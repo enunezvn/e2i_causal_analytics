@@ -300,6 +300,8 @@ class TestFeedbackLoopRiskRoundTrip:
         §3.6 lines 579-619 — real status columns are ``delivery_status``
         and ``acceptance_status``).
         """
+        import re
+
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT pg_get_functiondef(oid) FROM pg_proc WHERE proname = %s",
@@ -308,10 +310,19 @@ class TestFeedbackLoopRiskRoundTrip:
             row = cur.fetchone()
         assert row is not None, f"{fn_name} function not found — migration 006/038/039 not applied?"
         fn_src_lower = row[0].lower()
-        assert "join triggers " not in fn_src_lower, (
+        # Codex pass-1 LOW-2: normalize whitespace and match schema-qualified
+        # / quoted variants so a future hand-edit using `JOIN public.triggers`,
+        # `JOIN "triggers"`, or a newline between JOIN and the relation name
+        # cannot bypass the regression pin. The post-039 bodies contain zero
+        # references to the ``triggers`` relation under any form.
+        fn_src_collapsed = re.sub(r"\s+", " ", fn_src_lower)
+        triggers_join_re = re.compile(r"\bjoin\s+(?:public\s*\.\s*)?\"?triggers\"?\b")
+        assert not triggers_join_re.search(fn_src_collapsed), (
             f"{fn_name} still joins on the `triggers` table — migration 039 "
             "(issue #182) not applied or was reverted."
         )
+        # Direct token assertions for the specific column drifts that
+        # caused the runtime failure pre-039.
         for tok in ("t.prediction_id", "t.status", "t.trigger_id", "t.trigger_status"):
             assert tok not in fn_src_lower, (
                 f"{fn_name} still references `{tok}` — migration 039 "
@@ -480,20 +491,124 @@ class TestFeedbackLoopRiskRoundTrip:
                 )
 
                 cur.execute(
-                    "SELECT actual_outcome, outcome_label, truth_source "
+                    "SELECT actual_outcome, outcome_label, truth_source, truth_confidence "
                     "FROM ml_predictions WHERE prediction_id = %s",
                     (prediction_id,),
                 )
                 row = cur.fetchone()
 
             assert row is not None
-            actual, outcome_label, truth_source = row
+            actual, outcome_label, truth_source, truth_confidence = row
             assert actual is not None
             assert float(actual) == pytest.approx(0.0, abs=1e-3)
             assert outcome_label == "NEGATIVE"
             assert truth_source == "treatment_events", (
                 f"Expected post-039 truth_source='treatment_events' "
                 f"(was 'triggers_treatment_events' pre-039) but got {truth_source!r}"
+            )
+            # Codex pass-1 LOW-3: pin the post-039 truth_confidence value.
+            # Pre-039 NBA had bifurcated 0.90 (if trigger_status='accepted')
+            # vs 0.70 (otherwise); post-039 we collapse to a single 0.70
+            # since trigger acceptance is no longer part of the evidence.
+            # Future hand-edit that adds back a confidence branch on a
+            # column we DO have (e.g. acceptance_status from a corrected
+            # join) would change this value and trip the assertion.
+            assert truth_confidence is not None
+            assert float(truth_confidence) == pytest.approx(0.70, abs=1e-3), (
+                f"Expected post-039 NBA truth_confidence=0.70 but got {truth_confidence!r}"
+            )
+        finally:
+            conn.rollback()
+
+    def test_assign_truth_next_best_action_labels_positive_with_activity(self, conn) -> None:
+        """Issue #182 acceptance criterion 2 — POSITIVE branch of
+        ``assign_truth_next_best_action`` via
+        ``run_feedback_loop('next_best_action')``. Seeds an old PENDING
+        'next_best_action' prediction PLUS a downstream treatment_event
+        for the same HCP in the observation window; asserts POSITIVE
+        with ``truth_source='treatment_events'`` and the post-039
+        ``truth_confidence=0.70`` (codex pass-1 LOW-3: pin the value on
+        the POSITIVE branch too, not just NEGATIVE).
+        """
+        suffix = uuid.uuid4().hex[:10]
+        patient_id = f"PTP182_{suffix[:9]}"
+        pjid = f"PJP182_{suffix[:9]}"
+        prediction_id = f"nbap182_{suffix}_{uuid.uuid4().hex[:5]}"
+        hcp_id = f"HCP182_{suffix[:8]}"
+        old_ts = datetime.now(timezone.utc) - timedelta(days=60)
+
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE ml_predictions SET outcome_label = 'EXCLUDED' "
+                    "WHERE prediction_type = 'next_best_action' "
+                    "AND outcome_label = 'PENDING' "
+                    "AND prediction_timestamp < NOW() - INTERVAL '30 days' "
+                    "AND prediction_id <> %s",
+                    (prediction_id,),
+                )
+
+                cur.execute(
+                    "INSERT INTO hcp_profiles (hcp_id, first_name, last_name, "
+                    "specialty, npi) VALUES (%s, 'Test', 'HCP', 'Dermatology', %s) "
+                    "ON CONFLICT (hcp_id) DO NOTHING",
+                    (hcp_id, f"97{suffix[:8]}"),
+                )
+                cur.execute(
+                    "INSERT INTO patient_journeys "
+                    "(patient_journey_id, patient_id, journey_start_date, journey_stage) "
+                    "VALUES (%s, %s, %s, 'initial_treatment')",
+                    (pjid, patient_id, old_ts.date()),
+                )
+                cur.execute(
+                    "INSERT INTO ml_predictions "
+                    "(prediction_id, model_version, model_type, "
+                    "prediction_timestamp, patient_id, hcp_id, "
+                    "prediction_type, prediction_value, confidence_score, "
+                    "outcome_label) "
+                    "VALUES (%s, 'nba_v1', 'xgboost', %s, %s, %s, "
+                    "'next_best_action', 0.50, 0.50, 'PENDING')",
+                    (prediction_id, old_ts, patient_id, hcp_id),
+                )
+                # Downstream treatment_event for same HCP, 10 days
+                # post-prediction (within 30-day NBA window).
+                event_date = (old_ts + timedelta(days=10)).date()
+                event_id = f"TE_{uuid.uuid4().hex[:14]}"
+                cur.execute(
+                    "INSERT INTO treatment_events "
+                    "(treatment_event_id, patient_journey_id, patient_id, hcp_id, "
+                    "event_date, event_type, duration_days, brand) "
+                    "VALUES (%s, %s, %s, %s, %s, 'consultation', 30, 'Fabhalta')",
+                    (event_id, pjid, patient_id, hcp_id, event_date),
+                )
+
+                cur.execute("SELECT * FROM run_feedback_loop('next_best_action')")
+                loop_rows = cur.fetchall()
+                nba_row = next((r for r in loop_rows if r[0] == "next_best_action"), None)
+                assert nba_row is not None
+                assert nba_row[1] == "COMPLETED"
+
+                cur.execute(
+                    "SELECT actual_outcome, outcome_label, truth_source, "
+                    "       truth_confidence, exclusion_reason "
+                    "FROM ml_predictions WHERE prediction_id = %s",
+                    (prediction_id,),
+                )
+                row = cur.fetchone()
+
+            assert row is not None
+            actual, outcome_label, truth_source, truth_confidence, exclusion_reason = row
+            assert actual is not None
+            assert float(actual) == pytest.approx(1.0, abs=1e-3)
+            assert outcome_label == "POSITIVE"
+            assert truth_source == "treatment_events"
+            # Codex pass-1 LOW-3: pin POSITIVE-branch truth_confidence.
+            assert truth_confidence is not None
+            assert float(truth_confidence) == pytest.approx(0.70, abs=1e-3)
+            # Codex pass-1 LOW-1: post-039 explicitly clears
+            # exclusion_reason on labeled rows.
+            assert exclusion_reason is None, (
+                f"exclusion_reason should be NULL on POSITIVE label, got {exclusion_reason!r}"
             )
         finally:
             conn.rollback()

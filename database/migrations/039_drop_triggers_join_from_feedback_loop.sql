@@ -87,9 +87,17 @@
 -- `assign_truth_market_share` (database/migrations/038, §5). See
 -- memory/issue_176_close_20260513.md for the rationale and the deferred
 -- "implement brand-scoped market_share truth assignment" follow-on.
+--
+-- Transaction wrapping (codex pass-1 MEDIUM-1): this migration does NOT
+-- open its own `BEGIN; ... COMMIT;` block. `scripts/run_migrations.sh`
+-- invokes psql with `--single-transaction` and appends an
+-- `INSERT INTO schema_migrations` after `\i $migration_file`; an inner
+-- `COMMIT` inside the migration would commit before the bookkeeping
+-- insert, so a failed insert would leave 039 applied but unrecorded.
+-- Letting the runner own the transaction is the correct shape.
+-- (Migration 038 has the inverted pattern — pre-existing defect, out of
+-- scope here; tracked for follow-up.)
 -- ============================================================================
-
-BEGIN;
 
 -- ----------------------------------------------------------------------------
 -- 1. Replace assign_truth_script_conversion
@@ -165,7 +173,12 @@ BEGIN
         outcome_recorded_at = NOW(),
         truth_source = 'treatment_events',
         truth_confidence = tc.truth_confidence,
-        outcome_label = tc.outcome_label
+        outcome_label = tc.outcome_label,
+        -- codex pass-1 LOW-1: explicitly clear any stale exclusion_reason
+        -- since post-039 the function never produces EXCLUDED rows; rows
+        -- that pre-039 had been EXCLUDED on 'Trigger not delivered' should
+        -- not retain that message when re-labeled POSITIVE/NEGATIVE here.
+        exclusion_reason = NULL
     FROM temp_conversion_candidates tc
     WHERE p.prediction_id = tc.prediction_id;
 
@@ -247,7 +260,12 @@ BEGIN
         outcome_recorded_at = NOW(),
         truth_source = 'treatment_events',
         truth_confidence = tc.truth_confidence,
-        outcome_label = tc.outcome_label
+        outcome_label = tc.outcome_label,
+        -- codex pass-1 LOW-1: clear stale exclusion_reason; post-039 the
+        -- function never produces EXCLUDED rows. Pre-039 it could mark
+        -- 'No trigger generated' EXCLUDED via the trigger_status IS NULL
+        -- branch; that branch is gone, so the field must be reset.
+        exclusion_reason = NULL
     FROM temp_nba_candidates tc
     WHERE p.prediction_id = tc.prediction_id;
 
@@ -256,5 +274,3 @@ BEGIN
     RETURN QUERY SELECT v_evaluated, v_labeled, v_excluded;
 END;
 $$;
-
-COMMIT;
