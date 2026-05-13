@@ -337,11 +337,20 @@ def read_influence_from_falkordb(
     # so every undirected pair is stored once. We still issue an
     # undirected match here (no arrow) so the readback is robust to any
     # future change in the persistence direction convention.
+    #
+    # Codex pass-3 MEDIUM: aggregate by canonical endpoints to dedupe
+    # legacy duplicate rows (e.g., if both `(A)->(B)` and `(B)->(A)` were
+    # persisted by a pre-canonicalisation run). `max(r.weight)` is the
+    # conservative aggregation choice — for clean data both rows carry
+    # the same weight so the result is unchanged; for divergent legacy
+    # data the larger count of shared patients wins. `WITH` enforces
+    # the grouping in the FalkorDB / openCypher dialect.
     edges_result = falkordb_graph.query(
         "MATCH (a:HCP {cohort_id: $cohort_id})-[r:SHARED_PATIENTS {cohort_id: $cohort_id}]-"
         "(b:HCP {cohort_id: $cohort_id}) "
         "WHERE a.id < b.id "
-        "RETURN a.id AS src, b.id AS dst, r.weight AS weight",
+        "WITH a.id AS src, b.id AS dst, max(r.weight) AS weight "
+        "RETURN src, dst, weight",
         {"cohort_id": cohort_id},
     )
 
