@@ -690,6 +690,11 @@ class TestFitComputesPrevalenceAwareFloor:
             assert "K=" in msg
             assert "prevalence=" in msg
             assert "floor_floor=" in msg
+            # Codex pass-1 LOW-1: compact "(KxPi)" form matches the
+            # user-spec example shape; pin it so a future refactor of
+            # the message cannot silently drop the parseable
+            # multiplicand.
+            assert f"({MIN_AUC_PR_K}x" in msg
 
     def test_explicit_override_preserves_legacy_bar(self) -> None:
         """Pass min_auc_pr=0.65 explicitly -> trainer uses that floor.

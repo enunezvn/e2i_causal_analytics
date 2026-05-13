@@ -77,6 +77,15 @@ class PredictionRepository(SplitAwareRepository):
         if split:
             query = query.eq("data_split", split)
 
+        # Issue #188: exclude gated audit rows from ranking. The Celery
+        # task writes these rows to ml_predictions for observability when
+        # a model failed its honest-failure gate, but their
+        # prediction_value carries the raw (un-gated) score; they MUST
+        # NOT be returned to downstream consumers as actionable
+        # rankings. The sentinel is GATED_SENTINEL_PREDICTION_CLASS
+        # (src/tasks/risk_score_prediction_tasks.py).
+        query = query.neq("prediction_class", "gated_honest_failure")
+
         # Order by prediction_value descending to get top predictions
         result = await query.order("prediction_value", desc=True).limit(top_k).execute()
 
@@ -106,11 +115,16 @@ class PredictionRepository(SplitAwareRepository):
                 "total_predictions": 0,
             }
 
-        # Fetch performance metrics for the model
+        # Issue #188: exclude gated audit rows from performance aggregation.
+        # Gated rows are written for observability when a model failed its
+        # honest-failure gate; they MUST NOT contribute to the averaged
+        # pr_auc / brier_score reported as model performance, otherwise
+        # the gating mechanism would silently double-count the failure.
         result = await (
             self.client.table(self.table_name)
             .select("model_pr_auc, brier_score, rank_metrics")
             .eq("model_version", model_id)
+            .neq("prediction_class", "gated_honest_failure")
             .limit(10000)
             .execute()
         )
