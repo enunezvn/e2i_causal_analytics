@@ -27,14 +27,16 @@ transaction with ``conn.autocommit = False`` and ``conn.rollback()`` in
 the DB up to ``LIMIT 1000``) are rolled back together — no shared-DB
 leakage, no flake risk when the DB has many old ``PENDING`` rows.
 
-Brand-matching (codex pass-2 HIGH-1): both ``ml_predictions.brand`` (if
-it exists on this DB) and ``treatment_events.brand`` are seeded to
-``'Fabhalta'`` so the test still produces POSITIVE if a future migration
-re-installs the migration-006-as-written ``assign_truth_treatment_response``
-function (which joins fills on brand). The live installed function does
-not currently use brand-matching — the live join is on
-``(patient_id, event_type, event_date)`` only — so the brand seed is
-defense in depth.
+Brand-matching (codex pass-2 HIGH-1 + issue #176): migration 038 stripped
+``p.brand`` from ``assign_truth_treatment_response`` and dropped the two
+brand-keyed indexes — both ``ml_predictions.brand`` (if it exists on
+this DB at all) and ``te.brand::text = pc.brand::text`` are gone. The
+test still seeds ``treatment_events.brand='Fabhalta'`` (and
+``ml_predictions.brand`` if the column happens to exist on a legacy DB)
+as defense in depth in case a future migration re-introduces the
+brand-join. See
+``test_assign_truth_treatment_response_has_no_brand_reference`` for the
+explicit regression pin on the migration-038 state.
 
 DB-touching tests are gated on a reachable Postgres at
 ``RISK_SCORE_DB_URL`` / ``SUPABASE_DB_URL`` / ``DATABASE_URL``; in CI
@@ -130,6 +132,54 @@ class TestFeedbackLoopRiskRoundTrip:
         assert min_obs == 90
         assert is_active is True
         conn.rollback()  # read-only; nothing to commit
+
+    def test_assign_truth_treatment_response_has_no_brand_reference(self, conn) -> None:
+        """Issue #176 — migration 038 stripped ``p.brand`` from the
+        ``assign_truth_treatment_response`` function body and dropped the
+        two brand-keyed indexes. This regression test pins the new state:
+
+            * ``pg_get_functiondef`` for the risk truth function MUST NOT
+              contain ``p.brand`` or ``te.brand`` joins.
+            * Neither ``idx_predictions_hcp_brand`` nor
+              ``idx_predictions_patient_brand`` exists in ``pg_indexes``.
+
+        Without this guard, a future hand-edit of migration 006 could
+        silently re-introduce the dead-on-arrival column reference.
+        """
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pg_get_functiondef(oid) FROM pg_proc "
+                "WHERE proname = 'assign_truth_treatment_response'"
+            )
+            row = cur.fetchone()
+        assert row is not None, (
+            "assign_truth_treatment_response function not found — migration "
+            "006 not applied?"
+        )
+        fn_src = row[0]
+        # The risk function should not select p.brand nor join on
+        # te.brand::text = pc.brand::text after migration 038.
+        assert "p.brand" not in fn_src, (
+            "assign_truth_treatment_response still references p.brand — "
+            "migration 038 (issue #176) not applied or was reverted."
+        )
+        assert "te.brand::text = pc.brand::text" not in fn_src, (
+            "assign_truth_treatment_response still joins on te.brand — "
+            "migration 038 (issue #176) not applied or was reverted."
+        )
+
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT indexname FROM pg_indexes "
+                "WHERE indexname IN "
+                "('idx_predictions_hcp_brand', 'idx_predictions_patient_brand')"
+            )
+            stale_indexes = [r[0] for r in cur.fetchall()]
+        assert stale_indexes == [], (
+            f"Stale brand-keyed indexes still present: {stale_indexes!r} — "
+            "migration 038 (issue #176) not applied."
+        )
+        conn.rollback()
 
     def test_run_feedback_loop_callable(self, conn) -> None:
         """``run_feedback_loop('risk')`` is callable end-to-end and
