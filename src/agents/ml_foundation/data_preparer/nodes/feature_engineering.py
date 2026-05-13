@@ -62,12 +62,70 @@ _RATIO_DENOM_MIN = 1.0
 # amplification beyond inputs. The amplification heuristic flags this as
 # leakage (ratios can manufacture signal not present in either component).
 # See docs/calibration/b3_engineered_audit_20260511.json + amended pre-spec.
-CSU_ENGINEERED_FEATURES: Tuple[str, ...] = (
-    "age_x_insurance_interaction",
+#
+# Issue #187 / backlog #17 (commit cfa71627, 2026-05-12): three of the
+# four B3 engineered features (engagement_per_visit,
+# treatment_diversity_intensity, severity_engagement_product) were
+# reclassified as ``knowable_at=post_index`` because their inputs are
+# medication-derived aggregates that are themselves post-index (target
+# coupling: untreated patients are absent from ``CSUDataConverter._med_by_pat``
+# so all medication-derived aggregates collapse to zero for them).
+# Materializing them would add forbidden columns to ``train_df`` even
+# though ``_select_features`` filters via ``CSU_FORBIDDEN_AS_FEATURES``
+# at Layer 3 — defense-in-depth: don't materialize them in the first
+# place. The formulas remain as private ``_csu_*`` helpers for unit-test
+# coverage of the math (per-formula tests still pin the
+# clamp/log1p/product semantics) but the production path no longer
+# adds the forbidden columns to the split DataFrames.
+CSU_ENGINEERED_FEATURES: Tuple[str, ...] = ("age_x_insurance_interaction",)
+
+
+# Historical formulas retained for unit-test coverage only. Issue #187
+# regression pin: if these are re-added to CSU_ENGINEERED_FEATURES, the
+# Layer 1 chain-validity test in test_feature_engineering.py will catch
+# the regression and the test_csu_engineered_features_post_index_*
+# guard will fire because the manifest still declares them post-index.
+_BACKLOG_17_FORBIDDEN_CSU_ENGINEERED: Tuple[str, ...] = (
     "engagement_per_visit",
     "treatment_diversity_intensity",
     "severity_engagement_product",
 )
+
+
+def _csu_engagement_per_visit(df: pd.DataFrame) -> pd.Series:
+    """Historical (post-index) formula retained for unit-test coverage only.
+
+    Issue #187 / backlog #17: this engineered feature is FORBIDDEN as a
+    production model input (its inputs ``engagement_score`` + ``hcp_visits``
+    are post-index per the CSU manifest). The math is preserved here so
+    the per-formula clamp/zero-visits regression test can still pin it.
+    """
+    eng = pd.to_numeric(df["engagement_score"], errors="coerce")
+    visits = pd.to_numeric(df["hcp_visits"], errors="coerce")
+    denom = visits.clip(lower=_RATIO_DENOM_MIN)
+    return eng / denom
+
+
+def _csu_treatment_diversity_intensity(df: pd.DataFrame) -> pd.Series:
+    """Historical (post-index) formula retained for unit-test coverage only.
+
+    Issue #187 / backlog #17: forbidden as production input. See
+    ``_csu_engagement_per_visit``.
+    """
+    pt = pd.to_numeric(df["prior_treatments"], errors="coerce").fillna(0.0)
+    dot = pd.to_numeric(df["days_on_therapy"], errors="coerce").fillna(0.0).clip(lower=0.0)
+    return pt * np.log1p(dot)
+
+
+def _csu_severity_engagement_product(df: pd.DataFrame) -> pd.Series:
+    """Historical (post-index) formula retained for unit-test coverage only.
+
+    Issue #187 / backlog #17: forbidden as production input. See
+    ``_csu_engagement_per_visit``.
+    """
+    sev = pd.to_numeric(df["disease_severity"], errors="coerce")
+    eng = pd.to_numeric(df["engagement_score"], errors="coerce")
+    return sev * eng
 
 
 def _engineer_csu_features(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
@@ -82,6 +140,18 @@ def _engineer_csu_features(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
     the CSU manifest (csu_feature_manifest.py). NaN inputs propagate
     via standard pandas semantics; ratio denominators are clipped to
     >= _RATIO_DENOM_MIN to avoid divide-by-zero.
+
+    Issue #187 / backlog #17: post-index engineered candidates
+    (``engagement_per_visit``, ``treatment_diversity_intensity``,
+    ``severity_engagement_product``) are NOT materialized here — the
+    manifest declares them forbidden because their inputs are
+    medication-derived and target-coupled. The per-formula math is
+    retained in private ``_csu_*`` helpers so the math regression
+    tests still pin clamp/log1p/product semantics, but the production
+    DataFrame never gains these columns. ``_select_features``
+    (adaptive_validity_check.py) provides downstream defense-in-depth
+    via ``CSU_FORBIDDEN_AS_FEATURES``; this helper provides the
+    upstream pin.
 
     Note: The returned DataFrame is the same object as the input, with
     engineered columns assigned via ``df[col] = ...``. Callers that
@@ -103,34 +173,11 @@ def _engineer_csu_features(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
         )
 
     # C2 (claim_intensity_ratio) DROPPED post-audit — see module docstring.
-
-    # C3: engagement per visit
-    if "engagement_score" in df.columns and "hcp_visits" in df.columns:
-        eng = pd.to_numeric(df["engagement_score"], errors="coerce")
-        visits = pd.to_numeric(df["hcp_visits"], errors="coerce")
-        denom = visits.clip(lower=_RATIO_DENOM_MIN)
-        df["engagement_per_visit"] = eng / denom
-        materialized.append("engagement_per_visit")
-    else:
-        logger.info("csu FE: skipping engagement_per_visit (missing inputs)")
-
-    # C4: treatment diversity intensity = prior_treatments × log1p(days_on_therapy)
-    if "prior_treatments" in df.columns and "days_on_therapy" in df.columns:
-        pt = pd.to_numeric(df["prior_treatments"], errors="coerce").fillna(0.0)
-        dot = pd.to_numeric(df["days_on_therapy"], errors="coerce").fillna(0.0).clip(lower=0.0)
-        df["treatment_diversity_intensity"] = pt * np.log1p(dot)
-        materialized.append("treatment_diversity_intensity")
-    else:
-        logger.info("csu FE: skipping treatment_diversity_intensity (missing inputs)")
-
-    # C5: severity × engagement product
-    if "disease_severity" in df.columns and "engagement_score" in df.columns:
-        sev = pd.to_numeric(df["disease_severity"], errors="coerce")
-        eng = pd.to_numeric(df["engagement_score"], errors="coerce")
-        df["severity_engagement_product"] = sev * eng
-        materialized.append("severity_engagement_product")
-    else:
-        logger.info("csu FE: skipping severity_engagement_product (missing inputs)")
+    # C3-C5 (engagement_per_visit, treatment_diversity_intensity,
+    # severity_engagement_product) FORBIDDEN per backlog #17 — see
+    # _BACKLOG_17_FORBIDDEN_CSU_ENGINEERED. The math is retained in the
+    # private _csu_* helpers for test coverage; production no longer
+    # materializes them on the split DataFrames.
 
     return df, materialized
 
