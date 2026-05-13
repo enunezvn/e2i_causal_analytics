@@ -422,11 +422,18 @@ class FalkorDBSemanticMemory:
             limit: Maximum nodes to return (default 100, max 500)
             offset: Pagination offset for results
             cohort_id: optional cohort tag (e.g., ``"optum_initiation_v3"``).
-                When supplied, restricts traversal to nodes carrying the
-                same ``cohort_id`` property as the start HCP — required
-                to keep CSU and Optum influence graphs queryable
+                When supplied, restricts traversal to nodes AND relationships
+                carrying the same ``cohort_id`` property as the start HCP —
+                required to keep CSU and Optum influence graphs queryable
                 independently after issue #169 ingestion populates the
-                backend.
+                backend. **Strongly recommended whenever influence data
+                has been ingested under any cohort tag**: an unscoped
+                call (``cohort_id=None``) will MATCH every ``HCP`` node
+                that shares the requested ``id`` — and the issue #169
+                schema deliberately creates one node per ``(id, cohort_id)``
+                pair, so a same-NPI provider that appears in both CSU
+                and Optum cohorts would have its neighborhoods merged
+                in the result.
 
         Returns:
             Dict with hcp_id, influenced_hcps, patients, brands_prescribed, pagination
@@ -437,15 +444,19 @@ class FalkorDBSemanticMemory:
         safe_offset = max(0, int(offset))
 
         # FalkorDB doesn't support parameterized variable-length bounds.
-        # Issue #169: cohort filter is applied as a property predicate on
-        # both endpoints so that the SHARED_PATIENTS edges ingested by the
-        # FalkorDB persistence script don't leak cross-cohort traversal
-        # paths. The `cohort_id` property is set on every HCP node + edge
-        # by `scripts/persist_hcp_influence_to_falkordb.py`.
+        # Issue #169 codex pass-1 MEDIUM-1: cohort traversal must constrain
+        # EVERY relationship in the path (not just the terminal node) so
+        # cross-cohort or non-SHARED_PATIENTS edges can't smuggle a node
+        # whose `cohort_id` happens to match. Bind the path and enforce
+        # the predicate over `relationships(path)` plus the edge's own
+        # `cohort_id` property — both are populated by the issue #169
+        # persistence script on every SHARED_PATIENTS edge.
         if cohort_id is not None:
             query = f"""
-            MATCH (h:HCP {{id: $hcp_id, cohort_id: $cohort_id}})-[*1..{safe_depth}]-(connected)
+            MATCH path = (h:HCP {{id: $hcp_id, cohort_id: $cohort_id}})
+                -[:SHARED_PATIENTS*1..{safe_depth}]-(connected)
             WHERE connected.cohort_id = $cohort_id
+              AND all(r IN relationships(path) WHERE r.cohort_id = $cohort_id)
             RETURN DISTINCT connected
             SKIP {safe_offset}
             LIMIT {safe_limit}
@@ -592,9 +603,14 @@ class FalkorDBSemanticMemory:
         safe_depth = max(1, min(5, int(max_depth)))
 
         if cohort_id is not None:
+            # Issue #169 codex pass-1 MEDIUM-1: constrain every relationship
+            # in the path to the same cohort + SHARED_PATIENTS type so the
+            # count cannot leak across non-influence edges.
             query = f"""
-            MATCH (h:HCP {{id: $hcp_id, cohort_id: $cohort_id}})-[*1..{safe_depth}]-(connected)
+            MATCH path = (h:HCP {{id: $hcp_id, cohort_id: $cohort_id}})
+                -[:SHARED_PATIENTS*1..{safe_depth}]-(connected)
             WHERE connected.cohort_id = $cohort_id
+              AND all(r IN relationships(path) WHERE r.cohort_id = $cohort_id)
             RETURN count(DISTINCT connected) as total
             """
             params: Dict[str, Any] = {"hcp_id": hcp_id, "cohort_id": cohort_id}
@@ -606,6 +622,39 @@ class FalkorDBSemanticMemory:
             params = {"hcp_id": hcp_id}
 
         result = self.graph.query(query, params)
+        return result.result_set[0][0] if result.result_set else 0
+
+    def count_hcp_influence_degree(
+        self,
+        hcp_id: str,
+        cohort_id: str,
+    ) -> int:
+        """
+        Issue #169 codex pass-1 MEDIUM-2: 1-hop count for Parquet parity.
+
+        The Parquet artifact's ``influence_network_size`` is exactly
+        ``graph.degree(npi)`` — the count of distinct neighbors via the
+        ``SHARED_PATIENTS`` relationship within the same cohort. The
+        depth-N traversal in :meth:`count_hcp_influence_network`
+        intentionally counts transitive neighborhoods, so it will NOT
+        match ``influence_network_size`` for ``max_depth > 1`` on any
+        non-trivial graph. This helper is the dedicated entry point
+        for "give me the same number the converter wrote to Parquet".
+
+        Args:
+            hcp_id: HCP entity id (the obfuscated/real NPI string).
+            cohort_id: cohort tag the FalkorDB rows are keyed under.
+                Required — there is no "global degree" view across cohorts.
+
+        Returns:
+            Distinct 1-hop SHARED_PATIENTS neighbor count.
+        """
+        query = """
+        MATCH (h:HCP {id: $hcp_id, cohort_id: $cohort_id})
+            -[:SHARED_PATIENTS]-(neighbor:HCP {cohort_id: $cohort_id})
+        RETURN count(DISTINCT neighbor) as total
+        """
+        result = self.graph.query(query, {"hcp_id": hcp_id, "cohort_id": cohort_id})
         return result.result_set[0][0] if result.result_set else 0
 
     def count_causal_chains(self, start_entity_id: str, max_depth: int = 3) -> int:
