@@ -15,7 +15,13 @@ Design notes per supervisor decisions (2026-05-13):
    metric reported alongside AUC-ROC.
 
 3. Hyperparameter search via Optuna (50 trials default; configurable via
-   ``hpo_trials``). Floor at ``min_auc_pr`` (default 0.65).
+   ``hpo_trials``). AUC-PR floor: when ``min_auc_pr is None`` (default)
+   the floor is computed at fit time from the validation-split positive
+   prevalence as ``max(MIN_AUC_PR_K * prevalence, MIN_AUC_PR_FLOOR_FLOOR)``
+   clamped to 1.0 (the AUC-PR ceiling). Issue #188 replaces the legacy
+   fixed 0.65 floor which was structurally unreachable at low prevalence.
+   Callers may pass an explicit float to bypass the prevalence-aware
+   mechanism (e.g. ``min_auc_pr=0.65`` for synthetic-smoke regression).
 
 4. Calibration acceptance: Brier <= 0.20 AND ECE <= 0.10 on the validation
    split. Calibration is fit on VALIDATION (not train) — both Platt scaling
@@ -177,7 +183,7 @@ def compute_auc_pr_floor(
 ) -> float:
     """Compute the prevalence-aware AUC-PR floor (issue #188).
 
-    floor = max(k * prevalence, floor_floor)
+    floor = min(max(k * prevalence, floor_floor), 1.0)
     where prevalence = n_pos / n_total.
 
     A random/uninformative classifier achieves AUC-PR ~= prevalence
@@ -186,6 +192,13 @@ def compute_auc_pr_floor(
     framing) requires the model to clear 5x baseline. The absolute floor
     of 0.10 prevents floor collapse on rare-but-tractable cohorts and
     enforces a clinically-actionable top-decile PPV.
+
+    Codex pass-2 MEDIUM-3: the upper clamp to 1.0 ensures the floor is
+    physically achievable even at high prevalence (e.g. balanced 50%
+    cohort: k*pi=2.5 -> clamped to 1.0; AUC-PR cannot exceed 1.0). On
+    high-prevalence cohorts the random baseline already equals the
+    prevalence (Saito-Rehmsmeier), so a floor near 1.0 effectively
+    requires near-perfect ranking — appropriately strict.
 
     Args:
         n_pos: number of positive labels in the labeled set used to
@@ -213,7 +226,7 @@ def compute_auc_pr_floor(
     if n_total <= 0:
         return floor_floor
     prevalence = n_pos / n_total
-    return max(k * prevalence, floor_floor)
+    return min(max(k * prevalence, floor_floor), 1.0)
 
 
 def risk_score_to_tier(score: float) -> str:
@@ -434,6 +447,19 @@ class RiskScoreTrainer:
             raise ValueError("y_train must be 0/1 binary labels.")
         if set(np.unique(y_val_arr)).difference({0, 1}):
             raise ValueError("y_val must be 0/1 binary labels.")
+        # Codex pass-2 MEDIUM-1: validation set must contain BOTH classes.
+        # Calibration via CalibratedClassifierCV(cv='prefit') requires at
+        # least one positive AND one negative in y_val (sklearn raises
+        # internally otherwise). AUC-PR is also undefined / degenerate
+        # for single-class validation. Fail loud with an actionable
+        # message instead of crashing inside sklearn.
+        if len(np.unique(y_val_arr)) < 2:
+            raise ValueError(
+                "y_val must contain BOTH classes (got only "
+                f"{ {int(v) for v in np.unique(y_val_arr)} }). "
+                "Calibration + AUC-PR are undefined on single-class "
+                "validation sets. Re-stratify the split."
+            )
 
         # Anti-leakage contract.
         assert_no_leakage_in_features(feat_names)

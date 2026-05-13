@@ -193,11 +193,20 @@ class SupabaseDataConnector(BaseDataConnector):
         await self._ensure_initialized()
 
         try:
-            # Query ml_predictions table
+            # Query ml_predictions table.
+            #
+            # Issue #188: exclude gated audit rows from drift monitoring.
+            # Gated rows (prediction_class='gated_honest_failure', written
+            # by src/tasks/risk_score_prediction_tasks.py when a model
+            # failed its honest-failure gate) carry raw un-gated scores
+            # that MUST NOT feed drift detection; including them would
+            # silently double-count the failure as either input drift
+            # or unstable predictions.
             query = (
                 self._client.table("ml_predictions")
                 .select("confidence_score, prediction_value, created_at, entity_id")
                 .eq("model_version", model_id)
+                .neq("prediction_class", "gated_honest_failure")
                 .gte("created_at", time_window.start.isoformat())
                 .lte("created_at", time_window.end.isoformat())
             )
@@ -273,11 +282,14 @@ class SupabaseDataConnector(BaseDataConnector):
         await self._ensure_initialized()
 
         try:
-            # Query ml_predictions with ground truth outcomes
+            # Query ml_predictions with ground truth outcomes.
+            # Issue #188: exclude gated audit rows (see comment in
+            # query_predictions above for full rationale).
             query = (
                 self._client.table("ml_predictions")
                 .select("confidence_score, prediction_value, created_at, entity_id, actual_outcome")
                 .eq("model_version", model_id)
+                .neq("prediction_class", "gated_honest_failure")
                 .gte("created_at", time_window.start.isoformat())
                 .lte("created_at", time_window.end.isoformat())
                 .not_.is_("actual_outcome", "null")  # Only include labeled data
