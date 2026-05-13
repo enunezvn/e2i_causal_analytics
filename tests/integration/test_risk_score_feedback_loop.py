@@ -142,6 +142,31 @@ class TestFeedbackLoopRiskRoundTrip:
         assert isinstance(rows, list)
         conn.rollback()
 
+    def _isolate_other_pending_risk_rows(self, conn) -> None:
+        """Temporarily move other eligible PENDING risk predictions out
+        of the ``assign_truth_treatment_response`` candidate set so
+        our test row is guaranteed to be selected.
+
+        Codex pass-3 MEDIUM: migration 006's risk truth path uses
+        ``LIMIT 1000`` with no ``ORDER BY`` (line 373). On a shared DB
+        with > 1000 old eligible PENDING risk rows, ``run_feedback_loop``
+        could skip our test row, causing the POSITIVE/NEGATIVE
+        assertions to fail. We tag every other eligible row with the
+        sentinel ``outcome_label='EXCLUDED'`` inside our transaction,
+        then ``rollback`` in ``finally`` restores them — net-zero
+        side effect on the production DB.
+
+        Idempotent: rolled back along with everything else if any test
+        step fails.
+        """
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE ml_predictions SET outcome_label = 'EXCLUDED' "
+                "WHERE prediction_type = 'risk' "
+                "AND outcome_label = 'PENDING' "
+                "AND prediction_timestamp < NOW() - INTERVAL '180 days'"
+            )
+
     def _seed_prediction_and_journey(
         self,
         conn,
@@ -205,6 +230,7 @@ class TestFeedbackLoopRiskRoundTrip:
         old_ts = datetime.now(timezone.utc) - timedelta(days=200)
 
         try:
+            self._isolate_other_pending_risk_rows(conn)
             self._seed_prediction_and_journey(conn, prediction_id, patient_id, pjid, old_ts)
             with conn.cursor() as cur:
                 # 6 monthly fills, 30-day supply each => 180 days covered
@@ -269,6 +295,7 @@ class TestFeedbackLoopRiskRoundTrip:
         old_ts = datetime.now(timezone.utc) - timedelta(days=200)
 
         try:
+            self._isolate_other_pending_risk_rows(conn)
             self._seed_prediction_and_journey(conn, prediction_id, patient_id, pjid, old_ts)
             with conn.cursor() as cur:
                 cur.execute("SELECT * FROM run_feedback_loop('risk')")
