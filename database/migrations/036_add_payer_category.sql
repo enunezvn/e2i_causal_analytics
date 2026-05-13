@@ -8,8 +8,15 @@
 --
 -- Forward-only. No rollback (the additive columns are nullable and have no
 -- back-references).
-
-BEGIN;
+--
+-- Issue #186 (sibling of 038's fix; mirror of PR #185 / mig 039): this
+-- file is intentionally bare of `BEGIN;` / `COMMIT;` at the script level.
+-- `scripts/run_migrations.sh:100` invokes psql with `--single-transaction`,
+-- which owns the outer txn (the `\i` of the migration + the
+-- `INSERT INTO schema_migrations` bookkeeping row that follows). An inner
+-- `COMMIT;` would prematurely commit before the bookkeeping insert,
+-- leaving the migration applied but unrecorded on a bookkeeping-insert
+-- failure (silent ledger drift on fresh-DB replay or re-application).
 
 -- 8-value vocabulary per issue #156 item 6.
 ALTER TABLE patient_journeys
@@ -45,4 +52,5 @@ CREATE INDEX IF NOT EXISTS idx_patient_journeys_payer_category
     ON patient_journeys (payer_category)
     WHERE payer_category IS NOT NULL;
 
-COMMIT;
+-- (No `COMMIT;` — psql `--single-transaction` owns the outer txn. See
+-- top-of-file note.)
