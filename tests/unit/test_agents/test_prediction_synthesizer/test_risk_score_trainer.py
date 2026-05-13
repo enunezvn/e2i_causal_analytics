@@ -512,6 +512,23 @@ class TestFitInputValidation:
         with pytest.raises(TypeError, match="non-numeric"):
             trainer.fit(X, y, X, y)
 
+    def test_single_class_val_raises(self) -> None:
+        """Codex pass-2 MEDIUM-1: y_val with one class must fail loud.
+
+        CalibratedClassifierCV(cv='prefit') crashes if y_val is missing
+        a class; AUC-PR is also undefined. Fail with an actionable
+        message instead of letting sklearn crash inside the calibration
+        helper.
+        """
+        X_tr, y_tr, X_va, _ = self._make_simple_inputs()
+        trainer = RiskScoreTrainer(enable_mlflow=False, hpo_trials=2, cv_folds=2)
+        # All-zero val.
+        with pytest.raises(ValueError, match="y_val must contain BOTH"):
+            trainer.fit(X_tr, y_tr, X_va, np.array([0, 0, 0, 0, 0, 0]))
+        # All-one val.
+        with pytest.raises(ValueError, match="y_val must contain BOTH"):
+            trainer.fit(X_tr, y_tr, X_va, np.array([1, 1, 1, 1, 1, 1]))
+
 
 # ---------------------------------------------------------------------------
 # Issue #188: prevalence-aware AUC-PR floor
@@ -541,8 +558,13 @@ class TestComputeAucPrFloor:
             (0.10, 0.50),  # 5 * 0.10 = 0.50
             (0.15, 0.75),  # 5 * 0.15 = 0.75
             (0.20, 1.00),  # 5 * 0.20 = 1.00 (ceiling at unity)
-            (0.30, 1.50),  # 5 * 0.30 = 1.50 (above 1.0, but helper does not clamp upper)
-            (0.50, 2.50),  # balanced cohort
+            # Codex pass-2 MEDIUM-3: upper clamp to 1.0 (AUC-PR ceiling).
+            # Without it the floor would be 1.50 / 2.50 — physically
+            # impossible to satisfy. Clamping at 1.0 keeps the gate
+            # appropriately strict at high prevalence while remaining
+            # achievable in principle by a near-perfect classifier.
+            (0.30, 1.00),  # 5 * 0.30 = 1.50 -> clamp to 1.0
+            (0.50, 1.00),  # balanced cohort 5 * 0.50 = 2.50 -> clamp
         ],
     )
     def test_floor_formula(self, prevalence: float, expected_floor: float) -> None:
@@ -605,6 +627,20 @@ class TestComputeAucPrFloor:
             compute_auc_pr_floor(n_pos=1, n_total=10, floor_floor=-0.1)
         with pytest.raises(ValueError, match="floor_floor must"):
             compute_auc_pr_floor(n_pos=1, n_total=10, floor_floor=1.5)
+
+    def test_upper_clamp_at_1_0(self) -> None:
+        """Codex pass-2 MEDIUM-3: high-prevalence cohorts clamp to 1.0.
+
+        Without the upper clamp the floor on a balanced cohort would be
+        5 * 0.50 = 2.50, which is physically impossible (AUC-PR <= 1.0)
+        and would make the gate unsatisfiable even by a perfect
+        classifier. Clamping at 1.0 keeps the gate strict (requires
+        near-perfect ranking) while remaining achievable.
+        """
+        assert compute_auc_pr_floor(n_pos=500, n_total=1000) == 1.0
+        assert compute_auc_pr_floor(n_pos=999, n_total=1000) == 1.0
+        # Even with K=100 the result clamps to 1.0.
+        assert compute_auc_pr_floor(n_pos=100, n_total=1000, k=100.0) == 1.0
 
 
 @pytest.mark.slow
