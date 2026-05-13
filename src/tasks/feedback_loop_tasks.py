@@ -130,6 +130,12 @@ async def _execute_feedback_loop(
 
     config = load_config()
     processing_config = config.get("feedback_loop", {}).get("processing", {})
+    # NOTE (issue #177): ``batch_size`` is loaded from config purely as a
+    # diagnostic breadcrumb in the per-prediction-type log line below. The
+    # ``run_feedback_loop`` SQL function in migration 006 accepts ONLY
+    # ``p_prediction_type``; it does not thread a batch-size parameter
+    # through to the underlying ``assign_truth_*`` functions. See the call
+    # site below for the full rationale.
     batch_size = processing_config.get("batch_size", 1000)
 
     start_time = time.time()
@@ -151,15 +157,33 @@ async def _execute_feedback_loop(
             try:
                 logger.info(
                     f"Running feedback loop for {prediction_type}: "
-                    f"task {task_id}, window {window_name}"
+                    f"task {task_id}, window {window_name}, "
+                    f"config_batch_size={batch_size}"
                 )
 
-                # Call the PL/pgSQL function via RPC
+                # Call the PL/pgSQL function via RPC.
+                #
+                # NOTE (issue #177): ``run_feedback_loop`` in migration
+                # ``006_feedback_loop_infrastructure.sql`` accepts ONLY the
+                # ``p_prediction_type`` parameter — it does NOT accept a
+                # ``p_batch_size`` kwarg. Internally it dispatches to the
+                # per-prediction-type ``assign_truth_*`` functions with just
+                # ``v_config.observation_window_days``; those functions do
+                # take a ``p_batch_size`` argument but ``run_feedback_loop``
+                # never threads it through, so passing ``p_batch_size`` here
+                # would be silently ignored at best (PostgREST RPC schema
+                # cache) or rejected as an unknown parameter at worst.
+                #
+                # ``batch_size`` from ``processing_config`` is therefore
+                # logged for operator visibility but NOT passed to the SQL
+                # function. If the SQL function ever grows real batching
+                # semantics (i.e. ``run_feedback_loop`` threads
+                # ``p_batch_size`` down into ``assign_truth_*``), this is
+                # the place to re-thread it.
                 rpc_result = await client.rpc(
                     "run_feedback_loop",
                     {
                         "p_prediction_type": prediction_type,
-                        "p_batch_size": batch_size,
                     },
                 ).execute()
 

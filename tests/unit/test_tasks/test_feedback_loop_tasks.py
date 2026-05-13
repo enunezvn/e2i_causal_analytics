@@ -109,6 +109,87 @@ def mock_concept_drift_metrics():
 
 
 # =============================================================================
+# ISSUE #177 — run_feedback_loop RPC SIGNATURE REGRESSION GUARD
+# =============================================================================
+
+
+class TestRunFeedbackLoopRpcSignature:
+    """Regression tests for issue #177.
+
+    The ``run_feedback_loop`` PL/pgSQL function in migration
+    ``006_feedback_loop_infrastructure.sql`` accepts ONLY a
+    ``p_prediction_type`` parameter. Passing ``p_batch_size`` here either
+    silently no-ops (PostgREST may discard unknown named params depending
+    on the schema cache state) or raises an error at the live function
+    boundary. Either way it is a contract bug.
+
+    These tests pin the caller's RPC kwargs shape to what the SQL function
+    actually accepts.
+    """
+
+    @patch("src.memory.services.factories.get_supabase_client")
+    def test_rpc_called_without_p_batch_size_kwarg(self, mock_get_client, mock_supabase_client):
+        """``run_feedback_loop`` RPC is invoked with ONLY ``p_prediction_type``.
+
+        Issue #177 — guard against re-introducing ``p_batch_size`` (or any
+        other kwarg) that the SQL function does not accept.
+        """
+        from src.tasks.feedback_loop_tasks import run_feedback_loop_short_window
+
+        mock_get_client.side_effect = AsyncMock(return_value=mock_supabase_client)
+
+        result = run_feedback_loop_short_window()
+        assert result is not None
+
+        # At least one prediction type should have been processed.
+        rpc_calls = mock_supabase_client.rpc.call_args_list
+        assert len(rpc_calls) > 0, (
+            "Expected at least one RPC invocation; got none. "
+            "Did the caller short-circuit before reaching the RPC?"
+        )
+
+        for call in rpc_calls:
+            args, kwargs = call
+            # Positional arg 0: function name; positional arg 1: kwargs dict.
+            assert args[0] == "run_feedback_loop", f"Unexpected RPC target: {args[0]!r}"
+            rpc_kwargs = args[1]
+            assert isinstance(rpc_kwargs, dict)
+            assert "p_prediction_type" in rpc_kwargs, (
+                "RPC payload missing required ``p_prediction_type`` key."
+            )
+            assert "p_batch_size" not in rpc_kwargs, (
+                "Issue #177 regression: ``p_batch_size`` is back in the "
+                "run_feedback_loop RPC payload, but the SQL function does "
+                "not accept that parameter (see "
+                "database/migrations/006_feedback_loop_infrastructure.sql "
+                "line ~655)."
+            )
+            # Lock the shape exactly — no other unknown kwargs.
+            assert set(rpc_kwargs.keys()) == {"p_prediction_type"}, (
+                f"Unexpected extra RPC kwargs: {set(rpc_kwargs.keys()) - {'p_prediction_type'}}"
+            )
+
+    @patch("src.memory.services.factories.get_supabase_client")
+    def test_rpc_called_for_each_prediction_type(self, mock_get_client, mock_supabase_client):
+        """Each prediction type in the override list triggers exactly one RPC call."""
+        from src.tasks.feedback_loop_tasks import run_feedback_loop_short_window
+
+        mock_get_client.side_effect = AsyncMock(return_value=mock_supabase_client)
+
+        custom_types = ["trigger", "next_best_action"]
+        run_feedback_loop_short_window(prediction_types=custom_types)
+
+        rpc_calls = mock_supabase_client.rpc.call_args_list
+        prediction_types_called = [call.args[1]["p_prediction_type"] for call in rpc_calls]
+        assert prediction_types_called == custom_types, (
+            f"Expected one RPC per requested type in order; got {prediction_types_called}"
+        )
+        # And every call must still have the issue-#177-safe shape.
+        for call in rpc_calls:
+            assert set(call.args[1].keys()) == {"p_prediction_type"}
+
+
+# =============================================================================
 # SHORT WINDOW FEEDBACK LOOP TESTS
 # =============================================================================
 
