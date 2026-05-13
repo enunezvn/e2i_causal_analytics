@@ -39,6 +39,7 @@ import logging
 import re
 import sys
 import uuid
+from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -66,6 +67,42 @@ DEFAULT_OUTPUT = PROJECT_ROOT / "data" / "rwd" / "optum"
 
 LOOKBACK_DAYS = 180
 PREDICTION_DAYS = 180
+
+# Issue #156 item 1: priority_tier rolling-12-month window for HCP TRx
+# aggregation per ZIP3 decile. 12 months = 365 days. Aligns with the
+# pharma-industry standard "trailing twelve-month TRx" used for decile
+# segmentation in commercial analytics.
+PRIORITY_TIER_TRX_WINDOW_DAYS = 365
+
+# Issue #156 item 1: decile → priority_tier mapping (1 = highest priority).
+# Per issue body:
+#   decile 10        → tier 1
+#   decile 8-9       → tier 2
+#   decile 4-7       → tier 3
+#   decile 2-3       → tier 4
+#   decile 1         → tier 5
+# HCPs with TRx=0 in the window also map to tier 5 (kept in the
+# scoreable pool, not excluded).
+PRIORITY_TIER_DECILE_MAP: dict[int, int] = {
+    10: 1,
+    9: 2,
+    8: 2,
+    7: 3,
+    6: 3,
+    5: 3,
+    4: 3,
+    3: 4,
+    2: 4,
+    1: 5,
+}
+PRIORITY_TIER_DEFAULT = 5
+
+# Issue #156 item 2: peer_influence_score is eigenvector_centrality scaled
+# from the natural [0, 1] range to fit the DECIMAL(3,2) DB column, which
+# admits values in [0.00, 9.99]. We scale by `PEER_INFLUENCE_SCALE` so that
+# a top-influencer (centrality ≈ 1.0) lands at 9.99 (then clamped). The
+# scale factor is exposed for downstream re-derivation.
+PEER_INFLUENCE_SCALE = 9.99
 
 # Enrollment-window regime constants (Tier 1A bifurcation, plan v3 §3).
 # Default = production (360/180). Research regime (180/90) trades stricter
@@ -1486,7 +1523,11 @@ class OptumDataConverter:
         # 8. Treatment events + HCP profiles from the kept patients
         kept_patids = {j["_patid"] for j in journeys}
         events = self._build_treatment_events(kept_patids, journeys)
-        hcps = self._build_hcp_profiles(kept_patids)
+        # Issue #156 item 1: pass patid → index_date so priority_tier
+        # can anchor its rolling-12-month TRx window on the cohort's
+        # latest index date (stable cohort-wide endpoint).
+        idx_by_patid_for_hcp = {int(j["_patid"]): pd.Timestamp(j["index_date"]) for j in journeys}
+        hcps = self._build_hcp_profiles(kept_patids, idx_by_patid_for_hcp)
 
         # 9. Strip internal fields before return
         for j in journeys:
@@ -2870,7 +2911,274 @@ class OptumDataConverter:
 
         return days_out, offlabel
 
-    def _build_hcp_profiles(self, kept_patids: set[int]) -> list[dict[str, Any]]:
+    # ------------------------------------------------------------------ #
+    # Issue #156 item 1: priority_tier via rolling 12-mo TRx ZIP3 decile #
+    # ------------------------------------------------------------------ #
+
+    def _hcp_zip3_modal(self, npi: str, patient_sets: dict[str, set[int]]) -> str | None:
+        """Return the modal ZIP3 across the HCP's treated patients.
+
+        ZIP3 is sourced from ``demographics.zipcode_5`` (first 3 chars) per
+        the project-wide convention in ``_compute_features``. ZIP3 (not ZIP5)
+        is chosen per issue #156 item 1 because ZIP5 has too few HCPs per bin
+        for stable decile assignment; ZIP3 gives ~900 bins nationally.
+
+        Ties are broken alphabetically for determinism so two HCPs with
+        identical TRx + tied ZIP3 modes always produce identical tiers.
+        Returns ``None`` only when no patient in the set has a usable ZIP3
+        (rare — demographics ZIP is nearly always populated).
+        """
+        pats = patient_sets.get(npi)
+        if not pats or self.demo.empty or "zipcode_5" not in self.demo.columns:
+            return None
+        sub = self.demo[self.demo["patid"].isin(pats)]
+        if sub.empty:
+            return None
+        zip_strs = sub["zipcode_5"].dropna().astype(str).str.split("_").str[0].str.strip()
+        zip3s = zip_strs[zip_strs.str.len() >= 3].str[:3]
+        if zip3s.empty:
+            return None
+        counts = zip3s.value_counts()
+        top = counts.max()
+        tied = sorted(counts[counts == top].index.tolist())
+        return tied[0]
+
+    def _compute_priority_tiers(
+        self,
+        kept_patids: set[int],
+        npi_pat: dict[str, set[int]],
+        idx_by_patid: dict[int, pd.Timestamp] | None,
+    ) -> tuple[dict[str, int], dict[str, str | None], dict[str, int]]:
+        """Issue #156 item 1: rolling 12-month CSU-biologic TRx → ZIP3 decile → tier.
+
+        Returns three dicts keyed by obfuscated NPI:
+          - npi → priority_tier (1=high, 5=low; 1-5 always populated, no None)
+          - npi → modal ZIP3 (or None when no demographics ZIP is resolvable)
+          - npi → biologic TRx count in the rolling 12-mo window
+
+        Algorithm (per issue body):
+          1. Filter ``self.med`` to in-scope CSU biologics via
+             ``_csu_biologic_mask`` (which encodes
+             CSU_BIOLOGIC_NDC_PREFIXES ∪ CSU_BIOLOGIC_HCPCS ∪
+             CSU_BIOLOGIC_GENERICS).
+          2. Restrict to the trailing-12-month window ending at the
+             cohort's latest patient index_date. Per-HCP rolling windows
+             ending at each HCP's latest patient index date are
+             unstable in practice (HCPs treating only one patient get a
+             1-day window); we anchor on the cohort-wide latest index
+             date for stability, matching the pharma-commercial TTM
+             convention. When ``idx_by_patid`` is empty/None we fall
+             back to the global max ``medication_date`` so testability
+             is preserved.
+          3. For each NPI in ``npi_pat``, compute biologic TRx count in
+             that window.
+          4. Group HCPs by modal ZIP3 (across their treated patients).
+          5. Within each ZIP3, rank HCPs by TRx (ties broken by
+             NDC-distinct count, then alphabetical NPI — per issue body
+             — for determinism). Compute 10-bin equal-frequency
+             deciles.
+          6. Map decile → tier via ``PRIORITY_TIER_DECILE_MAP``.
+          7. HCPs with TRx=0 (or no resolvable ZIP3) → tier 5.
+
+        Codex pre-review: the tie-break order is HCP-deterministic;
+        ``np.unique`` is NOT used (it would mask the tie pattern from
+        downstream auditors).
+        """
+        zip3_by_npi: dict[str, str | None] = {}
+        for npi in npi_pat:
+            zip3_by_npi[npi] = self._hcp_zip3_modal(npi, npi_pat)
+
+        # Determine the rolling-12mo window endpoint.
+        window_end: pd.Timestamp | None = None
+        if idx_by_patid:
+            dates = [pd.Timestamp(d) for d in idx_by_patid.values() if d is not None]
+            if dates:
+                window_end = max(dates)
+        if window_end is None:
+            if (
+                not self.med.empty
+                and "medication_date" in self.med.columns
+                and self.med["medication_date"].notna().any()
+            ):
+                window_end = pd.Timestamp(self.med["medication_date"].max())
+        if window_end is None:
+            window_end = pd.Timestamp(datetime.now(tz=UTC).date())
+        window_start = window_end - timedelta(days=PRIORITY_TIER_TRX_WINDOW_DAYS)
+
+        # Compute biologic TRx count + NDC-distinct count per NPI.
+        trx_by_npi: dict[str, int] = dict.fromkeys(npi_pat, 0)
+        ndc_distinct_by_npi: dict[str, set[str]] = {npi: set() for npi in npi_pat}
+        med = self.med
+        if not med.empty and "npi" in med.columns and "medication_date" in med.columns:
+            sub = med[med["patid"].isin(kept_patids)].copy()
+            if not sub.empty:
+                bio_mask = self._csu_biologic_mask(sub)
+                sub = sub[bio_mask]
+                if not sub.empty:
+                    sub = sub[
+                        (sub["medication_date"] > window_start)
+                        & (sub["medication_date"] <= window_end)
+                    ]
+                    for _, r in sub.iterrows():
+                        nv = r.get("npi")
+                        if pd.isna(nv):
+                            continue
+                        ns = str(nv).strip()
+                        if not ns or ns == "nan":
+                            continue
+                        if ns not in trx_by_npi:
+                            continue
+                        trx_by_npi[ns] = trx_by_npi.get(ns, 0) + 1
+                        code_val = r.get("code")
+                        if code_val is not None and not pd.isna(code_val):
+                            ndc_distinct_by_npi[ns].add(str(code_val).strip().upper())
+
+        # Group by ZIP3 and assign deciles within each group.
+        tier_by_npi: dict[str, int] = {}
+        zip3_groups: dict[str, list[str]] = defaultdict(list)
+        for npi in npi_pat:
+            z = zip3_by_npi.get(npi)
+            if z is None or trx_by_npi.get(npi, 0) <= 0:
+                # No ZIP3 OR zero TRx → tier 5 (kept in pool).
+                tier_by_npi[npi] = PRIORITY_TIER_DEFAULT
+                continue
+            zip3_groups[z].append(npi)
+
+        for _zip3, members in zip3_groups.items():
+            # Tie-break: descending TRx, then descending NDC-distinct,
+            # then ASCENDING alphabetical NPI for full determinism.
+            ordered = sorted(
+                members,
+                key=lambda n: (
+                    -trx_by_npi[n],
+                    -len(ndc_distinct_by_npi[n]),
+                    n,
+                ),
+            )
+            n_members = len(ordered)
+            if n_members == 0:
+                continue
+            # Equal-frequency 10-bin decile. Top-ranked HCP (rank 0) is in
+            # decile 10. We compute decile as
+            #     decile = 10 - floor(rank * 10 / n_members), clamped to [1, 10].
+            # With n_members < 10 each HCP lands in a distinct top-decile;
+            # ZIP3s with very few HCPs collapse into the top deciles which
+            # is the desired behavior (small market = each HCP is high-priority).
+            for rank, npi in enumerate(ordered):
+                decile = 10 - (rank * 10 // n_members)
+                decile = max(1, min(10, decile))
+                tier_by_npi[npi] = PRIORITY_TIER_DECILE_MAP.get(decile, PRIORITY_TIER_DEFAULT)
+
+        return tier_by_npi, zip3_by_npi, trx_by_npi
+
+    # ------------------------------------------------------------------ #
+    # Issue #156 item 2: influence_network via shared-patient clique     #
+    # ------------------------------------------------------------------ #
+
+    def _compute_influence_network(
+        self, kept_patids: set[int]
+    ) -> tuple[dict[str, int], dict[str, float]]:
+        """Issue #156 item 2: shared-patient clique → degree + eigenvector_centrality.
+
+        For each patient in ``kept_patids``, collect the set of treating
+        HCPs from ``medication.npi ∪ procedure.npi`` (any visit / fill —
+        not just biologic). Each per-patient set forms a clique; the
+        weighted HCP-HCP graph aggregates over patients.
+
+        Returns:
+          - degree_by_npi: ``influence_network_size`` per HCP
+          - centrality_by_npi: ``peer_influence_score`` per HCP, scaled
+            from ``eigenvector_centrality`` [0,1] → [0.00, 9.99] to fit
+            DECIMAL(3,2). Power-iteration failures (rare; disconnected
+            singletons) fall back to 0.0.
+
+        IMPORTANT: this is a CLAIMS-DERIVED PROXY for KOL influence, NOT
+        canonical KOL data. Canonical KOL data requires external
+        commercial sources (Definitive Healthcare, HCS Spectrum) or
+        PubMed co-authorship — explicitly out of scope per issue #156.
+        Documented in the data dictionary.
+        """
+        try:
+            import networkx as nx
+        except ImportError:
+            logger.warning(
+                "networkx not available — influence_network fields will be None. "
+                "Add networkx>=3.0 to dependencies."
+            )
+            return {}, {}
+
+        # Per-patient HCP sets across med + proc.
+        hcps_by_patient: dict[int, set[str]] = defaultdict(set)
+
+        def _collect(df: pd.DataFrame) -> None:
+            if "npi" not in df.columns or "patid" not in df.columns:
+                return
+            sub = df[df["patid"].isin(kept_patids)]
+            for _, r in sub.iterrows():
+                nv = r.get("npi")
+                if pd.isna(nv):
+                    continue
+                ns = str(nv).strip()
+                if not ns or ns == "nan":
+                    continue
+                hcps_by_patient[int(r["patid"])].add(ns)
+
+        _collect(self.med)
+        _collect(self.proc)
+
+        # Aggregate to undirected weighted edge counts.
+        edge_weight: dict[tuple[str, str], int] = defaultdict(int)
+        node_set: set[str] = set()
+        for hcp_set in hcps_by_patient.values():
+            members = sorted(hcp_set)
+            node_set.update(members)
+            n = len(members)
+            for i in range(n):
+                for j in range(i + 1, n):
+                    edge_weight[(members[i], members[j])] += 1
+
+        if not node_set:
+            return {}, {}
+
+        graph: Any = nx.Graph()
+        graph.add_nodes_from(node_set)
+        for (a, b), w in edge_weight.items():
+            graph.add_edge(a, b, weight=w)
+
+        degree_by_npi: dict[str, int] = {n: int(graph.degree(n)) for n in graph.nodes()}
+
+        # eigenvector_centrality may not converge on disconnected graphs.
+        # Compute per connected component to avoid PowerIterationFailedConvergence,
+        # then map back to global keys. Singletons (no edges) get 0.0.
+        centrality_raw: dict[str, float] = dict.fromkeys(graph.nodes(), 0.0)
+        for component in nx.connected_components(graph):
+            sub_g = graph.subgraph(component)
+            if sub_g.number_of_edges() == 0:
+                continue
+            try:
+                c = nx.eigenvector_centrality(sub_g, max_iter=1000, tol=1e-6, weight="weight")
+            except nx.PowerIterationFailedConvergence:
+                logger.warning(
+                    "eigenvector_centrality failed on component size %d — falling back to 0.0",
+                    sub_g.number_of_nodes(),
+                )
+                continue
+            for k, v in c.items():
+                centrality_raw[k] = float(v)
+
+        centrality_by_npi: dict[str, float] = {}
+        for n, v in centrality_raw.items():
+            scaled = round(min(v, 1.0) * PEER_INFLUENCE_SCALE, 2)
+            # Clamp into DECIMAL(3,2) range [0.00, 9.99].
+            centrality_by_npi[n] = max(0.0, min(9.99, scaled))
+
+        return degree_by_npi, centrality_by_npi
+
+    def _build_hcp_profiles(
+        self,
+        kept_patids: set[int],
+        idx_by_patid: dict[int, pd.Timestamp] | None = None,
+    ) -> list[dict[str, Any]]:
         # Collect obfuscated NPIs from med + proc for kept patients.
         npi_rx: dict[str, int] = {}
         npi_pat: dict[str, set[int]] = {}
@@ -2914,6 +3222,12 @@ class OptumDataConverter:
             kept_patids, npi_rx, xolair_launch
         )
         adoption_by_npi = rwdc.classify_rogers_adoption(hcp_days_to_first_fill)
+
+        # Issue #156 item 1 + item 2: priority_tier + influence_network.
+        priority_tier_by_npi, zip3_by_npi, _trx_by_npi = self._compute_priority_tiers(
+            kept_patids, npi_pat, idx_by_patid
+        )
+        influence_size_by_npi, peer_score_by_npi = self._compute_influence_network(kept_patids)
 
         for seq, obf in enumerate(sorted(npi_rx.keys())):
             rx = npi_rx[obf]
@@ -3015,7 +3329,7 @@ class OptumDataConverter:
                     "state": state_val,
                     "city": city_val,
                     "zip_code": zip_code_val,
-                    "priority_tier": None,
+                    "priority_tier": priority_tier_by_npi.get(obf, PRIORITY_TIER_DEFAULT),
                     "decile": None,
                     "total_patient_volume": pv,
                     "target_patient_volume": None,
@@ -3027,8 +3341,8 @@ class OptumDataConverter:
                     "preferred_channel": None,
                     "last_interaction_date": None,
                     "interaction_frequency": None,
-                    "influence_network_size": None,
-                    "peer_influence_score": None,
+                    "influence_network_size": influence_size_by_npi.get(obf),
+                    "peer_influence_score": peer_score_by_npi.get(obf),
                     "adoption_category": adoption,
                     "dupixent_offlabel": dupixent_offlabel,
                     "coverage_status": None,
@@ -3206,6 +3520,64 @@ class OptumDataConverter:
                     "source_timestamp) / 3600). Negative for rare back-"
                     "dated drops; downstream consumers should surface "
                     "the anomaly."
+                ),
+            },
+            # Issue #156 item 1: priority_tier
+            {
+                "feature": "priority_tier",
+                "type": "int (1=high, 5=low)",
+                "source_table": "medication (CSU biologic fills) via NPI + demographics.zipcode_5",
+                "lookback_window": "rolling 365d ending at cohort latest index_date",
+                "notes": (
+                    "Issue #156 item 1 — rolling 12-month CSU biologic "
+                    "TRx aggregated per (NPI, ZIP3) → equal-frequency "
+                    "decile within each ZIP3 → mapped to 5-tier scale "
+                    "(decile 10=tier 1, 8-9=tier 2, 4-7=tier 3, 2-3=tier "
+                    "4, 1=tier 5). HCPs with TRx=0 in window or no "
+                    "resolvable ZIP3 default to tier 5 (kept in scoreable "
+                    "pool, not excluded). Tie-break: descending NDC-"
+                    "distinct count, then ascending alphabetical NPI. "
+                    "ZIP3 (not ZIP5) chosen because ZIP5 has too few "
+                    "HCPs per bin for stable decile assignment. NPI ZIP3 "
+                    "is the modal ZIP3 across the HCP's treated patients "
+                    "in the cohort."
+                ),
+            },
+            # Issue #156 item 2: influence_network_size + peer_influence_score
+            {
+                "feature": "influence_network_size",
+                "type": "int (degree)",
+                "source_table": "medication.npi ∪ procedure.npi (CLAIMS-DERIVED PROXY)",
+                "lookback_window": "all kept-cohort claims",
+                "notes": (
+                    "Issue #156 item 2 — degree (neighbor count) in the "
+                    "shared-patient HCP-HCP graph. For each kept patient, "
+                    "the set of treating HCPs (across medication ∪ "
+                    "procedure) forms a clique; edge weight = number of "
+                    "shared patients across two NPIs. Graph computed via "
+                    "networkx.Graph. CLAIMS-DERIVED PROXY for KOL "
+                    "influence — canonical KOL data requires external "
+                    "commercial sources (Definitive Healthcare, HCS "
+                    "Spectrum) or PubMed co-authorship, which is "
+                    "explicitly out of scope (issue #156)."
+                ),
+            },
+            {
+                "feature": "peer_influence_score",
+                "type": "float DECIMAL(3,2) ∈ [0.00, 9.99]",
+                "source_table": "medication.npi ∪ procedure.npi (CLAIMS-DERIVED PROXY)",
+                "lookback_window": "all kept-cohort claims",
+                "notes": (
+                    "Issue #156 item 2 — weighted eigenvector_centrality "
+                    "computed on the shared-patient graph (see "
+                    "influence_network_size). Raw centrality ∈ [0, 1] is "
+                    "scaled by PEER_INFLUENCE_SCALE=9.99 then clamped to "
+                    "fit DECIMAL(3,2). Computed per-component to avoid "
+                    "PowerIterationFailedConvergence on disconnected "
+                    "subgraphs; singletons (no edges) get 0.0. CLAIMS-"
+                    "DERIVED PROXY for KOL influence — see "
+                    "influence_network_size notes for canonical-data "
+                    "scope deferral."
                 ),
             },
         ]
