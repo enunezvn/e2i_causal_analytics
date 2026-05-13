@@ -148,10 +148,25 @@ class _FakeFalkorGraph:
             return _Result(result_set=rows)
 
         # Cohort-scoped influence-network traversal (depth 1 only for
-        # the cohort-isolation test). We use depth 1 because the
-        # persistence schema is bipartite-by-edge (HCP-HCP only), so
-        # 1-hop neighbours are sufficient to verify the WHERE predicate.
-        if "WHERE connected.cohort_id" in c and "[*1.." in c:
+        # the cohort-isolation test). The production Cypher AFTER
+        # codex pass-1 MEDIUM-1 is path-bound and SHARED_PATIENTS-typed:
+        #
+        #   MATCH path = (h:HCP {id, cohort_id})
+        #     -[:SHARED_PATIENTS*1..N]-(connected)
+        #   WHERE connected.cohort_id = $cohort_id
+        #     AND all(r IN relationships(path) WHERE r.cohort_id = $cohort_id)
+        #
+        # The fake honours that contract by ONLY traversing edges whose
+        # cohort_id matches AND only respecting SHARED_PATIENTS edges
+        # (which is the only edge type the fake stores — extra edge
+        # types would never enter via persist_graph_to_falkordb, but
+        # the test_cross_relationship_leak test below seeds a fake
+        # cross-cohort/relationship edge to verify the predicate.
+        if (
+            "WHERE connected.cohort_id" in c
+            and ":SHARED_PATIENTS" in c
+            and "relationships(path)" in c
+        ):
             hcp_id = params["hcp_id"]
             cohort = params["cohort_id"]
             neighbours: set[str] = set()
@@ -162,15 +177,23 @@ class _FakeFalkorGraph:
                     neighbours.add(dst)
                 elif dst == hcp_id:
                     neighbours.add(src)
-            # Return one row per connected node (count if asked, else
-            # node-shape stub). We don't fabricate full node objects
-            # since this branch is only hit by the count helper in this
-            # test suite.
             if "count(DISTINCT connected)" in c:
                 return _Result(result_set=[[len(neighbours)]])
-            # Otherwise return raw IDs (good enough for cohort-isolation
-            # assertions).
             return _Result(result_set=[[n] for n in sorted(neighbours)])
+
+        # 1-hop SHARED_PATIENTS degree count (count_hcp_influence_degree).
+        if "-[:SHARED_PATIENTS]-(neighbor:HCP" in c:
+            hcp_id = params["hcp_id"]
+            cohort = params["cohort_id"]
+            neighbours = set()
+            for ec, src, dst in self.edges:
+                if ec != cohort:
+                    continue
+                if src == hcp_id:
+                    neighbours.add(dst)
+                elif dst == hcp_id:
+                    neighbours.add(src)
+            return _Result(result_set=[[len(neighbours)]])
 
         raise AssertionError(f"_FakeFalkorGraph saw unexpected Cypher:\n{c[:200]}")
 
@@ -448,14 +471,31 @@ class TestReplaceFlag:
 class TestSemanticMemoryCohortFilter:
     """Verify the semantic_memory.py extension accepts ``cohort_id``."""
 
-    def test_cohort_filter_param_threaded(self) -> None:
-        """get_hcp_influence_network + count_hcp_influence_network accept cohort_id."""
+    @staticmethod
+    def _wired_semantic_memory(fake: "_FakeFalkorGraph") -> Any:
         from unittest.mock import MagicMock, patch
 
         from src.memory.semantic_memory import FalkorDBSemanticMemory
 
+        client = MagicMock()
+        client.select_graph.return_value = fake
+        cfg = MagicMock()
+        cfg.semantic.graph_name = "e2i_semantic"
+        with (
+            patch("src.memory.semantic_memory.get_config", return_value=cfg),
+            patch(
+                "src.memory.semantic_memory.get_falkordb_client",
+                return_value=client,
+            ),
+        ):
+            sm = FalkorDBSemanticMemory()
+            _ = sm.client
+            _ = sm.graph
+            return sm
+
+    def test_cohort_filter_param_threaded(self) -> None:
+        """get_hcp_influence_network + count_hcp_influence_network accept cohort_id."""
         fake = _FakeFalkorGraph()
-        # Seed two cohorts both containing HCP "X" with disjoint neighbours.
         med_a = pd.DataFrame(
             [
                 {"patid": 1, "npi": "X", "medication_date": pd.Timestamp("2024-05-15")},
@@ -476,26 +516,64 @@ class TestSemanticMemoryCohortFilter:
         persist_graph_to_falkordb(ga, fake, cohort_id="cohort_a")
         persist_graph_to_falkordb(gb, fake, cohort_id="cohort_b")
 
-        # Wire the fake into a FalkorDBSemanticMemory instance.
-        client = MagicMock()
-        client.select_graph.return_value = fake
-        cfg = MagicMock()
-        cfg.semantic.graph_name = "e2i_semantic"
-        with (
-            patch("src.memory.semantic_memory.get_config", return_value=cfg),
-            patch(
-                "src.memory.semantic_memory.get_falkordb_client",
-                return_value=client,
-            ),
-        ):
-            sm = FalkorDBSemanticMemory()
-            _ = sm.client  # force lazy init
-            _ = sm.graph
-            count_a = sm.count_hcp_influence_network("X", max_depth=1, cohort_id="cohort_a")
-            count_b = sm.count_hcp_influence_network("X", max_depth=1, cohort_id="cohort_b")
-
+        sm = self._wired_semantic_memory(fake)
+        count_a = sm.count_hcp_influence_network("X", max_depth=1, cohort_id="cohort_a")
+        count_b = sm.count_hcp_influence_network("X", max_depth=1, cohort_id="cohort_b")
         assert count_a == 1  # X is connected to A1 only in cohort_a
         assert count_b == 1  # X is connected to B1 only in cohort_b
+
+    def test_count_hcp_influence_degree_matches_parquet(self) -> None:
+        """Codex pass-1 MEDIUM-2: count_hcp_influence_degree == Parquet degree."""
+        fake = _FakeFalkorGraph()
+        kept, idx, med, proc = _make_synthetic_cohort(n_hcps=15, n_patients=30, seed=11)
+        graph = build_hcp_influence_graph(kept_patids=kept, med=med, proc=proc, idx_by_patid=idx)
+        persist_graph_to_falkordb(graph, fake, cohort_id="C")
+        parquet_deg, _ = score_hcp_influence_graph(graph)
+        sm = self._wired_semantic_memory(fake)
+        for npi, expected in parquet_deg.items():
+            got = sm.count_hcp_influence_degree(npi, cohort_id="C")
+            assert got == expected, f"degree mismatch for {npi}: got={got} expected={expected}"
+
+    def test_cross_cohort_edge_traversal_blocked(self) -> None:
+        """Codex pass-1 LOW-1 + MEDIUM-1: terminal-only predicate would leak.
+
+        A node tagged with the requested ``cohort_id`` that is ONLY
+        reachable via an edge tagged with a DIFFERENT cohort must NOT
+        appear in the traversal. The post-fix Cypher constrains every
+        relationship in the path via
+        ``all(r IN relationships(path) WHERE r.cohort_id = $cohort_id)``.
+        """
+        fake = _FakeFalkorGraph()
+        med_a = pd.DataFrame(
+            [
+                {"patid": 1, "npi": "X", "medication_date": pd.Timestamp("2024-05-15")},
+                {"patid": 1, "npi": "A", "medication_date": pd.Timestamp("2024-05-16")},
+            ]
+        )
+        empty = pd.DataFrame(columns=["patid", "npi", "proc_date"])
+        ga = build_hcp_influence_graph({1}, med_a, empty, {1: pd.Timestamp("2024-06-01")})
+        persist_graph_to_falkordb(ga, fake, cohort_id="A")
+
+        # Manually inject a cohort-mismatched rogue edge: node Z is
+        # tagged cohort_id="A" but the X-Z edge is tagged cohort_id="B".
+        # The path-bound Cypher must reject the traversal.
+        fake.nodes[("A", "Z")] = {
+            "id": "Z",
+            "npi": "Z",
+            "cohort_id": "A",
+            "ingested_at": "test",
+            "e2i_entity_type": "hcp",
+        }
+        fake.edges[("B", "X", "Z")] = {
+            "weight": 1,
+            "cohort_id": "B",
+            "ingested_at": "test",
+        }
+
+        sm = self._wired_semantic_memory(fake)
+        count_a = sm.count_hcp_influence_network("X", max_depth=2, cohort_id="A")
+        # Only the legitimate cohort-A neighbour (A) should be reachable.
+        assert count_a == 1
 
 
 class TestLoadCohortInputs:
