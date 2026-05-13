@@ -1466,7 +1466,7 @@ def _scenario_to_dataframe(
             ``None`` preserves the default (6000 for all four scenarios) so
             no-flag invocations remain bit-identical to the pre-PR baseline.
         imbalance_ratio: Defense-in-depth (backlog #21.7). Must be ``None`` for
-            scenario regimes. The CLI guard at lines 7132-7155 already rejects
+            scenario regimes. The CLI guard at lines 7168-7192 already rejects
             ``--imbalanced`` under ``--regime scenario_*`` at the argparse
             boundary; this parameter is the function-level mirror so a
             programmatic caller bypassing argparse cannot silently drop the
@@ -1492,7 +1492,7 @@ def _scenario_to_dataframe(
         # relabel would corrupt feature ↔ target correlation. scenario_a_balanced
         # re-calibrates prevalence to 0.50 via intercept solver INSIDE the DGP,
         # preserving signal; that is the right tool for a 50:50 cohort. See
-        # backlog #21.7 + CLI guard at scripts/run_tier0_test.py:7132-7155.
+        # backlog #21.7 + CLI guard at scripts/run_tier0_test.py:7168-7192.
         if imbalance_ratio == 0.50:
             redirect = (
                 "Use regime='scenario_a_balanced' for a signal-preserving "
@@ -7167,8 +7167,8 @@ def main():
         )
 
     # --imbalanced × scenario-regime conflict (backlog #21.7): the synthetic_v2
-    # dispatch in generate_sample_data:1469 returns BEFORE the relabel block at
-    # lines 1494-1506, so --imbalanced is silently ignored under any
+    # dispatch in generate_sample_data:1579 returns BEFORE the relabel block at
+    # lines 1609-1621, so --imbalanced is silently ignored under any
     # --regime scenario_*. Discovered during plan Phase 3.3 contrast empirically
     # (conditions A and C produced bit-identical metrics for seed=42).
     # Fail loud at the CLI boundary instead of silently dropping the flag.
@@ -7187,8 +7187,8 @@ def main():
             )
         parser.error(
             f"--imbalanced {args.imbalanced} is silently ignored under "
-            f"--regime {args.regime} (generate_sample_data:1469 returns before "
-            f"the relabel block at lines 1494-1506). " + redirect
+            f"--regime {args.regime} (generate_sample_data:1579 returns before "
+            f"the relabel block at lines 1609-1621). " + redirect
         )
 
     # Update config
