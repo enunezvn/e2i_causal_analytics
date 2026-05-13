@@ -226,6 +226,278 @@ class TestFeedbackLoopRiskRoundTrip:
         assert isinstance(rows, list)
         conn.rollback()
 
+    @pytest.mark.parametrize(
+        "prediction_type,truth_fn",
+        [
+            ("trigger", "assign_truth_script_conversion"),
+            ("next_best_action", "assign_truth_next_best_action"),
+        ],
+    )
+    def test_run_feedback_loop_trigger_and_nba_callable_post_039(
+        self, conn, prediction_type, truth_fn
+    ) -> None:
+        """Issue #182 — migration 039 stripped ``LEFT JOIN triggers t ON
+        t.prediction_id = p.prediction_id`` plus the ``t.trigger_id`` /
+        ``t.status`` / ``t.trigger_status`` references from
+        ``assign_truth_script_conversion`` and
+        ``assign_truth_next_best_action``. Pre-039, every execution of
+        either function (reachable via ``run_feedback_loop('trigger')``
+        and ``run_feedback_loop('next_best_action')`` — wired into the
+        4-hourly Celery beat schedule at
+        ``src/tasks/feedback_loop_tasks.py:40``) raises
+        ``column t.prediction_id does not exist`` at plan time because
+        the real ``triggers`` schema has neither column.
+
+        This test pins the post-039 callable state for both functions.
+        We call ``run_feedback_loop(...)`` rather than the underlying
+        truth-assignment helpers directly so the orchestrator's CASE
+        dispatch (006 §6 lines 704-714) is exercised too.
+
+        Side effects rolled back so this test does not interact with
+        the time-travel tests below.
+        """
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM pg_proc WHERE proname = %s", (truth_fn,))
+            assert cur.fetchone() is not None, (
+                f"{truth_fn} not installed — migration 006/038/039 may be missing"
+            )
+            cur.execute("SELECT * FROM run_feedback_loop(%s)", (prediction_type,))
+            rows = cur.fetchall()
+        assert isinstance(rows, list)
+        # ``run_feedback_loop`` returns one row per active
+        # ml_feedback_loop_config entry matching the filter. The
+        # 'trigger' and 'next_best_action' rows are both is_active=true
+        # per migration 006 §7 seeding.
+        assert len(rows) >= 1, (
+            f"run_feedback_loop({prediction_type!r}) returned no rows — "
+            "ml_feedback_loop_config row missing or inactive"
+        )
+        type_row = next((r for r in rows if r[0] == prediction_type), None)
+        assert type_row is not None, (
+            f"No {prediction_type!r} row in run_feedback_loop output: {rows!r}"
+        )
+        # 006 §6: COMPLETED if no exception, FAILED otherwise. Pre-039
+        # would be FAILED with the t.prediction_id schema-drift error.
+        assert type_row[1] == "COMPLETED", (
+            f"run_feedback_loop({prediction_type!r}) status = {type_row[1]!r} "
+            "(expected COMPLETED). Pre-039 this raises on the "
+            f"LEFT JOIN triggers schema drift. Full row: {type_row!r}"
+        )
+        conn.rollback()
+
+    @pytest.mark.parametrize(
+        "fn_name",
+        ["assign_truth_script_conversion", "assign_truth_next_best_action"],
+    )
+    def test_truth_assignment_function_has_no_triggers_join(self, conn, fn_name) -> None:
+        """Issue #182 — migration 039 must strip the ``LEFT JOIN triggers``
+        clause and every ``t.<column>`` reference (``t.prediction_id``,
+        ``t.status``, ``t.trigger_id``, ``t.trigger_status``) from
+        ``assign_truth_script_conversion`` and
+        ``assign_truth_next_best_action``. The real ``triggers`` table has
+        no ``prediction_id`` / ``status`` columns and no FK back to
+        ``ml_predictions`` (see ``database/core/e2i_ml_complete_v3_schema.sql``
+        §3.6 lines 579-619 — real status columns are ``delivery_status``
+        and ``acceptance_status``).
+        """
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pg_get_functiondef(oid) FROM pg_proc WHERE proname = %s",
+                (fn_name,),
+            )
+            row = cur.fetchone()
+        assert row is not None, f"{fn_name} function not found — migration 006/038/039 not applied?"
+        fn_src_lower = row[0].lower()
+        assert "join triggers " not in fn_src_lower, (
+            f"{fn_name} still joins on the `triggers` table — migration 039 "
+            "(issue #182) not applied or was reverted."
+        )
+        for tok in ("t.prediction_id", "t.status", "t.trigger_id", "t.trigger_status"):
+            assert tok not in fn_src_lower, (
+                f"{fn_name} still references `{tok}` — migration 039 "
+                "(issue #182) not applied or was reverted."
+            )
+        conn.rollback()
+
+    def test_assign_truth_script_conversion_labels_positive_on_prescription(self, conn) -> None:
+        """Issue #182 acceptance criterion 2 — integration test exercises
+        ``assign_truth_script_conversion`` via the
+        ``run_feedback_loop('trigger')`` caller path. Seeds an old
+        PENDING 'trigger' prediction + a single in-window prescription
+        for the same HCP, then asserts the truth-backfill produces
+        POSITIVE with ``truth_source='treatment_events'`` (the post-039
+        value, ex-``triggers_treatment_events``).
+
+        Isolation: every other PENDING 'trigger' row is moved to
+        EXCLUDED inside the transaction so our seeded row wins the
+        LIMIT 1000 race; everything rolls back in `finally`.
+        """
+        suffix = uuid.uuid4().hex[:10]
+        patient_id = f"PT182_{suffix}"
+        pjid = f"PJ182_{suffix}"
+        prediction_id = f"trg182_{suffix}_{uuid.uuid4().hex[:6]}"
+        hcp_id = f"HCP182_{suffix[:8]}"
+        # observation_window_days = 21 per 006 §7 seeding for 'trigger'
+        old_ts = datetime.now(timezone.utc) - timedelta(days=60)
+
+        try:
+            with conn.cursor() as cur:
+                # Isolate other eligible PENDING 'trigger' rows.
+                cur.execute(
+                    "UPDATE ml_predictions SET outcome_label = 'EXCLUDED' "
+                    "WHERE prediction_type = 'trigger' "
+                    "AND outcome_label = 'PENDING' "
+                    "AND prediction_timestamp < NOW() - INTERVAL '21 days' "
+                    "AND prediction_id <> %s",
+                    (prediction_id,),
+                )
+
+                # Seed HCP, patient journey, prediction, prescription event.
+                cur.execute(
+                    "INSERT INTO hcp_profiles (hcp_id, first_name, last_name, "
+                    "specialty, npi) VALUES (%s, 'Test', 'HCP', 'Dermatology', %s) "
+                    "ON CONFLICT (hcp_id) DO NOTHING",
+                    (hcp_id, f"99{suffix[:8]}"),
+                )
+                cur.execute(
+                    "INSERT INTO patient_journeys "
+                    "(patient_journey_id, patient_id, journey_start_date, journey_stage) "
+                    "VALUES (%s, %s, %s, 'initial_treatment')",
+                    (pjid, patient_id, old_ts.date()),
+                )
+                cur.execute(
+                    "INSERT INTO ml_predictions "
+                    "(prediction_id, model_version, model_type, "
+                    "prediction_timestamp, patient_id, hcp_id, "
+                    "prediction_type, prediction_value, confidence_score, "
+                    "outcome_label) "
+                    "VALUES (%s, 'trigger_v1', 'xgboost', %s, %s, %s, "
+                    "'trigger', 0.50, 0.50, 'PENDING')",
+                    (prediction_id, old_ts, patient_id, hcp_id),
+                )
+                # In-window prescription (post-prediction, within 21 days).
+                fill_date = (old_ts + timedelta(days=5)).date()
+                event_id = f"TE_{uuid.uuid4().hex[:14]}"
+                cur.execute(
+                    "INSERT INTO treatment_events "
+                    "(treatment_event_id, patient_journey_id, patient_id, hcp_id, "
+                    "event_date, event_type, duration_days, brand) "
+                    "VALUES (%s, %s, %s, %s, %s, 'prescription', 30, 'Fabhalta')",
+                    (event_id, pjid, patient_id, hcp_id, fill_date),
+                )
+
+                cur.execute("SELECT * FROM run_feedback_loop('trigger')")
+                loop_rows = cur.fetchall()
+                trigger_row = next((r for r in loop_rows if r[0] == "trigger"), None)
+                assert trigger_row is not None
+                assert trigger_row[1] == "COMPLETED", (
+                    f"run_feedback_loop('trigger') failed: {trigger_row!r}"
+                )
+
+                cur.execute(
+                    "SELECT actual_outcome, outcome_label, truth_source "
+                    "FROM ml_predictions WHERE prediction_id = %s",
+                    (prediction_id,),
+                )
+                row = cur.fetchone()
+
+            assert row is not None
+            actual, outcome_label, truth_source = row
+            assert actual is not None, (
+                "actual_outcome was not backfilled — script_conversion "
+                "truth-assignment didn't pick up the seeded prediction. "
+                f"loop_rows={loop_rows!r}"
+            )
+            assert float(actual) == pytest.approx(1.0, abs=1e-3)
+            assert outcome_label == "POSITIVE"
+            # Post-039: truth_source is 'treatment_events' (was
+            # 'treatment_events' on the live droplet too — never
+            # 'triggers_treatment_events' for script_conversion; that
+            # literal applied only to next_best_action pre-039).
+            assert truth_source == "treatment_events", (
+                f"Expected truth_source='treatment_events' but got {truth_source!r}"
+            )
+        finally:
+            conn.rollback()
+
+    def test_assign_truth_next_best_action_labels_negative_no_activity(self, conn) -> None:
+        """Issue #182 acceptance criterion 2 — integration test exercises
+        ``assign_truth_next_best_action`` via ``run_feedback_loop('next_best_action')``.
+        Seeds an old PENDING 'next_best_action' prediction with NO
+        downstream treatment_events; asserts NEGATIVE with
+        ``truth_source='treatment_events'`` (post-039 value;
+        ex-``triggers_treatment_events`` pre-039).
+        """
+        suffix = uuid.uuid4().hex[:10]
+        patient_id = f"PTN182_{suffix[:9]}"
+        pjid = f"PJN182_{suffix[:9]}"
+        prediction_id = f"nba182_{suffix}_{uuid.uuid4().hex[:6]}"
+        hcp_id = f"HCN182_{suffix[:8]}"
+        # observation_window_days = 30 per 006 §7 seeding for 'next_best_action'
+        old_ts = datetime.now(timezone.utc) - timedelta(days=60)
+
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE ml_predictions SET outcome_label = 'EXCLUDED' "
+                    "WHERE prediction_type = 'next_best_action' "
+                    "AND outcome_label = 'PENDING' "
+                    "AND prediction_timestamp < NOW() - INTERVAL '30 days' "
+                    "AND prediction_id <> %s",
+                    (prediction_id,),
+                )
+
+                cur.execute(
+                    "INSERT INTO hcp_profiles (hcp_id, first_name, last_name, "
+                    "specialty, npi) VALUES (%s, 'Test', 'HCP', 'Dermatology', %s) "
+                    "ON CONFLICT (hcp_id) DO NOTHING",
+                    (hcp_id, f"98{suffix[:8]}"),
+                )
+                cur.execute(
+                    "INSERT INTO patient_journeys "
+                    "(patient_journey_id, patient_id, journey_start_date, journey_stage) "
+                    "VALUES (%s, %s, %s, 'initial_treatment')",
+                    (pjid, patient_id, old_ts.date()),
+                )
+                cur.execute(
+                    "INSERT INTO ml_predictions "
+                    "(prediction_id, model_version, model_type, "
+                    "prediction_timestamp, patient_id, hcp_id, "
+                    "prediction_type, prediction_value, confidence_score, "
+                    "outcome_label) "
+                    "VALUES (%s, 'nba_v1', 'xgboost', %s, %s, %s, "
+                    "'next_best_action', 0.30, 0.30, 'PENDING')",
+                    (prediction_id, old_ts, patient_id, hcp_id),
+                )
+                # NO downstream treatment_events seeded → NEGATIVE.
+
+                cur.execute("SELECT * FROM run_feedback_loop('next_best_action')")
+                loop_rows = cur.fetchall()
+                nba_row = next((r for r in loop_rows if r[0] == "next_best_action"), None)
+                assert nba_row is not None
+                assert nba_row[1] == "COMPLETED", (
+                    f"run_feedback_loop('next_best_action') failed: {nba_row!r}"
+                )
+
+                cur.execute(
+                    "SELECT actual_outcome, outcome_label, truth_source "
+                    "FROM ml_predictions WHERE prediction_id = %s",
+                    (prediction_id,),
+                )
+                row = cur.fetchone()
+
+            assert row is not None
+            actual, outcome_label, truth_source = row
+            assert actual is not None
+            assert float(actual) == pytest.approx(0.0, abs=1e-3)
+            assert outcome_label == "NEGATIVE"
+            assert truth_source == "treatment_events", (
+                f"Expected post-039 truth_source='treatment_events' "
+                f"(was 'triggers_treatment_events' pre-039) but got {truth_source!r}"
+            )
+        finally:
+            conn.rollback()
+
     def _isolate_other_pending_risk_rows(self, conn) -> None:
         """Temporarily move other eligible PENDING risk predictions out
         of the ``assign_truth_treatment_response`` candidate set so
