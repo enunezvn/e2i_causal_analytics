@@ -182,20 +182,35 @@ class TestFeedbackLoopRiskRoundTrip:
         (codex pass-1 HIGH-1). The in-place fix to 006 §2.4 strips
         ``brand`` from the index keys.
 
-        This test asserts that if either historically-named index
-        exists, its ``indexdef`` does NOT mention ``brand``.
+        Codex pass-2 MEDIUM-2: assert the indexed COLUMN list specifically
+        excludes ``brand``, not the whole ``indexdef`` (which embeds the
+        index name and would false-positive on the historical
+        ``idx_predictions_*_brand`` token).
         """
+        # Inspect the indexed columns via pg_index / pg_attribute, not
+        # the indexdef text. ``pg_index.indkey`` is an int2vector of
+        # attribute numbers; ``pg_attribute`` resolves them to names.
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT indexname, indexdef FROM pg_indexes "
-                "WHERE indexname IN "
-                "('idx_predictions_hcp_brand', 'idx_predictions_patient_brand')"
+                "SELECT i.relname AS indexname, "
+                "       array_agg(a.attname ORDER BY x.ord) AS columns "
+                "FROM pg_index ix "
+                "JOIN pg_class i ON i.oid = ix.indexrelid "
+                "JOIN pg_class t ON t.oid = ix.indrelid "
+                "JOIN unnest(ix.indkey) WITH ORDINALITY AS x(attnum, ord) "
+                "  ON TRUE "
+                "JOIN pg_attribute a "
+                "  ON a.attrelid = t.oid AND a.attnum = x.attnum "
+                "WHERE i.relname IN "
+                "  ('idx_predictions_hcp_brand', "
+                "   'idx_predictions_patient_brand') "
+                "GROUP BY i.relname"
             )
             rows = cur.fetchall()
-        for name, indexdef in rows:
-            assert "brand" not in indexdef, (
-                f"Index {name!r} still references a brand column: "
-                f"{indexdef!r} — migration 006 §2.4 fix (issue #176) "
+        for indexname, columns in rows:
+            assert "brand" not in columns, (
+                f"Index {indexname!r} key columns still include 'brand': "
+                f"{columns!r} — migration 006 §2.4 fix (issue #176) "
                 "not applied or was reverted."
             )
         conn.rollback()
