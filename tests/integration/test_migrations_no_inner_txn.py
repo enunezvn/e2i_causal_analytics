@@ -133,153 +133,141 @@ _BEGIN_ATOMIC_RE = re.compile(r"\bBEGIN\s+ATOMIC\b", re.IGNORECASE)
 _BARE_END_RE = re.compile(r"^END\s*;\s*$", re.IGNORECASE)
 
 
-def _strip_inline_comment(line: str) -> str:
-    """Strip a trailing ``-- comment`` from a SQL line, preserving the
-    SQL text before it. Naive: does not handle ``--`` inside string
-    literals, but migration scripts in this project don't use ``--``
-    inside string literals at the script level (PL/pgSQL body comments
-    live inside ``$$ ... $$`` dollar-quoted blocks, which the scanner
-    tracks separately and never invokes this helper for).
+def _tokenize_script_statements(text: str) -> list[tuple[int, str]]:
+    """Unified SQL tokenizer (codex pass-8 MEDIUM-1). Walk the full
+    file once and emit script-level statements as
+    ``(terminator_lineno, statement_text)`` tuples.
+
+    The tokenizer maintains five mutually-exclusive lexical states:
+
+    1. ``normal``: outside any quoting or comment construct.
+    2. ``in_line_comment``: between ``--`` and end-of-line.
+    3. ``in_block_comment``: between ``/*`` and ``*/``.
+    4. ``in_single_quote``: inside a ``'...'`` string literal
+       (with ``''`` doubled-quote escape).
+    5. ``in_dollar_quote``: inside a ``$tag$ ... $tag$`` dollar-quoted
+       block.
+
+    State transitions are recognised ONLY from the ``normal`` state
+    (e.g. a ``$$`` inside a ``'...'`` string is just literal text, not
+    a dollar-block opener). This is critical to avoid the pass-8
+    false-negatives where embedded ``$$``, ``--``, and ``/* */``
+    inside string literals were being interpreted as state
+    transitions.
+
+    Statements end at every ``;`` encountered in ``normal`` state. The
+    returned list contains only terminated statements; any trailing
+    non-terminated text is dropped (the lint cares about complete
+    statements with terminators).
+
+    Each statement is reduced to its body text with comments
+    stripped (comments are skipped during tokenization). Single-
+    and dollar-quoted strings are PRESERVED in the body text so the
+    matchers downstream can still match keywords correctly — keywords
+    are never inside string literals at the statement-head position.
     """
-    idx = line.find("--")
-    if idx >= 0:
-        return line[:idx]
-    return line
-
-
-def _split_line_at_dollar_boundaries(
-    raw_line: str,
-    in_dollar_block: bool,
-    open_tag: str | None,
-) -> tuple[list[str], bool, str | None]:
-    """Split ``raw_line`` into segments of consecutive script-level
-    text (i.e. text NOT inside a dollar-quoted block), returning
-    ``(script_segments, new_in_dollar_block, new_open_tag)``.
-
-    The script-level segments are the portions of the line that the
-    lint should inspect for transaction-control statements. Text
-    inside a dollar-quoted block is omitted from the returned list.
-    This correctly handles same-line script SQL after a dollar-block
-    close, e.g. ``$$; COMMIT;`` returns ``["; COMMIT;"]`` (after the
-    closer) as a script-level segment. Codex pass-2 LOW-2.
-
-    Examples (compact):
-
-      in=False, "$$ BEGIN" -> segments=["$$ BEGIN"]?
-      Actually the opener itself counts as outside-then-transition:
-      the ``$$`` token is treated as the boundary, so the segments
-      collected are the text BEFORE the ``$$`` (outside, returned)
-      and the text AFTER is now inside (omitted until close).
-    """
-    segments: list[str] = []
-    cursor = 0
-    for match in _DOLLAR_QUOTE_RE.finditer(raw_line):
-        boundary_start, boundary_end = match.span()
-        tag = match.group(1) or ""
-        # Text up to (but not including) the boundary marker:
-        prefix = raw_line[cursor:boundary_start]
-        if not in_dollar_block:
-            # Prefix was script-level; capture it.
-            segments.append(prefix)
-        # The boundary marker (``$tag$``) itself is part of the
-        # dollar-quote machinery — it's neither pure script nor pure
-        # body content. We do NOT add it to ``segments``; it carries
-        # no transaction-control semantics.
-        if in_dollar_block:
-            if tag == (open_tag or ""):
-                in_dollar_block = False
-                open_tag = None
-        else:
-            in_dollar_block = True
-            open_tag = tag
-        cursor = boundary_end
-
-    # Tail after the last boundary (or the whole line if no
-    # boundaries): script-level iff we ended OUTSIDE a dollar block.
-    if not in_dollar_block:
-        segments.append(raw_line[cursor:])
-
-    return segments, in_dollar_block, open_tag
-
-
-def _split_statements_outside_strings(text: str) -> list[tuple[str, bool]]:
-    """Split ``text`` on ``;`` boundaries that are NOT inside a
-    single-quoted SQL string literal. Handles SQL's standard
-    ``''`` escape (a doubled single-quote represents a literal
-    apostrophe inside a string, and does NOT close the string).
-
-    Returns a list of ``(statement_text, terminated)`` tuples, where
-    ``terminated`` is ``True`` if the statement was followed by a
-    ``;`` in the source (a complete statement) and ``False`` if it's
-    a trailing partial. Callers must only treat ``terminated=True``
-    entries as full statements — otherwise the lint would fire on
-    multi-line statements that haven't reached their semicolon yet
-    (e.g. ``CASE ... END AS col,`` on a line by itself, codex pass-5
-    follow-up).
-
-    This is a minimal SQL tokenizer scoped to the lint's needs:
-
-    * Tracks ``'`` open/close. Doubled ``''`` toggles in then back
-      out, which is equivalent to "stay open" (per SQL spec).
-    * Does NOT handle PostgreSQL's ``E'\\''`` C-style escape syntax;
-      this repo doesn't use it in migrations. If a future migration
-      starts using ``E'...'``, the tokenizer will need a second
-      state for that quoting style.
-    * Does NOT handle ``"..."`` identifier quoting (no transaction
-      keywords are valid identifiers in standard contexts; double-
-      quoted identifiers can contain ``;`` but never as
-      statement-separator).
-    * Does NOT handle ``/* ... */`` block comments. Migrations in
-      this repo use ``--`` line comments exclusively.
-    * Dollar-quoted strings are already filtered upstream by
-      ``_split_line_at_dollar_boundaries`` — by the time text
-      reaches this function, all content is script-level (outside
-      function bodies). Within a script-level context, dollar
-      quoting is rare (it's primarily a function-body construct)
-      but if it appeared, this tokenizer would NOT skip semicolons
-      inside it. Codex pass-4 documented limitation.
-    * Single-quote state does NOT persist across the caller-supplied
-      text boundary. The scanner currently calls this once per
-      source line, so a multi-line string literal with a ``;`` on
-      its own line would false-positive. Codex pass-5 documented
-      limitation; not a current issue because migrations in this
-      repo do not split string literals across lines.
-
-    Codex pass-4 LOW-1; pass-5 follow-up tuple shape.
-    """
-    statements: list[tuple[str, bool]] = []
-    current: list[str] = []
-    in_single_quote = False
+    statements: list[tuple[int, str]] = []
+    body: list[str] = []
+    terminator_lineno = 1
+    current_lineno = 1
+    state = "normal"
+    open_tag = ""
     i = 0
     n = len(text)
+
     while i < n:
         ch = text[i]
-        if ch == "'":
-            current.append(ch)
-            if in_single_quote:
-                # SQL ``''`` escape: if next char is also ``'``,
-                # consume it and stay inside the string.
+        if ch == "\n":
+            current_lineno += 1
+
+        if state == "normal":
+            # Try state transitions in priority order.
+            if ch == "'":
+                body.append(ch)
+                state = "in_single_quote"
+                i += 1
+                continue
+            if ch == "-" and i + 1 < n and text[i + 1] == "-":
+                state = "in_line_comment"
+                i += 2
+                continue
+            if ch == "/" and i + 1 < n and text[i + 1] == "*":
+                state = "in_block_comment"
+                i += 2
+                continue
+            if ch == "$":
+                # Try to match `$tag$` at this position.
+                dollar_match = _DOLLAR_QUOTE_RE.match(text, i)
+                if dollar_match is not None:
+                    open_tag = dollar_match.group(1) or ""
+                    body.append(dollar_match.group(0))
+                    i = dollar_match.end()
+                    state = "in_dollar_quote"
+                    continue
+            if ch == ";":
+                # End of statement.
+                statement = "".join(body).strip()
+                if statement:
+                    statements.append((current_lineno, statement))
+                body = []
+                terminator_lineno = current_lineno
+                i += 1
+                continue
+            body.append(ch)
+            i += 1
+            continue
+
+        if state == "in_line_comment":
+            if ch == "\n":
+                state = "normal"
+                # Newline itself is whitespace at script level.
+                body.append(" ")
+            i += 1
+            continue
+
+        if state == "in_block_comment":
+            if ch == "*" and i + 1 < n and text[i + 1] == "/":
+                state = "normal"
+                body.append(" ")
+                i += 2
+                continue
+            i += 1
+            continue
+
+        if state == "in_single_quote":
+            body.append(ch)
+            if ch == "'":
+                # SQL `''` escape: doubled quote = stay inside.
                 if i + 1 < n and text[i + 1] == "'":
-                    current.append(text[i + 1])
+                    body.append(text[i + 1])
                     i += 2
                     continue
-                in_single_quote = False
-            else:
-                in_single_quote = True
+                state = "normal"
             i += 1
             continue
-        if ch == ";" and not in_single_quote:
-            statements.append(("".join(current), True))
-            current = []
+
+        if state == "in_dollar_quote":
+            # Try to match the closing tag at this position.
+            if ch == "$":
+                dollar_match = _DOLLAR_QUOTE_RE.match(text, i)
+                if dollar_match is not None:
+                    tag = dollar_match.group(1) or ""
+                    if tag == open_tag:
+                        body.append(dollar_match.group(0))
+                        i = dollar_match.end()
+                        state = "normal"
+                        open_tag = ""
+                        continue
+            body.append(ch)
             i += 1
             continue
-        current.append(ch)
+
+        # Unreachable — defensive.
         i += 1
-    # Tail (any trailing text after the last ``;`` or whole text if no
-    # ``;`` found). ``terminated=False`` — this is a partial statement
-    # waiting for its semicolon on a subsequent line.
-    if current:
-        statements.append(("".join(current), False))
+
+    # Drop any non-terminated trailing text — the lint only fires on
+    # statements that actually have a `;`.
+    _ = terminator_lineno  # silence unused-var; line citation lives in tuples
     return statements
 
 
@@ -287,127 +275,39 @@ def _scan_for_bare_txn(sql_path: Path) -> list[tuple[int, str]]:
     """Return a list of ``(line_number, line_text)`` for every
     script-level transaction-control statement in ``sql_path``.
 
-    Statements inside dollar-quoted PL/pgSQL function bodies are
-    skipped. The scanner uses ``_split_line_at_dollar_boundaries`` to
-    extract per-line script-level segments, then splits each segment
-    on ``;`` to recover individual statements. Each candidate
-    statement-head is then matched against the txn regex.
-
-    This handles:
-
-    * The historical bug shape: top-of-line ``BEGIN;`` / ``COMMIT;``.
-    * Whole-line-inside-dollar-block: zero script segments → skipped.
-    * Mid-line dollar close followed by script SQL on the same line:
-      the post-close tail is captured as a script segment, then
-      semicolon-split into statements (codex pass-3 LOW-1).
-    * Multi-statement-per-line script SQL like
-      ``ALTER TABLE foo ADD COLUMN bar INTEGER; COMMIT;`` —
-      semicolon-split surfaces the ``COMMIT`` as its own statement
-      and flags it.
+    Uses the unified ``_tokenize_script_statements`` to extract
+    properly-tokenized script-level statements (respecting all of
+    single quotes, dollar quotes, line comments, block comments). For
+    each statement, decides whether it matches the txn regex; tracks
+    ``BEGIN ATOMIC`` function-body context across statements.
     """
     findings: list[tuple[int, str]] = []
     text = sql_path.read_text(encoding="utf-8")
-    in_dollar_block = False
-    open_tag: str | None = None
-    # Codex pass-7 MEDIUM: ``BEGIN ATOMIC`` opens a SQL-standard
-    # function body. Inside it, ``;`` separates body statements and
-    # the closing ``END;`` ends the outer ``CREATE FUNCTION``. We do
-    # not flag txn-control inside ``BEGIN ATOMIC``, nor on the
-    # function-body-closing ``END;``.
+    source_lines = text.splitlines()
+
+    # ``BEGIN ATOMIC`` function-body tracking (codex pass-7 MEDIUM).
     in_atomic_body = False
 
-    # Accumulator for script-level text that spans multiple physical
-    # lines (codex pass-6 MEDIUM: ``BEGIN\n;\n`` is syntactically
-    # equivalent to ``BEGIN;`` in Postgres). Pair each character with
-    # its source line number so findings can cite the line where the
-    # offending statement closes.
-    script_buffer: list[tuple[int, str]] = []
+    for terminator_lineno, statement in _tokenize_script_statements(text):
+        candidate = statement + ";"
 
-    for lineno, raw_line in enumerate(text.splitlines(), start=1):
-        segments, in_dollar_block, open_tag = _split_line_at_dollar_boundaries(
-            raw_line,
-            in_dollar_block,
-            open_tag,
-        )
-        if not segments:
+        # Atomic-body opener?
+        if not in_atomic_body and _BEGIN_ATOMIC_RE.search(statement):
+            in_atomic_body = True
             continue
-        # Strip inline ``--`` comments from each segment BEFORE
-        # accumulating. (After accumulating across lines, a ``--``
-        # in one line would consume the next line's text too,
-        # missing real transaction-control statements.)
-        cleaned_segments = [_strip_inline_comment(seg) for seg in segments]
-        # Pair each segment character with this line's line-number
-        # so findings cite the right line when the statement closes
-        # mid-buffer.
-        for seg in cleaned_segments:
-            for ch in seg:
-                script_buffer.append((lineno, ch))
-            # Replace inter-segment boundaries with a synthetic
-            # whitespace so adjacent segments don't run together.
-            script_buffer.append((lineno, " "))
 
-        # Drain complete statements from the buffer (text up to and
-        # including each script-level ``;``). The drainer respects
-        # single-quote string state. A non-terminated tail remains
-        # in the buffer for the next line to potentially complete.
-        buffer_text = "".join(ch for _, ch in script_buffer)
-        statements = _split_statements_outside_strings(buffer_text)
-        if not statements:
+        if in_atomic_body:
+            if _BARE_END_RE.match(candidate):
+                in_atomic_body = False
             continue
-        # Reconstruct line-number for each statement: each statement
-        # ends at the position of its terminating ``;`` (or the buffer
-        # tail). Walk the buffer's (lineno, ch) pairs to find each
-        # ``;`` position.
-        new_buffer: list[tuple[int, str]] = []
-        cursor = 0
-        for raw_statement, terminated in statements:
-            statement_len = len(raw_statement) + (1 if terminated else 0)
-            statement_end = cursor + statement_len
-            if not terminated:
-                # Leftover tail — preserve for next iteration.
-                new_buffer = script_buffer[cursor:]
-                break
-            # Cite the line where the terminating ``;`` appears
-            # (statement_end - 1 is the ``;``).
-            terminator_lineno = script_buffer[statement_end - 1][0]
-            cursor = statement_end
-            statement = raw_statement.strip()
-            if not statement:
-                continue
-            candidate = statement + ";"
 
-            # Track ``BEGIN ATOMIC`` function-body opener/closer
-            # (codex pass-7 MEDIUM). A statement that CONTAINS
-            # ``BEGIN ATOMIC`` (case-insensitive) enters atomic mode;
-            # while inside, we do NOT flag any txn-control. The
-            # bare ``END;`` that exits the function body takes us
-            # out of atomic mode (without flagging).
-            if not in_atomic_body and _BEGIN_ATOMIC_RE.search(statement):
-                in_atomic_body = True
-                continue
-
-            if in_atomic_body:
-                # Inside ``BEGIN ATOMIC ... END;`` — every internal
-                # ``;`` separates body statements, and the closing
-                # ``END;`` (with no other clauses) exits the body.
-                if _BARE_END_RE.match(candidate):
-                    in_atomic_body = False
-                continue
-
-            if _TXN_STATEMENT_RE.match(candidate):
-                # Recover the raw line text for the citation: re-read
-                # from the source text by line number.
-                source_lines = text.splitlines()
-                cited_line = (
-                    source_lines[terminator_lineno - 1]
-                    if 0 < terminator_lineno <= len(source_lines)
-                    else ""
-                )
-                findings.append((terminator_lineno, cited_line.rstrip()))
-        else:
-            # All statements terminated; clear buffer.
-            new_buffer = []
-        script_buffer = new_buffer
+        if _TXN_STATEMENT_RE.match(candidate):
+            cited_line = (
+                source_lines[terminator_lineno - 1]
+                if 0 < terminator_lineno <= len(source_lines)
+                else ""
+            )
+            findings.append((terminator_lineno, cited_line.rstrip()))
 
     return findings
     return findings
@@ -774,41 +674,46 @@ def test_scanner_detects_isolation_level_split_across_lines(
     assert findings[1][0] == 4  # `;` after COMMIT
 
 
-def test_split_statements_outside_strings_basic_cases() -> None:
-    """Direct unit-test of ``_split_statements_outside_strings`` to
-    pin the tokenizer's behavior.
+def test_tokenize_script_statements_basic_cases() -> None:
+    """Direct unit-test of ``_tokenize_script_statements`` to pin the
+    unified tokenizer's behavior.
 
-    Return shape: ``[(statement_text, terminated_bool)]`` where
-    ``terminated`` is ``True`` iff the source had a ``;`` after the
-    statement.
+    Return shape: ``[(terminator_lineno, statement_text)]`` —
+    statements are emitted only when terminated by ``;``; trailing
+    non-terminated text is dropped.
     """
-    # No string, two statements — first is terminated by `;`, second
-    # is a trailing fragment without `;`.
-    assert _split_statements_outside_strings("BEGIN;COMMIT") == [
-        ("BEGIN", True),
-        ("COMMIT", False),
+    # No string, two statements (one terminator).
+    assert _tokenize_script_statements("BEGIN;COMMIT") == [(1, "BEGIN")]
+    # Trailing semicolon → 1 terminated statement, no tail.
+    assert _tokenize_script_statements("BEGIN;") == [(1, "BEGIN")]
+    # Both terminated.
+    assert _tokenize_script_statements("BEGIN;COMMIT;") == [
+        (1, "BEGIN"),
+        (1, "COMMIT"),
     ]
-    # Trailing semicolon → empty tail dropped (no current text):
-    assert _split_statements_outside_strings("BEGIN;") == [("BEGIN", True)]
-    # Semicolon inside single-quoted string (no split):
-    assert _split_statements_outside_strings("VALUES ('a;b')") == [
-        ("VALUES ('a;b')", False),
+    # Semicolon inside single-quoted string (no split, no
+    # terminator → no statement emitted).
+    assert _tokenize_script_statements("VALUES ('a;b')") == []
+    # Doubled quote escape (no split, no terminator).
+    assert _tokenize_script_statements("VALUES ('it''s;a;test')") == []
+    # Multiple strings + a real terminator.
+    assert _tokenize_script_statements("INSERT INTO t VALUES ('a;b'), ('c;d');COMMIT;") == [
+        (1, "INSERT INTO t VALUES ('a;b'), ('c;d')"),
+        (1, "COMMIT"),
     ]
-    # Doubled quote escape (no split):
-    assert _split_statements_outside_strings("VALUES ('it''s;a;test')") == [
-        ("VALUES ('it''s;a;test')", False),
+    # Empty input.
+    assert _tokenize_script_statements("") == []
+    # Mid-statement fragment without terminator: dropped.
+    assert _tokenize_script_statements("    END AS patient_volume_tier,") == []
+    # Line-number tracking: terminator on line 2.
+    assert _tokenize_script_statements("BEGIN\n;") == [(2, "BEGIN")]
+    # Block comment stripped, no statement.
+    assert _tokenize_script_statements("/* hello */ ALTER TABLE foo ADD bar int;") == [
+        (1, "ALTER TABLE foo ADD bar int")
     ]
-    # Multiple strings + a real terminator:
-    assert _split_statements_outside_strings("INSERT INTO t VALUES ('a;b'), ('c;d');COMMIT") == [
-        ("INSERT INTO t VALUES ('a;b'), ('c;d')", True),
-        ("COMMIT", False),
-    ]
-    # Empty input:
-    assert _split_statements_outside_strings("") == []
-    # Mid-statement fragment with no terminator (codex pass-5
-    # follow-up: must not be classified as terminated):
-    assert _split_statements_outside_strings("    END AS patient_volume_tier,") == [
-        ("    END AS patient_volume_tier,", False),
+    # Line comment stripped.
+    assert _tokenize_script_statements("ALTER TABLE foo -- ignored\nADD bar int;") == [
+        (2, "ALTER TABLE foo  ADD bar int")
     ]
 
 
@@ -882,15 +787,53 @@ def test_scanner_handles_custom_dollar_tags(tmp_path: Path) -> None:
     assert findings == [], f"scanner false-positive on custom dollar tag: {findings}"
 
 
-def test_strip_inline_comment_preserves_sql() -> None:
-    """The comment-stripper must not consume real SQL text before the
-    ``--`` marker.
+def test_scanner_handles_block_comments_around_txn(tmp_path: Path) -> None:
+    """Codex pass-8 MEDIUM-1: ``/* ... */`` block comments must be
+    stripped during tokenization, otherwise ``/* harmless */ COMMIT;``
+    would have its statement-head be ``/* harmless */ COMMIT`` (not
+    ``COMMIT``) and miss the txn regex.
     """
-    assert _strip_inline_comment("SELECT 1; -- trailing comment") == "SELECT 1; "
-    assert _strip_inline_comment("-- whole line comment") == ""
-    assert _strip_inline_comment("BEGIN; -- spurious") == "BEGIN; "
-    assert _strip_inline_comment("BEGIN;") == "BEGIN;"
-    # Verify the post-strip text still matches the txn-statement regex
-    # on the BEGIN; case.
-    stripped = _strip_inline_comment("BEGIN; -- spurious").strip()
-    assert _TXN_STATEMENT_RE.match(stripped) is not None
+    sql = tmp_path / "block_comment_around_commit.sql"
+    sql.write_text(
+        "/* comment block */ COMMIT;\n",
+        encoding="utf-8",
+    )
+    findings = _scan_for_bare_txn(sql)
+    assert len(findings) == 1, f"expected COMMIT; flag, got: {findings}"
+    assert findings[0][0] == 1
+
+
+def test_scanner_handles_line_comment_inside_string_literal(
+    tmp_path: Path,
+) -> None:
+    """Codex pass-8 MEDIUM-1: ``--`` inside a single-quoted string
+    must NOT terminate a "line comment" — the whole string is a
+    literal. A subsequent ``COMMIT;`` IS a real script statement and
+    must flag.
+    """
+    sql = tmp_path / "dash_dash_in_string.sql"
+    sql.write_text(
+        "SELECT '-- not a comment'; COMMIT;\n",
+        encoding="utf-8",
+    )
+    findings = _scan_for_bare_txn(sql)
+    assert len(findings) == 1, f"expected COMMIT; flag, got: {findings}"
+    assert findings[0][0] == 1
+
+
+def test_scanner_handles_dollar_dollar_inside_string_literal(
+    tmp_path: Path,
+) -> None:
+    """Codex pass-8 MEDIUM-1: ``$$`` inside a single-quoted string
+    must NOT open a "dollar-quoted block" — the whole string is a
+    literal. A subsequent ``COMMIT;`` IS a real script statement and
+    must flag.
+    """
+    sql = tmp_path / "dollar_dollar_in_string.sql"
+    sql.write_text(
+        "SELECT '$$'; COMMIT;\n",
+        encoding="utf-8",
+    )
+    findings = _scan_for_bare_txn(sql)
+    assert len(findings) == 1, f"expected COMMIT; flag, got: {findings}"
+    assert findings[0][0] == 1
