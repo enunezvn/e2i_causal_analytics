@@ -128,6 +128,78 @@ WASHOUT_DAYS = 30
 BIOLOGIC_DISCONT_GAP_DAYS = 90
 BIOLOGIC_PERSISTENCE_GAP_DAYS = 60
 
+# --------------------------------------------------------------------------- #
+# Issue #157 PR C — treatment_response proxy rule constants                   #
+# --------------------------------------------------------------------------- #
+# CSU has no validated lab biomarker for clinical control (UAS7/UCT/CU-Q2oL
+# are patient-reported and absent from Optum claims). We derive a 5-value
+# response proxy from claim-pattern signals per the issue #157 spec.
+#
+# Pre-conditions for non-NULL response (else treatment_response = NULL):
+#   * Treatment initiated: >=1 fill of a CSU biologic (Xolair or Dupixent)
+#   * Persistence: >=TREATMENT_RESPONSE_MIN_COVERAGE_DAYS of biologic coverage
+#     by days_sup (matches BIOLOGIC_PERSISTENCE_GAP_DAYS = 60d).
+#   * Follow-up: >=TREATMENT_RESPONSE_MIN_FOLLOWUP_DAYS post-initiation
+#     observation window.
+#
+# Classification order (first match wins):
+#   1. discontinued — Gap > BIOLOGIC_DISCONT_GAP_DAYS between fill_end and
+#      next fill, within TREATMENT_RESPONSE_WINDOW_DAYS of initiation.
+#   2. refractory   — Switch to the OTHER biologic (different NDC prefix)
+#      within TREATMENT_RESPONSE_WINDOW_DAYS, OR addition of an
+#      immunosuppressant (NON_TARGET_DRUG_CLASSES["immunosupp"]) during
+#      the post-init coverage window.
+#   3. inadequate   — Persistence met but >=1 rescue oral-steroid burst
+#      (prednisone/methylprednisolone, >=5 days, post-init coverage window)
+#      OR >=1 urticaria/angioedema ED visit (POS=23, dx in L50.x or T78.3).
+#   4. controlled   — Persistence met, no rescue events, no ED visit.
+#
+# The fifth allowed value, `uncontrolled`, is reserved for non-Optum cohorts
+# (synthetic generator + EHR-anchored cohorts where UAS7 is available);
+# the Optum proxy emits `inadequate` for that semantic position because the
+# distinction between "uncontrolled" and "inadequate response to biologic"
+# cannot be made from claims alone.
+TREATMENT_RESPONSE_MIN_COVERAGE_DAYS = BIOLOGIC_PERSISTENCE_GAP_DAYS  # 60d
+TREATMENT_RESPONSE_MIN_FOLLOWUP_DAYS = 90
+TREATMENT_RESPONSE_WINDOW_DAYS = 180
+
+# Rescue oral-steroid burst (CDC/MMWR + Maurer 2018 CSU literature):
+#   * Drug: prednisone OR methylprednisolone (only — dexamethasone is
+#     typically inhaled/IV for CSU and out of scope for the burst signal).
+#   * Daily dose: not directly parsed from Optum (NDC strength is per-tablet,
+#     not per-day) — we approximate via days_sup >= 5 and rely on the
+#     short-course pattern.
+#   * Duration: days_sup >= 5.
+RESCUE_STEROID_GENERICS: tuple[str, ...] = ("prednisone", "methylprednisolone")
+RESCUE_STEROID_MIN_DAYS_SUP = 5
+
+# Urticaria/angioedema ED visit signal.
+#   * POS 23 = Emergency Room — Hospital (CMS POS code set).
+#   * Diagnosis: any of L50.x (CSU urticaria) or T78.3 (angioedema).
+ED_POS_CODE = "23"
+ED_CSU_DX_PREFIXES: tuple[str, ...] = ("L50", "T783")
+
+# Treatment-response vocabulary (mirrors the CHECK constraint in
+# migration 037_treatment_response_column.sql).
+TREATMENT_RESPONSE_VOCAB: frozenset[str] = frozenset(
+    {"controlled", "inadequate", "uncontrolled", "refractory", "discontinued"}
+)
+
+# outcome_indicator mapping per issue #157 spec.
+#   controlled                            → improved
+#   inadequate, refractory                → worsened
+#   discontinued                          → worsened (no subsequent fill)
+#                                        OR stable (subsequent fill exists,
+#                                                   handled per-row at emit
+#                                                   time)
+TREATMENT_RESPONSE_TO_OUTCOME: dict[str, str] = {
+    "controlled": "improved",
+    "inadequate": "worsened",
+    "uncontrolled": "worsened",
+    "refractory": "worsened",
+    "discontinued": "worsened",  # overridden to 'stable' if subsequent fill
+}
+
 # Drug-class-aware gap thresholds for discontinuation/persistence detection.
 # Keys correspond to drug class labels. CSU biologics (Xolair / Dupixent) use
 # the "biologic" entry, which preserves the historical 90/60 day defaults
@@ -1520,9 +1592,24 @@ class OptumDataConverter:
         for j in journeys:
             j["split_config_id"] = split_config_id
 
-        # 8. Treatment events + HCP profiles from the kept patients
+        # 8. Treatment events + HCP profiles from the kept patients.
+        # Issue #157 PR C (Sub-PR-A): pass cohort + per-patient init_date
+        # so the discontinuation cohort can emit biologic-fill rows
+        # within the post-init treatment window and tag them with the
+        # claim-pattern `treatment_response` proxy.
         kept_patids = {j["_patid"] for j in journeys}
-        events = self._build_treatment_events(kept_patids, journeys)
+        init_date_by_patid: dict[int, pd.Timestamp | None] = {}
+        if cohort == "discontinuation":
+            for j in journeys:
+                # Discontinuation cohort's index_date IS the first biologic
+                # fill (see `_derive_index_date`), so init == index_date.
+                init_date_by_patid[int(j["_patid"])] = pd.Timestamp(j["index_date"])
+        events = self._build_treatment_events(
+            kept_patids,
+            journeys,
+            cohort=cohort,
+            init_date_by_patid=init_date_by_patid,
+        )
         # Issue #156 items 1 + 2: pass patid → index_date so both
         # priority_tier (rolling 12-month TRx) and influence_network
         # (pre-index 180d lookback) can apply PER-PATIENT temporal
@@ -2474,6 +2561,242 @@ class OptumDataConverter:
         return 1
 
     # ------------------------------------------------------------------ #
+    # Issue #157 PR C — treatment_response proxy derivation               #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _classify_biologic_brand(row: pd.Series) -> str | None:
+        """Return 'xolair' / 'dupixent' / None for a medication row.
+
+        Used to detect biologic switch (different NDC prefix) for the
+        `refractory` rule. Reuses the same signals as `_csu_biologic_mask`
+        but distinguishes between the two brands.
+        """
+        # Brand_Name takes priority where present.
+        bn = row.get("Brand_Name")
+        if pd.notna(bn):
+            b = str(bn).strip().upper()
+            if "XOLAIR" in b:
+                return "xolair"
+            if "DUPIXENT" in b:
+                return "dupixent"
+        gn = row.get("Generic_Name")
+        if pd.notna(gn):
+            g = str(gn).strip().lower()
+            if "omalizumab" in g:
+                return "xolair"
+            if "dupilumab" in g:
+                return "dupixent"
+        code = row.get("code")
+        if pd.notna(code):
+            c = str(code).strip().upper()
+            # Xolair = NDC prefix 50242, HCPCS J2357.
+            if c.startswith("50242") or c == "J2357":
+                return "xolair"
+            # Dupixent = NDC prefix 0024/00024, HCPCS J0517 (per spec).
+            if c.startswith("00024") or c.startswith("0024") or c == "J0517":
+                return "dupixent"
+        return None
+
+    def _coverage_days(self, bio_fills: pd.DataFrame) -> int:
+        """Total covered days across (non-overlapping union of) biologic fills.
+
+        Each fill contributes [fill_date, fill_date + days_sup). Overlaps are
+        union'd so back-to-back overlapping fills do not double-count.
+        """
+        if bio_fills.empty:
+            return 0
+        intervals: list[tuple[pd.Timestamp, pd.Timestamp]] = []
+        for _, row in bio_fills.iterrows():
+            fd = row.get("medication_date")
+            if pd.isna(fd):
+                continue
+            ds = rwdc.safe_int(row.get("days_sup")) or 0
+            if ds <= 0:
+                continue
+            intervals.append((fd, fd + timedelta(days=ds)))
+        if not intervals:
+            return 0
+        intervals.sort()
+        total = 0
+        cur_start, cur_end = intervals[0]
+        for start, end in intervals[1:]:
+            if start <= cur_end:
+                cur_end = max(cur_end, end)
+            else:
+                total += (cur_end - cur_start).days
+                cur_start, cur_end = start, end
+        total += (cur_end - cur_start).days
+        return total
+
+    def _has_rescue_steroid_burst(
+        self, patid: int, init_date: pd.Timestamp, end_date: pd.Timestamp
+    ) -> bool:
+        """True if patient has >=1 oral-steroid burst within [init, end]."""
+        grp = self._med_by_pat.get(patid)
+        if grp is None or grp.empty:
+            return False
+        win = grp[(grp["medication_date"] >= init_date) & (grp["medication_date"] <= end_date)]
+        if win.empty:
+            return False
+        gen_series = win.get("Generic_Name")
+        if gen_series is None:
+            return False
+        gen_lower = gen_series.astype(str).str.lower()
+        steroid_mask = pd.Series(False, index=win.index)
+        for s in RESCUE_STEROID_GENERICS:
+            steroid_mask = steroid_mask | gen_lower.str.contains(s, na=False)
+        if not steroid_mask.any():
+            return False
+        cand = win.loc[steroid_mask]
+        for _, row in cand.iterrows():
+            ds = rwdc.safe_int(row.get("days_sup")) or 0
+            if ds >= RESCUE_STEROID_MIN_DAYS_SUP:
+                return True
+        return False
+
+    def _has_urticaria_ed_visit(
+        self, patid: int, init_date: pd.Timestamp, end_date: pd.Timestamp
+    ) -> bool:
+        """True if patient has >=1 urticaria/angioedema ED visit in window.
+
+        ED = inpatient claim with pos == '23' (CMS POS code for "Emergency
+        Room — Hospital") AND any of diag1..5 prefixes with L50 or T783.
+        Procedure-data POS is not populated in Optum (see issue #156 PR B
+        item 7), so we use inpatient claims only.
+        """
+        grp = self._inpatient_by_pat.get(patid)
+        if grp is None or grp.empty:
+            return False
+        win = grp[(grp["admit_date"] >= init_date) & (grp["admit_date"] <= end_date)]
+        if win.empty:
+            return False
+        pos_series = win.get("pos")
+        if pos_series is None:
+            return False
+        pos_str = pos_series.astype(str).str.strip()
+        ed_mask = pos_str == ED_POS_CODE
+        if not ed_mask.any():
+            return False
+        ed_rows = win.loc[ed_mask]
+        for _, row in ed_rows.iterrows():
+            for col in ("diag1", "diag2", "diag3", "diag4", "diag5"):
+                val = row.get(col)
+                if pd.isna(val):
+                    continue
+                code = str(val).upper().replace(".", "")
+                for prefix in ED_CSU_DX_PREFIXES:
+                    if code.startswith(prefix):
+                        return True
+        return False
+
+    def _derive_treatment_response(
+        self, patid: int, init_date: pd.Timestamp
+    ) -> tuple[str | None, str | None]:
+        """Derive (treatment_response, outcome_indicator) per issue #157 spec.
+
+        Returns ``(None, None)`` when the biologic-fill pre-conditions
+        (>=60d coverage, >=90d follow-up) are unmet. Otherwise returns the
+        classification per the first-match-wins rule order and the mapped
+        outcome_indicator.
+
+        Called by ``_build_treatment_events`` for biologic-fill rows on
+        the discontinuation cohort (where ``init_date`` is the first
+        biologic fill). Index_date is exposed as ``init_date`` to make
+        the contract explicit at the call site.
+        """
+        grp = self._med_by_pat.get(patid)
+        if grp is None or grp.empty:
+            return None, None
+
+        end_window = init_date + timedelta(days=TREATMENT_RESPONSE_WINDOW_DAYS)
+
+        # Biologic fills within the response window.
+        mask = self._csu_biologic_mask(grp)
+        bio = grp.loc[mask]
+        bio = bio[(bio["medication_date"] >= init_date) & (bio["medication_date"] <= end_window)]
+        bio = bio.sort_values("medication_date")
+        if bio.empty:
+            return None, None
+
+        # Pre-conditions:
+        #   * coverage >= 60d (TREATMENT_RESPONSE_MIN_COVERAGE_DAYS)
+        #   * follow-up >= 90d from init_date (TREATMENT_RESPONSE_MIN_FOLLOWUP_DAYS)
+        coverage = self._coverage_days(bio)
+        followup = (end_window - init_date).days  # 180 by construction
+        if followup < TREATMENT_RESPONSE_MIN_FOLLOWUP_DAYS:
+            return None, None
+
+        # Rule 1: discontinued — gap > BIOLOGIC_DISCONT_GAP_DAYS within window.
+        # Reuses the same logic as `_target_discontinued_180d` but does NOT
+        # short-circuit to "discontinued" on a single fill (we require the
+        # >=60d coverage pre-condition first; a lone fill with days_sup < 60
+        # fails the pre-condition and returns NULL).
+        if coverage < TREATMENT_RESPONSE_MIN_COVERAGE_DAYS:
+            return None, None
+
+        # Discontinuation gap check. Per issue #157 spec, the rule fires
+        # ONLY on the inter-fill gap (> BIOLOGIC_DISCONT_GAP_DAYS between
+        # last fill end-date and next fill). The trailing-edge variant
+        # (last fill ends > 90d before window close) is part of
+        # `_target_discontinued_180d` but NOT part of the response
+        # classifier — a patient with one biologic fill that extends
+        # 60-90d post-init and no further fills cannot be safely labeled
+        # `discontinued` from claims alone (could be physician-directed
+        # hold, refill not yet due, etc.). Such cases fall through to
+        # the next rule.
+        bio_list = bio.reset_index(drop=True)
+        is_discontinued = False
+        for i in range(len(bio_list) - 1):
+            fill_date = bio_list.iloc[i]["medication_date"]
+            ds = rwdc.safe_int(bio_list.iloc[i].get("days_sup")) or 0
+            fill_end = fill_date + timedelta(days=ds)
+            next_fill = bio_list.iloc[i + 1]["medication_date"]
+            if (next_fill - fill_end).days > BIOLOGIC_DISCONT_GAP_DAYS:
+                is_discontinued = True
+                break
+        if is_discontinued:
+            # Subsequent biologic fill outside [init, end_window]? If yes,
+            # outcome_indicator='stable' per spec; else 'worsened'.
+            all_bio = grp.loc[mask]
+            later = all_bio[all_bio["medication_date"] > end_window]
+            outcome = "stable" if not later.empty else "worsened"
+            return "discontinued", outcome
+
+        # Rule 2: refractory — switch to the OTHER biologic OR addition of
+        # immunosuppressant within window.
+        index_brand = self._classify_biologic_brand(bio_list.iloc[0])
+        switched = False
+        for i in range(1, len(bio_list)):
+            other = self._classify_biologic_brand(bio_list.iloc[i])
+            if other is not None and index_brand is not None and other != index_brand:
+                switched = True
+                break
+        if not switched:
+            # Immunosuppressant addition.
+            immuno_generics = NON_TARGET_DRUG_CLASSES.get("immunosupp", ())
+            win = grp[(grp["medication_date"] >= init_date) & (grp["medication_date"] <= end_window)]
+            gen_series = win.get("Generic_Name") if not win.empty else None
+            if gen_series is not None:
+                gen_lower = gen_series.astype(str).str.lower()
+                immuno_mask = pd.Series(False, index=win.index)
+                for g in immuno_generics:
+                    immuno_mask = immuno_mask | gen_lower.str.contains(g, na=False)
+                if immuno_mask.any():
+                    switched = True
+        if switched:
+            return "refractory", TREATMENT_RESPONSE_TO_OUTCOME["refractory"]
+
+        # Rule 3: inadequate — rescue steroid burst OR urticaria/angioedema ED.
+        if self._has_rescue_steroid_burst(patid, init_date, end_window):
+            return "inadequate", TREATMENT_RESPONSE_TO_OUTCOME["inadequate"]
+        if self._has_urticaria_ed_visit(patid, init_date, end_window):
+            return "inadequate", TREATMENT_RESPONSE_TO_OUTCOME["inadequate"]
+
+        # Rule 4: controlled — persistence met, no rescue events.
+        return "controlled", TREATMENT_RESPONSE_TO_OUTCOME["controlled"]
+
+    # ------------------------------------------------------------------ #
     # Journey record assembly                                             #
     # ------------------------------------------------------------------ #
 
@@ -2635,6 +2958,9 @@ class OptumDataConverter:
         self,
         kept_patids: set[int],
         journeys: list[dict[str, Any]],
+        *,
+        cohort: str = "initiation",
+        init_date_by_patid: dict[int, pd.Timestamp | None] | None = None,
     ) -> list[dict[str, Any]]:
         """Emit canonical treatment_event records for included patients only.
 
@@ -2642,7 +2968,15 @@ class OptumDataConverter:
         so the downstream ML pipeline observes pre-index events only. The target
         is already encoded on the journey; events are for feature provenance /
         narrative context.
+
+        Issue #157 PR C (Sub-PR-A): for the discontinuation cohort, ALSO emit
+        biologic-fill events in [init_date, init_date + 180d] with the
+        derived `treatment_response` + `outcome_indicator`. These post-index
+        events are NEVER used as ML features (the converter writes them only
+        to `treatment_events`, never to the journey feature matrix), so the
+        anti-leakage discipline for the risk model is preserved.
         """
+        init_dates = init_date_by_patid or {}
         idx_by_patid = {
             int(j["_patid"]): (
                 pd.Timestamp(j["index_date"]),
@@ -2671,6 +3005,9 @@ class OptumDataConverter:
             loinc: list[str] | None = None,
             lab_values: dict[str, Any] | None = None,
             hcp_id: str | None = None,
+            brand: str | None = None,
+            treatment_response: str | None = None,
+            outcome_indicator: str | None = None,
         ) -> dict[str, Any]:
             idx, lb, pj, pat = idx_by_patid[patid]
             return {
@@ -2681,7 +3018,7 @@ class OptumDataConverter:
                 "event_date": rwdc.safe_date(event_date),
                 "event_type": event_type,
                 "event_subtype": None,
-                "brand": None,
+                "brand": brand,
                 "drug_ndc": drug_ndc,
                 "drug_name": drug_name,
                 "drug_class": None,
@@ -2694,7 +3031,8 @@ class OptumDataConverter:
                 "location_type": None,
                 "facility_id": None,
                 "cost": None,
-                "outcome_indicator": None,
+                "outcome_indicator": outcome_indicator,
+                "treatment_response": treatment_response,
                 "adverse_event_flag": False,
                 "discontinuation_flag": False,
                 "discontinuation_reason": None,
@@ -2794,6 +3132,100 @@ class OptumDataConverter:
                         )
                     )
                     seq += 1
+
+            # Issue #157 PR C (Sub-PR-A): emit biologic-fill events at/after
+            # init_date for the discontinuation cohort, with the derived
+            # treatment_response + outcome_indicator. These post-index
+            # events are NEVER consumed as ML features — they appear only
+            # in `treatment_events` for KPI calculation
+            # (brand_specific.py BR-001 / BR-002).
+            init_dt = init_dates.get(patid) if cohort == "discontinuation" else None
+            if init_dt is not None:
+                tr, oc = self._derive_treatment_response(patid, init_dt)
+                med_grp = self._med_by_pat.get(patid)
+                if med_grp is not None and not med_grp.empty:
+                    bio_mask = self._csu_biologic_mask(med_grp)
+                    end_win = init_dt + timedelta(days=TREATMENT_RESPONSE_WINDOW_DAYS)
+                    bio_win = med_grp.loc[bio_mask]
+                    bio_win = bio_win[
+                        (bio_win["medication_date"] >= init_dt)
+                        & (bio_win["medication_date"] <= end_win)
+                    ].sort_values("medication_date")
+                    if not bio_win.empty:
+                        # Only the FIRST biologic fill within the window
+                        # carries the treatment_response label — that is
+                        # the index biologic-fill episode per issue #157
+                        # ("apply per (patient, biologic_fill_episode)").
+                        # Later fills in the window are still emitted for
+                        # provenance but with NULL response.
+                        first_row = bio_win.iloc[0]
+                        first_brand = self._classify_biologic_brand(first_row)
+                        # `brand` enum on treatment_events is brand_type
+                        # (defined in core schema). Schema constraints
+                        # accept 'competitor' / 'innovator' / brand-name
+                        # values depending on cohort. CSU biologics map
+                        # to 'competitor' for non-Pluvicto cohorts per
+                        # current converter convention; we mirror that
+                        # via the patient_journeys.brand assignment.
+                        events.append(
+                            _emit(
+                                seq,
+                                patid=patid,
+                                event_date=first_row.get("medication_date"),
+                                event_type="prescription",
+                                drug_name=(
+                                    str(first_row["Brand_Name"]).title()
+                                    if pd.notna(first_row.get("Brand_Name"))
+                                    else None
+                                ),
+                                drug_ndc=(
+                                    str(first_row["code"])
+                                    if pd.notna(first_row.get("code"))
+                                    else None
+                                ),
+                                dosage=(
+                                    str(first_row["strength"])
+                                    if pd.notna(first_row.get("strength"))
+                                    else None
+                                ),
+                                duration=rwdc.safe_int(first_row.get("days_sup")),
+                                brand="competitor",
+                                treatment_response=tr,
+                                outcome_indicator=oc,
+                            )
+                        )
+                        seq += 1
+                        # Trailing fills (provenance only — NULL response).
+                        for i in range(1, len(bio_win)):
+                            row = bio_win.iloc[i]
+                            events.append(
+                                _emit(
+                                    seq,
+                                    patid=patid,
+                                    event_date=row.get("medication_date"),
+                                    event_type="prescription",
+                                    drug_name=(
+                                        str(row["Brand_Name"]).title()
+                                        if pd.notna(row.get("Brand_Name"))
+                                        else None
+                                    ),
+                                    drug_ndc=(
+                                        str(row["code"]) if pd.notna(row.get("code")) else None
+                                    ),
+                                    dosage=(
+                                        str(row["strength"])
+                                        if pd.notna(row.get("strength"))
+                                        else None
+                                    ),
+                                    duration=rwdc.safe_int(row.get("days_sup")),
+                                    brand="competitor",
+                                )
+                            )
+                            seq += 1
+                        # Silence unused-variable lint if downstream code adds
+                        # consumers later — `first_brand` is reserved for a
+                        # follow-up emission (per-brand audit JSONL).
+                        _ = first_brand
         return events
 
     def _compute_npi_first_fill(
@@ -3730,6 +4162,44 @@ class OptumDataConverter:
                     "source_table": "medication biologic fills",
                     "lookback_window": "[init_date, init_date+180]",
                     "notes": "§8.3 — TARGET; active fill (days_supply-based) at day 180",
+                }
+            )
+
+        # Issue #157 PR C (Sub-PR-A) — treatment_response + outcome_indicator
+        # are emitted on the biologic-fill row in treatment_events for the
+        # discontinuation cohort only. Document the proxy here so downstream
+        # consumers can find the derivation rules.
+        if cohort == "discontinuation":
+            entries.append(
+                {
+                    "feature": "treatment_response",
+                    "type": "enum{controlled,inadequate,uncontrolled,refractory,discontinued}",
+                    "source_table": "treatment_events (biologic-fill row)",
+                    "lookback_window": "[init_date, init_date+180]",
+                    "notes": (
+                        "Issue #157 PR C / Sub-PR-A — CSU claim-pattern "
+                        "response proxy. NULL outside biologic-fill universe "
+                        "or when >=60d coverage / >=90d follow-up "
+                        "pre-conditions are unmet. First-match-wins rule "
+                        "order: discontinued > refractory > inadequate > "
+                        "controlled. `uncontrolled` reserved for non-Optum "
+                        "UAS7-anchored cohorts."
+                    ),
+                }
+            )
+            entries.append(
+                {
+                    "feature": "outcome_indicator",
+                    "type": "enum{improved,stable,worsened}",
+                    "source_table": "treatment_events (biologic-fill row)",
+                    "lookback_window": "[init_date, init_date+180]",
+                    "notes": (
+                        "Issue #157 PR C / Sub-PR-A — mapped from "
+                        "treatment_response: controlled→improved, "
+                        "{inadequate,refractory}→worsened, "
+                        "discontinued→worsened if no subsequent biologic "
+                        "fill outside window else stable."
+                    ),
                 }
             )
         return entries

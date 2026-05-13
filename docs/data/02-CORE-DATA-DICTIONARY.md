@@ -943,6 +943,7 @@ Stores individual clinical events (diagnoses, prescriptions, lab tests, procedur
 | `facility_id` | `VARCHAR(20)` | YES | | Facility identifier |
 | `cost` | `DECIMAL(10,2)` | YES | | Event cost in USD |
 | `outcome_indicator` | `VARCHAR(20)` | YES | | Outcome classification: `improved`, `stable`, `worsened` |
+| `treatment_response` | `VARCHAR(20)` | YES | CHECK in vocabulary | CSU biologic-fill claim-pattern response proxy: `controlled` (persistence + no rescue events), `inadequate` (rescue steroid burst OR urticaria/angioedema ED visit), `uncontrolled` (reserved for non-Optum UAS7-anchored cohorts), `refractory` (biologic switch OR immunosuppressant addition), `discontinued` (gap > 90d). NULL outside the CSU biologic-fill universe or when pre-conditions are unmet. Issue #157 PR C (Sub-PR-A); migration 037. |
 | `adverse_event_flag` | `BOOLEAN` | YES | DEFAULT `FALSE` | Whether an adverse event was reported |
 | `discontinuation_flag` | `BOOLEAN` | YES | DEFAULT `FALSE` | Whether the patient discontinued treatment |
 | `discontinuation_reason` | `VARCHAR(100)` | YES | | Reason for discontinuation |
