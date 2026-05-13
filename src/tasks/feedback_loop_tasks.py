@@ -164,15 +164,20 @@ async def _execute_feedback_loop(
                 # Call the PL/pgSQL function via RPC.
                 #
                 # NOTE (issue #177): ``run_feedback_loop`` in migration
-                # ``006_feedback_loop_infrastructure.sql`` accepts ONLY the
-                # ``p_prediction_type`` parameter — it does NOT accept a
-                # ``p_batch_size`` kwarg. Internally it dispatches to the
-                # per-prediction-type ``assign_truth_*`` functions with just
-                # ``v_config.observation_window_days``; those functions do
-                # take a ``p_batch_size`` argument but ``run_feedback_loop``
-                # never threads it through, so passing ``p_batch_size`` here
-                # would be silently ignored at best (PostgREST RPC schema
-                # cache) or rejected as an unknown parameter at worst.
+                # ``006_feedback_loop_infrastructure.sql`` (line ~655)
+                # accepts ONLY the ``p_prediction_type`` parameter — it does
+                # NOT accept a ``p_batch_size`` kwarg. Internally it
+                # dispatches to the per-prediction-type ``assign_truth_*``
+                # functions with just ``v_config.observation_window_days``;
+                # those functions do take a ``p_batch_size`` argument but
+                # ``run_feedback_loop`` never threads it through. Passing
+                # ``p_batch_size`` here is therefore a contract drift: the
+                # PostgREST RPC path normally fails function lookup when
+                # named args do not match the SQL signature (HTTP 404
+                # ``function ... not found in schema cache``), so the call
+                # either errors at runtime or — if the live droplet has
+                # been independently patched — silently no-ops. Neither
+                # is a healthy state.
                 #
                 # ``batch_size`` from ``processing_config`` is therefore
                 # logged for operator visibility but NOT passed to the SQL
