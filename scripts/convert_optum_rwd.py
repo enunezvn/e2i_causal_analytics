@@ -2948,99 +2948,145 @@ class OptumDataConverter:
         kept_patids: set[int],
         npi_pat: dict[str, set[int]],
         idx_by_patid: dict[int, pd.Timestamp] | None,
-    ) -> tuple[dict[str, int], dict[str, str | None], dict[str, int]]:
+    ) -> tuple[
+        dict[str, int],
+        dict[str, str | None],
+        dict[str, int],
+        dict[str, int | None],
+    ]:
         """Issue #156 item 1: rolling 12-month CSU-biologic TRx → ZIP3 decile → tier.
 
-        Returns three dicts keyed by obfuscated NPI:
+        Returns four dicts keyed by obfuscated NPI:
           - npi → priority_tier (1=high, 5=low; 1-5 always populated, no None)
           - npi → modal ZIP3 (or None when no demographics ZIP is resolvable)
-          - npi → biologic TRx count in the rolling 12-mo window
+          - npi → biologic TRx count in the per-patient lookback window
+          - npi → decile within ZIP3 (1-10; None for tier-5 defaults so the
+                  data dictionary can disambiguate "below decile 1" from
+                  "TRx=0 / no ZIP3")
 
         Algorithm (per issue body):
-          1. Filter ``self.med`` to in-scope CSU biologics via
-             ``_csu_biologic_mask`` (which encodes
-             CSU_BIOLOGIC_NDC_PREFIXES ∪ CSU_BIOLOGIC_HCPCS ∪
-             CSU_BIOLOGIC_GENERICS).
-          2. Restrict to the trailing-12-month window ending at the
-             cohort's latest patient index_date. Per-HCP rolling windows
-             ending at each HCP's latest patient index date are
-             unstable in practice (HCPs treating only one patient get a
-             1-day window); we anchor on the cohort-wide latest index
-             date for stability, matching the pharma-commercial TTM
-             convention. When ``idx_by_patid`` is empty/None we fall
-             back to the global max ``medication_date`` so testability
-             is preserved.
-          3. For each NPI in ``npi_pat``, compute biologic TRx count in
-             that window.
+          1. Filter both ``self.med`` (NDC/HCPCS/generic biologic codes)
+             AND ``self.proc`` (HCPCS J2357 / J0517 administered as
+             buy-and-bill in office settings) for in-scope CSU biologics.
+             Codex PR-2 pass-1 HIGH-1: ignoring procedure-side HCPCS
+             undercounts office-administered Xolair/Dupixent TRx and
+             defaults affected HCPs to tier 5.
+          2. PER-PATIENT temporal gating: for each (patient, npi, fill)
+             triple, count the fill ONLY IF
+                 ``patient_index - 365d < fill_date <= patient_index``.
+             This avoids the leakage risk where a cohort-wide endpoint
+             (max-index) would let post-index fills for early-index
+             patients sneak in. Codex PR-2 pass-1 MEDIUM-1.
+          3. For each NPI in ``npi_pat``, aggregate fills across all
+             treated patients into a single biologic TRx count.
           4. Group HCPs by modal ZIP3 (across their treated patients).
           5. Within each ZIP3, rank HCPs by TRx (ties broken by
-             NDC-distinct count, then alphabetical NPI — per issue body
-             — for determinism). Compute 10-bin equal-frequency
+             NDC/HCPCS-distinct count, then alphabetical NPI — per issue
+             body — for determinism). Compute 10-bin equal-frequency
              deciles.
           6. Map decile → tier via ``PRIORITY_TIER_DECILE_MAP``.
-          7. HCPs with TRx=0 (or no resolvable ZIP3) → tier 5.
-
-        Codex pre-review: the tie-break order is HCP-deterministic;
-        ``np.unique`` is NOT used (it would mask the tie pattern from
-        downstream auditors).
+          7. HCPs with TRx=0 (or no resolvable ZIP3) → tier 5, decile None.
         """
         zip3_by_npi: dict[str, str | None] = {}
         for npi in npi_pat:
             zip3_by_npi[npi] = self._hcp_zip3_modal(npi, npi_pat)
 
-        # Determine the rolling-12mo window endpoint.
-        window_end: pd.Timestamp | None = None
+        # Per-patient index_date lookup (fallback: max date in med if a
+        # patient has no index_date — used only by tests / standalone
+        # invocation. In production every kept patient HAS index_date.)
+        idx_map: dict[int, pd.Timestamp] = {}
         if idx_by_patid:
-            dates = [pd.Timestamp(d) for d in idx_by_patid.values() if d is not None]
-            if dates:
-                window_end = max(dates)
-        if window_end is None:
+            for k, v in idx_by_patid.items():
+                if v is not None:
+                    idx_map[int(k)] = pd.Timestamp(v)
+        # Fallback endpoint for tests where idx_by_patid is None.
+        fallback_end: pd.Timestamp | None = None
+        if not idx_map:
             if (
                 not self.med.empty
                 and "medication_date" in self.med.columns
                 and self.med["medication_date"].notna().any()
             ):
-                window_end = pd.Timestamp(self.med["medication_date"].max())
-        if window_end is None:
-            window_end = pd.Timestamp(datetime.now(tz=UTC).date())
-        window_start = window_end - timedelta(days=PRIORITY_TIER_TRX_WINDOW_DAYS)
+                fallback_end = pd.Timestamp(self.med["medication_date"].max())
+            else:
+                fallback_end = pd.Timestamp(datetime.now(tz=UTC).date())
+
+        def _patient_index(pid: int) -> pd.Timestamp | None:
+            return idx_map.get(int(pid)) if idx_map else fallback_end
 
         # Compute biologic TRx count + NDC-distinct count per NPI.
+        # Scans BOTH self.med (NDC + HCPCS + brand/generic) AND
+        # self.proc (HCPCS-only — buy-and-bill office admin).
         trx_by_npi: dict[str, int] = dict.fromkeys(npi_pat, 0)
         ndc_distinct_by_npi: dict[str, set[str]] = {npi: set() for npi in npi_pat}
-        med = self.med
-        if not med.empty and "npi" in med.columns and "medication_date" in med.columns:
-            sub = med[med["patid"].isin(kept_patids)].copy()
-            if not sub.empty:
+
+        def _count_fills(df: pd.DataFrame, date_col: str, code_col: str) -> None:
+            if (
+                df.empty
+                or "npi" not in df.columns
+                or date_col not in df.columns
+                or "patid" not in df.columns
+            ):
+                return
+            sub = df[df["patid"].isin(kept_patids)].copy()
+            if sub.empty:
+                return
+            # For self.med use the full _csu_biologic_mask (NDC + HCPCS +
+            # Brand_Name + Generic_Name). For self.proc only HCPCS is
+            # available, so test J2357/J0517 directly. Codex PR-2 pass-1
+            # HIGH-1: procedure-side biologic admins must contribute to TRx.
+            if code_col == "code":
                 bio_mask = self._csu_biologic_mask(sub)
-                sub = sub[bio_mask]
-                if not sub.empty:
-                    sub = sub[
-                        (sub["medication_date"] > window_start)
-                        & (sub["medication_date"] <= window_end)
-                    ]
-                    for _, r in sub.iterrows():
-                        nv = r.get("npi")
-                        if pd.isna(nv):
-                            continue
-                        ns = str(nv).strip()
-                        if not ns or ns == "nan":
-                            continue
-                        if ns not in trx_by_npi:
-                            continue
-                        trx_by_npi[ns] = trx_by_npi.get(ns, 0) + 1
-                        code_val = r.get("code")
-                        if code_val is not None and not pd.isna(code_val):
-                            ndc_distinct_by_npi[ns].add(str(code_val).strip().upper())
+            else:
+                if code_col not in sub.columns:
+                    return
+                code_s = sub[code_col].astype(str).str.upper()
+                bio_mask = code_s.isin(CSU_BIOLOGIC_HCPCS)
+            sub = sub[bio_mask]
+            if sub.empty:
+                return
+            for _, r in sub.iterrows():
+                pid = r.get("patid")
+                if pd.isna(pid):
+                    continue
+                fill_date = r.get(date_col)
+                if pd.isna(fill_date):
+                    continue
+                idx_dt = _patient_index(int(pid))
+                if idx_dt is None:
+                    continue
+                # Per-patient lookback: (index - 365, index].
+                if not (
+                    (fill_date > idx_dt - timedelta(days=PRIORITY_TIER_TRX_WINDOW_DAYS))
+                    and (fill_date <= idx_dt)
+                ):
+                    continue
+                nv = r.get("npi")
+                if pd.isna(nv):
+                    continue
+                ns = str(nv).strip()
+                if not ns or ns == "nan":
+                    continue
+                if ns not in trx_by_npi:
+                    continue
+                trx_by_npi[ns] = trx_by_npi.get(ns, 0) + 1
+                code_val = r.get(code_col)
+                if code_val is not None and not pd.isna(code_val):
+                    ndc_distinct_by_npi[ns].add(str(code_val).strip().upper())
+
+        _count_fills(self.med, "medication_date", "code")
+        _count_fills(self.proc, "proc_date", "proc_code")
 
         # Group by ZIP3 and assign deciles within each group.
         tier_by_npi: dict[str, int] = {}
+        decile_by_npi: dict[str, int | None] = {}
         zip3_groups: dict[str, list[str]] = defaultdict(list)
         for npi in npi_pat:
             z = zip3_by_npi.get(npi)
             if z is None or trx_by_npi.get(npi, 0) <= 0:
-                # No ZIP3 OR zero TRx → tier 5 (kept in pool).
+                # No ZIP3 OR zero TRx → tier 5 (kept in pool), decile None.
                 tier_by_npi[npi] = PRIORITY_TIER_DEFAULT
+                decile_by_npi[npi] = None
                 continue
             zip3_groups[z].append(npi)
 
@@ -3067,23 +3113,38 @@ class OptumDataConverter:
             for rank, npi in enumerate(ordered):
                 decile = 10 - (rank * 10 // n_members)
                 decile = max(1, min(10, decile))
+                decile_by_npi[npi] = decile
                 tier_by_npi[npi] = PRIORITY_TIER_DECILE_MAP.get(decile, PRIORITY_TIER_DEFAULT)
 
-        return tier_by_npi, zip3_by_npi, trx_by_npi
+        return tier_by_npi, zip3_by_npi, trx_by_npi, decile_by_npi
 
     # ------------------------------------------------------------------ #
     # Issue #156 item 2: influence_network via shared-patient clique     #
     # ------------------------------------------------------------------ #
 
     def _compute_influence_network(
-        self, kept_patids: set[int]
+        self,
+        kept_patids: set[int],
+        idx_by_patid: dict[int, pd.Timestamp] | None = None,
     ) -> tuple[dict[str, int], dict[str, float]]:
         """Issue #156 item 2: shared-patient clique → degree + eigenvector_centrality.
 
         For each patient in ``kept_patids``, collect the set of treating
-        HCPs from ``medication.npi ∪ procedure.npi`` (any visit / fill —
-        not just biologic). Each per-patient set forms a clique; the
-        weighted HCP-HCP graph aggregates over patients.
+        HCPs from ``medication.npi ∪ procedure.npi`` WITHIN THE PER-PATIENT
+        LOOKBACK WINDOW ``(patient_index - LOOKBACK_DAYS, patient_index]``.
+        Each per-patient set forms a clique; the weighted HCP-HCP graph
+        aggregates over patients.
+
+        Codex PR-2 pass-1 MEDIUM-2: post-index and prediction-window
+        HCP contacts would otherwise contribute edges and inflate
+        centrality with future information. The per-patient lookback
+        gate is symmetric with the priority_tier change (HIGH-1 /
+        MEDIUM-1) and matches the project-wide convention that HCP
+        features observed at index never include post-index data.
+
+        When ``idx_by_patid`` is None (test invocation), the gate is
+        skipped and the full med/proc rows are used. Production callers
+        always thread ``idx_by_patid``.
 
         Returns:
           - degree_by_npi: ``influence_network_size`` per HCP
@@ -3107,24 +3168,48 @@ class OptumDataConverter:
             )
             return {}, {}
 
-        # Per-patient HCP sets across med + proc.
+        idx_map: dict[int, pd.Timestamp] = {}
+        if idx_by_patid:
+            for k, v in idx_by_patid.items():
+                if v is not None:
+                    idx_map[int(k)] = pd.Timestamp(v)
+
+        # Per-patient HCP sets across med + proc, with per-patient
+        # pre-index lookback gating.
         hcps_by_patient: dict[int, set[str]] = defaultdict(set)
 
-        def _collect(df: pd.DataFrame) -> None:
+        def _collect(df: pd.DataFrame, date_col: str) -> None:
             if "npi" not in df.columns or "patid" not in df.columns:
                 return
             sub = df[df["patid"].isin(kept_patids)]
+            has_date = date_col in sub.columns
             for _, r in sub.iterrows():
+                pid = r.get("patid")
+                if pd.isna(pid):
+                    continue
+                pid_int = int(pid)
+                if idx_map and has_date:
+                    fill_date = r.get(date_col)
+                    if pd.isna(fill_date):
+                        continue
+                    idx_dt = idx_map.get(pid_int)
+                    if idx_dt is None:
+                        continue
+                    if not (
+                        (fill_date > idx_dt - timedelta(days=LOOKBACK_DAYS))
+                        and (fill_date <= idx_dt)
+                    ):
+                        continue
                 nv = r.get("npi")
                 if pd.isna(nv):
                     continue
                 ns = str(nv).strip()
                 if not ns or ns == "nan":
                     continue
-                hcps_by_patient[int(r["patid"])].add(ns)
+                hcps_by_patient[pid_int].add(ns)
 
-        _collect(self.med)
-        _collect(self.proc)
+        _collect(self.med, "medication_date")
+        _collect(self.proc, "proc_date")
 
         # Aggregate to undirected weighted edge counts.
         edge_weight: dict[tuple[str, str], int] = defaultdict(int)
@@ -3224,10 +3309,15 @@ class OptumDataConverter:
         adoption_by_npi = rwdc.classify_rogers_adoption(hcp_days_to_first_fill)
 
         # Issue #156 item 1 + item 2: priority_tier + influence_network.
-        priority_tier_by_npi, zip3_by_npi, _trx_by_npi = self._compute_priority_tiers(
-            kept_patids, npi_pat, idx_by_patid
+        (
+            priority_tier_by_npi,
+            zip3_by_npi,
+            _trx_by_npi,
+            decile_by_npi,
+        ) = self._compute_priority_tiers(kept_patids, npi_pat, idx_by_patid)
+        influence_size_by_npi, peer_score_by_npi = self._compute_influence_network(
+            kept_patids, idx_by_patid
         )
-        influence_size_by_npi, peer_score_by_npi = self._compute_influence_network(kept_patids)
 
         for seq, obf in enumerate(sorted(npi_rx.keys())):
             rx = npi_rx[obf]
@@ -3330,7 +3420,7 @@ class OptumDataConverter:
                     "city": city_val,
                     "zip_code": zip_code_val,
                     "priority_tier": priority_tier_by_npi.get(obf, PRIORITY_TIER_DEFAULT),
-                    "decile": None,
+                    "decile": decile_by_npi.get(obf),
                     "total_patient_volume": pv,
                     "target_patient_volume": None,
                     "prescribing_volume": rx,
@@ -3526,8 +3616,12 @@ class OptumDataConverter:
             {
                 "feature": "priority_tier",
                 "type": "int (1=high, 5=low)",
-                "source_table": "medication (CSU biologic fills) via NPI + demographics.zipcode_5",
-                "lookback_window": "rolling 365d ending at cohort latest index_date",
+                "source_table": (
+                    "medication (NDC + HCPCS + brand/generic) + procedure "
+                    "(HCPCS J2357/J0517 for buy-and-bill admin) via NPI + "
+                    "demographics.zipcode_5"
+                ),
+                "lookback_window": "per-patient (index - 365d, index]",
                 "notes": (
                     "Issue #156 item 1 — rolling 12-month CSU biologic "
                     "TRx aggregated per (NPI, ZIP3) → equal-frequency "
@@ -3535,12 +3629,30 @@ class OptumDataConverter:
                     "(decile 10=tier 1, 8-9=tier 2, 4-7=tier 3, 2-3=tier "
                     "4, 1=tier 5). HCPs with TRx=0 in window or no "
                     "resolvable ZIP3 default to tier 5 (kept in scoreable "
-                    "pool, not excluded). Tie-break: descending NDC-"
+                    "pool, not excluded). Tie-break: descending NDC/HCPCS-"
                     "distinct count, then ascending alphabetical NPI. "
                     "ZIP3 (not ZIP5) chosen because ZIP5 has too few "
                     "HCPs per bin for stable decile assignment. NPI ZIP3 "
                     "is the modal ZIP3 across the HCP's treated patients "
-                    "in the cohort."
+                    "in the cohort. Per-patient temporal gating (codex "
+                    "PR-2 pass-1 MEDIUM-1) ensures no post-index fills "
+                    "leak in. Procedure-side HCPCS admins (codex PR-2 "
+                    "pass-1 HIGH-1) are counted so office buy-and-bill "
+                    "is not undercounted."
+                ),
+            },
+            {
+                "feature": "decile",
+                "type": "int [1, 10] or None (tier-5 defaults)",
+                "source_table": "derived from priority_tier ranking",
+                "lookback_window": "per-patient (index - 365d, index]",
+                "notes": (
+                    "Issue #156 item 1 / codex PR-2 pass-1 LOW-1 — the "
+                    "underlying within-ZIP3 decile that maps to "
+                    "priority_tier via PRIORITY_TIER_DECILE_MAP. Exposed "
+                    "so the tier derivation is auditable from the "
+                    "artifact. None when the HCP has TRx=0 or no "
+                    "resolvable ZIP3 (those default to tier 5)."
                 ),
             },
             # Issue #156 item 2: influence_network_size + peer_influence_score
@@ -3548,17 +3660,20 @@ class OptumDataConverter:
                 "feature": "influence_network_size",
                 "type": "int (degree)",
                 "source_table": "medication.npi ∪ procedure.npi (CLAIMS-DERIVED PROXY)",
-                "lookback_window": "all kept-cohort claims",
+                "lookback_window": "per-patient (index - 180d, index]",
                 "notes": (
                     "Issue #156 item 2 — degree (neighbor count) in the "
                     "shared-patient HCP-HCP graph. For each kept patient, "
                     "the set of treating HCPs (across medication ∪ "
-                    "procedure) forms a clique; edge weight = number of "
-                    "shared patients across two NPIs. Graph computed via "
-                    "networkx.Graph. CLAIMS-DERIVED PROXY for KOL "
-                    "influence — canonical KOL data requires external "
-                    "commercial sources (Definitive Healthcare, HCS "
-                    "Spectrum) or PubMed co-authorship, which is "
+                    "procedure) within the pre-index 180d lookback forms "
+                    "a clique; edge weight = number of shared patients "
+                    "across two NPIs. Per-patient temporal gating (codex "
+                    "PR-2 pass-1 MEDIUM-2) ensures no post-index HCP "
+                    "contacts leak into the influence proxy. Graph "
+                    "computed via networkx.Graph. CLAIMS-DERIVED PROXY "
+                    "for KOL influence — canonical KOL data requires "
+                    "external commercial sources (Definitive Healthcare, "
+                    "HCS Spectrum) or PubMed co-authorship, which is "
                     "explicitly out of scope (issue #156)."
                 ),
             },
@@ -3566,7 +3681,7 @@ class OptumDataConverter:
                 "feature": "peer_influence_score",
                 "type": "float DECIMAL(3,2) ∈ [0.00, 9.99]",
                 "source_table": "medication.npi ∪ procedure.npi (CLAIMS-DERIVED PROXY)",
-                "lookback_window": "all kept-cohort claims",
+                "lookback_window": "per-patient (index - 180d, index]",
                 "notes": (
                     "Issue #156 item 2 — weighted eigenvector_centrality "
                     "computed on the shared-patient graph (see "
