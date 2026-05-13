@@ -2655,6 +2655,35 @@ class OptumDataConverter:
                 return True
         return False
 
+    def _observable_followup_days(
+        self, patid: int, init_date: pd.Timestamp, end_window: pd.Timestamp
+    ) -> int:
+        """Return observable follow-up days for response pre-condition gate.
+
+        Computed as ``min(eligend, end_window) - init_date``. Defends
+        against soft-enrollment-filter / research-mode short-window cases
+        where a patient is enrolled in the cohort but has <90d real
+        observability post-initiation.
+
+        Falls back to ``self.enrollment_post_days`` when eligend is
+        unavailable; under research-mode that fallback can return 90d,
+        which equals the pre-condition threshold and still gates
+        correctly. Under strict mode the fallback returns 180d and the
+        check is satisfied trivially.
+        """
+        try:
+            eligend_series = self.demo.loc[self.demo["patid"] == patid, "eligend"]
+        except (KeyError, AttributeError):
+            return int((end_window - init_date).days)
+        if eligend_series.empty:
+            return int(getattr(self, "enrollment_post_days", 180))
+        eligend = eligend_series.iloc[0]
+        if pd.isna(eligend):
+            return int(getattr(self, "enrollment_post_days", 180))
+        eligend_ts = pd.Timestamp(eligend)
+        cap = min(eligend_ts, end_window)
+        return int(max((cap - init_date).days, 0))
+
     def _has_urticaria_ed_visit(
         self, patid: int, init_date: pd.Timestamp, end_date: pd.Timestamp
     ) -> bool:
@@ -2704,6 +2733,15 @@ class OptumDataConverter:
         the discontinuation cohort (where ``init_date`` is the first
         biologic fill). Index_date is exposed as ``init_date`` to make
         the contract explicit at the call site.
+
+        Follow-up enforcement: under strict cohort gating
+        (`enrollment_post_days=180`) the 180d follow-up is guaranteed by
+        construction, but under `soft_enrollment_filter=True` or
+        research-mode (`enrollment_post_days=90`) a patient can land in
+        the cohort with <90d observable follow-up. We enforce the
+        pre-condition against actual `eligend` from demographics; when
+        eligend is missing, we fall back to the converter's
+        `enrollment_post_days` as a documented over-estimate.
         """
         grp = self._med_by_pat.get(patid)
         if grp is None or grp.empty:
@@ -2719,13 +2757,16 @@ class OptumDataConverter:
         if bio.empty:
             return None, None
 
-        # Pre-conditions:
-        #   * coverage >= 60d (TREATMENT_RESPONSE_MIN_COVERAGE_DAYS)
-        #   * follow-up >= 90d from init_date (TREATMENT_RESPONSE_MIN_FOLLOWUP_DAYS)
-        coverage = self._coverage_days(bio)
-        followup = (end_window - init_date).days  # 180 by construction
-        if followup < TREATMENT_RESPONSE_MIN_FOLLOWUP_DAYS:
+        # Pre-condition: follow-up >= 90d.
+        # Observable follow-up = min(eligend, end_window) - init_date.
+        # If `self.demo` does not have eligend for this patid, we fall back
+        # to `self.enrollment_post_days` (the cohort-gating post-window).
+        observable_followup_days = self._observable_followup_days(patid, init_date, end_window)
+        if observable_followup_days < TREATMENT_RESPONSE_MIN_FOLLOWUP_DAYS:
             return None, None
+
+        # Pre-condition: coverage >= 60d.
+        coverage = self._coverage_days(bio)
 
         # Rule 1: discontinued — gap > BIOLOGIC_DISCONT_GAP_DAYS within window.
         # Reuses the same logic as `_target_discontinued_180d` but does NOT
@@ -2756,10 +2797,16 @@ class OptumDataConverter:
                 is_discontinued = True
                 break
         if is_discontinued:
-            # Subsequent biologic fill outside [init, end_window]? If yes,
-            # outcome_indicator='stable' per spec; else 'worsened'.
+            # Spec: "discontinued -> worsened if no subsequent biologic,
+            # else stable". The gap-based rule fires when fill_i+1 exists
+            # within the window AND the gap to fill_i+1's end exceeds
+            # BIOLOGIC_DISCONT_GAP_DAYS — that subsequent fill (whether
+            # in-window or outside) is exactly the "subsequent biologic"
+            # the spec refers to. We check ALL fills after init_date
+            # (excluding init_date itself) for any later fill — captures
+            # both in-window and post-window re-engagement.
             all_bio = grp.loc[mask]
-            later = all_bio[all_bio["medication_date"] > end_window]
+            later = all_bio[all_bio["medication_date"] > init_date]
             outcome = "stable" if not later.empty else "worsened"
             return "discontinued", outcome
 
