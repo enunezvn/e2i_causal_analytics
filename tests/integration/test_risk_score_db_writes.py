@@ -148,7 +148,11 @@ class TestNoDbDeferral:
     def test_task_skips_when_no_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
         for v in ("RISK_SCORE_DB_URL", "SUPABASE_DB_URL", "DATABASE_URL"):
             monkeypatch.delenv(v, raising=False)
-        out = write_risk_score_predictions.apply(args=([{"prediction_id": "x"}],)).result
+        # Issue #188: pass honest_failures=[] explicitly to opt out of the
+        # default gated-on-missing-metadata path.
+        out = write_risk_score_predictions.apply(
+            args=([{"prediction_id": "x"}], None, None, []),
+        ).result
         assert out["status"] == "skipped"
         assert out["reason"] == "no_db_url"
         assert out["predictions"]["submitted"] == 1
@@ -411,6 +415,7 @@ class TestRealDbWrites:
                 [payload],
                 [{"patient_journey_id": seeded_journey, "risk_score": 5.5}],
                 _DB_URL,
+                [],  # honest_failures=[] -> not gated (issue #188).
             )
         ).result
         assert result["status"] == "completed"

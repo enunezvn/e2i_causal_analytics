@@ -74,6 +74,25 @@ RISK_ELIGIBLE_JOURNEY_STAGES: frozenset[str] = frozenset(
 # semver is pinned.
 DEFAULT_MODEL_VERSION = "risk_score_v1"
 
+# Issue #188: downstream gate for the AUC-PR floor mechanism. When the
+# trainer produced honest_failures (AUC-PR floor not met OR calibration
+# unmet), this task MUST refuse to promote the model's per-patient
+# outputs to actionable DB writes — even if a developer mistakenly
+# invokes the task with raw payloads from a non-promotable run.
+#
+# The gate inspects the per-call ``honest_failures`` argument; if
+# non-empty, predictions are NOT written to ml_predictions, and
+# patient_journeys.risk_score is NOT updated. A structured audit event
+# ``risk_score.skipped.honest_failure`` is logged.
+#
+# Callers that have NO honest_failures metadata available (e.g. an old
+# pre-#188 model artifact whose payloads omit the field) are treated
+# according to ``honest_failures_default_gated``: when ``True`` (the
+# safe default), missing metadata is treated as a failure-gate; when
+# ``False``, missing metadata is treated as a pass (back-compat for
+# callers that pre-validated upstream).
+GATED_SENTINEL_PREDICTION_CLASS: str = "gated_honest_failure"
+
 
 # ---------------------------------------------------------------------------
 # Helpers (pure; unit-testable without DB or Celery)
@@ -316,6 +335,8 @@ def write_risk_score_predictions(
     payloads: list[dict[str, Any]],
     journey_updates: Optional[list[dict[str, Any]]] = None,
     db_url: Optional[str] = None,
+    honest_failures: Optional[list[str]] = None,
+    honest_failures_default_gated: bool = True,
 ) -> dict[str, Any]:
     """Persist a batch of risk_score predictions to Postgres.
 
@@ -330,13 +351,28 @@ def write_risk_score_predictions(
         db_url: Postgres URL; falls back to ``RISK_SCORE_DB_URL`` /
             ``SUPABASE_DB_URL`` / ``DATABASE_URL`` env vars in that
             order.
+        honest_failures: list of failure messages from the trainer
+            (``RiskScoreTrainingResult.honest_failures``). When this
+            list is non-empty, the task switches to GATED mode: it
+            does NOT update ``patient_journeys.risk_score`` and it does
+            NOT propagate ``prediction_class`` to ``ml_predictions``
+            (the audit row is still written with
+            ``prediction_class='gated_honest_failure'`` so the gating
+            event is observable in downstream dashboards). Issue #188.
+        honest_failures_default_gated: behavior when ``honest_failures``
+            is ``None`` (e.g. an old caller that pre-dates #188 and
+            does not pass the kwarg). When ``True`` (the safe default),
+            missing metadata is treated as a failure-gate; pass
+            ``False`` to opt out (back-compat for callers that
+            already validated upstream).
 
     Returns:
         ``{
-            "status": "completed" | "skipped" | "failed",
+            "status": "completed" | "skipped" | "failed" | "gated_honest_failure",
             "predictions": {"inserted", "updated", "submitted"},
             "journeys":    {"updated", "skipped_ineligible", "not_in_db", "submitted"},
-            "task_id": ...
+            "task_id": ...,
+            "honest_failures": [...],     # if gated
         }``
 
     The task is *idempotent on re-run*: the same payloads + journey
@@ -344,12 +380,47 @@ def write_risk_score_predictions(
     the same, with row contents matching the LAST submission.
     """
     task_id = getattr(self.request, "id", "eager") if self else "eager"
+
+    # Issue #188: resolve gate decision.
+    if honest_failures is None:
+        # Caller did not pass honest_failures. Default behavior is to
+        # treat missing metadata as a failure-gate (safe default).
+        is_gated = bool(honest_failures_default_gated)
+        gate_reason = (
+            "missing_honest_failures_metadata"
+            if is_gated
+            else "missing_metadata_opt_out"
+        )
+        resolved_honest_failures: list[str] = (
+            ["honest_failures metadata missing (treated as gated per issue #188)"]
+            if is_gated
+            else []
+        )
+    else:
+        resolved_honest_failures = list(honest_failures)
+        is_gated = len(resolved_honest_failures) > 0
+        gate_reason = "honest_failures_non_empty" if is_gated else "honest_failures_empty"
+
     logger.info(
-        "write_risk_score_predictions: task=%s payloads=%d journeys=%d",
+        "write_risk_score_predictions: task=%s payloads=%d journeys=%d "
+        "gated=%s reason=%s",
         task_id,
         len(payloads),
         len(journey_updates or []),
+        is_gated,
+        gate_reason,
     )
+
+    if is_gated:
+        # Structured audit event for downstream dashboards (do NOT update
+        # patient_journeys.risk_score; do NOT write prediction_class).
+        logger.warning(
+            "risk_score.skipped.honest_failure task=%s reason=%s "
+            "honest_failures=%s",
+            task_id,
+            gate_reason,
+            resolved_honest_failures,
+        )
 
     resolved_url = _resolve_db_url(db_url)
     if not resolved_url:
@@ -369,6 +440,8 @@ def write_risk_score_predictions(
                 "not_in_db": 0,
                 "submitted": len(journey_updates or []),
             },
+            "gated": is_gated,
+            "honest_failures": resolved_honest_failures,
         }
 
     try:
@@ -384,6 +457,18 @@ def write_risk_score_predictions(
             "task_id": task_id,
         }
 
+    # Issue #188: when gated, we still write an audit row to ml_predictions
+    # so downstream dashboards can observe which (model, patient, day)
+    # triples were NOT promoted — but we (a) overwrite the actionable
+    # ``prediction_class`` with the sentinel ``'gated_honest_failure'``
+    # and (b) skip the patient_journeys.risk_score UPDATE entirely.
+    if is_gated:
+        gated_payloads = [
+            {**p, "prediction_class": GATED_SENTINEL_PREDICTION_CLASS} for p in payloads
+        ]
+    else:
+        gated_payloads = list(payloads)
+
     # Codex pass-1 MEDIUM-3: open a single transaction so both writes
     # (ml_predictions upsert + patient_journeys.risk_score UPDATE) are
     # atomic. ``psycopg.connect()`` as a context manager auto-commits on
@@ -392,17 +477,27 @@ def write_risk_score_predictions(
     # transaction boundary.
     try:
         with psycopg.connect(resolved_url) as conn:
-            pred_result = upsert_ml_predictions(conn, payloads, commit=False)
-            journey_result = (
-                update_patient_journey_risk_scores(conn, journey_updates, commit=False)
-                if journey_updates
-                else {
+            pred_result = upsert_ml_predictions(conn, gated_payloads, commit=False)
+            # Issue #188: journey writes are SUPPRESSED in gated mode.
+            if is_gated:
+                journey_result = {
                     "updated": 0,
                     "skipped_ineligible": 0,
                     "not_in_db": 0,
-                    "submitted": 0,
+                    "submitted": len(journey_updates or []),
+                    "skipped_gated_honest_failure": len(journey_updates or []),
                 }
-            )
+            else:
+                journey_result = (
+                    update_patient_journey_risk_scores(conn, journey_updates, commit=False)
+                    if journey_updates
+                    else {
+                        "updated": 0,
+                        "skipped_ineligible": 0,
+                        "not_in_db": 0,
+                        "submitted": 0,
+                    }
+                )
             # Explicit commit at the transaction boundary so a journey
             # failure rolls BOTH writes back, not just the journey
             # write.
@@ -413,17 +508,22 @@ def write_risk_score_predictions(
             "status": "failed",
             "reason": f"db_error: {type(exc).__name__}: {exc}",
             "task_id": task_id,
+            "gated": is_gated,
+            "honest_failures": resolved_honest_failures,
         }
 
     logger.info(
-        "write_risk_score_predictions: predictions=%s journeys=%s",
+        "write_risk_score_predictions: predictions=%s journeys=%s gated=%s",
         pred_result,
         journey_result,
+        is_gated,
     )
     return {
-        "status": "completed",
+        "status": "gated_honest_failure" if is_gated else "completed",
         "task_id": task_id,
         "predictions": pred_result,
         "journeys": journey_result,
+        "gated": is_gated,
+        "honest_failures": resolved_honest_failures,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
