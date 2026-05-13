@@ -1449,6 +1449,7 @@ def _scenario_to_dataframe(
     regime: str,
     seed: int,
     n_total: int | None = None,
+    imbalance_ratio: float | None = None,
 ) -> pd.DataFrame:
     """Generate a synthetic_v2 scenario dataset and adapt to the runner contract.
 
@@ -1464,6 +1465,13 @@ def _scenario_to_dataframe(
         n_total: Optional override for the scenario's ``builder.default_n_total``.
             ``None`` preserves the default (6000 for all four scenarios) so
             no-flag invocations remain bit-identical to the pre-PR baseline.
+        imbalance_ratio: Defense-in-depth (backlog #21.7). Must be ``None`` for
+            scenario regimes. The CLI guard at lines 7132-7155 already rejects
+            ``--imbalanced`` under ``--regime scenario_*`` at the argparse
+            boundary; this parameter is the function-level mirror so a
+            programmatic caller bypassing argparse cannot silently drop the
+            ratio either. Any non-None value raises ``ValueError`` before
+            generation.
 
     Each scenario uses a regime-specific ``brand`` + ``patient_journey_id``
     prefix so a downstream consumer that union-merges multi-scenario outputs
@@ -1478,6 +1486,30 @@ def _scenario_to_dataframe(
         raise ValueError(
             f"unknown synthetic_v2 regime {regime!r}; "
             f"expected one of {sorted(_SCENARIO_REGIME_TO_NAME.keys())}"
+        )
+    if imbalance_ratio is not None:
+        # Scenario regimes encode signal-preservation contracts — post-hoc
+        # relabel would corrupt feature ↔ target correlation. scenario_a_balanced
+        # re-calibrates prevalence to 0.50 via intercept solver INSIDE the DGP,
+        # preserving signal; that is the right tool for a 50:50 cohort. See
+        # backlog #21.7 + CLI guard at scripts/run_tier0_test.py:7132-7155.
+        if imbalance_ratio == 0.50:
+            redirect = (
+                "Use regime='scenario_a_balanced' for a signal-preserving "
+                "50:50 cohort (scenario_a DGP, prevalence re-calibrated via "
+                "intercept solver — preserves feature ↔ target correlation)."
+            )
+        else:
+            redirect = (
+                "No scenario regime accepts an arbitrary prevalence ratio; "
+                "use a legacy regime (default/adverse/clean) with "
+                "imbalance_ratio for post-hoc relabel."
+            )
+        raise ValueError(
+            f"imbalance_ratio={imbalance_ratio!r} is incompatible with "
+            f"scenario regime {regime!r}: scenario regimes encode "
+            f"signal-preservation contracts — post-hoc relabel would corrupt "
+            f"feature ↔ target correlation. See backlog #21.7. " + redirect
         )
     scenario_attr = _SCENARIO_REGIME_TO_NAME[regime]
     scenario = getattr(ScenarioName, scenario_attr)
@@ -1545,7 +1577,12 @@ def generate_sample_data(
             ``.claude/plans/synthetic_cohort_growth_plan_20260509.md`` Phase 1.
     """
     if _generator in _SCENARIO_REGIME_TO_NAME:
-        return _scenario_to_dataframe(_generator, seed=seed, n_total=n_total)
+        return _scenario_to_dataframe(
+            _generator,
+            seed=seed,
+            n_total=n_total,
+            imbalance_ratio=imbalance_ratio,
+        )
 
     # Use the same generator as the data_preparer agent for consistency
     from src.repositories.sample_data import SampleDataGenerator
