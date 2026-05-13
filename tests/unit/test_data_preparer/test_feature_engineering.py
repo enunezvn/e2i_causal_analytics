@@ -1,8 +1,17 @@
 """Unit tests for v5 Gate B3 feature engineering.
 
 Covers:
-1. CSU + Optum manifest contracts declared for all 10 candidates with
-   ``knowable_at=index_date`` and pre-anchor derivation chains.
+1. CSU + Optum manifest contracts declared for all engineered features
+   exposed by ``feature_engineering`` (4 CSU + 5 Optum after
+   ``claim_intensity_ratio`` was dropped post-audit in commit
+   ``fc7c251a``; see ``docs/calibration/b3_engineered_audit_20260511.json``).
+   Backlog #17 (commit ``cfa71627``, 2026-05-12) reclassified 3 of the 4
+   CSU engineered features to ``knowable_at=post_index`` because their
+   inputs (``engagement_score`` / ``hcp_visits`` / ``prior_treatments``
+   / ``days_on_therapy`` / ``disease_severity``) became post-index;
+   only ``age_x_insurance_interaction`` survives as a pre-anchor
+   engineered feature. The 5 Optum engineered features remain
+   pre-anchor (their inputs are pre-anchor by construction).
 2. Helper ``engineer_features`` correctness on small synthetic
    DataFrames (CSU + Optum dispatch).
 3. Node wrapper ``engineer_features_node`` gating: OFF by default
@@ -13,7 +22,11 @@ Covers:
 6. Edge cases: NaN inputs, divide-by-zero clamping, categorical
    factorization stability.
 
-Pre-spec: docs/specs/v5_b3_feature_engineering_prespec_2026-05-11.md.
+Pre-spec: docs/specs/v5_b3_feature_engineering_prespec_2026-05-11.md
+(pre-dates backlog #17 and still says "all candidates declared
+knowable_at=index_date"; the CSU manifest is now the source of truth and
+``tests/unit/test_data/test_csu_feature_manifest.py`` pins the post-index
+reclassification at the contract level).
 """
 
 from __future__ import annotations
@@ -32,6 +45,7 @@ from src.agents.ml_foundation.data_preparer.nodes.feature_engineering import (
 )
 from src.data.manifests.csu_feature_manifest import (
     CSU_FEATURES,
+    CSU_FORBIDDEN_AS_FEATURES,
     CSU_SAFE_FEATURES,
 )
 from src.data.manifests.optum_feature_manifest import (
@@ -42,6 +56,62 @@ from src.data.manifests.optum_feature_manifest import (
 # =============================================================================
 # Manifest declarations
 # =============================================================================
+
+
+# Issue #187 (2026-05-13): backlog #17 (commit cfa71627, 2026-05-12)
+# reclassified 6 CSU medication-derived aggregates to
+# ``knowable_at=post_index`` because the CSU prediction target
+# (``treatment_initiated``) is structurally coupled to "patient appears
+# in the medication panel". The chain-validity rule then forced 3 of
+# the 4 B3 engineered features (``engagement_per_visit``,
+# ``treatment_diversity_intensity``, ``severity_engagement_product``)
+# to ``post_index`` because their inputs are post_index. Only
+# ``age_x_insurance_interaction`` remains pre-anchor — its inputs
+# (``age_continuous`` + ``insurance_type``) are both enrollment-knowable.
+#
+# This file pre-dated backlog #17 and iterated over
+# ``CSU_ENGINEERED_FEATURES`` as if all four were pre-anchor. The fix
+# below splits the engineered set by anchor at the manifest contract
+# level. The pre-anchor sibling tests assert the pre-anchor expectations
+# only over the pre-anchor bucket; a NEW test pins the post-index
+# bucket as a literal frozenset so the split cannot regress silently
+# (someone removing one of the names from ``CSU_ENGINEERED_FEATURES``
+# would fire the new test, not silently skip the pre-anchor sibling).
+def _split_engineered_by_anchor(
+    engineered_names: tuple[str, ...],
+    contracts: dict,
+) -> tuple[list[str], list[str]]:
+    """Partition engineered feature names by their declared anchor.
+
+    Returns ``(pre_anchor, post_index)``. A pre-anchor name has its
+    contract's ``knowable_at.reference`` in ``{"index_date", "enrollment"}``;
+    a post-index name has ``reference == "post_index"``. Names absent from
+    ``contracts`` raise a ``KeyError`` — callers must first run
+    ``test_*_engineered_features_all_in_manifest``.
+    """
+    pre_anchor: list[str] = []
+    post_index: list[str] = []
+    for name in engineered_names:
+        ref = contracts[name].knowable_at.reference
+        if ref == "post_index":
+            post_index.append(name)
+        else:
+            pre_anchor.append(name)
+    return pre_anchor, post_index
+
+
+# Literal pin on the post-index bucket. If one of these names is silently
+# removed from ``CSU_ENGINEERED_FEATURES`` (e.g., a refactor drops the
+# helper that materializes it) the new
+# ``test_csu_engineered_features_post_index_correctly_classified`` will
+# fail because the literal pin is no longer a subset of the bucket.
+_BACKLOG_17_POST_INDEX_ENGINEERED: frozenset[str] = frozenset(
+    {
+        "engagement_per_visit",
+        "treatment_diversity_intensity",
+        "severity_engagement_product",
+    }
+)
 
 
 def test_csu_engineered_features_all_in_manifest():
@@ -59,12 +129,70 @@ def test_optum_engineered_features_all_in_manifest():
 
 
 def test_csu_engineered_features_declared_index_date():
-    """All CSU engineered features are knowable_at=index_date (pre-anchor)."""
+    """Pre-anchor CSU engineered features are knowable_at=index_date.
+
+    Backlog #17 split: only engineered features whose inputs are
+    pre-anchor (currently ``age_x_insurance_interaction``) can themselves
+    be declared at ``index_date``. The 3 medication-derived engineered
+    features (``engagement_per_visit`` etc.) are post-index by chain
+    validity and are pinned by
+    ``test_csu_engineered_features_post_index_correctly_classified``.
+    """
     contracts = {c.name: c for c in CSU_FEATURES}
-    for name in CSU_ENGINEERED_FEATURES:
+    pre_anchor, _ = _split_engineered_by_anchor(CSU_ENGINEERED_FEATURES, contracts)
+    assert pre_anchor, (
+        "Expected at least one pre-anchor CSU engineered feature; got 0. "
+        "If backlog #17 has fully retired all pre-anchor engineered "
+        "features, update this test and CSU_ENGINEERED_FEATURES "
+        "intentionally rather than letting the assertion silently pass."
+    )
+    for name in pre_anchor:
         c = contracts[name]
         assert c.knowable_at.reference == "index_date", (
             f"{name} declared knowable_at={c.knowable_at.reference!r}, expected 'index_date'"
+        )
+
+
+def test_csu_engineered_features_post_index_correctly_classified():
+    """Post-index CSU engineered features are pinned in the forbidden view.
+
+    Backlog #17 regression pin: the 3 medication-derived engineered
+    features (``engagement_per_visit``, ``treatment_diversity_intensity``,
+    ``severity_engagement_product``) MUST stay declared ``post_index``
+    because their inputs are post_index. This test catches two drift
+    directions:
+
+    1. Someone removes one of these names from ``CSU_ENGINEERED_FEATURES``
+       — the literal-pin subset check fires.
+    2. Someone "fixes" the pre-anchor sibling test by re-classifying one
+       of them back to ``index_date`` — that would re-break chain
+       validity, and this test catches it via the per-name assertion
+       below.
+    """
+    contracts = {c.name: c for c in CSU_FEATURES}
+    _, post_index = _split_engineered_by_anchor(CSU_ENGINEERED_FEATURES, contracts)
+    post_index_set = set(post_index)
+
+    # Pin (1): literal frozenset must be a subset of the post-index bucket.
+    missing = _BACKLOG_17_POST_INDEX_ENGINEERED - post_index_set
+    assert not missing, (
+        f"Backlog #17 regression: engineered features {sorted(missing)} "
+        f"are no longer present in the post-index bucket of "
+        f"CSU_ENGINEERED_FEATURES. Either the helper dropped them, or "
+        f"they were re-classified back to pre-anchor (which would also "
+        f"violate chain validity)."
+    )
+
+    # Pin (2): per-name assertions confirm manifest reference + forbidden view.
+    forbidden = set(CSU_FORBIDDEN_AS_FEATURES)
+    for name in post_index:
+        c = contracts[name]
+        assert c.knowable_at.reference == "post_index", (
+            f"{name} mis-bucketed: knowable_at={c.knowable_at.reference!r}"
+        )
+        assert name in forbidden, (
+            f"{name} should be in CSU_FORBIDDEN_AS_FEATURES (it is "
+            f"post_index by manifest); manifest views have drifted."
         )
 
 
@@ -79,9 +207,17 @@ def test_optum_engineered_features_declared_index_date():
 
 
 def test_csu_engineered_features_in_safe_view():
-    """Engineered features appear in CSU_SAFE_FEATURES (pre-or-at-index)."""
+    """Pre-anchor CSU engineered features appear in ``CSU_SAFE_FEATURES``.
+
+    Backlog #17 split: only engineered features whose contract is
+    pre-anchor land in the SAFE view. The 3 post-index engineered
+    features appear in ``CSU_FORBIDDEN_AS_FEATURES`` instead and are
+    pinned by ``test_csu_engineered_features_post_index_correctly_classified``.
+    """
+    contracts = {c.name: c for c in CSU_FEATURES}
+    pre_anchor, _ = _split_engineered_by_anchor(CSU_ENGINEERED_FEATURES, contracts)
     safe = set(CSU_SAFE_FEATURES)
-    for name in CSU_ENGINEERED_FEATURES:
+    for name in pre_anchor:
         assert name in safe, f"{name} not in CSU_SAFE_FEATURES"
 
 
@@ -102,9 +238,22 @@ _PRE_ANCHOR_REFERENCES = {"index_date", "enrollment"}
 
 
 def test_csu_engineered_derivation_chain_is_pre_anchor():
-    """Every derivation_input is itself declared pre-anchor in CSU manifest."""
+    """Pre-anchor CSU engineered features pull from pre-anchor inputs only.
+
+    Backlog #17 split: only engineered features whose own contract is
+    pre-anchor are required to derive from pre-anchor inputs. The 3
+    post-index engineered features (e.g., ``engagement_per_visit``)
+    legitimately pull from post-index inputs (``engagement_score``,
+    ``hcp_visits``, etc.) — their post-index declaration in the
+    manifest is precisely WHAT chain validity enforces, and they are
+    excluded from training via ``CSU_FORBIDDEN_AS_FEATURES`` (see
+    ``test_csu_engineered_features_post_index_correctly_classified``).
+    Full-contract chain validity is also pinned at the manifest layer
+    by ``tests/unit/test_data/test_csu_feature_manifest.py``.
+    """
     contracts = {c.name: c for c in CSU_FEATURES}
-    for name in CSU_ENGINEERED_FEATURES:
+    pre_anchor, _ = _split_engineered_by_anchor(CSU_ENGINEERED_FEATURES, contracts)
+    for name in pre_anchor:
         c = contracts[name]
         for input_name in c.derivation_inputs:
             assert input_name in contracts, (
