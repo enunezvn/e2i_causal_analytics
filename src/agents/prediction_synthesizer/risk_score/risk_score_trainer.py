@@ -746,8 +746,10 @@ class RiskScoreTrainer:
             if tracking_uri:
                 mlflow.set_tracking_uri(tracking_uri)
             mlflow.set_experiment(experiment)
-            run_kwargs = {"run_name": run_name} if run_name else {}
-            with mlflow.start_run(**run_kwargs) as run:
+            # Use explicit kwarg dispatch instead of **run_kwargs so mypy can
+            # type-check ``start_run`` against its actual signature.
+            run_ctx = mlflow.start_run(run_name=run_name) if run_name else mlflow.start_run()
+            with run_ctx as run:
                 mlflow.set_tags({**tags, "model_type": model_type})
                 # Stringify param values so MLflow accepts them.
                 mlflow.log_params({k: str(v) for k, v in best_params.items()})
@@ -772,7 +774,8 @@ class RiskScoreTrainer:
                     mlflow.sklearn.log_model(estimator, name="model")
                 except Exception as exc:  # pragma: no cover - depends on MLflow
                     logger.warning("risk_score_trainer: mlflow log_model failed: %s", exc)
-                return run.info.run_id
+                run_id: Optional[str] = str(run.info.run_id) if run is not None else None
+                return run_id
         except Exception as exc:
             logger.warning(
                 "risk_score_trainer: MLflow logging failed (%s: %s). "
