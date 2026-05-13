@@ -190,9 +190,7 @@ class TestRescueSteroidBurst:
     def test_no_meds(self) -> None:
         conv = _converter()
         conv._med_by_pat = {}
-        assert (
-            conv._has_rescue_steroid_burst(1, _ts("2024-01-01"), _ts("2024-06-30")) is False
-        )
+        assert conv._has_rescue_steroid_burst(1, _ts("2024-01-01"), _ts("2024-06-30")) is False
 
     def test_prednisone_long_course_in_window(self) -> None:
         conv = _converter()
@@ -371,12 +369,8 @@ class TestDeriveTreatmentResponse:
         self, med_rows: list[dict] | None, inpatient_rows: list[dict] | None = None
     ) -> OptumDataConverter:
         conv = _converter()
-        conv._med_by_pat = (
-            {1: pd.DataFrame(med_rows)} if med_rows else {}
-        )
-        conv._inpatient_by_pat = (
-            {1: pd.DataFrame(inpatient_rows)} if inpatient_rows else {}
-        )
+        conv._med_by_pat = {1: pd.DataFrame(med_rows)} if med_rows else {}
+        conv._inpatient_by_pat = {1: pd.DataFrame(inpatient_rows)} if inpatient_rows else {}
         return conv
 
     # --- pre-condition: no biologic ---
@@ -386,8 +380,15 @@ class TestDeriveTreatmentResponse:
 
     def test_med_grp_present_but_no_biologic(self) -> None:
         conv = self._setup(
-            [{"medication_date": _ts("2024-02-01"), "Generic_Name": "cetirizine", "days_sup": 30,
-              "Brand_Name": None, "code": None}]
+            [
+                {
+                    "medication_date": _ts("2024-02-01"),
+                    "Generic_Name": "cetirizine",
+                    "days_sup": 30,
+                    "Brand_Name": None,
+                    "code": None,
+                }
+            ]
         )
         assert conv._derive_treatment_response(1, _ts("2024-01-01")) == (None, None)
 
@@ -708,9 +709,7 @@ class TestFollowupPrecondition:
     def test_observable_followup_helper_with_capped_window(self) -> None:
         conv = _converter()
         conv.demo = pd.DataFrame([{"patid": 1, "eligend": _ts("2025-12-31")}])
-        followup = conv._observable_followup_days(
-            1, _ts("2024-02-01"), _ts("2024-07-30")
-        )
+        followup = conv._observable_followup_days(1, _ts("2024-02-01"), _ts("2024-07-30"))
         # min(2025-12-31, 2024-07-30) - 2024-02-01 = 180.
         assert followup == 180
 
@@ -718,9 +717,7 @@ class TestFollowupPrecondition:
         """Falls back to `enrollment_post_days` when eligend is missing."""
         conv = _converter()
         conv.demo = pd.DataFrame(columns=["patid", "eligend"])
-        followup = conv._observable_followup_days(
-            1, _ts("2024-02-01"), _ts("2024-07-30")
-        )
+        followup = conv._observable_followup_days(1, _ts("2024-02-01"), _ts("2024-07-30"))
         assert followup == conv.enrollment_post_days
 
 
@@ -823,7 +820,8 @@ class TestBuildTreatmentEventsCohortGuard:
             init_date_by_patid={1: journey["index_date"]},
         )
         post_idx = [
-            e for e in events
+            e
+            for e in events
             if e.get("event_date") is not None
             and pd.Timestamp(e["event_date"]) >= journey["index_date"]
         ]
