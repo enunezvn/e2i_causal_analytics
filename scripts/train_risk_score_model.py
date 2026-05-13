@@ -145,16 +145,36 @@ def _load_real_optum_data(
     # HIGH-1: anchor feature selection to OPTUM_SAFE_FEATURES + explicit
     # drop of OPTUM_FORBIDDEN_AS_FEATURES (which includes
     # treatment_initiated, the exact alias of initiated_biologic_180d).
+    #
+    # Issue #173 finding: ``from src.data.manifests.optum_feature_manifest
+    # import ...`` transitively loads ``src.data.manifests.__init__`` which
+    # imports ``synthetic_feature_manifest`` → ``src.repositories`` →
+    # ``src.agents.ml_foundation.data_preparer`` → BACK into
+    # ``src.data.manifests`` for ``SYNTHETIC_FORBIDDEN_AS_FEATURES``. That
+    # cycle is pre-existing on main but breaks the real-data loader here.
+    # Use ``importlib.util.spec_from_file_location`` to load
+    # ``optum_feature_manifest.py`` directly, bypassing the package
+    # ``__init__`` entirely. The module itself has no cyclic dependencies.
     try:
-        from src.data.manifests.optum_feature_manifest import (
-            OPTUM_FORBIDDEN_AS_FEATURES,
-            OPTUM_SAFE_FEATURES,
-            OPTUM_TARGETS,
+        import importlib.util
+
+        manifest_path = PROJECT_ROOT / "src" / "data" / "manifests" / "optum_feature_manifest.py"
+        if not manifest_path.exists():
+            raise FileNotFoundError(f"optum_feature_manifest.py not found at {manifest_path}")
+        spec = importlib.util.spec_from_file_location(
+            "_optum_feature_manifest_isolated", manifest_path
         )
-    except ImportError as exc:
+        if spec is None or spec.loader is None:  # pragma: no cover — defensive
+            raise RuntimeError("Could not build module spec for optum_feature_manifest.")
+        _optum_manifest = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_optum_manifest)
+        OPTUM_FORBIDDEN_AS_FEATURES = _optum_manifest.OPTUM_FORBIDDEN_AS_FEATURES
+        OPTUM_SAFE_FEATURES = _optum_manifest.OPTUM_SAFE_FEATURES
+        OPTUM_TARGETS = _optum_manifest.OPTUM_TARGETS
+    except Exception as exc:
         raise RuntimeError(
-            "Cannot import OPTUM_SAFE_FEATURES from "
-            "src.data.manifests.optum_feature_manifest. The feature-selection "
+            "Cannot load OPTUM_SAFE_FEATURES from "
+            "src/data/manifests/optum_feature_manifest.py. The feature-selection "
             "anti-leakage anchor is REQUIRED. Aborting real-data training to "
             "avoid silently training on a target-leaking feature set."
         ) from exc
