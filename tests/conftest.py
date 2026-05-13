@@ -186,10 +186,12 @@ def _run_service_checks() -> Dict[str, bool]:
         results["redis"] = False
 
     # FalkorDB check is skipped cleanly when no URL is configured (issue #183).
-    # The probe only fires when either the lane explicitly opts in via
-    # FALKORDB_REQUIRED=1 (e.g., a future FalkorDB-backed CI lane) or a
-    # non-empty FALKORDB_URL is exported (local-droplet runs, where the env
-    # var is auto-injected by docker-compose).
+    # The probe ONLY fires when a non-empty ``FALKORDB_URL`` is exported
+    # (local-droplet runs, where docker-compose auto-injects the env var
+    # pointing at :6381). The independent ``FALKORDB_REQUIRED`` env var does
+    # NOT itself trigger a probe — it only surfaces a warning when the URL is
+    # empty so future FalkorDB-backed CI lanes can't silently mis-configure
+    # the env without log evidence (codex pass-1 LOW-1 wording clarification).
     if FALKORDB_URL:
         try:
             results["falkordb"] = loop.run_until_complete(_check_redis_service(FALKORDB_URL))
