@@ -116,14 +116,14 @@ class TestDeterministicPredictionId:
         assert len(out) == 30
         assert out.startswith("rsc_")
 
-    def test_naive_datetime_still_normalises(self) -> None:
-        """A naive datetime is normalised via ``astimezone()`` which Python
-        treats as local time → UTC. We don't reject it (Python 3.6+
-        accepts), but verify the ID is still well-formed and stable
-        across same-day naive inputs.
+    def test_naive_datetime_rejected(self) -> None:
+        """Codex pass-1 MEDIUM-1: a naive datetime would silently produce
+        different UTC dates across workers in different time zones. We
+        reject it explicitly so idempotency is never accidentally broken
+        by an unzoned timestamp.
         """
-        out = make_deterministic_prediction_id("v1", "PAT_001", datetime(2026, 5, 13, 12, 0))
-        assert len(out) == 30 and out.startswith("rsc_")
+        with pytest.raises(ValueError, match="timezone-aware"):
+            make_deterministic_prediction_id("v1", "PAT_001", datetime(2026, 5, 13, 12, 0))
 
     def test_empty_inputs_raise(self) -> None:
         t = datetime(2026, 5, 13, tzinfo=timezone.utc)
@@ -167,14 +167,31 @@ class TestNoDbDeferral:
 
 
 class TestEligibleStages:
-    def test_includes_both_legacy_and_v3(self) -> None:
+    def test_includes_legacy_4_stage_on_treatment(self) -> None:
+        # Legacy 4-stage on-treatment subset (issue body §4 literal).
         assert "initial_treatment" in RISK_ELIGIBLE_JOURNEY_STAGES
         assert "maintenance" in RISK_ELIGIBLE_JOURNEY_STAGES
-        # 7-stage extensions
         assert "treatment_optimization" in RISK_ELIGIBLE_JOURNEY_STAGES
         assert "treatment_switch" in RISK_ELIGIBLE_JOURNEY_STAGES
-        # Should NOT include pre-treatment stages
+
+    def test_includes_v3_7_stage_on_treatment(self) -> None:
+        """Codex pass-1 HIGH-2: the 7-stage enum's on-treatment subset is
+        ``prescribed, first_fill, adherent, maintained`` per
+        ``journey_stage_type`` ENUM. The original PR set used the legacy
+        names by mistake.
+        """
+        assert "prescribed" in RISK_ELIGIBLE_JOURNEY_STAGES
+        assert "first_fill" in RISK_ELIGIBLE_JOURNEY_STAGES
+        assert "adherent" in RISK_ELIGIBLE_JOURNEY_STAGES
+        assert "maintained" in RISK_ELIGIBLE_JOURNEY_STAGES
+
+    def test_excludes_pre_treatment_and_terminal(self) -> None:
+        # Pre-treatment stages — these patients haven't initiated yet.
         assert "diagnosis" not in RISK_ELIGIBLE_JOURNEY_STAGES
+        assert "aware" not in RISK_ELIGIBLE_JOURNEY_STAGES
+        assert "considering" not in RISK_ELIGIBLE_JOURNEY_STAGES
+        # Terminal stage — no future risk to score.
+        assert "discontinued" not in RISK_ELIGIBLE_JOURNEY_STAGES
 
 
 # ---------------------------------------------------------------------------
@@ -227,6 +244,38 @@ class TestRealDbWrites:
                 "INSERT INTO patient_journeys "
                 "(patient_journey_id, patient_id, journey_start_date, journey_stage) "
                 "VALUES (%s, %s, %s, 'diagnosis')",
+                (pjid, test_patient_id, "2026-05-01"),
+            )
+        conn.commit()
+        yield pjid
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM patient_journeys WHERE patient_journey_id = %s", (pjid,))
+        conn.commit()
+
+    @pytest.fixture
+    def seeded_journey_7stage(self, conn: Any, test_patient_id: str) -> str:
+        """A journey in the 7-stage 'adherent' enum (codex pass-1 HIGH-2).
+
+        Skips if the DB's journey_stage_type enum doesn't yet include
+        ``'adherent'`` — local Supabase stacks on older schema revisions
+        only have the 4-stage values. The 4-stage-only test
+        ``test_journey_update_only_eligible_stage`` still exercises the
+        4-stage on-treatment path on those DBs.
+        """
+        with conn.cursor() as cur:
+            cur.execute("SELECT 'adherent' = ANY(enum_range(NULL::journey_stage_type)::text[])")
+            row = cur.fetchone()
+        if not row or not row[0]:
+            pytest.skip(
+                "journey_stage_type enum on this DB does not include 'adherent' "
+                "(pre-v3 7-stage revision); 4-stage subset test still covers the gate."
+            )
+        pjid = f"PJ7_{uuid.uuid4().hex[:12]}"  # 16 chars
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO patient_journeys "
+                "(patient_journey_id, patient_id, journey_start_date, journey_stage) "
+                "VALUES (%s, %s, %s, 'adherent')",
                 (pjid, test_patient_id, "2026-05-01"),
             )
         conn.commit()
@@ -314,18 +363,34 @@ class TestRealDbWrites:
         conn: Any,
         seeded_journey: str,
         seeded_journey_ineligible: str,
+        seeded_journey_7stage: str,
     ) -> None:
+        """Codex pass-1 HIGH-2 follow-on: a 7-stage 'adherent' journey
+        must be updated (was previously silently skipped because the
+        eligible set lacked 7-stage values).
+        """
         result = update_patient_journey_risk_scores(
             conn,
             [
                 {"patient_journey_id": seeded_journey, "risk_score": 7.42},
                 {"patient_journey_id": seeded_journey_ineligible, "risk_score": 7.42},
-                {"patient_journey_id": "PJ_does_not_exist_zzzzz", "risk_score": 5.0},
+                {"patient_journey_id": seeded_journey_7stage, "risk_score": 3.14},
+                {"patient_journey_id": "PJ_no_exist_zzzz", "risk_score": 5.0},
             ],
         )
-        assert result["updated"] == 1
+        assert result["updated"] == 2  # eligible + 7-stage
         assert result["skipped_ineligible"] == 1
         assert result["not_in_db"] == 1
+
+        # 7-stage row must have its risk_score populated.
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT risk_score FROM patient_journeys WHERE patient_journey_id = %s",
+                (seeded_journey_7stage,),
+            )
+            row = cur.fetchone()
+        assert row is not None
+        assert float(row[0]) == pytest.approx(3.14, abs=0.01)
 
         # Verify the eligible row was actually written.
         with conn.cursor() as cur:

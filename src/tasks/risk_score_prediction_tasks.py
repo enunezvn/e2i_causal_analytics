@@ -37,14 +37,35 @@ from src.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
-# Stages eligible for risk_score write per issue #173 scope item 4. The
-# union covers both the legacy 4-stage enum and the v3 7-stage extension.
+# Stages eligible for risk_score write per issue #173 scope item 4.
+#
+# The ``journey_stage_type`` enum (database/core/e2i_ml_complete_v3_schema.sql:155)
+# contains both a legacy 4-stage set and a 7-stage extension. We score
+# patients who are post-initiation but still on (or recently on) therapy:
+#
+#   * Legacy 4-stage (issue body §4 literal):
+#       initial_treatment, maintenance
+#   * Legacy 4-stage (transitional / mid-treatment — included for parity
+#     with the cohort builder which routes mid-treatment patients here):
+#       treatment_optimization, treatment_switch
+#   * 7-stage extension (codex pass-1 HIGH-2 fix — these are the
+#     canonical 7-stage equivalents):
+#       prescribed, first_fill, adherent, maintained
+#
+# We intentionally exclude pre-treatment stages (``diagnosis``,
+# ``aware``, ``considering``) and the terminal ``discontinued`` stage.
 RISK_ELIGIBLE_JOURNEY_STAGES: frozenset[str] = frozenset(
     {
+        # Legacy 4-stage (on-treatment subset)
         "initial_treatment",
         "maintenance",
         "treatment_optimization",
         "treatment_switch",
+        # 7-stage extension (on-treatment subset)
+        "prescribed",
+        "first_fill",
+        "adherent",
+        "maintained",
     }
 )
 
@@ -76,6 +97,16 @@ def make_deterministic_prediction_id(
     """
     if not model_version or not patient_id:
         raise ValueError("model_version and patient_id must be non-empty")
+    # Codex pass-1 MEDIUM-1: reject naive datetimes. ``astimezone()`` on a
+    # naive datetime treats it as local time, which means workers in
+    # different time zones (or across DST boundaries) would derive
+    # different UTC dates from the same input and silently break
+    # idempotency. Require explicit tzinfo.
+    if prediction_timestamp.tzinfo is None:
+        raise ValueError(
+            "prediction_timestamp must be timezone-aware (tzinfo is None). "
+            "Pass datetime.now(timezone.utc) or attach tzinfo explicitly."
+        )
     ts_utc = prediction_timestamp.astimezone(timezone.utc).date().isoformat()
     digest = hashlib.sha256(f"{model_version}|{patient_id}|{ts_utc}".encode("utf-8")).hexdigest()
     return f"rsc_{digest[:26]}"
@@ -121,6 +152,8 @@ def update_patient_journey_risk_scores(
     conn: Any,
     rows: Iterable[Mapping[str, Any]],
     eligible_stages: frozenset[str] = RISK_ELIGIBLE_JOURNEY_STAGES,
+    *,
+    commit: bool = True,
 ) -> dict[str, int]:
     """UPDATE ``patient_journeys.risk_score`` for the supplied rows.
 
@@ -131,6 +164,11 @@ def update_patient_journey_risk_scores(
     ``skipped_ineligible`` is rows that matched a ``patient_journey_id``
     but whose stage was outside the gate. Missing IDs are silently
     counted as ``not_in_db``.
+
+    Codex pass-1 MEDIUM-3: ``commit`` defaults to True for backward
+    compat in unit tests, but the Celery task calls with ``commit=False``
+    so both this UPDATE and the ``upsert_ml_predictions`` INSERT
+    share a single transaction — atomicity across both tables.
     """
     rows = list(rows)
     if not rows:
@@ -140,10 +178,6 @@ def update_patient_journey_risk_scores(
     ineligible = 0
     submitted = len(rows)
 
-    # We use one connection across the batch, one statement per row, in a
-    # single transaction. That keeps the locking footprint tight (no
-    # multi-second exclusive lock on patient_journeys) while still
-    # being idempotent.
     with conn.cursor() as cur:
         # Pre-query: which patient_journey_ids exist and which are stage-eligible?
         ids = [r["patient_journey_id"] for r in rows]
@@ -160,13 +194,22 @@ def update_patient_journey_risk_scores(
             if present[pjid] not in eligible_stages:
                 ineligible += 1
                 continue
+            # Cast journey_stage to text so the comparison works even on
+            # DBs whose ``journey_stage_type`` enum hasn't yet been
+            # extended with all of our eligible labels (e.g. a Postgres
+            # instance still on the 4-stage enum revision will reject
+            # casting ``'adherent'::journey_stage_type``). Text equality
+            # passes through the existing app-level set check so the
+            # gate is preserved either way.
             cur.execute(
                 "UPDATE patient_journeys SET risk_score = %s, updated_at = NOW() "
-                "WHERE patient_journey_id = %s AND journey_stage = ANY(%s)",
+                "WHERE patient_journey_id = %s "
+                "AND journey_stage::text = ANY(%s)",
                 (_coerce_decimal_3_2(float(r["risk_score"])), pjid, list(eligible_tuple)),
             )
             updated += cur.rowcount
-    conn.commit()
+    if commit:
+        conn.commit()
     return {
         "updated": updated,
         "skipped_ineligible": ineligible,
@@ -178,6 +221,8 @@ def update_patient_journey_risk_scores(
 def upsert_ml_predictions(
     conn: Any,
     payloads: Iterable[Mapping[str, Any]],
+    *,
+    commit: bool = True,
 ) -> dict[str, int]:
     """UPSERT ``ml_predictions`` rows by ``prediction_id`` (PRIMARY KEY).
 
@@ -251,7 +296,8 @@ def upsert_ml_predictions(
                 inserted += 1
             else:
                 updated += 1
-    conn.commit()
+    if commit:
+        conn.commit()
     return {"inserted": inserted, "updated": updated, "submitted": len(payloads)}
 
 
@@ -338,11 +384,17 @@ def write_risk_score_predictions(
             "task_id": task_id,
         }
 
+    # Codex pass-1 MEDIUM-3: open a single transaction so both writes
+    # (ml_predictions upsert + patient_journeys.risk_score UPDATE) are
+    # atomic. ``psycopg.connect()`` as a context manager auto-commits on
+    # clean exit and rolls back on exception — so we pass ``commit=False``
+    # to the helpers and let the connection context handle the
+    # transaction boundary.
     try:
         with psycopg.connect(resolved_url) as conn:
-            pred_result = upsert_ml_predictions(conn, payloads)
+            pred_result = upsert_ml_predictions(conn, payloads, commit=False)
             journey_result = (
-                update_patient_journey_risk_scores(conn, journey_updates)
+                update_patient_journey_risk_scores(conn, journey_updates, commit=False)
                 if journey_updates
                 else {
                     "updated": 0,
@@ -351,6 +403,10 @@ def write_risk_score_predictions(
                     "submitted": 0,
                 }
             )
+            # Explicit commit at the transaction boundary so a journey
+            # failure rolls BOTH writes back, not just the journey
+            # write.
+            conn.commit()
     except Exception as exc:  # pragma: no cover - real-DB error path
         logger.exception("write_risk_score_predictions: DB write failed: %s", exc)
         return {

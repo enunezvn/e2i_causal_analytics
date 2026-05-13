@@ -52,6 +52,9 @@ from src.tasks.feedback_loop_tasks import (
 # NPPES NPI taxonomy cache (issue #154)
 from src.tasks.nppes_tasks import refresh_npi_taxonomy_cache
 
+# Risk-score prediction DB write task (issue #173)
+from src.tasks.risk_score_prediction_tasks import write_risk_score_predictions
+
 __all__ = [
     # Feature Store
     "materialize_features",
@@ -85,4 +88,6 @@ __all__ = [
     "run_full_feedback_loop",
     # NPPES NPI taxonomy cache (issue #154)
     "refresh_npi_taxonomy_cache",
+    # Risk-score prediction DB writes (issue #173)
+    "write_risk_score_predictions",
 ]
