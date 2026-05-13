@@ -1,4 +1,4 @@
-"""Unit tests for the `--imbalanced × scenario_*` CLI guard.
+"""Unit tests for the `--imbalanced × scenario_*` CLI guard + function guard.
 
 Pins backlog #21.7 (codex pass-2 follow-up): `generate_sample_data:1469`
 short-circuits to `_scenario_to_dataframe` BEFORE the relabel block at
@@ -6,10 +6,17 @@ lines 1494-1506, so `--imbalanced RATIO` is silently dropped under any
 `--regime scenario_*`. Discovered empirically during plan Phase 3.3
 contrast (conditions A and C produced bit-identical metrics for seed=42).
 
-The CLI guard at `scripts/run_tier0_test.py:6237-6262` errors out at the
-argparse boundary so operators see a clear message + redirect to either
-`--regime scenario_a_balanced` (if they wanted prevalence=0.50 with intact
-signal) or a legacy regime (default/adverse/clean) for post-hoc relabel.
+Two layers of defense covered here:
+
+1. CLI guard at `scripts/run_tier0_test.py:7132-7155` errors out at the
+   argparse boundary so operators see a clear message + redirect to either
+   `--regime scenario_a_balanced` (if they wanted prevalence=0.50 with intact
+   signal) or a legacy regime (default/adverse/clean) for post-hoc relabel.
+
+2. Function-level guard in `_scenario_to_dataframe` (issue #195): mirrors
+   the CLI redirect at the function boundary so a programmatic caller
+   bypassing argparse (e.g. an interactive session importing
+   `generate_sample_data`) ALSO cannot silently drop the ratio.
 """
 
 from __future__ import annotations
@@ -18,10 +25,19 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 RUNNER = REPO_ROOT / "scripts" / "run_tier0_test.py"
+
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from scripts.run_tier0_test import (  # noqa: E402
+    _scenario_to_dataframe,
+    generate_sample_data,
+)
 
 
 @pytest.mark.parametrize(
@@ -169,3 +185,64 @@ def test_no_imbalanced_with_scenario_regime_passes() -> None:
         f"Expected exit 0 for --regime scenario_a --dry-run, "
         f"got {result.returncode}; stderr (truncated): {result.stderr[-500:]!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Function-level defense-in-depth (issue #195 / backlog #21.7)
+#
+# A programmatic caller bypassing argparse (e.g. an interactive session that
+# imports `generate_sample_data` directly) would have silently dropped the
+# imbalance_ratio under a scenario regime, because `_scenario_to_dataframe`
+# accepted no such kwarg and the dispatch in `generate_sample_data` returned
+# BEFORE the relabel block. The fix threads `imbalance_ratio` through and
+# raises ValueError immediately when it is non-None under a scenario regime.
+# ---------------------------------------------------------------------------
+
+
+class TestScenarioToDataframeImbalanceGuard:
+    """Function-level mirror of the CLI guard. See module docstring layer #2."""
+
+    @pytest.mark.parametrize(
+        "scenario_regime",
+        ["scenario_a", "scenario_a_balanced", "scenario_b", "scenario_c"],
+    )
+    def test_direct_call_with_ratio_raises(self, scenario_regime: str) -> None:
+        """Direct call with imbalance_ratio set raises ValueError with redirect."""
+        with pytest.raises(ValueError) as excinfo:
+            _scenario_to_dataframe(scenario_regime, seed=42, imbalance_ratio=0.05)
+        msg = str(excinfo.value)
+        assert "scenario" in msg.lower(), f"Error must mention 'scenario'; got: {msg!r}"
+        assert "#21.7" in msg, f"Error must cite backlog #21.7; got: {msg!r}"
+        # ratio=0.05 is non-0.50 → legacy regime redirect
+        assert ("scenario_a_balanced" in msg) or ("legacy" in msg.lower()), (
+            f"Error must redirect to scenario_a_balanced or legacy regimes; got: {msg!r}"
+        )
+
+    def test_direct_call_at_half_redirects_to_balanced(self) -> None:
+        """imbalance_ratio == 0.50 specifically recommends scenario_a_balanced."""
+        with pytest.raises(ValueError) as excinfo:
+            _scenario_to_dataframe("scenario_a", seed=42, imbalance_ratio=0.50)
+        assert "scenario_a_balanced" in str(excinfo.value), (
+            f"At ratio=0.50 the function guard must redirect to "
+            f"scenario_a_balanced; got: {excinfo.value!s}"
+        )
+
+    def test_direct_call_without_ratio_succeeds(self) -> None:
+        """Backward-compat: imbalance_ratio=None (and omitted) returns a DataFrame."""
+        df_explicit = _scenario_to_dataframe("scenario_a", seed=42, imbalance_ratio=None)
+        assert isinstance(df_explicit, pd.DataFrame) and len(df_explicit) > 0
+
+        # Default-arg case (kwarg omitted entirely) must also succeed —
+        # callers that pre-date issue #195 do not pass the new param.
+        df_default = _scenario_to_dataframe("scenario_a", seed=42)
+        assert isinstance(df_default, pd.DataFrame) and len(df_default) > 0
+
+    def test_generate_sample_data_threads_ratio_to_scenario_path(self) -> None:
+        """End-to-end: `generate_sample_data(_generator=..., imbalance_ratio=...)`
+        must propagate the ratio so the in-function guard fires. This pins the
+        threading from `generate_sample_data:1547-1553` and prevents a future
+        refactor from dropping the kwarg silently again.
+        """
+        with pytest.raises(ValueError) as excinfo:
+            generate_sample_data(_generator="scenario_a", imbalance_ratio=0.05, seed=42)
+        assert "#21.7" in str(excinfo.value)
