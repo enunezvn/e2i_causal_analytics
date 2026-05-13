@@ -62,12 +62,20 @@ ON ml_predictions (model_version, prediction_type, prediction_timestamp)
 INCLUDE (prediction_value, actual_outcome, truth_confidence);
 
 -- 2.4 Composite index for truth queries joining to treatment_events
-CREATE INDEX IF NOT EXISTS idx_predictions_hcp_brand 
-ON ml_predictions (hcp_id, brand, prediction_timestamp)
+-- Issue #176 (2026-05-13): the original definition keyed these indexes on
+-- ``ml_predictions.brand``, a column that NO migration ever adds. Under
+-- ``psql -v ON_ERROR_STOP=1 --single-transaction`` (the runner mode at
+-- ``scripts/run_migrations.sh:100``) the missing column would abort the
+-- entire migration on a fresh DB, and migration 038 (which strips the
+-- brand-join from the SQL functions) would never get a chance to run.
+-- Fixed in place: drop ``brand`` from the index keys. The brand-keyed
+-- form was always dead on arrival.
+CREATE INDEX IF NOT EXISTS idx_predictions_hcp_brand
+ON ml_predictions (hcp_id, prediction_timestamp)
 WHERE prediction_type IN ('churn', 'trigger', 'next_best_action');
 
-CREATE INDEX IF NOT EXISTS idx_predictions_patient_brand 
-ON ml_predictions (patient_id, brand, prediction_timestamp)
+CREATE INDEX IF NOT EXISTS idx_predictions_patient_brand
+ON ml_predictions (patient_id, prediction_timestamp)
 WHERE prediction_type IN ('risk', 'propensity');
 
 -- ============================================================================
