@@ -21,12 +21,26 @@ register against the CSU or Optum manifest instead.
 from __future__ import annotations
 
 from src.data.feature_contract import FeatureContract, KnowableAt
-from src.repositories.synthetic_rwd_realistic import BORDERLINE_GENUINE_FEATURE_NAME
 
 # ============================================================================
 # v5 Gate C2: borderline_genuine_feature is declared knowable_at=index_date
 # so HBLP's declared-safe prior (1.5x z-threshold multiplier) applies.
 # ============================================================================
+
+# Issue #178: this constant USED to be imported from
+# ``src.repositories.synthetic_rwd_realistic``, but importing anything from
+# ``src.repositories`` transitively triggers ``src.repositories.__init__``,
+# which loads ``ObservabilitySpanRepository`` → ``src.agents.ml_foundation``
+# → ``data_preparer/.../adaptive_validity_check`` → BACK into
+# ``src.data.manifests``. That cycle made ``from src.data.manifests import
+# OPTUM_SAFE_FEATURES`` fail with ImportError on a cold interpreter, which
+# is why PR #175 needed ``importlib.util.spec_from_file_location``.
+#
+# The manifest is the canonical owner of the contracted feature name (it's
+# the Layer 1 declaration). The repository imports this constant from the
+# manifest, inverting the dependency to its correct direction
+# (repositories depend on data contracts, not the reverse).
+BORDERLINE_GENUINE_FEATURE_NAME = "borderline_genuine_feature"
 
 _SYNTHETIC_FEATURES = [
     FeatureContract(
@@ -65,6 +79,7 @@ def synthetic_contract_for(name: str) -> FeatureContract | None:
 
 
 __all__ = [
+    "BORDERLINE_GENUINE_FEATURE_NAME",
     "SYNTHETIC_FEATURES",
     "SYNTHETIC_FORBIDDEN_AS_FEATURES",
     "synthetic_contract_for",

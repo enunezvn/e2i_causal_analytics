@@ -303,3 +303,77 @@ def test_all_optum_kg_entity_codes_use_known_systems():
         if system not in _KG_KNOWN_SYSTEMS
     ]
     assert bad == [], f"Unknown CodeSystem(s) on these features: {bad}"
+
+
+def test_manifests_package_imports_without_circular_dependency():
+    """Regression: issue #178.
+
+    ``from src.data.manifests import OPTUM_SAFE_FEATURES`` must succeed on
+    a cold interpreter (no prior partial imports of ``src.data.manifests``
+    or ``src.repositories``). The previous arrangement —
+    ``synthetic_feature_manifest`` importing ``BORDERLINE_GENUINE_FEATURE_NAME``
+    from ``src.repositories.synthetic_rwd_realistic`` — triggered
+    ``src.repositories.__init__`` which transitively loaded
+    ``src.agents.ml_foundation`` →
+    ``data_preparer/.../adaptive_validity_check.py`` → BACK into
+    ``src.data.manifests``, raising ``ImportError: cannot import name
+    'SYNTHETIC_FORBIDDEN_AS_FEATURES' from partially initialized module``.
+    PR #175 had to bypass the package ``__init__`` with
+    ``importlib.util.spec_from_file_location``.
+
+    This test pins the fix: the manifest is the canonical owner of the
+    constant; the repository imports from the manifest (dep arrow flows
+    repo → data, not the reverse), so the cycle is gone.
+    """
+    import subprocess
+    import sys
+
+    # Use a fresh subprocess so the test is unaffected by other tests that
+    # may have already partially populated ``sys.modules`` with manifest
+    # and repository entries (the cycle only fires on a cold import order).
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from src.data.manifests import "
+                "OPTUM_SAFE_FEATURES, "
+                "OPTUM_FORBIDDEN_AS_FEATURES, "
+                "OPTUM_TARGETS, "
+                "CSU_SAFE_FEATURES, "
+                "SYNTHETIC_FORBIDDEN_AS_FEATURES, "
+                "MANIFEST_SOURCES; "
+                "assert len(OPTUM_SAFE_FEATURES) > 0; "
+                "assert len(CSU_SAFE_FEATURES) > 0; "
+                "assert 'optum' in MANIFEST_SOURCES; "
+                "print('ok')"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, (
+        f"Cold-import of src.data.manifests failed (issue #178 regression). "
+        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    assert "ok" in result.stdout
+
+
+def test_borderline_genuine_feature_name_consistent_across_import_paths():
+    """Regression: issue #178.
+
+    The repository and the manifest both expose
+    ``BORDERLINE_GENUINE_FEATURE_NAME``. The manifest is the canonical
+    owner (Layer 1 contract). The repository re-exports it. Both paths
+    MUST resolve to the same string — otherwise the manifest contract
+    wouldn't match the injected column.
+    """
+    from src.data.manifests.synthetic_feature_manifest import (
+        BORDERLINE_GENUINE_FEATURE_NAME as MANIFEST_NAME,
+    )
+    from src.repositories.synthetic_rwd_realistic import (
+        BORDERLINE_GENUINE_FEATURE_NAME as REPO_NAME,
+    )
+
+    assert MANIFEST_NAME == REPO_NAME == "borderline_genuine_feature"

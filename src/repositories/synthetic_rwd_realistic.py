@@ -53,6 +53,18 @@ from typing import Literal
 import numpy as np
 import pandas as pd
 
+# Issue #178: ``BORDERLINE_GENUINE_FEATURE_NAME`` is the Layer 1 manifest
+# contract name. The manifest is the canonical owner; this module re-exports
+# the constant so existing call sites (tests, injection helpers below) keep
+# their import paths stable. Previous direction (manifest → repository) made
+# ``from src.data.manifests import ...`` fail on a cold interpreter because
+# ``src.repositories.__init__`` transitively pulled
+# ``src.agents.ml_foundation`` → ``adaptive_validity_check`` →
+# ``src.data.manifests``.
+from src.data.manifests.synthetic_feature_manifest import (
+    BORDERLINE_GENUINE_FEATURE_NAME,
+)
+
 LeakagePattern = Literal[
     "none",
     "post_index_aggregation",
@@ -84,7 +96,6 @@ LeakagePattern = Literal[
 # can produce any AUC by construction; what this test pins is that the
 # pipeline routing (legacy vs HBLP) decides correctly at the boundary.
 # ============================================================================
-BORDERLINE_GENUINE_FEATURE_NAME = "borderline_genuine_feature"
 # Class-conditional Gaussian offset. Calibrated empirically against
 # ``adaptive_validity_check`` defaults (n_permutations=200, seed=7) at
 # n_patients=20000, prevalence=0.024, generator seed=42:
