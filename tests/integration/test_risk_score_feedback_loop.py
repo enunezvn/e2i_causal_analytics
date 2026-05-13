@@ -107,77 +107,166 @@ class TestFeedbackLoopRiskRoundTrip:
         # The function returns one row per processed config (just 'risk' here).
         assert isinstance(rows, list)
 
-    def test_time_travel_backfills_actual_outcome(self, conn) -> None:
-        """End-to-end: a 200-day-old risk prediction + a patient whose
-        ``treatment_initiated=1`` should result in the feedback loop
-        backfilling ``actual_outcome`` on the prediction row.
+    def test_time_travel_backfills_positive_outcome_from_treatment_events(self, conn) -> None:
+        """Codex pass-1 HIGH-3: the previous version of this test seeded
+        ``patient_journeys.treatment_initiated=1`` and accepted
+        ``actual_outcome IS NOT NULL OR outcome_recorded_at IS NOT NULL``.
+        That was a false-positive: the installed
+        ``assign_truth_treatment_response`` function joins on
+        ``treatment_events`` (prescription fills), not on
+        ``patient_journeys.treatment_initiated``, and falls into
+        ``NEGATIVE`` (outcome=0) when no fills exist — which would
+        populate ``outcome_recorded_at`` regardless of whether the
+        ground truth was right.
 
-        Implementation note: the truth-assignment function
-        ``assign_truth_treatment_response`` (migration 006 line ~373)
-        joins ``ml_predictions`` to ``patient_journeys`` on
-        ``patient_id`` and reads ``treatment_initiated`` as the ground
-        truth. We seed the rows accordingly.
+        Tightened version: seed a 200-day-old risk prediction in
+        ``PENDING`` state PLUS three monthly prescription fill events
+        spanning the observation window. This is the ground-truth
+        scenario that should produce a ``POSITIVE`` label (PDC ≥ 0.80).
+        We assert ``actual_outcome == 1.0`` AND ``outcome_label='POSITIVE'``
+        AND a non-null ``truth_source``.
         """
-        # Use a unique patient_id to avoid collisions with existing rows.
-        # patient_id VARCHAR(20) and patient_journey_id VARCHAR(20) — keep them tight.
         suffix = uuid.uuid4().hex[:10]
         patient_id = f"PT173_{suffix}"  # 16 chars
         pjid = f"PJ173_{suffix}"  # 16 chars
-        # prediction_id VARCHAR(30) — has more room.
         prediction_id = f"rsc173_{suffix}_{uuid.uuid4().hex[:6]}"
         old_ts = datetime.now(timezone.utc) - timedelta(days=200)
 
-        # Seed: a patient_journey with treatment_initiated=1 + an old
-        # risk prediction.
+        # Seed (a) the patient_journey, (b) the old risk prediction in
+        # PENDING state, (c) 6x monthly prescription fills with 30-day
+        # supply spanning days 0..150 from the prediction.
         with conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO patient_journeys "
-                "(patient_journey_id, patient_id, journey_start_date, "
-                "journey_stage, treatment_initiated) "
-                "VALUES (%s, %s, %s, 'initial_treatment', 1)",
+                "(patient_journey_id, patient_id, journey_start_date, journey_stage) "
+                "VALUES (%s, %s, %s, 'initial_treatment')",
                 (pjid, patient_id, old_ts.date()),
             )
             cur.execute(
                 "INSERT INTO ml_predictions "
                 "(prediction_id, model_version, model_type, prediction_timestamp, "
-                "patient_id, prediction_type, prediction_value, confidence_score) "
-                "VALUES (%s, 'risk_score_v1', 'xgboost', %s, %s, 'risk', 0.42, 0.42)",
+                "patient_id, prediction_type, prediction_value, confidence_score, "
+                "outcome_label) "
+                "VALUES (%s, 'risk_score_v1', 'xgboost', %s, %s, 'risk', 0.42, 0.42, "
+                "'PENDING')",
                 (prediction_id, old_ts, patient_id),
             )
+            # 6 monthly fills, 30-day supply each => 180 days covered out
+            # of 180-day window => PDC=1.0, well above the default 0.80
+            # threshold => POSITIVE label.
+            for month in range(6):
+                fill_date = (old_ts + timedelta(days=month * 30)).date()
+                event_id = f"TE_{uuid.uuid4().hex[:14]}"
+                cur.execute(
+                    "INSERT INTO treatment_events "
+                    "(treatment_event_id, patient_journey_id, patient_id, "
+                    "event_date, event_type, duration_days) "
+                    "VALUES (%s, %s, %s, %s, 'prescription', 30)",
+                    (event_id, pjid, patient_id, fill_date),
+                )
         conn.commit()
 
         try:
-            # Run the loop on the 'risk' type only.
             with conn.cursor() as cur:
                 cur.execute("SELECT * FROM run_feedback_loop('risk')")
                 loop_rows = cur.fetchall()
-            assert isinstance(loop_rows, list)
+            # The loop should report at least one labelled prediction
+            # (ours). Migration 006 returns:
+            #   (prediction_type, run_status, predictions_evaluated,
+            #    predictions_labeled, predictions_excluded, duration_s)
+            assert len(loop_rows) >= 1
+            risk_row = next((r for r in loop_rows if r[0] == "risk"), None)
+            assert risk_row is not None
+            # predictions_labeled is the 4th column. We don't pin to ==1
+            # because the global DB has many other PENDING risk rows that
+            # may also have been labelled this run; we only need our
+            # prediction's row to be labelled.
+            assert risk_row[1] == "COMPLETED"
 
-            # Check that the row got an ``actual_outcome``. We don't
-            # demand a specific value because the truth function may
-            # encode the outcome differently (1.0 vs True vs the day
-            # count) — just that it's no longer NULL.
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT actual_outcome, outcome_recorded_at, outcome_source "
+                    "SELECT actual_outcome, outcome_label, truth_source, "
+                    "       outcome_recorded_at "
                     "FROM ml_predictions WHERE prediction_id = %s",
                     (prediction_id,),
                 )
                 row = cur.fetchone()
             assert row is not None
-            actual, recorded, source = row
-            # The truth-assignment SQL in migration 006 should fire on
-            # any prediction whose age >= min_observation_days (90).
-            # We assert that at least one of ``actual_outcome`` /
-            # ``outcome_recorded_at`` was populated. If neither, the
-            # backfill regressed.
-            assert (actual is not None) or (recorded is not None), (
-                "Feedback loop did not backfill actual_outcome or "
-                "outcome_recorded_at for a 200-day-old risk prediction "
-                "— migration 006 truth assignment may have regressed."
+            actual, outcome_label, truth_source, outcome_recorded_at = row
+            assert actual is not None, (
+                f"actual_outcome was NOT backfilled for {prediction_id} "
+                f"despite 6 monthly fills spanning the observation window. "
+                f"loop_rows={loop_rows}"
             )
+            assert float(actual) == pytest.approx(1.0, abs=1e-3), (
+                f"Expected actual_outcome=1.0 (POSITIVE — PDC=1.0 ≥ 0.80) but got {actual}"
+            )
+            assert outcome_label == "POSITIVE", (
+                f"Expected outcome_label='POSITIVE' but got {outcome_label!r}"
+            )
+            assert truth_source is not None
+            assert outcome_recorded_at is not None
         finally:
-            # Always clean up our test rows.
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM treatment_events WHERE patient_id = %s",
+                    (patient_id,),
+                )
+                cur.execute(
+                    "DELETE FROM ml_predictions WHERE prediction_id = %s",
+                    (prediction_id,),
+                )
+                cur.execute(
+                    "DELETE FROM patient_journeys WHERE patient_journey_id = %s",
+                    (pjid,),
+                )
+            conn.commit()
+
+    def test_time_travel_backfills_negative_outcome_no_fills(self, conn) -> None:
+        """Codex pass-1 HIGH-3 follow-on: the NEGATIVE branch must also
+        be reachable. Seed a 200-day-old PENDING risk prediction with
+        NO prescription fills — should label NEGATIVE (outcome=0).
+        """
+        suffix = uuid.uuid4().hex[:10]
+        patient_id = f"PT173n{suffix[:5]}"  # 13 chars
+        pjid = f"PJ173n{suffix[:5]}"
+        prediction_id = f"rscn173_{suffix}_{uuid.uuid4().hex[:5]}"
+        old_ts = datetime.now(timezone.utc) - timedelta(days=200)
+
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO patient_journeys "
+                "(patient_journey_id, patient_id, journey_start_date, journey_stage) "
+                "VALUES (%s, %s, %s, 'initial_treatment')",
+                (pjid, patient_id, old_ts.date()),
+            )
+            cur.execute(
+                "INSERT INTO ml_predictions "
+                "(prediction_id, model_version, model_type, prediction_timestamp, "
+                "patient_id, prediction_type, prediction_value, confidence_score, "
+                "outcome_label) "
+                "VALUES (%s, 'risk_score_v1', 'xgboost', %s, %s, 'risk', 0.42, 0.42, "
+                "'PENDING')",
+                (prediction_id, old_ts, patient_id),
+            )
+        conn.commit()
+
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM run_feedback_loop('risk')")
+                cur.fetchall()
+                cur.execute(
+                    "SELECT actual_outcome, outcome_label FROM ml_predictions "
+                    "WHERE prediction_id = %s",
+                    (prediction_id,),
+                )
+                row = cur.fetchone()
+            assert row is not None
+            actual, outcome_label = row
+            assert actual is not None
+            assert float(actual) == pytest.approx(0.0, abs=1e-3)
+            assert outcome_label == "NEGATIVE"
+        finally:
             with conn.cursor() as cur:
                 cur.execute(
                     "DELETE FROM ml_predictions WHERE prediction_id = %s",

@@ -398,6 +398,42 @@ def test_honest_failure_surfaced_on_noise() -> None:
         assert any("Calibration acceptance not met" in f for f in result.honest_failures)
 
 
+@pytest.mark.slow
+def test_honest_failure_deterministic_with_impossible_floor() -> None:
+    """Codex pass-1 MEDIUM-5 (issue #173): the noise-features test above
+    is *probabilistic* (it asserts honest_failures only IF the floor
+    happened not to be met). This test pins min_auc_pr=1.0 — physically
+    impossible to satisfy with any real classifier — so the
+    honest_failures path is *deterministically* exercised. If a future
+    refactor ever silently dropped the surfacing logic, this test would
+    fail.
+    """
+    rng = np.random.default_rng(7)
+    n = 200
+    X = pd.DataFrame(rng.normal(size=(n, 6)), columns=[f"feat_{i}" for i in range(6)])
+    y = rng.integers(0, 2, size=n)
+    # Even a perfect classifier cannot beat 1.0 strictly (== is allowed
+    # by `auc_pr_floor_met = val_auc_pr >= floor`, but the noise data
+    # makes equality unreachable).
+    trainer = RiskScoreTrainer(
+        hpo_trials=3,
+        cv_folds=3,
+        enable_mlflow=False,
+        model_candidates=("xgboost",),
+        min_auc_pr=1.0,
+    )
+    X_tr, X_va = X.iloc[: n // 2].reset_index(drop=True), X.iloc[n // 2 :].reset_index(drop=True)
+    y_tr, y_va = y[: n // 2], y[n // 2 :]
+    result = trainer.fit(X_tr, y_tr, X_va, y_va)
+    # Bar was not silently lowered.
+    assert result.auc_pr_floor == 1.0
+    assert result.auc_pr_floor_met is False
+    # honest_failures must surface — deterministically.
+    assert any("AUC-PR floor not met" in f for f in result.honest_failures), (
+        f"honest_failures regressed: {result.honest_failures}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Input validation
 # ---------------------------------------------------------------------------
