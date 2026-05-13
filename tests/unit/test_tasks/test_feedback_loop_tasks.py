@@ -117,11 +117,12 @@ class TestRunFeedbackLoopRpcSignature:
     """Regression tests for issue #177.
 
     The ``run_feedback_loop`` PL/pgSQL function in migration
-    ``006_feedback_loop_infrastructure.sql`` accepts ONLY a
-    ``p_prediction_type`` parameter. Passing ``p_batch_size`` here either
-    silently no-ops (PostgREST may discard unknown named params depending
-    on the schema cache state) or raises an error at the live function
-    boundary. Either way it is a contract bug.
+    ``006_feedback_loop_infrastructure.sql`` (line ~655) accepts ONLY a
+    ``p_prediction_type`` parameter. PostgREST RPC normally fails
+    function lookup when supplied named args do not match the SQL
+    signature (HTTP 404 ``function ... not found in schema cache``), so
+    passing ``p_batch_size`` here is contract drift that will surface
+    as a runtime error against any non-patched deployment.
 
     These tests pin the caller's RPC kwargs shape to what the SQL function
     actually accepts.
