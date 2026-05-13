@@ -38,8 +38,12 @@ import pandas as pd
 import pytest
 
 from src.agents.ml_foundation.data_preparer.nodes.feature_engineering import (
+    _BACKLOG_17_FORBIDDEN_CSU_ENGINEERED,
     CSU_ENGINEERED_FEATURES,
     OPTUM_ENGINEERED_FEATURES,
+    _csu_engagement_per_visit,
+    _csu_severity_engagement_product,
+    _csu_treatment_diversity_intensity,
     engineer_features,
     engineer_features_node,
 )
@@ -70,13 +74,29 @@ from src.data.manifests.optum_feature_manifest import (
 # (``age_continuous`` + ``insurance_type``) are both enrollment-knowable.
 #
 # This file pre-dated backlog #17 and iterated over
-# ``CSU_ENGINEERED_FEATURES`` as if all four were pre-anchor. The fix
-# below splits the engineered set by anchor at the manifest contract
-# level. The pre-anchor sibling tests assert the pre-anchor expectations
-# only over the pre-anchor bucket; a NEW test pins the post-index
-# bucket as a literal frozenset so the split cannot regress silently
-# (someone removing one of the names from ``CSU_ENGINEERED_FEATURES``
-# would fire the new test, not silently skip the pre-anchor sibling).
+# ``CSU_ENGINEERED_FEATURES`` as if all four were pre-anchor. After
+# codex pass-1 review, the production helper ``_engineer_csu_features``
+# was tightened to materialize ONLY the pre-anchor candidate
+# (``age_x_insurance_interaction``); the 3 forbidden formulas are
+# preserved as private ``_csu_*`` helpers for math regression coverage
+# but no longer add columns to ``train_df`` in production. The
+# materialized tuple ``CSU_ENGINEERED_FEATURES`` now equals exactly the
+# safe (pre-anchor) names; the forbidden tuple
+# ``_BACKLOG_17_FORBIDDEN_CSU_ENGINEERED`` holds the 3 retained-but-
+# forbidden names. The pre-anchor sibling tests still iterate
+# ``CSU_ENGINEERED_FEATURES`` (now trivially all-safe); a separate
+# test pins the forbidden tuple's equality against the literal frozenset
+# AND asserts each name lands in ``CSU_FORBIDDEN_AS_FEATURES`` per the
+# manifest. This guards against three drift directions:
+#
+#   1. Someone re-adds a forbidden name to ``CSU_ENGINEERED_FEATURES``
+#      → the pre-anchor sibling tests fire because the manifest declares
+#      it post-index.
+#   2. Someone silently drops one of the forbidden names from
+#      ``_BACKLOG_17_FORBIDDEN_CSU_ENGINEERED`` → the equality pin fires.
+#   3. Someone re-classifies one back to ``index_date`` in the manifest
+#      → the manifest-reference assertion fires (also re-breaks chain
+#      validity at the manifest layer).
 def _split_engineered_by_anchor(
     engineered_names: tuple[str, ...],
     contracts: dict,
@@ -100,11 +120,12 @@ def _split_engineered_by_anchor(
     return pre_anchor, post_index
 
 
-# Literal pin on the post-index bucket. If one of these names is silently
-# removed from ``CSU_ENGINEERED_FEATURES`` (e.g., a refactor drops the
-# helper that materializes it) the new
-# ``test_csu_engineered_features_post_index_correctly_classified`` will
-# fail because the literal pin is no longer a subset of the bucket.
+# Literal equality pin on the forbidden-engineered tuple in feature_engineering.py.
+# Codex pass-1 LOW: using ``set(...)`` equality (not just subset) catches
+# (a) silent drops of one of the three names AND (b) silent additions of a
+# fourth post-index engineered candidate that should have triggered an
+# explicit design review. Adding a fourth forbidden name SHOULD also
+# update this literal.
 _BACKLOG_17_POST_INDEX_ENGINEERED: frozenset[str] = frozenset(
     {
         "engagement_per_visit",
@@ -154,45 +175,79 @@ def test_csu_engineered_features_declared_index_date():
 
 
 def test_csu_engineered_features_post_index_correctly_classified():
-    """Post-index CSU engineered features are pinned in the forbidden view.
+    """Backlog #17 forbidden engineered tuple is structurally separated.
 
-    Backlog #17 regression pin: the 3 medication-derived engineered
-    features (``engagement_per_visit``, ``treatment_diversity_intensity``,
-    ``severity_engagement_product``) MUST stay declared ``post_index``
-    because their inputs are post_index. This test catches two drift
-    directions:
+    Regression pin for the issue #187 + codex pass-1 HIGH fix: the 3
+    medication-derived engineered formulas (``engagement_per_visit``,
+    ``treatment_diversity_intensity``, ``severity_engagement_product``)
+    are FORBIDDEN production inputs because their underlying inputs are
+    post-index. The helper ``_engineer_csu_features`` must NOT
+    materialize them on ``train_df``. The formulas survive as private
+    ``_csu_*`` helpers (math regression coverage) but the materialized
+    tuple ``CSU_ENGINEERED_FEATURES`` must exclude them entirely.
 
-    1. Someone removes one of these names from ``CSU_ENGINEERED_FEATURES``
-       — the literal-pin subset check fires.
-    2. Someone "fixes" the pre-anchor sibling test by re-classifying one
-       of them back to ``index_date`` — that would re-break chain
-       validity, and this test catches it via the per-name assertion
-       below.
+    This test catches four drift directions:
+
+    1. Someone re-adds one of the forbidden names to
+       ``CSU_ENGINEERED_FEATURES`` (which would re-introduce the post-
+       index leakage on ``train_df.columns``) — pin (A) fires.
+    2. Someone silently drops or adds a name to
+       ``_BACKLOG_17_FORBIDDEN_CSU_ENGINEERED`` without updating
+       this test — pin (B) fires (equality, not subset).
+    3. Someone re-classifies one of the forbidden names back to
+       ``index_date`` in the CSU manifest — pin (C) fires (manifest
+       reference assertion) and chain validity at the manifest layer
+       also re-breaks.
+    4. Manifest views drift (a name is post-index but missing from
+       ``CSU_FORBIDDEN_AS_FEATURES``) — pin (D) fires.
     """
     contracts = {c.name: c for c in CSU_FEATURES}
-    _, post_index = _split_engineered_by_anchor(CSU_ENGINEERED_FEATURES, contracts)
-    post_index_set = set(post_index)
+    materialized_set = set(CSU_ENGINEERED_FEATURES)
+    forbidden_tuple_set = set(_BACKLOG_17_FORBIDDEN_CSU_ENGINEERED)
+    manifest_forbidden = set(CSU_FORBIDDEN_AS_FEATURES)
 
-    # Pin (1): literal frozenset must be a subset of the post-index bucket.
-    missing = _BACKLOG_17_POST_INDEX_ENGINEERED - post_index_set
-    assert not missing, (
-        f"Backlog #17 regression: engineered features {sorted(missing)} "
-        f"are no longer present in the post-index bucket of "
-        f"CSU_ENGINEERED_FEATURES. Either the helper dropped them, or "
-        f"they were re-classified back to pre-anchor (which would also "
-        f"violate chain validity)."
+    # Pin (A): NO forbidden engineered name appears in the materialized tuple.
+    leaked = materialized_set & forbidden_tuple_set
+    assert not leaked, (
+        f"Backlog #17 leakage regression: forbidden engineered "
+        f"features {sorted(leaked)} re-appear in CSU_ENGINEERED_FEATURES "
+        "(the materialized tuple). _engineer_csu_features will assign "
+        "these post-index columns to train_df.columns and consumers "
+        "that iterate df.columns directly (e.g., graph.py "
+        "available_features) will pick them up. Either drop them from "
+        "CSU_ENGINEERED_FEATURES or, if the CSU prediction target has "
+        "structurally changed, update the manifest to reflect new "
+        "knowable_at semantics before re-promoting them."
     )
 
-    # Pin (2): per-name assertions confirm manifest reference + forbidden view.
-    forbidden = set(CSU_FORBIDDEN_AS_FEATURES)
-    for name in post_index:
+    # Pin (B): equality (not subset) between forbidden tuple and the
+    # literal pin. Adding a fourth forbidden name silently would bypass
+    # downstream invariants — fail loudly so the design choice gets a
+    # review pass.
+    assert forbidden_tuple_set == _BACKLOG_17_POST_INDEX_ENGINEERED, (
+        f"_BACKLOG_17_FORBIDDEN_CSU_ENGINEERED drift: "
+        f"production tuple has {sorted(forbidden_tuple_set)}, "
+        f"test literal expected {sorted(_BACKLOG_17_POST_INDEX_ENGINEERED)}. "
+        "Update both in lockstep (the literal is the cross-check, not "
+        "the source of truth)."
+    )
+
+    # Pins (C) + (D): each forbidden engineered name MUST appear in the
+    # CSU manifest as knowable_at=post_index AND in CSU_FORBIDDEN_AS_FEATURES.
+    for name in _BACKLOG_17_FORBIDDEN_CSU_ENGINEERED:
+        assert name in contracts, (
+            f"{name} missing from CSU_FEATURES — manifest must declare "
+            "every forbidden engineered formula so chain validity can "
+            "evaluate it."
+        )
         c = contracts[name]
         assert c.knowable_at.reference == "post_index", (
-            f"{name} mis-bucketed: knowable_at={c.knowable_at.reference!r}"
+            f"{name} mis-bucketed in manifest: "
+            f"knowable_at={c.knowable_at.reference!r}, expected 'post_index'"
         )
-        assert name in forbidden, (
-            f"{name} should be in CSU_FORBIDDEN_AS_FEATURES (it is "
-            f"post_index by manifest); manifest views have drifted."
+        assert name in manifest_forbidden, (
+            f"{name} should be in CSU_FORBIDDEN_AS_FEATURES (manifest "
+            "declares it post_index). View has drifted."
         )
 
 
@@ -308,12 +363,28 @@ def _make_csu_df() -> pd.DataFrame:
     )
 
 
-def test_engineer_csu_features_materializes_all_five():
+def test_engineer_csu_features_materializes_only_safe_bucket():
+    """Production helper materializes only the pre-anchor candidates.
+
+    Post issue #187 + codex pass-1 HIGH fix: ``CSU_ENGINEERED_FEATURES``
+    is the safe-only materialized tuple. The 3 forbidden formulas are
+    in ``_BACKLOG_17_FORBIDDEN_CSU_ENGINEERED`` (private) and the math
+    is reachable through private ``_csu_*`` helpers for unit-test
+    coverage of clamp/log1p/product semantics.
+    """
     df = _make_csu_df()
     out, materialized = engineer_features(df, "csu")
     assert set(materialized) == set(CSU_ENGINEERED_FEATURES)
     for name in CSU_ENGINEERED_FEATURES:
         assert name in out.columns
+    # Codex pass-1 HIGH regression pin: forbidden engineered names must
+    # NOT appear in the output DataFrame's columns.
+    for forbidden in _BACKLOG_17_FORBIDDEN_CSU_ENGINEERED:
+        assert forbidden not in out.columns, (
+            f"{forbidden} re-appeared in train_df.columns; "
+            "_engineer_csu_features re-materialized a backlog #17 "
+            "post-index engineered feature (issue #187)."
+        )
 
 
 # claim_intensity_ratio DROPPED post-audit (b3_engineered_audit_20260511).
@@ -326,25 +397,43 @@ def test_csu_claim_intensity_ratio_dropped_from_module():
 
 
 def test_csu_engagement_per_visit_clamps_zero_visits():
+    """Math pin for the forbidden (post-index) formula via private helper.
+
+    Production no longer materializes engagement_per_visit on train_df
+    (issue #187 + codex pass-1 HIGH); the formula is retained in the
+    private ``_csu_engagement_per_visit`` helper so the clamp semantics
+    remain pinned and the formula is reachable if the prediction target
+    structurally changes and the contract becomes safe again.
+    """
     df = _make_csu_df()
-    out, _ = engineer_features(df, "csu")
+    out = _csu_engagement_per_visit(df)
     # Row 3: 2.0 / max(0, 1) = 2.0  (clamped denominator)
-    np.testing.assert_allclose(out["engagement_per_visit"].iloc[3], 2.0)
+    np.testing.assert_allclose(out.iloc[3], 2.0)
 
 
 def test_csu_treatment_diversity_intensity_log1p():
+    """Math pin for the forbidden (post-index) formula via private helper.
+
+    See ``test_csu_engagement_per_visit_clamps_zero_visits`` for the
+    issue #187 / codex pass-1 HIGH context.
+    """
     df = _make_csu_df()
-    out, _ = engineer_features(df, "csu")
+    out = _csu_treatment_diversity_intensity(df)
     # Row 1: 3 * log1p(120) = 3 * log(121)
     expected = 3 * math.log1p(120.0)
-    np.testing.assert_allclose(out["treatment_diversity_intensity"].iloc[1], expected, rtol=1e-6)
+    np.testing.assert_allclose(out.iloc[1], expected, rtol=1e-6)
 
 
 def test_csu_severity_engagement_product():
+    """Math pin for the forbidden (post-index) formula via private helper.
+
+    See ``test_csu_engagement_per_visit_clamps_zero_visits`` for the
+    issue #187 / codex pass-1 HIGH context.
+    """
     df = _make_csu_df()
-    out, _ = engineer_features(df, "csu")
+    out = _csu_severity_engagement_product(df)
     # Row 0: 1.5 * 10 = 15
-    np.testing.assert_allclose(out["severity_engagement_product"].iloc[0], 15.0)
+    np.testing.assert_allclose(out.iloc[0], 15.0)
 
 
 def test_csu_age_x_insurance_uses_categorical_codes():
@@ -450,7 +539,14 @@ def test_optum_specialist_visit_interaction():
 
 
 def test_csu_missing_inputs_skip_feature_silently():
-    """When a required input column is absent, that feature is skipped (not crashed)."""
+    """When a required input column is absent, that feature is skipped (not crashed).
+
+    Post issue #187 + codex pass-1 HIGH: the production helper only
+    materializes ``age_x_insurance_interaction``, so this test confirms
+    that the production helper degrades gracefully when its single
+    safe candidate's inputs are missing — the materialized list is
+    empty rather than crashing.
+    """
     df = pd.DataFrame(
         {
             "age_continuous": [30.0],
@@ -460,9 +556,18 @@ def test_csu_missing_inputs_skip_feature_silently():
         }
     )
     out, materialized = engineer_features(df, "csu")
-    # engagement_per_visit can still be computed; age_x_insurance cannot.
+    # age_x_insurance_interaction cannot be computed without insurance_type.
     assert "age_x_insurance_interaction" not in materialized
-    assert "engagement_per_visit" in materialized
+    assert materialized == [], (
+        "Expected empty materialized list when the only safe candidate's "
+        f"inputs are missing; got {materialized}. If a new safe candidate "
+        "was added to CSU_ENGINEERED_FEATURES, update the fixture."
+    )
+    # Forbidden (post-index) names must NOT slip in even when their
+    # inputs ARE available — they are not materialized at all.
+    for forbidden in _BACKLOG_17_FORBIDDEN_CSU_ENGINEERED:
+        assert forbidden not in out.columns
+        assert forbidden not in materialized
 
 
 def test_optum_missing_drug_class_columns_skips_polypharmacy():
@@ -483,18 +588,24 @@ def test_optum_missing_drug_class_columns_skips_polypharmacy():
 
 
 def test_csu_nan_engagement_score_propagates_through_ratio():
-    """engagement_per_visit handles NaN engagement_score gracefully."""
+    """engagement_per_visit handles NaN engagement_score gracefully.
+
+    Post issue #187 + codex pass-1 HIGH: tested via the private
+    ``_csu_engagement_per_visit`` helper since the production
+    ``engineer_features`` no longer materializes this forbidden
+    (post-index) feature.
+    """
     df = pd.DataFrame(
         {
             "engagement_score": [np.nan, 10.0],
             "hcp_visits": [3, 5],
         }
     )
-    out, _ = engineer_features(df, "csu")
+    out = _csu_engagement_per_visit(df)
     # NaN engagement_score / clipped denominator -> NaN
-    assert pd.isna(out["engagement_per_visit"].iloc[0])
+    assert pd.isna(out.iloc[0])
     # Row 1: 10 / 5 = 2.0
-    np.testing.assert_allclose(out["engagement_per_visit"].iloc[1], 2.0)
+    np.testing.assert_allclose(out.iloc[1], 2.0)
 
 
 # =============================================================================
@@ -555,6 +666,17 @@ async def test_node_enabled_csu_applies_to_all_splits():
     for d in (df_train, df_val, df_test):
         for name in CSU_ENGINEERED_FEATURES:
             assert name in d.columns
+        # Issue #187 + codex pass-1 HIGH regression pin: forbidden
+        # (post-index) engineered names must NOT leak into the split's
+        # columns. Consumers that iterate df.columns directly
+        # (e.g., graph.py available_features) would otherwise carry
+        # forbidden columns downstream.
+        for forbidden in _BACKLOG_17_FORBIDDEN_CSU_ENGINEERED:
+            assert forbidden not in d.columns, (
+                f"{forbidden} leaked into a split DataFrame; "
+                "engineer_features_node must NOT materialize backlog "
+                "#17 post-index engineered features (issue #187)."
+            )
 
 
 @pytest.mark.asyncio
