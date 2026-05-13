@@ -363,34 +363,22 @@ class TestRealDbWrites:
         conn: Any,
         seeded_journey: str,
         seeded_journey_ineligible: str,
-        seeded_journey_7stage: str,
     ) -> None:
-        """Codex pass-1 HIGH-2 follow-on: a 7-stage 'adherent' journey
-        must be updated (was previously silently skipped because the
-        eligible set lacked 7-stage values).
+        """Legacy 4-stage gate — runs on every DB regardless of enum
+        revision. (Codex pass-2 MEDIUM-1: split from the 7-stage assertion
+        so older DBs still test the gate.)
         """
         result = update_patient_journey_risk_scores(
             conn,
             [
                 {"patient_journey_id": seeded_journey, "risk_score": 7.42},
                 {"patient_journey_id": seeded_journey_ineligible, "risk_score": 7.42},
-                {"patient_journey_id": seeded_journey_7stage, "risk_score": 3.14},
                 {"patient_journey_id": "PJ_no_exist_zzzz", "risk_score": 5.0},
             ],
         )
-        assert result["updated"] == 2  # eligible + 7-stage
+        assert result["updated"] == 1  # only the eligible 4-stage row
         assert result["skipped_ineligible"] == 1
         assert result["not_in_db"] == 1
-
-        # 7-stage row must have its risk_score populated.
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT risk_score FROM patient_journeys WHERE patient_journey_id = %s",
-                (seeded_journey_7stage,),
-            )
-            row = cur.fetchone()
-        assert row is not None
-        assert float(row[0]) == pytest.approx(3.14, abs=0.01)
 
         # Verify the eligible row was actually written.
         with conn.cursor() as cur:
@@ -433,3 +421,26 @@ class TestRealDbWrites:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM ml_predictions WHERE prediction_id = %s", (pid,))
         conn.commit()
+
+    def test_journey_update_includes_7stage_when_enum_supports(
+        self,
+        conn: Any,
+        seeded_journey_7stage: str,
+    ) -> None:
+        """Codex pass-1 HIGH-2 + pass-2 MEDIUM-1: when the DB enum
+        includes 7-stage values, the 'adherent' journey must be updated.
+        Skipped automatically on pre-v3 enum revisions.
+        """
+        result = update_patient_journey_risk_scores(
+            conn,
+            [{"patient_journey_id": seeded_journey_7stage, "risk_score": 3.14}],
+        )
+        assert result["updated"] == 1
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT risk_score FROM patient_journeys WHERE patient_journey_id = %s",
+                (seeded_journey_7stage,),
+            )
+            row = cur.fetchone()
+        assert row is not None
+        assert float(row[0]) == pytest.approx(3.14, abs=0.01)
