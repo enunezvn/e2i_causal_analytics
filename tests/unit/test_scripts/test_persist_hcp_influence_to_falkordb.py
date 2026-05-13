@@ -481,6 +481,20 @@ class TestIdempotency:
         # Both A and B see exactly one neighbour (each other).
         assert deg == {"A": 1, "B": 1}
 
+        # Codex pass-4 LOW: also assert max(weight) semantics survive
+        # the aggregation. Read the underlying readback's edge result
+        # directly: one row, with the LARGER of the two legacy weights.
+        edges_result = fake.query(
+            "MATCH (a:HCP {cohort_id: $cohort_id})-[r:SHARED_PATIENTS {cohort_id: $cohort_id}]-"
+            "(b:HCP {cohort_id: $cohort_id}) "
+            "WHERE a.id < b.id "
+            "WITH a.id AS src, b.id AS dst, max(r.weight) AS weight "
+            "RETURN src, dst, weight",
+            {"cohort_id": "legacy"},
+        )
+        assert len(edges_result.result_set) == 1
+        assert edges_result.result_set[0] == ["A", "B", 7]
+
     def test_double_ingest_no_doubling(self) -> None:
         fake = _FakeFalkorGraph()
         kept, idx, med, proc = _make_synthetic_cohort(n_hcps=20, n_patients=40, seed=7)
