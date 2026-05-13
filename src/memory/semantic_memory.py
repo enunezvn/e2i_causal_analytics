@@ -655,7 +655,13 @@ class FalkorDBSemanticMemory:
         RETURN count(DISTINCT neighbor) as total
         """
         result = self.graph.query(query, {"hcp_id": hcp_id, "cohort_id": cohort_id})
-        return result.result_set[0][0] if result.result_set else 0
+        # Codex pass-2 LOW: defensive null-coerce in case FalkorDB ever
+        # returns `[[None]]` for the count row. Standard count() returns
+        # 0 on no matches, so this is belt-and-suspenders.
+        if not result.result_set:
+            return 0
+        value = result.result_set[0][0]
+        return int(value) if value is not None else 0
 
     def count_causal_chains(self, start_entity_id: str, max_depth: int = 3) -> int:
         """
