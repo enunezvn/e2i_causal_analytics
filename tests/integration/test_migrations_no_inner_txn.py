@@ -116,6 +116,22 @@ _TXN_STATEMENT_RE = re.compile(
 # different tags are technically legal (though unused in this repo).
 _DOLLAR_QUOTE_RE = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)?\$")
 
+# ``BEGIN ATOMIC`` opener (codex pass-7 MEDIUM-1). This is the
+# SQL-standard alternative to PL/pgSQL ``$$ ... $$`` function bodies.
+# We need to recognize it because the closing ``END;`` of an atomic
+# body is a function-body terminator, NOT a script-level commit.
+# We don't track ``BEGIN ATOMIC`` via dollar-quote machinery because
+# it isn't dollar-quoted — it's a SQL keyword sequence inside the
+# ``CREATE FUNCTION`` statement.
+_BEGIN_ATOMIC_RE = re.compile(r"\bBEGIN\s+ATOMIC\b", re.IGNORECASE)
+
+# Bare ``END;`` (no clauses) — the typical function-body terminator
+# for ``BEGIN ATOMIC ... END;``. Used to detect exit from atomic
+# mode. We DELIBERATELY do not match ``END LOOP;`` or ``END CASE;``
+# here because those are PL/pgSQL constructs, always inside ``$$``
+# blocks, and never seen at script level.
+_BARE_END_RE = re.compile(r"^END\s*;\s*$", re.IGNORECASE)
+
 
 def _strip_inline_comment(line: str) -> str:
     """Strip a trailing ``-- comment`` from a SQL line, preserving the
@@ -293,6 +309,12 @@ def _scan_for_bare_txn(sql_path: Path) -> list[tuple[int, str]]:
     text = sql_path.read_text(encoding="utf-8")
     in_dollar_block = False
     open_tag: str | None = None
+    # Codex pass-7 MEDIUM: ``BEGIN ATOMIC`` opens a SQL-standard
+    # function body. Inside it, ``;`` separates body statements and
+    # the closing ``END;`` ends the outer ``CREATE FUNCTION``. We do
+    # not flag txn-control inside ``BEGIN ATOMIC``, nor on the
+    # function-body-closing ``END;``.
+    in_atomic_body = False
 
     # Accumulator for script-level text that spans multiple physical
     # lines (codex pass-6 MEDIUM: ``BEGIN\n;\n`` is syntactically
@@ -353,6 +375,25 @@ def _scan_for_bare_txn(sql_path: Path) -> list[tuple[int, str]]:
             if not statement:
                 continue
             candidate = statement + ";"
+
+            # Track ``BEGIN ATOMIC`` function-body opener/closer
+            # (codex pass-7 MEDIUM). A statement that CONTAINS
+            # ``BEGIN ATOMIC`` (case-insensitive) enters atomic mode;
+            # while inside, we do NOT flag any txn-control. The
+            # bare ``END;`` that exits the function body takes us
+            # out of atomic mode (without flagging).
+            if not in_atomic_body and _BEGIN_ATOMIC_RE.search(statement):
+                in_atomic_body = True
+                continue
+
+            if in_atomic_body:
+                # Inside ``BEGIN ATOMIC ... END;`` — every internal
+                # ``;`` separates body statements, and the closing
+                # ``END;`` (with no other clauses) exits the body.
+                if _BARE_END_RE.match(candidate):
+                    in_atomic_body = False
+                continue
+
             if _TXN_STATEMENT_RE.match(candidate):
                 # Recover the raw line text for the citation: re-read
                 # from the source text by line number.
@@ -550,28 +591,16 @@ def test_scanner_allows_plpgsql_begin_end_blocks(tmp_path: Path) -> None:
     assert findings == [], f"scanner false-positive on PL/pgSQL bodies: {findings}"
 
 
-def test_scanner_documented_limit_on_begin_atomic_function_bodies(
-    tmp_path: Path,
-) -> None:
+def test_scanner_allows_begin_atomic_function_bodies(tmp_path: Path) -> None:
     """``BEGIN ATOMIC ... END;`` is the SQL-standard function body
-    syntax (alternative to ``$$ ... $$``). The scanner does NOT track
-    ``BEGIN ATOMIC`` openers as opening a "function-body" context,
-    because (a) this repo uses ``$$``-style bodies exclusively, and
-    (b) implementing full SQL parsing here is out of scope for a
-    filesystem-only lint.
+    syntax (alternative to ``$$ ... $$``). The scanner tracks
+    ``BEGIN ATOMIC`` openers as a function-body context: subsequent
+    statements (and the closing ``END;``) are exempt from
+    transaction-control flagging.
 
-    This test pins the resulting limitation: the closing ``END;`` of
-    a ``BEGIN ATOMIC`` body will be flagged as a script-level
-    transaction-control statement, even though Postgres parses it as
-    the function-body closer. The single-false-positive count is
-    pinned so a future scanner change cannot silently swallow the
-    limit (raising the count would indicate a new bug; lowering it
-    to zero would indicate someone implemented full BEGIN ATOMIC
-    tracking, in which case this test should be updated rather than
-    silently weakened).
-
-    If this repo ever adopts ``BEGIN ATOMIC`` function bodies, widen
-    the scanner to track them and update / remove this pin.
+    Codex pass-7 MEDIUM-1: closed the pass-2 limit. The scanner now
+    enters "atomic mode" when a candidate statement contains
+    ``BEGIN ATOMIC`` and exits when it sees a bare ``END;``.
     """
     sql = tmp_path / "atomic_migration.sql"
     sql.write_text(
@@ -584,11 +613,30 @@ def test_scanner_documented_limit_on_begin_atomic_function_bodies(
         encoding="utf-8",
     )
     findings = _scan_for_bare_txn(sql)
-    assert len(findings) == 1, (
-        f"expected single END; false-positive (documented limit on "
-        f"BEGIN ATOMIC function bodies — see test docstring), got: {findings}"
+    assert findings == [], f"scanner false-positive on BEGIN ATOMIC function body: {findings}"
+
+
+def test_scanner_resumes_flagging_after_begin_atomic_body(tmp_path: Path) -> None:
+    """After a ``BEGIN ATOMIC ... END;`` body exits, the scanner must
+    resume flagging script-level txn-control. A migration with a
+    legitimate atomic function body followed by a stray script-level
+    ``COMMIT;`` should flag the COMMIT.
+    """
+    sql = tmp_path / "atomic_then_commit.sql"
+    sql.write_text(
+        "CREATE FUNCTION add_one(x integer) RETURNS integer\n"
+        "    LANGUAGE SQL\n"
+        "    IMMUTABLE\n"
+        "BEGIN ATOMIC\n"
+        "    SELECT x + 1;\n"
+        "END;\n"
+        "COMMIT;\n",
+        encoding="utf-8",
     )
-    assert "END;" in findings[0][1].upper()
+    findings = _scan_for_bare_txn(sql)
+    assert len(findings) == 1, f"expected COMMIT; finding, got: {findings}"
+    assert findings[0][0] == 7
+    assert "COMMIT;" in findings[0][1].upper()
 
 
 def test_scanner_detects_txn_control_after_same_line_dollar_close(
