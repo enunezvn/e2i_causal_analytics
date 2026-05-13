@@ -24,9 +24,14 @@ The lint flags ANY script-level transaction-control statement:
 
   - ``BEGIN;`` / ``BEGIN TRANSACTION;`` / ``BEGIN WORK;`` /
     ``START TRANSACTION;``                                  -> outer-txn open
-  - ``COMMIT;`` / ``COMMIT TRANSACTION;`` / ``COMMIT WORK;`` -> premature commit
+  - ``BEGIN ISOLATION LEVEL ...;`` / ``BEGIN READ ONLY;`` /
+    ``START TRANSACTION READ WRITE;`` and other transaction-mode
+    variants                                               -> outer-txn open
+  - ``COMMIT;`` / ``COMMIT TRANSACTION;`` / ``COMMIT WORK;`` /
+    ``COMMIT AND CHAIN;``                                   -> premature commit
   - ``ROLLBACK;`` / ``ROLLBACK TRANSACTION;`` /
-    ``ROLLBACK WORK;`` / ``ABORT;`` / ``ABORT TRANSACTION;`` /
+    ``ROLLBACK WORK;`` / ``ROLLBACK AND NO CHAIN;`` /
+    ``ABORT;`` / ``ABORT TRANSACTION;`` /
     ``ABORT WORK;``                                         -> premature rollback
   - ``END;`` / ``END TRANSACTION;`` / ``END WORK;`` at the script level
     (PostgreSQL treats bare ``END;`` outside a PL/pgSQL body as a
@@ -34,10 +39,14 @@ The lint flags ANY script-level transaction-control statement:
 
 PL/pgSQL function-body ``BEGIN ... END`` blocks are NOT flagged: the
 scanner tracks ``$tag$ ... $tag$`` dollar-quoted block boundaries and
-skips anything inside them. ``BEGIN ATOMIC`` / ``BEGIN ISOLATION LEVEL``
-variants (with extra clauses before the semicolon) are also legitimate
-and excluded — the scanner only flags the bare statement-head followed
-by an optional clause word and the terminating ``;``.
+skips anything inside them. Multi-statement-per-line script SQL like
+``ALTER ...; COMMIT;`` is correctly split by a semicolon-level
+tokenizer that respects single-quoted string literals (so
+``VALUES ('a;b')`` does not produce a fake ``b'`` statement).
+Mid-statement fragments without a terminating ``;`` (e.g. lines of a
+multi-line ``CASE ... END AS col`` expression) are not classified as
+complete statements — the lint only fires on statements that actually
+end with ``;`` in the source.
 
 This test is filesystem-only (no DB required) so it runs in the CI
 integration lane (``tests/integration``). See ``backend-tests.yml``
@@ -57,28 +66,45 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MIGRATIONS_DIR = REPO_ROOT / "database" / "migrations"
 
-# Match any script-level transaction-control statement head after
-# stripping leading whitespace and trailing inline ``--`` comment.
-# Optional clause keyword (``TRANSACTION`` / ``WORK``) is permitted —
-# Postgres accepts ``BEGIN TRANSACTION;`` etc. as a synonym for the
-# bare form. ``START TRANSACTION;`` is explicitly listed (no bare
-# form).
+# Match any script-level transaction-control statement head, including
+# Postgres-accepted clause/mode variants (codex pass-5 LOW-2). The
+# runner contract under ``psql --single-transaction`` is violated by
+# ANY of:
+#
+#   - Bare forms: ``BEGIN;``, ``COMMIT;``, ``ROLLBACK;``, ``END;``,
+#     ``ABORT;``, ``START TRANSACTION;``.
+#   - Synonym clauses: ``BEGIN TRANSACTION;``, ``COMMIT WORK;`` etc.
+#   - Transaction-mode clauses: ``BEGIN ISOLATION LEVEL SERIALIZABLE;``,
+#     ``BEGIN READ ONLY;``, ``BEGIN NOT DEFERRABLE;``, etc.
+#   - Chaining clauses: ``COMMIT AND CHAIN;``, ``COMMIT AND NO CHAIN;``,
+#     same for ``ROLLBACK``.
+#   - ``START TRANSACTION READ WRITE;``, ``START TRANSACTION ISOLATION
+#     LEVEL SERIALIZABLE;``, etc.
+#
+# The regex accepts arbitrary trailing tokens after the statement
+# head and before the terminating ``;``. The ``head`` itself is the
+# constrained part: one of ``BEGIN``, ``START TRANSACTION``, ``COMMIT``,
+# ``END``, ``ROLLBACK``, ``ABORT``. Followed by ANY content (greedy
+# match) plus the terminating ``;``.
 #
 # Indentation is NOT the discriminator — the discriminator is whether
 # the statement sits inside a ``$tag$ ... $tag$`` dollar-quoted block
 # (PL/pgSQL function body), which the scanner tracks separately.
 _TXN_STATEMENT_RE = re.compile(
     r"""
-    ^                                  # start of stripped line
+    ^                                  # start of stripped statement
     (?:
-        BEGIN (?:\s+(?:TRANSACTION|WORK))?
+        BEGIN
         | START\s+TRANSACTION
-        | COMMIT (?:\s+(?:TRANSACTION|WORK))?
-        | END (?:\s+(?:TRANSACTION|WORK))?
-        | ROLLBACK (?:\s+(?:TRANSACTION|WORK))?
-        | ABORT (?:\s+(?:TRANSACTION|WORK))?
+        | COMMIT
+        | END
+        | ROLLBACK
+        | ABORT
     )
-    \s*;\s*$                           # terminating semicolon (no trailing clauses)
+    (?:\s+[^;]*)?                      # optional trailing clauses (TRANSACTION,
+                                       # WORK, ISOLATION LEVEL ..., AND CHAIN,
+                                       # READ ONLY, etc.)
+    \s*;\s*$                           # terminating semicolon
     """,
     re.IGNORECASE | re.VERBOSE,
 )
@@ -160,11 +186,20 @@ def _split_line_at_dollar_boundaries(
     return segments, in_dollar_block, open_tag
 
 
-def _split_statements_outside_strings(text: str) -> list[str]:
+def _split_statements_outside_strings(text: str) -> list[tuple[str, bool]]:
     """Split ``text`` on ``;`` boundaries that are NOT inside a
     single-quoted SQL string literal. Handles SQL's standard
     ``''`` escape (a doubled single-quote represents a literal
     apostrophe inside a string, and does NOT close the string).
+
+    Returns a list of ``(statement_text, terminated)`` tuples, where
+    ``terminated`` is ``True`` if the statement was followed by a
+    ``;`` in the source (a complete statement) and ``False`` if it's
+    a trailing partial. Callers must only treat ``terminated=True``
+    entries as full statements — otherwise the lint would fire on
+    multi-line statements that haven't reached their semicolon yet
+    (e.g. ``CASE ... END AS col,`` on a line by itself, codex pass-5
+    follow-up).
 
     This is a minimal SQL tokenizer scoped to the lint's needs:
 
@@ -187,10 +222,16 @@ def _split_statements_outside_strings(text: str) -> list[str]:
       quoting is rare (it's primarily a function-body construct)
       but if it appeared, this tokenizer would NOT skip semicolons
       inside it. Codex pass-4 documented limitation.
+    * Single-quote state does NOT persist across the caller-supplied
+      text boundary. The scanner currently calls this once per
+      source line, so a multi-line string literal with a ``;`` on
+      its own line would false-positive. Codex pass-5 documented
+      limitation; not a current issue because migrations in this
+      repo do not split string literals across lines.
 
-    Codex pass-4 LOW-1.
+    Codex pass-4 LOW-1; pass-5 follow-up tuple shape.
     """
-    statements: list[str] = []
+    statements: list[tuple[str, bool]] = []
     current: list[str] = []
     in_single_quote = False
     i = 0
@@ -212,16 +253,17 @@ def _split_statements_outside_strings(text: str) -> list[str]:
             i += 1
             continue
         if ch == ";" and not in_single_quote:
-            statements.append("".join(current))
+            statements.append(("".join(current), True))
             current = []
             i += 1
             continue
         current.append(ch)
         i += 1
     # Tail (any trailing text after the last ``;`` or whole text if no
-    # ``;`` found).
+    # ``;`` found). ``terminated=False`` — this is a partial statement
+    # waiting for its semicolon on a subsequent line.
     if current:
-        statements.append("".join(current))
+        statements.append(("".join(current), False))
     return statements
 
 
@@ -270,8 +312,15 @@ def _scan_for_bare_txn(sql_path: Path) -> list[tuple[int, str]]:
         # at semicolons OUTSIDE single-quoted SQL string literals
         # (codex pass-4 LOW-1: a literal like
         # ``VALUES ('before; COMMIT; after')`` should not split into
-        # a fake ``COMMIT;`` statement).
-        for raw_statement in _split_statements_outside_strings(joined):
+        # a fake ``COMMIT;`` statement). Each tuple is
+        # ``(statement_text, terminated)`` — partial statements
+        # (no trailing ``;``) are ignored because they may be
+        # mid-statement fragments like ``END AS col,`` from a
+        # multi-line ``CASE ... END`` expression (codex pass-5
+        # follow-up).
+        for raw_statement, terminated in _split_statements_outside_strings(joined):
+            if not terminated:
+                continue
             statement = raw_statement.strip()
             if not statement:
                 continue
@@ -394,6 +443,12 @@ def test_migration_039_canonical_shape_is_already_clean() -> None:
         # Indented script-level (still a runner-contract violation —
         # the discriminator is dollar-quoting, not indentation).
         "    BEGIN;\nALTER TABLE foo ADD COLUMN bar INTEGER;\n    COMMIT;\n",
+        # Transaction modes (codex pass-5 LOW-2).
+        "BEGIN ISOLATION LEVEL SERIALIZABLE;\nALTER TABLE foo ADD COLUMN bar INTEGER;\nCOMMIT;\n",
+        "START TRANSACTION READ WRITE;\nALTER TABLE foo ADD COLUMN bar INTEGER;\nCOMMIT;\n",
+        # Chaining clauses (codex pass-5 LOW-2).
+        "BEGIN;\nALTER TABLE foo ADD COLUMN bar INTEGER;\nCOMMIT AND CHAIN;\n",
+        "BEGIN;\nALTER TABLE foo ADD COLUMN bar INTEGER;\nROLLBACK AND NO CHAIN;\n",
     ],
     ids=[
         "bare-begin-commit",
@@ -404,6 +459,10 @@ def test_migration_039_canonical_shape_is_already_clean() -> None:
         "begin-abort",
         "lowercase-begin-commit",
         "indented-begin-commit",
+        "begin-isolation-level-serializable",
+        "start-transaction-read-write",
+        "commit-and-chain",
+        "rollback-and-no-chain",
     ],
 )
 def test_scanner_flags_synthetic_bad_input(tmp_path: Path, sql_body: str) -> None:
@@ -567,28 +626,79 @@ def test_scanner_handles_doubled_quote_escape_in_strings(tmp_path: Path) -> None
     assert findings == [], f"scanner false-positive on ``''`` quote escape: {findings}"
 
 
+def test_scanner_documented_limit_on_multi_line_string_literals(
+    tmp_path: Path,
+) -> None:
+    """Codex pass-5 LOW-1: the scanner tokenizes per-line, so a multi-line
+    SQL string literal containing a ``;`` on its own line will
+    false-positive. This is a known limitation pinned here to keep
+    the limit visible.
+
+    To close the limit fully, the scanner would need to thread
+    single-quote state across line boundaries (similar to how the
+    dollar-quote state is already threaded). No current migration
+    splits a string literal across lines, so this is not actively a
+    bug — but the test pins the documented gap.
+
+    If a future migration introduces multi-line string literals,
+    this test will need to be updated to assert the corrected
+    behavior, and the tokenizer in ``_split_statements_outside_strings``
+    must be extended to accept a line-spanning input or thread
+    single-quote state via the scanner's main loop.
+    """
+    sql = tmp_path / "multi_line_string.sql"
+    sql.write_text(
+        "INSERT INTO audit_log(message) VALUES ('first line\nCOMMIT;\nlast line');\n",
+        encoding="utf-8",
+    )
+    findings = _scan_for_bare_txn(sql)
+    # Currently flagged as a false positive on line 2 (the lone
+    # ``COMMIT;`` inside the multi-line string literal). Pinning this
+    # so a future scanner change that closes the gap is forced to
+    # update this test, not silently weaken it.
+    assert len(findings) == 1, (
+        f"expected single false-positive on multi-line string literal "
+        f"(documented limit), got: {findings}"
+    )
+    assert findings[0][0] == 2
+
+
 def test_split_statements_outside_strings_basic_cases() -> None:
     """Direct unit-test of ``_split_statements_outside_strings`` to
     pin the tokenizer's behavior.
+
+    Return shape: ``[(statement_text, terminated_bool)]`` where
+    ``terminated`` is ``True`` iff the source had a ``;`` after the
+    statement.
     """
-    # No string, two statements:
-    assert _split_statements_outside_strings("BEGIN;COMMIT") == ["BEGIN", "COMMIT"]
-    # Trailing semicolon → trailing empty segment is NOT emitted; the
-    # caller is responsible for stripping empties anyway:
-    assert _split_statements_outside_strings("BEGIN;") == ["BEGIN"]
-    # Semicolon inside single-quoted string:
-    assert _split_statements_outside_strings("VALUES ('a;b')") == ["VALUES ('a;b')"]
-    # Doubled quote escape:
-    assert _split_statements_outside_strings("VALUES ('it''s;a;test')") == [
-        "VALUES ('it''s;a;test')"
+    # No string, two statements — first is terminated by `;`, second
+    # is a trailing fragment without `;`.
+    assert _split_statements_outside_strings("BEGIN;COMMIT") == [
+        ("BEGIN", True),
+        ("COMMIT", False),
     ]
-    # Multiple strings:
+    # Trailing semicolon → empty tail dropped (no current text):
+    assert _split_statements_outside_strings("BEGIN;") == [("BEGIN", True)]
+    # Semicolon inside single-quoted string (no split):
+    assert _split_statements_outside_strings("VALUES ('a;b')") == [
+        ("VALUES ('a;b')", False),
+    ]
+    # Doubled quote escape (no split):
+    assert _split_statements_outside_strings("VALUES ('it''s;a;test')") == [
+        ("VALUES ('it''s;a;test')", False),
+    ]
+    # Multiple strings + a real terminator:
     assert _split_statements_outside_strings("INSERT INTO t VALUES ('a;b'), ('c;d');COMMIT") == [
-        "INSERT INTO t VALUES ('a;b'), ('c;d')",
-        "COMMIT",
+        ("INSERT INTO t VALUES ('a;b'), ('c;d')", True),
+        ("COMMIT", False),
     ]
     # Empty input:
     assert _split_statements_outside_strings("") == []
+    # Mid-statement fragment with no terminator (codex pass-5
+    # follow-up: must not be classified as terminated):
+    assert _split_statements_outside_strings("    END AS patient_volume_tier,") == [
+        ("    END AS patient_volume_tier,", False),
+    ]
 
 
 def test_scanner_detects_multi_statement_per_line_txn_control(tmp_path: Path) -> None:
