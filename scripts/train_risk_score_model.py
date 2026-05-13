@@ -17,14 +17,21 @@ Usage::
         --target initiated_biologic_180d
 
 Inputs:
-    --data-dir         Optum cohort directory (initiation cohort by default).
-    --target           Target column name (default: initiated_biologic_180d).
-    --hpo-trials       Optuna trials (default 50; lower for quick runs).
-    --min-auc-pr       AUC-PR floor (default 0.65). Bar NEVER lowered silently.
-    --disable-mlflow   Skip MLflow logging (still trains).
-    --synthetic-smoke  Use a synthetic separable dataset (CI smoke; ignores
-                       --data-dir; useful when real Optum data is unavailable).
-    --json-out         Optional path to write training-result JSON.
+    --data-dir              Optum cohort directory (initiation cohort by default).
+    --target                Target column name (default: initiated_biologic_180d).
+    --hpo-trials            Optuna trials (default 50; lower for quick runs).
+    --min-auc-pr            Explicit AUC-PR floor override. Default: None ->
+                            prevalence-aware floor max(5*pi, 0.10) computed at
+                            fit-time from the validation split (issue #188).
+                            Bar NEVER lowered silently.
+    --disable-mlflow        Skip MLflow logging (still trains).
+    --synthetic-smoke       Use a synthetic separable dataset (CI smoke; ignores
+                            --data-dir; useful when real Optum data is unavailable).
+    --json-out              Optional path to write training-result JSON.
+    --allow-honest-failures Do NOT exit non-zero when honest_failures is
+                            populated. Use for synthetic-noise plumbing tests
+                            where failure is the expected outcome. Default off
+                            (CI exits non-zero on honest failure — issue #188).
 
 The script intentionally does NOT write to the DB by default — DB writes are
 gated by ``--write-predictions`` and require ``SUPABASE_URL`` /
@@ -237,7 +244,21 @@ def main(argv: Optional[list[str]] = None) -> int:
         "--min-auc-pr",
         type=float,
         default=DEFAULT_MIN_AUC_PR,
-        help=f"AUC-PR floor (default: {DEFAULT_MIN_AUC_PR})",
+        help=(
+            "Explicit AUC-PR floor override (e.g. 0.65). Default: None -> "
+            "prevalence-aware floor computed at fit time from validation "
+            "prevalence (issue #188)."
+        ),
+    )
+    parser.add_argument(
+        "--allow-honest-failures",
+        action="store_true",
+        help=(
+            "Do NOT exit non-zero when honest_failures is populated. Use "
+            "for synthetic-noise plumbing where failure is expected. "
+            "Default OFF — production runs exit non-zero on honest "
+            "failure to prevent silent deployment of an under-bar model."
+        ),
     )
     parser.add_argument(
         "--disable-mlflow",
@@ -317,9 +338,21 @@ def main(argv: Optional[list[str]] = None) -> int:
         logger.warning("Honest failures surfaced:")
         for failure in result.honest_failures:
             logger.warning("  - %s", failure)
-        # Don't fail the run — the bar is reported, not enforced (per
-        # supervisor decision: "If real Optum data fails the bar: log it
-        # and SURFACE, do NOT lower the bar silently").
+        # Issue #188: production runs exit non-zero on honest failure so
+        # the downstream Celery write task + CI pipelines cannot silently
+        # promote an under-bar model. The bar is NEVER lowered silently;
+        # the failure is now both surfaced AND enforced.
+        if not args.allow_honest_failures:
+            logger.error(
+                "Exiting non-zero because honest_failures is non-empty. "
+                "Pass --allow-honest-failures to override (e.g. synthetic-"
+                "noise plumbing tests). See issue #188."
+            )
+            return 1
+        logger.warning(
+            "Honest failures surfaced but --allow-honest-failures was "
+            "passed; exiting 0. This path is for plumbing tests only."
+        )
     return 0
 
 

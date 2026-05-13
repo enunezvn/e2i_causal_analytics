@@ -306,8 +306,15 @@ def test_trainer_accepts_clean_feature_matrix() -> None:
     )
     # Balanced labels so the splitter doesn't choke.
     y = np.array([0, 1] * (n // 2))
+    # Issue #188: pin the legacy 0.65 floor explicitly to test the
+    # constructor override path (proves back-compat with callers that
+    # were passing the literal bar before the prevalence-aware change).
     trainer = RiskScoreTrainer(
-        enable_mlflow=False, hpo_trials=1, cv_folds=2, model_candidates=("xgboost",)
+        enable_mlflow=False,
+        hpo_trials=1,
+        cv_folds=2,
+        model_candidates=("xgboost",),
+        min_auc_pr=0.65,
     )
     # Must not raise LeakageError.
     result = trainer.fit(X, y, X, y)

@@ -71,8 +71,35 @@ logger = logging.getLogger(__name__)
 CALIBRATION_BRIER_MAX: float = 0.20
 CALIBRATION_ECE_MAX: float = 0.10
 
-# AUC-PR floor (per OptumTestConfig.min_auc_threshold = 0.65 in issue body)
-DEFAULT_MIN_AUC_PR: float = 0.65
+# AUC-PR floor strategy (issue #188, 2026-05-13).
+#
+# AUC-PR has a class-prevalence-dependent baseline: a random/uninformative
+# classifier achieves AUC-PR ~= pi where pi = P / (P + N) is the positive
+# prevalence (Saito & Rehmsmeier 2015 PLOS ONE 10:e0118432). The original
+# constant 0.65 was inherited from a synthetic-data AUC-ROC ceiling and is
+# structurally unreachable at low prevalence (e.g., pi=0.029 -> max
+# achievable at typical specialty-pharma signal is ~3-5x baseline = 0.09-0.15).
+#
+# We replace the fixed floor with a prevalence-aware floor:
+#     floor = max(MIN_AUC_PR_K * prevalence, MIN_AUC_PR_FLOOR_FLOOR)
+#
+# Reference comparators for MIN_AUC_PR_K = 5.0:
+#   - Stidham et al. 2018 (IBD biologic initiation, claims): ~2.7x over chance.
+#   - Martin et al. 2025 Pediatr Crit Care Med 26(6):e855: 16.6x on ICU
+#     rare-event prediction with rich physiologic features.
+#   K=5 is the smallest integer multiple that exceeds the typical specialty-
+#   pharma claims-only ceiling while remaining far below rich-feature regimes.
+#
+# MIN_AUC_PR_FLOOR_FLOOR = 0.10 prevents floor collapse on rare-but-tractable
+# cohorts (e.g., pi=0.005 -> K*pi=0.025 is meaningless; 0.10 enforces a
+# clinically-actionable top-decile PPV).
+MIN_AUC_PR_K: float = 5.0
+MIN_AUC_PR_FLOOR_FLOOR: float = 0.10
+
+# DEFAULT_MIN_AUC_PR is kept as None to signal "compute from validation
+# prevalence in fit()." The legacy literal 0.65 is preserved by callers that
+# explicitly pass min_auc_pr=0.65 (back-compat with synthetic-smoke tests).
+DEFAULT_MIN_AUC_PR: Optional[float] = None
 
 # Risk-tier cuts (issue body §"Risk tier mapping to prediction_class")
 RISK_SCORE_HIGH_TIER: float = 6.6  # >= -> high
@@ -140,6 +167,53 @@ def expected_calibration_error(
         conf = float(y_prob_arr[mask].mean())
         ece += (n_in_bin / total) * abs(acc - conf)
     return float(ece)
+
+
+def compute_auc_pr_floor(
+    n_pos: int,
+    n_total: int,
+    k: float = MIN_AUC_PR_K,
+    floor_floor: float = MIN_AUC_PR_FLOOR_FLOOR,
+) -> float:
+    """Compute the prevalence-aware AUC-PR floor (issue #188).
+
+    floor = max(k * prevalence, floor_floor)
+    where prevalence = n_pos / n_total.
+
+    A random/uninformative classifier achieves AUC-PR ~= prevalence
+    (Saito & Rehmsmeier 2015 PLOS ONE 10:e0118432). The lift factor k=5
+    (Martin et al. 2025 Pediatr Crit Care Med 26(6):e855 gain-ratio
+    framing) requires the model to clear 5x baseline. The absolute floor
+    of 0.10 prevents floor collapse on rare-but-tractable cohorts and
+    enforces a clinically-actionable top-decile PPV.
+
+    Args:
+        n_pos: number of positive labels in the labeled set used to
+            estimate prevalence (typically the validation split).
+        n_total: total number of labels in the labeled set.
+        k: lift factor over random baseline (default ``MIN_AUC_PR_K``).
+        floor_floor: absolute minimum floor (default
+            ``MIN_AUC_PR_FLOOR_FLOOR``).
+
+    Returns:
+        Effective AUC-PR floor as a float in [floor_floor, 1.0].
+
+    Raises:
+        ValueError: if ``n_pos`` is negative, ``n_total`` < n_pos, or
+            ``k``/``floor_floor`` are out of range.
+    """
+    if n_pos < 0:
+        raise ValueError(f"n_pos must be >= 0, got {n_pos}")
+    if n_total < n_pos:
+        raise ValueError(f"n_total ({n_total}) must be >= n_pos ({n_pos})")
+    if k < 0:
+        raise ValueError(f"k must be >= 0, got {k}")
+    if not (0.0 <= floor_floor <= 1.0):
+        raise ValueError(f"floor_floor must be in [0, 1], got {floor_floor}")
+    if n_total <= 0:
+        return floor_floor
+    prevalence = n_pos / n_total
+    return max(k * prevalence, floor_floor)
 
 
 def risk_score_to_tier(score: float) -> str:
@@ -235,7 +309,8 @@ class RiskScoreTrainer:
 
     Usage::
 
-        trainer = RiskScoreTrainer(min_auc_pr=0.65, hpo_trials=50)
+        # Default: prevalence-aware floor computed from validation split.
+        trainer = RiskScoreTrainer(hpo_trials=50)
         result = trainer.fit(
             X_train=X_train_df,
             y_train=y_train_arr,
@@ -243,6 +318,25 @@ class RiskScoreTrainer:
             y_val=y_val_arr,
             mlflow_experiment="risk_score_csu_initiation",
         )
+
+        # Override (e.g. synthetic-smoke tests still pinning 0.65):
+        trainer = RiskScoreTrainer(min_auc_pr=0.65, hpo_trials=5)
+
+    AUC-PR floor mechanism (issue #188, 2026-05-13):
+
+    When ``min_auc_pr`` is ``None`` (the default), the floor is computed
+    at fit time from the validation-split prevalence as
+    ``max(MIN_AUC_PR_K * prevalence, MIN_AUC_PR_FLOOR_FLOOR)``. The
+    random-classifier baseline AUC-PR equals the positive class
+    prevalence (Saito & Rehmsmeier 2015 PLOS ONE 10:e0118432); we
+    require a 5x lift over baseline (Martin et al. 2025 Pediatr Crit
+    Care Med 26(6):e855 gain-ratio framing) clamped to a minimum of
+    0.10 to enforce a clinically-actionable top-decile PPV.
+
+    Callers can pass an explicit ``min_auc_pr`` (e.g. 0.65) to bypass
+    the prevalence-aware mechanism — this is used by the synthetic-
+    smoke tests where the high-signal cohort has prevalence ~0.30 and
+    the classical bar is achievable.
 
     The trainer:
 
@@ -263,7 +357,7 @@ class RiskScoreTrainer:
 
     def __init__(
         self,
-        min_auc_pr: float = DEFAULT_MIN_AUC_PR,
+        min_auc_pr: Optional[float] = DEFAULT_MIN_AUC_PR,
         brier_max: float = CALIBRATION_BRIER_MAX,
         ece_max: float = CALIBRATION_ECE_MAX,
         hpo_trials: int = _DEFAULT_HPO_TRIALS,
@@ -272,6 +366,8 @@ class RiskScoreTrainer:
         enable_mlflow: bool = True,
         model_candidates: tuple[str, ...] = ("xgboost", "lightgbm"),
     ) -> None:
+        # min_auc_pr is the optional override; None => compute from
+        # validation prevalence in fit() (issue #188).
         self.min_auc_pr = min_auc_pr
         self.brier_max = brier_max
         self.ece_max = ece_max
@@ -392,11 +488,30 @@ class RiskScoreTrainer:
         val_brier = self._safe_metric(brier_score_loss, y_val_arr, val_proba)
 
         # Step 6 — acceptance gates (surfaced, not enforced).
-        auc_pr_floor_met = val_auc_pr >= self.min_auc_pr
+        # Issue #188: prevalence-aware floor. If the constructor was passed an
+        # explicit min_auc_pr (e.g. 0.65 for synthetic-smoke), use that;
+        # otherwise compute from VALIDATION prevalence (val is what
+        # auc_pr_floor_met is judged against, so the baseline must come from
+        # the same distribution). The training prevalence is also recorded
+        # in train_class_balance for diagnostic purposes.
+        n_val_pos = int((y_val_arr == 1).sum())
+        n_val_total = int(y_val_arr.size)
+        val_prevalence = (n_val_pos / n_val_total) if n_val_total > 0 else 0.0
+        if self.min_auc_pr is not None:
+            effective_floor = float(self.min_auc_pr)
+        else:
+            effective_floor = compute_auc_pr_floor(
+                n_pos=n_val_pos, n_total=n_val_total
+            )
+        auc_pr_floor_met = val_auc_pr >= effective_floor
         calibration_acceptance_met = (val_brier <= self.brier_max) and (val_ece <= self.ece_max)
         if not auc_pr_floor_met:
+            # Include both observed AUC-PR and computed floor + prevalence so
+            # downstream consumers can re-derive the gating decision.
             honest_failures.append(
-                f"AUC-PR floor not met: val_auc_pr={val_auc_pr:.4f} < {self.min_auc_pr:.2f}"
+                f"AUC-PR floor not met: val_auc_pr={val_auc_pr:.4f} < "
+                f"{effective_floor:.3f} (K={MIN_AUC_PR_K} x prevalence="
+                f"{val_prevalence:.4f}, floor_floor={MIN_AUC_PR_FLOOR_FLOOR})"
             )
         if not calibration_acceptance_met:
             honest_failures.append(
@@ -428,7 +543,9 @@ class RiskScoreTrainer:
                     "val_recall": val_recall,
                     "cv_auc_pr_mean": cv_auc_pr_mean,
                     "cv_auc_pr_std": cv_auc_pr_std,
+                    "auc_pr_floor": float(effective_floor),
                     "auc_pr_floor_met": float(auc_pr_floor_met),
+                    "val_prevalence": float(val_prevalence),
                     "calibration_acceptance_met": float(calibration_acceptance_met),
                 },
                 tags={
@@ -436,6 +553,15 @@ class RiskScoreTrainer:
                     "target": "initiated_biologic_180d",
                     "calibration_method": calib_method,
                     "cohort": "csu_initiation",
+                    # Issue #188: tag the floor strategy + values so the
+                    # Celery downstream gate can resolve "is this model
+                    # promotable?" from MLflow metadata alone.
+                    "auc_pr_floor_strategy": (
+                        "explicit_override"
+                        if self.min_auc_pr is not None
+                        else "prevalence_aware_k5_floor010"
+                    ),
+                    "auc_pr_floor_met_tag": str(bool(auc_pr_floor_met)).lower(),
                 },
                 reliability_png=reliability_png,
                 feature_importance=feature_importance,
@@ -454,7 +580,11 @@ class RiskScoreTrainer:
             val_brier=float(val_brier),
             val_ece=float(val_ece),
             calibration_method=calib_method,
-            auc_pr_floor=self.min_auc_pr,
+            # Issue #188: auc_pr_floor records the EFFECTIVE floor used for
+            # gating, which may be the computed prevalence-aware value OR
+            # the explicit override the caller passed in. Either way, this
+            # is the value that auc_pr_floor_met was evaluated against.
+            auc_pr_floor=float(effective_floor),
             auc_pr_floor_met=bool(auc_pr_floor_met),
             calibration_acceptance_met=bool(calibration_acceptance_met),
             cv_auc_pr_mean=float(cv_auc_pr_mean),

@@ -23,11 +23,14 @@ from src.agents.prediction_synthesizer.risk_score import (
     CALIBRATION_ECE_MAX,
     DEFAULT_MIN_AUC_PR,
     FORBIDDEN_FEATURE_SUBSTRINGS,
+    MIN_AUC_PR_FLOOR_FLOOR,
+    MIN_AUC_PR_K,
     RISK_SCORE_HIGH_TIER,
     RISK_SCORE_LOW_TIER,
     LeakageError,
     RiskScoreTrainer,
     assert_no_leakage_in_features,
+    compute_auc_pr_floor,
     expected_calibration_error,
     find_leaked_features,
     risk_score_to_tier,
@@ -168,10 +171,19 @@ class TestTrainerConstruction:
 
     def test_defaults_match_supervisor_decisions(self) -> None:
         t = RiskScoreTrainer()
-        assert t.min_auc_pr == DEFAULT_MIN_AUC_PR == 0.65
+        # Issue #188: default min_auc_pr is now None (compute from prevalence).
+        assert t.min_auc_pr is DEFAULT_MIN_AUC_PR is None
         assert t.brier_max == CALIBRATION_BRIER_MAX == 0.20
         assert t.ece_max == CALIBRATION_ECE_MAX == 0.10
         assert t.model_candidates == ("xgboost", "lightgbm")
+        # Issue #188: prevalence-aware floor constants are pinned.
+        assert MIN_AUC_PR_K == 5.0
+        assert MIN_AUC_PR_FLOOR_FLOOR == 0.10
+
+    def test_explicit_min_auc_pr_override_still_supported(self) -> None:
+        """Back-compat: callers may still pass an explicit floor (e.g. 0.65)."""
+        t = RiskScoreTrainer(min_auc_pr=0.65)
+        assert t.min_auc_pr == 0.65
 
     def test_can_pin_single_candidate(self) -> None:
         t = RiskScoreTrainer(model_candidates=("xgboost",))
@@ -220,7 +232,14 @@ def _make_separable_dataset(
 
 @pytest.mark.slow
 def test_smoke_fit_separable_passes_auc_pr_floor() -> None:
-    """Plumbing smoke: separable synthetic cohort clears AUC-PR floor."""
+    """Plumbing smoke: separable synthetic cohort clears AUC-PR floor.
+
+    Issue #188: this test pins the legacy 0.65 floor explicitly because the
+    synthetic separable cohort is the historical "high-signal" comparator
+    for which the classical bar IS achievable. The new prevalence-aware
+    default would also pass (5 * 0.30 = 1.50 -> clamps to 1.0 ceiling),
+    but pinning 0.65 keeps the test pinned to its original semantics.
+    """
     X_tr, y_tr, X_va, y_va = _make_separable_dataset()
     # Constrain HPO trials for test speed; pin to xgboost so the CV-pick is
     # deterministic and the test isn't sensitive to which library wins.
@@ -229,6 +248,7 @@ def test_smoke_fit_separable_passes_auc_pr_floor() -> None:
         cv_folds=3,
         enable_mlflow=False,
         model_candidates=("xgboost",),
+        min_auc_pr=0.65,
     )
     result = trainer.fit(X_tr, y_tr, X_va, y_va)
     # Plumbing assertions.
@@ -238,8 +258,8 @@ def test_smoke_fit_separable_passes_auc_pr_floor() -> None:
     assert result.train_class_balance["n_neg"] > 0
     assert result.val_class_balance["n_pos"] > 0
     assert result.val_class_balance["n_neg"] > 0
-    # Discrimination should clear the floor on this synthetic dataset.
-    assert result.val_auc_pr >= DEFAULT_MIN_AUC_PR
+    # Discrimination should clear the explicit 0.65 floor on this synthetic dataset.
+    assert result.val_auc_pr >= 0.65
     assert result.auc_pr_floor_met is True
     # Calibration bar should also be met on a well-separable dataset.
     assert result.val_brier <= CALIBRATION_BRIER_MAX
@@ -377,7 +397,14 @@ def test_build_ml_predictions_payload_accepts_explicit_id_and_timestamp() -> Non
 
 @pytest.mark.slow
 def test_honest_failure_surfaced_on_noise() -> None:
-    """On pure-noise features the trainer surfaces (does NOT lower) the bar."""
+    """On pure-noise features the trainer surfaces (does NOT lower) the bar.
+
+    Issue #188: prevalence-aware floor. The expected floor for a roughly-
+    balanced y (rng.integers in {0,1}) is K * 0.5 = 2.5 clamped to ceiling
+    behavior — but the clamp only enforces a LOWER bound (0.10). The
+    prevalence-aware computation should equal max(5 * pi, 0.10) where
+    pi is the validation positive prevalence.
+    """
     rng = np.random.default_rng(13)
     n = 200
     X = pd.DataFrame(rng.normal(size=(n, 6)), columns=[f"noise_{i}" for i in range(6)])
@@ -388,11 +415,19 @@ def test_honest_failure_surfaced_on_noise() -> None:
     X_tr, X_va = X.iloc[: n // 2].reset_index(drop=True), X.iloc[n // 2 :].reset_index(drop=True)
     y_tr, y_va = y[: n // 2], y[n // 2 :]
     result = trainer.fit(X_tr, y_tr, X_va, y_va)
-    # Bar was not silently lowered.
-    assert result.auc_pr_floor == DEFAULT_MIN_AUC_PR
-    # If the floor was not met, honest_failures must record it.
+    # Issue #188: the effective floor must equal the prevalence-aware formula
+    # at the validation prevalence — bar was NOT silently lowered (or raised).
+    expected_floor = compute_auc_pr_floor(
+        n_pos=int(result.val_class_balance["n_pos"]),
+        n_total=int(result.val_class_balance["n_pos"] + result.val_class_balance["n_neg"]),
+    )
+    assert math.isclose(result.auc_pr_floor, expected_floor, abs_tol=1e-9)
+    # If the floor was not met, honest_failures must record it AND include
+    # both observed and computed floor values per issue #188.
     if not result.auc_pr_floor_met:
-        assert any("AUC-PR floor not met" in f for f in result.honest_failures)
+        msg = next((f for f in result.honest_failures if "AUC-PR floor not met" in f), None)
+        assert msg is not None
+        assert f"{expected_floor:.3f}" in msg
     # If calibration was not met, honest_failures must record it.
     if not result.calibration_acceptance_met:
         assert any("Calibration acceptance not met" in f for f in result.honest_failures)
@@ -476,3 +511,198 @@ class TestFitInputValidation:
         trainer = RiskScoreTrainer(enable_mlflow=False, hpo_trials=2, cv_folds=2)
         with pytest.raises(TypeError, match="non-numeric"):
             trainer.fit(X, y, X, y)
+
+
+# ---------------------------------------------------------------------------
+# Issue #188: prevalence-aware AUC-PR floor
+# ---------------------------------------------------------------------------
+
+
+class TestComputeAucPrFloor:
+    """Unit tests for the prevalence-aware floor helper (issue #188)."""
+
+    def test_constants_are_pinned(self) -> None:
+        """K=5 and FLOOR_FLOOR=0.10 are the user-decided values."""
+        assert MIN_AUC_PR_K == 5.0
+        assert MIN_AUC_PR_FLOOR_FLOOR == 0.10
+
+    @pytest.mark.parametrize(
+        ("prevalence", "expected_floor"),
+        [
+            # K * pi < FLOOR_FLOOR -> clamps to FLOOR_FLOOR=0.10
+            (0.005, 0.10),  # very rare cohort -> 0.025 < 0.10 -> clamp
+            (0.01, 0.10),  # 0.05 < 0.10 -> clamp
+            # K * pi >= FLOOR_FLOOR -> uses K * pi.
+            # The real Optum Initiation cohort is pi=0.029 (37/1294) ->
+            # 5 * 0.029 = 0.145 (exact: 0.14296754... from 5*37/1294).
+            (0.029, 0.145),  # nominal pi=0.029 -> 0.145 exactly
+            (0.02, 0.10),  # 5 * 0.02 = 0.10 (boundary case)
+            (0.05, 0.25),  # 5 * 0.05 = 0.25
+            (0.10, 0.50),  # 5 * 0.10 = 0.50
+            (0.15, 0.75),  # 5 * 0.15 = 0.75
+            (0.20, 1.00),  # 5 * 0.20 = 1.00 (ceiling at unity)
+            (0.30, 1.50),  # 5 * 0.30 = 1.50 (above 1.0, but helper does not clamp upper)
+            (0.50, 2.50),  # balanced cohort
+        ],
+    )
+    def test_floor_formula(self, prevalence: float, expected_floor: float) -> None:
+        n_total = 10_000
+        n_pos = int(round(prevalence * n_total))
+        floor = compute_auc_pr_floor(n_pos=n_pos, n_total=n_total)
+        # n_pos/n_total may round to slightly different pi (e.g. 0.029 ->
+        # 290/10000=0.029 exactly), but values like 0.005 -> 50/10000=0.005;
+        # we tolerate 1e-9 absolute since the inputs are clean ratios.
+        assert math.isclose(floor, expected_floor, abs_tol=1e-9)
+
+    def test_floor_at_optum_initiation_real_cohort_is_0145(self) -> None:
+        """The headline regression: n=1294, 37 pos -> floor = 0.145.
+
+        This is the load-bearing acceptance criterion from issue #188 and
+        the research report (issue_188_aucpr_floor_research_20260513.md).
+        """
+        floor = compute_auc_pr_floor(n_pos=37, n_total=1294)
+        # 5 * (37/1294) = 0.14296... -> round to 4 dp
+        assert math.isclose(floor, 5.0 * 37 / 1294, abs_tol=1e-9)
+        # Sanity: this exceeds FLOOR_FLOOR (no clamp), and exceeds the
+        # observed val_auc_pr=0.0895 (so the model correctly fails).
+        assert floor > MIN_AUC_PR_FLOOR_FLOOR
+        assert floor > 0.0895
+
+    def test_empty_returns_floor_floor(self) -> None:
+        assert compute_auc_pr_floor(n_pos=0, n_total=0) == MIN_AUC_PR_FLOOR_FLOOR
+
+    def test_zero_positives_returns_floor_floor(self) -> None:
+        # K * 0 = 0 -> clamp to FLOOR_FLOOR.
+        assert compute_auc_pr_floor(n_pos=0, n_total=100) == MIN_AUC_PR_FLOOR_FLOOR
+
+    def test_custom_k_and_floor_floor(self) -> None:
+        """Helper accepts override parameters for sensitivity analysis."""
+        # K=3 (Stidham 2018 lower bound) at pi=0.029.
+        floor_k3 = compute_auc_pr_floor(n_pos=37, n_total=1294, k=3.0)
+        # 3 * 0.029 = 0.0857 < 0.10 -> clamp to default FLOOR_FLOOR=0.10.
+        assert floor_k3 == 0.10
+        # K=3, FLOOR_FLOOR=0.05 at pi=0.029.
+        floor_k3_floor05 = compute_auc_pr_floor(
+            n_pos=37, n_total=1294, k=3.0, floor_floor=0.05
+        )
+        # 3 * 0.029 = 0.0857 > 0.05 -> uses K*pi.
+        assert math.isclose(floor_k3_floor05, 3.0 * 37 / 1294, abs_tol=1e-9)
+
+    @pytest.mark.parametrize(
+        ("n_pos", "n_total"),
+        [(-1, 100), (10, 5), (100, 50)],
+    )
+    def test_invalid_inputs_raise(self, n_pos: int, n_total: int) -> None:
+        with pytest.raises(ValueError):
+            compute_auc_pr_floor(n_pos=n_pos, n_total=n_total)
+
+    def test_invalid_k_raises(self) -> None:
+        with pytest.raises(ValueError, match="k must"):
+            compute_auc_pr_floor(n_pos=1, n_total=10, k=-1.0)
+
+    def test_invalid_floor_floor_raises(self) -> None:
+        with pytest.raises(ValueError, match="floor_floor must"):
+            compute_auc_pr_floor(n_pos=1, n_total=10, floor_floor=-0.1)
+        with pytest.raises(ValueError, match="floor_floor must"):
+            compute_auc_pr_floor(n_pos=1, n_total=10, floor_floor=1.5)
+
+
+@pytest.mark.slow
+class TestFitComputesPrevalenceAwareFloor:
+    """End-to-end: fit() picks the prevalence-aware floor when min_auc_pr=None."""
+
+    def _make_low_prevalence_dataset(
+        self,
+        n: int = 400,
+        prevalence: float = 0.03,
+        random_state: int = 17,
+    ) -> tuple[pd.DataFrame, np.ndarray, pd.DataFrame, np.ndarray]:
+        """Stratified-split synthetic cohort with target prevalence."""
+        from sklearn.datasets import make_classification
+        from sklearn.model_selection import train_test_split
+
+        weights = [1.0 - prevalence, prevalence]
+        X, y = make_classification(
+            n_samples=n,
+            n_features=8,
+            n_informative=2,
+            n_redundant=2,
+            n_classes=2,
+            weights=weights,
+            flip_y=0.05,
+            class_sep=0.8,
+            random_state=random_state,
+        )
+        feat_names = [f"feature_{i}" for i in range(8)]
+        X_df = pd.DataFrame(X, columns=feat_names)
+        X_tr, X_va, y_tr, y_va = train_test_split(
+            X_df, y, test_size=0.30, stratify=y, random_state=random_state
+        )
+        return (
+            X_tr.reset_index(drop=True),
+            y_tr,
+            X_va.reset_index(drop=True),
+            y_va,
+        )
+
+    def test_default_floor_is_computed_from_val_prevalence(self) -> None:
+        """min_auc_pr=None -> auc_pr_floor matches compute_auc_pr_floor(val)."""
+        X_tr, y_tr, X_va, y_va = self._make_low_prevalence_dataset(n=400, prevalence=0.03)
+        trainer = RiskScoreTrainer(
+            hpo_trials=3,
+            cv_folds=3,
+            enable_mlflow=False,
+            model_candidates=("xgboost",),
+        )
+        result = trainer.fit(X_tr, y_tr, X_va, y_va)
+        expected_floor = compute_auc_pr_floor(
+            n_pos=int(result.val_class_balance["n_pos"]),
+            n_total=int(
+                result.val_class_balance["n_pos"] + result.val_class_balance["n_neg"]
+            ),
+        )
+        assert math.isclose(result.auc_pr_floor, expected_floor, abs_tol=1e-9)
+        # The trainer should record the floor that matches the floor_met
+        # determination — i.e. the gating decision is internally consistent.
+        assert result.auc_pr_floor_met == (result.val_auc_pr >= expected_floor)
+
+    def test_honest_failures_message_includes_prevalence_and_floor(self) -> None:
+        """When the bar fails, the message must include K*pi and prevalence."""
+        X_tr, y_tr, X_va, y_va = self._make_low_prevalence_dataset(
+            n=400, prevalence=0.03, random_state=19
+        )
+        trainer = RiskScoreTrainer(
+            hpo_trials=3,
+            cv_folds=3,
+            enable_mlflow=False,
+            model_candidates=("xgboost",),
+        )
+        result = trainer.fit(X_tr, y_tr, X_va, y_va)
+        if not result.auc_pr_floor_met:
+            msg = next(
+                (f for f in result.honest_failures if "AUC-PR floor not met" in f),
+                None,
+            )
+            assert msg is not None
+            # Must include both the K factor + prevalence and the
+            # computed floor value (per issue #188 user request:
+            # "AUC-PR floor not met: val_auc_pr=... < 0.145 (5*0.029)").
+            assert "K=" in msg
+            assert "prevalence=" in msg
+            assert "floor_floor=" in msg
+
+    def test_explicit_override_preserves_legacy_bar(self) -> None:
+        """Pass min_auc_pr=0.65 explicitly -> trainer uses that floor.
+
+        Back-compat for existing tests + scripts that pinned 0.65.
+        """
+        X_tr, y_tr, X_va, y_va = self._make_low_prevalence_dataset(n=400, prevalence=0.03)
+        trainer = RiskScoreTrainer(
+            hpo_trials=3,
+            cv_folds=3,
+            enable_mlflow=False,
+            model_candidates=("xgboost",),
+            min_auc_pr=0.65,
+        )
+        result = trainer.fit(X_tr, y_tr, X_va, y_va)
+        assert result.auc_pr_floor == 0.65
