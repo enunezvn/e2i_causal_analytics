@@ -50,9 +50,11 @@ import io
 import json
 import logging
 import os
+import secrets
 import tempfile
 import warnings
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 import numpy as np
@@ -809,12 +811,28 @@ class RiskScoreTrainer:
         per_patient_shap: Optional[dict[str, float]] = None,
         features_available: Optional[dict[str, Any]] = None,
         model_version: str = "v1",
+        prediction_id: Optional[str] = None,
+        prediction_timestamp: Optional[datetime] = None,
     ) -> dict[str, Any]:
         """Build a per-patient ``ml_predictions`` row dict.
 
         Matches the schema at ``database/core/e2i_ml_complete_v3_schema.sql:525``
         (table ``ml_predictions``).
+
+        ``prediction_id`` (PRIMARY KEY) and ``prediction_timestamp``
+        (NOT NULL) are required by the schema. If not provided, we auto-mint
+        a 30-char prediction_id (``rsc_<24hex>``) and stamp ``now(UTC)``.
+        Callers writing many rows in a batch SHOULD pass explicit values
+        for both so the caller controls dedup keys.
+
+        Codex pass-1 MEDIUM-2: the previous version returned a row missing
+        the PRIMARY KEY + NOT NULL columns; this version fills them.
         """
+        if prediction_id is None:
+            # 30-char alphanumeric matches VARCHAR(30) PK width.
+            prediction_id = f"rsc_{secrets.token_hex(13)}"  # 4 + 26 = 30
+        if prediction_timestamp is None:
+            prediction_timestamp = datetime.now(timezone.utc)
         top_features: list[dict[str, Any]] = []
         if per_patient_shap:
             ranked = sorted(per_patient_shap.items(), key=lambda kv: abs(kv[1]), reverse=True)[:10]
@@ -828,6 +846,8 @@ class RiskScoreTrainer:
             top_features = [{"feature": name, "gain": float(val)} for name, val in ranked]
 
         return {
+            "prediction_id": prediction_id,
+            "prediction_timestamp": prediction_timestamp.isoformat(),
             "model_version": model_version,
             "model_type": result.model_type,
             "patient_id": patient_id,

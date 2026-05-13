@@ -89,31 +89,42 @@ def _load_real_optum_data(
 ) -> tuple[pd.DataFrame, np.ndarray, pd.DataFrame, np.ndarray]:
     """Load the Optum initiation cohort from ``data_dir`` and split train / val.
 
-    Expected layout::
+    Expected layout (per ``scripts/convert_optum_rwd.py:1403``)::
 
         <data_dir>/
-            patient_journeys.parquet (or .json / .csv)
-            <feature_files>
+            e2i_ml_v3_patient_journeys.parquet   <- THE journey/feature/target table
+            e2i_ml_v3_treatment_events.parquet   <- ignored here
+            e2i_ml_v3_hcp_profiles.parquet       <- ignored here
+            e2i_ml_v3_split_registry.json        <- ignored here
 
-    We look for a single tabular file with the target column + numeric feature
-    columns. The exact converter output schema is documented in
-    ``scripts/convert_optum_rwd.py`` §3 (``OptumDataConverter.convert_all``).
+    Loads ONLY ``e2i_ml_v3_patient_journeys.{parquet,csv}`` (MEDIUM-1 fix from
+    codex pass-1 — the previous glob accidentally concatenated treatment_events
+    and hcp_profiles into the feature frame).
+
+    HIGH-1 (codex pass-1) — feature selection is anchored to
+    ``OPTUM_SAFE_FEATURES`` (pre-or-at-index manifest entries). Every column
+    in ``OPTUM_FORBIDDEN_AS_FEATURES`` (which includes the target
+    ``initiated_biologic_180d`` AND its exact alias ``treatment_initiated`` AND
+    the other cohort targets) is explicitly dropped, even if it slipped through
+    the manifest gate during cohort build. This is the load-bearing real-data
+    safety net.
     """
-    candidates = list(data_dir.glob("*.parquet")) + list(data_dir.glob("*.csv"))
-    if not candidates:
-        raise FileNotFoundError(
-            f"No .parquet or .csv files in {data_dir}. "
-            "Run scripts/convert_optum_rwd.py --cohort initiation first."
-        )
-    df_list = []
-    for path in candidates:
-        if path.suffix == ".parquet":
-            df_list.append(pd.read_parquet(path))
-        else:
-            df_list.append(pd.read_csv(path))
-    df = pd.concat(df_list, axis=0, ignore_index=True) if len(df_list) > 1 else df_list[0]
+    # MEDIUM-1: only the patient journeys file.
+    journey_path = data_dir / "e2i_ml_v3_patient_journeys.parquet"
+    if not journey_path.exists():
+        # CSV fallback (rare; some downstream test fixtures emit CSV).
+        csv_path = data_dir / "e2i_ml_v3_patient_journeys.csv"
+        if not csv_path.exists():
+            raise FileNotFoundError(
+                f"Cohort journey file not found at {journey_path} or {csv_path}. "
+                "Run scripts/convert_optum_rwd.py --cohort initiation first."
+            )
+        df = pd.read_csv(csv_path)
+    else:
+        df = pd.read_parquet(journey_path)
+
     if target not in df.columns:
-        raise KeyError(f"Target column {target!r} not present in cohort frame.")
+        raise KeyError(f"Target column {target!r} not present in patient_journeys.")
 
     # Use the existing data_split column if present, else split here.
     if "data_split" in df.columns:
@@ -131,9 +142,37 @@ def _load_real_optum_data(
             random_state=42,
         )
 
-    # Drop non-feature columns (metadata, IDs, target) before training.
-    drop_cols = {
-        target,
+    # HIGH-1: anchor feature selection to OPTUM_SAFE_FEATURES + explicit
+    # drop of OPTUM_FORBIDDEN_AS_FEATURES (which includes
+    # treatment_initiated, the exact alias of initiated_biologic_180d).
+    try:
+        from src.data.manifests.optum_feature_manifest import (
+            OPTUM_FORBIDDEN_AS_FEATURES,
+            OPTUM_SAFE_FEATURES,
+            OPTUM_TARGETS,
+        )
+    except ImportError as exc:
+        raise RuntimeError(
+            "Cannot import OPTUM_SAFE_FEATURES from "
+            "src.data.manifests.optum_feature_manifest. The feature-selection "
+            "anti-leakage anchor is REQUIRED. Aborting real-data training to "
+            "avoid silently training on a target-leaking feature set."
+        ) from exc
+
+    # Build a strict allow-list. Start from manifest safe features that are
+    # actually present in the frame, then drop the union of forbidden /
+    # targets / generic ID columns as a defense in depth.
+    safe_present = [c for c in OPTUM_SAFE_FEATURES if c in df.columns]
+    # If the manifest is empty / drifted, we hard-fail rather than silently
+    # train on the full column set.
+    if not safe_present:
+        raise RuntimeError(
+            "OPTUM_SAFE_FEATURES intersected with the loaded patient_journeys "
+            "frame is EMPTY. Either the manifest is out of date or the loader "
+            "is pointed at the wrong file. Aborting real-data training."
+        )
+    forbidden = set(OPTUM_FORBIDDEN_AS_FEATURES) | set(OPTUM_TARGETS) | {target}
+    metadata_drops = {
         "data_split",
         "patid",
         "patient_id",
@@ -142,10 +181,24 @@ def _load_real_optum_data(
         "updated_at",
         "index_date",
         "journey_id",
+        "journey_start_date",
+        "journey_end_date",
     }
     feat_cols = [
-        c for c in df.columns if c not in drop_cols and pd.api.types.is_numeric_dtype(df[c])
+        c
+        for c in safe_present
+        if c not in forbidden and c not in metadata_drops and pd.api.types.is_numeric_dtype(df[c])
     ]
+    if not feat_cols:
+        raise RuntimeError(
+            "After dropping forbidden + target + metadata columns there are no "
+            "numeric features left. Aborting real-data training."
+        )
+    logger.info(
+        "Selected %d features from OPTUM_SAFE_FEATURES (dropped %d forbidden/target/metadata cols).",
+        len(feat_cols),
+        len(forbidden | metadata_drops),
+    )
     X_train = train[feat_cols].fillna(0).reset_index(drop=True)
     y_train = train[target].astype(int).to_numpy()
     X_val = val[feat_cols].fillna(0).reset_index(drop=True)

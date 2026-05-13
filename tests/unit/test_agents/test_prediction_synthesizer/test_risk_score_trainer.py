@@ -304,10 +304,15 @@ def test_build_ml_predictions_payload_schema() -> None:
         per_patient_shap={"feature_0": 0.5, "feature_1": -0.2},
         features_available={"age": 45, "comorbidities": 2},
     )
+    # Schema-required keys (PRIMARY KEY + NOT NULL columns per
+    # database/core/e2i_ml_complete_v3_schema.sql:525). codex pass-1 MEDIUM-2
+    # — the payload must be insertable; the test catches missing PK / NOT NULL.
     expected_keys = {
+        "prediction_id",  # PRIMARY KEY VARCHAR(30)
+        "prediction_timestamp",  # TIMESTAMPTZ NOT NULL
         "model_version",
         "model_type",
-        "patient_id",
+        "patient_id",  # VARCHAR(20) NOT NULL
         "prediction_type",
         "prediction_value",
         "prediction_class",
@@ -325,6 +330,12 @@ def test_build_ml_predictions_payload_schema() -> None:
         "features_available_at_prediction",
     }
     assert expected_keys.issubset(payload.keys())
+    # Schema constraints.
+    assert payload["prediction_id"].startswith("rsc_"), payload["prediction_id"]
+    assert len(payload["prediction_id"]) == 30, (
+        f"prediction_id width {len(payload['prediction_id'])} != VARCHAR(30)"
+    )
+    assert payload["prediction_timestamp"] is not None
     assert payload["patient_id"] == "P0001"
     assert payload["prediction_type"] == "risk"
     assert payload["prediction_class"] == "high"  # 7.80 >= 6.6
@@ -332,6 +343,31 @@ def test_build_ml_predictions_payload_schema() -> None:
     assert payload["features_available_at_prediction"] == {"age": 45, "comorbidities": 2}
     assert len(payload["top_features"]) == 2
     assert payload["top_features"][0]["feature"] == "feature_0"  # |0.5| > |-0.2|
+
+
+@pytest.mark.slow
+def test_build_ml_predictions_payload_accepts_explicit_id_and_timestamp() -> None:
+    """Caller-provided ``prediction_id`` / ``prediction_timestamp`` round-trip."""
+    from datetime import datetime, timezone
+
+    X_tr, y_tr, X_va, y_va = _make_separable_dataset(n=200)
+    trainer = RiskScoreTrainer(
+        hpo_trials=3, cv_folds=3, enable_mlflow=False, model_candidates=("xgboost",)
+    )
+    result = trainer.fit(X_tr, y_tr, X_va, y_va)
+    ts = datetime(2026, 5, 13, 12, 0, 0, tzinfo=timezone.utc)
+    explicit_id = "rsc_explicit_callerid000000000"  # exactly 30 chars
+    payload = trainer.build_ml_predictions_payload(
+        result,
+        patient_id="P0002",
+        proba=0.3,
+        risk_score=3.00,
+        prediction_id=explicit_id,
+        prediction_timestamp=ts,
+    )
+    assert payload["prediction_id"] == explicit_id
+    assert payload["prediction_timestamp"] == ts.isoformat()
+    assert payload["prediction_class"] == "low"  # 3.00 < 3.3
 
 
 # ---------------------------------------------------------------------------
