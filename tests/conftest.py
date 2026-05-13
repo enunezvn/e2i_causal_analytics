@@ -64,12 +64,25 @@ def pytest_configure(config):
 # CONFIGURATION
 # =============================================================================
 
-# Service URLs from environment with defaults
+# Service URLs from environment with defaults.
+#
 # Port mapping (per docker/docker-compose.yml):
 #   - e2i_redis (Working Memory): 6382
 #   - e2i_falkordb (Semantic Memory): 6381
 #   - opik-redis (Opik, separate): 6390
 #   - auto-claude-falkordb (external): 6380
+#
+# CI note (issue #183): GitHub Actions integration-tests/unit-tests/slow-tests
+# jobs do NOT stand up a FalkorDB service container. Historically those
+# workflows still exported ``FALKORDB_URL='redis://localhost:6380'``, which
+# caused ``_check_redis_service`` to log a noisy ECONNREFUSED on every CI run
+# and confuse the failure picture when an xdist worker died for unrelated
+# reasons (see PR #181's run 25809588036 where a transient gw0 message was
+# misread as a FalkorDB outage). The workflow YAML has been updated to drop
+# FALKORDB_URL when no FalkorDB service is declared; the conftest now opts
+# the probe out cleanly when ``FALKORDB_REQUIRED`` is not set, so the session
+# header reads ``FALKORDB: UNCONFIGURED (expected in this lane)`` instead of
+# producing an ECONNREFUSED traceback.
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "")  # No password in docker/docker-compose.yml
 _redis_url_env = os.getenv("REDIS_URL")
 if _redis_url_env:
@@ -78,7 +91,14 @@ elif REDIS_PASSWORD:
     REDIS_URL = f"redis://:{REDIS_PASSWORD}@localhost:6382"
 else:
     REDIS_URL = "redis://localhost:6382"
-FALKORDB_URL = os.getenv("FALKORDB_URL", "redis://localhost:6381")
+
+# FALKORDB_URL is optional. When it is unset AND the lane has not opted into
+# FALKORDB_REQUIRED=1, the service-check probe is skipped (returns False)
+# rather than attempting a TCP connect that we know cannot succeed. This
+# preserves the existing skip semantics for ``requires_falkordb`` tests while
+# stopping the misleading ECONNREFUSED log line.
+FALKORDB_URL = os.getenv("FALKORDB_URL", "")
+FALKORDB_REQUIRED = os.getenv("FALKORDB_REQUIRED", "").lower() in {"1", "true", "yes"}
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY", "") or os.getenv("SUPABASE_SERVICE_KEY", "")
 
@@ -165,16 +185,34 @@ def _run_service_checks() -> Dict[str, bool]:
         print(f"  DEBUG: Redis check failed: {e}", file=sys.stderr)
         results["redis"] = False
 
-    try:
-        # Check FalkorDB
-        results["falkordb"] = loop.run_until_complete(_check_redis_service(FALKORDB_URL))
-    except Exception as e:
-        import sys
+    # FalkorDB check is skipped cleanly when no URL is configured (issue #183).
+    # The probe only fires when either the lane explicitly opts in via
+    # FALKORDB_REQUIRED=1 (e.g., a future FalkorDB-backed CI lane) or a
+    # non-empty FALKORDB_URL is exported (local-droplet runs, where the env
+    # var is auto-injected by docker-compose).
+    if FALKORDB_URL:
+        try:
+            results["falkordb"] = loop.run_until_complete(_check_redis_service(FALKORDB_URL))
+        except Exception as e:
+            import sys
 
-        print(f"  DEBUG: FalkorDB check failed: {e}", file=sys.stderr)
+            print(f"  DEBUG: FalkorDB check failed: {e}", file=sys.stderr)
+            results["falkordb"] = False
+        finally:
+            loop.close()
+    else:
+        # No URL configured. Treat as unconfigured (skip-equivalent) instead of
+        # attempting a TCP connect that we know will fail with ECONNREFUSED.
         results["falkordb"] = False
-    finally:
         loop.close()
+        if FALKORDB_REQUIRED:
+            import sys
+
+            print(
+                "  WARN: FALKORDB_REQUIRED=1 set but FALKORDB_URL is empty; "
+                "FalkorDB-marked tests will skip.",
+                file=sys.stderr,
+            )
 
     # Check Supabase (credentials only)
     results["supabase"] = _check_supabase_service()
@@ -216,8 +254,19 @@ def pytest_configure(config: pytest.Config) -> None:
         print("SERVICE AVAILABILITY CHECK")
         print("=" * 60)
         for service, available in SERVICES_AVAILABLE.items():
-            status = "AVAILABLE" if available else "UNAVAILABLE"
-            icon = "\u2713" if available else "\u2717"
+            if service == "falkordb" and not FALKORDB_URL and not available:
+                # Distinguish "intentionally unconfigured" from "configured but
+                # unreachable" so a session header in CI reads
+                # ``FALKORDB: UNCONFIGURED`` rather than implying a service
+                # outage (issue #183).
+                status = "UNCONFIGURED (skipping FalkorDB-marked tests)"
+                icon = "\u2013"  # en dash
+            elif available:
+                status = "AVAILABLE"
+                icon = "\u2713"
+            else:
+                status = "UNAVAILABLE"
+                icon = "\u2717"
             print(f"  {icon} {service.upper()}: {status}")
         print(f"  (checked in {check_duration:.2f}s)")
         print("=" * 60 + "\n")
@@ -337,6 +386,11 @@ async def falkordb_client():
     """
     if not SERVICES_AVAILABLE["falkordb"]:
         pytest.skip("FalkorDB not available")
+
+    # Defensive: if availability check somehow flipped True without a URL,
+    # skip rather than throwing inside ``aioredis.from_url("")`` (issue #183).
+    if not FALKORDB_URL:
+        pytest.skip("FalkorDB URL not configured")
 
     import redis.asyncio as aioredis
 

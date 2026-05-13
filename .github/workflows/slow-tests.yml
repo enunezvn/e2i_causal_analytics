@@ -80,7 +80,9 @@ jobs:
       SUPABASE_KEY: 'test-key'
       SUPABASE_ANON_KEY: 'test-key'
       REDIS_URL: 'redis://localhost:6379'
-      FALKORDB_URL: 'redis://localhost:6380'
+      # FALKORDB_URL intentionally unset — slow-tests lanes have no FalkorDB
+      # service container (issue #183). Empty URL → conftest skips the probe
+      # and reports ``FALKORDB: UNCONFIGURED`` cleanly.
       MLFLOW_TRACKING_URI: 'http://localhost:5000'
       OPIK_URL: 'http://localhost:5173'
       ANTHROPIC_API_KEY: 'test-key'
@@ -203,7 +205,9 @@ jobs:
       SUPABASE_KEY: 'test-key'
       SUPABASE_ANON_KEY: 'test-key'
       REDIS_URL: 'redis://localhost:6379'
-      FALKORDB_URL: 'redis://localhost:6380'
+      # FALKORDB_URL intentionally unset — slow-tests lanes have no FalkorDB
+      # service container (issue #183). Empty URL → conftest skips the probe
+      # and reports ``FALKORDB: UNCONFIGURED`` cleanly.
       MLFLOW_TRACKING_URI: 'http://localhost:5000'
       OPIK_URL: 'http://localhost:5173'
       ANTHROPIC_API_KEY: 'test-key'
@@ -305,7 +309,9 @@ jobs:
       SUPABASE_KEY: 'test-key'
       SUPABASE_ANON_KEY: 'test-key'
       REDIS_URL: 'redis://localhost:6379'
-      FALKORDB_URL: 'redis://localhost:6380'
+      # FALKORDB_URL intentionally unset — slow-tests lanes have no FalkorDB
+      # service container (issue #183). Empty URL → conftest skips the probe
+      # and reports ``FALKORDB: UNCONFIGURED`` cleanly.
       MLFLOW_TRACKING_URI: 'http://localhost:5000'
       OPIK_URL: 'http://localhost:5173'
       ANTHROPIC_API_KEY: 'test-key'
@@ -403,7 +409,9 @@ jobs:
       SUPABASE_KEY: 'test-key'
       SUPABASE_ANON_KEY: 'test-key'
       REDIS_URL: 'redis://localhost:6379'
-      FALKORDB_URL: 'redis://localhost:6380'
+      # FALKORDB_URL intentionally unset — slow-tests lanes have no FalkorDB
+      # service container (issue #183). Empty URL → conftest skips the probe
+      # and reports ``FALKORDB: UNCONFIGURED`` cleanly.
       MLFLOW_TRACKING_URI: 'http://localhost:5000'
       OPIK_URL: 'http://localhost:5173'
       ANTHROPIC_API_KEY: 'test-key'
