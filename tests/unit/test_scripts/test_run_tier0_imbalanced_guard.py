@@ -1,14 +1,14 @@
 """Unit tests for the `--imbalanced × scenario_*` CLI guard + function guard.
 
-Pins backlog #21.7 (codex pass-2 follow-up): `generate_sample_data:1469`
+Pins backlog #21.7 (codex pass-2 follow-up): `generate_sample_data:1579`
 short-circuits to `_scenario_to_dataframe` BEFORE the relabel block at
-lines 1494-1506, so `--imbalanced RATIO` is silently dropped under any
+lines 1609-1621, so `--imbalanced RATIO` is silently dropped under any
 `--regime scenario_*`. Discovered empirically during plan Phase 3.3
 contrast (conditions A and C produced bit-identical metrics for seed=42).
 
 Two layers of defense covered here:
 
-1. CLI guard at `scripts/run_tier0_test.py:7132-7155` errors out at the
+1. CLI guard at `scripts/run_tier0_test.py:7168-7192` errors out at the
    argparse boundary so operators see a clear message + redirect to either
    `--regime scenario_a_balanced` (if they wanted prevalence=0.50 with intact
    signal) or a legacy regime (default/adverse/clean) for post-hoc relabel.
@@ -72,8 +72,8 @@ def test_imbalanced_with_scenario_regime_errors(scenario_regime: str) -> None:
         f"Error message lacks expected pointers for {scenario_regime}; got:\n{err}"
     )
     # Source-line reference must point at the actual short-circuit
-    assert "generate_sample_data:1469" in err, (
-        f"Error message must cite generate_sample_data:1469 for {scenario_regime}; got:\n{err}"
+    assert "generate_sample_data:1579" in err, (
+        f"Error message must cite generate_sample_data:1579 for {scenario_regime}; got:\n{err}"
     )
 
 
@@ -139,7 +139,7 @@ def test_imbalanced_with_legacy_regime_passes_argparse() -> None:
     """`--imbalanced 0.50 --regime default` passes argparse (uses --dry-run).
 
     The guard must NOT fire for legacy regimes that DO honor the flag via
-    the relabel block at lines 1494-1506 in `generate_sample_data`.
+    the relabel block at lines 1609-1621 in `generate_sample_data`.
     """
     result = subprocess.run(
         [
@@ -240,7 +240,7 @@ class TestScenarioToDataframeImbalanceGuard:
     def test_generate_sample_data_threads_ratio_to_scenario_path(self) -> None:
         """End-to-end: `generate_sample_data(_generator=..., imbalance_ratio=...)`
         must propagate the ratio so the in-function guard fires. This pins the
-        threading from `generate_sample_data:1547-1553` and prevents a future
+        threading from `generate_sample_data:1579-1585` and prevents a future
         refactor from dropping the kwarg silently again.
         """
         with pytest.raises(ValueError) as excinfo:
