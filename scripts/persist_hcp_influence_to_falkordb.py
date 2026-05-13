@@ -239,11 +239,24 @@ def persist_graph_to_falkordb(
         ingested_at = _now_iso()
 
     nodes = list(graph.nodes())
-    edges = [
-        (str(a), str(b), int(d.get("weight", 1)))
-        for a, b, d in graph.edges(data=True)
-        if int(d.get("weight", 0)) >= 1
-    ]
+    # Codex pass-2 MEDIUM: networkx.Graph.edges() iteration order on an
+    # UNDIRECTED graph is implementation-defined and can swap (a, b) on
+    # a rerun (different process / hash randomization). The FalkorDB
+    # MERGE below is DIRECTED, so without canonicalisation a rerun
+    # could create `(B)->(A)` alongside a prior `(A)->(B)` instead of
+    # updating in place — breaking idempotency. Sort each endpoint pair
+    # lexically so the persisted direction is deterministic across runs.
+    # Aggregate by canonical key to defend against the (admittedly
+    # impossible-for-nx.Graph) case where both orders appear in one
+    # iteration.
+    canonical_weights: dict[tuple[str, str], int] = {}
+    for a, b, d in graph.edges(data=True):
+        weight = int(d.get("weight", 0))
+        if weight < 1:
+            continue
+        src, dst = sorted((str(a), str(b)))
+        canonical_weights[(src, dst)] = weight
+    edges = [(src, dst, w) for (src, dst), w in canonical_weights.items()]
 
     if not nodes:
         logger.info("persist_graph_to_falkordb: cohort '%s' has 0 HCPs", cohort_id)
@@ -320,9 +333,14 @@ def read_influence_from_falkordb(
         "MATCH (h:HCP {cohort_id: $cohort_id}) RETURN h.id AS id",
         {"cohort_id": cohort_id},
     )
+    # NOTE: persistence canonicalises endpoint order to `sorted((a, b))`
+    # so every undirected pair is stored once. We still issue an
+    # undirected match here (no arrow) so the readback is robust to any
+    # future change in the persistence direction convention.
     edges_result = falkordb_graph.query(
-        "MATCH (a:HCP {cohort_id: $cohort_id})-[r:SHARED_PATIENTS {cohort_id: $cohort_id}]->"
+        "MATCH (a:HCP {cohort_id: $cohort_id})-[r:SHARED_PATIENTS {cohort_id: $cohort_id}]-"
         "(b:HCP {cohort_id: $cohort_id}) "
+        "WHERE a.id < b.id "
         "RETURN a.id AS src, b.id AS dst, r.weight AS weight",
         {"cohort_id": cohort_id},
     )

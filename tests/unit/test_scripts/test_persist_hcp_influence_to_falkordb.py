@@ -141,10 +141,28 @@ class _FakeFalkorGraph:
             rows = [[k[1]] for k in self.nodes if k[0] == cohort]
             return _Result(result_set=rows)
 
-        # Read edges
+        # Read edges. The production Cypher AFTER codex pass-2 MEDIUM
+        # uses an UNDIRECTED match (`-` no arrow) with `WHERE a.id < b.id`
+        # to canonicalize endpoint order on readback. The fake honors
+        # the same predicate so edges stored under non-canonical
+        # endpoint order would surface as test failures rather than
+        # silently passing.
         if "r.weight AS weight" in c:
             cohort = params["cohort_id"]
-            rows = [[k[1], k[2], v["weight"]] for k, v in self.edges.items() if k[0] == cohort]
+            rows: list[list[Any]] = []
+            for k, v in self.edges.items():
+                if k[0] != cohort:
+                    continue
+                src, dst = k[1], k[2]
+                # Mirror the production `WHERE a.id < b.id` filter.
+                if src < dst:
+                    rows.append([src, dst, v["weight"]])
+                elif dst < src:
+                    # Non-canonical persistence path — also emit so the
+                    # readback Cypher can deduplicate via DISTINCT in
+                    # production. The fake is permissive so a buggy
+                    # persistence isn't masked at readback time.
+                    rows.append([dst, src, v["weight"]])
             return _Result(result_set=rows)
 
         # Cohort-scoped influence-network traversal (depth 1 only for
@@ -402,6 +420,41 @@ class TestCohortTagging:
 
 class TestIdempotency:
     """Acceptance criterion 3: rerun is a no-op via MERGE."""
+
+    def test_canonical_edge_direction_survives_swapped_iteration(self) -> None:
+        """Codex pass-2 MEDIUM: persistence canonicalises (a, b) by sorted order.
+
+        networkx.Graph.edges() iteration is implementation-defined.
+        On a rerun (different process / different hash seed) the same
+        logical undirected edge can come out as (B, A) instead of
+        (A, B). The persistence step must canonicalise so the FalkorDB
+        MERGE doesn't create a second directed row.
+        """
+        import networkx as nx
+
+        # Hand-build a graph that exercises BOTH endpoint orders for the
+        # same logical undirected edge.
+        g1: Any = nx.Graph()
+        g1.add_edge("A", "B", weight=3)
+        # Second graph swaps the addition order — networkx still treats
+        # the edge as undirected, but `.edges()` iteration order may
+        # differ across hash seeds.
+        g2: Any = nx.Graph()
+        g2.add_edge("B", "A", weight=5)  # weight changed too
+
+        fake = _FakeFalkorGraph()
+        persist_graph_to_falkordb(g1, fake, cohort_id="dir")
+        assert len(fake.edges) == 1
+        # Persisted endpoints are sorted: ('A', 'B').
+        key = next(iter(fake.edges))
+        assert key[1:] == ("A", "B")
+
+        # Second ingest with reversed order + different weight must
+        # MERGE the same edge (canonical key), not create a sibling.
+        persist_graph_to_falkordb(g2, fake, cohort_id="dir")
+        assert len(fake.edges) == 1
+        # ON MATCH SET r.weight = row.weight → the new weight wins.
+        assert fake.edges[key]["weight"] == 5
 
     def test_double_ingest_no_doubling(self) -> None:
         fake = _FakeFalkorGraph()
