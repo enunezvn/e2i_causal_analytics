@@ -282,7 +282,7 @@ def upsert_ml_predictions(
     updated = 0
     with conn.cursor() as cur:
         for payload in payloads:
-            values = []
+            values: list[Any] = []
             for c in cols:
                 v = payload.get(c)
                 if c in jsonb_cols:
