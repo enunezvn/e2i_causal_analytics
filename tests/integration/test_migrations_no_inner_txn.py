@@ -294,6 +294,13 @@ def _scan_for_bare_txn(sql_path: Path) -> list[tuple[int, str]]:
     in_dollar_block = False
     open_tag: str | None = None
 
+    # Accumulator for script-level text that spans multiple physical
+    # lines (codex pass-6 MEDIUM: ``BEGIN\n;\n`` is syntactically
+    # equivalent to ``BEGIN;`` in Postgres). Pair each character with
+    # its source line number so findings can cite the line where the
+    # offending statement closes.
+    script_buffer: list[tuple[int, str]] = []
+
     for lineno, raw_line in enumerate(text.splitlines(), start=1):
         segments, in_dollar_block, open_tag = _split_line_at_dollar_boundaries(
             raw_line,
@@ -303,36 +310,65 @@ def _scan_for_bare_txn(sql_path: Path) -> list[tuple[int, str]]:
         if not segments:
             continue
         # Strip inline ``--`` comments from each segment BEFORE
-        # joining. (After joining, a ``--`` in one segment would
-        # consume the next segment's text too, missing real
-        # transaction-control statements.)
+        # accumulating. (After accumulating across lines, a ``--``
+        # in one line would consume the next line's text too,
+        # missing real transaction-control statements.)
         cleaned_segments = [_strip_inline_comment(seg) for seg in segments]
-        joined = " ".join(cleaned_segments)
-        # Split on ``;`` to recover individual statements, but only
-        # at semicolons OUTSIDE single-quoted SQL string literals
-        # (codex pass-4 LOW-1: a literal like
-        # ``VALUES ('before; COMMIT; after')`` should not split into
-        # a fake ``COMMIT;`` statement). Each tuple is
-        # ``(statement_text, terminated)`` — partial statements
-        # (no trailing ``;``) are ignored because they may be
-        # mid-statement fragments like ``END AS col,`` from a
-        # multi-line ``CASE ... END`` expression (codex pass-5
-        # follow-up).
-        for raw_statement, terminated in _split_statements_outside_strings(joined):
+        # Pair each segment character with this line's line-number
+        # so findings cite the right line when the statement closes
+        # mid-buffer.
+        for seg in cleaned_segments:
+            for ch in seg:
+                script_buffer.append((lineno, ch))
+            # Replace inter-segment boundaries with a synthetic
+            # whitespace so adjacent segments don't run together.
+            script_buffer.append((lineno, " "))
+
+        # Drain complete statements from the buffer (text up to and
+        # including each script-level ``;``). The drainer respects
+        # single-quote string state. A non-terminated tail remains
+        # in the buffer for the next line to potentially complete.
+        buffer_text = "".join(ch for _, ch in script_buffer)
+        statements = _split_statements_outside_strings(buffer_text)
+        if not statements:
+            continue
+        # Reconstruct line-number for each statement: each statement
+        # ends at the position of its terminating ``;`` (or the buffer
+        # tail). Walk the buffer's (lineno, ch) pairs to find each
+        # ``;`` position.
+        new_buffer: list[tuple[int, str]] = []
+        cursor = 0
+        for raw_statement, terminated in statements:
+            statement_len = len(raw_statement) + (1 if terminated else 0)
+            statement_end = cursor + statement_len
             if not terminated:
-                continue
+                # Leftover tail — preserve for next iteration.
+                new_buffer = script_buffer[cursor:]
+                break
+            # Cite the line where the terminating ``;`` appears
+            # (statement_end - 1 is the ``;``).
+            terminator_lineno = script_buffer[statement_end - 1][0]
+            cursor = statement_end
             statement = raw_statement.strip()
             if not statement:
                 continue
-            # Re-append the ``;`` we split on so the existing regex
-            # (which anchors on ``;\s*$``) still matches.
             candidate = statement + ";"
             if _TXN_STATEMENT_RE.match(candidate):
-                findings.append((lineno, raw_line.rstrip()))
-                # Only one finding per line is useful — additional
-                # txn statements on the same line will point at the
-                # same line and aren't actionable separately.
-                break
+                # Recover the raw line text for the citation: re-read
+                # from the source text by line number.
+                source_lines = text.splitlines()
+                cited_line = (
+                    source_lines[terminator_lineno - 1]
+                    if 0 < terminator_lineno <= len(source_lines)
+                    else ""
+                )
+                findings.append((terminator_lineno, cited_line.rstrip()))
+        else:
+            # All statements terminated; clear buffer.
+            new_buffer = []
+        script_buffer = new_buffer
+
+    return findings
     return findings
 
 
@@ -626,25 +662,19 @@ def test_scanner_handles_doubled_quote_escape_in_strings(tmp_path: Path) -> None
     assert findings == [], f"scanner false-positive on ``''`` quote escape: {findings}"
 
 
-def test_scanner_documented_limit_on_multi_line_string_literals(
+def test_scanner_handles_multi_line_string_literals(
     tmp_path: Path,
 ) -> None:
-    """Codex pass-5 LOW-1: the scanner tokenizes per-line, so a multi-line
-    SQL string literal containing a ``;`` on its own line will
-    false-positive. This is a known limitation pinned here to keep
-    the limit visible.
+    """Codex pass-5 LOW-1 + pass-6 MEDIUM: the scanner threads
+    single-quote state across line boundaries via the cross-line
+    script buffer, so a multi-line SQL string literal containing a
+    ``;`` on its own line is correctly NOT flagged.
 
-    To close the limit fully, the scanner would need to thread
-    single-quote state across line boundaries (similar to how the
-    dollar-quote state is already threaded). No current migration
-    splits a string literal across lines, so this is not actively a
-    bug — but the test pins the documented gap.
-
-    If a future migration introduces multi-line string literals,
-    this test will need to be updated to assert the corrected
-    behavior, and the tokenizer in ``_split_statements_outside_strings``
-    must be extended to accept a line-spanning input or thread
-    single-quote state via the scanner's main loop.
+    The pass-6 fix introduced a cross-line accumulator: characters
+    are buffered (with their source line numbers) until the script
+    tokenizer finds a real statement-terminator ``;`` (i.e. outside
+    a single-quoted string). This closed the pass-5 LOW-1 limit as
+    a side effect.
     """
     sql = tmp_path / "multi_line_string.sql"
     sql.write_text(
@@ -652,15 +682,48 @@ def test_scanner_documented_limit_on_multi_line_string_literals(
         encoding="utf-8",
     )
     findings = _scan_for_bare_txn(sql)
-    # Currently flagged as a false positive on line 2 (the lone
-    # ``COMMIT;`` inside the multi-line string literal). Pinning this
-    # so a future scanner change that closes the gap is forced to
-    # update this test, not silently weaken it.
-    assert len(findings) == 1, (
-        f"expected single false-positive on multi-line string literal "
-        f"(documented limit), got: {findings}"
+    assert findings == [], f"scanner false-positive on multi-line string literal: {findings}"
+
+
+def test_scanner_detects_txn_control_split_across_lines(tmp_path: Path) -> None:
+    """Codex pass-6 MEDIUM: a transaction-control statement whose
+    body and terminator are on different physical lines (e.g.
+    ``BEGIN\\n;``) IS syntactically equivalent to the same-line
+    form and must be flagged.
+
+    The pass-6 cross-line accumulator handles this: characters are
+    buffered with line numbers, and when the tokenizer finds the
+    statement-terminating ``;`` the citation walks back to the
+    correct line.
+    """
+    sql = tmp_path / "split_across_lines.sql"
+    sql.write_text(
+        "BEGIN\n;\nALTER TABLE foo ADD COLUMN bar int;\nCOMMIT\n;\n",
+        encoding="utf-8",
     )
-    assert findings[0][0] == 2
+    findings = _scan_for_bare_txn(sql)
+    # Two findings: ``BEGIN ;`` closes on line 2, ``COMMIT ;`` on
+    # line 5.
+    assert len(findings) == 2, f"expected 2 findings, got: {findings}"
+    assert findings[0][0] == 2  # ``;`` after BEGIN
+    assert findings[1][0] == 5  # ``;`` after COMMIT
+
+
+def test_scanner_detects_isolation_level_split_across_lines(
+    tmp_path: Path,
+) -> None:
+    """``BEGIN\\n  ISOLATION LEVEL SERIALIZABLE;`` — head on one
+    line, mode + terminator on the next. Same pattern as above.
+    """
+    sql = tmp_path / "split_isolation.sql"
+    sql.write_text(
+        "BEGIN\n  ISOLATION LEVEL SERIALIZABLE;\nSELECT 1;\nCOMMIT;\n",
+        encoding="utf-8",
+    )
+    findings = _scan_for_bare_txn(sql)
+    assert len(findings) == 2, f"expected 2 findings, got: {findings}"
+    assert findings[0][0] == 2  # `;` after ISOLATION LEVEL SERIALIZABLE
+    assert findings[1][0] == 4  # `;` after COMMIT
 
 
 def test_split_statements_outside_strings_basic_cases() -> None:
