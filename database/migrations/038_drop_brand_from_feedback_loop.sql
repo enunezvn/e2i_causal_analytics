@@ -54,9 +54,18 @@
 -- regression pins
 -- `test_assign_truth_*_has_no_brand_reference` lock the post-038 state
 -- for all five functions.
+--
+-- Issue #186 (mirror of PR #185 / mig 039 fix for issue #182): this
+-- file is intentionally bare of `BEGIN;` / `COMMIT;` at the script level.
+-- `scripts/run_migrations.sh:100` invokes psql with `--single-transaction`,
+-- which owns the outer transaction (the `\i` of the migration plus the
+-- `INSERT INTO schema_migrations` bookkeeping row that follows). An
+-- inner `BEGIN;` ... `COMMIT;` here would prematurely commit before the
+-- bookkeeping insert, leaving the migration applied but unrecorded on a
+-- bookkeeping-insert failure. PL/pgSQL function-body `BEGIN ... END`
+-- blocks below are fine — only top-of-file `^BEGIN;$` / `^COMMIT;$` are
+-- the bug.
 -- ============================================================================
-
-BEGIN;
 
 -- ----------------------------------------------------------------------------
 -- 0. Remediate brand-keyed indexes on EXISTING DBs (codex pass-2 MEDIUM-1).
@@ -583,4 +592,5 @@ BEGIN
 END;
 $$;
 
-COMMIT;
+-- (No `COMMIT;` — psql `--single-transaction` owns the outer txn. See
+-- top-of-file note.)
