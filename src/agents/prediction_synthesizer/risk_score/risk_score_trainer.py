@@ -506,12 +506,19 @@ class RiskScoreTrainer:
         auc_pr_floor_met = val_auc_pr >= effective_floor
         calibration_acceptance_met = (val_brier <= self.brier_max) and (val_ece <= self.ece_max)
         if not auc_pr_floor_met:
-            # Include both observed AUC-PR and computed floor + prevalence so
-            # downstream consumers can re-derive the gating decision.
+            # Include observed AUC-PR, the computed floor, and the K x
+            # prevalence breakdown so downstream consumers can re-derive
+            # the gating decision without needing the trainer source.
+            # Compact form ``(K*pi)`` matches the user-spec example shape
+            # in issue #188 (e.g. ``< 0.145 (5x0.029)``); expanded form
+            # carries K + prevalence + floor_floor literally for full
+            # diagnostic clarity.
             honest_failures.append(
                 f"AUC-PR floor not met: val_auc_pr={val_auc_pr:.4f} < "
-                f"{effective_floor:.3f} (K={MIN_AUC_PR_K} x prevalence="
-                f"{val_prevalence:.4f}, floor_floor={MIN_AUC_PR_FLOOR_FLOOR})"
+                f"{effective_floor:.3f} "
+                f"({MIN_AUC_PR_K}x{val_prevalence:.4f}) "
+                f"[K={MIN_AUC_PR_K}, prevalence={val_prevalence:.4f}, "
+                f"floor_floor={MIN_AUC_PR_FLOOR_FLOOR}]"
             )
         if not calibration_acceptance_met:
             honest_failures.append(
