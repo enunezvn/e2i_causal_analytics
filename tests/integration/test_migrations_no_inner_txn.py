@@ -133,10 +133,19 @@ _BEGIN_ATOMIC_RE = re.compile(r"\bBEGIN\s+ATOMIC\b", re.IGNORECASE)
 _BARE_END_RE = re.compile(r"^END\s*;\s*$", re.IGNORECASE)
 
 
-def _tokenize_script_statements(text: str) -> list[tuple[int, str]]:
+def _tokenize_script_statements(
+    text: str,
+) -> list[tuple[int, str, str]]:
     """Unified SQL tokenizer (codex pass-8 MEDIUM-1). Walk the full
     file once and emit script-level statements as
-    ``(terminator_lineno, statement_text)`` tuples.
+    ``(terminator_lineno, statement_text, normal_text_only)`` tuples.
+
+    The third element is the statement's body with all string-literal
+    and dollar-quoted contents stripped out (replaced with empty
+    placeholders), leaving only ``normal``-state SQL. This is what
+    matchers should use for keyword detection — keywords inside
+    string literals (e.g. ``SELECT 'BEGIN ATOMIC';``) must not
+    trigger false positives.
 
     The tokenizer maintains five mutually-exclusive lexical states:
 
@@ -166,9 +175,14 @@ def _tokenize_script_statements(text: str) -> list[tuple[int, str]]:
     matchers downstream can still match keywords correctly — keywords
     are never inside string literals at the statement-head position.
     """
-    statements: list[tuple[int, str]] = []
+    statements: list[tuple[int, str, str]] = []
+    # ``body`` is the full statement text (including string + dollar
+    # contents). ``normal_text`` is the same statement with string and
+    # dollar contents replaced with a single space, so downstream
+    # keyword-matching against ``normal_text`` doesn't trigger inside
+    # string literals.
     body: list[str] = []
-    terminator_lineno = 1
+    normal_text: list[str] = []
     current_lineno = 1
     state = "normal"
     open_tag = ""
@@ -184,6 +198,7 @@ def _tokenize_script_statements(text: str) -> list[tuple[int, str]]:
             # Try state transitions in priority order.
             if ch == "'":
                 body.append(ch)
+                normal_text.append(" ")  # string content blanked
                 state = "in_single_quote"
                 i += 1
                 continue
@@ -201,19 +216,22 @@ def _tokenize_script_statements(text: str) -> list[tuple[int, str]]:
                 if dollar_match is not None:
                     open_tag = dollar_match.group(1) or ""
                     body.append(dollar_match.group(0))
+                    normal_text.append(" ")
                     i = dollar_match.end()
                     state = "in_dollar_quote"
                     continue
             if ch == ";":
                 # End of statement.
                 statement = "".join(body).strip()
+                normal = "".join(normal_text).strip()
                 if statement:
-                    statements.append((current_lineno, statement))
+                    statements.append((current_lineno, statement, normal))
                 body = []
-                terminator_lineno = current_lineno
+                normal_text = []
                 i += 1
                 continue
             body.append(ch)
+            normal_text.append(ch)
             i += 1
             continue
 
@@ -222,6 +240,7 @@ def _tokenize_script_statements(text: str) -> list[tuple[int, str]]:
                 state = "normal"
                 # Newline itself is whitespace at script level.
                 body.append(" ")
+                normal_text.append(" ")
             i += 1
             continue
 
@@ -229,6 +248,7 @@ def _tokenize_script_statements(text: str) -> list[tuple[int, str]]:
             if ch == "*" and i + 1 < n and text[i + 1] == "/":
                 state = "normal"
                 body.append(" ")
+                normal_text.append(" ")
                 i += 2
                 continue
             i += 1
@@ -267,7 +287,6 @@ def _tokenize_script_statements(text: str) -> list[tuple[int, str]]:
 
     # Drop any non-terminated trailing text — the lint only fires on
     # statements that actually have a `;`.
-    _ = terminator_lineno  # silence unused-var; line citation lives in tuples
     return statements
 
 
@@ -288,11 +307,15 @@ def _scan_for_bare_txn(sql_path: Path) -> list[tuple[int, str]]:
     # ``BEGIN ATOMIC`` function-body tracking (codex pass-7 MEDIUM).
     in_atomic_body = False
 
-    for terminator_lineno, statement in _tokenize_script_statements(text):
-        candidate = statement + ";"
+    for terminator_lineno, statement, normal_text in _tokenize_script_statements(text):
+        # Use ``normal_text`` (string/dollar contents stripped) for
+        # keyword detection. Otherwise a literal like
+        # ``SELECT 'BEGIN ATOMIC';`` would falsely enter atomic mode
+        # and hide the subsequent ``COMMIT;`` (codex pass-9 MEDIUM-1).
+        candidate = normal_text + ";"
 
         # Atomic-body opener?
-        if not in_atomic_body and _BEGIN_ATOMIC_RE.search(statement):
+        if not in_atomic_body and _BEGIN_ATOMIC_RE.search(normal_text):
             in_atomic_body = True
             continue
 
@@ -309,6 +332,9 @@ def _scan_for_bare_txn(sql_path: Path) -> list[tuple[int, str]]:
             )
             findings.append((terminator_lineno, cited_line.rstrip()))
 
+    # ``statement`` is intentionally unused — kept in the tuple for
+    # forensic debugging if a future tokenizer change misclassifies.
+    _ = statement  # noqa: F841 - documents the unused tuple position
     return findings
     return findings
 
@@ -678,43 +704,58 @@ def test_tokenize_script_statements_basic_cases() -> None:
     """Direct unit-test of ``_tokenize_script_statements`` to pin the
     unified tokenizer's behavior.
 
-    Return shape: ``[(terminator_lineno, statement_text)]`` —
-    statements are emitted only when terminated by ``;``; trailing
-    non-terminated text is dropped.
+    Return shape: ``[(terminator_lineno, statement_text, normal_text)]``
+    — statements are emitted only when terminated by ``;``;
+    trailing non-terminated text is dropped. ``normal_text`` is the
+    same statement with string-literal and dollar-quoted contents
+    blanked (replaced with a single space).
     """
     # No string, two statements (one terminator).
-    assert _tokenize_script_statements("BEGIN;COMMIT") == [(1, "BEGIN")]
+    assert _tokenize_script_statements("BEGIN;COMMIT") == [(1, "BEGIN", "BEGIN")]
     # Trailing semicolon → 1 terminated statement, no tail.
-    assert _tokenize_script_statements("BEGIN;") == [(1, "BEGIN")]
+    assert _tokenize_script_statements("BEGIN;") == [(1, "BEGIN", "BEGIN")]
     # Both terminated.
     assert _tokenize_script_statements("BEGIN;COMMIT;") == [
-        (1, "BEGIN"),
-        (1, "COMMIT"),
+        (1, "BEGIN", "BEGIN"),
+        (1, "COMMIT", "COMMIT"),
     ]
     # Semicolon inside single-quoted string (no split, no
     # terminator → no statement emitted).
     assert _tokenize_script_statements("VALUES ('a;b')") == []
     # Doubled quote escape (no split, no terminator).
     assert _tokenize_script_statements("VALUES ('it''s;a;test')") == []
-    # Multiple strings + a real terminator.
-    assert _tokenize_script_statements("INSERT INTO t VALUES ('a;b'), ('c;d');COMMIT;") == [
-        (1, "INSERT INTO t VALUES ('a;b'), ('c;d')"),
-        (1, "COMMIT"),
-    ]
+    # Multiple strings + a real terminator: body preserves literal
+    # content; normal_text blanks the literals.
+    res = _tokenize_script_statements("INSERT INTO t VALUES ('a;b'), ('c;d');COMMIT;")
+    assert len(res) == 2
+    assert res[0][0] == 1
+    assert res[0][1] == "INSERT INTO t VALUES ('a;b'), ('c;d')"
+    # normal_text: string contents replaced with single space.
+    assert "BEGIN" not in res[0][2]
+    assert "COMMIT" not in res[0][2]
+    assert res[1] == (1, "COMMIT", "COMMIT")
     # Empty input.
     assert _tokenize_script_statements("") == []
     # Mid-statement fragment without terminator: dropped.
     assert _tokenize_script_statements("    END AS patient_volume_tier,") == []
     # Line-number tracking: terminator on line 2.
-    assert _tokenize_script_statements("BEGIN\n;") == [(2, "BEGIN")]
+    assert _tokenize_script_statements("BEGIN\n;") == [(2, "BEGIN", "BEGIN")]
     # Block comment stripped, no statement.
     assert _tokenize_script_statements("/* hello */ ALTER TABLE foo ADD bar int;") == [
-        (1, "ALTER TABLE foo ADD bar int")
+        (1, "ALTER TABLE foo ADD bar int", "ALTER TABLE foo ADD bar int")
     ]
     # Line comment stripped.
     assert _tokenize_script_statements("ALTER TABLE foo -- ignored\nADD bar int;") == [
-        (2, "ALTER TABLE foo  ADD bar int")
+        (2, "ALTER TABLE foo  ADD bar int", "ALTER TABLE foo  ADD bar int")
     ]
+    # String content blanked in normal_text (codex pass-9 MEDIUM-1):
+    # ``SELECT 'BEGIN ATOMIC';`` must yield normal_text WITHOUT
+    # ``BEGIN ATOMIC`` so the atomic-body matcher doesn't fire.
+    res = _tokenize_script_statements("SELECT 'BEGIN ATOMIC';")
+    assert len(res) == 1
+    assert res[0][0] == 1
+    assert res[0][1] == "SELECT 'BEGIN ATOMIC'"
+    assert "BEGIN ATOMIC" not in res[0][2]
 
 
 def test_scanner_detects_multi_statement_per_line_txn_control(tmp_path: Path) -> None:
@@ -819,6 +860,24 @@ def test_scanner_handles_line_comment_inside_string_literal(
     findings = _scan_for_bare_txn(sql)
     assert len(findings) == 1, f"expected COMMIT; flag, got: {findings}"
     assert findings[0][0] == 1
+
+
+def test_scanner_ignores_begin_atomic_inside_string_literal(
+    tmp_path: Path,
+) -> None:
+    """Codex pass-9 MEDIUM-1: ``BEGIN ATOMIC`` inside a single-quoted
+    string literal must NOT trigger atomic-body mode. Otherwise a
+    subsequent script-level ``COMMIT;`` would be silently exempted.
+    """
+    sql = tmp_path / "begin_atomic_in_string.sql"
+    sql.write_text(
+        "SELECT 'BEGIN ATOMIC';\nCOMMIT;\n",
+        encoding="utf-8",
+    )
+    findings = _scan_for_bare_txn(sql)
+    assert len(findings) == 1, f"expected COMMIT; flag, got: {findings}"
+    assert findings[0][0] == 2
+    assert "COMMIT;" in findings[0][1].upper()
 
 
 def test_scanner_handles_dollar_dollar_inside_string_literal(
