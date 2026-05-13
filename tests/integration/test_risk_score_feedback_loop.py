@@ -27,16 +27,18 @@ transaction with ``conn.autocommit = False`` and ``conn.rollback()`` in
 the DB up to ``LIMIT 1000``) are rolled back together — no shared-DB
 leakage, no flake risk when the DB has many old ``PENDING`` rows.
 
-Brand-matching (codex pass-2 HIGH-1 + issue #176): migration 038 stripped
-``p.brand`` from ``assign_truth_treatment_response`` and dropped the two
-brand-keyed indexes — both ``ml_predictions.brand`` (if it exists on
-this DB at all) and ``te.brand::text = pc.brand::text`` are gone. The
-test still seeds ``treatment_events.brand='Fabhalta'`` (and
+Brand-matching (codex pass-2 HIGH-1 + issue #176): migration 038
+``CREATE OR REPLACE``-d all five truth-assignment functions without the
+``p.brand`` SELECT or the ``te.brand::text = pc.brand::text`` joins;
+migration 006 §2.4 was patched in place to drop ``brand`` from the two
+historically-named ``idx_predictions_*_brand`` index keys (which had
+prevented fresh-DB ``--single-transaction`` replay — codex pass-1
+HIGH-1). The test still seeds ``treatment_events.brand='Fabhalta'`` (and
 ``ml_predictions.brand`` if the column happens to exist on a legacy DB)
-as defense in depth in case a future migration re-introduces the
-brand-join. See
-``test_assign_truth_treatment_response_has_no_brand_reference`` for the
-explicit regression pin on the migration-038 state.
+as defense in depth. See
+``test_truth_assignment_function_has_no_brand_reference`` (parametrized
+across all 5 functions) and ``test_brand_indexes_have_no_brand_column``
+for explicit regression pins on the post-038 state.
 
 DB-touching tests are gated on a reachable Postgres at
 ``RISK_SCORE_DB_URL`` / ``SUPABASE_DB_URL`` / ``DATABASE_URL``; in CI
@@ -133,52 +135,69 @@ class TestFeedbackLoopRiskRoundTrip:
         assert is_active is True
         conn.rollback()  # read-only; nothing to commit
 
-    def test_assign_truth_treatment_response_has_no_brand_reference(self, conn) -> None:
-        """Issue #176 — migration 038 stripped ``p.brand`` from the
-        ``assign_truth_treatment_response`` function body and dropped the
-        two brand-keyed indexes. This regression test pins the new state:
+    @pytest.mark.parametrize(
+        "fn_name",
+        [
+            "assign_truth_hcp_churn",
+            "assign_truth_script_conversion",
+            "assign_truth_treatment_response",
+            "assign_truth_next_best_action",
+            "assign_truth_market_share",
+        ],
+    )
+    def test_truth_assignment_function_has_no_brand_reference(self, conn, fn_name) -> None:
+        """Issue #176 — migration 038 stripped ``p.brand`` and the
+        ``te.brand::text = pc.brand::text`` joins from all five
+        truth-assignment function bodies. This regression test pins the
+        post-038 state per function so a future hand-edit of migration
+        006 / 038 cannot silently re-introduce the dead-on-arrival
+        column reference.
 
-            * ``pg_get_functiondef`` for the risk truth function MUST NOT
-              contain ``p.brand`` or ``te.brand`` joins.
-            * Neither ``idx_predictions_hcp_brand`` nor
-              ``idx_predictions_patient_brand`` exists in ``pg_indexes``.
-
-        Without this guard, a future hand-edit of migration 006 could
-        silently re-introduce the dead-on-arrival column reference.
+        Codex pass-1 MEDIUM-3 (2026-05-13): parametrized across all five
+        functions, not just ``assign_truth_treatment_response``.
         """
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT pg_get_functiondef(oid) FROM pg_proc "
-                "WHERE proname = 'assign_truth_treatment_response'"
+                "SELECT pg_get_functiondef(oid) FROM pg_proc WHERE proname = %s",
+                (fn_name,),
             )
             row = cur.fetchone()
-        assert row is not None, (
-            "assign_truth_treatment_response function not found — migration "
-            "006 not applied?"
-        )
+        assert row is not None, f"{fn_name} function not found — migration 006 not applied?"
         fn_src = row[0]
-        # The risk function should not select p.brand nor join on
-        # te.brand::text = pc.brand::text after migration 038.
         assert "p.brand" not in fn_src, (
-            "assign_truth_treatment_response still references p.brand — "
+            f"{fn_name} still references p.brand — "
             "migration 038 (issue #176) not applied or was reverted."
         )
         assert "te.brand::text = pc.brand::text" not in fn_src, (
-            "assign_truth_treatment_response still joins on te.brand — "
+            f"{fn_name} still joins on te.brand::text = pc.brand::text — "
             "migration 038 (issue #176) not applied or was reverted."
         )
+        conn.rollback()
 
+    def test_brand_indexes_have_no_brand_column(self, conn) -> None:
+        """Issue #176 — migration 006 originally keyed
+        ``idx_predictions_hcp_brand`` / ``idx_predictions_patient_brand``
+        on a nonexistent ``ml_predictions.brand`` column, which aborted
+        the runner's ``--single-transaction`` replay on a fresh DB
+        (codex pass-1 HIGH-1). The in-place fix to 006 §2.4 strips
+        ``brand`` from the index keys.
+
+        This test asserts that if either historically-named index
+        exists, its ``indexdef`` does NOT mention ``brand``.
+        """
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT indexname FROM pg_indexes "
+                "SELECT indexname, indexdef FROM pg_indexes "
                 "WHERE indexname IN "
                 "('idx_predictions_hcp_brand', 'idx_predictions_patient_brand')"
             )
-            stale_indexes = [r[0] for r in cur.fetchall()]
-        assert stale_indexes == [], (
-            f"Stale brand-keyed indexes still present: {stale_indexes!r} — "
-            "migration 038 (issue #176) not applied."
-        )
+            rows = cur.fetchall()
+        for name, indexdef in rows:
+            assert "brand" not in indexdef, (
+                f"Index {name!r} still references a brand column: "
+                f"{indexdef!r} — migration 006 §2.4 fix (issue #176) "
+                "not applied or was reverted."
+            )
         conn.rollback()
 
     def test_run_feedback_loop_callable(self, conn) -> None:

@@ -4,10 +4,23 @@
 -- ============================================================================
 -- Issue #176 — Migration 006 SQL functions and indexes reference a `brand`
 -- column on `ml_predictions` that is never added by any migration. A fresh
--- `alembic upgrade head` (or equivalent psql replay) against an empty DB
--- would fail at function-creation time, OR succeed with functions that are
--- dead-on-arrival when called against `ml_predictions` (selecting a
--- nonexistent `p.brand`).
+-- `psql -v ON_ERROR_STOP=1 --single-transaction` replay against an empty DB
+-- (the runner mode at `scripts/run_migrations.sh:100`) would fail at the
+-- two CREATE INDEX statements in 006 §2.4, aborting the transaction before
+-- this migration could run. THE FIX therefore has TWO PARTS:
+--
+--   PART 1 (in `006_feedback_loop_infrastructure.sql`): drop `brand` from
+--   the two index keys in place. This is the ONLY part of 006 that
+--   immediate-DDL-fails on missing-column; the function bodies use
+--   deferred name resolution and CREATE OR REPLACE FUNCTION succeeds at
+--   definition time regardless. See codex pass-1 HIGH-1 (2026-05-13).
+--
+--   PART 2 (this migration, 038): `CREATE OR REPLACE FUNCTION` for the
+--   five truth-assignment functions, stripping `p.brand` from SELECT and
+--   `te.brand::text = pc.brand::text` from the joins. Without 038, the
+--   functions create successfully but are dead-on-arrival when invoked
+--   by `run_feedback_loop('risk')` (the only path exercised today via
+--   `tests/integration/test_risk_score_feedback_loop.py`).
 --
 -- Option A (add the column) was rejected: no code in `src/` populates
 -- `brand` on `ml_predictions` (the PR #175 writer at
@@ -19,35 +32,34 @@
 -- from patient -> treatment_events to populate it, adding failure modes
 -- with no current consumer.
 --
--- Option B (this migration) — strip brand from migration 006:
---   * DROP the two indexes that include the nonexistent column.
---   * CREATE OR REPLACE FUNCTION for the 5 truth-assignment functions
---     plus the master orchestrator, omitting `p.brand` from SELECT and
---     dropping `AND te.brand::text = pc.brand::text` from the joins.
+-- IMPORTANT SEMANTIC NOTE (codex pass-1 MEDIUM-1): stripping the
+-- `te.brand::text = pc.brand::text` join changes the outcome semantics —
+-- a same-HCP or same-patient prescription of ANY brand now counts toward
+-- the truth label (formerly only the predicted brand counted). This
+-- matches the droplet's hand-patched live function, so post-deploy
+-- behaviour is consistent. It is NOT faithful to migration 006's
+-- brand-scoped intent. A future migration that adds a real brand key to
+-- `ml_predictions` and re-narrows these joins is recommended.
 --
--- Forward-only. Re-applying this migration is idempotent because we use
--- `DROP INDEX IF EXISTS` and `CREATE OR REPLACE FUNCTION`. A downgrade
--- path is not provided — restoring the brand-join would re-introduce the
--- original defect (broken function references), so there is no defensible
--- forward + backward symmetric pair.
+-- Re-applying this migration is idempotent because we use
+-- `CREATE OR REPLACE FUNCTION` everywhere. A downgrade path is not
+-- provided — restoring the brand-join would re-introduce the original
+-- defect (broken function references), so there is no defensible forward
+-- + backward symmetric pair.
 --
--- After applying this migration, `tests/integration/test_risk_score_feedback_loop.py`
--- still passes both branches of `_ml_predictions_has_brand_column` because
--- the seeding code already tolerates the column being absent.
+-- After applying this migration,
+-- `tests/integration/test_risk_score_feedback_loop.py` still passes both
+-- branches of `_ml_predictions_has_brand_column` (the seeding code
+-- already tolerates the column being absent), and the new explicit
+-- regression pins
+-- `test_assign_truth_*_has_no_brand_reference` lock the post-038 state
+-- for all five functions.
 -- ============================================================================
 
 BEGIN;
 
 -- ----------------------------------------------------------------------------
--- 1. Drop the two indexes that reference the nonexistent `brand` column.
--- ----------------------------------------------------------------------------
--- These are no-ops if the table never had `brand` (the fresh-DB case), or
--- if the indexes were already dropped by a runtime patch on the droplet.
-DROP INDEX IF EXISTS idx_predictions_hcp_brand;
-DROP INDEX IF EXISTS idx_predictions_patient_brand;
-
--- ----------------------------------------------------------------------------
--- 2. Replace assign_truth_hcp_churn (was: 006 §5.1)
+-- 1. Replace assign_truth_hcp_churn (was: 006 §5.1)
 --    Removes p.brand from SELECT and te.brand::text = pc.brand::text from
 --    both treatment_events joins. Logic is otherwise identical.
 -- ----------------------------------------------------------------------------
@@ -159,7 +171,16 @@ END;
 $$;
 
 -- ----------------------------------------------------------------------------
--- 3. Replace assign_truth_script_conversion (was: 006 §5.2)
+-- 2. Replace assign_truth_script_conversion (was: 006 §5.2)
+--    Out of scope for issue #176: this function ALSO references
+--    `t.prediction_id` and `t.status` on the `triggers` table, which has
+--    neither column (see database/core/e2i_ml_complete_v3_schema.sql:579 —
+--    the real columns are `delivery_status` / `acceptance_status`, and
+--    triggers has no FK back to ml_predictions). Calling
+--    run_feedback_loop('trigger') will fail at execution time on this
+--    schema drift. We strip brand here for consistency with the rest of
+--    this migration but leave the t.* drift as a separate latent bug
+--    (file a follow-on issue for "triggers schema drift in migration 006").
 -- ----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION assign_truth_script_conversion(
     p_observation_window_days INTEGER DEFAULT 21,
@@ -249,7 +270,7 @@ END;
 $$;
 
 -- ----------------------------------------------------------------------------
--- 4. Replace assign_truth_treatment_response (was: 006 §5.3 — risk path)
+-- 3. Replace assign_truth_treatment_response (was: 006 §5.3 — risk path)
 --    This is the function exercised by tests/integration/test_risk_score_feedback_loop.py
 --    via run_feedback_loop('risk'). Matches the live droplet patched version
 --    (join on patient_id + event_type + event_date; no brand match).
@@ -361,7 +382,10 @@ END;
 $$;
 
 -- ----------------------------------------------------------------------------
--- 5. Replace assign_truth_next_best_action (was: 006 §5.4)
+-- 4. Replace assign_truth_next_best_action (was: 006 §5.4)
+--    Out of scope for issue #176: also depends on `t.prediction_id` and
+--    `t.status` (see §2 note above). Strip brand only; t.* drift is a
+--    separate latent bug.
 -- ----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION assign_truth_next_best_action(
     p_observation_window_days INTEGER DEFAULT 30,
@@ -449,16 +473,31 @@ END;
 $$;
 
 -- ----------------------------------------------------------------------------
--- 6. Replace assign_truth_market_share (was: 006 §5.5)
---    business_metrics still has a real `brand` column (see
---    database/core/e2i_ml_complete_v3_schema.sql:879), but the join
---    `bm.brand::text = pc.brand::text` references `pc.brand` which comes
---    from `ml_predictions p.brand` — that's what's missing. We replace
---    the brand-keyed join with `region + measurement_date` only (already
---    the discriminating keys for the market-share lookup), keeping the
---    function consistent with the live droplet's stripped behaviour. If
---    a future migration adds a real brand-scoping column to
---    ml_predictions, market_share can be re-tightened in a follow-up.
+-- 5. Replace assign_truth_market_share (was: 006 §5.5)
+--
+-- The 006-as-written function was triple-broken:
+--   1. SELECT p.brand — column doesn't exist on ml_predictions.
+--   2. bm.measurement_date — `business_metrics` actually has `metric_date`
+--      (database/core/e2i_ml_complete_v3_schema.sql:658).
+--   3. bm.market_share — `business_metrics` has `value` / `target` /
+--      `metric_name`, no `market_share` column.
+--   4. Even if 1-3 were patched, joining baseline/outcome rows on
+--      (region, month) alone over-matches: business_metrics has both
+--      per-HCP and per-aggregate rows for the same brand/region/month
+--      (codex pass-1 HIGH-3; see src/etl/business_metrics_per_hcp_etl.py),
+--      so `UPDATE ... FROM` would pick an arbitrary source row and
+--      multiply baseline × outcome matches per prediction.
+--
+-- Issue #176 is scoped to fixing the *fresh-replay blocker* and the
+-- *dead-on-arrival call paths*, not to designing a correct market-share
+-- truth pipeline. We replace this function with a stub that always
+-- marks `market_share_impact` predictions EXCLUDED with a forensic
+-- reason, so the function is safely callable end-to-end and the broken
+-- 006 logic is decisively retired. A future PR (file separate issue:
+-- "implement brand-scoped market_share truth assignment") can replace
+-- this stub with a real implementation once `ml_predictions` has a real
+-- brand key AND `business_metrics` rows are unambiguously aggregable
+-- per (brand, region, month).
 -- ----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION assign_truth_market_share(
     p_observation_window_days INTEGER DEFAULT 90,
@@ -477,76 +516,35 @@ DECLARE
     v_labeled INTEGER := 0;
     v_excluded INTEGER := 0;
 BEGIN
+    -- Mark every eligible PENDING market_share_impact prediction as
+    -- EXCLUDED. The truth-assignment SQL referenced columns
+    -- (`p.brand`, `bm.market_share`, `bm.measurement_date`) that do
+    -- not exist on the canonical schema; computing market_share truth
+    -- correctly requires brand-scoping that is not currently
+    -- representable on `ml_predictions`. See migration 038 header
+    -- (issue #176) and follow-on issue for the rebuild.
     CREATE TEMP TABLE temp_ms_candidates AS
-    WITH prediction_context AS (
-        SELECT
-            p.prediction_id,
-            p.metadata->>'region' as region,
-            p.prediction_timestamp,
-            p.prediction_value as predicted_delta
-        FROM ml_predictions p
-        WHERE p.prediction_type = 'market_share_impact'
-          AND p.outcome_label = 'PENDING'
-          AND p.prediction_timestamp < NOW() - (p_observation_window_days || ' days')::INTERVAL
-        LIMIT p_batch_size
-    ),
-    baseline_share AS (
-        SELECT
-            pc.prediction_id,
-            bm.market_share as baseline_ms
-        FROM prediction_context pc
-        JOIN business_metrics bm
-            ON bm.region = pc.region
-            AND bm.measurement_date = DATE_TRUNC('month', pc.prediction_timestamp)
-        WHERE bm.metric_type = 'market_share'
-    ),
-    outcome_share AS (
-        SELECT
-            pc.prediction_id,
-            bm.market_share as outcome_ms
-        FROM prediction_context pc
-        JOIN business_metrics bm
-            ON bm.region = pc.region
-            AND bm.measurement_date = DATE_TRUNC('month',
-                pc.prediction_timestamp + (p_observation_window_days || ' days')::INTERVAL)
-        WHERE bm.metric_type = 'market_share'
-    )
-    SELECT
-        pc.prediction_id,
-        pc.predicted_delta,
-        bs.baseline_ms,
-        os.outcome_ms,
-        CASE
-            WHEN bs.baseline_ms IS NOT NULL AND os.outcome_ms IS NOT NULL
-            THEN os.outcome_ms - bs.baseline_ms
-            ELSE NULL
-        END as actual_delta,
-        CASE
-            WHEN bs.baseline_ms IS NULL OR os.outcome_ms IS NULL THEN 'EXCLUDED'
-            ELSE 'POSITIVE'
-        END as outcome_label,
-        0.95 as truth_confidence
-    FROM prediction_context pc
-    LEFT JOIN baseline_share bs ON bs.prediction_id = pc.prediction_id
-    LEFT JOIN outcome_share os ON os.prediction_id = pc.prediction_id;
+    SELECT p.prediction_id
+    FROM ml_predictions p
+    WHERE p.prediction_type = 'market_share_impact'
+      AND p.outcome_label = 'PENDING'
+      AND p.prediction_timestamp < NOW() - (p_observation_window_days || ' days')::INTERVAL
+    LIMIT p_batch_size;
 
     SELECT COUNT(*) INTO v_evaluated FROM temp_ms_candidates;
-    SELECT COUNT(*) INTO v_labeled FROM temp_ms_candidates WHERE outcome_label = 'POSITIVE';
-    SELECT COUNT(*) INTO v_excluded FROM temp_ms_candidates WHERE outcome_label = 'EXCLUDED';
 
     UPDATE ml_predictions p
     SET
-        actual_outcome = tc.actual_delta,
         outcome_recorded_at = NOW(),
         truth_source = 'business_metrics',
-        truth_confidence = tc.truth_confidence,
-        outcome_label = tc.outcome_label,
-        exclusion_reason = CASE
-            WHEN tc.outcome_label = 'EXCLUDED' THEN 'Missing baseline or outcome market share data'
-            ELSE NULL
-        END
+        truth_confidence = 0.0,
+        outcome_label = 'EXCLUDED',
+        exclusion_reason = 'market_share truth assignment disabled post-issue-176: requires brand-scoping on ml_predictions'
     FROM temp_ms_candidates tc
     WHERE p.prediction_id = tc.prediction_id;
+
+    v_labeled := 0;
+    v_excluded := v_evaluated;
 
     DROP TABLE temp_ms_candidates;
 
