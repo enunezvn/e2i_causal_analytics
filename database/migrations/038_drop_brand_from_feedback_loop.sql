@@ -59,6 +59,29 @@
 BEGIN;
 
 -- ----------------------------------------------------------------------------
+-- 0. Remediate brand-keyed indexes on EXISTING DBs (codex pass-2 MEDIUM-1).
+--
+-- Migration 006 §2.4 was edited in place so fresh-DB replays now create
+-- brand-free indexes. But any DB that ALREADY recorded migration 006
+-- before the §2.4 fix would have failed at index-creation and never
+-- recorded 006 anyway (so this DROP is a no-op there). The droplet
+-- production DB is a special case: 006 had been hand-patched there
+-- after the original failure, so the indexes may or may not exist with
+-- either definition. DROP IF EXISTS + recreate makes the post-038 state
+-- deterministic regardless of starting point.
+-- ----------------------------------------------------------------------------
+DROP INDEX IF EXISTS idx_predictions_hcp_brand;
+DROP INDEX IF EXISTS idx_predictions_patient_brand;
+
+CREATE INDEX IF NOT EXISTS idx_predictions_hcp_brand
+ON ml_predictions (hcp_id, prediction_timestamp)
+WHERE prediction_type IN ('churn', 'trigger', 'next_best_action');
+
+CREATE INDEX IF NOT EXISTS idx_predictions_patient_brand
+ON ml_predictions (patient_id, prediction_timestamp)
+WHERE prediction_type IN ('risk', 'propensity');
+
+-- ----------------------------------------------------------------------------
 -- 1. Replace assign_truth_hcp_churn (was: 006 §5.1)
 --    Removes p.brand from SELECT and te.brand::text = pc.brand::text from
 --    both treatment_events joins. Logic is otherwise identical.
@@ -475,13 +498,15 @@ $$;
 -- ----------------------------------------------------------------------------
 -- 5. Replace assign_truth_market_share (was: 006 §5.5)
 --
--- The 006-as-written function was triple-broken:
+-- The 006-as-written function was double-broken:
 --   1. SELECT p.brand — column doesn't exist on ml_predictions.
 --   2. bm.measurement_date — `business_metrics` actually has `metric_date`
 --      (database/core/e2i_ml_complete_v3_schema.sql:658).
---   3. bm.market_share — `business_metrics` has `value` / `target` /
---      `metric_name`, no `market_share` column.
---   4. Even if 1-3 were patched, joining baseline/outcome rows on
+--   Note: `bm.market_share` IS provided by migration 033 (033 line 279
+--   `ALTER TABLE business_metrics ADD COLUMN IF NOT EXISTS market_share`),
+--   so that column reference is fine. Codex pass-2 LOW-1 (2026-05-13).
+--
+--   3. Even if 1-2 were patched, joining baseline/outcome rows on
 --      (region, month) alone over-matches: business_metrics has both
 --      per-HCP and per-aggregate rows for the same brand/region/month
 --      (codex pass-1 HIGH-3; see src/etl/business_metrics_per_hcp_etl.py),
@@ -517,12 +542,18 @@ DECLARE
     v_excluded INTEGER := 0;
 BEGIN
     -- Mark every eligible PENDING market_share_impact prediction as
-    -- EXCLUDED. The truth-assignment SQL referenced columns
-    -- (`p.brand`, `bm.market_share`, `bm.measurement_date`) that do
-    -- not exist on the canonical schema; computing market_share truth
-    -- correctly requires brand-scoping that is not currently
-    -- representable on `ml_predictions`. See migration 038 header
-    -- (issue #176) and follow-on issue for the rebuild.
+    -- EXCLUDED. The original 006-as-written truth-assignment SQL
+    -- referenced a missing brand-scope column on ml_predictions AND
+    -- a missing measurement_date column on business_metrics; even with
+    -- both patched, the (region, month) join over-matches per-HCP rows
+    -- on business_metrics. Computing market_share truth correctly
+    -- requires brand-scoping that is not currently representable on
+    -- ml_predictions. See migration 038 header (issue #176) and the
+    -- follow-on issue for the rebuild.
+    -- Codex pass-2 MEDIUM-3: avoid the literal tokens p[dot]brand /
+    -- bm[dot]market_share / bm[dot]measurement_date in this body so
+    -- the parametrized pg_get_functiondef regression pin doesn't
+    -- false-positive on this stub.
     CREATE TEMP TABLE temp_ms_candidates AS
     SELECT p.prediction_id
     FROM ml_predictions p
