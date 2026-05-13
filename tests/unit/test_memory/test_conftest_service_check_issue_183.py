@@ -125,7 +125,12 @@ def test_falkordb_client_fixture_skips_when_url_empty(monkeypatch):
     URL is empty even if the global availability flag somehow indicates True.
     This pins the defensive guard added for issue #183 — previously the
     fixture would fall through into ``aioredis.from_url("")`` which raises
-    a confusing ``ValueError`` deep in the redis client (codex pass-1 LOW-2)."""
+    a confusing ``ValueError`` deep in the redis client.
+
+    Pass-2 LOW-2 fix: exercise the actual shared helper
+    ``_enforce_falkordb_preconditions`` that the fixture invokes, instead
+    of mirroring guard clauses inline (which would silently pass if the
+    fixture were ever refactored to drop a guard)."""
     monkeypatch.delenv("FALKORDB_URL", raising=False)
     conftest = _reload_root_conftest()
 
@@ -133,16 +138,37 @@ def test_falkordb_client_fixture_skips_when_url_empty(monkeypatch):
     # not the first ``not SERVICES_AVAILABLE["falkordb"]`` short-circuit.
     monkeypatch.setitem(conftest.SERVICES_AVAILABLE, "falkordb", True)
 
-    # Replicate the fixture body inline (rather than invoking pytest_asyncio
-    # machinery in a unit test) to assert on the skip behavior directly.
     assert conftest.FALKORDB_URL == ""
 
+    # Invoke the actual shared helper that the fixture calls. If the
+    # fixture's empty-URL guard is removed, this test fails.
     with pytest.raises(pytest.skip.Exception, match="FalkorDB URL not configured"):
-        # Mirror the two guard clauses from ``falkordb_client``.
-        if not conftest.SERVICES_AVAILABLE["falkordb"]:
-            pytest.skip("FalkorDB not available")
-        if not conftest.FALKORDB_URL:
-            pytest.skip("FalkorDB URL not configured")
+        conftest._enforce_falkordb_preconditions()
+
+
+def test_falkordb_client_fixture_skips_when_unavailable(monkeypatch):
+    """First-guard coverage for ``_enforce_falkordb_preconditions``: skips
+    when the global availability flag is False, regardless of URL state."""
+    monkeypatch.setenv("FALKORDB_URL", "redis://localhost:6381")
+    conftest = _reload_root_conftest()
+
+    monkeypatch.setitem(conftest.SERVICES_AVAILABLE, "falkordb", False)
+
+    with pytest.raises(pytest.skip.Exception, match="FalkorDB not available"):
+        conftest._enforce_falkordb_preconditions()
+
+
+def test_falkordb_preconditions_proceed_when_both_ok(monkeypatch):
+    """When availability=True AND URL is non-empty, the helper must NOT
+    skip (returns ``None``)."""
+    monkeypatch.setenv("FALKORDB_URL", "redis://localhost:6381")
+    conftest = _reload_root_conftest()
+
+    monkeypatch.setitem(conftest.SERVICES_AVAILABLE, "falkordb", True)
+
+    # Should NOT raise.
+    result = conftest._enforce_falkordb_preconditions()
+    assert result is None
 
 
 def test_no_econnrefused_logged_on_unset_url(monkeypatch, capsys):
