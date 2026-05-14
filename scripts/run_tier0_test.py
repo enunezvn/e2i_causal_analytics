@@ -1494,11 +1494,30 @@ def _scenario_to_dataframe(
         # preserving signal; that is the right tool for a 50:50 cohort. See
         # backlog #21.7 + CLI guard at scripts/run_tier0_test.py:7168-7192.
         if imbalance_ratio == 0.50:
-            redirect = (
-                "Use regime='scenario_a_balanced' for a signal-preserving "
-                "50:50 cohort (scenario_a DGP, prevalence re-calibrated via "
-                "intercept solver — preserves feature ↔ target correlation)."
-            )
+            # Regime-aware redirect: only scenario_a has a balanced variant
+            # (scenario_a_balanced). scenario_b / scenario_c don't, so naive
+            # "use scenario_a_balanced" misleads users who wanted scenario_b/c's
+            # DGP. Codex pass-2 LOW.
+            if regime == "scenario_a_balanced":
+                redirect = (
+                    "regime='scenario_a_balanced' already produces a 50:50 "
+                    "cohort via intercept-solver prevalence calibration — "
+                    "drop imbalance_ratio=0.50 to use the balanced regime as-is."
+                )
+            elif regime == "scenario_a":
+                redirect = (
+                    "Use regime='scenario_a_balanced' for a signal-preserving "
+                    "50:50 cohort (scenario_a DGP, prevalence re-calibrated via "
+                    "intercept solver — preserves feature ↔ target correlation)."
+                )
+            else:  # scenario_b, scenario_c — no balanced variant
+                redirect = (
+                    f"regime={regime!r} has no balanced variant. Either "
+                    "(a) use regime='scenario_a_balanced' for a 50:50 cohort "
+                    "with scenario_a's DGP, or (b) use a legacy regime "
+                    "(default/adverse/clean) with imbalance_ratio for post-hoc "
+                    "relabel on top of a non-scenario data generator."
+                )
         else:
             redirect = (
                 "No scenario regime accepts an arbitrary prevalence ratio; "
@@ -7174,11 +7193,29 @@ def main():
     # Fail loud at the CLI boundary instead of silently dropping the flag.
     if args.imbalanced is not None and args.regime in _SCENARIO_REGIME_TO_NAME:
         if args.imbalanced == 0.50:
-            redirect = (
-                "Use --regime scenario_a_balanced for a signal-preserving "
-                "50:50 cohort (scenario_a DGP, prevalence re-calibrated via "
-                "intercept solver — preserves feature ↔ target correlation)."
-            )
+            # Regime-aware redirect (codex pass-2 LOW): only scenario_a has a
+            # balanced variant. scenario_b/c don't, so naive "use
+            # scenario_a_balanced" misleads users who wanted scenario_b/c's DGP.
+            if args.regime == "scenario_a_balanced":
+                redirect = (
+                    "--regime scenario_a_balanced already produces a 50:50 "
+                    "cohort via intercept-solver prevalence calibration — "
+                    "drop --imbalanced 0.50 to use the balanced regime as-is."
+                )
+            elif args.regime == "scenario_a":
+                redirect = (
+                    "Use --regime scenario_a_balanced for a signal-preserving "
+                    "50:50 cohort (scenario_a DGP, prevalence re-calibrated via "
+                    "intercept solver — preserves feature ↔ target correlation)."
+                )
+            else:  # scenario_b, scenario_c — no balanced variant
+                redirect = (
+                    f"--regime {args.regime} has no balanced variant. Either "
+                    "(a) use --regime scenario_a_balanced for a 50:50 cohort "
+                    "with scenario_a's DGP, or (b) use a legacy regime "
+                    "(default/adverse/clean) with --imbalanced 0.50 for "
+                    "post-hoc relabel on top of a non-scenario data generator."
+                )
         else:
             redirect = (
                 "No scenario regime accepts an arbitrary prevalence ratio; "
