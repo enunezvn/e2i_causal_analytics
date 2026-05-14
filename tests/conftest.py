@@ -417,11 +417,9 @@ def pytest_configure(config: pytest.Config) -> None:
     # ``pytest.exit`` fires before ``pytest_sessionfinish``, so the
     # terminal-summary diagnostic block is NOT guaranteed on this path
     # (codex pass-2 LOW); the message is self-contained.
-    if (
-        _ASYNCIO_POLLUTION_STATE["preexisting_pollution_detected"]
-        and os.getenv("E2I_ASSERT_NO_ASYNCIO_POLLUTION", "").lower()
-        in {"1", "true", "yes"}
-    ):
+    if _ASYNCIO_POLLUTION_STATE["preexisting_pollution_detected"] and os.getenv(
+        "E2I_ASSERT_NO_ASYNCIO_POLLUTION", ""
+    ).lower() in {"1", "true", "yes"}:
         pytest.exit(
             "[issue-218] FATAL: asyncio.run was already patched before "
             "tests/conftest.py loaded — the runtime probe cannot detect "
