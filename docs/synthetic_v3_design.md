@@ -140,15 +140,28 @@ git-ignored).
 ### 3.1 `borderline_genuine` — v5 Gate C2 routing sanity-check
 
 A class-conditional Gaussian tuned so the permutation-null z lands in the
-HBLP variance-relaxation band `[5σ, 7.5σ]` at `n_patients=20000`,
-`prevalence=0.024`, `seed=42` (calibration constants at
+HBLP variance-relaxation band `[5σ, 7.5σ]` and `|delta_AUC| ≈ 0.05` at
+`n_patients=20000`, `prevalence=0.024`, `seed=42` (calibration constants
+at
 [`:109-113`](../src/repositories/synthetic_rwd_realistic.py)). The
 injected feature is declared `knowable_at=index_date` in the synthetic
 manifest
 ([`synthetic_feature_manifest.py:48`](../src/data/manifests/synthetic_feature_manifest.py)),
-so the pipeline sees it as Layer 1 declared-safe. Contract: legacy 5σ →
-DROP, HBLP `5σ × 1.5 = 7.5σ` declared-safe → RETAIN, pinned by
-[`test_synthetic_borderline_genuine_hblp_contrast.py`](../tests/integration/test_synthetic_borderline_genuine_hblp_contrast.py).
+so the pipeline sees it as Layer 1 declared-safe.
+
+**Contract (post-issue-#194):** the Layer 5 joint check
+`severity ∈ {moderate, high} ⇔ (z > k) AND (|delta_AUC| > epsilon=0.10)`
+applies to BOTH arms. Since `|delta_AUC| ≈ 0.05 < 0.10` floor, BOTH the
+legacy 5σ arm AND the HBLP `5σ × 1.5 = 7.5σ` declared-safe arm RETAIN
+the feature — the joint check correctly classifies it as a benign weak
+signal, not a leak. HBLP's variance-inflation prior remains active and
+is verified separately by `test_v5_c2_hblp_relaxation_actually_fired`.
+Pre-issue-#194 the contract was "legacy DROPS, HBLP RETAINS" via the z
+threshold alone; the executable spec is now
+[`test_synthetic_borderline_genuine_hblp_contrast.py`](../tests/integration/test_synthetic_borderline_genuine_hblp_contrast.py)
+(see `test_v5_c2_legacy_drops_hblp_retains_borderline_genuine` line 148
+— the function name preserves the historical phrasing; the assertions
+at lines 187-194 + 276 pin the post-#194 behavior).
 
 **This is a v5 Gate C2 engineering CI sanity-check, NOT RWD positive
 evidence** — the generator can produce any AUC by construction; the test
