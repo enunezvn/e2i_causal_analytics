@@ -563,8 +563,11 @@ class EnsembleVoter:
                 and not math.isfinite(float(adv_z_score))
                 and float(adv_z_score) > 0
             )
+            # Narrow types so mypy sees the runtime guards.
             joint_check_corroborated = bool(
                 z_is_positive_inf
+                and adv_delta_auc is not None
+                and adv_delta_auc_floor is not None
                 and _is_finite_number(adv_delta_auc)
                 and _is_finite_number(adv_delta_auc_floor)
                 and abs(float(adv_delta_auc)) > float(adv_delta_auc_floor)
@@ -689,14 +692,19 @@ class EnsembleVoter:
                 and not (isinstance(z, float) and math.isnan(z))
                 and not math.isfinite(float(z))
                 and float(z) > 0
+                and adv_delta_auc_for_evidence is not None
+                and adv_delta_auc_floor_for_evidence is not None
                 and _is_finite_number(adv_delta_auc_for_evidence)
                 and _is_finite_number(adv_delta_auc_floor_for_evidence)
             ):
+                # Narrow non-None type for mypy after runtime guards.
+                _adv_delta = float(adv_delta_auc_for_evidence)
+                _adv_floor = float(adv_delta_auc_floor_for_evidence)
                 evidence.append(
                     f"Adversarial probe veto: severity=high, z_score={z} "
                     f"(degenerate null; null_std=0), |delta_AUC|="
-                    f"{abs(float(adv_delta_auc_for_evidence)):.4f} > floor "
-                    f"{float(adv_delta_auc_floor_for_evidence):.4f} "
+                    f"{abs(_adv_delta):.4f} > floor "
+                    f"{_adv_floor:.4f} "
                     f"(issue #194 joint-check corroboration)"
                 )
             else:

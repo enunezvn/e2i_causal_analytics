@@ -399,8 +399,12 @@ def hblp_classify(
     # BEFORE the z-only ladder so the rationale string can carry the
     # joint-check decision uniformly. ``delta_auc`` is optional; when
     # None or non-finite we treat the floor as inactive.
+    # ``delta_auc_value`` is a narrowed-non-None float used everywhere
+    # below; ``delta_auc_known`` is the predicate.
     delta_auc_known = delta_auc is not None and bool(np.isfinite(delta_auc))
-    delta_auc_below_floor = delta_auc_known and abs(float(delta_auc)) <= float(delta_auc_floor)
+    delta_auc_value: float = float(delta_auc) if delta_auc is not None else 0.0
+    delta_auc_floor_value: float = float(delta_auc_floor)
+    delta_auc_below_floor = delta_auc_known and abs(delta_auc_value) <= delta_auc_floor_value
 
     # Issue #194 codex pass-1 MEDIUM-1: a zero-variance permutation null
     # makes ``compute_adversarial_score`` return ``z=+inf`` when
@@ -421,7 +425,7 @@ def hblp_classify(
         and not np.isfinite(z_score)
         and z_score > 0
         and delta_auc_known
-        and abs(float(delta_auc)) > float(delta_auc_floor)
+        and abs(delta_auc_value) > delta_auc_floor_value
     )
 
     if z_is_positive_inf_strong_effect:
@@ -431,8 +435,8 @@ def hblp_classify(
         severity = "high"
         rationale = (
             f"z={z_score} (degenerate null; null_std=0 → infinite "
-            f"separation) AND |delta_AUC|={abs(float(delta_auc)):.4f} > floor "
-            f"{float(delta_auc_floor):.4f}; joint check confirms severity=high "
+            f"separation) AND |delta_AUC|={abs(delta_auc_value):.4f} > floor "
+            f"{delta_auc_floor_value:.4f}; joint check confirms severity=high "
             f"(issue #194 codex pass-1 MED-1)"
         )
     elif not _is_finite_z(z_score):
@@ -446,14 +450,14 @@ def hblp_classify(
             severity = "info"
             rationale = (
                 f"z={z_score:.2f}σ > HBLP-effective {high_eff:.2f}σ but "
-                f"|delta_AUC|={abs(float(delta_auc)):.4f} ≤ floor "
-                f"{float(delta_auc_floor):.4f}; joint check forces "
+                f"|delta_AUC|={abs(delta_auc_value):.4f} ≤ floor "
+                f"{delta_auc_floor_value:.4f}; joint check forces "
                 f"severity=info (issue #194)"
             )
         else:
             severity = "high"
             joint_note = (
-                f", |delta_AUC|={abs(float(delta_auc)):.4f} > floor {float(delta_auc_floor):.4f}"
+                f", |delta_AUC|={abs(delta_auc_value):.4f} > floor {delta_auc_floor_value:.4f}"
                 if delta_auc_known
                 else ""
             )
@@ -468,14 +472,14 @@ def hblp_classify(
             severity = "info"
             rationale = (
                 f"z={z_score:.2f}σ in HBLP moderate band but "
-                f"|delta_AUC|={abs(float(delta_auc)):.4f} ≤ floor "
-                f"{float(delta_auc_floor):.4f}; joint check forces "
+                f"|delta_AUC|={abs(delta_auc_value):.4f} ≤ floor "
+                f"{delta_auc_floor_value:.4f}; joint check forces "
                 f"severity=info (issue #194)"
             )
         else:
             severity = "moderate"
             joint_note = (
-                f", |delta_AUC|={abs(float(delta_auc)):.4f} > floor {float(delta_auc_floor):.4f}"
+                f", |delta_AUC|={abs(delta_auc_value):.4f} > floor {delta_auc_floor_value:.4f}"
                 if delta_auc_known
                 else ""
             )
@@ -508,8 +512,8 @@ def hblp_classify(
         # Issue #194 — joint-check audit fields. Always populated so
         # downstream readers (audit JSON sidecar, dashboards) can see
         # whether the joint check was active and what the floor was.
-        "delta_auc": (float(delta_auc) if delta_auc_known else None),
-        "delta_auc_floor": float(delta_auc_floor),
+        "delta_auc": (delta_auc_value if delta_auc_known else None),
+        "delta_auc_floor": delta_auc_floor_value,
         "delta_auc_below_floor": bool(delta_auc_below_floor),
     }
 
@@ -887,10 +891,10 @@ def _adversarial_input(
         # |delta_AUC|-floor decision so downstream audit readers can see
         # why a feature with z above HIGH_Z was nonetheless kept.
         joint_check_footnote = (
-            f" [joint check #194: |delta_AUC|={abs(float(delta_auc_arg)):.4f} "
+            f" [joint check #194: |delta_AUC|={abs(float(delta_auc_arg or 0.0)):.4f} "
             f"≤ floor {LAYER5_DELTA_AUC_FLOOR_DEFAULT:.4f}; "
             f"z above HBLP band but absolute effect below pharma-actionable threshold]"
-            if classification.get("delta_auc_below_floor")
+            if classification.get("delta_auc_below_floor") and delta_auc_arg is not None
             else ""
         )
         if severity == "high":
