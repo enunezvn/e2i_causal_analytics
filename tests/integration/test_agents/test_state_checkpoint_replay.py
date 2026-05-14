@@ -543,7 +543,6 @@ def test_audit_workflow_id_propagates_when_caller_provides_uuid() -> None:
     This test pins the propagation contract: with caller-provided UUID,
     a 3-node graph sees the SAME audit_workflow_id at every node.
     """
-    import asyncio
 
     from langgraph.graph import END, START, StateGraph
 
@@ -575,7 +574,12 @@ def test_audit_workflow_id_propagates_when_caller_provides_uuid() -> None:
 
     # Caller MUST provide audit_workflow_id (post-D1 contract).
     expected_id = uuid4()
-    asyncio.run(
+    # Issue #220: ``run_sync`` instead of bare ``asyncio.run`` — RAGAS
+    # pollution at ``ragas/async_utils.py:49`` can otherwise route this
+    # through ``nest_asyncio.run`` against a closed loop.
+    from tests.integration._asyncio_compat import run_sync
+
+    run_sync(
         graph.ainvoke({"experiment_id": "test_d1_propagation", "audit_workflow_id": expected_id})
     )
 
@@ -605,7 +609,6 @@ def test_model_trainer_state_repeated_mode_fold_invocation_propagates_through_la
     This is the smoke test that catches the regression if anyone
     re-introduces underscore-prefixed sentinel handling.
     """
-    import asyncio
 
     from langgraph.graph import END, START, StateGraph
 
@@ -640,7 +643,11 @@ def test_model_trainer_state_repeated_mode_fold_invocation_propagates_through_la
         "fold_idx": 3,
     }
 
-    asyncio.run(graph.ainvoke(initial_state))
+    # Issue #220: ``run_sync`` instead of bare ``asyncio.run`` — see
+    # earlier docstring for the RAGAS-pollution rationale.
+    from tests.integration._asyncio_compat import run_sync
+
+    run_sync(graph.ainvoke(initial_state))
 
     # The sentinel MUST reach node B as True. If LangGraph drops it
     # (the pre-D4 model_extra regression), this assertion fires loud.

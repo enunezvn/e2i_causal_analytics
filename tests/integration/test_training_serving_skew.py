@@ -374,13 +374,12 @@ def real_pruning_state() -> dict[str, Any]:
     its async API the same way `step_6_feature_analyzer` does — no mocking
     of the pruning logic itself.
     """
-    import asyncio
-
     from sklearn.linear_model import LogisticRegression
 
     from src.agents.ml_foundation.feature_analyzer.nodes.feature_selector import (
         select_features,
     )
+    from tests.integration._asyncio_compat import run_sync
 
     X_train, y_train = _build_pruning_friendly_training_frame()
 
@@ -410,7 +409,7 @@ def real_pruning_state() -> dict[str, Any]:
             "compute_importance": False,  # avoid extra RandomForest fit cost
         },
     }
-    pruning_output = asyncio.run(select_features(pruning_input_state))
+    pruning_output = run_sync(select_features(pruning_input_state))
 
     return {
         # Step 5 artifacts (what model_deployer consumes via step_7 kwargs)
