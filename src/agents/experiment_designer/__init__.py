@@ -57,7 +57,6 @@ from src.agents.experiment_designer.agent import (
 from src.agents.experiment_designer.graph import (
     create_experiment_designer_graph,
     create_initial_state,
-    experiment_designer_graph,
 )
 from src.agents.experiment_designer.mlflow_tracker import (
     DesignContext,
@@ -103,7 +102,6 @@ __all__ = [
     "ErrorDetails",
     # Graph
     "create_experiment_designer_graph",
-    "experiment_designer_graph",
     "create_initial_state",
     # MLflow tracking
     "ExperimentDesignerMLflowTracker",

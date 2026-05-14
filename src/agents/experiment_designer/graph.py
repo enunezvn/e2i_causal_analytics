@@ -51,17 +51,22 @@ def wrap_async_node(async_func: Callable) -> Callable:
     Returns:
         Sync function that runs the async function
     """
-    # nest_asyncio is optional - only needed for nested event loop scenarios
+    # Issue #215: nest_asyncio.apply() is a PROCESS-WIDE monkey-patch of
+    # asyncio.run; calling it at wrap_async_node construction time (i.e.
+    # when create_experiment_designer_graph() runs) pollutes sibling pytest
+    # workers and produces ``RuntimeError: Event loop is closed`` in
+    # unrelated tests that use plain ``asyncio.run(...)`` later on the same
+    # worker (e.g. tests/integration/test_adaptive_validity_check_ablation_layer3.py).
+    # Defer the apply() to inside sync_wrapper's running-loop branch where
+    # it is actually needed for ``loop.run_until_complete`` to nest. Import
+    # nest_asyncio at construction time (cheap, doesn't pollute) so the
+    # closure captures availability once.
     try:
-        import nest_asyncio
+        import nest_asyncio as _nest_asyncio
 
-        try:
-            nest_asyncio.apply()
-        except RuntimeError:
-            # Already applied or no event loop
-            pass
         _has_nest_asyncio = True
     except ImportError:
+        _nest_asyncio = None  # type: ignore[assignment]
         _has_nest_asyncio = False
 
     def sync_wrapper(state: ExperimentDesignState) -> Any:
@@ -72,7 +77,16 @@ def wrap_async_node(async_func: Callable) -> Callable:
 
         if loop and loop.is_running():
             if _has_nest_asyncio:
-                # Use nest_asyncio for nested event loops
+                # We are actually nested — invoke nest_asyncio.apply() ONLY
+                # here, not at wrap_async_node construction. apply() is
+                # idempotent across repeated calls; confining it to the
+                # actually-nested execution path means the import-time +
+                # graph-construction-time paths leave asyncio.run untouched.
+                try:
+                    _nest_asyncio.apply()  # type: ignore[union-attr]
+                except RuntimeError:
+                    # Already applied or no event loop
+                    pass
                 return loop.run_until_complete(async_func(state))
             else:
                 # Fallback: create new event loop (may cause issues in nested scenarios)
@@ -267,8 +281,14 @@ def create_experiment_designer_graph(
     return workflow.compile()
 
 
-# Export compiled graph with default settings
-experiment_designer_graph = create_experiment_designer_graph()
+# Issue #215: the eager module-level singleton
+# ``experiment_designer_graph = create_experiment_designer_graph()`` has been
+# REMOVED. Zero internal callers reference it (verified via repo-wide grep
+# 2026-05-14). External callers, if any, should call
+# ``create_experiment_designer_graph()`` directly. The eager evaluation
+# triggered wrap_async_node's nest_asyncio.apply() at module import (see
+# wrap_async_node docstring above for the asyncio pollution chain that
+# produced the xdist flake described in issue #215).
 
 
 def create_initial_state(
