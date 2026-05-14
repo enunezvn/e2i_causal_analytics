@@ -59,6 +59,18 @@ def run_sync(coro: Awaitable[T]) -> T:
           test bodies, fixtures, and module-level helpers.
         - Inside ``async def`` code, use ``await coro`` directly — this
           helper is only for the sync-to-async boundary.
+        - **Cleanup semantics differ from ``asyncio.run``** (codex pass-1
+          LOW-1, documented limitation): stdlib ``asyncio.run`` cancels
+          residual tasks and finalises async generators via
+          ``loop.shutdown_default_executor()`` before closing. This
+          helper does NOT — it closes the loop immediately. None of the
+          current 15 callsites spawn background tasks beyond their
+          awaited coroutine, but a future coroutine that creates
+          fire-and-forget tasks would leak ``unclosed task`` warnings.
+          If that becomes a real problem, extend this helper rather
+          than reintroducing bare ``asyncio.run`` — the lint at
+          ``tests/integration/test_no_bare_asyncio_run_in_integration_tests.py``
+          will reject the latter.
     """
 
     loop = asyncio.new_event_loop()
