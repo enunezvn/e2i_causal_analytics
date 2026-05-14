@@ -187,16 +187,20 @@ reusable-workflow split. The N3 guard is now two workflow files:
 * `.github/workflows/methodology_signoff_guard.yml` — the THIN CALLER.
   Identifies touched artifacts on the PR diff, then delegates to the
   reusable workflow via
-  `uses: ./.github/workflows/methodology-signoff-validator.yml`. Passes
-  `validator_ref: 'main'` to pin the validator-script source to the
-  protected branch.
+  `uses: ./.github/workflows/methodology-signoff-validator.yml`. The
+  caller passes `touched_files` and `strict_gh: '1'`; it does NOT
+  pass the validator ref (codex pass-2 LOW-1: ref is hardcoded inside
+  the reusable workflow to eliminate the caller-controlled-ref
+  footgun).
 
 * `.github/workflows/methodology-signoff-validator.yml` — the REUSABLE
-  WORKFLOW (`on: workflow_call:`). Performs TWO `actions/checkout@v4`
-  invocations:
+  WORKFLOW (`on: workflow_call:`). Hardcodes
+  `env.VALIDATOR_PROTECTED_REF: 'main'` at workflow level. Performs
+  TWO `actions/checkout@v4` invocations:
   1. PR head into `pr-checkout/` (the artifacts being validated).
-  2. The protected ref (default `main`, sparse-checkout of
-     `scripts/check_methodology_signoff.py` only) into `validator-source/`.
+  2. The protected ref (`env.VALIDATOR_PROTECTED_REF` = 'main',
+     sparse-checkout of `scripts/check_methodology_signoff.py` only)
+     into `validator-source/`.
 
   Runs `python3 ${{ github.workspace }}/validator-source/scripts/check_methodology_signoff.py`
   against the PR-checkout artifacts. The validator code is sourced from
