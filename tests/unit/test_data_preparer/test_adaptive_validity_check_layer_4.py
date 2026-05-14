@@ -427,6 +427,70 @@ def test_adaptive_validity_check_emits_decided_by_llm_on_csu_feature(
     )
 
 
+def test_legacy_verdict_carries_llm_audit_fields_consistently(reset_dspy_lm) -> None:
+    """Every emitted legacy verdict dict has ``llm_role`` + ``llm_remediation``
+    keys (None when no LLM was supplied; populated when one was).
+
+    Codex pass-3 LOW (issue #193): shape consistency across the
+    voter-routed path AND every bypass path
+    (``_legacy_adversarial_alone_verdict``, ``_legacy_info_verdict``,
+    ``_legacy_short_circuit_verdict``). Without this pin, downstream
+    audit consumers (``write_adaptive_verdicts_sidecar``) would
+    KeyError on the bypass-emitted verdicts when querying
+    ``llm_role``.
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _legacy_adversarial_alone_verdict,
+        _legacy_info_verdict,
+        _legacy_short_circuit_verdict,
+    )
+
+    adv = {
+        "z_score": 4.0,
+        "actual_auc": 0.6,
+        "null_mean": 0.5,
+        "null_std": 0.025,
+        "p_value": 0.001,
+        "n_permutations": 200,
+        "severity": "moderate",
+        "remediation": "ambiguous",
+        "evidence": "moderate signal",
+        "_hblp_classified": True,
+    }
+    bypass_alone = _legacy_adversarial_alone_verdict("feat", adv)
+    bypass_info = _legacy_info_verdict("feat", adversarial_input=adv, evidence="x")
+    bypass_short = _legacy_short_circuit_verdict("feat", evidence="x")
+    for d in (bypass_alone, bypass_info, bypass_short):
+        assert "llm_role" in d
+        assert "llm_remediation" in d
+        assert d["llm_role"] is None
+        assert d["llm_remediation"] is None
+
+
+def test_ensure_dspy_lm_configured_typoed_provider_fails_closed(reset_dspy_lm, monkeypatch) -> None:
+    """Typoed provider prefix (e.g. 'antropic/...') with only OPENAI_API_KEY
+    must return False, NOT fall back to permissive any-key.
+
+    Codex pass-3 MEDIUM (issue #193): the pass-2 fix closed the
+    ANTHROPIC_API_KEY/OPENAI_API_KEY mismatch for KNOWN providers, but
+    a typoed-but-non-empty provider prefix still fell through the
+    unknown-provider permissive any-key fallback. An env with only
+    OPENAI_API_KEY + model='antropic/claude-sonnet-4-20250514' (missing
+    'h') would green-light configuration of an Anthropic LM, then
+    classify_feature would silently fail every call. Fail closed for
+    slash-shaped unknown prefixes.
+    """
+    from src.data.causal_role_classifier_loader import ensure_dspy_lm_configured
+
+    dspy.settings.configure(lm=None)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-only-not-real")
+    # Typoed provider — looks like a provider/path but the prefix is
+    # not in _PROVIDER_TO_ENV_VARS.
+    assert ensure_dspy_lm_configured(model="antropic/claude-sonnet-4-20250514") is False
+    assert getattr(dspy.settings, "lm", None) is None
+
+
 def test_ensure_dspy_lm_configured_provider_mismatch_skips(reset_dspy_lm, monkeypatch) -> None:
     """OPENAI_API_KEY set but model is anthropic/* → skip (return False).
 
@@ -575,6 +639,19 @@ def test_ensure_dspy_lm_configured_high_declared_safe_records_llm_disagreement(
     assert any("llm=ancestor" in d for d in disagreements), (
         f"Expected disagreements to include 'llm=ancestor' for high+declared_safe "
         f"feature; got {disagreements}. Full verdict: {age_v}"
+    )
+    # Codex pass-3 LOW (issue #193): the LLM's role/remediation MUST be
+    # surfaced in the legacy dict even when adversarial wins on severity.
+    # Without this, the audit-cost of a Layer 4 LLM call is observable
+    # only through the free-text disagreements field, not as a
+    # structured query-friendly column.
+    assert age_v.get("llm_role") == "ancestor", (
+        f"Expected llm_role='ancestor' surfaced when adversarial wins; "
+        f"got {age_v.get('llm_role')!r}. Full verdict: {age_v}"
+    )
+    assert age_v.get("llm_remediation") == "keep_with_caveat", (
+        f"Expected llm_remediation='keep_with_caveat' surfaced when "
+        f"adversarial wins; got {age_v.get('llm_remediation')!r}."
     )
 
 

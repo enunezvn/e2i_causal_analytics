@@ -768,6 +768,21 @@ def _ensemble_to_legacy_dict(
     # carries a single string. Join with "; " so the join is greppable.
     evidence_str = "; ".join(verdict.evidence) if verdict.evidence else ""
 
+    # Codex pass-3 LOW (issue #193): when an LLM verdict was supplied
+    # but the voter's deterministic veto won (Layer 1 high or
+    # Adversarial high), the legacy dict previously dropped the LLM's
+    # role / remediation. The disagreement was recorded in
+    # ``disagreements`` (e.g. ``"adversarial=high but llm=ancestor"``),
+    # but operators auditing why Layer 4 cost was spent on this feature
+    # had no structured field to consume. Surface the LLM's verdict
+    # fields explicitly so the audit cost is observable even when
+    # adversarial / Layer 1 wins on severity.
+    llm_in = verdict.llm_input
+    llm_role = getattr(llm_in, "causal_role", None) if llm_in is not None else None
+    llm_remediation = (
+        getattr(llm_in, "recommended_remediation", None) if llm_in is not None else None
+    )
+
     return {
         "feature": verdict.feature_name,
         "layer": layer_str,
@@ -791,6 +806,12 @@ def _ensemble_to_legacy_dict(
         "decided_by": verdict.decided_by,
         "disagreements": list(verdict.disagreements),
         "kg_signal": verdict.kg_signal,
+        # Phase 2.9 Stage 3 audit (codex pass-3 LOW, issue #193): LLM
+        # role/remediation surfaced even when the deterministic veto
+        # path wins on severity. ``None`` when no LLM verdict was
+        # supplied for this feature.
+        "llm_role": llm_role,
+        "llm_remediation": llm_remediation,
     }
 
 
@@ -831,6 +852,12 @@ def _legacy_adversarial_alone_verdict(
         "decided_by": "adversarial",
         "disagreements": [],
         "kg_signal": "no_signal",
+        # Codex pass-3 LOW (issue #193): schema-shape consistency with
+        # _ensemble_to_legacy_dict. The bypass path never carries an
+        # LLM verdict (it's adversarial-alone), so both audit fields
+        # are ``None``.
+        "llm_role": None,
+        "llm_remediation": None,
     }
 
 
@@ -869,6 +896,10 @@ def _legacy_info_verdict(
         "decided_by": "adversarial",
         "disagreements": [],
         "kg_signal": "no_signal",
+        # Codex pass-3 LOW (issue #193): schema-shape consistency with
+        # _ensemble_to_legacy_dict.
+        "llm_role": None,
+        "llm_remediation": None,
     }
 
 
@@ -897,6 +928,10 @@ def _legacy_short_circuit_verdict(feature: str, *, evidence: str) -> dict[str, A
         "decided_by": "adversarial",
         "disagreements": [],
         "kg_signal": "no_signal",
+        # Codex pass-3 LOW (issue #193): schema-shape consistency with
+        # _ensemble_to_legacy_dict.
+        "llm_role": None,
+        "llm_remediation": None,
     }
 
 
