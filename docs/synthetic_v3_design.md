@@ -3,7 +3,9 @@
 Canonical design reference for the `rwd_realistic` synthetic data regime that
 ships in [`src/repositories/synthetic_rwd_realistic.py`](../src/repositories/synthetic_rwd_realistic.py).
 
-Closes Phase S.3 of `.claude/plans/adaptive_temporal_validity_redesign.md` (line 266).
+Closes Phase S.3 of `.claude/plans/adaptive_temporal_validity_redesign.md`
+(line 266; host-side plan file — `.claude/` is git-ignored so the path is
+relative to the project root, not the repo working tree).
 
 > **Premise corrections (issue #200, verified 2026-05-14 against source):**
 > the issue body says "5 leakage variants"; the regime's `LeakagePattern`
@@ -62,8 +64,9 @@ All defaults are pinned in `RwdRealisticConfig`
 Default `prevalence=0.024` matches the CSU 2.4 % claims-data anchor; it
 also approximates AD 4.1 % and severe-asthma 3.8 % (regime source
 [line 20](../src/repositories/synthetic_rwd_realistic.py)). Realised
-prevalence stays within ±1 pp of target — pinned by
-[`test_prevalence_matches_target` (test_synthetic_rwd_realistic.py:41-54)](../tests/unit/test_data/test_synthetic_rwd_realistic.py).
+prevalence stays within **1.5 pp** of target (assertion `abs(realized -
+target) < 0.015`) — pinned by
+[`test_prevalence_matches_target` (test_synthetic_rwd_realistic.py:50-63)](../tests/unit/test_data/test_synthetic_rwd_realistic.py).
 
 ### 2.2 Panel fragmentation
 
@@ -120,7 +123,9 @@ The regime injects exactly one leakage column per call. The
 [`synthetic_rwd_realistic.py:70-78`](../src/repositories/synthetic_rwd_realistic.py)
 is canonical: 4 leak branches + 1 CONTROL + 1 declared-safe sanity-check
 + 1 no-op = 7 values. Each is designed to exercise a specific layer of
-the 4-layer adaptive defense (`.claude/plans/adaptive_temporal_validity_redesign.md`).
+the 4-layer adaptive defense (host-side plan
+`.claude/plans/adaptive_temporal_validity_redesign.md`; `.claude/` is
+git-ignored).
 
 | Variant                     | Type / `_LEAK` vs `_CONTROL`            | Expected defense layer | Mechanic                                                                 | Source                                                                          |
 |-----------------------------|-----------------------------------------|------------------------|---------------------------------------------------------------------------|---------------------------------------------------------------------------------|
@@ -176,9 +181,10 @@ deployable-vs-noise buffer; pre-PR-#153 the regime had no AUC knob.
 
 The unit spec is
 [`test_synthetic_rwd_realistic.py`](../tests/unit/test_data/test_synthetic_rwd_realistic.py)
-(14 tests, 334 LOC): pins cohort shape, prevalence ±1 pp, panel
-fragmentation rate, and per-variant column + adversarial-leakage
-z-score (file lines 92-334). End-to-end pipeline contracts live in
+(14 tests, 343 LOC after pass-1 MED-3 header pointer): pins cohort
+shape, prevalence (1.5 pp tolerance), panel fragmentation rate, and
+per-variant column + adversarial-leakage z-score (leakage tests at
+file lines 101-343). End-to-end pipeline contracts live in
 [`test_layer_5_pipeline_integration.py`](../tests/integration/test_layer_5_pipeline_integration.py)
 (Layer 5 catches `post_index_aggregation`) and
 [`test_synthetic_borderline_genuine_hblp_contrast.py`](../tests/integration/test_synthetic_borderline_genuine_hblp_contrast.py)
