@@ -9,8 +9,12 @@ which is what unlocks the HBLP variance-relaxation contrast at the
 This is a v5 Gate C2 ENGINEERING CI SANITY-CHECK — NOT RWD positive
 evidence (v5 plan §2 C2 + codex pass-3 MEDIUM-7). The synthetic generator
 can produce any feature AUC by construction; what the integration test
-pins is that the pipeline routing (legacy 5σ DROP vs HBLP 7.5σ RETAIN)
-fires correctly at the variance-relaxation band boundary.
+pins is the post-issue-#194 "BOTH arms RETAIN" routing contract — the
+legacy arm retains via the Layer 5 joint `|delta_AUC| > 0.10` floor
+(borderline_genuine is tuned to `|delta_AUC| ≈ 0.05`); the HBLP arm
+retains via the 1.5× declared-safe prior threshold (`5σ × 1.5 = 7.5σ`).
+Pre-issue-#194 the contract was "legacy DROPS, HBLP RETAINS" via z
+alone. See ``docs/synthetic_v3_design.md`` §3.1.
 
 Disease-agnostic-by-construction note: the synthetic regime is *not* a
 disease cohort. The manifest only registers the columns that the
