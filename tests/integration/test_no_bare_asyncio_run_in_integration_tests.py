@@ -87,6 +87,14 @@ class _BareAsyncioRunScanner(ast.NodeVisitor):
 
     Lambdas push a synchronous scope (codex pass-1 LOW-2) so a returned
     lambda inside an async function isn't silently treated as async.
+
+    **Codex pass-2 LOW (documented limitation)**: binding tracking is
+    *flat* — we do not model lexical scope. A nested function that
+    rebinds ``run`` (or assigns ``run = <something>`` for an unrelated
+    purpose) taints the outer scope. No current ``tests/integration/``
+    file exhibits this; the runtime probe in ``tests/conftest.py`` is
+    the authoritative fallback when binding flow becomes ambiguous.
+    Promote to AST-scope analysis only if a real case appears.
     """
 
     def __init__(self) -> None:
