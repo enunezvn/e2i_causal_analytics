@@ -196,17 +196,21 @@ class SupabaseDataConnector(BaseDataConnector):
             # Query ml_predictions table.
             #
             # Issue #188: exclude gated audit rows from drift monitoring.
-            # Gated rows (prediction_class='gated_honest_failure', written
-            # by src/tasks/risk_score_prediction_tasks.py when a model
-            # failed its honest-failure gate) carry raw un-gated scores
-            # that MUST NOT feed drift detection; including them would
-            # silently double-count the failure as either input drift
-            # or unstable predictions.
+            # Gated rows (prediction_class==GATED_HONEST_FAILURE_SENTINEL,
+            # written by src/tasks/risk_score_prediction_tasks.py when a
+            # model failed its honest-failure gate) carry raw un-gated
+            # scores that MUST NOT feed drift detection; including them
+            # would silently double-count the failure as either input
+            # drift or unstable predictions. Codex pass-4 LOW: import
+            # the centralized sentinel rather than hardcoding the literal
+            # twice so a future rename is caught by the inter-module pin.
+            from src.repositories.prediction import GATED_HONEST_FAILURE_SENTINEL
+
             query = (
                 self._client.table("ml_predictions")
                 .select("confidence_score, prediction_value, created_at, entity_id")
                 .eq("model_version", model_id)
-                .neq("prediction_class", "gated_honest_failure")
+                .neq("prediction_class", GATED_HONEST_FAILURE_SENTINEL)
                 .gte("created_at", time_window.start.isoformat())
                 .lte("created_at", time_window.end.isoformat())
             )
@@ -284,12 +288,15 @@ class SupabaseDataConnector(BaseDataConnector):
         try:
             # Query ml_predictions with ground truth outcomes.
             # Issue #188: exclude gated audit rows (see comment in
-            # query_predictions above for full rationale).
+            # query_predictions above for full rationale). Codex pass-4
+            # LOW: use the centralized sentinel constant.
+            from src.repositories.prediction import GATED_HONEST_FAILURE_SENTINEL
+
             query = (
                 self._client.table("ml_predictions")
                 .select("confidence_score, prediction_value, created_at, entity_id, actual_outcome")
                 .eq("model_version", model_id)
-                .neq("prediction_class", "gated_honest_failure")
+                .neq("prediction_class", GATED_HONEST_FAILURE_SENTINEL)
                 .gte("created_at", time_window.start.isoformat())
                 .lte("created_at", time_window.end.isoformat())
                 .not_.is_("actual_outcome", "null")  # Only include labeled data

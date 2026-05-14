@@ -126,6 +126,10 @@ class TestCliPrevalenceAwareFloor:
                 # No --min-auc-pr -> prevalence-aware default.
             ]
         )
-        # 5 * 0.30 = 1.50; even a perfect classifier scores < 1.50 (AUC-PR
-        # is bounded by 1.0). So honest_failures IS populated.
+        # Synthetic-smoke is ~30% prevalence; 5 * 0.30 = 1.50, clamped at
+        # the AUC-PR ceiling 1.0 (codex pass-2 MEDIUM-3 upper clamp). The
+        # synthetic cohort's val_auc_pr is in the 0.7-0.95 band, well
+        # below the 1.0 floor, so honest_failures IS populated and the
+        # CLI exits non-zero. (For the legacy 0.65 bar pass, see
+        # ``test_cli_exits_zero_on_signal_cohort`` above.)
         assert rc == 1

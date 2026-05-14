@@ -339,12 +339,14 @@ class RiskScoreTrainer:
 
     When ``min_auc_pr`` is ``None`` (the default), the floor is computed
     at fit time from the validation-split prevalence as
-    ``max(MIN_AUC_PR_K * prevalence, MIN_AUC_PR_FLOOR_FLOOR)``. The
-    random-classifier baseline AUC-PR equals the positive class
+    ``min(max(MIN_AUC_PR_K * prevalence, MIN_AUC_PR_FLOOR_FLOOR), 1.0)``.
+    The random-classifier baseline AUC-PR equals the positive class
     prevalence (Saito & Rehmsmeier 2015 PLOS ONE 10:e0118432); we
     require a 5x lift over baseline (Martin et al. 2025 Pediatr Crit
-    Care Med 26(6):e855 gain-ratio framing) clamped to a minimum of
-    0.10 to enforce a clinically-actionable top-decile PPV.
+    Care Med 26(6):e855 gain-ratio framing) clamped between 0.10 (to
+    enforce a clinically-actionable top-decile PPV on rare-but-
+    tractable cohorts) and 1.0 (the AUC-PR ceiling — so the gate
+    remains achievable in principle for any cohort).
 
     Callers can pass an explicit ``min_auc_pr`` (e.g. 0.65) to bypass
     the prevalence-aware mechanism — this is used by the synthetic-
