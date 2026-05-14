@@ -63,10 +63,22 @@ load_dotenv(override=True)
 # ``RuntimeError: Event loop is closed``.
 #
 # PR #217 closed one polluter (``experiment_designer.graph``'s eager singleton)
-# but left the broader bug class open: any of the 9 gated callsites in ``src/``
-# or the 2 known third-party callers (``dspy/utils/syncify.py:20`` and
-# ``mlflow/genai/utils/trace_utils.py:395``) can pollute if invoked from
-# inside a running loop.
+# but left the broader bug class open: any of the 10 gated callsites in ``src/``
+# or the 3 known third-party callers can pollute if invoked from inside a
+# running loop:
+#   1. ``dspy/utils/syncify.py:20`` — guarded by ``loop.is_running()`` check
+#   2. ``mlflow/genai/utils/trace_utils.py:395`` — guarded by running-loop check
+#   3. ``ragas/async_utils.py:49`` — **UNCONDITIONAL** ``apply_nest_asyncio()``
+#      helper (called at import-time inside ragas evaluation code; identified by
+#      this probe in PR #219 CI run 25879019929 — invoked via
+#      ``test_gepa_integration.py::TestRAGASGEPAOpikIntegration``)
+#
+# The RAGAS polluter is the actual root cause of issue #218 — the test that
+# was failing in #215 (Layer-3 ablation) ran on the same xdist worker as the
+# RAGAS evaluation test. PR #217's victim-site fix (`loop.run_until_complete`
+# instead of `asyncio.run`) keeps the suite green today; the lint + probe
+# here prevent a regression if a future victim site reintroduces bare
+# ``asyncio.run`` while RAGAS pollution is in effect.
 #
 # This probe instruments ``nest_asyncio.apply`` at session start so we can:
 #   1. Record the FIRST ``apply()`` call's full stack trace (the polluter).
