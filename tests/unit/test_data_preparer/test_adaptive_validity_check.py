@@ -592,6 +592,11 @@ def test_verdict_schema_is_uniform_across_layer_1_and_layer_3():
         "ablation_null_mean",
         "ablation_null_std",
         "ablation_severity",
+        # Issue #212 — z-only severity before joint-check clamp.
+        # Audit field; lets downstream consumers distinguish "Layer 4
+        # fired because pre-joint-check was moderate, joint-clamped to
+        # info" from inconsistent layer routing.
+        "severity_pre_joint_check",
     }
     for v in result["adaptive_verdicts"]:
         assert set(v.keys()) == canonical_keys, (
@@ -953,10 +958,11 @@ def test_phase29_compose_legacy_verdict_all_none_signals_returns_abstain():
     assert verdict["layer"] == "abstain"
     assert verdict["severity"] == "abstain"
     assert verdict["remediation"] == "review"
-    # Schema invariant: all 26 canonical fields present
+    # Schema invariant: all 27 canonical fields present
     # (16 Phase 2.9 Stage 1 + 2 Phase 2.9 Stage 3 LLM audit fields from issue #193
     # + 3 issue #194 joint-check audit fields from codex pass-1 LOW-1
-    # + 5 issue #196 Phase 3.3 ablation audit fields).
+    # + 5 issue #196 Phase 3.3 ablation audit fields
+    # + 1 issue #212 severity_pre_joint_check audit field).
     expected_keys = {
         "feature",
         "layer",
@@ -987,6 +993,8 @@ def test_phase29_compose_legacy_verdict_all_none_signals_returns_abstain():
         "ablation_null_mean",
         "ablation_null_std",
         "ablation_severity",
+        # Issue #212 — pre-joint-check severity audit field:
+        "severity_pre_joint_check",
     }
     assert set(verdict.keys()) == expected_keys
 
@@ -2024,9 +2032,10 @@ async def test_phase29_stage2_e2e_main_loop_with_populated_cache(tmp_path, monke
     # numeric "age" column.
     assert "adaptive_verdicts" in result
     assert len(result["adaptive_verdicts"]) >= 1
-    # Verdict carries the canonical 26-field shape (regression guard).
+    # Verdict carries the canonical 27-field shape (regression guard).
     # Issue #193 added llm_role + llm_remediation. Issue #194 added
     # 3 joint-check audit fields. Issue #196 added 5 ablation audit fields.
+    # Issue #212 added severity_pre_joint_check.
     verdict = next(v for v in result["adaptive_verdicts"] if v["feature"] == "age")
     expected_keys = {
         "feature",
@@ -2058,6 +2067,8 @@ async def test_phase29_stage2_e2e_main_loop_with_populated_cache(tmp_path, monke
         "ablation_null_mean",
         "ablation_null_std",
         "ablation_severity",
+        # Issue #212 — pre-joint-check severity audit field:
+        "severity_pre_joint_check",
     }
     assert set(verdict.keys()) == expected_keys
 
