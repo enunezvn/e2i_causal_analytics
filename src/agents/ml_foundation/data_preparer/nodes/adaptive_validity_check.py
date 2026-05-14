@@ -1894,19 +1894,30 @@ def _short_circuit_verdict(feature: str, *, evidence: str) -> dict[str, Any]:
 # would miss exactly the interaction-pair leak class ablation is
 # supposed to catch.
 #
-# Escape: when ``|delta_AUC| > LAYER5_ABLATION_STRONG_EFFECT_DEFAULT``
-# (3x the issue #194 floor), classify severity=high regardless of z.
+# Escape: when ``delta_AUC > LAYER5_ABLATION_STRONG_EFFECT_DEFAULT`` AND
+# ``z`` is non-NaN, classify severity=high regardless of z magnitude.
 # This is the absolute-effect analog of the ``z=+inf`` escape in
 # ``hblp_classify`` (issue #194 codex pass-1 MED-1) — when the effect
 # magnitude is large enough that no reasonable null could produce it,
 # the z-test's failure is the test's bug, not the signal's.
 #
+# Codex pass-1 MED-1: REQUIRES ``z`` non-NaN. A NaN z indicates the
+# permutation null could not be built; with no statistical anchor the
+# ablation sub-test has no contract and degrades to permutation-only.
+#
+# Codex pass-1 MED-2: SIGNED escape. ``delta_auc = full_auc -
+# ablated_auc`` > 0 means the feature ADDS to joint AUC (leak-carrier).
+# A NEGATIVE delta means removing the feature IMPROVES the joint model,
+# typically model-instability noise from a multicollinear nuisance
+# variable — NOT a leak. Using ``abs(delta_AUC)`` would false-flag those.
+#
 # Calibration: at this threshold the column-shuffle null can NEVER
-# produce a sustained |delta_AUC| > 0.30 because the model's full_auc
-# is bounded in [0.5, 1.0] and the null mean is the COLUMN-SHUFFLED
-# AUC, which is at MOST full_auc itself. A |delta_AUC| > 0.30 implies
-# the ablated model lost 30% of its AUC — physically large for a
-# pharma cohort. The MODERATE band lowers the bar to floor=0.10.
+# produce a sustained delta_AUC > 0.30 because the model's full_auc
+# is bounded in [0.5, 1.0] and the ablated_auc cannot drop below 0.5
+# in expectation (a chance classifier is always available). So
+# delta_AUC > 0.30 implies full_auc > 0.80 AND ablated_auc < 0.50 —
+# a structurally dominant feature dependency, the dominance signature
+# of a real leak. The MODERATE band lowers the bar to floor=0.10.
 LAYER5_ABLATION_STRONG_EFFECT_DEFAULT: float = 0.30
 
 
@@ -1919,15 +1930,23 @@ def _classify_ablation_severity(
 ) -> str:
     """Map an ablation per-feature row to a severity tag.
 
-    Two-tier rule (issue #196, refined to address column-shuffle null
-    weakness on interaction-pair leaks):
+    Two-tier rule (issue #196, refined per codex pass-1 to address
+    column-shuffle null weakness on interaction-pair leaks):
 
-      A. Strong-effect escape (MED-1 mirror, |delta_AUC| primary signal):
-         when ``|delta_AUC| > strong_effect_threshold`` (default 0.30),
-         classify severity=high regardless of z. The column-shuffle null
-         inside ``compute_feature_ablation`` produces poor z-scores on
+      0. Degradation contract: when ``delta_auc`` OR ``z_score`` is
+         NaN / None / non-numeric, return ``"info"``. The ablation
+         sub-test has no statistical anchor; the verdict falls back
+         to permutation-only.
+
+      A. Strong-effect escape (positive delta primary signal):
+         when ``delta_AUC > strong_effect_threshold`` (default 0.30)
+         AND ``z`` is non-NaN, classify severity=high regardless of
+         z magnitude. The column-shuffle null inside
+         ``compute_feature_ablation`` produces poor z-scores on
          interaction-pair leaks (the null delta ≈ actual delta), so
          |delta_AUC| is the load-bearing signal for that class.
+         SIGNED escape (codex MED-2): NEGATIVE delta = "model improves
+         when feature dropped" = nuisance/multicollinearity, NOT a leak.
 
       B. Joint-check ladder (issue #194 framing, AND-rule):
          when ``|delta_AUC| > floor`` AND z passes the band:
@@ -1936,7 +1955,7 @@ def _classify_ablation_severity(
          When ``z=+inf`` (degenerate null) AND ``|delta_AUC| > floor``,
          severity=high (mirror of hblp_classify's MED-1 escape).
 
-      C. Default: severity=info (below-floor delta, NaN signals, etc.).
+      C. Default: severity=info (below-floor delta, etc.).
 
     Returns one of ``"high"``, ``"moderate"``, ``"info"``. The
     MODERATE/HIGH bands match the permutation Layer-3 ladder so the
@@ -1954,29 +1973,51 @@ def _classify_ablation_severity(
     if np.isnan(delta_f):
         return "info"
 
+    # Codex pass-1 MED-1: require z is NOT NaN even for the strong-effect
+    # escape. A NaN z indicates the permutation null could not be built
+    # (e.g., every permuted retrain failed → null_std=NaN per
+    # ``compute_feature_ablation`` lines 220/227 in
+    # ``src/data/adversarial_leakage.py``). When the null itself is
+    # undefined the ablation sub-test has no statistical anchor; per the
+    # documented degradation contract ("NaN signals fall back to
+    # permutation-only"), we must classify info. The +inf z escape below
+    # handles the "null collapsed to zero variance" case separately —
+    # that is a DEFINED null with degenerate variance, not an undefined
+    # null. NaN means undefined.
+    z_is_nan = (
+        z is None
+        or not isinstance(z, (int, float))
+        or isinstance(z, bool)
+        or (isinstance(z, float) and np.isnan(z))
+    )
+    if z_is_nan:
+        return "info"
+
     # Strong-effect escape (case A). The z-score is irrelevant here —
-    # |delta_AUC| > 0.30 means dropping the feature destroys 30% of the
-    # joint model's AUC, which is structurally impossible for legitimate
-    # weak predictors at any cohort size.
-    if abs(delta_f) > float(strong_effect_threshold):
+    # ``delta_auc > strong_effect_threshold`` means dropping the feature
+    # destroys >30% of the joint model's AUC, which is structurally
+    # impossible for legitimate weak predictors at any cohort size.
+    #
+    # Codex pass-1 MED-2: positive-only escape. ``delta_auc = full_auc -
+    # ablated_auc`` (per ``compute_feature_ablation`` line 201 in
+    # ``src/data/adversarial_leakage.py``); ``delta_auc > 0`` means the
+    # feature ADDS to joint AUC (the leak-carrier case). A large
+    # NEGATIVE delta means removing the feature IMPROVES the joint
+    # model, which is model-instability noise (often a multicollinear
+    # nuisance variable causing LR coefficient explosion), NOT a leak.
+    # Using ``abs(delta_f)`` here would false-flag noisy nuisance
+    # features as leaks. The conservative escape is signed.
+    if delta_f > float(strong_effect_threshold):
         return "high"
 
     # Below the strong-effect threshold, fall back to the z-anchored
     # joint-check ladder (case B). Requires |delta_AUC| > floor.
+    # ``z`` was already verified non-NaN above (codex MED-1 guard).
     above_floor = abs(delta_f) > float(delta_auc_floor)
     if not above_floor:
         return "info"
 
-    # z-score handling, mirroring hblp_classify.
-    if z is None or not isinstance(z, (int, float)) or isinstance(z, bool):
-        # |delta_AUC| in the [floor, strong-effect] band but no usable
-        # z. The joint check (B) requires z; without it, treat as info
-        # (conservative — strong-effect escape would have fired if the
-        # signal were unambiguous).
-        return "info"
-    z_f = float(z)
-    if np.isnan(z_f):
-        return "info"
+    z_f = float(z)  # type: ignore[arg-type]  # guarded above
 
     # +inf-with-strong-effect escape (issue #194 codex MED-1 mirror).
     if not np.isfinite(z_f):
