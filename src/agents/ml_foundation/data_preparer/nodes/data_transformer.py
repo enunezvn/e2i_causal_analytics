@@ -79,30 +79,44 @@ async def transform_data(state: DataPreparerState) -> Dict[str, Any]:
         imputation_strategy = scope_spec.get("imputation_strategy", "mean")
         datetime_features = scope_spec.get("extract_datetime_features", True)
 
-        # Defense-in-depth pre-step (Codex pass-2 MEDIUM-2 + pass-3 MED-3):
-        # scan for unhashable container columns BEFORE any transformation
-        # so we can thread the cleaned (but otherwise-untransformed)
-        # frames back into state. Downstream nodes in the data_preparer
-        # graph that consume ``state.get("train_df")`` —
-        # ``feast_registrar``, ``compute_baseline_metrics``,
-        # ``finalize_output`` — would otherwise read the ORIGINAL
-        # state's frame with list cells intact and crash on their own
-        # ``nunique()``/``value_counts()`` calls. Mirrors loader-side
-        # ``_drop_unhashable_columns``.
+        # Defense-in-depth pre-step (Codex pass-2 MEDIUM-2 + pass-3 MED-3
+        # + pass-4 MED-4): scan for unhashable container columns BEFORE
+        # any transformation so we can thread the cleaned (but
+        # otherwise-untransformed) frames back into state. Downstream
+        # nodes in the data_preparer graph that consume
+        # ``state.get("train_df")`` — ``feast_registrar``,
+        # ``compute_baseline_metrics``, ``finalize_output`` — would
+        # otherwise read the ORIGINAL state's frame with list cells
+        # intact and crash on their own ``nunique()``/``value_counts()``
+        # calls. Mirrors loader-side ``_drop_unhashable_columns``.
         #
         # Pass-3 MED-3: scan EVERY split (train/val/test/holdout) and
         # take the UNION of unhashable cols. A column may be scalar in
         # train but list-typed in val/test (split skew on JSON-decoded
         # CSU/Optum), or a list-only column absent from train altogether.
         # The drop set must cover all splits, not just train.
+        #
+        # Pass-4 MED-4: the unhashable scan must run INDEPENDENTLY of
+        # ``exclude_columns``. The transformation-exclusion path
+        # (``excluded_features`` / ``exclude_columns``) only suppresses
+        # encoding/scaling — it does NOT remove the column from the
+        # frame. A list-typed col placed in ``excluded_features`` would
+        # therefore bypass the safety drop and survive into X_* /
+        # state frames, re-tripping the same ``nunique()`` crash in
+        # ``model_trainer/nodes/preprocessor.py::_detect_feature_types``.
+        # The safety drop is a hazard mitigation, not a transformation
+        # policy — it must apply regardless of caller intent.
         def _unhashable_in(frame: pd.DataFrame | None) -> set[str]:
             if frame is None:
                 return set()
-            scan_frame = (
-                frame.drop(columns=[target_column], errors="ignore") if target_column else frame
-            )
-            _, _, _, cols = _identify_column_types(scan_frame, exclude_columns)
-            return set(cols)
+            cols: set[str] = set()
+            for col in frame.columns:
+                if target_column and col == target_column:
+                    # Target column is exempt — caller's responsibility.
+                    continue
+                if _column_has_unhashable_cells(frame[col]):
+                    cols.add(col)
+            return cols
 
         unhashable_set: set[str] = (
             _unhashable_in(train_df)

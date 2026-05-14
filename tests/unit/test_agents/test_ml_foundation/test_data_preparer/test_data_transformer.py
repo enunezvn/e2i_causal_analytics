@@ -998,3 +998,136 @@ class TestTransformDataSplitSkewUnhashableCells:
         dropped_set = set(drop_entries[0].get("columns") or [])
         # Both train-only-list AND val-only-list must surface as dropped.
         assert dropped_set == {"train_only_list", "val_only_list"}
+
+
+@pytest.mark.asyncio
+class TestTransformDataSafetyDropIndependentOfExcludedFeatures:
+    """Codex pass-4 MEDIUM-4 (2026-05-14): the unhashable safety drop
+    must run INDEPENDENTLY of ``excluded_features`` /
+    ``exclude_columns``. The transformation-exclusion path only
+    suppresses encoding/scaling — it does NOT remove columns from the
+    returned frames. A list-typed column placed in ``excluded_features``
+    would bypass the safety drop and survive into X_* / state frames,
+    re-tripping the ``nunique()`` crash in
+    ``model_trainer/nodes/preprocessor.py::_detect_feature_types``.
+
+    Safety-drop is a hazard mitigation, not a transformation policy —
+    it must apply regardless of caller intent.
+    """
+
+    async def test_list_col_in_excluded_features_still_dropped(self) -> None:
+        """List-typed col declared in ``excluded_features`` is STILL
+        dropped from all returned frames — the safety scan ignores
+        ``exclude_columns`` to prevent bypass."""
+        train_df = pd.DataFrame(
+            {
+                "comorbidities": [["E11", "I10"], [], ["J45"], []],
+                "age": [25.0, 60.0, 45.0, 30.0],
+                "target": [0, 1, 0, 1],
+            }
+        )
+        state = {
+            "experiment_id": "test_issue_197_excluded_list_safety",
+            "train_df": train_df,
+            "validation_df": train_df.copy(),
+            "test_df": train_df.copy(),
+            "scope_spec": {
+                "target_column": "target",
+                # Caller explicitly excludes the list col from transformation.
+                # The safety drop MUST still fire — otherwise the col
+                # would survive into X_train and crash model_trainer.
+                "excluded_features": ["comorbidities"],
+                "scaling_method": "minmax",
+                "imputation_strategy": "mean",
+                "extract_datetime_features": False,
+            },
+        }
+        result = await transform_data(state)
+        assert result.get("error") is None
+        # X_train must NOT contain the list col.
+        X_train = result["X_train"]
+        assert "comorbidities" not in X_train.columns, (
+            "List col in excluded_features bypassed the safety drop — "
+            "Codex pass-4 MED-4 regression. The transformation-exclusion "
+            "path only suppresses encoding/scaling, NOT column removal; "
+            "the safety scan must run independently."
+        )
+        # State's train_df also clean (Codex pass-2 MED-2 + pass-4 MED-4).
+        assert "train_df" in result
+        assert "comorbidities" not in result["train_df"].columns
+        # Drop metadata surfaces it.
+        transformations = result.get("transformations_applied") or []
+        drop_entries = [t for t in transformations if t.get("type") == "drop_unhashable_columns"]
+        assert len(drop_entries) == 1
+        assert "comorbidities" in set(drop_entries[0].get("columns") or [])
+
+    async def test_list_col_in_legacy_exclude_columns_still_dropped(self) -> None:
+        """Same regression but via the legacy ``exclude_columns`` key
+        (deprecated but honored). Safety drop must still fire."""
+        train_df = pd.DataFrame(
+            {
+                "secondary_diagnosis_codes": [["B97.4"], [], ["J45.0"], []],
+                "age": [25.0, 60.0, 45.0, 30.0],
+                "target": [0, 1, 0, 1],
+            }
+        )
+        state = {
+            "experiment_id": "test_issue_197_legacy_excluded_list",
+            "train_df": train_df,
+            "validation_df": train_df.copy(),
+            "test_df": train_df.copy(),
+            "scope_spec": {
+                "target_column": "target",
+                # Legacy key — still honored, still must not bypass safety.
+                "exclude_columns": ["secondary_diagnosis_codes"],
+                "scaling_method": "minmax",
+                "imputation_strategy": "mean",
+                "extract_datetime_features": False,
+            },
+        }
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            result = await transform_data(state)
+        assert result.get("error") is None
+        X_train = result["X_train"]
+        assert "secondary_diagnosis_codes" not in X_train.columns
+        assert "train_df" in result
+        assert "secondary_diagnosis_codes" not in result["train_df"].columns
+
+    async def test_non_list_col_in_excluded_features_still_kept_in_frame(
+        self,
+    ) -> None:
+        """Sanity: when an excluded col is NOT list-typed, the safety
+        drop does NOT fire — and the col remains in X_train (per
+        existing excluded_features semantics: suppress from
+        encoding/scaling, keep in frame).
+        """
+        train_df = pd.DataFrame(
+            {
+                "patient_id": ["P001", "P002", "P003", "P004"],
+                "age": [25.0, 60.0, 45.0, 30.0],
+                "target": [0, 1, 0, 1],
+            }
+        )
+        state = {
+            "experiment_id": "test_issue_197_excluded_scalar",
+            "train_df": train_df,
+            "validation_df": train_df.copy(),
+            "test_df": train_df.copy(),
+            "scope_spec": {
+                "target_column": "target",
+                "excluded_features": ["patient_id"],
+                "scaling_method": "minmax",
+                "imputation_strategy": "mean",
+                "extract_datetime_features": False,
+            },
+        }
+        result = await transform_data(state)
+        assert result.get("error") is None
+        X_train = result["X_train"]
+        # Scalar excluded col stays — safety drop doesn't fire.
+        assert "patient_id" in X_train.columns
+        # No drop_unhashable_columns metadata entry.
+        transformations = result.get("transformations_applied") or []
+        drop_entries = [t for t in transformations if t.get("type") == "drop_unhashable_columns"]
+        assert drop_entries == []
