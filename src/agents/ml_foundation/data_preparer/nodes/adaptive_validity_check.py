@@ -227,6 +227,20 @@ MIN_LAYER3_SAMPLES = 30
 # advisory). It is enforced in ``hblp_classify`` for severity ∈ {high,
 # moderate}; severity=info is unchanged. See
 # ``calibration_runs/issue_194_sweep.jsonl`` for the full sweep output.
+#
+# Codex pass-1 MED-1 + pass-3 LOW-2 escape: when the permutation null
+# has zero variance (``null_std=0``) AND ``actual_auc > null_mean``,
+# ``compute_adversarial_score`` returns ``z=+inf``. Pre-joint-check
+# the legacy non-finite-z guard classified these as severity=info
+# silently — a false negative on deterministic high-effect signals
+# with degenerate nulls. The joint check provides a principled escape:
+# when ``z=+inf`` AND ``|delta_AUC| > LAYER5_DELTA_AUC_FLOOR_DEFAULT``,
+# ``hblp_classify`` returns severity=high. The same escape is mirrored
+# in (a) ``EnsembleVoter.vote``'s M3 guard (so KG-active shadow-mode
+# interactions don't silently downgrade), and (b) the sweep helper
+# ``_decide_joint`` in ``scripts/calibration/run_layer5_joint_threshold_sweep.py``.
+# ``z=-inf`` and ``z=NaN`` still fall through to severity=info — the
+# escape is one-sided (positive-inf strong-effect only).
 LAYER5_DELTA_AUC_FLOOR_DEFAULT: float = 0.10
 
 
