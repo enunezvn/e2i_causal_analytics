@@ -478,6 +478,85 @@ def test_compose_legacy_verdict_does_not_cap_when_joint_check_did_not_fire(
     assert "212 cap" not in verdict["evidence"]
 
 
+def test_compose_legacy_verdict_cap_fires_on_remediation_only_difference(
+    reset_dspy_lm,
+) -> None:
+    """Issue #212 codex pass-2 LOW-1: the cap MUST fire when the LLM
+    verdict matches severity (both 'info') but DIFFERS on remediation
+    (e.g. LLM 'ancestor' → 'keep_with_caveat' vs joint-clamped 'keep').
+
+    Pre-pass-2 the cap guard only checked severity, so a non-leak LLM
+    role on a joint-clamped feature would leave remediation as the
+    voter's value, diverging from the joint-clamped contract and
+    omitting the #212 audit annotation.
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _compose_legacy_verdict,
+    )
+    from src.data.kg.ensemble_voter import EnsembleVoter
+    from src.data.kg.types import LLMVerdict
+
+    voter = EnsembleVoter()
+    # Joint-check-clamped adversarial input (same shape as the prior
+    # cap test). Joint-clamped severity='info', remediation='keep'.
+    adversarial_input = {
+        "layer": "3",
+        "severity": "info",
+        "severity_pre_joint_check": "moderate",
+        "remediation": "keep",
+        "evidence": "test joint-clamped moderate signal",
+        "z_score": 4.0,
+        "actual_auc": 0.55,
+        "null_mean": 0.50,
+        "null_std": 0.0125,
+        "p_value": 0.001,
+        "n_permutations": 200,
+        "delta_auc": 0.05,
+        "delta_auc_floor": 0.10,
+        "delta_auc_below_floor": True,
+        "_hblp_classified": True,
+    }
+    # LLM verdict: NON-leak role 'ancestor' with 'keep_with_caveat'
+    # remediation. The voter's LLM path maps this to severity='info'
+    # via ``_llm_severity`` (non-leak). But remediation comes from
+    # ``_role_to_remediation`` which returns 'keep_with_caveat' for
+    # accept-roles with the LLM's recommended remediation. Joint-
+    # clamped remediation is 'keep'; the cap must reset it.
+    llm_verdict = LLMVerdict(
+        causal_role="ancestor",
+        mechanism="pre-index demographic",
+        recommended_remediation="keep_with_caveat",
+        cited_pmids=(),
+    )
+    verdict = _compose_legacy_verdict(
+        "weak_feat",
+        voter=voter,
+        adversarial_input=adversarial_input,
+        llm_verdict=llm_verdict,
+    )
+    # Audit fields preserved.
+    assert verdict["decided_by"] == "llm"
+    assert verdict["layer"] == "4"
+    assert verdict["llm_role"] == "ancestor"
+    assert verdict["llm_remediation"] == "keep_with_caveat"
+    # Severity matches both sides ('info') but remediation must be
+    # capped from 'keep_with_caveat' (or whatever voter produced) to
+    # the joint-clamped 'keep'.
+    assert verdict["severity"] == "info"
+    assert verdict["remediation"] == "keep", (
+        f"Issue #212 pass-2 LOW-1: when joint check fired AND voter "
+        f"selected LLM path AND remediation differs, the cap MUST "
+        f"reset remediation to joint-clamped 'keep'. Got "
+        f"remediation={verdict.get('remediation')!r}"
+    )
+    # Audit annotation must appear even though severity matched.
+    assert "212 cap" in verdict["evidence"] or "issue #212" in verdict["evidence"].lower(), (
+        f"Issue #212 pass-2 LOW-1: cap annotation must appear in "
+        f"evidence whenever the cap condition is reached, even when "
+        f"only remediation differs. Got evidence={verdict['evidence']!r}"
+    )
+
+
 def test_compose_legacy_verdict_without_llm_falls_back_to_adversarial(
     reset_dspy_lm,
 ) -> None:

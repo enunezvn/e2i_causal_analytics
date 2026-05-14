@@ -3589,3 +3589,105 @@ class TestIssue212PreJointCheckSeverity:
         # severity_pre_joint_check.
         assert adv_input["severity"] == adv_input["severity_pre_joint_check"]
         assert adv_input["severity"] == "moderate"  # z=4 in moderate band
+
+    def test_combine_ablation_escalates_severity_pre_joint_check(self) -> None:
+        """Issue #212 codex pass-2 MED-1: ``_combine_ablation_with_permutation``
+        MUST escalate ``severity_pre_joint_check`` symmetrically with the
+        final ``severity``. Otherwise the orchestrator's Layer 4 trigger
+        (which reads ``severity_pre_joint_check``) skips ablation-only
+        signals — losing the LLM review #196's ablation pass added to
+        catch interaction-only leaks.
+        """
+        from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+            _combine_ablation_with_permutation,
+        )
+
+        # Permutation path produces info severity (z below noise band).
+        perm_input = {
+            "layer": "3",
+            "severity": "info",
+            "severity_pre_joint_check": "info",
+            "remediation": "keep",
+            "evidence": "permutation info",
+            "z_score": 2.0,
+            "actual_auc": 0.52,
+            "null_mean": 0.50,
+            "null_std": 0.01,
+            "p_value": 0.5,
+            "n_permutations": 200,
+            "delta_auc": 0.02,
+            "delta_auc_floor": 0.10,
+            "delta_auc_below_floor": True,
+            "_hblp_classified": True,
+        }
+        # Ablation row escalates to moderate (above floor + above
+        # moderate z-band but below high z-band).
+        ablation_row = {
+            "feature": "feat_x",
+            "full_auc": 0.85,
+            "ablated_auc": 0.70,
+            "delta_auc": 0.15,  # above floor 0.10 (interaction leak signature)
+            "null_mean": 0.0,
+            "null_std": 0.03,
+            "z_score": 4.0,  # above MODERATE_Z=3.0, below HIGH_Z=5.0
+            "suspicious": True,
+        }
+        combined = _combine_ablation_with_permutation(perm_input, ablation_row)
+        # Final severity escalated by MAX rule.
+        assert combined["severity"] == "moderate"
+        # Issue #212 pass-2 MED-1: severity_pre_joint_check MUST also
+        # be escalated so the orchestrator's Layer 4 trigger fires.
+        assert combined["severity_pre_joint_check"] == "moderate", (
+            f"Issue #212 pass-2 MED-1: severity_pre_joint_check must "
+            f"be escalated symmetrically with severity when ablation "
+            f"escalates. Got severity_pre_joint_check="
+            f"{combined['severity_pre_joint_check']!r}, "
+            f"severity={combined['severity']!r}"
+        )
+
+    def test_combine_ablation_no_escalation_preserves_severity_pre(self) -> None:
+        """Symmetric pin: when ablation does NOT escalate (e.g.
+        ablation severity = info), ``severity_pre_joint_check`` MUST
+        remain at the permutation path's value (no spurious
+        downgrade).
+        """
+        from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+            _combine_ablation_with_permutation,
+        )
+
+        # Permutation at moderate (pre-joint-check), joint-clamped to
+        # info on final severity. severity_pre_joint_check='moderate'.
+        perm_input = {
+            "layer": "3",
+            "severity": "info",  # joint-clamped
+            "severity_pre_joint_check": "moderate",
+            "remediation": "keep",
+            "evidence": "permutation moderate joint-clamped",
+            "z_score": 4.0,
+            "actual_auc": 0.55,
+            "null_mean": 0.50,
+            "null_std": 0.0125,
+            "p_value": 0.001,
+            "n_permutations": 200,
+            "delta_auc": 0.05,
+            "delta_auc_floor": 0.10,
+            "delta_auc_below_floor": True,
+            "_hblp_classified": True,
+        }
+        # Ablation row that produces severity='info' (no escalation).
+        ablation_row = {
+            "feature": "feat_y",
+            "full_auc": 0.55,
+            "ablated_auc": 0.54,
+            "delta_auc": 0.01,
+            "null_mean": 0.01,
+            "null_std": 0.005,
+            "z_score": 1.0,  # below MODERATE_Z
+            "suspicious": False,
+        }
+        combined = _combine_ablation_with_permutation(perm_input, ablation_row)
+        # No escalation: severity stays at joint-clamped 'info'.
+        assert combined["severity"] == "info"
+        # severity_pre_joint_check preserved at 'moderate' (NOT
+        # downgraded to 'info' by ablation's info-severity).
+        assert combined["severity_pre_joint_check"] == "moderate"
