@@ -156,6 +156,19 @@ def _run(state: dict) -> dict:
     return asyncio.run(adaptive_validity_check(state))
 
 
+# Issue #215: the 3 tests below all call ``asyncio.run(adaptive_validity_check(state))``
+# via the ``_run`` helper. xdist worker pollution from any upstream test that
+# triggers ``nest_asyncio.apply()`` (e.g. via wrap_async_node-based graphs)
+# leaves ``asyncio.run`` monkey-patched, causing ``RuntimeError: Event loop
+# is closed``. We isolate the 3 tests to a dedicated worker via
+# ``xdist_group("issue_215_layer3_ablation")`` so they run in a clean
+# subprocess regardless of upstream pollution. Defense-in-depth complement
+# to the root-cause fix at src/agents/experiment_designer/graph.py (eager
+# singleton removed; nest_asyncio.apply moved into the actually-nested
+# branch of sync_wrapper).
+pytestmark = pytest.mark.xdist_group("issue_215_layer3_ablation")
+
+
 @pytest.mark.integration
 def test_permutation_only_misses_interaction_leak_ablation_catches_it() -> None:
     """MAX-rule integration pin: permutation Layer 3 alone misses the
