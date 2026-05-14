@@ -5,12 +5,22 @@
     "demos": [
       {
         "augmented": true,
+        "feature_name": "disease_severity",
+        "derivation_pseudocode": "min(3.0, sum(med.fill_count) * 0.5) + min(2.0, count(proc.code='J2357')) + count(lab.flag='abnormal')  # over entire patient panel, NO pre-index filter",
+        "dataset_context": "ConcertAI CSU claims; target=treatment_initiated; prevalence=0.024; prediction_anchor=index_date",
+        "reasoning": "The disease_severity feature is a composite score aggregating medication fills, procedures, and abnormal labs across the entire patient panel without temporal filtering. This creates a problematic mixture: pre-index components reflect genuine baseline severity (a legitimate confounder), but post-index components capture treatment-related events. For treated patients, medication fills and procedures will be non-zero post-treatment, while untreated patients will have zero post-index medication events. The score thus becomes contaminated by post-prediction information, making it a descendant of the treatment decision rather than a pure baseline confounder.",
+        "causal_role": "descendant",
+        "mechanism": "Composite severity score aggregates events across entire patient timeline without pre-index filtering. Post-treatment medication fills and procedures contaminate the score with treatment-dependent information.",
+        "recommended_remediation": "window"
+      },
+      {
+        "augmented": true,
         "feature_name": "engagement_score",
         "derivation_pseudocode": "len(unique(med.npi)) + count(med.fills) + count(lab.tests)  # over entire panel",
         "dataset_context": "ConcertAI CSU; target=treatment_initiated; anchor=index_date",
-        "reasoning": "The engagement score aggregates three components across the entire patient panel without temporal filtering: unique provider count, medication fills, and lab tests. For treated patients, post-index medication fills and lab monitoring will inflate the score compared to untreated patients. The feature mixes legitimate pre-index engagement signals with post-treatment healthcare utilization, making it structurally post-prediction-time.",
+        "reasoning": "The engagement score aggregates unique provider NPIs, medication fills, and lab tests across the entire patient panel without any temporal filtering to pre-index events. This means it includes post-treatment healthcare utilization. Treated patients will have additional medication fills, lab monitoring, and potentially new provider contacts that occur after treatment initiation, making the score structurally dependent on the treatment decision.",
         "causal_role": "descendant",
-        "mechanism": "Aggregates medication fills and lab tests across the entire patient timeline without pre-prediction-time filtering. Treated patients accumulate post-index fills and monitoring labs that inflate the engagement score, making it a post-treatment indicator.",
+        "mechanism": "Aggregates healthcare utilization metrics (provider contacts, medication fills, lab tests) across the entire patient timeline without pre-index filtering. Treated patients accumulate post-treatment utilization events that inflate the engagement score, making it structurally post-prediction-time.",
         "recommended_remediation": "window"
       },
       {
@@ -18,9 +28,9 @@
         "feature_name": "days_on_therapy",
         "derivation_pseudocode": "sum(med.days_supply) over entire panel",
         "dataset_context": "CSU; target=treatment_initiated; anchor=index_date",
-        "reasoning": "The feature sums days_supply from medication events across the entire patient panel without temporal filtering. For untreated patients (target=0), this sum is necessarily zero since they have no medication events. For treated patients (target=1), the sum is positive by definition. This creates a deterministic relationship where the feature perfectly separates the target classes.",
+        "reasoning": "The feature sums medication days supply across the entire patient panel without temporal filtering. For untreated patients (target=0), this sum is zero since there are no medication events. For treated patients (target=1), the sum includes post-index medication supply, making it a direct function of the treatment decision. This creates perfect class separation.",
         "causal_role": "descendant",
-        "mechanism": "Feature is tautologically equivalent to the target: sum > 0 if and only if patient was treated. Perfect class separator with no temporal filter makes it structurally post-prediction-time.",
+        "mechanism": "Days on therapy aggregates medication supply across the entire timeline without pre-index filtering. Untreated patients have zero days supply by definition, while treated patients accumulate post-treatment supply, making the feature a direct consequence of treatment initiation.",
         "recommended_remediation": "drop"
       },
       {
@@ -28,83 +38,17 @@
         "feature_name": "medication_claim_count",
         "derivation_pseudocode": "count(rows in medication_events where patient_id=p)",
         "dataset_context": "CSU/Optum; target=treatment_initiated; anchor=index_date",
-        "reasoning": "The feature counts all medication events for a patient without any temporal filtering relative to the index_date. This means it includes both pre-index medications (which could be legitimate confounders) and post-index medications (which would be consequences of treatment). For treated patients, the count will necessarily include the index treatment itself plus any follow-up prescriptions, making the feature structurally dependent on the target variable. Untreated patients will have lower counts by construction since they don't receive the index treatment.",
+        "reasoning": "The feature counts all medication events for a patient without any temporal filtering relative to index_date. This means it includes both pre-index medications (which could be confounders) and post-index medications (which would be consequences of treatment). Since treatment_initiated patients will have medication events recorded as part of their treatment, while untreated patients may have fewer or no medication events, this creates a direct dependency between the target and the feature. The lack of temporal filtering makes this a post-prediction-time feature that captures treatment consequences.",
         "causal_role": "descendant",
-        "mechanism": "Counts all medication events across the patient timeline without temporal filtering. For treated patients, this includes the index treatment and subsequent prescriptions, making it structurally post-prediction-time.",
+        "mechanism": "Counts medication events across entire patient timeline without temporal filtering. Treated patients accumulate post-index medication records as part of their treatment regimen, making the count structurally dependent on treatment status.",
         "recommended_remediation": "window"
       },
       {
-        "augmented": true,
-        "feature_name": "journey_status",
-        "derivation_pseudocode": "categorical from (treatment_initiated, discontinuation_flag) tuple",
-        "dataset_context": "synthetic; target=treatment_initiated",
-        "reasoning": "The journey_status feature is a categorical variable derived from a tuple containing treatment_initiated and discontinuation_flag. Since treatment_initiated is the target variable itself, this feature directly incorporates the outcome we're trying to predict. The discontinuation_flag is also a post-treatment event that can only occur after treatment initiation. This creates a feature that is deterministically related to the target variable.",
-        "causal_role": "descendant",
-        "mechanism": "Feature is constructed from the target variable (treatment_initiated) plus a post-treatment event (discontinuation_flag). This creates a deterministic relationship where the feature directly encodes the prediction target.",
-        "recommended_remediation": "drop"
-      },
-      {
-        "feature_name": "disease_severity",
-        "derivation_pseudocode": "min(3.0, sum(med.fill_count) * 0.5) + min(2.0, count(proc.code='J2357')) + count(lab.flag='abnormal')  # over entire patient panel, NO pre-index filter",
-        "dataset_context": "ConcertAI CSU claims; target=treatment_initiated; prevalence=0.024; prediction_anchor=index_date",
-        "causal_role": "descendant",
-        "mechanism": "Aggregates medication fills, J2357 procedures, and abnormal labs across the ENTIRE patient panel without filtering to events before the prediction time. Treated patients accumulate post-index events that drive the score, making it structurally a post-treatment indicator.",
-        "recommended_remediation": "drop"
-      },
-      {
-        "feature_name": "urban_rural_code",
-        "derivation_pseudocode": "rural_urban_commuting_area_code(zip3)  # static at enrollment",
-        "dataset_context": "Optum claims; target=initiated_biologic_180d; anchor=index_date; geographic feature derived from zip3; static at enrollment",
-        "causal_role": "instrument",
-        "mechanism": "Supply-side geographic instrument (Brookhart-style pharmacoepi IV): RUCA code reflects access to specialist-driven biologic prescribing (Z -> T arrow via specialist density and biologic-friendly provider mix). Exclusion restriction: Z -> Y holds only through T under the standard IV assumption that geographic classification does not directly affect disease pathophysiology. Static at enrollment so no confounding with post-index outcomes. IV-VALIDITY AUDIT STEP (required before use): test for direct Z -> Y on a placebo outcome that should be invariant to T; reject the IV interpretation if the placebo test fails.",
-        "recommended_remediation": "keep_with_caveat"
-      },
-      {
-        "feature_name": "has_angioedema",
-        "derivation_pseudocode": "any(diagnosis_events where dx_code='T78.3')",
-        "dataset_context": "Optum; target=treatment_initiated",
-        "causal_role": "descendant",
-        "mechanism": "Boolean any-time-in-history diagnosis flag captures post-prediction-time diagnoses. Class_0 patients have it never observed; class_1 patients had diagnosis recorded at any time including post-treatment.",
-        "recommended_remediation": "window"
-      },
-      {
-        "feature_name": "alive_at_180d_observation_window",
-        "derivation_pseudocode": "(death_date IS NULL OR death_date > index_date + 180d) AND (enrollment_active(index_date + 180d) = 1)  # binary complete-follow-up flag used as a SAMPLE-INCLUSION filter",
-        "dataset_context": "Optum claims; target=initiated_biologic_180d; anchor=index_date; death + enrollment panels; analysts commonly filter to V=1 to get complete-follow-up cohorts",
-        "causal_role": "collider",
-        "mechanism": "Sample-selection confounder-collider (sub-family ii). V has two arrowheads. (a) Baseline mortality/dropout risk (age, comorbidity burden, frailty) is a T-Y confounder via the severity-of-illness pathway (severity -> T via prescriber declining biologics for frail patients; severity -> Y via uncontrolled disease) AND drives the survival/enrollment arrow into V. (b) T -> survival -> V: the treatment itself affects mortality and dropout, so T has an arrow into V independent of the baseline-risk arm. When the analysis is RESTRICTED to V=1 patients (the common complete-follow-up filter), conditioning opens the T <-> baseline-risk backdoor on the Y path. Structurally distinct from the count colliders above because V is BINARY and used as a sample-inclusion gate.",
-        "recommended_remediation": "drop"
-      },
-      {
-        "feature_name": "concomitant_steroid_burst_count_followup",
-        "derivation_pseudocode": "count(medication_events where med_class='oral_steroid_burst' AND fill_date in [index_date, index_date+180d]) — driven by both pre-index severity and post-treatment non-response",
-        "dataset_context": "Optum claims; target=initiated_biologic_180d; anchor=index_date; medication panel; oral steroid burst is a rescue therapy that fires from both baseline severity and biologic non-response",
-        "causal_role": "collider",
-        "mechanism": "Confounder-collider on the rescue-therapy count: V has two arrowheads from distinct sources. (a) Baseline disease severity is a classical T-Y confounder (severity -> T via prescriber escalation; severity -> Y via uncontrolled disease) AND drives bursts (severity -> V) for patients with high baseline activity regardless of biologic exposure. (b) Biologic-treatment non-response forms a path T -> non-response -> burst-prescription. Non-response is downstream of T but is NOT itself caused by baseline severity in a deterministic way (responders and non-responders are distributed across the severity spectrum). V has arrowheads from both severity (confounder) and non-response (T-driven). Conditioning on V opens the severity <-> Y backdoor.",
-        "recommended_remediation": "drop"
-      },
-      {
-        "feature_name": "geographic_region",
-        "derivation_pseudocode": "{NE,MW,South,West} from zip3  # static at enrollment",
-        "dataset_context": "CSU/Optum claims; target=treatment_initiated; anchor=index_date; static at enrollment",
-        "causal_role": "instrument",
-        "mechanism": "Regional prescribing-rate variation is a canonical supply-side IV in observational pharmacoepi (Brookhart et al. 2006). Z -> T arrow: regional formulary policy and specialist density drive the biologic-vs-non-biologic mix. Exclusion restriction: Z -> Y holds only through T under the standard IV assumption that region does not directly cause disease activity or modify drug pharmacokinetics. Z is set at enrollment, before treatment decision, so unconfounded with post-index outcomes. IV-VALIDITY AUDIT STEP (required before use): verify exchangeability on pre-index covariates across region levels; if covariate imbalance is large, condition on the imbalanced covariate or drop the IV interpretation.",
-        "recommended_remediation": "keep_with_caveat"
-      },
-      {
-        "feature_name": "diagnostic_test_count_followup",
-        "derivation_pseudocode": "count(lab_events U procedure_events where category='diagnostic' AND date in [index_date, index_date+180d]) — driven by both pre-index workup intensity and post-treatment AE-specific monitoring",
-        "dataset_context": "Optum claims; target=initiated_biologic_180d; anchor=index_date; lab+procedure panels filtered to diagnostic codes; pre-index severity drives workup, post-T monitoring fires conditional on T",
-        "causal_role": "collider",
-        "mechanism": "Confounder-collider on the workup count: V has two arrowheads. (a) Baseline disease activity / diagnostic uncertainty (a T-Y confounder via severity-of-illness; drives both the prescriber's T decision AND the workup stream). (b) Treatment-specific monitoring forms a path T -> protocol-driven labs -> V (e.g., LFT/CBC monitoring in biologic protocols; the test request comes from the treatment protocol, not from underlying disease activity). Conditioning on the total count opens the activity <-> Y backdoor.",
-        "recommended_remediation": "drop"
-      },
-      {
-        "feature_name": "age_at_index",
-        "derivation_pseudocode": "(index_date - birth_date).years",
-        "dataset_context": "CSU/Optum; target=treatment_initiated; anchor=index_date",
-        "causal_role": "ancestor",
-        "mechanism": "Age at the prediction time is a stable demographic measured before the prediction time. Causally upstream of both treatment decisions and outcomes.",
+        "feature_name": "baseline_severity_score_preindex",
+        "derivation_pseudocode": "weighted sum of pre-index diagnoses + lab abnormalities + prior medication intensity WHERE event_date < index_date - 30d (strict pre-index window with a 30-day washout buffer)",
+        "dataset_context": "Optum/CSU claims; target=initiated_biologic_180d; anchor=index_date; STRICT pre-index temporal filter; severity score is a composite of baseline disease activity",
+        "causal_role": "confounder",
+        "mechanism": "Pre-index severity score is a CONFOUNDER: arrows go OUT of severity into BOTH T (severity -> T via prescriber decision to escalate to biologic) and Y (severity -> Y via uncontrolled disease activity). The variable itself has no incoming arrowheads from T or downstream events because the derivation strictly filters to pre-index. Severity is NOT a collider: collider DAG requires arrowheads INTO V, but severity's only arrowheads are OUTGOING. Standard remediation is keep_with_caveat (condition on severity in downstream models to close the backdoor T <- severity -> Y path; this is the canonical confounder-adjustment use case).",
         "recommended_remediation": "keep_with_caveat"
       },
       {
@@ -116,12 +60,28 @@
         "recommended_remediation": "window"
       },
       {
-        "feature_name": "journey_duration_days",
-        "derivation_pseudocode": "(journey_end_date - journey_start_date).days where journey_end_date = max(eligend, last_med_date + days_supply, last_proc_date, last_lab_date)",
-        "dataset_context": "CSU; target=treatment_initiated; anchor=index_date",
-        "causal_role": "mediator",
-        "mechanism": "Journey end date is computed from max of clinical event dates without a pre-prediction-time filter. For treated patients the medication events extend end_date past index, making journey_duration depend on treatment. Single-feature AUC=0.689 escapes hardcoded thresholds but is detected by permutation-baseline z-score.",
+        "feature_name": "charlson_score",
+        "derivation_pseudocode": "weighted sum over comorbidity diagnoses across entire patient diagnosis history (no pre-prediction-time filter)",
+        "dataset_context": "Optum; target=treatment_initiated",
+        "causal_role": "descendant",
+        "mechanism": "Comorbidity scores aggregate diagnoses across the entire patient timeline. Diagnoses recorded post-treatment contaminate the score. Without temporal filtering the feature is post-prediction-time.",
         "recommended_remediation": "window"
+      },
+      {
+        "feature_name": "concomitant_steroid_burst_count_followup",
+        "derivation_pseudocode": "count(medication_events where med_class='oral_steroid_burst' AND fill_date in [index_date, index_date+180d]) — driven by both pre-index severity and post-treatment non-response",
+        "dataset_context": "Optum claims; target=initiated_biologic_180d; anchor=index_date; medication panel; oral steroid burst is a rescue therapy that fires from both baseline severity and biologic non-response",
+        "causal_role": "collider",
+        "mechanism": "Confounder-collider on the rescue-therapy count: V has two arrowheads from distinct sources. (a) Baseline disease severity is a classical T-Y confounder (severity -> T via prescriber escalation; severity -> Y via uncontrolled disease) AND drives bursts (severity -> V) for patients with high baseline activity regardless of biologic exposure. (b) Biologic-treatment non-response forms a path T -> non-response -> burst-prescription. Non-response is downstream of T but is NOT itself caused by baseline severity in a deterministic way (responders and non-responders are distributed across the severity spectrum). V has arrowheads from both severity (confounder) and non-response (T-driven). Conditioning on V opens the severity <-> Y backdoor.",
+        "recommended_remediation": "drop"
+      },
+      {
+        "feature_name": "alive_at_180d_observation_window",
+        "derivation_pseudocode": "(death_date IS NULL OR death_date > index_date + 180d) AND (enrollment_active(index_date + 180d) = 1)  # binary complete-follow-up flag used as a SAMPLE-INCLUSION filter",
+        "dataset_context": "Optum claims; target=initiated_biologic_180d; anchor=index_date; death + enrollment panels; analysts commonly filter to V=1 to get complete-follow-up cohorts",
+        "causal_role": "collider",
+        "mechanism": "Sample-selection confounder-collider (sub-family ii). V has two arrowheads. (a) Baseline mortality/dropout risk (age, comorbidity burden, frailty) is a T-Y confounder via the severity-of-illness pathway (severity -> T via prescriber declining biologics for frail patients; severity -> Y via uncontrolled disease) AND drives the survival/enrollment arrow into V. (b) T -> survival -> V: the treatment itself affects mortality and dropout, so T has an arrow into V independent of the baseline-risk arm. When the analysis is RESTRICTED to V=1 patients (the common complete-follow-up filter), conditioning opens the T <-> baseline-risk backdoor on the Y path. Structurally distinct from the count colliders above because V is BINARY and used as a sample-inclusion gate.",
+        "recommended_remediation": "drop"
       },
       {
         "feature_name": "prior_treatments",
@@ -129,6 +89,22 @@
         "dataset_context": "CSU; target=treatment_initiated",
         "causal_role": "confounder",
         "mechanism": "Pre-index medication history is genuinely pre-prediction-time and reflects prior care patterns that influence both observable patient attributes and treatment decision. Properly windowed.",
+        "recommended_remediation": "keep_with_caveat"
+      },
+      {
+        "feature_name": "hospitalizations_total",
+        "derivation_pseudocode": "count(encounter_events where admit_date in [journey_start, journey_end]) — NO pre-index temporal filter; admissions include both pre-index severity-driven admits AND post-index biologic-AE-driven admits",
+        "dataset_context": "Optum claims; target=initiated_biologic_180d; anchor=index_date; encounter_events panel; admissions can be driven by pre-index severity OR by post-treatment adverse events",
+        "causal_role": "collider",
+        "mechanism": "Confounder-collider (sub-family ii per Greenland-Pearl-Robins 1999 M-structure): two arrowheads in from distinct sources. (a) Baseline disease severity is a T-Y confounder (severity -> T via prescriber decision; severity -> Y via uncontrolled disease activity) and ALSO has an arrow into the hospitalization count (severity drives admissions). (b) Treatment-related adverse events form a path T -> AE -> hospitalization. V has arrowheads from both severity and AE, so V is a collider on the (severity, T) backdoor. Conditioning on V opens the severity <-> Y path, biasing the treatment-effect estimate. (NOTE: a properly windowed pre-index hospitalization count collapses to a pure confounder with NO post-index arrow; the collider semantics depend on the derivation crossing the index date.)",
+        "recommended_remediation": "drop"
+      },
+      {
+        "feature_name": "urban_rural_code",
+        "derivation_pseudocode": "rural_urban_commuting_area_code(zip3)  # static at enrollment",
+        "dataset_context": "Optum claims; target=initiated_biologic_180d; anchor=index_date; geographic feature derived from zip3; static at enrollment",
+        "causal_role": "instrument",
+        "mechanism": "Supply-side geographic instrument (Brookhart-style pharmacoepi IV): RUCA code reflects access to specialist-driven biologic prescribing (Z -> T arrow via specialist density and biologic-friendly provider mix). Exclusion restriction: Z -> Y holds only through T under the standard IV assumption that geographic classification does not directly affect disease pathophysiology. Static at enrollment so no confounding with post-index outcomes. IV-VALIDITY AUDIT STEP (required before use): test for direct Z -> Y on a placebo outcome that should be invariant to T; reject the IV interpretation if the placebo test fails.",
         "recommended_remediation": "keep_with_caveat"
       },
       {
@@ -140,6 +116,14 @@
         "recommended_remediation": "keep_with_caveat"
       },
       {
+        "feature_name": "journey_status",
+        "derivation_pseudocode": "categorical from (treatment_initiated, discontinuation_flag) tuple",
+        "dataset_context": "synthetic; target=treatment_initiated",
+        "causal_role": "descendant",
+        "mechanism": "Derived directly from the target variable. Cramér's V to target = 1.0, perfect class separation.",
+        "recommended_remediation": "drop"
+      },
+      {
         "feature_name": "provider_preference_score",
         "derivation_pseudocode": "fraction(prior_patients_of(index_provider) where biologic_initiation=1) over the 12 months BEFORE this patient's index_date; patient excluded from own provider's denominator",
         "dataset_context": "Optum claims; target=initiated_biologic_180d; anchor=index_date; provider-level prescribing-pattern feature derived from index_provider's other patients' prior history",
@@ -148,12 +132,28 @@
         "recommended_remediation": "keep_with_caveat"
       },
       {
-        "feature_name": "charlson_score",
-        "derivation_pseudocode": "weighted sum over comorbidity diagnoses across entire patient diagnosis history (no pre-prediction-time filter)",
-        "dataset_context": "Optum; target=treatment_initiated",
-        "causal_role": "descendant",
-        "mechanism": "Comorbidity scores aggregate diagnoses across the entire patient timeline. Diagnoses recorded post-treatment contaminate the score. Without temporal filtering the feature is post-prediction-time.",
-        "recommended_remediation": "window"
+        "feature_name": "geographic_region",
+        "derivation_pseudocode": "{NE,MW,South,West} from zip3  # static at enrollment",
+        "dataset_context": "CSU/Optum claims; target=treatment_initiated; anchor=index_date; static at enrollment",
+        "causal_role": "instrument",
+        "mechanism": "Regional prescribing-rate variation is a canonical supply-side IV in observational pharmacoepi (Brookhart et al. 2006). Z -> T arrow: regional formulary policy and specialist density drive the biologic-vs-non-biologic mix. Exclusion restriction: Z -> Y holds only through T under the standard IV assumption that region does not directly cause disease activity or modify drug pharmacokinetics. Z is set at enrollment, before treatment decision, so unconfounded with post-index outcomes. IV-VALIDITY AUDIT STEP (required before use): verify exchangeability on pre-index covariates across region levels; if covariate imbalance is large, condition on the imbalanced covariate or drop the IV interpretation.",
+        "recommended_remediation": "keep_with_caveat"
+      },
+      {
+        "feature_name": "age_at_index",
+        "derivation_pseudocode": "(index_date - birth_date).years",
+        "dataset_context": "CSU/Optum; target=treatment_initiated; anchor=index_date",
+        "causal_role": "ancestor",
+        "mechanism": "Age at the prediction time is a stable demographic measured before the prediction time. Causally upstream of both treatment decisions and outcomes.",
+        "recommended_remediation": "keep_with_caveat"
+      },
+      {
+        "feature_name": "diagnostic_test_count_followup",
+        "derivation_pseudocode": "count(lab_events U procedure_events where category='diagnostic' AND date in [index_date, index_date+180d]) — driven by both pre-index workup intensity and post-treatment AE-specific monitoring",
+        "dataset_context": "Optum claims; target=initiated_biologic_180d; anchor=index_date; lab+procedure panels filtered to diagnostic codes; pre-index severity drives workup, post-T monitoring fires conditional on T",
+        "causal_role": "collider",
+        "mechanism": "Confounder-collider on the workup count: V has two arrowheads. (a) Baseline disease activity / diagnostic uncertainty (a T-Y confounder via severity-of-illness; drives both the prescriber's T decision AND the workup stream). (b) Treatment-specific monitoring forms a path T -> protocol-driven labs -> V (e.g., LFT/CBC monitoring in biologic protocols; the test request comes from the treatment protocol, not from underlying disease activity). Conditioning on the total count opens the activity <-> Y backdoor.",
+        "recommended_remediation": "drop"
       },
       {
         "feature_name": "index_provider_biologic_volume_prior_year",
@@ -164,12 +164,20 @@
         "recommended_remediation": "keep_with_caveat"
       },
       {
-        "feature_name": "hospitalizations_total",
-        "derivation_pseudocode": "count(encounter_events where admit_date in [journey_start, journey_end]) — NO pre-index temporal filter; admissions include both pre-index severity-driven admits AND post-index biologic-AE-driven admits",
-        "dataset_context": "Optum claims; target=initiated_biologic_180d; anchor=index_date; encounter_events panel; admissions can be driven by pre-index severity OR by post-treatment adverse events",
-        "causal_role": "collider",
-        "mechanism": "Confounder-collider (sub-family ii per Greenland-Pearl-Robins 1999 M-structure): two arrowheads in from distinct sources. (a) Baseline disease severity is a T-Y confounder (severity -> T via prescriber decision; severity -> Y via uncontrolled disease activity) and ALSO has an arrow into the hospitalization count (severity drives admissions). (b) Treatment-related adverse events form a path T -> AE -> hospitalization. V has arrowheads from both severity and AE, so V is a collider on the (severity, T) backdoor. Conditioning on V opens the severity <-> Y path, biasing the treatment-effect estimate. (NOTE: a properly windowed pre-index hospitalization count collapses to a pure confounder with NO post-index arrow; the collider semantics depend on the derivation crossing the index date.)",
-        "recommended_remediation": "drop"
+        "feature_name": "journey_duration_days",
+        "derivation_pseudocode": "(journey_end_date - journey_start_date).days where journey_end_date = max(eligend, last_med_date + days_supply, last_proc_date, last_lab_date)",
+        "dataset_context": "CSU; target=treatment_initiated; anchor=index_date",
+        "causal_role": "mediator",
+        "mechanism": "Journey end date is computed from max of clinical event dates without a pre-prediction-time filter. For treated patients the medication events extend end_date past index, making journey_duration depend on treatment. Single-feature AUC=0.689 escapes hardcoded thresholds but is detected by permutation-baseline z-score.",
+        "recommended_remediation": "window"
+      },
+      {
+        "feature_name": "has_angioedema",
+        "derivation_pseudocode": "any(diagnosis_events where dx_code='T78.3')",
+        "dataset_context": "Optum; target=treatment_initiated",
+        "causal_role": "descendant",
+        "mechanism": "Boolean any-time-in-history diagnosis flag captures post-prediction-time diagnoses. Class_0 patients have it never observed; class_1 patients had diagnosis recorded at any time including post-treatment.",
+        "recommended_remediation": "window"
       }
     ],
     "signature": {
