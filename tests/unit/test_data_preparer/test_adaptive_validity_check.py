@@ -576,6 +576,12 @@ def test_verdict_schema_is_uniform_across_layer_1_and_layer_3():
         "decided_by",
         "disagreements",
         "kg_signal",
+        # Phase 2.9 Stage 3 audit fields (issue #193 codex pass-3 LOW):
+        # surface LLM verdict role + remediation even when the
+        # deterministic veto path wins on severity, so audit-cost is
+        # observable per-feature.
+        "llm_role",
+        "llm_remediation",
     }
     for v in result["adaptive_verdicts"]:
         assert set(v.keys()) == canonical_keys, (
@@ -932,7 +938,8 @@ def test_phase29_compose_legacy_verdict_all_none_signals_returns_abstain():
     assert verdict["layer"] == "abstain"
     assert verdict["severity"] == "abstain"
     assert verdict["remediation"] == "review"
-    # Schema invariant: all 16 canonical fields present
+    # Schema invariant: all 18 canonical fields present (16 Phase 2.9
+    # Stage 1 + 2 Phase 2.9 Stage 3 LLM audit fields from issue #193).
     expected_keys = {
         "feature",
         "layer",
@@ -950,6 +957,9 @@ def test_phase29_compose_legacy_verdict_all_none_signals_returns_abstain():
         "decided_by",
         "disagreements",
         "kg_signal",
+        # Phase 2.9 Stage 3 audit fields (issue #193 codex pass-3 LOW):
+        "llm_role",
+        "llm_remediation",
     }
     assert set(verdict.keys()) == expected_keys
 
@@ -2006,6 +2016,9 @@ async def test_phase29_stage2_e2e_main_loop_with_populated_cache(tmp_path, monke
         "decided_by",
         "disagreements",
         "kg_signal",
+        # Phase 2.9 Stage 3 audit fields (issue #193 codex pass-3 LOW):
+        "llm_role",
+        "llm_remediation",
     }
     assert set(verdict.keys()) == expected_keys
 

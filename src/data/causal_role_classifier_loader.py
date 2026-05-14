@@ -176,15 +176,39 @@ def ensure_dspy_lm_configured(
         return True
     if require_api_key:
         provider = _model_provider(model)
+        if provider is not None and provider not in _PROVIDER_TO_ENV_VARS:
+            # Codex pass-3 MEDIUM (issue #193): typoed provider prefixes
+            # (e.g. ``antropic/claude-sonnet-4-20250514`` missing the
+            # ``h``) used to fall back to a permissive any-recognised-
+            # key check, which would let an env with only the wrong
+            # provider's key green-light an unusable LM. The previous
+            # pass-2 fix specifically targeted this class of silent
+            # disablement; the typo path was the remaining hole.
+            # Fail closed: when the operator wrote a slash-shaped model
+            # string with an unrecognised provider, refuse to guess.
+            logger.warning(
+                "ensure_dspy_lm_configured: model=%r has slash-shaped "
+                "provider prefix %r which is not in %s; refusing to "
+                "configure (fail-closed against typoed prefix). Set the "
+                "model to a recognised provider or update "
+                "_PROVIDER_TO_ENV_VARS to add the new provider.",
+                model,
+                provider,
+                sorted(_PROVIDER_TO_ENV_VARS.keys()),
+            )
+            return False
         expected_vars = _PROVIDER_TO_ENV_VARS.get(provider) if provider else None
         if expected_vars is None:
-            # Unknown / bare model: fall back to "any recognised key"
-            # (permissive — new providers, dev environments). Warn so
-            # the operator can correct the model string.
+            # Bare model (no slash): keep the permissive any-key fallback
+            # so LiteLLM's auto-provider-detection path still works for
+            # dev environments. We only refuse on the typoed-slash path
+            # above (where the operator's intent was clearly "use
+            # provider X" but X is unknown).
             expected_vars = tuple(v for vs in _PROVIDER_TO_ENV_VARS.values() for v in vs)
             logger.warning(
-                "ensure_dspy_lm_configured: model=%r has no recognised provider "
-                "prefix; falling back to permissive any-key check over %s.",
+                "ensure_dspy_lm_configured: model=%r has no provider prefix "
+                "(bare model name); falling back to permissive any-key check "
+                "over %s. Prefer slash-shaped provider/path strings.",
                 model,
                 list(expected_vars),
             )
