@@ -427,6 +427,59 @@ def test_adaptive_validity_check_emits_decided_by_llm_on_csu_feature(
     )
 
 
+def test_ensure_dspy_lm_configured_provider_mismatch_skips(reset_dspy_lm, monkeypatch) -> None:
+    """OPENAI_API_KEY set but model is anthropic/* → skip (return False).
+
+    Codex pass-2 MEDIUM (issue #193): the credential gate must match
+    the model's provider prefix. An env with only OPENAI_API_KEY set
+    must NOT green-light configuration of the default Anthropic model
+    (which would then fail every classify_feature call with no LLM auth).
+    """
+    from src.data.causal_role_classifier_loader import ensure_dspy_lm_configured
+
+    dspy.settings.configure(lm=None)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-only-not-real")
+
+    # Default model is anthropic/*; with no ANTHROPIC_API_KEY this must
+    # short-circuit to False even though OPENAI_API_KEY is "set".
+    assert ensure_dspy_lm_configured() is False
+    assert getattr(dspy.settings, "lm", None) is None
+
+
+def test_ensure_dspy_lm_configured_rejects_whitespace_only_key(reset_dspy_lm, monkeypatch) -> None:
+    """A whitespace-only key value must be treated as no key.
+
+    Codex pass-2 MEDIUM (issue #193): ``os.environ.get(v)`` returns the
+    string verbatim, so a value of ``"   "`` is truthy by length. The
+    helper now ``.strip()``s before checking; this test pins that.
+    """
+    from src.data.causal_role_classifier_loader import ensure_dspy_lm_configured
+
+    dspy.settings.configure(lm=None)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "   \t\n  ")
+    assert ensure_dspy_lm_configured() is False
+    assert getattr(dspy.settings, "lm", None) is None
+
+
+def test_ensure_dspy_lm_configured_provider_match_proceeds(reset_dspy_lm, monkeypatch) -> None:
+    """OPENAI_API_KEY set AND model is openai/* → configure (return True).
+
+    Verifies the provider-aware gate is symmetric: OpenAI key + OpenAI
+    model proceeds; the helper does not require Anthropic specifically.
+    """
+    from src.data.causal_role_classifier_loader import ensure_dspy_lm_configured
+
+    dspy.settings.configure(lm=None)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-only-not-real")
+    # dspy.LM('openai/gpt-4o-mini') instantiation does NOT contact the
+    # network — only at inference time. So the helper proceeds without
+    # a real key as long as the env var is present and matches the provider.
+    assert ensure_dspy_lm_configured(model="openai/gpt-4o-mini") is True
+    assert getattr(dspy.settings, "lm", None) is not None
+
+
 def test_ensure_dspy_lm_configured_skips_when_no_key(reset_dspy_lm, monkeypatch) -> None:
     """ensure_dspy_lm_configured returns False when no API key in env.
 
