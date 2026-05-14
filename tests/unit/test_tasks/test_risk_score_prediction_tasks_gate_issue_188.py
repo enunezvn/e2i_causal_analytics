@@ -104,3 +104,27 @@ class TestGatedSentinelConstant:
         from src.repositories.prediction import GATED_HONEST_FAILURE_SENTINEL
 
         assert GATED_SENTINEL_PREDICTION_CLASS == GATED_HONEST_FAILURE_SENTINEL
+
+    def test_sentinel_used_in_drift_monitor_module(self) -> None:
+        """The drift_monitor supabase connector also filters on the
+        sentinel; codex pass-4 LOW: the constant is now imported there
+        too. This test verifies the connector source has no stale string
+        literals and imports the sentinel from the centralized location.
+        """
+        from pathlib import Path
+
+        repo_root = Path(__file__).resolve().parents[3]
+        src = (
+            repo_root
+            / "src"
+            / "agents"
+            / "drift_monitor"
+            / "connectors"
+            / "supabase_connector.py"
+        ).read_text(encoding="utf-8")
+        # The connector must import the centralized sentinel (not
+        # hardcode the string literal in .neq() calls).
+        assert "GATED_HONEST_FAILURE_SENTINEL" in src, (
+            "drift_monitor supabase_connector.py does not import the "
+            "centralized sentinel; future renames will diverge."
+        )
