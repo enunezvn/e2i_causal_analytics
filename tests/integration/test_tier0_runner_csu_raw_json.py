@@ -204,8 +204,16 @@ def test_transformer_survives_unstripped_list_columns(csu_fixture_dir: Path) -> 
         f"check data_transformer._column_has_unhashable_cells."
     )
     feature_columns = result.get("feature_columns") or []
-    # The list columns are NOT dropped from the frame — the transformer
-    # only suppresses them from encoding/scaling. (Use the loader-side
-    # ``_drop_unhashable_columns`` for column removal.)
-    assert "comorbidities" in feature_columns
-    assert "secondary_diagnosis_codes" in feature_columns
+    # Codex pass-1 MEDIUM-1 (2026-05-14): the transformer DROPS list-
+    # typed columns from the frame, mirroring loader semantics so
+    # downstream model_trainer preprocessor does not re-trip the same
+    # nunique() crash. The columns must NOT be in feature_columns.
+    assert "comorbidities" not in feature_columns
+    assert "secondary_diagnosis_codes" not in feature_columns
+    # And the drop is recorded in transformations_applied for auditability.
+    transformations = result.get("transformations_applied") or []
+    drop_entries = [t for t in transformations if t.get("type") == "drop_unhashable_columns"]
+    assert len(drop_entries) == 1
+    dropped_set = set(drop_entries[0].get("columns") or [])
+    assert "comorbidities" in dropped_set
+    assert "secondary_diagnosis_codes" in dropped_set

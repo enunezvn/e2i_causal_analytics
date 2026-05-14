@@ -332,7 +332,7 @@ class TestIdentifyColumnTypesBoolRouting:
                 "count": [10, 20, 30, 40],
             }
         )
-        numeric, categorical, datetime = _identify_column_types(df, exclude_columns=[])
+        numeric, categorical, datetime, _unhashable = _identify_column_types(df, exclude_columns=[])
         assert "flag" in categorical
         assert "flag" not in numeric
 
@@ -348,7 +348,7 @@ class TestIdentifyColumnTypesBoolRouting:
                 "count": [10, 20, 30, 40],
             }
         )
-        numeric, _, _ = _identify_column_types(df, exclude_columns=[])
+        numeric, _, _, _ = _identify_column_types(df, exclude_columns=[])
         # With bool routed away, numeric_cols holds only int+float — common
         # dtype is float64, no object fallback.
         values = df[numeric].values
@@ -369,35 +369,27 @@ class TestIdentifyColumnTypesBoolRouting:
                 "x_obj": ["a", "b", "c"],
             }
         )
-        numeric, categorical, _ = _identify_column_types(df, exclude_columns=[])
+        numeric, categorical, _, _ = _identify_column_types(df, exclude_columns=[])
         assert "x_int" in numeric
         assert "x_float" in numeric
         assert "x_obj" in categorical
 
 
-class TestIdentifyColumnTypesUnhashableSkip:
-    """Object columns with list/dict/set/tuple/ndarray cells must be skipped.
+class TestIdentifyColumnTypesUnhashableReport:
+    """Object columns with list/dict/set/tuple/ndarray cells must be reported
+    in the fourth return slot so ``transform_data`` drops them from all splits.
 
-    Issue #197: ``scripts/run_tier0_test.py --data-dir <csu_dir>`` ingests
-    raw CSU ``patient_journeys.json`` whose ``comorbidities`` and
-    ``secondary_diagnosis_codes`` columns carry list-typed cells (most
-    empty ``[]``; some non-empty in real cohorts). The
-    ``data_loader._drop_unhashable_columns`` helper strips these at file
-    ingestion, but ``_identify_column_types`` must defend itself too —
-    any caller bypassing the loader (preassembled DataFrames passed
-    directly via ``state['train_df']``, alternate ingestion shapes)
-    still reaches the type-detection step. Without the guard, the
-    ``df[col].nunique()`` call at the object-dtype branch crashes with
-    ``TypeError: unhashable type: 'list'``.
-
-    See ``data_loader._drop_unhashable_columns`` for the upstream
-    counterpart (drops the column entirely at ingest). This guard is
-    a per-column skip — the column survives in the DataFrame, but is
-    not registered as numeric/categorical for encoding.
+    Issue #197 (Codex pass-1 MEDIUM-1, 2026-05-14): leaving the columns
+    in the frame just shifts the ``TypeError: unhashable type: 'list'``
+    crash downstream to ``model_trainer/nodes/preprocessor.py::
+    _detect_feature_types`` — same ``X[col].nunique()`` call — so
+    ``_identify_column_types`` must REPORT the columns to its caller
+    and ``transform_data`` must DROP them symmetrically across splits.
+    Mirrors ``data_loader._drop_unhashable_columns`` semantics so the
+    transformer's contract is consistent with the loader's.
     """
 
-    def test_list_column_skipped_not_crashed(self) -> None:
-        """List-typed object column must be skipped without crashing."""
+    def test_list_column_reported_as_unhashable(self) -> None:
         df = pd.DataFrame(
             {
                 "comorbidities": [["E11", "I10"], [], ["J45"], []],
@@ -405,7 +397,8 @@ class TestIdentifyColumnTypesUnhashableSkip:
                 "y": ["a", "b", "a", "c"],
             }
         )
-        numeric, categorical, datetime = _identify_column_types(df, exclude_columns=[])
+        numeric, categorical, datetime, unhashable = _identify_column_types(df, exclude_columns=[])
+        assert "comorbidities" in unhashable
         assert "comorbidities" not in numeric
         assert "comorbidities" not in categorical
         assert "comorbidities" not in datetime
@@ -413,14 +406,13 @@ class TestIdentifyColumnTypesUnhashableSkip:
         assert "x" in numeric
         assert "y" in categorical
 
-    def test_empty_list_only_column_skipped(self) -> None:
-        """Empty-list cells are still ``list`` instances — must be skipped.
-
-        Real CSU ``patient_journeys.json`` has all-empty ``comorbidities``
-        and ``secondary_diagnosis_codes`` for every record sampled
-        2026-05-14; the column type is object, the cells are ``[]``, and
-        ``.nunique()`` still crashes with ``TypeError: unhashable type:
-        'list'``."""
+    def test_empty_list_only_column_reported(self) -> None:
+        """Empty-list cells are still ``list`` instances. Real CSU
+        ``patient_journeys.json`` has all-empty ``comorbidities`` and
+        ``secondary_diagnosis_codes`` for every record sampled
+        2026-05-14; the column type is object, the cells are ``[]``,
+        and ``.nunique()`` still crashes with ``TypeError: unhashable
+        type: 'list'``."""
         df = pd.DataFrame(
             {
                 "comorbidities": [[], [], [], []],
@@ -428,36 +420,45 @@ class TestIdentifyColumnTypesUnhashableSkip:
                 "scalar": [1, 2, 3, 4],
             }
         )
-        numeric, categorical, _ = _identify_column_types(df, exclude_columns=[])
+        numeric, categorical, _, unhashable = _identify_column_types(df, exclude_columns=[])
+        assert "comorbidities" in unhashable
+        assert "secondary_diagnosis_codes" in unhashable
         assert "comorbidities" not in numeric
         assert "comorbidities" not in categorical
         assert "secondary_diagnosis_codes" not in numeric
         assert "secondary_diagnosis_codes" not in categorical
         assert "scalar" in numeric
 
-    def test_ndarray_column_skipped(self) -> None:
-        """``numpy.ndarray`` cells (the Parquet→pandas roundtrip shape) must
-        also be skipped — same crash path as Python lists."""
+    def test_ndarray_column_reported(self) -> None:
+        """``numpy.ndarray`` cells (the Parquet→pandas roundtrip shape)
+        must also surface as unhashable — same crash path as Python
+        lists."""
         df = pd.DataFrame(
             {
-                "vec": [np.array([1, 2]), np.array([3]), np.array([]), np.array([4, 5, 6])],
+                "vec": [
+                    np.array([1, 2]),
+                    np.array([3]),
+                    np.array([]),
+                    np.array([4, 5, 6]),
+                ],
                 "scalar": [1.0, 2.0, 3.0, 4.0],
             }
         )
-        numeric, categorical, _ = _identify_column_types(df, exclude_columns=[])
+        numeric, categorical, _, unhashable = _identify_column_types(df, exclude_columns=[])
+        assert "vec" in unhashable
         assert "vec" not in numeric
         assert "vec" not in categorical
         assert "scalar" in numeric
 
-    def test_dict_column_skipped(self) -> None:
-        """Dict cells are also unhashable; must be skipped."""
+    def test_dict_column_reported(self) -> None:
         df = pd.DataFrame(
             {
                 "meta": [{"k": 1}, {"k": 2}, {}, {"k": 3}],
                 "scalar": [1, 2, 3, 4],
             }
         )
-        numeric, categorical, _ = _identify_column_types(df, exclude_columns=[])
+        numeric, categorical, _, unhashable = _identify_column_types(df, exclude_columns=[])
+        assert "meta" in unhashable
         assert "meta" not in numeric
         assert "meta" not in categorical
         assert "scalar" in numeric
@@ -471,25 +472,28 @@ class TestIdentifyColumnTypesUnhashableSkip:
                 "scalar": [1, 2, 3, 4],
             }
         )
-        numeric, categorical, _ = _identify_column_types(df, exclude_columns=[])
+        numeric, categorical, _, unhashable = _identify_column_types(df, exclude_columns=[])
         assert "diag" in categorical
         assert "diag" not in numeric
+        assert "diag" not in unhashable
 
 
 @pytest.mark.asyncio
-class TestTransformDataSurvivesUnhashableColumns:
-    """End-to-end transform_data must not crash on list-typed columns.
+class TestTransformDataDropsUnhashableColumns:
+    """``transform_data`` must DROP list-typed columns from all split
+    frames (not just skip them from encoding) so downstream consumers
+    (model_trainer preprocessor) see a clean encodable feature surface.
 
-    Issue #197 root cause: when ``train_df`` contains list-typed cells
-    (CSU ``comorbidities`` / ``secondary_diagnosis_codes``), the
-    transformer raises ``TypeError: unhashable type: 'list'`` before
-    any model code runs. With the ``_column_has_unhashable_cells``
-    guard in place, transform_data returns a non-error result; the
-    list-typed columns survive in ``feature_columns`` (unchanged from
-    input) but are not registered as numeric/categorical for encoding.
+    Codex pass-1 MEDIUM-1 (2026-05-14): leaving columns in
+    ``X_train``/``feature_columns`` shifts the
+    ``TypeError: unhashable type: 'list'`` crash downstream to
+    ``model_trainer/nodes/preprocessor.py::_detect_feature_types``
+    where it calls the same ``X[col].nunique()``. Mirror the
+    ``data_loader._drop_unhashable_columns`` semantics here so the
+    transformer's contract is consistent with the loader's.
     """
 
-    async def test_transform_data_does_not_crash_on_list_columns(self) -> None:
+    async def test_transform_data_drops_list_columns_from_all_splits(self) -> None:
         train_df = pd.DataFrame(
             {
                 "comorbidities": [["E11", "I10"], [], ["J45"], []],
@@ -516,46 +520,140 @@ class TestTransformDataSurvivesUnhashableColumns:
         result = await transform_data(state)
         assert result.get("error") is None, f"transform_data crashed with: {result.get('error')!r}"
         assert result.get("error_type") is None
+
+        # The transformer MUST drop list-typed columns from the frame
+        # (Codex pass-1 MEDIUM-1). Otherwise model_trainer's
+        # _detect_feature_types crashes on the same nunique() call.
+        X_train = result["X_train"]
+        X_val = result.get("X_val")
+        X_test = result.get("X_test")
+        assert "comorbidities" not in X_train.columns
+        assert "secondary_diagnosis_codes" not in X_train.columns
+        assert X_val is not None and "comorbidities" not in X_val.columns
+        assert X_val is not None and "secondary_diagnosis_codes" not in X_val.columns
+        assert X_test is not None and "comorbidities" not in X_test.columns
+        assert X_test is not None and "secondary_diagnosis_codes" not in X_test.columns
+
+        # feature_columns reflects the post-drop schema.
         feature_columns = result.get("feature_columns") or []
-        # Both list-typed columns survive in feature_columns (the
-        # transformer doesn't drop columns it doesn't know how to handle;
-        # the loader-side helper ``_drop_unhashable_columns`` is the
-        # correct upstream place for that).
-        assert "comorbidities" in feature_columns
-        assert "secondary_diagnosis_codes" in feature_columns
+        assert "comorbidities" not in feature_columns
+        assert "secondary_diagnosis_codes" not in feature_columns
+
         # Scalars still encoded — sanity check.
         assert "age" in feature_columns
         assert "gender" in feature_columns
 
-    async def test_transform_data_with_excluded_list_columns_still_works(self) -> None:
-        """Sanity: callers who DO pass list cols in excluded_features still
-        get a clean transform — the new guard does not interfere with the
-        existing exclusion path."""
+        # transformations_applied surfaces the drop for auditability.
+        transformations = result.get("transformations_applied") or []
+        drop_entries = [t for t in transformations if t.get("type") == "drop_unhashable_columns"]
+        assert len(drop_entries) == 1, (
+            f"Expected one drop_unhashable_columns entry; "
+            f"got {len(drop_entries)}. transformations_applied={transformations!r}"
+        )
+        dropped_set = set(drop_entries[0].get("columns") or [])
+        assert dropped_set == {"comorbidities", "secondary_diagnosis_codes"}
+
+    async def test_transform_data_drops_only_unhashable_keeps_others(self) -> None:
+        """Regression: the drop is precise — only list-typed columns leave
+        the frame; numeric and string-object columns survive intact."""
         train_df = pd.DataFrame(
             {
                 "comorbidities": [["E11", "I10"], [], ["J45"], []],
+                "diag": ["L50.1", "L50.1", "L50.2", "L50.9"],
                 "age": [25.0, 60.0, 45.0, 30.0],
                 "target": [0, 1, 0, 1],
             }
         )
         state = {
-            "experiment_id": "test_issue_197_excluded_list",
+            "experiment_id": "test_issue_197_precise_drop",
             "train_df": train_df,
             "validation_df": train_df.copy(),
             "test_df": train_df.copy(),
             "scope_spec": {
                 "target_column": "target",
-                "excluded_features": ["comorbidities"],
                 "scaling_method": "minmax",
                 "imputation_strategy": "mean",
                 "extract_datetime_features": False,
+                "excluded_features": [],
             },
         }
         result = await transform_data(state)
         assert result.get("error") is None
-        # ``feature_columns`` reflects ``train_df.columns`` AFTER target drop;
-        # excluded features are still PRESENT in train_df (the transformer
-        # only suppresses them from encoding/scaling, not from the frame).
-        feature_columns = result.get("feature_columns") or []
-        assert "comorbidities" in feature_columns  # still in frame
-        assert "age" in feature_columns
+        X_train = result["X_train"]
+        # comorbidities dropped; diag + age survive (diag as encoded
+        # categorical, age as scaled numeric).
+        assert "comorbidities" not in X_train.columns
+        assert "diag" in X_train.columns
+        assert "age" in X_train.columns
+
+    async def test_transform_data_no_unhashable_no_drop_transformation(self) -> None:
+        """Regression: when no list columns are present, no
+        ``drop_unhashable_columns`` transformation is recorded."""
+        train_df = pd.DataFrame(
+            {
+                "diag": ["L50.1", "L50.1", "L50.2", "L50.9"],
+                "age": [25.0, 60.0, 45.0, 30.0],
+                "target": [0, 1, 0, 1],
+            }
+        )
+        state = {
+            "experiment_id": "test_issue_197_no_drop",
+            "train_df": train_df,
+            "validation_df": train_df.copy(),
+            "test_df": train_df.copy(),
+            "scope_spec": {
+                "target_column": "target",
+                "scaling_method": "minmax",
+                "imputation_strategy": "mean",
+                "extract_datetime_features": False,
+                "excluded_features": [],
+            },
+        }
+        result = await transform_data(state)
+        assert result.get("error") is None
+        transformations = result.get("transformations_applied") or []
+        drop_entries = [t for t in transformations if t.get("type") == "drop_unhashable_columns"]
+        assert drop_entries == [], (
+            f"Expected NO drop_unhashable_columns when no list cols present; got {drop_entries!r}"
+        )
+
+    async def test_transform_data_output_passes_model_trainer_detect(self) -> None:
+        """Cross-agent contract: transform_data output must be safe for the
+        model_trainer preprocessor's auto-detect. This pins the surgical
+        Codex MEDIUM-1 fix by composing both nodes — if the transformer
+        leaves a list column in X_train, the preprocessor's
+        ``_detect_feature_types`` crashes on ``X[col].nunique()``.
+        """
+        from src.agents.ml_foundation.model_trainer.nodes.preprocessor import (
+            ModelTrainerPreprocessor,
+        )
+
+        train_df = pd.DataFrame(
+            {
+                "comorbidities": [["E11", "I10"], [], ["J45"], []],
+                "age": [25.0, 60.0, 45.0, 30.0],
+                "gender": ["M", "F", "F", "M"],
+                "target": [0, 1, 0, 1],
+            }
+        )
+        state = {
+            "experiment_id": "test_issue_197_cross_agent_contract",
+            "train_df": train_df,
+            "validation_df": train_df.copy(),
+            "test_df": train_df.copy(),
+            "scope_spec": {
+                "target_column": "target",
+                "scaling_method": "minmax",
+                "imputation_strategy": "mean",
+                "extract_datetime_features": False,
+                "excluded_features": [],
+            },
+        }
+        result = await transform_data(state)
+        assert result.get("error") is None
+        X_train = result["X_train"]
+        # Without the drop, _detect_feature_types crashes at
+        # ``n_unique = X[col].nunique()`` on the comorbidities column.
+        # With the drop, this is a noop list comprehension.
+        preprocessor = ModelTrainerPreprocessor()
+        preprocessor._detect_feature_types(X_train)  # must NOT raise
