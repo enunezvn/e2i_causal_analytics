@@ -80,7 +80,6 @@ idempotency).
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 import warnings
 from datetime import datetime, timedelta, timezone
@@ -89,6 +88,7 @@ from typing import Any
 
 import pytest
 
+from tests.integration._asyncio_compat import run_sync
 from tests.integration._feast_helpers import (
     build_minimal_feature_view,
     feast_integration_available,
@@ -165,8 +165,11 @@ def feast_client() -> Any:
 
     client = FeastClient()
 
+    # Issue #220: ``run_sync`` instead of bare ``asyncio.run`` so this
+    # call is robust against the RAGAS pollution chain (see
+    # ``_asyncio_compat.run_sync`` docstring).
     try:
-        asyncio.run(client.initialize())
+        run_sync(client.initialize())
     except Exception as exc:  # noqa: BLE001 — skip on ANY init failure
         pytest.skip(f"FeastClient.initialize() failed: {exc!s:.200}")
 
@@ -257,7 +260,7 @@ def test_register_feature_view_round_trips_through_list(feast_client: Any) -> No
     store = feast_client._store
 
     try:
-        result = asyncio.run(
+        result = run_sync(
             feast_client.register_feature_view(
                 name=fv_name,
                 entity_name=ENTITY_NAME,
@@ -332,7 +335,7 @@ def test_materialize_via_push_round_trips_to_online_store(feast_client: Any) -> 
     store = feast_client._store
 
     try:
-        result = asyncio.run(
+        result = run_sync(
             feast_client.register_feature_view(
                 name=fv_name,
                 entity_name=ENTITY_NAME,
@@ -416,7 +419,7 @@ def test_get_historical_features_preserves_tz_aware_event_timestamp(
     store = feast_client._store
 
     try:
-        result = asyncio.run(
+        result = run_sync(
             feast_client.register_feature_view(
                 name=fv_name,
                 entity_name=ENTITY_NAME,
@@ -493,7 +496,7 @@ def test_get_online_features_round_trips_pushed_values(feast_client: Any) -> Non
     store = feast_client._store
 
     try:
-        result = asyncio.run(
+        result = run_sync(
             feast_client.register_feature_view(
                 name=fv_name,
                 entity_name=ENTITY_NAME,
@@ -571,7 +574,7 @@ def test_re_registration_with_identical_spec_is_idempotent(
 
     try:
         # First register.
-        first = asyncio.run(
+        first = run_sync(
             feast_client.register_feature_view(
                 name=fv_name,
                 entity_name=ENTITY_NAME,
@@ -588,7 +591,7 @@ def test_re_registration_with_identical_spec_is_idempotent(
         first_ttl = first_fv.ttl
 
         # Second register — IDENTICAL spec.
-        second = asyncio.run(
+        second = run_sync(
             feast_client.register_feature_view(
                 name=fv_name,
                 entity_name=ENTITY_NAME,

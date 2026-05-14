@@ -33,6 +33,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.integration._asyncio_compat import run_sync
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -95,7 +97,6 @@ def test_transformer_survives_raw_csu_list_columns(csu_fixture_dir: Path) -> Non
     transformer, the new ``_column_has_unhashable_cells`` guard
     catches it without crashing).
     """
-    import asyncio
 
     from src.agents.ml_foundation.data_preparer.nodes.data_loader import (
         _load_from_files,
@@ -136,7 +137,7 @@ def test_transformer_survives_raw_csu_list_columns(csu_fixture_dir: Path) -> Non
             "excluded_features": [],  # NOT pre-cleaning list cols
         },
     }
-    result = asyncio.run(transform_data(state))
+    result = run_sync(transform_data(state))
     assert result.get("error") is None, (
         f"transform_data crashed: {result.get('error')!r}\n"
         f"This means the issue #197 defense regressed; check "
@@ -154,7 +155,6 @@ def test_transformer_survives_unstripped_list_columns(csu_fixture_dir: Path) -> 
     transformer's ``_column_has_unhashable_cells`` guard prevents the
     crash. This pins the surgical fix introduced for issue #197.
     """
-    import asyncio
 
     import pandas as pd
 
@@ -196,7 +196,7 @@ def test_transformer_survives_unstripped_list_columns(csu_fixture_dir: Path) -> 
             "excluded_features": [],
         },
     }
-    result = asyncio.run(transform_data(state))
+    result = run_sync(transform_data(state))
     assert result.get("error") is None, (
         f"transform_data crashed on raw list cols (loader bypassed): "
         f"{result.get('error')!r}\n"

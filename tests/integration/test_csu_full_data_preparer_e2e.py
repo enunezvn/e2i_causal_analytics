@@ -23,10 +23,11 @@ Marked ``slow`` (run via ``pytest -m slow``); not in default sweeps.
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 import pytest
+
+from tests.integration._asyncio_compat import run_sync
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CSU_JOURNEYS_PATH = REPO_ROOT / "data" / "rwd" / "csu" / "e2i_ml_v3_patient_journeys.json"
@@ -231,7 +232,7 @@ def _run_pipeline(scope_spec: dict, data_source: dict) -> dict:
     lr._analyze_leakage_with_llm = _stub_llm
     try:
         agent = DataPreparerAgent()
-        return asyncio.run(agent.run(input_data))
+        return run_sync(agent.run(input_data))
     finally:
         lr._analyze_leakage_with_llm = original
 

@@ -56,6 +56,7 @@ from typing import Any
 
 import pytest
 
+from tests.integration._asyncio_compat import run_sync
 from tests.integration._feast_helpers import feast_integration_available
 
 # Skip the entire module if the Feast Python SDK is not importable.
@@ -178,7 +179,7 @@ def test_auto_register_round_trip(feature_store: Any) -> None:
 
     try:
         # ---- Auto-register call -----------------------------------------
-        result = asyncio.run(agent._auto_register_in_feast(final_state, input_data=input_data))
+        result = run_sync(agent._auto_register_in_feast(final_state, input_data=input_data))
 
         # `registered=False` here means we connected to Feast but the
         # auto-register wiring is wrong — fail-loud, that's exactly
@@ -242,8 +243,12 @@ def test_auto_register_round_trip(feature_store: Any) -> None:
         # for Feast 0.43.0 (Q3 resolution). Failures here are
         # low-severity: Feast 0.43.0 ``apply()`` is idempotent (upsert),
         # so a missed cleanup just gets re-applied on the next run.
+        # Issue #220: ``run_sync`` instead of bare ``asyncio.run`` so the
+        # cleanup doesn't crash with ``Event loop is closed`` when an
+        # earlier xdist test triggered ``nest_asyncio.apply()`` (e.g.,
+        # RAGAS at ``ragas/async_utils.py:49``).
         try:
-            asyncio.run(_delete_feature_view_async(feature_store, fv_name))
+            run_sync(_delete_feature_view_async(feature_store, fv_name))
         except Exception as cleanup_exc:  # noqa: BLE001
             warnings.warn(
                 f"Failed to clean up auto-registered FeatureView {fv_name!r}: "
