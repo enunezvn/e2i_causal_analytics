@@ -149,7 +149,7 @@ langchain-community==0.4.1
 # "downward drift" resync would regress to CVE-vulnerable versions:
 #   - langchain-core 1.2.6 (.venv) has CVE-2026-26013 (fix=1.2.11) +
 #     CVE-2026-40087 (fix=1.2.28); pinned 1.2.31 clears both.
-#   - langgraph 1.0.5 (.venv) has CVE-2026-28277 (fix=1.2.10); pinned 1.0.10 clears.
+#   - langgraph 1.0.5 (.venv) has CVE-2026-28277 (fix=1.0.10); pinned 1.0.10 clears.
 #   - langgraph-prebuilt: no CVE on 1.0.5 or 1.0.8; keeping the higher pin for
 #     graph-stability.
 # This means a fresh `pip install -r requirements.txt` will UPGRADE the dev .venv
