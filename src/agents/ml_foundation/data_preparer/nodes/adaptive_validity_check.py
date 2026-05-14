@@ -1954,12 +1954,15 @@ def _classify_ablation_severity(
          SIGNED escape (codex MED-2): NEGATIVE delta = "model improves
          when feature dropped" = nuisance/multicollinearity, NOT a leak.
 
-      B. Joint-check ladder (issue #194 framing, AND-rule):
-         when ``|delta_AUC| > floor`` AND z passes the band:
-           * ``z > z_threshold`` AND ``|delta_AUC| > floor`` → high.
-           * ``MODERATE_Z < z <= z_threshold`` AND ``|delta_AUC| > floor`` → moderate.
-         When ``z=+inf`` (degenerate null) AND ``|delta_AUC| > floor``,
+      B. Joint-check ladder (issue #194 framing, AND-rule; pass-2 MED-1
+         extended the signed-delta requirement here):
+         when ``delta_AUC > floor`` AND z passes the band:
+           * ``z > z_threshold`` AND ``delta_AUC > floor`` → high.
+           * ``MODERATE_Z < z <= z_threshold`` AND ``delta_AUC > floor`` → moderate.
+         When ``z=+inf`` (degenerate null) AND ``delta_AUC > floor``,
          severity=high (mirror of hblp_classify's MED-1 escape).
+         Negative delta cannot reach any of these paths (symmetric with
+         case A); the ladder gate is signed, not absolute.
 
       C. Default: severity=info (below-floor delta, etc.).
 
