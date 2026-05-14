@@ -560,12 +560,16 @@ def test_persisted_artifact_demos_carry_diverse_new_role_features():
         "alive_at_180d_observation_window",
         "diagnostic_test_count_followup",
     }
-    new_instrument_features = {
-        "urban_rural_code",
-        "geographic_region",
+    # Codex pass-4 MED-1: require BOTH IV families in saved demos.
+    # Pass-3's count-only check (>=2 instruments) could be satisfied by
+    # urban_rural_code + geographic_region (both geography), silently
+    # dropping the provider IV family from production training signal.
+    geographic_iv_features = {"urban_rural_code", "geographic_region"}
+    provider_iv_features = {
         "provider_preference_score",
         "index_provider_biologic_volume_prior_year",
     }
+    new_instrument_features = geographic_iv_features | provider_iv_features
 
     demo_collider_features = {
         d["feature_name"]
@@ -580,6 +584,8 @@ def test_persisted_artifact_demos_carry_diverse_new_role_features():
 
     collider_overlap = demo_collider_features & new_collider_features
     instrument_overlap = demo_instrument_features & new_instrument_features
+    geographic_iv_overlap = demo_instrument_features & geographic_iv_features
+    provider_iv_overlap = demo_instrument_features & provider_iv_features
 
     assert len(collider_overlap) >= 2, (
         f"Persisted artifact demos carry only {len(collider_overlap)} of "
@@ -587,7 +593,7 @@ def test_persisted_artifact_demos_carry_diverse_new_role_features():
         f"Expected >= 2 distinct collider features so the compiled "
         f"classifier has diverse training signal for the confounder-collider "
         f"pattern across both count and binary derivations. Recompile with "
-        f"the default max_labeled_demos=16 (raised from 8 on codex pass-3)."
+        f"the default max_labeled_demos=24 (raised from 16 on codex pass-4)."
     )
     assert len(instrument_overlap) >= 2, (
         f"Persisted artifact demos carry only {len(instrument_overlap)} of "
@@ -595,6 +601,27 @@ def test_persisted_artifact_demos_carry_diverse_new_role_features():
         f"Expected >= 2 distinct instrument features so the compiled "
         f"classifier has diverse training signal across both supply-side "
         f"geographic and preference/volume-based provider IV families."
+    )
+    # Codex pass-4 MED-1: family-level diversity. Require at least one
+    # geographic IV AND at least one provider IV in the saved demos.
+    # Without this, the count-only pin lets the compile pass while
+    # silently dropping an entire IV family from production training.
+    assert geographic_iv_overlap, (
+        f"Persisted artifact demos carry NO geographic IV exemplars from "
+        f"{sorted(geographic_iv_features)}; got instrument features "
+        f"{sorted(demo_instrument_features)}. The compiled classifier "
+        f"needs at least one Brookhart supply-side geographic IV demo to "
+        f"teach the geographic-access IV pattern."
+    )
+    assert provider_iv_overlap, (
+        f"Persisted artifact demos carry NO provider IV exemplars from "
+        f"{sorted(provider_iv_features)}; got instrument features "
+        f"{sorted(demo_instrument_features)}. The compiled classifier "
+        f"needs at least one Brookhart-Schneeweiss provider IV demo "
+        f"(preference-fraction or volume-based) to teach the preference-"
+        f"based IV pattern as distinct from the geographic IV family. "
+        f"Recompile with the default max_labeled_demos=24 (raised from "
+        f"16 on codex pass-4 so all 20 labeled examples survive)."
     )
 
 
