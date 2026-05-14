@@ -72,13 +72,29 @@ class _BareAsyncioRunScanner(ast.NodeVisitor):
     inside ``async def`` helpers are correctly skipped, while calls
     inside sync ``def test_…`` bodies are flagged.
 
-    Also tracks ``asyncio`` import bindings so renamed imports
-    (``import asyncio as aio``) are caught.
+    Codex pass-1 MEDIUM (#220): tracks four forms of ``asyncio.run``
+    binding to prevent a future polluter from sneaking through:
+
+    1. ``import asyncio`` / ``import asyncio as aio`` — module-attribute
+       calls of the form ``<binding>.run(...)``.
+    2. ``from asyncio import run`` / ``from asyncio import run as ar`` —
+       direct-name calls of the form ``<binding>(...)``.
+    3. ``my_run = asyncio.run`` / ``my_run: Callable = asyncio.run`` —
+       reassignment to a fresh name (covered by ``visit_Assign`` and
+       ``visit_AnnAssign``).
+    4. Chained reassignment ``a = asyncio.run; b = a`` — propagates
+       through the existing ``_run_bindings`` set.
+
+    Lambdas push a synchronous scope (codex pass-1 LOW-2) so a returned
+    lambda inside an async function isn't silently treated as async.
     """
 
     def __init__(self) -> None:
         super().__init__()
         self._asyncio_module_bindings: set[str] = {"asyncio"}
+        # Names that resolve DIRECTLY to ``asyncio.run`` (from-imports +
+        # reassignment chains). Looked up as bare calls in ``visit_Call``.
+        self._run_bindings: set[str] = set()
         # Stack of booleans: True == inside an async function, False == sync.
         self._async_scope_stack: list[bool] = []
         self.unguarded: list[tuple[int, str]] = []  # (lineno, source line)
@@ -97,6 +113,54 @@ class _BareAsyncioRunScanner(ast.NodeVisitor):
                 self._asyncio_module_bindings.add(alias.asname or alias.name)
         self.generic_visit(node)
 
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:  # type: ignore[override]
+        """Track ``from asyncio import run [as alias]`` (codex pass-1 MED)."""
+
+        if node.module == "asyncio":
+            for alias in node.names:
+                if alias.name == "run":
+                    self._run_bindings.add(alias.asname or alias.name)
+        self.generic_visit(node)
+
+    def _resolve_rhs_run_binding(self, value: ast.AST) -> bool:
+        """Does ``value`` resolve to ``asyncio.run``? Used for reassignment
+        tracking via ``visit_Assign`` / ``visit_AnnAssign``."""
+
+        # Form: ``<module_binding>.run`` (attribute reference, no call).
+        if (
+            isinstance(value, ast.Attribute)
+            and value.attr == "run"
+            and isinstance(value.value, ast.Name)
+            and value.value.id in self._asyncio_module_bindings
+        ):
+            return True
+        # Form: ``<existing_run_binding>`` — chained alias.
+        if isinstance(value, ast.Name) and value.id in self._run_bindings:
+            return True
+        return False
+
+    def visit_Assign(self, node: ast.Assign) -> None:  # type: ignore[override]
+        """Track ``my_run = asyncio.run`` and chained reassignments."""
+
+        if (
+            len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and self._resolve_rhs_run_binding(node.value)
+        ):
+            self._run_bindings.add(node.targets[0].id)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:  # type: ignore[override]
+        """Track ``my_run: Callable = asyncio.run`` (annotated equivalent)."""
+
+        if (
+            isinstance(node.target, ast.Name)
+            and node.value is not None
+            and self._resolve_rhs_run_binding(node.value)
+        ):
+            self._run_bindings.add(node.target.id)
+        self.generic_visit(node)
+
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # type: ignore[override]
         self._async_scope_stack.append(False)
         try:
@@ -111,11 +175,27 @@ class _BareAsyncioRunScanner(ast.NodeVisitor):
         finally:
             self._async_scope_stack.pop()
 
+    def visit_Lambda(self, node: ast.Lambda) -> None:  # type: ignore[override]
+        """A lambda is a SYNCHRONOUS callable regardless of where it is
+        defined — pushing ``False`` here means a lambda's body returning
+        ``asyncio.run(...)`` is flagged even if the lambda is created
+        inside an async function (codex pass-1 LOW-2)."""
+
+        self._async_scope_stack.append(False)
+        try:
+            self.generic_visit(node)
+        finally:
+            self._async_scope_stack.pop()
+
     def _is_asyncio_run(self, call: ast.Call) -> bool:
         func = call.func
+        # Form 1: ``<module_binding>.run(coro)`` — attribute call.
         if isinstance(func, ast.Attribute) and func.attr == "run":
             value = func.value
             return isinstance(value, ast.Name) and value.id in self._asyncio_module_bindings
+        # Form 2: ``<run_binding>(coro)`` — bare call to a tracked name.
+        if isinstance(func, ast.Name) and func.id in self._run_bindings:
+            return True
         return False
 
     def visit_Call(self, node: ast.Call) -> None:  # type: ignore[override]
@@ -260,6 +340,51 @@ def test_scanner_skips_unparseable_files(tmp_path: pathlib.Path) -> None:
     broken = tmp_path / "frag_broken.py"
     broken.write_text("def test_x(:\n    asyncio.run(\n", encoding="utf-8")
     assert _scan_file(broken) == []
+
+
+def test_scanner_catches_from_import_run(tmp_path: pathlib.Path) -> None:
+    """Codex pass-1 MEDIUM: ``from asyncio import run; run(coro())`` must
+    be flagged. The receiver-less call form had no detection before."""
+
+    source = "from asyncio import run\n\ndef test_x():\n    run(some_coro())\n"
+    unguarded = _scan_fragment(tmp_path, "frag_from_run.py", source)
+    assert unguarded and unguarded[0][0] == 4, unguarded
+
+
+def test_scanner_catches_from_import_run_aliased(tmp_path: pathlib.Path) -> None:
+    """``from asyncio import run as ar; ar(coro())`` — asname binding."""
+
+    source = "from asyncio import run as ar\n\ndef test_x():\n    ar(some_coro())\n"
+    unguarded = _scan_fragment(tmp_path, "frag_from_run_alias.py", source)
+    assert unguarded and unguarded[0][0] == 4, unguarded
+
+
+def test_scanner_catches_reassigned_asyncio_run(tmp_path: pathlib.Path) -> None:
+    """``my_run = asyncio.run; my_run(coro())`` — reassignment."""
+
+    source = "import asyncio\nmy_run = asyncio.run\n\ndef test_x():\n    my_run(some_coro())\n"
+    unguarded = _scan_fragment(tmp_path, "frag_reassign.py", source)
+    assert unguarded and unguarded[0][0] == 5, unguarded
+
+
+def test_scanner_catches_chained_reassignment(tmp_path: pathlib.Path) -> None:
+    """``a = asyncio.run; b = a; b(coro())`` — chained reassignment."""
+
+    source = "import asyncio\na = asyncio.run\nb = a\n\ndef test_x():\n    b(some_coro())\n"
+    unguarded = _scan_fragment(tmp_path, "frag_chain.py", source)
+    assert unguarded and unguarded[0][0] == 6, unguarded
+
+
+def test_scanner_flags_lambda_inside_async_function(tmp_path: pathlib.Path) -> None:
+    """Codex pass-1 LOW-2: a lambda returning ``asyncio.run(coro)`` is a
+    *synchronous* callable even if defined inside an async function.
+    The lambda's body MUST be flagged."""
+
+    source = (
+        "import asyncio\n\nasync def make_helper():\n    return lambda: asyncio.run(some_coro())\n"
+    )
+    unguarded = _scan_fragment(tmp_path, "frag_lambda_in_async.py", source)
+    assert unguarded and unguarded[0][0] == 4, unguarded
 
 
 def test_scanner_flags_nested_sync_def_inside_async_module_top_level(
