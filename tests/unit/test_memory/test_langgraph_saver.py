@@ -12,7 +12,7 @@ All tests use mocked dependencies to avoid external services.
 """
 
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -186,13 +186,15 @@ class TestCreateCheckpointer:
 
 
 class TestCreateAsyncCheckpointer:
-    """Tests for create_async_checkpointer function."""
+    """Tests for create_async_checkpointer function (async; awaits asetup())."""
 
-    def test_creates_async_redis_saver_with_url(self):
+    @pytest.mark.asyncio
+    async def test_creates_async_redis_saver_with_url(self):
         """Should create AsyncRedisSaver when Redis is available."""
         import sys
 
         mock_saver = MagicMock()
+        mock_saver.asetup = AsyncMock()
         mock_cls = MagicMock()
         mock_cls.return_value = mock_saver
         mock_module = MagicMock()
@@ -202,11 +204,13 @@ class TestCreateAsyncCheckpointer:
             sys.modules,
             {"langgraph.checkpoint.redis.aio": mock_module},
         ):
-            result = create_async_checkpointer(redis_url="redis://custom:6380")
+            result = await create_async_checkpointer(redis_url="redis://custom:6380")
             mock_cls.assert_called_once_with(redis_url="redis://custom:6380")
+            mock_saver.asetup.assert_awaited_once()
             assert result == mock_saver
 
-    def test_falls_back_to_memory_on_import_error(self, mock_memory_saver):
+    @pytest.mark.asyncio
+    async def test_falls_back_to_memory_on_import_error(self, mock_memory_saver):
         """Should fall back to MemorySaver when async import fails."""
         import sys
 
@@ -215,19 +219,21 @@ class TestCreateAsyncCheckpointer:
                 "langgraph.checkpoint.memory.MemorySaver",
                 return_value=mock_memory_saver,
             ):
-                result = create_async_checkpointer(fallback_to_memory=True)
+                result = await create_async_checkpointer(fallback_to_memory=True)
                 assert result == mock_memory_saver
 
-    def test_raises_import_error_when_fallback_disabled(self):
+    @pytest.mark.asyncio
+    async def test_raises_import_error_when_fallback_disabled(self):
         """Should raise ImportError when fallback_to_memory is False."""
         import sys
 
         with patch.dict(sys.modules, {"langgraph.checkpoint.redis.aio": None}):
             with pytest.raises(ImportError) as exc_info:
-                create_async_checkpointer(fallback_to_memory=False)
+                await create_async_checkpointer(fallback_to_memory=False)
             assert "langgraph-checkpoint-redis" in str(exc_info.value)
 
-    def test_falls_back_on_connection_error(self, mock_memory_saver):
+    @pytest.mark.asyncio
+    async def test_falls_back_on_connection_error(self, mock_memory_saver):
         """Should fall back to MemorySaver when async connection fails."""
         import sys
 
@@ -244,10 +250,11 @@ class TestCreateAsyncCheckpointer:
                 "langgraph.checkpoint.memory.MemorySaver",
                 return_value=mock_memory_saver,
             ):
-                result = create_async_checkpointer(fallback_to_memory=True)
+                result = await create_async_checkpointer(fallback_to_memory=True)
                 assert result == mock_memory_saver
 
-    def test_raises_connection_error_when_fallback_disabled(self):
+    @pytest.mark.asyncio
+    async def test_raises_connection_error_when_fallback_disabled(self):
         """Should raise ConnectionError when fallback is disabled."""
         import sys
 
@@ -261,7 +268,7 @@ class TestCreateAsyncCheckpointer:
             {"langgraph.checkpoint.redis.aio": mock_module},
         ):
             with pytest.raises(ConnectionError) as exc_info:
-                create_async_checkpointer(fallback_to_memory=False)
+                await create_async_checkpointer(fallback_to_memory=False)
             assert "Failed to connect to Redis" in str(exc_info.value)
 
 
@@ -325,11 +332,13 @@ class TestCheckpointerConfig:
             config.create_checkpointer()
             mock_cls.assert_called_once_with(redis_url="redis://config-test:6379")
 
-    def test_create_async_checkpointer_method(self):
+    @pytest.mark.asyncio
+    async def test_create_async_checkpointer_method(self):
         """Should create async checkpointer using configuration."""
         import sys
 
         mock_saver = MagicMock()
+        mock_saver.asetup = AsyncMock()
         mock_cls = MagicMock()
         mock_cls.return_value = mock_saver
         mock_module = MagicMock()
@@ -340,7 +349,7 @@ class TestCheckpointerConfig:
             {"langgraph.checkpoint.redis.aio": mock_module},
         ):
             config = CheckpointerConfig(redis_url="redis://config-async:6379")
-            config.create_async_checkpointer()
+            await config.create_async_checkpointer()
             mock_cls.assert_called_once_with(redis_url="redis://config-async:6379")
 
 
@@ -361,9 +370,10 @@ class TestCheckpointerIntegration:
         # Verify it has the expected checkpointer interface
         assert hasattr(result, "put") or hasattr(result, "aget") or hasattr(result, "get")
 
-    def test_real_async_checkpointer_creation_with_fallback(self):
+    @pytest.mark.asyncio
+    async def test_real_async_checkpointer_creation_with_fallback(self):
         """Test that create_async_checkpointer works end-to-end with fallback."""
-        result = create_async_checkpointer(fallback_to_memory=True)
+        result = await create_async_checkpointer(fallback_to_memory=True)
         assert result is not None
         assert hasattr(result, "put") or hasattr(result, "aget") or hasattr(result, "get")
 
