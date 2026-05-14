@@ -48,7 +48,9 @@ def create_checkpointer(redis_url: Optional[str] = None, fallback_to_memory: boo
     try:
         from langgraph.checkpoint.redis import RedisSaver
 
-        checkpointer = RedisSaver.from_conn_string(url)
+        # langgraph-checkpoint-redis 0.4.x changed from_conn_string into a
+        # @contextmanager; for long-lived checkpointer use we construct directly.
+        checkpointer = RedisSaver(redis_url=url)
         logger.info(f"Created RedisSaver checkpointer for {url.split('@')[-1]}")
         return checkpointer
 
@@ -94,7 +96,9 @@ def create_async_checkpointer(redis_url: Optional[str] = None, fallback_to_memor
     try:
         from langgraph.checkpoint.redis.aio import AsyncRedisSaver
 
-        checkpointer = AsyncRedisSaver.from_conn_string(url)
+        # Same API change as the sync RedisSaver — from_conn_string is now
+        # an @asynccontextmanager; construct directly for long-lived use.
+        checkpointer = AsyncRedisSaver(redis_url=url)
         logger.info(f"Created AsyncRedisSaver checkpointer for {url.split('@')[-1]}")
         return checkpointer
 
