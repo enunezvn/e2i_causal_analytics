@@ -478,6 +478,94 @@ def test_compose_legacy_verdict_does_not_cap_when_joint_check_did_not_fire(
     assert "212 cap" not in verdict["evidence"]
 
 
+def test_compose_legacy_verdict_does_not_cap_when_ablation_corroborated(
+    reset_dspy_lm,
+) -> None:
+    """Issue #212 codex pass-2 MED-1 follow-on: the cap MUST NOT fire
+    when issue #196's ablation pass independently corroborated the
+    signal (``ablation_severity`` in {moderate, high}).
+
+    Scenario: permutation z=4σ + |delta_AUC|=0.05 (below floor 0.10)
+    → joint check clamps severity to info, delta_auc_below_floor=True,
+    severity_pre_joint_check=moderate. But ablation z=4σ +
+    ablation_delta_AUC=0.15 (above floor) → ablation classifier
+    returns 'moderate' → _combine_ablation_with_permutation escalates
+    severity (info → moderate) AND severity_pre_joint_check (moderate
+    preserved). Ablation_severity='moderate' set as audit field.
+
+    LLM verdict 'descendant' (leak) → voter assigns severity=high/drop.
+
+    PRE-CORROBORATION-GUARD FIX: the cap would fire because
+    delta_auc_below_floor=True AND decided_by='llm', capping severity
+    back to permutation's joint-clamped 'info' — SILENTLY relaxing the
+    ablation contract. The corroboration guard skips the cap when
+    ablation independently passed its own joint check.
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _compose_legacy_verdict,
+    )
+    from src.data.kg.ensemble_voter import EnsembleVoter
+    from src.data.kg.types import LLMVerdict
+
+    voter = EnsembleVoter()
+    # Adversarial input: permutation joint-clamped, ablation escalated.
+    adversarial_input = {
+        "layer": "3",
+        "severity": "moderate",  # ablation escalated this
+        "severity_pre_joint_check": "moderate",
+        "remediation": "ambiguous",
+        "evidence": "permutation joint-clamped but ablation escalated",
+        "z_score": 4.0,
+        "actual_auc": 0.55,
+        "null_mean": 0.50,
+        "null_std": 0.0125,
+        "p_value": 0.001,
+        "n_permutations": 200,
+        "delta_auc": 0.05,  # permutation below floor
+        "delta_auc_floor": 0.10,
+        "delta_auc_below_floor": True,  # permutation joint check fired
+        # Ablation independently corroborated the signal — its
+        # classifier ALREADY applied the joint check on its OWN
+        # delta_auc and returned 'moderate'.
+        "ablation_z_score": 4.0,
+        "ablation_delta_auc": 0.15,  # ABOVE floor (independent corroboration)
+        "ablation_null_mean": 0.0,
+        "ablation_null_std": 0.03,
+        "ablation_severity": "moderate",  # corroborates Layer 3
+        "_hblp_classified": True,
+    }
+    llm_verdict = LLMVerdict(
+        causal_role="descendant",  # leak role
+        mechanism="ablation-corroborated leak path",
+        recommended_remediation="drop",
+        cited_pmids=(),
+    )
+    verdict = _compose_legacy_verdict(
+        "corroborated_feat",
+        voter=voter,
+        adversarial_input=adversarial_input,
+        llm_verdict=llm_verdict,
+    )
+    # Audit fields preserved.
+    assert verdict["decided_by"] == "llm"
+    assert verdict["layer"] == "4"
+    # Final severity is NOT capped because ablation independently
+    # corroborated. The voter's LLM-derived severity propagates.
+    assert verdict["severity"] == "high", (
+        f"Issue #212 pass-2 MED-1 follow-on: cap MUST NOT fire when "
+        f"ablation_severity in {{moderate, high}} — that means #196's "
+        f"ablation joint check independently corroborated the signal. "
+        f"Got severity={verdict['severity']!r}, expected 'high' "
+        f"(LLM-driven). Full verdict: {verdict}"
+    )
+    assert verdict["remediation"] == "drop"
+    # No #212 cap annotation in evidence (cap did not fire).
+    assert "212 cap" not in verdict["evidence"], (
+        f"Cap annotation must NOT appear when ablation corroborated; "
+        f"got evidence={verdict['evidence']!r}"
+    )
+
+
 def test_compose_legacy_verdict_cap_fires_on_remediation_only_difference(
     reset_dspy_lm,
 ) -> None:
