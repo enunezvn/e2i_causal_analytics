@@ -8,7 +8,7 @@
 #
 a2wsgi==1.10.10
 aiohappyeyeballs==2.6.1
-aiohttp==3.13.2
+aiohttp==3.13.5
 aiohttp-asgi-connector==1.1.2
 aiosignal==1.4.0
 aiosqlite==0.22.0
@@ -38,7 +38,7 @@ cffi==2.0.0
 cfgv==3.5.0
 charset-normalizer==3.4.4
 clarabel==0.11.1
-click==8.3.1
+click==8.1.8
 click-option-group==0.5.9
 cloudpickle==3.1.2
 colorama==0.4.6
@@ -102,7 +102,7 @@ huggingface-hub==0.36.0
 hyperframe==6.1.0
 identify==2.6.15
 idna==3.11
-importlib_metadata==8.7.0
+importlib_metadata==8.5.0
 iniconfig==2.3.0
 instructor==1.13.0
 itsdangerous==2.2.0
@@ -112,7 +112,7 @@ joblib==1.5.3
 json_repair==0.54.3
 jsonpatch==1.33
 jsonpointer==3.0.0
-jsonschema==4.25.1
+jsonschema==4.23.0
 jsonschema-specifications==2025.9.1
 kantoku==0.18.3
 kiwisolver==1.4.9
@@ -124,7 +124,7 @@ langchain-community==0.4.1
 # See requirements.txt for rationale: keep higher pre-PR pins instead of
 # resyncing to .venv to avoid regressing CVE fix versions.
 langchain-core==1.2.31
-langchain-openai==1.1.7
+langchain-openai==1.1.14
 langchain-text-splitters==1.1.2
 langgraph==1.0.10
 langgraph-checkpoint==3.0.1
@@ -133,7 +133,7 @@ langgraph-sdk==0.3.1
 langsmith==0.8.0
 librt==0.7.4
 lightgbm==4.6.0
-litellm==1.83.0
+litellm==1.83.7
 llvmlite==0.46.0
 locket==1.0.0
 magicattr==0.1.6
@@ -177,7 +177,7 @@ nvidia-nccl-cu12==2.27.5
 nvidia-nvjitlink-cu12==12.8.93
 nvidia-nvshmem-cu12==3.3.20
 nvidia-nvtx-cu12==12.8.90
-openai==2.14.0
+openai==2.30.0
 opentelemetry-api==1.39.1
 opentelemetry-instrumentation==0.60b1
 opentelemetry-instrumentation-aiohttp-client==0.60b1
@@ -231,7 +231,7 @@ pytest-cov==7.0.0
 pytest-mock==3.15.1
 pytest-xdist==3.8.0
 python-dateutil==2.9.0.post0
-python-dotenv==1.2.1
+python-dotenv==1.0.1
 python-json-logger==4.0.0
 python-multipart==0.0.21
 pytokens==0.3.0
@@ -286,7 +286,7 @@ tabulate==0.9.0
 tenacity==9.1.2
 threadpoolctl==3.6.0
 tiktoken==0.12.0
-tokenizers==0.22.1
+tokenizers==0.22.2
 toml==0.10.2
 tomli_w==1.2.0
 toolz==1.1.0

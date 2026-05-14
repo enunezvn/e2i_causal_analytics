@@ -194,11 +194,8 @@ jobs:
             --ignore-vuln GHSA-3936-cmfr-pm3m `# black 25.12.0 -> 26.3.1 major bump; coordinate with ruff/format CI baseline` \
             --ignore-vuln GHSA-w8v5-vhqr-4h9v `# diskcache 5.6.3 has no upstream fix as of 2026-04` \
             --ignore-vuln GHSA-gg5m-55jj-8m5g `# graphiti-core 0.24.3 -> 0.28.2 multi-minor; depends on memory backend test pass` \
-            --ignore-vuln GHSA-r7w7-9xr2-qq2r `# langchain-openai 1.1.6 -> 1.1.14 blocked by openai>=2.26 (current 2.14)` \
-            --ignore-vuln GHSA-xqmj-j6mv-4862 `# litellm 1.83.0 -> 1.83.7 (CVE-2026-42203); litellm 1.83.1+ hard-pins aiohttp==3.13.5 / openai==2.30.0 / 10 others — must bundle with cascading bumps in Wave 2 or a dedicated Wave 1.5` \
-            --ignore-vuln GHSA-r75f-5x8p-qvmc `# litellm 1.83.0 -> 1.83.7 (CVE-2026-42208); surfaced by Wave 1 bump 1.80.12 -> 1.83.0 (pip-audit DB updated; the CVE was unreported on the 1.80.12 baseline). Same hard-pin coupling as GHSA-xqmj-j6mv-4862; will clear in the same bundled bump.` \
-            --ignore-vuln GHSA-v4p8-mg3p-g94g `# litellm 1.83.0 -> 1.83.7 (CVE-2026-42271; PROXY_ADMIN gating fix); we do NOT use litellm proxy mode, so inapplicable in practice. Same hard-pin coupling as GHSA-xqmj-j6mv-4862.` \
-            --ignore-vuln GHSA-wxxx-gvqv-xp7p `# litellm 1.83.0 -> 1.83.10 (CVE-2026-40217); surfaced by Wave 1 bump 1.80.12 -> 1.83.0 (pip-audit DB updated). Fix requires 1.83.10; same hard-pin coupling as the 1.83.7-fix CVEs above.` \
+            --ignore-vuln GHSA-wxxx-gvqv-xp7p `# litellm 1.83.7 -> 1.83.10 (CVE-2026-40217); only residual litellm CVE. We hold at 1.83.7 because 1.83.10 hard-pins openai==2.24.0 which breaks the langchain-openai 1.1.14 GHSA fix floor (openai>=2.26.0). Re-evaluate when litellm relaxes the openai pin again.` \
+            --ignore-vuln GHSA-mf9w-mj56-hr94 `# python-dotenv 1.0.1 (CVE-2026-28684; fix=1.2.2); INTRODUCED REGRESSION by Wave 2 downgrade. litellm 1.83.7 hard-pins python-dotenv==1.0.1 so we cannot stay at 1.2.2. Re-evaluate when litellm relaxes the python-dotenv pin.` \
             --ignore-vuln GHSA-xch3-2f9x-wh9f `# mlflow 3.7.0 fix only in 3.8.0rc0 (refuse rc); see mlflow 3.11.x upgrade ticket` \
             --ignore-vuln GHSA-gq3w-7jj3-x7gr `# mlflow 3.7.0 same — fix only in 3.8.0rc0` \
             --ignore-vuln GHSA-q2r8-vmq7-fpx2 `# mlflow 3.7.0 same — fix only in 3.8.0rc0` \
