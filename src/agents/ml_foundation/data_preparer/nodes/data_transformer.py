@@ -101,16 +101,51 @@ async def transform_data(state: DataPreparerState) -> Dict[str, Any]:
                 target_holdout = holdout_df[target_column].copy()
                 holdout_df = holdout_df.drop(columns=[target_column])
 
-        # Identify column types
-        numeric_cols, categorical_cols, datetime_cols = _identify_column_types(
+        # Identify column types. The fourth slot reports object-dtype
+        # columns carrying unhashable container cells (list/dict/ndarray)
+        # that crash downstream nunique() / LabelEncoder. The loader path
+        # already strips these via ``_drop_unhashable_columns`` but callers
+        # who bypass the loader (preassembled DataFrames) reach here with
+        # the columns intact; mirror the loader behavior by dropping them
+        # from all splits so downstream nodes (model_trainer preprocessor,
+        # feast registrar) see a clean encodable feature surface.
+        numeric_cols, categorical_cols, datetime_cols, unhashable_cols = _identify_column_types(
             train_df, exclude_columns
         )
+
+        if unhashable_cols:
+            logger.warning(
+                "Dropping %d non-encodable column(s) with unhashable cells "
+                "(list/dict/set/tuple/ndarray): %s. These crash nunique() / "
+                "LabelEncoder; mirroring data_loader._drop_unhashable_columns "
+                "semantics so model_trainer preprocessor does not re-trip "
+                "the same crash on X[col].nunique(). Route ingestion through "
+                "_load_from_files to strip them upstream and avoid this warning.",
+                len(unhashable_cols),
+                unhashable_cols,
+            )
+            train_df = train_df.drop(columns=unhashable_cols, errors="ignore")
+            if validation_df is not None:
+                validation_df = validation_df.drop(columns=unhashable_cols, errors="ignore")
+            if test_df is not None:
+                test_df = test_df.drop(columns=unhashable_cols, errors="ignore")
+            if holdout_df is not None:
+                holdout_df = holdout_df.drop(columns=unhashable_cols, errors="ignore")
 
         # Store transformation metadata
         transformations_applied = []
         encoders = {}
         scalers = {}
         imputers = {}
+        if unhashable_cols:
+            transformations_applied.append(
+                {
+                    "type": "drop_unhashable_columns",
+                    "columns": unhashable_cols,
+                    "reason": "object-dtype cells carrying list/dict/set/tuple/ndarray "
+                    "values cannot be hashed by LabelEncoder/OneHotEncoder",
+                }
+            )
 
         # === DATETIME FEATURE EXTRACTION ===
         if datetime_features and datetime_cols:
@@ -369,7 +404,7 @@ def _column_has_unhashable_cells(series: pd.Series) -> bool:
 
 def _identify_column_types(
     df: pd.DataFrame, exclude_columns: List[str]
-) -> Tuple[List[str], List[str], List[str]]:
+) -> Tuple[List[str], List[str], List[str], List[str]]:
     """Identify column types for transformation.
 
     Args:
@@ -377,22 +412,31 @@ def _identify_column_types(
         exclude_columns: Columns to exclude from transformation
 
     Returns:
-        Tuple of (numeric_cols, categorical_cols, datetime_cols)
+        Tuple of (numeric_cols, categorical_cols, datetime_cols,
+        unhashable_cols). The fourth element lists object-dtype columns
+        whose cells are unhashable containers — these are NOT encodable
+        and the caller (``transform_data``) MUST drop them from all
+        split frames before returning so downstream nodes (model_trainer
+        ``_detect_feature_types`` in particular) do not re-trip the
+        ``unhashable type: 'list'`` crash on ``X[col].nunique()``.
 
     Defense: object-dtype columns whose cells are unhashable containers
-    (``list``/``dict``/``set``/``tuple``/``numpy.ndarray``) are skipped with
-    a warning. The downstream ``.nunique()`` / ``.value_counts()`` /
-    ``LabelEncoder`` calls all require hashable values; reaching them with a
-    list cell raises ``TypeError: unhashable type: 'list'``. The file-loader
-    path drops these columns via ``data_loader._drop_unhashable_columns``
-    before transform_data sees them, but this guard ensures callers that
-    bypass the loader (preassembled DataFrames, alternate ingestion shapes)
-    do not blow up in the type-detection step.
+    (``list``/``dict``/``set``/``tuple``/``numpy.ndarray``) crash
+    ``nunique()`` / ``value_counts()`` / ``LabelEncoder`` with
+    ``TypeError: unhashable type: 'list'``. The file-loader path drops
+    these columns via ``data_loader._drop_unhashable_columns`` before
+    transform_data sees them; the transformer-side detection here is
+    defense-in-depth for callers who bypass the loader (preassembled
+    DataFrames passed directly via ``state['train_df']``, alternate
+    ingestion shapes). Returning the names lets ``transform_data``
+    perform the symmetric drop on all splits — mirroring loader
+    semantics so downstream consumers (model_trainer preprocessor,
+    feast registrar) see a clean encodable feature surface.
     """
     numeric_cols = []
     categorical_cols = []
     datetime_cols = []
-    skipped_unhashable: list[str] = []
+    unhashable_cols: list[str] = []
 
     for col in df.columns:
         if col in exclude_columns:
@@ -414,11 +458,13 @@ def _identify_column_types(
             numeric_cols.append(col)
         elif isinstance(dtype, pd.CategoricalDtype) or dtype == object:
             # Defense-in-depth: object columns carrying unhashable cells
-            # (lists/dicts/ndarrays) crash ``nunique()`` below. Skip with
-            # warning; the loader normally strips these but callers that
-            # bypass the loader (preassembled DFs) still reach here.
+            # (lists/dicts/ndarrays) crash ``nunique()`` below. Record the
+            # column name so the caller drops it from all splits — leaving
+            # the column in the frame would just shift the crash downstream
+            # (model_trainer ``_detect_feature_types`` calls the same
+            # ``nunique()`` on object columns).
             if _column_has_unhashable_cells(df[col]):
-                skipped_unhashable.append(col)
+                unhashable_cols.append(col)
                 continue
 
             # Check if it looks like a categorical
@@ -433,19 +479,7 @@ def _identify_column_types(
                 # Treat high cardinality as text, skip for now
                 logger.warning(f"Column {col} has high cardinality ({n_unique} unique), skipping")
 
-    if skipped_unhashable:
-        logger.warning(
-            "Skipping %d column(s) with unhashable cells "
-            "(list/dict/set/tuple/ndarray): %s. These are not encodable by "
-            "LabelEncoder/OneHotEncoder and would crash nunique(). Use "
-            "scope_spec['excluded_features'] to drop them explicitly, or "
-            "route ingestion through _load_from_files which strips them "
-            "upstream.",
-            len(skipped_unhashable),
-            skipped_unhashable,
-        )
-
-    return numeric_cols, categorical_cols, datetime_cols
+    return numeric_cols, categorical_cols, datetime_cols, unhashable_cols
 
 
 def _extract_datetime_features(
