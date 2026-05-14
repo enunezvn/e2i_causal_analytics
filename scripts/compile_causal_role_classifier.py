@@ -60,13 +60,17 @@ DEFAULT_OUT_PATH = PROJECT_ROOT / "artifacts" / "dspy" / "causal_role_classifier
 DEFAULT_LM_MODEL = "anthropic/claude-sonnet-4-20250514"
 DEFAULT_SEED = 7
 DEFAULT_MAX_BOOTSTRAPPED_DEMOS = 4
-# Issue #198 codex pass-3 MED-2: raised from 8 -> 16 so the 8 collider +
-# instrument exemplars added under #198 surface in the persisted demos
-# alongside the legacy roles. With 20 compile-set examples and 16 labeled
-# demos retained, the BootstrapFewShot output captures the diversity
-# (multiple new-role features per saved artifact rather than only 1
-# instrument + 1 collider).
-DEFAULT_MAX_LABELED_DEMOS = 16
+# Issue #198 codex pass-4 MED-1: raised from 16 -> 24 so all 20 labeled
+# compile-set examples survive the random.sample step inside
+# BootstrapFewShot._train (which caps `augmented_demos + raw_demos` at
+# max_labeled_demos). With max_labeled_demos=24 and 20 examples + 4
+# bootstrapped, every labeled exemplar — including both provider IV
+# variants (provider_preference_score and
+# index_provider_biologic_volume_prior_year) — is preserved in the
+# persisted few-shot demos. Pass-3 set this to 16 which dropped 4-8
+# labeled examples randomly; pass-4 audit found this routinely dropped
+# the provider IV family entirely.
+DEFAULT_MAX_LABELED_DEMOS = 24
 
 
 def _seed_all(seed: int) -> None:
@@ -138,10 +142,13 @@ def compile_and_persist(
         max_bootstrapped_demos: Cap on teacher-generated demos. BootstrapFewShot
             default is 4; keeping it low so the compile run stays cheap.
         max_labeled_demos: Cap on labeled (compile-set) demos retained as
-            few-shot exemplars. Default 16 <= ``len(build_compile_set()) == 20``
-            so the 8 new collider/instrument exemplars added under
-            issue #198 surface in the persisted demos alongside the
-            legacy roles (raised from 8 on codex pass-3).
+            few-shot exemplars. Default 24 > ``len(build_compile_set()) == 20``
+            so every labeled exemplar (including all 4 collider and all
+            4 instrument examples) survives the random.sample step
+            inside BootstrapFewShot._train (raised from 8 -> 16 on
+            codex pass-3 and from 16 -> 24 on codex pass-4 after the
+            artifact-pin audit found that random.sample at 16 was
+            routinely dropping the provider IV exemplars).
 
     Returns:
         The path the compiled program JSON was written to (mirror of

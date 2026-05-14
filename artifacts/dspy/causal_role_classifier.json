@@ -8,9 +8,9 @@
         "feature_name": "engagement_score",
         "derivation_pseudocode": "len(unique(med.npi)) + count(med.fills) + count(lab.tests)  # over entire panel",
         "dataset_context": "ConcertAI CSU; target=treatment_initiated; anchor=index_date",
-        "reasoning": "The engagement_score aggregates healthcare utilization metrics (unique providers, medication fills, lab tests) across the entire patient panel without any temporal filtering to pre-index events. This means the score includes post-treatment healthcare activity for treated patients. Since treated patients will have additional medication fills, lab monitoring, and potentially provider contacts related to their biologic therapy, the engagement score becomes contaminated with post-prediction information. For untreated patients, the score reflects only baseline healthcare engagement, while for treated patients it includes both baseline engagement plus treatment-related activity, making it a descendant of the treatment decision.",
+        "reasoning": "The engagement score aggregates three components across the entire patient panel without temporal filtering: unique provider count, medication fills, and lab tests. For treated patients, post-index medication fills and lab monitoring will inflate the score compared to untreated patients. The feature mixes legitimate pre-index engagement signals with post-treatment healthcare utilization, making it structurally post-prediction-time.",
         "causal_role": "descendant",
-        "mechanism": "Aggregates healthcare utilization (provider count, medication fills, lab tests) across the entire patient timeline. Treated patients accumulate post-index medication fills and monitoring labs that inflate their engagement score relative to untreated patients.",
+        "mechanism": "Aggregates medication fills and lab tests across the entire patient timeline without pre-prediction-time filtering. Treated patients accumulate post-index fills and monitoring labs that inflate the engagement score, making it a post-treatment indicator.",
         "recommended_remediation": "window"
       },
       {
@@ -18,9 +18,9 @@
         "feature_name": "days_on_therapy",
         "derivation_pseudocode": "sum(med.days_supply) over entire panel",
         "dataset_context": "CSU; target=treatment_initiated; anchor=index_date",
-        "reasoning": "The feature sums days_supply from medication events across the entire patient panel without temporal filtering. For untreated patients (target=0), this sum is necessarily zero since they have no medication events. For treated patients (target=1), this sum is necessarily positive since they have medication events with non-zero days_supply. This creates a deterministic relationship where the feature perfectly separates the target classes.",
+        "reasoning": "The feature sums days_supply from medication events across the entire patient panel without temporal filtering. For untreated patients (target=0), this sum is necessarily zero since they have no medication events. For treated patients (target=1), the sum is positive by definition. This creates a deterministic relationship where the feature perfectly separates the target classes.",
         "causal_role": "descendant",
-        "mechanism": "Sum of days_supply is tautologically equivalent to the target: sum > 0 if and only if patient was treated (has medication events). Perfect class separator with deterministic relationship to treatment status.",
+        "mechanism": "Feature is tautologically equivalent to the target: sum > 0 if and only if patient was treated. Perfect class separator with no temporal filter makes it structurally post-prediction-time.",
         "recommended_remediation": "drop"
       },
       {
@@ -28,9 +28,9 @@
         "feature_name": "medication_claim_count",
         "derivation_pseudocode": "count(rows in medication_events where patient_id=p)",
         "dataset_context": "CSU/Optum; target=treatment_initiated; anchor=index_date",
-        "reasoning": "The feature counts all medication events for a patient without any temporal filtering relative to the index_date. This means it aggregates both pre-treatment and post-treatment medication fills. For untreated patients, this count reflects baseline medication use patterns. For treated patients, this count includes the target treatment itself plus any additional medications prescribed post-treatment, making it structurally dependent on the treatment decision.",
+        "reasoning": "The feature counts all medication events for a patient without any temporal filtering relative to the index_date. This means it includes both pre-index medications (which could be legitimate confounders) and post-index medications (which would be consequences of treatment). For treated patients, the count will necessarily include the index treatment itself plus any follow-up prescriptions, making the feature structurally dependent on the target variable. Untreated patients will have lower counts by construction since they don't receive the index treatment.",
         "causal_role": "descendant",
-        "mechanism": "Counts medication events across the entire patient timeline without pre-prediction-time filtering. For treated patients, the count includes post-treatment fills making it structurally dependent on the target variable.",
+        "mechanism": "Counts all medication events across the patient timeline without temporal filtering. For treated patients, this includes the index treatment and subsequent prescriptions, making it structurally post-prediction-time.",
         "recommended_remediation": "window"
       },
       {
@@ -38,9 +38,9 @@
         "feature_name": "journey_status",
         "derivation_pseudocode": "categorical from (treatment_initiated, discontinuation_flag) tuple",
         "dataset_context": "synthetic; target=treatment_initiated",
-        "reasoning": "The feature is derived from a tuple containing the target variable itself (treatment_initiated) plus a discontinuation flag. This creates a deterministic relationship where the feature directly encodes the target variable as one of its components.",
+        "reasoning": "The journey_status feature is a categorical variable derived from a tuple containing treatment_initiated and discontinuation_flag. Since treatment_initiated is the target variable itself, this feature directly incorporates the outcome we're trying to predict. The discontinuation_flag is also a post-treatment event that can only occur after treatment initiation. This creates a feature that is deterministically related to the target variable.",
         "causal_role": "descendant",
-        "mechanism": "Feature is constructed from a tuple that includes the target variable (treatment_initiated) as a direct component. This creates perfect separability where the feature deterministically reveals the target.",
+        "mechanism": "Feature is constructed from the target variable (treatment_initiated) plus a post-treatment event (discontinuation_flag). This creates a deterministic relationship where the feature directly encodes the prediction target.",
         "recommended_remediation": "drop"
       },
       {
@@ -138,6 +138,38 @@
         "causal_role": "confounder",
         "mechanism": "Insurance product type is set at enrollment, before the prediction time. Influences both healthcare access (affecting observable patient attributes) and treatment authorization decisions.",
         "recommended_remediation": "keep_with_caveat"
+      },
+      {
+        "feature_name": "provider_preference_score",
+        "derivation_pseudocode": "fraction(prior_patients_of(index_provider) where biologic_initiation=1) over the 12 months BEFORE this patient's index_date; patient excluded from own provider's denominator",
+        "dataset_context": "Optum claims; target=initiated_biologic_180d; anchor=index_date; provider-level prescribing-pattern feature derived from index_provider's other patients' prior history",
+        "causal_role": "instrument",
+        "mechanism": "Preference-based provider IV per Brookhart-Schneeweiss 2007 (Epidemiology 18:589). Z -> T arrow: a high-biologic-preference provider is mechanically more likely to initiate a biologic for the index patient. Exclusion restriction: Z -> Y holds only through T under the standard IV assumption that provider preference acts on the patient solely via prescribing choice, with no direct effect on disease biology. Patient excluded from own denominator so Z is genuinely pre-index. IV-VALIDITY AUDIT STEP (required before use): test for unbalanced patient-level baseline covariates across high- vs low-preference providers; condition on imbalanced baselines or reject the IV if the imbalance is structural.",
+        "recommended_remediation": "keep_with_caveat"
+      },
+      {
+        "feature_name": "charlson_score",
+        "derivation_pseudocode": "weighted sum over comorbidity diagnoses across entire patient diagnosis history (no pre-prediction-time filter)",
+        "dataset_context": "Optum; target=treatment_initiated",
+        "causal_role": "descendant",
+        "mechanism": "Comorbidity scores aggregate diagnoses across the entire patient timeline. Diagnoses recorded post-treatment contaminate the score. Without temporal filtering the feature is post-prediction-time.",
+        "recommended_remediation": "window"
+      },
+      {
+        "feature_name": "index_provider_biologic_volume_prior_year",
+        "derivation_pseudocode": "count(distinct patients of index_provider where biologic_initiation_date in [index_date - 365d, index_date - 1d]) EXCLUDING this patient — provider-level volume in the year BEFORE this patient's index",
+        "dataset_context": "Optum claims; target=initiated_biologic_180d; anchor=index_date; provider-volume IV measured strictly pre-index from other patients",
+        "causal_role": "instrument",
+        "mechanism": "Provider-volume IV — a VOLUME-based variant of the Brookhart 2006 / Brookhart-Schneeweiss 2007 preference-based IV family (the canonical Brookhart 2006 used the PREFERENCE FRACTION on the previous prescription, not an absolute count; the volume operationalization captures the same underlying provider-level supply-side lever but via raw count rather than ratio). Z -> T arrow: high-volume biologic prescribers have higher initiation rates per patient due to operational familiarity, established prior-auth workflows, and established formulary navigation. Exclusion restriction: Z -> Y holds only through T under the standard IV assumption that the provider's PRIOR volume on OTHER patients does not directly affect THIS patient's outcome except through T (the provider's skill / care quality may violate this assumption — see audit step). Measured pre-index from other patients so Z is exogenous to this patient's covariates. IV-VALIDITY AUDIT STEP (required before use): test for provider-level care-quality differences in NON-biologic management across volume tiers; if high-volume providers also differ in non-biologic care quality, reject the IV interpretation.",
+        "recommended_remediation": "keep_with_caveat"
+      },
+      {
+        "feature_name": "hospitalizations_total",
+        "derivation_pseudocode": "count(encounter_events where admit_date in [journey_start, journey_end]) — NO pre-index temporal filter; admissions include both pre-index severity-driven admits AND post-index biologic-AE-driven admits",
+        "dataset_context": "Optum claims; target=initiated_biologic_180d; anchor=index_date; encounter_events panel; admissions can be driven by pre-index severity OR by post-treatment adverse events",
+        "causal_role": "collider",
+        "mechanism": "Confounder-collider (sub-family ii per Greenland-Pearl-Robins 1999 M-structure): two arrowheads in from distinct sources. (a) Baseline disease severity is a T-Y confounder (severity -> T via prescriber decision; severity -> Y via uncontrolled disease activity) and ALSO has an arrow into the hospitalization count (severity drives admissions). (b) Treatment-related adverse events form a path T -> AE -> hospitalization. V has arrowheads from both severity and AE, so V is a collider on the (severity, T) backdoor. Conditioning on V opens the severity <-> Y path, biasing the treatment-effect estimate. (NOTE: a properly windowed pre-index hospitalization count collapses to a pure confounder with NO post-index arrow; the collider semantics depend on the derivation crossing the index date.)",
+        "recommended_remediation": "drop"
       }
     ],
     "signature": {

@@ -721,9 +721,15 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="instrument",
             mechanism=(
-                "Provider-volume IV per Brookhart 2006 supply-side IV "
-                "framework. Z -> T arrow: high-volume biologic prescribers "
-                "have higher initiation rates per patient due to operational "
+                "Provider-volume IV — a VOLUME-based variant of the "
+                "Brookhart 2006 / Brookhart-Schneeweiss 2007 preference-"
+                "based IV family (the canonical Brookhart 2006 used the "
+                "PREFERENCE FRACTION on the previous prescription, not "
+                "an absolute count; the volume operationalization "
+                "captures the same underlying provider-level supply-side "
+                "lever but via raw count rather than ratio). Z -> T "
+                "arrow: high-volume biologic prescribers have higher "
+                "initiation rates per patient due to operational "
                 "familiarity, established prior-auth workflows, and "
                 "established formulary navigation. Exclusion restriction: "
                 "Z -> Y holds only through T under the standard IV "
