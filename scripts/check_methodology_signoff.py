@@ -17,6 +17,15 @@ Exit codes:
 * ``1`` — generic validation failure (missing section, unregistered reviewer,
   selection-rule violation, unverifiable signature, etc.).
 * ``2`` — script invocation error (e.g. missing file argument).
+* ``3`` — strict-gh policy violation: ``--strict-gh`` (or ``STRICT_GH=1`` in
+  the environment) was set AND at least one CheckResult reports
+  ``provenance_check_skipped=True`` (gh CLI unavailable / unauthenticated).
+  This exit is the issue #192 H2/M1 fail-closed policy: in CI deployments
+  where the methodology-signoff-guard workflow provisions ``GH_TOKEN`` and
+  exports ``STRICT_GH=1``, a skipped gh provenance query MUST hard-fail
+  rather than warn — otherwise a reviewer can self-declare clean while
+  authoring/reviewing PRs via the GitHub web UI (no git-attributable commit).
+  Local devs without ``--strict-gh`` retain the warn-only back-compat path.
 
 The CI workflow ``.github/workflows/methodology_signoff_guard.yml`` calls this
 script with the ``--repo-root`` flag so it can be exercised from any
@@ -60,6 +69,16 @@ M1 (iter-3) — gh provenance best-effort:
     comment. See also ``docs/governance/n3_known_limitations_20260510.md``
     for the full deferred-infra rationale.
 
+    Issue #192 H2/M1 fail-closed escalation:
+        The ``--strict-gh`` CLI flag (or ``STRICT_GH=1`` in the environment)
+        promotes ``provenance_check_skipped=True`` from a logged warning to
+        a hard exit (code 3). The methodology-signoff-guard workflow now
+        provisions ``GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}`` AND exports
+        ``STRICT_GH=1`` so CI runs hit the fail-closed path. Local devs who
+        run the validator without GH_TOKEN retain the warn-only back-compat
+        behavior because they neither pass ``--strict-gh`` nor have the env
+        var set.
+
 NEW MED (iter-3) — future-dated artifacts:
     ``check_signoff_age`` rejects sign-offs whose filename date is more than
     1 day ahead of ``today``. The 1-day tolerance covers TZ-skew at the day
@@ -71,6 +90,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import os
 import re
 import shutil
 import subprocess
@@ -1462,7 +1482,41 @@ def build_parser() -> argparse.ArgumentParser:
             f"{MAX_SIGNOFF_AGE_DAYS}."
         ),
     )
+    parser.add_argument(
+        "--strict-gh",
+        action="store_true",
+        default=None,
+        help=(
+            "Fail-closed when any CheckResult has provenance_check_skipped=True "
+            "(i.e. gh CLI was unavailable / unauthenticated, so PR/review "
+            "provenance was NOT confirmed). The validator returns exit code 3 "
+            "in that case. Defaults to OFF for back-compat with local dev "
+            "runs; CI workflows that provision GH_TOKEN MUST set this flag "
+            "(or export STRICT_GH=1, which the CLI also honors). Issue "
+            "#192 H2/M1 fail-closed enforcement."
+        ),
+    )
     return parser
+
+
+def _resolve_strict_gh(cli_flag: Optional[bool]) -> bool:
+    """Resolve the strict-gh policy: CLI flag wins; falls back to env var.
+
+    Issue #192 H2/M1: when neither the CLI flag nor the env var is set, the
+    validator preserves the historical warn-only behavior (back-compat for
+    local devs running the script ad-hoc). CI workflows that provision
+    GH_TOKEN MUST set ``--strict-gh`` (or export ``STRICT_GH=1``) so a
+    skipped gh provenance query becomes a hard PR block (exit code 3)
+    rather than a logged warning.
+
+    Truthy env values: ``1``, ``true``, ``yes``, ``on`` (case-insensitive).
+    Anything else (including absent / empty) defaults to OFF.
+    """
+
+    if cli_flag is True:
+        return True
+    raw = os.environ.get("STRICT_GH", "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -1485,7 +1539,31 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         max_age_days=args.max_age_days,
     )
     print(render_report(results))
-    return 0 if all(r.ok for r in results) else 1
+
+    # Generic validation failure path takes precedence over strict-gh — a
+    # selection-rule violation (ok=False) is exit 1 even if STRICT_GH=1 also
+    # would have triggered. This preserves the existing exit-code contract
+    # for the dominant failure mode and reserves exit 3 specifically for
+    # "everything else passed but provenance was not confirmed under strict
+    # mode" so log scrapers can distinguish the two failure classes.
+    if not all(r.ok for r in results):
+        return 1
+
+    strict_gh = _resolve_strict_gh(args.strict_gh)
+    if strict_gh and any(r.provenance_check_skipped for r in results):
+        skipped = [r.name for r in results if r.provenance_check_skipped]
+        print(
+            "FAIL: --strict-gh policy is in effect (or STRICT_GH=1 in env) "
+            "AND at least one check has provenance_check_skipped=True. "
+            f"Skipped checks: {', '.join(skipped)}. "
+            "Provision GH_TOKEN with pull-requests:read on the runner to "
+            "satisfy gh PR/review provenance queries. "
+            "See docs/governance/n3_known_limitations_20260510.md item 2.",
+            file=sys.stderr,
+        )
+        return 3
+
+    return 0
 
 
 if __name__ == "__main__":

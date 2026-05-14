@@ -563,7 +563,15 @@ def test_check_signoff_missing_coi_sha(fixture_repo: Path):
 
 
 def test_workflow_yaml_parses():
-    """The methodology_signoff_guard.yml workflow must be valid YAML."""
+    """The methodology_signoff_guard.yml workflow must be valid YAML.
+
+    Issue #192 H3: the workflow architecture changed from a single
+    inline-validator job to a thin caller (`identify`) + delegate
+    (`validate`) that calls the reusable `methodology-signoff-validator.yml`
+    workflow. The reusable workflow loads the validator script from the
+    protected `main` ref. This test pins the new caller layout; the
+    reusable workflow's contract is pinned by `TestReusableValidatorWorkflow`.
+    """
 
     yaml = pytest.importorskip("yaml")
     workflow_path = PROJECT_ROOT / ".github" / "workflows" / "methodology_signoff_guard.yml"
@@ -573,11 +581,21 @@ def test_workflow_yaml_parses():
     # `on:` as the boolean True, so we accept either the string or the bool.)
     assert "on" in parsed or True in parsed
     assert "jobs" in parsed
-    assert "validate-signoff" in parsed["jobs"]
-    steps = parsed["jobs"]["validate-signoff"]["steps"]
-    # Find the step that invokes the python script.
-    invokes = [s for s in steps if "check_methodology_signoff.py" in s.get("run", "")]
-    assert invokes, "workflow does not invoke check_methodology_signoff.py"
+    # H3: caller now has `identify` + `validate` jobs (validate delegates
+    # to the reusable workflow).
+    assert "identify" in parsed["jobs"], (
+        "H3: caller must have an `identify` job that enumerates touched artifacts"
+    )
+    assert "validate" in parsed["jobs"], (
+        "H3: caller must have a `validate` job that delegates to the reusable workflow"
+    )
+    # The validate job must `uses:` the reusable validator workflow, NOT
+    # run python3 inline (that was the pre-H3 threat).
+    validate_job = parsed["jobs"]["validate"]
+    assert "uses" in validate_job, (
+        "H3: validate job must use the reusable workflow (no inline python3)"
+    )
+    assert "methodology-signoff-validator.yml" in validate_job["uses"]
 
 
 def test_workflow_has_has_files_boolean(tmp_path: Path):
@@ -587,23 +605,39 @@ def test_workflow_has_has_files_boolean(tmp_path: Path):
     text = workflow_path.read_text(encoding="utf-8")
     assert "has_files=true" in text, "workflow must write has_files=true"
     assert "has_files=false" in text, "workflow must write has_files=false"
-    # Downstream gating uses outputs.has_files == 'true' rather than empty-
-    # string testing on outputs.files.
-    assert "outputs.has_files == 'true'" in text
+    # Downstream gating uses needs.identify.outputs.has_files == 'true'
+    # (the H3 split moved this from a step `if:` to a job `if:` since
+    # the validate job now lives in a separate workflow).
+    assert "needs.identify.outputs.has_files == 'true'" in text, (
+        "H3: validate job must gate on identify.outputs.has_files"
+    )
     # Whitespace-only lines must be stripped from the candidate file list.
     assert "grep -v '^[[:space:]]*$'" in text
 
 
 def test_workflow_uses_base_ref_pinned_validator():
-    """H3: the workflow must fetch the validator from base ref before invoking it."""
+    """H3: the workflow architecture must pin the validator to a protected ref.
+
+    Issue #192 H3 update: the historical mitigation was a `git show
+    <base_sha>:scripts/check_methodology_signoff.py` fetch inside the
+    same workflow. That has been replaced by a reusable-workflow split
+    that does its own `actions/checkout@v4` of `main` for the validator
+    script. This test pins the caller side; `TestReusableValidatorWorkflow`
+    pins the reusable side.
+    """
 
     workflow_path = PROJECT_ROOT / ".github" / "workflows" / "methodology_signoff_guard.yml"
     text = workflow_path.read_text(encoding="utf-8")
-    # base_sha-pinned fetch via `git show <base_sha>:scripts/...`.
-    assert "git show" in text
-    assert "scripts/check_methodology_signoff.py" in text
-    # /tmp/governance/check_methodology_signoff.py is the pinned-copy path.
-    assert "/tmp/governance/check_methodology_signoff.py" in text
+    # H3 (post-#192): caller delegates to the reusable workflow which
+    # loads the validator script from the protected ref.
+    assert "uses: ./.github/workflows/methodology-signoff-validator.yml" in text, (
+        "H3: caller must `uses:` the reusable validator workflow"
+    )
+    # The caller pins validator_ref: 'main' to keep the threat model
+    # explicit (validator script comes from the protected branch).
+    assert "validator_ref: 'main'" in text, (
+        "H3: caller must pin validator_ref to the protected 'main' branch"
+    )
 
 
 def test_script_exit_code_on_template():
@@ -1320,3 +1354,354 @@ def test_selection_rule_gh_present_does_not_set_skip_flag(fixture_repo: Path):
     assert result.ok is True
     # The CheckResult's provenance_check_skipped attribute exists and is a bool.
     assert isinstance(result.provenance_check_skipped, bool)
+
+
+# --------------------------------------------------------------------------- #
+# Issue #192 H2/M1 — strict-gh policy resolution + main() exit-code contract.
+# --------------------------------------------------------------------------- #
+
+
+class TestStrictGhResolution:
+    """``_resolve_strict_gh`` consults the CLI flag first, then env var.
+
+    Issue #192 H2/M1: CI workflows export STRICT_GH=1 to elevate
+    provenance_check_skipped from a logged warning to a hard exit (3).
+    Local devs without the env var nor the CLI flag retain back-compat.
+    """
+
+    def test_default_off(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("STRICT_GH", raising=False)
+        assert cms._resolve_strict_gh(None) is False
+        assert cms._resolve_strict_gh(False) is False
+
+    def test_cli_flag_overrides_missing_env(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("STRICT_GH", raising=False)
+        assert cms._resolve_strict_gh(True) is True
+
+    @pytest.mark.parametrize("value", ["1", "true", "TRUE", "yes", "on", "On"])
+    def test_env_truthy_values(
+        self, monkeypatch: pytest.MonkeyPatch, value: str
+    ):
+        monkeypatch.setenv("STRICT_GH", value)
+        assert cms._resolve_strict_gh(None) is True
+
+    @pytest.mark.parametrize("value", ["", "0", "false", "no", "off", "garbage"])
+    def test_env_falsy_values(
+        self, monkeypatch: pytest.MonkeyPatch, value: str
+    ):
+        monkeypatch.setenv("STRICT_GH", value)
+        assert cms._resolve_strict_gh(None) is False
+
+    def test_cli_flag_true_wins_over_env_falsy(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("STRICT_GH", "0")
+        # CLI flag True is the explicit operator intent; honor it.
+        assert cms._resolve_strict_gh(True) is True
+
+
+class TestStrictGhMainExitCode:
+    """``main()`` returns exit 3 when STRICT_GH is set AND provenance was skipped.
+
+    Issue #192 H2/M1: this is the load-bearing wiring that escalates the
+    M1 advisory warning to a fail-closed CI block. Tests both the strict
+    fail path (exit 3) and the back-compat warn path (exit 0 — the
+    canonical git-log signal still PASSES on its own).
+
+    NOTE on exit-code priority: a generic validation failure (exit 1)
+    takes precedence over the strict-gh failure (exit 3). The intent is
+    that exit 3 specifically means "everything else passed but
+    provenance was unverified" so log scrapers can distinguish the two.
+
+    Implementation note: these tests monkeypatch ``cms.check_signoff`` to
+    return a controlled list of CheckResults so the exit-code path is
+    isolated from upstream concerns (GPG keyring, CoI SHA resolution,
+    signature toolchain). The strict-gh wiring lives entirely in
+    ``main()`` AFTER ``check_signoff`` returns, so this is a faithful
+    test of the load-bearing logic.
+    """
+
+    @staticmethod
+    def _make_results(
+        all_pass: bool = True, provenance_skipped: bool = False
+    ) -> list:
+        """Build a CheckResult list with controlled ok/skip flags."""
+
+        results = [
+            cms.CheckResult("filename", True, "ok"),
+            cms.CheckResult("signoff_age", True, "ok"),
+            cms.CheckResult("required_sections", True, "ok"),
+            cms.CheckResult("signature_present", True, "ok"),
+            cms.CheckResult("coi_referenced", True, "ok"),
+            cms.CheckResult("registry_loaded", True, "ok"),
+            cms.CheckResult("reviewer_registered", True, "ok"),
+            cms.CheckResult(
+                "selection_rule",
+                all_pass,
+                "ok | CRITICAL: gh provenance query SKIPPED" if provenance_skipped else "ok",
+                provenance_check_skipped=provenance_skipped,
+            ),
+            cms.CheckResult("signature_verifies", True, "ok"),
+        ]
+        return results
+
+    def _patch_check_signoff(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        all_pass: bool = True,
+        provenance_skipped: bool = False,
+    ) -> None:
+        results = self._make_results(
+            all_pass=all_pass, provenance_skipped=provenance_skipped
+        )
+
+        def fake_check_signoff(*args, **kwargs):  # noqa: ANN001 ANN002 ANN003
+            return results
+
+        monkeypatch.setattr(cms, "check_signoff", fake_check_signoff)
+
+    @staticmethod
+    def _make_doc_path(tmp_path: Path) -> Path:
+        # main() requires the doc_path.is_file() check to pass; the
+        # patched check_signoff above is what actually runs the validation.
+        # Note: the file must be named with the dated pattern so
+        # check_filename would have passed (we don't strictly need this
+        # since check_signoff is patched, but keep it for realism).
+        path = tmp_path / "optum_methodology_signoff_20260520.md"
+        path.write_text("# placeholder\n", encoding="utf-8")
+        return path
+
+    def test_strict_gh_fail_when_gh_unavailable(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ):
+        """STRICT_GH=1 + provenance_check_skipped=True → exit 3 + clear message."""
+
+        self._patch_check_signoff(monkeypatch, provenance_skipped=True)
+        monkeypatch.setenv("STRICT_GH", "1")
+        doc = self._make_doc_path(tmp_path)
+        rc = cms.main([str(doc), "--repo-root", str(tmp_path)])
+        captured = capsys.readouterr()
+        assert rc == 3, (
+            f"expected exit 3 (strict-gh policy violation), got {rc}. "
+            f"Captured: {captured}"
+        )
+        # Combined stdout + stderr — the report goes to stdout, the FAIL
+        # message to stderr; both should be present.
+        combined = captured.out + captured.err
+        assert "FAIL" in combined
+        assert "--strict-gh" in combined or "STRICT_GH=1" in combined
+        assert "selection_rule" in combined
+
+    def test_default_warn_when_gh_unavailable(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ):
+        """No STRICT_GH + no --strict-gh + provenance_skipped=True → exit 0."""
+
+        self._patch_check_signoff(monkeypatch, provenance_skipped=True)
+        monkeypatch.delenv("STRICT_GH", raising=False)
+        doc = self._make_doc_path(tmp_path)
+        rc = cms.main([str(doc), "--repo-root", str(tmp_path)])
+        captured = capsys.readouterr()
+        assert rc == 0, (
+            f"expected exit 0 (back-compat warn-only), got {rc}. "
+            f"Captured: {captured}"
+        )
+        # The CRITICAL warning should still surface on stdout (in the report
+        # detail), confirming the warn behavior is preserved.
+        combined = captured.out + captured.err
+        assert "CRITICAL" in combined
+
+    def test_strict_gh_cli_flag_overrides_missing_env(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """``--strict-gh`` on its own (no env var) also escalates to exit 3."""
+
+        self._patch_check_signoff(monkeypatch, provenance_skipped=True)
+        monkeypatch.delenv("STRICT_GH", raising=False)
+        doc = self._make_doc_path(tmp_path)
+        rc = cms.main(
+            [str(doc), "--repo-root", str(tmp_path), "--strict-gh"]
+        )
+        assert rc == 3, f"expected exit 3 (CLI --strict-gh), got {rc}"
+
+    def test_validation_failure_takes_precedence_over_strict_gh(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Exit 1 (generic validation fail) wins over exit 3 (strict-gh).
+
+        Reserves exit 3 for the specific "everything passed except gh
+        provenance" case so log scrapers can distinguish failure modes.
+        """
+
+        # all_pass=False (selection_rule.ok=False) AND
+        # provenance_skipped=True — exit 1 must win.
+        self._patch_check_signoff(
+            monkeypatch, all_pass=False, provenance_skipped=True
+        )
+        monkeypatch.setenv("STRICT_GH", "1")
+        doc = self._make_doc_path(tmp_path)
+        rc = cms.main([str(doc), "--repo-root", str(tmp_path)])
+        assert rc == 1, (
+            f"expected exit 1 (generic validation precedence), got {rc}"
+        )
+
+    def test_strict_gh_pass_when_no_provenance_skip(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """STRICT_GH=1 + all checks pass + no provenance skip → exit 0.
+
+        Pin: the strict-gh policy doesn't false-positive when gh DID run
+        successfully. Without this assertion the strict-gh failure path
+        could silently expand to "always exit 3" on regressions.
+        """
+
+        self._patch_check_signoff(monkeypatch, provenance_skipped=False)
+        monkeypatch.setenv("STRICT_GH", "1")
+        doc = self._make_doc_path(tmp_path)
+        rc = cms.main([str(doc), "--repo-root", str(tmp_path)])
+        assert rc == 0, f"expected exit 0 (strict-gh satisfied), got {rc}"
+
+
+# --------------------------------------------------------------------------- #
+# Issue #192 H3 — workflow architecture pins for the reusable-workflow split.
+# --------------------------------------------------------------------------- #
+
+
+class TestReusableValidatorWorkflow:
+    """The H3 mitigation requires:
+
+    1. A reusable workflow at .github/workflows/methodology-signoff-validator.yml
+       with `on: workflow_call:` that loads the validator script from a
+       protected ref (default 'main') in a SEPARATE checkout.
+    2. The caller `methodology_signoff_guard.yml` must delegate to the
+       reusable workflow rather than running the validator inline.
+    3. The reusable workflow must provision GH_TOKEN AND export STRICT_GH=1
+       (issue #192 H2/M1 fail-closed).
+    4. The reusable workflow must declare least-privilege permissions
+       (contents:read + pull-requests:read).
+    """
+
+    REUSABLE_PATH = (
+        PROJECT_ROOT
+        / ".github"
+        / "workflows"
+        / "methodology-signoff-validator.yml"
+    )
+    CALLER_PATH = (
+        PROJECT_ROOT
+        / ".github"
+        / "workflows"
+        / "methodology_signoff_guard.yml"
+    )
+
+    def _parse(self, path: Path):
+        yaml = pytest.importorskip("yaml")
+        return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+    def test_reusable_workflow_exists(self):
+        assert self.REUSABLE_PATH.is_file(), (
+            f"H3: reusable validator workflow missing: {self.REUSABLE_PATH}"
+        )
+
+    def test_reusable_workflow_has_workflow_call_trigger(self):
+        parsed = self._parse(self.REUSABLE_PATH)
+        # PyYAML interprets bare `on:` keys as boolean True; accept either.
+        on_block = parsed.get("on") or parsed.get(True)
+        assert on_block is not None, "reusable workflow missing on: block"
+        assert "workflow_call" in on_block, (
+            "reusable workflow must use on: workflow_call: trigger"
+        )
+
+    def test_reusable_workflow_declares_required_inputs(self):
+        parsed = self._parse(self.REUSABLE_PATH)
+        on_block = parsed.get("on") or parsed.get(True)
+        inputs = on_block["workflow_call"]["inputs"]
+        # touched_files is mandatory; without it the caller can't pass the
+        # PR diff to the validator.
+        assert "touched_files" in inputs
+        assert inputs["touched_files"]["required"] is True
+        # validator_ref + strict_gh are optional with sane defaults.
+        assert "validator_ref" in inputs
+        assert "strict_gh" in inputs
+
+    def test_reusable_workflow_checks_out_protected_ref(self):
+        text = self.REUSABLE_PATH.read_text(encoding="utf-8")
+        # Two checkouts are required: PR head (artifacts) AND protected
+        # ref (validator script source). The H3 defense rests on the
+        # validator coming from the protected ref.
+        assert "ref: ${{ inputs.validator_ref }}" in text, (
+            "H3: reusable workflow must checkout the protected validator_ref"
+        )
+        assert "path: validator-source" in text, (
+            "H3: validator source must live in a separate workspace"
+        )
+        assert "path: pr-checkout" in text, (
+            "H3: PR-head artifacts must live in a separate workspace"
+        )
+
+    def test_reusable_workflow_provisions_gh_token(self):
+        text = self.REUSABLE_PATH.read_text(encoding="utf-8")
+        # H2/M1: GITHUB_TOKEN must be wired through to the validator's
+        # gh CLI invocations.
+        assert "GH_TOKEN: ${{ github.token }}" in text, (
+            "H2/M1: reusable workflow must provision GH_TOKEN for gh CLI"
+        )
+
+    def test_reusable_workflow_exports_strict_gh(self):
+        text = self.REUSABLE_PATH.read_text(encoding="utf-8")
+        # H2/M1: STRICT_GH must be exported so the validator's main() hits
+        # the fail-closed exit-3 path on any provenance_check_skipped=True.
+        assert "STRICT_GH: ${{ inputs.strict_gh }}" in text, (
+            "H2/M1: reusable workflow must export STRICT_GH for fail-closed"
+        )
+
+    def test_reusable_workflow_has_least_privilege_permissions(self):
+        parsed = self._parse(self.REUSABLE_PATH)
+        perms = parsed.get("permissions", {})
+        # Least-privilege: read-only on contents + PRs; no write anywhere.
+        assert perms.get("contents") == "read"
+        assert perms.get("pull-requests") == "read"
+        # Defensive: ensure no write permissions creep in.
+        for key, value in perms.items():
+            assert value == "read", (
+                f"H2/M1: permissions must be read-only; got {key}={value!r}"
+            )
+
+    def test_caller_delegates_to_reusable_workflow(self):
+        text = self.CALLER_PATH.read_text(encoding="utf-8")
+        # The caller invokes the reusable workflow via `uses:` rather
+        # than running python3 inline. Path-pinned same-repo invocation
+        # is the baseline; future migration to cross-repo SHA-pinned
+        # invocation is documented in the workflow header.
+        assert (
+            "uses: ./.github/workflows/methodology-signoff-validator.yml"
+            in text
+        ), "H3: caller must delegate to the reusable validator workflow"
+        # Caller passes strict_gh: '1' so production CI hits fail-closed.
+        assert "strict_gh: '1'" in text
+        # Caller pins validator_ref to 'main' (the protected ref).
+        assert "validator_ref: 'main'" in text
+
+    def test_caller_no_longer_runs_validator_inline(self):
+        text = self.CALLER_PATH.read_text(encoding="utf-8")
+        # H3: the caller must NOT invoke check_methodology_signoff.py
+        # directly — that's the threat the H3 split closes. The validator
+        # is now invoked from inside the reusable workflow which loads
+        # the script from the protected ref.
+        assert "python3 /tmp/governance/check_methodology_signoff.py" not in text, (
+            "H3: caller must delegate to reusable workflow, not invoke "
+            "validator inline (the inline invocation was the H3 threat)"
+        )
