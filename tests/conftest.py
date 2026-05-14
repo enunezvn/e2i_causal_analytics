@@ -177,6 +177,15 @@ _ASYNCIO_POLLUTION_STATE: Dict[str, object] = {
     # first-apply allowlist match. Strict mode now re-evaluates this
     # flag on every test boundary instead of only at first-apply time.
     "non_allowlisted_apply_seen": False,
+    # Issue #221 codex pass-5 MEDIUM-1: when strict mode fires on a
+    # non-allowlisted apply that came AFTER an allowlisted first
+    # apply, the fatal message must surface the non-allowlisted stack
+    # (the novel culprit) instead of the first-apply stack (which
+    # would be RAGAS — the known-safe one). Capture the FIRST
+    # non-allowlisted apply's stack + nodeid; subsequent ones are
+    # ignored.
+    "non_allowlisted_apply_stack": None,  # type: Optional[str]
+    "non_allowlisted_apply_nodeid": None,  # type: Optional[str]
 }
 
 
@@ -271,6 +280,16 @@ def _install_nest_asyncio_apply_trace() -> None:
         # call so ``pytest_runtest_logfinish`` can fire late.
         if allowlist_hit is None:
             _ASYNCIO_POLLUTION_STATE["non_allowlisted_apply_seen"] = True
+            # Issue #221 codex pass-5 MEDIUM-1: capture the FIRST
+            # non-allowlisted stack so the strict-mode fatal message
+            # names the actual culprit instead of the (allowlisted)
+            # first apply. Subsequent non-allowlisted applies are
+            # ignored — first one wins for diagnostic purposes.
+            if _ASYNCIO_POLLUTION_STATE["non_allowlisted_apply_stack"] is None:
+                _ASYNCIO_POLLUTION_STATE["non_allowlisted_apply_stack"] = stack
+                _ASYNCIO_POLLUTION_STATE["non_allowlisted_apply_nodeid"] = _ASYNCIO_POLLUTION_STATE[
+                    "current_nodeid"
+                ]
 
         return _real_apply(*args, **kwargs)
 
@@ -604,6 +623,41 @@ def _format_pollution_warning(nodeid: str) -> str:
     )
 
 
+def _format_non_allowlisted_strict_exit(test_nodeid: str) -> str:
+    """Build the strict-mode fatal message for the non-allowlisted path.
+
+    Issue #221 codex pass-5 MEDIUM-1: when strict mode fires on a
+    non-allowlisted apply that fired AFTER an allowlisted first apply
+    (e.g., RAGAS polluted first then a NEW dep polluted), the operator
+    needs the NEW culprit's stack — not RAGAS's. This formatter
+    surfaces ``non_allowlisted_apply_stack`` + ``non_allowlisted_apply_nodeid``
+    while still acknowledging the allowlisted first apply for full
+    context (so the operator can verify the allowlist isn't masking
+    something subtle).
+    """
+
+    novel_nodeid = _ASYNCIO_POLLUTION_STATE.get("non_allowlisted_apply_nodeid")
+    novel_stack = _ASYNCIO_POLLUTION_STATE.get("non_allowlisted_apply_stack") or "<not captured>"
+    first_match = _ASYNCIO_POLLUTION_STATE.get("first_apply_allowlist_match")
+    apply_count = _ASYNCIO_POLLUTION_STATE.get("apply_count", 0)
+    allowlist_context = (
+        f"First apply was allowlisted ({first_match!r}); "
+        if first_match
+        else "First apply was NOT allowlisted; "
+    )
+    return (
+        f"[issue-218] asyncio.run was monkey-patched by a non-allowlisted "
+        f"nest_asyncio.apply() during test: {test_nodeid}. "
+        f"{allowlist_context}"
+        f"first non-allowlisted apply() recorded while running: "
+        f"{novel_nodeid!r} (total apply count this worker: {apply_count}). "
+        f"Audit this stack — the polluter is NOT in "
+        f"_STRICT_MODE_ALLOWLISTED_POLLUTERS:\n"
+        f"--- non-allowlisted apply() call stack ---\n"
+        f"{novel_stack}\n--- end stack ---"
+    )
+
+
 def pytest_runtest_logfinish(nodeid, location):  # type: ignore[no-untyped-def]
     """Detect the first test boundary at which ``asyncio.run`` is polluted.
 
@@ -644,8 +698,11 @@ def pytest_runtest_logfinish(nodeid, location):  # type: ignore[no-untyped-def]
         if _ASYNCIO_POLLUTION_STATE.get("non_allowlisted_apply_seen"):
             # Hard-fail. We use pytest.exit (not raise) so the surrounding
             # test isn't blamed for the pollution — the session summary
-            # names the actual culprit via ``polluter_nodeid``.
-            current_msg = _format_pollution_warning(str(nodeid))
+            # names the actual culprit via ``polluter_nodeid``. Issue #221
+            # codex pass-5 MEDIUM-1: surface the NON-ALLOWLISTED stack
+            # (the novel culprit) instead of ``apply_first_stack`` (which
+            # would be RAGAS — the known-safe one if it polluted first).
+            current_msg = _format_non_allowlisted_strict_exit(str(nodeid))
             pytest.exit(
                 f"[issue-218] FATAL: nest_asyncio.apply() polluted "
                 f"asyncio.run from a non-allowlisted caller.\n{current_msg}",
@@ -709,6 +766,17 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):  # type: igno
             "strict mode would fail this session if "
             "E2I_ASSERT_NO_ASYNCIO_POLLUTION=1)"
         )
+        novel_nodeid = _ASYNCIO_POLLUTION_STATE.get("non_allowlisted_apply_nodeid")
+        terminalreporter.write_line(
+            f"non_allowlisted_apply_nodeid (first NEW-polluter apply attributed to): "
+            f"{novel_nodeid!r}"
+        )
+        novel_stack = _ASYNCIO_POLLUTION_STATE.get("non_allowlisted_apply_stack")
+        if novel_stack:
+            terminalreporter.write_line("--- non-allowlisted apply() call stack ---")
+            for line in str(novel_stack).splitlines():
+                terminalreporter.write_line(line)
+            terminalreporter.write_line("--- end non-allowlisted stack ---")
     stack = _ASYNCIO_POLLUTION_STATE.get("apply_first_stack")
     if stack:
         terminalreporter.write_line("--- first apply() call stack ---")
