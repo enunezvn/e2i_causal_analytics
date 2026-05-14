@@ -23,8 +23,20 @@ def _exclude_gated_rows(query: Any) -> Any:
     Centralizing the filter here keeps the sentinel value in one place
     and makes it trivial to add new actionable read paths without
     re-deriving the filter semantics.
+
+    Codex pass-5 MEDIUM: ``ml_predictions.prediction_class`` is nullable
+    (no NOT NULL constraint at
+    ``database/core/e2i_ml_complete_v3_schema.sql:534``). The naive
+    ``.neq("prediction_class", sentinel)`` filter would drop historical
+    rows where ``prediction_class IS NULL`` because PostgREST uses SQL
+    tri-valued logic (NULL != X yields NULL, which the query treats as
+    "exclude"). We need NULL-preserving semantics: keep rows whose
+    prediction_class is NULL OR not the sentinel. PostgREST exposes
+    OR via the ``.or_(...)`` chain with comma-separated predicates.
     """
-    return query.neq("prediction_class", GATED_HONEST_FAILURE_SENTINEL)
+    return query.or_(
+        f"prediction_class.is.null,prediction_class.neq.{GATED_HONEST_FAILURE_SENTINEL}"
+    )
 
 
 class PredictionRepository(SplitAwareRepository):

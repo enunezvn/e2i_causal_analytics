@@ -201,16 +201,20 @@ class SupabaseDataConnector(BaseDataConnector):
             # model failed its honest-failure gate) carry raw un-gated
             # scores that MUST NOT feed drift detection; including them
             # would silently double-count the failure as either input
-            # drift or unstable predictions. Codex pass-4 LOW: import
-            # the centralized sentinel rather than hardcoding the literal
-            # twice so a future rename is caught by the inter-module pin.
+            # drift or unstable predictions. Codex pass-5 MEDIUM: use a
+            # NULL-preserving filter (prediction_class.is.null OR
+            # neq.sentinel) since prediction_class is nullable and
+            # historical rows may have it set to NULL.
             from src.repositories.prediction import GATED_HONEST_FAILURE_SENTINEL
 
             query = (
                 self._client.table("ml_predictions")
                 .select("confidence_score, prediction_value, created_at, entity_id")
                 .eq("model_version", model_id)
-                .neq("prediction_class", GATED_HONEST_FAILURE_SENTINEL)
+                .or_(
+                    "prediction_class.is.null,"
+                    f"prediction_class.neq.{GATED_HONEST_FAILURE_SENTINEL}"
+                )
                 .gte("created_at", time_window.start.isoformat())
                 .lte("created_at", time_window.end.isoformat())
             )
@@ -287,16 +291,19 @@ class SupabaseDataConnector(BaseDataConnector):
 
         try:
             # Query ml_predictions with ground truth outcomes.
-            # Issue #188: exclude gated audit rows (see comment in
-            # query_predictions above for full rationale). Codex pass-4
-            # LOW: use the centralized sentinel constant.
+            # Issue #188: exclude gated audit rows with a NULL-preserving
+            # filter (see codex pass-5 MEDIUM rationale on
+            # query_predictions above).
             from src.repositories.prediction import GATED_HONEST_FAILURE_SENTINEL
 
             query = (
                 self._client.table("ml_predictions")
                 .select("confidence_score, prediction_value, created_at, entity_id, actual_outcome")
                 .eq("model_version", model_id)
-                .neq("prediction_class", GATED_HONEST_FAILURE_SENTINEL)
+                .or_(
+                    "prediction_class.is.null,"
+                    f"prediction_class.neq.{GATED_HONEST_FAILURE_SENTINEL}"
+                )
                 .gte("created_at", time_window.start.isoformat())
                 .lte("created_at", time_window.end.isoformat())
                 .not_.is_("actual_outcome", "null")  # Only include labeled data

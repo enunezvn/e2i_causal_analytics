@@ -237,8 +237,11 @@ def test_smoke_fit_separable_passes_auc_pr_floor() -> None:
     Issue #188: this test pins the legacy 0.65 floor explicitly because the
     synthetic separable cohort is the historical "high-signal" comparator
     for which the classical bar IS achievable. The new prevalence-aware
-    default would also pass (5 * 0.30 = 1.50 -> clamps to 1.0 ceiling),
-    but pinning 0.65 keeps the test pinned to its original semantics.
+    default (5 * 0.30 = 1.50, clamped to the AUC-PR ceiling 1.0 per the
+    upper-clamp in compute_auc_pr_floor) would NOT pass — the synthetic
+    cohort's val_auc_pr is in the 0.7-0.95 range, well below 1.0.
+    Pinning 0.65 keeps the test semantics aligned with the original
+    "plumbing-clears-bar" intent.
     """
     X_tr, y_tr, X_va, y_va = _make_separable_dataset()
     # Constrain HPO trials for test speed; pin to xgboost so the CV-pick is
@@ -400,10 +403,11 @@ def test_honest_failure_surfaced_on_noise() -> None:
     """On pure-noise features the trainer surfaces (does NOT lower) the bar.
 
     Issue #188: prevalence-aware floor. The expected floor for a roughly-
-    balanced y (rng.integers in {0,1}) is K * 0.5 = 2.5 clamped to ceiling
-    behavior — but the clamp only enforces a LOWER bound (0.10). The
-    prevalence-aware computation should equal max(5 * pi, 0.10) where
-    pi is the validation positive prevalence.
+    balanced y (rng.integers in {0,1}) is K * 0.5 = 2.5 clamped to the
+    AUC-PR ceiling 1.0 (codex pass-2 MEDIUM-3 upper clamp). The
+    prevalence-aware computation is therefore
+    min(max(5 * pi, 0.10), 1.0) where pi is the validation positive
+    prevalence.
     """
     rng = np.random.default_rng(13)
     n = 200

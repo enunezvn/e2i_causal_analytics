@@ -59,6 +59,9 @@ class _ChainableQuery:
     def neq(self, *args: Any) -> "_ChainableQuery":
         return self._record("neq", *args)
 
+    def or_(self, *args: Any) -> "_ChainableQuery":
+        return self._record("or_", *args)
+
     def gte(self, *args: Any) -> "_ChainableQuery":
         return self._record("gte", *args)
 
@@ -89,10 +92,21 @@ def _make_repo_with_query() -> tuple[PredictionRepository, _ChainableQuery]:
 
 
 def _assert_neq_gated(query: _ChainableQuery, method_name: str) -> None:
-    neq_calls = [args for (name, args) in query.calls if name == "neq"]
-    assert ("prediction_class", GATED_HONEST_FAILURE_SENTINEL) in neq_calls, (
-        f"{method_name} did NOT filter out {GATED_HONEST_FAILURE_SENTINEL} rows. "
-        f"Calls: {query.calls}"
+    """Codex pass-5 MEDIUM: filter must be NULL-preserving.
+
+    The filter is now implemented as
+    ``.or_("prediction_class.is.null,prediction_class.neq.<sentinel>")``
+    so a row with prediction_class=NULL still passes (historical rows
+    pre-issue-188 may not have prediction_class set; PostgREST .neq() on
+    a NULL column would tri-value-drop them).
+    """
+    or_calls = [args for (name, args) in query.calls if name == "or_"]
+    expected = (
+        f"prediction_class.is.null,prediction_class.neq.{GATED_HONEST_FAILURE_SENTINEL}",
+    )
+    assert expected in or_calls, (
+        f"{method_name} did NOT filter out {GATED_HONEST_FAILURE_SENTINEL} rows "
+        f"with NULL-preserving semantics. or_ calls: {or_calls}"
     )
 
 
