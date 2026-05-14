@@ -216,8 +216,12 @@ provisional → 0.04 calibrated).
 - [`src/data/manifests/synthetic_feature_manifest.py`](../src/data/manifests/synthetic_feature_manifest.py)
   — declares the `borderline_genuine_feature` as `knowable_at=index_date`
   so Layer 1 sees it as declared-safe.
-- [`src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py:185`](../src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py)
-  — Layer 1 logic that interacts with the manifest declaration.
+- [`src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py:273-284`](../src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py)
+  — Layer-1-conditional HBLP inflation: declared-safe features
+  (`knowable_at <= index_date`) get the 1.5× prior multiplier on the
+  Layer 3 z-threshold (encodes the structural prior that manifest-cleared
+  features need stronger statistical evidence to be reclassified as
+  leaks). Helper: `T2_1B_HBLP_DECLARED_SAFE_PRIOR_MULTIPLIER`.
 - [`src/agents/ml_foundation/model_trainer/nodes/evaluator.py`](../src/agents/ml_foundation/model_trainer/nodes/evaluator.py)
   — T2.2 / T2.3 honest-band derivation; references the `[0.62, 0.68]`
   anchor.
