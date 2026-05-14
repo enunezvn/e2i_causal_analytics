@@ -79,19 +79,38 @@ async def transform_data(state: DataPreparerState) -> Dict[str, Any]:
         imputation_strategy = scope_spec.get("imputation_strategy", "mean")
         datetime_features = scope_spec.get("extract_datetime_features", True)
 
-        # Defense-in-depth pre-step (Codex pass-2 MEDIUM-2): scan for
-        # unhashable container columns BEFORE any transformation so we
-        # can thread the cleaned (but otherwise-untransformed) frames
-        # back into state. Downstream nodes in the data_preparer graph
-        # that consume ``state.get("train_df")`` — ``feast_registrar``,
-        # ``compute_baseline_metrics``, ``finalize_output`` — would
-        # otherwise read the ORIGINAL state's frame with list cells
-        # intact and crash on their own ``nunique()``/``value_counts()``
-        # calls. Mirrors loader-side ``_drop_unhashable_columns``.
-        _, _, _, unhashable_cols = _identify_column_types(
-            train_df.drop(columns=[target_column], errors="ignore") if target_column else train_df,
-            exclude_columns,
+        # Defense-in-depth pre-step (Codex pass-2 MEDIUM-2 + pass-3 MED-3):
+        # scan for unhashable container columns BEFORE any transformation
+        # so we can thread the cleaned (but otherwise-untransformed)
+        # frames back into state. Downstream nodes in the data_preparer
+        # graph that consume ``state.get("train_df")`` —
+        # ``feast_registrar``, ``compute_baseline_metrics``,
+        # ``finalize_output`` — would otherwise read the ORIGINAL
+        # state's frame with list cells intact and crash on their own
+        # ``nunique()``/``value_counts()`` calls. Mirrors loader-side
+        # ``_drop_unhashable_columns``.
+        #
+        # Pass-3 MED-3: scan EVERY split (train/val/test/holdout) and
+        # take the UNION of unhashable cols. A column may be scalar in
+        # train but list-typed in val/test (split skew on JSON-decoded
+        # CSU/Optum), or a list-only column absent from train altogether.
+        # The drop set must cover all splits, not just train.
+        def _unhashable_in(frame: pd.DataFrame | None) -> set[str]:
+            if frame is None:
+                return set()
+            scan_frame = (
+                frame.drop(columns=[target_column], errors="ignore") if target_column else frame
+            )
+            _, _, _, cols = _identify_column_types(scan_frame, exclude_columns)
+            return set(cols)
+
+        unhashable_set: set[str] = (
+            _unhashable_in(train_df)
+            | _unhashable_in(validation_df)
+            | _unhashable_in(test_df)
+            | _unhashable_in(holdout_df)
         )
+        unhashable_cols = sorted(unhashable_set)
 
         # Stash pre-transformation cleaned frames for state replay.
         # These hold the original schema MINUS the unhashable cols, with
