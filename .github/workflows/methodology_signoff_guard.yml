@@ -13,8 +13,42 @@ name: Methodology Sign-off Guard
 #   validation to the reusable workflow at
 #   `.github/workflows/methodology-signoff-validator.yml`. The reusable
 #   workflow does its OWN checkout of the protected `main` ref for the
-#   validator script (issue #192 H3 mitigation), so a PR cannot weaken the
-#   validator and have its own copy validate itself in the same commit.
+#   validator SCRIPT (issue #192 H3 partial mitigation: the validator
+#   *script* always runs from main, even if the PR edits its own copy).
+#
+#   IMPORTANT THREAT-MODEL HONESTY (codex pass-1 HIGH-1, 2026-05-14):
+#     Same-repo path-pinned `uses: ./.github/workflows/...` loads the
+#     reusable workflow YAML *from the same commit as the caller* (per
+#     GitHub docs). Therefore a malicious PR can edit BOTH this caller
+#     YAML AND the reusable workflow YAML in the same commit, and its
+#     own modified workflow can swap out / weaken / disable the
+#     `actions/checkout@v4 ref: main` step that loads the validator
+#     script. The script-source pin is only load-bearing if the
+#     workflow YAML that performs the pin is itself trustworthy.
+#     Same-repo path-pinning expands the trusted computing base from
+#     {validator script} to {validator script + both workflow YAMLs}
+#     — narrower than the pre-#192 state ({validator script + caller
+#     YAML, all from PR head}), but NOT a complete close.
+#
+#     The full close requires either:
+#       (a) Move both workflow YAMLs + validator to a separate
+#           governance repo and call as
+#           `uses: org/governance-actions/.github/workflows/...@<sha>`
+#           (cross-repo SHA-pinned).
+#       (b) Use `pull_request_target` from main with strict checkout-
+#           by-immutable-head-SHA semantics (more complex, runs in
+#           trusted context with PR data — has its own threat model).
+#
+#     Until (a) or (b), the operator complement is REQUIRED:
+#       * Branch protection on `main` (no force-push, requires PR).
+#       * CODEOWNERS gate on `scripts/check_methodology_signoff.py`
+#         AND on `.github/workflows/methodology_signoff_guard.yml`
+#         AND on `.github/workflows/methodology-signoff-validator.yml`
+#         requiring security-team review.
+#     This makes a "weakening" PR visible to the security team for
+#     review — same as the pre-#192 state, but with a narrower attack
+#     surface (validator script edits no longer matter; only workflow
+#     YAML edits do).
 #
 # H1 + H4 (registry-pinned GPG keyring + CoI body signature verify):
 #   STILL DEFERRED — both require infra (per-runner GPG keyring with
@@ -31,16 +65,12 @@ name: Methodology Sign-off Guard
 #   the script ad-hoc retain warn-only back-compat (no STRICT_GH set).
 #
 # H3 (validator-from-protected-ref):
-#   RESOLVED 2026-05-14 (issue #192). The reusable workflow checks out
-#   `main` into a SEPARATE workspace and runs the validator script from
-#   that protected-ref checkout, NOT from the PR head. This closes the
-#   "PR weakens validator + workflow in same commit" attack class.
-#   Cross-PR weakening (land weak validator on main first, then open
-#   sign-off PR) is NOT closed by this split alone — branch protection +
-#   CODEOWNERS gate on `scripts/check_methodology_signoff.py` and on
-#   both workflow files is the required complement. The full cross-org
-#   migration to `org/governance-actions/methodology-signoff@<sha>` is
-#   the future-state ideal but requires a separate-repo decision.
+#   PARTIALLY RESOLVED 2026-05-14 (issue #192) — see threat-model
+#   honesty note above. The validator *script* now always runs from
+#   `main` (load-bearing), but both workflow YAMLs are still loaded
+#   from caller's ref. The full close requires cross-repo SHA-pinned
+#   invocation (decision pending) PLUS the operator branch-protection +
+#   CODEOWNERS complement (already required pre-#192).
 
 on:
   pull_request:

