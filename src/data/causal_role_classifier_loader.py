@@ -73,6 +73,84 @@ def _lm_is_configured() -> bool:
     return lm is not None
 
 
+# Default model + key env var. Matches the convention in
+# ``src/api/routes/chatbot_dspy.py:63`` and ``src/rag/causal_rag.py:186``.
+_DEFAULT_LM_MODEL = "anthropic/claude-sonnet-4-20250514"
+_API_KEY_ENV_VARS: tuple[str, ...] = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY")
+
+
+def ensure_dspy_lm_configured(
+    *,
+    model: str = _DEFAULT_LM_MODEL,
+    require_api_key: bool = True,
+) -> bool:
+    """Idempotent DSPy LM configuration for the runtime production path.
+
+    Codex pass-1 HIGH-1 (issue #193): the loader previously checked
+    ``dspy.settings.lm is None`` and returned ``None`` from
+    ``classify_feature`` when no LM was configured — but the
+    orchestrator never instantiated one. The production pipeline path
+    with ``ANTHROPIC_API_KEY`` set in env therefore silently no-op'd
+    every Layer 4 invocation, effectively disabling the Stage 3 wiring.
+
+    This helper bridges the gap: when called at orchestrator entry it
+    configures a default DSPy LM (matching the convention used in
+    ``src/api/routes/chatbot_dspy.py`` and ``src/rag/causal_rag.py``) iff
+    (a) no LM is already configured AND (b) a usable API key is present
+    in the environment. Returns ``True`` when an LM is configured after
+    the call (either pre-existing or freshly configured), ``False``
+    when no LM is or can be configured.
+
+    Idempotent: a second call with an LM already configured returns
+    ``True`` without re-configuring (this matches the chatbot_dspy
+    module's ``_dspy_lm_configured`` once-flag pattern but is stateless
+    so test code can rely on ``dspy.settings.lm = None`` to force
+    re-configuration).
+
+    Args:
+        model: Default LM model string. Default matches the documented
+            convention (Anthropic Claude Sonnet 4).
+        require_api_key: When ``True`` (default) the configuration step is
+            skipped unless one of the recognised API key env vars
+            (``ANTHROPIC_API_KEY``, ``OPENAI_API_KEY``) is present and
+            non-empty. When ``False``, ``dspy.LM(model)`` is invoked
+            unconditionally — useful for tests that supply DummyLM via a
+            different mechanism. Tests of this function itself must set
+            ``require_api_key=True`` and prepare the env so the branching
+            is exercised.
+
+    Returns:
+        ``True`` iff a DSPy LM is configured at end of the call. ``False``
+        means Layer 4 will skip — either because no key is present (the
+        documented CI / developer-laptop path) OR because configuration
+        raised (logged as a warning).
+    """
+    if _lm_is_configured():
+        return True
+    if require_api_key and not any(os.environ.get(v) for v in _API_KEY_ENV_VARS):
+        logger.info(
+            "ensure_dspy_lm_configured: no API key env var found "
+            "(checked %s) — Layer 4 will skip this run.",
+            list(_API_KEY_ENV_VARS),
+        )
+        return False
+    try:
+        lm = dspy.LM(model)
+        dspy.configure(lm=lm)
+        logger.info(
+            "ensure_dspy_lm_configured: configured default DSPy LM with model=%s",
+            model,
+        )
+        return True
+    except Exception as exc:
+        logger.warning(
+            "ensure_dspy_lm_configured: failed to configure DSPy LM (%s); "
+            "Layer 4 will skip this run.",
+            exc,
+        )
+        return False
+
+
 def load_compiled_classifier(
     *,
     artifact_path: Path | None = None,
@@ -237,7 +315,29 @@ def classify_feature(
         )
         remediation = "keep_with_caveat"
 
-    mechanism = getattr(prediction, "mechanism", None) or ""
+    # Codex pass-1 MEDIUM-1 (issue #193): coerce ``mechanism`` to ``str``
+    # at the loader boundary. A malformed LLM that returns a list/dict for
+    # the mechanism field would otherwise propagate into ``_extract_pmids``
+    # (which calls ``re.findall``), raising ``TypeError`` outside the
+    # ``classify_feature`` try/except in this function. The orchestrator's
+    # outer try/except would swallow it as "Layer 4 failed", but direct
+    # loader callers (tests, scripts) would see an exception in violation
+    # of the documented "best-effort: malformed output → None" contract.
+    raw_mechanism = getattr(prediction, "mechanism", None)
+    if raw_mechanism is None or raw_mechanism == "":
+        mechanism = ""
+    elif isinstance(raw_mechanism, str):
+        mechanism = raw_mechanism
+    else:
+        logger.warning(
+            "classify_feature(%s): LLM returned non-string mechanism=%r "
+            "(type=%s); coercing to empty string.",
+            feature_name,
+            raw_mechanism,
+            type(raw_mechanism).__name__,
+        )
+        mechanism = ""
+
     return LLMVerdict(
         causal_role=role,
         mechanism=mechanism,

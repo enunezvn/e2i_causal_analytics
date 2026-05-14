@@ -114,7 +114,8 @@ def _try_load_layer_4_classifier() -> Optional[Any]:
     pull DSPy into this module's import-time surface (mirroring the
     ``EnsembleVoter`` lazy-import pattern above). Returns ``None`` when:
 
-    - no DSPy LM is configured (developer laptop / CI without API key);
+    - no DSPy LM is configured AND no API key is present in env (the
+      developer-laptop / CI-without-key path);
     - the compiled artifact is missing (compile script hasn't run yet);
     - the loader raises during load (we log + swallow so Layer 4 is
       best-effort, never blocking the pipeline).
@@ -122,15 +123,34 @@ def _try_load_layer_4_classifier() -> Optional[Any]:
     Stage 3 wiring (issue #193): the orchestrator calls this once per node
     invocation and reuses the returned classifier across every per-feature
     Layer 4 call to avoid reloading the artifact on every feature.
+
+    Codex pass-1 HIGH-1 (issue #193): this helper now invokes
+    ``ensure_dspy_lm_configured`` so the production runtime path (where
+    only ``ANTHROPIC_API_KEY`` is set in env, with no prior
+    ``dspy.configure(...)`` call anywhere upstream) actually instantiates
+    a DSPy LM. Without that call the loader's no-LM short-circuit would
+    silently disable every Stage 3 invocation.
     """
     try:
-        from src.data.causal_role_classifier_loader import load_compiled_classifier
+        from src.data.causal_role_classifier_loader import (
+            ensure_dspy_lm_configured,
+            load_compiled_classifier,
+        )
     except Exception as exc:  # pragma: no cover - import-time defensive
         logger.warning(
             "adaptive_validity_check: loader import failed (%s); Layer 4 skipped",
             exc,
         )
         return None
+
+    # Codex HIGH-1: configure a default DSPy LM if none is registered AND
+    # an API key is present. Returns False when no key is present (the
+    # documented developer-laptop / CI-without-key path) — Layer 4 still
+    # silently skips, but the production path with a key is no longer
+    # silently disabled.
+    if not ensure_dspy_lm_configured():
+        return None
+
     try:
         return load_compiled_classifier(strict=False)
     except Exception as exc:  # pragma: no cover - load-time defensive
@@ -1727,8 +1747,22 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
         # to disambiguate. The verdict then routes through the voter with
         # ``llm_verdict`` populated, which yields ``decided_by="llm"`` in
         # the audit trail (mapped to ``layer="4"`` via _DECIDED_BY_TO_LAYER).
+        #
+        # Codex pass-1 MEDIUM-2 (issue #193): ALSO invoke Layer 4 when the
+        # adversarial severity is ``high`` AND Layer 1 declared the feature
+        # safe (manifest contract knowable_at <= index_date). This is the
+        # expensive false-positive case — the voter's deterministic
+        # adversarial-high veto still wins on severity (drop), but the
+        # ``EnsembleVerdict.disagreements`` audit trail records
+        # ``adversarial=high but llm=<accept-role>`` when the LLM agrees
+        # with Layer 1's "safe" assessment. Without this, the operator
+        # has no Layer 4 signal to triage Layer-1-vs-Layer-3 disagreement.
         llm_verdict: Optional[Any] = None
-        if layer_4_classifier is not None and adv_input.get("severity") == "moderate":
+        adv_severity = adv_input.get("severity")
+        layer_4_should_fire = adv_severity == "moderate" or (
+            adv_severity == "high" and layer_1_declared_safe
+        )
+        if layer_4_classifier is not None and layer_4_should_fire:
             try:
                 from src.data.causal_role_classifier_loader import classify_feature
 
