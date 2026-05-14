@@ -87,7 +87,37 @@ _ASYNCIO_POLLUTION_STATE: Dict[str, object] = {
     "current_nodeid": None,  # type: Optional[str]
     "apply_count": 0,
     "installed_trace": False,
+    # Codex pass-1 LOW: surface pre-existing pollution (a sitecustomize,
+    # earlier conftest, or pytest plugin that imported nest_asyncio +
+    # called ``apply()`` before this module loaded). When True, the
+    # baseline ``_ORIG_ASYNCIO_RUN`` is already the patched function and
+    # the runtime probe cannot detect new pollution by identity check.
+    "preexisting_pollution_detected": False,
 }
+
+
+def _check_preexisting_pollution() -> None:
+    """Detect pollution that happened BEFORE this conftest imported.
+
+    Heuristic: nest_asyncio's ``apply`` rewrites ``asyncio.run`` to point
+    at its own ``run`` helper. If ``asyncio.run.__module__`` is no longer
+    the stdlib ``asyncio.runners`` (or ``asyncio``), something has
+    already patched it. We record this for the terminal-summary block so
+    a future debugger run knows the baseline is unreliable.
+
+    No-op if nothing is detectable; this is purely informational and
+    never raises (avoids breaking unrelated test sessions where another
+    legitimate plugin has wrapped asyncio.run).
+    """
+
+    module_name = getattr(asyncio.run, "__module__", "") or ""
+    # Stdlib spellings across Python versions.
+    if module_name in {"asyncio", "asyncio.runners"}:
+        return
+    qual = getattr(asyncio.run, "__qualname__", "") or ""
+    # If a nest_asyncio fingerprint is visible on the callable, mark it.
+    if "nest_asyncio" in module_name or "nest_asyncio" in qual:
+        _ASYNCIO_POLLUTION_STATE["preexisting_pollution_detected"] = True
 
 
 def _install_nest_asyncio_apply_trace() -> None:
@@ -129,6 +159,12 @@ def _install_nest_asyncio_apply_trace() -> None:
     nest_asyncio.apply = _traced_apply  # type: ignore[assignment]
     _ASYNCIO_POLLUTION_STATE["installed_trace"] = True
 
+
+# Run the pre-existing pollution check BEFORE installing the trace so
+# ``_ORIG_ASYNCIO_RUN`` is captured at the earliest moment we have access
+# to. If the baseline is already patched we surface it in the terminal
+# summary rather than silently treating the patched function as authentic.
+_check_preexisting_pollution()
 
 # Install ASAP so we catch apply() calls fired during fixture setup, not just
 # inside the test body itself.
@@ -364,6 +400,22 @@ def pytest_configure(config: pytest.Config) -> None:
 # =============================================================================
 
 
+def pytest_collectstart(collector):  # type: ignore[no-untyped-def]
+    """Attribute import-phase ``nest_asyncio.apply()`` calls to the
+    collection item being processed (codex pass-1 MEDIUM-3).
+
+    Without this hook, a polluter fired during a test module's import
+    would record ``apply_first_nodeid=None`` and the diagnostic would
+    surface only at the next test boundary. By setting
+    ``current_nodeid`` here, the trace correctly names the module that
+    triggered the import-time pollution.
+    """
+
+    nodeid = getattr(collector, "nodeid", None)
+    if nodeid:
+        _ASYNCIO_POLLUTION_STATE["current_nodeid"] = f"<collect> {nodeid}"
+
+
 def pytest_runtest_protocol(item, nextitem):  # type: ignore[no-untyped-def]
     """Record which test is currently executing so the apply() trace can
     attribute the first ``nest_asyncio.apply()`` call to a specific nodeid."""
@@ -373,12 +425,39 @@ def pytest_runtest_protocol(item, nextitem):  # type: ignore[no-untyped-def]
     return None
 
 
+def _format_pollution_warning(nodeid: str) -> str:
+    """Build the warning/exit message body. Inlined here so the message
+    surfaces in BOTH the controller terminal summary AND the per-worker
+    captured output (codex pass-1 MEDIUM-2 — under xdist
+    ``_ASYNCIO_POLLUTION_STATE`` is process-local, so the controller has
+    only what comes back through the worker's stdout/warnings stream).
+    """
+
+    apply_nodeid = _ASYNCIO_POLLUTION_STATE.get("apply_first_nodeid")
+    stack = _ASYNCIO_POLLUTION_STATE.get("apply_first_stack") or "<not captured>"
+    apply_count = _ASYNCIO_POLLUTION_STATE.get("apply_count", 0)
+    return (
+        f"[issue-218] asyncio.run was monkey-patched by nest_asyncio.apply() "
+        f"during test: {nodeid}. First apply() called from: "
+        f"{apply_nodeid!r} (total apply count this worker: {apply_count}). "
+        f"Set E2I_ASSERT_NO_ASYNCIO_POLLUTION=1 to promote this to a hard "
+        f"failure.\n"
+        f"--- first apply() call stack ---\n{stack}\n--- end stack ---"
+    )
+
+
 def pytest_runtest_logfinish(nodeid, location):  # type: ignore[no-untyped-def]
     """Detect the first test boundary at which ``asyncio.run`` is polluted.
 
     Fires after every test (passed/failed/skipped/xfailed). Once we observe
     ``asyncio.run is not _ORIG_ASYNCIO_RUN``, we record the polluter nodeid
     and emit a pytest warning so the session summary shows the culprit.
+
+    Under xdist, this hook fires on each worker; the warning message embeds
+    the full apply() call stack so it survives the worker→controller
+    boundary (codex pass-1 MEDIUM-2). The controller's terminal summary
+    still re-prints whatever local state exists, which is empty on the
+    controller but populated on each worker.
     """
 
     if _ASYNCIO_POLLUTION_STATE["polluter_nodeid"] is not None:
@@ -390,42 +469,52 @@ def pytest_runtest_logfinish(nodeid, location):  # type: ignore[no-untyped-def]
         return
 
     _ASYNCIO_POLLUTION_STATE["polluter_nodeid"] = nodeid
-    warnings.warn(
-        (
-            f"[issue-218] asyncio.run was monkey-patched by nest_asyncio.apply() "
-            f"during test: {nodeid}. First apply() call attributed to: "
-            f"{_ASYNCIO_POLLUTION_STATE.get('apply_first_nodeid')!r}. "
-            f"Set E2I_ASSERT_NO_ASYNCIO_POLLUTION=1 to promote this to a hard "
-            f"failure; inspect ``_ASYNCIO_POLLUTION_STATE['apply_first_stack']`` "
-            f"in a debugger or via the session-summary log line for the call site."
-        ),
-        category=RuntimeWarning,
-        stacklevel=1,
-    )
+    msg = _format_pollution_warning(str(nodeid))
+    warnings.warn(msg, category=RuntimeWarning, stacklevel=1)
+    # Also write to stderr so the message survives even when warnings are
+    # captured/suppressed by the user's pytest filter config.
+    import sys as _sys
+
+    print(msg, file=_sys.stderr, flush=True)
 
     if os.getenv("E2I_ASSERT_NO_ASYNCIO_POLLUTION", "").lower() in {"1", "true", "yes"}:
         # Hard-fail when explicitly requested. We use pytest.exit (not raise)
         # so the surrounding test isn't blamed for the pollution — the
         # session summary will name the actual culprit via ``polluter_nodeid``.
-        stack = _ASYNCIO_POLLUTION_STATE.get("apply_first_stack") or "<not captured>"
         pytest.exit(
-            (
-                f"[issue-218] FATAL: nest_asyncio.apply() polluted asyncio.run "
-                f"during test {nodeid!r}. First apply() called from: "
-                f"{_ASYNCIO_POLLUTION_STATE.get('apply_first_nodeid')!r}.\n"
-                f"--- apply() call stack ---\n{stack}\n--- end stack ---"
-            ),
+            f"[issue-218] FATAL: nest_asyncio.apply() polluted asyncio.run.\n{msg}",
             returncode=2,
         )
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):  # type: ignore[no-untyped-def]
     """Append an issue-218 diagnostic block to the terminal summary when
-    pollution was detected during the session."""
+    pollution was detected during the session.
 
-    if _ASYNCIO_POLLUTION_STATE["polluter_nodeid"] is None:
+    Under xdist this fires on the controller, where
+    ``_ASYNCIO_POLLUTION_STATE`` is per-process and therefore empty when
+    the actual polluter ran on a worker. The per-worker warning emitted
+    by ``pytest_runtest_logfinish`` carries the full stack, so missing
+    state on the controller is a documented xdist limitation (codex
+    pass-1 MEDIUM-2). When polluted ON the controller (single-process
+    runs, ``-p no:xdist``), the block below renders normally.
+    """
+
+    if (
+        _ASYNCIO_POLLUTION_STATE["polluter_nodeid"] is None
+        and not _ASYNCIO_POLLUTION_STATE["preexisting_pollution_detected"]
+    ):
         return
     terminalreporter.write_sep("=", "issue-218 asyncio pollution diagnostic")
+    if _ASYNCIO_POLLUTION_STATE["preexisting_pollution_detected"]:
+        terminalreporter.write_line(
+            "WARNING: asyncio.run was ALREADY patched before this conftest "
+            "loaded — runtime detection by identity check may miss further "
+            "polluters. Audit sitecustomize.py / earlier-loaded pytest "
+            "plugins / parent conftest files."
+        )
+    if _ASYNCIO_POLLUTION_STATE["polluter_nodeid"] is None:
+        return
     terminalreporter.write_line(
         f"polluter_nodeid (first test after pollution detected): "
         f"{_ASYNCIO_POLLUTION_STATE['polluter_nodeid']!r}"
