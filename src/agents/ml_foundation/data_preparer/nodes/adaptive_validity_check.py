@@ -388,7 +388,40 @@ def hblp_classify(
     delta_auc_known = delta_auc is not None and bool(np.isfinite(delta_auc))
     delta_auc_below_floor = delta_auc_known and abs(float(delta_auc)) <= float(delta_auc_floor)
 
-    if not _is_finite_z(z_score):
+    # Issue #194 codex pass-1 MEDIUM-1: a zero-variance permutation null
+    # makes ``compute_adversarial_score`` return ``z=+inf`` when
+    # ``actual_auc > null_mean`` (a deterministic high-effect signal —
+    # every permutation produced the same AUC, so the actual feature's
+    # AUC is infinitely many standard deviations above the null). The
+    # legacy code path classified ``z=inf`` as severity=info via the
+    # non-finite-z guard, which silently dropped these strong signals.
+    # The joint check now provides a principled escape: when ``z=+inf``
+    # AND ``|delta_AUC| > floor``, severity=high (the absolute-effect
+    # floor confirms a real leak; the inf z just means the null was
+    # degenerate). ``z=-inf`` or NaN still falls through to severity=info.
+    z_is_positive_inf_strong_effect = (
+        z_score is not None
+        and isinstance(z_score, (int, float))
+        and not isinstance(z_score, bool)
+        and not (isinstance(z_score, float) and np.isnan(z_score))
+        and not np.isfinite(z_score)
+        and z_score > 0
+        and delta_auc_known
+        and abs(float(delta_auc)) > float(delta_auc_floor)
+    )
+
+    if z_is_positive_inf_strong_effect:
+        # Deterministic high-effect signal with degenerate null.
+        # Route through severity=high so a real leak isn't silently
+        # dropped. Audit-trail records the inf-z + strong-effect path.
+        severity = "high"
+        rationale = (
+            f"z={z_score} (degenerate null; null_std=0 → infinite "
+            f"separation) AND |delta_AUC|={abs(float(delta_auc)):.4f} > floor "
+            f"{float(delta_auc_floor):.4f}; joint check confirms severity=high "
+            f"(issue #194 codex pass-1 MED-1)"
+        )
+    elif not _is_finite_z(z_score):
         severity = "info"
         rationale = "z_score is non-finite; HBLP defaults to severity=info"
     elif z_score > high_eff:
@@ -871,6 +904,27 @@ def _adversarial_input(
             )
         z_input = float(z)
 
+    # Issue #194 codex pass-1 LOW-1: thread joint-check audit fields
+    # through the adversarial-input dict so structured-sidecar consumers
+    # (audit JSON, dashboards, regression-test fixtures) can branch on
+    # the joint-check decision without parsing the human-readable
+    # ``evidence`` string. Always populated:
+    #   - delta_auc: signed float, or None when classifier had no input
+    #   - delta_auc_floor: float, the active floor at decision time
+    #   - delta_auc_below_floor: bool, True iff joint check fired
+    # The degenerate-z path (z_is_degenerate above) returns the three
+    # fields as None / 0.0 / False because hblp_classify wasn't called.
+    if z_is_degenerate:
+        ax_delta_auc: Optional[float] = None
+        ax_delta_auc_floor: float = float(LAYER5_DELTA_AUC_FLOOR_DEFAULT)
+        ax_delta_auc_below_floor: bool = False
+    else:
+        ax_delta_auc = classification.get("delta_auc")
+        ax_delta_auc_floor = float(
+            classification.get("delta_auc_floor", LAYER5_DELTA_AUC_FLOOR_DEFAULT)
+        )
+        ax_delta_auc_below_floor = bool(classification.get("delta_auc_below_floor", False))
+
     return {
         "layer": "3",
         "severity": severity,
@@ -884,6 +938,10 @@ def _adversarial_input(
         "null_std": score.get("null_std"),
         "p_value": score.get("p_value"),
         "n_permutations": score.get("n_permutations"),
+        # Issue #194 joint-check audit fields (codex pass-1 LOW-1).
+        "delta_auc": ax_delta_auc,
+        "delta_auc_floor": ax_delta_auc_floor,
+        "delta_auc_below_floor": ax_delta_auc_below_floor,
         # Plan v4 §2 G3 / codex MED-5: tag the adversarial-input dict so
         # ``_compose_legacy_verdict`` can verify the severity classifi-
         # cation came from ``hblp_classify`` (not a hand-rolled legacy
@@ -965,6 +1023,12 @@ def _ensemble_to_legacy_dict(
         "null_std": adv.get("null_std"),
         "p_value": adv.get("p_value"),
         "n_permutations": adv.get("n_permutations"),
+        # Issue #194 joint-check audit fields (codex pass-1 LOW-1).
+        # Populated when ``adversarial_input`` carries them; default
+        # to None/floor/False when Layer 3 didn't fire.
+        "delta_auc": adv.get("delta_auc"),
+        "delta_auc_floor": adv.get("delta_auc_floor", LAYER5_DELTA_AUC_FLOOR_DEFAULT),
+        "delta_auc_below_floor": bool(adv.get("delta_auc_below_floor", False)),
         # Severity / remediation routed through the voter (or set
         # directly by the bypass paths for short-circuit / info-only).
         "severity": verdict.severity,
@@ -1015,6 +1079,10 @@ def _legacy_adversarial_alone_verdict(
         "null_std": adversarial_input.get("null_std"),
         "p_value": adversarial_input.get("p_value"),
         "n_permutations": adversarial_input.get("n_permutations"),
+        # Issue #194 joint-check audit fields (codex pass-1 LOW-1).
+        "delta_auc": adversarial_input.get("delta_auc"),
+        "delta_auc_floor": adversarial_input.get("delta_auc_floor", LAYER5_DELTA_AUC_FLOOR_DEFAULT),
+        "delta_auc_below_floor": bool(adversarial_input.get("delta_auc_below_floor", False)),
         "severity": adversarial_input.get("severity", "info"),
         "remediation": adversarial_input.get("remediation", "keep"),
         "evidence": adversarial_input.get("evidence", ""),
@@ -1059,6 +1127,10 @@ def _legacy_info_verdict(
         "null_std": adv.get("null_std"),
         "p_value": adv.get("p_value"),
         "n_permutations": adv.get("n_permutations"),
+        # Issue #194 joint-check audit fields (codex pass-1 LOW-1).
+        "delta_auc": adv.get("delta_auc"),
+        "delta_auc_floor": adv.get("delta_auc_floor", LAYER5_DELTA_AUC_FLOOR_DEFAULT),
+        "delta_auc_below_floor": bool(adv.get("delta_auc_below_floor", False)),
         "severity": "info",
         "remediation": "keep",
         "evidence": evidence,
@@ -1091,6 +1163,13 @@ def _legacy_short_circuit_verdict(feature: str, *, evidence: str) -> dict[str, A
         "null_std": None,
         "p_value": None,
         "n_permutations": None,
+        # Issue #194 joint-check audit fields (codex pass-1 LOW-1).
+        # Short-circuit path: classifier never ran, so the fields
+        # default to None/floor/False — the audit JSON sidecar still
+        # sees the field present (schema uniformity), just unpopulated.
+        "delta_auc": None,
+        "delta_auc_floor": float(LAYER5_DELTA_AUC_FLOOR_DEFAULT),
+        "delta_auc_below_floor": False,
         "severity": "info",
         "remediation": "keep",
         "evidence": evidence,

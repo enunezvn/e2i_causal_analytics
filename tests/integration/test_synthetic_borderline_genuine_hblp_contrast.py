@@ -248,12 +248,27 @@ def test_v5_c2_z_lands_in_calibration_band(borderline_arms_results):
         f"Calibration drift: z={z} fell outside expected band "
         f"[{EXPECTED_Z_LOW}, {EXPECTED_Z_HIGH}] — re-tune generator constants"
     )
-    # Also assert z is in the in-band decision window for the contrast
-    # test to make sense. If this fails, the contrast test will fail too.
+    # z-band invariant on the HBLP relaxation window: even though
+    # issue #194's joint check now retains the borderline_genuine
+    # feature on BOTH arms, the z-value MUST still land in (5σ, 7.5σ)
+    # for the HBLP relaxation mechanism to be in its active range.
+    # If z fell BELOW 5σ the legacy-z-only path would also retain
+    # (severity=info pre-joint-check); if z fell ABOVE 7.5σ HBLP's
+    # ``layer_1_declared_safe`` relaxation wouldn't help.
+    # ``test_v5_c2_hblp_relaxation_actually_fired`` then independently
+    # verifies the HBLP mechanism via direct ``hblp_classify`` call.
+    # Issue #194 codex pass-1 LOW-2: assertion text refreshed — the
+    # "legacy-DROPS / HBLP-RETAINS" framing is stale; the joint check
+    # is now the primary decision on the legacy arm. The z-band
+    # invariant still has value as the precondition for HBLP's
+    # relaxation mechanism to be testable.
     assert LEGACY_THRESHOLD < z < HBLP_EFFECTIVE_THRESHOLD, (
         f"v5 C2 invariant: z={z} must satisfy {LEGACY_THRESHOLD} < z < "
-        f"{HBLP_EFFECTIVE_THRESHOLD} for the legacy-DROPS / HBLP-RETAINS "
-        f"contrast to be possible"
+        f"{HBLP_EFFECTIVE_THRESHOLD} for HBLP's variance-relaxation "
+        f"mechanism to be in its active range. (Issue #194 joint check "
+        f"now retains the feature on BOTH arms via |delta_AUC|-floor; "
+        f"the HBLP mechanism is verified independently in "
+        f"test_v5_c2_hblp_relaxation_actually_fired.)"
     )
 
 
