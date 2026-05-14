@@ -144,16 +144,12 @@ def _install_nest_asyncio_apply_trace() -> None:
 
         # Increment for every apply() call so a follow-up regression test
         # can pin "apply_count==0" on clean sessions.
-        _ASYNCIO_POLLUTION_STATE["apply_count"] = (
-            int(_ASYNCIO_POLLUTION_STATE["apply_count"]) + 1
-        )
+        _ASYNCIO_POLLUTION_STATE["apply_count"] = int(_ASYNCIO_POLLUTION_STATE["apply_count"]) + 1
         if _ASYNCIO_POLLUTION_STATE["apply_first_stack"] is None:
-            _ASYNCIO_POLLUTION_STATE["apply_first_stack"] = "".join(
-                traceback.format_stack()
-            )
-            _ASYNCIO_POLLUTION_STATE["apply_first_nodeid"] = (
-                _ASYNCIO_POLLUTION_STATE["current_nodeid"]
-            )
+            _ASYNCIO_POLLUTION_STATE["apply_first_stack"] = "".join(traceback.format_stack())
+            _ASYNCIO_POLLUTION_STATE["apply_first_nodeid"] = _ASYNCIO_POLLUTION_STATE[
+                "current_nodeid"
+            ]
         return _real_apply(*args, **kwargs)
 
     nest_asyncio.apply = _traced_apply  # type: ignore[assignment]
@@ -524,8 +520,7 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):  # type: igno
         f"{_ASYNCIO_POLLUTION_STATE['apply_first_nodeid']!r}"
     )
     terminalreporter.write_line(
-        f"nest_asyncio.apply() call count: "
-        f"{_ASYNCIO_POLLUTION_STATE['apply_count']}"
+        f"nest_asyncio.apply() call count: {_ASYNCIO_POLLUTION_STATE['apply_count']}"
     )
     stack = _ASYNCIO_POLLUTION_STATE.get("apply_first_stack")
     if stack:
