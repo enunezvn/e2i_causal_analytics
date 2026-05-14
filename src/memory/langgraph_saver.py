@@ -81,38 +81,40 @@ def create_checkpointer(redis_url: Optional[str] = None, fallback_to_memory: boo
     return MemorySaver()
 
 
-def create_async_checkpointer(redis_url: Optional[str] = None, fallback_to_memory: bool = True):
+async def create_async_checkpointer(
+    redis_url: Optional[str] = None, fallback_to_memory: bool = True
+):
     """
     Create an async LangGraph checkpointer.
 
-    Similar to create_checkpointer but uses async Redis client.
+    Similar to create_checkpointer but uses async Redis client. Async because
+    AsyncRedisSaver.asetup() must be awaited to initialize Redis indices AND
+    bind the running event loop for the sync-wrapper methods
+    (get_tuple/put/put_writes via asyncio.run_coroutine_threadsafe).
 
     Args:
         redis_url: Redis connection URL. If not provided, uses REDIS_URL env var.
         fallback_to_memory: If True, fall back to MemorySaver when Redis unavailable.
 
     Returns:
-        Checkpointer: AsyncRedisSaver or MemorySaver instance
+        Checkpointer: AsyncRedisSaver (asetup-initialized) or MemorySaver instance
     """
     url = redis_url or os.environ.get("REDIS_URL", "redis://localhost:6382")
 
     try:
         from langgraph.checkpoint.redis.aio import AsyncRedisSaver
 
-        # Same API change as the sync RedisSaver — from_conn_string is now
-        # an @asynccontextmanager; construct directly for long-lived use.
-        # NOTE: AsyncRedisSaver.setup() is itself async (returns a coroutine),
-        # so this sync factory cannot await it. Callers MUST `await
-        # checkpointer.asetup()` before first use OR await checkpointer.setup()
-        # — without it, Redis indices are missing and the event-loop binding
-        # used by sync wrapper methods (get_tuple/put/put_writes via
-        # asyncio.run_coroutine_threadsafe) is not initialized. See
-        # asetup() docstring at langgraph/checkpoint/redis/aio/__init__.py.
+        # langgraph-checkpoint-redis 0.4.x changed from_conn_string into an
+        # @asynccontextmanager; construct directly for long-lived use and
+        # await asetup() to create indices + bind the event loop. asetup()
+        # docstring: "Capture the running event loop here so that sync
+        # wrapper methods can dispatch coroutines to it via
+        # asyncio.run_coroutine_threadsafe. Deferring this to asetup() instead
+        # of __init__ lets callers construct the saver outside an async
+        # context (Issue #179)."
         checkpointer = AsyncRedisSaver(redis_url=url)
-        logger.info(
-            f"Created AsyncRedisSaver checkpointer for {url.split('@')[-1]} "
-            "(caller MUST await asetup() before first use)"
-        )
+        await checkpointer.asetup()
+        logger.info(f"Created AsyncRedisSaver checkpointer for {url.split('@')[-1]}")
         return checkpointer
 
     except ImportError as e:
@@ -168,8 +170,8 @@ class CheckpointerConfig:
             redis_url=self.redis_url, fallback_to_memory=self.fallback_to_memory
         )
 
-    def create_async_checkpointer(self):
+    async def create_async_checkpointer(self):
         """Create an async checkpointer using this configuration."""
-        return create_async_checkpointer(
+        return await create_async_checkpointer(
             redis_url=self.redis_url, fallback_to_memory=self.fallback_to_memory
         )
