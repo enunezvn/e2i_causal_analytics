@@ -63,7 +63,7 @@ dependencies = [
 
     # RAG & Prompt Engineering
     "ragas>=0.1.0",                # RAG evaluation
-    "dspy-ai>=2.4.0",              # Prompt optimization
+    "dspy>=3.0.0",                 # Prompt optimization (post-3.0 canonical name; legacy alias 'dspy-ai' removed 2026-05-14)
 
     # Knowledge Graph
     "graphiti-core[falkordb,anthropic]>=0.10.0",  # Temporal knowledge graph
