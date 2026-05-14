@@ -72,6 +72,15 @@ class _ApplyCallsiteVisitor(ast.NodeVisitor):
     both alias forms (`import nest_asyncio as na`; `from nest_asyncio
     import apply`), allowing an unconditional polluter to evade the
     guard test AND the count pin in one stroke.
+
+    Codex pass-2 LOW (documented limitation): binding tracking is
+    *flat* — we do not model lexical scope. ``if TYPE_CHECKING: from
+    nest_asyncio import apply`` would taint module-level ``apply()``
+    calls anywhere in the same file, producing a false positive. No
+    such pattern currently exists in src/; the runtime probe in
+    tests/conftest.py is the authoritative check when binding flow
+    becomes ambiguous. Promote to AST-scope analysis only if a real
+    case appears.
     """
 
     def __init__(self) -> None:
@@ -103,6 +112,53 @@ class _ApplyCallsiteVisitor(ast.NodeVisitor):
                     self._apply_bindings.add(alias.asname or alias.name)
                 elif alias.name == "*":  # pragma: no cover — defensive
                     self._apply_bindings.add("apply")
+        self.generic_visit(node)
+
+    def visit_Assign(self, node: ast.Assign) -> None:  # type: ignore[override]
+        """Track reassignment aliases: ``do_apply = nest_asyncio.apply``
+        and ``do_apply = <existing_apply_binding>``.
+
+        Codex pass-2 MEDIUM: a future unconditional polluter could evade
+        detection by binding ``apply`` to a fresh name (``f = na.apply;
+        f()``) — that pattern is uncommon but the AST scanner closes the
+        gap cheaply. Only handles single-target ``Name = ...`` assigns
+        because that covers every realistic alias chain; tuple/starred
+        unpacking targets are out of scope.
+        """
+
+        if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            target_name = node.targets[0].id
+            value = node.value
+            # RHS form 1: ``<module>.apply`` attribute reference (no call).
+            if (
+                isinstance(value, ast.Attribute)
+                and value.attr == "apply"
+                and isinstance(value.value, ast.Name)
+                and value.value.id in self._module_bindings
+            ):
+                self._apply_bindings.add(target_name)
+            # RHS form 2: ``<existing_apply_binding>`` — chained alias.
+            elif isinstance(value, ast.Name) and value.id in self._apply_bindings:
+                self._apply_bindings.add(target_name)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:  # type: ignore[override]
+        """Same alias-tracking for annotated assignment (``f: Callable =
+        nest_asyncio.apply``). Real-world rarity, but matches the
+        ``visit_Assign`` coverage so a typed equivalent doesn't escape."""
+
+        if isinstance(node.target, ast.Name) and node.value is not None:
+            target_name = node.target.id
+            value = node.value
+            if (
+                isinstance(value, ast.Attribute)
+                and value.attr == "apply"
+                and isinstance(value.value, ast.Name)
+                and value.value.id in self._module_bindings
+            ):
+                self._apply_bindings.add(target_name)
+            elif isinstance(value, ast.Name) and value.id in self._apply_bindings:
+                self._apply_bindings.add(target_name)
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:  # type: ignore[override]
@@ -441,6 +497,58 @@ def test_ast_scan_rejects_inverted_guard(tmp_path: pathlib.Path) -> None:
     # ancestor and classifies as guarded. The runtime probe in
     # ``tests/conftest.py`` catches inverted-polarity polluters at runtime.
     assert guarded == [6], (guarded, unguarded)
+    assert not unguarded
+
+
+def test_ast_scan_catches_reassigned_module_attribute(tmp_path: pathlib.Path) -> None:
+    """Codex pass-2 MEDIUM: ``f = nest_asyncio.apply; f()`` must be
+    detected. A polluter could trivially evade the import-based scan by
+    binding apply to a fresh name; ``visit_Assign`` closes that gap."""
+
+    source = (
+        "import nest_asyncio\n"
+        "do_apply = nest_asyncio.apply\n"
+        "do_apply()\n"
+    )
+    guarded, unguarded = _scan_fragment(
+        tmp_path, "fragment_reassigned.py", source
+    )
+    assert unguarded == [3], (guarded, unguarded)
+
+
+def test_ast_scan_catches_chained_reassignment(tmp_path: pathlib.Path) -> None:
+    """``from nest_asyncio import apply; do = apply; do()`` — chained
+    reassignment from an existing apply binding must propagate."""
+
+    source = (
+        "from nest_asyncio import apply\n"
+        "do = apply\n"
+        "do()\n"
+    )
+    guarded, unguarded = _scan_fragment(tmp_path, "fragment_chain.py", source)
+    assert unguarded == [3], (guarded, unguarded)
+
+
+def test_ast_scan_reassignment_under_guard(tmp_path: pathlib.Path) -> None:
+    """A reassigned alias call inside a proper guard should be guarded
+    (the binding-tracking and the guard-check are orthogonal)."""
+
+    source = (
+        "import asyncio\n"
+        "import nest_asyncio\n"
+        "do_apply = nest_asyncio.apply\n"
+        "def fn():\n"
+        "    try:\n"
+        "        loop = asyncio.get_running_loop()\n"
+        "    except RuntimeError:\n"
+        "        loop = None\n"
+        "    if loop and loop.is_running():\n"
+        "        do_apply()\n"
+    )
+    guarded, unguarded = _scan_fragment(
+        tmp_path, "fragment_reassigned_guarded.py", source
+    )
+    assert guarded == [10], (guarded, unguarded)
     assert not unguarded
 
 
