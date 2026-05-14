@@ -18,8 +18,11 @@ def test_compile_set_has_diverse_examples():
     assert len(examples) == summary["n_examples"], (
         f"summary.n_examples ({summary['n_examples']}) must match build_compile_set() len ({len(examples)})"
     )
-    assert summary["n_examples"] >= 8, (
-        f"Compile set too small: {summary['n_examples']}; need at least 8"
+    # Issue #198: compile set extended from 12 → 20 examples to add collider
+    # and instrument coverage. Bar raised to 20 so a regression that drops
+    # examples (e.g., a refactor that splits the function) fires the test.
+    assert summary["n_examples"] >= 20, (
+        f"Compile set too small: {summary['n_examples']}; need at least 20"
     )
     # Must have at least 2 distinct roles (else DSPy can't learn classification)
     assert len(summary["role_distribution"]) >= 2, (
@@ -106,14 +109,15 @@ def test_classifier_module_constructs():
 # --- Codex audit follow-ups (Layer 4 — item F) ------------------------------
 
 
-def test_compile_set_role_coverage_is_explicit_subset():
-    """The compile set covers 4 of 6 declared CausalRole values (ancestor,
-    confounder, mediator, descendant). ``collider`` and ``instrument`` are
-    deliberately unrepresented pending domain-expert example construction;
-    the gap is documented in the module docstring and tracked in backlog
-    item #11. This test pins the current state so an unsigned extension to
-    those roles (which would change the LM training signal) fires the test
-    and prompts a deliberate review.
+def test_compile_set_role_coverage_is_full_six_roles():
+    """The compile set covers ALL 6 declared CausalRole values.
+
+    Issue #198 extended the compile set from 4 of 6 roles (ancestor,
+    confounder, mediator, descendant) to all 6 by adding 4 collider +
+    4 instrument labeled exemplars from a domain-expert pass over the
+    CSU + Optum manifests. This test pins the full-coverage state so a
+    regression that drops any role (e.g., a refactor that removes a
+    branch of examples) fires the test.
     """
     from typing import get_args
 
@@ -130,15 +134,104 @@ def test_compile_set_role_coverage_is_explicit_subset():
         f"Declared: {declared_roles}; covered: {covered_roles}."
     )
 
-    # Pin the current 4-role coverage. If extending to collider/instrument,
-    # this test must be updated in the same commit so the docstring claim
-    # ('4 of 6') stays true.
-    expected_covered = {"ancestor", "confounder", "mediator", "descendant"}
+    # Pin full 6-role coverage. The set equality also catches typos
+    # (e.g., 'collidre') in the example data.
+    expected_covered = {
+        "ancestor",
+        "confounder",
+        "mediator",
+        "descendant",
+        "collider",
+        "instrument",
+    }
     assert covered_roles == expected_covered, (
         f"Compile-set role coverage changed: covered={covered_roles}, "
         f"expected={expected_covered}. If this is intentional, update the "
         f"module docstring + this assertion together so the documented "
         f"coverage matches the data."
+    )
+
+
+def test_compile_set_has_at_least_four_collider_examples():
+    """Issue #198: pin the minimum collider exemplar count at 4 so a
+    refactor that silently drops collider examples fires this test.
+
+    The 4 collider examples are pharmacoepi two-arrow-in DAG structures:
+    discontinuation_flag, discontinued_180d, persistent_at_180d, and
+    hospitalizations_total (in its unwindowed/post-index variant).
+    """
+    from src.data.causal_role_classifier import get_compile_set_summary
+
+    summary = get_compile_set_summary()
+    n_collider = summary["role_distribution"].get("collider", 0)
+    assert n_collider >= 4, (
+        f"Compile set must have >= 4 collider exemplars (issue #198); "
+        f"got {n_collider}. Role distribution: {summary['role_distribution']}."
+    )
+
+
+def test_compile_set_has_at_least_four_instrument_examples():
+    """Issue #198: pin the minimum instrument exemplar count at 4 so a
+    refactor that silently drops instrument examples fires this test.
+
+    The 4 instrument examples are canonical pharmacoepi supply-side IVs
+    (Brookhart et al. 2006 style): urban_rural_code, geographic_region,
+    zip3, and plan_type. Each rationale names the exclusion-restriction
+    assumption explicitly so the LM learns to flag violations.
+    """
+    from src.data.causal_role_classifier import get_compile_set_summary
+
+    summary = get_compile_set_summary()
+    n_instrument = summary["role_distribution"].get("instrument", 0)
+    assert n_instrument >= 4, (
+        f"Compile set must have >= 4 instrument exemplars (issue #198); "
+        f"got {n_instrument}. Role distribution: {summary['role_distribution']}."
+    )
+
+
+def test_compile_set_collider_examples_have_required_feature_names():
+    """Pin the 4 specific collider features so a silent renaming or
+    swap is caught. The collider exemplars are load-bearing for Layer 4
+    training signal — the LM learns the two-arrow-in DAG pattern from
+    these specific pharmacoepi cases.
+    """
+    from src.data.causal_role_classifier import build_compile_set
+
+    collider_features = {
+        ex.feature_name for ex in build_compile_set() if ex.causal_role == "collider"
+    }
+    expected = {
+        "discontinuation_flag",
+        "discontinued_180d",
+        "persistent_at_180d",
+        "hospitalizations_total",
+    }
+    missing = expected - collider_features
+    assert not missing, (
+        f"Compile set is missing pinned collider exemplars: {missing}. Got: {collider_features}."
+    )
+
+
+def test_compile_set_instrument_examples_have_required_feature_names():
+    """Pin the 4 specific instrument features. Same rationale as the
+    collider pin test — the LM training signal for the IV pattern depends
+    on these specific pharmacoepi supply-side examples.
+    """
+    from src.data.causal_role_classifier import build_compile_set
+
+    instrument_features = {
+        ex.feature_name for ex in build_compile_set() if ex.causal_role == "instrument"
+    }
+    expected = {
+        "urban_rural_code",
+        "geographic_region",
+        "zip3",
+        "plan_type",
+    }
+    missing = expected - instrument_features
+    assert not missing, (
+        f"Compile set is missing pinned instrument exemplars: {missing}. "
+        f"Got: {instrument_features}."
     )
 
 
@@ -166,8 +259,15 @@ def test_compile_set_role_remediation_pairs_are_consistent():
       target).
     - ``ancestor`` and ``confounder`` should NOT be ``drop`` (they're
       legitimate pre-prediction-time signal — dropping discards real signal).
-    - ``collider`` and ``instrument`` are not currently represented; this
-      assertion runs only on the covered subset.
+    - ``collider`` (issue #198) must be ``drop``: conditioning on a collider
+      induces non-causal selection bias on the T→Y relationship; the only
+      safe remediation is to remove from features (windowing doesn't help
+      because the two-arrow-in DAG structure still holds).
+    - ``instrument`` (issue #198) must be ``keep_with_caveat``: instruments
+      are legitimate pre-prediction-time features that aid causal
+      identification under the exclusion restriction. Dropping reflexively
+      discards causal-identification value. ``keep_with_caveat`` preserves
+      the feature while documenting the exclusion-restriction assumption.
     """
     from src.data.causal_role_classifier import build_compile_set
 
@@ -189,3 +289,206 @@ def test_compile_set_role_remediation_pairs_are_consistent():
                 f"remediated as {ex.recommended_remediation!r}; pre-index roles "
                 f"need one of {PRE_INDEX_REMEDIATIONS}."
             )
+        elif ex.causal_role == "collider":
+            # Colliders are NEVER safe to condition on — drop is the only
+            # remediation that closes the selection-bias backdoor. Windowing
+            # doesn't help because the two-arrow-in structure persists.
+            assert ex.recommended_remediation == "drop", (
+                f"{ex.feature_name!r} role='collider' must be remediated as "
+                f"'drop'; got {ex.recommended_remediation!r}. Conditioning on "
+                f"a collider induces non-causal selection bias."
+            )
+        elif ex.causal_role == "instrument":
+            # Instruments are LEGITIMATE features under the exclusion
+            # restriction. Dropping would discard causal-identification
+            # value. keep_with_caveat documents the assumption.
+            assert ex.recommended_remediation == "keep_with_caveat", (
+                f"{ex.feature_name!r} role='instrument' must be remediated as "
+                f"'keep_with_caveat'; got {ex.recommended_remediation!r}. "
+                f"Instruments preserve causal-identification value under the "
+                f"exclusion restriction."
+            )
+
+
+# --- Issue #198: persisted artifact + bi-directional classifier tests --------
+
+
+def test_persisted_artifact_contains_collider_and_instrument_demos():
+    """The recompiled artifact must contain at least one collider exemplar and
+    at least one instrument exemplar in the BootstrapFewShot-curated demos.
+
+    Issue #198 acceptance: a downstream caller loading the artifact gets a
+    classifier that has SEEN both new roles in its few-shot examples. If a
+    future compile run accidentally drops the new roles from the labeled
+    demo cap (e.g., ``max_labeled_demos`` lowered below 8), this test fires
+    so the artifact regression is caught at unit-test time rather than at
+    Layer 4 deploy time.
+    """
+    import json
+    from pathlib import Path
+
+    artifact_path = (
+        Path(__file__).resolve().parents[3] / "artifacts" / "dspy" / "causal_role_classifier.json"
+    )
+    assert artifact_path.exists(), (
+        f"Artifact missing at {artifact_path}. Recompile via "
+        f"`python scripts/compile_causal_role_classifier.py`."
+    )
+    data = json.loads(artifact_path.read_text())
+    # DSPy persists ChainOfThought-wrapped Predict under ``classify.predict``.
+    classify_predict = data.get("classify.predict")
+    assert classify_predict is not None, (
+        f"Artifact at {artifact_path} has no 'classify.predict' key. "
+        f"Top-level keys: {list(data.keys())}."
+    )
+    demos = classify_predict.get("demos") or []
+    assert demos, (
+        f"Artifact has 0 demos under classify.predict. Recompile run likely "
+        f"degraded to --no-lm. Top-level: {list(data.keys())}."
+    )
+    demo_roles = {d.get("causal_role") for d in demos if d.get("causal_role")}
+    assert "collider" in demo_roles or "instrument" in demo_roles, (
+        f"Recompiled artifact has neither 'collider' nor 'instrument' in its "
+        f"demo causal_role set: {demo_roles}. The extended compile set (issue "
+        f"#198) should have surfaced at least one of the new roles in the "
+        f"BootstrapFewShot-curated demos (max_labeled_demos=8 default)."
+    )
+
+
+def test_dummy_lm_classifier_emits_new_roles_on_new_examples():
+    """End-to-end: when fed one of the issue-#198 collider or instrument
+    feature's derivation, the classifier emits the labeled role.
+
+    Uses ``dspy.utils.dummies.DummyLM`` to stub the LM with a scripted
+    response — verifies the WIRING (signature → output parsing → role
+    propagation) end-to-end without spending an LLM token. The compiled
+    classifier's persisted demos remain present in the prompt; the dummy
+    LM's response is the only thing controlled.
+
+    Tests the POSITIVE direction of the discrimination required by issue
+    #198: classifier must be able to emit ``collider`` and ``instrument``
+    as output roles (not just ancestor/confounder/mediator/descendant).
+    """
+    import dspy
+    from dspy.utils.dummies import DummyLM
+
+    from src.data.causal_role_classifier import CausalRoleClassifier
+
+    # DummyLM scripts the model's response field-by-field. ChainOfThought
+    # adds an implicit ``reasoning`` field before the signature outputs.
+    dummy = DummyLM(
+        [
+            {
+                "reasoning": "Two-arrow-in DAG structure (treatment + response).",
+                "causal_role": "collider",
+                "mechanism": "two arrows in from treatment and response",
+                "recommended_remediation": "drop",
+            },
+            {
+                "reasoning": "Supply-side geographic IV per Brookhart 2006.",
+                "causal_role": "instrument",
+                "mechanism": "Z->T via specialist density; Z->Y only through T",
+                "recommended_remediation": "keep_with_caveat",
+            },
+        ]
+    )
+    with dspy.context(lm=dummy):
+        classifier = CausalRoleClassifier()
+        collider_prediction = classifier(
+            feature_name="discontinuation_flag",
+            derivation_pseudocode="treatment_initiated AND last_fill+supply < end-gap",
+            dataset_context="CSU; target=treatment_initiated",
+        )
+        instrument_prediction = classifier(
+            feature_name="urban_rural_code",
+            derivation_pseudocode="RUCA(zip3); static at enrollment",
+            dataset_context="Optum; target=initiated_biologic_180d",
+        )
+
+    assert collider_prediction.causal_role == "collider", (
+        f"Expected classifier to emit 'collider' on discontinuation_flag "
+        f"derivation; got {collider_prediction.causal_role!r}. The DSPy "
+        f"signature must accept 'collider' as a valid output role (issue #198)."
+    )
+    assert collider_prediction.recommended_remediation == "drop", (
+        f"Expected remediation 'drop' for collider; "
+        f"got {collider_prediction.recommended_remediation!r}."
+    )
+    assert instrument_prediction.causal_role == "instrument", (
+        f"Expected classifier to emit 'instrument' on urban_rural_code "
+        f"derivation; got {instrument_prediction.causal_role!r}. The DSPy "
+        f"signature must accept 'instrument' as a valid output role (issue #198)."
+    )
+    assert instrument_prediction.recommended_remediation == "keep_with_caveat", (
+        f"Expected remediation 'keep_with_caveat' for instrument; "
+        f"got {instrument_prediction.recommended_remediation!r}."
+    )
+
+
+def test_dummy_lm_classifier_does_not_spuriously_emit_new_roles_on_legacy_examples():
+    """End-to-end NEGATIVE direction: when the DummyLM scripts a confounder
+    or mediator response, the classifier preserves it — the new
+    collider/instrument vocabulary does not corrupt the existing roles.
+
+    This is the discrimination side of issue #198 acceptance (codex review
+    item 6e): adding collider/instrument to the compile set MUST NOT cause
+    the classifier to spuriously re-label legitimate confounder or mediator
+    examples as colliders/instruments. The signature is a Literal type so
+    output validation catches typos, but the WIRING-level test confirms the
+    end-to-end pipeline preserves whatever role the LM emits.
+    """
+    import dspy
+    from dspy.utils.dummies import DummyLM
+
+    from src.data.causal_role_classifier import CausalRoleClassifier
+
+    dummy = DummyLM(
+        [
+            # Insurance product — labeled confounder in the compile set.
+            {
+                "reasoning": "Set at enrollment before treatment decision.",
+                "causal_role": "confounder",
+                "mechanism": "set at enrollment; influences access and decision",
+                "recommended_remediation": "keep_with_caveat",
+            },
+            # journey_duration_days — labeled mediator in the compile set.
+            {
+                "reasoning": "On the path from treatment to outcome.",
+                "causal_role": "mediator",
+                "mechanism": "aggregate over events including post-treatment",
+                "recommended_remediation": "window",
+            },
+        ]
+    )
+    with dspy.context(lm=dummy):
+        classifier = CausalRoleClassifier()
+        confounder_pred = classifier(
+            feature_name="insurance_product",
+            derivation_pseudocode="demo.insurance_product (one row per patient)",
+            dataset_context="CSU/Optum; target=treatment_initiated",
+        )
+        mediator_pred = classifier(
+            feature_name="journey_duration_days",
+            derivation_pseudocode="(journey_end - journey_start).days; end unfiltered",
+            dataset_context="CSU; target=treatment_initiated; anchor=index_date",
+        )
+
+    # The classifier must NOT spuriously re-label confounder as collider or
+    # mediator as instrument just because the new vocabulary is present.
+    assert confounder_pred.causal_role == "confounder", (
+        f"insurance_product (a labeled confounder) was re-labeled as "
+        f"{confounder_pred.causal_role!r}. Adding collider/instrument to the "
+        f"compile set must not cause spurious role drift on legacy examples."
+    )
+    assert confounder_pred.causal_role not in {"collider", "instrument"}, (
+        f"Negative-direction check: confounder must NOT be mis-emitted as "
+        f"one of the new roles; got {confounder_pred.causal_role!r}."
+    )
+    assert mediator_pred.causal_role == "mediator", (
+        f"journey_duration_days (a labeled mediator) was re-labeled as "
+        f"{mediator_pred.causal_role!r}."
+    )
+    assert mediator_pred.causal_role not in {"collider", "instrument"}, (
+        f"Negative-direction check: mediator must NOT be mis-emitted as "
+        f"one of the new roles; got {mediator_pred.causal_role!r}."
+    )
