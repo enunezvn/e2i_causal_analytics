@@ -55,7 +55,10 @@ from typing import TYPE_CHECKING, Any, Dict, Iterable, Optional
 import numpy as np
 import pandas as pd
 
-from src.data.adversarial_leakage import compute_adversarial_score
+from src.data.adversarial_leakage import (
+    compute_adversarial_score,
+    compute_feature_ablation,
+)
 from src.data.feature_contract import FeatureContract
 from src.data.manifests import (
     CSU_FEATURES,
@@ -242,6 +245,83 @@ MIN_LAYER3_SAMPLES = 30
 # ``z=-inf`` and ``z=NaN`` still fall through to severity=info — the
 # escape is one-sided (positive-inf strong-effect only).
 LAYER5_DELTA_AUC_FLOOR_DEFAULT: float = 0.10
+
+
+# ============================================================================
+# Issue #196 — Phase 3.3 Layer-3 multi-feature ablation wiring.
+#
+# ``src/data/adversarial_leakage.py:compute_feature_ablation`` is the
+# permutation-baseline of the OTHER suspicion axis: for each feature, drop
+# it, retrain the joint model, measure |delta_AUC| relative to a column-
+# shuffle null. The single-feature permutation test in
+# ``compute_adversarial_score`` measures the MARGINAL leak signal of a
+# feature on its own; ablation measures the MARGINAL CONTRIBUTION of the
+# feature to the joint model. These are different mechanisms:
+#
+#   - Single-feature leak (caught by permutation):  feature ALONE has high
+#     AUC → suspicious z-score.
+#   - Interaction-only leak (caught by ablation):   feature on its own has
+#     near-chance AUC, but the joint model crashes when it's removed —
+#     the leak is encoded via an interaction term with another feature.
+#
+# Combination rule chosen: MAX (any-source-suspicious wins).
+#
+# Why MAX over ensemble averaging:
+#   * Ensemble averaging would DILUTE an interaction-only leak: ablation
+#     z=8σ (large) averaged with permutation z=0σ (near-noise) → 4σ, which
+#     might fall below the moderate band's HBLP-effective threshold at
+#     n_pos > 200. Averaging weighted by null-variance has the same
+#     defect — the permutation null at n=10k can have std two orders of
+#     magnitude smaller than the ablation null, weighting permutation
+#     ~100x and crushing the ablation signal.
+#   * MAX preserves the "if either signal is strong, escalate" contract
+#     that operators expect from a defense-in-depth signal. The two tests
+#     measure orthogonal failure modes; treating "ablation says drop" and
+#     "permutation says drop" as substitutes is the right call.
+#   * Symmetric application of the issue #194 joint check
+#     ``severity ∈ {moderate, high}  ⇔  (z > k) AND (|delta_AUC| > epsilon)``
+#     to BOTH the permutation z AND the ablation z prevents the same
+#     large-n false-positive failure mode that #194 closed for permutation.
+#     A feature with ablation z=6σ but |delta_AUC|=0.005 (legitimate weak
+#     contribution that the joint model can substitute around at large n)
+#     is NOT escalated.
+#
+# The escape-clause from issue #194 codex pass-1 MED-1 (z=+inf + degenerate
+# null + |delta_AUC| above floor → severity=high) ALSO applies symmetrically
+# to ablation z=+inf with the ablation delta_AUC.
+#
+# AND a NEW escape (strong-effect): |delta_AUC| > LAYER5_ABLATION_STRONG_EFFECT_DEFAULT
+# (default 0.30, 3x the issue #194 floor) bypasses the z-anchored ladder
+# entirely. Rationale: ``compute_feature_ablation``'s null distribution is
+# built by shuffling the feature COLUMN, not the labels. For interaction-pair
+# leaks — features whose ROW-ALIGNMENT with another column is the leak vector
+# (redundant-noise-cancel pairs, sign-stratified variance shifts) — the
+# column-shuffle null produces ``perm_delta_auc ≈ actual_delta_auc``, so the
+# z-score collapses to ~0 even when the |delta_AUC| is huge. Without this
+# escape the AND-rule would silently miss exactly the leak class ablation
+# is supposed to catch beyond permutation. The 0.30 threshold is structurally
+# robust: legitimate weak predictors at any cohort size cannot produce
+# |delta_AUC| > 0.30 (dropping the feature would have to destroy 30% of the
+# joint model's AUC, which is the dominance signature of a real leak).
+#
+# Costs: O(n_features) main retrains + O(n_features × n_permutations) shuffle
+# retrains. With ``DEFAULT_ABLATION_PERMUTATIONS=50`` and the LogisticRegression
+# factory baked into ``compute_feature_ablation``, runtime on a 5-feature × 300-
+# row pin (the integration test fixture) is ~2 s wall-clock. A 50-feature CSU/
+# Optum pipeline at production widths is ~10-30 s. Hence default OFF; opt-in
+# via the ``adaptive_layer3_ablation_enabled`` flag.
+#
+# Wide-feature blowup guard: ``DEFAULT_ABLATION_MAX_FEATURES=50`` caps the
+# active ablation set. When ``numeric_candidates`` after Layer-1 exclusion
+# exceeds the cap, the ablation pass is SKIPPED entirely (not partial —
+# subsetting which features to ablate would bias the joint-model AUC the
+# survivors are measured against). The orchestrator logs a warning so the
+# operator sees the cap fired.
+# ============================================================================
+
+# Phase 3.3 — ablation tuning constants. All overridable via scope_spec state.
+DEFAULT_ABLATION_PERMUTATIONS = 50
+DEFAULT_ABLATION_MAX_FEATURES = 50
 
 
 # ============================================================================
@@ -977,6 +1057,7 @@ def _adversarial_input(
 _DECIDED_BY_TO_LAYER: dict[str, str] = {
     "layer_1": "1",
     "adversarial": "3",
+    "adversarial_ablation": "3",
     "kg": "2",
     "llm": "4",
     "abstain": "abstain",
@@ -1047,6 +1128,14 @@ def _ensemble_to_legacy_dict(
         "delta_auc": adv.get("delta_auc"),
         "delta_auc_floor": adv.get("delta_auc_floor", LAYER5_DELTA_AUC_FLOOR_DEFAULT),
         "delta_auc_below_floor": bool(adv.get("delta_auc_below_floor", False)),
+        # Issue #196 Phase 3.3 — ablation audit fields. None when the
+        # ablation pass was OFF / unable to run / no row for this feature;
+        # populated when ``_combine_ablation_with_permutation`` set them.
+        "ablation_z_score": adv.get("ablation_z_score"),
+        "ablation_delta_auc": adv.get("ablation_delta_auc"),
+        "ablation_null_mean": adv.get("ablation_null_mean"),
+        "ablation_null_std": adv.get("ablation_null_std"),
+        "ablation_severity": adv.get("ablation_severity"),
         # Severity / remediation routed through the voter (or set
         # directly by the bypass paths for short-circuit / info-only).
         "severity": verdict.severity,
@@ -1101,6 +1190,14 @@ def _legacy_adversarial_alone_verdict(
         "delta_auc": adversarial_input.get("delta_auc"),
         "delta_auc_floor": adversarial_input.get("delta_auc_floor", LAYER5_DELTA_AUC_FLOOR_DEFAULT),
         "delta_auc_below_floor": bool(adversarial_input.get("delta_auc_below_floor", False)),
+        # Issue #196 Phase 3.3 — ablation audit fields. Same schema as
+        # ``_ensemble_to_legacy_dict``; populated from ``adversarial_input``
+        # when ``_combine_ablation_with_permutation`` ran, else None.
+        "ablation_z_score": adversarial_input.get("ablation_z_score"),
+        "ablation_delta_auc": adversarial_input.get("ablation_delta_auc"),
+        "ablation_null_mean": adversarial_input.get("ablation_null_mean"),
+        "ablation_null_std": adversarial_input.get("ablation_null_std"),
+        "ablation_severity": adversarial_input.get("ablation_severity"),
         "severity": adversarial_input.get("severity", "info"),
         "remediation": adversarial_input.get("remediation", "keep"),
         "evidence": adversarial_input.get("evidence", ""),
@@ -1149,6 +1246,12 @@ def _legacy_info_verdict(
         "delta_auc": adv.get("delta_auc"),
         "delta_auc_floor": adv.get("delta_auc_floor", LAYER5_DELTA_AUC_FLOOR_DEFAULT),
         "delta_auc_below_floor": bool(adv.get("delta_auc_below_floor", False)),
+        # Issue #196 Phase 3.3 — ablation audit fields.
+        "ablation_z_score": adv.get("ablation_z_score"),
+        "ablation_delta_auc": adv.get("ablation_delta_auc"),
+        "ablation_null_mean": adv.get("ablation_null_mean"),
+        "ablation_null_std": adv.get("ablation_null_std"),
+        "ablation_severity": adv.get("ablation_severity"),
         "severity": "info",
         "remediation": "keep",
         "evidence": evidence,
@@ -1188,6 +1291,14 @@ def _legacy_short_circuit_verdict(feature: str, *, evidence: str) -> dict[str, A
         "delta_auc": None,
         "delta_auc_floor": float(LAYER5_DELTA_AUC_FLOOR_DEFAULT),
         "delta_auc_below_floor": False,
+        # Issue #196 Phase 3.3 — ablation audit fields. None on the
+        # short-circuit path; the ablation pass also cannot run when
+        # the per-feature row count was below MIN_LAYER3_SAMPLES.
+        "ablation_z_score": None,
+        "ablation_delta_auc": None,
+        "ablation_null_mean": None,
+        "ablation_null_std": None,
+        "ablation_severity": None,
         "severity": "info",
         "remediation": "keep",
         "evidence": evidence,
@@ -1766,6 +1877,312 @@ def _short_circuit_verdict(feature: str, *, evidence: str) -> dict[str, Any]:
     return _legacy_short_circuit_verdict(feature, evidence=evidence)
 
 
+# ============================================================================
+# Issue #196 — Phase 3.3 ablation helpers.
+# ============================================================================
+
+
+# Issue #196 — ablation strong-effect threshold. The ablation null
+# distribution is built by SHUFFLING THE FEATURE COLUMN (not labels) inside
+# ``compute_feature_ablation``. For features whose VALUE distribution is
+# independent of target but whose ROW-ALIGNMENT with another feature is the
+# leak vector (e.g., redundant-noise-cancel pairs, sign-stratified
+# variance shifts), the column-shuffle null produces ``perm_delta_auc``
+# close to the actual ``delta_auc`` — so the z-score collapses to ~0 even
+# when the feature is a clear leak (|delta_AUC| huge). Without an
+# absolute-effect escape, the AND-rule ``z > k AND |delta_AUC| > floor``
+# would miss exactly the interaction-pair leak class ablation is
+# supposed to catch.
+#
+# Escape: when ``|delta_AUC| > LAYER5_ABLATION_STRONG_EFFECT_DEFAULT``
+# (3x the issue #194 floor), classify severity=high regardless of z.
+# This is the absolute-effect analog of the ``z=+inf`` escape in
+# ``hblp_classify`` (issue #194 codex pass-1 MED-1) — when the effect
+# magnitude is large enough that no reasonable null could produce it,
+# the z-test's failure is the test's bug, not the signal's.
+#
+# Calibration: at this threshold the column-shuffle null can NEVER
+# produce a sustained |delta_AUC| > 0.30 because the model's full_auc
+# is bounded in [0.5, 1.0] and the null mean is the COLUMN-SHUFFLED
+# AUC, which is at MOST full_auc itself. A |delta_AUC| > 0.30 implies
+# the ablated model lost 30% of its AUC — physically large for a
+# pharma cohort. The MODERATE band lowers the bar to floor=0.10.
+LAYER5_ABLATION_STRONG_EFFECT_DEFAULT: float = 0.30
+
+
+def _classify_ablation_severity(
+    ablation_row: dict[str, Any],
+    *,
+    z_threshold: float = HIGH_Z,
+    delta_auc_floor: float = LAYER5_DELTA_AUC_FLOOR_DEFAULT,
+    strong_effect_threshold: float = LAYER5_ABLATION_STRONG_EFFECT_DEFAULT,
+) -> str:
+    """Map an ablation per-feature row to a severity tag.
+
+    Two-tier rule (issue #196, refined to address column-shuffle null
+    weakness on interaction-pair leaks):
+
+      A. Strong-effect escape (MED-1 mirror, |delta_AUC| primary signal):
+         when ``|delta_AUC| > strong_effect_threshold`` (default 0.30),
+         classify severity=high regardless of z. The column-shuffle null
+         inside ``compute_feature_ablation`` produces poor z-scores on
+         interaction-pair leaks (the null delta ≈ actual delta), so
+         |delta_AUC| is the load-bearing signal for that class.
+
+      B. Joint-check ladder (issue #194 framing, AND-rule):
+         when ``|delta_AUC| > floor`` AND z passes the band:
+           * ``z > z_threshold`` AND ``|delta_AUC| > floor`` → high.
+           * ``MODERATE_Z < z <= z_threshold`` AND ``|delta_AUC| > floor`` → moderate.
+         When ``z=+inf`` (degenerate null) AND ``|delta_AUC| > floor``,
+         severity=high (mirror of hblp_classify's MED-1 escape).
+
+      C. Default: severity=info (below-floor delta, NaN signals, etc.).
+
+    Returns one of ``"high"``, ``"moderate"``, ``"info"``. The
+    MODERATE/HIGH bands match the permutation Layer-3 ladder so the
+    MAX-rule combination in ``_combine_ablation_with_permutation`` can
+    reason on a unified severity scale.
+    """
+    z = ablation_row.get("z_score")
+    delta_auc = ablation_row.get("delta_auc")
+
+    if delta_auc is None:
+        return "info"
+    if not isinstance(delta_auc, (int, float)) or isinstance(delta_auc, bool):
+        return "info"
+    delta_f = float(delta_auc)
+    if np.isnan(delta_f):
+        return "info"
+
+    # Strong-effect escape (case A). The z-score is irrelevant here —
+    # |delta_AUC| > 0.30 means dropping the feature destroys 30% of the
+    # joint model's AUC, which is structurally impossible for legitimate
+    # weak predictors at any cohort size.
+    if abs(delta_f) > float(strong_effect_threshold):
+        return "high"
+
+    # Below the strong-effect threshold, fall back to the z-anchored
+    # joint-check ladder (case B). Requires |delta_AUC| > floor.
+    above_floor = abs(delta_f) > float(delta_auc_floor)
+    if not above_floor:
+        return "info"
+
+    # z-score handling, mirroring hblp_classify.
+    if z is None or not isinstance(z, (int, float)) or isinstance(z, bool):
+        # |delta_AUC| in the [floor, strong-effect] band but no usable
+        # z. The joint check (B) requires z; without it, treat as info
+        # (conservative — strong-effect escape would have fired if the
+        # signal were unambiguous).
+        return "info"
+    z_f = float(z)
+    if np.isnan(z_f):
+        return "info"
+
+    # +inf-with-strong-effect escape (issue #194 codex MED-1 mirror).
+    if not np.isfinite(z_f):
+        return "high" if z_f > 0 else "info"
+
+    if z_f > float(z_threshold):
+        return "high"
+    if z_f > MODERATE_Z:
+        return "moderate"
+    return "info"
+
+
+_SEVERITY_RANK: dict[str, int] = {"info": 0, "moderate": 1, "high": 2}
+
+
+def _combine_ablation_with_permutation(
+    perm_input: dict[str, Any],
+    ablation_row: Optional[dict[str, Any]],
+    *,
+    z_threshold: float = HIGH_Z,
+    delta_auc_floor: float = LAYER5_DELTA_AUC_FLOOR_DEFAULT,
+    strong_effect_threshold: float = LAYER5_ABLATION_STRONG_EFFECT_DEFAULT,
+) -> dict[str, Any]:
+    """Combine permutation-anchored input with the per-feature ablation row.
+
+    Combination rule: MAX over (permutation severity, ablation severity)
+    using the rank ``high > moderate > info``.
+
+    When ablation escalates severity strictly above the permutation's
+    severity, the returned input dict is rewritten with:
+      * ``severity`` / ``remediation`` updated to the escalated values
+        (``high`` → drop, ``moderate`` → ambiguous).
+      * ``evidence`` text extended with an audit footnote that names the
+        ablation signal and the joint-check decision (so audit readers
+        can see the escalation source without parsing severity alone).
+      * Five audit-trail fields populated from ``ablation_row``:
+          ``ablation_z_score`` / ``ablation_delta_auc`` / ``ablation_null_mean``
+          / ``ablation_null_std`` / ``ablation_severity``.
+      * The ``_hblp_classified=True`` invariant is PRESERVED so the
+        wiring-guard in ``_compose_legacy_verdict`` does not reject the
+        dict. The classification chain runs permutation first
+        (``_adversarial_input → hblp_classify``); ablation is an
+        ESCALATION applied on top, never a bypass.
+
+    When ablation does NOT escalate (ablation severity ≤ permutation
+    severity), the original dict is returned unchanged (perm_input is
+    mutated in place — same shape) but the five ablation-audit fields
+    are STILL populated (always when ablation_row is provided), so audit
+    consumers can branch on "ablation ran but agreed" vs "ablation did
+    not run".
+
+    Returns the (possibly mutated) input dict.
+    """
+    if ablation_row is None:
+        # Ablation pass didn't run for this feature — leave perm_input
+        # alone but populate the audit fields as None for schema
+        # uniformity.
+        perm_input.setdefault("ablation_z_score", None)
+        perm_input.setdefault("ablation_delta_auc", None)
+        perm_input.setdefault("ablation_null_mean", None)
+        perm_input.setdefault("ablation_null_std", None)
+        perm_input.setdefault("ablation_severity", None)
+        return perm_input
+
+    ablation_sev = _classify_ablation_severity(
+        ablation_row,
+        z_threshold=z_threshold,
+        delta_auc_floor=delta_auc_floor,
+        strong_effect_threshold=strong_effect_threshold,
+    )
+    perm_sev = str(perm_input.get("severity", "info"))
+
+    # Populate audit fields unconditionally — readers see "ran and
+    # contributed" vs "ran but agreed/lost" via severity comparison.
+    perm_input["ablation_z_score"] = ablation_row.get("z_score")
+    perm_input["ablation_delta_auc"] = ablation_row.get("delta_auc")
+    perm_input["ablation_null_mean"] = ablation_row.get("null_mean")
+    perm_input["ablation_null_std"] = ablation_row.get("null_std")
+    perm_input["ablation_severity"] = ablation_sev
+
+    perm_rank = _SEVERITY_RANK.get(perm_sev, 0)
+    ablation_rank = _SEVERITY_RANK.get(ablation_sev, 0)
+    if ablation_rank <= perm_rank:
+        # Permutation's severity already wins (or ties) — no escalation.
+        # Original evidence stays intact; perm pathway already routed
+        # through hblp_classify so the invariants hold.
+        return perm_input
+
+    # Ablation escalates. Map severity → remediation matching the
+    # permutation ladder.
+    if ablation_sev == "high":
+        new_remediation = "drop"
+    elif ablation_sev == "moderate":
+        new_remediation = "ambiguous"
+    else:
+        # Cannot reach: rank only escalates from info → moderate or
+        # info/moderate → high. ``ablation_sev`` cannot be ``"info"``
+        # here because that would not exceed ``perm_rank``.
+        new_remediation = perm_input.get("remediation", "keep")
+
+    ablation_z = ablation_row.get("z_score")
+    ablation_delta = ablation_row.get("delta_auc")
+    z_str = (
+        f"{float(ablation_z):.2f}σ"
+        if isinstance(ablation_z, (int, float))
+        and not isinstance(ablation_z, bool)
+        and np.isfinite(float(ablation_z))
+        else f"{ablation_z}"
+    )
+    delta_str = (
+        f"{abs(float(ablation_delta)):.4f}"
+        if isinstance(ablation_delta, (int, float))
+        and not isinstance(ablation_delta, bool)
+        and np.isfinite(float(ablation_delta))
+        else f"{ablation_delta}"
+    )
+    footnote = (
+        f" [Layer-3 ablation escalated severity from '{perm_sev}' to "
+        f"'{ablation_sev}': ablation_z={z_str}, |ablation_delta_AUC|="
+        f"{delta_str} > floor {float(delta_auc_floor):.4f} (issue #196 "
+        f"MAX-rule, joint check applied symmetrically)]"
+    )
+    existing_evidence = perm_input.get("evidence", "") or ""
+    perm_input["evidence"] = (
+        f"{existing_evidence}{footnote}" if existing_evidence else footnote.strip()
+    )
+    perm_input["severity"] = ablation_sev
+    perm_input["remediation"] = new_remediation
+    return perm_input
+
+
+def _run_ablation_pass(
+    train_df: pd.DataFrame,
+    target: str,
+    feature_names: list[str],
+    *,
+    binary_label_mask: pd.Series,
+    n_permutations: int,
+    seed: int,
+    model_factory: Optional[Any] = None,
+) -> Optional[dict[str, dict[str, Any]]]:
+    """Run ``compute_feature_ablation`` once over the active feature set.
+
+    Returns a dict mapping ``feature_name → per_feature row`` (with the
+    ``delta_auc`` / ``z_score`` / ``null_mean`` / ``null_std`` fields).
+    Returns ``None`` when the ablation cannot run (insufficient rows for
+    a joint model, single-class target after masking, or training error
+    at the full-model stage). Per-feature failures inside
+    ``compute_feature_ablation`` are tolerated — the per-feature row will
+    carry NaN ``delta_auc`` / ``z_score`` and ``_classify_ablation_severity``
+    will return ``"info"`` for those rows (silent degradation to
+    permutation-only for that feature).
+    """
+    mask = binary_label_mask.copy()
+    # Restrict to rows where ALL active features are non-null, so the
+    # joint model has a consistent design matrix. NaN-imputation would
+    # change the ablation null distribution shape; dropping rows is
+    # cheaper and matches what real model_trainer pipelines do.
+    for feat in feature_names:
+        mask = mask & train_df[feat].notna()
+    if mask.sum() < MIN_LAYER3_SAMPLES:
+        logger.warning(
+            "Layer-3 ablation pass skipped: only %d rows survived joint-mask "
+            "intersection across %d active features (need >= %d)",
+            int(mask.sum()),
+            len(feature_names),
+            MIN_LAYER3_SAMPLES,
+        )
+        return None
+
+    X = train_df.loc[mask, feature_names].astype(float)
+    y = train_df.loc[mask, target].to_numpy(dtype=int)
+    if len(np.unique(y)) < 2:
+        logger.warning(
+            "Layer-3 ablation pass skipped: target has < 2 classes after "
+            "joint-mask intersection (n_rows=%d, n_pos=%d)",
+            int(mask.sum()),
+            int((y == 1).sum()),
+        )
+        return None
+
+    try:
+        result = compute_feature_ablation(
+            X,
+            y,
+            model_factory=model_factory,
+            n_permutations=n_permutations,
+            seed=seed,
+            z_threshold=HIGH_Z,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Layer-3 ablation pass failed at full-model stage (%s) — falling "
+            "back to permutation-only Layer 3",
+            exc,
+        )
+        return None
+
+    per_feat = result.get("per_feature", []) or []
+    # Re-derive ``delta_auc = full_auc - ablated_auc`` row-wise so it
+    # matches the meaning ``_classify_ablation_severity`` expects
+    # (the function already stores ``delta_auc`` per-row; we just
+    # surface the existing field). null_mean/std/z_score already present.
+    return {row["feature"]: row for row in per_feat if row.get("feature") is not None}
+
+
 _MANIFEST_FORBIDDEN_BY_SOURCE: dict[str, list[str]] = {
     "csu": CSU_FORBIDDEN_AS_FEATURES,
     "optum": OPTUM_FORBIDDEN_AS_FEATURES,
@@ -1930,6 +2347,46 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
     _seed = state.get("adaptive_seed")
     seed = int(_seed) if _seed is not None else 7
 
+    # Issue #196 — Phase 3.3 Layer-3 multi-feature ablation config. Default
+    # OFF: the joint-model retrain cost is O(n_features) × O(n_permutations)
+    # so even at modest widths it adds 10-30 s to a node call. Tuning knobs:
+    #   * adaptive_layer3_ablation_enabled (bool, default False): master gate.
+    #   * adaptive_ablation_n_permutations (int, default DEFAULT_ABLATION_PERMUTATIONS=50):
+    #     smaller than the permutation pass since each round is a full
+    #     retrain.
+    #   * adaptive_ablation_z_threshold (float, default HIGH_Z=5.0): match
+    #     the permutation HIGH band so MAX-rule reasons on a unified scale.
+    #   * adaptive_ablation_max_features (int, default DEFAULT_ABLATION_MAX_FEATURES=50):
+    #     O(n²) blowup guard. When active-feature count exceeds this, the
+    #     entire ablation pass is SKIPPED with a warning (subsetting which
+    #     features to ablate would bias the joint-model AUC the survivors
+    #     are measured against).
+    ablation_enabled = bool(state.get("adaptive_layer3_ablation_enabled", False))
+    _ablation_perms = state.get("adaptive_ablation_n_permutations")
+    ablation_n_perms = (
+        int(_ablation_perms) if _ablation_perms is not None else DEFAULT_ABLATION_PERMUTATIONS
+    )
+    _ablation_z = state.get("adaptive_ablation_z_threshold")
+    ablation_z_threshold = float(_ablation_z) if _ablation_z is not None else HIGH_Z
+    _ablation_max = state.get("adaptive_ablation_max_features")
+    ablation_max_features = (
+        int(_ablation_max) if _ablation_max is not None else DEFAULT_ABLATION_MAX_FEATURES
+    )
+    # Issue #196 — model_factory escape hatch. Callable returning a fresh
+    # sklearn-compatible classifier with predict_proba. None falls through to
+    # ``compute_feature_ablation``'s default LogisticRegression — the right
+    # call for the linear-leak regime that dominates RWD pipelines. Pass a
+    # tree-based factory (DecisionTreeClassifier, GradientBoosting, etc.) to
+    # detect interaction-only leaks the linear baseline cannot learn (the
+    # integration test fixture uses this path).
+    ablation_model_factory = state.get("adaptive_ablation_model_factory")
+    _ablation_strong = state.get("adaptive_ablation_strong_effect_threshold")
+    ablation_strong_effect = (
+        float(_ablation_strong)
+        if _ablation_strong is not None
+        else LAYER5_ABLATION_STRONG_EFFECT_DEFAULT
+    )
+
     verdicts: list[dict[str, Any]] = []
     flagged: list[str] = []
     voter = _get_ensemble_voter_class()()
@@ -1985,6 +2442,48 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
             verdicts.append(verdict)
             flagged.append(feat)
             layer_1_caught.add(feat)
+
+    # Issue #196 — Phase 3.3 Layer-3 ablation pass (opt-in, default OFF).
+    # Run BEFORE the per-feature permutation loop so the joint-model retrain
+    # happens once over the full active feature set. The per-feature loop
+    # below then looks up each feature's ablation row by name and combines
+    # it with the permutation result via MAX-rule.
+    ablation_active_features: list[str] = [
+        feat for feat in numeric_candidates if feat not in layer_1_caught
+    ]
+    ablation_results: Optional[dict[str, dict[str, Any]]] = None
+    ablation_skipped_reason: Optional[str] = None
+    if ablation_enabled:
+        if len(ablation_active_features) == 0:
+            ablation_skipped_reason = "no active features after Layer 1"
+        elif len(ablation_active_features) > ablation_max_features:
+            ablation_skipped_reason = (
+                f"active-feature count {len(ablation_active_features)} > "
+                f"ablation_max_features={ablation_max_features} cap; O(n²) "
+                f"blowup guard fired"
+            )
+            logger.warning("Layer-3 ablation pass skipped: %s", ablation_skipped_reason)
+        else:
+            ablation_results = _run_ablation_pass(
+                train_df,
+                target,
+                ablation_active_features,
+                binary_label_mask=binary_label_mask,
+                n_permutations=ablation_n_perms,
+                seed=seed,
+                model_factory=ablation_model_factory,
+            )
+            if ablation_results is None:
+                ablation_skipped_reason = "ablation pass returned None (see warning above)"
+            else:
+                logger.info(
+                    "Layer-3 ablation pass: scored %d features (n_perms=%d, "
+                    "z_threshold=%.2f, |delta_AUC| floor=%.4f)",
+                    len(ablation_results),
+                    ablation_n_perms,
+                    ablation_z_threshold,
+                    LAYER5_DELTA_AUC_FLOOR_DEFAULT,
+                )
 
     # Layer 3 pass — numeric columns only, skipping anything Layer 1 already caught.
     for feat in numeric_candidates:
@@ -2042,6 +2541,35 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
             score,
             n_train_pos=n_train_pos,
             layer_1_declared_safe=layer_1_declared_safe,
+        )
+
+        # Issue #196 — Phase 3.3 Layer-3 ablation MAX-rule combination.
+        # When the opt-in ablation pass produced a per-feature row for this
+        # feature, combine its severity with the permutation severity via
+        # ``_combine_ablation_with_permutation``. The combination:
+        #   * Escalates severity (info → moderate / moderate → high) when
+        #     ablation crosses its threshold AND |delta_AUC| > floor (issue
+        #     #194 joint check, applied symmetrically).
+        #   * Populates 5 audit-trail fields (ablation_z_score,
+        #     ablation_delta_auc, ablation_null_mean, ablation_null_std,
+        #     ablation_severity) so audit readers see "ran and agreed" vs
+        #     "did not run" without needing to parse evidence text.
+        #   * Preserves the ``_hblp_classified=True`` invariant — permutation
+        #     ran first through ``_adversarial_input → hblp_classify``;
+        #     ablation is an ESCALATION applied on top, not a bypass.
+        # When ablation is OFF or the ablation pass returned None, the
+        # call is a no-op except for setting the 5 audit fields to None.
+        pre_combine_severity = adv_input.get("severity")
+        ablation_row_for_feat = ablation_results.get(feat) if ablation_results is not None else None
+        adv_input = _combine_ablation_with_permutation(
+            adv_input,
+            ablation_row_for_feat,
+            z_threshold=ablation_z_threshold,
+            delta_auc_floor=LAYER5_DELTA_AUC_FLOOR_DEFAULT,
+            strong_effect_threshold=ablation_strong_effect,
+        )
+        ablation_escalated = (
+            ablation_row_for_feat is not None and adv_input.get("severity") != pre_combine_severity
         )
 
         # Stage 3 Layer 4 trigger (issue #193): when adversarial severity is
@@ -2102,6 +2630,16 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
             layer_1_declared_safe=layer_1_declared_safe,
             llm_verdict=llm_verdict,
         )
+        # Issue #196 Phase 3.3 — tag ``decided_by="adversarial_ablation"`` so
+        # audit-trail consumers can distinguish "permutation caught it" from
+        # "ablation escalated it". Only tag when ablation strictly escalated
+        # severity AND the voter did NOT promote a different source
+        # (Layer 1 / KG / LLM) past adversarial — the deterministic-veto
+        # precedence is preserved. The voter sets ``decided_by`` on the
+        # verdict; we overwrite ONLY when the verdict's decided_by is the
+        # adversarial path (voter rule for adv-alone or the bypass route).
+        if ablation_escalated and verdict.get("decided_by") == "adversarial":
+            verdict["decided_by"] = "adversarial_ablation"
         verdicts.append(verdict)
         if verdict["severity"] == "high":
             flagged.append(feat)
