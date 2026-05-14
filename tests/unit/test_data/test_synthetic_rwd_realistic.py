@@ -1,5 +1,14 @@
 """Tests for the RWD-realistic synthetic regime.
 
+Canonical design reference: ``docs/synthetic_v3_design.md`` (Phase S.3).
+This file is the **executable spec** for the ``rwd_realistic`` regime
+shipped at ``src/repositories/synthetic_rwd_realistic.py``; the design doc
+points back here as the authoritative test surface (§5.1). Per issue #200
+codex pass-1 MED-3, the back-pointer here is mandatory to keep the
+cross-reference non-circular AND symmetric — the legacy regime file
+``tests/synthetic/test_synthetic_regimes.py`` carries the same pointer
+already.
+
 Verifies that the synthetic generator produces data with structural properties
 matching real-world claims data:
 - 2.4% prevalence (matches published CSU/AD/asthma claims studies)

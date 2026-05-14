@@ -266,11 +266,12 @@ End-to-end pipeline contracts on the `rwd_realistic` regime live in:
 
 > The legacy [`tests/synthetic/test_synthetic_regimes.py`](../tests/synthetic/test_synthetic_regimes.py)
 > covers the `default / adverse / clean` regimes shipped by
-> `SampleDataGenerator.ml_patients()`, not `rwd_realistic` itself. A
-> header pointer on that file links readers to this design doc; the
-> file:line table above is the executable spec for the `rwd_realistic`
-> regime proper. The cross-references are intentionally non-circular —
-> the test files point at the doc; the doc points at the test files.
+> `SampleDataGenerator.ml_patients()`, not `rwd_realistic` itself. Both
+> the legacy file AND the rwd_realistic spec file
+> ([`tests/unit/test_data/test_synthetic_rwd_realistic.py`](../tests/unit/test_data/test_synthetic_rwd_realistic.py))
+> carry a header pointer back to this doc. Cross-references are
+> non-circular AND symmetric — every spec file points at the doc; the
+> doc points at every spec file.
 
 ### 5.2 Calibration harness
 
