@@ -35,6 +35,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+import warnings
 from typing import Dict, Optional
 
 import pytest
@@ -48,6 +49,90 @@ from dotenv import load_dotenv
 # any test files are collected. Use override=True so real .env values win
 # over any placeholder test keys that may have been set earlier.
 load_dotenv(override=True)
+
+# =============================================================================
+# ASYNCIO POLLUTION PROBE (issue #218 — follow-up to #215)
+# =============================================================================
+# ``nest_asyncio.apply()`` is a PROCESS-WIDE monkey-patch of ``asyncio.run``.
+# Once any test (directly or via a dependency such as DSPy's ``syncify`` or
+# mlflow.genai's ``_make_sync_wrapper``) triggers ``apply()`` on an xdist
+# worker, every subsequent ``asyncio.run(coro)`` on that worker routes through
+# nest_asyncio's patched runner — which holds a reference to the *original*
+# event loop. If that loop has since been closed (e.g., by pytest-asyncio
+# tearing down a per-test loop), the next sync ``asyncio.run`` call raises
+# ``RuntimeError: Event loop is closed``.
+#
+# PR #217 closed one polluter (``experiment_designer.graph``'s eager singleton)
+# but left the broader bug class open: any of the 9 gated callsites in ``src/``
+# or the 2 known third-party callers (``dspy/utils/syncify.py:20`` and
+# ``mlflow/genai/utils/trace_utils.py:395``) can pollute if invoked from
+# inside a running loop.
+#
+# This probe instruments ``nest_asyncio.apply`` at session start so we can:
+#   1. Record the FIRST ``apply()`` call's full stack trace (the polluter).
+#   2. Detect the test boundary AT WHICH ``asyncio.run`` first becomes
+#      monkey-patched, and surface BOTH the test nodeid and the call stack
+#      in a session-summary line + a pytest warning.
+#
+# Default behaviour is *observational* — we do not fail the session, because
+# the existing victim-site mitigations (PR #217 commit ``a321b64f``,
+# ``test_layer_5_pipeline_integration.py``, etc.) keep the suite green. Set
+# ``E2I_ASSERT_NO_ASYNCIO_POLLUTION=1`` in CI to promote a detected polluter
+# into a hard ``pytest.exit`` so the offending test is named on a red CI run.
+_ORIG_ASYNCIO_RUN = asyncio.run
+_ASYNCIO_POLLUTION_STATE: Dict[str, object] = {
+    "apply_first_stack": None,  # type: Optional[str]
+    "apply_first_nodeid": None,  # type: Optional[str]
+    "polluter_nodeid": None,  # type: Optional[str]
+    "current_nodeid": None,  # type: Optional[str]
+    "apply_count": 0,
+    "installed_trace": False,
+}
+
+
+def _install_nest_asyncio_apply_trace() -> None:
+    """Wrap ``nest_asyncio.apply`` so we record the first-call stack trace.
+
+    Idempotent: re-installing on top of itself is a no-op. The wrapper still
+    delegates to the real ``apply`` (we instrument, not block) so PR #217's
+    lazy-apply pattern continues to work for legitimate nested-loop cases.
+    """
+    if _ASYNCIO_POLLUTION_STATE["installed_trace"]:
+        return
+    try:
+        import nest_asyncio  # type: ignore[import-not-found]
+    except ImportError:
+        # nest_asyncio is a project dep; absence means the suite cannot be
+        # polluted via it. Nothing to instrument.
+        _ASYNCIO_POLLUTION_STATE["installed_trace"] = True
+        return
+
+    _real_apply = nest_asyncio.apply
+
+    def _traced_apply(*args, **kwargs):  # type: ignore[no-untyped-def]
+        import traceback
+
+        # Increment for every apply() call so a follow-up regression test
+        # can pin "apply_count==0" on clean sessions.
+        _ASYNCIO_POLLUTION_STATE["apply_count"] = (
+            int(_ASYNCIO_POLLUTION_STATE["apply_count"]) + 1
+        )
+        if _ASYNCIO_POLLUTION_STATE["apply_first_stack"] is None:
+            _ASYNCIO_POLLUTION_STATE["apply_first_stack"] = "".join(
+                traceback.format_stack()
+            )
+            _ASYNCIO_POLLUTION_STATE["apply_first_nodeid"] = (
+                _ASYNCIO_POLLUTION_STATE["current_nodeid"]
+            )
+        return _real_apply(*args, **kwargs)
+
+    nest_asyncio.apply = _traced_apply  # type: ignore[assignment]
+    _ASYNCIO_POLLUTION_STATE["installed_trace"] = True
+
+
+# Install ASAP so we catch apply() calls fired during fixture setup, not just
+# inside the test body itself.
+_install_nest_asyncio_apply_trace()
 
 # =============================================================================
 # TESTING MODE - Set before any src imports to bypass JWT auth
@@ -272,6 +357,93 @@ def pytest_configure(config: pytest.Config) -> None:
             print(f"  {icon} {service.upper()}: {status}")
         print(f"  (checked in {check_duration:.2f}s)")
         print("=" * 60 + "\n")
+
+
+# =============================================================================
+# ASYNCIO POLLUTION HOOKS (issue #218)
+# =============================================================================
+
+
+def pytest_runtest_protocol(item, nextitem):  # type: ignore[no-untyped-def]
+    """Record which test is currently executing so the apply() trace can
+    attribute the first ``nest_asyncio.apply()`` call to a specific nodeid."""
+
+    _ASYNCIO_POLLUTION_STATE["current_nodeid"] = item.nodeid
+    # Don't return a value — we only observe; pytest continues the protocol.
+    return None
+
+
+def pytest_runtest_logfinish(nodeid, location):  # type: ignore[no-untyped-def]
+    """Detect the first test boundary at which ``asyncio.run`` is polluted.
+
+    Fires after every test (passed/failed/skipped/xfailed). Once we observe
+    ``asyncio.run is not _ORIG_ASYNCIO_RUN``, we record the polluter nodeid
+    and emit a pytest warning so the session summary shows the culprit.
+    """
+
+    if _ASYNCIO_POLLUTION_STATE["polluter_nodeid"] is not None:
+        # Already recorded — pollution is a one-shot process state, no
+        # follow-up signal needed.
+        return
+
+    if asyncio.run is _ORIG_ASYNCIO_RUN:
+        return
+
+    _ASYNCIO_POLLUTION_STATE["polluter_nodeid"] = nodeid
+    warnings.warn(
+        (
+            f"[issue-218] asyncio.run was monkey-patched by nest_asyncio.apply() "
+            f"during test: {nodeid}. First apply() call attributed to: "
+            f"{_ASYNCIO_POLLUTION_STATE.get('apply_first_nodeid')!r}. "
+            f"Set E2I_ASSERT_NO_ASYNCIO_POLLUTION=1 to promote this to a hard "
+            f"failure; inspect ``_ASYNCIO_POLLUTION_STATE['apply_first_stack']`` "
+            f"in a debugger or via the session-summary log line for the call site."
+        ),
+        category=RuntimeWarning,
+        stacklevel=1,
+    )
+
+    if os.getenv("E2I_ASSERT_NO_ASYNCIO_POLLUTION", "").lower() in {"1", "true", "yes"}:
+        # Hard-fail when explicitly requested. We use pytest.exit (not raise)
+        # so the surrounding test isn't blamed for the pollution — the
+        # session summary will name the actual culprit via ``polluter_nodeid``.
+        stack = _ASYNCIO_POLLUTION_STATE.get("apply_first_stack") or "<not captured>"
+        pytest.exit(
+            (
+                f"[issue-218] FATAL: nest_asyncio.apply() polluted asyncio.run "
+                f"during test {nodeid!r}. First apply() called from: "
+                f"{_ASYNCIO_POLLUTION_STATE.get('apply_first_nodeid')!r}.\n"
+                f"--- apply() call stack ---\n{stack}\n--- end stack ---"
+            ),
+            returncode=2,
+        )
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):  # type: ignore[no-untyped-def]
+    """Append an issue-218 diagnostic block to the terminal summary when
+    pollution was detected during the session."""
+
+    if _ASYNCIO_POLLUTION_STATE["polluter_nodeid"] is None:
+        return
+    terminalreporter.write_sep("=", "issue-218 asyncio pollution diagnostic")
+    terminalreporter.write_line(
+        f"polluter_nodeid (first test after pollution detected): "
+        f"{_ASYNCIO_POLLUTION_STATE['polluter_nodeid']!r}"
+    )
+    terminalreporter.write_line(
+        f"apply_first_nodeid (running when first apply() fired): "
+        f"{_ASYNCIO_POLLUTION_STATE['apply_first_nodeid']!r}"
+    )
+    terminalreporter.write_line(
+        f"nest_asyncio.apply() call count: "
+        f"{_ASYNCIO_POLLUTION_STATE['apply_count']}"
+    )
+    stack = _ASYNCIO_POLLUTION_STATE.get("apply_first_stack")
+    if stack:
+        terminalreporter.write_line("--- first apply() call stack ---")
+        for line in str(stack).splitlines():
+            terminalreporter.write_line(line)
+        terminalreporter.write_line("--- end stack ---")
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
