@@ -36,10 +36,16 @@ defense (Phase S in `.claude/plans/adaptive_temporal_validity_redesign.md`):
 - `treatment_leaked_code`: ICD code assigned post-treatment
 - `spurious_correlation`: feature with high single-feature AUC but no causal path
 - `pure_noise`: control (should NOT be flagged)
-- `borderline_genuine`: pre-anchor causal feature with z in [5σ, 7.5σ] —
-  the HBLP variance-relaxation band. Engineering CI sanity-check ONLY:
-  validates that HBLP RETAINS when Layer 1 declared-safe while legacy 5σ
-  DROPS. NOT RWD positive-evidence (per v5 plan §2 C2 + codex pass-3).
+- `borderline_genuine`: pre-anchor causal feature with z in [5σ, 7.5σ]
+  and `|delta_AUC| ≈ 0.05` — the HBLP variance-relaxation band.
+  Engineering CI sanity-check ONLY. Post-issue-#194 contract: BOTH
+  arms RETAIN (legacy arm via the Layer 5 joint `|delta_AUC| > 0.10`
+  floor; HBLP arm via the 1.5× declared-safe prior, which is now
+  redundant for this feature but verified separately). Pre-issue-#194
+  contract was "legacy DROPS, HBLP RETAINS" via z alone; the test
+  function name preserves the historical phrasing. NOT RWD
+  positive-evidence (per v5 plan §2 C2 + codex pass-3). See
+  ``docs/synthetic_v3_design.md`` §3.1.
 
 Reference: codex agent output 2026-05-07 (option (c) hybrid: keep existing
 regimes for plumbing tests; add this regime for RWD-realistic testing).
