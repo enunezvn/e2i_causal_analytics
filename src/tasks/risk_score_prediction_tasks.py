@@ -451,10 +451,15 @@ def write_risk_score_predictions(
             "write_risk_score_predictions: psycopg not installed. Install via "
             "`pip install psycopg[binary]` to enable DB writes."
         )
+        # Codex pass-5 LOW: every failure shape must carry the gate
+        # state so callers can branch on it uniformly without
+        # special-casing the failure reason.
         return {
             "status": "failed",
             "reason": "psycopg_missing",
             "task_id": task_id,
+            "gated": is_gated,
+            "honest_failures": resolved_honest_failures,
         }
 
     # Issue #188: when gated, we still write an audit row to ml_predictions
