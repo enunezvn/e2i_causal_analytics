@@ -9,21 +9,24 @@ plus 8 domain-expert collider / instrument exemplars added under issue #198.
 Compile-set role coverage: ancestor=1, confounder=2, mediator=1, descendant=8,
 collider=4, instrument=4. All six declared ``CausalRole`` Literal values are
 represented (previously: 4 of 6; collider + instrument were deferred to issue
-#198 pending domain-expert labeling). The collider examples emphasize the
-*Berkson-bias DAG structure* with TWO DISTINCT CAUSAL PARENTS — typically
-(baseline disease severity / activity, treatment-related adverse event). That
-is what separates a collider from a descendant: a descendant has only one
-arrow in (T -> V); a collider has T -> V AND X -> V where X is causally
-independent of T (e.g., pre-index severity). This compile set explicitly
-rejects "T AND (post-T event)" framings (e.g., discontinuation_flag =
-treatment_initiated AND fill-gap) as colliders because the second "arrow"
-there is itself a downstream of T, not an independent cause. The instrument
-examples follow the canonical pharmacoepidemiology IV families: Brookhart
-preference-based provider IVs and supply-side geographic IVs. Each instrument
-rationale phrases the exclusion restriction as an ASSUMPTION TO AUDIT (with
-a named validity-check step), not as a confessed violation — so the LM
-learns IV-validity discipline rather than a "name a violation and still call
-it an IV" pattern.
+#198 pending domain-expert labeling). The collider examples cover BOTH Pearl
+collider sub-families: (i) classical Berkson colliders with causally
+independent parents (alive_at_180d_observation_window: frailty ⊥ T at
+baseline) and (ii) confounder-colliders / M-structures (per Greenland-
+Pearl-Robins 1999) where baseline severity is itself a T-Y confounder with
+arrowheads into BOTH T and the collider variable (hospitalizations_total,
+concomitant_steroid_burst_count_followup, diagnostic_test_count_followup).
+The compile set explicitly rejects "T AND (post-T event)" framings (e.g.,
+discontinuation_flag = treatment_initiated AND fill-gap) as colliders
+because the second "arrow" there is itself a downstream of T, making the
+variable a descendant, not a collider. The instrument examples span two
+pharmacoepi IV families: supply-side geographic (urban_rural_code,
+geographic_region) and preference/volume-based provider IVs
+(provider_preference_score, index_provider_biologic_volume_prior_year).
+Each instrument rationale phrases the exclusion restriction as an
+ASSUMPTION TO AUDIT (with a named validity-check step), not as a confessed
+violation — so the LM learns IV-validity discipline rather than a "name a
+violation and still call it an IV" pattern.
 
 Why DSPy: replace ad-hoc Claude prompts (which hallucinated feature names per
 the documented synthetic_v2 incident) with a STRUCTURED PROGRAM that:
@@ -139,24 +142,32 @@ def build_compile_set() -> list[dspy.Example]:
     the broader exemplars). 8 additional ``collider`` and ``instrument``
     exemplars were added under issue #198 from domain-expert review.
 
-    The 4 collider examples are Berkson-bias structures with two DISTINCT
-    causal parents: hospitalizations_total / er_visit_count_followup /
-    concomitant_steroid_burst_count_followup /
-    diagnostic_test_count_followup. Each rationale exposes BOTH parents in
-    the derivation (pre-index severity AND post-index treatment-AE).
-    `discontinuation_flag` / `discontinued_180d` / `persistent_at_180d` are
-    intentionally NOT used as colliders because their derivation reduces to
+    The 4 collider examples cover both Pearl collider sub-families:
+    hospitalizations_total + concomitant_steroid_burst_count_followup +
+    diagnostic_test_count_followup are confounder-collider M-structures
+    (per Greenland-Pearl-Robins 1999) where baseline severity is the T-Y
+    confounder; alive_at_180d_observation_window is the textbook
+    survivor-selection Berkson collider with causally independent
+    parents (baseline frailty + T -> survival). Each rationale exposes
+    BOTH parents in the derivation. `discontinuation_flag` /
+    `discontinued_180d` / `persistent_at_180d` are intentionally NOT
+    used as colliders because their derivation reduces to
     ``T AND (post-T event)`` — the second "arrow" there is itself
     downstream of T, making them descendants, not colliders.
 
-    The 4 instrument examples are the canonical pharmacoepi IV pattern:
-    urban_rural_code / geographic_region / provider_preference_score /
-    plan_type. Each rationale phrases the exclusion restriction as an
-    ASSUMPTION-TO-AUDIT with a named validity check step (per Brookhart
-    2010 IV-validity audit), NOT as a confessed Z -> Y violation. The
-    LM thereby learns to FLAG candidate IVs whose exclusion restriction
-    has not been validated, rather than to accept "exclusion violation
-    named -> still an IV" as a pattern.
+    The 4 instrument examples span two pharmacoepi IV families: supply-
+    side geographic (urban_rural_code, geographic_region) and
+    preference-based provider IVs (provider_preference_score,
+    index_provider_biologic_volume_prior_year). Each rationale phrases
+    the exclusion restriction as an ASSUMPTION-TO-AUDIT with a named
+    validity check step (per Brookhart 2010 IV-validity audit), NOT as
+    a confessed Z -> Y violation. The LM thereby learns to FLAG
+    candidate IVs whose exclusion restriction has not been validated,
+    rather than to accept "exclusion violation named -> still an IV" as
+    a pattern. `plan_type` was considered but rejected on codex pass-2
+    because as an enrollment-time payer feature it duplicates the
+    `insurance_product` confounder exemplar and creates contradictory
+    training signal for an access/coverage variable.
 
     Coverage by role: ancestor=1, confounder=2, mediator=1, descendant=8,
     collider=4, instrument=4.
@@ -343,39 +354,51 @@ def build_compile_set() -> list[dspy.Example]:
         # =====================================================================
         # Issue #198 — collider exemplars (4)
         # ---------------------------------------------------------------------
-        # A COLLIDER is a variable V with TWO ARROWS POINTING INTO IT from
-        # DISTINCT causes (Pearl, `Causality` 2009): V <- T and V <- X
-        # where X is a causal factor INDEPENDENT of T (not merely a
-        # downstream property of T). Conditioning on V opens a non-causal
-        # backdoor path between T and X. This is what separates a
-        # collider from a descendant: descendants have only T -> V (the
-        # variable is downstream of treatment); colliders have arrows from
-        # T AND from a SECOND, INDEPENDENT cause (typically a pre-treatment
-        # baseline characteristic OR an outcome-proxy that is itself
-        # caused by something other than T).
+        # A COLLIDER (Pearl, `Causality` 2009) is any variable V with TWO
+        # ARROWHEADS pointing into it from distinct sources. Conditioning
+        # on V opens a non-causal path between V's parents. Two important
+        # sub-families:
         #
-        # IMPORTANT codex pass-1 correction: post-treatment outcome flags
-        # whose derivation reduces to `T AND (post-T event)` (e.g.,
-        # `discontinuation_flag = T AND (gap_in_fills)`) are DESCENDANTS,
-        # not colliders — the "second arrow" they appeal to is itself a
-        # consequence of T, not an independent cause. The exemplars below
-        # are restricted to the canonical Berkson-bias family where the
-        # second parent is genuinely INDEPENDENT of T: baseline disease
-        # severity (set pre-index) or a non-disease comorbidity flow.
+        # (i)  CLASSIC BERKSON COLLIDER: V <- T and V <- X with X causally
+        #      INDEPENDENT of T. Conditioning opens an artificial T-X
+        #      dependence in the conditioned subpopulation.
         #
-        # Remediation is `drop` because conditioning on a collider induces
-        # selection bias on the T->Y relationship — same family of bias
-        # as Berkson's bias in case-control studies.
+        # (ii) CONFOUNDER-COLLIDER (confounded-collider, "M-structure"
+        #      collider per Greenland-Pearl-Robins 1999): V <- T and
+        #      V <- X where X also CONFOUNDS T-Y (i.e., X -> T and
+        #      X -> Y). V still has two arrowheads in, so it remains a
+        #      collider. Conditioning on V opens a backdoor X <-> Y path
+        #      and is the dominant collider failure mode in observational
+        #      pharmacoepi (baseline severity is the canonical X).
+        #
+        # The four exemplars below are confounder-collider (type ii). The
+        # rationale in each example NAMES the structure explicitly so the
+        # LM does not learn "Berkson-only" framing and reject realistic
+        # pharmacoepi colliders. Each derivation exposes BOTH parents in
+        # the data: a PRE-INDEX activity / severity stream AND a POST-T
+        # AE / non-response stream feeding the same total.
+        #
+        # IMPORTANT codex pass-1 correction (preserved): post-treatment
+        # outcome flags whose derivation reduces to `T AND (post-T event)`
+        # (e.g., `discontinuation_flag = T AND (gap_in_fills)`) are
+        # DESCENDANTS, not colliders — the "second arrow" they appeal to
+        # is itself a consequence of T, not an independent or confounding
+        # cause.
+        #
+        # Remediation is `drop` because conditioning on a collider — of
+        # EITHER sub-family — induces selection bias on the T->Y
+        # relationship.
         # =====================================================================
         # Collider 1 — hospitalizations_total (unwindowed): the canonical
-        # Berkson-bias collider in pharmacoepi. Two distinct parents made
-        # explicit in the derivation: (a) baseline disease severity
-        # (PRE-index, independent of T at the patient-level; influences
-        # both T-selection AND admission probability), (b) treatment-
-        # related adverse events (POST-T, but caused by T not by
-        # severity). Hospitalizations of either parent type both count
-        # into the same total. Conditioning opens the
-        # severity <-> AE backdoor.
+        # CONFOUNDER-COLLIDER in pharmacoepi (sub-family ii). Two arrows
+        # in from distinct sources: (a) baseline disease severity (which
+        # is itself a T-Y CONFOUNDER — severity -> T via prescriber
+        # decision, severity -> Y via uncontrolled disease activity) and
+        # (b) treatment-related adverse events (which is a path from T:
+        # T -> AE -> hospitalization). V = hospitalizations_total has
+        # arrowheads from BOTH severity and AE. Conditioning on V opens
+        # the severity <-> Y backdoor that the unconditioned (T, severity,
+        # Y) graph leaves blocked.
         dspy.Example(
             feature_name="hospitalizations_total",
             derivation_pseudocode=(
@@ -391,59 +414,32 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="collider",
             mechanism=(
-                "Berkson-style two-arrow-in collider with DISTINCT parents: "
-                "(a) baseline disease severity (set pre-index, drives the "
-                "treatment-selection arm AND independently drives admissions "
-                "via disease activity), and (b) treatment-related adverse "
-                "events (post-initiation biologic AE causally drives "
-                "admissions on a path NOT mediated by severity). Severity "
-                "and AE are causally distinct sources. Conditioning on the "
-                "total opens a non-causal severity <-> AE path. (NOTE: a "
-                "properly windowed pre-index hospitalization count collapses "
-                "to a confounder; the collider semantics depend on the "
-                "derivation crossing the index date.)"
+                "Confounder-collider (sub-family ii per Greenland-Pearl-"
+                "Robins 1999 M-structure): two arrowheads in from distinct "
+                "sources. (a) Baseline disease severity is a T-Y confounder "
+                "(severity -> T via prescriber decision; severity -> Y via "
+                "uncontrolled disease activity) and ALSO has an arrow into "
+                "the hospitalization count (severity drives admissions). "
+                "(b) Treatment-related adverse events form a path T -> AE "
+                "-> hospitalization. V has arrowheads from both severity "
+                "and AE, so V is a collider on the (severity, T) backdoor. "
+                "Conditioning on V opens the severity <-> Y path, biasing "
+                "the treatment-effect estimate. (NOTE: a properly windowed "
+                "pre-index hospitalization count collapses to a pure "
+                "confounder with NO post-index arrow; the collider semantics "
+                "depend on the derivation crossing the index date.)"
             ),
             recommended_remediation="drop",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
-        # Collider 2 — er_visit_count_followup: same two-distinct-parent
-        # structure as hospitalizations_total but at the ER-visit level
-        # (POS-23 in Optum inpatient panel). Pre-index severity AND
-        # treatment AE both drive ER admissions. Pinned separately so the
-        # LM learns the Berkson-bias pattern transfers across encounter
-        # types (inpatient vs ER vs observation).
-        dspy.Example(
-            feature_name="er_visit_count_followup",
-            derivation_pseudocode=(
-                "count(inpatient_events where POS=23 AND admit_date in "
-                "[index_date, index_date+180d]) — both pre-index severity "
-                "and post-treatment AE feed this stream"
-            ),
-            dataset_context=(
-                "Optum claims; target=initiated_biologic_180d; anchor=index_date; "
-                "inpatient panel filtered to ER place-of-service; window "
-                "includes both severity-driven and AE-driven admissions"
-            ),
-            causal_role="collider",
-            mechanism=(
-                "ER-visit Berkson collider: (a) baseline disease severity "
-                "(pre-index, independent of T; drives ER visits via "
-                "uncontrolled disease activity), and (b) treatment-related "
-                "adverse events (post-initiation biologic AE such as "
-                "anaphylaxis/injection-site reactions drives ER visits "
-                "via a path NOT mediated by severity). The two parents "
-                "are causally distinct (severity is not caused by T; AE "
-                "is caused by T but not by severity). Conditioning on the "
-                "total ER count opens the severity <-> AE backdoor."
-            ),
-            recommended_remediation="drop",
-        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
-        # Collider 3 — concomitant_steroid_burst_count_followup: post-
-        # index steroid-burst prescription count. Two distinct parents:
-        # (a) baseline disease severity (drives rescue therapy
-        # independently of biologic exposure — even untreated severe
-        # patients receive bursts), (b) biologic-treatment failure
-        # (post-T; non-responders receive more bursts). Severity and
-        # biologic-response are causally distinct sources.
+        # Collider 2 — concomitant_steroid_burst_count_followup: post-
+        # index rescue-therapy count. Cleaner confounder-collider example
+        # than the parallel ER/admission counts because the two arrowheads
+        # come from CAUSALLY DIFFERENT mechanisms: (a) baseline disease
+        # severity (a T-Y confounder; severity -> T; severity -> Y; severity
+        # -> bursts) and (b) biologic-treatment NON-RESPONSE — non-response
+        # is a path from T but NOT driven by severity (a non-responding
+        # biologic patient gets bursts whether or not their baseline
+        # severity was high or low).
         dspy.Example(
             feature_name="concomitant_steroid_burst_count_followup",
             derivation_pseudocode=(
@@ -458,49 +454,96 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="collider",
             mechanism=(
-                "Steroid-burst rescue is a Berkson-bias collider with two "
-                "DISTINCT parents: (a) baseline disease severity (pre-index, "
-                "independent of biologic exposure; severe patients receive "
-                "bursts regardless of biologic), (b) biologic-treatment "
-                "non-response (post-T, biologic-induced; non-responders "
-                "escalate to bursts). The two arrows feed the same count "
-                "stream but originate in independent causal factors. "
-                "Conditioning on the burst count opens severity <-> "
-                "non-response, biasing the treatment-effect estimate."
+                "Confounder-collider on the rescue-therapy count: V has "
+                "two arrowheads from distinct sources. (a) Baseline disease "
+                "severity is a classical T-Y confounder (severity -> T via "
+                "prescriber escalation; severity -> Y via uncontrolled "
+                "disease) AND drives bursts (severity -> V) for patients "
+                "with high baseline activity regardless of biologic "
+                "exposure. (b) Biologic-treatment non-response forms a "
+                "path T -> non-response -> burst-prescription. Non-response "
+                "is downstream of T but is NOT itself caused by baseline "
+                "severity in a deterministic way (responders and non-"
+                "responders are distributed across the severity spectrum). "
+                "V has arrowheads from both severity (confounder) and "
+                "non-response (T-driven). Conditioning on V opens the "
+                "severity <-> Y backdoor."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Collider 3 — alive_at_180d_observation_window: the textbook
+        # SURVIVOR-SELECTION Berkson collider, with parents causally
+        # independent of each other. V = patient is still alive AND
+        # continuously enrolled at index+180d. Parents: (a) baseline
+        # mortality risk (set pre-index by age, comorbidity burden; a
+        # T-Y confounder via severity-of-illness pathway), and (b) the
+        # treatment effect on mortality (T -> survival -> V). When an
+        # analysis is RESTRICTED to V=1 patients (the common complete-
+        # follow-up filter), the unconditional T <-> mortality-risk
+        # backdoor is opened. This is the classical informative-
+        # censoring / immortal-time-adjacent collider.
+        dspy.Example(
+            feature_name="alive_at_180d_observation_window",
+            derivation_pseudocode=(
+                "(death_date IS NULL OR death_date > index_date + 180d) AND "
+                "(enrollment_active(index_date + 180d) = 1)  # binary "
+                "complete-follow-up flag used as a SAMPLE-INCLUSION filter"
+            ),
+            dataset_context=(
+                "Optum claims; target=initiated_biologic_180d; anchor=index_date; "
+                "death + enrollment panels; analysts commonly filter to V=1 "
+                "to get complete-follow-up cohorts"
+            ),
+            causal_role="collider",
+            mechanism=(
+                "Survivor-selection Berkson collider with two arrowheads "
+                "from distinct sources. (a) Baseline mortality / dropout "
+                "risk (age, comorbidity, frailty — a T-Y confounder via "
+                "severity-of-illness pathways) drives the survival arrow "
+                "into V. (b) T -> survival -> V: the treatment itself "
+                "affects mortality and dropout, so T also has an arrow "
+                "into V. The two parents (frailty, T) are causally "
+                "distinct: frailty is pre-T baseline, T is the assigned "
+                "treatment. Conditioning on V=1 (the common complete-"
+                "follow-up filter) opens the T <-> frailty backdoor and "
+                "biases ANY downstream T-Y comparison. The fix is NOT to "
+                "filter the cohort by V; carry both V=0 and V=1 patients "
+                "through with appropriate censoring."
             ),
             recommended_remediation="drop",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
         # Collider 4 — diagnostic_test_count_followup: diagnostic-workup
-        # test count in the post-index window. Two distinct parents:
-        # (a) baseline disease activity / diagnostic uncertainty (pre-
-        # index, drives ongoing workup independently of T), (b) treatment-
-        # related adverse events (post-T, drives AE-specific lab/imaging
-        # workup). Severity and AE are causally distinct, but both feed
-        # the test-count total.
+        # test count in the post-index window. Confounder-collider
+        # (sub-family ii) with a mechanically different second-parent
+        # path than the utilization-based hospitalization/burst counts:
+        # the post-T arrow is AE-specific monitoring, not severity-
+        # driven utilization. Pinned separately so the LM learns the
+        # pattern transfers across COUNT-feature derivations (utilization
+        # vs workup vs medication).
         dspy.Example(
             feature_name="diagnostic_test_count_followup",
             derivation_pseudocode=(
-                "count(lab_events ∪ procedure_events where category='diagnostic' "
+                "count(lab_events U procedure_events where category='diagnostic' "
                 "AND date in [index_date, index_date+180d]) — driven by both "
-                "pre-index workup intensity and post-treatment AE workup"
+                "pre-index workup intensity and post-treatment AE-specific monitoring"
             ),
             dataset_context=(
                 "Optum claims; target=initiated_biologic_180d; anchor=index_date; "
                 "lab+procedure panels filtered to diagnostic codes; pre-index "
-                "severity and post-T AE both drive test ordering"
+                "severity drives workup, post-T monitoring fires conditional on T"
             ),
             causal_role="collider",
             mechanism=(
-                "Diagnostic-workup count is a Berkson collider: "
-                "(a) baseline disease activity / diagnostic uncertainty "
-                "(pre-index, independent of T; drives ongoing imaging and "
-                "labs to characterize disease), and (b) treatment-related "
-                "adverse events (post-T; AE-specific labs such as liver "
-                "function for biologic monitoring fire conditional on T). "
-                "The two parents are causally distinct: activity is not "
-                "caused by T; AE-workup is caused by T but not by baseline "
-                "activity. Joint contribution to the same count makes the "
-                "total a collider on the T -> Y path."
+                "Confounder-collider on the workup count: V has two "
+                "arrowheads. (a) Baseline disease activity / diagnostic "
+                "uncertainty (a T-Y confounder via severity-of-illness; "
+                "drives both the prescriber's T decision AND the workup "
+                "stream). (b) Treatment-specific monitoring forms a path "
+                "T -> protocol-driven labs -> V (e.g., LFT/CBC monitoring "
+                "in biologic protocols; the test request comes from the "
+                "treatment protocol, not from underlying disease activity). "
+                "Conditioning on the total count opens the activity <-> Y "
+                "backdoor."
             ),
             recommended_remediation="drop",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -636,32 +679,51 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
-        # Instrument 4 — plan_type: HMO vs PPO vs POS as an IV via step-
-        # therapy, biologic-formulary placement, and prior-auth tiering.
-        # Distinct mechanism from geography and provider preference.
+        # Instrument 4 — index_provider_biologic_volume_prior_year:
+        # provider-volume IV. Distinct from the preference-fraction IV
+        # (which captures prescribing PROPORTION) — this captures the
+        # ABSOLUTE VOLUME of biologic initiations the provider performed
+        # in the year before the patient's index. High-volume biologic
+        # prescribers initiate biologics more readily (operational
+        # familiarity, established prior-auth workflows). Replaces the
+        # original `plan_type` example because plan_type is functionally
+        # equivalent to the existing `insurance_product` confounder
+        # exemplar (both enrollment-time payer features that affect
+        # outcomes via access/monitoring/SES paths). Codex pass-2 MED-2
+        # flagged the contradictory plan_type-vs-insurance_product
+        # training signal — this replacement preserves the IV slot
+        # without the access/coverage path that breaks exclusion.
         dspy.Example(
-            feature_name="plan_type",
-            derivation_pseudocode=("demo.product  # HMO/PPO/POS/other, set at enrollment"),
+            feature_name="index_provider_biologic_volume_prior_year",
+            derivation_pseudocode=(
+                "count(distinct patients of index_provider where "
+                "biologic_initiation_date in [index_date - 365d, index_date - 1d]) "
+                "EXCLUDING this patient — provider-level volume in the year "
+                "BEFORE this patient's index"
+            ),
             dataset_context=(
                 "Optum claims; target=initiated_biologic_180d; "
-                "anchor=index_date; static at enrollment"
+                "anchor=index_date; provider-volume IV measured strictly "
+                "pre-index from other patients"
             ),
             causal_role="instrument",
             mechanism=(
-                "Plan-design IV: HMO vs PPO vs POS varies in step-therapy "
-                "requirements, biologic-formulary placement, and prior-auth "
-                "tiering. Z -> T arrow: plan design affects whether a "
-                "biologic prescription is approved at first attempt. "
-                "Exclusion restriction: Z -> Y holds only through T under "
-                "the standard IV assumption that plan type does not "
-                "directly modify disease biology. Static at enrollment so "
-                "unconfounded with post-index outcomes. IV-VALIDITY AUDIT "
-                "STEP (required before use): test exchangeability on "
-                "patient-level baseline covariates (age, comorbidity, "
-                "income proxy) across plan_type levels; condition on or "
-                "stratify by any imbalanced baseline characteristic, OR "
-                "reject the IV interpretation if a baseline is plausibly "
-                "on a Z -> Y path independent of T."
+                "Provider-volume IV per Brookhart 2006 supply-side IV "
+                "framework. Z -> T arrow: high-volume biologic prescribers "
+                "have higher initiation rates per patient due to operational "
+                "familiarity, established prior-auth workflows, and "
+                "established formulary navigation. Exclusion restriction: "
+                "Z -> Y holds only through T under the standard IV "
+                "assumption that the provider's PRIOR volume on OTHER "
+                "patients does not directly affect THIS patient's outcome "
+                "except through T (the provider's skill / care quality may "
+                "violate this assumption — see audit step). Measured "
+                "pre-index from other patients so Z is exogenous to this "
+                "patient's covariates. IV-VALIDITY AUDIT STEP (required "
+                "before use): test for provider-level care-quality "
+                "differences in NON-biologic management across volume "
+                "tiers; if high-volume providers also differ in non-"
+                "biologic care quality, reject the IV interpretation."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),

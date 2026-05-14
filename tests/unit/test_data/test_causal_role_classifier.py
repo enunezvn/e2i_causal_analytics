@@ -156,11 +156,12 @@ def test_compile_set_has_at_least_four_collider_examples():
     """Issue #198: pin the minimum collider exemplar count at 4 so a
     refactor that silently drops collider examples fires this test.
 
-    The 4 collider examples are pharmacoepi Berkson-bias structures
-    with TWO DISTINCT parents (pre-index severity AND post-index AE):
-    hospitalizations_total, er_visit_count_followup,
-    concomitant_steroid_burst_count_followup, and
-    diagnostic_test_count_followup.
+    The 4 collider examples span both Pearl collider sub-families:
+    confounder-collider M-structures (hospitalizations_total,
+    concomitant_steroid_burst_count_followup,
+    diagnostic_test_count_followup) and the classical survivor-
+    selection Berkson collider with causally independent parents
+    (alive_at_180d_observation_window).
 
     Note: discontinuation_flag / discontinued_180d / persistent_at_180d
     were considered but rejected on codex pass-1 review because their
@@ -199,9 +200,9 @@ def test_compile_set_has_at_least_four_instrument_examples():
 
 def test_compile_set_collider_examples_have_required_feature_names():
     """Pin the 4 specific collider features so a silent renaming or
-    swap is caught. The collider exemplars are load-bearing for Layer 4
-    training signal — the LM learns the Berkson-bias two-DISTINCT-parents
-    DAG pattern from these specific pharmacoepi cases.
+    swap is caught. The collider exemplars span both Pearl collider
+    sub-families (confounder-collider + classical Berkson) — load-
+    bearing for Layer 4 training signal.
     """
     from src.data.causal_role_classifier import build_compile_set
 
@@ -210,8 +211,8 @@ def test_compile_set_collider_examples_have_required_feature_names():
     }
     expected = {
         "hospitalizations_total",
-        "er_visit_count_followup",
         "concomitant_steroid_burst_count_followup",
+        "alive_at_180d_observation_window",
         "diagnostic_test_count_followup",
     }
     missing = expected - collider_features
@@ -221,10 +222,17 @@ def test_compile_set_collider_examples_have_required_feature_names():
 
 
 def test_compile_set_instrument_examples_have_required_feature_names():
-    """Pin the 4 specific instrument features. Same rationale as the
-    collider pin test — the LM training signal for the IV pattern depends
-    on these specific pharmacoepi examples spanning two distinct IV
-    families (supply-side geographic + preference-based provider).
+    """Pin the 4 specific instrument features. The LM training signal
+    for the IV pattern depends on these specific pharmacoepi examples
+    spanning two distinct IV families: supply-side geographic
+    (urban_rural_code, geographic_region) and preference/volume-based
+    provider IVs (provider_preference_score,
+    index_provider_biologic_volume_prior_year).
+
+    Note: plan_type was considered but rejected on codex pass-2 review
+    because as an enrollment-time payer feature it would duplicate the
+    `insurance_product` confounder exemplar (creating contradictory
+    confounder-vs-IV training signal on the same feature family).
     """
     from src.data.causal_role_classifier import build_compile_set
 
@@ -235,7 +243,7 @@ def test_compile_set_instrument_examples_have_required_feature_names():
         "urban_rural_code",
         "geographic_region",
         "provider_preference_score",
-        "plan_type",
+        "index_provider_biologic_volume_prior_year",
     }
     missing = expected - instrument_features
     assert not missing, (
@@ -546,14 +554,14 @@ def test_persisted_artifact_demos_carry_at_least_one_new_role_feature():
     new_role_features = {
         # Issue #198 collider feature names
         "hospitalizations_total",
-        "er_visit_count_followup",
         "concomitant_steroid_burst_count_followup",
+        "alive_at_180d_observation_window",
         "diagnostic_test_count_followup",
         # Issue #198 instrument feature names
         "urban_rural_code",
         "geographic_region",
         "provider_preference_score",
-        "plan_type",
+        "index_provider_biologic_volume_prior_year",
     }
     overlap = demo_features & new_role_features
     assert overlap, (
