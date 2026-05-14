@@ -2835,6 +2835,45 @@ def test_issue_194_voter_rejects_z_inf_without_joint_check_corroboration():
     )
 
 
+def test_issue_194_voter_rejects_z_inf_without_hblp_classified_tag():
+    """Codex pass-4 LOW-1: a valid-looking z=+inf dict that is OTHERWISE
+    well-formed (severity=high + finite delta_auc + finite floor + abs
+    above floor) BUT lacks the ``_hblp_classified=True`` producer tag
+    is rejected by the voter. The producer tag is the audit-integrity
+    anchor — it confirms the dict came from production ``_adversarial_
+    input``, not from a hand-built fixture / stale producer.
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        LAYER5_DELTA_AUC_FLOOR_DEFAULT,
+        _get_ensemble_voter_class,
+    )
+
+    # Valid-looking input EXCEPT the _hblp_classified tag is missing.
+    untagged_ad = {
+        "layer": "3",
+        "severity": "high",
+        "remediation": "drop",
+        "evidence": "untagged test fixture",
+        "z_score": float("inf"),
+        "actual_auc": 0.95,
+        "null_mean": 0.50,
+        "null_std": 0.0,
+        "p_value": 0.0,
+        "n_permutations": 200,
+        "delta_auc": 0.45,  # above floor 0.10
+        "delta_auc_floor": LAYER5_DELTA_AUC_FLOOR_DEFAULT,
+        "delta_auc_below_floor": False,
+        # _hblp_classified intentionally missing — producer didn't tag.
+    }
+    voter = _get_ensemble_voter_class()()
+    verdict = voter.vote("test_feat", adversarial_verdict=untagged_ad)
+    assert verdict.severity != "high", (
+        f"Issue #194 codex pass-4 LOW-1: untagged adversarial input must "
+        f"be rejected even when joint-check fields look valid; "
+        f"got {verdict.severity}"
+    )
+
+
 def test_issue_194_audit_fields_propagated_through_short_circuit_verdict():
     """Codex pass-1 LOW-1: short-circuit path (too-few-rows / scoring-error)
     must populate the 3 audit fields too — schema uniformity for
