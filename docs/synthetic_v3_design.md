@@ -159,9 +159,10 @@ is verified separately by `test_v5_c2_hblp_relaxation_actually_fired`.
 Pre-issue-#194 the contract was "legacy DROPS, HBLP RETAINS" via the z
 threshold alone; the executable spec is now
 [`test_synthetic_borderline_genuine_hblp_contrast.py`](../tests/integration/test_synthetic_borderline_genuine_hblp_contrast.py)
-(see `test_v5_c2_legacy_drops_hblp_retains_borderline_genuine` line 148
-— the function name preserves the historical phrasing; the assertions
-at lines 187-194 + 276 pin the post-#194 behavior).
+(see `test_v5_c2_legacy_drops_hblp_retains_borderline_genuine` line 158
+— the function name preserves the historical phrasing; the retain
+assertions at lines 200-205 and the relaxation-fired test at line 289
+pin the post-#194 behavior).
 
 **This is a v5 Gate C2 engineering CI sanity-check, NOT RWD positive
 evidence** — the generator can produce any AUC by construction; the test
