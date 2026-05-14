@@ -91,6 +91,17 @@ load_dotenv(override=True)
 # ``test_layer_5_pipeline_integration.py``, etc.) keep the suite green. Set
 # ``E2I_ASSERT_NO_ASYNCIO_POLLUTION=1`` in CI to promote a detected polluter
 # into a hard ``pytest.exit`` so the offending test is named on a red CI run.
+#
+# Issue #221 (PR pending): the Integration Tests lane in
+# ``.github/workflows/backend-tests.yml`` now sets
+# ``E2I_ASSERT_NO_ASYNCIO_POLLUTION=1`` so strict mode is the production
+# default for that job. All known victim sites have been migrated to the
+# explicit-loop pattern via the ``tests.integration._asyncio_compat.run_sync``
+# helper (issue #220 / PR #222), so a strict-mode trip on a green branch
+# means a NEW polluter has appeared and must be investigated. Unit tests
+# stay in observational mode — they don't touch RAGAS — to keep the
+# strict-mode blast radius scoped to the lane where pollution actually
+# matters.
 _ORIG_ASYNCIO_RUN = asyncio.run
 _ASYNCIO_POLLUTION_STATE: Dict[str, object] = {
     "apply_first_stack": None,  # type: Optional[str]
