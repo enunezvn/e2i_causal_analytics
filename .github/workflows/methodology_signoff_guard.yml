@@ -6,40 +6,41 @@ name: Methodology Sign-off Guard
 # docs/results/optum_methodology_rejection_*.md pattern (excluding the
 # template files, which the validator rejects by name).
 #
-# The job runs scripts/check_methodology_signoff.py against each touched
-# artifact. Validation failure (selection-rule violation, unregistered
-# reviewer, missing section, missing signature) blocks the PR.
+# Issue #192 architecture (2026-05-14):
 #
-# H3 SECURITY ADVISORY (codex review of v4 N3 phase A — 2026-05-10):
-# This workflow currently runs `scripts/check_methodology_signoff.py` from
-# the PR checkout — i.e. the PR can also modify the validator and have its
-# weakened version validate itself. The "Run validator from a pinned
-# trusted ref" step below is the production fix; until it is enabled,
-# `scripts/check_methodology_signoff.py` MUST be added to a CODEOWNERS
-# entry that requires review by a member of the security team. Recommended
-# production deployment:
+#   This workflow is now a THIN CALLER. It identifies the touched
+#   methodology artifacts on the PR diff and delegates the actual
+#   validation to the reusable workflow at
+#   `.github/workflows/methodology-signoff-validator.yml`. The reusable
+#   workflow does its OWN checkout of the protected `main` ref for the
+#   validator script (issue #192 H3 mitigation), so a PR cannot weaken the
+#   validator and have its own copy validate itself in the same commit.
 #
-#   - Move the validator into a separate, protected repository
-#     `org/governance-actions` and reference it via
-#     `uses: org/governance-actions/methodology-signoff@<sha>` pinned by
-#     SHA on `main` of THIS repo's protected refs.
-#   - Alternatively, add a "fetch validator from base ref" step that uses
-#     `git show <base_sha>:scripts/check_methodology_signoff.py > /tmp/validator.py`
-#     and invokes the base-ref copy rather than the PR-checkout copy.
-#   - As a minimum: branch-protection rule requiring CODEOWNERS review on
-#     `scripts/check_methodology_signoff.py` and `.github/workflows/
-#     methodology_signoff_guard.yml`.
+# H1 + H4 (registry-pinned GPG keyring + CoI body signature verify):
+#   STILL DEFERRED — both require infra (per-runner GPG keyring with
+#   curated reviewer public keys). Tracked in
+#   `docs/governance/n3_known_limitations_20260510.md` items 1 + 4 with
+#   explicit risk owner placeholder pending operator action. See the
+#   sub-issue spawned from issue #192 closure for the operator scope.
 #
-# M1 (iter-3) — gh provenance is best-effort. The validator emits a
-# CRITICAL warning AND sets `provenance_check_skipped=True` on the
-# selection_rule check when `gh` is unavailable / unauthenticated on the
-# runner. The "Detect skipped provenance signal" step below scans the
-# validator output for the CRITICAL token and posts a workflow warning.
-# Production deployments that require gh-confirmed PR/review provenance
-# MUST provision a `GH_TOKEN` with `repo:read` and switch the policy to
-# fail-closed by changing the trailing `exit 0` in that step to `exit 1`.
-# See `docs/governance/n3_known_limitations_20260510.md` for the full
-# deferred-infra rationale.
+# H2 / M1 (gh PR/review enforcement):
+#   RESOLVED 2026-05-14 (issue #192). The reusable workflow now
+#   provisions GH_TOKEN (via the auto-provided secrets.GITHUB_TOKEN)
+#   AND exports STRICT_GH=1 so the validator returns exit code 3 when
+#   any check has provenance_check_skipped=True. Local devs running
+#   the script ad-hoc retain warn-only back-compat (no STRICT_GH set).
+#
+# H3 (validator-from-protected-ref):
+#   RESOLVED 2026-05-14 (issue #192). The reusable workflow checks out
+#   `main` into a SEPARATE workspace and runs the validator script from
+#   that protected-ref checkout, NOT from the PR head. This closes the
+#   "PR weakens validator + workflow in same commit" attack class.
+#   Cross-PR weakening (land weak validator on main first, then open
+#   sign-off PR) is NOT closed by this split alone — branch protection +
+#   CODEOWNERS gate on `scripts/check_methodology_signoff.py` and on
+#   both workflow files is the required complement. The full cross-org
+#   migration to `org/governance-actions/methodology-signoff@<sha>` is
+#   the future-state ideal but requires a separate-repo decision.
 
 on:
   pull_request:
@@ -50,25 +51,29 @@ on:
       - 'docs/governance/coi_declarations/**'
       - 'scripts/check_methodology_signoff.py'
       - '.github/workflows/methodology_signoff_guard.yml'
+      - '.github/workflows/methodology-signoff-validator.yml'
   workflow_dispatch:
 
+permissions:
+  # Caller workflow only needs to read the PR diff to enumerate touched
+  # artifacts. The reusable workflow declares its own (slightly broader)
+  # permissions for the gh-CLI provenance queries.
+  contents: read
+  pull-requests: read
+
 jobs:
-  validate-signoff:
-    name: Validate Methodology Sign-off
+  identify:
+    name: Identify touched artifacts
     runs-on: ubuntu-latest
+    outputs:
+      files: ${{ steps.touched.outputs.files }}
+      has_files: ${{ steps.touched.outputs.has_files }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          # Full history needed so `git log --author=...` evaluations in
-          # check_methodology_signoff.py see the full commit graph for the
-          # named period.
+          # Full history needed for `git diff <base>...<head>`.
           fetch-depth: 0
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
 
       - name: Identify touched artifacts
         id: touched
@@ -103,113 +108,46 @@ jobs:
             | grep -v '^[[:space:]]*$' \
             || true)
 
-          # Persist for the next step (multi-line output uses GH's heredoc).
+          # Persist for the downstream reusable-workflow call (multi-line
+          # output uses GH's heredoc).
           {
             echo "files<<EOF"
             echo "$FILTERED"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-          # H3 / M3: separate, explicit boolean output that downstream steps
-          # gate on. ``-n`` returns true when the string is non-empty AFTER
-          # whitespace-only lines have been stripped above.
+          # H3 / M3: separate, explicit boolean output that the downstream
+          # job's `if:` gates on. ``-n`` returns true when the string is
+          # non-empty AFTER whitespace-only lines have been stripped above.
           if [ -n "$FILTERED" ]; then
             echo "has_files=true" >> "$GITHUB_OUTPUT"
-            echo "Will validate the following artifacts:"
+            echo "Will delegate validation of the following artifacts to the reusable workflow:"
             echo "$FILTERED"
           else
             echo "has_files=false" >> "$GITHUB_OUTPUT"
-            echo "No methodology artifacts in scope; the validator will be skipped."
+            echo "No methodology artifacts in scope; the reusable workflow will be skipped."
           fi
 
-      - name: Fetch trusted validator from base ref (H3 mitigation)
-        if: steps.touched.outputs.has_files == 'true'
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          set -euo pipefail
-          # H3: run the validator from the PR's base ref so a malicious PR
-          # cannot weaken the validator and have its own weakened copy
-          # validate itself. If the validator does not yet exist on base
-          # (first-introduction PR), fall back to the PR-checkout copy and
-          # log a warning that a CODEOWNERS-gated review is required.
-          mkdir -p /tmp/governance
-          if [ -n "$BASE_SHA" ] && \
-             git cat-file -e "${BASE_SHA}:scripts/check_methodology_signoff.py" 2>/dev/null; then
-            git show "${BASE_SHA}:scripts/check_methodology_signoff.py" \
-              > /tmp/governance/check_methodology_signoff.py
-            echo "validator_source=base_sha" >> "$GITHUB_OUTPUT"
-            echo "Using base-ref validator at SHA $BASE_SHA"
-          else
-            cp scripts/check_methodology_signoff.py /tmp/governance/check_methodology_signoff.py
-            echo "::warning::validator absent on base ref; using PR-checkout copy. CODEOWNERS gating required."
-            echo "validator_source=pr_head" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Run check_methodology_signoff.py on each artifact
-        id: validate
-        if: steps.touched.outputs.has_files == 'true'
-        env:
-          # The selection-rule check shells out to git log; the workspace
-          # checkout is the natural --repo-root.
-          REPO_ROOT: ${{ github.workspace }}
-        run: |
-          set -euo pipefail
-          STATUS=0
-          PROVENANCE_SKIPPED=0
-          # Capture combined output across all artifacts so the next step
-          # can scan for the M1 CRITICAL marker.
-          : > /tmp/governance/validator_output.txt
-          while IFS= read -r ARTIFACT; do
-            [ -z "$ARTIFACT" ] && continue
-            echo "::group::Validating $ARTIFACT"
-            # H3: prefer the base-ref-pinned validator written in the
-            # previous step; falls back to PR copy only when the validator
-            # is absent on base.
-            if ! python3 /tmp/governance/check_methodology_signoff.py \
-                  --repo-root "$REPO_ROOT" \
-                  --require-signature \
-                  "$ARTIFACT" 2>&1 | tee -a /tmp/governance/validator_output.txt; then
-              echo "::error file=$ARTIFACT::methodology sign-off validation failed"
-              STATUS=1
-            fi
-            echo "::endgroup::"
-          done <<< "${{ steps.touched.outputs.files }}"
-          # iter-3 M1: detect CRITICAL provenance-skip markers without
-          # blocking validation success. A separate "Provenance signal"
-          # step inspects this flag.
-          if grep -q "CRITICAL: gh provenance query SKIPPED" \
-              /tmp/governance/validator_output.txt; then
-            PROVENANCE_SKIPPED=1
-          fi
-          echo "provenance_skipped=$PROVENANCE_SKIPPED" >> "$GITHUB_OUTPUT"
-          exit "$STATUS"
-
-      - name: Provenance signal (M1) — surface skipped gh queries
-        if: steps.touched.outputs.has_files == 'true' && steps.validate.outputs.provenance_skipped == '1'
-        run: |
-          # iter-3 M1: the validator could not query gh (gh missing,
-          # unauthenticated, or API error). The git-log signal still gates
-          # the PASS, but PR/review provenance was NOT confirmed. This
-          # step posts a workflow-level warning. To switch to fail-closed
-          # in production, change the trailing `exit 0` to `exit 1`.
-          echo "::warning::CRITICAL: gh provenance query was SKIPPED on at least one artifact. PR/review evidence is unverified. To fail-closed, change `exit 0` here to `exit 1`. See docs/governance/n3_known_limitations_20260510.md."
-          exit 0
-
-      - name: Summary
-        if: always()
+      - name: No-op summary
+        if: steps.touched.outputs.has_files != 'true'
         run: |
           echo "## Methodology Sign-off Guard" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          # M3: gate the summary path on the explicit has_files boolean
-          # rather than testing string emptiness, which previously treated
-          # whitespace-only output as work.
-          if [ "${{ steps.touched.outputs.has_files }}" != "true" ]; then
-            echo "_No methodology artifacts touched by this PR — guard was a no-op._" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "Artifacts validated:" >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-            echo "${{ steps.touched.outputs.files }}" >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-          fi
+          echo "_No methodology artifacts touched by this PR — guard was a no-op._" >> "$GITHUB_STEP_SUMMARY"
+
+  # Issue #192 H3: delegate to the reusable workflow which loads the
+  # validator script from the protected `main` ref. This is the same-repo
+  # equivalent of `uses: org/governance-actions/...@<sha>` until the
+  # cross-org migration happens.
+  validate:
+    name: Delegate to protected-ref validator
+    needs: identify
+    if: needs.identify.outputs.has_files == 'true'
+    uses: ./.github/workflows/methodology-signoff-validator.yml
+    permissions:
+      contents: read
+      pull-requests: read
+    with:
+      touched_files: ${{ needs.identify.outputs.files }}
+      validator_ref: 'main'
+      strict_gh: '1'

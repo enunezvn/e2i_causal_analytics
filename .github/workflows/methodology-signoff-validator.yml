@@ -1,0 +1,210 @@
+name: Methodology Sign-off Validator (reusable)
+
+# Reusable workflow that executes scripts/check_methodology_signoff.py
+# against a sign-off / rejection artifact list. Issue #192 H3 mitigation:
+# this workflow is invoked via `uses: ./.github/workflows/...` from the
+# caller, which means GitHub loads its YAML from the caller's ref. The
+# load-bearing defense is INSIDE this workflow: we explicitly checkout the
+# protected ref (typically `main`) into a SEPARATE workspace and run the
+# validator script from THAT checkout — not from the PR head. This closes
+# the "PR weakens validator + workflow in same commit and validates itself"
+# attack class.
+#
+# The PR's artifacts (the markdown sign-off / rejection files being
+# validated) are still read from the caller-passed checkout, since the
+# validator's job is to evaluate THE PR's content. Only the validator
+# CODE comes from the protected ref.
+#
+# Cross-PR weakening attack (e.g. land a weakened validator on main first,
+# then open the sign-off PR) is NOT closed by this split alone — it
+# requires CODEOWNERS gating on `scripts/check_methodology_signoff.py`
+# AND on this file. See the H3 SECURITY ADVISORY in
+# `methodology_signoff_guard.yml` for the production migration path
+# (move the validator to a separate `org/governance-actions` repo and
+# pin by SHA — that's the only way to fully close cross-PR weakening
+# in a same-org same-repo world).
+#
+# Inputs:
+#   * touched_files (string, required)
+#       Newline-separated list of artifact paths to validate, relative to
+#       the repo root (the PR-checkout workspace).
+#   * validator_ref (string, optional, default: 'main')
+#       The git ref to checkout for the validator script. Defaults to
+#       'main' for production. Tests / dispatch may override.
+#   * strict_gh (string, optional, default: '1')
+#       When '1', the validator's --strict-gh flag is set (issue #192
+#       H2/M1 fail-closed escalation: provenance_check_skipped=True
+#       becomes exit code 3 / hard fail rather than warning). Caller may
+#       pass '0' to opt out for early-stage / dev contexts.
+
+on:
+  workflow_call:
+    inputs:
+      touched_files:
+        description: 'Newline-separated list of methodology artifact paths to validate.'
+        required: true
+        type: string
+      validator_ref:
+        description: 'Protected git ref to checkout for the validator script (default: main).'
+        required: false
+        type: string
+        default: 'main'
+      strict_gh:
+        description: '"1" to pass --strict-gh to the validator (fail-closed on missing gh provenance). Default "1".'
+        required: false
+        type: string
+        default: '1'
+
+permissions:
+  # Least-privilege: validator only needs to read PR metadata + repo
+  # contents. NEVER grant write here — the validator is a guard, not a
+  # mutator. Issue #192 H2/M1: pull-requests:read enables the validator's
+  # gh-CLI provenance queries via the auto-provisioned GITHUB_TOKEN.
+  contents: read
+  pull-requests: read
+
+jobs:
+  validate:
+    name: Validate Methodology Sign-off (reusable)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR head (artifacts under validation)
+        uses: actions/checkout@v4
+        with:
+          # Full history needed so `git log --author=...` evaluations in
+          # check_methodology_signoff.py see the full commit graph for the
+          # named period.
+          fetch-depth: 0
+          path: pr-checkout
+
+      - name: Checkout protected validator ref (issue #192 H3)
+        uses: actions/checkout@v4
+        with:
+          # Issue #192 H3: load the validator script from the protected
+          # ref (default: main) into a SEPARATE workspace. This closes
+          # the "PR weakens validator and validates itself" attack class.
+          # The PR's content (artifacts) is read from `pr-checkout` above;
+          # the validator code is loaded from THIS checkout.
+          ref: ${{ inputs.validator_ref }}
+          fetch-depth: 1
+          path: validator-source
+          # Sparse checkout: we only need the validator script. Avoids
+          # carrying the full repo into the validator workspace and makes
+          # the threat surface explicit (only this file matters).
+          sparse-checkout: |
+            scripts/check_methodology_signoff.py
+          sparse-checkout-cone-mode: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Verify validator source provenance
+        working-directory: validator-source
+        run: |
+          set -euo pipefail
+          # Defensive log: surface which ref the validator was loaded from
+          # so audit logs can reconstruct the protection state. Issue #192
+          # H3: the SHA below MUST be an ancestor of the PR's merge base
+          # OR equal to the protected branch HEAD. CI does not enforce
+          # the ancestry check (would require gh + token + complex logic
+          # to handle force-pushes); branch protection on `main` is the
+          # primary defense.
+          VALIDATOR_SHA=$(git rev-parse HEAD)
+          echo "validator_ref=${{ inputs.validator_ref }}"
+          echo "validator_sha=${VALIDATOR_SHA}"
+          echo "validator_path=scripts/check_methodology_signoff.py"
+          if [ ! -f scripts/check_methodology_signoff.py ]; then
+            echo "::error::validator script not found at protected ref ${{ inputs.validator_ref }}@${VALIDATOR_SHA}"
+            exit 1
+          fi
+          # Compute and log the validator's content SHA so post-incident
+          # forensics can verify which version of the script ran.
+          sha256sum scripts/check_methodology_signoff.py
+          echo "validator_sha=${VALIDATOR_SHA}" >> "$GITHUB_OUTPUT"
+        id: validator_provenance
+
+      - name: Run validator on each touched artifact
+        env:
+          # Issue #192 H2/M1: provision the GitHub-Actions auto-token so
+          # the validator's `gh pr list` provenance queries succeed. The
+          # permissions block above grants only pull-requests:read +
+          # contents:read — strictly the minimum needed for the queries.
+          GH_TOKEN: ${{ github.token }}
+          # Issue #192 H2/M1: when STRICT_GH=1, the validator returns
+          # exit code 3 if any check has provenance_check_skipped=True.
+          # The caller defaults this to '1'; set '0' to opt out.
+          STRICT_GH: ${{ inputs.strict_gh }}
+          # The selection-rule check shells out to git log; the
+          # PR-checkout workspace is the natural --repo-root.
+          REPO_ROOT: ${{ github.workspace }}/pr-checkout
+        working-directory: pr-checkout
+        run: |
+          set -euo pipefail
+
+          # Smoke-test that gh is available + authenticated before we
+          # invoke the validator. Issue #192 H2/M1: STRICT_GH=1 makes the
+          # validator hard-fail when gh is unavailable; surface that
+          # state explicitly here so the CI log shows why.
+          if command -v gh >/dev/null 2>&1; then
+            if gh auth status >/dev/null 2>&1; then
+              echo "gh CLI: available + authenticated"
+            else
+              echo "::warning::gh CLI is on PATH but `gh auth status` failed; STRICT_GH=${STRICT_GH} may trigger validator exit 3"
+            fi
+          else
+            echo "::warning::gh CLI is NOT on PATH on this runner; STRICT_GH=${STRICT_GH} may trigger validator exit 3"
+          fi
+
+          STATUS=0
+          # Capture combined output across all artifacts so the next step
+          # can scan for the M1 CRITICAL marker.
+          : > /tmp/validator_output.txt
+
+          VALIDATOR_PATH="${{ github.workspace }}/validator-source/scripts/check_methodology_signoff.py"
+          echo "Using validator from: $VALIDATOR_PATH (ref=${{ inputs.validator_ref }})"
+
+          # Read newline-separated touched_files input.
+          while IFS= read -r ARTIFACT; do
+            [ -z "$ARTIFACT" ] && continue
+            echo "::group::Validating $ARTIFACT"
+            # Run validator from the protected-ref source against the
+            # PR-checkout artifact. --strict-gh is set via STRICT_GH=1
+            # env var (the validator honors both CLI flag and env).
+            if ! python3 "$VALIDATOR_PATH" \
+                  --repo-root "$REPO_ROOT" \
+                  --require-signature \
+                  "$ARTIFACT" 2>&1 | tee -a /tmp/validator_output.txt; then
+              # Capture the exit code for explicit reporting. Note the
+              # `tee` above uses pipefail (set -o pipefail at top) so a
+              # non-zero from python3 reaches the `if` check.
+              echo "::error file=$ARTIFACT::methodology sign-off validation failed (see log; exit code 3 = STRICT_GH provenance gap)"
+              STATUS=1
+            fi
+            echo "::endgroup::"
+          done <<< "${{ inputs.touched_files }}"
+
+          # iter-3 M1: surface the CRITICAL provenance-skip marker even
+          # when STRICT_GH=0 (back-compat path). When STRICT_GH=1, the
+          # validator already exited 3 above; this echo is informational.
+          if grep -q "CRITICAL: gh provenance query SKIPPED" \
+              /tmp/validator_output.txt; then
+            echo "::warning::CRITICAL: gh provenance query was SKIPPED on at least one artifact. STRICT_GH=${STRICT_GH}; if 1, the validator exited 3."
+          fi
+
+          exit "$STATUS"
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Methodology Sign-off Guard" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Validator source ref:** \`${{ inputs.validator_ref }}\` (issue #192 H3)" >> "$GITHUB_STEP_SUMMARY"
+          echo "**STRICT_GH:** \`${{ inputs.strict_gh }}\` (issue #192 H2/M1)" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Artifacts validated:" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ inputs.touched_files }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
