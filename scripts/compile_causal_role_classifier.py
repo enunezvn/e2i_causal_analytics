@@ -60,7 +60,13 @@ DEFAULT_OUT_PATH = PROJECT_ROOT / "artifacts" / "dspy" / "causal_role_classifier
 DEFAULT_LM_MODEL = "anthropic/claude-sonnet-4-20250514"
 DEFAULT_SEED = 7
 DEFAULT_MAX_BOOTSTRAPPED_DEMOS = 4
-DEFAULT_MAX_LABELED_DEMOS = 8
+# Issue #198 codex pass-3 MED-2: raised from 8 -> 16 so the 8 collider +
+# instrument exemplars added under #198 surface in the persisted demos
+# alongside the legacy roles. With 20 compile-set examples and 16 labeled
+# demos retained, the BootstrapFewShot output captures the diversity
+# (multiple new-role features per saved artifact rather than only 1
+# instrument + 1 collider).
+DEFAULT_MAX_LABELED_DEMOS = 16
 
 
 def _seed_all(seed: int) -> None:
@@ -132,7 +138,10 @@ def compile_and_persist(
         max_bootstrapped_demos: Cap on teacher-generated demos. BootstrapFewShot
             default is 4; keeping it low so the compile run stays cheap.
         max_labeled_demos: Cap on labeled (compile-set) demos retained as
-            few-shot exemplars. Default 8 ≤ ``len(build_compile_set()) == 12``.
+            few-shot exemplars. Default 16 <= ``len(build_compile_set()) == 20``
+            so the 8 new collider/instrument exemplars added under
+            issue #198 surface in the persisted demos alongside the
+            legacy roles (raised from 8 on codex pass-3).
 
     Returns:
         The path the compiled program JSON was written to (mirror of

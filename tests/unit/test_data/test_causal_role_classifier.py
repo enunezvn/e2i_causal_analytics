@@ -156,11 +156,12 @@ def test_compile_set_has_at_least_four_collider_examples():
     """Issue #198: pin the minimum collider exemplar count at 4 so a
     refactor that silently drops collider examples fires this test.
 
-    The 4 collider examples span both Pearl collider sub-families:
-    confounder-collider M-structures (hospitalizations_total,
-    concomitant_steroid_burst_count_followup,
-    diagnostic_test_count_followup) and the classical survivor-
-    selection Berkson collider with causally independent parents
+    All 4 collider examples are confounder-collider M-structures (per
+    Greenland-Pearl-Robins 1999) — the dominant collider failure mode
+    in observational pharmacoepi. They differ in derivation MECHANISM:
+    count of utilization (hospitalizations_total), count of medication
+    (concomitant_steroid_burst_count_followup), count of workup
+    (diagnostic_test_count_followup), and binary sample-inclusion gate
     (alive_at_180d_observation_window).
 
     Note: discontinuation_flag / discontinued_180d / persistent_at_180d
@@ -200,9 +201,9 @@ def test_compile_set_has_at_least_four_instrument_examples():
 
 def test_compile_set_collider_examples_have_required_feature_names():
     """Pin the 4 specific collider features so a silent renaming or
-    swap is caught. The collider exemplars span both Pearl collider
-    sub-families (confounder-collider + classical Berkson) — load-
-    bearing for Layer 4 training signal.
+    swap is caught. The collider exemplars are confounder-collider
+    M-structures varying in derivation mechanism (count vs binary) —
+    load-bearing for Layer 4 training signal.
     """
     from src.data.causal_role_classifier import build_compile_set
 
@@ -524,21 +525,24 @@ def test_dummy_lm_classifier_does_not_spuriously_emit_new_roles_on_legacy_exampl
     )
 
 
-def test_persisted_artifact_demos_carry_at_least_one_new_role_feature():
-    """Codex pass-1 LOW-2 strengthening: previously the DummyLM tests
-    exercised only the WIRING (signature accepts the role string and
-    propagates it to ``Prediction``). They did not verify the persisted
-    artifact actually carries any of the new feature names in its
-    BootstrapFewShot-curated demo set. This test fills that gap by
-    loading the artifact and pinning that at least one new collider OR
-    instrument FEATURE NAME is present in the saved demos.
+def test_persisted_artifact_demos_carry_diverse_new_role_features():
+    """Codex pass-3 MED-2 strengthening: pass-1 added a weak "at least one
+    new feature" check; pass-3 noted that with 4 collider + 4 instrument
+    exemplars in the compile set, the persisted artifact should carry
+    multiple new-role features per role — not just the single feature
+    picked by the BootstrapFewShot's first-bootstrap-attempt run.
+
+    Requires at least 2 collider FEATURES AND at least 2 instrument
+    FEATURES from the issue-#198 set to be present in the saved demos.
+    This catches a stale compile run where only one feature per new
+    role made it through the teacher metric. The cap is set well below
+    the maximum (4 per role) so the test stays robust to BootstrapFewShot's
+    teacher-rejection variance across runs.
 
     Together with ``test_persisted_artifact_contains_collider_and_instrument_demos``
-    (which pins role-set membership), this test pins the actual feature-
-    level training signal that the compiled classifier carries into
-    production. A regression that swaps the demos for stale data, or
-    re-runs ``compile_causal_role_classifier`` against a stale compile
-    set, would fire this test.
+    (which pins role-set membership), this test pins the diversity of
+    new-role TRAINING SIGNAL the compiled classifier carries into
+    production.
     """
     import json
     from pathlib import Path
@@ -549,27 +553,120 @@ def test_persisted_artifact_demos_carry_at_least_one_new_role_feature():
     assert artifact_path.exists(), f"Artifact missing at {artifact_path}."
     data = json.loads(artifact_path.read_text())
     demos = data.get("classify.predict", {}).get("demos") or []
-    demo_features = {d.get("feature_name") for d in demos if d.get("feature_name")}
 
-    new_role_features = {
-        # Issue #198 collider feature names
+    new_collider_features = {
         "hospitalizations_total",
         "concomitant_steroid_burst_count_followup",
         "alive_at_180d_observation_window",
         "diagnostic_test_count_followup",
-        # Issue #198 instrument feature names
+    }
+    new_instrument_features = {
         "urban_rural_code",
         "geographic_region",
         "provider_preference_score",
         "index_provider_biologic_volume_prior_year",
     }
-    overlap = demo_features & new_role_features
-    assert overlap, (
-        f"Persisted artifact demos contain NONE of the issue-#198 "
-        f"feature names. Demo features: {sorted(demo_features)}. "
-        f"Expected at least one of: {sorted(new_role_features)}. The "
-        f"BootstrapFewShot teacher should have selected at least one of "
-        f"the new examples; if none appear the compile run is stale or "
-        f"the teacher rejected every new demo (which would indicate the "
-        f"exact-match metric or LM cannot reproduce the labeled role)."
+
+    demo_collider_features = {
+        d["feature_name"]
+        for d in demos
+        if d.get("causal_role") == "collider" and d.get("feature_name")
+    }
+    demo_instrument_features = {
+        d["feature_name"]
+        for d in demos
+        if d.get("causal_role") == "instrument" and d.get("feature_name")
+    }
+
+    collider_overlap = demo_collider_features & new_collider_features
+    instrument_overlap = demo_instrument_features & new_instrument_features
+
+    assert len(collider_overlap) >= 2, (
+        f"Persisted artifact demos carry only {len(collider_overlap)} of "
+        f"the 4 issue-#198 collider features ({sorted(collider_overlap)}). "
+        f"Expected >= 2 distinct collider features so the compiled "
+        f"classifier has diverse training signal for the confounder-collider "
+        f"pattern across both count and binary derivations. Recompile with "
+        f"the default max_labeled_demos=16 (raised from 8 on codex pass-3)."
+    )
+    assert len(instrument_overlap) >= 2, (
+        f"Persisted artifact demos carry only {len(instrument_overlap)} of "
+        f"the 4 issue-#198 instrument features ({sorted(instrument_overlap)}). "
+        f"Expected >= 2 distinct instrument features so the compiled "
+        f"classifier has diverse training signal across both supply-side "
+        f"geographic and preference/volume-based provider IV families."
+    )
+
+
+def test_dummy_lm_pure_severity_confounder_is_not_classified_as_collider():
+    """Codex pass-3 (e) negative-direction strengthening: a pure
+    pre-index severity confounder must NOT be spuriously emitted as
+    collider just because the widened compile-set framing teaches the
+    LM about confounder-collider M-structures.
+
+    A pure pre-index severity score has arrowheads into BOTH T (via
+    prescriber decision) and Y (via uncontrolled disease) but is NOT
+    itself a collider — it's a CONFOUNDER. The arrowheads go OUT of
+    severity into both T and Y, not into severity from T. The
+    discrimination boundary the compile set must teach is:
+
+    - confounder: severity -> T AND severity -> Y (arrows OUT)
+    - collider: T -> V AND severity -> V (arrows IN, V at the bottom)
+
+    This test uses DummyLM to script a "confounder" response on a pure
+    severity feature and verifies the WIRING correctly propagates it
+    without the new collider vocabulary corrupting the legacy
+    confounder path.
+    """
+    import dspy
+    from dspy.utils.dummies import DummyLM
+
+    from src.data.causal_role_classifier import CausalRoleClassifier
+
+    dummy = DummyLM(
+        [
+            {
+                "reasoning": (
+                    "Pre-index severity has arrowheads OUT to both T and Y "
+                    "(severity -> T via prescriber decision; severity -> Y "
+                    "via disease activity); arrows go OUT, not IN, so this "
+                    "is a confounder not a collider."
+                ),
+                "causal_role": "confounder",
+                "mechanism": ("pre-index severity score; arrows out to T and Y"),
+                "recommended_remediation": "keep_with_caveat",
+            },
+        ]
+    )
+    with dspy.context(lm=dummy):
+        classifier = CausalRoleClassifier()
+        prediction = classifier(
+            feature_name="baseline_severity_score",
+            derivation_pseudocode=(
+                "weighted sum of pre-index dx + lab abnormalities "
+                "WHERE event_date < index_date - 30d"
+            ),
+            dataset_context=(
+                "Optum claims; target=initiated_biologic_180d; anchor=index_date; PRE-INDEX ONLY"
+            ),
+        )
+
+    assert prediction.causal_role == "confounder", (
+        f"Pure pre-index severity confounder was emitted as "
+        f"{prediction.causal_role!r}. The widened confounder-collider "
+        f"framing in the compile set MUST NOT cause a severity-only "
+        f"feature (arrows OUT of severity) to be re-labeled as collider "
+        f"(arrows IN to V). If the LM gets this wrong, the discrimination "
+        f"boundary the compile set is teaching is too loose — the "
+        f"compile-set rationales should be tightened so the LM learns "
+        f"that 'severity is a confounder when its arrows go OUT, a "
+        f"parent of a collider when one of its arrows goes INTO a "
+        f"separate variable V'."
+    )
+    assert prediction.causal_role != "collider", (
+        f"Pure pre-index severity must not be classified as collider. "
+        f"Got {prediction.causal_role!r}. Confounder-collider M-structures "
+        f"in the issue-#198 compile set are colliders BECAUSE the COUNT/"
+        f"BINARY variable V has two arrowheads in — not because severity "
+        f"itself has any arrowhead in."
     )
