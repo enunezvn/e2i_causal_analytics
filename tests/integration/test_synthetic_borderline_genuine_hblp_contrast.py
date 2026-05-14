@@ -4,23 +4,34 @@ ENGINEERING CI SANITY-CHECK ONLY — NOT RWD positive-evidence.
 
 Per v5 plan §2 C2 + codex pass-3 MEDIUM-7: the synthetic generator can
 produce any feature AUC by construction; this test does not establish
-quality uplift for any RWD cohort. What it pins is that the pipeline
-routing in ``adaptive_validity_check`` decides correctly at the HBLP
-variance-relaxation band boundary:
+quality uplift for any RWD cohort. What it pins is the post-issue-#194
+contract that BOTH arms RETAIN at z in (5σ, 7.5σ) and
+``|delta_AUC| ≈ 0.05``, with the routing reasons differing per arm:
 
-  * Legacy arm (no ``feature_manifest_source``): the 5σ legacy threshold
-    fires, severity escalates to ``high``, the feature is dropped.
+  * Legacy arm (no ``feature_manifest_source``): pre-issue-#194 the 5σ
+    legacy z-threshold alone would have escalated severity to ``high``
+    and dropped the feature. Post-issue-#194 (MERGED 2026-05-14,
+    53c09206 + 8f2d8a52) the Layer 5 joint check ``(z > k) AND
+    (|delta_AUC| > epsilon=0.10)`` fires first; since the
+    borderline_genuine generator was tuned to ``|delta_AUC| ≈ 0.05 <
+    0.10``, the joint check correctly classifies the feature as a
+    benign weak signal and retains it.
   * HBLP arm (``feature_manifest_source="synthetic"``): the manifest
     declares the feature ``knowable_at=index_date``, so HBLP's
     ``layer_1_declared_safe`` prior applies the 1.5× threshold
     multiplier; at n_pos >> 50 the variance-inflation factor is 1.0 so
-    the effective threshold is exactly 5σ × 1.5 = 7.5σ. The injected
-    feature's z (~6σ at default parameters) lands below 7.5σ and is
-    retained (severity drops to ``moderate`` — queued for Layer 4 causal
-    review, not dropped).
+    the effective threshold is exactly 5σ × 1.5 = 7.5σ. The HBLP
+    variance-inflation prior remains active and is verified separately
+    by ``test_v5_c2_hblp_relaxation_actually_fired``.
 
 The test asserts:
-1. Decision contract — legacy DROPS, HBLP RETAINS, same z across arms.
+1. Decision contract — BOTH arms RETAIN the borderline_genuine feature
+   post-#194 (joint check is responsible on the legacy arm; HBLP prior
+   is responsible — and now redundant for this feature — on the HBLP
+   arm). The function name ``test_v5_c2_legacy_drops_hblp_retains_*``
+   preserves the historical phrasing; the assertion body pins the
+   post-#194 "both retain" contract via ``feature not in legacy_flagged``
+   AND ``feature not in hblp_flagged``.
 2. Calibration sanity — z is in a wide band [4.5, 8.0] so platform
    drift in numpy/scipy/permutation impl doesn't flake CI on a 0.1σ
    shift, but a real regression in the generator constants (e.g.,
@@ -28,6 +39,8 @@ The test asserts:
 3. HBLP relaxation actually fired — verified by calling production
    ``hblp_classify`` directly with the observed z and asserting it
    would reclassify ``high → moderate`` at the manifest threshold.
+
+Canonical design reference: ``docs/synthetic_v3_design.md`` §3.1.
    This replaces the prior brittle ``"HBLP-relaxed" in evidence``
    string-match (codex pass-1 LOW).
 

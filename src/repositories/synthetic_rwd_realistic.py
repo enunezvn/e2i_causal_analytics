@@ -88,10 +88,15 @@ LeakagePattern = Literal[
 #
 # The injection adds a single normally-distributed feature with class-
 # conditional means tuned so the resulting feature AUC ≈ 0.55 (~6σ of
-# permutation-null evidence) at n=20000. The default constants below were
-# calibrated against compute_adversarial_score with n_permutations=200 and
-# seed=42; the integration test pins the empirical z-value AND the
-# legacy-drops vs HBLP-retains contrast.
+# permutation-null evidence, |delta_AUC| ≈ 0.05) at n=20000. The default
+# constants below were calibrated against compute_adversarial_score with
+# n_permutations=200 and seed=42; the integration test pins the empirical
+# z-value AND the post-issue-#194 "BOTH arms retain" decision contract
+# (legacy arm via the Layer 5 joint |delta_AUC| floor, HBLP arm via the
+# 1.5× declared-safe prior). Pre-issue-#194 the contract was "legacy
+# DROPS, HBLP RETAINS"; the test function name preserves the historical
+# phrasing. See ``docs/synthetic_v3_design.md`` §3.1 for the canonical
+# write-up.
 #
 # This is a v5 Gate C2 ENGINEERING CI SANITY-CHECK, not RWD positive
 # evidence (v5 plan §2 C2 + codex pass-3 MEDIUM-7). The synthetic generator
@@ -349,14 +354,20 @@ def _inject_leakage(
         # v5 Gate C2 ENGINEERING CI SANITY-CHECK — NOT RWD positive evidence.
         #
         # A class-conditional Gaussian whose effect size (treated-mean offset
-        # scaled by ``leakage_strength``) produces z in [5σ, 7.5σ] at
-        # n_patients=20000. The injected feature is declared knowable_at=
-        # index_date in the synthetic manifest (manifest source "synthetic"),
-        # so the pipeline sees it as Layer 1 declared-safe.
+        # scaled by ``leakage_strength``) produces z in [5σ, 7.5σ] with
+        # ``|delta_AUC| ≈ 0.05`` at n_patients=20000. The injected feature
+        # is declared knowable_at=index_date in the synthetic manifest
+        # (manifest source "synthetic"), so the pipeline sees it as Layer 1
+        # declared-safe.
         #
-        # Contract under v5 §2 C2: legacy 5σ threshold → DROP (z > 5σ).
-        # HBLP threshold for declared-safe = 5σ × 1.5 → RETAIN (z < 7.5σ).
-        # The integration test pins this contrast.
+        # Post-issue-#194 contract: BOTH arms RETAIN this feature.
+        #   - Legacy arm: Layer 5 joint check ``(z > k) AND
+        #     (|delta_AUC| > epsilon=0.10)`` retains because 0.05 < 0.10.
+        #   - HBLP arm: 5σ × 1.5 = 7.5σ declared-safe threshold retains
+        #     because the empirical z ≈ 6σ stays below 7.5σ.
+        # Pre-issue-#194 contract was "legacy DROPS, HBLP RETAINS" via z
+        # alone; the integration test function name preserves the
+        # historical phrasing. See ``docs/synthetic_v3_design.md`` §3.1.
         treated_mean = BORDERLINE_GENUINE_TREATED_MEAN * strength
         out[BORDERLINE_GENUINE_FEATURE_NAME] = target * rng.normal(
             treated_mean, BORDERLINE_GENUINE_SHARED_STD, n
