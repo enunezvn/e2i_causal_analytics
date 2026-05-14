@@ -153,7 +153,21 @@ def _run(state: dict) -> dict:
         adaptive_validity_check,
     )
 
-    return asyncio.run(adaptive_validity_check(state))
+    # Issue #215: avoid bare ``asyncio.run(...)`` here. When another test on
+    # the same xdist worker has triggered ``nest_asyncio.apply()`` (an
+    # involuntary process-wide monkey-patch of asyncio.run), ``asyncio.run``
+    # routes through nest_asyncio's wrapper which calls ``loop.create_task``
+    # on the currently-tracked pytest-asyncio per-test loop — and that loop
+    # closes between tests, raising ``RuntimeError: Event loop is closed``.
+    # The explicit ``new_event_loop`` pattern always creates a fresh loop
+    # regardless of nest_asyncio state. Same mitigation as
+    # tests/integration/test_synthetic_borderline_genuine_hblp_contrast.py:151
+    # and tests/integration/test_g3_three_cohort_regression_sweep.py:804.
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(adaptive_validity_check(state))
+    finally:
+        loop.close()
 
 
 # Issue #215: the 3 tests below all call ``asyncio.run(adaptive_validity_check(state))``
