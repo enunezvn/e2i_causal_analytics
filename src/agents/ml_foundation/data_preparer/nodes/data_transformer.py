@@ -340,6 +340,33 @@ async def transform_data(state: DataPreparerState) -> Dict[str, Any]:
         }
 
 
+def _column_has_unhashable_cells(series: pd.Series) -> bool:
+    """Return ``True`` if any non-null cell in an object-dtype series is an
+    unhashable container (list/dict/set/tuple/ndarray).
+
+    Mirrors the loader-side guard ``_drop_unhashable_columns`` in
+    ``data_loader.py`` but applied per-column at transformer entry as
+    defense-in-depth. Callers that bypass the file-loader path (preassembled
+    DataFrames passed directly through ``state['train_df']``, alternate
+    ingestion shapes, future ``data_source`` variants) still hit
+    ``_identify_column_types`` — so the type-detection step must not crash on
+    ``Series.nunique()`` when an object column carries list-typed cells.
+
+    Empty / all-null object columns return ``False`` (benign for downstream).
+    """
+    if not pd.api.types.is_object_dtype(series.dtype):
+        return False
+    non_null = series.dropna()
+    if non_null.empty:
+        return False
+    # Same scan strategy as data_loader._drop_unhashable_columns: pandas
+    # object-dtype columns are not type-uniform, so sampling only iloc[0]
+    # could miss a list/ndarray cell at a later row.
+    return bool(
+        non_null.map(lambda v: isinstance(v, (list, dict, set, frozenset, tuple, np.ndarray))).any()
+    )
+
+
 def _identify_column_types(
     df: pd.DataFrame, exclude_columns: List[str]
 ) -> Tuple[List[str], List[str], List[str]]:
@@ -351,10 +378,21 @@ def _identify_column_types(
 
     Returns:
         Tuple of (numeric_cols, categorical_cols, datetime_cols)
+
+    Defense: object-dtype columns whose cells are unhashable containers
+    (``list``/``dict``/``set``/``tuple``/``numpy.ndarray``) are skipped with
+    a warning. The downstream ``.nunique()`` / ``.value_counts()`` /
+    ``LabelEncoder`` calls all require hashable values; reaching them with a
+    list cell raises ``TypeError: unhashable type: 'list'``. The file-loader
+    path drops these columns via ``data_loader._drop_unhashable_columns``
+    before transform_data sees them, but this guard ensures callers that
+    bypass the loader (preassembled DataFrames, alternate ingestion shapes)
+    do not blow up in the type-detection step.
     """
     numeric_cols = []
     categorical_cols = []
     datetime_cols = []
+    skipped_unhashable: list[str] = []
 
     for col in df.columns:
         if col in exclude_columns:
@@ -375,6 +413,14 @@ def _identify_column_types(
         elif pd.api.types.is_numeric_dtype(dtype):
             numeric_cols.append(col)
         elif isinstance(dtype, pd.CategoricalDtype) or dtype == object:
+            # Defense-in-depth: object columns carrying unhashable cells
+            # (lists/dicts/ndarrays) crash ``nunique()`` below. Skip with
+            # warning; the loader normally strips these but callers that
+            # bypass the loader (preassembled DFs) still reach here.
+            if _column_has_unhashable_cells(df[col]):
+                skipped_unhashable.append(col)
+                continue
+
             # Check if it looks like a categorical
             n_unique = df[col].nunique()
             n_total = len(df)
@@ -386,6 +432,18 @@ def _identify_column_types(
             else:
                 # Treat high cardinality as text, skip for now
                 logger.warning(f"Column {col} has high cardinality ({n_unique} unique), skipping")
+
+    if skipped_unhashable:
+        logger.warning(
+            "Skipping %d column(s) with unhashable cells "
+            "(list/dict/set/tuple/ndarray): %s. These are not encodable by "
+            "LabelEncoder/OneHotEncoder and would crash nunique(). Use "
+            "scope_spec['excluded_features'] to drop them explicitly, or "
+            "route ingestion through _load_from_files which strips them "
+            "upstream.",
+            len(skipped_unhashable),
+            skipped_unhashable,
+        )
 
     return numeric_cols, categorical_cols, datetime_cols
 
