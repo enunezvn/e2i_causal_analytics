@@ -156,9 +156,17 @@ def test_compile_set_has_at_least_four_collider_examples():
     """Issue #198: pin the minimum collider exemplar count at 4 so a
     refactor that silently drops collider examples fires this test.
 
-    The 4 collider examples are pharmacoepi two-arrow-in DAG structures:
-    discontinuation_flag, discontinued_180d, persistent_at_180d, and
-    hospitalizations_total (in its unwindowed/post-index variant).
+    The 4 collider examples are pharmacoepi Berkson-bias structures
+    with TWO DISTINCT parents (pre-index severity AND post-index AE):
+    hospitalizations_total, er_visit_count_followup,
+    concomitant_steroid_burst_count_followup, and
+    diagnostic_test_count_followup.
+
+    Note: discontinuation_flag / discontinued_180d / persistent_at_180d
+    were considered but rejected on codex pass-1 review because their
+    derivation ``T AND (post-T event)`` makes them DESCENDANTS, not
+    colliders — the second "arrow" is downstream of T rather than an
+    independent cause.
     """
     from src.data.causal_role_classifier import get_compile_set_summary
 
@@ -192,8 +200,8 @@ def test_compile_set_has_at_least_four_instrument_examples():
 def test_compile_set_collider_examples_have_required_feature_names():
     """Pin the 4 specific collider features so a silent renaming or
     swap is caught. The collider exemplars are load-bearing for Layer 4
-    training signal — the LM learns the two-arrow-in DAG pattern from
-    these specific pharmacoepi cases.
+    training signal — the LM learns the Berkson-bias two-DISTINCT-parents
+    DAG pattern from these specific pharmacoepi cases.
     """
     from src.data.causal_role_classifier import build_compile_set
 
@@ -201,10 +209,10 @@ def test_compile_set_collider_examples_have_required_feature_names():
         ex.feature_name for ex in build_compile_set() if ex.causal_role == "collider"
     }
     expected = {
-        "discontinuation_flag",
-        "discontinued_180d",
-        "persistent_at_180d",
         "hospitalizations_total",
+        "er_visit_count_followup",
+        "concomitant_steroid_burst_count_followup",
+        "diagnostic_test_count_followup",
     }
     missing = expected - collider_features
     assert not missing, (
@@ -215,7 +223,8 @@ def test_compile_set_collider_examples_have_required_feature_names():
 def test_compile_set_instrument_examples_have_required_feature_names():
     """Pin the 4 specific instrument features. Same rationale as the
     collider pin test — the LM training signal for the IV pattern depends
-    on these specific pharmacoepi supply-side examples.
+    on these specific pharmacoepi examples spanning two distinct IV
+    families (supply-side geographic + preference-based provider).
     """
     from src.data.causal_role_classifier import build_compile_set
 
@@ -225,7 +234,7 @@ def test_compile_set_instrument_examples_have_required_feature_names():
     expected = {
         "urban_rural_code",
         "geographic_region",
-        "zip3",
+        "provider_preference_score",
         "plan_type",
     }
     missing = expected - instrument_features
@@ -314,15 +323,19 @@ def test_compile_set_role_remediation_pairs_are_consistent():
 
 
 def test_persisted_artifact_contains_collider_and_instrument_demos():
-    """The recompiled artifact must contain at least one collider exemplar and
-    at least one instrument exemplar in the BootstrapFewShot-curated demos.
+    """The recompiled artifact must contain BOTH a collider exemplar AND an
+    instrument exemplar in the BootstrapFewShot-curated demos.
 
     Issue #198 acceptance: a downstream caller loading the artifact gets a
     classifier that has SEEN both new roles in its few-shot examples. If a
-    future compile run accidentally drops the new roles from the labeled
+    future compile run accidentally drops EITHER role from the labeled
     demo cap (e.g., ``max_labeled_demos`` lowered below 8), this test fires
     so the artifact regression is caught at unit-test time rather than at
     Layer 4 deploy time.
+
+    Codex pass-1 LOW-1 tightening: the prior version used ``or`` (either
+    role suffices) which would silently let half of #198's intent
+    disappear. The set-subset assertion below requires both roles.
     """
     import json
     from pathlib import Path
@@ -347,11 +360,17 @@ def test_persisted_artifact_contains_collider_and_instrument_demos():
         f"degraded to --no-lm. Top-level: {list(data.keys())}."
     )
     demo_roles = {d.get("causal_role") for d in demos if d.get("causal_role")}
-    assert "collider" in demo_roles or "instrument" in demo_roles, (
-        f"Recompiled artifact has neither 'collider' nor 'instrument' in its "
-        f"demo causal_role set: {demo_roles}. The extended compile set (issue "
-        f"#198) should have surfaced at least one of the new roles in the "
-        f"BootstrapFewShot-curated demos (max_labeled_demos=8 default)."
+    required_roles = {"collider", "instrument"}
+    missing_roles = required_roles - demo_roles
+    assert not missing_roles, (
+        f"Recompiled artifact is missing role(s) {sorted(missing_roles)} "
+        f"from its demo causal_role set: got {sorted(demo_roles)}. The "
+        f"extended compile set (issue #198) must surface BOTH 'collider' "
+        f"AND 'instrument' in the BootstrapFewShot-curated demos "
+        f"(max_labeled_demos=8 default). If the role got dropped, the "
+        f"compile run likely shrank max_labeled_demos below 8 or the "
+        f"BootstrapFewShot teacher rejected the demos via the exact-match "
+        f"metric — investigate before re-pinning the artifact."
     )
 
 
@@ -395,9 +414,12 @@ def test_dummy_lm_classifier_emits_new_roles_on_new_examples():
     with dspy.context(lm=dummy):
         classifier = CausalRoleClassifier()
         collider_prediction = classifier(
-            feature_name="discontinuation_flag",
-            derivation_pseudocode="treatment_initiated AND last_fill+supply < end-gap",
-            dataset_context="CSU; target=treatment_initiated",
+            feature_name="hospitalizations_total",
+            derivation_pseudocode=(
+                "count(encounter_events in [journey_start, journey_end]); "
+                "both pre-index severity and post-T AE feed the count"
+            ),
+            dataset_context="Optum; target=initiated_biologic_180d",
         )
         instrument_prediction = classifier(
             feature_name="urban_rural_code",
@@ -406,7 +428,7 @@ def test_dummy_lm_classifier_emits_new_roles_on_new_examples():
         )
 
     assert collider_prediction.causal_role == "collider", (
-        f"Expected classifier to emit 'collider' on discontinuation_flag "
+        f"Expected classifier to emit 'collider' on hospitalizations_total "
         f"derivation; got {collider_prediction.causal_role!r}. The DSPy "
         f"signature must accept 'collider' as a valid output role (issue #198)."
     )
@@ -491,4 +513,55 @@ def test_dummy_lm_classifier_does_not_spuriously_emit_new_roles_on_legacy_exampl
     assert mediator_pred.causal_role not in {"collider", "instrument"}, (
         f"Negative-direction check: mediator must NOT be mis-emitted as "
         f"one of the new roles; got {mediator_pred.causal_role!r}."
+    )
+
+
+def test_persisted_artifact_demos_carry_at_least_one_new_role_feature():
+    """Codex pass-1 LOW-2 strengthening: previously the DummyLM tests
+    exercised only the WIRING (signature accepts the role string and
+    propagates it to ``Prediction``). They did not verify the persisted
+    artifact actually carries any of the new feature names in its
+    BootstrapFewShot-curated demo set. This test fills that gap by
+    loading the artifact and pinning that at least one new collider OR
+    instrument FEATURE NAME is present in the saved demos.
+
+    Together with ``test_persisted_artifact_contains_collider_and_instrument_demos``
+    (which pins role-set membership), this test pins the actual feature-
+    level training signal that the compiled classifier carries into
+    production. A regression that swaps the demos for stale data, or
+    re-runs ``compile_causal_role_classifier`` against a stale compile
+    set, would fire this test.
+    """
+    import json
+    from pathlib import Path
+
+    artifact_path = (
+        Path(__file__).resolve().parents[3] / "artifacts" / "dspy" / "causal_role_classifier.json"
+    )
+    assert artifact_path.exists(), f"Artifact missing at {artifact_path}."
+    data = json.loads(artifact_path.read_text())
+    demos = data.get("classify.predict", {}).get("demos") or []
+    demo_features = {d.get("feature_name") for d in demos if d.get("feature_name")}
+
+    new_role_features = {
+        # Issue #198 collider feature names
+        "hospitalizations_total",
+        "er_visit_count_followup",
+        "concomitant_steroid_burst_count_followup",
+        "diagnostic_test_count_followup",
+        # Issue #198 instrument feature names
+        "urban_rural_code",
+        "geographic_region",
+        "provider_preference_score",
+        "plan_type",
+    }
+    overlap = demo_features & new_role_features
+    assert overlap, (
+        f"Persisted artifact demos contain NONE of the issue-#198 "
+        f"feature names. Demo features: {sorted(demo_features)}. "
+        f"Expected at least one of: {sorted(new_role_features)}. The "
+        f"BootstrapFewShot teacher should have selected at least one of "
+        f"the new examples; if none appear the compile run is stale or "
+        f"the teacher rejected every new demo (which would indicate the "
+        f"exact-match metric or LM cannot reproduce the labeled role)."
     )

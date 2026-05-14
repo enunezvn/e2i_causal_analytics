@@ -8,9 +8,9 @@
         "feature_name": "disease_severity",
         "derivation_pseudocode": "min(3.0, sum(med.fill_count) * 0.5) + min(2.0, count(proc.code='J2357')) + count(lab.flag='abnormal')  # over entire patient panel, NO pre-index filter",
         "dataset_context": "ConcertAI CSU claims; target=treatment_initiated; prevalence=0.024; prediction_anchor=index_date",
-        "reasoning": "The disease_severity feature aggregates medication fills, procedure codes, and abnormal lab flags across the entire patient panel without any pre-index temporal filtering. This means it includes events that occur both before and after the prediction anchor (index_date). Since the target is treatment_initiated, treated patients will have medication fills post-initiation that contribute to the severity score, making this score deterministically higher for treated vs untreated patients. The feature becomes a post-hoc aggregation that directly depends on the treatment decision.",
+        "reasoning": "The disease_severity feature aggregates medication fills, procedure codes, and abnormal lab flags across the entire patient panel without any pre-index temporal filtering. This means it includes both pre-treatment disease markers AND post-treatment events. For treated patients, the medication fill counts will be inflated by the target treatment itself, and post-treatment lab abnormalities or procedures will contaminate the severity score. The feature directly incorporates consequences of the treatment decision, making it a post-prediction descendant.",
         "causal_role": "descendant",
-        "mechanism": "Severity score aggregates clinical events across entire timeline without pre-index filtering. Treated patients contribute post-initiation medication fills to the score, creating deterministic dependence on treatment status.",
+        "mechanism": "Severity score aggregates clinical events across entire timeline without temporal filtering. Post-treatment medication fills and lab abnormalities contaminate the score, making it partially determined by the treatment decision itself.",
         "recommended_remediation": "window"
       },
       {
@@ -18,9 +18,9 @@
         "feature_name": "engagement_score",
         "derivation_pseudocode": "len(unique(med.npi)) + count(med.fills) + count(lab.tests)  # over entire panel",
         "dataset_context": "ConcertAI CSU; target=treatment_initiated; anchor=index_date",
-        "reasoning": "The engagement_score aggregates provider interactions, medication fills, and lab tests across the entire patient panel without temporal filtering. This means it includes post-index events that occur after treatment initiation. For patients who initiate treatment, their engagement score will be inflated by additional medication fills (the biologic itself), potentially more provider visits for monitoring, and additional lab work for safety monitoring. This creates a dependency where the target variable (treatment_initiated) causally affects the feature value.",
+        "reasoning": "The engagement_score aggregates unique prescribers, medication fills, and lab tests across the entire patient panel without temporal filtering. This means it includes both pre-index healthcare utilization (which could confound treatment decisions) and post-index utilization (which is influenced by treatment). The composite nature and lack of temporal bounds makes this a descendant that leaks post-prediction information.",
         "causal_role": "descendant",
-        "mechanism": "Engagement metrics aggregate healthcare utilization events across the entire timeline. Post-treatment medication fills, monitoring visits, and safety labs inflate the score for treated patients, making the feature causally dependent on the target.",
+        "mechanism": "Composite score aggregates healthcare utilization metrics across entire patient timeline without pre-prediction temporal filter. Post-treatment medication fills and lab monitoring contaminate the score with information determined after the prediction anchor.",
         "recommended_remediation": "window"
       },
       {
@@ -28,9 +28,9 @@
         "feature_name": "days_on_therapy",
         "derivation_pseudocode": "sum(med.days_supply) over entire panel",
         "dataset_context": "CSU; target=treatment_initiated; anchor=index_date",
-        "reasoning": "This feature sums days_supply from medication events across the entire patient panel without temporal filtering. For patients who never initiated treatment, the sum is deterministically zero (no medication events exist). For patients who did initiate treatment, the sum includes all post-prediction medication fills, making it non-zero. This creates a direct deterministic relationship where days_on_therapy = 0 if treatment_initiated = 0, and days_on_therapy > 0 if treatment_initiated = 1.",
+        "reasoning": "The feature sums days_supply from medication events across the entire patient panel without temporal filtering. For untreated patients, this will be zero (no medication events). For treated patients, this will be non-zero and include post-index medication days. This creates a deterministic relationship where the feature directly reflects the treatment outcome.",
         "causal_role": "descendant",
-        "mechanism": "Feature deterministically aggregates post-prediction medication events without temporal filtering. Value is identically zero for untreated patients and positive for treated patients, creating perfect separation.",
+        "mechanism": "Days on therapy is deterministically zero for untreated patients (no medication events) and positive for treated patients (includes post-index medication days). Without temporal filtering, the feature is a direct consequence of the treatment decision.",
         "recommended_remediation": "drop"
       },
       {
@@ -38,9 +38,9 @@
         "feature_name": "medication_claim_count",
         "derivation_pseudocode": "count(rows in medication_events where patient_id=p)",
         "dataset_context": "CSU/Optum; target=treatment_initiated; anchor=index_date",
-        "reasoning": "The feature counts all medication events for a patient without any temporal filtering relative to the prediction anchor (index_date). For patients who initiated treatment (target=1), this count will include the post-prediction medication fills, making the feature deterministically higher for treated patients. For patients who never initiated (target=0), the count excludes the target medication fills entirely. This creates a direct dependence on the target variable through post-prediction information leakage.",
+        "reasoning": "The feature counts all medication events for a patient without any temporal filtering relative to the index_date. This means it includes both pre-treatment medications (which could be confounders or ancestors) and post-treatment medications (which would be descendants). Since the target is treatment_initiated, treated patients will by definition have at least one medication event (the treatment itself), while untreated patients may have zero or fewer medication events. The lack of temporal filtering makes this a post-prediction-time feature that leaks information about the treatment decision.",
         "causal_role": "descendant",
-        "mechanism": "Counts medication events across entire patient timeline without pre-index temporal filter. For treated patients, includes post-prediction medication fills that are consequences of the treatment decision, creating direct dependence on the target.",
+        "mechanism": "Medication count without temporal filtering includes post-index treatment events. Treated patients deterministically have higher counts due to the target treatment itself being recorded in medication_events.",
         "recommended_remediation": "window"
       },
       {
@@ -56,7 +56,7 @@
         "derivation_pseudocode": "rural_urban_commuting_area_code(zip3)  # static at enrollment",
         "dataset_context": "Optum claims; target=initiated_biologic_180d; anchor=index_date; geographic feature derived from zip3; static at enrollment",
         "causal_role": "instrument",
-        "mechanism": "Supply-side geographic instrument (Brookhart-style pharmacoepi IV pattern): RUCA code reflects access to specialist-driven biologic prescribing (Z→T arrow via specialist density and biologic-friendly provider mix), and is plausibly independent of CSU disease biology (Z↛Y direct path; exclusion restriction holds under the assumption that urban vs rural classification does not directly affect urticaria pathophysiology). Set at enrollment so no confounding with post-index outcomes. ASSUMPTION: exclusion restriction could be violated if rural areas have systematically different allergen exposures or air-quality drivers — name this in audit.",
+        "mechanism": "Supply-side geographic instrument (Brookhart-style pharmacoepi IV): RUCA code reflects access to specialist-driven biologic prescribing (Z -> T arrow via specialist density and biologic-friendly provider mix). Exclusion restriction: Z -> Y holds only through T under the standard IV assumption that geographic classification does not directly affect disease pathophysiology. Static at enrollment so no confounding with post-index outcomes. IV-VALIDITY AUDIT STEP (required before use): test for direct Z -> Y on a placebo outcome that should be invariant to T; reject the IV interpretation if the placebo test fails.",
         "recommended_remediation": "keep_with_caveat"
       },
       {
@@ -68,11 +68,11 @@
         "recommended_remediation": "window"
       },
       {
-        "feature_name": "persistent_at_180d",
-        "derivation_pseudocode": "treatment_initiated AND (PDC over [index_date, index_date+180d] >= 0.80) AND (last_biologic_fill within 60d of [index+180d])",
-        "dataset_context": "Optum claims; target=initiated_biologic_180d; anchor=index_date; lookback=180d",
+        "feature_name": "concomitant_steroid_burst_count_followup",
+        "derivation_pseudocode": "count(medication_events where med_class='oral_steroid_burst' AND fill_date in [index_date, index_date+180d]) — driven by both pre-index severity and post-treatment non-response",
+        "dataset_context": "Optum claims; target=initiated_biologic_180d; anchor=index_date; medication panel; oral steroid burst is a rescue therapy that fires from both baseline severity and biologic non-response",
         "causal_role": "collider",
-        "mechanism": "Persistence outcome variable is the favorable-polarity twin of discontinuation. Two arrows in: (a) treatment_initiated (must have started), (b) adherence + clinical response (must have stayed). Same collider DAG as discontinuation but encodes the OR-of-favorable rather than the OR-of-unfavorable. Including it as a feature in an initiation model would leak the future-treatment-response signal AND open a backdoor selection path.",
+        "mechanism": "Steroid-burst rescue is a Berkson-bias collider with two DISTINCT parents: (a) baseline disease severity (pre-index, independent of biologic exposure; severe patients receive bursts regardless of biologic), (b) biologic-treatment non-response (post-T, biologic-induced; non-responders escalate to bursts). The two arrows feed the same count stream but originate in independent causal factors. Conditioning on the burst count opens severity <-> non-response, biasing the treatment-effect estimate.",
         "recommended_remediation": "drop"
       }
     ],
