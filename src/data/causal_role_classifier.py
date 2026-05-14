@@ -2,12 +2,16 @@
 
 Classifies a proposed feature derivation as ancestor / confounder / mediator /
 collider / descendant / instrument with respect to the prediction target.
-Compiled on a curated subset (20 of 18+) of documented past-leakage incidents
+Compiled on a curated subset (21 of 18+) of documented past-leakage incidents
 from this codebase's history (`.claude/state/leakage_compile_set_20260507.md`)
-plus 8 domain-expert collider / instrument exemplars added under issue #198.
+plus 8 domain-expert collider / instrument exemplars added under issue #198
+plus 1 explicit negative-direction confounder exemplar
+(baseline_severity_score_preindex) added on codex pass-5 to teach the
+discrimination boundary between confounder (arrows OUT of severity) and
+collider (arrows IN to V).
 
-Compile-set role coverage: ancestor=1, confounder=2, mediator=1, descendant=8,
-collider=4, instrument=4. All six declared ``CausalRole`` Literal values are
+Compile-set role coverage: ancestor=1, confounder=3, mediator=1, descendant=8,
+collider=4, instrument=4 (total: 21). All six declared ``CausalRole`` Literal values are
 represented (previously: 4 of 6; collider + instrument were deferred to issue
 #198 pending domain-expert labeling). All 4 collider examples are
 confounder-collider / M-structures per Greenland-Pearl-Robins 1999 (the
@@ -136,14 +140,18 @@ class CausalRoleClassifier(dspy.Module):
 
 
 def build_compile_set() -> list[dspy.Example]:
-    """Build the DSPy compile set: 20 curated examples covering all 6 roles.
+    """Build the DSPy compile set: 21 curated examples covering all 6 roles.
 
     Of the 18 incidents catalogued at
     ``.claude/state/leakage_compile_set_20260507.md``, 12 have been distilled
     into typed ``dspy.Example`` objects below (the remaining 6 are either
     duplicates of an already-represented mechanism or have been folded into
     the broader exemplars). 8 additional ``collider`` and ``instrument``
-    exemplars were added under issue #198 from domain-expert review.
+    exemplars were added under issue #198 from domain-expert review, plus 1
+    explicit negative-direction confounder exemplar
+    (baseline_severity_score_preindex) added on codex pass-5 to teach the
+    discrimination boundary between confounder (arrows OUT) and collider
+    (arrows IN).
 
     All 4 collider examples are confounder-collider M-structures (per
     Greenland-Pearl-Robins 1999) — the dominant collider failure mode
@@ -356,6 +364,49 @@ def build_compile_set() -> list[dspy.Example]:
                 "Insurance product type is set at enrollment, before the prediction time. "
                 "Influences both healthcare access (affecting observable patient attributes) "
                 "and treatment authorization decisions."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Issue #198 codex pass-5: NEGATIVE-DIRECTION DISCRIMINATION
+        # exemplar. A pure pre-index baseline severity score is a
+        # CONFOUNDER (arrows OUT: severity -> T via prescriber decision
+        # and severity -> Y via uncontrolled disease activity). It is NOT
+        # a collider (arrows go OUT of severity, not INTO it). This
+        # exemplar pairs with the 4 confounder-collider M-structures in
+        # the collider section below: when severity is itself the
+        # variable being classified and its arrows go OUT to T and Y,
+        # the role is confounder; when severity is a PARENT of a
+        # downstream count/binary variable V (with arrows from severity
+        # AND from T converging into V), V is the collider.
+        # Without this exemplar the LM has no positive example of
+        # "pre-index severity = confounder", risking spurious collider
+        # labels on legitimate severity confounders after seeing the 4
+        # collider examples that all name severity as a parent of V.
+        dspy.Example(
+            feature_name="baseline_severity_score_preindex",
+            derivation_pseudocode=(
+                "weighted sum of pre-index diagnoses + lab abnormalities + "
+                "prior medication intensity WHERE event_date < index_date - 30d "
+                "(strict pre-index window with a 30-day washout buffer)"
+            ),
+            dataset_context=(
+                "Optum/CSU claims; target=initiated_biologic_180d; "
+                "anchor=index_date; STRICT pre-index temporal filter; severity "
+                "score is a composite of baseline disease activity"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Pre-index severity score is a CONFOUNDER: arrows go OUT of "
+                "severity into BOTH T (severity -> T via prescriber decision "
+                "to escalate to biologic) and Y (severity -> Y via "
+                "uncontrolled disease activity). The variable itself has no "
+                "incoming arrowheads from T or downstream events because "
+                "the derivation strictly filters to pre-index. Severity is "
+                "NOT a collider: collider DAG requires arrowheads INTO V, "
+                "but severity's only arrowheads are OUTGOING. Standard "
+                "remediation is keep_with_caveat (condition on severity in "
+                "downstream models to close the backdoor T <- severity -> Y "
+                "path; this is the canonical confounder-adjustment use case)."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),

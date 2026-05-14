@@ -18,11 +18,13 @@ def test_compile_set_has_diverse_examples():
     assert len(examples) == summary["n_examples"], (
         f"summary.n_examples ({summary['n_examples']}) must match build_compile_set() len ({len(examples)})"
     )
-    # Issue #198: compile set extended from 12 → 20 examples to add collider
-    # and instrument coverage. Bar raised to 20 so a regression that drops
-    # examples (e.g., a refactor that splits the function) fires the test.
-    assert summary["n_examples"] >= 20, (
-        f"Compile set too small: {summary['n_examples']}; need at least 20"
+    # Issue #198: compile set extended from 12 to 21 examples to add
+    # collider + instrument coverage and one explicit confounder
+    # negative-direction discrimination exemplar
+    # (baseline_severity_score_preindex, added on codex pass-5). Bar
+    # raised to 21 so a regression that drops examples fires the test.
+    assert summary["n_examples"] >= 21, (
+        f"Compile set too small: {summary['n_examples']}; need at least 21"
     )
     # Must have at least 2 distinct roles (else DSPy can't learn classification)
     assert len(summary["role_distribution"]) >= 2, (
@@ -625,25 +627,69 @@ def test_persisted_artifact_demos_carry_diverse_new_role_features():
     )
 
 
+def test_compile_set_contains_explicit_severity_confounder_negative_exemplar():
+    """Codex pass-5 MED-1 substantive fix: the prior pass-3 DummyLM
+    negative-direction test was a wiring test only (scripted LM response,
+    so it would pass even if the compile set were teaching the wrong
+    discrimination). This test pins the substantive fix: an explicit
+    POSITIVE training exemplar of "pre-index severity = confounder" was
+    added to the compile set itself, so the LM learns the discrimination
+    boundary from labeled data rather than only via the negative-by-
+    absence of "no severity-as-collider" exemplars.
+
+    Without this exemplar the compile set has 0 positive instances of
+    "pre-index severity = confounder" — and 4 negative instances where
+    severity is named as a PARENT of a collider V (in the confounder-
+    collider M-structures). The risk: LM learns "severity appears in
+    collider rationales -> label severity-shaped features as collider"
+    even when severity is the feature being classified directly.
+    """
+    from src.data.causal_role_classifier import build_compile_set
+
+    severity_confounder = next(
+        (ex for ex in build_compile_set() if ex.feature_name == "baseline_severity_score_preindex"),
+        None,
+    )
+    assert severity_confounder is not None, (
+        "Compile set must contain the pre-index baseline severity confounder "
+        "exemplar (codex pass-5 MED-1). Without it the LM has no positive "
+        "example of 'pre-index severity = confounder' and may spuriously "
+        "label legitimate severity confounders as colliders after seeing "
+        "the 4 collider examples that all name severity as a parent of V."
+    )
+    assert severity_confounder.causal_role == "confounder", (
+        f"baseline_severity_score_preindex must be labeled 'confounder' "
+        f"(arrows OUT of severity to T and Y); got "
+        f"{severity_confounder.causal_role!r}."
+    )
+    assert severity_confounder.recommended_remediation == "keep_with_caveat", (
+        f"baseline_severity_score_preindex must have remediation "
+        f"'keep_with_caveat' (condition on it to close the backdoor); got "
+        f"{severity_confounder.recommended_remediation!r}."
+    )
+    # The rationale must explicitly name OUTGOING arrows so the LM learns
+    # the discrimination boundary, not just the role label.
+    mechanism = severity_confounder.mechanism.lower()
+    assert "out of severity" in mechanism or "arrows out" in mechanism, (
+        f"baseline_severity_score_preindex mechanism must explicitly say "
+        f"arrows go OUT of severity (the discrimination boundary vs "
+        f"collider). Got (truncated): {severity_confounder.mechanism[:200]!r}..."
+    )
+
+
 def test_dummy_lm_pure_severity_confounder_is_not_classified_as_collider():
-    """Codex pass-3 (e) negative-direction strengthening: a pure
-    pre-index severity confounder must NOT be spuriously emitted as
-    collider just because the widened compile-set framing teaches the
-    LM about confounder-collider M-structures.
+    """WIRING test only (codex pass-5): scripts a DummyLM 'confounder'
+    response and verifies the signature/output-parsing pipeline
+    propagates it without the new collider vocabulary corrupting the
+    confounder path. Substantive negative-direction discrimination is
+    enforced by
+    ``test_compile_set_contains_explicit_severity_confounder_negative_exemplar``
+    above (which pins the positive training exemplar in the compile
+    set).
 
-    A pure pre-index severity score has arrowheads into BOTH T (via
-    prescriber decision) and Y (via uncontrolled disease) but is NOT
-    itself a collider — it's a CONFOUNDER. The arrowheads go OUT of
-    severity into both T and Y, not into severity from T. The
-    discrimination boundary the compile set must teach is:
-
-    - confounder: severity -> T AND severity -> Y (arrows OUT)
-    - collider: T -> V AND severity -> V (arrows IN, V at the bottom)
-
-    This test uses DummyLM to script a "confounder" response on a pure
-    severity feature and verifies the WIRING correctly propagates it
-    without the new collider vocabulary corrupting the legacy
-    confounder path.
+    Kept as a wiring sanity check that the Literal-typed signature
+    still accepts 'confounder' as a valid output and does not silently
+    coerce it to one of the new roles.
     """
     import dspy
     from dspy.utils.dummies import DummyLM
@@ -654,13 +700,12 @@ def test_dummy_lm_pure_severity_confounder_is_not_classified_as_collider():
         [
             {
                 "reasoning": (
-                    "Pre-index severity has arrowheads OUT to both T and Y "
-                    "(severity -> T via prescriber decision; severity -> Y "
-                    "via disease activity); arrows go OUT, not IN, so this "
-                    "is a confounder not a collider."
+                    "Pre-index severity has arrowheads OUT to both T and Y; "
+                    "arrows go OUT, not IN, so this is a confounder not a "
+                    "collider."
                 ),
                 "causal_role": "confounder",
-                "mechanism": ("pre-index severity score; arrows out to T and Y"),
+                "mechanism": "pre-index severity score; arrows out to T and Y",
                 "recommended_remediation": "keep_with_caveat",
             },
         ]
@@ -678,22 +723,10 @@ def test_dummy_lm_pure_severity_confounder_is_not_classified_as_collider():
             ),
         )
 
+    # Wiring check: signature must accept 'confounder' as a valid output
+    # and not silently coerce it to a new role.
     assert prediction.causal_role == "confounder", (
-        f"Pure pre-index severity confounder was emitted as "
-        f"{prediction.causal_role!r}. The widened confounder-collider "
-        f"framing in the compile set MUST NOT cause a severity-only "
-        f"feature (arrows OUT of severity) to be re-labeled as collider "
-        f"(arrows IN to V). If the LM gets this wrong, the discrimination "
-        f"boundary the compile set is teaching is too loose — the "
-        f"compile-set rationales should be tightened so the LM learns "
-        f"that 'severity is a confounder when its arrows go OUT, a "
-        f"parent of a collider when one of its arrows goes INTO a "
-        f"separate variable V'."
+        f"Wiring failure: DSPy signature did not propagate scripted "
+        f"'confounder' role; got {prediction.causal_role!r}."
     )
-    assert prediction.causal_role != "collider", (
-        f"Pure pre-index severity must not be classified as collider. "
-        f"Got {prediction.causal_role!r}. Confounder-collider M-structures "
-        f"in the issue-#198 compile set are colliders BECAUSE the COUNT/"
-        f"BINARY variable V has two arrowheads in — not because severity "
-        f"itself has any arrowhead in."
-    )
+    assert prediction.causal_role != "collider"
