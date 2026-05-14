@@ -148,10 +148,33 @@ def _score_one(
 def _decide_joint(z: float, delta_auc: float, *, k: float, epsilon: float) -> bool:
     """Apply the joint ``(z > k) AND (|delta_AUC| > epsilon)`` decision.
 
-    Returns False for non-finite z (degenerate score — treat as not-flagged,
-    consistent with ``hblp_classify``'s severity=info fallback).
+    Mirrors ``hblp_classify``'s severity decision for severity ∈ {moderate,
+    high}. Specifically:
+
+    - Finite z AND finite delta_auc: standard joint check.
+    - ``z=+inf`` AND finite delta_auc AND ``|delta_auc| > epsilon``:
+      degenerate-null + strong-effect ESCAPE path (issue #194 codex
+      pass-1 MED-1). Returns True so the sweep TPR ledger reflects
+      the production classifier's behaviour at zero-variance nulls.
+    - All other non-finite inputs: False (severity=info fallback).
+
+    The escape is symmetric with the production ``hblp_classify``
+    branch added in adaptive_validity_check.py:337.
     """
-    if not (np.isfinite(z) and np.isfinite(delta_auc)):
+    delta_auc_known = bool(np.isfinite(delta_auc))
+    # Issue #194 codex pass-2 LOW-1: z=+inf strong-effect escape, mirror
+    # the production classifier branch so the sweep TPR is faithful.
+    if (
+        not np.isfinite(z)
+        and z is not None
+        and isinstance(z, (int, float))
+        and not isinstance(z, bool)
+        and z > 0
+        and delta_auc_known
+        and abs(delta_auc) > epsilon
+    ):
+        return True
+    if not (np.isfinite(z) and delta_auc_known):
         return False
     return (z > k) and (abs(delta_auc) > epsilon)
 

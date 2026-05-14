@@ -2727,6 +2727,107 @@ def test_issue_194_audit_fields_propagated_through_adversarial_input():
     assert ad2["delta_auc_below_floor"] is False
 
 
+def test_issue_194_voter_honors_z_inf_strong_effect_through_kg_path():
+    """Codex pass-2 MED-1: when adversarial verdict carries severity=high
+    with z=+inf BUT delta_auc_below_floor=False (joint check
+    corroborated), the EnsembleVoter must NOT downgrade to no-signal.
+    Pre-fix the M3 non-finite-z guard would reject these even though
+    they're legitimate deterministic high-effect signals — re-opening
+    the false-negative path in KG-active shadow interactions.
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _adversarial_input,
+        _compose_legacy_verdict,
+        _get_ensemble_voter_class,
+    )
+    from src.data.kg.types import KGEdge
+
+    # Adversarial score with z=+inf (degenerate null) + strong delta_AUC
+    score = {
+        "z_score": float("inf"),
+        "actual_auc": 0.95,
+        "null_mean": 0.50,
+        "null_std": 0.0,  # degenerate null → z=inf
+        "p_value": 0.0,
+        "n_permutations": 200,
+    }
+    ad = _adversarial_input(score, n_train_pos=500, layer_1_declared_safe=False)
+    assert ad["severity"] == "high", (
+        f"Issue #194 codex pass-1 MED-1 invariant: _adversarial_input must "
+        f"emit severity=high for z=+inf + strong delta_AUC; got {ad['severity']}"
+    )
+    assert ad["delta_auc_below_floor"] is False
+
+    # Now route through _compose_legacy_verdict with a KG edge present —
+    # this exercises the EnsembleVoter path. Use a KG edge that does
+    # NOT connect feature_ids to target_ids → kg_signal=no_signal →
+    # falls through to adversarial-alone bypass that preserves severity.
+    voter = _get_ensemble_voter_class()()
+    kg_edge = KGEdge(
+        subject_id="X",
+        predicate="treats",
+        object_id="Y",
+        evidence_source="test",
+        score=0.9,
+    )
+    verdict = _compose_legacy_verdict(
+        "test_feat",
+        voter=voter,
+        adversarial_input=ad,
+        kg_edges=[kg_edge],
+        feature_entity_ids=["X"],
+        target_entity_ids=["Z"],  # disjoint → no_signal
+        kg_mode="off",
+    )
+    assert verdict["severity"] == "high", (
+        f"Issue #194 codex pass-2 MED-1: voter must accept z=+inf when "
+        f"delta_auc_below_floor=False; got {verdict['severity']}, "
+        f"evidence={verdict.get('evidence')}"
+    )
+    assert verdict["remediation"] == "drop"
+
+
+def test_issue_194_voter_rejects_z_inf_without_joint_check_corroboration():
+    """Codex pass-2 MED-1 (complement): legacy non-finite-z guard MUST
+    still reject severity=high when delta_auc corroboration is
+    UNAVAILABLE (a hand-crafted malformed adversarial input that
+    skipped _adversarial_input). Directly invokes voter.vote() to
+    exercise the guard.
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _get_ensemble_voter_class,
+    )
+
+    # Hand-crafted malformed input: severity=high + z=inf + NO
+    # delta_auc fields populated. Simulates a stale producer.
+    malformed_ad = {
+        "layer": "3",
+        "severity": "high",
+        "remediation": "drop",
+        "evidence": "malformed test fixture",
+        "z_score": float("inf"),
+        "actual_auc": None,
+        "null_mean": None,
+        "null_std": None,
+        "p_value": None,
+        "n_permutations": None,
+        "_hblp_classified": True,
+        # delta_auc missing entirely
+    }
+    voter = _get_ensemble_voter_class()()
+    verdict = voter.vote(
+        "test_feat",
+        adversarial_verdict=malformed_ad,
+    )
+    # M3 guard downgrades the malformed high to no-signal. The voter
+    # then falls through to abstain (no Layer 1, no KG, no LLM).
+    assert verdict.severity != "high", (
+        f"Issue #194 codex pass-2 MED-1: malformed adversarial input "
+        f"without delta_auc corroboration must NOT drive a high veto; "
+        f"got {verdict.severity}"
+    )
+
+
 def test_issue_194_audit_fields_propagated_through_short_circuit_verdict():
     """Codex pass-1 LOW-1: short-circuit path (too-few-rows / scoring-error)
     must populate the 3 audit fields too — schema uniformity for

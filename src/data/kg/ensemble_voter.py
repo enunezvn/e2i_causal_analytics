@@ -518,17 +518,49 @@ class EnsembleVoter:
             # high verdicts so the voter falls through to the
             # LLM/KG/abstain path; the malformed input is logged so
             # operators see the misconfiguration.
-            if raw_adv_severity == ADV_SEVERITY_HIGH and not _is_finite_number(adv_z_score):
+            #
+            # Issue #194 codex pass-2 MED-1 (2026-05-14): the M3 guard
+            # ALSO rejected the legitimate ``z=+inf`` strong-effect
+            # path the issue #194 fix added in ``hblp_classify``. When
+            # ``compute_adversarial_score`` returns ``z=+inf`` because
+            # the permutation null has zero variance AND the actual
+            # AUC is far above null_mean (a deterministic high-effect
+            # signal with degenerate null), the classifier correctly
+            # emits ``severity=high``. The non-finite-z guard then
+            # downgraded it before KG/LLM/abstain routing, which in
+            # ``kg_mode="shadow"`` capped to info — re-opening the
+            # exact false-negative the MED-1 fix was meant to close.
+            #
+            # The escape is principled: accept ``severity=high`` when
+            # z is non-finite IF the adversarial verdict ALSO carries
+            # ``delta_auc_below_floor=False`` (i.e., the joint check
+            # confirmed the absolute effect is above the floor). The
+            # audit trail then records the inf z AND the delta_AUC
+            # corroboration so the deterministic veto has underlying
+            # evidence.
+            adv_delta_auc = adversarial_verdict.get("delta_auc")
+            adv_delta_auc_below_floor = adversarial_verdict.get("delta_auc_below_floor", None)
+            joint_check_corroborated = bool(
+                _is_finite_number(adv_delta_auc) and adv_delta_auc_below_floor is False
+            )
+            if (
+                raw_adv_severity == ADV_SEVERITY_HIGH
+                and not _is_finite_number(adv_z_score)
+                and not joint_check_corroborated
+            ):
                 evidence.append(
                     f"Adversarial verdict claims severity=high but z_score is "
-                    f"{adv_z_score!r} (missing or non-finite); cannot honour "
-                    f"as deterministic veto"
+                    f"{adv_z_score!r} (missing or non-finite) AND |delta_AUC| "
+                    f"corroboration unavailable; cannot honour as deterministic veto"
                 )
                 logger.warning(
                     "EnsembleVoter: malformed adversarial high verdict for %s; "
-                    "z_score=%r — downgrading to no signal",
+                    "z_score=%r, delta_auc=%r, delta_auc_below_floor=%r — "
+                    "downgrading to no signal",
                     feature_name,
                     adv_z_score,
+                    adv_delta_auc,
+                    adv_delta_auc_below_floor,
                 )
                 adv_severity = None
             else:
