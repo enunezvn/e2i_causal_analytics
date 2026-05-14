@@ -657,3 +657,161 @@ class TestTransformDataDropsUnhashableColumns:
         # With the drop, this is a noop list comprehension.
         preprocessor = ModelTrainerPreprocessor()
         preprocessor._detect_feature_types(X_train)  # must NOT raise
+
+
+@pytest.mark.asyncio
+class TestTransformDataThreadsCleanedFramesIntoState:
+    """``transform_data`` must thread the cleaned frames back into state
+    under the canonical ``train_df``/``validation_df``/``test_df``/
+    ``holdout_df`` keys so downstream nodes in the data_preparer graph
+    consume the post-drop schema.
+
+    Codex pass-2 MEDIUM-2 (2026-05-14): the prior fix dropped unhashable
+    columns only from the local working copies returned as
+    ``X_train``/``X_val``/``X_test``/``X_holdout``. The downstream
+    nodes ``feast_registrar``, ``compute_baseline_metrics``, and
+    ``finalize_output`` consume ``state.get("train_df")`` — which
+    points at the ORIGINAL (uncleaned) frame. Result: list cells
+    crash ``baseline_computer``'s ``value_counts()``/``nunique()``
+    when a list col is in ``required_features``, and would silently
+    expose list cols to Feast registration.
+
+    Contract: when ``transform_data`` drops unhashable cols, it MUST
+    also surface the cleaned (pre-transformation, target-preserved)
+    frames under the canonical state keys so LangGraph's state-merge
+    replaces the originals.
+    """
+
+    async def test_state_train_df_is_cleaned_when_unhashable_dropped(self) -> None:
+        train_df = pd.DataFrame(
+            {
+                "comorbidities": [["E11", "I10"], [], ["J45"], []],
+                "age": [25.0, 60.0, 45.0, 30.0],
+                "gender": ["M", "F", "F", "M"],
+                "target": [0, 1, 0, 1],
+            }
+        )
+        state = {
+            "experiment_id": "test_issue_197_state_thread",
+            "train_df": train_df,
+            "validation_df": train_df.copy(),
+            "test_df": train_df.copy(),
+            "scope_spec": {
+                "target_column": "target",
+                "scaling_method": "minmax",
+                "imputation_strategy": "mean",
+                "extract_datetime_features": False,
+                "excluded_features": [],
+            },
+        }
+        result = await transform_data(state)
+        assert result.get("error") is None
+        # Codex pass-2 MED-2: state's train_df MUST be replaced with the
+        # cleaned frame (target preserved, list cols dropped).
+        assert "train_df" in result, (
+            "transform_data MUST surface cleaned train_df in state delta "
+            "when unhashable cols were dropped (Codex pass-2 MED-2)"
+        )
+        assert "validation_df" in result
+        assert "test_df" in result
+        state_train_df = result["train_df"]
+        assert "comorbidities" not in state_train_df.columns
+        # Target column preserved in state's train_df (canonical contract).
+        assert "target" in state_train_df.columns
+        # Sanity: feature cols preserved.
+        assert "age" in state_train_df.columns
+        assert "gender" in state_train_df.columns
+
+        # Pre-transformation schema preserved — train_df["age"] is NOT
+        # scaled (only X_train is scaled).
+        assert state_train_df["age"].iloc[0] == 25.0
+
+    async def test_baseline_computer_runs_on_cleaned_state_train_df(self) -> None:
+        """Cross-node contract: after transform_data drops list cols, the
+        ``compute_baseline_metrics`` node MUST be able to read
+        ``state.get("train_df")`` and compute stats on
+        ``required_features`` (including categorical cols) without
+        crashing on ``value_counts()`` / ``nunique()``.
+
+        This is the surgical pin for Codex pass-2 MEDIUM-2: pre-fix,
+        if ``comorbidities`` was in ``required_features``, baseline
+        crashed on ``value_counts()``. Post-fix, baseline either
+        finds it absent from the cleaned state's train_df (warns and
+        continues) or it's been pruned upstream.
+        """
+        from src.agents.ml_foundation.data_preparer.nodes.baseline_computer import (
+            compute_baseline_metrics,
+        )
+
+        train_df = pd.DataFrame(
+            {
+                "comorbidities": [["E11", "I10"], [], ["J45"], []],
+                "age": [25.0, 60.0, 45.0, 30.0],
+                "gender": ["M", "F", "F", "M"],
+                "target": [0, 1, 0, 1],
+            }
+        )
+        state: dict = {
+            "experiment_id": "test_issue_197_baseline_runs",
+            "train_df": train_df,
+            "validation_df": train_df.copy(),
+            "test_df": train_df.copy(),
+            "scope_spec": {
+                "target_column": "target",
+                "prediction_target": "target",
+                # Crucially: list col is declared as a required feature.
+                # Pre-fix this caused baseline_computer to call
+                # value_counts() on it and crash.
+                "required_features": ["comorbidities", "age", "gender"],
+                "scaling_method": "minmax",
+                "imputation_strategy": "mean",
+                "extract_datetime_features": False,
+                "excluded_features": [],
+            },
+        }
+        # Simulate LangGraph's state-merge: apply transform_data's
+        # state delta to the input state.
+        transform_result = await transform_data(state)
+        assert transform_result.get("error") is None
+        merged_state = {**state, **transform_result}
+        # Now run the downstream node against the merged state.
+        baseline_result = await compute_baseline_metrics(merged_state)
+        assert baseline_result.get("error") is None, (
+            f"baseline_computer crashed: {baseline_result.get('error')!r}. "
+            f"This means transform_data's state-train_df was not cleaned, "
+            f"and the value_counts()/nunique() in baseline_computer "
+            f"re-tripped the same TypeError: unhashable type: 'list' "
+            f"crash that the issue #197 fix was supposed to close."
+        )
+
+    async def test_no_state_train_df_update_when_no_unhashable(self) -> None:
+        """Regression: when no list columns are present, transform_data
+        does NOT update state's train_df/validation_df/test_df/holdout_df
+        — preserves the original state-contract for the canonical path."""
+        train_df = pd.DataFrame(
+            {
+                "diag": ["L50.1", "L50.1", "L50.2", "L50.9"],
+                "age": [25.0, 60.0, 45.0, 30.0],
+                "target": [0, 1, 0, 1],
+            }
+        )
+        state = {
+            "experiment_id": "test_issue_197_no_state_thread",
+            "train_df": train_df,
+            "validation_df": train_df.copy(),
+            "test_df": train_df.copy(),
+            "scope_spec": {
+                "target_column": "target",
+                "scaling_method": "minmax",
+                "imputation_strategy": "mean",
+                "extract_datetime_features": False,
+                "excluded_features": [],
+            },
+        }
+        result = await transform_data(state)
+        assert result.get("error") is None
+        # No unhashable cols → no state-train_df overwrite.
+        assert "train_df" not in result
+        assert "validation_df" not in result
+        assert "test_df" not in result
+        assert "holdout_df" not in result

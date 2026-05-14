@@ -217,3 +217,16 @@ def test_transformer_survives_unstripped_list_columns(csu_fixture_dir: Path) -> 
     dropped_set = set(drop_entries[0].get("columns") or [])
     assert "comorbidities" in dropped_set
     assert "secondary_diagnosis_codes" in dropped_set
+
+    # Codex pass-2 MEDIUM-2 (2026-05-14): the cleaned frames also thread
+    # back into state under canonical ``train_df`` / ``validation_df`` /
+    # ``test_df`` keys so downstream data_preparer nodes (feast_registrar,
+    # baseline_computer, finalize_output) consume the cleaned schema.
+    assert "train_df" in result, (
+        "transform_data MUST surface cleaned train_df in state delta (Codex pass-2 MED-2)"
+    )
+    state_train_df = result["train_df"]
+    assert "comorbidities" not in state_train_df.columns
+    assert "secondary_diagnosis_codes" not in state_train_df.columns
+    # Target preserved in state's train_df.
+    assert "treatment_initiated" in state_train_df.columns

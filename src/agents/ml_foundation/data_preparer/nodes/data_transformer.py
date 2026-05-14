@@ -79,6 +79,62 @@ async def transform_data(state: DataPreparerState) -> Dict[str, Any]:
         imputation_strategy = scope_spec.get("imputation_strategy", "mean")
         datetime_features = scope_spec.get("extract_datetime_features", True)
 
+        # Defense-in-depth pre-step (Codex pass-2 MEDIUM-2): scan for
+        # unhashable container columns BEFORE any transformation so we
+        # can thread the cleaned (but otherwise-untransformed) frames
+        # back into state. Downstream nodes in the data_preparer graph
+        # that consume ``state.get("train_df")`` — ``feast_registrar``,
+        # ``compute_baseline_metrics``, ``finalize_output`` — would
+        # otherwise read the ORIGINAL state's frame with list cells
+        # intact and crash on their own ``nunique()``/``value_counts()``
+        # calls. Mirrors loader-side ``_drop_unhashable_columns``.
+        _, _, _, unhashable_cols = _identify_column_types(
+            train_df.drop(columns=[target_column], errors="ignore") if target_column else train_df,
+            exclude_columns,
+        )
+
+        # Stash pre-transformation cleaned frames for state replay.
+        # These hold the original schema MINUS the unhashable cols, with
+        # the target column preserved — preserving the canonical state
+        # contract that ``train_df`` contains the target.
+        state_train_df_cleaned = None
+        state_val_df_cleaned = None
+        state_test_df_cleaned = None
+        state_holdout_df_cleaned = None
+
+        if unhashable_cols:
+            logger.warning(
+                "Dropping %d non-encodable column(s) with unhashable cells "
+                "(list/dict/set/tuple/ndarray): %s. These crash nunique() / "
+                "LabelEncoder; mirroring data_loader._drop_unhashable_columns "
+                "semantics so downstream data_preparer nodes (feast_registrar, "
+                "baseline_computer, finalize_output) and the model_trainer "
+                "preprocessor do not re-trip the same crash on X[col].nunique(). "
+                "Route ingestion through _load_from_files to strip them upstream "
+                "and avoid this warning.",
+                len(unhashable_cols),
+                unhashable_cols,
+            )
+            # Pre-transformation snapshot (originals + target, minus list cols)
+            # — used by the downstream-state delta below.
+            state_train_df_cleaned = train_df.drop(columns=unhashable_cols, errors="ignore")
+            if validation_df is not None:
+                state_val_df_cleaned = validation_df.drop(columns=unhashable_cols, errors="ignore")
+            if test_df is not None:
+                state_test_df_cleaned = test_df.drop(columns=unhashable_cols, errors="ignore")
+            if holdout_df is not None:
+                state_holdout_df_cleaned = holdout_df.drop(columns=unhashable_cols, errors="ignore")
+            # Local working copies (used by transformation steps) also
+            # need the list cols dropped — otherwise we re-trip nunique()
+            # ourselves in the next _identify_column_types call.
+            train_df = state_train_df_cleaned.copy()
+            if state_val_df_cleaned is not None:
+                validation_df = state_val_df_cleaned.copy()
+            if state_test_df_cleaned is not None:
+                test_df = state_test_df_cleaned.copy()
+            if state_holdout_df_cleaned is not None:
+                holdout_df = state_holdout_df_cleaned.copy()
+
         # Separate target from features if specified
         target_train = None
         target_val = None
@@ -101,36 +157,13 @@ async def transform_data(state: DataPreparerState) -> Dict[str, Any]:
                 target_holdout = holdout_df[target_column].copy()
                 holdout_df = holdout_df.drop(columns=[target_column])
 
-        # Identify column types. The fourth slot reports object-dtype
-        # columns carrying unhashable container cells (list/dict/ndarray)
-        # that crash downstream nunique() / LabelEncoder. The loader path
-        # already strips these via ``_drop_unhashable_columns`` but callers
-        # who bypass the loader (preassembled DataFrames) reach here with
-        # the columns intact; mirror the loader behavior by dropping them
-        # from all splits so downstream nodes (model_trainer preprocessor,
-        # feast registrar) see a clean encodable feature surface.
-        numeric_cols, categorical_cols, datetime_cols, unhashable_cols = _identify_column_types(
+        # Identify column types. The fourth slot is empty here because
+        # we already stripped unhashable cols above (the early scan).
+        # The signature still returns 4 values so callers in tests can
+        # introspect the type buckets.
+        numeric_cols, categorical_cols, datetime_cols, _ = _identify_column_types(
             train_df, exclude_columns
         )
-
-        if unhashable_cols:
-            logger.warning(
-                "Dropping %d non-encodable column(s) with unhashable cells "
-                "(list/dict/set/tuple/ndarray): %s. These crash nunique() / "
-                "LabelEncoder; mirroring data_loader._drop_unhashable_columns "
-                "semantics so model_trainer preprocessor does not re-trip "
-                "the same crash on X[col].nunique(). Route ingestion through "
-                "_load_from_files to strip them upstream and avoid this warning.",
-                len(unhashable_cols),
-                unhashable_cols,
-            )
-            train_df = train_df.drop(columns=unhashable_cols, errors="ignore")
-            if validation_df is not None:
-                validation_df = validation_df.drop(columns=unhashable_cols, errors="ignore")
-            if test_df is not None:
-                test_df = test_df.drop(columns=unhashable_cols, errors="ignore")
-            if holdout_df is not None:
-                holdout_df = holdout_df.drop(columns=unhashable_cols, errors="ignore")
 
         # Store transformation metadata
         transformations_applied = []
@@ -356,6 +389,25 @@ async def transform_data(state: DataPreparerState) -> Dict[str, Any]:
             "feature_columns": list(train_df.columns),
             "transform_duration_seconds": transform_duration,
         }
+
+        # Codex pass-2 MEDIUM-2: when we dropped unhashable cols, also
+        # thread the cleaned (pre-transformation, target-preserved)
+        # frames back into state under the canonical ``train_df``/
+        # ``validation_df``/``test_df``/``holdout_df`` keys so downstream
+        # nodes (feast_registrar, baseline_computer, finalize_output)
+        # consume the post-drop schema. We surface the PRE-transformation
+        # frames (the originals minus list cols) rather than the
+        # encoded/scaled X_* frames — the canonical state contract is
+        # that train_df mirrors raw schema, just with list cols stripped.
+        if unhashable_cols:
+            if state_train_df_cleaned is not None:
+                updates["train_df"] = state_train_df_cleaned
+            if state_val_df_cleaned is not None:
+                updates["validation_df"] = state_val_df_cleaned
+            if state_test_df_cleaned is not None:
+                updates["test_df"] = state_test_df_cleaned
+            if state_holdout_df_cleaned is not None:
+                updates["holdout_df"] = state_holdout_df_cleaned
 
         logger.info(
             f"Data transformation completed: "
