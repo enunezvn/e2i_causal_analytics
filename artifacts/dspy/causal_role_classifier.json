@@ -1,0 +1,121 @@
+{
+  "classify.predict": {
+    "traces": [],
+    "train": [],
+    "demos": [
+      {
+        "augmented": true,
+        "feature_name": "disease_severity",
+        "derivation_pseudocode": "min(3.0, sum(med.fill_count) * 0.5) + min(2.0, count(proc.code='J2357')) + count(lab.flag='abnormal')  # over entire patient panel, NO pre-index filter",
+        "dataset_context": "ConcertAI CSU claims; target=treatment_initiated; prevalence=0.024; prediction_anchor=index_date",
+        "reasoning": "The disease_severity feature is computed over the entire patient panel without any pre-index temporal filtering. This means it aggregates medication fills, procedures, and lab abnormalities that occur both before AND after the prediction anchor (index_date). For treated patients, the medication fills component (med.fill_count) will include post-treatment medications, directly incorporating information about the treatment decision into the severity score. This creates a post-prediction contamination where the feature becomes dependent on the target variable.",
+        "causal_role": "descendant",
+        "mechanism": "The severity score aggregates medication fills and clinical events across the entire patient timeline without temporal filtering. Post-index medication fills for treated patients contaminate the score, making it partially dependent on the treatment decision.",
+        "recommended_remediation": "window"
+      },
+      {
+        "augmented": true,
+        "feature_name": "engagement_score",
+        "derivation_pseudocode": "len(unique(med.npi)) + count(med.fills) + count(lab.tests)  # over entire panel",
+        "dataset_context": "ConcertAI CSU; target=treatment_initiated; anchor=index_date",
+        "reasoning": "The engagement_score aggregates unique medication providers, medication fills, and lab tests across the entire patient panel without any temporal filtering to pre-index events. This means it includes post-treatment healthcare utilization. Treated patients will have additional medication fills and potentially more provider contacts and lab monitoring after treatment initiation, making this feature contaminated by post-prediction events.",
+        "causal_role": "descendant",
+        "mechanism": "Aggregates medication fills, provider contacts, and lab tests across the entire panel without pre-index filtering. Treated patients accumulate post-treatment healthcare utilization that inflates the engagement score.",
+        "recommended_remediation": "window"
+      },
+      {
+        "augmented": true,
+        "feature_name": "days_on_therapy",
+        "derivation_pseudocode": "sum(med.days_supply) over entire panel",
+        "dataset_context": "CSU; target=treatment_initiated; anchor=index_date",
+        "reasoning": "This feature sums days_supply from medication events across the entire patient panel without any temporal filtering relative to the index_date. For patients who initiated treatment (target=1), this will include post-index medication days, making the feature directly dependent on the treatment outcome. For patients who never initiated treatment (target=0), this will be zero or very low. This creates a direct causal pathway from treatment to the feature value.",
+        "causal_role": "descendant",
+        "mechanism": "Sums medication days_supply across entire panel without pre-prediction-time filtering. Treated patients accumulate post-index therapy days, making this feature causally downstream of treatment initiation.",
+        "recommended_remediation": "window"
+      },
+      {
+        "augmented": true,
+        "feature_name": "medication_claim_count",
+        "derivation_pseudocode": "count(rows in medication_events where patient_id=p)",
+        "dataset_context": "CSU/Optum; target=treatment_initiated; anchor=index_date",
+        "reasoning": "The feature counts medication events across the entire patient panel without any temporal filtering to restrict events to before the prediction time (index_date). This means it includes both pre-treatment and post-treatment medication claims. For treated patients, the count will include medications prescribed after treatment initiation, making this feature structurally dependent on the treatment outcome.",
+        "causal_role": "descendant",
+        "mechanism": "Counts medication events across entire patient timeline without pre-prediction-time filtering. Post-treatment medication claims inflate the count for treated patients, creating structural dependence on the target.",
+        "recommended_remediation": "window"
+      },
+      {
+        "feature_name": "insurance_product",
+        "derivation_pseudocode": "demo.insurance_product (one row per patient at enrollment)",
+        "dataset_context": "CSU/Optum; target=treatment_initiated",
+        "causal_role": "confounder",
+        "mechanism": "Insurance product type is set at enrollment, before the prediction time. Influences both healthcare access (affecting observable patient attributes) and treatment authorization decisions.",
+        "recommended_remediation": "keep_with_caveat"
+      },
+      {
+        "feature_name": "age_at_index",
+        "derivation_pseudocode": "(index_date - birth_date).years",
+        "dataset_context": "CSU/Optum; target=treatment_initiated; anchor=index_date",
+        "causal_role": "ancestor",
+        "mechanism": "Age at the prediction time is a stable demographic measured before the prediction time. Causally upstream of both treatment decisions and outcomes.",
+        "recommended_remediation": "keep_with_caveat"
+      },
+      {
+        "feature_name": "charlson_score",
+        "derivation_pseudocode": "weighted sum over comorbidity diagnoses across entire patient diagnosis history (no pre-prediction-time filter)",
+        "dataset_context": "Optum; target=treatment_initiated",
+        "causal_role": "descendant",
+        "mechanism": "Comorbidity scores aggregate diagnoses across the entire patient timeline. Diagnoses recorded post-treatment contaminate the score. Without temporal filtering the feature is post-prediction-time.",
+        "recommended_remediation": "window"
+      },
+      {
+        "feature_name": "atopy_score",
+        "derivation_pseudocode": "weighted composite of atopic-disease diagnosis indicators (eczema, asthma, allergic_rhinitis) across patient timeline",
+        "dataset_context": "Optum; target=treatment_initiated",
+        "causal_role": "descendant",
+        "mechanism": "Composite of multiple post-prediction-time diagnosis booleans inherits their post-hoc semantics. Without temporal filtering at component level the composite leaks post-treatment information.",
+        "recommended_remediation": "window"
+      }
+    ],
+    "signature": {
+      "instructions": "Classify the causal role of a proposed feature relative to the prediction target.\n\nThe model must reason from the feature's derivation steps and the dataset\ncontext, NOT from prior knowledge of feature names. Hallucinated feature\nnames (proposing replacements not in the column list) are explicitly\nforbidden.",
+      "fields": [
+        {
+          "prefix": "Feature Name:",
+          "description": "Name of the feature being classified."
+        },
+        {
+          "prefix": "Derivation Pseudocode:",
+          "description": "Plain-English or pseudo-code description of how the feature is derived. Must specify the SOURCE TABLE (e.g., medication_events, lab_events, demo) and any temporal filtering."
+        },
+        {
+          "prefix": "Dataset Context:",
+          "description": "Context about the dataset: target variable, prevalence, prediction-time anchor (e.g., 'index_date'), data source (e.g., 'ConcertAI CSU claims')."
+        },
+        {
+          "prefix": "Reasoning: Let's think step by step in order to",
+          "description": "${reasoning}"
+        },
+        {
+          "prefix": "Causal Role:",
+          "description": "The feature's causal role with respect to the target."
+        },
+        {
+          "prefix": "Mechanism:",
+          "description": "Concise explanation of WHY the feature has this causal role (1-2 sentences). Reference SPECIFIC mechanism (e.g., 'aggregates events post-prediction without temporal filter', 'pre-existing demographic measured before prediction time')."
+        },
+        {
+          "prefix": "Recommended Remediation:",
+          "description": "What to do with this feature in the ML pipeline."
+        }
+      ]
+    },
+    "lm": null
+  },
+  "metadata": {
+    "dependency_versions": {
+      "python": "3.12",
+      "dspy": "3.1.0",
+      "cloudpickle": "3.1"
+    }
+  }
+}
