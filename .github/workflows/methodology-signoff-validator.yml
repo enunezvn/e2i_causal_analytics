@@ -1,14 +1,25 @@
 name: Methodology Sign-off Validator (reusable)
 
 # Reusable workflow that executes scripts/check_methodology_signoff.py
-# against a sign-off / rejection artifact list. Issue #192 H3 mitigation:
-# this workflow is invoked via `uses: ./.github/workflows/...` from the
-# caller, which means GitHub loads its YAML from the caller's ref. The
-# load-bearing defense is INSIDE this workflow: we explicitly checkout the
-# protected ref (typically `main`) into a SEPARATE workspace and run the
-# validator script from THAT checkout — not from the PR head. This closes
-# the "PR weakens validator + workflow in same commit and validates itself"
-# attack class.
+# against a sign-off / rejection artifact list. Issue #192 H3 PARTIAL
+# mitigation: this workflow is invoked via `uses: ./.github/workflows/...`
+# from the caller, which means GitHub loads BOTH the caller YAML AND
+# this reusable workflow YAML from the caller's ref. The load-bearing
+# defense is INSIDE this workflow's `actions/checkout@v4 ref: main`
+# step which loads the validator SCRIPT from the protected ref — that
+# closes script-only weakening (a PR that edits ONLY the validator
+# script no longer affects the run, since the workflow runs main's copy
+# of the script).
+#
+# IMPORTANT (codex pass-1 HIGH-1 + pass-2 MED-2 honesty correction):
+#   The split does NOT close the "PR weakens validator + workflow in
+#   same commit" attack class. A malicious PR can edit BOTH workflow
+#   YAMLs in one commit and disable / replace the `ref: main` checkout
+#   step that pins the validator script. Same-repo path-pinning expands
+#   the trusted computing base from {validator script + caller YAML} to
+#   {validator script + both workflow YAMLs}. Narrower than pre-#192,
+#   not a complete close. See `docs/governance/n3_known_limitations_20260510.md`
+#   item 3 for the residual-threats inventory.
 #
 # The PR's artifacts (the markdown sign-off / rejection files being
 # validated) are still read from the caller-passed checkout, since the
@@ -16,26 +27,31 @@ name: Methodology Sign-off Validator (reusable)
 # CODE comes from the protected ref.
 #
 # Cross-PR weakening attack (e.g. land a weakened validator on main first,
-# then open the sign-off PR) is NOT closed by this split alone — it
+# then open the sign-off PR) is also NOT closed by this split alone — it
 # requires CODEOWNERS gating on `scripts/check_methodology_signoff.py`
-# AND on this file. See the H3 SECURITY ADVISORY in
+# AND on both workflow files. See the H3 SECURITY ADVISORY in
 # `methodology_signoff_guard.yml` for the production migration path
 # (move the validator to a separate `org/governance-actions` repo and
-# pin by SHA — that's the only way to fully close cross-PR weakening
+# pin by SHA — that's the only way to fully close both attack classes
 # in a same-org same-repo world).
 #
 # Inputs:
 #   * touched_files (string, required)
 #       Newline-separated list of artifact paths to validate, relative to
 #       the repo root (the PR-checkout workspace).
-#   * validator_ref (string, optional, default: 'main')
-#       The git ref to checkout for the validator script. Defaults to
-#       'main' for production. Tests / dispatch may override.
 #   * strict_gh (string, optional, default: '1')
 #       When '1', the validator's --strict-gh flag is set (issue #192
 #       H2/M1 fail-closed escalation: provenance_check_skipped=True
 #       becomes exit code 3 / hard fail rather than warning). Caller may
 #       pass '0' to opt out for early-stage / dev contexts.
+#
+# NOTE on validator_ref (codex pass-2 LOW-1 fix): the protected ref the
+# validator script is loaded from is now HARDCODED to 'main' inside this
+# workflow rather than exposed as a caller-controlled input. This
+# eliminates a footgun where a future caller could accidentally pass a
+# non-protected ref. To re-introduce a ref override for testing /
+# dispatch, gate it behind an explicit `workflow_dispatch` block (NOT
+# `workflow_call`) so PR-controlled callers can never set it.
 
 on:
   workflow_call:
@@ -44,16 +60,18 @@ on:
         description: 'Newline-separated list of methodology artifact paths to validate.'
         required: true
         type: string
-      validator_ref:
-        description: 'Protected git ref to checkout for the validator script (default: main).'
-        required: false
-        type: string
-        default: 'main'
       strict_gh:
         description: '"1" to pass --strict-gh to the validator (fail-closed on missing gh provenance). Default "1".'
         required: false
         type: string
         default: '1'
+
+# Codex pass-2 LOW-1 fix: hardcode the protected validator ref. Caller
+# workflows can no longer override this via input. If the protected
+# branch ever needs to change, edit this value here in a CODEOWNERS-
+# gated change.
+env:
+  VALIDATOR_PROTECTED_REF: 'main'
 
 permissions:
   # Least-privilege: validator only needs to read PR metadata + repo
@@ -81,11 +99,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           # Issue #192 H3: load the validator script from the protected
-          # ref (default: main) into a SEPARATE workspace. This closes
-          # the "PR weakens validator and validates itself" attack class.
-          # The PR's content (artifacts) is read from `pr-checkout` above;
-          # the validator code is loaded from THIS checkout.
-          ref: ${{ inputs.validator_ref }}
+          # ref (HARDCODED 'main' via env.VALIDATOR_PROTECTED_REF) into
+          # a SEPARATE workspace. This closes script-only weakening
+          # (a PR that edits ONLY the validator script no longer affects
+          # the run). It does NOT close same-commit dual-edit of both
+          # workflow YAMLs — see the IMPORTANT comment block at the top
+          # of this file.
+          # Codex pass-2 LOW-1 fix: ref is no longer caller-controlled.
+          ref: ${{ env.VALIDATOR_PROTECTED_REF }}
           fetch-depth: 1
           path: validator-source
           # Sparse checkout: we only need the validator script. Avoids
@@ -102,11 +123,6 @@ jobs:
 
       - name: Verify validator source provenance
         working-directory: validator-source
-        env:
-          # Issue #192 codex pass-1 HIGH-2 hardening: route validator_ref
-          # through env so it cannot be a shell-injection sink even
-          # though actions/checkout above already validated it.
-          VALIDATOR_REF: ${{ inputs.validator_ref }}
         run: |
           set -euo pipefail
           # Defensive log: surface which ref the validator was loaded from
@@ -116,12 +132,14 @@ jobs:
           # the ancestry check (would require gh + token + complex logic
           # to handle force-pushes); branch protection on `main` is the
           # primary defense.
+          # VALIDATOR_PROTECTED_REF is set at workflow level (codex pass-2
+          # LOW-1 hardcode); read directly from env.
           VALIDATOR_SHA=$(git rev-parse HEAD)
-          echo "validator_ref=${VALIDATOR_REF}"
+          echo "validator_ref=${VALIDATOR_PROTECTED_REF}"
           echo "validator_sha=${VALIDATOR_SHA}"
           echo "validator_path=scripts/check_methodology_signoff.py"
           if [ ! -f scripts/check_methodology_signoff.py ]; then
-            echo "::error::validator script not found at protected ref ${VALIDATOR_REF}@${VALIDATOR_SHA}"
+            echo "::error::validator script not found at protected ref ${VALIDATOR_PROTECTED_REF}@${VALIDATOR_SHA}"
             exit 1
           fi
           # Compute and log the validator's content SHA so post-incident
@@ -158,7 +176,8 @@ jobs:
           # (FILENAME_PATTERN regex) rejects such filenames downstream,
           # but we MUST defend BEFORE invoking the validator.
           TOUCHED_FILES: ${{ inputs.touched_files }}
-          VALIDATOR_REF: ${{ inputs.validator_ref }}
+          # VALIDATOR_PROTECTED_REF is set at workflow level (codex
+          # pass-2 LOW-1 hardcode) and inherits into this step's env.
           VALIDATOR_PATH_ABS: ${{ github.workspace }}/validator-source/scripts/check_methodology_signoff.py
         working-directory: pr-checkout
         run: |
@@ -190,7 +209,7 @@ jobs:
           STATUS=0
           : > /tmp/validator_output.txt
 
-          echo "Using validator from: ${VALIDATOR_PATH_ABS} (ref=${VALIDATOR_REF})"
+          echo "Using validator from: ${VALIDATOR_PATH_ABS} (ref=${VALIDATOR_PROTECTED_REF})"
 
           # Issue #192 codex pass-1 HIGH-2 fix: iterate from the env-var
           # TOUCHED_FILES rather than from a here-string interpolated by
@@ -203,22 +222,35 @@ jobs:
             # Run validator from the protected-ref source against the
             # PR-checkout artifact. --strict-gh is set via STRICT_GH env
             # var (the validator honors both CLI flag and env).
+            #
+            # Codex pass-2 MED-1 fix: under `set -euo pipefail`, the bare
+            # `python3 ... | tee ...` pipeline EXITS THE SHELL on any
+            # non-zero validator rc, BEFORE the next line can read
+            # PIPESTATUS. We bracket the pipeline with `set +e` / `set -e`
+            # so the rc reaches the priority logic. PIPESTATUS[0] is the
+            # validator's exit (PIPESTATUS[1] is tee's, which we ignore).
+            set +e
             python3 "${VALIDATOR_PATH_ABS}" \
                   --repo-root "$REPO_ROOT" \
                   --require-signature \
                   "$ARTIFACT" 2>&1 | tee -a /tmp/validator_output.txt
-            # PIPESTATUS[0] = validator exit; PIPESTATUS[1] = tee exit.
-            # We only care about the validator. With set -o pipefail,
-            # tee inherits the validator's status, but reading
-            # PIPESTATUS[0] directly avoids the "tee succeeded but
-            # validator failed" ambiguity and lets us preserve exit 3
-            # vs exit 1.
             ARTIFACT_RC=${PIPESTATUS[0]}
+            set -e
             if [ "$ARTIFACT_RC" -ne 0 ]; then
               echo "::error file=$ARTIFACT::methodology sign-off validation failed (rc=$ARTIFACT_RC; rc=3 = STRICT_GH provenance gap)"
-              # Priority: rc=1 (generic validation fail) > rc=3
-              # (strict-gh) > 0. Mirrors the Python main()'s precedence.
-              if [ "$STATUS" -ne 1 ] && [ "$ARTIFACT_RC" -gt "$STATUS" ]; then
+              # Codex pass-2 MED-1 fix: explicit precedence with -eq
+              # comparisons (the prior `-gt` was wrong — `3 -gt 1` is
+              # true, so a later rc=1 would NOT overwrite an earlier
+              # rc=3 even though we want rc=1 to win).
+              # Priority (mirrors Python main()):
+              #   rc=1 (generic validation fail) > rc=3 (strict-gh) > rc=0.
+              if [ "$ARTIFACT_RC" -eq 1 ]; then
+                STATUS=1
+              elif [ "$ARTIFACT_RC" -eq 3 ] && [ "$STATUS" -eq 0 ]; then
+                STATUS=3
+              elif [ "$ARTIFACT_RC" -ne 0 ] && [ "$STATUS" -eq 0 ]; then
+                # Any other non-zero (e.g. rc=2 invocation error) only
+                # wins when STATUS is still 0; never overwrites 1 or 3.
                 STATUS="$ARTIFACT_RC"
               fi
             fi
@@ -241,15 +273,15 @@ jobs:
           # Issue #192 codex pass-1 HIGH-2 hardening: route every input
           # through env so the Summary step (which writes to
           # GITHUB_STEP_SUMMARY) is also free of GitHub-Actions
-          # expression-substitution sinks.
-          VALIDATOR_REF: ${{ inputs.validator_ref }}
+          # expression-substitution sinks. VALIDATOR_PROTECTED_REF
+          # inherits from workflow-level env (codex pass-2 LOW-1).
           STRICT_GH: ${{ inputs.strict_gh }}
           TOUCHED_FILES: ${{ inputs.touched_files }}
         run: |
           {
             echo "## Methodology Sign-off Guard"
             echo ""
-            echo "**Validator source ref:** \`${VALIDATOR_REF}\` (issue #192 H3)"
+            echo "**Validator source ref:** \`${VALIDATOR_PROTECTED_REF}\` (issue #192 H3, hardcoded)"
             echo "**STRICT_GH:** \`${STRICT_GH}\` (issue #192 H2/M1)"
             echo ""
             echo "Artifacts validated:"

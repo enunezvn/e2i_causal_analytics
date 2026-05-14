@@ -201,8 +201,13 @@ reusable-workflow split. The N3 guard is now two workflow files:
   Runs `python3 ${{ github.workspace }}/validator-source/scripts/check_methodology_signoff.py`
   against the PR-checkout artifacts. The validator code is sourced from
   the protected ref; the artifacts are sourced from the PR. This closes
-  the "PR weakens validator and validates itself in same commit" attack
-  class.
+  the **script-only** weakening attack (a PR that edits ONLY the
+  validator script no longer affects the run). It does NOT close the
+  same-commit dual-edit of both workflow YAMLs (codex pass-1 HIGH-1 +
+  pass-2 MED-2): the reusable workflow YAML itself is loaded from
+  caller's ref under same-repo `uses: ./...`, so a PR can edit BOTH
+  workflow YAMLs in one commit and disable the `ref: main` checkout.
+  See "Residual threats" below.
 
 **Architecture decision (with codex pass-1 HIGH-1 honesty
 correction).** Same-repo same-org reusable-workflow invocation
