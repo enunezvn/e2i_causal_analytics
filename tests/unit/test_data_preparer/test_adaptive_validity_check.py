@@ -3340,3 +3340,241 @@ class TestClassifyAblationSeverityCodexPass1:
         # Same setup with moderate z. Pre-fix: 'moderate'; post-fix: 'info'.
         row["z_score"] = 4.0
         assert _classify_ablation_severity(row) == "info"
+
+
+# ============================================================================
+# Issue #212 — Layer 4 fires on pre-joint-check severity.
+#
+# Pre-#212: when the issue #194 joint check clamped severity to ``info``
+# (z passes the band but |delta_AUC| ≤ floor), the orchestrator's Layer 4
+# trigger never fired — it read the joint-clamped ``severity`` field
+# instead of the underlying z-only band. That starved the LLM-verdict
+# audit channel for exactly the class of features the joint check was
+# designed to protect (legitimate weak signals).
+#
+# Post-#212: ``hblp_classify`` publishes ``severity_pre_joint_check``
+# (the z-only band before the joint-clamp downgrade), and the
+# orchestrator's Layer 4 trigger reads THAT field. The final
+# ``severity`` is unchanged (still joint-clamped — issue #194's bar is
+# preserved). The pre-joint-check severity is a parallel audit channel,
+# not a relaxation of the joint check.
+# ============================================================================
+
+
+class TestIssue212PreJointCheckSeverity:
+    """Pin the issue #212 contract on ``severity_pre_joint_check``."""
+
+    def test_hblp_classify_publishes_severity_pre_joint_check_high_z_weak_delta(
+        self,
+    ) -> None:
+        """When the joint check clamps a high-z signal to ``info`` because
+        ``|delta_AUC| ≤ floor``, ``severity_pre_joint_check`` MUST preserve
+        the ``high`` band that z alone would have selected.
+
+        Setup: z = 6.0σ (above HIGH_Z=5.0, n_pos=200 + declared_safe=False
+        so no HBLP relaxation), delta_auc = 0.05 (below 0.10 floor).
+        Pre-#212 the joint check downgraded severity to ``info`` and the
+        old z-band was unrecoverable. Post-#212 the new field carries it.
+        """
+        from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+            hblp_classify,
+        )
+
+        result = hblp_classify(
+            z_score=6.0,
+            n_positives=200,
+            layer_1_declared_safe=False,
+            delta_auc=0.05,  # below floor 0.10
+        )
+        assert result["severity"] == "info"  # joint check clamps
+        assert result["severity_pre_joint_check"] == "high"
+        assert result["delta_auc_below_floor"] is True
+
+    def test_hblp_classify_publishes_severity_pre_joint_check_moderate_z_weak_delta(
+        self,
+    ) -> None:
+        """Moderate-z signal clamped by joint check: severity_pre_joint_check
+        preserves the moderate band so Layer 4 can still see the signal.
+        """
+        from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+            hblp_classify,
+        )
+
+        result = hblp_classify(
+            z_score=4.0,  # in moderate band (3.0 < z ≤ 5.0)
+            n_positives=200,
+            layer_1_declared_safe=False,
+            delta_auc=0.03,  # below floor
+        )
+        assert result["severity"] == "info"  # joint check clamps
+        assert result["severity_pre_joint_check"] == "moderate"
+
+    def test_hblp_classify_severity_pre_matches_final_severity_when_joint_inactive(
+        self,
+    ) -> None:
+        """When the joint check does NOT fire (|delta_AUC| > floor),
+        ``severity_pre_joint_check`` MUST match the final ``severity``.
+        """
+        from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+            hblp_classify,
+        )
+
+        result = hblp_classify(
+            z_score=6.0,
+            n_positives=200,
+            layer_1_declared_safe=False,
+            delta_auc=0.25,  # well above floor
+        )
+        assert result["severity"] == "high"
+        assert result["severity_pre_joint_check"] == "high"
+        assert result["delta_auc_below_floor"] is False
+
+    def test_hblp_classify_severity_pre_matches_when_no_delta_auc_supplied(self) -> None:
+        """Legacy callers that omit ``delta_auc`` MUST see
+        ``severity_pre_joint_check == severity`` (no clamp to consider).
+        """
+        from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+            hblp_classify,
+        )
+
+        # Legacy call shape — no delta_auc.
+        result = hblp_classify(
+            z_score=6.0,
+            n_positives=200,
+            layer_1_declared_safe=False,
+        )
+        assert result["severity"] == "high"
+        assert result["severity_pre_joint_check"] == "high"
+
+        # Moderate z with no delta.
+        result2 = hblp_classify(
+            z_score=4.0,
+            n_positives=200,
+            layer_1_declared_safe=False,
+        )
+        assert result2["severity"] == "moderate"
+        assert result2["severity_pre_joint_check"] == "moderate"
+
+        # Info z with no delta.
+        result3 = hblp_classify(
+            z_score=2.0,
+            n_positives=200,
+            layer_1_declared_safe=False,
+        )
+        assert result3["severity"] == "info"
+        assert result3["severity_pre_joint_check"] == "info"
+
+    def test_hblp_classify_severity_pre_high_on_z_positive_inf_strong_effect(
+        self,
+    ) -> None:
+        """The z=+inf strong-effect escape (issue #194 codex pass-1 MED-1)
+        sets final severity=high; severity_pre_joint_check MUST match.
+        """
+        from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+            hblp_classify,
+        )
+
+        result = hblp_classify(
+            z_score=float("inf"),
+            n_positives=200,
+            layer_1_declared_safe=False,
+            delta_auc=0.50,  # well above floor
+        )
+        assert result["severity"] == "high"
+        assert result["severity_pre_joint_check"] == "high"
+
+    def test_adversarial_input_propagates_severity_pre_joint_check(self) -> None:
+        """``_adversarial_input`` MUST surface ``severity_pre_joint_check``
+        from the underlying ``hblp_classify`` result so the orchestrator
+        can read it for the Layer 4 trigger.
+        """
+        from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+            _adversarial_input,
+        )
+
+        # Weak-effect signal that the joint check clamps to info.
+        # z = 6.0, actual_auc=0.55, null_mean=0.50 → delta_auc=0.05 < floor 0.10
+        score = {
+            "z_score": 6.0,
+            "actual_auc": 0.55,
+            "null_mean": 0.50,
+            "null_std": 0.0083,
+            "p_value": 0.001,
+            "n_permutations": 200,
+        }
+        adv_input = _adversarial_input(
+            score,
+            n_train_pos=200,
+            layer_1_declared_safe=False,
+        )
+        assert adv_input["severity"] == "info"  # joint clamp
+        assert adv_input["severity_pre_joint_check"] == "high"
+        assert adv_input["delta_auc_below_floor"] is True
+        assert adv_input["_hblp_classified"] is True
+
+    def test_adversarial_input_degenerate_z_publishes_severity_pre_info(self) -> None:
+        """Degenerate z (NaN, None) → ``severity_pre_joint_check == 'info'``
+        matching the final ``severity``. No z-band to recover.
+        """
+        import math
+
+        from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+            _adversarial_input,
+        )
+
+        score = {
+            "z_score": float("nan"),
+            "actual_auc": float("nan"),
+            "null_mean": float("nan"),
+            "null_std": 0.0,
+            "p_value": 1.0,
+            "n_permutations": 0,
+        }
+        adv_input = _adversarial_input(
+            score,
+            n_train_pos=200,
+            layer_1_declared_safe=False,
+        )
+        assert adv_input["severity"] == "info"
+        assert adv_input["severity_pre_joint_check"] == "info"
+
+        # Also verify with z_score=None.
+        score2 = {**score, "z_score": None}
+        adv_input2 = _adversarial_input(
+            score2,
+            n_train_pos=200,
+            layer_1_declared_safe=False,
+        )
+        assert adv_input2["severity_pre_joint_check"] == "info"
+        # Quiet the unused-var lint on math import for static analyzers.
+        _ = math.nan
+
+    def test_adversarial_input_no_delta_auc_pre_matches_post(self) -> None:
+        """When ``compute_adversarial_score`` doesn't supply finite
+        actual_auc/null_mean (custom scorer), ``delta_auc`` is None and
+        joint check can't fire. ``severity_pre_joint_check`` MUST equal
+        the final ``severity``.
+        """
+        from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+            _adversarial_input,
+        )
+
+        score = {
+            "z_score": 4.0,
+            "actual_auc": float("nan"),  # missing; joint check skipped
+            "null_mean": float("nan"),
+            "null_std": 0.01,
+            "p_value": 0.0001,
+            "n_permutations": 200,
+        }
+        adv_input = _adversarial_input(
+            score,
+            n_train_pos=200,
+            layer_1_declared_safe=False,
+        )
+        # Note: actual_auc / null_mean are NaN so _adversarial_input
+        # gates them out; the verdict's "actual_auc" field becomes None.
+        # The joint check can't fire without delta_auc, so severity ==
+        # severity_pre_joint_check.
+        assert adv_input["severity"] == adv_input["severity_pre_joint_check"]
+        assert adv_input["severity"] == "moderate"  # z=4 in moderate band
