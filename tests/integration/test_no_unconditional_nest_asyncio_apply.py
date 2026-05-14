@@ -263,9 +263,7 @@ class _GuardedCallChecker(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:  # type: ignore[override]
         if self._matches_apply_call(node):
-            guarded = any(
-                self._is_guard_carrier(anc) for anc in self._ancestor_stack
-            )
+            guarded = any(self._is_guard_carrier(anc) for anc in self._ancestor_stack)
             (self.guarded if guarded else self.unguarded).append(node.lineno)
         # Recurse so nested calls (rare) are still inspected.
         self.generic_visit(node)
@@ -369,9 +367,7 @@ def test_nest_asyncio_apply_callsite_count_pinned() -> None:
         f"(expected {expected}, found {len(callsites)}). Audit each new "
         f"callsite for an is_running() / get_running_loop() guard and "
         f"update the pin if intentional. Callsites:\n"
-        + "\n".join(
-            f"  {p.relative_to(REPO_ROOT).as_posix()}:{ln}" for p, ln, _ in callsites
-        )
+        + "\n".join(f"  {p.relative_to(REPO_ROOT).as_posix()}:{ln}" for p, ln, _ in callsites)
     )
 
 
@@ -505,14 +501,8 @@ def test_ast_scan_catches_reassigned_module_attribute(tmp_path: pathlib.Path) ->
     detected. A polluter could trivially evade the import-based scan by
     binding apply to a fresh name; ``visit_Assign`` closes that gap."""
 
-    source = (
-        "import nest_asyncio\n"
-        "do_apply = nest_asyncio.apply\n"
-        "do_apply()\n"
-    )
-    guarded, unguarded = _scan_fragment(
-        tmp_path, "fragment_reassigned.py", source
-    )
+    source = "import nest_asyncio\ndo_apply = nest_asyncio.apply\ndo_apply()\n"
+    guarded, unguarded = _scan_fragment(tmp_path, "fragment_reassigned.py", source)
     assert unguarded == [3], (guarded, unguarded)
 
 
@@ -520,11 +510,7 @@ def test_ast_scan_catches_chained_reassignment(tmp_path: pathlib.Path) -> None:
     """``from nest_asyncio import apply; do = apply; do()`` — chained
     reassignment from an existing apply binding must propagate."""
 
-    source = (
-        "from nest_asyncio import apply\n"
-        "do = apply\n"
-        "do()\n"
-    )
+    source = "from nest_asyncio import apply\ndo = apply\ndo()\n"
     guarded, unguarded = _scan_fragment(tmp_path, "fragment_chain.py", source)
     assert unguarded == [3], (guarded, unguarded)
 
@@ -545,9 +531,7 @@ def test_ast_scan_reassignment_under_guard(tmp_path: pathlib.Path) -> None:
         "    if loop and loop.is_running():\n"
         "        do_apply()\n"
     )
-    guarded, unguarded = _scan_fragment(
-        tmp_path, "fragment_reassigned_guarded.py", source
-    )
+    guarded, unguarded = _scan_fragment(tmp_path, "fragment_reassigned_guarded.py", source)
     assert guarded == [10], (guarded, unguarded)
     assert not unguarded
 
