@@ -2497,3 +2497,372 @@ def test_phase29_stage2_pre_kg_mode_valid_modes_pass_through():
     assert _resolve_kg_mode("off") == "off"
     assert _resolve_kg_mode("shadow") == "shadow"
     assert _resolve_kg_mode("promoted") == "promoted"
+
+
+# =============================================================================
+# Issue #194 — Joint (z, |delta_AUC|) threshold for Layer 5 severity.
+#
+# These tests pin the joint-check semantics calibrated 2026-05-14:
+#
+#     severity ∈ {moderate, high}  ⇔  (z > k) AND (|delta_AUC| > epsilon)
+#
+# with ``k = HIGH_Z = 5.0`` and ``epsilon = LAYER5_DELTA_AUC_FLOOR_DEFAULT
+# = 0.10``. The floor is enforced INSIDE ``hblp_classify`` when its
+# optional ``delta_auc`` kwarg is supplied; legacy callers that don't
+# thread ``delta_auc`` see legacy z-only behaviour. See the long-form
+# comment in ``adaptive_validity_check.py`` for the calibration sweep.
+#
+# Coverage:
+#   1. The floor downgrades severity=high → info when |delta_AUC| ≤ floor.
+#   2. The floor downgrades severity=moderate → info when |delta_AUC| ≤ floor.
+#   3. The floor does NOT downgrade when |delta_AUC| > floor (real leak).
+#   4. ``delta_auc=None`` (legacy z-only) preserves legacy severity.
+#   5. Non-finite ``delta_auc`` (NaN) preserves legacy z-only behaviour.
+#   6. ``_adversarial_input`` threads delta_AUC from the score dict
+#      (integration with hblp_classify).
+#   7. End-to-end node behaviour at n=10000 with a benign weak-correlation
+#      feature: FPR ≤ 1% on benign features (the issue body's acceptance
+#      criterion). Uses a constructed cohort where the benign feature
+#      delta_AUC is below the floor but z is above HIGH_Z.
+#   8. End-to-end node behaviour preserves TPR on injected leaks at n=2000
+#      (small-n behaviour unchanged for real leakage signals).
+# =============================================================================
+
+
+def test_issue_194_hblp_floor_downgrades_high_when_below_floor():
+    """Joint check fires: z > HIGH_Z but |delta_AUC| ≤ floor → severity=info."""
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        LAYER5_DELTA_AUC_FLOOR_DEFAULT,
+        hblp_classify,
+    )
+
+    # z=8σ (well above 5σ), delta_AUC=0.05 (well below the 0.10 floor).
+    cls = hblp_classify(
+        z_score=8.0,
+        n_positives=500,
+        layer_1_declared_safe=False,
+        delta_auc=0.05,
+    )
+    assert cls["severity"] == "info", (
+        f"Joint check should force info; got {cls['severity']}, rationale={cls['rationale']}"
+    )
+    assert cls["delta_auc_below_floor"] is True
+    assert cls["delta_auc"] == 0.05
+    assert cls["delta_auc_floor"] == LAYER5_DELTA_AUC_FLOOR_DEFAULT
+    # The rationale must explicitly mention the joint-check reason so
+    # audit-trail readers see WHY the high-z feature was kept.
+    assert "joint check" in cls["rationale"].lower() or "#194" in cls["rationale"]
+
+
+def test_issue_194_hblp_floor_downgrades_moderate_when_below_floor():
+    """z in moderate band but |delta_AUC| ≤ floor → severity=info."""
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        hblp_classify,
+    )
+
+    # z=4σ (between MODERATE_Z=3σ and HIGH_Z=5σ), delta_AUC=0.05 below floor.
+    cls = hblp_classify(
+        z_score=4.0,
+        n_positives=500,
+        layer_1_declared_safe=False,
+        delta_auc=0.05,
+    )
+    assert cls["severity"] == "info"
+    assert cls["delta_auc_below_floor"] is True
+
+
+def test_issue_194_hblp_floor_does_not_downgrade_real_leak():
+    """When |delta_AUC| > floor, severity=high is preserved (no false negative)."""
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        hblp_classify,
+    )
+
+    # Real leak: z=40σ AND delta_AUC=0.4 (above floor).
+    cls = hblp_classify(
+        z_score=40.0,
+        n_positives=500,
+        layer_1_declared_safe=False,
+        delta_auc=0.4,
+    )
+    assert cls["severity"] == "high", f"Real leak must stay high; got {cls['severity']}"
+    assert cls["delta_auc_below_floor"] is False
+    assert cls["delta_auc"] == 0.4
+
+
+def test_issue_194_hblp_floor_inactive_when_delta_auc_none():
+    """``delta_auc=None`` (legacy z-only call) preserves z-only behaviour."""
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        hblp_classify,
+    )
+
+    # z=8σ, no delta_auc supplied → legacy z-only branch.
+    cls = hblp_classify(
+        z_score=8.0,
+        n_positives=500,
+        layer_1_declared_safe=False,
+    )
+    assert cls["severity"] == "high"
+    # Audit fields are populated even when the floor was inactive.
+    assert cls["delta_auc"] is None
+    assert cls["delta_auc_below_floor"] is False
+
+
+def test_issue_194_hblp_floor_inactive_when_delta_auc_nan():
+    """``delta_auc=nan`` (degenerate score) preserves z-only behaviour."""
+    import math
+
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        hblp_classify,
+    )
+
+    cls = hblp_classify(
+        z_score=8.0,
+        n_positives=500,
+        layer_1_declared_safe=False,
+        delta_auc=math.nan,
+    )
+    assert cls["severity"] == "high"
+    assert cls["delta_auc"] is None
+    assert cls["delta_auc_below_floor"] is False
+
+
+def test_issue_194_adversarial_input_threads_delta_auc_from_score():
+    """``_adversarial_input`` computes delta_AUC and threads it to hblp_classify."""
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _adversarial_input,
+    )
+
+    # Construct a score dict where z is well above HIGH_Z but
+    # |delta_AUC| = 0.05 < floor=0.10. Without the joint check this
+    # would emit severity=high; with the joint check it emits info.
+    score = {
+        "z_score": 8.0,
+        "actual_auc": 0.55,
+        "null_mean": 0.50,
+        "null_std": 0.00625,  # 0.05 / 8
+        "p_value": 0.005,
+        "n_permutations": 200,
+    }
+    ad = _adversarial_input(score, n_train_pos=500, layer_1_declared_safe=False)
+    assert ad["severity"] == "info", (
+        f"Joint check must propagate via _adversarial_input; got {ad['severity']}, "
+        f"evidence={ad['evidence']}"
+    )
+    assert ad["remediation"] == "keep"
+    # The evidence text records the joint-check footnote.
+    assert "194" in ad["evidence"] or "joint check" in ad["evidence"].lower()
+
+
+def test_issue_194_adversarial_input_real_leak_stays_high():
+    """``_adversarial_input`` retains severity=high for real leaks."""
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _adversarial_input,
+    )
+
+    score = {
+        "z_score": 40.0,
+        "actual_auc": 0.95,
+        "null_mean": 0.55,
+        "null_std": 0.01,
+        "p_value": 0.0,
+        "n_permutations": 200,
+    }
+    ad = _adversarial_input(score, n_train_pos=500, layer_1_declared_safe=False)
+    assert ad["severity"] == "high"
+    assert ad["remediation"] == "drop"
+
+
+def test_issue_194_layer5_benign_fpr_at_n_10k_under_one_percent():
+    """Layer 5 acceptance criterion: FPR ≤ 1% on benign weak predictors at n=10000.
+
+    Calls the production severity classifier
+    (``_adversarial_input`` → ``hblp_classify``) over 10 i.i.d. synthetic
+    cohorts at n=10000 from ``synthetic_rwd_realistic`` (signal_scale=1.0)
+    on the benign 'age' feature, and asserts that severity=high fires
+    on 0 of 10 cohorts (matches the calibration sweep result; the larger
+    50-replicate sweep at
+    ``scripts/calibration/run_layer5_joint_threshold_sweep.py`` confirmed
+    0 flags out of 50 runs at the calibrated (k=5.0, ε=0.10)).
+
+    Test-cost note: a 30-replicate version (matching the calibration
+    sweep's seed count) crashed pytest-xdist workers (16-worker OOM at
+    30 × 10k DataFrames × 200 permutations). 10 replicates × 200
+    permutations × n=10000 is enough to detect a regression that
+    re-introduces large-n FPR (pre-fix flag rate was ~40%, so even a
+    single flag in 10 trials would be 17x the new joint-check FPR).
+
+    'age' is a legitimate weak predictor in ``_generate_target`` (per
+    the regime's calibration) — its single-feature AUC is ~0.54, with
+    delta_AUC empirically < 0.10 (the calibrated floor). Pre-issue-#194
+    the legacy 5σ threshold flagged it ~40% of the time at n=10k.
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _adversarial_input,
+    )
+    from src.data.adversarial_leakage import compute_adversarial_score
+    from src.repositories.synthetic_rwd_realistic import (
+        RwdRealisticConfig,
+        generate_rwd_realistic,
+    )
+
+    n_replicates = 10
+    n_flagged = 0
+    n_run = 0
+    for trial in range(n_replicates):
+        cohort = generate_rwd_realistic(
+            RwdRealisticConfig(
+                n_patients=10000,
+                prevalence=0.024,
+                missing_demo_rate=0.0,
+                signal_scale=1.0,
+                seed=42 + trial,
+            )
+        )
+        target = cohort["treatment_initiated"].to_numpy(dtype=int)
+        if len(np.unique(target)) < 2:
+            continue
+        age = cohort["age"].to_numpy(dtype=float)
+        score = compute_adversarial_score(age, target, n_permutations=200, seed=7)
+        ad = _adversarial_input(
+            score, n_train_pos=int(np.sum(target == 1)), layer_1_declared_safe=False
+        )
+        n_run += 1
+        if ad["severity"] == "high":
+            n_flagged += 1
+    fpr = n_flagged / n_run if n_run > 0 else float("nan")
+    assert n_flagged == 0, (
+        f"Issue #194 acceptance criterion: severity=high on benign 'age' must "
+        f"be 0 at n=10000 (FPR ≤ 1% target); observed {n_flagged}/{n_run} "
+        f"(empirical FPR={fpr:.2%})"
+    )
+
+
+def test_issue_194_layer5_tpr_preserved_on_injected_leaks_at_n_2000():
+    """End-to-end Layer 5 acceptance criterion (companion to FPR test):
+    TPR on injected leak patterns at n=2000 stays at 100% — joint check
+    does NOT degrade small-n leakage detection.
+
+    Runs the full node ONCE per leak pattern at n=2000 (cheap; 8k rows
+    per cohort × 1 replicate = ~40MB transient). Asserts each of the 4
+    injection patterns is flagged. Same pattern as the pre-existing
+    ``test_post_index_aggregation_leak_is_caught_by_layer_3`` at the
+    score-only level; here we verify it propagates through the full
+    node post-issue-#194 joint check.
+
+    The calibration sweep at
+    ``scripts/calibration/run_layer5_joint_threshold_sweep.py`` showed
+    minimum injected-leak |delta_AUC|=0.354 (treatment_leaked_code at
+    n=2000), well above the 0.10 floor — joint check fires on z AND
+    delta_AUC, so leak detection is unchanged.
+    """
+    from src.repositories.synthetic_rwd_realistic import (
+        RwdRealisticConfig,
+        generate_rwd_realistic,
+    )
+
+    leak_patterns_and_cols = [
+        ("post_index_aggregation", "post_index_med_count_LEAK"),
+        ("post_hoc_termination", "months_remaining_eligibility_LEAK"),
+        ("treatment_leaked_code", "has_z79_long_term_drug_LEAK"),
+        ("spurious_correlation", "spurious_score_LEAK"),
+    ]
+    for pattern, leak_col in leak_patterns_and_cols:
+        cohort = generate_rwd_realistic(
+            RwdRealisticConfig(
+                n_patients=2000,
+                prevalence=0.024,
+                missing_demo_rate=0.0,
+                signal_scale=1.0,
+                leakage_pattern=pattern,
+                seed=42,
+            )
+        )
+        train_df = pd.DataFrame(
+            {
+                leak_col: cohort[leak_col].to_numpy(dtype=float),
+                "age": cohort["age"].to_numpy(dtype=float),
+                "treatment_initiated": cohort["treatment_initiated"].to_numpy(dtype=int),
+            }
+        )
+        state = _make_state(train_df, "treatment_initiated", feature_manifest_source=None)
+        result = _run(state)
+        flagged = set(result.get("adaptive_flagged_features") or [])
+        assert leak_col in flagged, (
+            f"Issue #194 acceptance criterion: joint check must preserve "
+            f"TPR=100% on injected leak pattern {pattern!r}; "
+            f"got flagged={flagged}"
+        )
+
+
+def test_issue_194_floor_constant_pinned_to_calibrated_value():
+    """Pin the calibrated floor at 0.10. Future changes to this value
+    require a new sweep — codex pass-1 question (a) preservation pin.
+
+    The value 0.10 is the upper-rounded p99 of legitimate weak demo
+    features at n=10000 from the calibration sweep (run via
+    ``scripts/calibration/run_layer5_joint_threshold_sweep.py``). Lower
+    values fail the FPR ≤ 1% criterion; higher values are safe but
+    cost detection precision on borderline leaks.
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        LAYER5_DELTA_AUC_FLOOR_DEFAULT,
+    )
+
+    assert LAYER5_DELTA_AUC_FLOOR_DEFAULT == 0.10, (
+        "Calibrated value pinned at 0.10. Any change must re-run "
+        "scripts/calibration/run_layer5_joint_threshold_sweep.py and "
+        "update both this assertion and the long-form code comment "
+        "in adaptive_validity_check.py."
+    )
+
+
+@pytest.mark.parametrize("n", [1000, 5000, 10000, 50000])
+def test_issue_194_joint_check_holds_across_cohort_sizes(n: int):
+    """Codex pass-1 question (a): the joint check must hold the FPR
+    contract across n ∈ {1k, 5k, 10k, 50k}.
+
+    This is a single-cohort smoke at each n (not a full sweep — that's
+    in ``scripts/calibration/run_layer5_joint_threshold_sweep.py``). We
+    verify that for the canonical benign 'age' feature, ``_adversarial_
+    input`` does NOT emit severity=high when delta_AUC stays below the
+    calibrated floor.
+
+    Three-cohort replication per n to reduce single-seed flake risk
+    while keeping the test fast (≤ ~30s total across all n).
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _adversarial_input,
+    )
+    from src.data.adversarial_leakage import compute_adversarial_score
+    from src.repositories.synthetic_rwd_realistic import (
+        RwdRealisticConfig,
+        generate_rwd_realistic,
+    )
+
+    n_high = 0
+    n_run = 0
+    for trial in range(3):
+        cohort = generate_rwd_realistic(
+            RwdRealisticConfig(
+                n_patients=n,
+                prevalence=0.024,
+                missing_demo_rate=0.0,
+                signal_scale=1.0,
+                seed=42 + trial,
+            )
+        )
+        target = cohort["treatment_initiated"].to_numpy(dtype=int)
+        if len(np.unique(target)) < 2:
+            continue
+        age = cohort["age"].to_numpy(dtype=float)
+        score = compute_adversarial_score(age, target, n_permutations=200, seed=7)
+        n_run += 1
+        ad = _adversarial_input(score, n_train_pos=int(np.sum(target == 1)))
+        if ad["severity"] == "high":
+            n_high += 1
+    # Three replicates × FPR ≤ 1% target → expect 0 false positives at
+    # any n. Anchored at 0/3 not "≤ 1" to keep the regression strict.
+    assert n_high == 0, (
+        f"Joint check failed at n={n}: severity=high on {n_high}/{n_run} "
+        f"benign 'age' cohorts; expected 0 false positives."
+    )

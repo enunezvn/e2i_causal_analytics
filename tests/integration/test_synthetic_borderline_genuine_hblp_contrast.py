@@ -145,13 +145,33 @@ def borderline_arms_results(borderline_train_df):
 def test_v5_c2_legacy_drops_hblp_retains_borderline_genuine(
     borderline_train_df, borderline_arms_results
 ):
-    """v5 §2 C2 acceptance — legacy DROPS, HBLP RETAINS at z in (5σ, 7.5σ).
+    """v5 §2 C2 acceptance — BOTH arms RETAIN at z in (5σ, 7.5σ) post-issue-#194.
 
     ENGINEERING CI SANITY-CHECK — NOT RWD positive-evidence.
 
-    Both arm results come from the module-scoped fixture so
-    ``adaptive_validity_check`` runs at most twice across the whole
-    contrast suite. Asserts opposite verdicts at identical z.
+    Pre-issue-#194 the contract was "legacy DROPS, HBLP RETAINS": the
+    legacy 5σ z-threshold flagged the borderline_genuine feature, while
+    HBLP's 7.5σ effective threshold under ``layer_1_declared_safe=True``
+    retained it. The borderline_genuine generator constants
+    (``BORDERLINE_GENUINE_TREATED_MEAN=0.06``) were chosen so the
+    injected feature lands at AUC ≈ 0.55 with ``|delta_AUC| ≈ 0.05``,
+    placing z in the (5σ, 7.5σ) HBLP relaxation band.
+
+    Issue #194 closure (2026-05-14): the joint check
+    ``severity ∈ {moderate, high}  ⇔  (z > k) AND (|delta_AUC| > epsilon=0.10)``
+    now applies to BOTH arms. Since the borderline_genuine
+    ``|delta_AUC| ≈ 0.05`` is below the 0.10 floor, BOTH arms retain
+    the feature — the joint check correctly classifies it as a benign
+    weak signal, NOT a leak. HBLP's variance-inflation prior remains
+    active (verified by ``test_v5_c2_hblp_relaxation_actually_fired``
+    via the direct ``hblp_classify`` call) but the joint check fires
+    earlier in the decision tree on the legacy arm too.
+
+    The narrative preserved: the borderline_genuine pattern is a
+    NEGATIVE control — a feature that legitimately weak-correlates
+    with the target but should NOT be dropped. The fix changes who is
+    responsible for the correct decision (joint check vs HBLP), not
+    the decision itself for the HBLP arm.
     """
     train_df, _ = borderline_train_df
     feature = BORDERLINE_GENUINE_FEATURE_NAME
@@ -161,11 +181,15 @@ def test_v5_c2_legacy_drops_hblp_retains_borderline_genuine(
     hblp_result = borderline_arms_results["hblp"]
     legacy_flagged = set(legacy_result.get("adaptive_flagged_features") or [])
     hblp_flagged = set(hblp_result.get("adaptive_flagged_features") or [])
-    assert feature in legacy_flagged, (
-        f"v5 C2 contract: legacy arm should DROP {feature!r} at z > 5σ; flagged={legacy_flagged}"
+    # Issue #194: BOTH arms retain the borderline_genuine feature
+    # because |delta_AUC| ≈ 0.05 < 0.10 floor. The legacy arm now
+    # benefits from the joint check the same way HBLP did before.
+    assert feature not in legacy_flagged, (
+        f"Issue #194 contract: legacy arm should RETAIN {feature!r} via "
+        f"joint check (|delta_AUC| ≈ 0.05 ≤ floor 0.10); flagged={legacy_flagged}"
     )
     assert feature not in hblp_flagged, (
-        f"v5 C2 contract: HBLP arm should RETAIN {feature!r} at z < 7.5σ; flagged={hblp_flagged}"
+        f"v5 C2 + issue #194: HBLP arm should RETAIN {feature!r}; flagged={hblp_flagged}"
     )
 
     legacy_verdict = next(v for v in legacy_result["adaptive_verdicts"] if v["feature"] == feature)
@@ -176,11 +200,25 @@ def test_v5_c2_legacy_drops_hblp_retains_borderline_genuine(
         f"z_score must be identical across arms (threshold is the only difference). "
         f"legacy={z_legacy}, hblp={z_hblp}"
     )
-    # Decision contract: severity differs across arms even though z is identical.
-    assert legacy_verdict["severity"] == "high"
-    assert hblp_verdict["severity"] in {"moderate", "info"}
+    # Issue #194: both arms now classify as ``info`` (z above HIGH_Z
+    # but |delta_AUC| ≤ floor → joint check forces info). HBLP's
+    # variance-relaxation prior is verified independently by the
+    # ``test_v5_c2_hblp_relaxation_actually_fired`` test below — that
+    # one directly invokes ``hblp_classify`` without the |delta_AUC|
+    # input, isolating the HBLP relaxation mechanism.
+    assert legacy_verdict["severity"] == "info"
+    assert hblp_verdict["severity"] == "info"
     assert legacy_verdict["layer"] == "3"
     assert hblp_verdict["layer"] == "3"
+    # Audit trail: the legacy-arm evidence string must mention the
+    # joint check (#194) so an audit reader sees WHY the high-z
+    # feature was kept.
+    assert (
+        "194" in legacy_verdict["evidence"] or "joint check" in legacy_verdict["evidence"].lower()
+    ), (
+        f"Issue #194: legacy verdict must record joint-check rationale; "
+        f"got evidence={legacy_verdict['evidence']!r}"
+    )
 
 
 @pytest.mark.integration

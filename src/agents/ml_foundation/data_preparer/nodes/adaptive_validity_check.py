@@ -175,6 +175,60 @@ DEFAULT_PERMUTATIONS = 200
 # backlog item #11.c so future tightening can change one place.
 MIN_LAYER3_SAMPLES = 30
 
+# Issue #194 — Joint (z, |delta_AUC|) threshold for Layer 5 severity.
+#
+# Problem reproduced 2026-05-14 at n in {1k, 5k, 10k, 50k} via
+# ``scripts/calibration/run_layer5_joint_threshold_sweep.py``: the legacy
+# 5σ z-threshold alone over-flags legitimate weak demographic predictors
+# at large n. The permutation-null std scales as ~1/sqrt(n) per the CLT
+# (measured: null_std ≈ 0.029 at n=1k → 0.010 at n=10k → 0.004 at n=50k
+# on the synthetic_rwd_realistic regime). At n=10k a benign feature with
+# single-feature AUC=0.54 yields z ≈ 4σ; at n=50k the same feature yields
+# z ≈ 16σ — well above any z-only threshold yet domain-trivial.
+#
+# Decision (user, issue #194): adopt the joint check
+#     ``severity ∈ {moderate, high}  ⇔  (z > k) AND (|delta_AUC| > epsilon)``
+# where ``delta_AUC = actual_auc - null_mean`` on the folded AUC-ROC scale
+# (the same scale ``compute_adversarial_score`` already produces). The
+# absolute-effect floor is interpretable in the pharma domain: a feature
+# whose single-feature AUC is less than ``epsilon`` above chance is not
+# an actionable leakage signal — at clinically-relevant sample sizes
+# (n ≥ 1000) any leak worth dropping has delta_AUC well above this floor.
+#
+# Calibration (2026-05-14, sweep grid k ∈ {3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0}
+# × epsilon ∈ {0.0, 0.005, 0.01, 0.02, 0.03, 0.05, 0.06, 0.07, 0.08, 0.09,
+# 0.10, 0.12, 0.15} across N_REP=50 cohorts at each n):
+#
+#   - Legitimate weak demographic features (age, eligibility_duration_days
+#     under signal_scale=1.0): empirical p99 of |delta_AUC| at n=10k is
+#     0.0913; max observed across all n in {1k, 5k, 10k, 50k} is 0.1334.
+#   - Injected leak patterns (post_index_aggregation, post_hoc_termination,
+#     treatment_leaked_code, spurious_correlation): minimum observed
+#     |delta_AUC| is 0.354 (treatment_leaked_code at n=2000) — well above
+#     any reasonable epsilon floor.
+#   - The benign-vs-leak window is wide ([0.13, 0.35]); choice of epsilon
+#     within that window is robust.
+#
+# Chosen: ``k = HIGH_Z (5.0)`` (no relaxation in z; preserves HBLP wiring
+# and the legacy 5σ contract for callers that override) and
+# ``epsilon = 0.10`` (rounded up from the empirical p99=0.0913 with a
+# small safety margin — same shape as PR #153's T2.2 buffer-fitting
+# rule ``floor(P5 margin * 100) / 100 - 0.01 safety``, applied to the
+# upper-tail of benign delta_AUC instead of the lower-tail of legitimate
+# margin).
+#
+# Measured FPR at (k=5.0, epsilon=0.10) on legitimate weak predictors:
+# 0% at n ∈ {1k, 5k, 10k, 50k}; TPR=100% on all 4 injected leak patterns
+# at n=2000. Loosening to (k=4.5, epsilon=0.09) still meets FPR ≤ 1% at
+# every n; tightening (smaller epsilon) reintroduces large-n
+# false-positives.
+#
+# Lifecycle: this is the runtime threshold (NOT an observability-only
+# advisory). It is enforced in ``hblp_classify`` for severity ∈ {high,
+# moderate}; severity=info is unchanged. See
+# ``calibration_runs/issue_194_sweep.jsonl`` for the full sweep output.
+LAYER5_DELTA_AUC_FLOOR_DEFAULT: float = 0.10
+
 
 # ============================================================================
 # Plan v3 §3 Tier 1B step 2 — Hierarchical Bayesian Leakage Prior (HBLP)
@@ -264,6 +318,8 @@ def hblp_classify(
     layer_1_declared_safe: bool,
     base_threshold: float = HIGH_Z,
     moderate_base_threshold: float = MODERATE_Z,
+    delta_auc: Optional[float] = None,
+    delta_auc_floor: float = LAYER5_DELTA_AUC_FLOOR_DEFAULT,
     **kwargs: Any,
 ) -> Dict[str, Any]:
     """Plan v3 §3 Tier 1B step 2 — HBLP-aware Layer 3 severity classifier.
@@ -279,6 +335,40 @@ def hblp_classify(
       * ``layer_1_factor``: float, 1.5x for declared-safe else 1.0
       * ``hblp_relaxed``: bool, True iff effective > base
       * ``rationale``: str, explanation
+
+    Issue #194 — joint ``(z, |delta_AUC|)`` threshold:
+
+      When ``delta_auc`` is supplied AND ``|delta_auc| <= delta_auc_floor``,
+      severity is FORCED to ``info`` even if z exceeds the HBLP-effective
+      high/moderate band. This is the joint check
+      ``severity ∈ {moderate, high}  ⇔  (z > k) AND (|delta_auc| > epsilon)``
+      adopted in issue #194; it prevents large-n false-positives on
+      legitimate weak predictors whose null variance has shrunk per CLT
+      below the absolute-effect floor of pharma-actionable leakage.
+
+      Backwards compatibility: callers that DO NOT supply ``delta_auc``
+      (legacy code paths, tests that build classifications from raw z
+      alone) see the legacy z-only behaviour. The joint check fires ONLY
+      when ``delta_auc`` is explicitly provided AND finite. Non-finite
+      ``delta_auc`` (NaN / inf) is treated as "delta_AUC unknown" and the
+      classification falls through to the z-only path.
+
+    Args:
+        z_score: Permutation-anchored z-score (folded-AUC scale).
+        n_positives: Train-split positive-class count (drives HBLP variance
+            inflation).
+        layer_1_declared_safe: True iff the feature's manifest contract
+            declared knowable_at <= index_date.
+        base_threshold: Pre-HBLP z-threshold for severity=high (default 5σ).
+        moderate_base_threshold: Pre-HBLP z-threshold for severity=moderate
+            (default 3σ).
+        delta_auc: Signed ``actual_auc - null_mean`` on the folded AUC-ROC
+            scale, when known. Optional; when omitted (None) or non-finite,
+            the joint check does not fire and the classifier falls through
+            to legacy z-only behaviour.
+        delta_auc_floor: Absolute-effect floor (``epsilon``). Severity is
+            forced to "info" when ``|delta_auc| <= delta_auc_floor``.
+            Default 0.10 per issue #194 calibration sweep.
     """
     high_eff = hblp_effective_z_threshold(
         n_positives=n_positives,
@@ -291,21 +381,61 @@ def hblp_classify(
     relaxation_factor = high_eff / float(base_threshold)
     moderate_eff = float(moderate_base_threshold) * relaxation_factor
 
+    # Issue #194 — joint check. Compute the |delta_AUC| floor outcome
+    # BEFORE the z-only ladder so the rationale string can carry the
+    # joint-check decision uniformly. ``delta_auc`` is optional; when
+    # None or non-finite we treat the floor as inactive.
+    delta_auc_known = delta_auc is not None and bool(np.isfinite(delta_auc))
+    delta_auc_below_floor = delta_auc_known and abs(float(delta_auc)) <= float(delta_auc_floor)
+
     if not _is_finite_z(z_score):
         severity = "info"
         rationale = "z_score is non-finite; HBLP defaults to severity=info"
     elif z_score > high_eff:
-        severity = "high"
-        rationale = (
-            f"z={z_score:.2f}σ > HBLP-effective {high_eff:.2f}σ "
-            f"(base={base_threshold}σ × inflation={relaxation_factor:.2f})"
-        )
+        if delta_auc_below_floor:
+            # Joint check fires: z passes the high band but |delta_AUC|
+            # is below the absolute-effect floor. Force severity=info
+            # so a legitimate large-n weak predictor isn't dropped.
+            severity = "info"
+            rationale = (
+                f"z={z_score:.2f}σ > HBLP-effective {high_eff:.2f}σ but "
+                f"|delta_AUC|={abs(float(delta_auc)):.4f} ≤ floor "
+                f"{float(delta_auc_floor):.4f}; joint check forces "
+                f"severity=info (issue #194)"
+            )
+        else:
+            severity = "high"
+            joint_note = (
+                f", |delta_AUC|={abs(float(delta_auc)):.4f} > floor {float(delta_auc_floor):.4f}"
+                if delta_auc_known
+                else ""
+            )
+            rationale = (
+                f"z={z_score:.2f}σ > HBLP-effective {high_eff:.2f}σ "
+                f"(base={base_threshold}σ × inflation={relaxation_factor:.2f})"
+                f"{joint_note}"
+            )
     elif z_score > moderate_eff:
-        severity = "moderate"
-        rationale = (
-            f"z={z_score:.2f}σ between moderate {moderate_eff:.2f}σ and "
-            f"high {high_eff:.2f}σ (HBLP-inflated)"
-        )
+        if delta_auc_below_floor:
+            # Same joint logic for the moderate band.
+            severity = "info"
+            rationale = (
+                f"z={z_score:.2f}σ in HBLP moderate band but "
+                f"|delta_AUC|={abs(float(delta_auc)):.4f} ≤ floor "
+                f"{float(delta_auc_floor):.4f}; joint check forces "
+                f"severity=info (issue #194)"
+            )
+        else:
+            severity = "moderate"
+            joint_note = (
+                f", |delta_AUC|={abs(float(delta_auc)):.4f} > floor {float(delta_auc_floor):.4f}"
+                if delta_auc_known
+                else ""
+            )
+            rationale = (
+                f"z={z_score:.2f}σ between moderate {moderate_eff:.2f}σ and "
+                f"high {high_eff:.2f}σ (HBLP-inflated){joint_note}"
+            )
     else:
         severity = "info"
         rationale = f"z={z_score:.2f}σ ≤ HBLP-effective moderate {moderate_eff:.2f}σ"
@@ -328,6 +458,12 @@ def hblp_classify(
         "n_positives": int(n_positives),
         "layer_1_declared_safe": layer_1_declared_safe,
         "rationale": rationale,
+        # Issue #194 — joint-check audit fields. Always populated so
+        # downstream readers (audit JSON sidecar, dashboards) can see
+        # whether the joint check was active and what the floor was.
+        "delta_auc": (float(delta_auc) if delta_auc_known else None),
+        "delta_auc_floor": float(delta_auc_floor),
+        "delta_auc_below_floor": bool(delta_auc_below_floor),
     }
 
 
@@ -651,16 +787,39 @@ def _adversarial_input(
         # evidence string. ``n_train_pos`` falls back to the reference
         # N (no inflation) when unset — preserves legacy 5σ/3σ
         # behaviour for callers that don't thread cohort metadata.
-        # Tier 1 invariant: ``hblp_classify`` signature is unchanged.
+        # Tier 1 invariant: ``hblp_classify`` accepts the additional
+        # optional ``delta_auc`` kwarg for the issue #194 joint check;
+        # legacy z-only callers see legacy behaviour because the floor
+        # only fires when ``delta_auc`` is finite.
         effective_n_pos = (
             int(n_train_pos)
             if n_train_pos is not None and n_train_pos > 0
             else T2_1B_HBLP_VARIANCE_INFLATION_REFERENCE_N
         )
+        # Issue #194 — thread ``delta_AUC = actual_auc - null_mean``
+        # into the classifier so the joint check ``(z > k) AND
+        # (|delta_AUC| > epsilon)`` fires for severity ∈ {moderate,
+        # high}. ``compute_adversarial_score`` always populates both
+        # fields when the score is non-degenerate; we recompute the
+        # difference here rather than carry it through the score dict
+        # to keep ``compute_adversarial_score``'s output schema stable.
+        # If either input is non-finite (only possible if a custom
+        # scorer fills the score dict by hand), the classifier sees
+        # ``delta_auc=None`` and falls through to z-only behaviour.
+        if (
+            isinstance(auc, (int, float))
+            and isinstance(null_mean, (int, float))
+            and np.isfinite(auc)
+            and np.isfinite(null_mean)
+        ):
+            delta_auc_arg: Optional[float] = float(auc) - float(null_mean)
+        else:
+            delta_auc_arg = None
         classification = hblp_classify(
             z_score=float(z),
             n_positives=effective_n_pos,
             layer_1_declared_safe=bool(layer_1_declared_safe),
+            delta_auc=delta_auc_arg,
         )
         severity = classification["severity"]
         high_eff = classification["effective_high_threshold"]
@@ -673,6 +832,18 @@ def _adversarial_input(
             f"n_train_pos={effective_n_pos}, "
             f"layer_1_declared_safe={bool(layer_1_declared_safe)}]"
             if hblp_relaxed
+            else ""
+        )
+        # Issue #194 — joint-check audit footnote. When the joint check
+        # has fired (severity forced from {high, moderate} → info), the
+        # evidence string must record BOTH the z-evidence and the
+        # |delta_AUC|-floor decision so downstream audit readers can see
+        # why a feature with z above HIGH_Z was nonetheless kept.
+        joint_check_footnote = (
+            f" [joint check #194: |delta_AUC|={abs(float(delta_auc_arg)):.4f} "
+            f"≤ floor {LAYER5_DELTA_AUC_FLOOR_DEFAULT:.4f}; "
+            f"z above HBLP band but absolute effect below pharma-actionable threshold]"
+            if classification.get("delta_auc_below_floor")
             else ""
         )
         if severity == "high":
@@ -696,7 +867,7 @@ def _adversarial_input(
             evidence = (
                 f"Layer 3 adversarial discriminator: z={z:.2f}σ "
                 f"(below {moderate_eff:.2f}σ HBLP-effective noise floor); "
-                f"legitimate weak signal{relaxation_note}"
+                f"legitimate weak signal{relaxation_note}{joint_check_footnote}"
             )
         z_input = float(z)
 
