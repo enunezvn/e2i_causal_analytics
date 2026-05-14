@@ -1,5 +1,7 @@
 """RWD-realistic synthetic data generator (Phase S of adaptive-temporal-validity).
 
+Canonical design reference: ``docs/synthetic_v3_design.md`` (Phase S.3 closure).
+
 Faithfully reproduces the structural challenges of ConcertAI claims data
 (or analogous specialty-pharma RWD) so the agentic ML pipeline can be tested
 on data that LOOKS like what it'll see in production.

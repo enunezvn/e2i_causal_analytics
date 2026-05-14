@@ -1,5 +1,17 @@
 """Synthetic regimes — generator + tier0 e2e contracts.
 
+Canonical design reference: docs/synthetic_v3_design.md
+
+This file covers the legacy ``SampleDataGenerator.ml_patients()`` regimes
+(``default`` / ``adverse`` / ``clean``). The ``rwd_realistic`` regime added
+in Phase S of adaptive-temporal-validity ships in
+``src/repositories/synthetic_rwd_realistic.py`` and is exercised by
+``tests/unit/test_data/test_synthetic_rwd_realistic.py`` (unit) and
+``tests/integration/test_layer_5_pipeline_integration.py`` +
+``tests/integration/test_synthetic_borderline_genuine_hblp_contrast.py``
+(integration). See ``docs/synthetic_v3_design.md`` for the canonical design
+reference covering both regime families.
+
 Originally the adverse-regime smoke test (Block 4 / Findings #7, #8, #12);
 extended in Section A of pre_phase2_unblockers to cover three regimes:
 
