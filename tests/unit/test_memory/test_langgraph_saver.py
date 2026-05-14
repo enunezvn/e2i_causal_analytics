@@ -64,7 +64,7 @@ class TestCreateCheckpointer:
         import sys
 
         mock_cls = MagicMock()
-        mock_cls.from_conn_string.return_value = mock_redis_saver
+        mock_cls.return_value = mock_redis_saver
         mock_module = MagicMock()
         mock_module.RedisSaver = mock_cls
 
@@ -73,7 +73,7 @@ class TestCreateCheckpointer:
             {"langgraph.checkpoint.redis": mock_module},
         ):
             result = create_checkpointer(redis_url="redis://custom:6380")
-            mock_cls.from_conn_string.assert_called_once_with("redis://custom:6380")
+            mock_cls.assert_called_once_with(redis_url="redis://custom:6380")
             assert result == mock_redis_saver
 
     def test_uses_env_var_when_no_url_provided(self, mock_redis_saver):
@@ -81,7 +81,7 @@ class TestCreateCheckpointer:
         import sys
 
         mock_cls = MagicMock()
-        mock_cls.from_conn_string.return_value = mock_redis_saver
+        mock_cls.return_value = mock_redis_saver
         mock_module = MagicMock()
         mock_module.RedisSaver = mock_cls
 
@@ -91,7 +91,7 @@ class TestCreateCheckpointer:
                 {"langgraph.checkpoint.redis": mock_module},
             ):
                 create_checkpointer()
-                mock_cls.from_conn_string.assert_called_once_with("redis://env-host:6379")
+                mock_cls.assert_called_once_with(redis_url="redis://env-host:6379")
 
     def test_falls_back_to_memory_on_import_error(self, mock_memory_saver):
         """Should fall back to MemorySaver when import fails."""
@@ -103,7 +103,7 @@ class TestCreateCheckpointer:
             def RedisSaver(self):
                 raise ImportError("Not installed")
 
-        # First, force the import to work but have from_conn_string fail
+        # First, force the import to work but have RedisSaver construction fail
         with patch.dict(sys.modules, {"langgraph.checkpoint.redis": None}):
             with patch(
                 "langgraph.checkpoint.memory.MemorySaver",
@@ -128,7 +128,7 @@ class TestCreateCheckpointer:
         import sys
 
         mock_cls = MagicMock()
-        mock_cls.from_conn_string.side_effect = ConnectionError("Connection refused")
+        mock_cls.side_effect = ConnectionError("Connection refused")
         mock_module = MagicMock()
         mock_module.RedisSaver = mock_cls
 
@@ -148,7 +148,7 @@ class TestCreateCheckpointer:
         import sys
 
         mock_cls = MagicMock()
-        mock_cls.from_conn_string.side_effect = Exception("Connection refused")
+        mock_cls.side_effect = Exception("Connection refused")
         mock_module = MagicMock()
         mock_module.RedisSaver = mock_cls
 
@@ -168,7 +168,7 @@ class TestCreateCheckpointer:
         os.environ.pop("REDIS_URL", None)
 
         mock_cls = MagicMock()
-        mock_cls.from_conn_string.return_value = mock_redis_saver
+        mock_cls.return_value = mock_redis_saver
         mock_module = MagicMock()
         mock_module.RedisSaver = mock_cls
 
@@ -177,7 +177,7 @@ class TestCreateCheckpointer:
             {"langgraph.checkpoint.redis": mock_module},
         ):
             create_checkpointer()
-            mock_cls.from_conn_string.assert_called_once_with("redis://localhost:6382")
+            mock_cls.assert_called_once_with(redis_url="redis://localhost:6382")
 
 
 # ============================================================================
@@ -194,7 +194,7 @@ class TestCreateAsyncCheckpointer:
 
         mock_saver = MagicMock()
         mock_cls = MagicMock()
-        mock_cls.from_conn_string.return_value = mock_saver
+        mock_cls.return_value = mock_saver
         mock_module = MagicMock()
         mock_module.AsyncRedisSaver = mock_cls
 
@@ -203,7 +203,7 @@ class TestCreateAsyncCheckpointer:
             {"langgraph.checkpoint.redis.aio": mock_module},
         ):
             result = create_async_checkpointer(redis_url="redis://custom:6380")
-            mock_cls.from_conn_string.assert_called_once_with("redis://custom:6380")
+            mock_cls.assert_called_once_with(redis_url="redis://custom:6380")
             assert result == mock_saver
 
     def test_falls_back_to_memory_on_import_error(self, mock_memory_saver):
@@ -232,7 +232,7 @@ class TestCreateAsyncCheckpointer:
         import sys
 
         mock_cls = MagicMock()
-        mock_cls.from_conn_string.side_effect = Exception("Connection refused")
+        mock_cls.side_effect = Exception("Connection refused")
         mock_module = MagicMock()
         mock_module.AsyncRedisSaver = mock_cls
 
@@ -252,7 +252,7 @@ class TestCreateAsyncCheckpointer:
         import sys
 
         mock_cls = MagicMock()
-        mock_cls.from_conn_string.side_effect = Exception("Connection refused")
+        mock_cls.side_effect = Exception("Connection refused")
         mock_module = MagicMock()
         mock_module.AsyncRedisSaver = mock_cls
 
@@ -313,7 +313,7 @@ class TestCheckpointerConfig:
 
         mock_saver = MagicMock()
         mock_cls = MagicMock()
-        mock_cls.from_conn_string.return_value = mock_saver
+        mock_cls.return_value = mock_saver
         mock_module = MagicMock()
         mock_module.RedisSaver = mock_cls
 
@@ -323,7 +323,7 @@ class TestCheckpointerConfig:
         ):
             config = CheckpointerConfig(redis_url="redis://config-test:6379")
             config.create_checkpointer()
-            mock_cls.from_conn_string.assert_called_once_with("redis://config-test:6379")
+            mock_cls.assert_called_once_with(redis_url="redis://config-test:6379")
 
     def test_create_async_checkpointer_method(self):
         """Should create async checkpointer using configuration."""
@@ -331,7 +331,7 @@ class TestCheckpointerConfig:
 
         mock_saver = MagicMock()
         mock_cls = MagicMock()
-        mock_cls.from_conn_string.return_value = mock_saver
+        mock_cls.return_value = mock_saver
         mock_module = MagicMock()
         mock_module.AsyncRedisSaver = mock_cls
 
@@ -341,7 +341,7 @@ class TestCheckpointerConfig:
         ):
             config = CheckpointerConfig(redis_url="redis://config-async:6379")
             config.create_async_checkpointer()
-            mock_cls.from_conn_string.assert_called_once_with("redis://config-async:6379")
+            mock_cls.assert_called_once_with(redis_url="redis://config-async:6379")
 
 
 # ============================================================================
