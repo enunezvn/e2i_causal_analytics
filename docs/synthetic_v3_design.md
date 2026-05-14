@@ -5,14 +5,16 @@ ships in [`src/repositories/synthetic_rwd_realistic.py`](../src/repositories/syn
 
 Closes Phase S.3 of `.claude/plans/adaptive_temporal_validity_redesign.md` (line 266).
 
-> **Premise correction (issue #200, verified 2026-05-14 against source):** the
-> plan and the issue body both speak of "5 leakage variants"; the regime
-> actually exposes **6 active variants** plus the `"none"` no-op
-> (post-`borderline_genuine` addition). `signal_scale` was introduced by
-> **PR #153** (commit `99f77fc6`, backlog #135 — NOT PR #148, which shipped
-> v5 B2 Cox + RSF survival modeling). Both corrections were applied to this
-> document rather than to the plan/issue body so the source remains the
-> ground truth.
+> **Premise corrections (issue #200, verified 2026-05-14 against source):**
+> the issue body says "5 leakage variants"; the regime's `LeakagePattern`
+> Literal has **7 values**: 4 leak branches (`post_index_aggregation`,
+> `post_hoc_termination`, `treatment_leaked_code`, `spurious_correlation`),
+> 1 pure-noise `CONTROL` (`pure_noise`), 1 declared-safe Gate C2
+> sanity-check (`borderline_genuine`), and 1 `"none"` no-op. The issue
+> body also credits `signal_scale` to PR #148; the actual PR is **#153**
+> (commit `99f77fc6`, backlog #135). PR #148 shipped v5 B2 Cox + RSF
+> survival modeling. Corrections applied to this doc, not the issue body,
+> so source remains ground truth.
 
 ---
 
@@ -21,12 +23,13 @@ Closes Phase S.3 of `.claude/plans/adaptive_temporal_validity_redesign.md` (line
 The legacy `clean` and `default` regimes in
 [`src/repositories/sample_data.py`](../src/repositories/sample_data.py)
 produce a val_AUC ≈ 0.87 on tier-0 (see
-[`tests/synthetic/test_synthetic_regimes.py:401`](../tests/synthetic/test_synthetic_regimes.py)).
+[`tests/synthetic/test_synthetic_regimes.py:413`](../tests/synthetic/test_synthetic_regimes.py)
+— `val_auc=0.8746`).
 That is unrealistically high for a claims-only specialty-pharma model.
 Published claims-only initiation models for CSU, AD and severe asthma
 converge in `val_AUC ∈ [0.61, 0.67]`, and the information-theoretic
 ceiling for the 6-feature / 2.4 %-prevalence regime sits at `[0.62, 0.68]`
-([regime source lines 9-13](../src/repositories/synthetic_rwd_realistic.py)).
+([regime source lines 11-14](../src/repositories/synthetic_rwd_realistic.py)).
 
 Training the leakage-defense pipeline on the easy regime hides RWD-shape
 leaks (vendor-encoded post-hoc fields, partial-panel masking). The
@@ -36,25 +39,28 @@ adaptive-temporal-validity test suite.
 Origin: codex research output 2026-05-07, option (c) hybrid — keep the
 existing regimes for plumbing tests, add `rwd_realistic` for production-
 shape testing
-([regime source lines 42-43](../src/repositories/synthetic_rwd_realistic.py)).
+([regime source lines 44-45](../src/repositories/synthetic_rwd_realistic.py)).
 
 ---
 
 ## 2. Regime invariants
 
 All defaults are pinned in `RwdRealisticConfig`
-([regime source lines 114-134](../src/repositories/synthetic_rwd_realistic.py)).
+([regime source lines 116-136](../src/repositories/synthetic_rwd_realistic.py)).
 
 | Invariant                       | Default | Source line                                                                       |
 |---------------------------------|---------|-----------------------------------------------------------------------------------|
-| `n_patients`                    | 7000    | [`synthetic_rwd_realistic.py:118`](../src/repositories/synthetic_rwd_realistic.py) |
-| `prevalence`                    | 0.024   | [`synthetic_rwd_realistic.py:119`](../src/repositories/synthetic_rwd_realistic.py) |
-| `panel_fragmentation_rate`     | 0.50    | [`synthetic_rwd_realistic.py:120`](../src/repositories/synthetic_rwd_realistic.py) |
-| `missing_demo_rate`             | 0.05    | [`synthetic_rwd_realistic.py:121`](../src/repositories/synthetic_rwd_realistic.py) |
-| `signal_scale`                  | 1.0     | [`synthetic_rwd_realistic.py:131`](../src/repositories/synthetic_rwd_realistic.py) |
-| `leakage_pattern`               | `"none"`| [`synthetic_rwd_realistic.py:122`](../src/repositories/synthetic_rwd_realistic.py) |
-| `seed`                          | 42      | [`synthetic_rwd_realistic.py:132`](../src/repositories/synthetic_rwd_realistic.py) |
-| Pinned val_AUC honest band      | `[0.62, 0.68]` | [`synthetic_rwd_realistic.py:263`](../src/repositories/synthetic_rwd_realistic.py) |
+| `n_patients`                    | 7000    | [`synthetic_rwd_realistic.py:120`](../src/repositories/synthetic_rwd_realistic.py) |
+| `prevalence`                    | 0.024   | [`synthetic_rwd_realistic.py:121`](../src/repositories/synthetic_rwd_realistic.py) |
+| `panel_fragmentation_rate`     | 0.50    | [`synthetic_rwd_realistic.py:122`](../src/repositories/synthetic_rwd_realistic.py) |
+| `missing_demo_rate`             | 0.05    | [`synthetic_rwd_realistic.py:123`](../src/repositories/synthetic_rwd_realistic.py) |
+| `leakage_pattern`               | `"none"`| [`synthetic_rwd_realistic.py:124`](../src/repositories/synthetic_rwd_realistic.py) |
+| `leakage_strength`              | 1.0     | [`synthetic_rwd_realistic.py:125`](../src/repositories/synthetic_rwd_realistic.py) |
+| `signal_scale`                  | 1.0     | [`synthetic_rwd_realistic.py:133`](../src/repositories/synthetic_rwd_realistic.py) |
+| `seed`                          | 42      | [`synthetic_rwd_realistic.py:134`](../src/repositories/synthetic_rwd_realistic.py) |
+| `start_date` / `end_date`       | 2022-01-01 / 2024-12-31 | [`synthetic_rwd_realistic.py:135-136`](../src/repositories/synthetic_rwd_realistic.py) |
+| Pinned val_AUC honest band      | `[0.62, 0.68]` | [`synthetic_rwd_realistic.py:265`](../src/repositories/synthetic_rwd_realistic.py) |
+| Output cols `is_fragmented` / `observation_months` | — | [`synthetic_rwd_realistic.py:253-254`](../src/repositories/synthetic_rwd_realistic.py) |
 
 ### 2.1 Prevalence 0.024
 
@@ -68,19 +74,19 @@ prevalence stays within ±1 pp of the configured target — pinned by
 
 `panel_fragmentation_rate=0.50` means ~50 % of patients have < 12 months
 of observation, plus ~5 % have demographics-only with no clinical claims
-([regime source lines 23-25](../src/repositories/synthetic_rwd_realistic.py)).
+([regime source lines 25-27](../src/repositories/synthetic_rwd_realistic.py)).
 Pinned by
 [`tests/unit/test_data/test_synthetic_rwd_realistic.py:56-67` (`test_panel_fragmentation_rate`)](../tests/unit/test_data/test_synthetic_rwd_realistic.py).
 Fragmented patients also get index 1-6 months post-enrollment
 (non-fragmented: 6-18 months);
-[`_generate_eligibility` at lines 217-225](../src/repositories/synthetic_rwd_realistic.py)
+[`_generate_eligibility` at lines 219-225](../src/repositories/synthetic_rwd_realistic.py)
 threads this into the `eligeff → index_date → eligend` window calculation
 that the `post_hoc_termination` leak exploits.
 
 ### 2.3 The pinned val_AUC honest band `[0.62, 0.68]`
 
 The 4 demographic coefficients in `_generate_target` (0.25 / 0.45 / 0.20 /
-0.15, [regime source lines 282-289](../src/repositories/synthetic_rwd_realistic.py))
+0.15, [regime source lines 287-290](../src/repositories/synthetic_rwd_realistic.py))
 are tuned so that a vanilla XGBoost trained on the leakage-clean feature
 set lands in `val_AUC ∈ [0.62, 0.68]`. This matches the published
 claims-only ceiling and is *the* discriminating contract that flags
@@ -103,7 +109,7 @@ unrealistic generators.
 
 Six demographics + four eligibility fields, no labs, no clinical severity,
 no prior-medication history
-([regime source lines 20-22](../src/repositories/synthetic_rwd_realistic.py)).
+([regime source lines 22-24](../src/repositories/synthetic_rwd_realistic.py)).
 This matches CSU vendor-data limitations and is the reason the achievable
 AUC ceiling is the modest `[0.62, 0.68]` band rather than 0.87+.
 
@@ -111,7 +117,7 @@ AUC ceiling is the modest `[0.62, 0.68]` band rather than 0.87+.
 
 Missing-data masking is conditioned on insurance product (medicaid_managed,
 exchange, other) — not MCAR
-([`_apply_missing_data` lines 373-383](../src/repositories/synthetic_rwd_realistic.py)).
+([`_apply_missing_data` lines 375-383](../src/repositories/synthetic_rwd_realistic.py)).
 This matches ConcertAI claims-data missingness patterns.
 
 ---
@@ -125,16 +131,16 @@ defense
 
 | Variant                     | Type                | Column name suffix     | Source line                                                                       |
 |-----------------------------|---------------------|------------------------|-----------------------------------------------------------------------------------|
-| `none`                      | no-op (default)     | (no column added)      | [`synthetic_rwd_realistic.py:308-309`](../src/repositories/synthetic_rwd_realistic.py) |
-| `post_index_aggregation`    | leak                | `_LEAK`                | [`synthetic_rwd_realistic.py:314-319`](../src/repositories/synthetic_rwd_realistic.py) |
-| `post_hoc_termination`      | leak                | `_LEAK`                | [`synthetic_rwd_realistic.py:321-328`](../src/repositories/synthetic_rwd_realistic.py) |
-| `treatment_leaked_code`     | leak                | `_LEAK`                | [`synthetic_rwd_realistic.py:330-334`](../src/repositories/synthetic_rwd_realistic.py) |
-| `spurious_correlation`      | leak                | `_LEAK`                | [`synthetic_rwd_realistic.py:336-340`](../src/repositories/synthetic_rwd_realistic.py) |
-| `pure_noise`                | CONTROL (must not flag) | `_CONTROL`           | [`synthetic_rwd_realistic.py:342-344`](../src/repositories/synthetic_rwd_realistic.py) |
-| `borderline_genuine`        | v5 Gate C2 sanity-check | manifest-anchored name | [`synthetic_rwd_realistic.py:346-363`](../src/repositories/synthetic_rwd_realistic.py) |
+| `none`                      | no-op (default)     | (no column added)      | [`synthetic_rwd_realistic.py:310`](../src/repositories/synthetic_rwd_realistic.py) |
+| `post_index_aggregation`    | leak                | `_LEAK`                | [`synthetic_rwd_realistic.py:316-321`](../src/repositories/synthetic_rwd_realistic.py) |
+| `post_hoc_termination`      | leak                | `_LEAK`                | [`synthetic_rwd_realistic.py:323-330`](../src/repositories/synthetic_rwd_realistic.py) |
+| `treatment_leaked_code`     | leak                | `_LEAK`                | [`synthetic_rwd_realistic.py:332-336`](../src/repositories/synthetic_rwd_realistic.py) |
+| `spurious_correlation`      | leak                | `_LEAK`                | [`synthetic_rwd_realistic.py:338-342`](../src/repositories/synthetic_rwd_realistic.py) |
+| `pure_noise`                | CONTROL (must not flag) | `_CONTROL`           | [`synthetic_rwd_realistic.py:344-346`](../src/repositories/synthetic_rwd_realistic.py) |
+| `borderline_genuine`        | declared-safe sanity-check | manifest-anchored name | [`synthetic_rwd_realistic.py:348-365`](../src/repositories/synthetic_rwd_realistic.py) |
 
 The `Literal` type that pins the variant set is at
-[`synthetic_rwd_realistic.py:68-76`](../src/repositories/synthetic_rwd_realistic.py)
+[`synthetic_rwd_realistic.py:70-78`](../src/repositories/synthetic_rwd_realistic.py)
 — any new variant must extend it.
 
 ### 3.1 `post_index_aggregation`
@@ -142,7 +148,7 @@ The `Literal` type that pins the variant set is at
 A feature that counts events strictly post-index. By construction the
 column is `target * rng.integers(1, 10, n)` so untreated patients land at
 0 deterministically
-([line 319](../src/repositories/synthetic_rwd_realistic.py)).
+([line 321](../src/repositories/synthetic_rwd_realistic.py)).
 Should be caught by Layer 1 (temporal-validity declaration) when the
 manifest's `knowable_at` window is enforced.
 
@@ -151,7 +157,7 @@ manifest's `knowable_at` window is enforced.
 A vendor-encoded `months_remaining_eligibility` feature where `eligend`
 reflects the actual post-hoc termination. Untreated patients get
 `12 + N(6, 3)`, treated patients get `3 + N(2, 1)`
-([lines 325-328](../src/repositories/synthetic_rwd_realistic.py)).
+([lines 327-330](../src/repositories/synthetic_rwd_realistic.py)).
 Should be caught by Layer 3 (statistical drift / single-feature AUC
 inspection) and by Layer 1 when `eligend` is correctly declared
 `knowable_at=post-event`.
@@ -161,7 +167,7 @@ inspection) and by Layer 1 when `eligend` is correctly declared
 A boolean `has_z79_long_term_drug_LEAK` flag. ICD-Z79.899 ("encounter for
 long-term drug therapy") is assigned post-treatment; the leak rate is
 `0.85 * strength` for treated vs 0.05 for untreated
-([line 332](../src/repositories/synthetic_rwd_realistic.py)).
+([line 334](../src/repositories/synthetic_rwd_realistic.py)).
 Should be caught by Layer 1 (Z79 is in the deny-list) and by Layer 2
 (adversarial-leakage z-score).
 
@@ -169,14 +175,14 @@ Should be caught by Layer 1 (Z79 is in the deny-list) and by Layer 2
 
 A "high single-feature AUC but no causal path" leak — a Gaussian whose
 mean depends on the target (treated: N(2, 0.5), untreated: N(0, 0.5))
-([lines 338-340](../src/repositories/synthetic_rwd_realistic.py)).
+([lines 340-342](../src/repositories/synthetic_rwd_realistic.py)).
 Should be caught by Layer 3 (statistical inspection) since the per-feature
 discrimination is visible without any temporal signal.
 
 ### 3.5 `pure_noise` — CONTROL
 
 A pure-noise `random_noise_CONTROL` column
-([line 344](../src/repositories/synthetic_rwd_realistic.py)). Each layer
+([line 346](../src/repositories/synthetic_rwd_realistic.py)). Each layer
 **must NOT** flag this; doing so is a false-positive regression.
 
 ### 3.6 `borderline_genuine` — v5 Gate C2 engineering sanity-check
@@ -184,11 +190,11 @@ A pure-noise `random_noise_CONTROL` column
 A class-conditional Gaussian tuned so the permutation-null z lands in the
 HBLP variance-relaxation band `[5σ, 7.5σ]` at `n_patients=20000`,
 `prevalence=0.024`, `seed=42`
-([regime source lines 99-111, 347-363](../src/repositories/synthetic_rwd_realistic.py)).
+([regime source lines 109-113 — calibration constants — and 348-365 — injection branch](../src/repositories/synthetic_rwd_realistic.py)).
 
 The injected feature is declared `knowable_at=index_date` in the synthetic
 feature manifest
-([`src/data/manifests/synthetic_feature_manifest.py:43`](../src/data/manifests/synthetic_feature_manifest.py)),
+([`src/data/manifests/synthetic_feature_manifest.py:48`](../src/data/manifests/synthetic_feature_manifest.py)),
 so the pipeline sees it as Layer 1 declared-safe.
 
 Contract: legacy 5σ → DROP, HBLP `5σ × 1.5 = 7.5σ` declared-safe →
@@ -200,16 +206,16 @@ pins this contrast.
 evidence** — the synthetic generator can produce any AUC by construction;
 the test pins that the pipeline routing (legacy vs HBLP) decides correctly
 at the boundary
-([regime source lines 94-98](../src/repositories/synthetic_rwd_realistic.py)).
+([regime source lines 96-100](../src/repositories/synthetic_rwd_realistic.py)).
 
 ---
 
 ## 4. The `signal_scale` knob
 
 `RwdRealisticConfig.signal_scale: float = 1.0`
-([source line 131](../src/repositories/synthetic_rwd_realistic.py)) is a
+([source line 133](../src/repositories/synthetic_rwd_realistic.py)) is a
 multiplier on the **4 demographic coefficients** in `_generate_target`
-([lines 282-289](../src/repositories/synthetic_rwd_realistic.py)).
+([lines 287-290](../src/repositories/synthetic_rwd_realistic.py)).
 
 - `signal_scale = 1.0` (default) reproduces the pinned `[0.62, 0.68]`
   val_AUC band — the published claims-only ceiling.
@@ -238,7 +244,7 @@ AUCs; backlog #135 needed `[0.55, 0.85]`.
 
 The executable spec for the regime is
 [`tests/unit/test_data/test_synthetic_rwd_realistic.py`](../tests/unit/test_data/test_synthetic_rwd_realistic.py)
-(20 tests, ~334 LOC). It pins:
+(14 tests, 334 LOC). It pins:
 
 - Cohort shape + required columns
   ([`test_basic_generation_shape`](../tests/unit/test_data/test_synthetic_rwd_realistic.py))
@@ -248,7 +254,7 @@ The executable spec for the regime is
   ([`test_panel_fragmentation_rate`](../tests/unit/test_data/test_synthetic_rwd_realistic.py))
 - Each leakage variant produces the expected column shape +
   adversarial-leakage z-score
-  ([file lines 99-330](../tests/unit/test_data/test_synthetic_rwd_realistic.py))
+  ([file lines 92-334](../tests/unit/test_data/test_synthetic_rwd_realistic.py))
 
 End-to-end pipeline contracts on the `rwd_realistic` regime live in:
 
@@ -276,14 +282,14 @@ calibration. It:
    [`run_t22_synth_sweep.py:58-66` (`TARGET_AUC_TO_SIGNAL_SCALE`)](../scripts/calibration/run_t22_synth_sweep.py).
 2. Generates a cohort at `n_patients=1400`, `prevalence=0.10`,
    `missing_demo_rate=0.0`
-   ([lines 72-74](../scripts/calibration/run_t22_synth_sweep.py)).
+   ([lines 71-73](../scripts/calibration/run_t22_synth_sweep.py)).
 3. Trains a logistic regression on the same 4 demographic features that
    `_generate_target` uses
-   ([`_extract_target_features` lines 79-95](../scripts/calibration/run_t22_synth_sweep.py)
+   ([`_extract_target_features` lines 79-96](../scripts/calibration/run_t22_synth_sweep.py)
    — must stay in lockstep with the regime's coefficient set).
 4. Calls `compute_permutation_test` (200 permutations) and emits one
    JSONL row per cell
-   ([lines 124-149](../scripts/calibration/run_t22_synth_sweep.py)).
+   ([lines 137-149](../scripts/calibration/run_t22_synth_sweep.py)).
 
 The downstream aggregator
 [`scripts/calibration/aggregate_t22_sweep.py`](../scripts/calibration/aggregate_t22_sweep.py)
@@ -309,21 +315,21 @@ result: `0.05` provisional → `0.04` calibrated, pinned at
 A future PR touching this regime is at risk of silently breaking the
 calibration. The reviewer must verify:
 
-1. **The 4 demographic coefficients** in `_generate_target` (line 282-289)
+1. **The 4 demographic coefficients** in `_generate_target` (lines 287-290)
    AND **`_extract_target_features` in `run_t22_synth_sweep.py`**
-   (lines 89-94) — these MUST be the same feature set with the same
+   (lines 89-95) — these MUST be the same feature set with the same
    normalisation. Adding a 5th coefficient to one without the other
    silently breaks the T2.2 sweep.
 2. **The `[0.62, 0.68]` honest-band band** is currently hardcoded as a
-   calibration anchor in the regime docstring (line 263) AND repeated in
+   calibration anchor in the regime docstring (line 265) AND repeated in
    `evaluator.py:156`. Both must move together if the band is widened.
-3. **The `BORDERLINE_GENUINE_*` constants** (regime lines 107-111) AND
-   the manifest declaration (`synthetic_feature_manifest.py:43`) AND the
+3. **The `BORDERLINE_GENUINE_*` constants** (regime lines 109-113) AND
+   the manifest declaration (`synthetic_feature_manifest.py:48`) AND the
    HBLP threshold (5σ × 1.5) must agree, otherwise the v5 Gate C2 sanity
    test passes / fails for the wrong reason.
-4. **The `LeakagePattern` Literal type** (line 68-76) is the canonical
+4. **The `LeakagePattern` Literal type** (lines 70-78) is the canonical
    list of variants. The branch dispatch in `_inject_leakage` (lines
-   308-363) must cover exactly the same set.
+   310-365) must cover exactly the same set.
 
 ---
 
