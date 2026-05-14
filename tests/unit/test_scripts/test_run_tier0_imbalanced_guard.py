@@ -246,3 +246,102 @@ class TestScenarioToDataframeImbalanceGuard:
         with pytest.raises(ValueError) as excinfo:
             generate_sample_data(_generator="scenario_a", imbalance_ratio=0.05, seed=42)
         assert "#21.7" in str(excinfo.value)
+
+    # ----- codex pass-2 LOW-1: regime-aware redirect at ratio=0.50 -----
+
+    @pytest.mark.parametrize("scenario_regime", ["scenario_b", "scenario_c"])
+    def test_direct_call_at_half_scenario_bc_offers_dual_path(self, scenario_regime: str) -> None:
+        """scenario_b/c have no balanced variant — at ratio=0.50 the redirect
+        must offer BOTH scenario_a_balanced (different DGP, balanced) AND
+        legacy regimes (post-hoc relabel). A naive "use scenario_a_balanced"
+        would mislead users who picked scenario_b/c for their DGP.
+        """
+        with pytest.raises(ValueError) as excinfo:
+            _scenario_to_dataframe(scenario_regime, seed=42, imbalance_ratio=0.50)
+        msg = str(excinfo.value)
+        assert "scenario_a_balanced" in msg, (
+            f"{scenario_regime} + 0.50 must offer scenario_a_balanced as one option; got: {msg!r}"
+        )
+        assert "legacy" in msg.lower(), (
+            f"{scenario_regime} + 0.50 must also offer legacy regimes as the "
+            f"fidelity-preserving option; got: {msg!r}"
+        )
+
+    def test_direct_call_at_half_scenario_a_balanced_says_already_balanced(self) -> None:
+        """scenario_a_balanced + 0.50 must NOT redirect to itself (the user is
+        ALREADY using the balanced regime); the redirect must tell them to
+        drop the imbalance_ratio flag instead.
+        """
+        with pytest.raises(ValueError) as excinfo:
+            _scenario_to_dataframe("scenario_a_balanced", seed=42, imbalance_ratio=0.50)
+        msg = str(excinfo.value)
+        assert "already" in msg.lower(), (
+            f"scenario_a_balanced + 0.50 must indicate the regime is already balanced; got: {msg!r}"
+        )
+        assert "drop" in msg.lower(), (
+            f"scenario_a_balanced + 0.50 must tell user to drop imbalance_ratio; got: {msg!r}"
+        )
+
+    # ----- codex pass-2 LOW-2: edge-ratio + ordering coverage -----
+
+    @pytest.mark.parametrize("ratio", [0.0, 1.0, -0.5, float("nan")])
+    def test_direct_call_with_edge_ratio_raises(self, ratio: float) -> None:
+        """Any non-None imbalance_ratio is rejected — including boundary (0.0,
+        1.0), negative, and NaN values. The semantic check is `is not None`,
+        not value validation: scenarios refuse ALL post-hoc relabel regardless
+        of ratio shape.
+        """
+        with pytest.raises(ValueError) as excinfo:
+            _scenario_to_dataframe("scenario_a", seed=42, imbalance_ratio=ratio)
+        assert "#21.7" in str(excinfo.value), (
+            f"Edge ratio {ratio!r} must still hit the function guard with the "
+            f"backlog #21.7 citation; got: {excinfo.value!s}"
+        )
+
+    def test_unknown_regime_with_ratio_raises_regime_error_first(self) -> None:
+        """When BOTH the regime is invalid AND imbalance_ratio is set, the
+        regime-validation ValueError must fire FIRST (it is the first check
+        in the function body). Pins the ordering so a future refactor that
+        re-orders checks does not silently swallow invalid-regime errors.
+        """
+        with pytest.raises(ValueError) as excinfo:
+            _scenario_to_dataframe("not_a_real_regime", seed=42, imbalance_ratio=0.05)
+        assert "unknown synthetic_v2 regime" in str(excinfo.value), (
+            f"Regime-validation error must fire before imbalance_ratio guard; "
+            f"got: {excinfo.value!s}"
+        )
+
+
+def test_imbalanced_0_50_scenario_b_cli_offers_dual_path() -> None:
+    """CLI mirror of codex pass-2 LOW-1: --regime scenario_b + --imbalanced 0.50
+    must offer BOTH scenario_a_balanced AND legacy-regime paths in the parser
+    error message.
+    """
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(RUNNER),
+            "--regime",
+            "scenario_b",
+            "--imbalanced",
+            "0.50",
+            "--no-bentoml",
+            "--no-save",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        cwd=str(REPO_ROOT),
+    )
+    assert result.returncode == 2
+    err = result.stderr
+    # The argparse usage banner contains "scenario_a_balanced" as a regime
+    # choice — strip it by looking only at the parser.error line (the last
+    # non-empty stderr line).
+    error_line = next(line for line in reversed(err.splitlines()) if line.strip())
+    assert "scenario_a_balanced" in error_line, (
+        f"scenario_b + 0.50 must offer scenario_a_balanced in the error line; got:\n{error_line}"
+    )
+    assert "legacy" in error_line.lower(), (
+        f"scenario_b + 0.50 must also offer legacy regimes in the error line; got:\n{error_line}"
+    )
