@@ -1659,7 +1659,20 @@ def _compose_legacy_verdict(
         # robust to any future intermediate severity-mutation step.
         joint_clamped_severity = str(adversarial_input.get("severity", "info"))
         joint_clamped_remediation = str(adversarial_input.get("remediation", "keep"))
-        if joint_clamped_severity != legacy.get("severity"):
+        # Issue #212 codex pass-2 LOW-1: fire the cap when EITHER
+        # severity OR remediation differs from the joint-clamped
+        # values. The pre-pass-2 guard only checked severity, missing
+        # the case where the LLM emits a non-leak role (severity stays
+        # 'info' via ``_llm_severity``) but the voter computes a
+        # remediation other than the joint-clamped ``keep`` (e.g.
+        # ``keep_with_caveat`` for accept-role with confidence below
+        # promotion thresholds). Both severity AND remediation must
+        # be reset to the joint-clamped values + the annotation must
+        # always appear when the cap condition is reached so audit
+        # readers see Layer 4's verdict was capped consistently.
+        severity_differs = joint_clamped_severity != legacy.get("severity")
+        remediation_differs = joint_clamped_remediation != legacy.get("remediation")
+        if severity_differs or remediation_differs:
             existing_evidence = legacy.get("evidence", "") or ""
             cap_annotation = (
                 f" [issue #212 cap: LLM verdict ({legacy.get('severity')!r}/"
@@ -2335,6 +2348,26 @@ def _combine_ablation_with_permutation(
     )
     perm_input["severity"] = ablation_sev
     perm_input["remediation"] = new_remediation
+    # Issue #212 codex pass-2 MED-1: ``severity_pre_joint_check`` must
+    # also reflect ablation escalation so the orchestrator's Layer 4
+    # trigger fires on ablation-escalated interaction-only leaks.
+    # Without this, a feature whose permutation z lands in info but
+    # whose ablation z escalates to moderate would skip the LLM
+    # review that the pre-#212 post-combine severity gate would have
+    # invoked.
+    #
+    # Ablation runs ``_classify_ablation_severity`` which already
+    # applies the issue #194 joint check symmetrically (delta_AUC
+    # floor + signed-positive contract per #196 pass-1 MED-2). So
+    # an ablation severity of ``moderate``/``high`` is GUARANTEED to
+    # have crossed the joint check (or the strong-effect escape with
+    # |delta_AUC| > 3x floor). The escalated pre-joint-check
+    # severity matches the escalated final severity in that case —
+    # they are the same value because the ablation classifier
+    # doesn't produce a pre-joint-check / post-joint-check split.
+    perm_pre_rank = _SEVERITY_RANK.get(str(perm_input.get("severity_pre_joint_check", perm_sev)), 0)
+    if ablation_rank > perm_pre_rank:
+        perm_input["severity_pre_joint_check"] = ablation_sev
     return perm_input
 
 
