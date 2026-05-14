@@ -318,6 +318,166 @@ def test_compose_legacy_verdict_with_llm_emits_decided_by_llm(reset_dspy_lm) -> 
     assert verdict["layer"] == "4"
 
 
+def test_compose_legacy_verdict_caps_llm_leak_role_when_joint_check_fired(
+    reset_dspy_lm,
+) -> None:
+    """Issue #212 cap — when the joint check fired on the adversarial
+    input (``delta_auc_below_floor=True``) AND the LLM verdict path
+    selected a leak role (final severity would be 'high' / drop), the
+    final ``severity`` / ``remediation`` MUST be capped to the
+    joint-clamped adversarial values. The LLM audit fields
+    (``decided_by='llm'``, ``layer='4'``, ``llm_role``,
+    ``llm_remediation``) MUST be preserved so audit consumers see
+    Layer 4 was consulted but its severity was capped.
+
+    Codex pass-1 HIGH-1 (issue #212): without this cap, the LLM path
+    can silently relax #194's downstream bar by promoting a
+    joint-clamped weak-effect feature back to ``high`` / drop. The cap
+    is INWARD only (high → info, drop → keep); Layer 4 cannot relax
+    info → high via this path.
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _compose_legacy_verdict,
+    )
+    from src.data.kg.ensemble_voter import EnsembleVoter
+    from src.data.kg.types import LLMVerdict
+
+    voter = EnsembleVoter()
+    # Joint-check-clamped adversarial input — z is in moderate band
+    # (severity_pre_joint_check='moderate') but |delta_AUC| <= floor
+    # forced severity to 'info'. This is the exact #212 scenario.
+    adversarial_input = {
+        "layer": "3",
+        "severity": "info",  # joint-clamped
+        "severity_pre_joint_check": "moderate",  # z-only band
+        "remediation": "keep",
+        "evidence": "test joint-clamped moderate signal",
+        "z_score": 4.0,
+        "actual_auc": 0.55,
+        "null_mean": 0.50,
+        "null_std": 0.0125,
+        "p_value": 0.001,
+        "n_permutations": 200,
+        "delta_auc": 0.05,  # below floor 0.10
+        "delta_auc_floor": 0.10,
+        "delta_auc_below_floor": True,  # joint check fired
+        "_hblp_classified": True,
+    }
+    # LLM verdict that maps to a LEAK role — would normally promote
+    # severity to 'high' / drop via _llm_severity. The cap must
+    # prevent this promotion since the joint check fired.
+    llm_verdict = LLMVerdict(
+        causal_role="descendant",  # leak role
+        mechanism="hypothetical leak path",
+        recommended_remediation="drop",
+        cited_pmids=(),
+    )
+    verdict = _compose_legacy_verdict(
+        "weak_feat",
+        voter=voter,
+        adversarial_input=adversarial_input,
+        llm_verdict=llm_verdict,
+    )
+    # Audit fields preserved.
+    assert verdict["decided_by"] == "llm", (
+        f"Audit-trail integrity: decided_by must stay 'llm' even when "
+        f"the cap fires; got {verdict.get('decided_by')!r}"
+    )
+    assert verdict["layer"] == "4", (
+        f"Audit-trail integrity: layer must stay '4' even when the cap "
+        f"fires; got {verdict.get('layer')!r}"
+    )
+    assert verdict["llm_role"] == "descendant", (
+        f"Audit-trail integrity: llm_role must be preserved; got {verdict.get('llm_role')!r}"
+    )
+    assert verdict["llm_remediation"] == "drop", (
+        f"Audit-trail integrity: llm_remediation must be preserved; got "
+        f"{verdict.get('llm_remediation')!r}"
+    )
+    # Final severity capped to joint-clamped 'info' (NOT 'high' as the
+    # LLM would have produced). This is the load-bearing #212 cap.
+    assert verdict["severity"] == "info", (
+        f"Issue #212 cap: final severity MUST be capped to joint-clamped "
+        f"'info' when delta_auc_below_floor=True AND decided_by='llm'; "
+        f"got {verdict.get('severity')!r}. Full verdict: {verdict}"
+    )
+    assert verdict["remediation"] == "keep", (
+        f"Issue #212 cap: final remediation MUST be capped to "
+        f"joint-clamped 'keep'; got {verdict.get('remediation')!r}"
+    )
+    # The cap annotation must appear in evidence so audit readers see
+    # WHY the LLM verdict's severity was capped.
+    assert "issue #212" in verdict["evidence"].lower() or "212 cap" in verdict["evidence"], (
+        f"Issue #212 cap: evidence string must record the cap rationale; "
+        f"got evidence={verdict['evidence']!r}"
+    )
+
+
+def test_compose_legacy_verdict_does_not_cap_when_joint_check_did_not_fire(
+    reset_dspy_lm,
+) -> None:
+    """Issue #212 cap — the cap MUST NOT fire when the joint check did
+    NOT fire (``delta_auc_below_floor=False``). The LLM verdict path
+    can still promote a verdict to 'high' / drop when the underlying
+    Layer 3 signal genuinely passed the joint check.
+
+    This is the symmetric negative pin to
+    ``test_compose_legacy_verdict_caps_llm_leak_role_when_joint_check_fired``.
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _compose_legacy_verdict,
+    )
+    from src.data.kg.ensemble_voter import EnsembleVoter
+    from src.data.kg.types import LLMVerdict
+
+    voter = EnsembleVoter()
+    # Adversarial input where joint check did NOT fire — z and
+    # delta_AUC both above thresholds, so severity stays moderate.
+    adversarial_input = {
+        "layer": "3",
+        "severity": "moderate",
+        "severity_pre_joint_check": "moderate",
+        "remediation": "ambiguous",
+        "evidence": "real moderate signal with above-floor delta_AUC",
+        "z_score": 4.0,
+        "actual_auc": 0.70,
+        "null_mean": 0.50,
+        "null_std": 0.05,
+        "p_value": 0.001,
+        "n_permutations": 200,
+        "delta_auc": 0.20,  # above floor
+        "delta_auc_floor": 0.10,
+        "delta_auc_below_floor": False,  # joint check NOT fired
+        "_hblp_classified": True,
+    }
+    llm_verdict = LLMVerdict(
+        causal_role="descendant",
+        mechanism="post-T leak",
+        recommended_remediation="drop",
+        cited_pmids=(),
+    )
+    verdict = _compose_legacy_verdict(
+        "leaky_feat",
+        voter=voter,
+        adversarial_input=adversarial_input,
+        llm_verdict=llm_verdict,
+    )
+    # LLM path fired and is NOT capped (joint check did not fire).
+    assert verdict["decided_by"] == "llm"
+    assert verdict["layer"] == "4"
+    # Final severity reflects the LLM's leak-role assessment (high),
+    # NOT the moderate adversarial input. This is normal Phase 2.9
+    # Stage 3 behaviour for the unclamped path.
+    assert verdict["severity"] == "high", (
+        f"When joint check did NOT fire, the LLM leak-role verdict MUST "
+        f"propagate to final severity. Got severity="
+        f"{verdict.get('severity')!r}. Full verdict: {verdict}"
+    )
+    assert verdict["remediation"] == "drop"
+    # No #212 cap annotation in evidence (cap did not fire).
+    assert "212 cap" not in verdict["evidence"]
+
+
 def test_compose_legacy_verdict_without_llm_falls_back_to_adversarial(
     reset_dspy_lm,
 ) -> None:
@@ -465,6 +625,13 @@ def test_legacy_verdict_carries_llm_audit_fields_consistently(reset_dspy_lm) -> 
         assert "llm_remediation" in d
         assert d["llm_role"] is None
         assert d["llm_remediation"] is None
+        # Issue #212 — schema uniformity for the pre-joint-check
+        # severity audit field. Every bypass path emits it (always a
+        # str), even when the bypass didn't invoke hblp_classify (it
+        # falls back to ``"info"`` matching the bypass's final
+        # severity for those cases).
+        assert "severity_pre_joint_check" in d
+        assert isinstance(d["severity_pre_joint_check"], str)
 
 
 def test_ensure_dspy_lm_configured_typoed_provider_fails_closed(reset_dspy_lm, monkeypatch) -> None:

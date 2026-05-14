@@ -1224,6 +1224,16 @@ def _ensemble_to_legacy_dict(
         "delta_auc": adv.get("delta_auc"),
         "delta_auc_floor": adv.get("delta_auc_floor", LAYER5_DELTA_AUC_FLOOR_DEFAULT),
         "delta_auc_below_floor": bool(adv.get("delta_auc_below_floor", False)),
+        # Issue #212 audit field — z-only severity before issue #194
+        # joint-check clamp. Equals ``severity`` when the joint check
+        # did not fire (no clamp) OR when no Layer 3 signal was
+        # produced (degenerate / short-circuit). Always populated so
+        # downstream audit consumers can distinguish "Layer 4 fired
+        # because pre-joint-check was moderate, joint-clamped to info"
+        # from inconsistent layer routing. Default ``"info"`` when
+        # ``adversarial_input`` did not carry the field (older callers
+        # or bypass paths that don't run hblp_classify).
+        "severity_pre_joint_check": adv.get("severity_pre_joint_check", "info"),
         # Issue #196 Phase 3.3 — ablation audit fields. None when the
         # ablation pass was OFF / unable to run / no row for this feature;
         # populated when ``_combine_ablation_with_permutation`` set them.
@@ -1286,6 +1296,9 @@ def _legacy_adversarial_alone_verdict(
         "delta_auc": adversarial_input.get("delta_auc"),
         "delta_auc_floor": adversarial_input.get("delta_auc_floor", LAYER5_DELTA_AUC_FLOOR_DEFAULT),
         "delta_auc_below_floor": bool(adversarial_input.get("delta_auc_below_floor", False)),
+        # Issue #212 — z-only severity before joint-check clamp.
+        # Schema-shape consistency with ``_ensemble_to_legacy_dict``.
+        "severity_pre_joint_check": adversarial_input.get("severity_pre_joint_check", "info"),
         # Issue #196 Phase 3.3 — ablation audit fields. Same schema as
         # ``_ensemble_to_legacy_dict``; populated from ``adversarial_input``
         # when ``_combine_ablation_with_permutation`` ran, else None.
@@ -1342,6 +1355,8 @@ def _legacy_info_verdict(
         "delta_auc": adv.get("delta_auc"),
         "delta_auc_floor": adv.get("delta_auc_floor", LAYER5_DELTA_AUC_FLOOR_DEFAULT),
         "delta_auc_below_floor": bool(adv.get("delta_auc_below_floor", False)),
+        # Issue #212 — schema-shape consistency.
+        "severity_pre_joint_check": adv.get("severity_pre_joint_check", "info"),
         # Issue #196 Phase 3.3 — ablation audit fields.
         "ablation_z_score": adv.get("ablation_z_score"),
         "ablation_delta_auc": adv.get("ablation_delta_auc"),
@@ -1387,6 +1402,10 @@ def _legacy_short_circuit_verdict(feature: str, *, evidence: str) -> dict[str, A
         "delta_auc": None,
         "delta_auc_floor": float(LAYER5_DELTA_AUC_FLOOR_DEFAULT),
         "delta_auc_below_floor": False,
+        # Issue #212 — schema-shape consistency. Short-circuit never
+        # invokes hblp_classify, so the pre-joint-check severity is
+        # the same ``info`` placeholder as the final severity.
+        "severity_pre_joint_check": "info",
         # Issue #196 Phase 3.3 — ablation audit fields. None on the
         # short-circuit path; the ablation pass also cannot run when
         # the per-feature row count was below MIN_LAYER3_SAMPLES.
@@ -1598,6 +1617,66 @@ def _compose_legacy_verdict(
         legacy["evidence"] = (
             f"{existing_evidence} {annotation}".strip() if existing_evidence else annotation
         )
+
+    # Issue #212 — joint-check final-severity cap on the LLM-decided
+    # path. The Layer 4 trigger now fires on ``severity_pre_joint_check``
+    # (pre-joint-clamp z-band), which surfaces an LLM verdict for
+    # weak-effect features that issue #194's joint check has clamped
+    # to ``info`` in the adversarial input. The voter's LLM path
+    # (``EnsembleVoter.vote`` rule 4) maps the LLM role through
+    # ``_llm_severity`` and emits the LLM-derived severity on the final
+    # verdict — for a leak role that is ``high``/``drop``. Without this
+    # cap, an LLM verdict misclassifying a joint-clamped weak signal
+    # as a leak would PROMOTE the final verdict to drop, silently
+    # relaxing issue #194's downstream bar. That contradicts the
+    # documented #194 contract ("when joint check fires, the feature is
+    # retained because the absolute-effect floor confirms benign weak
+    # signal").
+    #
+    # Fix: when the adversarial input recorded ``delta_auc_below_floor``
+    # (joint check fired on the Layer 3 signal) AND the voter selected
+    # the LLM path, cap final ``severity``/``remediation`` to the
+    # joint-clamped adversarial values. The LLM audit fields
+    # (``decided_by="llm"``, ``layer="4"``, ``llm_role``,
+    # ``llm_remediation``, ``disagreements``) remain on the verdict so
+    # the operator can see Layer 4 was consulted but its severity was
+    # capped by the joint check. ``evidence`` carries an annotation so
+    # audit readers can grep the cap explicitly.
+    #
+    # Bar preservation: this cap is INWARD only (severity high → info,
+    # remediation drop → keep). Layer 4 cannot relax info → high via
+    # the joint-clamped path. When the LLM agrees the feature is
+    # benign (non-leak role), the cap is a no-op (severity already
+    # info on both sides).
+    if (
+        adversarial_input is not None
+        and bool(adversarial_input.get("delta_auc_below_floor", False))
+        and legacy.get("decided_by") == "llm"
+    ):
+        # The joint-clamped adversarial severity is the contract floor.
+        # adv_input["severity"] is already 'info' here because the
+        # joint-clamp downgraded it; we re-read it explicitly to be
+        # robust to any future intermediate severity-mutation step.
+        joint_clamped_severity = str(adversarial_input.get("severity", "info"))
+        joint_clamped_remediation = str(adversarial_input.get("remediation", "keep"))
+        if joint_clamped_severity != legacy.get("severity"):
+            existing_evidence = legacy.get("evidence", "") or ""
+            cap_annotation = (
+                f" [issue #212 cap: LLM verdict ({legacy.get('severity')!r}/"
+                f"{legacy.get('remediation')!r}) capped to joint-clamped "
+                f"adversarial values ({joint_clamped_severity!r}/"
+                f"{joint_clamped_remediation!r}) because "
+                f"|delta_AUC| ≤ floor "
+                f"{float(adversarial_input.get('delta_auc_floor', 0.10)):.4f}; "
+                f"LLM audit fields preserved (decided_by=llm, layer=4)]"
+            )
+            legacy["severity"] = joint_clamped_severity
+            legacy["remediation"] = joint_clamped_remediation
+            legacy["evidence"] = (
+                f"{existing_evidence}{cap_annotation}"
+                if existing_evidence
+                else cap_annotation.strip()
+            )
 
     return legacy
 
