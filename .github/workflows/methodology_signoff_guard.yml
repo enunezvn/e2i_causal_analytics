@@ -166,7 +166,8 @@ jobs:
           echo "_No methodology artifacts touched by this PR — guard was a no-op._" >> "$GITHUB_STEP_SUMMARY"
 
   # Issue #192 H3: delegate to the reusable workflow which loads the
-  # validator script from the protected `main` ref. This is the same-repo
+  # validator script from the protected `main` ref (HARDCODED inside the
+  # reusable workflow per codex pass-2 LOW-1). This is the same-repo
   # equivalent of `uses: org/governance-actions/...@<sha>` until the
   # cross-org migration happens.
   validate:
@@ -179,5 +180,4 @@ jobs:
       pull-requests: read
     with:
       touched_files: ${{ needs.identify.outputs.files }}
-      validator_ref: 'main'
       strict_gh: '1'
