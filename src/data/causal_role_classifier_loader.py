@@ -73,10 +73,47 @@ def _lm_is_configured() -> bool:
     return lm is not None
 
 
-# Default model + key env var. Matches the convention in
+# Default model. Matches the convention in
 # ``src/api/routes/chatbot_dspy.py:63`` and ``src/rag/causal_rag.py:186``.
 _DEFAULT_LM_MODEL = "anthropic/claude-sonnet-4-20250514"
-_API_KEY_ENV_VARS: tuple[str, ...] = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY")
+
+# Provider → env-var mapping. The DSPy / LiteLLM model string carries the
+# provider prefix (``anthropic/``, ``openai/``, ``azure/``); we use that
+# prefix to gate on the matching env var so a key for the WRONG provider
+# does not green-light configuration (codex pass-2 MEDIUM: an env with
+# only ``OPENAI_API_KEY`` set must NOT auth-configure an Anthropic model
+# and then silently fail every LM call inside classify_feature).
+_PROVIDER_TO_ENV_VARS: dict[str, tuple[str, ...]] = {
+    "anthropic": ("ANTHROPIC_API_KEY",),
+    "openai": ("OPENAI_API_KEY",),
+    "azure": ("AZURE_API_KEY", "AZURE_OPENAI_API_KEY"),
+}
+
+
+def _env_value_is_usable(var_name: str) -> bool:
+    """Return True iff env var is set and non-whitespace.
+
+    Codex pass-2 MEDIUM: whitespace-only key values previously passed the
+    truthy check (``os.environ.get(v)`` returns the string, which is
+    truthy if length > 0) and would let ``dspy.LM`` configure with a
+    provider-rejected credential.
+    """
+    raw = os.environ.get(var_name)
+    if raw is None:
+        return False
+    return bool(raw.strip())
+
+
+def _model_provider(model: str) -> Optional[str]:
+    """Extract the LiteLLM provider prefix from a model string.
+
+    Returns the lower-cased provider (``"anthropic"``, ``"openai"``, etc.)
+    when the model is ``provider/path`` shaped; returns ``None`` for
+    bare model names (which LiteLLM would have to guess at).
+    """
+    if "/" not in model:
+        return None
+    return model.split("/", 1)[0].strip().lower()
 
 
 def ensure_dspy_lm_configured(
@@ -97,9 +134,9 @@ def ensure_dspy_lm_configured(
     configures a default DSPy LM (matching the convention used in
     ``src/api/routes/chatbot_dspy.py`` and ``src/rag/causal_rag.py``) iff
     (a) no LM is already configured AND (b) a usable API key is present
-    in the environment. Returns ``True`` when an LM is configured after
-    the call (either pre-existing or freshly configured), ``False``
-    when no LM is or can be configured.
+    in the environment FOR THE TARGET PROVIDER. Returns ``True`` when an
+    LM is configured after the call (either pre-existing or freshly
+    configured), ``False`` when no LM is or can be configured.
 
     Idempotent: a second call with an LM already configured returns
     ``True`` without re-configuring (this matches the chatbot_dspy
@@ -107,13 +144,23 @@ def ensure_dspy_lm_configured(
     so test code can rely on ``dspy.settings.lm = None`` to force
     re-configuration).
 
+    Codex pass-2 MEDIUM (issue #193): the credential gate is now
+    provider-aware. The model string's provider prefix (``anthropic/``,
+    ``openai/``) is mapped to the corresponding env var(s); only that
+    var(s) are checked. An env with only ``OPENAI_API_KEY`` set will NOT
+    green-light configuration of an Anthropic model. Whitespace-only key
+    values are rejected (``.strip() == ""``).
+
     Args:
-        model: Default LM model string. Default matches the documented
-            convention (Anthropic Claude Sonnet 4).
+        model: Default LM model string in LiteLLM-shape ``provider/path``.
+            Default matches the documented convention (Anthropic Claude
+            Sonnet 4). Unknown providers (model not in
+            ``_PROVIDER_TO_ENV_VARS``) fall back to "any recognised key"
+            so the helper stays permissive for new providers, with a
+            warning logged.
         require_api_key: When ``True`` (default) the configuration step is
-            skipped unless one of the recognised API key env vars
-            (``ANTHROPIC_API_KEY``, ``OPENAI_API_KEY``) is present and
-            non-empty. When ``False``, ``dspy.LM(model)`` is invoked
+            skipped unless a usable provider-matching API key env var
+            is present. When ``False``, ``dspy.LM(model)`` is invoked
             unconditionally — useful for tests that supply DummyLM via a
             different mechanism. Tests of this function itself must set
             ``require_api_key=True`` and prepare the env so the branching
@@ -121,19 +168,34 @@ def ensure_dspy_lm_configured(
 
     Returns:
         ``True`` iff a DSPy LM is configured at end of the call. ``False``
-        means Layer 4 will skip — either because no key is present (the
-        documented CI / developer-laptop path) OR because configuration
-        raised (logged as a warning).
+        means Layer 4 will skip — either because no usable provider-
+        matching key is present (the documented CI / developer-laptop
+        path) OR because configuration raised (logged as a warning).
     """
     if _lm_is_configured():
         return True
-    if require_api_key and not any(os.environ.get(v) for v in _API_KEY_ENV_VARS):
-        logger.info(
-            "ensure_dspy_lm_configured: no API key env var found "
-            "(checked %s) — Layer 4 will skip this run.",
-            list(_API_KEY_ENV_VARS),
-        )
-        return False
+    if require_api_key:
+        provider = _model_provider(model)
+        expected_vars = _PROVIDER_TO_ENV_VARS.get(provider) if provider else None
+        if expected_vars is None:
+            # Unknown / bare model: fall back to "any recognised key"
+            # (permissive — new providers, dev environments). Warn so
+            # the operator can correct the model string.
+            expected_vars = tuple(v for vs in _PROVIDER_TO_ENV_VARS.values() for v in vs)
+            logger.warning(
+                "ensure_dspy_lm_configured: model=%r has no recognised provider "
+                "prefix; falling back to permissive any-key check over %s.",
+                model,
+                list(expected_vars),
+            )
+        if not any(_env_value_is_usable(v) for v in expected_vars):
+            logger.info(
+                "ensure_dspy_lm_configured: no usable provider-matching API key "
+                "env var found (model=%s, checked %s) — Layer 4 will skip this run.",
+                model,
+                list(expected_vars),
+            )
+            return False
     try:
         lm = dspy.LM(model)
         dspy.configure(lm=lm)
