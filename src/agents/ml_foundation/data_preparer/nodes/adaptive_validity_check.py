@@ -77,7 +77,7 @@ from src.data.manifests import (
 # keeps adaptive_validity_check.py's import surface free of httpx.
 if TYPE_CHECKING:
     from src.data.kg.ensemble_voter import EnsembleVoter
-    from src.data.kg.types import EnsembleVerdict, KGEdge
+    from src.data.kg.types import EnsembleVerdict, KGEdge, LLMVerdict
 
 
 class _HblpRoutingViolationError(RuntimeError):
@@ -105,6 +105,40 @@ def _get_ensemble_voter_class() -> type:
     from src.data.kg.ensemble_voter import EnsembleVoter as _EnsembleVoter
 
     return _EnsembleVoter
+
+
+def _try_load_layer_4_classifier() -> Optional[Any]:
+    """Lazily load the persisted Phase 2.5 compiled classifier.
+
+    Imports inside the function so the loader's ``dspy`` import doesn't
+    pull DSPy into this module's import-time surface (mirroring the
+    ``EnsembleVoter`` lazy-import pattern above). Returns ``None`` when:
+
+    - no DSPy LM is configured (developer laptop / CI without API key);
+    - the compiled artifact is missing (compile script hasn't run yet);
+    - the loader raises during load (we log + swallow so Layer 4 is
+      best-effort, never blocking the pipeline).
+
+    Stage 3 wiring (issue #193): the orchestrator calls this once per node
+    invocation and reuses the returned classifier across every per-feature
+    Layer 4 call to avoid reloading the artifact on every feature.
+    """
+    try:
+        from src.data.causal_role_classifier_loader import load_compiled_classifier
+    except Exception as exc:  # pragma: no cover - import-time defensive
+        logger.warning(
+            "adaptive_validity_check: loader import failed (%s); Layer 4 skipped",
+            exc,
+        )
+        return None
+    try:
+        return load_compiled_classifier(strict=False)
+    except Exception as exc:  # pragma: no cover - load-time defensive
+        logger.warning(
+            "adaptive_validity_check: loader raised (%s); Layer 4 skipped",
+            exc,
+        )
+        return None
 
 
 logger = logging.getLogger(__name__)
@@ -455,6 +489,46 @@ def _layer_1_verdict(feature: str, contract: FeatureContract) -> dict[str, Any]:
         voter=_get_ensemble_voter_class()(),
         layer_1_input=_layer_1_input(feature, contract),
     )
+
+
+def _build_layer_4_inputs(
+    feature: str,
+    contract: Optional[FeatureContract],
+    target: str,
+    manifest_source: Optional[str],
+) -> tuple[str, str]:
+    """Build the (derivation_pseudocode, dataset_context) pair for Layer 4.
+
+    The compiled :class:`src.data.causal_role_classifier.CausalRoleClassifier`
+    expects three input fields: ``feature_name`` (provided by caller),
+    ``derivation_pseudocode``, and ``dataset_context``. This helper assembles
+    the latter two from the feature's manifest contract (when available) and
+    the scope_spec target metadata.
+
+    When ``contract`` is None (feature has no manifest entry — e.g. a numeric
+    column the runner pre-cleaned), the derivation pseudocode falls back to a
+    "no manifest contract on file" sentinel string. The LLM is still able to
+    classify based on the feature name alone, but with reduced confidence;
+    the audit trail records the absence so an operator can extend the
+    manifest later.
+    """
+    if contract is not None:
+        derivation = (
+            f"source={contract.source}; "
+            f"derivation_inputs={list(contract.derivation_inputs)}; "
+            f"aggregation={contract.aggregation}; "
+            f"window_days={contract.window_days}; "
+            f"knowable_at={contract.knowable_at}"
+        )
+    else:
+        derivation = (
+            f"No manifest contract on file for {feature!r} "
+            "(LLM is classifying from feature name + dataset context only)"
+        )
+
+    cohort = manifest_source or "unspecified"
+    dataset_context = f"cohort={cohort}; target={target}; prediction_anchor=index_date"
+    return derivation, dataset_context
 
 
 def _adversarial_input(
@@ -820,13 +894,15 @@ def _compose_legacy_verdict(
     kg_mode: Optional[str] = None,
     n_train_pos: Optional[int] = None,
     layer_1_declared_safe: Optional[bool] = None,
+    llm_verdict: Optional["LLMVerdict"] = None,
 ) -> dict[str, Any]:
     """Compose one legacy verdict dict from the per-source inputs.
 
     Routes through ``EnsembleVoter`` for cases that involve a real
     precedence decision (Layer 1 contract present, or KG signal
-    available, or adversarial severity high/moderate). Bypasses the
-    voter for two cases the voter would otherwise abstain on:
+    available, or LLM verdict supplied, or adversarial severity
+    high/moderate). Bypasses the voter for two cases the voter would
+    otherwise abstain on:
 
     1. ``short_circuit_evidence`` is set (too-few-rows, scoring-error)
        → emit ``_legacy_short_circuit_verdict``.
@@ -839,6 +915,18 @@ def _compose_legacy_verdict(
     ``target_entity_ids`` are forwarded to ``voter.vote(...)``. Empty
     defaults preserve Stage 1 behavior — the voter's KG path is a
     no-op.
+
+    Stage 3 update (Phase 2.9 Stage 3 — Layer 4 LLM wiring): an optional
+    ``llm_verdict`` (an :class:`src.data.kg.types.LLMVerdict`) is forwarded
+    to ``voter.vote(...)``. When present, it triggers the voter's
+    LLM-with-KG-cross-check precedence rule and the resulting verdict is
+    tagged ``decided_by="llm"`` (mapped to ``layer="4"`` in the legacy
+    schema). Passing ``llm_verdict=None`` preserves Stage 1/2 behaviour —
+    no LLM input is considered. The bypass to
+    ``_legacy_adversarial_alone_verdict`` is gated on
+    ``llm_verdict is None`` so a moderate adversarial signal paired with
+    an LLM verdict routes through the voter (which is the only path that
+    can emit ``decided_by="llm"`` for the audit trail).
 
     Plan v4 §2 G3 wiring (post-2026-05-10):
       * ``n_train_pos`` and ``layer_1_declared_safe`` are threaded from
@@ -936,7 +1024,17 @@ def _compose_legacy_verdict(
     # branch on. Stage 2: bypass is preserved when KG produces no_signal
     # (the kg_edges_tuple zero-out above) — the voter only adds value when
     # KG produces a real signal.
-    if layer_1_input is None and adversarial_input is not None and not kg_edges_tuple:
+    # Stage 3 (issue #193): the bypass is ALSO skipped when an LLM
+    # verdict is supplied. With an LLM verdict in hand the voter is the
+    # only path that can emit ``decided_by="llm"`` for the audit trail,
+    # so we route through it even when adversarial would otherwise be
+    # the only structured input.
+    if (
+        layer_1_input is None
+        and adversarial_input is not None
+        and not kg_edges_tuple
+        and llm_verdict is None
+    ):
         return _legacy_adversarial_alone_verdict(feature, adversarial_input)
 
     # Real cross-source decision needed → route through the voter so
@@ -949,6 +1047,7 @@ def _compose_legacy_verdict(
         kg_edges=kg_edges_tuple,
         feature_entity_ids=feature_ids_tuple,
         target_entity_ids=target_ids_tuple,
+        llm_verdict=llm_verdict,
     )
     legacy = _ensemble_to_legacy_dict(verdict, adversarial_input=adversarial_input)
 
@@ -1521,6 +1620,15 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
     kg_mode = _resolve_kg_mode(scope_spec.get("kg_mode"))
     target_ids = _parse_target_entity_codes(scope_spec.get("target_entity_codes") or [])
 
+    # Stage 3 LLM wiring (issue #193): load the persisted compiled
+    # CausalRoleClassifier once at node entry, reuse across every feature
+    # whose adversarial severity comes back ``moderate`` (the "ambiguous"
+    # bucket per the module docstring). Returns None when no LM endpoint
+    # is configured OR the compiled artifact is missing — in which case
+    # Layer 4 silently skips and the verdict goes through the legacy
+    # adversarial-alone bypass.
+    layer_4_classifier = _try_load_layer_4_classifier()
+
     def _kg_inputs(
         feat: str, contract: Optional[FeatureContract]
     ) -> tuple[tuple[Any, ...], tuple[str, ...]]:
@@ -1607,20 +1715,55 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
         layer_1_declared_safe = bool(
             contract is not None and contract.knowable_at.is_pre_or_at_index()
         )
+        adv_input = _adversarial_input(
+            score,
+            n_train_pos=n_train_pos,
+            layer_1_declared_safe=layer_1_declared_safe,
+        )
+
+        # Stage 3 Layer 4 trigger (issue #193): when adversarial severity is
+        # ``moderate`` (3σ < z ≤ 5σ — the "ambiguous" bucket per the module
+        # docstring) AND a compiled classifier is available, invoke the LLM
+        # to disambiguate. The verdict then routes through the voter with
+        # ``llm_verdict`` populated, which yields ``decided_by="llm"`` in
+        # the audit trail (mapped to ``layer="4"`` via _DECIDED_BY_TO_LAYER).
+        llm_verdict: Optional[Any] = None
+        if layer_4_classifier is not None and adv_input.get("severity") == "moderate":
+            try:
+                from src.data.causal_role_classifier_loader import classify_feature
+
+                derivation, ds_context = _build_layer_4_inputs(
+                    feat, contract, target, manifest_source
+                )
+                llm_verdict = classify_feature(
+                    feature_name=feat,
+                    derivation_pseudocode=derivation,
+                    dataset_context=ds_context,
+                    classifier=layer_4_classifier,
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                # Best-effort: log and proceed without LLM. The voter will
+                # see ``llm_verdict=None`` and fall through to the
+                # non-LLM precedence path.
+                logger.warning(
+                    "adaptive_validity_check: Layer 4 invocation failed for "
+                    "%s: %s — proceeding without LLM verdict",
+                    feat,
+                    exc,
+                )
+                llm_verdict = None
+
         verdict = _compose_legacy_verdict(
             feat,
             voter=voter,
-            adversarial_input=_adversarial_input(
-                score,
-                n_train_pos=n_train_pos,
-                layer_1_declared_safe=layer_1_declared_safe,
-            ),
+            adversarial_input=adv_input,
             kg_edges=edges,
             feature_entity_ids=feat_ids,
             target_entity_ids=target_ids,
             kg_mode=kg_mode,
             n_train_pos=n_train_pos,
             layer_1_declared_safe=layer_1_declared_safe,
+            llm_verdict=llm_verdict,
         )
         verdicts.append(verdict)
         if verdict["severity"] == "high":
