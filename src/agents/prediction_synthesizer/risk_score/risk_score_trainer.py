@@ -532,9 +532,7 @@ class RiskScoreTrainer:
         if self.min_auc_pr is not None:
             effective_floor = float(self.min_auc_pr)
         else:
-            effective_floor = compute_auc_pr_floor(
-                n_pos=n_val_pos, n_total=n_val_total
-            )
+            effective_floor = compute_auc_pr_floor(n_pos=n_val_pos, n_total=n_val_total)
         auc_pr_floor_met = val_auc_pr >= effective_floor
         calibration_acceptance_met = (val_brier <= self.brier_max) and (val_ece <= self.ece_max)
         if not auc_pr_floor_met:

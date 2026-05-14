@@ -33,9 +33,7 @@ class TestHonestFailureGateLogic:
     without inspecting DB rows.
     """
 
-    def test_honest_failures_empty_is_not_gated(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_honest_failures_empty_is_not_gated(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _strip_db_env(monkeypatch)
         out = write_risk_score_predictions.apply(
             args=([{"prediction_id": "x"}], None, None, []),
@@ -45,9 +43,7 @@ class TestHonestFailureGateLogic:
         assert out["gated"] is False
         assert out["honest_failures"] == []
 
-    def test_honest_failures_non_empty_is_gated(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_honest_failures_non_empty_is_gated(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _strip_db_env(monkeypatch)
         failures = ["AUC-PR floor not met: val_auc_pr=0.0895 < 0.145"]
         out = write_risk_score_predictions.apply(
@@ -74,9 +70,7 @@ class TestHonestFailureGateLogic:
         assert out["gated"] is True
         assert any("missing" in m.lower() for m in out["honest_failures"])
 
-    def test_missing_metadata_can_opt_out_explicitly(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_missing_metadata_can_opt_out_explicitly(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """honest_failures_default_gated=False opts back into the legacy
         permissive behavior for callers that pre-validate upstream.
         """
@@ -115,12 +109,7 @@ class TestGatedSentinelConstant:
 
         repo_root = Path(__file__).resolve().parents[3]
         src = (
-            repo_root
-            / "src"
-            / "agents"
-            / "drift_monitor"
-            / "connectors"
-            / "supabase_connector.py"
+            repo_root / "src" / "agents" / "drift_monitor" / "connectors" / "supabase_connector.py"
         ).read_text(encoding="utf-8")
         # The connector must import the centralized sentinel (not
         # hardcode the string literal in .neq() calls).

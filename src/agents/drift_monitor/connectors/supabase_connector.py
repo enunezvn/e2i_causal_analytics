@@ -212,8 +212,7 @@ class SupabaseDataConnector(BaseDataConnector):
                 .select("confidence_score, prediction_value, created_at, entity_id")
                 .eq("model_version", model_id)
                 .or_(
-                    "prediction_class.is.null,"
-                    f"prediction_class.neq.{GATED_HONEST_FAILURE_SENTINEL}"
+                    f"prediction_class.is.null,prediction_class.neq.{GATED_HONEST_FAILURE_SENTINEL}"
                 )
                 .gte("created_at", time_window.start.isoformat())
                 .lte("created_at", time_window.end.isoformat())
@@ -301,8 +300,7 @@ class SupabaseDataConnector(BaseDataConnector):
                 .select("confidence_score, prediction_value, created_at, entity_id, actual_outcome")
                 .eq("model_version", model_id)
                 .or_(
-                    "prediction_class.is.null,"
-                    f"prediction_class.neq.{GATED_HONEST_FAILURE_SENTINEL}"
+                    f"prediction_class.is.null,prediction_class.neq.{GATED_HONEST_FAILURE_SENTINEL}"
                 )
                 .gte("created_at", time_window.start.isoformat())
                 .lte("created_at", time_window.end.isoformat())
