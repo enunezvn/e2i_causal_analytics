@@ -582,6 +582,10 @@ def test_verdict_schema_is_uniform_across_layer_1_and_layer_3():
         # observable per-feature.
         "llm_role",
         "llm_remediation",
+        # Issue #194 joint-check audit fields (codex pass-1 LOW-1).
+        "delta_auc",
+        "delta_auc_floor",
+        "delta_auc_below_floor",
     }
     for v in result["adaptive_verdicts"]:
         assert set(v.keys()) == canonical_keys, (
@@ -938,8 +942,9 @@ def test_phase29_compose_legacy_verdict_all_none_signals_returns_abstain():
     assert verdict["layer"] == "abstain"
     assert verdict["severity"] == "abstain"
     assert verdict["remediation"] == "review"
-    # Schema invariant: all 18 canonical fields present (16 Phase 2.9
-    # Stage 1 + 2 Phase 2.9 Stage 3 LLM audit fields from issue #193).
+    # Schema invariant: all 21 canonical fields present
+    # (16 Phase 2.9 Stage 1 + 2 Phase 2.9 Stage 3 LLM audit fields from issue #193
+    # + 3 issue #194 joint-check audit fields from codex pass-1 LOW-1).
     expected_keys = {
         "feature",
         "layer",
@@ -960,6 +965,10 @@ def test_phase29_compose_legacy_verdict_all_none_signals_returns_abstain():
         # Phase 2.9 Stage 3 audit fields (issue #193 codex pass-3 LOW):
         "llm_role",
         "llm_remediation",
+        # Issue #194 joint-check audit fields (codex pass-1 LOW-1):
+        "delta_auc",
+        "delta_auc_floor",
+        "delta_auc_below_floor",
     }
     assert set(verdict.keys()) == expected_keys
 
@@ -1997,7 +2006,9 @@ async def test_phase29_stage2_e2e_main_loop_with_populated_cache(tmp_path, monke
     # numeric "age" column.
     assert "adaptive_verdicts" in result
     assert len(result["adaptive_verdicts"]) >= 1
-    # Verdict carries the canonical 16-field shape (regression guard).
+    # Verdict carries the canonical 21-field shape (regression guard).
+    # Issue #193 added llm_role + llm_remediation. Issue #194 added
+    # 3 joint-check audit fields.
     verdict = next(v for v in result["adaptive_verdicts"] if v["feature"] == "age")
     expected_keys = {
         "feature",
@@ -2019,6 +2030,10 @@ async def test_phase29_stage2_e2e_main_loop_with_populated_cache(tmp_path, monke
         # Phase 2.9 Stage 3 audit fields (issue #193 codex pass-3 LOW):
         "llm_role",
         "llm_remediation",
+        # Issue #194 joint-check audit fields (codex pass-1 LOW-1):
+        "delta_auc",
+        "delta_auc_floor",
+        "delta_auc_below_floor",
     }
     assert set(verdict.keys()) == expected_keys
 
@@ -2605,6 +2620,129 @@ def test_issue_194_hblp_floor_inactive_when_delta_auc_none():
     # Audit fields are populated even when the floor was inactive.
     assert cls["delta_auc"] is None
     assert cls["delta_auc_below_floor"] is False
+
+
+def test_issue_194_hblp_floor_z_positive_inf_strong_effect_keeps_high():
+    """Codex pass-1 MEDIUM-1: zero-variance permutation null produces
+    ``z=+inf`` when ``actual_auc > null_mean``. Pre-fix the non-finite-z
+    guard in ``hblp_classify`` silently dropped these to severity=info,
+    creating a false-negative on deterministic high-effect signals.
+    Post-fix the joint check provides a principled escape: when
+    ``z=+inf`` AND ``|delta_auc| > floor``, severity stays ``high``.
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        hblp_classify,
+    )
+
+    cls = hblp_classify(
+        z_score=float("inf"),
+        n_positives=500,
+        layer_1_declared_safe=False,
+        delta_auc=0.5,
+    )
+    assert cls["severity"] == "high"
+    # Rationale should record the degenerate-null + strong-effect path
+    # so audit readers see WHY a non-finite z reached severity=high.
+    assert "degenerate" in cls["rationale"].lower() or "194 codex pass-1 MED-1" in cls["rationale"]
+
+
+def test_issue_194_hblp_floor_z_positive_inf_weak_effect_stays_info():
+    """Codex pass-1 MEDIUM-1 (negative complement): when ``z=+inf`` but
+    ``|delta_auc| <= floor``, severity is still info — the joint check
+    fires on a degenerate null with a weak absolute effect just like
+    the finite-z path.
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        hblp_classify,
+    )
+
+    cls = hblp_classify(
+        z_score=float("inf"),
+        n_positives=500,
+        layer_1_declared_safe=False,
+        delta_auc=0.05,
+    )
+    assert cls["severity"] == "info"
+
+
+def test_issue_194_hblp_floor_z_negative_inf_stays_info():
+    """``z=-inf`` (custom scorer or anti-correlation past the fold).
+    Preserve the legacy non-finite-z severity=info fallback for
+    negative inf regardless of |delta_auc| — the MED-1 escape only
+    fires on positive inf (strong-effect signal).
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        hblp_classify,
+    )
+
+    cls = hblp_classify(
+        z_score=float("-inf"),
+        n_positives=500,
+        layer_1_declared_safe=False,
+        delta_auc=0.5,
+    )
+    assert cls["severity"] == "info"
+
+
+def test_issue_194_audit_fields_propagated_through_adversarial_input():
+    """Codex pass-1 LOW-1: the three audit fields
+    (``delta_auc``, ``delta_auc_floor``, ``delta_auc_below_floor``)
+    must be present on ``_adversarial_input``'s output dict, so
+    structured-sidecar consumers can branch on them without parsing
+    the human-readable evidence string.
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        LAYER5_DELTA_AUC_FLOOR_DEFAULT,
+        _adversarial_input,
+    )
+
+    # Joint check fires: z=8σ, |delta_AUC|=0.05 < 0.10 floor → info.
+    score = {
+        "z_score": 8.0,
+        "actual_auc": 0.55,
+        "null_mean": 0.50,
+        "null_std": 0.00625,
+        "p_value": 0.005,
+        "n_permutations": 200,
+    }
+    ad = _adversarial_input(score, n_train_pos=500, layer_1_declared_safe=False)
+    assert "delta_auc" in ad
+    assert ad["delta_auc"] == pytest.approx(0.05)
+    assert "delta_auc_floor" in ad
+    assert ad["delta_auc_floor"] == LAYER5_DELTA_AUC_FLOOR_DEFAULT
+    assert "delta_auc_below_floor" in ad
+    assert ad["delta_auc_below_floor"] is True
+
+    # Real leak: |delta_AUC|=0.4 > floor → joint check does NOT fire.
+    score2 = {
+        "z_score": 40.0,
+        "actual_auc": 0.95,
+        "null_mean": 0.55,
+        "null_std": 0.01,
+        "p_value": 0.0,
+        "n_permutations": 200,
+    }
+    ad2 = _adversarial_input(score2, n_train_pos=500, layer_1_declared_safe=False)
+    assert ad2["delta_auc"] == pytest.approx(0.4)
+    assert ad2["delta_auc_below_floor"] is False
+
+
+def test_issue_194_audit_fields_propagated_through_short_circuit_verdict():
+    """Codex pass-1 LOW-1: short-circuit path (too-few-rows / scoring-error)
+    must populate the 3 audit fields too — schema uniformity for
+    downstream sidecar consumers. Joint check never ran (no score
+    computed) so all 3 default sensibly.
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        LAYER5_DELTA_AUC_FLOOR_DEFAULT,
+        _legacy_short_circuit_verdict,
+    )
+
+    v = _legacy_short_circuit_verdict("dummy", evidence="too few rows")
+    assert "delta_auc" in v
+    assert v["delta_auc"] is None
+    assert v["delta_auc_floor"] == LAYER5_DELTA_AUC_FLOOR_DEFAULT
+    assert v["delta_auc_below_floor"] is False
 
 
 def test_issue_194_hblp_floor_inactive_when_delta_auc_nan():

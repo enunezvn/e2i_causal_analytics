@@ -65,11 +65,35 @@ DEFAULT_N_PERMUTATIONS = 200
 # at very large n the joint check should hold FPR ≤ 1% on benign features.
 DEFAULT_N_GRID: tuple[int, ...] = (1000, 5000, 10000, 50000)
 
-# Default sweep grids per issue body. The (k=5.0, epsilon=0.0) cell
-# reproduces the LEGACY behaviour (z > HIGH_Z alone) as the FPR-vs-
-# alternative baseline.
+# Default sweep grids. Issue #194 body originally proposed
+# ``k in {3.0, 3.5, 4.0, 4.5, 5.0}`` × ``epsilon in {0.005, 0.01,
+# 0.015, 0.02}`` as the starting point, but the calibration sweep
+# (2026-05-14) showed the legitimate-weak-predictor p99 |delta_AUC|
+# at n=10000 is 0.0913 — so ``epsilon`` must extend above 0.02 to
+# discriminate benign weak signals from real leaks. The grid below
+# spans both the issue-body range and the wider band that the
+# calibration explored, with ``epsilon=0.10`` (the production-
+# chosen floor) explicitly included so a reader of the sweep
+# output can verify the chosen value's FPR ledger at every n.
+# The (k=5.0, epsilon=0.0) cell reproduces the LEGACY behaviour
+# (z > HIGH_Z alone) as the FPR-vs-alternative baseline.
+#
+# Codex pass-1 MEDIUM-2: prior default ``epsilon`` grid stopped at
+# 0.02, so re-running this script in its DEFAULT mode would NOT
+# evaluate the production-chosen ``epsilon=0.10``. Extended below.
 DEFAULT_K_GRID: tuple[float, ...] = (3.0, 3.5, 4.0, 4.5, 5.0)
-DEFAULT_EPSILON_GRID: tuple[float, ...] = (0.0, 0.005, 0.01, 0.015, 0.02)
+DEFAULT_EPSILON_GRID: tuple[float, ...] = (
+    0.0,
+    0.005,
+    0.01,
+    0.015,
+    0.02,
+    0.05,
+    0.08,
+    0.10,
+    0.12,
+    0.15,
+)
 
 # How many independent benign-feature replicates to evaluate at each n.
 # Each replicate generates a fresh i.i.d. standard normal column on a
@@ -135,22 +159,33 @@ def _decide_joint(z: float, delta_auc: float, *, k: float, epsilon: float) -> bo
 def _benign_evidence_for_n(
     n: int, *, n_replicates: int, base_seed: int, n_permutations: int
 ) -> list[tuple[float, float]]:
-    """Collect (z, delta_auc) for ``n_replicates`` i.i.d. benign features.
+    """Collect (z, delta_auc) for ``n_replicates`` benign-feature evaluations.
 
-    Each replicate uses a fresh sub-seed derived from ``base_seed`` so
-    the sweep is deterministic across re-runs but each replicate sees an
-    independent random-normal feature column.
+    Issue #194 — codex pass-1 MEDIUM-2 fix: the calibration must reproduce
+    the SAME failure mode that motivated the issue, namely the legitimate
+    weak demographic predictors (``age``, ``eligibility_duration_days``)
+    used in ``synthetic_rwd_realistic._generate_target``. These features
+    are NOT leaks — they are real, weak, causal predictors with empirical
+    single-feature AUC ~0.54 — but the legacy 5σ z-threshold flagged them
+    at large n. A pure i.i.d. Gaussian benign feature has effective
+    AUC ≈ 0.50 and trips the legacy threshold ~0% of the time; it would
+    not surface the issue.
 
-    The synthetic cohort itself is regenerated per replicate too — at
+    The sweep collects evidence for BOTH demographic features per cohort
+    (2× evaluations per replicate) so the FPR ledger is over the full
+    "legitimate weak signal" population the issue body refers to.
+
+    The synthetic cohort itself is regenerated per replicate — at
     fixed ``signal_scale=1.0`` and ``prevalence=0.024``, with the cohort
-    seed offset by ``base_seed * 10000 + replicate_idx``. This makes each
-    benign-feature evaluation a fully independent realisation of the
-    benign-FPR experiment.
+    seed offset by ``base_seed * 10000 + replicate_idx``. Both
+    demographic-feature scorings on a single cohort share the same
+    target labels (they are NOT independent draws), but they are
+    independent feature axes. The FPR is computed over the joint
+    population.
     """
     evidence: list[tuple[float, float]] = []
     for r in range(n_replicates):
         cohort_seed = base_seed * 10000 + r
-        rng = np.random.default_rng(cohort_seed)
         cohort = generate_rwd_realistic(
             RwdRealisticConfig(
                 n_patients=n,
@@ -166,11 +201,16 @@ def _benign_evidence_for_n(
         # count them.
         if len(np.unique(target)) < 2:
             continue
-        benign = rng.standard_normal(n)
-        z, delta_auc, _, _ = _score_one(
-            benign, target, seed=base_seed, n_permutations=n_permutations
-        )
-        evidence.append((z, delta_auc))
+        # Per codex pass-1 MEDIUM-2: use the SAME demographic features
+        # that were calibrated against (``age`` + eligibility_duration_days``)
+        # so the script reproduces the calibration regime, not a
+        # different (cleaner) feature distribution.
+        for feat_name in ("age", "eligibility_duration_days"):
+            feat = cohort[feat_name].to_numpy(dtype=float)
+            z, delta_auc, _, _ = _score_one(
+                feat, target, seed=base_seed, n_permutations=n_permutations
+            )
+            evidence.append((z, delta_auc))
     return evidence
 
 
