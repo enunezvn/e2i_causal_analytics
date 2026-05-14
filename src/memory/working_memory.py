@@ -96,12 +96,23 @@ class RedisWorkingMemory:
                 from langgraph.checkpoint.redis import RedisSaver
 
                 redis_url = os.environ.get("REDIS_URL", "redis://localhost:6382")
-                self._checkpointer = RedisSaver.from_conn_string(redis_url)
+                # langgraph-checkpoint-redis 0.4.x changed RedisSaver.from_conn_string
+                # into a @contextmanager (returns _GeneratorContextManager); for our
+                # long-lived checkpointer use we construct directly via __init__.
+                # The new constructor eagerly connects, so a Redis-down environment
+                # raises ConnectionError here — caught in the broad except below.
+                self._checkpointer = RedisSaver(redis_url=redis_url)
                 logger.info("LangGraph RedisSaver checkpointer initialized")
-            except ImportError:
-                logger.warning(
-                    "langgraph-checkpoint-redis not installed, using memory checkpointer"
-                )
+            except (ImportError, Exception) as exc:
+                if isinstance(exc, ImportError):
+                    logger.warning(
+                        "langgraph-checkpoint-redis not installed, using memory checkpointer"
+                    )
+                else:
+                    logger.warning(
+                        "RedisSaver init failed (%s), falling back to memory checkpointer",
+                        exc,
+                    )
                 from langgraph.checkpoint.memory import MemorySaver
 
                 self._checkpointer = MemorySaver()
