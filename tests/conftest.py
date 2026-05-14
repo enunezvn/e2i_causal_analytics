@@ -96,28 +96,56 @@ load_dotenv(override=True)
 # Tests CI lane (see ``.github/workflows/backend-tests.yml``
 # ``integration-tests`` job env block). When ``E2I_ASSERT_NO_ASYNCIO_POLLUTION``
 # is set, the probe promotes a detected polluter into a hard
-# ``pytest.exit(returncode=2)``. Two trip paths:
+# ``pytest.exit(returncode=2)`` — UNLESS the polluter is in
+# ``_STRICT_MODE_ALLOWLISTED_POLLUTERS``, in which case the warning +
+# terminal-summary diagnostic still render but the session is not killed.
+# Two trip paths:
 #   1. *Runtime-observed pollution* (``pytest_runtest_logfinish``):
 #      ``nest_asyncio.apply()`` fired DURING the session after the
 #      trace installed. The probe records the offending test
 #      nodeid (``apply_first_nodeid``) + full stack trace, so the
-#      offender is named on a red CI run.
+#      offender is named on a red CI run. The allowlist check
+#      happens at apply() capture time — strict mode skips exit if
+#      the first apply came from a known-benign caller (e.g., RAGAS).
 #   2. *Preexisting-baseline pollution* (``pytest_configure``,
 #      codex pass-1 HIGH-1): ``asyncio.run`` was already patched
 #      BEFORE this conftest loaded (sitecustomize, earlier conftest,
 #      pytest plugin loaded out-of-order). The probe cannot trace
 #      the polluter on this path — there is no captured stack — but
 #      strict mode still fails loud so a polluted baseline never
-#      silently passes. Audit surface: sitecustomize.py + earlier
-#      pytest plugins + parent conftest files.
+#      silently passes. Allowlist DOES NOT APPLY to this path because
+#      we can't identify the caller. Audit surface: sitecustomize.py
+#      + earlier pytest plugins + parent conftest files.
 # Sequenced after issue #220 / PR #222 (all bare ``asyncio.run``
 # callsites in ``tests/integration/`` migrated to the shared ``run_sync``
-# helper), so on a green branch path 1 should be a no-op. A trip from
-# here forward means a NEW polluter has appeared. Rollback: unset the
-# env var in the workflow; this comment stays accurate either way
-# because it only describes the strict-mode contract, not the live
+# helper), so on a green branch the only path-1 trip should come from
+# allowlisted callers — and those are warning-only under strict mode.
+# A non-allowlisted trip means a NEW polluter has appeared. Rollback:
+# unset the env var in the workflow; this comment stays accurate either
+# way because it only describes the strict-mode contract, not the live
 # workflow state.
 _ORIG_ASYNCIO_RUN = asyncio.run
+
+# Issue #221 strict-mode allowlist: known-benign third-party callers of
+# ``nest_asyncio.apply()`` whose pollution is mitigated by the issue-#220
+# explicit-loop migration in tests/integration/. Strict mode only fires on
+# polluters NOT in this list — the goal is "catch NEW polluters introduced
+# by a future dependency upgrade", not "no apply() ever". Match is a
+# substring check against each frame's ``filename`` in the first apply()
+# stack trace; both ``/`` and ``\\`` work because traceback.format_stack
+# yields the raw path as captured by the interpreter.
+#
+# RAGAS (``ragas/async_utils.py:49 apply_nest_asyncio``) calls apply()
+# unconditionally at import-time inside its evaluation helper. Identified
+# by PR #219's runtime probe in CI run 25879019929. See [[issue-218-close-20260514]]
+# memory for why we explicitly did NOT patch RAGAS upstream: stable
+# transitive dep, victim-side mitigation (PR #217 + issue #220) keeps the
+# suite green, runtime probe + AST lint prevent future victim-site regressions.
+_STRICT_MODE_ALLOWLISTED_POLLUTERS = (
+    "ragas/async_utils.py",
+    "ragas\\async_utils.py",
+)
+
 _ASYNCIO_POLLUTION_STATE: Dict[str, object] = {
     "apply_first_stack": None,  # type: Optional[str]
     "apply_first_nodeid": None,  # type: Optional[str]
@@ -131,7 +159,34 @@ _ASYNCIO_POLLUTION_STATE: Dict[str, object] = {
     # baseline ``_ORIG_ASYNCIO_RUN`` is already the patched function and
     # the runtime probe cannot detect new pollution by identity check.
     "preexisting_pollution_detected": False,
+    # Issue #221: whether the FIRST observed apply() call came from a
+    # known-benign caller (allowlist match in the stack trace). When True,
+    # strict mode treats this as a known-mitigated polluter and does NOT
+    # fire ``pytest.exit``. The terminal-summary block still notes which
+    # caller polluted so a future audit has the evidence.
+    "first_apply_allowlisted": False,
+    # Issue #221: which allowlist entry matched, if any. Used for the
+    # terminal-summary diagnostic so the operator can see "RAGAS polluted
+    # as expected" vs "unknown polluter — investigate."
+    "first_apply_allowlist_match": None,  # type: Optional[str]
 }
+
+
+def _check_stack_against_allowlist(stack: str) -> Optional[str]:
+    """Return the first allowlist entry whose substring appears in ``stack``,
+    or ``None`` if nothing matched.
+
+    Substring match against the formatted traceback string. Each
+    ``traceback.format_stack`` frame includes ``File "<path>"`` so the
+    path-substring approach reliably identifies the caller without
+    parsing frame objects. Cheap (single ``in`` per allowlist entry,
+    no regex).
+    """
+
+    for needle in _STRICT_MODE_ALLOWLISTED_POLLUTERS:
+        if needle in stack:
+            return needle
+    return None
 
 
 def _check_preexisting_pollution() -> None:
@@ -184,10 +239,18 @@ def _install_nest_asyncio_apply_trace() -> None:
         # can pin "apply_count==0" on clean sessions.
         _ASYNCIO_POLLUTION_STATE["apply_count"] = int(_ASYNCIO_POLLUTION_STATE["apply_count"]) + 1
         if _ASYNCIO_POLLUTION_STATE["apply_first_stack"] is None:
-            _ASYNCIO_POLLUTION_STATE["apply_first_stack"] = "".join(traceback.format_stack())
+            stack = "".join(traceback.format_stack())
+            _ASYNCIO_POLLUTION_STATE["apply_first_stack"] = stack
             _ASYNCIO_POLLUTION_STATE["apply_first_nodeid"] = _ASYNCIO_POLLUTION_STATE[
                 "current_nodeid"
             ]
+            # Issue #221: stamp the allowlist match (or None) onto state at
+            # capture time so the strict-mode check in
+            # ``pytest_runtest_logfinish`` doesn't have to re-walk the stack.
+            allowlist_hit = _check_stack_against_allowlist(stack)
+            if allowlist_hit is not None:
+                _ASYNCIO_POLLUTION_STATE["first_apply_allowlisted"] = True
+                _ASYNCIO_POLLUTION_STATE["first_apply_allowlist_match"] = allowlist_hit
         return _real_apply(*args, **kwargs)
 
     nest_asyncio.apply = _traced_apply  # type: ignore[assignment]
@@ -552,6 +615,17 @@ def pytest_runtest_logfinish(nodeid, location):  # type: ignore[no-untyped-def]
     print(msg, file=_sys.stderr, flush=True)
 
     if os.getenv("E2I_ASSERT_NO_ASYNCIO_POLLUTION", "").lower() in {"1", "true", "yes"}:
+        # Issue #221: strict mode catches NEW polluters, not known-benign
+        # ones already mitigated victim-side. If the first observed
+        # apply() came from an allowlisted caller (e.g., RAGAS — see
+        # ``_STRICT_MODE_ALLOWLISTED_POLLUTERS``), keep the warning +
+        # terminal-summary diagnostic but DO NOT ``pytest.exit``. That
+        # keeps the issue #220 victim-site mitigation in force without
+        # making CI permanently red on a known polluter we explicitly
+        # chose not to patch upstream.
+        if _ASYNCIO_POLLUTION_STATE.get("first_apply_allowlisted"):
+            return
+
         # Hard-fail when explicitly requested. We use pytest.exit (not raise)
         # so the surrounding test isn't blamed for the pollution — the
         # session summary will name the actual culprit via ``polluter_nodeid``.
