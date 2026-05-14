@@ -566,6 +566,137 @@ def test_compose_legacy_verdict_does_not_cap_when_ablation_corroborated(
     )
 
 
+def test_combine_then_compose_skips_cap_when_ablation_independently_corroborates(
+    reset_dspy_lm,
+) -> None:
+    """Issue #212 codex pass-3 LOW-1: end-to-end production-wiring test
+    for the ablation corroboration guard.
+
+    The sibling ``test_compose_legacy_verdict_does_not_cap_when_ablation_corroborated``
+    isolates the cap predicate by hand-building ``adversarial_input``
+    with ``ablation_severity='moderate'``. That verifies the guard's
+    LOGIC but does NOT verify that ``_combine_ablation_with_permutation``
+    is the producer that populates the field the guard reads. If the
+    producer drifts (e.g. a future refactor renames the audit key or
+    only sets it on the escalation branch), the guard becomes inert and
+    the cap silently relaxes #196's ablation contract.
+
+    This test exercises the production wiring: run the combiner FIRST,
+    assert ``ablation_severity`` is populated, then feed the resulting
+    dict through ``_compose_legacy_verdict`` and verify the cap is
+    skipped.
+
+    Scenario:
+      * Permutation z=4σ + |delta_AUC|=0.05 (below floor 0.10) →
+        hblp_classify joint-clamps severity to 'info';
+        ``severity_pre_joint_check='moderate'`` (raw z lands in moderate
+        band); ``delta_auc_below_floor=True``.
+      * Ablation z=4σ + |delta_AUC|=0.15 (above floor) →
+        ``_classify_ablation_severity`` returns 'moderate'.
+      * ``_combine_ablation_with_permutation`` MAX-escalates severity
+        info → moderate AND publishes ``ablation_severity='moderate'``.
+      * LLM 'descendant' leak verdict triggers Layer 4 via the voter.
+      * Cap predicate sees ``delta_auc_below_floor=True`` AND
+        ``decided_by='llm'`` AND ``ablation_severity='moderate'`` →
+        corroboration guard fires → cap SKIPPED → LLM severity
+        ('high') propagates.
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _combine_ablation_with_permutation,
+        _compose_legacy_verdict,
+    )
+    from src.data.kg.ensemble_voter import EnsembleVoter
+    from src.data.kg.types import LLMVerdict
+
+    # Joint-clamped permutation-side input mirroring what hblp_classify
+    # emits after #194's joint check fires: raw z=4σ in moderate band,
+    # |delta_auc|=0.05 below 0.10 floor → severity clamped to 'info' but
+    # ``severity_pre_joint_check`` retains 'moderate'.
+    perm_input: dict[str, Any] = {
+        "layer": "3",
+        "severity": "info",
+        "severity_pre_joint_check": "moderate",
+        "remediation": "keep",
+        "evidence": "permutation joint-clamped",
+        "z_score": 4.0,
+        "actual_auc": 0.55,
+        "null_mean": 0.50,
+        "null_std": 0.0125,
+        "p_value": 0.001,
+        "n_permutations": 200,
+        "delta_auc": 0.05,
+        "delta_auc_floor": 0.10,
+        "delta_auc_below_floor": True,
+        "_hblp_classified": True,
+    }
+    # Ablation independently passes its own joint check:
+    #   z=4σ > MODERATE_Z=3.0 AND |delta_auc|=0.15 > floor 0.10 →
+    #   _classify_ablation_severity → 'moderate'.
+    ablation_row: dict[str, Any] = {
+        "z_score": 4.0,
+        "delta_auc": 0.15,
+        "null_mean": 0.0,
+        "null_std": 0.0375,
+    }
+
+    combined = _combine_ablation_with_permutation(perm_input, ablation_row)
+
+    # Production combiner populated the audit field that the cap guard
+    # reads. If this assertion fails the guard is structurally inert
+    # regardless of how the cap predicate is written.
+    assert combined["ablation_severity"] == "moderate", (
+        f"Expected _combine_ablation_with_permutation to publish "
+        f"ablation_severity='moderate'; got "
+        f"{combined.get('ablation_severity')!r}. The corroboration "
+        f"guard in _compose_legacy_verdict depends on this field — if "
+        f"the producer drifts, the cap silently relaxes #196's "
+        f"ablation contract."
+    )
+    # MAX-rule escalated permutation 'info' → 'moderate'.
+    assert combined["severity"] == "moderate"
+    assert combined["remediation"] == "ambiguous"
+    # Permutation-side joint-clamp signal still intact — that is the
+    # cap predicate's trigger condition.
+    assert combined["delta_auc_below_floor"] is True
+
+    # Now feed the combined dict through the voter + cap with a leak
+    # LLM verdict. The cap predicate sees delta_auc_below_floor=True
+    # AND decided_by='llm', but ALSO sees ablation_severity='moderate'
+    # (corroboration) and must skip the cap.
+    voter = EnsembleVoter()
+    llm_verdict = LLMVerdict(
+        causal_role="descendant",
+        mechanism="end-to-end ablation-corroborated leak",
+        recommended_remediation="drop",
+        cited_pmids=(),
+    )
+    verdict = _compose_legacy_verdict(
+        "ablation_corroborated_feat",
+        voter=voter,
+        adversarial_input=combined,
+        llm_verdict=llm_verdict,
+    )
+
+    # LLM audit fields surfaced.
+    assert verdict["decided_by"] == "llm"
+    assert verdict["layer"] == "4"
+    # Final severity follows the LLM (corroboration guard skipped cap).
+    assert verdict["severity"] == "high", (
+        f"Issue #212 pass-3 LOW-1: end-to-end corroboration guard must "
+        f"skip the cap when ablation_severity in {{moderate, high}}, "
+        f"as populated by _combine_ablation_with_permutation. Got "
+        f"severity={verdict['severity']!r}; expected 'high'. "
+        f"Full verdict: {verdict}"
+    )
+    assert verdict["remediation"] == "drop"
+    # Cap annotation must NOT appear when ablation corroborated.
+    assert "212 cap" not in verdict["evidence"], (
+        f"Cap annotation must not appear when ablation independently "
+        f"corroborates the Layer-3 signal. Got "
+        f"evidence={verdict['evidence']!r}"
+    )
+
+
 def test_compose_legacy_verdict_cap_fires_on_remediation_only_difference(
     reset_dspy_lm,
 ) -> None:
