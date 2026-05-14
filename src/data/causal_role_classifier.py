@@ -9,24 +9,27 @@ plus 8 domain-expert collider / instrument exemplars added under issue #198.
 Compile-set role coverage: ancestor=1, confounder=2, mediator=1, descendant=8,
 collider=4, instrument=4. All six declared ``CausalRole`` Literal values are
 represented (previously: 4 of 6; collider + instrument were deferred to issue
-#198 pending domain-expert labeling). The collider examples cover BOTH Pearl
-collider sub-families: (i) classical Berkson colliders with causally
-independent parents (alive_at_180d_observation_window: frailty ⊥ T at
-baseline) and (ii) confounder-colliders / M-structures (per Greenland-
-Pearl-Robins 1999) where baseline severity is itself a T-Y confounder with
-arrowheads into BOTH T and the collider variable (hospitalizations_total,
-concomitant_steroid_burst_count_followup, diagnostic_test_count_followup).
-The compile set explicitly rejects "T AND (post-T event)" framings (e.g.,
-discontinuation_flag = treatment_initiated AND fill-gap) as colliders
-because the second "arrow" there is itself a downstream of T, making the
-variable a descendant, not a collider. The instrument examples span two
-pharmacoepi IV families: supply-side geographic (urban_rural_code,
-geographic_region) and preference/volume-based provider IVs
-(provider_preference_score, index_provider_biologic_volume_prior_year).
-Each instrument rationale phrases the exclusion restriction as an
-ASSUMPTION TO AUDIT (with a named validity-check step), not as a confessed
-violation — so the LM learns IV-validity discipline rather than a "name a
-violation and still call it an IV" pattern.
+#198 pending domain-expert labeling). All 4 collider examples are
+confounder-collider / M-structures per Greenland-Pearl-Robins 1999 (the
+dominant collider failure mode in observational pharmacoepi, where baseline
+severity is itself a T-Y confounder with arrowheads into BOTH T and V). The
+examples vary in derivation MECHANISM to teach the LM that the
+confounder-collider pattern transfers across feature shapes: count of
+utilization events (hospitalizations_total), count of medication events
+(concomitant_steroid_burst_count_followup), count of workup events
+(diagnostic_test_count_followup), and binary sample-inclusion gate
+(alive_at_180d_observation_window). The compile set explicitly rejects
+"T AND (post-T event)" framings (e.g., discontinuation_flag =
+treatment_initiated AND fill-gap) as colliders because the second "arrow"
+there is itself a downstream of T, making the variable a descendant, not a
+collider. The instrument examples span two pharmacoepi IV families:
+supply-side geographic (urban_rural_code, geographic_region) and
+preference/volume-based provider IVs (provider_preference_score,
+index_provider_biologic_volume_prior_year). Each instrument rationale
+phrases the exclusion restriction as an ASSUMPTION TO AUDIT (with a named
+validity-check step), not as a confessed violation — so the LM learns
+IV-validity discipline rather than a "name a violation and still call it
+an IV" pattern.
 
 Why DSPy: replace ad-hoc Claude prompts (which hallucinated feature names per
 the documented synthetic_v2 incident) with a STRUCTURED PROGRAM that:
@@ -142,18 +145,23 @@ def build_compile_set() -> list[dspy.Example]:
     the broader exemplars). 8 additional ``collider`` and ``instrument``
     exemplars were added under issue #198 from domain-expert review.
 
-    The 4 collider examples cover both Pearl collider sub-families:
-    hospitalizations_total + concomitant_steroid_burst_count_followup +
-    diagnostic_test_count_followup are confounder-collider M-structures
-    (per Greenland-Pearl-Robins 1999) where baseline severity is the T-Y
-    confounder; alive_at_180d_observation_window is the textbook
-    survivor-selection Berkson collider with causally independent
-    parents (baseline frailty + T -> survival). Each rationale exposes
-    BOTH parents in the derivation. `discontinuation_flag` /
-    `discontinued_180d` / `persistent_at_180d` are intentionally NOT
-    used as colliders because their derivation reduces to
-    ``T AND (post-T event)`` — the second "arrow" there is itself
-    downstream of T, making them descendants, not colliders.
+    All 4 collider examples are confounder-collider M-structures (per
+    Greenland-Pearl-Robins 1999) — the dominant collider failure mode
+    in observational pharmacoepi, where baseline severity is itself a
+    T-Y confounder with an arrowhead into V. They differ in derivation
+    MECHANISM to teach the LM that the confounder-collider pattern
+    transfers across feature shapes: count of utilization
+    (hospitalizations_total), count of medication
+    (concomitant_steroid_burst_count_followup), count of workup
+    (diagnostic_test_count_followup), and binary sample-inclusion gate
+    (alive_at_180d_observation_window). Each rationale exposes BOTH
+    parents in the derivation: baseline severity (T-Y confounder with
+    arrowhead into V) AND a T-driven second arrow (AE, non-response,
+    protocol-monitoring, or T-mediated survival respectively).
+    `discontinuation_flag` / `discontinued_180d` / `persistent_at_180d`
+    are intentionally NOT used as colliders because their derivation
+    reduces to ``T AND (post-T event)`` — the second "arrow" is
+    downstream of T rather than an independent cause.
 
     The 4 instrument examples span two pharmacoepi IV families: supply-
     side geographic (urban_rural_code, geographic_region) and
@@ -471,17 +479,21 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             recommended_remediation="drop",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
-        # Collider 3 — alive_at_180d_observation_window: the textbook
-        # SURVIVOR-SELECTION Berkson collider, with parents causally
-        # independent of each other. V = patient is still alive AND
-        # continuously enrolled at index+180d. Parents: (a) baseline
-        # mortality risk (set pre-index by age, comorbidity burden; a
-        # T-Y confounder via severity-of-illness pathway), and (b) the
-        # treatment effect on mortality (T -> survival -> V). When an
-        # analysis is RESTRICTED to V=1 patients (the common complete-
-        # follow-up filter), the unconditional T <-> mortality-risk
-        # backdoor is opened. This is the classical informative-
-        # censoring / immortal-time-adjacent collider.
+        # Collider 3 — alive_at_180d_observation_window: SAMPLE-SELECTION
+        # confounder-collider (sub-family ii). V = patient alive AND
+        # continuously enrolled at index+180d, used as a complete-
+        # follow-up sample-inclusion filter. Two arrowheads from distinct
+        # mechanism families: (a) baseline mortality/dropout risk (a
+        # T-Y confounder via the severity-of-illness pathway — sicker
+        # patients are less likely to be prescribed biologics AND less
+        # likely to survive; this is the standard pharmacoepi reality)
+        # and (b) T -> survival -> V (treatment itself affects survival).
+        # Distinct from the utilization/medication/workup counts above:
+        # V here is a BINARY SAMPLE-INCLUSION indicator, not a count.
+        # Conditioning on V=1 (the common complete-follow-up filter) is
+        # what causes the M-bias. Pinned separately so the LM learns the
+        # confounder-collider pattern transfers across BOTH count
+        # features AND binary inclusion-filter features.
         dspy.Example(
             feature_name="alive_at_180d_observation_window",
             derivation_pseudocode=(
@@ -496,19 +508,20 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="collider",
             mechanism=(
-                "Survivor-selection Berkson collider with two arrowheads "
-                "from distinct sources. (a) Baseline mortality / dropout "
-                "risk (age, comorbidity, frailty — a T-Y confounder via "
-                "severity-of-illness pathways) drives the survival arrow "
-                "into V. (b) T -> survival -> V: the treatment itself "
-                "affects mortality and dropout, so T also has an arrow "
-                "into V. The two parents (frailty, T) are causally "
-                "distinct: frailty is pre-T baseline, T is the assigned "
-                "treatment. Conditioning on V=1 (the common complete-"
-                "follow-up filter) opens the T <-> frailty backdoor and "
-                "biases ANY downstream T-Y comparison. The fix is NOT to "
-                "filter the cohort by V; carry both V=0 and V=1 patients "
-                "through with appropriate censoring."
+                "Sample-selection confounder-collider (sub-family ii). V "
+                "has two arrowheads. (a) Baseline mortality/dropout risk "
+                "(age, comorbidity burden, frailty) is a T-Y confounder "
+                "via the severity-of-illness pathway (severity -> T via "
+                "prescriber declining biologics for frail patients; "
+                "severity -> Y via uncontrolled disease) AND drives the "
+                "survival/enrollment arrow into V. (b) T -> survival -> V: "
+                "the treatment itself affects mortality and dropout, so T "
+                "has an arrow into V independent of the baseline-risk arm. "
+                "When the analysis is RESTRICTED to V=1 patients (the "
+                "common complete-follow-up filter), conditioning opens "
+                "the T <-> baseline-risk backdoor on the Y path. "
+                "Structurally distinct from the count colliders above "
+                "because V is BINARY and used as a sample-inclusion gate."
             ),
             recommended_remediation="drop",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
