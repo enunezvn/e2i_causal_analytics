@@ -538,10 +538,37 @@ class EnsembleVoter:
             # audit trail then records the inf z AND the delta_AUC
             # corroboration so the deterministic veto has underlying
             # evidence.
+            # Issue #194 codex pass-3 MED-1: tighten the joint-check
+            # corroboration predicate so a stale/contradictory producer
+            # can't slip a malformed high through. Three conditions ALL
+            # required:
+            #   (a) z_score is specifically ``+inf`` (the production
+            #       MED-1 escape path; NOT just any non-finite — z=-inf
+            #       or NaN are still rejected).
+            #   (b) ``delta_auc`` is finite (numeric corroboration
+            #       available).
+            #   (c) ``abs(delta_auc) > delta_auc_floor`` directly checked
+            #       (not just ``delta_auc_below_floor is False`` — that
+            #       field could be set by a stale producer who computed
+            #       it against a different floor).
+            # Plus the producer-tag ``_hblp_classified=True`` to confirm
+            # the dict came from production ``_adversarial_input``.
             adv_delta_auc = adversarial_verdict.get("delta_auc")
-            adv_delta_auc_below_floor = adversarial_verdict.get("delta_auc_below_floor", None)
+            adv_delta_auc_floor = adversarial_verdict.get("delta_auc_floor")
+            adv_hblp_classified = adversarial_verdict.get("_hblp_classified", False)
+            z_is_positive_inf = (
+                isinstance(adv_z_score, (int, float))
+                and not isinstance(adv_z_score, bool)
+                and not (isinstance(adv_z_score, float) and math.isnan(adv_z_score))
+                and not math.isfinite(float(adv_z_score))
+                and float(adv_z_score) > 0
+            )
             joint_check_corroborated = bool(
-                _is_finite_number(adv_delta_auc) and adv_delta_auc_below_floor is False
+                z_is_positive_inf
+                and _is_finite_number(adv_delta_auc)
+                and _is_finite_number(adv_delta_auc_floor)
+                and abs(float(adv_delta_auc)) > float(adv_delta_auc_floor)
+                and bool(adv_hblp_classified)
             )
             if (
                 raw_adv_severity == ADV_SEVERITY_HIGH
@@ -550,17 +577,20 @@ class EnsembleVoter:
             ):
                 evidence.append(
                     f"Adversarial verdict claims severity=high but z_score is "
-                    f"{adv_z_score!r} (missing or non-finite) AND |delta_AUC| "
-                    f"corroboration unavailable; cannot honour as deterministic veto"
+                    f"{adv_z_score!r} (missing or non-finite) AND joint-check "
+                    f"corroboration unavailable (delta_auc={adv_delta_auc!r}, "
+                    f"floor={adv_delta_auc_floor!r}, _hblp_classified="
+                    f"{adv_hblp_classified!r}); cannot honour as deterministic veto"
                 )
                 logger.warning(
                     "EnsembleVoter: malformed adversarial high verdict for %s; "
-                    "z_score=%r, delta_auc=%r, delta_auc_below_floor=%r — "
-                    "downgrading to no signal",
+                    "z_score=%r, delta_auc=%r, delta_auc_floor=%r, "
+                    "_hblp_classified=%r — downgrading to no signal",
                     feature_name,
                     adv_z_score,
                     adv_delta_auc,
-                    adv_delta_auc_below_floor,
+                    adv_delta_auc_floor,
+                    adv_hblp_classified,
                 )
                 adv_severity = None
             else:
@@ -640,7 +670,37 @@ class EnsembleVoter:
         # 2. Adversarial deterministic veto (z > 5σ).
         if adv_severity == ADV_SEVERITY_HIGH:
             z = adversarial_verdict.get("z_score") if adversarial_verdict else None
-            evidence.append(f"Adversarial probe veto: severity=high, z_score={z}")
+            # Issue #194 codex pass-3 MED-2: when the high veto is
+            # justified by the z=+inf + joint-check corroboration path
+            # (rather than a normal finite-z deterministic veto),
+            # record BOTH the inf z AND the delta_AUC corroboration in
+            # the evidence text — otherwise downstream legacy-dict
+            # readers (who only see joined EnsembleVerdict.evidence)
+            # lose the human-readable rationale for the inf z.
+            adv_delta_auc_for_evidence = (
+                adversarial_verdict.get("delta_auc") if adversarial_verdict else None
+            )
+            adv_delta_auc_floor_for_evidence = (
+                adversarial_verdict.get("delta_auc_floor") if adversarial_verdict else None
+            )
+            if (
+                isinstance(z, (int, float))
+                and not isinstance(z, bool)
+                and not (isinstance(z, float) and math.isnan(z))
+                and not math.isfinite(float(z))
+                and float(z) > 0
+                and _is_finite_number(adv_delta_auc_for_evidence)
+                and _is_finite_number(adv_delta_auc_floor_for_evidence)
+            ):
+                evidence.append(
+                    f"Adversarial probe veto: severity=high, z_score={z} "
+                    f"(degenerate null; null_std=0), |delta_AUC|="
+                    f"{abs(float(adv_delta_auc_for_evidence)):.4f} > floor "
+                    f"{float(adv_delta_auc_floor_for_evidence):.4f} "
+                    f"(issue #194 joint-check corroboration)"
+                )
+            else:
+                evidence.append(f"Adversarial probe veto: severity=high, z_score={z}")
             self._record_disagreements_with_winner(
                 winner="adversarial",
                 kg_signal=kg_signal,

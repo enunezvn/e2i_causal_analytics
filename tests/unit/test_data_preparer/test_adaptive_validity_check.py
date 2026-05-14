@@ -2737,7 +2737,6 @@ def test_issue_194_voter_honors_z_inf_strong_effect_through_kg_path():
     """
     from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
         _adversarial_input,
-        _compose_legacy_verdict,
         _get_ensemble_voter_class,
     )
     from src.data.kg.types import KGEdge
@@ -2758,10 +2757,12 @@ def test_issue_194_voter_honors_z_inf_strong_effect_through_kg_path():
     )
     assert ad["delta_auc_below_floor"] is False
 
-    # Now route through _compose_legacy_verdict with a KG edge present —
-    # this exercises the EnsembleVoter path. Use a KG edge that does
-    # NOT connect feature_ids to target_ids → kg_signal=no_signal →
-    # falls through to adversarial-alone bypass that preserves severity.
+    # Codex pass-3 LOW-1 fix: call voter.vote() DIRECTLY rather than
+    # routing through _compose_legacy_verdict with a disjoint KG edge.
+    # The disjoint KG edge falls through to the adversarial-alone
+    # bypass at adaptive_validity_check.py:1189, which preserves
+    # severity without invoking the voter. Direct .vote() guarantees
+    # the voter's M3 guard predicate is exercised.
     voter = _get_ensemble_voter_class()()
     kg_edge = KGEdge(
         subject_id="X",
@@ -2770,21 +2771,27 @@ def test_issue_194_voter_honors_z_inf_strong_effect_through_kg_path():
         evidence_source="test",
         score=0.9,
     )
-    verdict = _compose_legacy_verdict(
+    # Connect feature_entity_ids to target_entity_ids THROUGH the edge
+    # so kg_signal is NOT no_signal → voter is fully exercised.
+    verdict_obj = voter.vote(
         "test_feat",
-        voter=voter,
-        adversarial_input=ad,
-        kg_edges=[kg_edge],
-        feature_entity_ids=["X"],
-        target_entity_ids=["Z"],  # disjoint → no_signal
-        kg_mode="off",
+        adversarial_verdict=ad,
+        kg_edges=(kg_edge,),
+        feature_entity_ids=("X",),
+        target_entity_ids=("Y",),
     )
-    assert verdict["severity"] == "high", (
-        f"Issue #194 codex pass-2 MED-1: voter must accept z=+inf when "
-        f"delta_auc_below_floor=False; got {verdict['severity']}, "
-        f"evidence={verdict.get('evidence')}"
+    assert verdict_obj.severity == "high", (
+        f"Issue #194 codex pass-2 MED-1: voter.vote() must accept z=+inf "
+        f"when joint check corroborated; got {verdict_obj.severity}, "
+        f"evidence={verdict_obj.evidence}"
     )
-    assert verdict["remediation"] == "drop"
+    assert verdict_obj.remediation == "drop"
+    # Pass-3 MED-2: evidence text must carry the delta_AUC justification.
+    evidence_str = "; ".join(verdict_obj.evidence)
+    assert "degenerate" in evidence_str.lower() or "194" in evidence_str, (
+        f"Pass-3 MED-2: voter evidence must record the joint-check "
+        f"corroboration; got {evidence_str!r}"
+    )
 
 
 def test_issue_194_voter_rejects_z_inf_without_joint_check_corroboration():
