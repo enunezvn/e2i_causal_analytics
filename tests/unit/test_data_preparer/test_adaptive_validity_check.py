@@ -586,6 +586,12 @@ def test_verdict_schema_is_uniform_across_layer_1_and_layer_3():
         "delta_auc",
         "delta_auc_floor",
         "delta_auc_below_floor",
+        # Issue #196 Phase 3.3 — Layer-3 ablation audit fields.
+        "ablation_z_score",
+        "ablation_delta_auc",
+        "ablation_null_mean",
+        "ablation_null_std",
+        "ablation_severity",
     }
     for v in result["adaptive_verdicts"]:
         assert set(v.keys()) == canonical_keys, (
@@ -863,6 +869,11 @@ def test_phase29_decided_by_to_layer_mapping_covers_all_cases():
     assert _DECIDED_BY_TO_LAYER == {
         "layer_1": "1",
         "adversarial": "3",
+        # Issue #196 Phase 3.3 — ``adversarial_ablation`` tag set when
+        # the Layer-3 ablation MAX-rule escalates severity beyond what
+        # the permutation pass alone produced. Maps back to layer "3"
+        # because ablation IS a Layer 3 sub-test.
+        "adversarial_ablation": "3",
         "kg": "2",
         "llm": "4",
         "abstain": "abstain",
@@ -942,9 +953,10 @@ def test_phase29_compose_legacy_verdict_all_none_signals_returns_abstain():
     assert verdict["layer"] == "abstain"
     assert verdict["severity"] == "abstain"
     assert verdict["remediation"] == "review"
-    # Schema invariant: all 21 canonical fields present
+    # Schema invariant: all 26 canonical fields present
     # (16 Phase 2.9 Stage 1 + 2 Phase 2.9 Stage 3 LLM audit fields from issue #193
-    # + 3 issue #194 joint-check audit fields from codex pass-1 LOW-1).
+    # + 3 issue #194 joint-check audit fields from codex pass-1 LOW-1
+    # + 5 issue #196 Phase 3.3 ablation audit fields).
     expected_keys = {
         "feature",
         "layer",
@@ -969,6 +981,12 @@ def test_phase29_compose_legacy_verdict_all_none_signals_returns_abstain():
         "delta_auc",
         "delta_auc_floor",
         "delta_auc_below_floor",
+        # Issue #196 Phase 3.3 — Layer-3 ablation audit fields:
+        "ablation_z_score",
+        "ablation_delta_auc",
+        "ablation_null_mean",
+        "ablation_null_std",
+        "ablation_severity",
     }
     assert set(verdict.keys()) == expected_keys
 
@@ -2006,9 +2024,9 @@ async def test_phase29_stage2_e2e_main_loop_with_populated_cache(tmp_path, monke
     # numeric "age" column.
     assert "adaptive_verdicts" in result
     assert len(result["adaptive_verdicts"]) >= 1
-    # Verdict carries the canonical 21-field shape (regression guard).
+    # Verdict carries the canonical 26-field shape (regression guard).
     # Issue #193 added llm_role + llm_remediation. Issue #194 added
-    # 3 joint-check audit fields.
+    # 3 joint-check audit fields. Issue #196 added 5 ablation audit fields.
     verdict = next(v for v in result["adaptive_verdicts"] if v["feature"] == "age")
     expected_keys = {
         "feature",
@@ -2034,6 +2052,12 @@ async def test_phase29_stage2_e2e_main_loop_with_populated_cache(tmp_path, monke
         "delta_auc",
         "delta_auc_floor",
         "delta_auc_below_floor",
+        # Issue #196 Phase 3.3 — Layer-3 ablation audit fields.
+        "ablation_z_score",
+        "ablation_delta_auc",
+        "ablation_null_mean",
+        "ablation_null_std",
+        "ablation_severity",
     }
     assert set(verdict.keys()) == expected_keys
 
