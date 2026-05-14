@@ -10,14 +10,20 @@ Compile-set role coverage: ancestor=1, confounder=2, mediator=1, descendant=8,
 collider=4, instrument=4. All six declared ``CausalRole`` Literal values are
 represented (previously: 4 of 6; collider + instrument were deferred to issue
 #198 pending domain-expert labeling). The collider examples emphasize the
-*two-arrow-in DAG structure* (variable with two distinct causal parents
-including the target or a target-proxy) — that's what separates a collider
-from a descendant (single arrow in from treatment). The instrument examples
-follow the canonical pharmacoepidemiology supply-side IV pattern (e.g.,
-Brookhart et al., geographic prescribing variation as IV) where the variable
-plausibly affects the OUTCOME only through the TREATMENT (exclusion
-restriction), and its assumed-independence from the outcome is named as part
-of the rationale so the LM can learn to flag exclusion-restriction violations.
+*Berkson-bias DAG structure* with TWO DISTINCT CAUSAL PARENTS — typically
+(baseline disease severity / activity, treatment-related adverse event). That
+is what separates a collider from a descendant: a descendant has only one
+arrow in (T -> V); a collider has T -> V AND X -> V where X is causally
+independent of T (e.g., pre-index severity). This compile set explicitly
+rejects "T AND (post-T event)" framings (e.g., discontinuation_flag =
+treatment_initiated AND fill-gap) as colliders because the second "arrow"
+there is itself a downstream of T, not an independent cause. The instrument
+examples follow the canonical pharmacoepidemiology IV families: Brookhart
+preference-based provider IVs and supply-side geographic IVs. Each instrument
+rationale phrases the exclusion restriction as an ASSUMPTION TO AUDIT (with
+a named validity-check step), not as a confessed violation — so the LM
+learns IV-validity discipline rather than a "name a violation and still call
+it an IV" pattern.
 
 Why DSPy: replace ad-hoc Claude prompts (which hallucinated feature names per
 the documented synthetic_v2 incident) with a STRUCTURED PROGRAM that:
@@ -131,10 +137,26 @@ def build_compile_set() -> list[dspy.Example]:
     into typed ``dspy.Example`` objects below (the remaining 6 are either
     duplicates of an already-represented mechanism or have been folded into
     the broader exemplars). 8 additional ``collider`` and ``instrument``
-    exemplars were added under issue #198 from domain-expert review of the
-    CSU + Optum manifests at ``src/data/manifests/``; rationales reference
-    the canonical DAG structure (two-arrow-in for colliders; exclusion-
-    restriction for instruments) rather than feature names alone.
+    exemplars were added under issue #198 from domain-expert review.
+
+    The 4 collider examples are Berkson-bias structures with two DISTINCT
+    causal parents: hospitalizations_total / er_visit_count_followup /
+    concomitant_steroid_burst_count_followup /
+    diagnostic_test_count_followup. Each rationale exposes BOTH parents in
+    the derivation (pre-index severity AND post-index treatment-AE).
+    `discontinuation_flag` / `discontinued_180d` / `persistent_at_180d` are
+    intentionally NOT used as colliders because their derivation reduces to
+    ``T AND (post-T event)`` — the second "arrow" there is itself
+    downstream of T, making them descendants, not colliders.
+
+    The 4 instrument examples are the canonical pharmacoepi IV pattern:
+    urban_rural_code / geographic_region / provider_preference_score /
+    plan_type. Each rationale phrases the exclusion restriction as an
+    ASSUMPTION-TO-AUDIT with a named validity check step (per Brookhart
+    2010 IV-validity audit), NOT as a confessed Z -> Y violation. The
+    LM thereby learns to FLAG candidate IVs whose exclusion restriction
+    has not been validated, rather than to accept "exclusion violation
+    named -> still an IV" as a pattern.
 
     Coverage by role: ancestor=1, confounder=2, mediator=1, descendant=8,
     collider=4, instrument=4.
@@ -321,138 +343,164 @@ def build_compile_set() -> list[dspy.Example]:
         # =====================================================================
         # Issue #198 — collider exemplars (4)
         # ---------------------------------------------------------------------
-        # A COLLIDER is a variable with TWO ARROWS POINTING INTO IT from
-        # distinct causes (Pearl). Conditioning on it opens a non-causal
-        # backdoor path between the original parents. In our pharmacoepi
-        # setup the two parents are typically (treatment_exposure,
-        # treatment_response/AE) — both must be present for the colliding
-        # variable to take a non-trivial value. This is what separates a
-        # collider from a descendant: descendants have a single arrow in
-        # from treatment; colliders have arrows from treatment AND from a
-        # second independent cause (often a target-proxy or an outcome
-        # proxy like adverse-event severity). Remediation is `drop`
-        # because conditioning a regression on a collider induces
-        # selection bias on the T→Y relationship — the same family of
-        # bias as Berkson's bias in case-control studies.
+        # A COLLIDER is a variable V with TWO ARROWS POINTING INTO IT from
+        # DISTINCT causes (Pearl, `Causality` 2009): V <- T and V <- X
+        # where X is a causal factor INDEPENDENT of T (not merely a
+        # downstream property of T). Conditioning on V opens a non-causal
+        # backdoor path between T and X. This is what separates a
+        # collider from a descendant: descendants have only T -> V (the
+        # variable is downstream of treatment); colliders have arrows from
+        # T AND from a SECOND, INDEPENDENT cause (typically a pre-treatment
+        # baseline characteristic OR an outcome-proxy that is itself
+        # caused by something other than T).
+        #
+        # IMPORTANT codex pass-1 correction: post-treatment outcome flags
+        # whose derivation reduces to `T AND (post-T event)` (e.g.,
+        # `discontinuation_flag = T AND (gap_in_fills)`) are DESCENDANTS,
+        # not colliders — the "second arrow" they appeal to is itself a
+        # consequence of T, not an independent cause. The exemplars below
+        # are restricted to the canonical Berkson-bias family where the
+        # second parent is genuinely INDEPENDENT of T: baseline disease
+        # severity (set pre-index) or a non-disease comorbidity flow.
+        #
+        # Remediation is `drop` because conditioning on a collider induces
+        # selection bias on the T->Y relationship — same family of bias
+        # as Berkson's bias in case-control studies.
         # =====================================================================
-        # Collider 1 — discontinuation_flag (CSU): classic pharmacoepi
-        # collider. Two parents: (a) treatment_initiated (you must have
-        # started treatment to discontinue), and (b) clinical response /
-        # adverse-event severity (you discontinue because the drug worked,
-        # didn't work, or caused intolerable AEs). Both arrows are
-        # post-index. Adjusting for it in a treatment-effect model would
-        # induce Berkson-style selection bias.
-        dspy.Example(
-            feature_name="discontinuation_flag",
-            derivation_pseudocode=(
-                "treatment_initiated AND (last_fill_date + days_supply < "
-                "journey_end_date - gap_threshold)"
-            ),
-            dataset_context=(
-                "ConcertAI CSU claims; target=treatment_initiated; "
-                "anchor=index_date; auxiliary clinical-response signal latent"
-            ),
-            causal_role="collider",
-            mechanism=(
-                "Two-arrow-in DAG structure: (1) requires treatment_initiated=1 "
-                "to be non-trivial (treatment exposure is one parent); "
-                "(2) requires the latent treatment-response variable to take "
-                "an unfavorable value (efficacy failure or AE) to flip from 0 "
-                "to 1 (clinical response is the second parent). Conditioning "
-                "on discontinuation in a downstream model opens a non-causal "
-                "path between treatment and response — Berkson-style selection "
-                "bias. NOT a descendant because descendant requires one parent; "
-                "this has two distinct causal sources."
-            ),
-            recommended_remediation="drop",
-        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
-        # Collider 2 — discontinued_180d (Optum): same two-parent structure
-        # as CSU's discontinuation_flag but with the 180d Optum lookback
-        # window. Pinned separately so the LM learns the pattern transfers
-        # across data sources and lookback semantics.
-        dspy.Example(
-            feature_name="discontinued_180d",
-            derivation_pseudocode=(
-                "treatment_initiated AND (last_biologic_fill + days_supply + "
-                "60d_gap < index_date + 180d)"
-            ),
-            dataset_context=(
-                "Optum claims; target=initiated_biologic_180d; anchor=index_date; lookback=180d"
-            ),
-            causal_role="collider",
-            mechanism=(
-                "Same two-arrow-in pharmacoepi collider as discontinuation_flag "
-                "but for Optum's 180d window: parents are (treatment_exposure, "
-                "treatment_response/adherence). Variable is identically zero "
-                "for patients who never initiated (single-parent floor) AND "
-                "for patients whose response was favorable (second parent "
-                "floor). Joint dependence on both makes it a collider. "
-                "Adjusting for it in a discontinuation-vs-persistence model "
-                "would bias the estimated effect of initiation."
-            ),
-            recommended_remediation="drop",
-        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
-        # Collider 3 — persistent_at_180d (Optum): mirror of discontinuation
-        # with opposite polarity. Two parents: treatment_initiated AND
-        # adherence/response (favorable). Useful exemplar so the LM
-        # doesn't anchor "collider" only on negative-outcome polarities.
-        dspy.Example(
-            feature_name="persistent_at_180d",
-            derivation_pseudocode=(
-                "treatment_initiated AND (PDC over [index_date, index_date+180d] "
-                ">= 0.80) AND (last_biologic_fill within 60d of [index+180d])"
-            ),
-            dataset_context=(
-                "Optum claims; target=initiated_biologic_180d; anchor=index_date; lookback=180d"
-            ),
-            causal_role="collider",
-            mechanism=(
-                "Persistence outcome variable is the favorable-polarity twin of "
-                "discontinuation. Two arrows in: (a) treatment_initiated (must "
-                "have started), (b) adherence + clinical response (must have "
-                "stayed). Same collider DAG as discontinuation but encodes the "
-                "OR-of-favorable rather than the OR-of-unfavorable. Including "
-                "it as a feature in an initiation model would leak the "
-                "future-treatment-response signal AND open a backdoor selection "
-                "path."
-            ),
-            recommended_remediation="drop",
-        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
-        # Collider 4 — hospitalizations_total (when computed unwindowed or
-        # over the journey post-index): the canonical Berkson-bias
-        # collider in pharmacoepi. Two parents: (a) baseline disease
-        # severity (which influences both the treatment decision AND the
-        # patient's outcome trajectory), (b) treatment-related adverse
-        # events (which can drive hospitalization directly). Note: when
-        # PROPERLY WINDOWED to a pre-index lookback only, this feature
-        # collapses to a confounder. The collider semantics apply when
-        # the window includes any post-index event. Rationale flags this
-        # dependence on derivation so the LM doesn't blanket-label any
-        # hospitalization count as collider.
+        # Collider 1 — hospitalizations_total (unwindowed): the canonical
+        # Berkson-bias collider in pharmacoepi. Two distinct parents made
+        # explicit in the derivation: (a) baseline disease severity
+        # (PRE-index, independent of T at the patient-level; influences
+        # both T-selection AND admission probability), (b) treatment-
+        # related adverse events (POST-T, but caused by T not by
+        # severity). Hospitalizations of either parent type both count
+        # into the same total. Conditioning opens the
+        # severity <-> AE backdoor.
         dspy.Example(
             feature_name="hospitalizations_total",
             derivation_pseudocode=(
                 "count(encounter_events where admit_date in [journey_start, "
-                "journey_end]) — NO pre-index temporal filter"
+                "journey_end]) — NO pre-index temporal filter; admissions "
+                "include both pre-index severity-driven admits AND post-index "
+                "biologic-AE-driven admits"
             ),
             dataset_context=(
                 "Optum claims; target=initiated_biologic_180d; anchor=index_date; "
-                "encounter_events panel; hospitalizations can be driven by "
-                "pre-existing severity OR by post-treatment adverse events"
+                "encounter_events panel; admissions can be driven by "
+                "pre-index severity OR by post-treatment adverse events"
             ),
             causal_role="collider",
             mechanism=(
-                "When measured across the journey without a pre-index filter, "
-                "the count has two arrows in: (a) baseline disease severity "
-                "(which independently drives both treatment selection and "
-                "outcome trajectory — severity is the common cause), and "
-                "(b) treatment-related adverse events (post-initiation "
-                "biologic AE can independently trigger admissions). "
-                "Conditioning opens a backdoor between treatment and outcome "
-                "via the severity ↔ AE relationship. (NOTE: a properly "
-                "windowed pre-index hospitalization count collapses to a "
-                "confounder; the collider semantics depend on the derivation "
-                "including post-index events.)"
+                "Berkson-style two-arrow-in collider with DISTINCT parents: "
+                "(a) baseline disease severity (set pre-index, drives the "
+                "treatment-selection arm AND independently drives admissions "
+                "via disease activity), and (b) treatment-related adverse "
+                "events (post-initiation biologic AE causally drives "
+                "admissions on a path NOT mediated by severity). Severity "
+                "and AE are causally distinct sources. Conditioning on the "
+                "total opens a non-causal severity <-> AE path. (NOTE: a "
+                "properly windowed pre-index hospitalization count collapses "
+                "to a confounder; the collider semantics depend on the "
+                "derivation crossing the index date.)"
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Collider 2 — er_visit_count_followup: same two-distinct-parent
+        # structure as hospitalizations_total but at the ER-visit level
+        # (POS-23 in Optum inpatient panel). Pre-index severity AND
+        # treatment AE both drive ER admissions. Pinned separately so the
+        # LM learns the Berkson-bias pattern transfers across encounter
+        # types (inpatient vs ER vs observation).
+        dspy.Example(
+            feature_name="er_visit_count_followup",
+            derivation_pseudocode=(
+                "count(inpatient_events where POS=23 AND admit_date in "
+                "[index_date, index_date+180d]) — both pre-index severity "
+                "and post-treatment AE feed this stream"
+            ),
+            dataset_context=(
+                "Optum claims; target=initiated_biologic_180d; anchor=index_date; "
+                "inpatient panel filtered to ER place-of-service; window "
+                "includes both severity-driven and AE-driven admissions"
+            ),
+            causal_role="collider",
+            mechanism=(
+                "ER-visit Berkson collider: (a) baseline disease severity "
+                "(pre-index, independent of T; drives ER visits via "
+                "uncontrolled disease activity), and (b) treatment-related "
+                "adverse events (post-initiation biologic AE such as "
+                "anaphylaxis/injection-site reactions drives ER visits "
+                "via a path NOT mediated by severity). The two parents "
+                "are causally distinct (severity is not caused by T; AE "
+                "is caused by T but not by severity). Conditioning on the "
+                "total ER count opens the severity <-> AE backdoor."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Collider 3 — concomitant_steroid_burst_count_followup: post-
+        # index steroid-burst prescription count. Two distinct parents:
+        # (a) baseline disease severity (drives rescue therapy
+        # independently of biologic exposure — even untreated severe
+        # patients receive bursts), (b) biologic-treatment failure
+        # (post-T; non-responders receive more bursts). Severity and
+        # biologic-response are causally distinct sources.
+        dspy.Example(
+            feature_name="concomitant_steroid_burst_count_followup",
+            derivation_pseudocode=(
+                "count(medication_events where med_class='oral_steroid_burst' AND "
+                "fill_date in [index_date, index_date+180d]) — driven by "
+                "both pre-index severity and post-treatment non-response"
+            ),
+            dataset_context=(
+                "Optum claims; target=initiated_biologic_180d; anchor=index_date; "
+                "medication panel; oral steroid burst is a rescue therapy that "
+                "fires from both baseline severity and biologic non-response"
+            ),
+            causal_role="collider",
+            mechanism=(
+                "Steroid-burst rescue is a Berkson-bias collider with two "
+                "DISTINCT parents: (a) baseline disease severity (pre-index, "
+                "independent of biologic exposure; severe patients receive "
+                "bursts regardless of biologic), (b) biologic-treatment "
+                "non-response (post-T, biologic-induced; non-responders "
+                "escalate to bursts). The two arrows feed the same count "
+                "stream but originate in independent causal factors. "
+                "Conditioning on the burst count opens severity <-> "
+                "non-response, biasing the treatment-effect estimate."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Collider 4 — diagnostic_test_count_followup: diagnostic-workup
+        # test count in the post-index window. Two distinct parents:
+        # (a) baseline disease activity / diagnostic uncertainty (pre-
+        # index, drives ongoing workup independently of T), (b) treatment-
+        # related adverse events (post-T, drives AE-specific lab/imaging
+        # workup). Severity and AE are causally distinct, but both feed
+        # the test-count total.
+        dspy.Example(
+            feature_name="diagnostic_test_count_followup",
+            derivation_pseudocode=(
+                "count(lab_events ∪ procedure_events where category='diagnostic' "
+                "AND date in [index_date, index_date+180d]) — driven by both "
+                "pre-index workup intensity and post-treatment AE workup"
+            ),
+            dataset_context=(
+                "Optum claims; target=initiated_biologic_180d; anchor=index_date; "
+                "lab+procedure panels filtered to diagnostic codes; pre-index "
+                "severity and post-T AE both drive test ordering"
+            ),
+            causal_role="collider",
+            mechanism=(
+                "Diagnostic-workup count is a Berkson collider: "
+                "(a) baseline disease activity / diagnostic uncertainty "
+                "(pre-index, independent of T; drives ongoing imaging and "
+                "labs to characterize disease), and (b) treatment-related "
+                "adverse events (post-T; AE-specific labs such as liver "
+                "function for biologic monitoring fire conditional on T). "
+                "The two parents are causally distinct: activity is not "
+                "caused by T; AE-workup is caused by T but not by baseline "
+                "activity. Joint contribution to the same count makes the "
+                "total a collider on the T -> Y path."
             ),
             recommended_remediation="drop",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -460,24 +508,33 @@ def build_compile_set() -> list[dspy.Example]:
         # Issue #198 — instrument exemplars (4)
         # ---------------------------------------------------------------------
         # An INSTRUMENT (instrumental variable, IV) is a variable Z such that:
-        # (i)  Z → T (the instrument affects the treatment), AND
-        # (ii) Z → Y only through T (exclusion restriction — no direct effect
+        # (i)  Z -> T (the instrument affects the treatment), AND
+        # (ii) Z -> Y only through T (exclusion restriction — no direct effect
         #      on the outcome bypassing treatment), AND
         # (iii) Z is unconfounded with Y (no common cause of Z and Y).
         #
-        # In pharmacoepi the canonical IV pattern is SUPPLY-SIDE / GEOGRAPHIC
-        # variation: regional prescribing rates, formulary structure, or
-        # specialist-density variation that drives access to a specific
-        # treatment without directly affecting the disease biology
-        # (Brookhart et al. 2006, "Preference-Based Instrumental Variable
-        # Methods for the Estimation of Treatment Effects", Stat Med).
+        # In pharmacoepi the canonical IV families are (a) preference-based
+        # provider-level IVs (Brookhart et al. 2006, "Preference-Based
+        # Instrumental Variable Methods for the Estimation of Treatment
+        # Effects", Stat Med 25:1907; Brookhart and Schneeweiss 2007,
+        # "Evaluating Short-Term Drug Effects Using a Physician-Specific
+        # Prescribing Preference as an IV", Epidemiology 18:589) and
+        # (b) supply-side geographic-access IVs (regional formulary
+        # heterogeneity, RUCA-tier specialist density).
         #
-        # Important caveat that we encode in EVERY rationale: the exclusion
-        # restriction is an ASSUMPTION, not an observable property. We name
-        # the assumption explicitly so the LM learns to FLAG candidate IVs
-        # whose exclusion-restriction is plausibly violated (e.g., a
-        # geographic region that correlates with environmental allergen
-        # exposure would violate exclusion in a CSU/urticaria cohort).
+        # Critical codex pass-1 framing correction: the exclusion-restriction
+        # rationale below is phrased as an ASSUMPTION-TO-AUDIT, NOT as a
+        # confessed violation. The compile set must NOT teach the LM that
+        # "the rationale already acknowledged Z -> Y, so it's still an
+        # instrument" — that would corrupt the role discrimination. Each
+        # rationale instead reads: "exclusion holds under the standard
+        # IV assumption; verification step X must be run before relying on
+        # this Z; refuse the IV interpretation if X fails." This matches
+        # the standard pharmacoepi IV-validity audit (Brookhart 2010,
+        # "Instrumental Variable Analysis"; Garabedian et al. 2014, "Potential
+        # Bias of Instrumental Variable Analyses for Observational
+        # Comparative Effectiveness Research", Ann Intern Med).
+        #
         # Remediation: `keep_with_caveat` because instruments are LEGITIMATE
         # pre-index features useful for causal identification when the
         # exclusion restriction holds; they shouldn't be dropped reflexively.
@@ -485,8 +542,9 @@ def build_compile_set() -> list[dspy.Example]:
         # Instrument 1 — urban_rural_code: classic geographic IV per
         # Brookhart-style pharmacoepi. Rural vs urban code reflects
         # supply-side access to specialist-driven biologic prescribing
-        # (T) without directly influencing CSU biology (Y). Exclusion
-        # restriction is plausible but not proven; assumption stated.
+        # without directly influencing disease biology. Static at
+        # enrollment. Exclusion restriction is the standard assumption to
+        # audit, not a confessed violation.
         dspy.Example(
             feature_name="urban_rural_code",
             derivation_pseudocode=("rural_urban_commuting_area_code(zip3)  # static at enrollment"),
@@ -497,25 +555,25 @@ def build_compile_set() -> list[dspy.Example]:
             causal_role="instrument",
             mechanism=(
                 "Supply-side geographic instrument (Brookhart-style "
-                "pharmacoepi IV pattern): RUCA code reflects access to "
-                "specialist-driven biologic prescribing (Z→T arrow via "
-                "specialist density and biologic-friendly provider mix), "
-                "and is plausibly independent of CSU disease biology "
-                "(Z↛Y direct path; exclusion restriction holds under the "
-                "assumption that urban vs rural classification does not "
-                "directly affect urticaria pathophysiology). Set at "
-                "enrollment so no confounding with post-index outcomes. "
-                "ASSUMPTION: exclusion restriction could be violated if "
-                "rural areas have systematically different allergen "
-                "exposures or air-quality drivers — name this in audit."
+                "pharmacoepi IV): RUCA code reflects access to specialist-"
+                "driven biologic prescribing (Z -> T arrow via specialist "
+                "density and biologic-friendly provider mix). Exclusion "
+                "restriction: Z -> Y holds only through T under the "
+                "standard IV assumption that geographic classification "
+                "does not directly affect disease pathophysiology. "
+                "Static at enrollment so no confounding with post-index "
+                "outcomes. IV-VALIDITY AUDIT STEP (required before use): "
+                "test for direct Z -> Y on a placebo outcome that should "
+                "be invariant to T; reject the IV interpretation if the "
+                "placebo test fails."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
-        # Instrument 2 — geographic_region: 4-region (Northeast / Midwest /
-        # South / West) variation in prescribing intensity. Standard IV
-        # in observational pharmacoepi research. Exclusion restriction
-        # could be violated by region-level allergen exposure in CSU,
-        # so we name the caveat in the rationale.
+        # Instrument 2 — geographic_region: 4-region prescribing-intensity
+        # IV. Coarse-grained complement to urban_rural_code; ships as a
+        # distinct example because the Z -> T mechanism (regional
+        # formulary policy) is differently shaped from the RUCA-tier
+        # specialist-density mechanism.
         dspy.Example(
             feature_name="geographic_region",
             derivation_pseudocode=("{NE,MW,South,West} from zip3  # static at enrollment"),
@@ -525,55 +583,62 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="instrument",
             mechanism=(
-                "Regional prescribing-rate variation is the canonical "
+                "Regional prescribing-rate variation is a canonical "
                 "supply-side IV in observational pharmacoepi (Brookhart "
-                "et al. 2006). Z→T arrow: regional formulary policy and "
-                "specialist density drive biologic-vs-non-biologic mix. "
-                "Z↛Y direct path: region itself does not directly cause "
-                "CSU or modify drug pharmacokinetics. Z⊥confounders: "
-                "region is set at enrollment, before treatment decision. "
-                "ASSUMPTION FLAG: exclusion restriction could be violated "
-                "if region correlates with environmental allergen "
-                "exposure (e.g., humid Southeast → dust mite load) — "
-                "audit-trail rationale should name the assumption."
+                "et al. 2006). Z -> T arrow: regional formulary policy and "
+                "specialist density drive the biologic-vs-non-biologic mix. "
+                "Exclusion restriction: Z -> Y holds only through T under "
+                "the standard IV assumption that region does not directly "
+                "cause disease activity or modify drug pharmacokinetics. "
+                "Z is set at enrollment, before treatment decision, so "
+                "unconfounded with post-index outcomes. IV-VALIDITY AUDIT "
+                "STEP (required before use): verify exchangeability on "
+                "pre-index covariates across region levels; if covariate "
+                "imbalance is large, condition on the imbalanced covariate "
+                "or drop the IV interpretation."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
-        # Instrument 3 — zip3: finer-grained geographic IV. Captures
-        # local prescribing heterogeneity below the 4-region level (e.g.,
-        # Boston metro biologic uptake vs rural NE) without directly
-        # encoding biology. Same exclusion-restriction caveat as region.
+        # Instrument 3 — provider_preference_score: the canonical Brookhart-
+        # Schneeweiss 2007 preference-based IV. Replaces the original `zip3`
+        # IV (which was a third nested zip-geography variable, contributing
+        # collinear training signal). Provider preference is a DIFFERENT IV
+        # family from supply-side geography, broadening the LM's training
+        # signal across the two pharmacoepi IV idioms.
         dspy.Example(
-            feature_name="zip3",
+            feature_name="provider_preference_score",
             derivation_pseudocode=(
-                "substr(zipcode_5, 1, 3)  # first 3 digits of ZIP at enrollment"
+                "fraction(prior_patients_of(index_provider) where "
+                "biologic_initiation=1) over the 12 months BEFORE this "
+                "patient's index_date; patient excluded from own provider's "
+                "denominator"
             ),
             dataset_context=(
                 "Optum claims; target=initiated_biologic_180d; "
-                "anchor=index_date; static at enrollment; ~900 distinct zip3s"
+                "anchor=index_date; provider-level prescribing-pattern feature "
+                "derived from index_provider's other patients' prior history"
             ),
             causal_role="instrument",
             mechanism=(
-                "Finer-grained geographic IV than region. Z→T arrow: "
-                "ZIP3-level variation in specialist density, formulary "
-                "negotiation, and biologic-friendly clinic mix drives "
-                "prescribing probability. Z↛Y direct path: ZIP3 does not "
-                "directly affect disease biology under the standard "
-                "exclusion restriction. Used as an instrument in "
-                "claims-data IV studies for prescribing variation. "
-                "ASSUMPTION FLAG: same caveat as geographic_region — "
-                "ZIP3-level allergen exposure or socioeconomic-status "
-                "confounding could violate exclusion. Practical note: "
-                "with ~900 distinct values, one-hot encoding gives high "
-                "cardinality; pre-bucketing into RUCA tiers is common."
+                "Preference-based provider IV per Brookhart-Schneeweiss 2007 "
+                "(Epidemiology 18:589). Z -> T arrow: a high-biologic-"
+                "preference provider is mechanically more likely to "
+                "initiate a biologic for the index patient. Exclusion "
+                "restriction: Z -> Y holds only through T under the "
+                "standard IV assumption that provider preference acts on "
+                "the patient solely via prescribing choice, with no "
+                "direct effect on disease biology. Patient excluded from "
+                "own denominator so Z is genuinely pre-index. IV-VALIDITY "
+                "AUDIT STEP (required before use): test for unbalanced "
+                "patient-level baseline covariates across high- vs low-"
+                "preference providers; condition on imbalanced baselines "
+                "or reject the IV if the imbalance is structural."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
-        # Instrument 4 — plan_type: HMO vs PPO vs POS as an IV. Plan
-        # design (step-therapy, prior-authorization tiering, biologic
-        # formulary placement) affects prescribing probability without
-        # directly modifying disease biology. Same exclusion-restriction
-        # discipline: name the assumption + flag the SES confounder risk.
+        # Instrument 4 — plan_type: HMO vs PPO vs POS as an IV via step-
+        # therapy, biologic-formulary placement, and prior-auth tiering.
+        # Distinct mechanism from geography and provider preference.
         dspy.Example(
             feature_name="plan_type",
             derivation_pseudocode=("demo.product  # HMO/PPO/POS/other, set at enrollment"),
@@ -585,16 +650,18 @@ def build_compile_set() -> list[dspy.Example]:
             mechanism=(
                 "Plan-design IV: HMO vs PPO vs POS varies in step-therapy "
                 "requirements, biologic-formulary placement, and prior-auth "
-                "tiering. Z→T arrow: plan design directly affects whether "
-                "a biologic prescription is approved at first attempt. "
-                "Z↛Y direct path: plan type does not directly modify "
-                "disease biology under the exclusion restriction. Common "
-                "IV in claims-data drug-utilization research. ASSUMPTION "
-                "FLAG: plan type correlates with employer-level "
-                "socioeconomic status, and SES can independently affect "
-                "outcomes via lifestyle/access — name the confounding path "
-                "in the audit trail when using this IV for treatment-effect "
-                "estimation."
+                "tiering. Z -> T arrow: plan design affects whether a "
+                "biologic prescription is approved at first attempt. "
+                "Exclusion restriction: Z -> Y holds only through T under "
+                "the standard IV assumption that plan type does not "
+                "directly modify disease biology. Static at enrollment so "
+                "unconfounded with post-index outcomes. IV-VALIDITY AUDIT "
+                "STEP (required before use): test exchangeability on "
+                "patient-level baseline covariates (age, comorbidity, "
+                "income proxy) across plan_type levels; condition on or "
+                "stratify by any imbalanced baseline characteristic, OR "
+                "reject the IV interpretation if a baseline is plausibly "
+                "on a Z -> Y path independent of T."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
