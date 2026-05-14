@@ -17,6 +17,47 @@ when an LM is configured; otherwise the verdict is recorded for manual
 governance review. This implementation focuses on Layers 1+3 wiring; Layer
 4 LM dispatch lands when the API key configuration story is finalized.
 
+Per-layer ordering (issue #212 — Layer 4 fires on pre-joint-check z-band):
+
+    Step 1.  Layer 1 manifest contract pass (every column). Caught features
+             short-circuit with severity=high, decided_by="layer_1".
+    Step 2.  Layer 3 permutation-baseline scoring per numeric feature
+             (``compute_adversarial_score`` → z, actual_auc, null_mean,
+             null_std). Runs once per surviving feature.
+    Step 3.  HBLP severity classification (``hblp_classify``):
+             3a. z-only band assignment → ``severity_pre_joint_check``.
+             3b. Issue #194 joint check ``|delta_AUC| <= floor`` may clamp
+                 the final ``severity`` to ``info`` (legitimate weak
+                 predictor protection). ``severity_pre_joint_check`` is
+                 preserved as the raw signal for downstream gating.
+    Step 4.  Layer-3 ablation pass (issue #196, opt-in via
+             ``adaptive_layer3_ablation_enabled``). Combined with
+             permutation via MAX-rule on the post-joint-check severity:
+             ablation can ESCALATE info→moderate/high if it crosses its
+             own joint check, but never DOWNGRADE.
+    Step 5.  Layer 4 LLM-verdict trigger (issue #193 / #212): fires on
+             ``severity_pre_joint_check`` (NOT the joint-clamped final
+             ``severity``) so a weak-effect Layer 3 signal that #194 has
+             downgraded still surfaces an LLM verdict for the audit
+             trail. Trigger rule:
+                 ``severity_pre_joint_check == "moderate"`` OR
+                 (``severity_pre_joint_check == "high"`` AND
+                  ``layer_1_declared_safe``)
+             Issue #194's downstream bar is preserved unchanged — the
+             final verdict still uses the joint-clamped ``severity``;
+             Layer 4 is an additive audit channel, not a relaxation.
+    Step 6.  EnsembleVoter renders the final EnsembleVerdict from the
+             precedence ladder (Layer 1 high veto → Adversarial high veto
+             → KG-contradictory abstain → LLM path → Adversarial-moderate
+             review → no-signal abstain). When an LLM verdict was
+             produced in Step 5, the voter emits
+             ``decided_by="llm"`` + ``layer="4"`` in the audit trail.
+
+The pre-#212 ordering had Layer 4 fire on the joint-clamped
+``severity``, which silently starved the LLM-verdict path for every
+feature where the joint check had clamped to ``info``. That contradicted
+the documented "Layer 4 disambiguates ambiguous z-band signals" intent.
+
 Acceptance criterion #4 of ``adaptive_temporal_validity_redesign.md``:
 every feature decision produces a structured record with layer, evidence,
 confidence, and remediation.
@@ -512,6 +553,26 @@ def hblp_classify(
         and abs(delta_auc_value) > delta_auc_floor_value
     )
 
+    # Issue #212 — pre-joint-check severity. The z-only classification
+    # before the issue #194 joint-check ``|delta_AUC| <= floor`` clamp
+    # downgrades to ``info``. Used by the orchestrator's Layer 4 trigger
+    # so an LLM verdict can be obtained for legitimate weak signals that
+    # the joint check would otherwise silently swallow (which starves
+    # the LLM-verdict audit trail). The FINAL ``severity`` field below
+    # is still joint-check-clamped — issue #194's downstream bar is
+    # preserved unchanged. See module docstring "Per-layer ordering"
+    # section.
+    if z_is_positive_inf_strong_effect:
+        severity_pre_joint_check = "high"
+    elif not _is_finite_z(z_score):
+        severity_pre_joint_check = "info"
+    elif z_score > high_eff:
+        severity_pre_joint_check = "high"
+    elif z_score > moderate_eff:
+        severity_pre_joint_check = "moderate"
+    else:
+        severity_pre_joint_check = "info"
+
     if z_is_positive_inf_strong_effect:
         # Deterministic high-effect signal with degenerate null.
         # Route through severity=high so a real leak isn't silently
@@ -584,6 +645,17 @@ def hblp_classify(
     )
     return {
         "severity": severity,
+        # Issue #212 — z-only severity BEFORE the issue #194 joint-check
+        # ``|delta_AUC| <= floor`` clamp. Equals ``severity`` when the
+        # joint check did not fire (no clamp). When the joint check
+        # downgraded to ``info``, this field preserves the band the z
+        # would have landed in (``moderate`` or ``high``). The
+        # orchestrator's Layer 4 trigger reads this field so an LLM
+        # verdict still surfaces on weak-effect signals that joint
+        # check clamps. NOTE: this does NOT relax the joint check —
+        # the FINAL ``severity`` field is still clamped; Layer 4 is
+        # additive (audit signal), not a bar.
+        "severity_pre_joint_check": severity_pre_joint_check,
         "effective_high_threshold": high_eff,
         "effective_moderate_threshold": moderate_eff,
         "base_threshold": float(base_threshold),
@@ -1020,16 +1092,36 @@ def _adversarial_input(
         ax_delta_auc: Optional[float] = None
         ax_delta_auc_floor: float = float(LAYER5_DELTA_AUC_FLOOR_DEFAULT)
         ax_delta_auc_below_floor: bool = False
+        # Degenerate z → no z-only classification to recover; the
+        # pre-joint-check severity matches the final ``info`` severity.
+        ax_severity_pre_joint_check: str = "info"
     else:
         ax_delta_auc = classification.get("delta_auc")
         ax_delta_auc_floor = float(
             classification.get("delta_auc_floor", LAYER5_DELTA_AUC_FLOOR_DEFAULT)
         )
         ax_delta_auc_below_floor = bool(classification.get("delta_auc_below_floor", False))
+        # Issue #212 — propagate the z-only severity (pre-joint-check
+        # clamp) so the orchestrator's Layer 4 trigger can fire on the
+        # raw signal even when issue #194 has downgraded the final
+        # severity to ``info``. Default to the final severity when the
+        # classifier didn't publish a pre-joint-check field (e.g.,
+        # alternative classifier shims in tests). NOTE: this does NOT
+        # affect the final ``severity`` field, the joint-check audit
+        # bar, or any downstream consumer of ``adv_input["severity"]``;
+        # it is a parallel audit channel.
+        ax_severity_pre_joint_check = str(classification.get("severity_pre_joint_check", severity))
 
     return {
         "layer": "3",
         "severity": severity,
+        # Issue #212 — z-only severity classification before issue #194
+        # joint-check ``|delta_AUC| <= floor`` clamp. Used by the
+        # orchestrator's Layer 4 trigger so the LLM verdict still fires
+        # for legitimate weak signals (3σ < z ≤ 5σ but |delta_AUC| ≤ 0.10)
+        # that #194 forces to ``info`` in the final verdict. See module
+        # docstring "Per-layer ordering" section.
+        "severity_pre_joint_check": ax_severity_pre_joint_check,
         "remediation": remediation,
         "evidence": evidence,
         "z_score": z_input,
@@ -2647,10 +2739,21 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
         # ``adversarial=high but llm=<accept-role>`` when the LLM agrees
         # with Layer 1's "safe" assessment. Without this, the operator
         # has no Layer 4 signal to triage Layer-1-vs-Layer-3 disagreement.
+        #
+        # Issue #212 — fire Layer 4 on the PRE-joint-check severity so a
+        # weak-effect Layer 3 signal (3σ < z ≤ 5σ but |delta_AUC| ≤ 0.10)
+        # that issue #194 forced to ``info`` still surfaces an LLM
+        # verdict for the audit trail. The FINAL ``severity`` field
+        # (post-joint-check) is unchanged — issue #194's downstream bar
+        # is preserved; this only widens the audit-signal channel.
+        # Defense in depth: when ``severity_pre_joint_check`` is absent
+        # (alt classifier shim / older fixture), fall back to the
+        # post-joint-check ``severity`` so the trigger semantics match
+        # the pre-#212 behaviour for those callers.
         llm_verdict: Optional[Any] = None
-        adv_severity = adv_input.get("severity")
-        layer_4_should_fire = adv_severity == "moderate" or (
-            adv_severity == "high" and layer_1_declared_safe
+        adv_severity_pre = adv_input.get("severity_pre_joint_check", adv_input.get("severity"))
+        layer_4_should_fire = adv_severity_pre == "moderate" or (
+            adv_severity_pre == "high" and layer_1_declared_safe
         )
         if layer_4_classifier is not None and layer_4_should_fire:
             try:

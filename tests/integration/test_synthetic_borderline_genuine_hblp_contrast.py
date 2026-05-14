@@ -117,8 +117,29 @@ def borderline_arms_results(borderline_train_df):
 
     Returns a dict with keys ``legacy`` and ``hblp``, each carrying the
     full state-update dict that ``adaptive_validity_check`` returned.
+
+    Issue #212 — this fixture deliberately runs with DSPy LM unset
+    (``dspy.settings.configure(lm=None)``) for the duration of both arm
+    runs. The post-#212 contract is that Layer 4 fires on
+    ``severity_pre_joint_check`` (the pre-joint-check z-band severity),
+    which would land the HBLP arm in ``moderate`` (z in 5σ-7.5σ band
+    with ``layer_1_declared_safe=True``). Without an LM stub, Layer 4
+    would dispatch a real Anthropic API call (when
+    ``ANTHROPIC_API_KEY`` is in env, which the dev conftest's
+    ``load_dotenv`` populates), producing non-deterministic test
+    behaviour AND consuming API budget on a borderline-feature
+    classification that is NOT the subject of this test.
+
+    The test's substantive contract is the joint-check + HBLP
+    relaxation interaction (issue #194 + v5 C2); the LM-vs-no-LM
+    branching is exercised in dedicated tests in
+    ``test_adaptive_validity_check_layer_4.py``. Forcing no-LM here
+    keeps this fixture deterministic + free.
     """
     import asyncio
+    import os
+
+    import dspy
 
     from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
         adaptive_validity_check,
@@ -126,31 +147,63 @@ def borderline_arms_results(borderline_train_df):
 
     train_df, numeric_cols = borderline_train_df
 
-    async def _run_both():
-        legacy = await adaptive_validity_check(
-            {
-                "experiment_id": "v5-c2-fx-legacy",
-                "train_df": train_df,
-                "scope_spec": _scope_spec(numeric_cols, manifest_source=None),
-            }
+    # Pin no-LM for the duration of the fixture so Layer 4 silently
+    # skips on the HBLP arm. The conftest's ``load_dotenv`` may have
+    # populated ``ANTHROPIC_API_KEY``; ``_try_load_layer_4_classifier``
+    # invokes ``ensure_dspy_lm_configured`` which will re-configure an
+    # LM from the key. To prevent that we MUST scrub the provider env
+    # vars (per ``_PROVIDER_TO_ENV_VARS`` in
+    # ``src/data/causal_role_classifier_loader.py``) for the duration
+    # of the fixture so the provider-aware credential gate returns
+    # ``False`` regardless of the default LM that the helper attempts.
+    prior_lm = getattr(dspy.settings, "lm", None)
+    prior_env = {
+        var: os.environ.pop(var, None)
+        for var in (
+            "ANTHROPIC_API_KEY",
+            "OPENAI_API_KEY",
+            "AZURE_API_KEY",
+            "AZURE_OPENAI_API_KEY",
         )
-        hblp = await adaptive_validity_check(
-            {
-                "experiment_id": "v5-c2-fx-hblp",
-                "train_df": train_df,
-                "scope_spec": _scope_spec(numeric_cols, manifest_source="synthetic"),
-            }
-        )
-        return legacy, hblp
-
-    # Fresh event loop so the module-scoped fixture doesn't collide with
-    # pytest-asyncio's per-test loop. Same nest_asyncio mitigation pattern
-    # as PR #106's test_layer_5_pipeline_integration.py rationale.
-    loop = asyncio.new_event_loop()
+    }
     try:
-        legacy_result, hblp_result = loop.run_until_complete(_run_both())
+        dspy.settings.configure(lm=None)
+
+        async def _run_both():
+            legacy = await adaptive_validity_check(
+                {
+                    "experiment_id": "v5-c2-fx-legacy",
+                    "train_df": train_df,
+                    "scope_spec": _scope_spec(numeric_cols, manifest_source=None),
+                }
+            )
+            hblp = await adaptive_validity_check(
+                {
+                    "experiment_id": "v5-c2-fx-hblp",
+                    "train_df": train_df,
+                    "scope_spec": _scope_spec(numeric_cols, manifest_source="synthetic"),
+                }
+            )
+            return legacy, hblp
+
+        # Fresh event loop so the module-scoped fixture doesn't collide with
+        # pytest-asyncio's per-test loop. Same nest_asyncio mitigation pattern
+        # as PR #106's test_layer_5_pipeline_integration.py rationale.
+        loop = asyncio.new_event_loop()
+        try:
+            legacy_result, hblp_result = loop.run_until_complete(_run_both())
+        finally:
+            loop.close()
     finally:
-        loop.close()
+        # Restore prior LM state + env so other tests in the
+        # module/session don't see this fixture's no-LM clamp.
+        try:
+            dspy.settings.configure(lm=prior_lm)
+        except Exception:
+            pass
+        for var, value in prior_env.items():
+            if value is not None:
+                os.environ[var] = value
     return {"legacy": legacy_result, "hblp": hblp_result}
 
 
@@ -221,6 +274,15 @@ def test_v5_c2_legacy_drops_hblp_retains_borderline_genuine(
     # input, isolating the HBLP relaxation mechanism.
     assert legacy_verdict["severity"] == "info"
     assert hblp_verdict["severity"] == "info"
+    # Issue #212 — Layer 4 trigger now fires on the PRE-joint-check
+    # severity. The fixture pins no-LM (scrubs provider API keys + sets
+    # ``dspy.settings.lm = None``) so Layer 4 silently skips even when
+    # the dev environment has ``ANTHROPIC_API_KEY`` populated by
+    # ``conftest.py``'s ``load_dotenv``. Both arms therefore stay at
+    # ``layer == '3'`` — the LM-vs-no-LM branching is exercised in
+    # dedicated tests in ``test_adaptive_validity_check_layer_4.py``,
+    # while THIS test's substantive contract is the joint-check + HBLP
+    # relaxation interaction (issue #194 + v5 C2).
     assert legacy_verdict["layer"] == "3"
     assert hblp_verdict["layer"] == "3"
     # Audit trail: the legacy-arm evidence string must mention the
