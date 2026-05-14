@@ -290,18 +290,22 @@ LAYER5_DELTA_AUC_FLOOR_DEFAULT: float = 0.10
 # null + |delta_AUC| above floor → severity=high) ALSO applies symmetrically
 # to ablation z=+inf with the ablation delta_AUC.
 #
-# AND a NEW escape (strong-effect): |delta_AUC| > LAYER5_ABLATION_STRONG_EFFECT_DEFAULT
+# AND a NEW escape (strong-effect): delta_AUC > LAYER5_ABLATION_STRONG_EFFECT_DEFAULT
 # (default 0.30, 3x the issue #194 floor) bypasses the z-anchored ladder
-# entirely. Rationale: ``compute_feature_ablation``'s null distribution is
-# built by shuffling the feature COLUMN, not the labels. For interaction-pair
-# leaks — features whose ROW-ALIGNMENT with another column is the leak vector
-# (redundant-noise-cancel pairs, sign-stratified variance shifts) — the
-# column-shuffle null produces ``perm_delta_auc ≈ actual_delta_auc``, so the
-# z-score collapses to ~0 even when the |delta_AUC| is huge. Without this
-# escape the AND-rule would silently miss exactly the leak class ablation
-# is supposed to catch beyond permutation. The 0.30 threshold is structurally
-# robust: legitimate weak predictors at any cohort size cannot produce
-# |delta_AUC| > 0.30 (dropping the feature would have to destroy 30% of the
+# entirely. SIGNED requirement (codex pass-1 MED-2) — positive-only:
+# delta_auc > 0 means dropping the feature DEGRADES joint AUC (leak-carrier);
+# delta_auc < 0 means dropping the feature IMPROVES joint AUC (nuisance/
+# multicollinearity), NOT a leak. Rationale for the threshold magnitude:
+# ``compute_feature_ablation``'s null distribution is built by shuffling
+# the feature COLUMN, not the labels. For interaction-pair leaks — features
+# whose ROW-ALIGNMENT with another column is the leak vector (redundant-
+# noise-cancel pairs, sign-stratified variance shifts) — the column-shuffle
+# null produces ``perm_delta_auc ≈ actual_delta_auc``, so the z-score
+# collapses to ~0 even when delta_AUC is huge. Without this escape the
+# AND-rule would silently miss exactly the leak class ablation is supposed
+# to catch beyond permutation. The 0.30 threshold is structurally robust:
+# legitimate weak predictors at any cohort size cannot produce
+# delta_AUC > 0.30 (dropping the feature would have to destroy 30% of the
 # joint model's AUC, which is the dominance signature of a real leak).
 #
 # Costs: O(n_features) main retrains + O(n_features × n_permutations) shuffle
@@ -1911,13 +1915,15 @@ def _short_circuit_verdict(feature: str, *, evidence: str) -> dict[str, Any]:
 # typically model-instability noise from a multicollinear nuisance
 # variable — NOT a leak. Using ``abs(delta_AUC)`` would false-flag those.
 #
-# Calibration: at this threshold the column-shuffle null can NEVER
-# produce a sustained delta_AUC > 0.30 because the model's full_auc
-# is bounded in [0.5, 1.0] and the ablated_auc cannot drop below 0.5
-# in expectation (a chance classifier is always available). So
-# delta_AUC > 0.30 implies full_auc > 0.80 AND ablated_auc < 0.50 —
-# a structurally dominant feature dependency, the dominance signature
-# of a real leak. The MODERATE band lowers the bar to floor=0.10.
+# Calibration: at this threshold the joint model's predictive power
+# falls by more than 30 AUC points when the feature is removed. With
+# ``full_auc ≤ 1.0`` and ``delta_AUC = full_auc - ablated_auc > 0.30``,
+# algebra gives ``ablated_auc < full_auc - 0.30 ≤ 0.70`` (codex pass-2
+# LOW-2 algebra fix; pre-fix the doc said ``< 0.50``, which assumed an
+# additional ``ablated_auc ≥ 0.50`` bound that is not structurally
+# guaranteed). The qualitative signature is still strong: a real
+# predictor with delta_AUC > 0.30 has measurably dominant joint-model
+# contribution. The MODERATE band lowers the bar to floor=0.10.
 LAYER5_ABLATION_STRONG_EFFECT_DEFAULT: float = 0.30
 
 
@@ -2011,15 +2017,24 @@ def _classify_ablation_severity(
         return "high"
 
     # Below the strong-effect threshold, fall back to the z-anchored
-    # joint-check ladder (case B). Requires |delta_AUC| > floor.
+    # joint-check ladder (case B). Requires POSITIVE delta_auc > floor.
     # ``z`` was already verified non-NaN above (codex MED-1 guard).
-    above_floor = abs(delta_f) > float(delta_auc_floor)
+    #
+    # Codex pass-2 MED-1: positive-only delta requirement EXTENDED to the
+    # z-band ladder. Pre-pass-2 the ladder used ``abs(delta_f) > floor``,
+    # which would classify ``delta_auc=-0.20, z=6.0`` as high via the
+    # ``z > z_threshold`` branch — contradicting the MED-2 rationale
+    # (negative delta = model improves when feature dropped = nuisance,
+    # not leak). Symmetric signed requirement across both case A and B.
+    above_floor = delta_f > float(delta_auc_floor)
     if not above_floor:
         return "info"
 
     z_f = float(z)  # type: ignore[arg-type]  # guarded above
 
     # +inf-with-strong-effect escape (issue #194 codex MED-1 mirror).
+    # ``delta_auc > floor`` already checked above, so this only fires for
+    # positive-delta + degenerate-null cases.
     if not np.isfinite(z_f):
         return "high" if z_f > 0 else "info"
 

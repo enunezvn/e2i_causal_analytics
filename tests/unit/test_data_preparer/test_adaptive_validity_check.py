@@ -3308,3 +3308,35 @@ class TestClassifyAblationSeverityCodexPass1:
             "suspicious": False,
         }
         assert _classify_ablation_severity(row) == "info"
+
+    def test_negative_delta_with_high_z_classifies_info(self) -> None:
+        """codex pass-2 MED-1: extend MED-2 signed-delta rule to the z-band
+        ladder. ``delta_auc=-0.20, z=6.0`` must NOT classify high via the
+        ``z > z_threshold`` branch — negative delta = nuisance behaviour.
+
+        Pre-pass-2 the z-band ladder used ``abs(delta_f) > floor``, which
+        would classify this row as high. Post-fix the ladder uses signed
+        ``delta_f > floor`` symmetrically with the strong-effect escape.
+        """
+        from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+            _classify_ablation_severity,
+        )
+
+        # Negative delta, |delta| > floor (0.10), z > HIGH_Z (5.0)
+        # Strong-effect escape doesn't fire (delta is negative).
+        # Pre-fix: z-band ladder fired high via abs(); post-fix: info.
+        row = {
+            "feature": "noisy_nuisance_high_z",
+            "full_auc": 0.75,
+            "ablated_auc": 0.95,
+            "delta_auc": -0.20,
+            "null_mean": -0.20,
+            "null_std": 0.01,
+            "z_score": 6.0,
+            "suspicious": False,
+        }
+        assert _classify_ablation_severity(row) == "info"
+
+        # Same setup with moderate z. Pre-fix: 'moderate'; post-fix: 'info'.
+        row["z_score"] = 4.0
+        assert _classify_ablation_severity(row) == "info"
