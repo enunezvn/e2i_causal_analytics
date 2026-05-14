@@ -1648,10 +1648,25 @@ def _compose_legacy_verdict(
     # the joint-clamped path. When the LLM agrees the feature is
     # benign (non-leak role), the cap is a no-op (severity already
     # info on both sides).
+    #
+    # Pre-cap corroboration guard (issue #212 codex pass-2 MED-1
+    # follow-on): the cap predicate reads the PERMUTATION pathway's
+    # joint-check decision via ``delta_auc_below_floor``. If issue #196
+    # ablation pass independently CORROBORATED the signal — i.e.
+    # ``ablation_severity`` is in {moderate, high} which already
+    # required passing its OWN joint check on ablation_delta_AUC —
+    # then the joint-clamped floor was overridden by a second Layer 3
+    # sub-test. Capping in that case would silently relax #196's
+    # ablation contract too. Skip the cap when ablation independently
+    # corroborated.
+    ablation_corroborated = adversarial_input is not None and str(
+        adversarial_input.get("ablation_severity") or "info"
+    ) in {"moderate", "high"}
     if (
         adversarial_input is not None
         and bool(adversarial_input.get("delta_auc_below_floor", False))
         and legacy.get("decided_by") == "llm"
+        and not ablation_corroborated
     ):
         # The joint-clamped adversarial severity is the contract floor.
         # adv_input["severity"] is already 'info' here because the
