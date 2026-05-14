@@ -815,3 +815,186 @@ class TestTransformDataThreadsCleanedFramesIntoState:
         assert "validation_df" not in result
         assert "test_df" not in result
         assert "holdout_df" not in result
+
+
+@pytest.mark.asyncio
+class TestTransformDataSplitSkewUnhashableCells:
+    """Codex pass-3 MEDIUM-3 (2026-05-14): the unhashable-col scan must
+    take the UNION across all splits, not just train. A column may be
+    scalar/null in train but list-typed in val/test (JSON-decoded CSU
+    cohorts can split-skew on column types), or a list-only column may
+    be absent from train altogether. The drop set must cover all splits.
+
+    Pre-fix: ``unhashable_cols`` was built from train_df alone. Under
+    split skew, val/test still carried list cells → downstream
+    state-frames still crashed on ``nunique()``/``value_counts()``.
+    """
+
+    async def test_validation_only_list_column_dropped(self) -> None:
+        """List cells in validation but scalar in train → still must drop."""
+        train_df = pd.DataFrame(
+            {
+                "comorbidities": ["scalar1", "scalar2", "scalar3", "scalar4"],
+                "age": [25.0, 60.0, 45.0, 30.0],
+                "target": [0, 1, 0, 1],
+            }
+        )
+        validation_df = pd.DataFrame(
+            {
+                # Same column, but list-typed in val (split skew).
+                "comorbidities": [["E11"], [], ["I10"], []],
+                "age": [40.0, 55.0, 50.0, 35.0],
+                "target": [1, 0, 1, 0],
+            }
+        )
+        state = {
+            "experiment_id": "test_issue_197_val_only_list",
+            "train_df": train_df,
+            "validation_df": validation_df,
+            "test_df": train_df.copy(),
+            "scope_spec": {
+                "target_column": "target",
+                "scaling_method": "minmax",
+                "imputation_strategy": "mean",
+                "extract_datetime_features": False,
+                "excluded_features": [],
+            },
+        }
+        result = await transform_data(state)
+        assert result.get("error") is None
+        # State's validation_df must have the list col dropped.
+        assert "validation_df" in result, (
+            "transform_data MUST surface cleaned validation_df even when "
+            "the unhashable col is only present in val (Codex pass-3 MED-3)"
+        )
+        state_val_df = result["validation_df"]
+        assert "comorbidities" not in state_val_df.columns
+        # And X_val output also clean.
+        X_val = result["X_val"]
+        assert "comorbidities" not in X_val.columns
+
+    async def test_test_only_list_column_dropped(self) -> None:
+        """List cells in test but scalar in train+val → still must drop."""
+        train_df = pd.DataFrame(
+            {
+                "secondary_diagnosis_codes": ["L50.1", "L50.1", "L50.2", "L50.9"],
+                "age": [25.0, 60.0, 45.0, 30.0],
+                "target": [0, 1, 0, 1],
+            }
+        )
+        test_df = pd.DataFrame(
+            {
+                # Same column, but list-typed in test (split skew).
+                "secondary_diagnosis_codes": [["B97.4"], [], ["J45.0"], []],
+                "age": [40.0, 55.0, 50.0, 35.0],
+                "target": [1, 0, 1, 0],
+            }
+        )
+        state = {
+            "experiment_id": "test_issue_197_test_only_list",
+            "train_df": train_df,
+            "validation_df": train_df.copy(),
+            "test_df": test_df,
+            "scope_spec": {
+                "target_column": "target",
+                "scaling_method": "minmax",
+                "imputation_strategy": "mean",
+                "extract_datetime_features": False,
+                "excluded_features": [],
+            },
+        }
+        result = await transform_data(state)
+        assert result.get("error") is None
+        assert "test_df" in result
+        state_test_df = result["test_df"]
+        assert "secondary_diagnosis_codes" not in state_test_df.columns
+
+    async def test_union_drop_across_all_splits(self) -> None:
+        """Different splits carry list cells in different columns →
+        union of unhashable cols dropped from ALL splits."""
+        train_df = pd.DataFrame(
+            {
+                "a": [["x"], [], ["y"], []],
+                "b": ["s1", "s2", "s3", "s4"],
+                "c": ["t1", "t2", "t3", "t4"],
+                "target": [0, 1, 0, 1],
+            }
+        )
+        validation_df = pd.DataFrame(
+            {
+                "a": ["s1", "s2", "s3", "s4"],
+                "b": [["E11"], [], ["I10"], []],
+                "c": ["t5", "t6", "t7", "t8"],
+                "target": [1, 0, 1, 0],
+            }
+        )
+        test_df = pd.DataFrame(
+            {
+                "a": ["s5", "s6", "s7", "s8"],
+                "b": ["s9", "s10", "s11", "s12"],
+                "c": [["X1"], [], ["X2"], []],
+                "target": [0, 1, 0, 1],
+            }
+        )
+        state = {
+            "experiment_id": "test_issue_197_union_drop",
+            "train_df": train_df,
+            "validation_df": validation_df,
+            "test_df": test_df,
+            "scope_spec": {
+                "target_column": "target",
+                "scaling_method": "minmax",
+                "imputation_strategy": "mean",
+                "extract_datetime_features": False,
+                "excluded_features": [],
+            },
+        }
+        result = await transform_data(state)
+        assert result.get("error") is None
+        # Union {a, b, c} dropped from ALL splits.
+        for key in ("train_df", "validation_df", "test_df"):
+            assert key in result, f"{key} not surfaced — pass-3 MED-3 regression"
+            for col in ("a", "b", "c"):
+                assert col not in result[key].columns, (
+                    f"{col} survived in state[{key}] — pass-3 union-drop failed"
+                )
+            assert "target" in result[key].columns
+
+    async def test_drop_unhashable_columns_metadata_lists_union(self) -> None:
+        """The transformations_applied entry surfaces the FULL union of
+        unhashable cols across splits, not just train's."""
+        train_df = pd.DataFrame(
+            {
+                "train_only_list": [["x"], [], ["y"], []],
+                "val_only_list": ["s1", "s2", "s3", "s4"],
+                "target": [0, 1, 0, 1],
+            }
+        )
+        validation_df = pd.DataFrame(
+            {
+                "train_only_list": ["s5", "s6", "s7", "s8"],
+                "val_only_list": [["E11"], [], ["I10"], []],
+                "target": [1, 0, 1, 0],
+            }
+        )
+        state = {
+            "experiment_id": "test_issue_197_metadata_union",
+            "train_df": train_df,
+            "validation_df": validation_df,
+            "test_df": train_df.copy(),
+            "scope_spec": {
+                "target_column": "target",
+                "scaling_method": "minmax",
+                "imputation_strategy": "mean",
+                "extract_datetime_features": False,
+                "excluded_features": [],
+            },
+        }
+        result = await transform_data(state)
+        assert result.get("error") is None
+        transformations = result.get("transformations_applied") or []
+        drop_entries = [t for t in transformations if t.get("type") == "drop_unhashable_columns"]
+        assert len(drop_entries) == 1
+        dropped_set = set(drop_entries[0].get("columns") or [])
+        # Both train-only-list AND val-only-list must surface as dropped.
+        assert dropped_set == {"train_only_list", "val_only_list"}
