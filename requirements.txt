@@ -90,7 +90,7 @@ flask-cors==6.0.2
 fonttools==4.61.1
 frozenlist==1.8.0
 fsspec==2025.10.0
-gepa==0.0.17
+gepa==0.0.22
 gitdb==4.0.12
 GitPython==3.1.50
 google-auth==2.45.0
