@@ -187,6 +187,58 @@ def test_classify_feature_returns_none_when_no_lm_configured(reset_dspy_lm) -> N
     assert verdict is None
 
 
+def test_classify_feature_coerces_non_string_mechanism(reset_dspy_lm) -> None:
+    """A valid role + invalid non-string mechanism still yields a clean
+    LLMVerdict (mechanism coerced to empty string) — does NOT raise.
+
+    Codex pass-1 MEDIUM-1 (issue #193): the loader previously fed
+    ``mechanism`` directly to ``_extract_pmids`` which calls
+    ``re.findall``. A non-string mechanism (list, dict) would raise
+    ``TypeError`` outside the LM-call try/except, breaking the
+    "malformed LLM output falls back cleanly" contract.
+    """
+    from dspy.utils.dummies import DummyLM
+
+    from src.data.causal_role_classifier_loader import (
+        classify_feature,
+        load_compiled_classifier,
+    )
+
+    # DummyLM that returns a valid role but a non-string mechanism.
+    # The hidden 'reasoning' field is also a string, the mechanism field
+    # is a list — exercising the loader's string-coercion path without
+    # tripping any DSPy-level type validation upstream.
+    dspy.configure(
+        lm=DummyLM(
+            [
+                {
+                    "reasoning": "test stub reasoning",
+                    "causal_role": "ancestor",
+                    # DummyLM emits this as-is; downstream signature
+                    # coercion may stringify it, so the test is
+                    # belt-and-braces: the loader-side guard runs even
+                    # if upstream stringifies first.
+                    "mechanism": ["not", "a", "string"],
+                    "recommended_remediation": "keep_with_caveat",
+                }
+            ]
+        )
+    )
+    classifier = load_compiled_classifier()
+    assert classifier is not None
+    verdict = classify_feature(
+        feature_name="age_continuous",
+        derivation_pseudocode="dummy",
+        dataset_context="dummy",
+        classifier=classifier,
+    )
+    # Whether the upstream parser stringified the list or the loader's
+    # type guard fired, the verdict must NOT be None (role is valid) and
+    # ``mechanism`` must be a string (the dataclass invariant).
+    assert verdict is not None
+    assert isinstance(verdict.mechanism, str)
+
+
 def test_classify_feature_handles_malformed_llm_role(reset_dspy_lm) -> None:
     """An LLM returning an out-of-vocab role yields None, not a crash.
 
@@ -375,19 +427,125 @@ def test_adaptive_validity_check_emits_decided_by_llm_on_csu_feature(
     )
 
 
-def test_adaptive_validity_check_skips_layer_4_when_no_lm(reset_dspy_lm) -> None:
-    """When no LM is configured, Layer 4 silently skips — the moderate
-    adversarial verdict goes through the legacy bypass instead.
+def test_ensure_dspy_lm_configured_skips_when_no_key(reset_dspy_lm, monkeypatch) -> None:
+    """ensure_dspy_lm_configured returns False when no API key in env.
 
-    Defense against a future regression that silently fails the LLM path
-    open. The non-LLM-configured run must NEVER emit ``decided_by='llm'``;
-    if it does, something has cached a stale LM somewhere.
+    Codex pass-1 HIGH-1 (issue #193): the helper bridges the gap between
+    "LM not configured" and "production has a key in env but never called
+    dspy.configure()". This test pins the no-key branch — without a key,
+    the helper must NOT raise, must NOT configure any LM, must return
+    False so the orchestrator's caller falls through to the Layer 4 skip.
+    """
+    from src.data.causal_role_classifier_loader import ensure_dspy_lm_configured
+
+    dspy.settings.configure(lm=None)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    assert ensure_dspy_lm_configured() is False
+    # And nothing got configured silently.
+    assert getattr(dspy.settings, "lm", None) is None
+
+
+def test_ensure_dspy_lm_configured_idempotent_when_already_configured(
+    reset_dspy_lm,
+) -> None:
+    """A second call with an LM already configured is a no-op.
+
+    Pins the once-flag-like behaviour without an actual global flag (so
+    tests can freely reset ``dspy.settings.lm`` and re-trigger).
+    """
+    from src.data.causal_role_classifier_loader import ensure_dspy_lm_configured
+
+    # Pre-configure with a Dummy so the helper sees lm != None.
+    pre_lm = _stub_dspy_lm_with_role("ancestor")
+    dspy.configure(lm=pre_lm)
+    assert ensure_dspy_lm_configured() is True
+    # And the pre-configured LM is still in place (helper did not replace it).
+    assert dspy.settings.lm is pre_lm
+
+
+def test_ensure_dspy_lm_configured_high_declared_safe_records_llm_disagreement(
+    reset_dspy_lm, monkeypatch
+) -> None:
+    """High adversarial + Layer 1 declared safe + LLM=accept-role records
+    the disagreement in the audit trail.
+
+    Codex pass-1 MEDIUM-2 (issue #193): the Layer 4 trigger now also
+    fires for ``severity=high AND layer_1_declared_safe`` so the
+    voter's ``adversarial=high but llm=<accept-role>`` disagreement
+    string lands in the audit trail. Without this, the operator has no
+    Layer 4 signal to triage the Layer-1-vs-Layer-3 disagreement.
+
+    Test setup: builds a high-signal feature (z > 5σ → severity=high)
+    that is also in the CSU manifest as declared-safe; stubs the LLM
+    with ``ancestor`` (accept-role); asserts the resulting verdict
+    carries the disagreement.
     """
     from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
         adaptive_validity_check,
     )
 
+    # Stub LM with accept-role so the voter records the disagreement.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-stub-key")
+    dspy.configure(lm=_stub_dspy_lm_with_role("ancestor", "keep_with_caveat"))
+
+    # Build a strong-signal frame so adversarial severity is high.
+    rng = np.random.default_rng(11)
+    y = rng.integers(0, 2, 400)
+    x = 0.8 * y + 0.3 * rng.standard_normal(400)
+    df = pd.DataFrame({"age_continuous": x, "treatment_initiated": y})
+
+    state = {
+        "experiment_id": "test-issue-193-high-safe",
+        "train_df": df,
+        "validation_df": None,
+        "test_df": None,
+        "scope_spec": {
+            "prediction_target": "treatment_initiated",
+            "required_features": ["age_continuous"],
+            "excluded_features": [],
+            "feature_manifest_source": "csu",
+        },
+        "leakage_findings": [],
+        "leaked_features": [],
+    }
+    result = asyncio.run(adaptive_validity_check(state))
+    age_verdicts = [v for v in result["adaptive_verdicts"] if v["feature"] == "age_continuous"]
+    assert len(age_verdicts) >= 1
+    age_v = age_verdicts[0]
+    # The adversarial veto wins on severity (deterministic high), so
+    # decided_by stays "adversarial", but disagreements should include
+    # the LLM accept-role.
+    assert age_v["severity"] == "high"
+    assert age_v["decided_by"] == "adversarial"
+    disagreements = age_v.get("disagreements", [])
+    assert any("llm=ancestor" in d for d in disagreements), (
+        f"Expected disagreements to include 'llm=ancestor' for high+declared_safe "
+        f"feature; got {disagreements}. Full verdict: {age_v}"
+    )
+
+
+def test_adaptive_validity_check_skips_layer_4_when_no_lm(reset_dspy_lm, monkeypatch) -> None:
+    """When no LM is configured AND no API key is in env, Layer 4 silently
+    skips — the moderate adversarial verdict goes through the legacy bypass.
+
+    Defense against a future regression that silently fails the LLM path
+    open. The non-LLM-configured-and-no-key run must NEVER emit
+    ``decided_by='llm'``; if it does, something has cached a stale LM
+    somewhere OR the env-vars-read path is broken (codex pass-1 HIGH-1
+    introduced ``ensure_dspy_lm_configured`` which configures a default
+    LM iff a recognised API key env var is non-empty — this test pins
+    the no-key, no-prior-config path).
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        adaptive_validity_check,
+    )
+
+    # Clear LM + clear every API key env var so ensure_dspy_lm_configured
+    # returns False (the documented CI / developer-laptop path).
     dspy.settings.configure(lm=None)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     df = _make_layer_3_moderate_df()
     state = {
         "experiment_id": "test-issue-193-no-lm",
