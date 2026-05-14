@@ -96,15 +96,27 @@ load_dotenv(override=True)
 # Tests CI lane (see ``.github/workflows/backend-tests.yml``
 # ``integration-tests`` job env block). When ``E2I_ASSERT_NO_ASYNCIO_POLLUTION``
 # is set, the probe promotes a detected polluter into a hard
-# ``pytest.exit(returncode=2)`` so the offending test is named on a red
-# CI run. Sequenced after issue #220 / PR #222 (all bare ``asyncio.run``
+# ``pytest.exit(returncode=2)``. Two trip paths:
+#   1. *Runtime-observed pollution* (``pytest_runtest_logfinish``):
+#      ``nest_asyncio.apply()`` fired DURING the session after the
+#      trace installed. The probe records the offending test
+#      nodeid (``apply_first_nodeid``) + full stack trace, so the
+#      offender is named on a red CI run.
+#   2. *Preexisting-baseline pollution* (``pytest_configure``,
+#      codex pass-1 HIGH-1): ``asyncio.run`` was already patched
+#      BEFORE this conftest loaded (sitecustomize, earlier conftest,
+#      pytest plugin loaded out-of-order). The probe cannot trace
+#      the polluter on this path — there is no captured stack — but
+#      strict mode still fails loud so a polluted baseline never
+#      silently passes. Audit surface: sitecustomize.py + earlier
+#      pytest plugins + parent conftest files.
+# Sequenced after issue #220 / PR #222 (all bare ``asyncio.run``
 # callsites in ``tests/integration/`` migrated to the shared ``run_sync``
-# helper), so on a green branch the strict-mode probe should be a no-op.
-# A trip from here forward means a NEW polluter has appeared and must
-# be investigated via the probe's ``apply_first_nodeid`` + full stack
-# trace. Rollback: unset the env var in the workflow; this comment
-# stays accurate either way because it only describes the strict-mode
-# contract, not the live workflow state.
+# helper), so on a green branch path 1 should be a no-op. A trip from
+# here forward means a NEW polluter has appeared. Rollback: unset the
+# env var in the workflow; this comment stays accurate either way
+# because it only describes the strict-mode contract, not the live
+# workflow state.
 _ORIG_ASYNCIO_RUN = asyncio.run
 _ASYNCIO_POLLUTION_STATE: Dict[str, object] = {
     "apply_first_stack": None,  # type: Optional[str]
@@ -198,34 +210,9 @@ _install_nest_asyncio_apply_trace()
 os.environ["E2I_TESTING_MODE"] = "1"
 
 
-def pytest_configure(config):
+def _load_dotenv_at_configure():
     """Run load_dotenv again at configure time for safety."""
     load_dotenv(override=True)
-
-    # Issue #221 codex pass-1 HIGH-1: when strict mode is requested AND
-    # ``_check_preexisting_pollution`` flagged the baseline ``asyncio.run``
-    # as already-patched, the identity-based probe in
-    # ``pytest_runtest_logfinish`` cannot detect further pollution — strict
-    # mode would silently pass. Fail-loud here so the session never enters
-    # collection with an unreliable baseline. The terminal-summary block
-    # still renders the diagnostic so the operator knows to audit
-    # sitecustomize / earlier-loaded plugins / parent conftest files.
-    if (
-        _ASYNCIO_POLLUTION_STATE["preexisting_pollution_detected"]
-        and os.getenv("E2I_ASSERT_NO_ASYNCIO_POLLUTION", "").lower()
-        in {"1", "true", "yes"}
-    ):
-        pytest.exit(
-            "[issue-218] FATAL: asyncio.run was already patched before "
-            "tests/conftest.py loaded — the runtime probe cannot detect "
-            "further nest_asyncio.apply() calls by identity check, so "
-            "strict mode cannot give a meaningful guarantee. Audit "
-            "sitecustomize.py, earlier-loaded pytest plugins, and parent "
-            "conftest files for the import-time polluter. "
-            "(E2I_ASSERT_NO_ASYNCIO_POLLUTION is set; preexisting "
-            "pollution detected.)",
-            returncode=2,
-        )
 
 
 # =============================================================================
@@ -399,12 +386,54 @@ def pytest_configure(config: pytest.Config) -> None:
     """Configure pytest with service availability information.
 
     This runs once at the start of the test session to:
-    1. Disable rate limiting for tests
-    2. Check which services are available
-    3. Store results for skip decision making
-    4. Print service status to console
+    1. Re-load .env for safety (mirrors top-of-file ``load_dotenv`` call).
+    2. Disable rate limiting for tests.
+    3. Apply the issue-#221 strict-mode trip-switch for preexisting
+       asyncio pollution (must run before collection / service checks
+       so a polluted baseline doesn't silently pass).
+    4. Check which services are available.
+    5. Store results for skip decision making.
+    6. Print service status to console.
     """
     global SERVICES_AVAILABLE
+
+    # Re-load .env defensively (the top-of-file ``load_dotenv`` already
+    # ran at import time; this catches the case where a parent conftest
+    # mutated os.environ between import and configure).
+    _load_dotenv_at_configure()
+
+    # Issue #221 codex pass-1 HIGH-1 (re-located here by codex pass-2
+    # HIGH so the hook is not shadowed by the duplicate-definition bug):
+    # when strict mode is requested AND ``_check_preexisting_pollution``
+    # flagged the baseline ``asyncio.run`` as already-patched, the
+    # identity-based probe in ``pytest_runtest_logfinish`` cannot detect
+    # further pollution — strict mode would silently pass. Fail-loud
+    # here so the session never enters collection with an unreliable
+    # baseline. This path has no ``apply_first_nodeid`` and no captured
+    # first-apply stack (pollution happened before this conftest
+    # loaded), so the exit message names sitecustomize / earlier-loaded
+    # plugins / parent conftests as the audit surface rather than
+    # promising a stack trace that doesn't exist. Configure-time
+    # ``pytest.exit`` fires before ``pytest_sessionfinish``, so the
+    # terminal-summary diagnostic block is NOT guaranteed on this path
+    # (codex pass-2 LOW); the message is self-contained.
+    if (
+        _ASYNCIO_POLLUTION_STATE["preexisting_pollution_detected"]
+        and os.getenv("E2I_ASSERT_NO_ASYNCIO_POLLUTION", "").lower()
+        in {"1", "true", "yes"}
+    ):
+        pytest.exit(
+            "[issue-218] FATAL: asyncio.run was already patched before "
+            "tests/conftest.py loaded — the runtime probe cannot detect "
+            "further nest_asyncio.apply() calls by identity check, so "
+            "strict mode cannot give a meaningful guarantee. Audit "
+            "sitecustomize.py, earlier-loaded pytest plugins, and parent "
+            "conftest files for the import-time polluter. "
+            "(E2I_ASSERT_NO_ASYNCIO_POLLUTION is set; preexisting "
+            "pollution detected; no apply_first_nodeid or stack trace "
+            "available on this path.)",
+            returncode=2,
+        )
 
     # Disable rate limiting for tests to prevent 429 errors from state accumulation
     os.environ["DISABLE_RATE_LIMITING"] = "1"
