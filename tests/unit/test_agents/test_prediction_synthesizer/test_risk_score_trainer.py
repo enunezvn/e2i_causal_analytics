@@ -643,9 +643,7 @@ class TestComputeAucPrFloor:
         # 3 * 0.029 = 0.0857 < 0.10 -> clamp to default FLOOR_FLOOR=0.10.
         assert floor_k3 == 0.10
         # K=3, FLOOR_FLOOR=0.05 at pi=0.029.
-        floor_k3_floor05 = compute_auc_pr_floor(
-            n_pos=37, n_total=1294, k=3.0, floor_floor=0.05
-        )
+        floor_k3_floor05 = compute_auc_pr_floor(n_pos=37, n_total=1294, k=3.0, floor_floor=0.05)
         # 3 * 0.029 = 0.0857 > 0.05 -> uses K*pi.
         assert math.isclose(floor_k3_floor05, 3.0 * 37 / 1294, abs_tol=1e-9)
 
@@ -732,9 +730,7 @@ class TestFitComputesPrevalenceAwareFloor:
         result = trainer.fit(X_tr, y_tr, X_va, y_va)
         expected_floor = compute_auc_pr_floor(
             n_pos=int(result.val_class_balance["n_pos"]),
-            n_total=int(
-                result.val_class_balance["n_pos"] + result.val_class_balance["n_neg"]
-            ),
+            n_total=int(result.val_class_balance["n_pos"] + result.val_class_balance["n_neg"]),
         )
         assert math.isclose(result.auc_pr_floor, expected_floor, abs_tol=1e-9)
         # The trainer should record the floor that matches the floor_met

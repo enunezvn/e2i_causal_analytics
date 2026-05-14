@@ -78,8 +78,7 @@ class TestCliExitGate:
             ]
         )
         assert rc == 1, (
-            "CLI must exit non-zero when honest_failures is non-empty "
-            "(issue #188 enforcement)"
+            "CLI must exit non-zero when honest_failures is non-empty (issue #188 enforcement)"
         )
         # JSON must still be emitted so the operator can inspect the failure
         # post-mortem.

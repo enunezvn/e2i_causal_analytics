@@ -386,11 +386,7 @@ def write_risk_score_predictions(
         # Caller did not pass honest_failures. Default behavior is to
         # treat missing metadata as a failure-gate (safe default).
         is_gated = bool(honest_failures_default_gated)
-        gate_reason = (
-            "missing_honest_failures_metadata"
-            if is_gated
-            else "missing_metadata_opt_out"
-        )
+        gate_reason = "missing_honest_failures_metadata" if is_gated else "missing_metadata_opt_out"
         resolved_honest_failures: list[str] = (
             ["honest_failures metadata missing (treated as gated per issue #188)"]
             if is_gated
@@ -402,8 +398,7 @@ def write_risk_score_predictions(
         gate_reason = "honest_failures_non_empty" if is_gated else "honest_failures_empty"
 
     logger.info(
-        "write_risk_score_predictions: task=%s payloads=%d journeys=%d "
-        "gated=%s reason=%s",
+        "write_risk_score_predictions: task=%s payloads=%d journeys=%d gated=%s reason=%s",
         task_id,
         len(payloads),
         len(journey_updates or []),
@@ -415,8 +410,7 @@ def write_risk_score_predictions(
         # Structured audit event for downstream dashboards (do NOT update
         # patient_journeys.risk_score; do NOT write prediction_class).
         logger.warning(
-            "risk_score.skipped.honest_failure task=%s reason=%s "
-            "honest_failures=%s",
+            "risk_score.skipped.honest_failure task=%s reason=%s honest_failures=%s",
             task_id,
             gate_reason,
             resolved_honest_failures,

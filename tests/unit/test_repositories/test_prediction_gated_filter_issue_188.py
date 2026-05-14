@@ -101,9 +101,7 @@ def _assert_neq_gated(query: _ChainableQuery, method_name: str) -> None:
     a NULL column would tri-value-drop them).
     """
     or_calls = [args for (name, args) in query.calls if name == "or_"]
-    expected = (
-        f"prediction_class.is.null,prediction_class.neq.{GATED_HONEST_FAILURE_SENTINEL}",
-    )
+    expected = (f"prediction_class.is.null,prediction_class.neq.{GATED_HONEST_FAILURE_SENTINEL}",)
     assert expected in or_calls, (
         f"{method_name} did NOT filter out {GATED_HONEST_FAILURE_SENTINEL} rows "
         f"with NULL-preserving semantics. or_ calls: {or_calls}"
