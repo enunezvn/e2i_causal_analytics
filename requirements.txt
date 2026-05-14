@@ -163,7 +163,7 @@ langsmith==0.8.0
 librt==0.7.4
 lifelines==0.30.3
 lightgbm==4.6.0
-litellm==1.83.7
+litellm==1.84.0
 llvmlite==0.46.0
 locket==1.0.0
 magicattr==0.1.6
@@ -263,7 +263,7 @@ pytest-asyncio==1.3.0
 pytest-cov==7.0.0
 pytest-mock==3.15.1
 python-dateutil==2.9.0.post0
-python-dotenv==1.0.1
+python-dotenv==1.2.2
 python-json-logger==4.0.0
 python-multipart==0.0.27
 pytokens==0.3.0
