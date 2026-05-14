@@ -3175,3 +3175,136 @@ def test_issue_194_joint_check_holds_across_cohort_sizes(n: int):
         f"Joint check failed at n={n}: severity=high on {n_high}/{n_run} "
         f"benign 'age' cohorts; expected 0 false positives."
     )
+
+
+# =============================================================================
+# Issue #196 Phase 3.3 — codex pass-1 regression pins.
+# =============================================================================
+
+
+class TestClassifyAblationSeverityCodexPass1:
+    """Pin codex pass-1 MED-1 + MED-2 fixes for ``_classify_ablation_severity``.
+
+    MED-1: NaN z-score must NOT escape via the strong-effect path. The null
+    distribution being undefined means the ablation sub-test has no
+    statistical anchor; the verdict must fall back to permutation-only.
+
+    MED-2: Negative ``delta_auc`` must NOT escape via the strong-effect path.
+    ``delta_auc = full_auc - ablated_auc`` > 0 means the feature ADDS to
+    joint AUC (the leak-carrier case); a NEGATIVE delta means removing the
+    feature IMPROVES the joint model — model-instability noise from
+    multicollinearity, NOT a leak.
+    """
+
+    def test_nan_z_blocks_strong_effect_escape(self) -> None:
+        """codex MED-1: NaN z with finite delta > 0.30 must NOT classify high."""
+        from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+            _classify_ablation_severity,
+        )
+
+        row = {
+            "feature": "feat",
+            "full_auc": 0.95,
+            "ablated_auc": 0.55,
+            "delta_auc": 0.40,  # well above 0.30 strong-effect threshold
+            "null_mean": float("nan"),
+            "null_std": float("nan"),
+            "z_score": float("nan"),  # null undefined
+            "suspicious": False,
+        }
+        # Pre-MED-1 fix this returned "high" (false positive on undefined null).
+        # Post-fix: NaN z degrades to info per the documented contract.
+        assert _classify_ablation_severity(row) == "info"
+
+    def test_negative_delta_blocks_strong_effect_escape(self) -> None:
+        """codex MED-2: large NEGATIVE delta_auc must NOT classify high.
+
+        delta_auc < 0 means model improves when the feature is dropped.
+        This is multicollinearity / nuisance-variable behaviour, not a leak.
+        """
+        from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+            _classify_ablation_severity,
+        )
+
+        row = {
+            "feature": "noisy_nuisance",
+            "full_auc": 0.75,
+            "ablated_auc": 0.95,  # ablated model IMPROVES
+            "delta_auc": -0.20,  # |delta| = 0.20 below floor; but even at -0.40 below should hold
+            "null_mean": -0.20,
+            "null_std": 0.01,
+            "z_score": 0.0,
+            "suspicious": False,
+        }
+        assert _classify_ablation_severity(row) == "info"
+
+        # Magnitude > 0.30 with negative sign: pre-MED-2 fix this returned
+        # "high" via abs(delta_f) > 0.30; post-fix: signed escape requires
+        # positive delta.
+        row["delta_auc"] = -0.40
+        assert _classify_ablation_severity(row) == "info"
+
+    def test_positive_strong_delta_with_finite_z_still_classifies_high(self) -> None:
+        """Sanity: positive delta > 0.30 AND finite z DOES classify high.
+
+        Pin the contract MED-1/MED-2 must not over-tighten — legitimate
+        strong-effect leak-carriers (the intended positive case) still
+        escalate.
+        """
+        from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+            _classify_ablation_severity,
+        )
+
+        row = {
+            "feature": "leak_carrier",
+            "full_auc": 0.95,
+            "ablated_auc": 0.55,
+            "delta_auc": 0.40,
+            "null_mean": 0.35,
+            "null_std": 0.10,
+            "z_score": 0.5,  # below permutation HIGH_Z=5.0 but strong-effect escape fires
+            "suspicious": False,
+        }
+        assert _classify_ablation_severity(row) == "high"
+
+    def test_positive_inf_z_with_above_floor_delta_classifies_high(self) -> None:
+        """Mirror of hblp_classify's issue #194 MED-1 escape: z=+inf
+        (degenerate null with zero variance, not undefined null) plus
+        |delta| above the issue #194 floor must classify high.
+
+        This is distinct from NaN z (codex MED-1) — +inf z means the null
+        is DEFINED but degenerate; NaN z means the null is UNDEFINED.
+        """
+        from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+            _classify_ablation_severity,
+        )
+
+        row = {
+            "feature": "degenerate_null_leak",
+            "full_auc": 0.95,
+            "ablated_auc": 0.80,
+            "delta_auc": 0.15,  # below strong-effect 0.30, above floor 0.10
+            "null_mean": 0.05,
+            "null_std": 0.0,  # zero variance → z=+inf via compute_feature_ablation
+            "z_score": float("inf"),
+            "suspicious": True,
+        }
+        assert _classify_ablation_severity(row) == "high"
+
+    def test_nan_delta_classifies_info(self) -> None:
+        """NaN delta_auc → info regardless of z. Degradation contract."""
+        from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+            _classify_ablation_severity,
+        )
+
+        row = {
+            "feature": "broken_feat",
+            "full_auc": 0.95,
+            "ablated_auc": float("nan"),
+            "delta_auc": float("nan"),
+            "null_mean": 0.0,
+            "null_std": 0.01,
+            "z_score": 10.0,  # would classify high if delta were finite
+            "suspicious": False,
+        }
+        assert _classify_ablation_severity(row) == "info"
