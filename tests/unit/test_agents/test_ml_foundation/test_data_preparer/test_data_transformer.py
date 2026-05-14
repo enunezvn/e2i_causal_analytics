@@ -373,3 +373,189 @@ class TestIdentifyColumnTypesBoolRouting:
         assert "x_int" in numeric
         assert "x_float" in numeric
         assert "x_obj" in categorical
+
+
+class TestIdentifyColumnTypesUnhashableSkip:
+    """Object columns with list/dict/set/tuple/ndarray cells must be skipped.
+
+    Issue #197: ``scripts/run_tier0_test.py --data-dir <csu_dir>`` ingests
+    raw CSU ``patient_journeys.json`` whose ``comorbidities`` and
+    ``secondary_diagnosis_codes`` columns carry list-typed cells (most
+    empty ``[]``; some non-empty in real cohorts). The
+    ``data_loader._drop_unhashable_columns`` helper strips these at file
+    ingestion, but ``_identify_column_types`` must defend itself too —
+    any caller bypassing the loader (preassembled DataFrames passed
+    directly via ``state['train_df']``, alternate ingestion shapes)
+    still reaches the type-detection step. Without the guard, the
+    ``df[col].nunique()`` call at the object-dtype branch crashes with
+    ``TypeError: unhashable type: 'list'``.
+
+    See ``data_loader._drop_unhashable_columns`` for the upstream
+    counterpart (drops the column entirely at ingest). This guard is
+    a per-column skip — the column survives in the DataFrame, but is
+    not registered as numeric/categorical for encoding.
+    """
+
+    def test_list_column_skipped_not_crashed(self) -> None:
+        """List-typed object column must be skipped without crashing."""
+        df = pd.DataFrame(
+            {
+                "comorbidities": [["E11", "I10"], [], ["J45"], []],
+                "x": [1.0, 2.0, 3.0, 4.0],
+                "y": ["a", "b", "a", "c"],
+            }
+        )
+        numeric, categorical, datetime = _identify_column_types(df, exclude_columns=[])
+        assert "comorbidities" not in numeric
+        assert "comorbidities" not in categorical
+        assert "comorbidities" not in datetime
+        # Sanity: other columns still route correctly.
+        assert "x" in numeric
+        assert "y" in categorical
+
+    def test_empty_list_only_column_skipped(self) -> None:
+        """Empty-list cells are still ``list`` instances — must be skipped.
+
+        Real CSU ``patient_journeys.json`` has all-empty ``comorbidities``
+        and ``secondary_diagnosis_codes`` for every record sampled
+        2026-05-14; the column type is object, the cells are ``[]``, and
+        ``.nunique()`` still crashes with ``TypeError: unhashable type:
+        'list'``."""
+        df = pd.DataFrame(
+            {
+                "comorbidities": [[], [], [], []],
+                "secondary_diagnosis_codes": [[], [], [], []],
+                "scalar": [1, 2, 3, 4],
+            }
+        )
+        numeric, categorical, _ = _identify_column_types(df, exclude_columns=[])
+        assert "comorbidities" not in numeric
+        assert "comorbidities" not in categorical
+        assert "secondary_diagnosis_codes" not in numeric
+        assert "secondary_diagnosis_codes" not in categorical
+        assert "scalar" in numeric
+
+    def test_ndarray_column_skipped(self) -> None:
+        """``numpy.ndarray`` cells (the Parquet→pandas roundtrip shape) must
+        also be skipped — same crash path as Python lists."""
+        df = pd.DataFrame(
+            {
+                "vec": [np.array([1, 2]), np.array([3]), np.array([]), np.array([4, 5, 6])],
+                "scalar": [1.0, 2.0, 3.0, 4.0],
+            }
+        )
+        numeric, categorical, _ = _identify_column_types(df, exclude_columns=[])
+        assert "vec" not in numeric
+        assert "vec" not in categorical
+        assert "scalar" in numeric
+
+    def test_dict_column_skipped(self) -> None:
+        """Dict cells are also unhashable; must be skipped."""
+        df = pd.DataFrame(
+            {
+                "meta": [{"k": 1}, {"k": 2}, {}, {"k": 3}],
+                "scalar": [1, 2, 3, 4],
+            }
+        )
+        numeric, categorical, _ = _identify_column_types(df, exclude_columns=[])
+        assert "meta" not in numeric
+        assert "meta" not in categorical
+        assert "scalar" in numeric
+
+    def test_object_column_with_strings_still_categorical(self) -> None:
+        """Regression: hashable object cells (plain strings) still route
+        to categorical — the guard only fires on unhashable cells."""
+        df = pd.DataFrame(
+            {
+                "diag": ["L50.1", "L50.1", "L50.2", "L50.9"],
+                "scalar": [1, 2, 3, 4],
+            }
+        )
+        numeric, categorical, _ = _identify_column_types(df, exclude_columns=[])
+        assert "diag" in categorical
+        assert "diag" not in numeric
+
+
+@pytest.mark.asyncio
+class TestTransformDataSurvivesUnhashableColumns:
+    """End-to-end transform_data must not crash on list-typed columns.
+
+    Issue #197 root cause: when ``train_df`` contains list-typed cells
+    (CSU ``comorbidities`` / ``secondary_diagnosis_codes``), the
+    transformer raises ``TypeError: unhashable type: 'list'`` before
+    any model code runs. With the ``_column_has_unhashable_cells``
+    guard in place, transform_data returns a non-error result; the
+    list-typed columns survive in ``feature_columns`` (unchanged from
+    input) but are not registered as numeric/categorical for encoding.
+    """
+
+    async def test_transform_data_does_not_crash_on_list_columns(self) -> None:
+        train_df = pd.DataFrame(
+            {
+                "comorbidities": [["E11", "I10"], [], ["J45"], []],
+                "secondary_diagnosis_codes": [[], ["B97.4"], [], []],
+                "age": [25.0, 60.0, 45.0, 30.0],
+                "gender": ["M", "F", "F", "M"],
+                "target": [0, 1, 0, 1],
+            }
+        )
+        state = {
+            "experiment_id": "test_issue_197_list_columns",
+            "train_df": train_df,
+            "validation_df": train_df.copy(),
+            "test_df": train_df.copy(),
+            "scope_spec": {
+                "target_column": "target",
+                "encoding_method": "label",
+                "scaling_method": "minmax",
+                "imputation_strategy": "mean",
+                "extract_datetime_features": False,
+                "excluded_features": [],  # Deliberately NOT excluding list cols
+            },
+        }
+        result = await transform_data(state)
+        assert result.get("error") is None, f"transform_data crashed with: {result.get('error')!r}"
+        assert result.get("error_type") is None
+        feature_columns = result.get("feature_columns") or []
+        # Both list-typed columns survive in feature_columns (the
+        # transformer doesn't drop columns it doesn't know how to handle;
+        # the loader-side helper ``_drop_unhashable_columns`` is the
+        # correct upstream place for that).
+        assert "comorbidities" in feature_columns
+        assert "secondary_diagnosis_codes" in feature_columns
+        # Scalars still encoded — sanity check.
+        assert "age" in feature_columns
+        assert "gender" in feature_columns
+
+    async def test_transform_data_with_excluded_list_columns_still_works(self) -> None:
+        """Sanity: callers who DO pass list cols in excluded_features still
+        get a clean transform — the new guard does not interfere with the
+        existing exclusion path."""
+        train_df = pd.DataFrame(
+            {
+                "comorbidities": [["E11", "I10"], [], ["J45"], []],
+                "age": [25.0, 60.0, 45.0, 30.0],
+                "target": [0, 1, 0, 1],
+            }
+        )
+        state = {
+            "experiment_id": "test_issue_197_excluded_list",
+            "train_df": train_df,
+            "validation_df": train_df.copy(),
+            "test_df": train_df.copy(),
+            "scope_spec": {
+                "target_column": "target",
+                "excluded_features": ["comorbidities"],
+                "scaling_method": "minmax",
+                "imputation_strategy": "mean",
+                "extract_datetime_features": False,
+            },
+        }
+        result = await transform_data(state)
+        assert result.get("error") is None
+        # ``feature_columns`` reflects ``train_df.columns`` AFTER target drop;
+        # excluded features are still PRESENT in train_df (the transformer
+        # only suppresses them from encoding/scaling, not from the frame).
+        feature_columns = result.get("feature_columns") or []
+        assert "comorbidities" in feature_columns  # still in frame
+        assert "age" in feature_columns
