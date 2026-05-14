@@ -98,10 +98,17 @@ class RedisWorkingMemory:
                 redis_url = os.environ.get("REDIS_URL", "redis://localhost:6382")
                 # langgraph-checkpoint-redis 0.4.x changed RedisSaver.from_conn_string
                 # into a @contextmanager (returns _GeneratorContextManager); for our
-                # long-lived checkpointer use we construct directly via __init__.
-                # The new constructor eagerly connects, so a Redis-down environment
-                # raises ConnectionError here — caught in the broad except below.
+                # long-lived checkpointer use we construct directly via __init__ AND
+                # call setup() explicitly — setup() docstring says "MUST be called
+                # before using the checkpointer" because it creates the Redis indices
+                # and key registry that put/get queries depend on. The old
+                # from_conn_string context manager also did NOT call setup() so this
+                # is a latent contract upgrade (the original behavior worked for
+                # exact-key put/get but not for indexed queries).
+                # ConnectionError surfaces here when Redis is unreachable — caught
+                # by the broad except below for fallback to MemorySaver.
                 self._checkpointer = RedisSaver(redis_url=redis_url)
+                self._checkpointer.setup()
                 logger.info("LangGraph RedisSaver checkpointer initialized")
             except (ImportError, Exception) as exc:
                 if isinstance(exc, ImportError):

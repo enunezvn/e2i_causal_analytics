@@ -50,7 +50,10 @@ def create_checkpointer(redis_url: Optional[str] = None, fallback_to_memory: boo
 
         # langgraph-checkpoint-redis 0.4.x changed from_conn_string into a
         # @contextmanager; for long-lived checkpointer use we construct directly.
+        # setup() docstring: "MUST be called before using the checkpointer" — it
+        # creates the Redis indices + key registry that put/get queries depend on.
         checkpointer = RedisSaver(redis_url=url)
+        checkpointer.setup()
         logger.info(f"Created RedisSaver checkpointer for {url.split('@')[-1]}")
         return checkpointer
 
@@ -98,8 +101,18 @@ def create_async_checkpointer(redis_url: Optional[str] = None, fallback_to_memor
 
         # Same API change as the sync RedisSaver — from_conn_string is now
         # an @asynccontextmanager; construct directly for long-lived use.
+        # NOTE: AsyncRedisSaver.setup() is itself async (returns a coroutine),
+        # so this sync factory cannot await it. Callers MUST `await
+        # checkpointer.asetup()` before first use OR await checkpointer.setup()
+        # — without it, Redis indices are missing and the event-loop binding
+        # used by sync wrapper methods (get_tuple/put/put_writes via
+        # asyncio.run_coroutine_threadsafe) is not initialized. See
+        # asetup() docstring at langgraph/checkpoint/redis/aio/__init__.py.
         checkpointer = AsyncRedisSaver(redis_url=url)
-        logger.info(f"Created AsyncRedisSaver checkpointer for {url.split('@')[-1]}")
+        logger.info(
+            f"Created AsyncRedisSaver checkpointer for {url.split('@')[-1]} "
+            "(caller MUST await asetup() before first use)"
+        )
         return checkpointer
 
     except ImportError as e:

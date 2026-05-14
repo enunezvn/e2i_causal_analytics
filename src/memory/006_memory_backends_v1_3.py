@@ -435,8 +435,10 @@ class RedisWorkingMemory:
 
             redis_url = os.environ.get("REDIS_URL", "redis://localhost:6382")
             # langgraph-checkpoint-redis 0.4.x changed from_conn_string to a
-            # @contextmanager; construct directly for long-lived use.
+            # @contextmanager; construct directly + setup() per its docstring
+            # ("MUST be called before using the checkpointer").
             self._checkpointer = RedisSaver(redis_url=redis_url)
+            self._checkpointer.setup()
         return self._checkpointer
 
     async def create_session(
