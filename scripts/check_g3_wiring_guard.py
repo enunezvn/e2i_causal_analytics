@@ -625,14 +625,13 @@ _REGISTRY_HEADERS = (
     "date_added",
     "areas_of_expertise",
     "status",
-    # Issue #226: PR #227 added the `fingerprint` column for registry-pinned
-    # GPG keyring binding (H1). The parser must match the 8-column schema
-    # introduced there or it silently treats every row as "table not found"
-    # and returns an empty active-emails set. That regression caused G3 to
-    # fail-closed with "registry is EMPTY" on PR #228 — surfaced by the
-    # operator-action closure PR's CI run.
-    "fingerprint",
 )
+# Issue #226: PR #227 added the `fingerprint` column for registry-pinned
+# GPG keyring binding (H1). The parser must accept BOTH the legacy 7-col
+# schema (preserved for existing test fixtures + back-compat) AND the new
+# 8-col schema with `fingerprint` appended. Keeping `_REGISTRY_HEADERS`
+# as the 7-col tuple lets the row-shape check stay strict at 7-or-8.
+_REGISTRY_HEADERS_OPTIONAL = ("fingerprint",)
 
 
 def _parse_registry_emails_from_text(content: str) -> set[str]:
@@ -655,7 +654,12 @@ def _parse_registry_emails_from_text(content: str) -> set[str]:
             saw_separator = False
             continue
         cells = [cell.strip() for cell in line.strip("|").split("|")]
-        if not in_table and tuple(cells) == _REGISTRY_HEADERS:
+        # Issue #226: accept the legacy 7-col header tuple OR the 8-col
+        # tuple with `fingerprint` appended (PR #227's H1 schema bump).
+        if not in_table and (
+            tuple(cells) == _REGISTRY_HEADERS
+            or tuple(cells) == _REGISTRY_HEADERS + _REGISTRY_HEADERS_OPTIONAL
+        ):
             in_table = True
             saw_separator = False
             continue
@@ -665,7 +669,11 @@ def _parse_registry_emails_from_text(content: str) -> set[str]:
                 continue
             in_table = False
             continue
-        if in_table and saw_separator and len(cells) == len(_REGISTRY_HEADERS):
+        # Row shape: legacy 7-col OR 8-col (fingerprint optional).
+        if in_table and saw_separator and len(cells) in (
+            len(_REGISTRY_HEADERS),
+            len(_REGISTRY_HEADERS) + len(_REGISTRY_HEADERS_OPTIONAL),
+        ):
             email_cell = cells[1]
             status = cells[6]
             if status != "active":
