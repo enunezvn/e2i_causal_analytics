@@ -227,20 +227,25 @@ jobs:
             exit 0
           fi
 
-          # base64 -d → gpg --import. We pipe through the env var so
-          # neither the secret nor the decoded bundle ever appears in
-          # the command-line args (which would be visible in `ps`).
-          # 2>&1 captures gpg's import status messages; we filter the
-          # noisy per-key lines from the log but keep the summary so
-          # post-incident forensics can see how many keys landed.
+          # Codex pass-1 MED-2 fix (2026-05-15): capture EVERY pipeline
+          # status, not just `gpg --import`. The pre-fix
+          # `IMPORT_RC=${PIPESTATUS[2]}` ignored `base64 -d` failure — if
+          # base64 emits partial decoded output and exits non-zero, gpg
+          # can still import partial key material and return 0. Fix:
+          # snapshot all PIPESTATUS values, then require both the
+          # decoder (PIPE_RC[1]) and gpg (PIPE_RC[2]) to succeed.
+          # printf failure (PIPE_RC[0]) is also asserted defensively.
           set +e
           printf '%s' "$GPG_REVIEWER_KEYS_ARMOR_BASE64" | base64 -d | \
             gpg --homedir "$KEYRING_DIR" --batch --import 2>&1 | \
             tee /tmp/gpg_import.log
-          IMPORT_RC=${PIPESTATUS[2]}
+          PIPE_RC=("${PIPESTATUS[@]}")
           set -e
-          if [ "$IMPORT_RC" -ne 0 ]; then
-            echo "::error::gpg --import returned ${IMPORT_RC}; see /tmp/gpg_import.log"
+          PRINTF_RC="${PIPE_RC[0]}"
+          BASE64_RC="${PIPE_RC[1]}"
+          IMPORT_RC="${PIPE_RC[2]}"
+          if [ "$PRINTF_RC" -ne 0 ] || [ "$BASE64_RC" -ne 0 ] || [ "$IMPORT_RC" -ne 0 ]; then
+            echo "::error::keyring import pipeline failed (printf=${PRINTF_RC} base64=${BASE64_RC} gpg=${IMPORT_RC}); see /tmp/gpg_import.log"
             if [ "$STRICT_GPG" = "1" ]; then
               exit 4
             fi
