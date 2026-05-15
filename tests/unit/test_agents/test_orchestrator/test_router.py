@@ -538,9 +538,7 @@ class TestIntentToAgentMapping:
                 timeout = dispatch["timeout_ms"]
                 cap = max_timeout_ms.get(intent, 120_000)
                 assert timeout > 0, f"Invalid timeout for {intent}"
-                assert timeout <= cap, (
-                    f"Timeout {timeout}ms for {intent} exceeds cap {cap}ms"
-                )
+                assert timeout <= cap, f"Timeout {timeout}ms for {intent} exceeds cap {cap}ms"
 
     def test_multi_agent_patterns_exist(self):
         """Test that multi-agent patterns are defined."""

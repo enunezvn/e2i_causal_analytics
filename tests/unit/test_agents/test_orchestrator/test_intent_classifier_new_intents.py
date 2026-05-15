@@ -29,12 +29,12 @@ def test_pattern_classifier_detects_multi_faceted() -> None:
     # Use queries that uniquely match multi_faceted, not gap_analyzer's "gap"
     # or segment_analysis's "segment" — otherwise the tie-break (Python
     # dict order in scores) hands the win to the earlier-inserted intent.
+    assert _classify("synthesize results from multiple analyses then summarize") == "multi_faceted"
+    assert _classify("show me both effects across the cohort") == "multi_faceted"
     assert (
-        _classify("synthesize results from multiple analyses then summarize")
+        _classify("integrate the findings with the prior research and also report")
         == "multi_faceted"
     )
-    assert _classify("show me both effects across the cohort") == "multi_faceted"
-    assert _classify("integrate the findings with the prior research and also report") == "multi_faceted"
 
 
 def test_pattern_classifier_keeps_existing_intents() -> None:
