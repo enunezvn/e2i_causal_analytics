@@ -2895,6 +2895,94 @@ class TestCoIBodySignatureVerifies:
         assert result.ok is True, f"sibling-asc verify failed: {result.detail}"
         assert "sibling-asc" in result.detail
 
+    def test_pass6_med1_signed_coi_with_empty_keyring_advisory_pass(
+        self, tmp_path: Path, gpg_keyring: tuple[Path, str]
+    ):
+        """Codex pass-6 MED-1 fix: signed CoI + unprovisioned keyring →
+        advisory PASS + sig-skip (NOT generic FAIL).
+
+        Pre-fix: check_coi_body_signature_verifies bypassed the keyring
+        preflight that pass-2 added to check_signature_verifies — so a
+        signed CoI with an empty keyring would route through main()'s
+        generic exit-1 branch instead of the reserved exit-4 STRICT_GPG
+        path. This broke the documented `strict_gpg: '0'` rollout
+        escape hatch for already-signed CoIs.
+
+        Fix mirrors the sign-off keyring preflight: signed CoI + empty
+        keyring → advisory PASS + signature_check_skipped=True.
+        """
+
+        home, _ = gpg_keyring  # populated keyring (used to sign)
+
+        coi_dir = tmp_path / "docs" / "governance" / "coi_declarations"
+        coi_dir.mkdir(parents=True)
+        coi_path = coi_dir / "alice_20260514.md"
+        body = "# CoI alice\nzero touches\n"
+
+        # Sign the CoI body using the populated keyring (the operator's
+        # real keyring) BUT then verify against an EMPTY keyring (the
+        # CI-runner-not-yet-provisioned scenario).
+        import os as _os
+
+        env = _os.environ.copy()
+        env["GNUPGHOME"] = str(home)
+        sib_sign = subprocess.run(
+            [
+                "gpg",
+                "--batch",
+                "--detach-sign",
+                "--armor",
+                "--output",
+                str(coi_path) + ".asc",
+                str(coi_path),
+            ],
+            input=body,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        coi_path.write_text(body, encoding="utf-8")
+        if sib_sign.returncode != 0:
+            # Above invocation actually requires the file to exist; redo.
+            coi_path.write_text(body, encoding="utf-8")
+            sib_sign = subprocess.run(
+                [
+                    "gpg",
+                    "--batch",
+                    "--detach-sign",
+                    "--armor",
+                    "--output",
+                    str(coi_path) + ".asc",
+                    str(coi_path),
+                ],
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            if sib_sign.returncode != 0:
+                pytest.skip(f"gpg sign failed: {sib_sign.stderr}")
+
+        # EMPTY keyring (operator hasn't provisioned the secret yet).
+        empty_keyring = tmp_path / "empty_keyring"
+        empty_keyring.mkdir(mode=0o700)
+
+        doc_text = self._make_doc_pointing_at_coi(
+            "docs/governance/coi_declarations/alice_20260514.md"
+        )
+        result = cms.check_coi_body_signature_verifies(
+            doc_text, repo_root=tmp_path, keyring_dir=empty_keyring
+        )
+        # Pass-6 MED-1: advisory pass + sig-skip (NOT FAIL).
+        assert result.ok is True, (
+            f"pass-6 MED-1: signed CoI + empty keyring must be advisory "
+            f"pass; got ok=False with {result.detail}"
+        )
+        assert result.signature_check_skipped is True
+        assert (
+            "signature present but keyring" in result.detail
+            or "missing/empty/unreadable" in result.detail
+        )
+
 
 class TestExtractValidsigFingerprint:
     """``_extract_validsig_fingerprint`` parses GNUPG status-fd output.
