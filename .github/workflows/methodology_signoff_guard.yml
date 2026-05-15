@@ -51,11 +51,18 @@ name: Methodology Sign-off Guard
 #     YAML edits do).
 #
 # H1 + H4 (registry-pinned GPG keyring + CoI body signature verify):
-#   STILL DEFERRED — both require infra (per-runner GPG keyring with
-#   curated reviewer public keys). Tracked in
-#   `docs/governance/n3_known_limitations_20260510.md` items 1 + 4 with
-#   explicit risk owner placeholder pending operator action. See the
-#   sub-issue spawned from issue #192 closure for the operator scope.
+#   PARTIALLY RESOLVED 2026-05-14 (issue #226): code-side infrastructure
+#   complete. The reusable workflow now (a) imports a curated reviewer
+#   keyring from the `GPG_REVIEWER_KEYS_ARMOR_BASE64` repo secret into
+#   a per-job `$KEYRING_DIR`, (b) passes `--keyring-dir` to the validator,
+#   and (c) the validator's new `check_keyring_present` +
+#   `check_coi_body_signature_verifies` checks gate the run with a new
+#   STRICT_GPG=1 fail-closed escalation (exit code 4). Operator's residual
+#   job: generate reviewer pubkeys + add the `GPG_REVIEWER_KEYS_ARMOR_BASE64`
+#   secret + populate the `fingerprint` column in the reviewer registry md.
+#   See `docs/governance/operator_gpg_keyring_setup.md` for the operator
+#   handoff workflow. Items 1 + 4 in `docs/governance/n3_known_limitations_20260510.md`
+#   are now PARTIALLY RESOLVED (code-side complete; awaits operator action).
 #
 # H2 / M1 (gh PR/review enforcement):
 #   RESOLVED 2026-05-14 (issue #192). The reusable workflow now
@@ -181,3 +188,10 @@ jobs:
     with:
       touched_files: ${{ needs.identify.outputs.files }}
       strict_gh: '1'
+      # Issue #226 H1+H4: fail-closed when keyring is missing or CoI
+      # body signature is absent. Set '0' to opt out for early-stage
+      # runs before the operator has provisioned the
+      # GPG_REVIEWER_KEYS_ARMOR_BASE64 secret. See
+      # docs/governance/operator_gpg_keyring_setup.md.
+      strict_gpg: '1'
+    secrets: inherit

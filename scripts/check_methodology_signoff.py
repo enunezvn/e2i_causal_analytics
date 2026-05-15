@@ -26,6 +26,15 @@ Exit codes:
   rather than warn — otherwise a reviewer can self-declare clean while
   authoring/reviewing PRs via the GitHub web UI (no git-attributable commit).
   Local devs without ``--strict-gh`` retain the warn-only back-compat path.
+* ``4`` — strict-gpg policy violation (issue #226 H1+H4): ``--strict-gpg``
+  (or ``STRICT_GPG=1`` in the environment) was set AND the keyring
+  pre-check failed (keyring directory missing, empty, or contains zero
+  imported public keys). Reserved exit code so log scrapers can distinguish
+  "keyring not provisioned on this runner" from generic validation failures.
+  The CI workflow ``.github/workflows/methodology-signoff-validator.yml``
+  provisions the keyring from the ``GPG_REVIEWER_KEYS_ARMOR_BASE64`` repo
+  secret BEFORE invoking the validator; this exit code fires when the
+  secret is unset or the import produced no usable keys.
 
 The CI workflow ``.github/workflows/methodology_signoff_guard.yml`` calls this
 script with the ``--repo-root`` flag so it can be exercised from any
@@ -84,6 +93,36 @@ NEW MED (iter-3) — future-dated artifacts:
     1 day ahead of ``today``. The 1-day tolerance covers TZ-skew at the day
     boundary. Prevents reviewers from pre-dating sign-offs to evade the
     max-age window.
+
+Issue #226 H1+H4 — GPG keyring bridge code (2026-05-14):
+    Adds the code-side infrastructure for the registry-pinned GPG keyring
+    (H1) AND CoI body signature verification (H4). After this PR ships,
+    operator's residual job is one secret addition + populating the
+    fingerprint column in the reviewer registry markdown.
+
+    Three new validator-side surfaces:
+
+    1. ``ReviewerInfo.fingerprint`` (parsed from the new
+       ``fingerprint`` registry column). Stripped of internal whitespace
+       so the raw 40-char hex fingerprint can be passed to gpg's ``--with-
+       fingerprint`` filter at validation time.
+    2. ``check_keyring_present`` (called when ``--keyring-dir`` is set):
+       PASSES when the keyring directory exists AND ``gpg --list-keys``
+       reports at least one key. WARNs in default mode + FAILs under
+       ``--strict-gpg`` (exit code 4).
+    3. ``check_coi_body_signature_verifies`` (H4): verifies the CoI
+       declaration markdown body against an embedded ASCII-armor block
+       (or a sibling ``<coi_path>.asc`` detached signature) using
+       ``gpg --homedir <keyring_dir> --verify``. PASSES when no signature
+       is present in default mode + FAILs under ``--strict-gpg``.
+
+    Strategy for keyring distribution (defendable to codex): secret-encoded
+    ASCII-armor bundle. Operator generates reviewer pubkeys offline,
+    concatenates ASCII-armor exports into a single multi-key blob,
+    base64-encodes it, and adds as repo secret
+    ``GPG_REVIEWER_KEYS_ARMOR_BASE64``. CI workflow imports that into a
+    per-job ``$KEYRING_DIR`` and passes ``--keyring-dir`` to the
+    validator. See ``docs/governance/operator_gpg_keyring_setup.md``.
 """
 
 from __future__ import annotations
@@ -160,12 +199,23 @@ class CheckResult:
             (git log) but the caller (CI) MUST decide whether to fail-
             closed when this flag is set. A CRITICAL warning is logged
             in the detail string when this flag is True (iter-3 M1).
+        signature_check_skipped: Issue #226 H4 — True when a cryptographic
+            signature check passed in advisory mode (no signature found
+            but the operator has not opted into STRICT_GPG=1). Mirrors
+            ``provenance_check_skipped`` semantically: the check passed
+            on the available evidence, but the caller (CI) MUST decide
+            whether to fail-closed when this flag is set. Distinct from
+            ``provenance_check_skipped`` so log scrapers / strict-mode
+            policy logic can distinguish "gh provenance not confirmed"
+            from "no CoI body signature pinned". A WARN is logged in the
+            detail string when this flag is True.
     """
 
     name: str
     ok: bool
     detail: str = ""
     provenance_check_skipped: bool = False
+    signature_check_skipped: bool = False
 
 
 @dataclasses.dataclass
@@ -179,12 +229,20 @@ class ReviewerInfo:
     ``"alice@example.com, alice@oldjob.com"``). Each alias is checked by
     the selection rule's ``git log --author=<email>`` filter so a reviewer
     who committed under an alternate identity is still detected.
+
+    Issue #226 H1: ``fingerprint`` is the registered GPG key fingerprint
+    (40-char hex, no spaces — internal whitespace from the registry cell
+    is stripped at parse time). Empty string when the registry row carries
+    a placeholder (``<TBD ...>``) or omits the cell. Consumed by the H1
+    sign-off-key-binding check and by ``check_keyring_present`` when the
+    workflow exports STRICT_GPG=1.
     """
 
     handle: str
     email: str
     status: str
     emails: tuple[str, ...] = ()
+    fingerprint: str = ""
 
 
 # --------------------------------------------------------------------------- #
@@ -200,7 +258,58 @@ _REGISTRY_HEADERS = (
     "date_added",
     "areas_of_expertise",
     "status",
+    "fingerprint",
 )
+
+# Tokens that indicate the fingerprint cell is an operator-fillable
+# placeholder (NOT a real GPG fingerprint). When the parsed value matches
+# any of these (case-insensitive substring), ReviewerInfo.fingerprint is
+# set to the empty string so the H1 keyring check downstream knows to
+# treat the row as "no fingerprint pinned yet".
+_FINGERPRINT_PLACEHOLDER_TOKENS: tuple[str, ...] = (
+    "<tbd",
+    "<placeholder",
+    "<populated",
+    "tbd ",
+    "n/a",
+    "none",
+)
+
+
+def _normalize_fingerprint(raw: str) -> str:
+    """Return the canonical 40-char hex fingerprint, or '' for placeholders.
+
+    Strips:
+      * Surrounding markdown emphasis / backticks (``_`` ``*`` `` ` ``).
+      * All internal whitespace (operators sometimes paste fingerprints
+        with the conventional space-every-4-chars formatting).
+      * The ``0x`` prefix if present.
+
+    Returns:
+      * The uppercased hex string when the result is exactly 40 hex chars.
+      * The empty string when the cell matches a placeholder pattern OR
+        cannot be parsed as a fingerprint. The caller (the keyring check)
+        treats empty as "not pinned" rather than as a hard failure so
+        registry rows can be added incrementally.
+    """
+
+    cleaned = raw.strip().strip("_*`").strip()
+    if not cleaned:
+        return ""
+    lowered = cleaned.lower()
+    for token in _FINGERPRINT_PLACEHOLDER_TOKENS:
+        if token in lowered:
+            return ""
+    # Strip whitespace and a leading 0x; uppercase.
+    no_ws = re.sub(r"\s+", "", cleaned)
+    if no_ws.lower().startswith("0x"):
+        no_ws = no_ws[2:]
+    if re.fullmatch(r"[0-9A-Fa-f]{40}", no_ws):
+        return no_ws.upper()
+    # Any other shape is not a usable fingerprint — return empty so the
+    # downstream check treats the row as "no fingerprint pinned yet"
+    # rather than failing the whole registry parse.
+    return ""
 
 
 def parse_registry(registry_path: Path) -> List[ReviewerInfo]:
@@ -212,6 +321,20 @@ def parse_registry(registry_path: Path) -> List[ReviewerInfo]:
     Raises:
         FileNotFoundError if the registry does not exist.
         ValueError if the table headers do not match the expected schema.
+
+    Issue #226 H1 schema migration: the registry now includes a
+    ``fingerprint`` column (8th cell). Rows whose fingerprint cell is a
+    placeholder (``<TBD ...>``, ``<populated by operator>``, etc.) are
+    parsed with ``ReviewerInfo.fingerprint=""``; the H1 keyring-binding
+    check treats empty as "not pinned" (warns in default mode, FAILs
+    under STRICT_GPG=1 only when ``check_keyring_present`` is also
+    failing — i.e. the operator hasn't completed the handoff).
+
+    Back-compat: legacy registries (without the fingerprint column) are
+    still parsed best-effort. The header-equality check fails on the
+    8-column header, so a 7-column registry is rejected — that is the
+    intended behavior so operators are forced to migrate the schema in
+    lockstep with the workflow change.
     """
 
     if not registry_path.is_file():
@@ -250,12 +373,17 @@ def parse_registry(registry_path: Path) -> List[ReviewerInfo]:
             # emails tuple for the selection rule's git-log probes.
             aliases = tuple(a.strip() for a in re.split(r"[,;]", email_cell) if a.strip())
             primary = aliases[0] if aliases else email_cell
+            # Issue #226 H1: parse the fingerprint cell (8th column).
+            # Placeholder values normalize to "" so the keyring check
+            # downstream knows the row hasn't been operator-populated yet.
+            fingerprint = _normalize_fingerprint(cells[7])
             rows.append(
                 ReviewerInfo(
                     handle=handle,
                     email=primary,
                     status=status,
                     emails=aliases or (email_cell,),
+                    fingerprint=fingerprint,
                 )
             )
     return rows
@@ -1355,6 +1483,289 @@ def check_signature_verifies(
 
 
 # --------------------------------------------------------------------------- #
+# Issue #226 H1+H4 — GPG keyring presence + CoI body signature verification.
+# --------------------------------------------------------------------------- #
+
+
+def _gpg_list_keys_in_keyring(keyring_dir: Path) -> tuple[bool, int, str]:
+    """Return ``(ok, n_keys, detail)`` for ``gpg --homedir <dir> --list-keys``.
+
+    ``ok`` is True iff gpg returned 0 AND parsed at least one ``pub:``
+    record. ``n_keys`` is the count of ``pub:`` records (each public-key
+    primary). ``detail`` is the truncated combined stderr+stdout for
+    inclusion in CheckResult details.
+
+    When gpg is unavailable or the keyring path does not exist, returns
+    ``(False, 0, "<reason>")`` so the caller can decide whether to FAIL
+    (under STRICT_GPG=1) or WARN (default).
+    """
+
+    if shutil.which("gpg") is None:
+        return False, 0, "gpg binary not found on PATH"
+    if not keyring_dir.is_dir():
+        return False, 0, f"keyring directory does not exist: {keyring_dir}"
+
+    cmd = [
+        "gpg",
+        "--batch",
+        "--homedir",
+        str(keyring_dir),
+        "--list-keys",
+        "--with-colons",
+        "--keyid-format=long",
+    ]
+    try:
+        completed = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=15,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        return False, 0, f"gpg --list-keys failed: {exc}"
+
+    if completed.returncode != 0:
+        # gpg returns non-zero when the homedir is unreadable or the
+        # trustdb cannot be initialized; surface that as fail-with-detail.
+        stderr = (completed.stderr or "").strip()
+        return False, 0, f"gpg --list-keys returncode={completed.returncode}: {stderr[:200]}"
+
+    n_pub = sum(1 for line in (completed.stdout or "").splitlines() if line.startswith("pub:"))
+    if n_pub == 0:
+        return False, 0, "gpg --list-keys reports zero public keys in keyring"
+    return True, n_pub, f"{n_pub} public key(s) in keyring"
+
+
+def check_keyring_present(keyring_dir: Optional[Path]) -> CheckResult:
+    """H1: keyring directory exists AND contains at least one usable pubkey.
+
+    Behavior matrix (intentionally non-strict by default — operators
+    rolling out the keyring infra may have rows pinned in the registry
+    before the secret lands; we don't want to block every PR until both
+    sides are wired):
+
+    * ``keyring_dir is None``  → PASS with a WARN that the keyring is not
+      pinned. Default-mode validators (no STRICT_GPG) treat this as "the
+      operator is running locally without keyring infra — preserve back-
+      compat". CI workflows that provision the keyring MUST pass
+      ``--keyring-dir <path>`` so this branch never fires in CI.
+    * ``keyring_dir`` set BUT directory missing OR empty (zero keys) → FAIL
+      with explanatory detail. The caller (main()) escalates this to exit
+      code 4 only when STRICT_GPG=1; otherwise it's a logged failure but
+      the orchestrator continues. The ``provenance_check_skipped`` flag
+      is NOT set (we use it only for gh-skip — semantically distinct).
+    * ``keyring_dir`` set AND populated → PASS with key count.
+
+    The CheckResult name is ``keyring_present`` so log scrapers can
+    distinguish from ``signature_verifies`` (which is about a specific
+    artifact's signature).
+    """
+
+    if keyring_dir is None:
+        return CheckResult(
+            "keyring_present",
+            True,
+            "WARN: --keyring-dir not set; keyring binding skipped (issue #226 H1)",
+        )
+
+    ok, n_keys, detail = _gpg_list_keys_in_keyring(keyring_dir)
+    if not ok:
+        return CheckResult(
+            "keyring_present",
+            False,
+            f"keyring at {keyring_dir} is missing/empty/unreadable: {detail}",
+        )
+    return CheckResult(
+        "keyring_present",
+        True,
+        f"keyring at {keyring_dir}: {detail}",
+    )
+
+
+_COI_INLINE_SIG_PATTERN = re.compile(
+    r"-----BEGIN PGP SIGNATURE-----.*?-----END PGP SIGNATURE-----",
+    re.DOTALL,
+)
+
+
+def _verify_coi_body_signature(
+    coi_path: Path,
+    keyring_dir: Optional[Path],
+) -> tuple[Optional[bool], str]:
+    """Run ``gpg --verify`` against the CoI declaration body.
+
+    Returns ``(ok, detail)`` where ``ok`` is:
+
+    * ``True``  — gpg verified the CoI body successfully.
+    * ``False`` — gpg ran AND verification failed.
+    * ``None``  — there is no signature to verify (no inline armor block,
+                  no sibling ``<coi_path>.asc`` detached signature). The
+                  caller (the H4 check) treats None as "advisory pass" in
+                  default mode and FAIL under STRICT_GPG=1.
+
+    Two signature-discovery paths:
+
+    1. **Inline ASCII armor**: an embedded
+       ``-----BEGIN PGP SIGNATURE-----...-----END PGP SIGNATURE-----``
+       block somewhere in the CoI markdown body. Verified against the
+       body content UP TO (but not including) the first signature block
+       (mirrors the sign-off doc's payload-extraction convention).
+    2. **Sibling detached sig**: a file at ``<coi_path>.asc`` containing
+       a detached signature for the CoI body. Verified against the FULL
+       CoI body (no payload truncation).
+
+    Inline takes precedence when both are present (the inline-armor case
+    is the operator-friendly default; the sibling-file case is for
+    reviewers who prefer git-attestation-style detached sigs).
+    """
+
+    if not coi_path.is_file():
+        return None, f"CoI body not found at {coi_path}"
+
+    if shutil.which("gpg") is None:
+        return None, "gpg binary not found on PATH"
+
+    coi_text = coi_path.read_text(encoding="utf-8")
+    inline_match = _COI_INLINE_SIG_PATTERN.search(coi_text)
+
+    import tempfile
+
+    if inline_match is not None:
+        armor_block = inline_match.group(0)
+        # Payload = body text up to the first armor block.
+        payload = coi_text[: inline_match.start()]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            sig_path = tmpdir_path / "coi.sig.asc"
+            payload_path = tmpdir_path / "coi.payload.txt"
+            sig_path.write_text(armor_block, encoding="utf-8")
+            payload_path.write_text(payload, encoding="utf-8")
+
+            cmd = ["gpg", "--batch", "--status-fd=1"]
+            if keyring_dir is not None:
+                cmd.extend(["--homedir", str(keyring_dir)])
+            cmd.extend(["--verify", str(sig_path), str(payload_path)])
+
+            try:
+                completed = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=30,
+                )
+            except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+                return False, f"gpg --verify (inline) failed: {exc}"
+
+            ok = completed.returncode == 0
+            combined = (completed.stderr or "") + (completed.stdout or "")
+            return ok, "inline-armor: " + (combined.strip() or f"rc={completed.returncode}")
+
+    # Inline not found — check for sibling .asc.
+    sibling = coi_path.with_suffix(coi_path.suffix + ".asc")
+    if sibling.is_file():
+        cmd = ["gpg", "--batch", "--status-fd=1"]
+        if keyring_dir is not None:
+            cmd.extend(["--homedir", str(keyring_dir)])
+        cmd.extend(["--verify", str(sibling), str(coi_path)])
+
+        try:
+            completed = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+            return False, f"gpg --verify (sibling .asc) failed: {exc}"
+
+        ok = completed.returncode == 0
+        combined = (completed.stderr or "") + (completed.stdout or "")
+        return ok, "sibling-asc: " + (combined.strip() or f"rc={completed.returncode}")
+
+    return None, "no inline PGP block AND no sibling <coi>.asc detached signature"
+
+
+def check_coi_body_signature_verifies(
+    doc_text: str,
+    repo_root: Path,
+    keyring_dir: Optional[Path] = None,
+) -> CheckResult:
+    """H4: cryptographically verify the CoI declaration body.
+
+    The sign-off doc points at a CoI declaration via the
+    ``- **CoI document:** <path>`` field (extracted by ``extract_coi_path``).
+    This check resolves that path under ``repo_root`` and runs
+    ``gpg --verify`` against either:
+
+    * an inline ASCII-armor signature block embedded in the CoI body
+      (the operator-friendly default), OR
+    * a sibling ``<coi>.asc`` detached signature file.
+
+    Behavior matrix (matches ``check_keyring_present`` semantics):
+
+    * Path missing / unreadable → FAIL with detail (the H4 sub-check 3 in
+      ``check_coi_referenced`` already covers SHA resolution; this check
+      additionally requires the body to be readable from the working
+      tree). Failing the existing ``coi_referenced`` check already blocks
+      the PR; this is defense-in-depth.
+    * Path readable but no signature found → ADVISORY PASS in default
+      mode (mirrors the sign-off doc's ``--require-signature=False`` path
+      so existing CoI declarations without sigs still validate locally).
+      The caller (main()) escalates to FAIL under STRICT_GPG=1.
+    * Path readable AND signature present AND verifies → PASS.
+    * Path readable AND signature present AND does NOT verify → FAIL.
+
+    The ``signature_check_skipped`` flag is set when the advisory-pass
+    branch fires (no signature found): STRICT_GPG=1 callers fail-closed
+    on missing CoI signatures the same way STRICT_GH=1 fails on missing
+    gh provenance. Distinct from ``provenance_check_skipped`` so log
+    scrapers can distinguish the two failure classes.
+    """
+
+    coi_path_str = extract_coi_path(doc_text)
+    if coi_path_str is None or "<github_handle>" in coi_path_str or coi_path_str == "":
+        return CheckResult(
+            "coi_body_signature_verifies",
+            False,
+            f"CoI path field missing or placeholder: {coi_path_str!r}",
+        )
+
+    coi_full = repo_root / coi_path_str
+    if not coi_full.is_file():
+        return CheckResult(
+            "coi_body_signature_verifies",
+            False,
+            f"CoI body not found at resolved path: {coi_full}",
+        )
+
+    ok, detail = _verify_coi_body_signature(coi_full, keyring_dir=keyring_dir)
+    if ok is True:
+        return CheckResult(
+            "coi_body_signature_verifies",
+            True,
+            f"gpg --verify OK on CoI body: {detail[:200]}",
+        )
+    if ok is False:
+        return CheckResult(
+            "coi_body_signature_verifies",
+            False,
+            f"gpg --verify FAILED on CoI body: {detail[:500]}",
+        )
+    # ok is None → no signature found; advisory PASS but flag it so
+    # STRICT_GPG callers fail-closed.
+    return CheckResult(
+        "coi_body_signature_verifies",
+        True,
+        f"WARN: no CoI body signature found ({detail[:200]}); H4 advisory mode",
+        signature_check_skipped=True,
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Orchestrator
 # --------------------------------------------------------------------------- #
 
@@ -1408,6 +1819,20 @@ def check_signoff(
             coi_text = coi_full.read_text(encoding="utf-8")
     results.append(check_selection_rule(doc_text, repo_root, registry, coi_text=coi_text))
     results.append(check_signature_verifies(doc_path, require_signature, keyring_dir=keyring_dir))
+    # Issue #226 H1: keyring presence pre-check. Always runs so the report
+    # surfaces keyring state even in advisory mode; STRICT_GPG=1 escalates
+    # a missing/empty keyring to exit code 4 in main().
+    results.append(check_keyring_present(keyring_dir))
+    # Issue #226 H4: CoI body signature verification. Runs unconditionally
+    # so its result is in the report; advisory pass when no sig is found
+    # (signature_check_skipped=True triggers fail-closed under STRICT_GPG=1).
+    results.append(
+        check_coi_body_signature_verifies(
+            doc_text,
+            repo_root=repo_root,
+            keyring_dir=keyring_dir,
+        )
+    )
     return results
 
 
@@ -1496,6 +1921,21 @@ def build_parser() -> argparse.ArgumentParser:
             "#192 H2/M1 fail-closed enforcement."
         ),
     )
+    parser.add_argument(
+        "--strict-gpg",
+        action="store_true",
+        default=None,
+        help=(
+            "Fail-closed when (a) the keyring directory passed via "
+            "--keyring-dir is missing/empty/unreadable OR (b) any check "
+            "has signature_check_skipped=True (no CoI body signature "
+            "found). The validator returns exit code 4 in that case. "
+            "Defaults to OFF for back-compat with local dev runs; CI "
+            "workflows that provision the keyring MUST set this flag (or "
+            "export STRICT_GPG=1, which the CLI also honors). Issue "
+            "#226 H1+H4 fail-closed enforcement."
+        ),
+    )
     return parser
 
 
@@ -1516,6 +1956,27 @@ def _resolve_strict_gh(cli_flag: Optional[bool]) -> bool:
     if cli_flag is True:
         return True
     raw = os.environ.get("STRICT_GH", "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def _resolve_strict_gpg(cli_flag: Optional[bool]) -> bool:
+    """Resolve the strict-gpg policy: CLI flag wins; falls back to env var.
+
+    Issue #226 H1+H4: mirrors ``_resolve_strict_gh`` semantics. When
+    neither the CLI flag nor the env var is set, the validator preserves
+    the historical advisory behavior (keyring-missing and CoI-sig-missing
+    are PASS-with-WARN). CI workflows that provision the keyring via the
+    ``GPG_REVIEWER_KEYS_ARMOR_BASE64`` secret MUST set ``--strict-gpg``
+    (or export ``STRICT_GPG=1``) so missing keyring / missing CoI body
+    signature become hard PR blocks (exit code 4) rather than warnings.
+
+    Truthy env values: ``1``, ``true``, ``yes``, ``on`` (case-insensitive).
+    Anything else (including absent / empty) defaults to OFF.
+    """
+
+    if cli_flag is True:
+        return True
+    raw = os.environ.get("STRICT_GPG", "").strip().lower()
     return raw in ("1", "true", "yes", "on")
 
 
@@ -1540,12 +2001,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     print(render_report(results))
 
-    # Generic validation failure path takes precedence over strict-gh — a
-    # selection-rule violation (ok=False) is exit 1 even if STRICT_GH=1 also
-    # would have triggered. This preserves the existing exit-code contract
-    # for the dominant failure mode and reserves exit 3 specifically for
-    # "everything else passed but provenance was not confirmed under strict
-    # mode" so log scrapers can distinguish the two failure classes.
+    # Generic validation failure path takes precedence over strict-gh AND
+    # strict-gpg — a selection-rule violation (ok=False) is exit 1 even if
+    # STRICT_GH=1 / STRICT_GPG=1 also would have triggered. This preserves
+    # the existing exit-code contract for the dominant failure mode and
+    # reserves exits 3 + 4 specifically for "everything else passed but
+    # provenance / keyring was not confirmed under strict mode" so log
+    # scrapers can distinguish the failure classes.
     if not all(r.ok for r in results):
         return 1
 
@@ -1562,6 +2024,32 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             file=sys.stderr,
         )
         return 3
+
+    # Issue #226 H1+H4 strict-gpg policy: exit 4 when either (a) the
+    # keyring pre-check would have failed but for advisory mode (we ran
+    # the full check above so a missing keyring already shows as ok=False
+    # and would have been caught by the exit-1 branch — but check
+    # ``signature_check_skipped`` for the H4 advisory-pass branch), OR
+    # (b) the CoI body sig check fired the advisory-pass branch
+    # (signature_check_skipped=True). Exit 4 is reserved to distinguish
+    # "keyring/CoI sig infra not provisioned" from generic validation
+    # failures so log scrapers can route the two failure classes.
+    strict_gpg = _resolve_strict_gpg(args.strict_gpg)
+    if strict_gpg and any(r.signature_check_skipped for r in results):
+        skipped = [r.name for r in results if r.signature_check_skipped]
+        print(
+            "FAIL: --strict-gpg policy is in effect (or STRICT_GPG=1 in env) "
+            "AND at least one check has signature_check_skipped=True. "
+            f"Skipped checks: {', '.join(skipped)}. "
+            "Provision the GPG keyring on the runner via the "
+            "GPG_REVIEWER_KEYS_ARMOR_BASE64 repo secret AND ensure CoI "
+            "declarations carry an inline armor signature OR a sibling "
+            "<coi>.asc detached signature. "
+            "See docs/governance/operator_gpg_keyring_setup.md and "
+            "docs/governance/n3_known_limitations_20260510.md items 1+4.",
+            file=sys.stderr,
+        )
+        return 4
 
     return 0
 
