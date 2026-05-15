@@ -87,7 +87,11 @@ def write_adaptive_verdicts_sidecar(state: Dict[str, Any]) -> Path | None:
             "adaptive_verdicts": verdicts,
         }
         sidecar.write_text(json.dumps(payload, indent=2, default=str))
-        logger.info("Wrote adaptive-validity audit trail to %s", sidecar)
+        logger.info(
+            "Wrote adaptive-validity audit trail to %s (verdicts=%d)",
+            sidecar,
+            len(verdicts),
+        )
         return sidecar
     except Exception as exc:  # noqa: BLE001
         logger.warning("Failed to write adaptive-validity sidecar: %s", exc)

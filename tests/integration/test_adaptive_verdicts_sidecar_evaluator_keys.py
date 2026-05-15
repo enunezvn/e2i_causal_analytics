@@ -110,3 +110,33 @@ def test_sidecar_emits_none_for_evaluator_keys_when_disabled(tmp_path, monkeypat
         "evaluator_model",
     ):
         assert verdict[key] is None
+
+
+def test_sidecar_info_log_includes_verdict_count(tmp_path, monkeypatch, caplog):
+    """Plan layer4_evaluator_audit_consumer.md Task 3: operators need
+    verdict-count visibility in the INFO log, not just the path."""
+    monkeypatch.setenv("ADAPTIVE_VALIDITY_ARTIFACTS_DIR", str(tmp_path))
+    state = {
+        "experiment_id": "test-experiment",
+        "data_source": "synthetic",
+        "leakage_severity": "none",
+        "leaked_features": [],
+        "adaptive_flagged_features": ["f1", "f2"],
+        "adaptive_verdicts": [
+            _make_verdict_with_evaluator_keys(satisfied=True),
+            _make_verdict_with_evaluator_keys(satisfied=False),
+        ],
+    }
+    with caplog.at_level("INFO"):
+        path = write_adaptive_verdicts_sidecar(state)
+    assert path is not None
+    matching = [
+        r for r in caplog.records
+        if "Wrote adaptive-validity audit trail" in r.message
+    ]
+    assert len(matching) == 1, (
+        f"expected exactly one matching INFO line, got: "
+        f"{[r.message for r in matching]}"
+    )
+    assert str(path) in matching[0].message
+    assert "verdicts=2" in matching[0].message
