@@ -1427,6 +1427,203 @@ def test_list_collector_append_still_accepted(tmp_path: Path) -> None:
         sys.path[:] = old_path
 
 
+# ---------------------------------------------------------------------------
+# Codex-rescue pass-4: HIGH-9 (safe-spread Call shadow), HIGH-10 (output Name
+# reassigned in tuple-unpack), LOW-3 (non-|= AugAssign on output Name)
+# ---------------------------------------------------------------------------
+
+
+def test_safe_spread_shadowed_by_unknown_helper_fails_closed(
+    tmp_path: Path,
+) -> None:
+    """Codex pass-4 HIGH-9: ``feats = self.unknown_helper()`` shadows
+    the safe-spread tolerance — the helper's return value carries
+    keys the static walker cannot see. Pass-2 only fired on Dict
+    literal RHS; pass-4 widens to any non-trusted Call.
+    """
+    converter = textwrap.dedent(
+        """
+        from typing import Any
+
+        class C:
+            def _build_record(self) -> dict[str, Any]:
+                feats = self.unknown_helper()
+                record: dict[str, Any] = {"known": 1}
+                record.update(feats)
+                return record
+
+            def _compute_features(self) -> dict[str, Any]:
+                feats: dict[str, Any] = {}
+                feats["safe_feature"] = 1
+                return feats
+        """
+    ).strip()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "synthetic_converter.py").write_text(converter)
+    (tmp_path / "_synthetic_manifest.py").write_text(_SYNTHETIC_MANIFEST)
+
+    cohort = cmc.CohortConfig(
+        name="synthetic-shadow-call",
+        converter_rel_path="scripts/synthetic_converter.py",
+        discovery_funcs=(
+            cmc.DiscoveryFunc(
+                func_name="_build_record",
+                output_dict_names=("record",),
+            ),
+            cmc.DiscoveryFunc(
+                func_name="_compute_features",
+                output_dict_names=("feats",),
+            ),
+        ),
+        manifest_module="_synthetic_manifest",
+        manifest_attr="SYNTHETIC_TEST_FEATURES",
+    )
+
+    old_path = list(sys.path)
+    sys.path.insert(0, str(tmp_path))
+    try:
+        discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
+        # The unknown_helper Call rebinds `feats`; safe-spread tolerance
+        # is shadowed; ``record.update(feats)`` becomes unsupported.
+        assert disc_errs, (
+            f"feats = self.unknown_helper() must shadow safe-spread: "
+            f"{disc_errs}"
+        )
+        assert any("record.update(feats)" in e for e in disc_errs)
+    finally:
+        sys.path[:] = old_path
+
+
+def test_safe_spread_trusted_helper_does_not_shadow(tmp_path: Path) -> None:
+    """``feats = self._compute_features(...)`` is the canonical Optum
+    pattern. The helper name IS a sibling DiscoveryFunc, so the
+    binding is trusted and the safe-spread tolerance applies.
+    """
+    converter = textwrap.dedent(
+        """
+        from typing import Any
+
+        class C:
+            def _build_record(self) -> dict[str, Any]:
+                # Trusted: _compute_features is a known sibling DiscoveryFunc.
+                feats = self._compute_features()
+                record: dict[str, Any] = {"known": 1}
+                record.update(feats)
+                return record
+
+            def _compute_features(self) -> dict[str, Any]:
+                feats: dict[str, Any] = {}
+                feats["safe_feature"] = 1
+                return feats
+        """
+    ).strip()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "synthetic_converter.py").write_text(converter)
+    (tmp_path / "_synthetic_manifest.py").write_text(_SYNTHETIC_MANIFEST)
+
+    cohort = cmc.CohortConfig(
+        name="synthetic-trusted-helper",
+        converter_rel_path="scripts/synthetic_converter.py",
+        discovery_funcs=(
+            cmc.DiscoveryFunc(
+                func_name="_build_record",
+                output_dict_names=("record",),
+            ),
+            cmc.DiscoveryFunc(
+                func_name="_compute_features",
+                output_dict_names=("feats",),
+            ),
+        ),
+        manifest_module="_synthetic_manifest",
+        manifest_attr="SYNTHETIC_TEST_FEATURES",
+    )
+
+    old_path = list(sys.path)
+    sys.path.insert(0, str(tmp_path))
+    try:
+        discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
+        assert disc_errs == [], (
+            f"trusted helper binding must not shadow: {disc_errs}"
+        )
+        assert {"known", "safe_feature"}.issubset(discovered)
+    finally:
+        sys.path[:] = old_path
+
+
+def test_output_name_reassigned_in_tuple_unpack_fails_closed(
+    tmp_path: Path,
+) -> None:
+    """Codex pass-4 HIGH-10: ``record, *rest = some_call()`` rebinds
+    the output Name inside a tuple unpack. ``record`` is now an
+    unenumerable value. Must error.
+    """
+    converter = textwrap.dedent(
+        """
+        from typing import Any
+
+        class C:
+            def _build_record(self) -> dict[str, Any]:
+                record: dict[str, Any] = {"known": 1}
+                record, *rest = self.helper_returning_tuple()
+                return record
+        """
+    ).strip()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "synthetic_converter.py").write_text(converter)
+    (tmp_path / "_synthetic_manifest.py").write_text(_SYNTHETIC_MANIFEST)
+
+    cohort = _make_synthetic_cohort(
+        tmp_path, "scripts/synthetic_converter.py", "SYNTHETIC_TEST_FEATURES"
+    )
+
+    old_path = list(sys.path)
+    sys.path.insert(0, str(tmp_path))
+    try:
+        discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
+        assert disc_errs, "tuple-unpack rebinding output Name must error"
+    finally:
+        sys.path[:] = old_path
+
+
+@pytest.mark.parametrize("op_src", ["+=", "*="])
+def test_non_ior_augassign_on_output_fails_closed(
+    tmp_path: Path, op_src: str
+) -> None:
+    """Codex pass-4 LOW-3: ``record += {...}`` / ``record *= 2`` etc.
+    on an output Name are unsupported. Python's dict would raise
+    TypeError at runtime, but the static walker treats them as
+    unenumerable output-dict mutations and flags them.
+    """
+    converter = textwrap.dedent(
+        f"""
+        from typing import Any
+
+        class C:
+            def _build_record(self) -> dict[str, Any]:
+                record: dict[str, Any] = {{"known": 1}}
+                record {op_src} 2
+                return record
+        """
+    ).strip()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "synthetic_converter.py").write_text(converter)
+    (tmp_path / "_synthetic_manifest.py").write_text(_SYNTHETIC_MANIFEST)
+
+    cohort = _make_synthetic_cohort(
+        tmp_path, "scripts/synthetic_converter.py", "SYNTHETIC_TEST_FEATURES"
+    )
+
+    old_path = list(sys.path)
+    sys.path.insert(0, str(tmp_path))
+    try:
+        discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
+        assert disc_errs, (
+            f"non-|= AugAssign on output Name must error (op={op_src}): {disc_errs}"
+        )
+    finally:
+        sys.path[:] = old_path
+
+
 def test_subscript_read_in_if_expression_does_not_false_positive(
     tmp_path: Path,
 ) -> None:

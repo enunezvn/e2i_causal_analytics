@@ -531,8 +531,17 @@ class _ColumnDiscoveryVisitor(ast.NodeVisitor):
         module_iterables: dict[str, tuple[str, ...]],
         output_dict_names: tuple[str, ...],
         safe_spread_names: frozenset[str] = frozenset(),
+        trusted_helper_names: frozenset[str] = frozenset(),
     ):
         self.module_iterables = module_iterables
+        # Codex pass-4 HIGH-9: the names of the cohort's other
+        # DiscoveryFunc functions. When a safe-spread Name is bound
+        # via a Call to one of these helpers (e.g.,
+        # ``feats = self._compute_features(...)``), the binding is the
+        # trusted shape and the safe-spread tolerance applies. Any
+        # other assignment to a safe-spread Name inside the function
+        # is a shadow.
+        self.trusted_helper_names: frozenset[str] = trusted_helper_names
         # We track aliases as we go: any ``alias = <output>`` assignment
         # adds ``alias`` to the active output-dict name set so a
         # follow-up ``alias[...] = ...`` is treated as a write to the
@@ -652,8 +661,12 @@ class _ColumnDiscoveryVisitor(ast.NodeVisitor):
         # subscript target's Name is in ``output_dict_names``. Walk
         # nested Tuple/List target structures so the codex pass-2
         # HIGH-4 ``record["a"], record["b"] = 1, 2`` form is caught.
+        # ``in_tuple_unpack=False`` for top-level targets — the Name
+        # check inside _walk_assign_target only fires inside
+        # tuple/list unpacks (codex pass-4 HIGH-10), not on the
+        # ``record = {...}`` initialisation Name target.
         for tgt in node.targets:
-            self._walk_assign_target(tgt)
+            self._walk_assign_target(tgt, in_tuple_unpack=False)
         # Pattern B: <output> = { "literal_key": ..., ... } — collect
         # dict-literal keys only when the assignment target is a Name
         # in ``output_dict_names``.
@@ -690,21 +703,25 @@ class _ColumnDiscoveryVisitor(ast.NodeVisitor):
                 expr_text = "<dynamic alias to output dict>"
             self.unsupported_writes.append(expr_text)
         # Pattern D — shadowing the safe-spread name (codex pass-2
-        # HIGH-5): if a dict literal is assigned to a Name that is in
-        # ``safe_spread_names`` AND that Name is NOT itself in
-        # ``output_dict_names``, the safe-spread tolerance is being
-        # subverted (the spread arg's "trusted" identifier was
-        # rebound to a fresh local dict literal in this function).
-        # Record the offending key set so a subsequent
-        # ``output.update(feats)`` cannot launder unmapped columns
-        # through the safe-spread path.
-        if isinstance(node.value, ast.Dict):
-            for tgt in node.targets:
-                if (
-                    isinstance(tgt, ast.Name)
-                    and tgt.id in self.safe_spread_names
-                    and tgt.id not in self.output_dict_names
-                ):
+        # HIGH-5 + pass-4 HIGH-9): assignment to a safe-spread Name
+        # marks it shadowed UNLESS the assignment is the canonical
+        # "feats = self._compute_features(...)" pattern where the
+        # called method is one of the cohort's sibling DiscoveryFunc
+        # names. Other RHS shapes are conservatively treated as
+        # shadows:
+        #
+        #   feats = {"unmapped": 1}              (Dict literal → shadow)
+        #   feats = self.unknown_helper()        (Call to non-trusted → shadow)
+        #   feats = a or b                       (BoolOp → shadow)
+        #   feats = other_var                    (Name → shadow)
+        #   feats = self._compute_features(...)  (Call to trusted_helper_names → trusted)
+        for tgt in node.targets:
+            if (
+                isinstance(tgt, ast.Name)
+                and tgt.id in self.safe_spread_names
+                and tgt.id not in self.output_dict_names
+            ):
+                if not self._is_trusted_helper_binding(node.value):
                     self._local_shadow_safe_spread.add(tgt.id)
         # Pattern E — output-dict reassignment from unenumerable RHS
         # (codex-rescue pass-3 HIGH-7). ``record = dict.fromkeys(...)``,
@@ -732,23 +749,66 @@ class _ColumnDiscoveryVisitor(ast.NodeVisitor):
                 break
         self.generic_visit(node)
 
-    def _walk_assign_target(self, tgt: ast.expr) -> None:
+    def _walk_assign_target(self, tgt: ast.expr, in_tuple_unpack: bool = False) -> None:
         """Recursively look for ``<output>[...]`` subscript targets
         inside an assignment LHS. Top-level handling caught the simple
         case; this method covers Tuple, List, and Starred forms so the
         codex pass-2 HIGH-4 ``record["a"], record["b"] = 1, 2`` bypass
         is closed.
+
+        Codex pass-4 HIGH-10: also detect output-Name rebinding inside
+        tuple/list unpack, e.g., ``record, *rest = some_call()``.
+        The output Name as a tuple target reassigns the output to an
+        unenumerable value. The ``in_tuple_unpack`` flag distinguishes
+        the harmful inner-Name case from the top-level
+        ``record = {...}`` initialisation Name target (which is
+        handled by Pattern B + Pattern E in ``visit_Assign``).
         """
         if isinstance(tgt, ast.Subscript) and self._is_output_target(tgt):
             self._handle_subscript_assign(tgt)
             return
+        if (
+            in_tuple_unpack
+            and isinstance(tgt, ast.Name)
+            and tgt.id in self.output_dict_names
+        ):
+            # Output Name reassignment inside tuple/list unpack.
+            try:
+                expr_text = ast.unparse(tgt)
+            except Exception:  # pragma: no cover — defensive
+                expr_text = "<output dict reassigned in tuple unpack>"
+            self.unsupported_writes.append(expr_text)
+            return
         if isinstance(tgt, (ast.Tuple, ast.List)):
             for elt in tgt.elts:
-                self._walk_assign_target(elt)
+                self._walk_assign_target(elt, in_tuple_unpack=True)
             return
         if isinstance(tgt, ast.Starred):
-            self._walk_assign_target(tgt.value)
+            self._walk_assign_target(tgt.value, in_tuple_unpack=in_tuple_unpack)
             return
+
+    def _is_trusted_helper_binding(self, value: ast.expr | None) -> bool:
+        """True iff the assignment value is a Call to a method whose
+        ``.attr`` is in ``trusted_helper_names`` (codex pass-4 HIGH-9
+        safe-spread tolerance). Examples that return True:
+
+          * ``self._compute_features(...)``
+          * ``self._compute_features()``
+          * ``other_obj._compute_features(...)``
+
+        Examples that return False:
+
+          * Anything that isn't a Call.
+          * ``self.helper()`` where ``helper`` isn't in trusted_helper_names.
+          * ``some_func()`` (bare Call, no Attribute).
+        """
+        if not isinstance(value, ast.Call):
+            return False
+        if isinstance(value.func, ast.Attribute):
+            return value.func.attr in self.trusted_helper_names
+        if isinstance(value.func, ast.Name):
+            return value.func.id in self.trusted_helper_names
+        return False
 
     def _is_potential_alias_assign(self, node: ast.Assign) -> bool:
         """True iff the assignment looks like a dynamic alias to an
@@ -840,13 +900,22 @@ class _ColumnDiscoveryVisitor(ast.NodeVisitor):
         if isinstance(node.value, ast.Dict) and isinstance(node.target, ast.Name):
             if node.target.id in self.output_dict_names:
                 self._collect_dict_literal_keys(node.value)
-            # Codex pass-2 HIGH-5 (annotated form): shadowing a
-            # safe-spread name with a fresh local dict literal.
-            if (
-                node.target.id in self.safe_spread_names
-                and node.target.id not in self.output_dict_names
-            ):
-                self._local_shadow_safe_spread.add(node.target.id)
+        # Codex pass-2 HIGH-5 + pass-4 HIGH-9 (annotated form):
+        # shadowing a safe-spread name with anything other than the
+        # trusted helper Call binding.
+        if (
+            isinstance(node.target, ast.Name)
+            and node.target.id in self.safe_spread_names
+            and node.target.id not in self.output_dict_names
+            and not self._is_trusted_helper_binding(node.value)
+        ):
+            # ``feats: dict = ...`` where ... isn't a trusted helper
+            # Call — shadow. Note: ``feats: dict[str, Any] = {}`` is
+            # the empty-init in _compute_features itself, which is
+            # fine because in that scan ``feats`` IS in
+            # output_dict_names (the outer ``not in output_dict_names``
+            # guard prevents the shadow).
+            self._local_shadow_safe_spread.add(node.target.id)
         # Alias propagation (annotated form): ``alias: dict = record``.
         if (
             isinstance(node.value, ast.Name)
@@ -871,39 +940,50 @@ class _ColumnDiscoveryVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_AugAssign(self, node: ast.AugAssign) -> None:  # noqa: N802
-        # Codex-rescue pass-3 HIGH-8: ``record |= {...}`` (Python 3.9+
-        # dict-union AugAssign) ADDS keys to ``record``. Without
-        # handling, the AugAssign was a silent bypass.
+        # Codex-rescue pass-3 HIGH-8 + pass-4 LOW-3: AugAssign on an
+        # output-dict Name.
         #
-        # Supported shape:
+        # Supported shapes:
         #   * ``<output> |= {<literal_keys>: ...}`` — enumerate the
         #     literal keys (same as ``.update({...})``).
-        # Unsupported shapes:
-        #   * ``<output> |= other_dict_var`` — non-literal RHS,
-        #     statically unenumerable; record as unsupported.
-        #   * ``<output>[<key>] += value`` — Subscript target;
-        #     ``__iadd__`` on a value, not mutation of the dict
-        #     itself (no new key); skipped.
-        if (
-            isinstance(node.target, ast.Name)
-            and node.target.id in self.output_dict_names
-            and isinstance(node.op, ast.BitOr)
-        ):
-            if isinstance(node.value, ast.Dict):
-                self._collect_dict_literal_keys(node.value)
-            elif (
-                isinstance(node.value, ast.Name)
-                and node.value.id in self.safe_spread_names
-                and node.value.id not in self._local_shadow_safe_spread
-            ):
-                # ``record |= feats`` — same safe-spread semantics
-                # as ``record.update(feats)``.
-                pass
+        #   * ``<output> |= <safe-spread-name>`` — accept (mirror of
+        #     ``.update(feats)`` safe-spread).
+        #
+        # Unsupported shapes (all flagged as unsupported_writes):
+        #   * ``<output> |= other_dict_var`` (non-literal, non-safe RHS).
+        #   * ``<output> += <anything>``, ``<output> *= <anything>``,
+        #     and any other ``op`` ≠ ``BitOr`` on an output Name —
+        #     these would raise ``TypeError`` at runtime for ``dict``
+        #     but the static walker treats them as unenumerable
+        #     output-dict mutations and flags them (codex pass-4
+        #     LOW-3 fail-closed cleanup).
+        #
+        # AugAssign on Subscript targets (``record["a"] += 1``) is
+        # ``__iadd__`` on the value, not mutation of the dict; no
+        # new key is added → skipped.
+        if isinstance(node.target, ast.Name) and node.target.id in self.output_dict_names:
+            if isinstance(node.op, ast.BitOr):
+                if isinstance(node.value, ast.Dict):
+                    self._collect_dict_literal_keys(node.value)
+                elif (
+                    isinstance(node.value, ast.Name)
+                    and node.value.id in self.safe_spread_names
+                    and node.value.id not in self._local_shadow_safe_spread
+                ):
+                    pass
+                else:
+                    try:
+                        expr_text = ast.unparse(node)
+                    except Exception:  # pragma: no cover — defensive
+                        expr_text = "<output dict |= unenumerable>"
+                    self.unsupported_writes.append(expr_text)
             else:
+                # Other AugAssign operators on output Names — pass-4
+                # LOW-3 fail-closed surface.
                 try:
                     expr_text = ast.unparse(node)
                 except Exception:  # pragma: no cover — defensive
-                    expr_text = "<output dict |= unenumerable>"
+                    expr_text = "<output dict augassign non-|= operator>"
                 self.unsupported_writes.append(expr_text)
         self.generic_visit(node)
 
@@ -1330,6 +1410,12 @@ def discover_columns_for_cohort(
     safe_spread = frozenset(
         n for df in cohort.discovery_funcs for n in df.output_dict_names
     )
+    # Codex pass-4 HIGH-9: names of sibling DiscoveryFunc functions
+    # in this cohort. A binding ``feats = self._compute_features(...)``
+    # is the trusted safe-spread shape — the visitor accepts it as
+    # non-shadowing because ``_compute_features`` is itself scanned
+    # by a sibling pass.
+    trusted_helpers = frozenset(df.func_name for df in cohort.discovery_funcs)
 
     discovered: set[str] = set()
     for df in cohort.discovery_funcs:
@@ -1340,6 +1426,7 @@ def discover_columns_for_cohort(
             module_iterables,
             df.output_dict_names,
             safe_spread_names=safe_spread,
+            trusted_helper_names=trusted_helpers,
         )
         # Walk the function body. We intentionally skip the function
         # parameter signature — discovery is body-only.
