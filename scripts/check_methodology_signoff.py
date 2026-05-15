@@ -209,6 +209,15 @@ class CheckResult:
             policy logic can distinguish "gh provenance not confirmed"
             from "no CoI body signature pinned". A WARN is logged in the
             detail string when this flag is True.
+        signing_fingerprint: Issue #226 H1 (codex pass-1 HIGH-1) — the
+            40-char hex fingerprint extracted from gpg's
+            ``[GNUPG:] VALIDSIG`` status line when a signature
+            verification check succeeded. Populated by
+            ``check_signature_verifies`` (sign-off doc) and
+            ``check_coi_body_signature_verifies`` (CoI body); consumed
+            by ``check_signing_fingerprint_matches_registry`` to bind
+            the signature to a registered reviewer. None when the
+            corresponding verify check did NOT pass.
     """
 
     name: str
@@ -216,6 +225,7 @@ class CheckResult:
     detail: str = ""
     provenance_check_skipped: bool = False
     signature_check_skipped: bool = False
+    signing_fingerprint: Optional[str] = None
 
 
 @dataclasses.dataclass
@@ -1198,6 +1208,34 @@ def check_signature_present(doc_text: str) -> CheckResult:
     )
 
 
+_VALIDSIG_PATTERN = re.compile(
+    r"^\[GNUPG:\]\s+VALIDSIG\s+(?P<fpr>[0-9A-F]{40})\b",
+    re.MULTILINE,
+)
+
+
+def _extract_validsig_fingerprint(gpg_status_output: str) -> Optional[str]:
+    """Return the 40-char hex fingerprint from a ``[GNUPG:] VALIDSIG`` line.
+
+    Issue #226 codex pass-1 HIGH-1: the validator must bind the verified
+    signature to a registered reviewer fingerprint. ``gpg --status-fd=1``
+    emits a ``[GNUPG:] VALIDSIG <fingerprint> <date> ...`` line ONLY when
+    the signature verifies cryptographically AND the signing key is
+    available in the keyring (i.e. equivalent to gpg returning 0).
+
+    Returns the uppercased 40-char hex string, or None when no
+    VALIDSIG line is present (verification failed OR gpg version too
+    old to emit the line in this format — in either case fingerprint
+    pinning cannot be evaluated and the caller treats this as a
+    fail/skip per the strict-gpg policy).
+    """
+
+    match = _VALIDSIG_PATTERN.search(gpg_status_output)
+    if match is None:
+        return None
+    return match.group("fpr").upper()
+
+
 def _extract_pgp_armor_block(doc_text: str) -> Optional[str]:
     """Return the first complete PGP armor block from doc_text, or None.
 
@@ -1230,12 +1268,20 @@ def _verify_pgp_signature(
     doc_path: Path,
     armor_block: str,
     keyring_dir: Optional[Path] = None,
-) -> tuple[bool, str]:
+) -> tuple[bool, str, Optional[str]]:
     """Run ``gpg --verify`` against the armored block and the doc payload.
 
-    Returns ``(ok, detail)``. ``ok`` is True iff gpg returns 0. The detail
-    string contains gpg's stderr (which is what gpg writes verification
-    output to).
+    Returns ``(ok, detail, signing_fingerprint)``. ``ok`` is True iff gpg
+    returns 0. The detail string contains gpg's stderr+stdout (gpg writes
+    verification output to stderr, status messages to stdout).
+    ``signing_fingerprint`` is the 40-char hex VALIDSIG fingerprint when
+    verification succeeded, else None.
+
+    Issue #226 codex pass-1 HIGH-1: callers use the returned fingerprint
+    to bind the signature to a registry-pinned reviewer (separate
+    ``check_signing_fingerprint_matches_registry`` check). Returning
+    None on verification failure is intentional — pinning is
+    impossible without a known-good fingerprint.
 
     The "doc payload" is the body of the document up to (but not including)
     the ``## Cryptographic signature`` heading — see
@@ -1244,7 +1290,7 @@ def _verify_pgp_signature(
     """
 
     if shutil.which("gpg") is None:
-        return False, "gpg binary not found on PATH"
+        return False, "gpg binary not found on PATH", None
 
     doc_text = doc_path.read_text(encoding="utf-8")
     payload_marker = "## Cryptographic signature"
@@ -1276,14 +1322,19 @@ def _verify_pgp_signature(
                 timeout=30,
             )
         except FileNotFoundError:
-            return False, "gpg binary not found on PATH"
+            return False, "gpg binary not found on PATH", None
         except subprocess.TimeoutExpired:
-            return False, "gpg verification timed out"
+            return False, "gpg verification timed out", None
 
         ok = completed.returncode == 0
         # gpg writes verification output to stderr; status messages to stdout.
-        combined = (completed.stderr or "") + (completed.stdout or "")
-        return ok, combined.strip() or f"gpg returncode={completed.returncode}"
+        # Extract VALIDSIG fingerprint from --status-fd=1 stdout for issue
+        # #226 H1 fingerprint-pinning binding.
+        status_fd_output = completed.stdout or ""
+        signing_fpr = _extract_validsig_fingerprint(status_fd_output) if ok else None
+        combined = (completed.stderr or "") + status_fd_output
+        detail = combined.strip() or f"gpg returncode={completed.returncode}"
+        return ok, detail, signing_fpr
 
 
 def _verify_sigstore_bundle(
@@ -1447,9 +1498,17 @@ def check_signature_verifies(
         )
 
     if pgp_block is not None and has_gpg:
-        ok, detail = _verify_pgp_signature(doc_path, pgp_block, keyring_dir=keyring_dir)
+        ok, detail, signing_fpr = _verify_pgp_signature(
+            doc_path, pgp_block, keyring_dir=keyring_dir
+        )
         if ok:
-            return CheckResult("signature_verifies", True, f"gpg --verify OK: {detail[:200]}")
+            fpr_suffix = f" [signing_fpr={signing_fpr}]" if signing_fpr else ""
+            return CheckResult(
+                "signature_verifies",
+                True,
+                f"gpg --verify OK: {detail[:200]}{fpr_suffix}",
+                signing_fingerprint=signing_fpr,
+            )
         return CheckResult(
             "signature_verifies",
             False,
@@ -1540,26 +1599,31 @@ def _gpg_list_keys_in_keyring(keyring_dir: Path) -> tuple[bool, int, str]:
 def check_keyring_present(keyring_dir: Optional[Path]) -> CheckResult:
     """H1: keyring directory exists AND contains at least one usable pubkey.
 
-    Behavior matrix (intentionally non-strict by default — operators
-    rolling out the keyring infra may have rows pinned in the registry
-    before the secret lands; we don't want to block every PR until both
-    sides are wired):
+    Behavior matrix (codex pass-1 MED-1 fix: missing/empty keyring is
+    ADVISORY PASS with ``signature_check_skipped=True`` so the
+    STRICT_GPG=1 escalation path returns the reserved exit code 4 via
+    the same code path as the H4 sig-skip — NOT exit 1 via the generic
+    ``not all(r.ok)`` branch which would lose the routing signal):
 
-    * ``keyring_dir is None``  → PASS with a WARN that the keyring is not
-      pinned. Default-mode validators (no STRICT_GPG) treat this as "the
-      operator is running locally without keyring infra — preserve back-
-      compat". CI workflows that provision the keyring MUST pass
-      ``--keyring-dir <path>`` so this branch never fires in CI.
-    * ``keyring_dir`` set BUT directory missing OR empty (zero keys) → FAIL
-      with explanatory detail. The caller (main()) escalates this to exit
-      code 4 only when STRICT_GPG=1; otherwise it's a logged failure but
-      the orchestrator continues. The ``provenance_check_skipped`` flag
-      is NOT set (we use it only for gh-skip — semantically distinct).
-    * ``keyring_dir`` set AND populated → PASS with key count.
+    * ``keyring_dir is None``  → ADVISORY PASS with sig-skip flag.
+      Default-mode validators (no STRICT_GPG) treat this as "the
+      operator is running locally without keyring infra — preserve
+      back-compat". CI workflows that provision the keyring MUST pass
+      ``--keyring-dir <path>`` so this branch only fires when the
+      operator handoff secret has not yet been provisioned.
+    * ``keyring_dir`` set BUT directory missing OR empty (zero keys) →
+      ADVISORY PASS with sig-skip flag. STRICT_GPG=1 escalates to
+      exit 4 in main(); STRICT_GPG=0 yields a logged WARN but the
+      orchestrator continues so a partial rollout (keyring secret not
+      yet uploaded) doesn't break every PR.
+    * ``keyring_dir`` set AND populated → PASS with key count, no
+      sig-skip flag.
 
     The CheckResult name is ``keyring_present`` so log scrapers can
     distinguish from ``signature_verifies`` (which is about a specific
-    artifact's signature).
+    artifact's signature). Codex pass-1 MED-1 (2026-05-15): converted
+    fail-mode to advisory-skip so exit 4 is the deterministic outcome
+    under STRICT_GPG=1 instead of the generic exit 1.
     """
 
     if keyring_dir is None:
@@ -1567,14 +1631,17 @@ def check_keyring_present(keyring_dir: Optional[Path]) -> CheckResult:
             "keyring_present",
             True,
             "WARN: --keyring-dir not set; keyring binding skipped (issue #226 H1)",
+            signature_check_skipped=True,
         )
 
-    ok, n_keys, detail = _gpg_list_keys_in_keyring(keyring_dir)
+    ok, _n_keys, detail = _gpg_list_keys_in_keyring(keyring_dir)
     if not ok:
         return CheckResult(
             "keyring_present",
-            False,
-            f"keyring at {keyring_dir} is missing/empty/unreadable: {detail}",
+            True,
+            f"WARN: keyring at {keyring_dir} is missing/empty/unreadable: "
+            f"{detail}; H1 advisory mode",
+            signature_check_skipped=True,
         )
     return CheckResult(
         "keyring_present",
@@ -1592,10 +1659,10 @@ _COI_INLINE_SIG_PATTERN = re.compile(
 def _verify_coi_body_signature(
     coi_path: Path,
     keyring_dir: Optional[Path],
-) -> tuple[Optional[bool], str]:
+) -> tuple[Optional[bool], str, Optional[str]]:
     """Run ``gpg --verify`` against the CoI declaration body.
 
-    Returns ``(ok, detail)`` where ``ok`` is:
+    Returns ``(ok, detail, signing_fingerprint)`` where ``ok`` is:
 
     * ``True``  — gpg verified the CoI body successfully.
     * ``False`` — gpg ran AND verification failed.
@@ -1603,6 +1670,9 @@ def _verify_coi_body_signature(
                   no sibling ``<coi_path>.asc`` detached signature). The
                   caller (the H4 check) treats None as "advisory pass" in
                   default mode and FAIL under STRICT_GPG=1.
+
+    ``signing_fingerprint`` is the 40-char hex VALIDSIG fingerprint when
+    verification succeeded (used by H4 fingerprint pinning), else None.
 
     Two signature-discovery paths:
 
@@ -1621,10 +1691,10 @@ def _verify_coi_body_signature(
     """
 
     if not coi_path.is_file():
-        return None, f"CoI body not found at {coi_path}"
+        return None, f"CoI body not found at {coi_path}", None
 
     if shutil.which("gpg") is None:
-        return None, "gpg binary not found on PATH"
+        return None, "gpg binary not found on PATH", None
 
     coi_text = coi_path.read_text(encoding="utf-8")
     inline_match = _COI_INLINE_SIG_PATTERN.search(coi_text)
@@ -1657,11 +1727,14 @@ def _verify_coi_body_signature(
                     timeout=30,
                 )
             except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-                return False, f"gpg --verify (inline) failed: {exc}"
+                return False, f"gpg --verify (inline) failed: {exc}", None
 
             ok = completed.returncode == 0
-            combined = (completed.stderr or "") + (completed.stdout or "")
-            return ok, "inline-armor: " + (combined.strip() or f"rc={completed.returncode}")
+            status_fd_output = completed.stdout or ""
+            signing_fpr = _extract_validsig_fingerprint(status_fd_output) if ok else None
+            combined = (completed.stderr or "") + status_fd_output
+            detail = combined.strip() or f"rc={completed.returncode}"
+            return ok, "inline-armor: " + detail, signing_fpr
 
     # Inline not found — check for sibling .asc.
     sibling = coi_path.with_suffix(coi_path.suffix + ".asc")
@@ -1680,13 +1753,16 @@ def _verify_coi_body_signature(
                 timeout=30,
             )
         except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-            return False, f"gpg --verify (sibling .asc) failed: {exc}"
+            return False, f"gpg --verify (sibling .asc) failed: {exc}", None
 
         ok = completed.returncode == 0
-        combined = (completed.stderr or "") + (completed.stdout or "")
-        return ok, "sibling-asc: " + (combined.strip() or f"rc={completed.returncode}")
+        status_fd_output = completed.stdout or ""
+        signing_fpr = _extract_validsig_fingerprint(status_fd_output) if ok else None
+        combined = (completed.stderr or "") + status_fd_output
+        detail = combined.strip() or f"rc={completed.returncode}"
+        return ok, "sibling-asc: " + detail, signing_fpr
 
-    return None, "no inline PGP block AND no sibling <coi>.asc detached signature"
+    return None, "no inline PGP block AND no sibling <coi>.asc detached signature", None
 
 
 def check_coi_body_signature_verifies(
@@ -1742,12 +1818,14 @@ def check_coi_body_signature_verifies(
             f"CoI body not found at resolved path: {coi_full}",
         )
 
-    ok, detail = _verify_coi_body_signature(coi_full, keyring_dir=keyring_dir)
+    ok, detail, signing_fpr = _verify_coi_body_signature(coi_full, keyring_dir=keyring_dir)
     if ok is True:
+        fpr_suffix = f" [signing_fpr={signing_fpr}]" if signing_fpr else ""
         return CheckResult(
             "coi_body_signature_verifies",
             True,
-            f"gpg --verify OK on CoI body: {detail[:200]}",
+            f"gpg --verify OK on CoI body: {detail[:200]}{fpr_suffix}",
+            signing_fingerprint=signing_fpr,
         )
     if ok is False:
         return CheckResult(
@@ -1762,6 +1840,119 @@ def check_coi_body_signature_verifies(
         True,
         f"WARN: no CoI body signature found ({detail[:200]}); H4 advisory mode",
         signature_check_skipped=True,
+    )
+
+
+def check_signing_fingerprint_matches_registry(
+    doc_text: str,
+    registry: Sequence[ReviewerInfo],
+    signature_results: Sequence[CheckResult],
+) -> CheckResult:
+    """Issue #226 codex pass-1 HIGH-1: bind verified signatures to a
+    registry-pinned reviewer fingerprint.
+
+    Ensures that every successful signature verification (sign-off doc
+    AND CoI body) was made by the GPG key whose fingerprint is the
+    registered fingerprint for the sign-off's reviewer handle. Without
+    this binding, ``check_signature_verifies`` only proves the
+    signature was made by SOME key in ``$KEYRING_DIR`` — but the
+    keyring contains every reviewer's pubkey, so reviewer A's key
+    would verify a sign-off from reviewer B and the validator would
+    accept it.
+
+    Behavior matrix:
+
+    * No verify check produced a signing fingerprint (both either
+      failed or skipped) → ADVISORY PASS with
+      ``signature_check_skipped=True``. Pinning has nothing to evaluate.
+      STRICT_GPG=1 callers fail-closed downstream via the existing
+      sig-skip escalation.
+    * Reviewer handle missing OR not in registry → FAIL (the
+      orchestrator already evaluates ``reviewer_registered`` upstream;
+      this is defense-in-depth).
+    * Reviewer registered but ``fingerprint`` cell is empty (not yet
+      operator-populated; placeholder normalized to "") → ADVISORY
+      PASS with ``signature_check_skipped=True``. Same operator-
+      progressive-rollout semantics as missing keyring.
+    * Reviewer registered AND fingerprint pinned AND every verify-
+      check signing fingerprint matches → PASS.
+    * Any verify-check signing fingerprint does NOT match registered
+      fingerprint → FAIL with explicit detail listing which check
+      mismatched.
+
+    The check is intentionally evaluated AFTER the verify checks so it
+    has access to their signing-fingerprint outputs via
+    ``signature_results``. The orchestrator passes the full results
+    list; we filter to verify checks by name.
+    """
+
+    handle = extract_handle(doc_text)
+    if handle is None:
+        return CheckResult(
+            "signing_fingerprint_matches_registry",
+            False,
+            "cannot evaluate fingerprint pinning without reviewer handle",
+        )
+
+    matching = [row for row in registry if row.handle == handle]
+    if not matching:
+        return CheckResult(
+            "signing_fingerprint_matches_registry",
+            False,
+            f"reviewer {handle!r} not in registry — cannot resolve pinned fingerprint",
+        )
+    row = matching[0]
+    registered_fpr = row.fingerprint  # Already normalized to upper-hex or "".
+
+    # Collect (name, signing_fpr) tuples from the two verify checks
+    # that may have populated signing_fingerprint.
+    verify_check_names = ("signature_verifies", "coi_body_signature_verifies")
+    verify_results = [
+        (r.name, r.signing_fingerprint) for r in signature_results if r.name in verify_check_names
+    ]
+    fingerprints_seen = [(name, fpr) for name, fpr in verify_results if fpr is not None]
+
+    if not fingerprints_seen:
+        # No verify check produced a fingerprint (both either failed
+        # OR skipped). Pinning has nothing to evaluate; flag for
+        # STRICT_GPG=1 escalation via the existing sig-skip path.
+        return CheckResult(
+            "signing_fingerprint_matches_registry",
+            True,
+            f"WARN: no signing fingerprint available for {handle} (verify checks "
+            "did not produce VALIDSIG); pinning skipped",
+            signature_check_skipped=True,
+        )
+
+    if not registered_fpr:
+        # Reviewer is registered but the fingerprint cell is empty
+        # (operator hasn't completed the H1 handoff). ADVISORY PASS
+        # with sig-skip flag so STRICT_GPG=1 fails closed.
+        return CheckResult(
+            "signing_fingerprint_matches_registry",
+            True,
+            f"WARN: registered fingerprint for {handle} is empty (placeholder); "
+            f"signing fingerprints seen: {[fpr for _, fpr in fingerprints_seen]} — "
+            "operator must populate the fingerprint column",
+            signature_check_skipped=True,
+        )
+
+    mismatches = [(name, fpr) for name, fpr in fingerprints_seen if fpr != registered_fpr]
+    if mismatches:
+        mismatch_strs = [f"{name}: signed_by={fpr}" for name, fpr in mismatches]
+        return CheckResult(
+            "signing_fingerprint_matches_registry",
+            False,
+            f"signing fingerprint(s) do not match registered fingerprint for "
+            f"{handle} (registered={registered_fpr}). Mismatches: "
+            f"{'; '.join(mismatch_strs)}",
+        )
+
+    return CheckResult(
+        "signing_fingerprint_matches_registry",
+        True,
+        f"all {len(fingerprints_seen)} verify-check signing fingerprint(s) match "
+        f"registered fingerprint for {handle} ({registered_fpr})",
     )
 
 
@@ -1821,7 +2012,7 @@ def check_signoff(
     results.append(check_signature_verifies(doc_path, require_signature, keyring_dir=keyring_dir))
     # Issue #226 H1: keyring presence pre-check. Always runs so the report
     # surfaces keyring state even in advisory mode; STRICT_GPG=1 escalates
-    # a missing/empty keyring to exit code 4 in main().
+    # a missing keyring to exit code 4 in main() via signature_check_skipped.
     results.append(check_keyring_present(keyring_dir))
     # Issue #226 H4: CoI body signature verification. Runs unconditionally
     # so its result is in the report; advisory pass when no sig is found
@@ -1831,6 +2022,18 @@ def check_signoff(
             doc_text,
             repo_root=repo_root,
             keyring_dir=keyring_dir,
+        )
+    )
+    # Issue #226 H1 codex pass-1 HIGH-1: bind verified signatures to the
+    # registered reviewer fingerprint. MUST run AFTER the verify checks so
+    # signing_fingerprint values are populated. Without this, a verify-OK
+    # only proves "some key in the keyring signed it" — pinning is what
+    # makes the keyring + registry into reviewer-identity binding.
+    results.append(
+        check_signing_fingerprint_matches_registry(
+            doc_text,
+            registry,
+            results,
         )
     )
     return results

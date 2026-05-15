@@ -2090,33 +2090,50 @@ class TestKeyringPresentCheck:
     Issue #226 H1.
     """
 
-    def test_keyring_dir_none_warns(self):
+    def test_keyring_dir_none_advisory_pass_with_skip_flag(self):
+        """Codex pass-1 MED-1: missing keyring is ADVISORY pass + sig-skip.
+
+        STRICT_GPG=1 callers escalate to exit 4 via the sig-skip path
+        (NOT exit 1 via the generic ``not all(r.ok)`` branch — that
+        would lose the routing signal for log scrapers).
+        """
+
         result = cms.check_keyring_present(None)
         assert result.ok is True
         assert "WARN" in result.detail
         assert "issue #226" in result.detail
+        # Codex pass-1 MED-1: this MUST flag for STRICT_GPG escalation.
+        assert result.signature_check_skipped is True
 
-    def test_keyring_dir_missing_fails(self, tmp_path: Path):
+    def test_keyring_dir_missing_advisory_pass_with_skip_flag(self, tmp_path: Path):
+        """Codex pass-1 MED-1: missing-dir is now advisory pass + sig-skip."""
+
         nonexistent = tmp_path / "nope"
         result = cms.check_keyring_present(nonexistent)
-        assert result.ok is False
+        assert result.ok is True
         assert "missing" in result.detail or "does not exist" in result.detail
+        assert result.signature_check_skipped is True
 
-    def test_keyring_dir_empty_fails(self, tmp_path: Path):
+    def test_keyring_dir_empty_advisory_pass_with_skip_flag(self, tmp_path: Path):
+        """Codex pass-1 MED-1: empty keyring is now advisory pass + sig-skip."""
+
         if shutil.which("gpg") is None:
             pytest.skip("gpg not on PATH")
         empty = tmp_path / "empty_gpghome"
         empty.mkdir(mode=0o700)
         result = cms.check_keyring_present(empty)
-        assert result.ok is False
+        assert result.ok is True
         # gpg --list-keys against an empty homedir reports zero keys.
         assert "zero public keys" in result.detail or "missing" in result.detail
+        assert result.signature_check_skipped is True
 
     def test_keyring_dir_with_imported_key_passes(self, gpg_keyring: tuple[Path, str]):
         home, _ = gpg_keyring
         result = cms.check_keyring_present(home)
         assert result.ok is True, f"unexpected fail: {result.detail}"
         assert "1 public key" in result.detail or "key(s)" in result.detail
+        # Populated keyring → pinning is possible; MUST NOT flag for skip.
+        assert result.signature_check_skipped is False
 
 
 class TestCoIBodySignatureVerifies:
@@ -2301,6 +2318,196 @@ class TestCoIBodySignatureVerifies:
         )
         assert result.ok is True, f"sibling-asc verify failed: {result.detail}"
         assert "sibling-asc" in result.detail
+
+
+class TestExtractValidsigFingerprint:
+    """``_extract_validsig_fingerprint`` parses GNUPG status-fd output.
+
+    Issue #226 codex pass-1 HIGH-1: the fingerprint binding requires
+    the validator to extract the signing fingerprint from gpg's
+    ``--status-fd=1`` stream. The ``[GNUPG:] VALIDSIG <fpr> <date> ...``
+    line is emitted only when verification succeeds AND the signing key
+    is in the keyring.
+    """
+
+    def test_validsig_line_extracted(self):
+        output = (
+            "[GNUPG:] NEWSIG\n"
+            "[GNUPG:] KEY_CONSIDERED ABCDEF0123456789ABCDEF0123456789ABCDEF01 0\n"
+            "[GNUPG:] SIG_ID ID 2026-05-15 1700000000\n"
+            "[GNUPG:] GOODSIG ABCDEF01 Test\n"
+            "[GNUPG:] VALIDSIG ABCDEF0123456789ABCDEF0123456789ABCDEF01 2026-05-15 "
+            "1700000000 0 4 0 1 8 01 ABCDEF0123456789ABCDEF0123456789ABCDEF01\n"
+            "[GNUPG:] TRUST_UNDEFINED 0 pgp\n"
+        )
+        assert (
+            cms._extract_validsig_fingerprint(output) == "ABCDEF0123456789ABCDEF0123456789ABCDEF01"
+        )
+
+    def test_no_validsig_returns_none(self):
+        output = "[GNUPG:] NEWSIG\n[GNUPG:] BADSIG ABCD 'Test'\n"
+        assert cms._extract_validsig_fingerprint(output) is None
+
+    def test_empty_input_returns_none(self):
+        assert cms._extract_validsig_fingerprint("") is None
+
+    def test_validsig_lowercase_uppercased(self):
+        # gpg normally emits uppercase but be defensive.
+        output = (
+            "[GNUPG:] VALIDSIG abcdef0123456789abcdef0123456789abcdef01 2026-05-15 "
+            "1700000000 0 4 0 1 8 01 abcdef0123456789abcdef0123456789abcdef01\n"
+        )
+        assert cms._extract_validsig_fingerprint(output) is None  # regex requires uppercase
+
+    def test_validsig_among_other_lines(self):
+        output = (
+            "Random non-status output\n"
+            "Multiple lines\n"
+            "[GNUPG:] VALIDSIG ABCDEF0123456789ABCDEF0123456789ABCDEF01 ...\n"
+            "More noise\n"
+        )
+        assert (
+            cms._extract_validsig_fingerprint(output) == "ABCDEF0123456789ABCDEF0123456789ABCDEF01"
+        )
+
+
+class TestCheckSigningFingerprintMatchesRegistry:
+    """``check_signing_fingerprint_matches_registry`` binds the verified
+    signature to a registered reviewer fingerprint.
+
+    Issue #226 codex pass-1 HIGH-1: without this binding, any key in
+    the keyring can verify any reviewer's sign-off — the keyring +
+    registry combo gives reviewer-identity binding only when the
+    fingerprint comparison is enforced.
+    """
+
+    @staticmethod
+    def _make_registry(handle: str, fingerprint: str = "") -> list:
+        return [
+            cms.ReviewerInfo(
+                handle=handle,
+                email=f"{handle}@example.com",
+                status="active",
+                emails=(f"{handle}@example.com",),
+                fingerprint=fingerprint,
+            ),
+        ]
+
+    @staticmethod
+    def _make_doc_text(handle: str = "alice") -> str:
+        return f"# Sign-off\n## Reviewer\n- **GitHub handle:** @{handle}\n"
+
+    def test_no_signing_fingerprints_advisory_pass(self):
+        """Both verify checks failed/skipped → ADVISORY pass + sig-skip."""
+
+        registry = self._make_registry("alice", "ABCDEF0123456789ABCDEF0123456789ABCDEF01")
+        # Verify checks failed → no signing_fingerprint populated.
+        signature_results = [
+            cms.CheckResult("signature_verifies", False, "FAILED"),
+            cms.CheckResult("coi_body_signature_verifies", False, "FAILED"),
+        ]
+        result = cms.check_signing_fingerprint_matches_registry(
+            self._make_doc_text("alice"), registry, signature_results
+        )
+        assert result.ok is True
+        assert result.signature_check_skipped is True
+        assert "no signing fingerprint available" in result.detail
+
+    def test_registered_fingerprint_empty_advisory_pass(self):
+        """Reviewer registered but fingerprint cell empty → advisory pass + sig-skip.
+
+        The operator hasn't completed the fingerprint-population step
+        yet. Don't break PRs but flag for STRICT_GPG=1 escalation.
+        """
+
+        registry = self._make_registry("alice", "")  # placeholder
+        signature_results = [
+            cms.CheckResult(
+                "signature_verifies",
+                True,
+                "ok",
+                signing_fingerprint="ABCDEF0123456789ABCDEF0123456789ABCDEF01",
+            ),
+        ]
+        result = cms.check_signing_fingerprint_matches_registry(
+            self._make_doc_text("alice"), registry, signature_results
+        )
+        assert result.ok is True
+        assert result.signature_check_skipped is True
+        assert "registered fingerprint" in result.detail.lower()
+        assert "empty" in result.detail.lower() or "placeholder" in result.detail.lower()
+
+    def test_signing_fingerprint_matches_passes(self):
+        """Registered fingerprint matches the signing fingerprint → PASS."""
+
+        fp = "ABCDEF0123456789ABCDEF0123456789ABCDEF01"
+        registry = self._make_registry("alice", fp)
+        signature_results = [
+            cms.CheckResult("signature_verifies", True, "ok", signing_fingerprint=fp),
+        ]
+        result = cms.check_signing_fingerprint_matches_registry(
+            self._make_doc_text("alice"), registry, signature_results
+        )
+        assert result.ok is True
+        assert result.signature_check_skipped is False
+        assert "match" in result.detail
+
+    def test_signing_fingerprint_mismatch_fails(self):
+        """Wrong key signed it → FAIL with explicit detail.
+
+        Load-bearing pin: this is the WHOLE POINT of the fingerprint-
+        binding check. Without it, reviewer A's key would verify
+        reviewer B's sign-off because both keys live in the same
+        $KEYRING_DIR.
+        """
+
+        registered = "ABCDEF0123456789ABCDEF0123456789ABCDEF01"
+        attacker = "1111111111111111111111111111111111111111"
+        registry = self._make_registry("alice", registered)
+        signature_results = [
+            cms.CheckResult("signature_verifies", True, "ok", signing_fingerprint=attacker),
+        ]
+        result = cms.check_signing_fingerprint_matches_registry(
+            self._make_doc_text("alice"), registry, signature_results
+        )
+        assert result.ok is False
+        assert "do not match" in result.detail
+        assert registered in result.detail
+        assert attacker in result.detail
+
+    def test_coi_body_signing_fingerprint_also_pinned(self):
+        """The CoI body sig fingerprint must ALSO match — pinning covers BOTH checks."""
+
+        registered = "ABCDEF0123456789ABCDEF0123456789ABCDEF01"
+        attacker = "2222222222222222222222222222222222222222"
+        registry = self._make_registry("alice", registered)
+        signature_results = [
+            cms.CheckResult("signature_verifies", True, "ok", signing_fingerprint=registered),
+            # CoI body signed by a DIFFERENT key (e.g. a stale key the
+            # reviewer rotated away from but didn't update the registry).
+            cms.CheckResult(
+                "coi_body_signature_verifies",
+                True,
+                "ok",
+                signing_fingerprint=attacker,
+            ),
+        ]
+        result = cms.check_signing_fingerprint_matches_registry(
+            self._make_doc_text("alice"), registry, signature_results
+        )
+        assert result.ok is False
+        assert "coi_body_signature_verifies" in result.detail
+
+    def test_unknown_handle_fails(self):
+        registry = self._make_registry("alice", "ABCD" * 10)
+        signature_results = [
+            cms.CheckResult("signature_verifies", True, "ok", signing_fingerprint="ABCD" * 10),
+        ]
+        result = cms.check_signing_fingerprint_matches_registry(
+            self._make_doc_text("bob"), registry, signature_results
+        )
+        assert result.ok is False
+        assert "not in registry" in result.detail
 
 
 class TestStrictGpgResolution:
@@ -2675,6 +2882,114 @@ class TestKeyringImportWorkflow:
             "issue #226: reusable workflow must document the secret name"
         )
 
+    def test_keyring_import_captures_full_pipestatus(self):
+        """Codex pass-1 MED-2 fix pin: workflow must capture EVERY pipeline rc.
+
+        The pre-fix pattern (single-index PIPESTATUS capture) caught
+        only ``gpg --import`` and silently swallowed ``base64 -d``
+        failures. If base64 emits partial decoded output and exits
+        non-zero, gpg can still import partial key material and return
+        0, so a malformed secret would silently become a populated
+        keyring under STRICT_GPG=1. The fix snapshots PIPESTATUS into
+        an array and asserts EACH stage succeeded.
+        """
+
+        text = self.REUSABLE_PATH.read_text(encoding="utf-8")
+        # Positive: array snapshot must be present.
+        assert 'PIPE_RC=("${PIPESTATUS[@]}")' in text, (
+            "MED-2: workflow must snapshot PIPESTATUS into an array"
+        )
+        # Each pipeline stage RC must be checked.
+        assert 'BASE64_RC="${PIPE_RC[1]}"' in text, "MED-2: must capture base64 rc"
+        assert 'IMPORT_RC="${PIPE_RC[2]}"' in text, "MED-2: must capture gpg rc"
+        assert 'PRINTF_RC="${PIPE_RC[0]}"' in text, "MED-2: must capture printf rc"
+        # Negative: the pre-fix single-index assignment pattern must NOT
+        # remain in actual SHELL CODE. We accept the pattern inside YAML
+        # comments (which describe the bug being fixed).
+        # Walk the YAML run blocks; strip leading-`#` comment lines;
+        # then assert the bad pattern is absent from the residue.
+        yaml = pytest.importorskip("yaml")
+        parsed = yaml.safe_load(text)
+        offenders: list[str] = []
+        for job_name, job in parsed.get("jobs", {}).items():
+            for step in job.get("steps", []):
+                run_block = step.get("run")
+                if not isinstance(run_block, str):
+                    continue
+                code_lines = [
+                    line for line in run_block.splitlines() if not line.lstrip().startswith("#")
+                ]
+                code_only = "\n".join(code_lines)
+                if "IMPORT_RC=${PIPESTATUS[2]}" in code_only:
+                    offenders.append(f"{job_name}::{step.get('name', '<unnamed>')}")
+        assert not offenders, (
+            "MED-2: the pre-fix `IMPORT_RC=${PIPESTATUS[2]}` pattern must "
+            f"be removed from actual shell code. Offenders: {offenders}"
+        )
+
+    def test_keyring_import_pipestatus_captured_under_set_e_pipefail(self):
+        """Codex pass-1 MED-2 sibling pin: model `set -euo pipefail` semantics.
+
+        Same lesson as the LOW-2 / MED-1 fix in PR #225's exit-code
+        bracketing: under ``set -euo pipefail``, the keyring-import
+        pipeline would exit the shell on any non-zero rc BEFORE
+        PIPESTATUS could be read. The fix brackets with ``set +e`` /
+        ``set -e``. Concrete bash harness exercises the production
+        pattern with a synthetic 4-stage pipeline whose middle stage
+        deliberately fails (rc=1).
+        """
+
+        if shutil.which("bash") is None:
+            pytest.skip("bash unavailable")
+
+        # Use 4 stages mirroring printf | base64 | gpg | tee. We
+        # synthesize each stage with `true` / `false` so the test does
+        # not depend on base64 / gpg availability AND so output is
+        # deterministic ASCII (avoids UnicodeDecodeError).
+        script = """
+        set -euo pipefail
+        STATUS=0
+        set +e
+        true | false | true | true
+        PIPE_RC=("${PIPESTATUS[@]}")
+        set -e
+        PRINTF_RC="${PIPE_RC[0]}"
+        BASE64_RC="${PIPE_RC[1]}"
+        IMPORT_RC="${PIPE_RC[2]}"
+        if [ "$PRINTF_RC" -ne 0 ] || [ "$BASE64_RC" -ne 0 ] || [ "$IMPORT_RC" -ne 0 ]; then
+          STATUS=4
+        fi
+        echo "FINAL_STATUS=$STATUS PRINTF_RC=$PRINTF_RC BASE64_RC=$BASE64_RC IMPORT_RC=$IMPORT_RC"
+        """
+        result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True)
+        # Load-bearing: even though tee (final stage) returned 0, the
+        # middle-stage rc=1 is captured and STATUS escalates to 4.
+        # Without the set+e bracket, the pipeline's rc=1 would have
+        # exited the shell before PIPE_RC was read.
+        assert "FINAL_STATUS=4" in result.stdout
+        assert "BASE64_RC=1" in result.stdout
+        assert "PRINTF_RC=0" in result.stdout
+        assert "IMPORT_RC=0" in result.stdout
+
+    def test_keyring_import_step_emits_exit_4_under_strict(self):
+        """Issue #226 H1: keyring-import step exits 4 under STRICT_GPG=1.
+
+        Both the missing-secret branch AND the import-pipeline-failure
+        branch must `exit 4` under STRICT_GPG=1. Pin both code paths.
+        """
+
+        text = self.REUSABLE_PATH.read_text(encoding="utf-8")
+        # Count occurrences of `exit 4` within the keyring step's run
+        # block. Should be present in (a) the gpg-not-on-PATH branch,
+        # (b) the missing-secret branch, (c) the import-pipeline-fail
+        # branch.
+        # The simplest assertion: at least 3 `exit 4` appear in the file.
+        exit_4_count = text.count("exit 4")
+        assert exit_4_count >= 3, (
+            f"issue #226 H1: expected at least 3 `exit 4` (gpg-missing, "
+            f"secret-missing, import-fail under STRICT_GPG=1); got {exit_4_count}"
+        )
+
 
 # --------------------------------------------------------------------------- #
 # Issue #226 H1+H4 — n3_known_limitations + operator handoff doc pins.
@@ -2724,3 +3039,25 @@ class TestN3LimitationsAndOperatorDoc:
             "base64",
         ):
             assert marker in text, f"issue #226: operator handoff doc must cover '{marker}'"
+
+    def test_operator_doc_warns_about_strict_default(self):
+        """Codex pass-1 LOW-1 fix: doc must NOT mislead operators that
+        pre-secret CI runs are advisory.
+
+        The caller workflow defaults `strict_gpg: '1'` which means CI
+        exits 4 immediately after merge if the secret/fingerprints are
+        not in place. The doc must surface this clearly so operators
+        know to either (a) provision the secret BEFORE merging this
+        change, or (b) temporarily flip the caller to `strict_gpg: '0'`
+        as a controlled rollout.
+        """
+
+        text = self.OPERATOR_DOC.read_text(encoding="utf-8")
+        # Doc must reference the strict-default + opt-out option.
+        assert "fail" in text.lower() and "closed" in text.lower(), (
+            "LOW-1: operator doc must explain CI fails closed by default"
+        )
+        # Must reference the opt-out path (`strict_gpg: '0'`).
+        assert "strict_gpg: '0'" in text, (
+            "LOW-1: operator doc must document the temporary advisory-mode opt-out"
+        )

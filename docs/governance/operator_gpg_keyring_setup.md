@@ -30,12 +30,26 @@ methodology sign-offs lives in:
   `GPG_REVIEWER_KEYS_ARMOR_BASE64` repo secret into a per-job
   `$KEYRING_DIR`, then passes `--keyring-dir` to the validator.
 
-Until the operator (a) generates per-reviewer GPG keypairs, (b) uploads
-the bundled pubkeys to the repo secret, and (c) populates the
-`fingerprint` column in the reviewer registry, the validator runs in
-**advisory mode**: signature checks pass with a WARN that the keyring
-is not pinned. The CI workflow defaults `STRICT_GPG: '1'` so once the
-operator action is complete, missing or invalid sigs hard-block PRs.
+**Important — production CI fails closed by default.** The caller
+workflow `.github/workflows/methodology_signoff_guard.yml` passes
+`strict_gpg: '1'` so as soon as this PR merges, the next CI run of
+the methodology sign-off guard against a touched sign-off artifact
+will **exit code `4`** if the operator has NOT yet:
+
+1. Provisioned the `GPG_REVIEWER_KEYS_ARMOR_BASE64` repo secret, OR
+2. Populated the `fingerprint` column for the active reviewer rows, OR
+3. Ensured the CoI declaration carries either an inline armor block or
+   a sibling `<coi>.asc` detached signature.
+
+If you need a temporary advisory-mode rollout window (e.g. while
+collecting reviewer pubkeys), edit the caller line `strict_gpg: '1'`
+→ `strict_gpg: '0'`. With the opt-out, signature/keyring/CoI-sig
+checks pass with a WARN but the workflow exits `0`. **Revert to `'1'`
+once operator setup is complete.**
+
+The CI workflow defaults `STRICT_GPG: '1'` so once the operator action
+is complete, missing or invalid sigs hard-block PRs without further
+caller-side change.
 
 This doc walks through the three operator steps end-to-end.
 
