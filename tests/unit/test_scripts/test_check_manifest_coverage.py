@@ -756,6 +756,332 @@ def test_manifest_ast_extractor_missing_file(tmp_path: Path) -> None:
     assert any("manifest file not found" in e for e in errors)
 
 
+# ---------------------------------------------------------------------------
+# Codex pass-10 HIGH: registry-flow tracing — orphaned FeatureContract calls
+# (declared in the file but NOT bound to the canonical registry variable) must
+# NOT be counted as covered.
+# ---------------------------------------------------------------------------
+
+
+def test_orphaned_feature_contract_call_does_not_count_as_coverage(
+    tmp_path: Path,
+) -> None:
+    """A ``FeatureContract`` call that exists in the manifest source but
+    is NOT reachable from the canonical registry variable must NOT
+    appear in the extractor's name set.
+
+    Without this property, a future PR could add an orphan (e.g., a
+    new column declared at module top but forgotten in ``_DEMO``, or
+    a partial-deletion artifact where the local ``_X = [...]`` binding
+    is removed but the FeatureContract literals are left in the file)
+    and the guard would silently miss the manifest-vs-runtime drift.
+    """
+    manifest = textwrap.dedent(
+        """
+        from src.data.feature_contract import FeatureContract, KnowableAt
+
+        # IN the registry — bound via ``_DEMO`` which the public list
+        # picks up.
+        _DEMO = [
+            FeatureContract(
+                name="in_registry",
+                knowable_at=KnowableAt(reference="enrollment"),
+                source="demo",
+            ),
+        ]
+
+        # ORPHAN 1 — declared at module scope as a Name binding that
+        # is NEVER referenced by FOO_FEATURES below. A partial-deletion
+        # artifact (the developer removed the ``+ _ORPHAN`` from the
+        # registry but forgot the ``_ORPHAN`` Name).
+        _ORPHAN = [
+            FeatureContract(
+                name="orphan_in_unused_binding",
+                knowable_at=KnowableAt(reference="enrollment"),
+                source="demo",
+            ),
+        ]
+
+        # ORPHAN 2 — inside a never-called function. The runtime
+        # ``lookup_feature_contract`` will never see this column.
+        def _never_called():
+            return FeatureContract(
+                name="orphan_in_dead_function",
+                knowable_at=KnowableAt(reference="enrollment"),
+                source="demo",
+            )
+
+        FOO_FEATURES: list[FeatureContract] = _DEMO
+        """
+    ).strip()
+    (tmp_path / "manifest.py").write_text(manifest)
+    cohort = cmc.CohortConfig(
+        name="orphan-test",
+        converter_rel_path="scripts/synthetic_converter.py",
+        discovery_funcs=(),
+        manifest_rel_path="manifest.py",
+        manifest_var="FOO_FEATURES",
+    )
+    names, errors = cmc.load_manifest_names(tmp_path, cohort)
+    assert errors == [], f"unexpected errors: {errors}"
+    # Only the in-registry name appears. The two orphans are silently
+    # dropped — same as Python dead code.
+    assert names == frozenset({"in_registry"})
+    assert "orphan_in_unused_binding" not in names
+    assert "orphan_in_dead_function" not in names
+
+
+def test_registry_flow_traces_through_concatenation_chain(tmp_path: Path) -> None:
+    """``CSU_FEATURES = _DEMO + _ELIGIBILITY + _WINDOWED_AGG +
+    _ENGINEERED_B3 + _POST_INDEX_FORBIDDEN`` is the canonical CSU
+    idiom. The tracer must resolve all 5 dependencies transitively.
+    """
+    manifest = textwrap.dedent(
+        """
+        from src.data.feature_contract import FeatureContract, KnowableAt
+
+        _DEMO = [
+            FeatureContract(
+                name="demo_a",
+                knowable_at=KnowableAt(reference="enrollment"),
+                source="demo",
+            ),
+        ]
+        _ELIGIBILITY = [
+            FeatureContract(
+                name="elig_a",
+                knowable_at=KnowableAt(reference="enrollment"),
+                source="enrollment",
+            ),
+        ]
+        _WINDOWED = [
+            FeatureContract(
+                name="win_a",
+                knowable_at=KnowableAt(reference="enrollment"),
+                source="derived",
+            ),
+        ]
+
+        FOO_FEATURES = _DEMO + _ELIGIBILITY + _WINDOWED
+        """
+    ).strip()
+    (tmp_path / "manifest.py").write_text(manifest)
+    cohort = cmc.CohortConfig(
+        name="concat-trace",
+        converter_rel_path="scripts/synthetic_converter.py",
+        discovery_funcs=(),
+        manifest_rel_path="manifest.py",
+        manifest_var="FOO_FEATURES",
+    )
+    names, errors = cmc.load_manifest_names(tmp_path, cohort)
+    assert errors == []
+    assert names == frozenset({"demo_a", "elig_a", "win_a"})
+
+
+def test_registry_flow_traces_through_loop_append_after_init(tmp_path: Path) -> None:
+    """``_LIST = []`` followed by ``for x in CONST: _LIST.append(FC(...))``
+    is the Optum dynamic-loop idiom. The tracer must absorb the
+    appended FeatureContract names into the binding for ``_LIST``.
+    """
+    manifest = textwrap.dedent(
+        """
+        from src.data.feature_contract import FeatureContract, KnowableAt
+
+        DRUG_CLASS_NAMES = ("h1", "h2", "ltra")
+
+        _DRUG_CLASS: list[FeatureContract] = []
+        for cls in DRUG_CLASS_NAMES:
+            _DRUG_CLASS.append(
+                FeatureContract(
+                    name=f"{cls}_ever_filled",
+                    knowable_at=KnowableAt(reference="index_date"),
+                    source="medication_events",
+                )
+            )
+            _DRUG_CLASS.append(
+                FeatureContract(
+                    name=f"{cls}_fill_count",
+                    knowable_at=KnowableAt(reference="index_date"),
+                    source="medication_events",
+                )
+            )
+
+        FOO_FEATURES = _DRUG_CLASS
+        """
+    ).strip()
+    (tmp_path / "manifest.py").write_text(manifest)
+    cohort = cmc.CohortConfig(
+        name="loop-append-trace",
+        converter_rel_path="scripts/synthetic_converter.py",
+        discovery_funcs=(),
+        manifest_rel_path="manifest.py",
+        manifest_var="FOO_FEATURES",
+    )
+    names, errors = cmc.load_manifest_names(tmp_path, cohort)
+    assert errors == []
+    assert names == frozenset(
+        {
+            "h1_ever_filled",
+            "h1_fill_count",
+            "h2_ever_filled",
+            "h2_fill_count",
+            "ltra_ever_filled",
+            "ltra_fill_count",
+        }
+    )
+
+
+def test_registry_flow_mixed_literal_and_loop_append(tmp_path: Path) -> None:
+    """A binding can be initialised with a non-empty list literal AND
+    then have loop-appends grow it further. Both contributions must
+    be absorbed.
+    """
+    manifest = textwrap.dedent(
+        """
+        from src.data.feature_contract import FeatureContract, KnowableAt
+
+        FAMILIES = ("a", "b")
+
+        _MIXED = [
+            FeatureContract(
+                name="seed_one",
+                knowable_at=KnowableAt(reference="enrollment"),
+                source="demo",
+            ),
+            FeatureContract(
+                name="seed_two",
+                knowable_at=KnowableAt(reference="enrollment"),
+                source="demo",
+            ),
+        ]
+        for fam in FAMILIES:
+            _MIXED.append(
+                FeatureContract(
+                    name=f"appended_{fam}",
+                    knowable_at=KnowableAt(reference="enrollment"),
+                    source="demo",
+                )
+            )
+
+        FOO_FEATURES = _MIXED
+        """
+    ).strip()
+    (tmp_path / "manifest.py").write_text(manifest)
+    cohort = cmc.CohortConfig(
+        name="mixed-trace",
+        converter_rel_path="scripts/synthetic_converter.py",
+        discovery_funcs=(),
+        manifest_rel_path="manifest.py",
+        manifest_var="FOO_FEATURES",
+    )
+    names, errors = cmc.load_manifest_names(tmp_path, cohort)
+    assert errors == []
+    assert names == frozenset({"seed_one", "seed_two", "appended_a", "appended_b"})
+
+
+def test_registry_flow_missing_registry_variable_errors(tmp_path: Path) -> None:
+    """If ``CohortConfig.manifest_var`` names a variable not bound at
+    module scope, the tracer errors so the misconfiguration surfaces
+    instead of silently returning an empty set (which would coverage-
+    PASS on every column).
+    """
+    manifest = textwrap.dedent(
+        """
+        from src.data.feature_contract import FeatureContract, KnowableAt
+
+        _DEMO = [
+            FeatureContract(
+                name="a",
+                knowable_at=KnowableAt(reference="enrollment"),
+                source="demo",
+            ),
+        ]
+        FOO_FEATURES = _DEMO
+        """
+    ).strip()
+    (tmp_path / "manifest.py").write_text(manifest)
+    cohort = cmc.CohortConfig(
+        name="missing-var",
+        converter_rel_path="scripts/synthetic_converter.py",
+        discovery_funcs=(),
+        manifest_rel_path="manifest.py",
+        manifest_var="NOT_THE_REAL_REGISTRY",
+    )
+    names, errors = cmc.load_manifest_names(tmp_path, cohort)
+    assert names == frozenset()
+    assert errors
+    assert any("not found at module scope" in e for e in errors)
+
+
+def test_registry_flow_unsupported_idiom_on_traced_path_errors(
+    tmp_path: Path,
+) -> None:
+    """If the registry variable's RHS is something the tracer can't
+    enumerate (e.g., a dict-comprehension), the error must surface
+    rather than silently producing a partial / empty set.
+    """
+    manifest = textwrap.dedent(
+        """
+        from src.data.feature_contract import FeatureContract, KnowableAt
+
+        def _build_features():
+            return [
+                FeatureContract(
+                    name="comp_a",
+                    knowable_at=KnowableAt(reference="enrollment"),
+                    source="demo",
+                ),
+            ]
+
+        # Unsupported: the tracer doesn't dive into helper-function
+        # return values.
+        FOO_FEATURES = _build_features()
+        """
+    ).strip()
+    (tmp_path / "manifest.py").write_text(manifest)
+    cohort = cmc.CohortConfig(
+        name="unsupported-rhs",
+        converter_rel_path="scripts/synthetic_converter.py",
+        discovery_funcs=(),
+        manifest_rel_path="manifest.py",
+        manifest_var="FOO_FEATURES",
+    )
+    names, errors = cmc.load_manifest_names(tmp_path, cohort)
+    assert errors, "unsupported RHS must surface as error"
+    # The function-local FC call is NOT counted (it's behind a helper
+    # call boundary the tracer doesn't enter).
+    assert names == frozenset()
+
+
+def test_registry_flow_real_csu_headline_count_unchanged() -> None:
+    """Anti-regression: switching from the orphan-counting extractor
+    to the registry-flow tracer must NOT change the headline manifest
+    counts on the real cohorts. If this test fails, a real orphan
+    was previously hidden (or a real registry-flow entry is now being
+    missed — investigate which).
+    """
+    csu_cohort = next(c for c in cmc.COHORTS if c.name == "csu")
+    csu_names, csu_errors = cmc.load_manifest_names(_REPO_ROOT, csu_cohort)
+    assert csu_errors == []
+    assert len(csu_names) == 28, (
+        f"CSU manifest count changed: expected 28, got {len(csu_names)}. "
+        f"If this is intentional (manifest edit), update the assertion. "
+        f"Otherwise the registry-flow tracer is missing or counting a name."
+    )
+
+
+def test_registry_flow_real_optum_headline_count_unchanged() -> None:
+    """Anti-regression: same as CSU but for the Optum manifest (3
+    cohorts share the same registry, so we check just one)."""
+    optum_cohort = next(c for c in cmc.COHORTS if c.name == "optum-initiation")
+    optum_names, optum_errors = cmc.load_manifest_names(_REPO_ROOT, optum_cohort)
+    assert optum_errors == []
+    assert len(optum_names) == 122, (
+        f"Optum manifest count changed: expected 122, got {len(optum_names)}. "
+        f"If this is intentional (manifest edit), update the assertion."
+    )
+
+
 def test_guard_runs_stdlib_only_against_real_repo() -> None:
     """The guard must complete without importing the manifest. We
     can't easily run a subprocess with PYTHONNOSITESITE=1 from pytest,

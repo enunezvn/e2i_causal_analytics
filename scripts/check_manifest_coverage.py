@@ -39,7 +39,7 @@ This script chooses (a). Rationale:
     smoke-conversion would require installing the full converter
     dependency stack in the CI job. The guard is now fully stdlib-only
     — BOTH the converter discovery (``_ColumnDiscoveryVisitor``) AND
-    the manifest registry extraction (``_ManifestNameExtractor``)
+    the manifest registry extraction (``_ManifestRegistryTracer``)
     AST-parse their respective source files without importing
     anything. No third-party deps required at runtime.
 
@@ -60,6 +60,20 @@ This script chooses (a). Rationale:
     expansions (``for name in COMORBIDITY_NAMES: _LIST.append(
     FeatureContract(name=f"has_{name}", ...))``). The guard now
     has zero third-party deps forever.
+
+    **Codex pass-10 HIGH refinement** (registry-flow tracing):
+    the initial Option-C extractor collected EVERY
+    ``FeatureContract(...)`` call in the manifest file — including
+    orphans (declared but not bound to the public registry variable)
+    that would never be visible to ``lookup_feature_contract`` at
+    runtime. That created a false-negative window. The extractor was
+    replaced with ``_ManifestRegistryTracer``, which traces only the
+    ``FeatureContract`` calls reachable from the canonical
+    ``cohort.manifest_var`` via the binding/dependency graph
+    (list-literal entries, ``_X + _Y`` concatenation chains,
+    ``_LIST.append(FC(...))`` loop-based growth, Name aliases,
+    mixed combinations). Orphans are silently dropped — same as a
+    Python module's dead code.
   - **Loop-iterable expansion is tractable.** The Optum
     ``_compute_features`` body produces ~80 columns, most via f-strings
     inside ``for X in Y:`` loops where ``Y`` is a module-level dict or
@@ -1748,31 +1762,134 @@ def _lookup_var_in_scopes(
     return None
 
 
-class _ManifestNameExtractor(ast.NodeVisitor):
-    """Walk a manifest module body collecting every ``FeatureContract(
-    name=...)`` call's resolved name(s). Maintains a stack of active
-    ``for var in MODULE_CONST:`` loop scopes so f-string names like
-    ``f"has_{name}"`` inside ``for name in COMORBIDITY_NAMES:`` expand
-    to concrete strings.
+class _ManifestRegistryTracer:
+    """Trace which ``FeatureContract(name=...)`` calls actually flow
+    into a named canonical registry variable (e.g., ``CSU_FEATURES``).
 
-    Codex-rescue Option C — replaces the previous import-based
-    ``load_manifest_names`` so the guard doesn't have to install the
-    manifest's transitive dependency chain (numpy → httpx → ...).
+    Codex pass-10 HIGH: the previous extractor counted EVERY
+    ``FeatureContract(...)`` call in the manifest file, regardless of
+    whether the resulting object reached the public registry that
+    ``lookup_feature_contract`` consults at runtime. That created a
+    false-negative window: a future PR could add an orphaned
+    ``FeatureContract(name="new_col", ...)`` (assigned to nothing, or
+    inside a never-called function, or commented-out as a partial
+    deletion) — the guard would count it as covered, but
+    ``lookup_feature_contract("new_col")`` would return ``None`` and
+    Layer 1 would silently no-op.
+
+    The tracer fixes this by building a Name → set[str] dependency
+    graph during a binding pass, then resolving the canonical
+    registry Name to the exact set of FeatureContract names reachable
+    from it. Orphaned FeatureContract calls are NOT counted — same as
+    a Python module's dead-code function.
+
+    Supported idioms (matching real CSU + Optum manifests):
+
+      * **List literal of FC calls**:
+        ``_DEMO = [FeatureContract(name="x", ...), FeatureContract(...)]``
+      * **Loop-based append on an initially-empty list**:
+        ``_LAB = []``
+        ``for n in LAB_NAMES: _LAB.append(FeatureContract(name=f"lab_{n}", ...))``
+      * **List concatenation via ``+``**:
+        ``CSU_FEATURES = _DEMO + _ELIGIBILITY + _WINDOWED_AGG + ...``
+      * **Mixed**: list-literal initialization + subsequent loop-appends.
+      * **Annotated form**:
+        ``_LAB: list[FeatureContract] = []``
+
+    Public surface:
+
+      * ``trace(registry_var: str) -> tuple[frozenset[str], list[str]]``
+        returns ``(names_in_registry, errors)`` for the named registry.
+        Errors list every unresolvable FeatureContract name encountered
+        ON THE TRACED PATH (orphans don't contribute errors).
     """
 
-    def __init__(self, module_iterables: dict[str, tuple[str, ...]]):
+    def __init__(
+        self,
+        tree: ast.Module,
+        module_iterables: dict[str, tuple[str, ...]],
+    ):
+        self.tree = tree
         self.module_iterables = module_iterables
-        self.names: set[str] = set()
-        self.errors: list[str] = []
-        self._loop_scopes: list[dict[str, tuple[str, ...]]] = []
+        # Name → set of FeatureContract names accumulated into the Name
+        # at module level. Built by the binding pass.
+        self._bindings: dict[str, set[str]] = {}
+        # Name → list of (Name|expr) references the binding depends on
+        # (for list-concatenation chains we resolve lazily so the order
+        # of binding-pass statements doesn't matter).
+        self._dependencies: dict[str, list[str]] = {}
+        # Per-Name errors collected during binding for that Name. A
+        # name only surfaces these errors if the orchestrator traces
+        # through it.
+        self._binding_errors: dict[str, list[str]] = {}
+        # Sentinel: Names we've fully resolved (memoization for trace).
+        self._resolved_cache: dict[str, frozenset[str]] = {}
+        # Sentinel: Names we're currently resolving (cycle detection).
+        self._resolving: set[str] = set()
 
-    def visit_For(self, node: ast.For) -> None:  # noqa: N802
-        self._handle_for(node)
+        self._build_bindings()
 
-    def visit_AsyncFor(self, node: ast.AsyncFor) -> None:  # noqa: N802
-        self._handle_for(node)
+    # ------------------------------------------------------------------ #
+    # Binding pass — walk every top-level statement                       #
+    # ------------------------------------------------------------------ #
 
-    def _handle_for(self, node: ast.For | ast.AsyncFor) -> None:
+    def _build_bindings(self) -> None:
+        for node in self.tree.body:
+            if isinstance(node, ast.Assign):
+                self._handle_module_assign(node)
+            elif isinstance(node, ast.AnnAssign):
+                self._handle_module_annassign(node)
+            elif isinstance(node, (ast.For, ast.AsyncFor)):
+                self._handle_module_for(node)
+            # FunctionDef / ClassDef / Import etc.: ignored at module
+            # scope because they don't materialise into the registry.
+            # FeatureContract calls inside an undeclared function are
+            # the canonical "orphan" case the tracer is designed to
+            # skip; that's correct.
+
+    def _handle_module_assign(self, node: ast.Assign) -> None:
+        # Pattern A: ``<NAME> = [FC(...), FC(...), ...]``
+        # Pattern B: ``<NAME> = _A + _B + ...``  (concatenation)
+        # Pattern C: ``<NAME> = <OTHER>``  (alias)
+        # Pattern D: ``<NAME> = []``  (init for loop-append)
+        # Pattern E: anything else → store nothing for <NAME>.
+        for tgt in node.targets:
+            if not isinstance(tgt, ast.Name):
+                continue
+            names_set, dep_names, errors = self._eval_list_expr(node.value)
+            self._bindings.setdefault(tgt.id, set()).update(names_set)
+            self._dependencies.setdefault(tgt.id, []).extend(dep_names)
+            if errors:
+                self._binding_errors.setdefault(tgt.id, []).extend(errors)
+
+    def _handle_module_annassign(self, node: ast.AnnAssign) -> None:
+        if not isinstance(node.target, ast.Name) or node.value is None:
+            return
+        names_set, dep_names, errors = self._eval_list_expr(node.value)
+        self._bindings.setdefault(node.target.id, set()).update(names_set)
+        self._dependencies.setdefault(node.target.id, []).extend(dep_names)
+        if errors:
+            self._binding_errors.setdefault(node.target.id, []).extend(errors)
+
+    def _handle_module_for(
+        self,
+        node: ast.For | ast.AsyncFor,
+        outer_scopes: list[dict[str, tuple[str, ...]]] | None = None,
+    ) -> None:
+        """Module-level ``for var in MODULE_CONST:`` — typically wraps
+        a ``_LIST.append(FeatureContract(...))`` call. We bind the
+        loop variable to the resolved iterable (if module-resolvable)
+        and walk the body for ``<Name>.append(FC(...))`` and
+        ``<Name>.extend([...])`` shapes.
+
+        ``outer_scopes`` carries enclosing for-loop bindings when this
+        method is called recursively (a nested loop inside another
+        module-level loop). Loops whose iterable is NOT module-
+        resolvable still recurse (the f-string expansion just won't
+        bind that variable; any FeatureContract f-string referencing
+        the unresolved var becomes an error in the trace path).
+        """
+        loop_scopes: list[dict[str, tuple[str, ...]]] = list(outer_scopes or [])
         iter_values = self._resolve_iter(node.iter)
         bindings: dict[str, tuple[str, ...]] = {}
         target = node.target
@@ -1780,19 +1897,188 @@ class _ManifestNameExtractor(ast.NodeVisitor):
             if isinstance(target, ast.Name):
                 bindings[target.id] = iter_values
             elif isinstance(target, ast.Tuple):
-                # ``for k, v in d.items():`` — bind first elt to keys
-                # (values aren't named via f-strings in the manifest
-                # idiom; only loop-key matters).
                 if target.elts and isinstance(target.elts[0], ast.Name):
                     bindings[target.elts[0].id] = iter_values
-        self._loop_scopes.append(bindings)
+        loop_scopes.append(bindings)
+
+        for stmt in node.body:
+            self._handle_loop_body_stmt(stmt, loop_scopes)
+        # ``else:`` clauses are rare; ignore.
+
+    def _handle_loop_body_stmt(
+        self,
+        stmt: ast.stmt,
+        loop_scopes: list[dict[str, tuple[str, ...]]],
+    ) -> None:
+        # Pattern: ``<Name>.append(<FeatureContract call>)`` or
+        # ``<Name>.extend([<FC call>, ...])``. Other statement shapes
+        # at loop-body scope (helper-var assigns like
+        # ``_kg_codes = COMORBIDITY_KG_CODES[name]``) don't affect
+        # which names flow into the registry, so we ignore them.
+        if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
+            call = stmt.value
+            if (
+                isinstance(call.func, ast.Attribute)
+                and isinstance(call.func.value, ast.Name)
+                and call.func.attr in ("append", "extend")
+                and call.args
+            ):
+                target_name = call.func.value.id
+                if call.func.attr == "append":
+                    self._absorb_into_binding(target_name, call.args[0], loop_scopes)
+                else:  # extend
+                    # ``.extend([FC, FC, ...])`` — walk the list literal.
+                    arg0 = call.args[0]
+                    if isinstance(arg0, (ast.List, ast.Tuple)):
+                        for elt in arg0.elts:
+                            self._absorb_into_binding(target_name, elt, loop_scopes)
+        elif isinstance(stmt, (ast.For, ast.AsyncFor)):
+            # Nested loop — recurse with current scope.
+            self._handle_module_for(stmt, outer_scopes=loop_scopes)
+        # Top-level Assign/AnnAssign inside the loop are local-scope
+        # helper variables, not registry-binding. We skip them.
+
+    def _absorb_into_binding(
+        self,
+        target_name: str,
+        expr: ast.expr,
+        loop_scopes: list[dict[str, tuple[str, ...]]],
+    ) -> None:
+        """Resolve ``expr`` (typically a ``FeatureContract(...)`` call)
+        and absorb the resulting names into ``self._bindings[target_name]``.
+
+        Supports the same shapes as ``_eval_list_expr`` at module
+        scope, with the active loop bindings available for f-string
+        expansion.
+        """
+        if isinstance(expr, ast.Call) and self._is_feature_contract_call(expr):
+            names, errs = _extract_feature_contract_names_from_call(expr, loop_scopes)
+            self._bindings.setdefault(target_name, set()).update(names)
+            if errs:
+                self._binding_errors.setdefault(target_name, []).extend(errs)
+            return
+        if isinstance(expr, ast.Name):
+            # ``.append(other_list)`` — rare; treat as dependency.
+            self._dependencies.setdefault(target_name, []).append(expr.id)
+            return
+        # Other shapes (calls returning lists, etc.) — record an error
+        # on the target name, surfaced only if traced.
         try:
-            for stmt in node.body:
-                self.visit(stmt)
-            for stmt in node.orelse:
-                self.visit(stmt)
-        finally:
-            self._loop_scopes.pop()
+            expr_text = ast.unparse(expr)
+        except Exception:  # pragma: no cover
+            expr_text = "<expr>"
+        self._binding_errors.setdefault(target_name, []).append(
+            f"unsupported expression appended/extended into {target_name!r}: "
+            f"{expr_text} (the registry tracer accepts only "
+            f"FeatureContract(...) calls or Name references)"
+        )
+
+    # ------------------------------------------------------------------ #
+    # Expression evaluator for module-level RHS                           #
+    # ------------------------------------------------------------------ #
+
+    def _eval_list_expr(self, expr: ast.expr) -> tuple[set[str], list[str], list[str]]:
+        """Evaluate ``expr`` as if it were the RHS of a module-level
+        ``<NAME> = ...`` assignment. Returns:
+
+          * ``names_set``: immediately-resolvable FeatureContract
+            names contributed by this expression (e.g., literal
+            ``[FC(name="x"), FC(name="y")]``).
+          * ``dep_names``: identifier names this expression depends on
+            (for ``_A + _B`` we record the dependencies; the trace
+            phase resolves them transitively).
+          * ``errors``: unresolvable FeatureContract names + unsupported
+            shapes; carried into the binding and surfaced only if
+            the trace reaches this Name.
+        """
+        names_set: set[str] = set()
+        dep_names: list[str] = []
+        errors: list[str] = []
+
+        if isinstance(expr, ast.List):
+            for elt in expr.elts:
+                if isinstance(elt, ast.Call) and self._is_feature_contract_call(elt):
+                    elt_names, elt_errs = _extract_feature_contract_names_from_call(
+                        elt, loop_scopes=[]
+                    )
+                    names_set.update(elt_names)
+                    errors.extend(elt_errs)
+                elif isinstance(elt, ast.Name):
+                    dep_names.append(elt.id)
+                elif isinstance(elt, ast.Starred) and isinstance(elt.value, ast.Name):
+                    # ``*_OTHER_LIST`` — list-unpack of another binding.
+                    dep_names.append(elt.value.id)
+                # Other shapes inside the list (Calls returning lists,
+                # comprehensions, ...) — emit a binding-time error
+                # that only fires if the trace path actually hits this
+                # Name.
+                else:
+                    try:
+                        expr_text = ast.unparse(elt)
+                    except Exception:  # pragma: no cover
+                        expr_text = "<elt>"
+                    errors.append(f"unsupported list element in registry-flow trace: {expr_text}")
+            return names_set, dep_names, errors
+
+        if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Add):
+            # ``_A + _B + _C`` — recurse on both sides; each side is a
+            # list expression. Concatenation is left-associative so
+            # ``_A + _B + _C`` parses as ``BinOp(BinOp(_A,+,_B),+,_C)``.
+            left_names, left_deps, left_errs = self._eval_list_expr(expr.left)
+            right_names, right_deps, right_errs = self._eval_list_expr(expr.right)
+            names_set.update(left_names)
+            names_set.update(right_names)
+            dep_names.extend(left_deps)
+            dep_names.extend(right_deps)
+            errors.extend(left_errs)
+            errors.extend(right_errs)
+            return names_set, dep_names, errors
+
+        if isinstance(expr, ast.Name):
+            # ``<NAME> = <OTHER>`` — alias.
+            dep_names.append(expr.id)
+            return names_set, dep_names, errors
+
+        if isinstance(expr, ast.Tuple):
+            # Tuple form — uncommon for registries but symmetric to List.
+            for elt in expr.elts:
+                if isinstance(elt, ast.Call) and self._is_feature_contract_call(elt):
+                    elt_names, elt_errs = _extract_feature_contract_names_from_call(
+                        elt, loop_scopes=[]
+                    )
+                    names_set.update(elt_names)
+                    errors.extend(elt_errs)
+                elif isinstance(elt, ast.Name):
+                    dep_names.append(elt.id)
+            return names_set, dep_names, errors
+
+        if isinstance(expr, ast.Call) and self._is_feature_contract_call(expr):
+            # ``<NAME> = FeatureContract(...)`` — single-FC binding
+            # (uncommon but legal). Extract the name.
+            elt_names, elt_errs = _extract_feature_contract_names_from_call(expr, loop_scopes=[])
+            names_set.update(elt_names)
+            errors.extend(elt_errs)
+            return names_set, dep_names, errors
+
+        # Anything else — emit a binding-time error that fires only on
+        # the traced path. Examples that hit this branch:
+        # ``<NAME> = {}`` (a dict, not a list), ``<NAME> = some_call()``
+        # (no static enumeration), ``<NAME> = [x for x in ...]``
+        # (list-comp — also not statically enumerated here).
+        try:
+            expr_text = ast.unparse(expr)
+        except Exception:  # pragma: no cover
+            expr_text = "<expr>"
+        errors.append(
+            f"unsupported binding RHS in registry-flow trace: {expr_text} "
+            f"(the registry tracer accepts list literals, list "
+            f"concatenations via ``+``, and Name aliases)"
+        )
+        return names_set, dep_names, errors
+
+    @staticmethod
+    def _is_feature_contract_call(call: ast.Call) -> bool:
+        return isinstance(call.func, ast.Name) and call.func.id == "FeatureContract"
 
     def _resolve_iter(self, expr: ast.expr) -> tuple[str, ...] | None:
         if isinstance(expr, ast.Name):
@@ -1806,41 +2092,98 @@ class _ManifestNameExtractor(ast.NodeVisitor):
                 return self.module_iterables.get(expr.func.value.id)
         return None
 
-    def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
-        # Look for ``FeatureContract(...)`` calls. The Name can be the
-        # bare ``FeatureContract`` after ``from src.data.feature_contract
-        # import FeatureContract`` (the canonical manifest import).
-        if isinstance(node.func, ast.Name) and node.func.id == "FeatureContract":
-            names, errs = _extract_feature_contract_names_from_call(node, self._loop_scopes)
-            self.names.update(names)
-            self.errors.extend(errs)
-        # Always descend (nested calls / list / dict comp bodies).
-        self.generic_visit(node)
+    # ------------------------------------------------------------------ #
+    # Trace pass — resolve a registry name to its full set of FC names    #
+    # ------------------------------------------------------------------ #
+
+    def trace(self, registry_var: str) -> tuple[frozenset[str], list[str]]:
+        """Return ``(names, errors)`` for the registry variable.
+
+        ``names`` is the transitive closure of FeatureContract names
+        reachable from ``registry_var`` via the binding/dependency
+        graph. ``errors`` are the binding-time errors collected on
+        Names that were actually visited (orphan-bound errors are NOT
+        surfaced).
+        """
+        if registry_var not in self._bindings and registry_var not in self._dependencies:
+            return (
+                frozenset(),
+                [
+                    f"registry variable {registry_var!r} not found at module "
+                    f"scope (binding pass saw no ``{registry_var} = ...`` "
+                    f"or ``{registry_var}: <T> = ...`` statement; check "
+                    f"CohortConfig.manifest_var)"
+                ],
+            )
+        errors: list[str] = []
+        result = self._resolve_name(registry_var, errors)
+        return frozenset(result), errors
+
+    def _resolve_name(self, name: str, errors_out: list[str]) -> set[str]:
+        if name in self._resolved_cache:
+            return set(self._resolved_cache[name])
+        if name in self._resolving:
+            # Cycle — defensive (manifest registries don't cycle in
+            # practice but we don't want to infinite-loop). Return
+            # empty; record an error.
+            errors_out.append(
+                f"cycle detected while resolving registry name {name!r}; "
+                f"static tracer treats this as empty"
+            )
+            return set()
+        self._resolving.add(name)
+        try:
+            collected: set[str] = set()
+            collected.update(self._bindings.get(name, set()))
+            errors_out.extend(self._binding_errors.get(name, []))
+            for dep in self._dependencies.get(name, []):
+                if dep in self._bindings or dep in self._dependencies:
+                    collected.update(self._resolve_name(dep, errors_out))
+                else:
+                    # Dep is an imported Name (e.g., a constant from
+                    # another module) — out of static scope. Record
+                    # an error since the trace can't enumerate it.
+                    errors_out.append(
+                        f"registry trace hit unresolved dependency Name {dep!r} "
+                        f"(no module-level binding found; the tracer can't "
+                        f"enumerate names from an imported list)"
+                    )
+            self._resolved_cache[name] = frozenset(collected)
+            return collected
+        finally:
+            self._resolving.discard(name)
 
 
 def load_manifest_names(repo_root: Path, cohort: CohortConfig) -> tuple[frozenset[str], list[str]]:
-    """AST-parse the cohort's manifest module file to extract every
-    ``FeatureContract(name=...)`` call's resolved name. Returns
-    ``(names, errors)``. Failure modes:
+    """AST-parse the cohort's manifest module file to extract the
+    ``FeatureContract(name=...)`` names that flow into the canonical
+    public registry variable (``cohort.manifest_var``). Returns
+    ``(names, errors)``.
+
+    Failure modes:
 
       * Manifest file missing → single error.
       * AST parse failure (syntax error in manifest) → single error.
+      * Registry variable not found at module scope → single error.
       * Unresolvable ``name=`` argument (non-string-non-fstring, or
-        f-string over a non-module-constant variable) → one error per
-        offending call.
+        f-string over a non-module-constant variable) ON THE TRACED
+        PATH → one error per offending call.
+      * Binding RHS shape unsupported by the registry-flow tracer ON
+        THE TRACED PATH → one error per offending statement.
 
-    This function DOES NOT import the manifest module. It only reads
-    the source file and walks the AST. That keeps the guard's runtime
-    dependencies at stdlib-only — adopted in PR #230 after Option A
-    (install numpy/pandas) surfaced a deeper transitive dep on
-    ``httpx`` (loaded by ``src.data.kg.__init__`` siblings of
-    ``adversarial_probe``), threatening a whack-a-mole iteration.
+    Codex pass-10 HIGH: this function now uses
+    ``_ManifestRegistryTracer`` to walk only the FeatureContract
+    calls that actually flow into ``cohort.manifest_var``. The
+    previous implementation collected EVERY ``FeatureContract(...)``
+    call in the file, regardless of registry membership, which
+    silently masked orphaned entries (added to the file but never
+    bound to the public registry → ``lookup_feature_contract`` would
+    return ``None`` at runtime but the guard counted them as
+    covered).
 
-    The extractor is intentionally CONSERVATIVE: any FeatureContract
-    name shape it can't resolve becomes a discovery error. That makes
-    a manifest refactor that introduces a new dynamic-name idiom fail
-    the guard (exit 2), prompting the developer to either restructure
-    the manifest or extend this extractor.
+    The tracer remains stdlib-only — file read + ast.parse, no
+    importlib. Decoupled from the manifest's transitive numpy/httpx/
+    etc. dependencies (the PR #230 Option-C pivot).
     """
     errors: list[str] = []
     manifest_path = repo_root / cohort.manifest_rel_path
@@ -1871,22 +2214,21 @@ def load_manifest_names(repo_root: Path, cohort: CohortConfig) -> tuple[frozense
         )
 
     module_iterables = _extract_module_iterables(tree)
-    extractor = _ManifestNameExtractor(module_iterables)
-    extractor.visit(tree)
+    tracer = _ManifestRegistryTracer(tree, module_iterables)
+    names, trace_errors = tracer.trace(cohort.manifest_var)
 
-    if extractor.errors:
-        # De-duplicate while preserving order.
+    if trace_errors:
         seen: list[str] = []
-        for e in extractor.errors:
+        for e in trace_errors:
             if e not in seen:
                 seen.append(e)
         errors.append(
-            f"{cohort.name}: manifest AST extraction had unresolvable "
-            f"FeatureContract names in {cohort.manifest_rel_path} "
-            f"(registry {cohort.manifest_var!r}):\n  " + "\n  ".join(seen)
+            f"{cohort.name}: manifest registry-flow trace had errors in "
+            f"{cohort.manifest_rel_path} (registry {cohort.manifest_var!r}):"
+            f"\n  " + "\n  ".join(seen)
         )
 
-    return frozenset(extractor.names), errors
+    return names, errors
 
 
 # ---------------------------------------------------------------------------
