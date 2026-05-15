@@ -299,6 +299,44 @@ class ModelTrainerState(BaseAgentSchema):
     # Permutation Test
     permutation_test: Optional[Dict[str, Any]] = None  # p-value, shuffled AUC stats, verdict
 
+    # Phase 3.4 Layer-3 model-eval ablation hook (.claude/plans/
+    # adaptive_temporal_validity_redesign.md line 245). All fields are
+    # OPT-IN: ``model_trainer_layer3_ablation_enabled`` is the master gate
+    # (default False); when False the other six tuning knobs are ignored.
+    # Advisory mode mirrors Sec.4 T2.2 / T2.3 lifecycle pattern — emits
+    # signals to ``validation_metrics`` but does NOT mutate
+    # ``success_criteria_met`` or block the deployer.
+    model_trainer_layer3_ablation_enabled: Optional[bool] = (
+        None  # Default-OFF master gate; False = inert
+    )
+    model_trainer_ablation_n_permutations: Optional[int] = (
+        None  # Column-shuffle ablation null perm count (default 30)
+    )
+    model_trainer_ablation_permutation_n_permutations: Optional[int] = (
+        None  # Label-shuffle perm null count (default 200)
+    )
+    model_trainer_ablation_z_threshold: Optional[float] = (
+        None  # HIGH-band z (default 5.0; mirrors Phase 3.3 HIGH_Z)
+    )
+    model_trainer_ablation_strong_effect_threshold: Optional[float] = (
+        None  # |delta_AUC| strong-effect escape (default 0.30)
+    )
+    model_trainer_ablation_delta_auc_floor: Optional[float] = (
+        None  # Issue #194 joint-check floor (default 0.10)
+    )
+    model_trainer_ablation_max_features: Optional[int] = (
+        None  # O(n²) blowup guard cap (default 100)
+    )
+    model_trainer_ablation_seed: Optional[int] = (
+        None  # RNG seed (default 42)
+    )
+    model_trainer_ablation_model_factory: Optional[Any] = (
+        None  # Callable[[], sklearn-classifier]; None → LogisticRegression
+    )
+    model_eval_ablation: Optional[Dict[str, Any]] = (
+        None  # Phase 3.4 result payload (ran flag, per_feature, flagged_features)
+    )
+
     # Cross-Validation
     cv_results: Optional[Dict[str, Any]] = None  # Stratified k-fold metrics
 
