@@ -665,8 +665,11 @@ def run_model_eval_ablation(
             decided_by = "adversarial_permutation"
         out_row = {
             "feature": str(col),
-            # Ablation-side audit fields.
-            "delta_auc": abl_row.get("delta_auc"),
+            # Ablation-side audit fields. Field NAMES match Phase 3.3's
+            # ``_combine_ablation_with_permutation`` at
+            # ``adaptive_validity_check.py:2312-2316`` so audit consumers
+            # see byte-identical keys across both pipeline stages.
+            "ablation_delta_auc": abl_row.get("delta_auc"),
             "ablation_z_score": abl_row.get("z_score"),
             "ablation_null_mean": abl_row.get("null_mean"),
             "ablation_null_std": abl_row.get("null_std"),
