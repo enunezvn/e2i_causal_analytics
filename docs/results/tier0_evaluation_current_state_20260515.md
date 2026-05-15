@@ -305,7 +305,11 @@ These are visible in the May-10 Optum report: `cv_5fold_roc_auc_mean=0.6795 ± 0
 
 ### §4A — Synthetic regimes
 
-**Status:** Dependency install is in progress in this session (`/tmp/tier0_eval_venv/bin/pip install -r requirements.txt`); deterministic numbers will be replayed from the most recent verified runs. The synthetic e2e is reproducible to the seeded run reports below.
+**Status:** A fresh synthetic-default e2e was attempted in this evaluation session against a bootstrapped venv (`scikit-learn==1.6.1`, all pinned versions). The run progressed cleanly through Steps 1–5a (Scope Definer → Data Preparer → Cohort Constructor → Model Selector → HPO), with HPO Trial 0 returning value=0.2942 (penalty=l1, C=0.0746), Trial 1 value=0.2874, Trial 2 value=0.1500 — all valid AUC-style optimization signals. The run **aborted at Step 5b "Algorithm Comparison"** with `Solver lbfgs supports only 'l2' or None penalties, got l1 penalty`.
+
+**Root cause of the abort (out of scope for this evaluation, but flagged):** the alt-candidate construction at `scripts/run_tier0_test.py:6170-6176` adds `class_weight="balanced"` to `new_candidate["default_hyperparameters"]` for the `LogisticRegression` retry, but does not set `solver="saga"`. The primary HPO path correctly pins `solver="saga"` at `src/agents/ml_foundation/model_trainer/nodes/hyperparameter_tuner.py:778` (so HPO trials with penalty=l1 succeed there), but the Step 5b alt-train constructs LR with the sklearn default solver (`lbfgs`), which is incompatible with l1. This is a real bug to file separately; it does not affect the leakage-mitigation or methodology audit conclusions of this report.
+
+Authoritative empirical numbers therefore come from the most-recent verified seeded runs (deterministic, `seed=42`, replayable per appendix command):
 
 **Most recent verified synthetic-default run** (Apr-26 → May-01 rebaseline anchor; reproduced 2026-05-01 deterministically across two seeded runs, `seed=42`):
 
