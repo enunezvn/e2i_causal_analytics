@@ -86,11 +86,16 @@ test-cov:
 #   python scripts/run_tier1_5_test.py --run-tier0-first
 # CI uses --skip-observability so Opik isn't required.
 tier1-5-test:
-	mkdir -p docs/results
-	python scripts/run_tier1_5_test.py \
-	    --tier0-cache scripts/tier0_output_cache/latest.pkl \
-	    --skip-observability \
-	    --output docs/results/tier1_5_pipeline_latest.json
+	@mkdir -p docs/results
+	@if [ ! -f scripts/tier0_output_cache/latest.pkl ]; then \
+	    echo "⚠️  scripts/tier0_output_cache/latest.pkl not found — skipping tier1-5 harness."; \
+	    echo "    Generate it with: python scripts/run_tier1_5_test.py --run-tier0-first"; \
+	else \
+	    python scripts/run_tier1_5_test.py \
+	        --tier0-cache scripts/tier0_output_cache/latest.pkl \
+	        --skip-observability \
+	        --output docs/results/tier1_5_pipeline_latest.json; \
+	fi
 
 lint:
 	ruff check src/ tests/
