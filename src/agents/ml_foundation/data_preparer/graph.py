@@ -50,6 +50,18 @@ def write_adaptive_verdicts_sidecar(state: Dict[str, Any]) -> Path | None:
     Severity routing in the producer uses ``z_score``, so this rounding is
     purely informational for downstream sidecar consumers.
 
+    Layer-4 evaluator audit-only fields (Plan
+    ``.claude/plans/layer4_evaluator_audit_signal.md``):
+    ``evaluator_satisfied``, ``evaluator_rationale_complete``,
+    ``evaluator_missed_considerations``, ``evaluator_notes``,
+    ``evaluator_model``. All five are ``None`` when
+    ``ADAPTIVE_VALIDITY_EVALUATOR_ENABLED`` is unset, when the worker
+    verdict was ``None``, when the evaluator failed, or when no LLM
+    verdict was supplied for this feature. Consumers must treat these
+    keys as audit-only; the orchestrator does not gate or override on
+    them. ``evaluator_missed_considerations`` is serialized as a tuple
+    by the producer; downstream JSON readers receive a Python list.
+
     Args:
         state: DataPreparerState dict-like with adaptive_verdicts.
 
