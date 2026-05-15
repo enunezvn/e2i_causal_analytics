@@ -19,19 +19,22 @@ def _classify(query: str) -> str:
 def test_pattern_classifier_detects_experiment_monitor() -> None:
     assert _classify("check all active A/B experiments for SRM") == "experiment_monitor"
     assert _classify("monitor the running trial enrollment") == "experiment_monitor"
-    assert _classify("are there interim analysis triggers in the current experiments?") == "experiment_monitor"
+    assert (
+        _classify("are there interim analysis triggers in the current experiments?")
+        == "experiment_monitor"
+    )
 
 
 def test_pattern_classifier_detects_multi_faceted() -> None:
-    assert _classify(
-        "compare HCP visits vs prior treatments and also identify high-risk segments"
-    ) == "multi_faceted"
-    assert _classify(
-        "combine the causal results with the gap analyses for the brand"
-    ) == "multi_faceted"
-    assert _classify(
-        "show me both effects across regions"
-    ) == "multi_faceted"
+    assert (
+        _classify("compare HCP visits vs prior treatments and also identify high-risk segments")
+        == "multi_faceted"
+    )
+    assert (
+        _classify("combine the causal results with the gap analyses for the brand")
+        == "multi_faceted"
+    )
+    assert _classify("show me both effects across regions") == "multi_faceted"
 
 
 def test_pattern_classifier_keeps_existing_intents() -> None:

@@ -11,7 +11,7 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional, cast
 
-from .._agent_method_map import AgentMethodSpec, get_method_spec
+from .._agent_method_map import get_method_spec
 from ..state import AgentDispatch, AgentResult, OrchestratorState
 
 logger = logging.getLogger(__name__)
@@ -392,7 +392,7 @@ def _normalize_agent_result(raw: Any) -> Dict[str, Any]:
         return {}
     if isinstance(raw, dict):
         return cast(Dict[str, Any], raw)
-    if hasattr(raw, "to_dict") and callable(getattr(raw, "to_dict")):
+    if hasattr(raw, "to_dict") and callable(raw.to_dict):
         try:
             result = raw.to_dict()
             if isinstance(result, dict):

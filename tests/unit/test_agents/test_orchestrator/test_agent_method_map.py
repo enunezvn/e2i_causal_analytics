@@ -86,9 +86,10 @@ def test_pydantic_input_wrappers_point_at_real_modules() -> None:
 
 def test_extract_narrative_per_agent_fields() -> None:
     """Each per-agent narrative key wins over generic ``narrative``/``response``."""
-    assert extract_narrative(
-        "causal_impact", {"executive_summary": "ATE 12%", "narrative": "ignored"}
-    ) == "ATE 12%"
+    assert (
+        extract_narrative("causal_impact", {"executive_summary": "ATE 12%", "narrative": "ignored"})
+        == "ATE 12%"
+    )
     assert extract_narrative("health_score", {"health_summary": "all green"}) == "all green"
     assert (
         extract_narrative("experiment_monitor", {"monitor_summary": "0 critical, 2 warn"})
