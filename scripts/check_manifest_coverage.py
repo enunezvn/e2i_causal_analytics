@@ -37,23 +37,29 @@ This script chooses (a). Rationale:
   - **No external compute for AST scanning.** The CSU/Optum converters
     depend on pandas, openpyxl, and the rwd_common package; option (b)
     smoke-conversion would require installing the full converter
-    dependency stack in the CI job. The AST scan itself uses only the
-    Python stdlib.
+    dependency stack in the CI job. The guard is now fully stdlib-only
+    — BOTH the converter discovery (``_ColumnDiscoveryVisitor``) AND
+    the manifest registry extraction (``_ManifestNameExtractor``)
+    AST-parse their respective source files without importing
+    anything. No third-party deps required at runtime.
 
-    **Note on manifest-import deps**: while the discovery scan is
-    stdlib-pure, the second guard phase (reading the manifest registry
-    via importlib) transitively imports
-    ``src.data.feature_contract`` → ``src.data.kg.types`` →
-    ``src.data.kg.__init__`` → ``src.data.kg.adversarial_probe``
-    which imports numpy at module load. The CI workflow at
-    ``.github/workflows/feature_contract_guard.yml`` installs ``numpy``
-    + ``pandas`` before invoking the guard (Option A from PR #230's
-    CI-failure-2 fix). Option C (AST-parsing the manifest module
-    source for ``FeatureContract(...)`` calls instead of importing)
-    would keep the guard fully stdlib-only but is deferred to a
-    future PR — the manifest's list-concatenation + dict-comp
-    construction patterns make AST parsing of the registry
-    construction nontrivial.
+    **History — Option-A → Option-C pivot (PR #230)**: the initial
+    implementation imported each cohort's manifest module via
+    ``importlib.import_module(cohort.manifest_module)`` to read the
+    ``FeatureContract`` registry. That import chain transitively
+    pulled ``src.data.feature_contract`` →
+    ``_compute_kg_known_systems()`` (called at module load) →
+    ``src.data.kg.types`` → ``src.data.kg.__init__`` →
+    ``src.data.kg.adversarial_probe`` → ``import numpy``. The
+    workflow first tried Option A (install ``numpy`` + ``pandas``),
+    but CI then surfaced a deeper transitive dep on ``httpx``
+    (loaded by a sibling ``src.data.kg.*`` module). Rather than
+    install whatever-comes-next, the guard pivoted to Option C
+    (this implementation): AST-parse the manifest source for
+    ``FeatureContract(name=...)`` calls, including the loop-based
+    expansions (``for name in COMORBIDITY_NAMES: _LIST.append(
+    FeatureContract(name=f"has_{name}", ...))``). The guard now
+    has zero third-party deps forever.
   - **Loop-iterable expansion is tractable.** The Optum
     ``_compute_features`` body produces ~80 columns, most via f-strings
     inside ``for X in Y:`` loops where ``Y`` is a module-level dict or
@@ -217,10 +223,23 @@ class CohortConfig:
     # the record via ``record.update(feats)`` — so the discovery must
     # follow that spread.
     discovery_funcs: tuple[DiscoveryFunc, ...]
-    # Module path (dotted) for the manifest registry. The script imports
-    # ``MODULE.ATTR`` and reads names off the resulting list.
-    manifest_module: str
-    manifest_attr: str
+    # Repo-relative path to the manifest module file. The guard
+    # AST-parses this file to extract ``FeatureContract(name=...)``
+    # calls without importing the manifest — that bypass is the
+    # codex-rescue Option C path adopted after Option A (install
+    # transitive deps) hit whack-a-mole on numpy → httpx → ... on
+    # PR #230 commit decd436c. AST-extraction has no third-party
+    # dep + no transitive import.
+    manifest_rel_path: str
+    # The Name of the public registry list (e.g., ``CSU_FEATURES``).
+    # Used only for diagnostics — the AST extractor collects EVERY
+    # ``FeatureContract(...)`` call in the manifest file (covering
+    # both list-literal entries and ``for X in CONST: _LIST.append(
+    # FeatureContract(...))`` loop expansions), so the registry-var
+    # name doesn't filter what gets collected. It's surfaced in
+    # error messages so a developer can grep for the registry that
+    # SHOULD have absorbed the missing entry.
+    manifest_var: str
 
 
 # Required columns per (cohort, discovery-func) — canonical names that
@@ -275,8 +294,8 @@ COHORTS: tuple[CohortConfig, ...] = (
                 collector_names=("journeys",),
             ),
         ),
-        manifest_module="src.data.manifests.csu_feature_manifest",
-        manifest_attr="CSU_FEATURES",
+        manifest_rel_path="src/data/manifests/csu_feature_manifest.py",
+        manifest_var="CSU_FEATURES",
     ),
     CohortConfig(
         name="optum-initiation",
@@ -301,8 +320,8 @@ COHORTS: tuple[CohortConfig, ...] = (
                 required_columns=_OPTUM_COMPUTE_FEATURES_REQUIRED,
             ),
         ),
-        manifest_module="src.data.manifests.optum_feature_manifest",
-        manifest_attr="OPTUM_FEATURES",
+        manifest_rel_path="src/data/manifests/optum_feature_manifest.py",
+        manifest_var="OPTUM_FEATURES",
     ),
     CohortConfig(
         name="optum-discontinuation",
@@ -319,8 +338,8 @@ COHORTS: tuple[CohortConfig, ...] = (
                 required_columns=_OPTUM_COMPUTE_FEATURES_REQUIRED,
             ),
         ),
-        manifest_module="src.data.manifests.optum_feature_manifest",
-        manifest_attr="OPTUM_FEATURES",
+        manifest_rel_path="src/data/manifests/optum_feature_manifest.py",
+        manifest_var="OPTUM_FEATURES",
     ),
     CohortConfig(
         name="optum-persistence",
@@ -337,8 +356,8 @@ COHORTS: tuple[CohortConfig, ...] = (
                 required_columns=_OPTUM_COMPUTE_FEATURES_REQUIRED,
             ),
         ),
-        manifest_module="src.data.manifests.optum_feature_manifest",
-        manifest_attr="OPTUM_FEATURES",
+        manifest_rel_path="src/data/manifests/optum_feature_manifest.py",
+        manifest_var="OPTUM_FEATURES",
     ),
 )
 
@@ -1583,54 +1602,291 @@ def discover_columns_for_cohort(
 # ---------------------------------------------------------------------------
 
 
-def load_manifest_names(repo_root: Path, cohort: CohortConfig) -> tuple[frozenset[str], list[str]]:
-    """Import the cohort's manifest module and return the registered
-    feature names. Failure modes:
+def _extract_feature_contract_names_from_call(
+    call: ast.Call,
+    loop_scopes: list[dict[str, tuple[str, ...]]],
+) -> tuple[list[str], list[str]]:
+    """Return (names, errors) for a single ``FeatureContract(...)`` call.
 
-      * Import error (e.g., a circular import or a refactor that
-        renamed the manifest module) → returned as a single error.
-      * Manifest attribute missing → returned as a single error.
+    Strategies:
+
+      * ``FeatureContract(name="literal", ...)`` →  ["literal"].
+      * ``FeatureContract(name=f"has_{var}", ...)`` inside a
+        ``for var in MODULE_CONST:`` loop whose iterable is a
+        module-level string-tuple → expand via ``loop_scopes``.
+      * Positional first arg is also accepted as the name when it's
+        a string Constant or an f-string (defensive — real manifest
+        always uses ``name=...`` kwarg but we don't want to silently
+        miss a refactor).
+
+    Unresolvable shapes (e.g., ``name=some_variable``) are returned
+    as errors so the orchestrator fails-closed.
+    """
+    names: list[str] = []
+    errors: list[str] = []
+
+    # Find the ``name`` argument — first try kwargs, fall back to
+    # positional[0].
+    name_expr: ast.expr | None = None
+    for kw in call.keywords:
+        if kw.arg == "name":
+            name_expr = kw.value
+            break
+    if name_expr is None and call.args:
+        name_expr = call.args[0]
+
+    if name_expr is None:
+        errors.append(
+            "FeatureContract(...) call has no name argument: "
+            f"{ast.unparse(call) if hasattr(ast, 'unparse') else '<call>'}"
+        )
+        return names, errors
+
+    if isinstance(name_expr, ast.Constant) and isinstance(name_expr.value, str):
+        names.append(name_expr.value)
+        return names, errors
+
+    if isinstance(name_expr, ast.JoinedStr):
+        # F-string: resolve via active loop bindings. The same
+        # logic as _ColumnDiscoveryVisitor._resolve_fstring but
+        # standalone (we don't want to instantiate the heavy
+        # visitor for a name-only extraction).
+        resolved = _resolve_manifest_fstring(name_expr, loop_scopes)
+        if resolved is None:
+            try:
+                expr_text = ast.unparse(name_expr)
+            except Exception:  # pragma: no cover
+                expr_text = "<f-string>"
+            errors.append(
+                f"FeatureContract name f-string unresolvable: {expr_text} "
+                f"(loop variable not bound to a module-level string-tuple "
+                f"constant; pin the loop iterable to a module constant or "
+                f"unroll the FeatureContract entries)"
+            )
+            return names, errors
+        names.extend(resolved)
+        return names, errors
+
+    # Any other shape (Name, BinOp, Call, ...) — unresolvable.
+    try:
+        expr_text = ast.unparse(name_expr)
+    except Exception:  # pragma: no cover
+        expr_text = "<expr>"
+    errors.append(
+        f"FeatureContract name is not a static string/f-string: {expr_text} "
+        f"(the AST extractor requires literal strings or f-strings over "
+        f"module-level string-tuple constants)"
+    )
+    return names, errors
+
+
+def _resolve_manifest_fstring(
+    fstr: ast.JoinedStr, loop_scopes: list[dict[str, tuple[str, ...]]]
+) -> tuple[str, ...] | None:
+    """Resolve a manifest f-string by cartesian-product over enclosing
+    ``for var in MODULE_CONST:`` bindings. Returns the list of
+    resolved string literals, or ``None`` if any variable can't be
+    resolved.
+
+    Mirrors ``_ColumnDiscoveryVisitor._resolve_fstring`` minus the
+    allowed-prefix sentinel path (manifest f-strings always expand to
+    concrete names; there's no ``demo_*`` runtime-pass-through case
+    here).
+    """
+    parts: list[tuple[str, str]] = []
+    for v in fstr.values:
+        if isinstance(v, ast.Constant) and isinstance(v.value, str):
+            parts.append(("literal", v.value))
+        elif isinstance(v, ast.FormattedValue):
+            if isinstance(v.value, ast.Name):
+                parts.append(("var", v.value.id))
+            else:
+                return None
+        else:
+            return None
+
+    var_values: dict[str, tuple[str, ...]] = {}
+    for kind, val in parts:
+        if kind != "var":
+            continue
+        resolved = _lookup_var_in_scopes(val, loop_scopes)
+        if resolved is None:
+            return None
+        var_values[val] = resolved
+
+    var_names = list(var_values.keys())
+    if not var_names:
+        joined = "".join(val for kind, val in parts if kind == "literal")
+        return (joined,)
+
+    def _expand(idx: int, partial: dict[str, str]) -> list[str]:
+        if idx == len(var_names):
+            out_parts: list[str] = []
+            for kind, val in parts:
+                if kind == "literal":
+                    out_parts.append(val)
+                else:
+                    out_parts.append(partial[val])
+            return ["".join(out_parts)]
+        results: list[str] = []
+        var = var_names[idx]
+        for v in var_values[var]:
+            partial[var] = v
+            results.extend(_expand(idx + 1, partial))
+        return results
+
+    return tuple(_expand(0, {}))
+
+
+def _lookup_var_in_scopes(
+    var: str, loop_scopes: list[dict[str, tuple[str, ...]]]
+) -> tuple[str, ...] | None:
+    """Innermost-first lookup of a loop var in the active scopes."""
+    for scope in reversed(loop_scopes):
+        if var in scope:
+            return scope[var]
+    return None
+
+
+class _ManifestNameExtractor(ast.NodeVisitor):
+    """Walk a manifest module body collecting every ``FeatureContract(
+    name=...)`` call's resolved name(s). Maintains a stack of active
+    ``for var in MODULE_CONST:`` loop scopes so f-string names like
+    ``f"has_{name}"`` inside ``for name in COMORBIDITY_NAMES:`` expand
+    to concrete strings.
+
+    Codex-rescue Option C — replaces the previous import-based
+    ``load_manifest_names`` so the guard doesn't have to install the
+    manifest's transitive dependency chain (numpy → httpx → ...).
+    """
+
+    def __init__(self, module_iterables: dict[str, tuple[str, ...]]):
+        self.module_iterables = module_iterables
+        self.names: set[str] = set()
+        self.errors: list[str] = []
+        self._loop_scopes: list[dict[str, tuple[str, ...]]] = []
+
+    def visit_For(self, node: ast.For) -> None:  # noqa: N802
+        self._handle_for(node)
+
+    def visit_AsyncFor(self, node: ast.AsyncFor) -> None:  # noqa: N802
+        self._handle_for(node)
+
+    def _handle_for(self, node: ast.For | ast.AsyncFor) -> None:
+        iter_values = self._resolve_iter(node.iter)
+        bindings: dict[str, tuple[str, ...]] = {}
+        target = node.target
+        if iter_values is not None:
+            if isinstance(target, ast.Name):
+                bindings[target.id] = iter_values
+            elif isinstance(target, ast.Tuple):
+                # ``for k, v in d.items():`` — bind first elt to keys
+                # (values aren't named via f-strings in the manifest
+                # idiom; only loop-key matters).
+                if target.elts and isinstance(target.elts[0], ast.Name):
+                    bindings[target.elts[0].id] = iter_values
+        self._loop_scopes.append(bindings)
+        try:
+            for stmt in node.body:
+                self.visit(stmt)
+            for stmt in node.orelse:
+                self.visit(stmt)
+        finally:
+            self._loop_scopes.pop()
+
+    def _resolve_iter(self, expr: ast.expr) -> tuple[str, ...] | None:
+        if isinstance(expr, ast.Name):
+            return self.module_iterables.get(expr.id)
+        if isinstance(expr, ast.Call):
+            if (
+                isinstance(expr.func, ast.Attribute)
+                and isinstance(expr.func.value, ast.Name)
+                and expr.func.attr in ("items", "keys")
+            ):
+                return self.module_iterables.get(expr.func.value.id)
+        return None
+
+    def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
+        # Look for ``FeatureContract(...)`` calls. The Name can be the
+        # bare ``FeatureContract`` after ``from src.data.feature_contract
+        # import FeatureContract`` (the canonical manifest import).
+        if isinstance(node.func, ast.Name) and node.func.id == "FeatureContract":
+            names, errs = _extract_feature_contract_names_from_call(node, self._loop_scopes)
+            self.names.update(names)
+            self.errors.extend(errs)
+        # Always descend (nested calls / list / dict comp bodies).
+        self.generic_visit(node)
+
+
+def load_manifest_names(repo_root: Path, cohort: CohortConfig) -> tuple[frozenset[str], list[str]]:
+    """AST-parse the cohort's manifest module file to extract every
+    ``FeatureContract(name=...)`` call's resolved name. Returns
+    ``(names, errors)``. Failure modes:
+
+      * Manifest file missing → single error.
+      * AST parse failure (syntax error in manifest) → single error.
+      * Unresolvable ``name=`` argument (non-string-non-fstring, or
+        f-string over a non-module-constant variable) → one error per
+        offending call.
+
+    This function DOES NOT import the manifest module. It only reads
+    the source file and walks the AST. That keeps the guard's runtime
+    dependencies at stdlib-only — adopted in PR #230 after Option A
+    (install numpy/pandas) surfaced a deeper transitive dep on
+    ``httpx`` (loaded by ``src.data.kg.__init__`` siblings of
+    ``adversarial_probe``), threatening a whack-a-mole iteration.
+
+    The extractor is intentionally CONSERVATIVE: any FeatureContract
+    name shape it can't resolve becomes a discovery error. That makes
+    a manifest refactor that introduces a new dynamic-name idiom fail
+    the guard (exit 2), prompting the developer to either restructure
+    the manifest or extend this extractor.
     """
     errors: list[str] = []
-    # We need ``repo_root`` on ``sys.path`` so ``src.data.manifests.*``
-    # resolves. Prepend if not present.
-    rr_str = str(repo_root.resolve())
-    inserted = False
-    if rr_str not in sys.path:
-        sys.path.insert(0, rr_str)
-        inserted = True
-    try:
-        import importlib
-
-        module = importlib.import_module(cohort.manifest_module)
-    except Exception as exc:  # pragma: no cover — defensive
+    manifest_path = repo_root / cohort.manifest_rel_path
+    if not manifest_path.is_file():
         return (
             frozenset(),
-            [f"{cohort.name}: manifest import failed ({cohort.manifest_module}): {exc!r}"],
+            [
+                f"{cohort.name}: manifest file not found at {manifest_path} "
+                f"(expected the cohort config's manifest_rel_path; verify "
+                f"the path or update CohortConfig)"
+            ],
         )
-    finally:
-        if inserted:
-            try:
-                sys.path.remove(rr_str)
-            except ValueError:  # pragma: no cover
-                pass
 
-    if not hasattr(module, cohort.manifest_attr):
+    try:
+        src = manifest_path.read_text()
+    except OSError as exc:  # pragma: no cover — defensive
+        return (
+            frozenset(),
+            [f"{cohort.name}: manifest read failed ({manifest_path}): {exc!r}"],
+        )
+
+    try:
+        tree = ast.parse(src, filename=str(manifest_path))
+    except SyntaxError as exc:
+        return (
+            frozenset(),
+            [f"{cohort.name}: manifest AST parse failed: {exc}"],
+        )
+
+    module_iterables = _extract_module_iterables(tree)
+    extractor = _ManifestNameExtractor(module_iterables)
+    extractor.visit(tree)
+
+    if extractor.errors:
+        # De-duplicate while preserving order.
+        seen: list[str] = []
+        for e in extractor.errors:
+            if e not in seen:
+                seen.append(e)
         errors.append(
-            f"{cohort.name}: manifest module {cohort.manifest_module} "
-            f"has no attribute {cohort.manifest_attr!r}"
+            f"{cohort.name}: manifest AST extraction had unresolvable "
+            f"FeatureContract names in {cohort.manifest_rel_path} "
+            f"(registry {cohort.manifest_var!r}):\n  " + "\n  ".join(seen)
         )
-        return frozenset(), errors
 
-    contracts = getattr(module, cohort.manifest_attr)
-    names: list[str] = []
-    for c in contracts:
-        if not hasattr(c, "name"):
-            errors.append(f"{cohort.name}: manifest entry {c!r} has no .name attribute")
-            continue
-        names.append(c.name)
-
-    return frozenset(names), errors
+    return frozenset(extractor.names), errors
 
 
 # ---------------------------------------------------------------------------

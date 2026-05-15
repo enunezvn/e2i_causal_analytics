@@ -312,7 +312,7 @@ def _write_synthetic_repo(tmp_path: Path, converter_src: str, manifest_src: str)
 
 
 def _make_synthetic_cohort(
-    repo_root: Path, converter_rel: str, manifest_attr: str
+    repo_root: Path, converter_rel: str, manifest_var: str
 ) -> cmc.CohortConfig:
     return cmc.CohortConfig(
         name="synthetic-test",
@@ -323,8 +323,12 @@ def _make_synthetic_cohort(
                 output_dict_names=("record",),
             ),
         ),
-        manifest_module="_synthetic_manifest",  # loaded by absolute import
-        manifest_attr=manifest_attr,
+        # Option C: AST-extract manifest names from a sibling file.
+        # The third arg is now the registry's local Name (used only
+        # for diagnostic messages); the actual path is fixed at the
+        # repo's _synthetic_manifest.py.
+        manifest_rel_path="_synthetic_manifest.py",
+        manifest_var=manifest_var,
     )
 
 
@@ -507,19 +511,273 @@ def test_module_iterables_skips_non_string_keys() -> None:
 
 def test_payer_category_manifest_entry_is_valid() -> None:
     """The ``payer_category`` entry added to the Optum manifest as part
-    of Phase 1.5 must pass FeatureContract construction (already tested
-    by the manifest's own test suite) AND must appear in the manifest
-    registry under the canonical name."""
-    from src.data.manifests.optum_feature_manifest import (
-        OPTUM_FEATURES,
-        OPTUM_SAFE_FEATURES,
-    )
+    of Phase 1.5 must appear in the manifest registry under the
+    canonical name.
 
-    names = {c.name for c in OPTUM_FEATURES}
+    Originally this test imported ``OPTUM_FEATURES`` from the manifest
+    module to inspect each contract's name + ``OPTUM_SAFE_FEATURES``
+    view. After PR #230 switched the guard to AST extraction (Option
+    C) to avoid the numpy/httpx transitive-import chain, this test
+    follows the same path so the test suite stays stdlib-only and
+    CI can run the suite in any environment that supports pytest. The
+    existing manifest's own unit-test suite (``tests/unit/test_data/
+    test_optum_feature_manifest.py``) already validates
+    FeatureContract construction + the SAFE/FORBIDDEN view semantics;
+    this test's role is narrower: confirm the AST surface of the
+    manifest registers ``payer_category`` at all.
+    """
+    optum_cohort = next(c for c in cmc.COHORTS if c.name == "optum-initiation")
+    names, errors = cmc.load_manifest_names(_REPO_ROOT, optum_cohort)
+    assert errors == [], f"manifest AST extraction errors: {errors}"
     assert "payer_category" in names
-    # payer_category claims enrollment-knowable, so it must appear in
-    # the SAFE view (knowable_at <= index_date).
-    assert "payer_category" in OPTUM_SAFE_FEATURES
+
+
+# ---------------------------------------------------------------------------
+# Option C: AST manifest extraction (PR #230 pivot from import-based load)
+# ---------------------------------------------------------------------------
+
+
+def test_manifest_ast_extractor_resolves_literal_names(tmp_path: Path) -> None:
+    """Literal ``FeatureContract(name="x", ...)`` calls inside a
+    list literal are extracted by AST without importing the module.
+    """
+    manifest = textwrap.dedent(
+        """
+        from src.data.feature_contract import FeatureContract, KnowableAt
+
+        FOO_FEATURES: list[FeatureContract] = [
+            FeatureContract(
+                name="literal_one",
+                knowable_at=KnowableAt(reference="enrollment"),
+                source="demo",
+            ),
+            FeatureContract(
+                name="literal_two",
+                knowable_at=KnowableAt(reference="enrollment"),
+                source="demo",
+            ),
+        ]
+        """
+    ).strip()
+    (tmp_path / "manifest.py").write_text(manifest)
+    cohort = cmc.CohortConfig(
+        name="ast-test",
+        converter_rel_path="scripts/synthetic_converter.py",
+        discovery_funcs=(),  # discovery unused for this test
+        manifest_rel_path="manifest.py",
+        manifest_var="FOO_FEATURES",
+    )
+    names, errors = cmc.load_manifest_names(tmp_path, cohort)
+    assert errors == []
+    assert names == frozenset({"literal_one", "literal_two"})
+
+
+def test_manifest_ast_extractor_resolves_loop_expansion(tmp_path: Path) -> None:
+    """``for name in COMORBIDITY_NAMES: _LIST.append(FeatureContract(
+    name=f"has_{name}", ...))`` expands via the module-iterable
+    resolver, matching the real Optum manifest's expansion pattern.
+    """
+    manifest = textwrap.dedent(
+        """
+        from src.data.feature_contract import FeatureContract, KnowableAt
+
+        FAMILY_NAMES = ("alpha", "beta", "gamma")
+
+        FOO_FEATURES: list[FeatureContract] = []
+        for fam in FAMILY_NAMES:
+            FOO_FEATURES.append(
+                FeatureContract(
+                    name=f"has_{fam}",
+                    knowable_at=KnowableAt(reference="enrollment"),
+                    source="derived",
+                )
+            )
+            FOO_FEATURES.append(
+                FeatureContract(
+                    name=f"{fam}_count",
+                    knowable_at=KnowableAt(reference="enrollment"),
+                    source="derived",
+                )
+            )
+        """
+    ).strip()
+    (tmp_path / "manifest.py").write_text(manifest)
+    cohort = cmc.CohortConfig(
+        name="ast-loop",
+        converter_rel_path="scripts/synthetic_converter.py",
+        discovery_funcs=(),
+        manifest_rel_path="manifest.py",
+        manifest_var="FOO_FEATURES",
+    )
+    names, errors = cmc.load_manifest_names(tmp_path, cohort)
+    assert errors == []
+    expected = {
+        "has_alpha",
+        "has_beta",
+        "has_gamma",
+        "alpha_count",
+        "beta_count",
+        "gamma_count",
+    }
+    assert names == expected
+
+
+def test_manifest_ast_extractor_handles_dict_items_loop(tmp_path: Path) -> None:
+    """``for name, prefixes in COMORBIDITY_CODES.items():`` over a
+    module-level dict is the Optum idiom; the resolver picks up the
+    keys as the iterable.
+    """
+    manifest = textwrap.dedent(
+        """
+        from src.data.feature_contract import FeatureContract, KnowableAt
+
+        DRUG_CLASSES: dict[str, tuple[str, ...]] = {
+            "h1": ("dipheny",),
+            "h2": ("famotidine",),
+        }
+
+        FOO_FEATURES: list[FeatureContract] = []
+        for cls_name, generics in DRUG_CLASSES.items():
+            FOO_FEATURES.append(
+                FeatureContract(
+                    name=f"{cls_name}_ever_filled",
+                    knowable_at=KnowableAt(reference="enrollment"),
+                    source="derived",
+                )
+            )
+        """
+    ).strip()
+    (tmp_path / "manifest.py").write_text(manifest)
+    cohort = cmc.CohortConfig(
+        name="ast-dict-items",
+        converter_rel_path="scripts/synthetic_converter.py",
+        discovery_funcs=(),
+        manifest_rel_path="manifest.py",
+        manifest_var="FOO_FEATURES",
+    )
+    names, errors = cmc.load_manifest_names(tmp_path, cohort)
+    assert errors == []
+    assert names == {"h1_ever_filled", "h2_ever_filled"}
+
+
+def test_manifest_ast_extractor_fails_on_dynamic_name(tmp_path: Path) -> None:
+    """A ``FeatureContract(name=some_variable, ...)`` call (variable
+    binding, not a literal/fstring) is unenumerable. The extractor
+    must surface the offending call as an error rather than silently
+    skipping it.
+    """
+    manifest = textwrap.dedent(
+        """
+        from src.data.feature_contract import FeatureContract, KnowableAt
+
+        DYNAMIC_NAME = "stamped"
+
+        FOO_FEATURES: list[FeatureContract] = [
+            FeatureContract(
+                name=DYNAMIC_NAME,
+                knowable_at=KnowableAt(reference="enrollment"),
+                source="demo",
+            ),
+        ]
+        """
+    ).strip()
+    (tmp_path / "manifest.py").write_text(manifest)
+    cohort = cmc.CohortConfig(
+        name="ast-dynamic",
+        converter_rel_path="scripts/synthetic_converter.py",
+        discovery_funcs=(),
+        manifest_rel_path="manifest.py",
+        manifest_var="FOO_FEATURES",
+    )
+    names, errors = cmc.load_manifest_names(tmp_path, cohort)
+    assert errors, "dynamic name must produce error"
+    assert any("not a static string/f-string" in e for e in errors)
+
+
+def test_manifest_ast_extractor_collects_across_idioms(tmp_path: Path) -> None:
+    """Mixed idioms in one manifest — list-literal, loop-append, and
+    list-concatenation public registry. All FeatureContract calls
+    are collected regardless of which named list they land in.
+    """
+    manifest = textwrap.dedent(
+        """
+        from src.data.feature_contract import FeatureContract, KnowableAt
+
+        FAMILIES = ("a", "b")
+
+        _DEMO = [
+            FeatureContract(
+                name="demo_one",
+                knowable_at=KnowableAt(reference="enrollment"),
+                source="demo",
+            ),
+        ]
+        _ENGINEERED: list[FeatureContract] = []
+        for fam in FAMILIES:
+            _ENGINEERED.append(
+                FeatureContract(
+                    name=f"eng_{fam}",
+                    knowable_at=KnowableAt(reference="enrollment"),
+                    source="derived",
+                )
+            )
+
+        # Public registry — list concatenation pattern (CSU idiom).
+        FOO_FEATURES: list[FeatureContract] = _DEMO + _ENGINEERED
+        """
+    ).strip()
+    (tmp_path / "manifest.py").write_text(manifest)
+    cohort = cmc.CohortConfig(
+        name="ast-mixed",
+        converter_rel_path="scripts/synthetic_converter.py",
+        discovery_funcs=(),
+        manifest_rel_path="manifest.py",
+        manifest_var="FOO_FEATURES",
+    )
+    names, errors = cmc.load_manifest_names(tmp_path, cohort)
+    assert errors == []
+    assert names == {"demo_one", "eng_a", "eng_b"}
+
+
+def test_manifest_ast_extractor_missing_file(tmp_path: Path) -> None:
+    """A missing manifest file produces a discovery error (exit 2),
+    not a silent empty extraction.
+    """
+    cohort = cmc.CohortConfig(
+        name="ast-missing",
+        converter_rel_path="scripts/synthetic_converter.py",
+        discovery_funcs=(),
+        manifest_rel_path="does_not_exist.py",
+        manifest_var="ANYTHING",
+    )
+    names, errors = cmc.load_manifest_names(tmp_path, cohort)
+    assert names == frozenset()
+    assert errors
+    assert any("manifest file not found" in e for e in errors)
+
+
+def test_guard_runs_stdlib_only_against_real_repo() -> None:
+    """The guard must complete without importing the manifest. We
+    can't easily run a subprocess with PYTHONNOSITESITE=1 from pytest,
+    but a proxy check is: no third-party module name appears in
+    sys.modules immediately after a fresh ``check_all`` invocation
+    on the real cohorts.
+    """
+    import sys
+
+    snapshot_before = set(sys.modules)
+    exit_code, reports, errors = cmc.check_all(_REPO_ROOT)
+    snapshot_after = set(sys.modules)
+    new_modules = snapshot_after - snapshot_before
+
+    assert errors == [], f"guard errors: {errors}"
+    assert exit_code == 0
+    # The guard MUST NOT have transitively imported numpy / pandas /
+    # httpx etc. via the manifest path. A short list of expected stdlib
+    # / project-internal imports the guard itself may add:
+    forbidden = {"numpy", "pandas", "httpx", "openpyxl", "scipy", "sklearn"}
+    leaked = forbidden & new_modules
+    assert not leaked, f"guard leaked third-party imports (Option-C pivot broken?): {leaked}"
 
 
 # ---------------------------------------------------------------------------
@@ -716,8 +974,8 @@ def test_safe_spread_record_update_feats_does_not_error(tmp_path: Path) -> None:
                 output_dict_names=("feats",),
             ),
         ),
-        manifest_module="_synthetic_manifest",
-        manifest_attr="SYNTHETIC_TEST_FEATURES",
+        manifest_rel_path="_synthetic_manifest.py",
+        manifest_var="SYNTHETIC_TEST_FEATURES",
     )
 
     old_path = list(sys.path)
@@ -817,8 +1075,8 @@ def test_output_dict_rename_collapses_to_required_column_error(tmp_path: Path) -
                 required_columns=("known", "age_at_index"),
             ),
         ),
-        manifest_module="_synthetic_manifest",
-        manifest_attr="SYNTHETIC_TEST_FEATURES",
+        manifest_rel_path="_synthetic_manifest.py",
+        manifest_var="SYNTHETIC_TEST_FEATURES",
     )
 
     old_path = list(sys.path)
@@ -965,8 +1223,8 @@ def test_journeys_append_output_does_not_error(tmp_path: Path) -> None:
                 collector_names=("journeys",),
             ),
         ),
-        manifest_module="_synthetic_manifest",
-        manifest_attr="SYNTHETIC_TEST_FEATURES",
+        manifest_rel_path="_synthetic_manifest.py",
+        manifest_var="SYNTHETIC_TEST_FEATURES",
     )
 
     old_path = list(sys.path)
@@ -1094,8 +1352,8 @@ def test_shadowed_safe_spread_fails_closed(tmp_path: Path) -> None:
                 output_dict_names=("feats",),
             ),
         ),
-        manifest_module="_synthetic_manifest",
-        manifest_attr="SYNTHETIC_TEST_FEATURES",
+        manifest_rel_path="_synthetic_manifest.py",
+        manifest_var="SYNTHETIC_TEST_FEATURES",
     )
 
     old_path = list(sys.path)
@@ -1366,8 +1624,8 @@ def test_augassign_dict_union_safe_spread_does_not_error(tmp_path: Path) -> None
                 output_dict_names=("feats",),
             ),
         ),
-        manifest_module="_synthetic_manifest",
-        manifest_attr="SYNTHETIC_TEST_FEATURES",
+        manifest_rel_path="_synthetic_manifest.py",
+        manifest_var="SYNTHETIC_TEST_FEATURES",
     )
 
     old_path = list(sys.path)
@@ -1413,8 +1671,8 @@ def test_list_collector_append_still_accepted(tmp_path: Path) -> None:
                 collector_names=("journeys",),
             ),
         ),
-        manifest_module="_synthetic_manifest",
-        manifest_attr="SYNTHETIC_TEST_FEATURES",
+        manifest_rel_path="_synthetic_manifest.py",
+        manifest_var="SYNTHETIC_TEST_FEATURES",
     )
 
     old_path = list(sys.path)
@@ -1475,8 +1733,8 @@ def test_safe_spread_shadowed_by_unknown_helper_fails_closed(
                 output_dict_names=("feats",),
             ),
         ),
-        manifest_module="_synthetic_manifest",
-        manifest_attr="SYNTHETIC_TEST_FEATURES",
+        manifest_rel_path="_synthetic_manifest.py",
+        manifest_var="SYNTHETIC_TEST_FEATURES",
     )
 
     old_path = list(sys.path)
@@ -1531,8 +1789,8 @@ def test_safe_spread_trusted_helper_does_not_shadow(tmp_path: Path) -> None:
                 output_dict_names=("feats",),
             ),
         ),
-        manifest_module="_synthetic_manifest",
-        manifest_attr="SYNTHETIC_TEST_FEATURES",
+        manifest_rel_path="_synthetic_manifest.py",
+        manifest_var="SYNTHETIC_TEST_FEATURES",
     )
 
     old_path = list(sys.path)
@@ -1662,8 +1920,8 @@ def test_trusted_helper_non_self_receiver_shadows(tmp_path: Path) -> None:
                 output_dict_names=("feats",),
             ),
         ),
-        manifest_module="_synthetic_manifest",
-        manifest_attr="SYNTHETIC_TEST_FEATURES",
+        manifest_rel_path="_synthetic_manifest.py",
+        manifest_var="SYNTHETIC_TEST_FEATURES",
     )
 
     old_path = list(sys.path)
@@ -1713,8 +1971,8 @@ def test_trusted_helper_bare_call_shadows(tmp_path: Path) -> None:
                 output_dict_names=("feats",),
             ),
         ),
-        manifest_module="_synthetic_manifest",
-        manifest_attr="SYNTHETIC_TEST_FEATURES",
+        manifest_rel_path="_synthetic_manifest.py",
+        manifest_var="SYNTHETIC_TEST_FEATURES",
     )
 
     old_path = list(sys.path)
@@ -1942,8 +2200,8 @@ def test_subscript_read_in_if_expression_does_not_false_positive(
                 output_dict_names=("feats",),
             ),
         ),
-        manifest_module="_synthetic_manifest",
-        manifest_attr="SYNTHETIC_TEST_FEATURES",
+        manifest_rel_path="_synthetic_manifest.py",
+        manifest_var="SYNTHETIC_TEST_FEATURES",
     )
 
     old_path = list(sys.path)
