@@ -4,7 +4,7 @@
 **Branch**: `phase-3-4-model-trainer-ablation`
 **Commits**: `394913b9` (initial wiring) + `71a9fa81` (self-review fixes)
 **Status**: Implementation + 6 integration tests + adversarial self-review COMPLETE.
-**PR URL**: Not yet opened (supervisor merges per agent constraints).
+**PR URL**: https://github.com/enunezvn/e2i_causal_analytics/pull/229 (supervisor merges per agent constraints).
 
 ## Decision Rationale: SHIP
 
