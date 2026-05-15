@@ -153,9 +153,7 @@ async def cascade_invalidate(
                         ).eq(pk_col, target_id).is_("invalidated_at", "null").execute()
                         result.record_hit(target_type)
                     except Exception as exc:
-                        logger.exception(
-                            f"cascade: update failed for {target_type}:{target_id}"
-                        )
+                        logger.exception(f"cascade: update failed for {target_type}:{target_id}")
                         result.errors.append(f"update {target_type}:{target_id}: {exc}")
                 # Walk further regardless of whether this row was invalidatable —
                 # an episodic_memory has no invalidated_at but may have descendants.

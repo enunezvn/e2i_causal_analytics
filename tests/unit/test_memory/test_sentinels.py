@@ -150,12 +150,10 @@ def fake_supabase() -> FakeSupabase:
 def patch_clients(fake_supabase):
     fake_redis = AsyncMock()
     fake_redis.publish = AsyncMock(return_value=1)
-    with patch(
-        "src.memory.sentinels.registry.get_supabase_client", return_value=fake_supabase
-    ), patch(
-        "src.memory.lifecycle.invalidator.get_supabase_client", return_value=fake_supabase
-    ), patch(
-        "src.memory.lifecycle.invalidator.get_redis_client", return_value=fake_redis
+    with (
+        patch("src.memory.sentinels.registry.get_supabase_client", return_value=fake_supabase),
+        patch("src.memory.lifecycle.invalidator.get_supabase_client", return_value=fake_supabase),
+        patch("src.memory.lifecycle.invalidator.get_redis_client", return_value=fake_redis),
     ):
         yield fake_supabase
 
@@ -166,7 +164,12 @@ async def test_register_rejects_empty_brand():
         await register_sentinel(
             name="bad",
             pattern_type="threshold_breach",
-            pattern_config={"table": "causal_paths", "column": "causal_effect_size", "op": "<", "value": 0.05},
+            pattern_config={
+                "table": "causal_paths",
+                "column": "causal_effect_size",
+                "op": "<",
+                "value": 0.05,
+            },
             action_type="invalidate",
             action_config={"source_type": "causal_path"},
             brand="",

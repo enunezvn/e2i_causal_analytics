@@ -646,7 +646,9 @@ app.add_middleware(
 # (inbound) and AFTER (outbound) — we use it on the outbound side to inspect
 # the JSON body. See src/api/middleware/insight_verifier.py.
 app.add_middleware(InsightVerifierMiddleware)
-logger.info("Insight Verifier: ENABLED (JIT provenance check on /api/causal, /api/explain, /api/executive-insights)")
+logger.info(
+    "Insight Verifier: ENABLED (JIT provenance check on /api/causal, /api/explain, /api/executive-insights)"
+)
 
 # JWT Authentication middleware (Supabase)
 # Protects all routes except public paths (health, docs, read-only endpoints)

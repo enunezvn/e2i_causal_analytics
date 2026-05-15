@@ -91,10 +91,9 @@ def patch_clients(fake_supabase):
     """Patch both Supabase and Redis clients used by the invalidator."""
     fake_redis = AsyncMock()
     fake_redis.publish = AsyncMock(return_value=1)
-    with patch(
-        "src.memory.lifecycle.invalidator.get_supabase_client", return_value=fake_supabase
-    ), patch(
-        "src.memory.lifecycle.invalidator.get_redis_client", return_value=fake_redis
+    with (
+        patch("src.memory.lifecycle.invalidator.get_supabase_client", return_value=fake_supabase),
+        patch("src.memory.lifecycle.invalidator.get_redis_client", return_value=fake_redis),
     ):
         yield fake_redis
 

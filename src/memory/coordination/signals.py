@@ -35,8 +35,8 @@ DEFAULT_STREAM_MAXLEN = 10_000
 class SignalStream:
     """Describes a stream the bus knows about."""
 
-    topic: str         # e.g. "cohort:rebuilt", "causal_path:discovered"
-    brand: str         # 'Kisqali', 'Fabhalta', 'Remibrutinib', or 'all'
+    topic: str  # e.g. "cohort:rebuilt", "causal_path:discovered"
+    brand: str  # 'Kisqali', 'Fabhalta', 'Remibrutinib', or 'all'
 
     @property
     def key(self) -> str:

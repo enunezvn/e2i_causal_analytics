@@ -162,12 +162,7 @@ async def get_sentinel(
 ) -> SentinelResponse:
     client = get_supabase_client()
     rows = (
-        client.table("sentinels")
-        .select("*")
-        .eq("sentinel_id", sentinel_id)
-        .limit(1)
-        .execute()
-        .data
+        client.table("sentinels").select("*").eq("sentinel_id", sentinel_id).limit(1).execute().data
     ) or []
     if not rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="sentinel not found")

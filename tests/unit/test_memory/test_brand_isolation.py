@@ -160,16 +160,12 @@ def patch_all(db):
     fake_redis.set = AsyncMock(return_value=True)
     fake_redis.eval = AsyncMock(return_value=1)
     fake_redis.xadd = AsyncMock(return_value="1-0")
-    with patch(
-        "src.memory.lifecycle.invalidator.get_supabase_client", return_value=db
-    ), patch(
-        "src.memory.lifecycle.invalidator.get_redis_client", return_value=fake_redis
-    ), patch(
-        "src.memory.crystallization.crystallizer.get_supabase_client", return_value=db
-    ), patch(
-        "src.memory.sentinels.registry.get_supabase_client", return_value=db
-    ), patch(
-        "src.memory.coordination.signals.get_redis_client", return_value=fake_redis
+    with (
+        patch("src.memory.lifecycle.invalidator.get_supabase_client", return_value=db),
+        patch("src.memory.lifecycle.invalidator.get_redis_client", return_value=fake_redis),
+        patch("src.memory.crystallization.crystallizer.get_supabase_client", return_value=db),
+        patch("src.memory.sentinels.registry.get_supabase_client", return_value=db),
+        patch("src.memory.coordination.signals.get_redis_client", return_value=fake_redis),
     ):
         yield db, fake_redis
 
