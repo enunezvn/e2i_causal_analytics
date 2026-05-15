@@ -82,6 +82,43 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: pip
+
+      - name: Install manifest-import dependencies (Option A from PR #230 fix)
+        # The guard imports ``src.data.manifests.<cohort>_feature_manifest``
+        # to read each cohort's registered ``FeatureContract`` entries.
+        # That import chain transitively pulls ``src.data.feature_contract``,
+        # whose module-load calls ``_compute_kg_known_systems()`` which
+        # imports ``src.data.kg.types``; the ``src.data.kg`` package
+        # ``__init__`` then pulls ``src.data.kg.adversarial_probe`` which
+        # imports numpy at module load. So the manifest is NOT
+        # stdlib-only importable despite the guard script itself being
+        # stdlib-pure.
+        #
+        # Fix per the PR #230 CI-failure-2 task brief: Option A
+        # (install the minimal transitive deps). numpy is the only one
+        # actually hit at import time today; pandas is added defensively
+        # for forward-compat against future ``src.data.kg.*`` additions
+        # the manifest accidentally pulls. We deliberately do NOT
+        # ``pip install -r requirements.txt`` — that's 5+ minutes of
+        # install vs. seconds for numpy+pandas, and the guard runs on
+        # every PR touching the converter/manifest paths.
+        #
+        # Alternatives we considered:
+        #   * Option B (lazy-import in feature_contract.py) — would
+        #     require moving _compute_kg_known_systems() out of
+        #     module-load. Higher risk: production callers rely on
+        #     _KG_KNOWN_SYSTEMS being populated when they construct
+        #     FeatureContract instances.
+        #   * Option C (AST-parse the manifest source for
+        #     FeatureContract(...) calls) — keeps guard stdlib-only
+        #     but adds parser code for list-concatenations + dict-comp
+        #     loops in manifest construction. Punted to a future PR
+        #     if the install-deps approach becomes a portability pain.
+        run: |
+          set -euo pipefail
+          python3 -m pip install --upgrade --quiet pip
+          python3 -m pip install --quiet numpy pandas
 
       - name: Resolve BASE SHA
         id: resolve-sha
@@ -126,11 +163,12 @@ jobs:
         run: |
           set -euo pipefail
           echo "::group::Layer 1 manifest-coverage guard output"
-          # The guard imports `src.data.manifests.*_feature_manifest`
-          # to read the registered FeatureContract entries; those imports
-          # transitively reference `src.data.feature_contract` which is
-          # stdlib-only. No third-party dependency install is required —
-          # the guard runs on the bare Python 3.12 toolchain.
+          # The guard script itself is stdlib-only, but the manifest
+          # modules it imports transitively pull numpy via
+          # ``src.data.feature_contract`` → ``src.data.kg.types`` →
+          # ``src.data.kg.__init__`` → ``src.data.kg.adversarial_probe``.
+          # The "Install manifest-import dependencies" step above
+          # installs numpy + pandas so the imports succeed.
           #
           # We invoke the base-ref validator copy from /tmp/governance
           # but point ``--repo-root`` at the PR checkout so it reads
@@ -160,6 +198,12 @@ jobs:
         # required_columns sanity check in the guard's own code
         # mitigates that, but the unit tests also exercise the synthetic
         # bypass scenarios — a defence-in-depth pair.
+        #
+        # numpy + pandas already installed by the manifest-import deps
+        # step above; the test file's
+        # ``test_payer_category_manifest_entry_is_valid`` imports
+        # ``src.data.manifests.optum_feature_manifest`` which needs
+        # those deps for the same transitive-import reason.
         run: |
           set -euo pipefail
           python3 -m pip install --quiet pytest pytest-xdist pytest-timeout pytest-asyncio

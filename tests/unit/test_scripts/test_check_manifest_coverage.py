@@ -51,9 +51,7 @@ def test_csu_manifest_fully_covers_csu_output() -> None:
     CSU manifest or the audit-column allowlist. Any failure here means
     a new CSU column landed without a manifest entry.
     """
-    exit_code, reports, errors = cmc.check_all(
-        _REPO_ROOT, only_cohorts=("csu",)
-    )
+    exit_code, reports, errors = cmc.check_all(_REPO_ROOT, only_cohorts=("csu",))
     assert errors == [], f"discovery/manifest errors: {errors}"
     assert exit_code == 0, f"CSU coverage failure: {reports}"
     assert len(reports) == 1
@@ -70,9 +68,7 @@ def test_optum_manifest_fully_covers_all_three_cohorts() -> None:
         "optum-discontinuation",
         "optum-persistence",
     )
-    exit_code, reports, errors = cmc.check_all(
-        _REPO_ROOT, only_cohorts=optum_cohorts
-    )
+    exit_code, reports, errors = cmc.check_all(_REPO_ROOT, only_cohorts=optum_cohorts)
     assert errors == [], f"discovery/manifest errors: {errors}"
     assert exit_code == 0, f"Optum coverage failure: {reports}"
     assert {r.cohort for r in reports} == set(optum_cohorts)
@@ -103,9 +99,7 @@ def test_csu_discovery_finds_known_columns() -> None:
     would silently zero-out the discovered set; this guards against
     that drift.
     """
-    discovered, errors = cmc.discover_columns_for_cohort(
-        _REPO_ROOT, cmc.COHORTS[0]
-    )
+    discovered, errors = cmc.discover_columns_for_cohort(_REPO_ROOT, cmc.COHORTS[0])
     assert errors == []
     for canonical in (
         "treatment_initiated",
@@ -229,8 +223,9 @@ def test_allowlist_accepts_visitor_sentinel() -> None:
 # ---------------------------------------------------------------------------
 
 
-_SYNTHETIC_CONVERTER_OK = textwrap.dedent(
-    """
+_SYNTHETIC_CONVERTER_OK = (
+    textwrap.dedent(
+        """
     from __future__ import annotations
     from typing import Any
 
@@ -246,11 +241,14 @@ _SYNTHETIC_CONVERTER_OK = textwrap.dedent(
                 record[f"has_{fam}"] = 0
             return record
     """
-).strip() + "\n"
+    ).strip()
+    + "\n"
+)
 
 
-_SYNTHETIC_CONVERTER_MISSING_COLUMN = textwrap.dedent(
-    """
+_SYNTHETIC_CONVERTER_MISSING_COLUMN = (
+    textwrap.dedent(
+        """
     from __future__ import annotations
     from typing import Any
 
@@ -267,11 +265,14 @@ _SYNTHETIC_CONVERTER_MISSING_COLUMN = textwrap.dedent(
                 record[f"has_{fam}"] = 0
             return record
     """
-).strip() + "\n"
+    ).strip()
+    + "\n"
+)
 
 
-_SYNTHETIC_MANIFEST = textwrap.dedent(
-    """
+_SYNTHETIC_MANIFEST = (
+    textwrap.dedent(
+        """
     from src.data.feature_contract import FeatureContract, KnowableAt
 
     SYNTHETIC_TEST_FEATURES: list[FeatureContract] = [
@@ -293,12 +294,12 @@ _SYNTHETIC_MANIFEST = textwrap.dedent(
         ),
     ]
     """
-).strip() + "\n"
+    ).strip()
+    + "\n"
+)
 
 
-def _write_synthetic_repo(
-    tmp_path: Path, converter_src: str, manifest_src: str
-) -> Path:
+def _write_synthetic_repo(tmp_path: Path, converter_src: str, manifest_src: str) -> Path:
     """Materialise a tiny repo layout that ``check_all`` can consume."""
     (tmp_path / "scripts").mkdir()
     (tmp_path / "scripts" / "synthetic_converter.py").write_text(converter_src)
@@ -426,9 +427,7 @@ def test_fstring_allowed_prefix_does_not_error(tmp_path: Path) -> None:
     assert "x" in discovered
     # The sentinel is emitted so the per-cohort summary reflects the
     # prefix-bound dynamic surface.
-    assert (
-        cmc._ColumnDiscoveryVisitor._ALLOWED_PREFIX_SENTINEL in discovered
-    )
+    assert cmc._ColumnDiscoveryVisitor._ALLOWED_PREFIX_SENTINEL in discovered
 
 
 def test_fstring_unbound_var_no_prefix_triggers_error(tmp_path: Path) -> None:
@@ -725,9 +724,7 @@ def test_safe_spread_record_update_feats_does_not_error(tmp_path: Path) -> None:
     sys.path.insert(0, str(tmp_path))
     try:
         discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
-        assert disc_errs == [], (
-            f"safe spread should not error: {disc_errs}"
-        )
+        assert disc_errs == [], f"safe spread should not error: {disc_errs}"
         # All three keys should be discovered.
         assert {"known", "safe_feature_a", "safe_feature_b"}.issubset(discovered)
     finally:
@@ -846,9 +843,7 @@ def test_real_cohort_required_columns_satisfied() -> None:
     """
     for cohort in cmc.COHORTS:
         discovered, errors = cmc.discover_columns_for_cohort(_REPO_ROOT, cohort)
-        assert errors == [], (
-            f"{cohort.name}: discovery errors: {errors}"
-        )
+        assert errors == [], f"{cohort.name}: discovery errors: {errors}"
         for df in cohort.discovery_funcs:
             for req in df.required_columns:
                 assert req in discovered, (
@@ -978,9 +973,7 @@ def test_journeys_append_output_does_not_error(tmp_path: Path) -> None:
     sys.path.insert(0, str(tmp_path))
     try:
         discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
-        assert disc_errs == [], (
-            f".append() should not trigger helper-call check: {disc_errs}"
-        )
+        assert disc_errs == [], f".append() should not trigger helper-call check: {disc_errs}"
         assert {"known", "patient_id"}.issubset(discovered)
     finally:
         sys.path[:] = old_path
@@ -1149,9 +1142,7 @@ def test_conditional_alias_assignment_fails_closed(tmp_path: Path) -> None:
     try:
         discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
         assert disc_errs, f"ternary alias must error: {disc_errs}"
-        assert any(
-            "alias = record if cond else other" in e for e in disc_errs
-        )
+        assert any("alias = record if cond else other" in e for e in disc_errs)
     finally:
         sys.path[:] = old_path
 
@@ -1166,9 +1157,7 @@ def test_conditional_alias_assignment_fails_closed(tmp_path: Path) -> None:
     "wrapper_method",
     ["get", "copy", "items", "keys", "values", "fromkeys"],
 )
-def test_wrapper_method_bypass_fails_closed(
-    tmp_path: Path, wrapper_method: str
-) -> None:
+def test_wrapper_method_bypass_fails_closed(tmp_path: Path, wrapper_method: str) -> None:
     """Codex pass-3 HIGH-6: an arbitrary user-defined object's method
     named with ``get`` / ``copy`` / ``items`` / ``keys`` / ``values``
     is just user code that could mutate the dict argument. Pass-2's
@@ -1199,9 +1188,7 @@ def test_wrapper_method_bypass_fails_closed(
     sys.path.insert(0, str(tmp_path))
     try:
         discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
-        assert disc_errs, (
-            f"wrapper.{wrapper_method}(record) must error (pass-3 HIGH-6)"
-        )
+        assert disc_errs, f"wrapper.{wrapper_method}(record) must error (pass-3 HIGH-6)"
     finally:
         sys.path[:] = old_path
 
@@ -1299,9 +1286,7 @@ def test_augassign_dict_union_literal_enumerates(tmp_path: Path) -> None:
     sys.path.insert(0, str(tmp_path))
     try:
         discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
-        assert disc_errs == [], (
-            f"AugAssign with dict literal should enumerate cleanly: {disc_errs}"
-        )
+        assert disc_errs == [], f"AugAssign with dict literal should enumerate cleanly: {disc_errs}"
         assert "aug_known_key" in discovered
         # Not in manifest → unmapped
         manifest, _ = cmc.load_manifest_names(tmp_path, cohort)
@@ -1436,9 +1421,7 @@ def test_list_collector_append_still_accepted(tmp_path: Path) -> None:
     sys.path.insert(0, str(tmp_path))
     try:
         discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
-        assert disc_errs == [], (
-            f"journeys.append(journey_dict) should not error: {disc_errs}"
-        )
+        assert disc_errs == [], f"journeys.append(journey_dict) should not error: {disc_errs}"
         assert "known" in discovered
     finally:
         sys.path[:] = old_path
@@ -1502,10 +1485,7 @@ def test_safe_spread_shadowed_by_unknown_helper_fails_closed(
         discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
         # The unknown_helper Call rebinds `feats`; safe-spread tolerance
         # is shadowed; ``record.update(feats)`` becomes unsupported.
-        assert disc_errs, (
-            f"feats = self.unknown_helper() must shadow safe-spread: "
-            f"{disc_errs}"
-        )
+        assert disc_errs, f"feats = self.unknown_helper() must shadow safe-spread: {disc_errs}"
         assert any("record.update(feats)" in e for e in disc_errs)
     finally:
         sys.path[:] = old_path
@@ -1559,9 +1539,7 @@ def test_safe_spread_trusted_helper_does_not_shadow(tmp_path: Path) -> None:
     sys.path.insert(0, str(tmp_path))
     try:
         discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
-        assert disc_errs == [], (
-            f"trusted helper binding must not shadow: {disc_errs}"
-        )
+        assert disc_errs == [], f"trusted helper binding must not shadow: {disc_errs}"
         assert {"known", "safe_feature"}.issubset(discovered)
     finally:
         sys.path[:] = old_path
@@ -1603,9 +1581,7 @@ def test_output_name_reassigned_in_tuple_unpack_fails_closed(
 
 
 @pytest.mark.parametrize("op_src", ["+=", "*="])
-def test_non_ior_augassign_on_output_fails_closed(
-    tmp_path: Path, op_src: str
-) -> None:
+def test_non_ior_augassign_on_output_fails_closed(tmp_path: Path, op_src: str) -> None:
     """Codex pass-4 LOW-3: ``record += {...}`` / ``record *= 2`` etc.
     on an output Name are unsupported. Python's dict would raise
     TypeError at runtime, but the static walker treats them as
@@ -1634,9 +1610,7 @@ def test_non_ior_augassign_on_output_fails_closed(
     sys.path.insert(0, str(tmp_path))
     try:
         discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
-        assert disc_errs, (
-            f"non-|= AugAssign on output Name must error (op={op_src}): {disc_errs}"
-        )
+        assert disc_errs, f"non-|= AugAssign on output Name must error (op={op_src}): {disc_errs}"
     finally:
         sys.path[:] = old_path
 
@@ -1696,9 +1670,7 @@ def test_trusted_helper_non_self_receiver_shadows(tmp_path: Path) -> None:
     sys.path.insert(0, str(tmp_path))
     try:
         discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
-        assert disc_errs, (
-            "non-self receiver trusted-helper-spoof must shadow safe-spread"
-        )
+        assert disc_errs, "non-self receiver trusted-helper-spoof must shadow safe-spread"
         assert any("record.update(feats)" in e for e in disc_errs)
     finally:
         sys.path[:] = old_path
@@ -1785,9 +1757,7 @@ def test_output_dict_reassignment_from_arbitrary_name_fails_closed(
     sys.path.insert(0, str(tmp_path))
     try:
         discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
-        assert disc_errs, (
-            f"record = arbitrary_temp must error: {disc_errs}"
-        )
+        assert disc_errs, f"record = arbitrary_temp must error: {disc_errs}"
         assert any("record = temp" in e for e in disc_errs)
     finally:
         sys.path[:] = old_path
@@ -1804,9 +1774,7 @@ def test_output_dict_reassignment_from_arbitrary_name_fails_closed(
         'some_func(**{"arg": record})',
     ],
 )
-def test_helper_call_unpacked_output_arg_fails_closed(
-    tmp_path: Path, call_shape: str
-) -> None:
+def test_helper_call_unpacked_output_arg_fails_closed(tmp_path: Path, call_shape: str) -> None:
     """Codex pass-7 HIGH-14: an output-dict Name hidden inside a
     Starred / List / Tuple / Dict unpack passed to a helper still
     delivers the dict by reference at runtime. The recursive
@@ -1839,9 +1807,7 @@ def test_helper_call_unpacked_output_arg_fails_closed(
     sys.path.insert(0, str(tmp_path))
     try:
         discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
-        assert disc_errs, (
-            f"unpack-wrapper hiding output dict must error (shape={call_shape!r})"
-        )
+        assert disc_errs, f"unpack-wrapper hiding output dict must error (shape={call_shape!r})"
     finally:
         sys.path[:] = old_path
 
@@ -1879,9 +1845,7 @@ def test_wrapper_append_with_output_arg_fails_closed(tmp_path: Path) -> None:
     sys.path.insert(0, str(tmp_path))
     try:
         discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
-        assert disc_errs, (
-            "wrapper.append(record) with no collector_names declared must error"
-        )
+        assert disc_errs, "wrapper.append(record) with no collector_names declared must error"
     finally:
         sys.path[:] = old_path
 
@@ -1915,9 +1879,7 @@ def test_output_dict_alias_self_assign_does_not_error(tmp_path: Path) -> None:
     sys.path.insert(0, str(tmp_path))
     try:
         discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
-        assert disc_errs == [], (
-            f"alias self-assign should not error: {disc_errs}"
-        )
+        assert disc_errs == [], f"alias self-assign should not error: {disc_errs}"
         assert "known" in discovered
     finally:
         sys.path[:] = old_path
@@ -1990,9 +1952,7 @@ def test_subscript_read_in_if_expression_does_not_false_positive(
         discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
         # The IfExp value reads feats["zip3"], but this is a subscript
         # READ, not an alias assignment. Must NOT trigger MEDIUM-2.
-        assert disc_errs == [], (
-            f"subscript read in IfExp should not be flagged: {disc_errs}"
-        )
+        assert disc_errs == [], f"subscript read in IfExp should not be flagged: {disc_errs}"
         assert "urban_rural_code" in discovered
         assert "zip3" in discovered
     finally:

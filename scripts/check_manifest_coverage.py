@@ -34,10 +34,26 @@ This script chooses (a). Rationale:
     checked-in golden file per cohort; a PR that adds a column WITHOUT
     a manifest entry could trivially update the golden file in the same
     commit, and the guard would silently pass.
-  - **No external compute.** The CSU/Optum converters depend on pandas,
-    openpyxl, and the rwd_common package; option (b) would require
-    installing the full converter dependency stack in the CI job. AST
-    parsing uses only the stdlib.
+  - **No external compute for AST scanning.** The CSU/Optum converters
+    depend on pandas, openpyxl, and the rwd_common package; option (b)
+    smoke-conversion would require installing the full converter
+    dependency stack in the CI job. The AST scan itself uses only the
+    Python stdlib.
+
+    **Note on manifest-import deps**: while the discovery scan is
+    stdlib-pure, the second guard phase (reading the manifest registry
+    via importlib) transitively imports
+    ``src.data.feature_contract`` → ``src.data.kg.types`` →
+    ``src.data.kg.__init__`` → ``src.data.kg.adversarial_probe``
+    which imports numpy at module load. The CI workflow at
+    ``.github/workflows/feature_contract_guard.yml`` installs ``numpy``
+    + ``pandas`` before invoking the guard (Option A from PR #230's
+    CI-failure-2 fix). Option C (AST-parsing the manifest module
+    source for ``FeatureContract(...)`` calls instead of importing)
+    would keep the guard fully stdlib-only but is deferred to a
+    future PR — the manifest's list-concatenation + dict-comp
+    construction patterns make AST parsing of the registry
+    construction nontrivial.
   - **Loop-iterable expansion is tractable.** The Optum
     ``_compute_features`` body produces ~80 columns, most via f-strings
     inside ``for X in Y:`` loops where ``Y`` is a module-level dict or
@@ -768,10 +784,7 @@ class _ColumnDiscoveryVisitor(ast.NodeVisitor):
                 if isinstance(node.value, ast.Dict):
                     # ``record = {...}`` — Pattern B handles enumeration.
                     continue
-                if (
-                    isinstance(node.value, ast.Name)
-                    and node.value.id in self.output_dict_names
-                ):
+                if isinstance(node.value, ast.Name) and node.value.id in self.output_dict_names:
                     # ``record = record`` / ``record = <known-alias>``
                     # — no-op / handled by alias propagation.
                     continue
@@ -803,11 +816,7 @@ class _ColumnDiscoveryVisitor(ast.NodeVisitor):
         if isinstance(tgt, ast.Subscript) and self._is_output_target(tgt):
             self._handle_subscript_assign(tgt)
             return
-        if (
-            in_tuple_unpack
-            and isinstance(tgt, ast.Name)
-            and tgt.id in self.output_dict_names
-        ):
+        if in_tuple_unpack and isinstance(tgt, ast.Name) and tgt.id in self.output_dict_names:
             # Output Name reassignment inside tuple/list unpack.
             try:
                 expr_text = ast.unparse(tgt)
@@ -975,10 +984,7 @@ class _ColumnDiscoveryVisitor(ast.NodeVisitor):
             and node.target.id in self.output_dict_names
             and node.value is not None
             and not isinstance(node.value, ast.Dict)
-            and not (
-                isinstance(node.value, ast.Name)
-                and node.value.id in self.output_dict_names
-            )
+            and not (isinstance(node.value, ast.Name) and node.value.id in self.output_dict_names)
         ):
             try:
                 expr_text = ast.unparse(node)
@@ -1097,9 +1103,7 @@ class _ColumnDiscoveryVisitor(ast.NodeVisitor):
                         try:
                             expr_text = ast.unparse(node)
                         except Exception:  # pragma: no cover — defensive
-                            expr_text = (
-                                f"{receiver}.update(<non-dict-literal>)"
-                            )
+                            expr_text = f"{receiver}.update(<non-dict-literal>)"
                         self.unsupported_writes.append(expr_text)
                 elif attr == "setdefault" or attr == "__setitem__":
                     try:
@@ -1174,10 +1178,7 @@ class _ColumnDiscoveryVisitor(ast.NodeVisitor):
             # record)`` on a user-defined object is no longer accepted
             # by method-name alone. The DiscoveryFunc's ``collector_names``
             # explicitly enumerates the legitimate collector identifiers.
-            if (
-                receiver_id in self.collector_names
-                and method in self._LIST_COLLECTOR_METHODS
-            ):
+            if receiver_id in self.collector_names and method in self._LIST_COLLECTOR_METHODS:
                 return
 
         # Examine each argument (and any nested unpack containers) for
@@ -1498,9 +1499,7 @@ def discover_columns_for_cohort(
     # When we see ``journey_dict.update(extra_demo)`` in
     # ``_build_patient_journeys``, ``extra_demo`` is the current
     # function's own output_dict_name → also safe.
-    safe_spread = frozenset(
-        n for df in cohort.discovery_funcs for n in df.output_dict_names
-    )
+    safe_spread = frozenset(n for df in cohort.discovery_funcs for n in df.output_dict_names)
     # Codex pass-4 HIGH-9: names of sibling DiscoveryFunc functions
     # in this cohort. A binding ``feats = self._compute_features(...)``
     # is the trusted safe-spread shape — the visitor accepts it as
@@ -1535,8 +1534,7 @@ def discover_columns_for_cohort(
                 f"{cohort.name}: unresolved f-string subscript keys in "
                 f"{df.func_name} (column enumeration incomplete; fix the "
                 f"discovery walker or pin the loop iterable to a "
-                f"module-level constant):\n  "
-                + "\n  ".join(seen_unresolved)
+                f"module-level constant):\n  " + "\n  ".join(seen_unresolved)
             )
         if visitor.unsupported_writes:
             # Codex-rescue HIGH-1: unsupported output-dict write shapes
@@ -1556,8 +1554,7 @@ def discover_columns_for_cohort(
                 f"{cohort.name}: unsupported output-dict write shapes "
                 f"in {df.func_name} (statically unenumerable; rewrite as "
                 f"literal subscript or pin keys into a module-level "
-                f"constant the walker can resolve):\n  "
-                + "\n  ".join(seen_unsupported)
+                f"constant the walker can resolve):\n  " + "\n  ".join(seen_unsupported)
             )
         # Codex-rescue HIGH-2: required-column sanity check. A refactor
         # that renames the output dict would silently collapse the
@@ -1567,9 +1564,7 @@ def discover_columns_for_cohort(
         # a discovery error (exit 2), not a coverage failure (exit 1):
         # the discovery surface is broken, not the manifest.
         if df.required_columns:
-            missing_required = [
-                c for c in df.required_columns if c not in visitor.discovered
-            ]
+            missing_required = [c for c in df.required_columns if c not in visitor.discovered]
             if missing_required:
                 errors.append(
                     f"{cohort.name}: discovery in {df.func_name} did NOT "
@@ -1588,9 +1583,7 @@ def discover_columns_for_cohort(
 # ---------------------------------------------------------------------------
 
 
-def load_manifest_names(
-    repo_root: Path, cohort: CohortConfig
-) -> tuple[frozenset[str], list[str]]:
+def load_manifest_names(repo_root: Path, cohort: CohortConfig) -> tuple[frozenset[str], list[str]]:
     """Import the cohort's manifest module and return the registered
     feature names. Failure modes:
 
@@ -1633,9 +1626,7 @@ def load_manifest_names(
     names: list[str] = []
     for c in contracts:
         if not hasattr(c, "name"):
-            errors.append(
-                f"{cohort.name}: manifest entry {c!r} has no .name attribute"
-            )
+            errors.append(f"{cohort.name}: manifest entry {c!r} has no .name attribute")
             continue
         names.append(c.name)
 
@@ -1683,9 +1674,7 @@ def reconcile_cohort(
     unmapped = sorted(c for c in discovered if c not in manifest and not _is_allowed(c))
     # The optional reverse-check: manifest entries that the static
     # analyser failed to find in the converter. Empty by default.
-    manifest_unproduced = sorted(
-        c for c in MANIFEST_MUST_BE_PRODUCED if c not in discovered
-    )
+    manifest_unproduced = sorted(c for c in MANIFEST_MUST_BE_PRODUCED if c not in discovered)
     return CohortReport(
         cohort=cohort_name,
         discovered=discovered,
@@ -1780,10 +1769,7 @@ def _build_parser() -> argparse.ArgumentParser:
         action="append",
         default=None,
         choices=[c.name for c in COHORTS],
-        help=(
-            "Restrict to one or more cohorts (repeatable). Defaults to all "
-            "cohorts."
-        ),
+        help=("Restrict to one or more cohorts (repeatable). Defaults to all cohorts."),
     )
     return p
 
@@ -1792,9 +1778,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     repo_root = (args.repo_root or Path(__file__).resolve().parent.parent).resolve()
 
-    exit_code, reports, errors = check_all(
-        repo_root, only_cohorts=args.only_cohort
-    )
+    exit_code, reports, errors = check_all(repo_root, only_cohorts=args.only_cohort)
 
     # Summary output. Always print the discovered column counts so the
     # CI log shows the audit even on PASS.
