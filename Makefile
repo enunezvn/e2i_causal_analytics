@@ -1,4 +1,4 @@
-.PHONY: help install dev-install test test-fast test-seq test-cov lint format clean docker-up docker-down docker-logs deploy deploy-build db-init data-generate api-docs curate-candidates
+.PHONY: help install dev-install test test-fast test-seq test-cov tier1-5-test lint format clean docker-up docker-down docker-logs deploy deploy-build db-init data-generate api-docs curate-candidates
 
 help:
 	@echo "E2I Causal Analytics - Available Commands"
@@ -12,6 +12,7 @@ help:
 	@echo "  make test-fast     Run tests (no coverage, faster)"
 	@echo "  make test-seq      Run tests sequentially (low memory systems)"
 	@echo "  make test-cov      Run tests with full coverage (HTML + XML reports)"
+	@echo "  make tier1-5-test  Run Tier 1-5 agent harness against cached tier0 outputs"
 	@echo "  make lint          Run linting checks"
 	@echo "  make format        Format code with black"
 	@echo "  make api-docs      Generate OpenAPI spec + Redoc HTML"
@@ -79,6 +80,17 @@ test-cov:
 	@echo "  - Terminal: above"
 	@echo "  - HTML: htmlcov/index.html"
 	@echo "  - XML: coverage.xml (for CI/CD)"
+
+# Tier 1-5 agent integration harness. Requires a cached Tier 0 state at
+# scripts/tier0_output_cache/latest.pkl — generate with:
+#   python scripts/run_tier1_5_test.py --run-tier0-first
+# CI uses --skip-observability so Opik isn't required.
+tier1-5-test:
+	mkdir -p docs/results
+	python scripts/run_tier1_5_test.py \
+	    --tier0-cache scripts/tier0_output_cache/latest.pkl \
+	    --skip-observability \
+	    --output docs/results/tier1_5_pipeline_latest.json
 
 lint:
 	ruff check src/ tests/

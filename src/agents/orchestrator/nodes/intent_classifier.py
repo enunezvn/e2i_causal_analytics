@@ -109,6 +109,20 @@ class IntentClassifierNode:
             r"feedback|learn.*from",
             r"improve.*based on",
         ],
+        "experiment_monitor": [
+            r"(monitor|check|status).*(experiment|trial|a\/?b ?test)",
+            r"sample ratio mismatch|\bsrm\b",
+            r"interim analysis",
+            r"(active|running).*(experiments?|trials?)",
+            r"experiments?.*(health|status|issues)",
+        ],
+        "multi_faceted": [
+            # Conjunctive multi-question markers ("and also", "compare X vs Y, then ...").
+            r"and (also|then|additionally|furthermore)",
+            r"compare .* (vs|versus|against|to) .* and",
+            r"(combine|integrate|synthes).*(analyses|results|findings)",
+            r"(both|multiple) (effects?|analyses|perspectives?)",
+        ],
         "cohort_definition": [
             r"(define|create|build|construct).*(cohort|patient set|patient population)",
             r"cohort.*(definition|construction|criteria)",
@@ -225,6 +239,7 @@ Intents:
 - performance_gap: ROI opportunities, underperformance, potential improvements
 - segment_analysis: Segment-specific effects, CATE, cohort analysis
 - experiment_design: A/B tests, experiment planning, sample size
+- experiment_monitor: Monitor running A/B experiments for SRM, interim, enrollment health
 - prediction: Forecasting, projections, likelihood estimates
 - resource_allocation: Budget/resource optimization, prioritization
 - explanation: Clarifying results, interpreting findings
@@ -232,6 +247,7 @@ Intents:
 - drift_check: Data/model drift, distribution changes
 - feedback: Learning from outcomes, improvement suggestions
 - cohort_definition: Patient cohort construction, eligibility criteria, inclusion/exclusion rules
+- multi_faceted: Multi-part questions combining 2+ distinct analyses (compare X and Y, then identify Z)
 - general: Other/unclear
 
 Respond with ONLY a JSON object:

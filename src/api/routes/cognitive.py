@@ -37,14 +37,26 @@ _orchestrator_instance = None
 
 
 def get_orchestrator():
-    """Get or create OrchestratorAgent singleton."""
+    """Get or create OrchestratorAgent singleton.
+
+    Wires the orchestrator with a registry of real Tier 0-5 agents via
+    ``create_agent_registry``. Without a registry the dispatcher silently
+    falls back to canned mock narratives (``dispatcher._mock_agent_execution``),
+    so every "cognitive" API response would be fabricated — that mode is now
+    only used when the factory itself fails to instantiate any agents.
+    """
     global _orchestrator_instance
     if _orchestrator_instance is None:
         try:
+            from src.agents.factory import create_agent_registry
             from src.agents.orchestrator import OrchestratorAgent
 
-            _orchestrator_instance = OrchestratorAgent()
-            logger.info("OrchestratorAgent initialized for cognitive workflow")
+            registry = create_agent_registry()
+            _orchestrator_instance = OrchestratorAgent(agent_registry=registry)
+            logger.info(
+                f"OrchestratorAgent initialized for cognitive workflow with "
+                f"{len(registry)} real agents: {sorted(registry.keys())}"
+            )
         except Exception as e:
             logger.warning(f"OrchestratorAgent initialization failed: {e}")
             return None

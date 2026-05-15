@@ -1,0 +1,80 @@
+name: Tier 1-5 Agent Harness
+
+# Runs the integration harness that walks every Tier 1-5 agent
+# (scripts/run_tier1_5_test.py) against a cached Tier 0 pipeline output. Acts
+# as a forcing function against schema drift between tier0 state, the
+# Tier0OutputMapper, and per-agent contracts. Soft-fails for the first two
+# weeks while the new wiring shakes out — flip ``continue-on-error`` to
+# ``false`` once the suite is stable.
+
+on:
+  pull_request:
+    paths:
+      - "src/agents/**"
+      - "src/testing/**"
+      - "scripts/run_tier0_test.py"
+      - "scripts/run_tier1_5_test.py"
+      - "config/agents/**"
+      - ".github/workflows/tier1-5-test.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  tier1-5-harness:
+    name: Tier 1-5 agent harness
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    # Soft-fail initially; flip this off after the first two clean weeks.
+    continue-on-error: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install runtime + dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Restore tier0 cache (if present in repo or artifact)
+        id: restore-cache
+        run: |
+          if [ -f scripts/tier0_output_cache/latest.pkl ]; then
+            echo "found=true" >> $GITHUB_OUTPUT
+          else
+            echo "found=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate tier0 cache (cold start)
+        if: steps.restore-cache.outputs.found == 'false'
+        env:
+          E2I_TESTING_MODE: "true"
+          DISABLE_PANDERA_IMPORT_WARNING: "True"
+        run: |
+          python scripts/run_tier0_test.py --no-mlflow --output-dir scripts/tier0_output_cache || true
+          ls -la scripts/tier0_output_cache/ || true
+
+      - name: Run Tier 1-5 harness
+        env:
+          E2I_TESTING_MODE: "true"
+          DISABLE_PANDERA_IMPORT_WARNING: "True"
+        run: |
+          make tier1-5-test
+
+      - name: Upload results JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tier1-5-results-${{ github.run_id }}
+          path: docs/results/tier1_5_pipeline_latest.json
+          if-no-files-found: ignore
+          retention-days: 14

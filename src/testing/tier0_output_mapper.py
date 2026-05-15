@@ -520,6 +520,36 @@ class Tier0OutputMapper:
             "brand": brand,
         }
 
+    def map_to_experiment_monitor(self) -> dict[str, Any]:
+        """Map to ExperimentMonitorInput (dataclass).
+
+        ExperimentMonitorInput schema (see
+        ``src/agents/experiment_monitor/agent.py:ExperimentMonitorInput``):
+        - query: str
+        - experiment_ids: Optional[List[str]] (None = use check_all_active)
+        - check_all_active: bool (default True)
+        - srm_threshold: float (default 0.001)
+        - enrollment_threshold: float (default 5.0)
+        - fidelity_threshold: float (default 0.2)
+        - stale_data_threshold_hours: float (default 24.0)
+        - check_interim: bool (default True)
+
+        Tier0 doesn't seed live experiments; we exercise the "no active
+        experiments" path which the agent must handle gracefully (empty
+        ``experiments`` list, ``monitor_summary`` describing the empty
+        check). That validates the agent's pipeline contract end-to-end.
+        """
+        return {
+            "query": "Check all active A/B experiments for SRM, enrollment, and interim issues",
+            "experiment_ids": None,
+            "check_all_active": True,
+            "srm_threshold": 0.001,
+            "enrollment_threshold": 5.0,
+            "fidelity_threshold": 0.2,
+            "stale_data_threshold_hours": 24.0,
+            "check_interim": True,
+        }
+
     def map_to_health_score(self) -> dict[str, Any]:
         """Map to HealthScoreAgent.check_health() kwargs.
 
@@ -798,6 +828,7 @@ class Tier0OutputMapper:
             # Tier 3
             "drift_monitor": self.map_to_drift_monitor(),
             "experiment_designer": self.map_to_experiment_designer(),
+            "experiment_monitor": self.map_to_experiment_monitor(),
             "health_score": self.map_to_health_score(),
             # Tier 4
             "prediction_synthesizer": self.map_to_prediction_synthesizer(),

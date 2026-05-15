@@ -10,6 +10,7 @@ from typing import Any, Dict, List
 
 from src.utils.llm_factory import get_fast_llm, get_llm_provider
 
+from .._agent_method_map import extract_narrative
 from ..state import AgentResult, OrchestratorState
 
 logger = logging.getLogger(__name__)
@@ -99,10 +100,11 @@ class SynthesizerNode:
         agent_output = result.get("result") or {}
         agent_name = result.get("agent_name", "unknown")
 
-        # Get raw response
-        raw_response = agent_output.get(
-            "narrative", agent_output.get("response", str(agent_output))
-        )
+        # Try per-agent narrative fields (executive_summary, monitor_summary,
+        # etc.) before falling back to the legacy ``narrative``/``response``
+        # keys. Last-resort stringification preserves prior behaviour for
+        # agents not yet in AGENT_RESPONSE_FIELDS.
+        raw_response = extract_narrative(agent_name, agent_output) or str(agent_output)
 
         # Extract key metrics for strategic interpretation
         interpretation = self._build_strategic_interpretation(agent_name, agent_output)
@@ -301,7 +303,7 @@ class SynthesizerNode:
             agent_output = result.get("result") or {}
             agent_name = result["agent_name"]
             agent_names.append(agent_name)
-            narrative = agent_output.get("narrative", "")[:500]
+            narrative = extract_narrative(agent_name, agent_output)[:500]
 
             # Include key metrics in summary for LLM context
             metrics_str = self._extract_key_metrics_str(agent_name, agent_output)

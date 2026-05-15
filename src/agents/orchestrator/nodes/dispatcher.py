@@ -4,11 +4,17 @@ Parallel agent dispatch with timeout handling.
 """
 
 import asyncio
+import functools
+import importlib
+import logging
 import time
 import uuid
 from typing import Any, Dict, List, Optional, cast
 
+from .._agent_method_map import AgentMethodSpec, get_method_spec
 from ..state import AgentDispatch, AgentResult, OrchestratorState
+
+logger = logging.getLogger(__name__)
 
 
 def _generate_dispatch_id() -> str:
@@ -102,38 +108,81 @@ class DispatcherNode:
     ) -> AgentResult:
         """Dispatch to a single agent with timeout.
 
-        Args:
-            dispatch: Dispatch configuration
-            state: Current state
-
-        Returns:
-            Agent result
+        Real agents are reached via the per-agent dispatch spec in
+        ``AGENT_METHOD_MAP`` (method name, async vs sync, kwargs splat, optional
+        Pydantic input model). Mock execution is only used when the agent name
+        is absent from the registry — never as a silent fallback when the
+        registered agent exists but is missing the configured method.
         """
         agent_name = dispatch["agent_name"]
         start_time = time.time()
 
-        # Mock implementation: simulate agent execution
-        # In production, this would call actual agent instances
+        # Mock implementation when no registry entry exists (used by unit
+        # tests that exercise routing without instantiating real agents).
         if agent_name not in self.agents:
-            # Simulate agent execution with mock data
             return await self._mock_agent_execution(dispatch, state)
 
         agent = self.agents[agent_name]
         timeout_ms = dispatch["timeout_ms"]
+        spec = get_method_spec(agent_name)
 
         try:
-            # Prepare agent input
             agent_input = self._prepare_agent_input(state, dispatch)
 
-            # Execute with timeout
-            result = await asyncio.wait_for(agent.analyze(agent_input), timeout=timeout_ms / 1000)
+            # Wrap input in a Pydantic / dataclass model when the agent expects
+            # one (e.g. DriftMonitorInput, ExperimentMonitorInput).
+            if spec.input_model and spec.input_module:
+                try:
+                    input_module = importlib.import_module(spec.input_module)
+                    input_cls = getattr(input_module, spec.input_model)
+                    agent_input = input_cls(**agent_input)
+                except (ImportError, AttributeError, TypeError) as e:
+                    latency = int((time.time() - start_time) * 1000)
+                    return AgentResult(
+                        agent_name=agent_name,
+                        success=False,
+                        result=None,
+                        error=f"Failed to build {spec.input_model}: {e}",
+                        latency_ms=latency,
+                    )
+
+            method = getattr(agent, spec.method, None)
+            if method is None:
+                latency = int((time.time() - start_time) * 1000)
+                return AgentResult(
+                    agent_name=agent_name,
+                    success=False,
+                    result=None,
+                    error=(
+                        f"Agent '{agent_name}' is registered but has no "
+                        f"method '{spec.method}'. Check AGENT_METHOD_MAP."
+                    ),
+                    latency_ms=latency,
+                )
+
+            timeout_seconds = timeout_ms / 1000
+
+            if spec.is_async:
+                if spec.uses_kwargs:
+                    coro = method(**agent_input)
+                else:
+                    coro = method(agent_input)
+                raw_result = await asyncio.wait_for(coro, timeout=timeout_seconds)
+            else:
+                loop = asyncio.get_event_loop()
+                if spec.uses_kwargs:
+                    call = functools.partial(method, **agent_input)
+                else:
+                    call = functools.partial(method, agent_input)
+                raw_result = await asyncio.wait_for(
+                    loop.run_in_executor(None, call), timeout=timeout_seconds
+                )
 
             latency = int((time.time() - start_time) * 1000)
-
             return AgentResult(
                 agent_name=agent_name,
                 success=True,
-                result=result,
+                result=_normalize_agent_result(raw_result),
                 error=None,
                 latency_ms=latency,
             )
@@ -329,6 +378,30 @@ class DispatcherNode:
             fallback_agent=None,
         )
         return await self._dispatch_agent(fallback_dispatch, state)
+
+
+def _normalize_agent_result(raw: Any) -> Dict[str, Any]:
+    """Coerce an agent's return value to the dict shape AgentResult expects.
+
+    Agents return one of: a TypedDict (already a dict), a dataclass output
+    object (e.g. ExperimentMonitorOutput, DriftMonitorOutput), or a plain
+    string. ``isinstance(raw, dict)`` short-circuits the TypedDict case;
+    dataclasses are flattened via ``__dict__``; anything else is wrapped.
+    """
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return cast(Dict[str, Any], raw)
+    if hasattr(raw, "to_dict") and callable(getattr(raw, "to_dict")):
+        try:
+            result = raw.to_dict()
+            if isinstance(result, dict):
+                return cast(Dict[str, Any], result)
+        except Exception:  # pragma: no cover - defensive
+            pass
+    if hasattr(raw, "__dict__"):
+        return {k: v for k, v in vars(raw).items() if not k.startswith("_")}
+    return {"raw_output": str(raw)}
 
 
 # Export for use in graph

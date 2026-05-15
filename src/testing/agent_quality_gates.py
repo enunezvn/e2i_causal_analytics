@@ -759,6 +759,20 @@ AGENT_QUALITY_GATES: dict[str, AgentQualityGate] = {
         "fail_on_status": ["error", "failed"],
         "semantic_validator": _validate_feedback_learner,
     },
+    "experiment_monitor": {
+        "description": "Monitors active A/B experiments for SRM, interim, enrollment issues",
+        "required_output_fields": [
+            "experiments_checked",
+            "alerts",
+            "monitor_summary",
+        ],
+        "min_required_fields_pct": 0.5,
+        "data_quality_checks": {
+            "experiments_checked": {"type": "int", "min_value": 0},
+            "monitor_summary": {"type": "str", "not_null": True},
+        },
+        "fail_on_status": ["error", "failed"],
+    },
 }
 
 

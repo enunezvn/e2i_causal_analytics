@@ -124,6 +124,26 @@ class RouterNode:
                 fallback_agent=None,
             )
         ],
+        # Tier 3: A/B experiment health monitoring (SRM, interim, enrollment).
+        "experiment_monitor": [
+            AgentDispatch(
+                agent_name="experiment_monitor",
+                priority="critical",
+                parameters={},
+                timeout_ms=15000,
+                fallback_agent=None,
+            )
+        ],
+        # Tier 1: Multi-faceted queries decomposed by the Tool Composer.
+        "multi_faceted": [
+            AgentDispatch(
+                agent_name="tool_composer",
+                priority="critical",
+                parameters={},
+                timeout_ms=180000,  # 3-minute SLA per tool_composer agent contract
+                fallback_agent="explainer",
+            )
+        ],
         # Tier 0: Patient cohort construction for ML pipelines
         "cohort_definition": [
             AgentDispatch(

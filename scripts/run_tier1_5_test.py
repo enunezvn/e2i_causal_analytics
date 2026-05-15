@@ -289,6 +289,21 @@ AGENT_CONFIGS = {
         "is_async": True,
         "uses_kwargs": True,  # scope, query, experiment_name
     },
+    "experiment_monitor": {
+        "tier": 3,
+        # The agent returns an ``ExperimentMonitorOutput`` dataclass; the
+        # contract validator falls back to ``__dict__`` flattening in
+        # ``test_agent`` so we point state_class at the dataclass itself.
+        "state_module": "src.agents.experiment_monitor.agent",
+        "state_class": "ExperimentMonitorOutput",
+        "agent_module": "src.agents.experiment_monitor",
+        "agent_class": "ExperimentMonitorAgent",
+        "method": "run_async",
+        "is_async": True,
+        "input_module": "src.agents.experiment_monitor.agent",
+        "input_model": "ExperimentMonitorInput",
+        "timeout": 20,
+    },
     # Tier 4: ML Predictions
     "prediction_synthesizer": {
         "tier": 4,
@@ -792,6 +807,20 @@ AGENT_ANALYSIS_CONFIG = {
             "Health grade: {health_grade}",
             "Overall health score: {overall_health_score}",
             "Recommendations: {recommendations}",
+        ],
+    },
+    "experiment_monitor": {
+        "key_fields": [
+            "experiments_checked",
+            "healthy_count",
+            "warning_count",
+            "critical_count",
+            "monitor_summary",
+        ],
+        "insights_template": [
+            "Experiments checked: {experiments_checked}",
+            "Health breakdown: {healthy_count} healthy, {warning_count} warning, {critical_count} critical",
+            "Summary: {monitor_summary}",
         ],
     },
     "prediction_synthesizer": {
