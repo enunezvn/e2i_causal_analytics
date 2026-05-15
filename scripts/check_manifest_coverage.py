@@ -706,6 +706,30 @@ class _ColumnDiscoveryVisitor(ast.NodeVisitor):
                     and tgt.id not in self.output_dict_names
                 ):
                     self._local_shadow_safe_spread.add(tgt.id)
+        # Pattern E — output-dict reassignment from unenumerable RHS
+        # (codex-rescue pass-3 HIGH-7). ``record = dict.fromkeys(...)``,
+        # ``record = (newrec := {...})``, ``record = some_func()`` etc.
+        # bind a fresh dict to the output Name whose keys the visitor
+        # cannot enumerate. Without this guard, the function could
+        # discover the dict-literal keys assigned BEFORE the
+        # reassignment and pass coverage while the actual returned
+        # dict carries unmapped columns.
+        for tgt in node.targets:
+            if (
+                isinstance(tgt, ast.Name)
+                and tgt.id in self.output_dict_names
+                and not isinstance(node.value, (ast.Dict, ast.Name))
+            ):
+                # Skip ``record = record`` no-ops (Name = Name in
+                # output_dict_names handled by alias propagation
+                # above) and dict-literal initialisation
+                # (``record = {}``) handled by Pattern B.
+                try:
+                    expr_text = ast.unparse(node)
+                except Exception:  # pragma: no cover — defensive
+                    expr_text = "<output dict reassignment from unenumerable RHS>"
+                self.unsupported_writes.append(expr_text)
+                break
         self.generic_visit(node)
 
     def _walk_assign_target(self, tgt: ast.expr) -> None:
@@ -830,10 +854,57 @@ class _ColumnDiscoveryVisitor(ast.NodeVisitor):
             and isinstance(node.target, ast.Name)
         ):
             self.output_dict_names.add(node.target.id)
+        # Pattern E (annotated form) — output-dict reassignment from
+        # unenumerable RHS (codex-rescue pass-3 HIGH-7). Same logic
+        # as visit_Assign Pattern E.
+        if (
+            isinstance(node.target, ast.Name)
+            and node.target.id in self.output_dict_names
+            and node.value is not None
+            and not isinstance(node.value, (ast.Dict, ast.Name))
+        ):
+            try:
+                expr_text = ast.unparse(node)
+            except Exception:  # pragma: no cover — defensive
+                expr_text = "<annotated output dict reassignment from unenumerable RHS>"
+            self.unsupported_writes.append(expr_text)
         self.generic_visit(node)
 
     def visit_AugAssign(self, node: ast.AugAssign) -> None:  # noqa: N802
-        # No-op for column discovery; included for completeness.
+        # Codex-rescue pass-3 HIGH-8: ``record |= {...}`` (Python 3.9+
+        # dict-union AugAssign) ADDS keys to ``record``. Without
+        # handling, the AugAssign was a silent bypass.
+        #
+        # Supported shape:
+        #   * ``<output> |= {<literal_keys>: ...}`` — enumerate the
+        #     literal keys (same as ``.update({...})``).
+        # Unsupported shapes:
+        #   * ``<output> |= other_dict_var`` — non-literal RHS,
+        #     statically unenumerable; record as unsupported.
+        #   * ``<output>[<key>] += value`` — Subscript target;
+        #     ``__iadd__`` on a value, not mutation of the dict
+        #     itself (no new key); skipped.
+        if (
+            isinstance(node.target, ast.Name)
+            and node.target.id in self.output_dict_names
+            and isinstance(node.op, ast.BitOr)
+        ):
+            if isinstance(node.value, ast.Dict):
+                self._collect_dict_literal_keys(node.value)
+            elif (
+                isinstance(node.value, ast.Name)
+                and node.value.id in self.safe_spread_names
+                and node.value.id not in self._local_shadow_safe_spread
+            ):
+                # ``record |= feats`` — same safe-spread semantics
+                # as ``record.update(feats)``.
+                pass
+            else:
+                try:
+                    expr_text = ast.unparse(node)
+                except Exception:  # pragma: no cover — defensive
+                    expr_text = "<output dict |= unenumerable>"
+                self.unsupported_writes.append(expr_text)
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
@@ -919,26 +990,31 @@ class _ColumnDiscoveryVisitor(ast.NodeVisitor):
             return True
         return False
 
-    # Methods on output-dict receivers that DO NOT mutate the dict;
-    # safe to accept output-dict args on these calls. ``append`` /
-    # ``extend`` on the list-of-records collector
-    # (``journeys.append(journey_dict)``) is the main legitimate
-    # form. Other read-only methods are added here if they show up in
-    # real converter patterns.
-    _NON_MUTATING_METHODS: frozenset[str] = frozenset(
-        {"append", "extend", "items", "keys", "values", "get", "copy"}
-    )
+    # Method names that, when called as ``LIST.METHOD(<output>)``,
+    # do NOT mutate the output dict. Only ``append`` and ``extend``
+    # qualify in current converter code (``journeys.append(journey_dict)``
+    # is the canonical CSU pattern). Other method names that codex-rescue
+    # pass-3 HIGH-6 enumerated (``get``, ``copy``, ``items``, ``keys``,
+    # ``values``) only behave non-mutating when called on a DICT
+    # receiver; on an arbitrary user-defined ``wrapper`` object,
+    # ``wrapper.get(record)`` is just user code that could mutate
+    # ``record``. The narrow allowlist closes that bypass.
+    _LIST_COLLECTOR_METHODS: frozenset[str] = frozenset({"append", "extend"})
 
     def _check_helper_call_with_output_arg(self, node: ast.Call) -> None:
-        """Codex pass-2 HIGH-3 mitigation. Flag any Call that takes an
-        output-dict Name as a positional or keyword argument, UNLESS
-        the call is one of:
+        """Codex pass-2 HIGH-3 + pass-3 HIGH-6 mitigation. Flag any
+        Call that takes an output-dict Name as a positional or keyword
+        argument, UNLESS the call is one of:
 
           * ``<output>.update(...)`` (the existing path handles enumeration).
           * ``<output>.setdefault(...)`` / ``<output>.__setitem__(...)``
             (existing path records as unsupported_writes).
-          * ``<receiver>.<NON_MUTATING_METHOD>(<output>, ...)`` —
-            e.g., ``journeys.append(journey_dict)``.
+          * ``<not-output>.append(<output>)`` / ``.extend(<output>)`` —
+            ``journeys.append(journey_dict)`` real-converter pattern.
+            Restricted to ``append``/``extend`` only (pass-3 HIGH-6
+            tightening) because broader method names on arbitrary
+            receivers (``wrapper.get(record)``) are just user code that
+            can mutate the dict.
 
         The check fires when ANY arg or kwarg's Name id is in
         ``output_dict_names``. This catches:
@@ -965,7 +1041,14 @@ class _ColumnDiscoveryVisitor(ast.NodeVisitor):
                 return
             # ``<not-output>.append(<output>)`` / ``.extend(<output>)``
             # is the journeys.append(journey_dict) pattern — safe.
-            if method in self._NON_MUTATING_METHODS:
+            # Tightened from pass-2's broader _NON_MUTATING_METHODS to
+            # close the codex pass-3 HIGH-6 wrapper-method bypass: the
+            # exception now applies ONLY when the receiver itself is
+            # NOT an output dict and the method is append/extend.
+            if (
+                receiver_id not in self.output_dict_names
+                and method in self._LIST_COLLECTOR_METHODS
+            ):
                 return
 
         # Examine each argument for an output-dict Name.
