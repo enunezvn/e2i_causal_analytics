@@ -51,7 +51,11 @@ def get_orchestrator():
             from src.agents.factory import create_agent_registry
             from src.agents.orchestrator import OrchestratorAgent
 
-            registry = create_agent_registry()
+            # Exclude orchestrator from its own dispatch registry — it
+            # routes to OTHER agents, not to itself, and including it
+            # would also cause the factory to instantiate a second
+            # OrchestratorAgent during registry construction.
+            registry = create_agent_registry(exclude_agents=["orchestrator"])
             _orchestrator_instance = OrchestratorAgent(agent_registry=registry)
             logger.info(
                 f"OrchestratorAgent initialized for cognitive workflow with "
