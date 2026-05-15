@@ -82,16 +82,17 @@ class SidecarReader:
             except (OSError, json.JSONDecodeError) as exc:
                 logger.warning(
                     "SidecarReader: skipping malformed sidecar %s: %s",
-                    path, exc,
+                    path,
+                    exc,
                 )
                 continue
             written_at_raw = payload.get("written_at")
             written_at = self._parse_iso8601(written_at_raw)
             if written_at is None:
                 logger.warning(
-                    "SidecarReader: sidecar %s has unparseable written_at=%r; "
-                    "skipping",
-                    path, written_at_raw,
+                    "SidecarReader: sidecar %s has unparseable written_at=%r; skipping",
+                    path,
+                    written_at_raw,
                 )
                 continue
             if self._since is not None and written_at < self._since:
@@ -146,9 +147,7 @@ class SidecarReader:
             p_value=_opt_float(raw.get("p_value")),
             delta_auc=_opt_float(raw.get("delta_auc")),
             evaluator_satisfied=_opt_bool(raw.get("evaluator_satisfied")),
-            evaluator_rationale_complete=_opt_bool(
-                raw.get("evaluator_rationale_complete")
-            ),
+            evaluator_rationale_complete=_opt_bool(raw.get("evaluator_rationale_complete")),
             evaluator_missed_considerations=_opt_str_list(
                 raw.get("evaluator_missed_considerations")
             ),
@@ -174,7 +173,8 @@ def _opt_bool(value: Any) -> Optional[bool]:
     logger.warning(
         "SidecarReader: non-bool value %r (type=%s) in a bool field; "
         "coercing to None. Indicates producer schema drift — investigate.",
-        value, type(value).__name__,
+        value,
+        type(value).__name__,
     )
     return None
 

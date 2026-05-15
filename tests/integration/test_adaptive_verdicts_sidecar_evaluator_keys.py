@@ -130,13 +130,9 @@ def test_sidecar_info_log_includes_verdict_count(tmp_path, monkeypatch, caplog):
     with caplog.at_level("INFO"):
         path = write_adaptive_verdicts_sidecar(state)
     assert path is not None
-    matching = [
-        r for r in caplog.records
-        if "Wrote adaptive-validity audit trail" in r.message
-    ]
+    matching = [r for r in caplog.records if "Wrote adaptive-validity audit trail" in r.message]
     assert len(matching) == 1, (
-        f"expected exactly one matching INFO line, got: "
-        f"{[r.message for r in matching]}"
+        f"expected exactly one matching INFO line, got: {[r.message for r in matching]}"
     )
     assert str(path) in matching[0].message
     assert "verdicts=2" in matching[0].message

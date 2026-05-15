@@ -9,8 +9,9 @@ import sys
 from pathlib import Path
 
 
-def _write_sidecar(artifacts_dir: Path, experiment_id: str,
-                   written_at: str, verdicts: list[dict]) -> Path:
+def _write_sidecar(
+    artifacts_dir: Path, experiment_id: str, written_at: str, verdicts: list[dict]
+) -> Path:
     sub = artifacts_dir / experiment_id
     sub.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -33,45 +34,77 @@ def test_cli_end_to_end_produces_markdown_and_manifest(tmp_path):
 
     # Two disagreements (same feature → dedup keeps latest), one agreement,
     # one record from the pre-evaluator schema (no eval keys at all).
-    _write_sidecar(artifacts_dir, "exp-1", "2026-05-10T10:00:00Z", [
-        {"feature": "ondansetron_fills_180d", "layer": "4",
-         "severity": "moderate", "remediation": "keep_with_caveat",
-         "evaluator_satisfied": False,
-         "evaluator_rationale_complete": False,
-         "evaluator_missed_considerations": ["temporal_filter"],
-         "evaluator_notes": "first critique",
-         "evaluator_model": "anthropic/claude-haiku-4-5-20251001"},
-    ])
-    _write_sidecar(artifacts_dir, "exp-2", "2026-05-12T10:00:00Z", [
-        {"feature": "ondansetron_fills_180d", "layer": "4",
-         "severity": "moderate", "remediation": "keep_with_caveat",
-         "evaluator_satisfied": False,
-         "evaluator_rationale_complete": False,
-         "evaluator_missed_considerations": ["pearl_arrows"],
-         "evaluator_notes": "second critique",
-         "evaluator_model": "anthropic/claude-haiku-4-5-20251001"},
-        {"feature": "metformin_fills_90d", "layer": "4",
-         "severity": "moderate", "remediation": "keep_with_caveat",
-         "evaluator_satisfied": True,
-         "evaluator_rationale_complete": True,
-         "evaluator_missed_considerations": [],
-         "evaluator_notes": "",
-         "evaluator_model": "anthropic/claude-haiku-4-5-20251001"},
-    ])
-    _write_sidecar(artifacts_dir, "exp-old", "2026-04-01T10:00:00Z", [
-        {"feature": "old_feature", "layer": "4", "severity": "moderate"},
-    ])
-
-    cli = Path(__file__).resolve().parents[2] / "scripts" / \
-        "curate_compile_set_candidates.py"
-    result = subprocess.run(
-        [sys.executable, str(cli),
-         "--artifacts-dir", str(artifacts_dir),
-         "--output-dir", str(output_dir)],
-        check=False, capture_output=True, text=True,
+    _write_sidecar(
+        artifacts_dir,
+        "exp-1",
+        "2026-05-10T10:00:00Z",
+        [
+            {
+                "feature": "ondansetron_fills_180d",
+                "layer": "4",
+                "severity": "moderate",
+                "remediation": "keep_with_caveat",
+                "evaluator_satisfied": False,
+                "evaluator_rationale_complete": False,
+                "evaluator_missed_considerations": ["temporal_filter"],
+                "evaluator_notes": "first critique",
+                "evaluator_model": "anthropic/claude-haiku-4-5-20251001",
+            },
+        ],
     )
-    assert result.returncode == 0, \
-        f"CLI failed: stdout={result.stdout!r} stderr={result.stderr!r}"
+    _write_sidecar(
+        artifacts_dir,
+        "exp-2",
+        "2026-05-12T10:00:00Z",
+        [
+            {
+                "feature": "ondansetron_fills_180d",
+                "layer": "4",
+                "severity": "moderate",
+                "remediation": "keep_with_caveat",
+                "evaluator_satisfied": False,
+                "evaluator_rationale_complete": False,
+                "evaluator_missed_considerations": ["pearl_arrows"],
+                "evaluator_notes": "second critique",
+                "evaluator_model": "anthropic/claude-haiku-4-5-20251001",
+            },
+            {
+                "feature": "metformin_fills_90d",
+                "layer": "4",
+                "severity": "moderate",
+                "remediation": "keep_with_caveat",
+                "evaluator_satisfied": True,
+                "evaluator_rationale_complete": True,
+                "evaluator_missed_considerations": [],
+                "evaluator_notes": "",
+                "evaluator_model": "anthropic/claude-haiku-4-5-20251001",
+            },
+        ],
+    )
+    _write_sidecar(
+        artifacts_dir,
+        "exp-old",
+        "2026-04-01T10:00:00Z",
+        [
+            {"feature": "old_feature", "layer": "4", "severity": "moderate"},
+        ],
+    )
+
+    cli = Path(__file__).resolve().parents[2] / "scripts" / "curate_compile_set_candidates.py"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(cli),
+            "--artifacts-dir",
+            str(artifacts_dir),
+            "--output-dir",
+            str(output_dir),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"CLI failed: stdout={result.stdout!r} stderr={result.stderr!r}"
 
     md_files = list(output_dir.glob("compile_set_candidates_*.md"))
     json_files = list(output_dir.glob("compile_set_candidates_*.json"))
@@ -110,25 +143,40 @@ def test_cli_dedup_is_deterministic_across_repeated_runs(tmp_path):
     out_b = tmp_path / "out-b"
 
     for i in [3, 1, 2]:  # unordered features
-        _write_sidecar(artifacts_dir, f"exp-{i}", f"2026-05-1{i}T10:00:00Z", [
-            {"feature": f"f{i}", "layer": "4",
-             "severity": "moderate", "remediation": "keep_with_caveat",
-             "evaluator_satisfied": False,
-             "evaluator_rationale_complete": False,
-             "evaluator_missed_considerations": [],
-             "evaluator_notes": "x",
-             "evaluator_model": "haiku"},
-        ])
+        _write_sidecar(
+            artifacts_dir,
+            f"exp-{i}",
+            f"2026-05-1{i}T10:00:00Z",
+            [
+                {
+                    "feature": f"f{i}",
+                    "layer": "4",
+                    "severity": "moderate",
+                    "remediation": "keep_with_caveat",
+                    "evaluator_satisfied": False,
+                    "evaluator_rationale_complete": False,
+                    "evaluator_missed_considerations": [],
+                    "evaluator_notes": "x",
+                    "evaluator_model": "haiku",
+                },
+            ],
+        )
 
-    cli = Path(__file__).resolve().parents[2] / "scripts" / \
-        "curate_compile_set_candidates.py"
+    cli = Path(__file__).resolve().parents[2] / "scripts" / "curate_compile_set_candidates.py"
 
     def _run(out: Path) -> dict:
         subprocess.run(
-            [sys.executable, str(cli),
-             "--artifacts-dir", str(artifacts_dir),
-             "--output-dir", str(out)],
-            check=True, capture_output=True, text=True,
+            [
+                sys.executable,
+                str(cli),
+                "--artifacts-dir",
+                str(artifacts_dir),
+                "--output-dir",
+                str(out),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
         )
         json_file = next(out.glob("compile_set_candidates_*.json"))
         return json.loads(json_file.read_text())

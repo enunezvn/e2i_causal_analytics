@@ -8,8 +8,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-def _write_sidecar(directory: Path, experiment_id: str, written_at: str,
-                   verdicts: list[dict]) -> Path:
+def _write_sidecar(
+    directory: Path, experiment_id: str, written_at: str, verdicts: list[dict]
+) -> Path:
     sub = directory / experiment_id
     sub.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -29,20 +30,40 @@ def _write_sidecar(directory: Path, experiment_id: str, written_at: str,
 def test_reader_loads_all_sidecars_in_directory(tmp_path):
     from src.data.audit_sidecar_reader import SidecarReader
 
-    _write_sidecar(tmp_path, "exp-a", "2026-05-15T10:00:00Z", [
-        {"feature": "f1", "layer": "4", "severity": "moderate",
-         "evaluator_satisfied": False,
-         "evaluator_missed_considerations": ["temporal_filter"],
-         "evaluator_notes": "thin rationale", "evaluator_model": "haiku",
-         "evaluator_rationale_complete": False}
-    ])
-    _write_sidecar(tmp_path, "exp-b", "2026-05-15T11:00:00Z", [
-        {"feature": "f2", "layer": "4", "severity": "moderate",
-         "evaluator_satisfied": True,
-         "evaluator_missed_considerations": [],
-         "evaluator_notes": "", "evaluator_model": "haiku",
-         "evaluator_rationale_complete": True}
-    ])
+    _write_sidecar(
+        tmp_path,
+        "exp-a",
+        "2026-05-15T10:00:00Z",
+        [
+            {
+                "feature": "f1",
+                "layer": "4",
+                "severity": "moderate",
+                "evaluator_satisfied": False,
+                "evaluator_missed_considerations": ["temporal_filter"],
+                "evaluator_notes": "thin rationale",
+                "evaluator_model": "haiku",
+                "evaluator_rationale_complete": False,
+            }
+        ],
+    )
+    _write_sidecar(
+        tmp_path,
+        "exp-b",
+        "2026-05-15T11:00:00Z",
+        [
+            {
+                "feature": "f2",
+                "layer": "4",
+                "severity": "moderate",
+                "evaluator_satisfied": True,
+                "evaluator_missed_considerations": [],
+                "evaluator_notes": "",
+                "evaluator_model": "haiku",
+                "evaluator_rationale_complete": True,
+            }
+        ],
+    )
 
     reader = SidecarReader(artifacts_dir=tmp_path)
     records = list(reader.iter_verdict_records())
@@ -54,18 +75,38 @@ def test_reader_loads_all_sidecars_in_directory(tmp_path):
 def test_reader_time_window_filter(tmp_path):
     from src.data.audit_sidecar_reader import SidecarReader
 
-    _write_sidecar(tmp_path, "exp-old", "2026-04-01T10:00:00Z",
-                   [{"feature": "old", "layer": "4",
-                     "evaluator_satisfied": False,
-                     "evaluator_missed_considerations": [],
-                     "evaluator_notes": "", "evaluator_model": "haiku",
-                     "evaluator_rationale_complete": False}])
-    _write_sidecar(tmp_path, "exp-new", "2026-05-10T10:00:00Z",
-                   [{"feature": "new", "layer": "4",
-                     "evaluator_satisfied": False,
-                     "evaluator_missed_considerations": [],
-                     "evaluator_notes": "", "evaluator_model": "haiku",
-                     "evaluator_rationale_complete": False}])
+    _write_sidecar(
+        tmp_path,
+        "exp-old",
+        "2026-04-01T10:00:00Z",
+        [
+            {
+                "feature": "old",
+                "layer": "4",
+                "evaluator_satisfied": False,
+                "evaluator_missed_considerations": [],
+                "evaluator_notes": "",
+                "evaluator_model": "haiku",
+                "evaluator_rationale_complete": False,
+            }
+        ],
+    )
+    _write_sidecar(
+        tmp_path,
+        "exp-new",
+        "2026-05-10T10:00:00Z",
+        [
+            {
+                "feature": "new",
+                "layer": "4",
+                "evaluator_satisfied": False,
+                "evaluator_missed_considerations": [],
+                "evaluator_notes": "",
+                "evaluator_model": "haiku",
+                "evaluator_rationale_complete": False,
+            }
+        ],
+    )
 
     reader = SidecarReader(
         artifacts_dir=tmp_path,
@@ -81,8 +122,12 @@ def test_reader_tolerates_pre_evaluator_schema_sidecar(tmp_path):
     The reader must accept them and surface evaluator fields as None."""
     from src.data.audit_sidecar_reader import SidecarReader
 
-    _write_sidecar(tmp_path, "exp-pre", "2026-04-15T10:00:00Z",
-                   [{"feature": "f1", "layer": "4", "severity": "moderate"}])
+    _write_sidecar(
+        tmp_path,
+        "exp-pre",
+        "2026-04-15T10:00:00Z",
+        [{"feature": "f1", "layer": "4", "severity": "moderate"}],
+    )
     reader = SidecarReader(artifacts_dir=tmp_path)
     records = list(reader.iter_verdict_records())
     assert len(records) == 1
@@ -98,31 +143,45 @@ def test_reader_tolerates_malformed_json(tmp_path, caplog):
     sub = tmp_path / "exp-bad"
     sub.mkdir(parents=True)
     (sub / "adaptive_verdicts_BAD.json").write_text("{this is: not valid json")
-    _write_sidecar(tmp_path, "exp-good", "2026-05-15T10:00:00Z",
-                   [{"feature": "g", "layer": "4",
-                     "evaluator_satisfied": False,
-                     "evaluator_missed_considerations": [],
-                     "evaluator_notes": "", "evaluator_model": "haiku",
-                     "evaluator_rationale_complete": False}])
+    _write_sidecar(
+        tmp_path,
+        "exp-good",
+        "2026-05-15T10:00:00Z",
+        [
+            {
+                "feature": "g",
+                "layer": "4",
+                "evaluator_satisfied": False,
+                "evaluator_missed_considerations": [],
+                "evaluator_notes": "",
+                "evaluator_model": "haiku",
+                "evaluator_rationale_complete": False,
+            }
+        ],
+    )
 
     reader = SidecarReader(artifacts_dir=tmp_path)
     with caplog.at_level("WARNING"):
         records = list(reader.iter_verdict_records())
     assert [r.feature for r in records] == ["g"]
-    assert any("malformed" in rec.message.lower()
-               or "decode" in rec.message.lower()
-               or "skip" in rec.message.lower()
-               for rec in caplog.records)
+    assert any(
+        "malformed" in rec.message.lower()
+        or "decode" in rec.message.lower()
+        or "skip" in rec.message.lower()
+        for rec in caplog.records
+    )
 
 
 def test_reader_empty_directory_returns_empty(tmp_path):
     from src.data.audit_sidecar_reader import SidecarReader
+
     reader = SidecarReader(artifacts_dir=tmp_path)
     assert list(reader.iter_verdict_records()) == []
 
 
 def test_reader_missing_directory_returns_empty(tmp_path):
     from src.data.audit_sidecar_reader import SidecarReader
+
     nonexistent = tmp_path / "does-not-exist"
     reader = SidecarReader(artifacts_dir=nonexistent)
     assert list(reader.iter_verdict_records()) == []
@@ -137,13 +196,22 @@ def test_reader_logs_warning_on_string_bool_drift(tmp_path, caplog):
     logs."""
     from src.data.audit_sidecar_reader import SidecarReader
 
-    _write_sidecar(tmp_path, "exp-drift", "2026-05-15T10:00:00Z", [
-        {"feature": "f-drift", "layer": "4",
-         "evaluator_satisfied": "false",  # WRONG: string, not bool
-         "evaluator_rationale_complete": False,
-         "evaluator_missed_considerations": [],
-         "evaluator_notes": "drift", "evaluator_model": "haiku"},
-    ])
+    _write_sidecar(
+        tmp_path,
+        "exp-drift",
+        "2026-05-15T10:00:00Z",
+        [
+            {
+                "feature": "f-drift",
+                "layer": "4",
+                "evaluator_satisfied": "false",  # WRONG: string, not bool
+                "evaluator_rationale_complete": False,
+                "evaluator_missed_considerations": [],
+                "evaluator_notes": "drift",
+                "evaluator_model": "haiku",
+            },
+        ],
+    )
     reader = SidecarReader(artifacts_dir=tmp_path)
     with caplog.at_level("WARNING"):
         records = list(reader.iter_verdict_records())
@@ -161,13 +229,23 @@ def test_reader_compact_format_timestamp_from_producer(tmp_path):
     with hyphens/colons. Pin reader compatibility with the producer's
     real format."""
     from src.data.audit_sidecar_reader import SidecarReader
-    _write_sidecar(tmp_path, "exp-compact", "20260515T103000Z", [
-        {"feature": "f-c", "layer": "4",
-         "evaluator_satisfied": False,
-         "evaluator_rationale_complete": False,
-         "evaluator_missed_considerations": [],
-         "evaluator_notes": "", "evaluator_model": "haiku"},
-    ])
+
+    _write_sidecar(
+        tmp_path,
+        "exp-compact",
+        "20260515T103000Z",
+        [
+            {
+                "feature": "f-c",
+                "layer": "4",
+                "evaluator_satisfied": False,
+                "evaluator_rationale_complete": False,
+                "evaluator_missed_considerations": [],
+                "evaluator_notes": "",
+                "evaluator_model": "haiku",
+            },
+        ],
+    )
     reader = SidecarReader(artifacts_dir=tmp_path)
     records = list(reader.iter_verdict_records())
     assert len(records) == 1
@@ -185,31 +263,61 @@ def test_extract_disagreements_filters_to_satisfied_false():
     )
 
     sat = VerdictRecord(
-        experiment_id="e", written_at=datetime.now(timezone.utc),
-        source_path=Path("/dev/null"), feature="f-sat", layer="4",
-        severity="moderate", remediation="keep_with_caveat", evidence=None,
-        z_score=2.0, p_value=0.05, delta_auc=0.04,
-        evaluator_satisfied=True, evaluator_rationale_complete=True,
-        evaluator_missed_considerations=[], evaluator_notes="",
-        evaluator_model="haiku", raw_verdict={},
+        experiment_id="e",
+        written_at=datetime.now(timezone.utc),
+        source_path=Path("/dev/null"),
+        feature="f-sat",
+        layer="4",
+        severity="moderate",
+        remediation="keep_with_caveat",
+        evidence=None,
+        z_score=2.0,
+        p_value=0.05,
+        delta_auc=0.04,
+        evaluator_satisfied=True,
+        evaluator_rationale_complete=True,
+        evaluator_missed_considerations=[],
+        evaluator_notes="",
+        evaluator_model="haiku",
+        raw_verdict={},
     )
     unsat = VerdictRecord(
-        experiment_id="e", written_at=datetime.now(timezone.utc),
-        source_path=Path("/dev/null"), feature="f-unsat", layer="4",
-        severity="moderate", remediation="keep_with_caveat", evidence=None,
-        z_score=2.0, p_value=0.05, delta_auc=0.04,
-        evaluator_satisfied=False, evaluator_rationale_complete=False,
+        experiment_id="e",
+        written_at=datetime.now(timezone.utc),
+        source_path=Path("/dev/null"),
+        feature="f-unsat",
+        layer="4",
+        severity="moderate",
+        remediation="keep_with_caveat",
+        evidence=None,
+        z_score=2.0,
+        p_value=0.05,
+        delta_auc=0.04,
+        evaluator_satisfied=False,
+        evaluator_rationale_complete=False,
         evaluator_missed_considerations=["temporal_filter"],
-        evaluator_notes="thin", evaluator_model="haiku", raw_verdict={},
+        evaluator_notes="thin",
+        evaluator_model="haiku",
+        raw_verdict={},
     )
     no_eval = VerdictRecord(
-        experiment_id="e", written_at=datetime.now(timezone.utc),
-        source_path=Path("/dev/null"), feature="f-no-eval", layer="4",
-        severity="moderate", remediation="keep_with_caveat", evidence=None,
-        z_score=2.0, p_value=0.05, delta_auc=0.04,
-        evaluator_satisfied=None, evaluator_rationale_complete=None,
-        evaluator_missed_considerations=None, evaluator_notes=None,
-        evaluator_model=None, raw_verdict={},
+        experiment_id="e",
+        written_at=datetime.now(timezone.utc),
+        source_path=Path("/dev/null"),
+        feature="f-no-eval",
+        layer="4",
+        severity="moderate",
+        remediation="keep_with_caveat",
+        evidence=None,
+        z_score=2.0,
+        p_value=0.05,
+        delta_auc=0.04,
+        evaluator_satisfied=None,
+        evaluator_rationale_complete=None,
+        evaluator_missed_considerations=None,
+        evaluator_notes=None,
+        evaluator_model=None,
+        raw_verdict={},
     )
 
     events = list(extract_disagreements([sat, unsat, no_eval]))
@@ -225,26 +333,40 @@ def test_dedup_disagreements_collapses_by_feature_name():
     )
 
     e1 = DisagreementEvent(
-        experiment_id="exp1", written_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
-        source_path=Path("/dev/null"), feature="f1",
-        worker_severity="moderate", worker_remediation="keep_with_caveat",
-        rationale_complete=False, missed_considerations=("temporal",),
-        notes="first", evaluator_model="haiku",
+        experiment_id="exp1",
+        written_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+        source_path=Path("/dev/null"),
+        feature="f1",
+        worker_severity="moderate",
+        worker_remediation="keep_with_caveat",
+        rationale_complete=False,
+        missed_considerations=("temporal",),
+        notes="first",
+        evaluator_model="haiku",
     )
     e2 = DisagreementEvent(
         experiment_id="exp2",
         written_at=datetime(2026, 5, 10, tzinfo=timezone.utc),  # later
-        source_path=Path("/dev/null"), feature="f1",  # same feature
-        worker_severity="moderate", worker_remediation="keep_with_caveat",
-        rationale_complete=False, missed_considerations=("pearl_arrows",),
-        notes="second", evaluator_model="haiku",
+        source_path=Path("/dev/null"),
+        feature="f1",  # same feature
+        worker_severity="moderate",
+        worker_remediation="keep_with_caveat",
+        rationale_complete=False,
+        missed_considerations=("pearl_arrows",),
+        notes="second",
+        evaluator_model="haiku",
     )
     e3 = DisagreementEvent(
-        experiment_id="exp3", written_at=datetime(2026, 5, 5, tzinfo=timezone.utc),
-        source_path=Path("/dev/null"), feature="f2",
-        worker_severity="moderate", worker_remediation="keep_with_caveat",
-        rationale_complete=False, missed_considerations=(),
-        notes="other", evaluator_model="haiku",
+        experiment_id="exp3",
+        written_at=datetime(2026, 5, 5, tzinfo=timezone.utc),
+        source_path=Path("/dev/null"),
+        feature="f2",
+        worker_severity="moderate",
+        worker_remediation="keep_with_caveat",
+        rationale_complete=False,
+        missed_considerations=(),
+        notes="other",
+        evaluator_model="haiku",
     )
 
     deduped = list(dedup_disagreements([e1, e2, e3]))
@@ -269,11 +391,16 @@ def test_dedup_disagreements_is_deterministic_under_repeat():
 
     events = [
         DisagreementEvent(
-            experiment_id="e", written_at=datetime(2026, 5, i, tzinfo=timezone.utc),
-            source_path=Path("/dev/null"), feature=f"f{i}",
-            worker_severity="m", worker_remediation="k",
-            rationale_complete=False, missed_considerations=(),
-            notes="", evaluator_model="haiku",
+            experiment_id="e",
+            written_at=datetime(2026, 5, i, tzinfo=timezone.utc),
+            source_path=Path("/dev/null"),
+            feature=f"f{i}",
+            worker_severity="m",
+            worker_remediation="k",
+            rationale_complete=False,
+            missed_considerations=(),
+            notes="",
+            evaluator_model="haiku",
         )
         for i in [3, 1, 2]  # intentionally unordered input
     ]
@@ -297,18 +424,28 @@ def test_dedup_equal_timestamp_uses_composite_tiebreaker():
 
     same_ts = datetime(2026, 5, 15, 10, 30, 0, tzinfo=timezone.utc)
     e_low = DisagreementEvent(
-        experiment_id="exp-a", written_at=same_ts,
+        experiment_id="exp-a",
+        written_at=same_ts,
         source_path=Path("/artifacts/exp-a/x.json"),
-        feature="f", worker_severity="m", worker_remediation="k",
-        rationale_complete=False, missed_considerations=("a",),
-        notes="from-a", evaluator_model="haiku",
+        feature="f",
+        worker_severity="m",
+        worker_remediation="k",
+        rationale_complete=False,
+        missed_considerations=("a",),
+        notes="from-a",
+        evaluator_model="haiku",
     )
     e_high = DisagreementEvent(
-        experiment_id="exp-b", written_at=same_ts,
+        experiment_id="exp-b",
+        written_at=same_ts,
         source_path=Path("/artifacts/exp-b/x.json"),  # sorts > exp-a
-        feature="f", worker_severity="m", worker_remediation="k",
-        rationale_complete=False, missed_considerations=("b",),
-        notes="from-b", evaluator_model="haiku",
+        feature="f",
+        worker_severity="m",
+        worker_remediation="k",
+        rationale_complete=False,
+        missed_considerations=("b",),
+        notes="from-b",
+        evaluator_model="haiku",
     )
     # Insertion order should not matter — composite key sort wins.
     winner1 = list(dedup_disagreements([e_low, e_high]))[0]

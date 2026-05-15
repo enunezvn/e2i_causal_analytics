@@ -47,14 +47,14 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from src.data.audit_candidate_formatter import (  # noqa: E402
+    format_json_manifest,
+    format_markdown_report,
+)
 from src.data.audit_sidecar_reader import (  # noqa: E402
     SidecarReader,
     dedup_disagreements,
     extract_disagreements,
-)
-from src.data.audit_candidate_formatter import (  # noqa: E402
-    format_json_manifest,
-    format_markdown_report,
 )
 
 
@@ -63,9 +63,7 @@ def _parse_date(value: str) -> datetime:
     try:
         dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError as exc:
-        raise argparse.ArgumentTypeError(
-            f"could not parse date {value!r}: {exc}"
-        ) from exc
+        raise argparse.ArgumentTypeError(f"could not parse date {value!r}: {exc}") from exc
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt
@@ -73,10 +71,7 @@ def _parse_date(value: str) -> datetime:
 
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        description=(
-            "Curate compile-set candidates from the adaptive-validity "
-            "audit trail."
-        )
+        description=("Curate compile-set candidates from the adaptive-validity audit trail.")
     )
     parser.add_argument(
         "--artifacts-dir",
@@ -122,10 +117,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     if artifacts_dir is None:
         env_dir = os.environ.get("ADAPTIVE_VALIDITY_ARTIFACTS_DIR")
         if not env_dir:
-            parser.error(
-                "neither --artifacts-dir nor $ADAPTIVE_VALIDITY_ARTIFACTS_DIR "
-                "is set"
-            )
+            parser.error("neither --artifacts-dir nor $ADAPTIVE_VALIDITY_ARTIFACTS_DIR is set")
         artifacts_dir = Path(env_dir)
 
     if not artifacts_dir.exists():
@@ -152,14 +144,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     json_path = args.output_dir / f"compile_set_candidates_{stamp}.json"
 
     md_path.write_text(format_markdown_report(deduped, generated_at=generated_at))
-    json_path.write_text(json.dumps(
-        format_json_manifest(deduped, generated_at=generated_at),
-        indent=2,
-    ))
+    json_path.write_text(
+        json.dumps(
+            format_json_manifest(deduped, generated_at=generated_at),
+            indent=2,
+        )
+    )
 
     logger.info(
-        "wrote %d candidates: %s (%d verdict records scanned, "
-        "%d disagreements before dedup)",
+        "wrote %d candidates: %s (%d verdict records scanned, %d disagreements before dedup)",
         len(deduped),
         md_path,
         len(records),
