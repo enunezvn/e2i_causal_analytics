@@ -55,6 +55,12 @@ from src.tasks.nppes_tasks import refresh_npi_taxonomy_cache
 # Risk-score prediction DB write task (issue #173)
 from src.tasks.risk_score_prediction_tasks import write_risk_score_predictions
 
+# Insight lifecycle (consolidator + sentinel dispatcher)
+from src.tasks.insight_lifecycle_tasks import (
+    consolidate_insights,
+    sentinel_dispatcher,
+)
+
 __all__ = [
     # Feature Store
     "materialize_features",
@@ -90,4 +96,7 @@ __all__ = [
     "refresh_npi_taxonomy_cache",
     # Risk-score prediction DB writes (issue #173)
     "write_risk_score_predictions",
+    # Insight lifecycle subsystem
+    "consolidate_insights",
+    "sentinel_dispatcher",
 ]
