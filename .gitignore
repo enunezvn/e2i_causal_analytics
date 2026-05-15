@@ -125,6 +125,7 @@ docs/Archive/
 docs/results/*
 # Block 0 + PR #2 baseline + verification docs are tracked exceptions
 !docs/results/tier0_remediation_baseline_*.md
+!docs/results/tier0_evaluation_current_state_*.md
 !docs/results/feast_infra_*.md
 # Phase 1 W4 days 2-5 multi-disease validation outcomes (synthetic_v2 shard 09 §F closure)
 !docs/results/phase1_w4_days25_*.md
