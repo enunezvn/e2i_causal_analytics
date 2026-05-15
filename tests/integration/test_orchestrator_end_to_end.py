@@ -85,13 +85,12 @@ class TestOrchestratorEndToEnd:
 
         assert body["metadata"]["orchestrator_used"] is True, body
         assert body["response"], "response text must not be empty"
-        # Real registry dispatches to causal_impact (or gap_analyzer for
-        # gap-flavoured causal queries).
-        assert body["agent_used"] in {
-            "causal_impact",
-            "gap_analyzer",
-            "tool_composer",  # multi_faceted fan-in is also acceptable
-        }, body
+        # Real registry dispatches to causal_impact (the orchestrator
+        # consistently picks this for causal-flavoured queries in the live
+        # Docker smoke; gap_analyzer is the alternate when wording is gap-
+        # flavoured, but for this canonical phrasing causal_impact is the
+        # contract).
+        assert body["agent_used"] == "causal_impact", body
 
     def test_experiment_design_query_routes_to_experiment_designer(
         self, client: TestClient
@@ -102,6 +101,10 @@ class TestOrchestratorEndToEnd:
             query_type="general",
         )
         assert body["metadata"]["orchestrator_used"] is True, body
+        # Tight: only experiment_designer is acceptable. tool_composer is
+        # acceptable when the multi_faceted detector fires. The orchestrator
+        # must never name itself as the responding agent (see
+        # ``test_orchestrator_never_dispatches_to_itself`` regression guard).
         assert body["agent_used"] in {"experiment_designer", "tool_composer"}, body
 
     def test_experiment_monitor_query_routes_to_experiment_monitor(
@@ -113,11 +116,25 @@ class TestOrchestratorEndToEnd:
             query_type="monitoring",
         )
         assert body["metadata"]["orchestrator_used"] is True, body
-        assert body["agent_used"] in {
-            "experiment_monitor",
-            "drift_monitor",
-            "tool_composer",
-        }, body
+        # Tight: experiment_monitor is the correct answer. drift_monitor is
+        # acceptable as a near miss (both tier-3 monitors); health_score is
+        # explicitly NOT — the live-Docker smoke surfaced that path as a
+        # latent API-default-leak bug (tracked in issue #251).
+        assert body["agent_used"] in {"experiment_monitor", "drift_monitor"}, body
+        assert body["agent_used"] != "health_score", body
+
+    def test_orchestrator_never_dispatches_to_itself(self, client: TestClient) -> None:
+        """Regression guard: 'orchestrator' must never appear as agent_used.
+
+        Even when intent classification fails or the dispatch plan is empty,
+        the API must not surface the orchestrator's own name as the
+        responding agent. The live-Docker smoke caught the orchestrator
+        emitting itself for ambiguous 'general' queries when real RAG context
+        was attached — this guard locks the contract.
+        """
+        body = _post_query(client, "Tell me something.", query_type="general")
+        assert body["metadata"]["orchestrator_used"] is True, body
+        assert body["agent_used"] != "orchestrator", body
 
 
 class TestOrchestratorSingletonContract:
