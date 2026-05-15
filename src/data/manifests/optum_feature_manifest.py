@@ -216,6 +216,22 @@ _DEMO = [
         source="demo",
         derivation_inputs=("product",),
     ),
+    # Issue #156 item 6 — derived 8-vocabulary payer label
+    # (commercial / commercial_exchange / medicare / medicare_advantage
+    # / medicare_lis_dual / medicaid / cash / other). Computed at
+    # cohort-build time by ``scripts.rwd_common.derive_payer_category``
+    # from the raw demographics fields (bus / product / health_exch /
+    # lis_dual). Knowable at enrollment because every input is a
+    # static demographics field. Added to the manifest 2026-05-15 by
+    # the Layer 1 manifest-coverage CI guard (Phase 1.5) which surfaced
+    # the missing entry as the only real (non-allowlisted, non-audit)
+    # uncovered column in the Optum journey output.
+    FeatureContract(
+        name="payer_category",
+        knowable_at=KnowableAt(reference="enrollment"),
+        source="derived",
+        derivation_inputs=("bus", "product", "health_exch", "lis_dual"),
+    ),
     FeatureContract(
         name="urban_rural_code",
         knowable_at=KnowableAt(reference="enrollment"),
