@@ -305,9 +305,17 @@ These are visible in the May-10 Optum report: `cv_5fold_roc_auc_mean=0.6795 ± 0
 
 ### §4A — Synthetic regimes
 
-**Status:** A fresh synthetic-default e2e was attempted in this evaluation session against a bootstrapped venv (`scikit-learn==1.6.1`, all pinned versions). The run progressed cleanly through Steps 1–5a (Scope Definer → Data Preparer → Cohort Constructor → Model Selector → HPO), with HPO Trial 0 returning value=0.2942 (penalty=l1, C=0.0746), Trial 1 value=0.2874, Trial 2 value=0.1500 — all valid AUC-style optimization signals. The run **aborted at Step 5b "Algorithm Comparison"** with `Solver lbfgs supports only 'l2' or None penalties, got l1 penalty`.
+**Status:** A fresh synthetic e2e was attempted in this evaluation session against a bootstrapped venv (`scikit-learn==1.6.1`, all pinned versions). **All three attempted regimes aborted** at training/HPO due to a `solver=saga` configuration gap in the `LogisticRegression`-family construction (tracked in **Issue #232**):
 
-**Root cause of the abort (out of scope for this evaluation, but flagged):** the alt-candidate construction at `scripts/run_tier0_test.py:6170-6176` adds `class_weight="balanced"` to `new_candidate["default_hyperparameters"]` for the `LogisticRegression` retry, but does not set `solver="saga"`. The primary HPO path correctly pins `solver="saga"` at `src/agents/ml_foundation/model_trainer/nodes/hyperparameter_tuner.py:778` (so HPO trials with penalty=l1 succeed there), but the Step 5b alt-train constructs LR with the sklearn default solver (`lbfgs`), which is incompatible with l1. This is a real bug to file separately; it does not affect the leakage-mitigation or methodology audit conclusions of this report.
+| Regime | n | Selected primary | Where it failed |
+|---|---|---|---|
+| `default` | 1500 | `LogisticRegression` | Step 5b alt-train, after HPO Trials 0-2 succeeded |
+| `scenario_a_balanced` | 6000 | `LogisticRegression_Conformal` | HPO Trials 0/1/2 all returned `-inf` (penalty=l1 + lbfgs default) |
+| `scenario_b` | varies | `LogisticRegression_Conformal` | HPO Trials 0/1/2 all returned `-inf` (same root cause) |
+
+Root cause: `solver` is not pinned for `LogisticRegression_Conformal` in HPO `fixed_params` (`hyperparameter_tuner.py:774`'s exact-string match excludes the `_Conformal` suffix), and is omitted entirely from the Step 5b alt-train construction at `scripts/run_tier0_test.py:6170-6176`. The Optum cohort (May-10 revalidation) sidesteps both because LightGBM is the winning algorithm there.
+
+These are configuration drifts unrelated to the leakage-mitigation or methodology audit conclusions of this report. Both manifestations are tracked in [Issue #232](https://github.com/enunezvn/e2i_causal_analytics/issues/232) with proposed single-source fix.
 
 Authoritative empirical numbers therefore come from the most-recent verified seeded runs (deterministic, `seed=42`, replayable per appendix command):
 
