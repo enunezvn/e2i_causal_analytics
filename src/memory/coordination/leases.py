@@ -154,12 +154,13 @@ class AgentLease:
         """Whether the lease key currently maps to the given holder."""
         redis = get_redis_client()
         current = await redis.get(self.key)
-        return current == holder_id
+        return bool(current == holder_id)
 
     async def current_holder(self) -> Optional[str]:
         """Return the holder_id currently owning the lease, or None."""
         redis = get_redis_client()
-        return await redis.get(self.key)
+        current = await redis.get(self.key)
+        return None if current is None else str(current)
 
     # Context manager — raises LeaseAcquisitionError on failure (no silent skip).
     async def __aenter__(self) -> "AgentLease":

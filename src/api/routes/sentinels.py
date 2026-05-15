@@ -197,7 +197,8 @@ async def update_sentinel(
     client.table("sentinels").update({"enabled": payload.enabled}).eq(
         "sentinel_id", sentinel_id
     ).execute()
-    return await get_sentinel(sentinel_id, user=user)
+    result: SentinelResponse = await get_sentinel(sentinel_id, user=user)
+    return result
 
 
 @router.delete("/{sentinel_id}", status_code=status.HTTP_204_NO_CONTENT)

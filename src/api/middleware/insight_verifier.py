@@ -233,7 +233,8 @@ async def _get_cached_verdict(key: str) -> Optional[Dict[str, Any]]:
         redis = get_redis_client()
         raw = await redis.get(key)
         if raw:
-            return json.loads(raw)
+            verdict: Dict[str, Any] = json.loads(raw)
+            return verdict
     except Exception:
         return None
     return None

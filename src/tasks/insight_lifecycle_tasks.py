@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from src.workers.celery_app import celery_app
 
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 @celery_app.task(bind=True, name="src.tasks.consolidate_insights")
-def consolidate_insights(self, brand: str = None) -> Dict[str, Any]:
+def consolidate_insights(self, brand: Optional[str] = None) -> Dict[str, Any]:
     """
     Daily consolidator pass. Returns a JSON-serializable summary.
 

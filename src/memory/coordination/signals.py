@@ -81,7 +81,7 @@ class InsightSignalBus:
             approximate=True,
         )
         logger.debug(f"published {stream.key} entry={entry_id} brand={brand}")
-        return entry_id
+        return str(entry_id)
 
     # --------------------------------------------------------------- subscribe
 
@@ -157,7 +157,8 @@ class InsightSignalBus:
     async def ack(self, message: Dict[str, Any], group: str) -> int:
         """Acknowledge a consumed message so it isn't redelivered."""
         redis = get_redis_client()
-        return await redis.xack(message["_stream_key"], group, message["entry_id"])
+        result = await redis.xack(message["_stream_key"], group, message["entry_id"])
+        return int(result)
 
     # ---------------------------------------------------------------- iterate
 
