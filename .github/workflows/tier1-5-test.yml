@@ -61,6 +61,13 @@ jobs:
 
       - name: Boot Redis + FalkorDB + MLflow from docker-compose
         run: |
+          # docker-compose.yml references an external 'supabase-network'
+          # (used by api / feast / scheduler — not by our 3 services). Even
+          # when only starting a subset, compose validates external networks
+          # exist, so pre-create it as an empty bridge to satisfy the
+          # declaration without bringing Supabase up.
+          docker network inspect supabase-network >/dev/null 2>&1 \
+            || docker network create supabase-network
           docker compose -f docker/docker-compose.yml up -d redis falkordb mlflow
           echo "Waiting for services to report healthy..."
           for svc in redis falkordb mlflow; do
