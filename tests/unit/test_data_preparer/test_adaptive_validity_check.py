@@ -597,6 +597,15 @@ def test_verdict_schema_is_uniform_across_layer_1_and_layer_3():
         # fired because pre-joint-check was moderate, joint-clamped to
         # info" from inconsistent layer routing.
         "severity_pre_joint_check",
+        # Layer-4 evaluator audit-only fields (Plan
+        # .claude/plans/layer4_evaluator_audit_signal.md). All five
+        # are None when the evaluator is disabled / failed / had no
+        # LLM verdict to read.
+        "evaluator_satisfied",
+        "evaluator_rationale_complete",
+        "evaluator_missed_considerations",
+        "evaluator_notes",
+        "evaluator_model",
     }
     for v in result["adaptive_verdicts"]:
         assert set(v.keys()) == canonical_keys, (
@@ -995,6 +1004,13 @@ def test_phase29_compose_legacy_verdict_all_none_signals_returns_abstain():
         "ablation_severity",
         # Issue #212 — pre-joint-check severity audit field:
         "severity_pre_joint_check",
+        # Layer-4 evaluator audit-only fields (Plan
+        # .claude/plans/layer4_evaluator_audit_signal.md):
+        "evaluator_satisfied",
+        "evaluator_rationale_complete",
+        "evaluator_missed_considerations",
+        "evaluator_notes",
+        "evaluator_model",
     }
     assert set(verdict.keys()) == expected_keys
 
@@ -2069,6 +2085,13 @@ async def test_phase29_stage2_e2e_main_loop_with_populated_cache(tmp_path, monke
         "ablation_severity",
         # Issue #212 — pre-joint-check severity audit field:
         "severity_pre_joint_check",
+        # Layer-4 evaluator audit-only fields (Plan
+        # .claude/plans/layer4_evaluator_audit_signal.md):
+        "evaluator_satisfied",
+        "evaluator_rationale_complete",
+        "evaluator_missed_considerations",
+        "evaluator_notes",
+        "evaluator_model",
     }
     assert set(verdict.keys()) == expected_keys
 

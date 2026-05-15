@@ -1206,6 +1206,10 @@ def _ensemble_to_legacy_dict(
     llm_remediation = (
         getattr(llm_in, "recommended_remediation", None) if llm_in is not None else None
     )
+    # Layer-4 evaluator audit-only sidecar (Plan
+    # .claude/plans/layer4_evaluator_audit_signal.md). None when the
+    # evaluator was disabled / failed / had no worker verdict to read.
+    llm_audit = getattr(llm_in, "evaluator_audit", None) if llm_in is not None else None
 
     return {
         "feature": verdict.feature_name,
@@ -1260,6 +1264,15 @@ def _ensemble_to_legacy_dict(
         # supplied for this feature.
         "llm_role": llm_role,
         "llm_remediation": llm_remediation,
+        # Layer-4 evaluator audit-only fields (Plan
+        # .claude/plans/layer4_evaluator_audit_signal.md). All five
+        # keys are None when the evaluator is disabled, the evaluator
+        # failed, or the worker's LLMVerdict had no evaluator_audit.
+        "evaluator_satisfied": llm_audit.satisfied if llm_audit else None,
+        "evaluator_rationale_complete": (llm_audit.rationale_complete if llm_audit else None),
+        "evaluator_missed_considerations": (llm_audit.missed_considerations if llm_audit else None),
+        "evaluator_notes": llm_audit.notes if llm_audit else None,
+        "evaluator_model": llm_audit.evaluator_model if llm_audit else None,
     }
 
 
@@ -1321,6 +1334,14 @@ def _legacy_adversarial_alone_verdict(
         # are ``None``.
         "llm_role": None,
         "llm_remediation": None,
+        # Layer-4 evaluator audit-only fields (Plan
+        # .claude/plans/layer4_evaluator_audit_signal.md). Adversarial-only
+        # bypass has no LLM verdict, so the evaluator never runs.
+        "evaluator_satisfied": None,
+        "evaluator_rationale_complete": None,
+        "evaluator_missed_considerations": None,
+        "evaluator_notes": None,
+        "evaluator_model": None,
     }
 
 
@@ -1375,6 +1396,14 @@ def _legacy_info_verdict(
         # _ensemble_to_legacy_dict.
         "llm_role": None,
         "llm_remediation": None,
+        # Layer-4 evaluator audit-only fields (Plan
+        # .claude/plans/layer4_evaluator_audit_signal.md). Info-only
+        # bypass has no LLM verdict.
+        "evaluator_satisfied": None,
+        "evaluator_rationale_complete": None,
+        "evaluator_missed_considerations": None,
+        "evaluator_notes": None,
+        "evaluator_model": None,
     }
 
 
@@ -1426,6 +1455,14 @@ def _legacy_short_circuit_verdict(feature: str, *, evidence: str) -> dict[str, A
         # _ensemble_to_legacy_dict.
         "llm_role": None,
         "llm_remediation": None,
+        # Layer-4 evaluator audit-only fields (Plan
+        # .claude/plans/layer4_evaluator_audit_signal.md). Short-circuit
+        # bypass (too-few-rows / scoring-error) has no LLM verdict.
+        "evaluator_satisfied": None,
+        "evaluator_rationale_complete": None,
+        "evaluator_missed_considerations": None,
+        "evaluator_notes": None,
+        "evaluator_model": None,
     }
 
 
