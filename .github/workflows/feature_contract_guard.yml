@@ -1,0 +1,107 @@
+name: Feature Contract Coverage Guard
+
+# Phase 1.5 Layer 1 manifest-coverage CI guard. Runs
+# `scripts/check_manifest_coverage.py` on every PR that touches a CSU or
+# Optum converter, the corresponding manifest, or the guard itself.
+#
+# Failure semantics:
+#   * exit 0 — every converter column is covered by either the manifest
+#     or the explicit audit-column allowlist; build passes.
+#   * exit 1 — at least one column is unmapped; stderr names each
+#     `<cohort>:<column>` pair. The PR is blocked until the developer
+#     adds a `FeatureContract` entry (preferred) or, for a genuinely
+#     audit-only column, an entry in `AUDIT_COLUMN_ALLOWLIST` inside
+#     the guard with documented justification.
+#   * exit 2 — invocation/discovery error (converter not found, AST
+#     parse failure, unresolved loop iterable). Build fails fast.
+#
+# Reference:
+#   * Plan section: `.claude/plans/adaptive_temporal_validity_redesign.md`
+#     — Layer 1 (Declarative Temporal Contracts).
+#   * Guard implementation: `scripts/check_manifest_coverage.py`
+#   * Pattern mirrors `g3_wiring_guard.yml` (similar PR-gating guard
+#     structure: scoped paths, stdlib-only validator, exit-code-driven
+#     failure surface).
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/convert_csu_rwd.py'
+      - 'scripts/convert_optum_rwd.py'
+      - 'src/data/manifests/csu_feature_manifest.py'
+      - 'src/data/manifests/optum_feature_manifest.py'
+      - 'src/data/feature_contract.py'
+      - 'scripts/check_manifest_coverage.py'
+      - 'tests/unit/test_scripts/test_check_manifest_coverage.py'
+      - '.github/workflows/feature_contract_guard.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/convert_csu_rwd.py'
+      - 'scripts/convert_optum_rwd.py'
+      - 'src/data/manifests/csu_feature_manifest.py'
+      - 'src/data/manifests/optum_feature_manifest.py'
+      - 'src/data/feature_contract.py'
+      - 'scripts/check_manifest_coverage.py'
+      - 'tests/unit/test_scripts/test_check_manifest_coverage.py'
+      - '.github/workflows/feature_contract_guard.yml'
+  workflow_dispatch:
+
+jobs:
+  feature-contract-guard:
+    name: Feature Contract Coverage Guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Full history is not required (no git ancestry checks) but a
+          # shallow fetch of depth 1 is sufficient. The default `actions/
+          # checkout@v4` fetch-depth=1 is what we want.
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run manifest-coverage guard
+        env:
+          REPO_ROOT: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          echo "::group::Layer 1 manifest-coverage guard output"
+          # The guard imports `src.data.manifests.*_feature_manifest`
+          # to read the registered FeatureContract entries; those imports
+          # transitively reference `src.data.feature_contract` which is
+          # stdlib-only. No third-party dependency install is required —
+          # the guard runs on the bare Python 3.12 toolchain.
+          python3 scripts/check_manifest_coverage.py \
+            --repo-root "$REPO_ROOT" \
+            2>&1 | tee /tmp/manifest_coverage_output.txt
+          EXIT=${PIPESTATUS[0]}
+          echo "::endgroup::"
+          if [ "$EXIT" -eq 1 ]; then
+            echo "::error::Layer 1 manifest coverage FAILED — at least one converter column has no FeatureContract entry and is not on the audit allowlist. Add the missing column(s) to src/data/manifests/<cohort>_feature_manifest.py as FeatureContract entries; OR, if the column is a non-feature audit/identifier column, extend AUDIT_COLUMN_ALLOWLIST in scripts/check_manifest_coverage.py with documented justification."
+          elif [ "$EXIT" -eq 2 ]; then
+            echo "::error::Layer 1 manifest coverage guard hit an INVOCATION error — see the output above. Common causes: converter renamed/refactored without updating the guard's CohortConfig, AST parse failure, or a new dynamic column-generation idiom that the discovery walker doesn't recognise."
+          fi
+          exit "$EXIT"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Layer 1 Manifest Coverage Guard"
+            echo ""
+            if [ -f /tmp/manifest_coverage_output.txt ]; then
+              echo '```'
+              cat /tmp/manifest_coverage_output.txt
+              echo '```'
+            else
+              echo "_Guard did not produce output — pre-step failure or pure no-op._"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
