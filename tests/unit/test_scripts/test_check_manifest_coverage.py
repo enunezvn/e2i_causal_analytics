@@ -1624,6 +1624,195 @@ def test_non_ior_augassign_on_output_fails_closed(
         sys.path[:] = old_path
 
 
+# ---------------------------------------------------------------------------
+# Codex-rescue pass-5: HIGH-11 (trusted-helper spoofing — non-self receiver
+# / bare Call), HIGH-12 (output-dict reassignment from arbitrary Name RHS)
+# ---------------------------------------------------------------------------
+
+
+def test_trusted_helper_non_self_receiver_shadows(tmp_path: Path) -> None:
+    """Codex pass-5 HIGH-11: ``feats = other_obj._compute_features()``
+    must NOT be accepted as the trusted helper binding — pass-4 only
+    checked the .attr name, not the receiver. Pass-5 narrows to
+    ``self.<trusted_helper>()``.
+    """
+    converter = textwrap.dedent(
+        """
+        from typing import Any
+
+        class C:
+            def _build_record(self, other_obj) -> dict[str, Any]:
+                # Receiver is `other_obj`, not `self` — not trusted.
+                feats = other_obj._compute_features()
+                record: dict[str, Any] = {"known": 1}
+                record.update(feats)
+                return record
+
+            def _compute_features(self) -> dict[str, Any]:
+                feats: dict[str, Any] = {}
+                feats["safe_feature"] = 1
+                return feats
+        """
+    ).strip()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "synthetic_converter.py").write_text(converter)
+    (tmp_path / "_synthetic_manifest.py").write_text(_SYNTHETIC_MANIFEST)
+
+    cohort = cmc.CohortConfig(
+        name="synthetic-non-self",
+        converter_rel_path="scripts/synthetic_converter.py",
+        discovery_funcs=(
+            cmc.DiscoveryFunc(
+                func_name="_build_record",
+                output_dict_names=("record",),
+            ),
+            cmc.DiscoveryFunc(
+                func_name="_compute_features",
+                output_dict_names=("feats",),
+            ),
+        ),
+        manifest_module="_synthetic_manifest",
+        manifest_attr="SYNTHETIC_TEST_FEATURES",
+    )
+
+    old_path = list(sys.path)
+    sys.path.insert(0, str(tmp_path))
+    try:
+        discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
+        assert disc_errs, (
+            "non-self receiver trusted-helper-spoof must shadow safe-spread"
+        )
+        assert any("record.update(feats)" in e for e in disc_errs)
+    finally:
+        sys.path[:] = old_path
+
+
+def test_trusted_helper_bare_call_shadows(tmp_path: Path) -> None:
+    """Codex pass-5 HIGH-11: bare ``feats = _compute_features()`` (no
+    receiver) must NOT be trusted.
+    """
+    converter = textwrap.dedent(
+        """
+        from typing import Any
+
+        def _compute_features() -> dict[str, Any]:
+            return {"unmapped_bare": 1}
+
+        class C:
+            def _build_record(self) -> dict[str, Any]:
+                # Bare function call — not self.<trusted>.
+                feats = _compute_features()
+                record: dict[str, Any] = {"known": 1}
+                record.update(feats)
+                return record
+        """
+    ).strip()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "synthetic_converter.py").write_text(converter)
+    (tmp_path / "_synthetic_manifest.py").write_text(_SYNTHETIC_MANIFEST)
+
+    cohort = cmc.CohortConfig(
+        name="synthetic-bare-call",
+        converter_rel_path="scripts/synthetic_converter.py",
+        discovery_funcs=(
+            cmc.DiscoveryFunc(
+                func_name="_build_record",
+                output_dict_names=("record",),
+            ),
+            cmc.DiscoveryFunc(
+                func_name="_compute_features",
+                output_dict_names=("feats",),
+            ),
+        ),
+        manifest_module="_synthetic_manifest",
+        manifest_attr="SYNTHETIC_TEST_FEATURES",
+    )
+
+    old_path = list(sys.path)
+    sys.path.insert(0, str(tmp_path))
+    try:
+        discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
+        assert disc_errs, "bare-Call trusted-helper-spoof must shadow"
+    finally:
+        sys.path[:] = old_path
+
+
+def test_output_dict_reassignment_from_arbitrary_name_fails_closed(
+    tmp_path: Path,
+) -> None:
+    """Codex pass-5 HIGH-12: ``record = temp`` where ``temp`` is NOT
+    an output-dict alias must error. Pass-3 exempted ALL Name RHS;
+    pass-5 narrows to only output-dict alias names.
+    """
+    converter = textwrap.dedent(
+        """
+        from typing import Any
+
+        class C:
+            def _build_record(self) -> dict[str, Any]:
+                record: dict[str, Any] = {"known": 1}
+                temp = {"known": 1, "unmapped_temp_key": 1}
+                record = temp
+                return record
+        """
+    ).strip()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "synthetic_converter.py").write_text(converter)
+    (tmp_path / "_synthetic_manifest.py").write_text(_SYNTHETIC_MANIFEST)
+
+    cohort = _make_synthetic_cohort(
+        tmp_path, "scripts/synthetic_converter.py", "SYNTHETIC_TEST_FEATURES"
+    )
+
+    old_path = list(sys.path)
+    sys.path.insert(0, str(tmp_path))
+    try:
+        discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
+        assert disc_errs, (
+            f"record = arbitrary_temp must error: {disc_errs}"
+        )
+        assert any("record = temp" in e for e in disc_errs)
+    finally:
+        sys.path[:] = old_path
+
+
+def test_output_dict_alias_self_assign_does_not_error(tmp_path: Path) -> None:
+    """``record = record`` (no-op self-assign) and ``alias = record;
+    record = alias`` (alias back to self) must NOT trigger the
+    pass-5 HIGH-12 Pattern E check.
+    """
+    converter = textwrap.dedent(
+        """
+        from typing import Any
+
+        class C:
+            def _build_record(self) -> dict[str, Any]:
+                record: dict[str, Any] = {"known": 1}
+                alias = record  # alias propagation: alias is added
+                record = alias  # alias is in output_dict_names → no-op
+                return record
+        """
+    ).strip()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "synthetic_converter.py").write_text(converter)
+    (tmp_path / "_synthetic_manifest.py").write_text(_SYNTHETIC_MANIFEST)
+
+    cohort = _make_synthetic_cohort(
+        tmp_path, "scripts/synthetic_converter.py", "SYNTHETIC_TEST_FEATURES"
+    )
+
+    old_path = list(sys.path)
+    sys.path.insert(0, str(tmp_path))
+    try:
+        discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
+        assert disc_errs == [], (
+            f"alias self-assign should not error: {disc_errs}"
+        )
+        assert "known" in discovered
+    finally:
+        sys.path[:] = old_path
+
+
 def test_subscript_read_in_if_expression_does_not_false_positive(
     tmp_path: Path,
 ) -> None:

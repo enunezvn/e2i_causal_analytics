@@ -724,23 +724,32 @@ class _ColumnDiscoveryVisitor(ast.NodeVisitor):
                 if not self._is_trusted_helper_binding(node.value):
                     self._local_shadow_safe_spread.add(tgt.id)
         # Pattern E — output-dict reassignment from unenumerable RHS
-        # (codex-rescue pass-3 HIGH-7). ``record = dict.fromkeys(...)``,
-        # ``record = (newrec := {...})``, ``record = some_func()`` etc.
-        # bind a fresh dict to the output Name whose keys the visitor
-        # cannot enumerate. Without this guard, the function could
-        # discover the dict-literal keys assigned BEFORE the
-        # reassignment and pass coverage while the actual returned
-        # dict carries unmapped columns.
+        # (codex-rescue pass-3 HIGH-7 + pass-5 HIGH-12).
+        # ``record = dict.fromkeys(...)``, ``record = (newrec := {...})``,
+        # ``record = some_func()``, ``record = temp`` (where ``temp`` is
+        # NOT an output-dict alias) all bind a fresh dict to the output
+        # Name whose keys the visitor cannot enumerate.
+        #
+        # Pass-3 exempted ALL Name RHS — that allowed
+        # ``record = arbitrary_temp_var`` to bypass. Pass-5 narrows the
+        # exemption: a Name RHS is only safe when the Name is ITSELF
+        # an output-dict identifier (alias propagation handles
+        # ``alias = record``; the alias is then in output_dict_names).
+        # Any other Name RHS is unenumerable → unsupported.
         for tgt in node.targets:
-            if (
-                isinstance(tgt, ast.Name)
-                and tgt.id in self.output_dict_names
-                and not isinstance(node.value, (ast.Dict, ast.Name))
-            ):
-                # Skip ``record = record`` no-ops (Name = Name in
-                # output_dict_names handled by alias propagation
-                # above) and dict-literal initialisation
-                # (``record = {}``) handled by Pattern B.
+            if isinstance(tgt, ast.Name) and tgt.id in self.output_dict_names:
+                if isinstance(node.value, ast.Dict):
+                    # ``record = {...}`` — Pattern B handles enumeration.
+                    continue
+                if (
+                    isinstance(node.value, ast.Name)
+                    and node.value.id in self.output_dict_names
+                ):
+                    # ``record = record`` / ``record = <known-alias>``
+                    # — no-op / handled by alias propagation.
+                    continue
+                # Anything else (Call, NamedExpr, IfExp, BoolOp,
+                # bare-Name-not-output, etc.) — unenumerable.
                 try:
                     expr_text = ast.unparse(node)
                 except Exception:  # pragma: no cover — defensive
@@ -788,26 +797,33 @@ class _ColumnDiscoveryVisitor(ast.NodeVisitor):
             return
 
     def _is_trusted_helper_binding(self, value: ast.expr | None) -> bool:
-        """True iff the assignment value is a Call to a method whose
-        ``.attr`` is in ``trusted_helper_names`` (codex pass-4 HIGH-9
-        safe-spread tolerance). Examples that return True:
+        """True iff the assignment value is a Call of the form
+        ``self.<trusted_helper>(...)`` — i.e., the receiver MUST be the
+        ``self`` Name AND the method MUST be in
+        ``trusted_helper_names``. Codex pass-5 HIGH-11 tightened this
+        from any-receiver / bare-Call to self-only.
+
+        Examples that return True:
 
           * ``self._compute_features(...)``
           * ``self._compute_features()``
-          * ``other_obj._compute_features(...)``
 
-        Examples that return False:
+        Examples that return False (codex pass-5 HIGH-11 closures):
 
+          * ``other_obj._compute_features(...)`` (receiver is not self)
+          * ``_compute_features()`` (bare Call, no receiver)
+          * ``self.unknown_helper(...)`` (method not in trusted_helper_names)
           * Anything that isn't a Call.
-          * ``self.helper()`` where ``helper`` isn't in trusted_helper_names.
-          * ``some_func()`` (bare Call, no Attribute).
         """
         if not isinstance(value, ast.Call):
             return False
-        if isinstance(value.func, ast.Attribute):
-            return value.func.attr in self.trusted_helper_names
-        if isinstance(value.func, ast.Name):
-            return value.func.id in self.trusted_helper_names
+        if (
+            isinstance(value.func, ast.Attribute)
+            and isinstance(value.func.value, ast.Name)
+            and value.func.value.id == "self"
+            and value.func.attr in self.trusted_helper_names
+        ):
+            return True
         return False
 
     def _is_potential_alias_assign(self, node: ast.Assign) -> bool:
@@ -924,13 +940,18 @@ class _ColumnDiscoveryVisitor(ast.NodeVisitor):
         ):
             self.output_dict_names.add(node.target.id)
         # Pattern E (annotated form) — output-dict reassignment from
-        # unenumerable RHS (codex-rescue pass-3 HIGH-7). Same logic
-        # as visit_Assign Pattern E.
+        # unenumerable RHS (codex-rescue pass-3 HIGH-7 + pass-5 HIGH-12).
+        # Mirror of the visit_Assign Pattern E logic: only exempt Dict
+        # literal or a Name that is itself in output_dict_names.
         if (
             isinstance(node.target, ast.Name)
             and node.target.id in self.output_dict_names
             and node.value is not None
-            and not isinstance(node.value, (ast.Dict, ast.Name))
+            and not isinstance(node.value, ast.Dict)
+            and not (
+                isinstance(node.value, ast.Name)
+                and node.value.id in self.output_dict_names
+            )
         ):
             try:
                 expr_text = ast.unparse(node)
