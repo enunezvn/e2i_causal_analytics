@@ -193,9 +193,7 @@ def _classify_permutation_severity(
         and not isinstance(delta_auc, bool)
         and bool(np.isfinite(float(delta_auc)))
     )
-    delta_auc_below_floor = (
-        delta_auc_known and abs(float(delta_auc)) <= float(delta_auc_floor)
-    )
+    delta_auc_below_floor = delta_auc_known and abs(float(delta_auc)) <= float(delta_auc_floor)
 
     # +inf-with-strong-effect escape (mirrors Phase 3.3
     # z_is_positive_inf_strong_effect at adaptive_validity_check.py:545).
@@ -629,8 +627,7 @@ def run_model_eval_ablation(
             max_features,
         )
         return _skipped_result(
-            f"encoded width {n_encoded} > max_features={max_features}; "
-            f"O(n²) blowup guard fired",
+            f"encoded width {n_encoded} > max_features={max_features}; O(n²) blowup guard fired",
             z_threshold=z_threshold,
             delta_auc_floor=delta_auc_floor,
             strong_effect_threshold=strong_effect_threshold,

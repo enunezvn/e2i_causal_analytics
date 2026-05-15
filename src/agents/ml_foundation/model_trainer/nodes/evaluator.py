@@ -915,8 +915,8 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
                     validation_metrics["model_eval_ablation_flagged_features"] = list(
                         ablation_result.get("flagged_features", []) or []
                     )
-                    validation_metrics["model_eval_ablation_skipped_reason"] = (
-                        ablation_result.get("skipped_reason")
+                    validation_metrics["model_eval_ablation_skipped_reason"] = ablation_result.get(
+                        "skipped_reason"
                     )
                 metrics_result["validation_metrics"] = validation_metrics
             if ablation_result is not None and ablation_result.get("ran"):

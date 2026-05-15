@@ -327,9 +327,7 @@ class ModelTrainerState(BaseAgentSchema):
     model_trainer_ablation_max_features: Optional[int] = (
         None  # O(n²) blowup guard cap (default 100)
     )
-    model_trainer_ablation_seed: Optional[int] = (
-        None  # RNG seed (default 42)
-    )
+    model_trainer_ablation_seed: Optional[int] = None  # RNG seed (default 42)
     model_trainer_ablation_model_factory: Optional[Any] = (
         None  # Callable[[], sklearn-classifier]; None → LogisticRegression
     )
