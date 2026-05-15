@@ -781,6 +781,22 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
                 if _ablation_perms_raw is not None
                 else DEFAULT_MODEL_EVAL_ABLATION_PERMUTATIONS
             )
+            # Codex LOW-1: guard against n_permutations < 1 which would
+            # silently produce empty null distributions via
+            # ``adversarial_leakage.py:87`` / :206 — the inner for-loop
+            # would not execute, ``null_aucs`` would stay empty, and
+            # severity would default to ``info`` for every feature
+            # (silent miss for any real leak class). Mirror the strict
+            # validation that Phase 3.3 enforces via type-coerce at the
+            # read site (DEFAULT_ABLATION_PERMUTATIONS=50 with explicit
+            # ``if X is not None`` guard at adaptive_validity_check.py:2624).
+            if ablation_perms < 1:
+                raise ValueError(
+                    f"model_trainer_ablation_n_permutations must be >= 1; "
+                    f"got {ablation_perms}. n_permutations < 1 would produce "
+                    f"empty null distributions and silently degrade every "
+                    f"feature's severity to info."
+                )
             _ablation_z_raw = state.get("model_trainer_ablation_z_threshold")
             ablation_z = (
                 float(_ablation_z_raw)
@@ -813,6 +829,14 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
                 if _ablation_perm_n_raw is not None
                 else DEFAULT_MODEL_EVAL_PERMUTATION_PERMS
             )
+            # Codex LOW-1: same guard for the label-shuffle perm n.
+            if ablation_perm_n < 1:
+                raise ValueError(
+                    f"model_trainer_ablation_permutation_n_permutations must "
+                    f"be >= 1; got {ablation_perm_n}. n_permutations < 1 "
+                    f"produces empty null distributions and silently degrades "
+                    f"every feature's permutation severity to info."
+                )
 
             # Recover encoded feature names. _wrap_with_feature_names already
             # produces a DataFrame when names are available — use them
