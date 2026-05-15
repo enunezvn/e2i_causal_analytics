@@ -1180,20 +1180,62 @@ class _ColumnDiscoveryVisitor(ast.NodeVisitor):
             ):
                 return
 
-        # Examine each argument for an output-dict Name.
+        # Examine each argument (and any nested unpack containers) for
+        # an output-dict Name. Codex pass-7 HIGH-14: ``some_func(*[record])``,
+        # ``some_func(**{"k": record})``, ``some_func(*(record,))`` all
+        # hide ``record`` inside a Starred/List/Tuple/Dict wrapper that
+        # gets unpacked at runtime — the helper still receives the
+        # output dict by reference. Recursive scan via _bare_output_in_expr
+        # walks the arg expression and reports the offending Name.
         offending: list[str] = []
         for arg in node.args:
-            if isinstance(arg, ast.Name) and arg.id in self.output_dict_names:
-                offending.append(arg.id)
+            offending.extend(self._bare_output_names_in_expr(arg))
         for kw in node.keywords:
-            if isinstance(kw.value, ast.Name) and kw.value.id in self.output_dict_names:
-                offending.append(kw.value.id)
+            if kw.value is not None:
+                offending.extend(self._bare_output_names_in_expr(kw.value))
         if offending:
             try:
                 expr_text = ast.unparse(node)
             except Exception:  # pragma: no cover — defensive
                 expr_text = f"<call(<output={offending}>)>"
             self.unsupported_writes.append(expr_text)
+
+    def _bare_output_names_in_expr(self, expr: ast.expr) -> list[str]:
+        """Return any output-dict Name ids that appear bare in
+        ``expr`` (i.e., not as the receiver of a Subscript/Attribute
+        read). Walks ``Starred`` / ``List`` / ``Tuple`` / ``Dict`` /
+        ``NamedExpr`` / ``IfExp`` / ``BoolOp`` containers so the
+        codex pass-7 HIGH-14 unpack-wrapper bypass is caught.
+
+        We re-use the ``_BareNameFinder`` logic from _has_bare_output_ref
+        but return the list of matching Name ids instead of a single
+        bool.
+        """
+
+        class _BareNameCollector(ast.NodeVisitor):
+            def __init__(self, target_names: set[str]) -> None:
+                self.target_names = target_names
+                self.found: list[str] = []
+
+            def visit_Subscript(self, node: ast.Subscript) -> None:  # noqa: N802
+                # Receiver is read-only; don't collect a bare Name
+                # there. Descend into slice and into a non-Name receiver.
+                if isinstance(node.slice, ast.AST):
+                    self.visit(node.slice)
+                if not isinstance(node.value, ast.Name):
+                    self.visit(node.value)
+
+            def visit_Attribute(self, node: ast.Attribute) -> None:  # noqa: N802
+                if not isinstance(node.value, ast.Name):
+                    self.visit(node.value)
+
+            def visit_Name(self, node: ast.Name) -> None:  # noqa: N802
+                if node.id in self.target_names:
+                    self.found.append(node.id)
+
+        collector = _BareNameCollector(self.output_dict_names)
+        collector.visit(expr)
+        return collector.found
 
     # ------------------------------------------------------------------ #
     # Helpers                                                             #
