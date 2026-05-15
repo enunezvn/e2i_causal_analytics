@@ -256,6 +256,83 @@ def test_reader_compact_format_timestamp_from_producer(tmp_path):
     assert records[0].written_at.day == 15
 
 
+def test_reader_opt_float_rejects_bool_typed_value(tmp_path):
+    """Codex review LOW-3 (2026-05-15): isinstance(True, (int, float))
+    is True in Python; a producer-side bug routing a bool into a float
+    field must surface as None on the reader side, not as 1.0/0.0."""
+    from src.data.audit_sidecar_reader import SidecarReader
+
+    _write_sidecar(
+        tmp_path,
+        "exp-bool-float",
+        "2026-05-15T10:00:00Z",
+        [
+            {
+                "feature": "f-bool",
+                "layer": "4",
+                "z_score": True,  # WRONG: bool, not float
+                "delta_auc": False,
+                "evaluator_satisfied": False,
+                "evaluator_rationale_complete": False,
+                "evaluator_missed_considerations": [],
+                "evaluator_notes": "",
+                "evaluator_model": "haiku",
+            }
+        ],
+    )
+    reader = SidecarReader(artifacts_dir=tmp_path)
+    records = list(reader.iter_verdict_records())
+    assert len(records) == 1
+    assert records[0].z_score is None
+    assert records[0].delta_auc is None
+
+
+def test_reader_time_window_boundary_equality(tmp_path):
+    """Codex review LOW-4 (2026-05-15): time-window filter is documented
+    as a CLOSED interval [since, until]; pin the equality boundaries."""
+    from src.data.audit_sidecar_reader import SidecarReader
+
+    _write_sidecar(
+        tmp_path,
+        "exp-since",
+        "2026-05-01T00:00:00Z",
+        [
+            {
+                "feature": "at-since",
+                "layer": "4",
+                "evaluator_satisfied": False,
+                "evaluator_rationale_complete": False,
+                "evaluator_missed_considerations": [],
+                "evaluator_notes": "",
+                "evaluator_model": "haiku",
+            }
+        ],
+    )
+    _write_sidecar(
+        tmp_path,
+        "exp-until",
+        "2026-05-31T23:59:59Z",
+        [
+            {
+                "feature": "at-until",
+                "layer": "4",
+                "evaluator_satisfied": False,
+                "evaluator_rationale_complete": False,
+                "evaluator_missed_considerations": [],
+                "evaluator_notes": "",
+                "evaluator_model": "haiku",
+            }
+        ],
+    )
+    reader = SidecarReader(
+        artifacts_dir=tmp_path,
+        since=datetime(2026, 5, 1, 0, 0, 0, tzinfo=timezone.utc),
+        until=datetime(2026, 5, 31, 23, 59, 59, tzinfo=timezone.utc),
+    )
+    features = sorted(r.feature for r in reader.iter_verdict_records())
+    assert features == ["at-since", "at-until"]
+
+
 def test_extract_disagreements_filters_to_satisfied_false():
     from src.data.audit_sidecar_reader import (
         VerdictRecord,

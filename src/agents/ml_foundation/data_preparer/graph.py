@@ -44,6 +44,20 @@ def write_adaptive_verdicts_sidecar(state: Dict[str, Any]) -> Path | None:
     the state has at least one verdict. Otherwise no-ops (silently skipped in
     unit tests, which generally do not configure an artifacts dir).
 
+    Sidecar contents are INTENDED to persist even when the evaluator is
+    disabled (Plan layer4_evaluator_audit_consumer.md, codex review MED-1).
+    The non-evaluator fields (severity, remediation, z_score, p_value,
+    delta_auc, layer routing, etc.) are useful for post-hoc Layer-4 audit
+    independent of the Haiku evaluator. When
+    ``ADAPTIVE_VALIDITY_EVALUATOR_ENABLED`` is unset, the 5 evaluator_*
+    keys are all ``None`` and downstream consumers (e.g.
+    ``scripts/curate_compile_set_candidates.py``) correctly skip those
+    records via the ``evaluator_satisfied is not False`` predicate.
+
+    Writes are atomic: payload is staged to ``<sidecar>.tmp`` then
+    ``Path.replace()``d into place so an interrupted run never leaves a
+    half-written JSON on the volume (codex review LOW-9).
+
     The serialized verdicts carry an empirical ``p_value`` field whose floor
     is ``1 / n_permutations`` (default 200). A persisted ``p_value=0.0``
     therefore means ``< 1/n_permutations``, NOT exact zero (backlog #11.e).
@@ -86,7 +100,11 @@ def write_adaptive_verdicts_sidecar(state: Dict[str, Any]) -> Path | None:
             "adaptive_flagged_features": state.get("adaptive_flagged_features", []),
             "adaptive_verdicts": verdicts,
         }
-        sidecar.write_text(json.dumps(payload, indent=2, default=str))
+        # Atomic write: stage to .tmp then rename so an interrupted run
+        # never leaves a half-written JSON (codex review LOW-9).
+        sidecar_tmp = sidecar.with_suffix(".json.tmp")
+        sidecar_tmp.write_text(json.dumps(payload, indent=2, default=str))
+        sidecar_tmp.replace(sidecar)
         logger.info(
             "Wrote adaptive-validity audit trail to %s (verdicts=%d)",
             sidecar,

@@ -138,7 +138,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     deduped = list(dedup_disagreements(disagreements))
 
     generated_at = datetime.now(timezone.utc)
-    stamp = generated_at.strftime("%Y%m%dT%H%M%SZ")
+    # Microsecond precision so two reruns in the same second don't
+    # overwrite each other (codex review LOW-7, 2026-05-15).
+    stamp = generated_at.strftime("%Y%m%dT%H%M%S%fZ")
 
     md_path = args.output_dir / f"compile_set_candidates_{stamp}.md"
     json_path = args.output_dir / f"compile_set_candidates_{stamp}.json"

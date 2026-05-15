@@ -46,6 +46,26 @@ def test_format_markdown_report_includes_required_sections():
     assert "2026-05-15" in md
 
 
+def test_format_markdown_report_lists_all_required_fill_ins():
+    """Codex review MED-8: the markdown must mention all 4 fields the
+    reviewer must populate before accepting (derivation_pseudocode +
+    dataset_context, not just the two expected_* fields)."""
+    from src.data.audit_candidate_formatter import format_markdown_report
+
+    md = format_markdown_report(
+        [_make_event("f1")],
+        generated_at=datetime(2026, 5, 15, 11, 0, tzinfo=timezone.utc),
+    )
+    for field in (
+        "expected_causal_role",
+        "expected_remediation",
+        "derivation_pseudocode",
+        "dataset_context",
+    ):
+        assert field in md, f"markdown missing required fill-in: {field}"
+    assert "Required fill-ins before accepting" in md
+
+
 def test_format_markdown_report_empty_input_is_handled():
     from src.data.audit_candidate_formatter import format_markdown_report
 
@@ -63,6 +83,14 @@ def test_format_json_manifest_shape():
     )
 
     assert manifest["generated_at"] == "2026-05-15T11:00:00+00:00"
+    # Codex review MED-8: top-level required_fill_ins enumerates the 4
+    # fields downstream consumers must validate before merging.
+    assert manifest["required_fill_ins"] == [
+        "expected_causal_role",
+        "expected_remediation",
+        "derivation_pseudocode",
+        "dataset_context",
+    ]
     assert len(manifest["candidates"]) == 2
     c0 = manifest["candidates"][0]
     # Per acceptance criterion #5, expected_* keys are present and null
@@ -70,6 +98,10 @@ def test_format_json_manifest_shape():
     assert c0["feature_name"] == "f1"
     assert c0["expected_causal_role"] is None
     assert c0["expected_remediation"] is None
+    # The derivation/context pair is also null (codex review MED-8) and
+    # listed in required_fill_ins above.
+    assert c0["derivation_pseudocode"] is None
+    assert c0["dataset_context"] is None
     # Evaluator audit echoed for context.
     assert c0["evaluator_audit"]["satisfied"] is False
     assert c0["evaluator_audit"]["missed_considerations"] == ["temporal_filter"]
