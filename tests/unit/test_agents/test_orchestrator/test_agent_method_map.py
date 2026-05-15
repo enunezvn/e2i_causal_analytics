@@ -54,8 +54,11 @@ def test_method_specs_match_real_agent_entry_points() -> None:
     cases = {
         "orchestrator": ("run", True, False),
         "tool_composer": ("run", True, False),
-        "causal_impact": ("analyze", True, False),
-        "gap_analyzer": ("analyze", True, False),
+        # Both ``CausalImpactAgent`` and ``GapAnalyzerAgent`` expose
+        # ``run`` and a legacy simplified ``analyze``; the integration
+        # harness + post-Phase-1 dispatch call ``run`` (issue #252).
+        "causal_impact": ("run", True, False),
+        "gap_analyzer": ("run", True, False),
         "heterogeneous_optimizer": ("run", True, False),
         "drift_monitor": ("run", True, False),
         "experiment_designer": ("run", False, False),
