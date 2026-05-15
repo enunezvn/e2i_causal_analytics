@@ -157,14 +157,21 @@ class DiscoveryFunc:
     helper aggregation like ``type_counts`` or ``l50_counts``) is
     ignored.
 
+    ``required_columns`` is a small set of canonical column names that
+    the function MUST produce. If the visitor finishes and a required
+    name is missing from the discovered set, the orchestrator emits a
+    discovery error. This is the codex-rescue HIGH-2 mitigation: a
+    refactor that renames the output dict (so the discovery surface
+    silently collapses to empty) is caught by the guard itself rather
+    than relying on the developer to run the unit tests.
+
     This whitelisting prevents false positives from incidental dict
     literals + subscript assignments unrelated to the journey output.
-    A converter refactor that renames the output dict will be caught
-    by the test ``test_<cohort>_discovery_finds_known_column``.
     """
 
     func_name: str
     output_dict_names: tuple[str, ...]
+    required_columns: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -186,6 +193,35 @@ class CohortConfig:
     manifest_attr: str
 
 
+# Required columns per (cohort, discovery-func) — canonical names that
+# MUST appear in the discovered set after the visitor runs. Codex-rescue
+# HIGH-2 mitigation: a refactor that renames the output dict would
+# silently collapse discovery to empty AND coverage to PASS (every
+# manifest entry covers nothing; no unmapped). Requiring a small set
+# of always-present columns turns the rename failure mode into a
+# discovery error (exit 2) instead of a silent PASS.
+_CSU_BUILD_JOURNEYS_REQUIRED: tuple[str, ...] = (
+    "patient_journey_id",
+    "patient_id",
+    "treatment_initiated",
+    "discontinuation_flag",
+    "journey_status",
+)
+_OPTUM_BUILD_RECORD_REQUIRED: tuple[str, ...] = (
+    "patient_journey_id",
+    "patient_id",
+    "treatment_initiated",
+    "discontinuation_flag",
+    "initiated_biologic_180d",
+)
+_OPTUM_COMPUTE_FEATURES_REQUIRED: tuple[str, ...] = (
+    "age_at_index",
+    "age_group",
+    "gender",
+    "payer_category",
+)
+
+
 COHORTS: tuple[CohortConfig, ...] = (
     CohortConfig(
         name="csu",
@@ -200,6 +236,7 @@ COHORTS: tuple[CohortConfig, ...] = (
                 # (``demo_<col>``) become real output columns. Both must
                 # be tracked so the static scan sees the full surface.
                 output_dict_names=("journey_dict", "extra_demo"),
+                required_columns=_CSU_BUILD_JOURNEYS_REQUIRED,
             ),
         ),
         manifest_module="src.data.manifests.csu_feature_manifest",
@@ -216,6 +253,7 @@ COHORTS: tuple[CohortConfig, ...] = (
                 # happens at runtime, so we scan ``_compute_features``
                 # separately and union.
                 output_dict_names=("record",),
+                required_columns=_OPTUM_BUILD_RECORD_REQUIRED,
             ),
             DiscoveryFunc(
                 func_name="_compute_features",
@@ -224,6 +262,7 @@ COHORTS: tuple[CohortConfig, ...] = (
                 # caller. All subscript assignments to ``feats`` are
                 # journey-output columns.
                 output_dict_names=("feats",),
+                required_columns=_OPTUM_COMPUTE_FEATURES_REQUIRED,
             ),
         ),
         manifest_module="src.data.manifests.optum_feature_manifest",
@@ -233,8 +272,16 @@ COHORTS: tuple[CohortConfig, ...] = (
         name="optum-discontinuation",
         converter_rel_path="scripts/convert_optum_rwd.py",
         discovery_funcs=(
-            DiscoveryFunc(func_name="_build_journey_record", output_dict_names=("record",)),
-            DiscoveryFunc(func_name="_compute_features", output_dict_names=("feats",)),
+            DiscoveryFunc(
+                func_name="_build_journey_record",
+                output_dict_names=("record",),
+                required_columns=_OPTUM_BUILD_RECORD_REQUIRED,
+            ),
+            DiscoveryFunc(
+                func_name="_compute_features",
+                output_dict_names=("feats",),
+                required_columns=_OPTUM_COMPUTE_FEATURES_REQUIRED,
+            ),
         ),
         manifest_module="src.data.manifests.optum_feature_manifest",
         manifest_attr="OPTUM_FEATURES",
@@ -243,8 +290,16 @@ COHORTS: tuple[CohortConfig, ...] = (
         name="optum-persistence",
         converter_rel_path="scripts/convert_optum_rwd.py",
         discovery_funcs=(
-            DiscoveryFunc(func_name="_build_journey_record", output_dict_names=("record",)),
-            DiscoveryFunc(func_name="_compute_features", output_dict_names=("feats",)),
+            DiscoveryFunc(
+                func_name="_build_journey_record",
+                output_dict_names=("record",),
+                required_columns=_OPTUM_BUILD_RECORD_REQUIRED,
+            ),
+            DiscoveryFunc(
+                func_name="_compute_features",
+                output_dict_names=("feats",),
+                required_columns=_OPTUM_COMPUTE_FEATURES_REQUIRED,
+            ),
         ),
         manifest_module="src.data.manifests.optum_feature_manifest",
         manifest_attr="OPTUM_FEATURES",
@@ -303,10 +358,31 @@ AUDIT_COLUMN_ALLOWLIST: frozenset[str] = frozenset(
         "comorbidities",
         # ------------------------------------------------------------------
         # Operational scores + free-text state — not Layer 1 features.
-        # ``data_quality_score`` is itself a downstream gate (issue #156),
-        # not a model input; ``risk_score`` is a placeholder for an
-        # external risk model not yet wired; ``state`` is a free-text
-        # location label never used as a feature.
+        #
+        # ``data_quality_score`` is structurally target-coupled by
+        # construction (the converter buckets it via ``np.random.uniform``
+        # keyed by patient archetype, and archetype is target-correlated:
+        # see convert_csu_rwd.py:824-830 + Shard B audit at
+        # ``.claude/state/quality_arc_b_csu_close_20260506.md``). It is
+        # NOT in the manifest because the value is downstream gate
+        # metadata (issue #156) rather than a clinical predictor; the
+        # downstream-exclusion invariant is enforced by
+        # ``src/agents/ml_foundation/scope_definer/nodes/scope_builder.py``
+        # which adds ``data_quality_score`` to the feature-exclusion list
+        # (with the 0.82 AUC partial-collapse rationale on n=9,607). If
+        # that downstream exclusion is ever removed, this allowlist
+        # entry MUST be promoted to a ``post_index`` FeatureContract so
+        # Layer 1 catches it instead of allowing it through silently.
+        # Codex-rescue LOW-1 references the same risk.
+        #
+        # ``risk_score`` is a placeholder for an external risk model
+        # not yet wired (always ``None`` in current converters); a
+        # future PR that materialises a real risk score must add a
+        # FeatureContract and remove this entry.
+        #
+        # ``state`` is a free-text US state label, never used as a
+        # feature today; promotion to a feature would require
+        # one-hot/ordinal encoding + a FeatureContract.
         # ------------------------------------------------------------------
         "data_quality_score",
         "risk_score",
@@ -454,9 +530,26 @@ class _ColumnDiscoveryVisitor(ast.NodeVisitor):
         self,
         module_iterables: dict[str, tuple[str, ...]],
         output_dict_names: tuple[str, ...],
+        safe_spread_names: frozenset[str] = frozenset(),
     ):
         self.module_iterables = module_iterables
-        self.output_dict_names = output_dict_names
+        # We track aliases as we go: any ``alias = <output>`` assignment
+        # adds ``alias`` to the active output-dict name set so a
+        # follow-up ``alias[...] = ...`` is treated as a write to the
+        # output. Aliases are scoped only by visitor lifetime (no
+        # function-scope tracking); for the journey-record idiom that's
+        # sufficient since the aliasing patterns we care about are
+        # straight-line.
+        self.output_dict_names: set[str] = set(output_dict_names)
+        # Codex-rescue HIGH-1 follow-up: a ``.update(name)`` is normally
+        # statically unenumerable (the visitor can't see what's inside
+        # ``name``), but when ``name`` is itself an output dict that the
+        # cohort orchestrator scans separately (e.g., CSU spreads
+        # ``extra_demo`` into ``journey_dict``; Optum spreads ``feats``
+        # into ``record``), the keys are already enumerated by the
+        # sibling pass and the spread is safe. ``safe_spread_names``
+        # records those known safe spread identifiers.
+        self.safe_spread_names: frozenset[str] = safe_spread_names
         self.discovered: set[str] = set()
         # Track the loop variable bindings active at any given point
         # during traversal so f-string resolution can constant-fold.
@@ -469,6 +562,17 @@ class _ColumnDiscoveryVisitor(ast.NodeVisitor):
         # analyser cannot enumerate the column set, so the guard must
         # fail-closed rather than silently miss columns.
         self.unresolved_f_strings: list[str] = []
+        # Codex-rescue HIGH-1: any output-dict write whose KEY shape is
+        # not literal-string-or-resolvable-f-string is a discovery
+        # error. The visitor records the offending expression text so
+        # the orchestrator can surface it to the developer. Examples:
+        # BinOp keys, walrus inside subscript, ``__setitem__``/
+        # ``setdefault`` method calls on the output dict,
+        # ``record.update(<not-dict-literal>)``, ``**unpack`` inside a
+        # journey-record dict literal, etc. Recording these means a
+        # malicious or accidental refactor cannot silently introduce
+        # an unmapped column via an unsupported write shape.
+        self.unsupported_writes: list[str] = []
 
     # ------------------------------------------------------------------ #
     # Loop tracking                                                       #
@@ -551,6 +655,17 @@ class _ColumnDiscoveryVisitor(ast.NodeVisitor):
                 if isinstance(tgt, ast.Name) and tgt.id in self.output_dict_names:
                     self._collect_dict_literal_keys(node.value)
                     break
+        # Pattern C — alias propagation (codex-rescue HIGH-1): when a
+        # plain Name is assigned the value of an output-dict Name
+        # (``alias = record``), promote ``alias`` to the output-dict
+        # whitelist so the follow-up ``alias[...] = ...`` is captured.
+        # This catches the alias-bypass concrete repro from the codex
+        # adversarial review. Multi-target assignments
+        # (``a = b = record``) are handled by iterating ``node.targets``.
+        if isinstance(node.value, ast.Name) and node.value.id in self.output_dict_names:
+            for tgt in node.targets:
+                if isinstance(tgt, ast.Name):
+                    self.output_dict_names.add(tgt.id)
         self.generic_visit(node)
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:  # noqa: N802
@@ -560,6 +675,13 @@ class _ColumnDiscoveryVisitor(ast.NodeVisitor):
         if isinstance(node.value, ast.Dict) and isinstance(node.target, ast.Name):
             if node.target.id in self.output_dict_names:
                 self._collect_dict_literal_keys(node.value)
+        # Alias propagation (annotated form): ``alias: dict = record``.
+        if (
+            isinstance(node.value, ast.Name)
+            and node.value.id in self.output_dict_names
+            and isinstance(node.target, ast.Name)
+        ):
+            self.output_dict_names.add(node.target.id)
         self.generic_visit(node)
 
     def visit_AugAssign(self, node: ast.AugAssign) -> None:  # noqa: N802
@@ -567,17 +689,49 @@ class _ColumnDiscoveryVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
-        # Pattern: ``<output>.update({...})`` — collect dict-literal
-        # keys in the first positional argument when the .update receiver
-        # is one of the output dicts.
-        if isinstance(node.func, ast.Attribute) and node.func.attr == "update":
-            if (
-                isinstance(node.func.value, ast.Name)
-                and node.func.value.id in self.output_dict_names
-                and node.args
-                and isinstance(node.args[0], ast.Dict)
-            ):
-                self._collect_dict_literal_keys(node.args[0])
+        # Pattern: ``<output>.update({...})`` / ``<output>.setdefault(...)`` /
+        # ``<output>.__setitem__(...)`` — codex-rescue HIGH-1.
+        # ``update({...})`` with an inline dict-literal first arg is
+        # handled directly. Any other shape that mutates an output dict
+        # (non-literal update, setdefault, __setitem__) is recorded as
+        # an unsupported write so the orchestrator fails closed.
+        if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name):
+            receiver = node.func.value.id
+            if receiver in self.output_dict_names:
+                attr = node.func.attr
+                if attr == "update":
+                    if node.args and isinstance(node.args[0], ast.Dict):
+                        # Dict-literal form — collect keys; reject
+                        # ``**unpack`` inside the literal via the
+                        # existing ``_collect_dict_literal_keys`` path
+                        # (which now records ``**`` as unsupported).
+                        self._collect_dict_literal_keys(node.args[0])
+                    elif (
+                        node.args
+                        and isinstance(node.args[0], ast.Name)
+                        and node.args[0].id in self.safe_spread_names
+                    ):
+                        # ``record.update(feats)`` / ``journey_dict.update(extra_demo)``
+                        # — the spread Name is itself enumerated by a
+                        # sibling discovery pass. Safe.
+                        pass
+                    else:
+                        # ``record.update(other_dict_var)`` with
+                        # ``other_dict_var`` NOT a safe-spread name —
+                        # statically unenumerable.
+                        try:
+                            expr_text = ast.unparse(node)
+                        except Exception:  # pragma: no cover — defensive
+                            expr_text = (
+                                f"{receiver}.update(<non-dict-literal>)"
+                            )
+                        self.unsupported_writes.append(expr_text)
+                elif attr == "setdefault" or attr == "__setitem__":
+                    try:
+                        expr_text = ast.unparse(node)
+                    except Exception:  # pragma: no cover — defensive
+                        expr_text = f"{receiver}.{attr}(...)"
+                    self.unsupported_writes.append(expr_text)
         self.generic_visit(node)
 
     def _is_output_target(self, sub: ast.Subscript) -> bool:
@@ -605,6 +759,21 @@ class _ColumnDiscoveryVisitor(ast.NodeVisitor):
             if resolved is not None:
                 self.discovered.update(resolved)
             return
+        # Codex-rescue HIGH-1: any other key shape (BinOp, walrus,
+        # attribute access, function call, ...) is statically
+        # unenumerable. Recording it as ``unsupported_writes`` makes
+        # the cohort fail discovery (exit 2). Examples:
+        #   record["prefix" + name] = ...       (BinOp)
+        #   record[(k := "x")] = ...            (NamedExpr / walrus)
+        #   record[get_key()] = ...             (Call)
+        # Each is a real bypass vector we must reject; the developer
+        # is expected to rewrite as a literal subscript or pin the
+        # key into a module-level constant the walker can resolve.
+        try:
+            expr_text = ast.unparse(sub)
+        except Exception:  # pragma: no cover — defensive
+            expr_text = "<unsupported subscript key>"
+        self.unsupported_writes.append(expr_text)
 
     def _collect_dict_literal_keys(self, d: ast.Dict) -> None:
         # We only collect string-constant keys. F-string keys inside a
@@ -612,7 +781,16 @@ class _ColumnDiscoveryVisitor(ast.NodeVisitor):
         # appears, log it as unresolved so the orchestrator fails.
         for k in d.keys:
             if k is None:
-                # Dict-unpack (``**other_dict``) — out of static scope.
+                # Dict-unpack (``**other_dict``) — codex-rescue HIGH-1.
+                # An unpacked dict's keys are statically unenumerable;
+                # the bypass repro is
+                # ``record = {"known": 1, **{"unmapped_unpack": 1}}``.
+                # Record the unpack so the cohort fails discovery.
+                try:
+                    expr_text = ast.unparse(d)
+                except Exception:  # pragma: no cover — defensive
+                    expr_text = "<dict literal with **unpack>"
+                self.unsupported_writes.append(expr_text)
                 continue
             if isinstance(k, ast.Constant) and isinstance(k.value, str):
                 self.discovered.add(k.value)
@@ -620,6 +798,14 @@ class _ColumnDiscoveryVisitor(ast.NodeVisitor):
                 resolved = self._resolve_fstring(k)
                 if resolved is not None:
                     self.discovered.update(resolved)
+            else:
+                # Non-string-constant, non-fstring key — same fail-closed
+                # treatment as the subscript path.
+                try:
+                    expr_text = ast.unparse(d)
+                except Exception:  # pragma: no cover — defensive
+                    expr_text = "<dict literal with non-string key>"
+                self.unsupported_writes.append(expr_text)
 
     def _resolve_fstring(self, fstr: ast.JoinedStr) -> tuple[str, ...] | None:
         """Resolve an f-string to a set of concrete strings by enumerating
@@ -810,13 +996,27 @@ def discover_columns_for_cohort(
         )
         # No point continuing — fall through to return the partial set.
 
+    # Safe-spread names: any output-dict name from a sibling
+    # DiscoveryFunc in the same cohort, plus the current function's own
+    # output-dict names. When we see ``record.update(feats)`` in
+    # ``_build_journey_record``, ``feats`` is in
+    # ``_compute_features``'s output_dict_names → the spread is safe.
+    # When we see ``journey_dict.update(extra_demo)`` in
+    # ``_build_patient_journeys``, ``extra_demo`` is the current
+    # function's own output_dict_name → also safe.
+    safe_spread = frozenset(
+        n for df in cohort.discovery_funcs for n in df.output_dict_names
+    )
+
     discovered: set[str] = set()
     for df in cohort.discovery_funcs:
         fn = func_nodes.get(df.func_name)
         if fn is None:
             continue
         visitor = _ColumnDiscoveryVisitor(
-            module_iterables, df.output_dict_names
+            module_iterables,
+            df.output_dict_names,
+            safe_spread_names=safe_spread,
         )
         # Walk the function body. We intentionally skip the function
         # parameter signature — discovery is body-only.
@@ -836,6 +1036,47 @@ def discover_columns_for_cohort(
                 f"module-level constant):\n  "
                 + "\n  ".join(seen_unresolved)
             )
+        if visitor.unsupported_writes:
+            # Codex-rescue HIGH-1: unsupported output-dict write shapes
+            # (BinOp keys, walrus subscripts, ``__setitem__``/
+            # ``setdefault`` calls, non-literal ``.update``, dict-literal
+            # ``**unpack``) are statically unenumerable and therefore
+            # potential bypass vectors. Surface every offending expression
+            # so the developer can either rewrite the converter to use
+            # a literal/fstring key, or, if the dynamic shape is
+            # intentional and audit-only, extend the guard to recognise
+            # the new idiom.
+            seen_unsupported: list[str] = []
+            for w in visitor.unsupported_writes:
+                if w not in seen_unsupported:
+                    seen_unsupported.append(w)
+            errors.append(
+                f"{cohort.name}: unsupported output-dict write shapes "
+                f"in {df.func_name} (statically unenumerable; rewrite as "
+                f"literal subscript or pin keys into a module-level "
+                f"constant the walker can resolve):\n  "
+                + "\n  ".join(seen_unsupported)
+            )
+        # Codex-rescue HIGH-2: required-column sanity check. A refactor
+        # that renames the output dict would silently collapse the
+        # discovered set to empty AND let coverage pass (no unmapped).
+        # Verify at least the canonical columns we KNOW the function
+        # produces survived discovery. Missing-required is recorded as
+        # a discovery error (exit 2), not a coverage failure (exit 1):
+        # the discovery surface is broken, not the manifest.
+        if df.required_columns:
+            missing_required = [
+                c for c in df.required_columns if c not in visitor.discovered
+            ]
+            if missing_required:
+                errors.append(
+                    f"{cohort.name}: discovery in {df.func_name} did NOT "
+                    f"produce the canonical columns "
+                    f"{sorted(missing_required)} (expected at least these "
+                    f"in the discovered set). Likely cause: the function's "
+                    f"output dict variable was renamed; update the cohort "
+                    f"config's ``output_dict_names`` to match the new name."
+                )
 
     return frozenset(discovered), errors
 

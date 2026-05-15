@@ -13,7 +13,9 @@ name: Feature Contract Coverage Guard
 #     audit-only column, an entry in `AUDIT_COLUMN_ALLOWLIST` inside
 #     the guard with documented justification.
 #   * exit 2 — invocation/discovery error (converter not found, AST
-#     parse failure, unresolved loop iterable). Build fails fast.
+#     parse failure, unresolved loop iterable, unsupported output-dict
+#     write shape, or missing required canonical column). Build fails
+#     fast.
 #
 # Reference:
 #   * Plan section: `.claude/plans/adaptive_temporal_validity_redesign.md`
@@ -21,7 +23,19 @@ name: Feature Contract Coverage Guard
 #   * Guard implementation: `scripts/check_manifest_coverage.py`
 #   * Pattern mirrors `g3_wiring_guard.yml` (similar PR-gating guard
 #     structure: scoped paths, stdlib-only validator, exit-code-driven
-#     failure surface).
+#     failure surface, AND base-ref validator preferred-source for
+#     defense against PR-weakens-own-validator attacks).
+#
+# H3 SECURITY MITIGATION (codex-rescue MEDIUM-1):
+#   The validator at scripts/check_manifest_coverage.py is loaded from
+#   the PR's BASE ref when one exists, NOT from the PR-checkout copy.
+#   A PR that weakens the guard (e.g., adds an entry to
+#   AUDIT_COLUMN_ALLOWLIST without justification) cannot use its
+#   weakened copy to validate the same PR. When the validator does
+#   not yet exist on base (the introducing PR itself), the workflow
+#   falls back to the PR-checkout copy and logs a warning that a
+#   CODEOWNERS-gated review is required — same policy as the existing
+#   g3 / methodology-signoff guards.
 
 on:
   pull_request:
@@ -58,15 +72,53 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          # Full history is not required (no git ancestry checks) but a
-          # shallow fetch of depth 1 is sufficient. The default `actions/
-          # checkout@v4` fetch-depth=1 is what we want.
-          fetch-depth: 1
+          # We need history at least back to the PR base ref so we can
+          # ``git show <base_sha>:scripts/check_manifest_coverage.py``
+          # for the H3 base-ref validator load. fetch-depth=0 pulls the
+          # full graph; cheap for this repo and unambiguous.
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      - name: Resolve BASE SHA
+        id: resolve-sha
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "base_sha=${{ github.event.pull_request.base.sha }}" >> "$GITHUB_OUTPUT"
+          else
+            # push to main or workflow_dispatch — no PR base; the
+            # validator load step falls back to the checkout copy and
+            # logs the fallback in the workflow log.
+            echo "base_sha=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Fetch trusted validator from base ref (H3 mitigation)
+        env:
+          BASE_SHA: ${{ steps.resolve-sha.outputs.base_sha }}
+        run: |
+          set -euo pipefail
+          # H3 mitigation: load the validator from the PR's base ref
+          # so a PR cannot weaken AUDIT_COLUMN_ALLOWLIST or relax the
+          # discovery walker and use its own weakened copy to validate
+          # the same PR. When the validator does not yet exist on base
+          # (this PR introducing it), fall back to the PR-checkout copy
+          # and log a warning — CODEOWNERS review is required in that
+          # case. Mirror of g3_wiring_guard.yml's H3 step.
+          mkdir -p /tmp/governance
+          if [ -n "$BASE_SHA" ] && \
+             git cat-file -e "${BASE_SHA}:scripts/check_manifest_coverage.py" 2>/dev/null; then
+            git show "${BASE_SHA}:scripts/check_manifest_coverage.py" \
+              > /tmp/governance/check_manifest_coverage.py
+            echo "validator_source=base_sha"
+            echo "Using base-ref validator at SHA $BASE_SHA"
+          else
+            cp scripts/check_manifest_coverage.py /tmp/governance/check_manifest_coverage.py
+            echo "::warning::validator absent on base ref (or non-PR event); using PR-checkout copy. CODEOWNERS gating required for the introducing PR."
+            echo "validator_source=pr_head_or_push"
+          fi
 
       - name: Run manifest-coverage guard
         env:
@@ -79,7 +131,13 @@ jobs:
           # transitively reference `src.data.feature_contract` which is
           # stdlib-only. No third-party dependency install is required —
           # the guard runs on the bare Python 3.12 toolchain.
-          python3 scripts/check_manifest_coverage.py \
+          #
+          # We invoke the base-ref validator copy from /tmp/governance
+          # but point ``--repo-root`` at the PR checkout so it reads
+          # the converter sources and manifests UNDER REVIEW. The
+          # validator's allowlist + discovery logic come from base;
+          # the data being validated comes from PR head.
+          python3 /tmp/governance/check_manifest_coverage.py \
             --repo-root "$REPO_ROOT" \
             2>&1 | tee /tmp/manifest_coverage_output.txt
           EXIT=${PIPESTATUS[0]}
@@ -87,9 +145,25 @@ jobs:
           if [ "$EXIT" -eq 1 ]; then
             echo "::error::Layer 1 manifest coverage FAILED — at least one converter column has no FeatureContract entry and is not on the audit allowlist. Add the missing column(s) to src/data/manifests/<cohort>_feature_manifest.py as FeatureContract entries; OR, if the column is a non-feature audit/identifier column, extend AUDIT_COLUMN_ALLOWLIST in scripts/check_manifest_coverage.py with documented justification."
           elif [ "$EXIT" -eq 2 ]; then
-            echo "::error::Layer 1 manifest coverage guard hit an INVOCATION error — see the output above. Common causes: converter renamed/refactored without updating the guard's CohortConfig, AST parse failure, or a new dynamic column-generation idiom that the discovery walker doesn't recognise."
+            echo "::error::Layer 1 manifest coverage guard hit an INVOCATION error — see the output above. Common causes: converter renamed/refactored without updating the guard's CohortConfig, AST parse failure, an unsupported output-dict write shape (the codex-rescue HIGH-1 fail-closed surface), or a missing required canonical column (the HIGH-2 rename-collapses-discovery sanity check)."
           fi
           exit "$EXIT"
+
+      - name: Run manifest-coverage guard unit tests
+        # The guard's own unit tests assert that the discovery walker
+        # catches known converter columns and rejects synthetic
+        # missing-column / unsupported-write scenarios. Running them
+        # in CI closes the gap surfaced by the codex-rescue HIGH-2
+        # finding: if the workflow only invokes the guard script, a
+        # refactor that breaks discovery (e.g., output-dict rename)
+        # can produce zero discovered columns AND pass coverage. The
+        # required_columns sanity check in the guard's own code
+        # mitigates that, but the unit tests also exercise the synthetic
+        # bypass scenarios — a defence-in-depth pair.
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pytest pytest-xdist pytest-timeout pytest-asyncio
+          python3 -m pytest tests/unit/test_scripts/test_check_manifest_coverage.py -v
 
       - name: Summary
         if: always()

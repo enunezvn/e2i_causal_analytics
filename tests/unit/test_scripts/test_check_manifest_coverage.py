@@ -549,3 +549,309 @@ def test_cli_default_all_cohorts_returns_zero() -> None:
     """The default invocation (all cohorts) returns 0 on a clean repo."""
     rc = cmc.main([])
     assert rc == 0
+
+
+# ---------------------------------------------------------------------------
+# Codex-rescue HIGH-1: fail-closed on unsupported output-dict writes
+# ---------------------------------------------------------------------------
+#
+# Each parametrized case below exercises one bypass shape that an
+# earlier iteration of the guard silently dropped. The expectation is
+# that the discovery walker now either (a) catches the column via the
+# alias-propagation path (making it unmapped — exit 1), OR (b) records
+# the expression as an ``unsupported_writes`` entry (exit 2). Both are
+# acceptable PR-blocking outcomes; what we MUST NOT see is a clean PASS.
+
+
+def _write_synthetic_converter(tmp_path: Path, body_src: str) -> cmc.CohortConfig:
+    """Helper: write a converter with the given ``_build_record`` body
+    and return a CohortConfig pointing at it. The synthetic manifest
+    has 3 entries (``known``, ``has_foo``, ``has_bar``) so a real
+    bypass would land as ``unmapped`` IF the visitor catches it; the
+    fail-closed surface lands the bypass as ``unsupported_writes``.
+    """
+    (tmp_path / "scripts").mkdir(exist_ok=True)
+    converter = textwrap.dedent(
+        f"""
+        from typing import Any
+
+        class C:
+            def _build_record(self) -> dict[str, Any]:
+                record: dict[str, Any] = {{"known": 1}}
+                {body_src}
+                return record
+        """
+    ).strip()
+    (tmp_path / "scripts" / "synthetic_converter.py").write_text(converter)
+    (tmp_path / "_synthetic_manifest.py").write_text(_SYNTHETIC_MANIFEST)
+    return _make_synthetic_cohort(
+        tmp_path, "scripts/synthetic_converter.py", "SYNTHETIC_TEST_FEATURES"
+    )
+
+
+@pytest.mark.parametrize(
+    "bypass_body",
+    [
+        # Alias propagation — the visitor's alias tracker turns this
+        # into a discovered subscript on the alias. The bypass key
+        # ends up in ``unmapped`` (not unsupported_writes), which is
+        # equivalent — both fail the guard. NOTE: must be on its own
+        # line because Python lexer treats ``;`` after annotated
+        # assignments in dedented synthetic source.
+        'alias = record\n                alias["unmapped_alias_key"] = 1',
+        # BinOp key — statically unenumerable; unsupported_writes.
+        'record["prefix" + "_suffix"] = 1',
+        # Walrus inside subscript — unsupported_writes.
+        'record[(k := "walrus_key")] = 1',
+        # setdefault — unsupported_writes.
+        'record.setdefault("setdefault_key", 1)',
+        # __setitem__ — unsupported_writes.
+        'record.__setitem__("setitem_key", 1)',
+        # .update(non_dict_literal) where the arg is NOT a sibling
+        # output dict — unsupported_writes.
+        'extra = {"a": 1}\n                record.update(extra)',
+    ],
+)
+def test_unsupported_output_dict_writes_fail_closed(
+    tmp_path: Path,
+    bypass_body: str,
+) -> None:
+    """Each unsupported output-dict write shape must produce either an
+    ``unmapped`` column (alias case) or a discovery error
+    (``unsupported_writes``). Either is acceptable — both block PR
+    merge. The original codex-rescue HIGH-1 finding was that ALL of
+    these silently dropped.
+    """
+    cohort = _write_synthetic_converter(tmp_path, bypass_body)
+    old_path = list(sys.path)
+    sys.path.insert(0, str(tmp_path))
+    try:
+        discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
+        manifest, _ = cmc.load_manifest_names(tmp_path, cohort)
+
+        # Either discovery errored (unsupported_writes path) OR the
+        # column was discovered + is unmapped (alias path). What we
+        # MUST NOT see is "no errors AND empty unmapped".
+        report = cmc.reconcile_cohort(discovered, manifest, cohort.name)
+        passed_cleanly = report.passed and not disc_errs
+        assert not passed_cleanly, (
+            f"BYPASS NOT CAUGHT: body={bypass_body!r}, "
+            f"discovered={sorted(discovered)}, errors={disc_errs}, "
+            f"unmapped={report.unmapped}"
+        )
+    finally:
+        sys.path[:] = old_path
+
+
+def test_dict_unpack_in_output_literal_fails_closed(tmp_path: Path) -> None:
+    """``record = {"known": 1, **unmapped_unpack}`` was a bypass in the
+    initial guard — the **unpack's keys were silently ignored. Verify
+    the fail-closed path now triggers an unsupported_write."""
+    converter = textwrap.dedent(
+        """
+        from typing import Any
+
+        class C:
+            def _build_record(self) -> dict[str, Any]:
+                extra = {"unmapped_unpack_key": 1}
+                record: dict[str, Any] = {"known": 1, **extra}
+                return record
+        """
+    ).strip()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "synthetic_converter.py").write_text(converter)
+    (tmp_path / "_synthetic_manifest.py").write_text(_SYNTHETIC_MANIFEST)
+
+    cohort = _make_synthetic_cohort(
+        tmp_path, "scripts/synthetic_converter.py", "SYNTHETIC_TEST_FEATURES"
+    )
+    old_path = list(sys.path)
+    sys.path.insert(0, str(tmp_path))
+    try:
+        discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
+        assert disc_errs, "**unpack must produce a discovery error"
+        assert any("unsupported" in e.lower() for e in disc_errs)
+    finally:
+        sys.path[:] = old_path
+
+
+def test_safe_spread_record_update_feats_does_not_error(tmp_path: Path) -> None:
+    """``record.update(feats)`` where ``feats`` is a sibling
+    DiscoveryFunc's output dict must NOT trigger an unsupported_write.
+    The Optum converter relies on this pattern: ``_build_journey_record``
+    spreads ``_compute_features``'s ``feats`` dict into ``record``.
+    """
+    converter = textwrap.dedent(
+        """
+        from typing import Any
+
+        class C:
+            def _build_record(self) -> dict[str, Any]:
+                feats = self._compute_features()
+                record: dict[str, Any] = {"known": 1}
+                record.update(feats)
+                return record
+
+            def _compute_features(self) -> dict[str, Any]:
+                feats: dict[str, Any] = {}
+                feats["safe_feature_a"] = 1
+                feats["safe_feature_b"] = 1
+                return feats
+        """
+    ).strip()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "synthetic_converter.py").write_text(converter)
+    (tmp_path / "_synthetic_manifest.py").write_text(_SYNTHETIC_MANIFEST)
+
+    # Two DiscoveryFunc entries — _build_record + _compute_features.
+    cohort = cmc.CohortConfig(
+        name="synthetic-spread",
+        converter_rel_path="scripts/synthetic_converter.py",
+        discovery_funcs=(
+            cmc.DiscoveryFunc(
+                func_name="_build_record",
+                output_dict_names=("record",),
+            ),
+            cmc.DiscoveryFunc(
+                func_name="_compute_features",
+                output_dict_names=("feats",),
+            ),
+        ),
+        manifest_module="_synthetic_manifest",
+        manifest_attr="SYNTHETIC_TEST_FEATURES",
+    )
+
+    old_path = list(sys.path)
+    sys.path.insert(0, str(tmp_path))
+    try:
+        discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
+        assert disc_errs == [], (
+            f"safe spread should not error: {disc_errs}"
+        )
+        # All three keys should be discovered.
+        assert {"known", "safe_feature_a", "safe_feature_b"}.issubset(discovered)
+    finally:
+        sys.path[:] = old_path
+
+
+def test_alias_propagation_catches_aliased_write(tmp_path: Path) -> None:
+    """``alias = record; alias["unmapped"] = 1`` — the alias propagation
+    in the visitor turns this into a discovered subscript on the alias.
+    Result: the bypass key ``unmapped`` lands in the discovered set
+    and is reported as ``unmapped`` by reconcile_cohort (not in
+    manifest, not in allowlist).
+    """
+    converter = textwrap.dedent(
+        """
+        from typing import Any
+
+        class C:
+            def _build_record(self) -> dict[str, Any]:
+                record: dict[str, Any] = {"known": 1}
+                alias = record
+                alias["alias_unmapped_key"] = 1
+                return record
+        """
+    ).strip()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "synthetic_converter.py").write_text(converter)
+    (tmp_path / "_synthetic_manifest.py").write_text(_SYNTHETIC_MANIFEST)
+
+    cohort = _make_synthetic_cohort(
+        tmp_path, "scripts/synthetic_converter.py", "SYNTHETIC_TEST_FEATURES"
+    )
+
+    old_path = list(sys.path)
+    sys.path.insert(0, str(tmp_path))
+    try:
+        discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
+        assert disc_errs == []
+        # The aliased key WAS discovered.
+        assert "alias_unmapped_key" in discovered
+        manifest, _ = cmc.load_manifest_names(tmp_path, cohort)
+        report = cmc.reconcile_cohort(discovered, manifest, cohort.name)
+        # It's not in manifest, not in allowlist → unmapped.
+        assert "alias_unmapped_key" in report.unmapped
+    finally:
+        sys.path[:] = old_path
+
+
+# ---------------------------------------------------------------------------
+# Codex-rescue HIGH-2: required-column sanity check (rename-collapses-discovery)
+# ---------------------------------------------------------------------------
+
+
+def test_output_dict_rename_collapses_to_required_column_error(tmp_path: Path) -> None:
+    """If the converter's output dict is renamed (e.g., ``record`` →
+    ``journey``) and the cohort config is NOT updated, the visitor
+    discovers ZERO columns. Without HIGH-2's required_columns sanity
+    check, this would PASS coverage silently (no unmapped). With the
+    sanity check, the cohort errors out — exit 2.
+    """
+    converter = textwrap.dedent(
+        """
+        from typing import Any
+
+        class C:
+            def _build_record(self) -> dict[str, Any]:
+                # Rename: the canonical local var was ``record``;
+                # this code uses ``journey`` instead. The cohort
+                # config still says output_dict_names=("record",), so
+                # the visitor sees nothing.
+                journey: dict[str, Any] = {
+                    "renamed_output_key_a": 1,
+                    "renamed_output_key_b": 2,
+                }
+                return journey
+        """
+    ).strip()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "synthetic_converter.py").write_text(converter)
+    (tmp_path / "_synthetic_manifest.py").write_text(_SYNTHETIC_MANIFEST)
+
+    # Cohort config has required_columns set — the rename will trip it.
+    cohort = cmc.CohortConfig(
+        name="synthetic-rename",
+        converter_rel_path="scripts/synthetic_converter.py",
+        discovery_funcs=(
+            cmc.DiscoveryFunc(
+                func_name="_build_record",
+                output_dict_names=("record",),
+                required_columns=("known", "age_at_index"),
+            ),
+        ),
+        manifest_module="_synthetic_manifest",
+        manifest_attr="SYNTHETIC_TEST_FEATURES",
+    )
+
+    old_path = list(sys.path)
+    sys.path.insert(0, str(tmp_path))
+    try:
+        discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
+        # The visitor found nothing under output_dict_names=("record",).
+        assert discovered == frozenset()
+        # The required-column sanity check fires.
+        assert disc_errs, "rename without config update must error"
+        assert any("did NOT produce the canonical columns" in e for e in disc_errs)
+    finally:
+        sys.path[:] = old_path
+
+
+def test_real_cohort_required_columns_satisfied() -> None:
+    """The real cohorts' required_columns lists must be satisfied by
+    the live converter at HEAD. Any failure here means either (a) the
+    required_columns list drifted ahead of the converter, or (b) the
+    converter was refactored without updating either the
+    output_dict_names or the manifest.
+    """
+    for cohort in cmc.COHORTS:
+        discovered, errors = cmc.discover_columns_for_cohort(_REPO_ROOT, cohort)
+        assert errors == [], (
+            f"{cohort.name}: discovery errors: {errors}"
+        )
+        for df in cohort.discovery_funcs:
+            for req in df.required_columns:
+                assert req in discovered, (
+                    f"{cohort.name}/{df.func_name}: required column "
+                    f"{req!r} not in discovered surface"
+                )
