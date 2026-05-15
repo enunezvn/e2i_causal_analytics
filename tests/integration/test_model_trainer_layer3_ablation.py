@@ -474,8 +474,8 @@ def test_phase34_permutation_joint_check_clamps_large_n_weak_predictor() -> None
     at n=2000); this test pins the LARGE-N CLAMP behavior directly.
     """
     from src.agents.ml_foundation.model_trainer.nodes.model_eval_ablation import (
-        _classify_permutation_severity,
         MODEL_EVAL_ABLATION_DELTA_AUC_FLOOR_DEFAULT,
+        _classify_permutation_severity,
     )
 
     # PRE-ISSUE-#194 path (no delta_AUC → z-only ladder): z=6.0 → high.
