@@ -148,6 +148,6 @@ def _to_response(row: Dict[str, Any]) -> ExecutiveInsightResponse:
         key_metrics=row.get("key_metrics") or {},
         recall=bool(row.get("recall", False)),
         recall_reason=row.get("recall_reason"),
-        crystallized_at=row.get("crystallized_at"),
+        crystallized_at=row["crystallized_at"],  # NOT NULL DEFAULT now() in schema
         source_count=row.get("source_count") or 0,
     )

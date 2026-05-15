@@ -40,7 +40,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, Optional, Tuple, cast
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -92,20 +92,27 @@ class InsightVerifierMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self.paths = paths or INSIGHT_VERIFIER_PATHS
 
-    async def dispatch(self, request: Request, call_next) -> Response:
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
         path = request.url.path
         if request.method != "GET" or not any(path.startswith(p) for p in self.paths):
-            return await call_next(request)
+            return cast(Response, await call_next(request))
 
-        response = await call_next(request)
+        response = cast(Response, await call_next(request))
 
         # Only inspect successful JSON responses.
         ct = response.headers.get("content-type", "")
         if response.status_code != 200 or "application/json" not in ct:
             return response
 
+        # call_next() returns a _StreamingResponse internally; body_iterator
+        # exists on it but Starlette's public type is Response which doesn't
+        # declare it. Standard middleware pattern; safe to access.
         body_bytes = b""
-        async for chunk in response.body_iterator:
+        async for chunk in response.body_iterator:  # type: ignore[attr-defined]
             body_bytes += chunk
 
         try:
