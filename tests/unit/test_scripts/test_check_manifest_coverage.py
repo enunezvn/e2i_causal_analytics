@@ -936,8 +936,10 @@ def test_helper_call_with_output_kwarg_fails_closed(tmp_path: Path) -> None:
 def test_journeys_append_output_does_not_error(tmp_path: Path) -> None:
     """``journeys.append(journey_dict)`` is the canonical CSU
     converter pattern: the per-patient dict is appended to a list
-    after all writes are complete. ``append`` is in
-    ``_NON_MUTATING_METHODS`` so the call must NOT be flagged.
+    after all writes are complete. Pass-6 narrows the append exception
+    to receiver Names in ``collector_names``; this test declares
+    ``journeys`` as the collector and verifies the legitimate pattern
+    still passes.
     """
     converter = textwrap.dedent(
         """
@@ -956,8 +958,20 @@ def test_journeys_append_output_does_not_error(tmp_path: Path) -> None:
     (tmp_path / "scripts" / "synthetic_converter.py").write_text(converter)
     (tmp_path / "_synthetic_manifest.py").write_text(_SYNTHETIC_MANIFEST)
 
-    cohort = _make_synthetic_cohort(
-        tmp_path, "scripts/synthetic_converter.py", "SYNTHETIC_TEST_FEATURES"
+    # Pass-6 HIGH: explicit collector_names declaration so the
+    # legitimate journeys.append(record) call is accepted.
+    cohort = cmc.CohortConfig(
+        name="synthetic-collector",
+        converter_rel_path="scripts/synthetic_converter.py",
+        discovery_funcs=(
+            cmc.DiscoveryFunc(
+                func_name="_build_record",
+                output_dict_names=("record",),
+                collector_names=("journeys",),
+            ),
+        ),
+        manifest_module="_synthetic_manifest",
+        manifest_attr="SYNTHETIC_TEST_FEATURES",
     )
 
     old_path = list(sys.path)
@@ -1383,8 +1397,10 @@ def test_augassign_dict_union_safe_spread_does_not_error(tmp_path: Path) -> None
 
 def test_list_collector_append_still_accepted(tmp_path: Path) -> None:
     """After tightening _NON_MUTATING_METHODS → _LIST_COLLECTOR_METHODS
-    (pass-3 HIGH-6), the canonical ``journeys.append(journey_dict)``
-    pattern must still work."""
+    (pass-3 HIGH-6) AND further restricting the receiver to
+    ``collector_names`` (pass-6), the canonical
+    ``journeys.append(journey_dict)`` pattern must still work when
+    the cohort config declares ``collector_names=("journeys",)``."""
     converter = textwrap.dedent(
         """
         from typing import Any
@@ -1409,6 +1425,7 @@ def test_list_collector_append_still_accepted(tmp_path: Path) -> None:
             cmc.DiscoveryFunc(
                 func_name="_build_record",
                 output_dict_names=("journey_dict",),
+                collector_names=("journeys",),
             ),
         ),
         manifest_module="_synthetic_manifest",
@@ -1772,6 +1789,46 @@ def test_output_dict_reassignment_from_arbitrary_name_fails_closed(
             f"record = arbitrary_temp must error: {disc_errs}"
         )
         assert any("record = temp" in e for e in disc_errs)
+    finally:
+        sys.path[:] = old_path
+
+
+def test_wrapper_append_with_output_arg_fails_closed(tmp_path: Path) -> None:
+    """Codex pass-6 HIGH: ``wrapper.append(record)`` where ``wrapper`` is
+    NOT in the cohort's ``collector_names`` must still be flagged. The
+    pass-3 fix only narrowed by METHOD name (append/extend); pass-6
+    further requires the RECEIVER to be a known collector identifier.
+    """
+    converter = textwrap.dedent(
+        """
+        from typing import Any
+
+        class C:
+            def _build_record(self) -> dict[str, Any]:
+                record: dict[str, Any] = {"known": 1}
+                # ``wrapper.append`` is user-defined code that can
+                # mutate ``record``; not a real list-collector.
+                wrapper.append(record)
+                return record
+        """
+    ).strip()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "synthetic_converter.py").write_text(converter)
+    (tmp_path / "_synthetic_manifest.py").write_text(_SYNTHETIC_MANIFEST)
+
+    # No collector_names declared — wrapper.append(record) must be
+    # flagged as unsupported.
+    cohort = _make_synthetic_cohort(
+        tmp_path, "scripts/synthetic_converter.py", "SYNTHETIC_TEST_FEATURES"
+    )
+
+    old_path = list(sys.path)
+    sys.path.insert(0, str(tmp_path))
+    try:
+        discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
+        assert disc_errs, (
+            "wrapper.append(record) with no collector_names declared must error"
+        )
     finally:
         sys.path[:] = old_path
 

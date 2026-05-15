@@ -165,6 +165,19 @@ class DiscoveryFunc:
     silently collapses to empty) is caught by the guard itself rather
     than relying on the developer to run the unit tests.
 
+    ``collector_names`` is the list of local Name identifiers that are
+    legitimate ``list.append(<output_dict>)`` collector targets
+    (e.g., CSU's ``journeys.append(journey_dict)``). Calls of the
+    form ``<collector_name>.append(<output>)`` /
+    ``<collector_name>.extend(<output>)`` are accepted; any other
+    receiver receiving an output dict as a positional/keyword arg
+    is recorded as ``unsupported_writes``. This is the
+    codex-rescue pass-6 HIGH mitigation: pass-3/HIGH-6 narrowed the
+    method allowlist from any-method to append/extend, but the
+    receiver was still unrestricted, so ``wrapper.append(record)``
+    on a user-defined wrapper could still mutate the dict
+    invisibly. Per-DiscoveryFunc collector names close that hole.
+
     This whitelisting prevents false positives from incidental dict
     literals + subscript assignments unrelated to the journey output.
     """
@@ -172,6 +185,7 @@ class DiscoveryFunc:
     func_name: str
     output_dict_names: tuple[str, ...]
     required_columns: tuple[str, ...] = ()
+    collector_names: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -237,6 +251,12 @@ COHORTS: tuple[CohortConfig, ...] = (
                 # be tracked so the static scan sees the full surface.
                 output_dict_names=("journey_dict", "extra_demo"),
                 required_columns=_CSU_BUILD_JOURNEYS_REQUIRED,
+                # Codex pass-6 HIGH mitigation: ``journeys`` is the
+                # ONLY legitimate ``.append(<output>)`` collector in
+                # this function. ``wrapper.append(record)`` on a
+                # user-defined object is no longer accepted by the
+                # append/extend method-name exception.
+                collector_names=("journeys",),
             ),
         ),
         manifest_module="src.data.manifests.csu_feature_manifest",
@@ -532,6 +552,7 @@ class _ColumnDiscoveryVisitor(ast.NodeVisitor):
         output_dict_names: tuple[str, ...],
         safe_spread_names: frozenset[str] = frozenset(),
         trusted_helper_names: frozenset[str] = frozenset(),
+        collector_names: frozenset[str] = frozenset(),
     ):
         self.module_iterables = module_iterables
         # Codex pass-4 HIGH-9: the names of the cohort's other
@@ -542,6 +563,12 @@ class _ColumnDiscoveryVisitor(ast.NodeVisitor):
         # other assignment to a safe-spread Name inside the function
         # is a shadow.
         self.trusted_helper_names: frozenset[str] = trusted_helper_names
+        # Codex pass-6: legitimate collector identifiers (e.g.,
+        # CSU's ``journeys``). ``<collector>.append(<output>)`` /
+        # ``<collector>.extend(<output>)`` are the only forms accepted
+        # for the append/extend method-name exception; arbitrary
+        # ``wrapper.append(record)`` is now flagged.
+        self.collector_names: frozenset[str] = collector_names
         # We track aliases as we go: any ``alias = <output>`` assignment
         # adds ``alias`` to the active output-dict name set so a
         # follow-up ``alias[...] = ...`` is treated as a write to the
@@ -1140,14 +1167,15 @@ class _ColumnDiscoveryVisitor(ast.NodeVisitor):
                 "__setitem__",
             }:
                 return
-            # ``<not-output>.append(<output>)`` / ``.extend(<output>)``
-            # is the journeys.append(journey_dict) pattern — safe.
-            # Tightened from pass-2's broader _NON_MUTATING_METHODS to
-            # close the codex pass-3 HIGH-6 wrapper-method bypass: the
-            # exception now applies ONLY when the receiver itself is
-            # NOT an output dict and the method is append/extend.
+            # ``<collector>.append(<output>)`` / ``.extend(<output>)``
+            # is the journeys.append(journey_dict) pattern. Codex
+            # pass-6 HIGH: the exception now requires the receiver to
+            # be in ``collector_names`` — arbitrary ``wrapper.append(
+            # record)`` on a user-defined object is no longer accepted
+            # by method-name alone. The DiscoveryFunc's ``collector_names``
+            # explicitly enumerates the legitimate collector identifiers.
             if (
-                receiver_id not in self.output_dict_names
+                receiver_id in self.collector_names
                 and method in self._LIST_COLLECTOR_METHODS
             ):
                 return
@@ -1448,6 +1476,7 @@ def discover_columns_for_cohort(
             df.output_dict_names,
             safe_spread_names=safe_spread,
             trusted_helper_names=trusted_helpers,
+            collector_names=frozenset(df.collector_names),
         )
         # Walk the function body. We intentionally skip the function
         # parameter signature — discovery is body-only.
