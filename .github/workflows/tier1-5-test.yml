@@ -3,9 +3,14 @@ name: Tier 1-5 Agent Harness
 # Runs the integration harness that walks every Tier 1-5 agent
 # (scripts/run_tier1_5_test.py) against a cached Tier 0 pipeline output. Acts
 # as a forcing function against schema drift between tier0 state, the
-# Tier0OutputMapper, and per-agent contracts. Soft-fails for the first two
-# weeks while the new wiring shakes out — flip ``continue-on-error`` to
-# ``false`` once the suite is stable.
+# Tier0OutputMapper, and per-agent contracts.
+#
+# The job boots the core ML infra from docker/docker-compose.yml (Redis,
+# FalkorDB, MLflow) so agents that lazy-init those backends find real
+# services on 127.0.0.1. Supabase is not in scope for this workflow — its
+# self-hosted compose lives under docker/supabase/ and takes long enough to
+# bring up that it's better handled by a committed tier0 cache or a
+# follow-up self-hosted-runner workflow.
 
 on:
   pull_request:
@@ -16,6 +21,7 @@ on:
       - "scripts/run_tier1_5_test.py"
       - "config/agents/**"
       - ".github/workflows/tier1-5-test.yml"
+      - "docker/docker-compose.yml"
   workflow_dispatch: {}
 
 permissions:
@@ -29,6 +35,20 @@ jobs:
     # Soft-fail initially; flip this off after the first two clean weeks.
     continue-on-error: true
 
+    env:
+      # CI-only dummy passwords for compose vars. The redis/falkordb services
+      # in docker-compose.yml require them to be set (?:?MUST be set syntax)
+      # but the harness doesn't authenticate against them; agents fall back
+      # to localhost/no-auth when their env vars are absent.
+      REDIS_PASSWORD: "ci-only-changeme"
+      FALKORDB_PASSWORD: "ci-only-changeme"
+      # Service endpoints the harness should point agents at.
+      REDIS_URL: "redis://:ci-only-changeme@127.0.0.1:6382/0"
+      FALKORDB_HOST: "127.0.0.1"
+      FALKORDB_PORT: "6381"
+      FALKORDB_PASSWORD_ENV: "ci-only-changeme"
+      MLFLOW_TRACKING_URI: "http://127.0.0.1:5000"
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,6 +58,26 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+
+      - name: Boot Redis + FalkorDB + MLflow from docker-compose
+        run: |
+          docker compose -f docker/docker-compose.yml up -d redis falkordb mlflow
+          echo "Waiting for services to report healthy..."
+          for svc in redis falkordb mlflow; do
+            for i in $(seq 1 30); do
+              status=$(docker inspect --format '{{.State.Health.Status}}' "e2i_${svc}" 2>/dev/null || echo "starting")
+              if [ "$status" = "healthy" ]; then
+                echo "  $svc: healthy ($i tries)"
+                break
+              fi
+              if [ "$i" = "30" ]; then
+                echo "::warning::$svc did not become healthy within 60s (last status: $status)"
+                docker logs "e2i_${svc}" --tail 50 || true
+              fi
+              sleep 2
+            done
+          done
+          docker compose -f docker/docker-compose.yml ps
 
       - name: Install runtime + dev dependencies
         run: |
@@ -54,8 +94,9 @@ jobs:
           else
             echo "found=false" >> $GITHUB_OUTPUT
             echo "No tier0 cache committed — harness will be skipped with a"
-            echo "success status. To enable harness coverage on CI, commit a"
-            echo "tier0 cache or wire an artifact-download step here."
+            echo "success status. The docker stack still came up so any"
+            echo "container-image / compose-config regression would have"
+            echo "surfaced in the boot step above."
           fi
 
       - name: Run Tier 1-5 harness
@@ -69,7 +110,21 @@ jobs:
       - name: Skip harness (no tier0 cache)
         if: steps.restore-cache.outputs.found == 'false'
         run: |
-          echo "::notice title=Tier 1-5 harness skipped::No tier0 cache available in this checkout. The harness is a no-op on this run. Generate scripts/tier0_output_cache/latest.pkl locally with 'python scripts/run_tier1_5_test.py --run-tier0-first' and commit it (or wire an artifact-restore step in this workflow) to enable coverage."
+          echo "::notice title=Tier 1-5 harness skipped::No tier0 cache available in this checkout, but the docker stack (Redis, FalkorDB, MLflow) booted cleanly. Commit scripts/tier0_output_cache/latest.pkl, or wire a tier0-generation step in this workflow, to enable harness coverage."
+
+      - name: Capture docker logs on failure
+        if: failure()
+        run: |
+          for svc in redis falkordb mlflow; do
+            echo "::group::e2i_${svc} logs"
+            docker logs "e2i_${svc}" --tail 200 || true
+            echo "::endgroup::"
+          done
+
+      - name: Tear down docker stack
+        if: always()
+        run: |
+          docker compose -f docker/docker-compose.yml down -v --remove-orphans || true
 
       - name: Upload results JSON
         if: always()
