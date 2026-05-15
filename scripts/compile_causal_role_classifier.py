@@ -1,5 +1,14 @@
 """Phase 2.5 — DSPy compile-and-persist for the Layer 4 CausalRoleClassifier.
 
+PREREQUISITE (Codex Gate-2 MED-5, Plan
+``.claude/plans/layer4_evaluator_audit_consumer.md``): before producing a
+new compiled artifact, run ``make curate-candidates`` and review the
+resulting markdown report under ``./candidates/``. Any accepted candidate
+must be hand-merged into ``build_compile_set()`` in
+``src/data/causal_role_classifier.py`` BEFORE this script is run. Skipping
+this step means new evaluator-flagged disagreements never reach the
+compile set; the new artifact will be a copy of the old one.
+
 Compiles ``src.data.causal_role_classifier.CausalRoleClassifier`` via
 ``BootstrapFewShot`` against the 12-example compile set produced by
 ``build_compile_set()`` and writes the compiled program JSON to::

@@ -1,4 +1,4 @@
-.PHONY: help install dev-install test test-fast test-seq test-cov lint format clean docker-up docker-down docker-logs deploy deploy-build db-init data-generate api-docs
+.PHONY: help install dev-install test test-fast test-seq test-cov lint format clean docker-up docker-down docker-logs deploy deploy-build db-init data-generate api-docs curate-candidates
 
 help:
 	@echo "E2I Causal Analytics - Available Commands"
@@ -28,6 +28,26 @@ help:
 	@echo "  make db-init       Initialize database schemas"
 	@echo "  make data-generate Generate synthetic data"
 	@echo ""
+	@echo "Layer-4 audit curation:"
+	@echo "  make curate-candidates  Generate compile-set candidate report from"
+	@echo "                          the Layer-4 audit trail (REQUIRED before"
+	@echo "                          running scripts/compile_causal_role_classifier.py)"
+	@echo ""
+
+# Layer-4 audit-signal curation entry point. Plan:
+# .claude/plans/layer4_evaluator_audit_consumer.md (Task 10, Codex Gate-2 MED-5
+# forcing function).
+curate-candidates:
+	@if [ -z "$$ADAPTIVE_VALIDITY_ARTIFACTS_DIR" ]; then \
+	    echo "ERROR: ADAPTIVE_VALIDITY_ARTIFACTS_DIR is not set."; \
+	    echo "       See .env.example or docker/env.example for the var."; \
+	    echo "       Inside docker-compose this defaults to /app/data/audit_artifacts."; \
+	    exit 1; \
+	fi
+	mkdir -p ./candidates
+	.venv/bin/python scripts/curate_compile_set_candidates.py \
+	    --artifacts-dir "$$ADAPTIVE_VALIDITY_ARTIFACTS_DIR" \
+	    --output-dir ./candidates
 
 install:
 	pip install -r requirements.txt

@@ -508,6 +508,42 @@ Vector Search      Full-Text Search   Graph Search
 - Offline: PostgreSQL time-series with freshness monitoring
 - Tracking: MLflow automatic feature definition versioning
 
+### 4.6 Layer-4 Evaluator Audit Trail
+
+The adaptive-validity pipeline (`src/agents/ml_foundation/data_preparer/`)
+writes a per-run sidecar JSON under `$ADAPTIVE_VALIDITY_ARTIFACTS_DIR`
+when the operator enables the Haiku audit evaluator
+(`ADAPTIVE_VALIDITY_EVALUATOR_ENABLED=1` + `ANTHROPIC_API_KEY`). In
+docker-compose the variable defaults to `/app/data/audit_artifacts`,
+backed by the `audit_artifacts` named volume mounted on every service
+that mounts `agent_outputs` (api + worker_light + worker_medium +
+worker_heavy).
+
+The sidecars are NOT consumed by the orchestrator or any agent — they
+are an audit trail for a manual curation workflow. To turn accumulated
+sidecars into compile-set candidate examples:
+
+```bash
+make curate-candidates
+# or directly:
+python scripts/curate_compile_set_candidates.py \
+    --artifacts-dir $ADAPTIVE_VALIDITY_ARTIFACTS_DIR \
+    --output-dir ./candidates \
+    --since 2026-05-01 \
+    --until 2026-05-31
+```
+
+The CLI emits a markdown report (engineer reviews accept/reject) and a
+JSON manifest (machine-parseable with nullable `expected_*` fields to be
+filled in at review). Accepted candidates are hand-merged into
+`build_compile_set()` in `src/data/causal_role_classifier.py`; then
+re-run `scripts/compile_causal_role_classifier.py` to produce a new
+compiled artifact.
+
+Plans:
+- Producer (shipped 2026-05-15): `.claude/plans/layer4_evaluator_audit_signal.md`
+- Persistence + curation CLI (shipped 2026-05-15): `.claude/plans/layer4_evaluator_audit_consumer.md`
+
 ---
 
 ## 5. Security Architecture

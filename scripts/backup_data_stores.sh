@@ -87,6 +87,29 @@ else
   echo -e "${YELLOW}WARNING: FALKORDB_PASSWORD not set, skipping FalkorDB backup${NC}"
 fi
 
+# --- Layer-4 Audit Artifacts Backup (named-volume tarball) ---
+# Plan: .claude/plans/layer4_evaluator_audit_consumer.md.
+# The audit_artifacts named volume holds adaptive-validity sidecar JSONs
+# produced by src/agents/ml_foundation/data_preparer/graph.py:
+# write_adaptive_verdicts_sidecar. Treat as supplementary forensic data
+# (the canonical persistence is the JSON files themselves; this tar is a
+# rollback escape hatch).
+echo ""
+echo "--- Layer-4 Audit Artifacts Tarball ---"
+if docker volume inspect e2i_audit_artifacts >/dev/null 2>&1; then
+  if docker run --rm \
+      -v e2i_audit_artifacts:/data:ro \
+      -v "$BACKUP_DIR":/backup \
+      alpine:3.20 \
+      tar czf /backup/audit_artifacts.tar.gz -C /data . 2>/dev/null; then
+    echo -e "${GREEN}Audit artifacts saved: $BACKUP_DIR/audit_artifacts.tar.gz${NC}"
+  else
+    echo -e "${YELLOW}WARNING: audit_artifacts tar failed${NC}"
+  fi
+else
+  echo -e "${YELLOW}NOTICE: e2i_audit_artifacts volume not present, skipping${NC}"
+fi
+
 # --- Retention ---
 echo ""
 echo "--- Cleanup (retention: ${RETENTION_DAYS} days) ---"
