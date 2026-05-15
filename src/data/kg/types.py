@@ -302,6 +302,39 @@ class LLMVerdict:
     mechanism: str
     recommended_remediation: Remediation
     cited_pmids: tuple[str, ...] = ()
+    evaluator_audit: Optional["LLMEvaluatorAudit"] = None
+
+
+@dataclass(frozen=True)
+class LLMEvaluatorAudit:
+    """Audit-only sidecar produced by the Haiku evaluator after the Layer-4
+    worker classifies a feature.
+
+    Never gates or overrides the worker's :class:`LLMVerdict`. The voter
+    and the issue-#212 cap path do not read these fields; they are
+    written to the audit trail only.
+
+    Plan: ``.claude/plans/layer4_evaluator_audit_signal.md``.
+
+    Attributes:
+        satisfied: Evaluator's overall pass/fail against the criteria text.
+        rationale_complete: Whether the worker's mechanism cited the
+            temporal filter (or lack of one) and identified Pearl
+            arrowheads.
+        missed_considerations: Short labels (≤5 items, each ≤80 chars)
+            identifying axes the worker did not address. Empty tuple
+            when ``satisfied`` is True.
+        notes: Free-text rationale from the evaluator, truncated to
+            500 chars at the audit boundary.
+        evaluator_model: Pinned model identifier (default
+            ``"anthropic/claude-haiku-4-5-20251001"``).
+    """
+
+    satisfied: bool
+    rationale_complete: bool
+    missed_considerations: tuple[str, ...]
+    notes: str
+    evaluator_model: str
 
 
 @dataclass(frozen=True)
