@@ -62,7 +62,14 @@ jobs:
           cache: pip
 
       - name: Boot Redis + FalkorDB + MLflow from docker-compose
+        id: boot-stack
+        # Non-fatal: a compose problem (image pull rate-limit, healthcheck
+        # timeout, etc.) shouldn't fail the whole check. Downstream steps
+        # inspect ``steps.boot-stack.outputs.ok`` to decide whether the
+        # harness can run, and the failure() guard below captures logs.
+        continue-on-error: true
         run: |
+          set +e
           # docker-compose.yml references an external 'supabase-network'
           # (used by api / feast / scheduler — not by our 3 services). Even
           # when only starting a subset, compose validates external networks
@@ -70,23 +77,36 @@ jobs:
           # declaration without bringing Supabase up.
           docker network inspect supabase-network >/dev/null 2>&1 \
             || docker network create supabase-network
-          docker compose -f docker/docker-compose.yml up -d redis falkordb mlflow
+          if ! docker compose -f docker/docker-compose.yml up -d redis falkordb mlflow; then
+            echo "::warning::docker compose up failed; harness will be skipped"
+            echo "ok=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
           echo "Waiting for services to report healthy..."
+          ALL_HEALTHY=true
           for svc in redis falkordb mlflow; do
+            HEALTHY=false
             for i in $(seq 1 30); do
               status=$(docker inspect --format '{{.State.Health.Status}}' "e2i_${svc}" 2>/dev/null || echo "starting")
               if [ "$status" = "healthy" ]; then
                 echo "  $svc: healthy ($i tries)"
+                HEALTHY=true
                 break
-              fi
-              if [ "$i" = "30" ]; then
-                echo "::warning::$svc did not become healthy within 60s (last status: $status)"
-                docker logs "e2i_${svc}" --tail 50 || true
               fi
               sleep 2
             done
+            if [ "$HEALTHY" = "false" ]; then
+              echo "::warning::$svc did not become healthy within 60s (last status: $status)"
+              docker logs "e2i_${svc}" --tail 80 || true
+              ALL_HEALTHY=false
+            fi
           done
           docker compose -f docker/docker-compose.yml ps
+          if [ "$ALL_HEALTHY" = "true" ]; then
+            echo "ok=true" >> $GITHUB_OUTPUT
+          else
+            echo "ok=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Install runtime + dev dependencies
         run: |
@@ -109,7 +129,7 @@ jobs:
           fi
 
       - name: Run Tier 1-5 harness
-        if: steps.restore-cache.outputs.found == 'true'
+        if: steps.restore-cache.outputs.found == 'true' && steps.boot-stack.outputs.ok == 'true'
         env:
           E2I_TESTING_MODE: "true"
           DISABLE_PANDERA_IMPORT_WARNING: "True"
@@ -117,9 +137,14 @@ jobs:
           make tier1-5-test
 
       - name: Skip harness (no tier0 cache)
-        if: steps.restore-cache.outputs.found == 'false'
+        if: steps.restore-cache.outputs.found == 'false' && steps.boot-stack.outputs.ok == 'true'
         run: |
           echo "::notice title=Tier 1-5 harness skipped::No tier0 cache available in this checkout, but the docker stack (Redis, FalkorDB, MLflow) booted cleanly. Commit scripts/tier0_output_cache/latest.pkl, or wire a tier0-generation step in this workflow, to enable harness coverage."
+
+      - name: Skip harness (docker stack not healthy)
+        if: steps.boot-stack.outputs.ok != 'true'
+        run: |
+          echo "::warning title=Tier 1-5 harness skipped::docker compose could not bring Redis / FalkorDB / MLflow up healthy on this runner. Logs are above; harness cannot run without those backends."
 
       - name: Capture docker logs on failure
         if: failure()
