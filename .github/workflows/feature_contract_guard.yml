@@ -82,43 +82,36 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          cache: pip
 
-      - name: Install manifest-import dependencies (Option A from PR #230 fix)
-        # The guard imports ``src.data.manifests.<cohort>_feature_manifest``
-        # to read each cohort's registered ``FeatureContract`` entries.
-        # That import chain transitively pulls ``src.data.feature_contract``,
-        # whose module-load calls ``_compute_kg_known_systems()`` which
-        # imports ``src.data.kg.types``; the ``src.data.kg`` package
-        # ``__init__`` then pulls ``src.data.kg.adversarial_probe`` which
-        # imports numpy at module load. So the manifest is NOT
-        # stdlib-only importable despite the guard script itself being
-        # stdlib-pure.
-        #
-        # Fix per the PR #230 CI-failure-2 task brief: Option A
-        # (install the minimal transitive deps). numpy is the only one
-        # actually hit at import time today; pandas is added defensively
-        # for forward-compat against future ``src.data.kg.*`` additions
-        # the manifest accidentally pulls. We deliberately do NOT
-        # ``pip install -r requirements.txt`` — that's 5+ minutes of
-        # install vs. seconds for numpy+pandas, and the guard runs on
-        # every PR touching the converter/manifest paths.
-        #
-        # Alternatives we considered:
-        #   * Option B (lazy-import in feature_contract.py) — would
-        #     require moving _compute_kg_known_systems() out of
-        #     module-load. Higher risk: production callers rely on
-        #     _KG_KNOWN_SYSTEMS being populated when they construct
-        #     FeatureContract instances.
-        #   * Option C (AST-parse the manifest source for
-        #     FeatureContract(...) calls) — keeps guard stdlib-only
-        #     but adds parser code for list-concatenations + dict-comp
-        #     loops in manifest construction. Punted to a future PR
-        #     if the install-deps approach becomes a portability pain.
-        run: |
-          set -euo pipefail
-          python3 -m pip install --upgrade --quiet pip
-          python3 -m pip install --quiet numpy pandas
+      # ---------------------------------------------------------------- #
+      # PR #230 dependency-install history (kept as commentary so future #
+      # maintainers don't reintroduce the install step):                 #
+      #                                                                  #
+      # The first iteration of this workflow installed numpy + pandas    #
+      # here (Option A from the PR-#230 CI-failure-2 task brief)         #
+      # because the manifest IMPORT chain transitively pulled            #
+      # ``src.data.feature_contract`` →                                  #
+      # ``_compute_kg_known_systems()`` (called at module load) →        #
+      # ``src.data.kg.types`` → ``src.data.kg.__init__`` →               #
+      # ``src.data.kg.adversarial_probe`` → ``import numpy``.            #
+      #                                                                  #
+      # That install-deps approach surfaced as whack-a-mole on commit    #
+      # decd436c: after numpy was installed, CI failed on ``httpx``      #
+      # (loaded by a sibling ``src.data.kg.*`` module — each transitive  #
+      # dep would have required another iteration). The guard pivoted    #
+      # to Option C: it now AST-PARSES the manifest module to extract    #
+      # ``FeatureContract(name=...)`` calls, BYPASSING the Python import #
+      # entirely. See ``scripts/check_manifest_coverage.py::             #
+      # load_manifest_names`` for the AST extractor (replaces the prior  #
+      # ``importlib.import_module(cohort.manifest_module)`` call) and    #
+      # ``_ManifestNameExtractor`` for the visitor that handles the      #
+      # manifest's list-literal entries AND loop-based expansions        #
+      # (``for name in COMORBIDITY_NAMES: _LIST.append(FeatureContract(  #
+      # name=f"has_{name}", ...))``).                                    #
+      #                                                                  #
+      # No third-party deps required for the guard. The unit-tests step  #
+      # below DOES need pytest deps (installed there).                   #
+      # ---------------------------------------------------------------- #
 
       - name: Resolve BASE SHA
         id: resolve-sha
@@ -163,12 +156,12 @@ jobs:
         run: |
           set -euo pipefail
           echo "::group::Layer 1 manifest-coverage guard output"
-          # The guard script itself is stdlib-only, but the manifest
-          # modules it imports transitively pull numpy via
-          # ``src.data.feature_contract`` → ``src.data.kg.types`` →
-          # ``src.data.kg.__init__`` → ``src.data.kg.adversarial_probe``.
-          # The "Install manifest-import dependencies" step above
-          # installs numpy + pandas so the imports succeed.
+          # The guard is stdlib-only — it AST-parses both the converters
+          # (for column discovery) and the manifest module files (for
+          # registered FeatureContract names). No third-party deps are
+          # required. The dependency-install step was removed in the
+          # PR #230 Option-C pivot — see the long comment after
+          # ``Set up Python`` above for the history.
           #
           # We invoke the base-ref validator copy from /tmp/governance
           # but point ``--repo-root`` at the PR checkout so it reads
@@ -199,14 +192,24 @@ jobs:
         # mitigates that, but the unit tests also exercise the synthetic
         # bypass scenarios — a defence-in-depth pair.
         #
-        # numpy + pandas already installed by the manifest-import deps
-        # step above; the test file's
-        # ``test_payer_category_manifest_entry_is_valid`` imports
-        # ``src.data.manifests.optum_feature_manifest`` which needs
-        # those deps for the same transitive-import reason.
+        # After the PR #230 Option-C pivot to AST manifest extraction,
+        # the test file itself is stdlib-only (no manifest import).
+        # However, the project's ``tests/conftest.py`` imports
+        # ``dotenv`` + ``pytest_asyncio`` at module load (lines 41-44),
+        # so we install just those (NOT the full requirements.txt
+        # which is 5+ minutes). Locally verified in a fresh venv:
+        # python-dotenv + pytest-asyncio + pytest-xdist +
+        # pytest-timeout is sufficient for the 65 tests to collect
+        # and run.
         run: |
           set -euo pipefail
-          python3 -m pip install --quiet pytest pytest-xdist pytest-timeout pytest-asyncio
+          python3 -m pip install --upgrade --quiet pip
+          python3 -m pip install --quiet \
+            python-dotenv \
+            pytest \
+            pytest-asyncio \
+            pytest-xdist \
+            pytest-timeout
           python3 -m pytest tests/unit/test_scripts/test_check_manifest_coverage.py -v
 
       - name: Summary
