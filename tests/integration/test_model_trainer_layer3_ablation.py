@@ -479,10 +479,9 @@ def test_phase34_permutation_joint_check_clamps_large_n_weak_predictor() -> None
     )
 
     # PRE-ISSUE-#194 path (no delta_AUC → z-only ladder): z=6.0 → high.
-    assert (
-        _classify_permutation_severity(6.0)
-        == "high"
-    ), "Backward-compat: z-only path with no delta_auc should still ladder."
+    assert _classify_permutation_severity(6.0) == "high", (
+        "Backward-compat: z-only path with no delta_auc should still ladder."
+    )
 
     # ISSUE #194 fix: z=6.0 but |delta_AUC|=0.03 < floor=0.10 → info.
     sev = _classify_permutation_severity(
@@ -550,8 +549,7 @@ def test_phase34_permutation_joint_check_clamps_large_n_weak_predictor() -> None
         delta_auc_floor=MODEL_EVAL_ABLATION_DELTA_AUC_FLOOR_DEFAULT,
     )
     assert sev6 == "moderate", (
-        f"Moderate-band z + strong delta should escalate to moderate. "
-        f"Got severity={sev6!r}."
+        f"Moderate-band z + strong delta should escalate to moderate. Got severity={sev6!r}."
     )
 
     # Moderate band gets clamped by joint check: z=4.0, delta=0.05 → info.
@@ -561,8 +559,7 @@ def test_phase34_permutation_joint_check_clamps_large_n_weak_predictor() -> None
         delta_auc_floor=MODEL_EVAL_ABLATION_DELTA_AUC_FLOOR_DEFAULT,
     )
     assert sev7 == "info", (
-        f"Moderate-band z with weak delta should clamp to info. "
-        f"Got severity={sev7!r}."
+        f"Moderate-band z with weak delta should clamp to info. Got severity={sev7!r}."
     )
 
 
@@ -788,9 +785,7 @@ def test_phase34_n_permutations_below_1_raises() -> None:
 
     loop = asyncio.new_event_loop()
     try:
-        with pytest.raises(
-            ValueError, match="model_trainer_ablation_permutation_n_permutations"
-        ):
+        with pytest.raises(ValueError, match="model_trainer_ablation_permutation_n_permutations"):
             loop.run_until_complete(evaluate_model(state2))
     finally:
         loop.close()
