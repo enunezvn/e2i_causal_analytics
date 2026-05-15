@@ -41,9 +41,12 @@ AGENT_METHOD_MAP: Dict[str, AgentMethodSpec] = {
     # Tier 1: Coordination
     "orchestrator": AgentMethodSpec(method="run"),
     "tool_composer": AgentMethodSpec(method="run"),
-    # Tier 2: Causal Analytics (these implement .analyze; included for clarity)
-    "causal_impact": AgentMethodSpec(method="analyze"),
-    "gap_analyzer": AgentMethodSpec(method="analyze"),
+    # Tier 2: Causal Analytics. Both ``CausalImpactAgent`` and
+    # ``GapAnalyzerAgent`` expose both ``run`` and a legacy ``analyze``; the
+    # integration harness (``scripts/run_tier1_5_test.py``) and the
+    # post-Phase-1 dispatch path both call ``run`` — keep this aligned.
+    "causal_impact": AgentMethodSpec(method="run"),
+    "gap_analyzer": AgentMethodSpec(method="run"),
     "heterogeneous_optimizer": AgentMethodSpec(method="run"),
     # Tier 3: Monitoring
     "drift_monitor": AgentMethodSpec(
