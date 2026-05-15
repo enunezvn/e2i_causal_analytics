@@ -139,33 +139,36 @@ _SEVERITY_RANK: dict[str, int] = {"info": 0, "moderate": 1, "high": 2}
 def _classify_permutation_severity(
     z_score: Any,
     *,
+    delta_auc: Any = None,
+    delta_auc_floor: float = MODEL_EVAL_ABLATION_DELTA_AUC_FLOOR_DEFAULT,
     z_threshold: float = MODEL_EVAL_ABLATION_HIGH_Z,
     moderate_z_threshold: float = MODEL_EVAL_ABLATION_MODERATE_Z,
 ) -> str:
-    """Map a label-shuffle z-score to a severity band.
+    """Map a label-shuffle (z, |delta_AUC|) pair to a severity band.
 
-    Mirrors Phase 3.3's permutation severity classifier (the simple
-    z-band ladder; the more elaborate hblp_classify in adaptive_validity_check
-    is coupled to delta_AUC joint-check + KG/LLM Layer-4 inputs we do not
-    have at model-eval time). The simple ladder here is exactly the
-    pre-issue-#194 band:
+    Mirrors Phase 3.3's ``hblp_classify`` joint (z, |delta_AUC|) check
+    from issue #194 (at ``adaptive_validity_check.py:454``), without the
+    HBLP variance-inflation factor (no Layer-1 declared-safe input at
+    model-eval time; the simple base 5σ band is correct here).
+
+    Issue #194 joint check semantics (codex pass-1 MED-2):
+      * delta_auc may be None / NaN / non-finite — the joint check is
+        skipped in those cases and the classifier falls through to the
+        pre-issue-#194 z-only ladder. This matches Phase 3.3's
+        ``delta_auc_known`` predicate at adaptive_validity_check.py:529.
+      * When delta_auc is known AND |delta_auc| <= floor, severity is
+        FORCED to "info" even if z exceeds the band. This prevents the
+        n≥10k FPR blowup on legitimate weak predictors whose null
+        variance has shrunk per CLT below the absolute-effect floor of
+        pharma-actionable leakage.
+      * z=+inf with strong-effect (|delta_auc| > floor) → severity=high
+        (mirrors Phase 3.3 ``z_is_positive_inf_strong_effect`` escape at
+        adaptive_validity_check.py:545-554).
+
+    Ladder (post-joint-check):
       * z > z_threshold (default 5.0) → high
       * moderate_z_threshold < z <= z_threshold → moderate
-      * else (incl. NaN, +inf at 0 actual_auc, etc.) → info
-
-    KNOWN LIMITATION (issue #194 mirror): the simple z-band has a 5σ FPR
-    blowup at n≥10k cohorts that Phase 3.3 mitigates via the joint
-    (z, |delta_AUC|) check in ``hblp_classify``. At model-eval time we
-    do not have a single-feature delta_AUC analog for the label-shuffle
-    null (the delta is against the JOINT model, available only through
-    the ablation pass), so the simple ladder is the best we can do
-    without piping joint-model retrains into the perm pathway. The
-    ablation sub-pass DOES include the issue #194 floor (via
-    ``classify_model_eval_ablation_severity``), so cohorts where perm
-    over-fires at large n will still see ablation as a secondary check.
-    Promote to joint check if (a) Phase 3.4 lifecycle transitions out of
-    ADVISORY into ENFORCED, AND (b) large-n FPR observation lands in a
-    cohort where the model-eval hook is active.
+      * else (incl. NaN, -inf, etc.) → info
     """
     if z_score is None:
         return "info"
@@ -178,8 +181,37 @@ def _classify_permutation_severity(
     z_f = float(z_score)
     if np.isnan(z_f):
         return "info"
-    # +inf is a defined "huge z" (null_std collapsed to zero while actual
-    # exceeded null_mean) — treat as exceeding threshold.
+
+    # Issue #194 joint check. delta_auc is OPTIONAL: when omitted /
+    # None / non-finite, the joint check is inactive and we fall through
+    # to z-only behaviour (preserves backward compatibility with callers
+    # that don't have delta_auc available, matching Phase 3.3's
+    # ``delta_auc_known`` predicate).
+    delta_auc_known = (
+        delta_auc is not None
+        and isinstance(delta_auc, (int, float))
+        and not isinstance(delta_auc, bool)
+        and bool(np.isfinite(float(delta_auc)))
+    )
+    delta_auc_below_floor = (
+        delta_auc_known and abs(float(delta_auc)) <= float(delta_auc_floor)
+    )
+
+    # +inf-with-strong-effect escape (mirrors Phase 3.3
+    # z_is_positive_inf_strong_effect at adaptive_validity_check.py:545).
+    if np.isinf(z_f) and z_f > 0:
+        if delta_auc_known and abs(float(delta_auc)) > float(delta_auc_floor):
+            return "high"
+        # +inf without strong effect = info (legitimate degenerate-null
+        # weak signal).
+        return "info"
+
+    # Issue #194 forced clamp: |delta_AUC| <= floor → info regardless
+    # of z.
+    if delta_auc_below_floor:
+        return "info"
+
+    # Post-joint-check z-only ladder.
     if z_f > float(z_threshold):
         return "high"
     if z_f > float(moderate_z_threshold):
@@ -379,6 +411,28 @@ def _skipped_result(
     }
 
 
+def _compute_perm_delta_auc(score: dict[str, Any]) -> Optional[float]:
+    """Compute single-feature permutation delta_AUC from a score dict.
+
+    Mirrors Phase 3.3 at ``adaptive_validity_check.py:1016-1024``:
+    ``delta_auc = actual_auc - null_mean`` when both are finite, else
+    None (signals "delta unknown" so the joint check skips). Folded-AUC
+    scale, same as ``compute_adversarial_score``'s output.
+    """
+    auc = score.get("actual_auc")
+    null_mean = score.get("null_mean")
+    if (
+        isinstance(auc, (int, float))
+        and not isinstance(auc, bool)
+        and isinstance(null_mean, (int, float))
+        and not isinstance(null_mean, bool)
+        and np.isfinite(float(auc))
+        and np.isfinite(float(null_mean))
+    ):
+        return float(auc) - float(null_mean)
+    return None
+
+
 def _run_permutation_pass(
     df: Any,
     y: np.ndarray,
@@ -387,14 +441,17 @@ def _run_permutation_pass(
     seed: int,
     z_threshold: float,
     moderate_z_threshold: float,
+    delta_auc_floor: float,
 ) -> dict[str, dict[str, Any]]:
     """Run per-encoded-feature label-shuffle ``compute_adversarial_score``.
 
     Returns a dict mapping encoded feature name → score dict with the
-    augmentation key ``permutation_severity`` produced by
-    ``_classify_permutation_severity``. Failures on individual features
-    (degenerate columns, all-NaN after mask, etc.) are tolerated — the
-    row stores NaN z and severity=info.
+    augmentation keys ``permutation_severity`` (produced by
+    ``_classify_permutation_severity`` with issue #194 joint check) and
+    ``permutation_delta_auc`` (single-feature label-shuffle lift used to
+    apply the joint check). Failures on individual features (degenerate
+    columns, all-NaN after mask, etc.) are tolerated — the row stores
+    NaN z and severity=info.
 
     The CONSTANT-COLUMN check skips features where the encoded column
     has zero variance (e.g., a OneHotEncoder indicator for a category
@@ -415,6 +472,7 @@ def _run_permutation_pass(
                 "p_value": float("nan"),
                 "suspicious": False,
                 "permutation_severity": "info",
+                "permutation_delta_auc": None,
             }
             continue
         try:
@@ -440,12 +498,18 @@ def _run_permutation_pass(
                 "p_value": float("nan"),
                 "suspicious": False,
             }
+        # Issue #194 joint check — compute single-feature label-shuffle
+        # delta_AUC and pipe through classifier with the floor.
+        perm_delta = _compute_perm_delta_auc(score)
         sev = _classify_permutation_severity(
             score.get("z_score"),
+            delta_auc=perm_delta,
+            delta_auc_floor=delta_auc_floor,
             z_threshold=z_threshold,
             moderate_z_threshold=moderate_z_threshold,
         )
         score["permutation_severity"] = sev
+        score["permutation_delta_auc"] = perm_delta
         out[col] = score
     return out
 
@@ -603,6 +667,7 @@ def run_model_eval_ablation(
         seed=seed,
         z_threshold=z_threshold,
         moderate_z_threshold=moderate_z_threshold,
+        delta_auc_floor=delta_auc_floor,
     )
 
     # === Pass 2: Joint-model COLUMN-SHUFFLE ablation ===
@@ -680,6 +745,8 @@ def run_model_eval_ablation(
             "permutation_null_mean": perm_row.get("null_mean"),
             "permutation_null_std": perm_row.get("null_std"),
             "permutation_p_value": perm_row.get("p_value"),
+            # Issue #194 joint check: permutation delta_AUC + floor used.
+            "permutation_delta_auc": perm_row.get("permutation_delta_auc"),
             "permutation_severity": perm_sev,
             # Combined.
             "severity": combined_sev,
