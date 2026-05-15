@@ -189,3 +189,49 @@ def _opt_str_list(value: Any) -> Optional[list[str]]:
     if isinstance(value, list):
         return [str(item) for item in value if isinstance(item, str)]
     return None
+
+
+@dataclass(frozen=True)
+class DisagreementEvent:
+    """A verdict where the evaluator did NOT validate the worker's rationale.
+
+    Carries forward enough context for the curation CLI to format a
+    candidate compile-set entry: feature name, worker verdict, evaluator
+    critique, source attribution.
+    """
+
+    experiment_id: str
+    written_at: datetime
+    source_path: Path
+    feature: str
+    worker_severity: Optional[str]
+    worker_remediation: Optional[str]
+    rationale_complete: Optional[bool]
+    missed_considerations: tuple[str, ...]
+    notes: str
+    evaluator_model: Optional[str]
+
+
+def extract_disagreements(
+    records: Iterator[VerdictRecord] | list[VerdictRecord],
+) -> Iterator[DisagreementEvent]:
+    """Yield one DisagreementEvent per VerdictRecord where the evaluator
+    explicitly said satisfied=False. Records with evaluator_satisfied=None
+    (evaluator was disabled or failed) are skipped — they are not
+    disagreements, they are absences of signal.
+    """
+    for r in records:
+        if r.evaluator_satisfied is not False:
+            continue
+        yield DisagreementEvent(
+            experiment_id=r.experiment_id,
+            written_at=r.written_at,
+            source_path=r.source_path,
+            feature=r.feature,
+            worker_severity=r.severity,
+            worker_remediation=r.remediation,
+            rationale_complete=r.evaluator_rationale_complete,
+            missed_considerations=tuple(r.evaluator_missed_considerations or ()),
+            notes=r.evaluator_notes or "",
+            evaluator_model=r.evaluator_model,
+        )

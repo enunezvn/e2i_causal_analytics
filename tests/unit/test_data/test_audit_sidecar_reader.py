@@ -176,3 +176,43 @@ def test_reader_compact_format_timestamp_from_producer(tmp_path):
     assert records[0].written_at.year == 2026
     assert records[0].written_at.month == 5
     assert records[0].written_at.day == 15
+
+
+def test_extract_disagreements_filters_to_satisfied_false():
+    from src.data.audit_sidecar_reader import (
+        VerdictRecord,
+        extract_disagreements,
+    )
+
+    sat = VerdictRecord(
+        experiment_id="e", written_at=datetime.now(timezone.utc),
+        source_path=Path("/dev/null"), feature="f-sat", layer="4",
+        severity="moderate", remediation="keep_with_caveat", evidence=None,
+        z_score=2.0, p_value=0.05, delta_auc=0.04,
+        evaluator_satisfied=True, evaluator_rationale_complete=True,
+        evaluator_missed_considerations=[], evaluator_notes="",
+        evaluator_model="haiku", raw_verdict={},
+    )
+    unsat = VerdictRecord(
+        experiment_id="e", written_at=datetime.now(timezone.utc),
+        source_path=Path("/dev/null"), feature="f-unsat", layer="4",
+        severity="moderate", remediation="keep_with_caveat", evidence=None,
+        z_score=2.0, p_value=0.05, delta_auc=0.04,
+        evaluator_satisfied=False, evaluator_rationale_complete=False,
+        evaluator_missed_considerations=["temporal_filter"],
+        evaluator_notes="thin", evaluator_model="haiku", raw_verdict={},
+    )
+    no_eval = VerdictRecord(
+        experiment_id="e", written_at=datetime.now(timezone.utc),
+        source_path=Path("/dev/null"), feature="f-no-eval", layer="4",
+        severity="moderate", remediation="keep_with_caveat", evidence=None,
+        z_score=2.0, p_value=0.05, delta_auc=0.04,
+        evaluator_satisfied=None, evaluator_rationale_complete=None,
+        evaluator_missed_considerations=None, evaluator_notes=None,
+        evaluator_model=None, raw_verdict={},
+    )
+
+    events = list(extract_disagreements([sat, unsat, no_eval]))
+    assert len(events) == 1
+    assert events[0].feature == "f-unsat"
+    assert events[0].missed_considerations == ("temporal_filter",)
