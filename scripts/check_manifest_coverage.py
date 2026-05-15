@@ -550,6 +550,12 @@ class _ColumnDiscoveryVisitor(ast.NodeVisitor):
         # sibling pass and the spread is safe. ``safe_spread_names``
         # records those known safe spread identifiers.
         self.safe_spread_names: frozenset[str] = safe_spread_names
+        # Codex pass-2 HIGH-5: track when a safe-spread name has been
+        # locally shadowed by a dict-literal assignment in this
+        # function (``feats = {"unmapped_shadow": 1}``). If shadowed,
+        # the subsequent ``.update(feats)`` cannot trust the safe-spread
+        # tolerance — record it as unsupported_writes.
+        self._local_shadow_safe_spread: set[str] = set()
         self.discovered: set[str] = set()
         # Track the loop variable bindings active at any given point
         # during traversal so f-string resolution can constant-fold.
@@ -643,10 +649,11 @@ class _ColumnDiscoveryVisitor(ast.NodeVisitor):
 
     def visit_Assign(self, node: ast.Assign) -> None:  # noqa: N802
         # Pattern A: <output>[<str>] = ... — accept ONLY when the
-        # subscript target's Name is in ``output_dict_names``.
+        # subscript target's Name is in ``output_dict_names``. Walk
+        # nested Tuple/List target structures so the codex pass-2
+        # HIGH-4 ``record["a"], record["b"] = 1, 2`` form is caught.
         for tgt in node.targets:
-            if isinstance(tgt, ast.Subscript) and self._is_output_target(tgt):
-                self._handle_subscript_assign(tgt)
+            self._walk_assign_target(tgt)
         # Pattern B: <output> = { "literal_key": ..., ... } — collect
         # dict-literal keys only when the assignment target is a Name
         # in ``output_dict_names``.
@@ -659,14 +666,148 @@ class _ColumnDiscoveryVisitor(ast.NodeVisitor):
         # plain Name is assigned the value of an output-dict Name
         # (``alias = record``), promote ``alias`` to the output-dict
         # whitelist so the follow-up ``alias[...] = ...`` is captured.
-        # This catches the alias-bypass concrete repro from the codex
-        # adversarial review. Multi-target assignments
-        # (``a = b = record``) are handled by iterating ``node.targets``.
+        # Multi-target assignments (``a = b = record``) are handled by
+        # iterating ``node.targets``.
+        #
+        # Codex pass-2 MEDIUM-2: conditional aliases
+        # (``alias = record if cond else other``) are flagged as
+        # unsupported_writes rather than propagated, so the dynamic
+        # binding cannot silently hide a write to the output dict.
         if isinstance(node.value, ast.Name) and node.value.id in self.output_dict_names:
             for tgt in node.targets:
                 if isinstance(tgt, ast.Name):
                     self.output_dict_names.add(tgt.id)
+        elif self._is_potential_alias_assign(node):
+            # Codex pass-2 MEDIUM-2: dynamic alias forms
+            # (``alias = record if cond else other``,
+            # ``alias = some_call(record)``) can rebind a fresh local
+            # to one of the output dicts at runtime. The static walker
+            # cannot decide which branch wins, so record the
+            # assignment as unsupported so the cohort fails discovery.
+            try:
+                expr_text = ast.unparse(node)
+            except Exception:  # pragma: no cover — defensive
+                expr_text = "<dynamic alias to output dict>"
+            self.unsupported_writes.append(expr_text)
+        # Pattern D — shadowing the safe-spread name (codex pass-2
+        # HIGH-5): if a dict literal is assigned to a Name that is in
+        # ``safe_spread_names`` AND that Name is NOT itself in
+        # ``output_dict_names``, the safe-spread tolerance is being
+        # subverted (the spread arg's "trusted" identifier was
+        # rebound to a fresh local dict literal in this function).
+        # Record the offending key set so a subsequent
+        # ``output.update(feats)`` cannot launder unmapped columns
+        # through the safe-spread path.
+        if isinstance(node.value, ast.Dict):
+            for tgt in node.targets:
+                if (
+                    isinstance(tgt, ast.Name)
+                    and tgt.id in self.safe_spread_names
+                    and tgt.id not in self.output_dict_names
+                ):
+                    self._local_shadow_safe_spread.add(tgt.id)
         self.generic_visit(node)
+
+    def _walk_assign_target(self, tgt: ast.expr) -> None:
+        """Recursively look for ``<output>[...]`` subscript targets
+        inside an assignment LHS. Top-level handling caught the simple
+        case; this method covers Tuple, List, and Starred forms so the
+        codex pass-2 HIGH-4 ``record["a"], record["b"] = 1, 2`` bypass
+        is closed.
+        """
+        if isinstance(tgt, ast.Subscript) and self._is_output_target(tgt):
+            self._handle_subscript_assign(tgt)
+            return
+        if isinstance(tgt, (ast.Tuple, ast.List)):
+            for elt in tgt.elts:
+                self._walk_assign_target(elt)
+            return
+        if isinstance(tgt, ast.Starred):
+            self._walk_assign_target(tgt.value)
+            return
+
+    def _is_potential_alias_assign(self, node: ast.Assign) -> bool:
+        """True iff the assignment looks like a dynamic alias to an
+        output dict — i.e., LHS is a bare Name AND RHS is a shape
+        whose runtime value MIGHT equal an output dict but isn't a
+        bare Name (which is handled by the alias-propagation branch).
+
+        Targeted shapes:
+
+          * ``alias = record if cond else other``    (IfExp)
+          * ``alias = some_func(record, ...)``       (Call returning alias)
+          * ``alias = record or other``              (BoolOp with output-dict operand)
+
+        We exclude:
+
+          * RHS that is a plain Name (already handled).
+          * Subscript / Attribute access on the RHS that READS the
+            output dict (``feats["zip3"]`` reads ``feats`` for a value;
+            not aliasing the dict). The distinction matters because
+            ``feats["urban_rural_code"] = "urban" if feats["zip3"] ...``
+            is a normal subscript assignment, not an alias.
+
+        We detect "the rhs READS an output dict only as a subscript
+        receiver" by walking and recording every Name AST occurrence;
+        if every occurrence is inside an ``ast.Subscript`` / ``ast.Attribute``
+        (where the output-dict Name is the ``.value`` not standalone),
+        it's a read, not an alias. If at least one occurrence is BARE
+        (e.g., as a Call arg, a BoolOp operand, or an IfExp body), we
+        flag it.
+        """
+        if node.value is None or isinstance(node.value, ast.Name):
+            return False
+        # Only fire on LHS = single bare Name (alias-shaped LHS).
+        if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
+            return False
+        # Check that the RHS has at least one BARE output-dict Name
+        # reference (not as a subscript/attribute receiver).
+        return self._has_bare_output_ref(node.value)
+
+    def _has_bare_output_ref(self, expr: ast.expr) -> bool:
+        """Recursively walk ``expr``. Return True iff at least one
+        Name with ``id`` in ``output_dict_names`` appears in a
+        non-receiver position — i.e., NOT as the ``.value`` of an
+        enclosing ``ast.Subscript`` or ``ast.Attribute``.
+
+        Concrete examples:
+          * ``feats["x"]``                → ``feats`` is .value of
+            Subscript → not bare → False.
+          * ``some_func(feats)``          → ``feats`` appears as a
+            Call argument (not a receiver) → bare → True.
+          * ``record if cond else other`` → ``record`` is the body
+            expression → bare → True.
+        """
+
+        class _BareNameFinder(ast.NodeVisitor):
+            def __init__(self, target_names: set[str]) -> None:
+                self.target_names = target_names
+                self.found = False
+
+            def visit_Subscript(self, node: ast.Subscript) -> None:  # noqa: N802
+                # The receiver of a subscript read is NOT bare (it's
+                # being indexed). Visit only the slice / inner index
+                # for nested expressions.
+                if isinstance(node.slice, ast.AST):
+                    self.visit(node.slice)
+                if not isinstance(node.value, ast.Name):
+                    self.visit(node.value)
+
+            def visit_Attribute(self, node: ast.Attribute) -> None:  # noqa: N802
+                # Same logic for attribute access: ``record.append`` —
+                # ``record`` is a receiver, not bare. We still descend
+                # into nested expressions inside .value if it's not a
+                # Name.
+                if not isinstance(node.value, ast.Name):
+                    self.visit(node.value)
+
+            def visit_Name(self, node: ast.Name) -> None:  # noqa: N802
+                if node.id in self.target_names:
+                    self.found = True
+
+        finder = _BareNameFinder(self.output_dict_names)
+        finder.visit(expr)
+        return finder.found
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:  # noqa: N802
         # Annotated dict-literal assignment: ``<output>: <T> = {...}``.
@@ -675,6 +816,13 @@ class _ColumnDiscoveryVisitor(ast.NodeVisitor):
         if isinstance(node.value, ast.Dict) and isinstance(node.target, ast.Name):
             if node.target.id in self.output_dict_names:
                 self._collect_dict_literal_keys(node.value)
+            # Codex pass-2 HIGH-5 (annotated form): shadowing a
+            # safe-spread name with a fresh local dict literal.
+            if (
+                node.target.id in self.safe_spread_names
+                and node.target.id not in self.output_dict_names
+            ):
+                self._local_shadow_safe_spread.add(node.target.id)
         # Alias propagation (annotated form): ``alias: dict = record``.
         if (
             isinstance(node.value, ast.Name)
@@ -689,12 +837,37 @@ class _ColumnDiscoveryVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
-        # Pattern: ``<output>.update({...})`` / ``<output>.setdefault(...)`` /
-        # ``<output>.__setitem__(...)`` — codex-rescue HIGH-1.
-        # ``update({...})`` with an inline dict-literal first arg is
-        # handled directly. Any other shape that mutates an output dict
-        # (non-literal update, setdefault, __setitem__) is recorded as
-        # an unsupported write so the orchestrator fails closed.
+        # Codex pass-2 HIGH-3 — helper-call bypass. Any function call
+        # that takes an output-dict Name as a positional or keyword
+        # argument could mutate that dict at runtime. Without static
+        # analysis of the helper's body, the visitor cannot enumerate
+        # the keys the helper might write. Record the call as
+        # ``unsupported_writes`` so the cohort fails discovery.
+        #
+        # Exceptions for legitimate call shapes:
+        #   * ``<output>.update({...})`` (handled below — dict-literal
+        #     keys are enumerated).
+        #   * ``<output>.update(<sibling-output-name>)`` where the
+        #     arg is a known safe-spread name (handled below).
+        #   * ``<output>.setdefault(...)`` / ``<output>.__setitem__(...)``
+        #     are intentionally recorded as unsupported below.
+        #
+        # The helper-call check only fires when an output-dict Name is
+        # passed as an argument to ANOTHER call (i.e., NOT one of the
+        # three known-method calls). The legitimate ``list.append(<output>)``
+        # pattern (``journeys.append(journey_dict)``) is NOT a mutation
+        # of the output dict — append doesn't modify the dict — but the
+        # static analyser can't prove this. We accept the trade-off and
+        # flag append calls too; the developer can refactor to move the
+        # append out of the function body if needed. In practice,
+        # ``journeys.append(journey_dict)`` is the only legitimate
+        # form, and it appears at the END of the function body after
+        # all writes — so flagging it as ``unsupported_writes`` is a
+        # false positive. Mitigation: maintain an
+        # ``ALLOWED_HELPER_METHODS`` set (``append``, ``extend``) that
+        # accept output-dict args without flagging.
+        self._check_helper_call_with_output_arg(node)
+
         if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name):
             receiver = node.func.value.id
             if receiver in self.output_dict_names:
@@ -710,10 +883,13 @@ class _ColumnDiscoveryVisitor(ast.NodeVisitor):
                         node.args
                         and isinstance(node.args[0], ast.Name)
                         and node.args[0].id in self.safe_spread_names
+                        and node.args[0].id not in self._local_shadow_safe_spread
                     ):
                         # ``record.update(feats)`` / ``journey_dict.update(extra_demo)``
                         # — the spread Name is itself enumerated by a
-                        # sibling discovery pass. Safe.
+                        # sibling discovery pass AND has not been
+                        # locally shadowed by a dict-literal rebind in
+                        # this function. Safe.
                         pass
                     else:
                         # ``record.update(other_dict_var)`` with
@@ -742,6 +918,70 @@ class _ColumnDiscoveryVisitor(ast.NodeVisitor):
         if isinstance(sub.value, ast.Name) and sub.value.id in self.output_dict_names:
             return True
         return False
+
+    # Methods on output-dict receivers that DO NOT mutate the dict;
+    # safe to accept output-dict args on these calls. ``append`` /
+    # ``extend`` on the list-of-records collector
+    # (``journeys.append(journey_dict)``) is the main legitimate
+    # form. Other read-only methods are added here if they show up in
+    # real converter patterns.
+    _NON_MUTATING_METHODS: frozenset[str] = frozenset(
+        {"append", "extend", "items", "keys", "values", "get", "copy"}
+    )
+
+    def _check_helper_call_with_output_arg(self, node: ast.Call) -> None:
+        """Codex pass-2 HIGH-3 mitigation. Flag any Call that takes an
+        output-dict Name as a positional or keyword argument, UNLESS
+        the call is one of:
+
+          * ``<output>.update(...)`` (the existing path handles enumeration).
+          * ``<output>.setdefault(...)`` / ``<output>.__setitem__(...)``
+            (existing path records as unsupported_writes).
+          * ``<receiver>.<NON_MUTATING_METHOD>(<output>, ...)`` —
+            e.g., ``journeys.append(journey_dict)``.
+
+        The check fires when ANY arg or kwarg's Name id is in
+        ``output_dict_names``. This catches:
+
+            self._add_columns(record)       # helper mutates record
+            mutate(record)                  # bare helper
+            self._compute_dqs(feats=feats)  # kwarg arg (if feats is
+                                            # this function's output)
+
+        Note: ``feats=feats`` inside ``_build_journey_record`` does
+        NOT fire here because ``feats`` is not in this function's
+        ``output_dict_names`` — it's a sibling DiscoveryFunc's output.
+        """
+        # Skip the three method calls on output-dict receivers that
+        # are handled by the existing visit_Call dispatch.
+        if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name):
+            receiver_id = node.func.value.id
+            method = node.func.attr
+            if receiver_id in self.output_dict_names and method in {
+                "update",
+                "setdefault",
+                "__setitem__",
+            }:
+                return
+            # ``<not-output>.append(<output>)`` / ``.extend(<output>)``
+            # is the journeys.append(journey_dict) pattern — safe.
+            if method in self._NON_MUTATING_METHODS:
+                return
+
+        # Examine each argument for an output-dict Name.
+        offending: list[str] = []
+        for arg in node.args:
+            if isinstance(arg, ast.Name) and arg.id in self.output_dict_names:
+                offending.append(arg.id)
+        for kw in node.keywords:
+            if isinstance(kw.value, ast.Name) and kw.value.id in self.output_dict_names:
+                offending.append(kw.value.id)
+        if offending:
+            try:
+                expr_text = ast.unparse(node)
+            except Exception:  # pragma: no cover — defensive
+                expr_text = f"<call(<output={offending}>)>"
+            self.unsupported_writes.append(expr_text)
 
     # ------------------------------------------------------------------ #
     # Helpers                                                             #
