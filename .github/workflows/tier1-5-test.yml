@@ -36,12 +36,14 @@ jobs:
     continue-on-error: true
 
     env:
-      # CI-only dummy passwords for compose vars. The redis/falkordb services
-      # in docker-compose.yml require them to be set (?:?MUST be set syntax)
-      # but the harness doesn't authenticate against them; agents fall back
-      # to localhost/no-auth when their env vars are absent.
+      # CI-only dummy passwords. docker-compose.yml uses ${VAR:?msg} syntax
+      # which evaluates ALL such refs at parse time (not just for services
+      # being started), so every required var must be set even though we
+      # only boot redis / falkordb / mlflow below.
       REDIS_PASSWORD: "ci-only-changeme"
       FALKORDB_PASSWORD: "ci-only-changeme"
+      GRAFANA_ADMIN_PASSWORD: "ci-only-changeme"
+      SUPABASE_POSTGRES_PASSWORD: "ci-only-changeme"
       # Service endpoints the harness should point agents at.
       REDIS_URL: "redis://:ci-only-changeme@127.0.0.1:6382/0"
       FALKORDB_HOST: "127.0.0.1"
