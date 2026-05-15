@@ -955,6 +955,38 @@ def test_signature_verifies_real_failure_when_keyring_present(
     assert result.signature_check_skipped is False
 
 
+def test_signature_verifies_pass3_med1_no_pgp_block_with_empty_keyring_no_advisory(
+    fixture_repo: Path, tmp_path: Path
+):
+    """Codex pass-3 MED-1 fix pin: doc has NO PGP block, keyring is empty.
+
+    Pre-fix: the keyring-advisory preflight ran BEFORE doc parsing, so
+    a doc with no PGP block (e.g. a sigstore-only doc OR a doc with no
+    signature at all) would advisory-pass-via-keyring-skip even though
+    the real failure is "no signature block in the doc". Post-fix: the
+    advisory only fires when the PGP path is actually being taken.
+    """
+
+    if shutil.which("gpg") is None:
+        pytest.skip("gpg not on PATH")
+    empty_keyring = tmp_path / "empty_keyring"
+    empty_keyring.mkdir(mode=0o700)
+
+    doc_path = fixture_repo / "docs" / "results" / "optum_methodology_signoff_20260520.md"
+    # Doc with NO PGP block.
+    doc_path.write_text("# Sign-off\nNo signature here.\n", encoding="utf-8")
+
+    result = cms.check_signature_verifies(
+        doc_path, require_signature=True, keyring_dir=empty_keyring
+    )
+    # Pass-3 MED-1: with no PGP block, the keyring advisory MUST NOT fire.
+    # The legitimate "no signature block" failure must surface.
+    assert result.ok is False
+    assert result.signature_check_skipped is False
+    # The detail must reference the missing block, not the empty keyring.
+    assert "no extractable PGP armor block" in result.detail or "no PGP" in result.detail
+
+
 def test_extract_pgp_armor_block_returns_full_block():
     text = "before\n-----BEGIN PGP SIGNATURE-----\nAAAA\n-----END PGP SIGNATURE-----\nafter\n"
     block = cms._extract_pgp_armor_block(text)
@@ -2825,6 +2857,85 @@ class TestCheckSigningFingerprintMatchesRegistry:
         assert fp_canonical in result.detail
         assert fp_rotated in result.detail
 
+    def test_codex_pass3_med2_recused_fingerprint_must_not_satisfy_pinning(self):
+        """Codex pass-3 MED-2: a fingerprint on a RECUSED row MUST NOT
+        satisfy pinning even when the handle has an active row.
+
+        The active+recused split is how the registry encodes "this
+        reviewer rotated their key — old key kept on inactive/recused
+        row for historical reference, new key on active row." If we
+        accepted recused fingerprints, the rotation semantic would be
+        defeated AND a leaked old key could still verify.
+        """
+
+        fp_active = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        fp_recused = "DEAD000000000000000000000000000000000000"
+        registry = [
+            cms.ReviewerInfo(
+                handle="alice",
+                email="alice@example.com",
+                status="active",
+                emails=("alice@example.com",),
+                fingerprint=fp_active,
+            ),
+            cms.ReviewerInfo(
+                handle="alice",
+                email="alice@example.com",
+                status="recused",
+                emails=("alice@example.com",),
+                fingerprint=fp_recused,
+            ),
+        ]
+        # Sign-off was signed by the RECUSED key.
+        signature_results = [
+            cms.CheckResult(
+                "signature_verifies",
+                True,
+                "ok",
+                signing_fingerprint=fp_recused,
+            ),
+        ]
+        result = cms.check_signing_fingerprint_matches_registry(
+            self._make_doc_text("alice"), registry, signature_results
+        )
+        # Pass-3 MED-2: recused-row fingerprint MUST NOT satisfy pinning.
+        assert result.ok is False, (
+            f"pass-3 MED-2: recused fingerprint must not satisfy pinning; got {result.detail}"
+        )
+        # Active fingerprint surfaced; recused NOT.
+        assert fp_active in result.detail
+        # The detail should NOT list the recused fp as registered.
+        assert (
+            f"registered=[{fp_recused!r}]" not in result.detail
+            and f"registered={[fp_recused]}" not in result.detail
+        )
+
+    def test_codex_pass3_med2_no_active_rows_fails(self):
+        """Pass-3 MED-2: handle exists in registry but ZERO active rows → FAIL."""
+
+        registry = [
+            cms.ReviewerInfo(
+                handle="alice",
+                email="alice@example.com",
+                status="inactive",  # only inactive
+                emails=("alice@example.com",),
+                fingerprint="A" * 40,
+            ),
+        ]
+        signature_results = [
+            cms.CheckResult(
+                "signature_verifies",
+                True,
+                "ok",
+                signing_fingerprint="A" * 40,
+            ),
+        ]
+        result = cms.check_signing_fingerprint_matches_registry(
+            self._make_doc_text("alice"), registry, signature_results
+        )
+        assert result.ok is False
+        assert "no active registry rows" in result.detail
+
 
 class TestStrictGpgResolution:
     """``_resolve_strict_gpg`` mirrors ``_resolve_strict_gh`` semantics.
@@ -3044,6 +3155,56 @@ class TestStrictGpgMainExitCode:
         doc = self._make_doc_path(tmp_path)
         rc = cms.main([str(doc), "--repo-root", str(tmp_path)])
         assert rc == 0, f"expected exit 0 (strict-gpg satisfied), got {rc}"
+
+    def test_codex_pass3_low1_exit4_message_distinguishes_subclasses(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ):
+        """Codex pass-3 LOW-1 fix: exit-4 stderr distinguishes the 3 subclasses.
+
+        The exit code 4 is reserved for "STRICT_GPG=1 + any sig-skip"
+        but the underlying failure can be (a) keyring not provisioned,
+        (b) CoI body sig missing, OR (c) fingerprint pinning gap. The
+        stderr message must enumerate which subclass(es) fired so log
+        scrapers can route the three distinct cases under the shared
+        exit code.
+        """
+
+        # Build a results list where ONLY the pinning check skipped.
+        # This is the (c) subclass that the pre-fix message would have
+        # blamed on (a) keyring-missing.
+        results = [
+            cms.CheckResult("filename", True, "ok"),
+            cms.CheckResult("signature_verifies", True, "sigstore verify OK"),
+            cms.CheckResult("keyring_present", True, "ok"),
+            cms.CheckResult("coi_body_signature_verifies", True, "ok"),
+            cms.CheckResult(
+                "signing_fingerprint_matches_registry",
+                True,
+                "WARN: pinning gap",
+                signature_check_skipped=True,
+            ),
+        ]
+
+        def fake_check_signoff(*args, **kwargs):  # noqa: ANN001 ANN002 ANN003
+            return results
+
+        monkeypatch.setattr(cms, "check_signoff", fake_check_signoff)
+        monkeypatch.setenv("STRICT_GPG", "1")
+        monkeypatch.delenv("STRICT_GH", raising=False)
+        doc = self._make_doc_path(tmp_path)
+        rc = cms.main([str(doc), "--repo-root", str(tmp_path)])
+        captured = capsys.readouterr()
+        assert rc == 4, f"expected exit 4 (pinning-gap subclass), got {rc}"
+        # Pass-3 LOW-1: stderr must surface the PINNING GAP subclass label.
+        combined = captured.out + captured.err
+        assert "FINGERPRINT PINNING GAP" in combined, (
+            "pass-3 LOW-1: exit-4 stderr must distinguish pinning-gap from "
+            f"keyring/sig-missing subclasses; got: {combined!r}"
+        )
+        assert "signing_fingerprint_matches_registry" in combined
 
 
 # --------------------------------------------------------------------------- #
