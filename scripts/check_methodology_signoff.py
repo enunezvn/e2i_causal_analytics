@@ -1935,6 +1935,35 @@ def check_coi_body_signature_verifies(
             f"CoI body not found at resolved path: {coi_full}",
         )
 
+    # Codex pass-6 MED-1 fix: mirror the keyring-advisory preflight from
+    # check_signature_verifies for the CoI path. If a CoI signature is
+    # present BUT the explicit --keyring-dir is missing/empty/unreadable,
+    # return advisory PASS + signature_check_skipped=True so STRICT_GPG=1
+    # routes to exit code 4 (NOT generic exit 1) AND the documented
+    # `strict_gpg: '0'` rollout escape hatch works for already-signed
+    # CoIs during the operator-handoff window.
+    #
+    # The preflight ONLY runs when (a) keyring_dir was explicitly set
+    # (None means local-dev advisory) AND (b) gpg is on PATH AND (c)
+    # the CoI body / sibling-asc HAS a signature to verify (no point
+    # advisory-passing on an unsigned CoI — that's a different sig-skip
+    # surface handled by the `ok is None` branch below).
+    has_coi_signature = (
+        _COI_INLINE_SIG_PATTERN.search(coi_full.read_text(encoding="utf-8")) is not None
+        or coi_full.with_suffix(coi_full.suffix + ".asc").is_file()
+    )
+    if keyring_dir is not None and shutil.which("gpg") is not None and has_coi_signature:
+        kr_ok, _kr_n, kr_detail = _gpg_list_keys_in_keyring(keyring_dir)
+        if not kr_ok:
+            return CheckResult(
+                "coi_body_signature_verifies",
+                True,
+                f"WARN: CoI signature present but keyring at {keyring_dir} "
+                f"is missing/empty/unreadable ({kr_detail}); H4 advisory mode "
+                "(STRICT_GPG=1 escalates via signature_check_skipped)",
+                signature_check_skipped=True,
+            )
+
     ok, detail, signing_fpr = _verify_coi_body_signature(coi_full, keyring_dir=keyring_dir)
     if ok is True:
         fpr_suffix = f" [signing_fpr={signing_fpr}]" if signing_fpr else ""
