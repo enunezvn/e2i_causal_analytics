@@ -73,6 +73,7 @@ from src.api.routes.cognitive import router as cognitive_router
 from src.api.routes.copilotkit import add_copilotkit_routes
 from src.api.routes.copilotkit import router as copilotkit_router
 from src.api.routes.digital_twin import router as digital_twin_router
+from src.api.routes.executive_insights import router as executive_insights_router
 from src.api.routes.experiments import router as experiments_router
 from src.api.routes.explain import router as explain_router
 from src.api.routes.feedback import router as feedback_router
@@ -88,7 +89,6 @@ from src.api.routes.rag import router as rag_router
 from src.api.routes.resource_optimizer import router as resource_optimizer_router
 from src.api.routes.segments import router as segments_router
 from src.api.routes.sentinels import router as sentinels_router
-from src.api.routes.executive_insights import router as executive_insights_router
 
 # Import MLOps connectors
 from src.feature_store.feast_client import FeastClient
