@@ -865,6 +865,96 @@ def test_signature_verifies_require_signature_fails_with_no_block(fixture_repo: 
     assert result.ok is False
 
 
+def test_signature_verifies_advisory_pass_when_keyring_missing(fixture_repo: Path, tmp_path: Path):
+    """Codex pass-2 HIGH-1 fix: when --keyring-dir is set but the keyring
+    is empty/missing, --require-signature returns ADVISORY pass + sig-skip.
+
+    Without this, the workflow's ``strict_gpg: '0'`` rollout escape hatch
+    is not reliable: the validator would still hit the gpg --verify path
+    with an unprovisioned keyring, fail, and route through main()'s
+    generic exit-1 branch — losing the routing signal AND breaking
+    the documented advisory-mode contract during the operator-handoff
+    window. The fix routes the missing-keyring case through the same
+    signature_check_skipped flag the H4 advisory-pass branch uses.
+    """
+
+    if shutil.which("gpg") is None:
+        pytest.skip("gpg not on PATH")
+
+    doc_path = fixture_repo / "docs" / "results" / "optum_methodology_signoff_20260520.md"
+    doc_path.write_text(
+        "# Sign-off\n"
+        "## Cryptographic signature\n"
+        "-----BEGIN PGP SIGNATURE-----\n"
+        "FAKE\n"
+        "-----END PGP SIGNATURE-----\n",
+        encoding="utf-8",
+    )
+    # --keyring-dir set but EMPTY keyring (zero pubkeys imported).
+    empty_keyring = tmp_path / "empty_keyring"
+    empty_keyring.mkdir(mode=0o700)
+
+    result = cms.check_signature_verifies(
+        doc_path, require_signature=True, keyring_dir=empty_keyring
+    )
+    # Pass-2 HIGH-1: advisory pass + sig-skip (NOT generic fail).
+    assert result.ok is True, f"expected advisory pass; got: {result.detail}"
+    assert result.signature_check_skipped is True
+    assert "missing/empty/unreadable" in result.detail
+    assert "STRICT_GPG=1" in result.detail or "advisory" in result.detail.lower()
+
+
+def test_signature_verifies_advisory_pass_when_keyring_dir_does_not_exist(
+    fixture_repo: Path, tmp_path: Path
+):
+    """Codex pass-2 HIGH-1 fix sibling: nonexistent keyring dir = advisory."""
+
+    if shutil.which("gpg") is None:
+        pytest.skip("gpg not on PATH")
+
+    doc_path = fixture_repo / "docs" / "results" / "optum_methodology_signoff_20260520.md"
+    doc_path.write_text(
+        "# Sign-off\n"
+        "## Cryptographic signature\n"
+        "-----BEGIN PGP SIGNATURE-----\n"
+        "FAKE\n"
+        "-----END PGP SIGNATURE-----\n",
+        encoding="utf-8",
+    )
+    nonexistent = tmp_path / "does_not_exist"
+    result = cms.check_signature_verifies(doc_path, require_signature=True, keyring_dir=nonexistent)
+    assert result.ok is True
+    assert result.signature_check_skipped is True
+
+
+def test_signature_verifies_real_failure_when_keyring_present(
+    fixture_repo: Path, gpg_keyring: tuple[Path, str]
+):
+    """Codex pass-2 HIGH-1: when keyring IS provisioned, real verify failures
+    still produce ok=False (NOT advisory pass).
+
+    Pin: the HIGH-1 fix MUST NOT silently swallow legitimate verify
+    failures. The fix only kicks in for the "keyring not provisioned"
+    case (operator-handoff window).
+    """
+
+    home, _ = gpg_keyring  # populated keyring
+    doc_path = fixture_repo / "docs" / "results" / "optum_methodology_signoff_20260520.md"
+    # Doc with a malformed PGP block — verify will fail.
+    doc_path.write_text(
+        "# Sign-off\n"
+        "## Cryptographic signature\n"
+        "-----BEGIN PGP SIGNATURE-----\n"
+        "GARBAGE\n"
+        "-----END PGP SIGNATURE-----\n",
+        encoding="utf-8",
+    )
+    result = cms.check_signature_verifies(doc_path, require_signature=True, keyring_dir=home)
+    # Populated keyring → real verify failure → ok=False (NOT advisory).
+    assert result.ok is False
+    assert result.signature_check_skipped is False
+
+
 def test_extract_pgp_armor_block_returns_full_block():
     text = "before\n-----BEGIN PGP SIGNATURE-----\nAAAA\n-----END PGP SIGNATURE-----\nafter\n"
     block = cms._extract_pgp_armor_block(text)
@@ -1305,6 +1395,80 @@ def test_selection_rule_catches_alias_commit(tmp_path: Path):
     result = cms.check_selection_rule(text, repo, rows)
     assert result.ok is False
     assert "alice@oldjob.com" in result.detail
+
+
+def test_selection_rule_aggregates_duplicate_active_rows(tmp_path: Path):
+    """Codex pass-2 MED-1: production registry has 2 rows for handle
+    `enunezvn`. The selection-rule check MUST union the email aliases
+    from BOTH rows so a commit authored under EITHER identity is caught.
+
+    Pre-fix: ``matching[0]`` only consulted row 0's emails — a commit
+    authored under row 1's no-reply email would NOT be caught.
+    """
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git("init", "--initial-branch=main", "-q", cwd=repo)
+    _git("config", "user.email", "ci@example.com", cwd=repo)
+    _git("config", "user.name", "CI", cwd=repo)
+    _git("config", "commit.gpgsign", "false", cwd=repo)
+    (repo / "scripts").mkdir(parents=True)
+    (repo / "scripts" / "convert_optum_rwd.py").write_text("# stub\n", encoding="utf-8")
+    (repo / "docs" / "governance").mkdir(parents=True)
+
+    # TWO active rows with DIFFERENT emails for the same handle.
+    registry_text = (
+        "| name | email | github_handle | role | date_added | "
+        "areas_of_expertise | status | fingerprint |\n"
+        "|---|---|---|---|---|---|---|---|\n"
+        "| Reviewer Canonical | alice@example.com | alice | clinician | "
+        "2026-05-10 | methodology | active | `<TBD>` |\n"
+        "| Reviewer No-Reply | 12345+alice@users.noreply.github.com | alice | "
+        "clinician | 2026-05-10 | methodology | active | `<TBD>` |\n"
+    )
+    (repo / "docs" / "governance" / "methodology_reviewer_registry.md").write_text(
+        registry_text, encoding="utf-8"
+    )
+    _git("add", "-A", cwd=repo)
+    _git(
+        "-c",
+        "user.email=ci@example.com",
+        "-c",
+        "user.name=CI",
+        "commit",
+        "--date=2026-04-01T12:00:00",
+        "-m",
+        "initial",
+        cwd=repo,
+        env_overrides={"GIT_COMMITTER_DATE": "2026-04-01T12:00:00"},
+    )
+
+    # Commit authored under ROW-2's no-reply email, NOT the canonical one.
+    (repo / "scripts" / "convert_optum_rwd.py").write_text("# touched\n", encoding="utf-8")
+    _git("add", "scripts/convert_optum_rwd.py", cwd=repo)
+    _git(
+        "-c",
+        "user.email=12345+alice@users.noreply.github.com",
+        "-c",
+        "user.name=Alice",
+        "commit",
+        "--date=2026-04-20T12:00:00",
+        "-m",
+        "alice touched via no-reply identity",
+        cwd=repo,
+        env_overrides={"GIT_COMMITTER_DATE": "2026-04-20T12:00:00"},
+    )
+
+    rows = cms.parse_registry(repo / "docs" / "governance" / "methodology_reviewer_registry.md")
+    assert len(rows) == 2
+    text = _signoff_doc(handle="alice")
+    result = cms.check_selection_rule(text, repo, rows)
+    # Pass-2 MED-1: with row aggregation, the no-reply email is checked.
+    assert result.ok is False, (
+        "pass-2 MED-1: aggregating across rows must catch commits authored "
+        "under any active row's email"
+    )
+    assert "12345+alice@users.noreply.github.com" in result.detail
 
 
 def test_selection_rule_gh_missing_emits_warning(fixture_repo: Path, monkeypatch):
@@ -2009,6 +2173,22 @@ class TestFingerprintNormalization:
         assert cms._normalize_fingerprint("0123") == ""  # too short
         assert cms._normalize_fingerprint("z" * 40) == ""  # not hex
 
+    def test_leading_bom_is_stripped(self):
+        """Codex pass-2 LOW-1 fix: a BOM-prefixed real fingerprint
+        must round-trip through normalization.
+
+        Operators sometimes paste fingerprints from terminals that
+        prepend U+FEFF; the pre-fix normalizer rejected those as
+        garbage → STRICT_GPG=1 false-fail.
+        """
+
+        bom = "﻿"
+        fp = "ABCDEF0123456789ABCDEF0123456789ABCDEF01"
+        assert cms._normalize_fingerprint(bom + fp) == fp
+        # BOM + spaced + backticks combo also handled.
+        spaced = "ABCD EF01 2345 6789 ABCD  EF01 2345 6789 ABCD EF01"
+        assert cms._normalize_fingerprint(bom + "`" + spaced + "`") == fp
+
 
 class TestRegistryFingerprintColumn:
     """Registry parser populates ``ReviewerInfo.fingerprint`` from the 8th cell.
@@ -2352,12 +2532,21 @@ class TestExtractValidsigFingerprint:
         assert cms._extract_validsig_fingerprint("") is None
 
     def test_validsig_lowercase_uppercased(self):
-        # gpg normally emits uppercase but be defensive.
+        """Codex pass-2 LOW-1 fix: case-insensitive match + uppercase output.
+
+        Modern gpg always emits uppercase but a future / patched version
+        may emit lowercase; the validator must accept both shapes and
+        emit canonical uppercase so downstream comparisons work.
+        """
+
         output = (
             "[GNUPG:] VALIDSIG abcdef0123456789abcdef0123456789abcdef01 2026-05-15 "
             "1700000000 0 4 0 1 8 01 abcdef0123456789abcdef0123456789abcdef01\n"
         )
-        assert cms._extract_validsig_fingerprint(output) is None  # regex requires uppercase
+        # Pass-2 LOW-1: lowercase input now parses + uppercases.
+        assert (
+            cms._extract_validsig_fingerprint(output) == "ABCDEF0123456789ABCDEF0123456789ABCDEF01"
+        )
 
     def test_validsig_among_other_lines(self):
         output = (
@@ -2411,7 +2600,8 @@ class TestCheckSigningFingerprintMatchesRegistry:
         )
         assert result.ok is True
         assert result.signature_check_skipped is True
-        assert "no signing fingerprint available" in result.detail
+        # Pass-2 HIGH-2: detail surfaces the no-successful-verify case.
+        assert "no successful signature verification" in result.detail
 
     def test_registered_fingerprint_empty_advisory_pass(self):
         """Reviewer registered but fingerprint cell empty → advisory pass + sig-skip.
@@ -2508,6 +2698,132 @@ class TestCheckSigningFingerprintMatchesRegistry:
         )
         assert result.ok is False
         assert "not in registry" in result.detail
+
+    def test_codex_pass2_h2_unpinned_verify_flagged_as_pinning_gap(self):
+        """Codex pass-2 HIGH-2: a successful verify with signing_fingerprint=None
+        is a PINNING GAP, NOT a "no fingerprints to evaluate" PASS.
+
+        Pre-fix bug: if `signature_verifies` succeeded via the SIGSTORE
+        code path (no GPG VALIDSIG produced) AND the CoI body sig
+        verified+pinned, the aggregate pinning check passed even though
+        the SIGN-OFF artifact was never bound to the reviewer. This is
+        the load-bearing security invariant — every successful verify
+        MUST be pinned.
+        """
+
+        registered = "ABCDEF0123456789ABCDEF0123456789ABCDEF01"
+        registry = self._make_registry("alice", registered)
+        # signature_verifies passed via sigstore path (no signing_fingerprint).
+        # coi_body_signature_verifies passed via gpg path AND matches.
+        signature_results = [
+            cms.CheckResult(
+                "signature_verifies",
+                True,
+                "sigstore verify OK",
+                signing_fingerprint=None,
+            ),
+            cms.CheckResult(
+                "coi_body_signature_verifies",
+                True,
+                "ok",
+                signing_fingerprint=registered,
+            ),
+        ]
+        result = cms.check_signing_fingerprint_matches_registry(
+            self._make_doc_text("alice"), registry, signature_results
+        )
+        # ADVISORY pass + sig-skip: STRICT_GPG=1 escalates to exit 4.
+        # Under default mode, the run continues.
+        assert result.ok is True
+        assert result.signature_check_skipped is True
+        assert "unpinned" in result.detail.lower() or "pinning gap" in result.detail.lower()
+        # The sigstore-emitting check name must be in the detail so
+        # operators know which artifact wasn't bound.
+        assert "signature_verifies" in result.detail
+
+    def test_codex_pass2_med1_duplicate_active_rows_aggregated(self):
+        """Codex pass-2 MED-1: production registry has 2 rows for handle
+        `enunezvn` (canonical email + GitHub no-reply). The pinning check
+        MUST consider BOTH rows' fingerprints — a key rotation history
+        encoded as a second row should still satisfy pinning.
+        """
+
+        fp_canonical = "ABCDEF0123456789ABCDEF0123456789ABCDEF01"
+        fp_rotated = "1111222233334444555566667777888899990000"
+        # Two active rows for the same handle.
+        registry = [
+            cms.ReviewerInfo(
+                handle="enunezvn",
+                email="canonical@example.com",
+                status="active",
+                emails=("canonical@example.com",),
+                fingerprint=fp_canonical,
+            ),
+            cms.ReviewerInfo(
+                handle="enunezvn",
+                email="noreply@users.noreply.github.com",
+                status="active",
+                emails=("noreply@users.noreply.github.com",),
+                fingerprint=fp_rotated,
+            ),
+        ]
+        # Sign-off was signed by the rotated key (second row).
+        signature_results = [
+            cms.CheckResult(
+                "signature_verifies",
+                True,
+                "ok",
+                signing_fingerprint=fp_rotated,
+            ),
+        ]
+        result = cms.check_signing_fingerprint_matches_registry(
+            self._make_doc_text("enunezvn"), registry, signature_results
+        )
+        assert result.ok is True, (
+            f"pass-2 MED-1: aggregation across active rows must accept either "
+            f"fingerprint; got {result.detail}"
+        )
+        # Must NOT flag for skip — match is real.
+        assert result.signature_check_skipped is False
+
+    def test_codex_pass2_med1_signing_fingerprint_in_neither_row_fails(self):
+        """Pass-2 MED-1: third-key signing (NOT in registry) still fails."""
+
+        fp_canonical = "ABCDEF0123456789ABCDEF0123456789ABCDEF01"
+        fp_rotated = "1111222233334444555566667777888899990000"
+        fp_attacker = "BAD000000000000000000000000000000000BAD0"
+        registry = [
+            cms.ReviewerInfo(
+                handle="enunezvn",
+                email="a@example.com",
+                status="active",
+                emails=("a@example.com",),
+                fingerprint=fp_canonical,
+            ),
+            cms.ReviewerInfo(
+                handle="enunezvn",
+                email="b@example.com",
+                status="active",
+                emails=("b@example.com",),
+                fingerprint=fp_rotated,
+            ),
+        ]
+        signature_results = [
+            cms.CheckResult(
+                "signature_verifies",
+                True,
+                "ok",
+                signing_fingerprint=fp_attacker,
+            ),
+        ]
+        result = cms.check_signing_fingerprint_matches_registry(
+            self._make_doc_text("enunezvn"), registry, signature_results
+        )
+        assert result.ok is False
+        assert "do not match" in result.detail
+        # Both registered fingerprints surfaced.
+        assert fp_canonical in result.detail
+        assert fp_rotated in result.detail
 
 
 class TestStrictGpgResolution:

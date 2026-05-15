@@ -303,7 +303,11 @@ def _normalize_fingerprint(raw: str) -> str:
         registry rows can be added incrementally.
     """
 
-    cleaned = raw.strip().strip("_*`").strip()
+    # Codex pass-2 LOW-1: strip a leading BOM (operators sometimes paste
+    # via terminals that prepend U+FEFF) along with surrounding markdown
+    # emphasis and whitespace. Without this, a BOM-prefixed real
+    # fingerprint normalizes to "" → STRICT_GPG=1 false-fail.
+    cleaned = raw.lstrip("﻿").strip().strip("_*`").strip()
     if not cleaned:
         return ""
     lowered = cleaned.lower()
@@ -992,12 +996,27 @@ def check_selection_rule(
             False,
             f"reviewer {handle!r} not in registry — cannot resolve email",
         )
+    # Codex pass-2 MED-1 fix: aggregate across ALL active rows for the
+    # handle (not just matching[0]). The production registry has 2 rows
+    # for handle `enunezvn` (canonical email + GitHub no-reply); the
+    # pre-fix code ignored the second row's emails AND fingerprint, so a
+    # commit authored under the no-reply identity would slip past the
+    # selection-rule git-log probe. Union the email-alias tuples across
+    # all matching rows and dedupe.
     row = matching[0]
     email = row.email
-    # M1: iterate over ALL declared aliases so a commit authored under an
-    # alternate identity is still caught by `git log --author=`. Falls back
-    # to the primary email if the row predates the alias-aware schema.
-    aliases = row.emails or (email,)
+    # M1 + pass-2 MED-1: iterate over ALL declared aliases (across ALL
+    # registry rows for this handle) so a commit authored under an
+    # alternate identity is still caught by `git log --author=`. Falls
+    # back to the primary email if the row predates the alias-aware schema.
+    aliases_set: list[str] = []
+    seen_aliases: set[str] = set()
+    for r in matching:
+        for alias in r.emails or (r.email,):
+            if alias not in seen_aliases:
+                seen_aliases.add(alias)
+                aliases_set.append(alias)
+    aliases = tuple(aliases_set) or (email,)
     violations: List[str] = []
     warnings: List[str] = []
 
@@ -1208,8 +1227,12 @@ def check_signature_present(doc_text: str) -> CheckResult:
     )
 
 
+# Codex pass-2 LOW-1: case-insensitive match. Modern gpg always emits
+# uppercase for VALIDSIG fingerprints, but be defensive against future /
+# patched versions that emit lowercase. The captured group is upper-cased
+# at extraction time so downstream comparisons are deterministic.
 _VALIDSIG_PATTERN = re.compile(
-    r"^\[GNUPG:\]\s+VALIDSIG\s+(?P<fpr>[0-9A-F]{40})\b",
+    r"^\[GNUPG:\]\s+VALIDSIG\s+(?P<fpr>[0-9A-Fa-f]{40})\b",
     re.MULTILINE,
 )
 
@@ -1473,6 +1496,30 @@ def check_signature_verifies(
             True,
             "WARN: --require-signature not set; cryptographic verification skipped",
         )
+
+    # Issue #226 codex pass-2 HIGH-1 fix: when the operator has explicitly
+    # set --keyring-dir BUT the keyring is missing/empty/unreadable, fall
+    # back to advisory-pass-with-sig-skip rather than running gpg --verify
+    # against an unprovisioned keyring (which would fail and route through
+    # exit 1 instead of the reserved exit 4 under STRICT_GPG=1). This
+    # makes the workflow's `strict_gpg: '0'` rollout escape hatch reliable:
+    # operators can merge this PR before provisioning the secret AND have
+    # the validator continue in advisory mode without breaking every PR.
+    # When --keyring-dir is None (operator running locally without keyring
+    # infra), retain the historical behavior so local devs explicitly
+    # passing --require-signature still get a real failure if their
+    # system keyring has the wrong key.
+    if keyring_dir is not None:
+        kr_ok, _kr_n, kr_detail = _gpg_list_keys_in_keyring(keyring_dir)
+        if not kr_ok:
+            return CheckResult(
+                "signature_verifies",
+                True,
+                f"WARN: keyring at {keyring_dir} is missing/empty/unreadable "
+                f"({kr_detail}); cryptographic verification skipped (issue #226 "
+                "H1 advisory-pass; STRICT_GPG=1 escalates via signature_check_skipped)",
+                signature_check_skipped=True,
+            )
 
     doc_text = doc_path.read_text(encoding="utf-8")
     pgp_block = _extract_pgp_armor_block(doc_text)
@@ -1901,57 +1948,109 @@ def check_signing_fingerprint_matches_registry(
             False,
             f"reviewer {handle!r} not in registry — cannot resolve pinned fingerprint",
         )
-    row = matching[0]
-    registered_fpr = row.fingerprint  # Already normalized to upper-hex or "".
+    # Codex pass-2 MED-1 fix: aggregate fingerprints across ALL registry
+    # rows for the handle (not just matching[0]). The production registry
+    # has 2 rows for handle `enunezvn` (canonical email + GitHub no-reply
+    # email) — the H1 pinning model is ANY active row's registered
+    # fingerprint MAY match (so a reviewer can rotate keys without
+    # deleting the prior row). Empty fingerprints are filtered out;
+    # at least one non-empty registered fingerprint is required.
+    registered_fprs: list[str] = []
+    for r in matching:
+        if r.fingerprint and r.fingerprint not in registered_fprs:
+            registered_fprs.append(r.fingerprint)
+    # Single canonical fingerprint for log/detail messages: prefer the
+    # first non-empty one, else empty string.
+    registered_fpr = registered_fprs[0] if registered_fprs else ""
 
-    # Collect (name, signing_fpr) tuples from the two verify checks
-    # that may have populated signing_fingerprint.
+    # Codex pass-2 HIGH-2 fix: collect ALL successful verify-check
+    # results (ok=True) regardless of whether they populated
+    # signing_fingerprint. A verify-OK result with signing_fingerprint=None
+    # (e.g. the sigstore code path which doesn't produce a GPG
+    # fingerprint, OR a future gpg version that drops VALIDSIG) is a
+    # PINNING GAP — we cannot bind that successful verification to a
+    # registered reviewer. Without this, a sigstore-verified sign-off
+    # PLUS a gpg-verified-and-pinned CoI body would falsely satisfy
+    # the check even though the SIGN-OFF artifact was never bound to
+    # the reviewer's identity.
     verify_check_names = ("signature_verifies", "coi_body_signature_verifies")
-    verify_results = [
-        (r.name, r.signing_fingerprint) for r in signature_results if r.name in verify_check_names
+    successful_verify_results = [
+        r for r in signature_results if r.name in verify_check_names and r.ok
     ]
-    fingerprints_seen = [(name, fpr) for name, fpr in verify_results if fpr is not None]
 
-    if not fingerprints_seen:
-        # No verify check produced a fingerprint (both either failed
-        # OR skipped). Pinning has nothing to evaluate; flag for
-        # STRICT_GPG=1 escalation via the existing sig-skip path.
+    if not successful_verify_results:
+        # No verify check passed (both either failed OR were skipped).
+        # Pinning has nothing to evaluate; flag for STRICT_GPG=1
+        # escalation via the existing sig-skip path.
         return CheckResult(
             "signing_fingerprint_matches_registry",
             True,
-            f"WARN: no signing fingerprint available for {handle} (verify checks "
-            "did not produce VALIDSIG); pinning skipped",
+            f"WARN: no successful signature verification for {handle} "
+            "(both verify checks failed/skipped); pinning skipped",
             signature_check_skipped=True,
         )
+
+    # Separate verify-OK results into pinned (signing_fingerprint set)
+    # and unpinned (signing_fingerprint=None). Codex pass-2 HIGH-2:
+    # any unpinned-but-successful verify is a pinning gap that
+    # STRICT_GPG=1 MUST escalate.
+    pinned_results = [r for r in successful_verify_results if r.signing_fingerprint is not None]
+    unpinned_results = [r for r in successful_verify_results if r.signing_fingerprint is None]
 
     if not registered_fpr:
         # Reviewer is registered but the fingerprint cell is empty
         # (operator hasn't completed the H1 handoff). ADVISORY PASS
         # with sig-skip flag so STRICT_GPG=1 fails closed.
+        seen_fprs = [r.signing_fingerprint for r in pinned_results]
         return CheckResult(
             "signing_fingerprint_matches_registry",
             True,
             f"WARN: registered fingerprint for {handle} is empty (placeholder); "
-            f"signing fingerprints seen: {[fpr for _, fpr in fingerprints_seen]} — "
+            f"signing fingerprints seen: {seen_fprs} — "
             "operator must populate the fingerprint column",
             signature_check_skipped=True,
         )
 
-    mismatches = [(name, fpr) for name, fpr in fingerprints_seen if fpr != registered_fpr]
+    # Pinned results MUST match ONE OF the registered fingerprints
+    # (codex pass-2 MED-1: a handle may have multiple active rows
+    # encoding key-rotation history; ANY active row's fingerprint is
+    # acceptable). The set is canonical-uppercase already (parsed via
+    # _normalize_fingerprint).
+    registered_fpr_set = set(registered_fprs)
+    mismatches = [
+        (r.name, r.signing_fingerprint)
+        for r in pinned_results
+        if r.signing_fingerprint not in registered_fpr_set
+    ]
     if mismatches:
         mismatch_strs = [f"{name}: signed_by={fpr}" for name, fpr in mismatches]
         return CheckResult(
             "signing_fingerprint_matches_registry",
             False,
-            f"signing fingerprint(s) do not match registered fingerprint for "
-            f"{handle} (registered={registered_fpr}). Mismatches: "
+            f"signing fingerprint(s) do not match any registered fingerprint for "
+            f"{handle} (registered={sorted(registered_fpr_set)}). Mismatches: "
             f"{'; '.join(mismatch_strs)}",
+        )
+
+    # Codex pass-2 HIGH-2: any unpinned-but-successful verify is a
+    # pinning gap. ADVISORY PASS with sig-skip; STRICT_GPG=1 escalates.
+    if unpinned_results:
+        unpinned_names = [r.name for r in unpinned_results]
+        return CheckResult(
+            "signing_fingerprint_matches_registry",
+            True,
+            f"WARN: {len(pinned_results)} verify-check(s) pinned to "
+            f"{registered_fpr} but {len(unpinned_results)} unpinned successful "
+            f"verify(s) cannot be bound to a registered fingerprint: "
+            f"{unpinned_names}. Likely cause: sigstore code path doesn't emit "
+            "GNUPG VALIDSIG. Pinning gap; STRICT_GPG=1 escalates.",
+            signature_check_skipped=True,
         )
 
     return CheckResult(
         "signing_fingerprint_matches_registry",
         True,
-        f"all {len(fingerprints_seen)} verify-check signing fingerprint(s) match "
+        f"all {len(pinned_results)} verify-check signing fingerprint(s) match "
         f"registered fingerprint for {handle} ({registered_fpr})",
     )
 
