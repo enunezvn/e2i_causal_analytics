@@ -996,22 +996,40 @@ def check_selection_rule(
             False,
             f"reviewer {handle!r} not in registry — cannot resolve email",
         )
-    # Codex pass-2 MED-1 fix: aggregate across ALL active rows for the
-    # handle (not just matching[0]). The production registry has 2 rows
-    # for handle `enunezvn` (canonical email + GitHub no-reply); the
-    # pre-fix code ignored the second row's emails AND fingerprint, so a
-    # commit authored under the no-reply identity would slip past the
-    # selection-rule git-log probe. Union the email-alias tuples across
-    # all matching rows and dedupe.
-    row = matching[0]
+    # Codex pass-3 MED-2 fix: filter to ACTIVE rows only. The pre-fix
+    # aggregation included inactive/recused rows whose emails would be
+    # checked by git-log — that is technically defensible (a recused
+    # reviewer's prior commit is still a touch) BUT it conflicts with
+    # the registry's documented "only active rows are eligible"
+    # contract. A reviewer whose ONLY entries are inactive/recused
+    # has no business reviewing — but that is caught by
+    # check_reviewer_registered upstream, not by this check.
+    active_matching = [r for r in matching if r.status == "active"]
+    if not active_matching:
+        # Handle is in registry but no active row → already caught by
+        # check_reviewer_registered. Return advisory pass with a note
+        # so this check doesn't double-fail; the upstream check is
+        # the authoritative gate.
+        return CheckResult(
+            "selection_rule",
+            True,
+            f"WARN: no active rows for {handle} (caught upstream by reviewer_registered)",
+        )
+    # Codex pass-2 MED-1 + pass-3 MED-2 fix: aggregate across ACTIVE
+    # rows for the handle (not just matching[0], not all rows). The
+    # production registry has 2 active rows for handle `enunezvn`
+    # (canonical email + GitHub no-reply). Union the email-alias
+    # tuples across all active matching rows and dedupe.
+    row = active_matching[0]
     email = row.email
-    # M1 + pass-2 MED-1: iterate over ALL declared aliases (across ALL
-    # registry rows for this handle) so a commit authored under an
-    # alternate identity is still caught by `git log --author=`. Falls
-    # back to the primary email if the row predates the alias-aware schema.
+    # M1 + pass-2 MED-1 + pass-3 MED-2: iterate over ALL declared
+    # aliases (across ALL active registry rows for this handle) so a
+    # commit authored under an alternate identity is still caught by
+    # `git log --author=`. Falls back to the primary email if the row
+    # predates the alias-aware schema.
     aliases_set: list[str] = []
     seen_aliases: set[str] = set()
-    for r in matching:
+    for r in active_matching:
         for alias in r.emails or (r.email,):
             if alias not in seen_aliases:
                 seen_aliases.add(alias)
@@ -1497,19 +1515,26 @@ def check_signature_verifies(
             "WARN: --require-signature not set; cryptographic verification skipped",
         )
 
-    # Issue #226 codex pass-2 HIGH-1 fix: when the operator has explicitly
-    # set --keyring-dir BUT the keyring is missing/empty/unreadable, fall
-    # back to advisory-pass-with-sig-skip rather than running gpg --verify
-    # against an unprovisioned keyring (which would fail and route through
-    # exit 1 instead of the reserved exit 4 under STRICT_GPG=1). This
-    # makes the workflow's `strict_gpg: '0'` rollout escape hatch reliable:
-    # operators can merge this PR before provisioning the secret AND have
-    # the validator continue in advisory mode without breaking every PR.
-    # When --keyring-dir is None (operator running locally without keyring
-    # infra), retain the historical behavior so local devs explicitly
-    # passing --require-signature still get a real failure if their
-    # system keyring has the wrong key.
-    if keyring_dir is not None:
+    # Codex pass-3 MED-1 fix: parse the doc + extract block kinds BEFORE
+    # the keyring-advisory preflight. This guarantees:
+    #   (a) sigstore-only docs are NOT preempted by an empty GPG keyring
+    #       (the GPG keyring is irrelevant to cosign verification);
+    #   (b) the gpg-not-on-PATH case is surfaced as
+    #       "no signature-verification tool found" rather than collapsed
+    #       into "keyring missing advisory" (which would falsely tell
+    #       operators their keyring is the problem).
+    doc_text = doc_path.read_text(encoding="utf-8")
+    pgp_block = _extract_pgp_armor_block(doc_text)
+    sigstore_block = _extract_sigstore_json_block(doc_text)
+
+    # Issue #226 codex pass-2 HIGH-1 + pass-3 MED-1: only apply the
+    # keyring-advisory preflight to the PGP code path. Sigstore-only
+    # docs proceed to cosign verification regardless of GPG keyring
+    # state. Distinguishes "operator hasn't provisioned the keyring
+    # yet" (advisory-pass per H1) from "no verifier toolchain at all"
+    # (which is the existing "no signature-verification tool found"
+    # FAIL branch downstream).
+    if pgp_block is not None and keyring_dir is not None and shutil.which("gpg") is not None:
         kr_ok, _kr_n, kr_detail = _gpg_list_keys_in_keyring(keyring_dir)
         if not kr_ok:
             return CheckResult(
@@ -1520,10 +1545,6 @@ def check_signature_verifies(
                 "H1 advisory-pass; STRICT_GPG=1 escalates via signature_check_skipped)",
                 signature_check_skipped=True,
             )
-
-    doc_text = doc_path.read_text(encoding="utf-8")
-    pgp_block = _extract_pgp_armor_block(doc_text)
-    sigstore_block = _extract_sigstore_json_block(doc_text)
 
     has_gpg = shutil.which("gpg") is not None
     has_cosign = shutil.which("cosign") is not None
@@ -1948,15 +1969,30 @@ def check_signing_fingerprint_matches_registry(
             False,
             f"reviewer {handle!r} not in registry — cannot resolve pinned fingerprint",
         )
-    # Codex pass-2 MED-1 fix: aggregate fingerprints across ALL registry
-    # rows for the handle (not just matching[0]). The production registry
-    # has 2 rows for handle `enunezvn` (canonical email + GitHub no-reply
-    # email) — the H1 pinning model is ANY active row's registered
-    # fingerprint MAY match (so a reviewer can rotate keys without
-    # deleting the prior row). Empty fingerprints are filtered out;
-    # at least one non-empty registered fingerprint is required.
+    # Codex pass-3 MED-2 fix: filter to ACTIVE rows only. A stale
+    # fingerprint left on an inactive/recused row would otherwise
+    # satisfy pinning even after the reviewer rotated keys — this
+    # weakens recusal AND key-rotation semantics. Per the registry
+    # contract ("only `active` rows are eligible"), inactive/recused
+    # rows MUST NOT contribute to the pinning fingerprint set.
+    active_matching = [r for r in matching if r.status == "active"]
+    if not active_matching:
+        return CheckResult(
+            "signing_fingerprint_matches_registry",
+            False,
+            f"reviewer {handle!r} has no active registry rows — pinning unsatisfiable",
+        )
+    # Codex pass-2 MED-1 + pass-3 MED-2 fix: aggregate fingerprints
+    # across ALL ACTIVE registry rows for the handle (not just
+    # matching[0], not all rows). The H1 pinning model is "any ACTIVE
+    # row's registered fingerprint MAY match" so reviewers can rotate
+    # keys without deleting the prior row — but rotated-AWAY keys
+    # belong on inactive rows, NOT active ones, and inactive rows
+    # don't contribute. Empty fingerprints are filtered out; at
+    # least one non-empty registered fingerprint on an active row
+    # is required for pinning to be evaluable.
     registered_fprs: list[str] = []
-    for r in matching:
+    for r in active_matching:
         if r.fingerprint and r.fingerprint not in registered_fprs:
             registered_fprs.append(r.fingerprint)
     # Single canonical fingerprint for log/detail messages: prefer the
@@ -2339,14 +2375,43 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     strict_gpg = _resolve_strict_gpg(args.strict_gpg)
     if strict_gpg and any(r.signature_check_skipped for r in results):
         skipped = [r.name for r in results if r.signature_check_skipped]
+        # Codex pass-3 LOW-1 fix: enumerate the failure subclasses so
+        # operators / log scrapers can route the three distinct cases
+        # under the same exit code:
+        #   (a) keyring_present skipped → keyring not provisioned
+        #   (b) signature_verifies skipped → keyring missing for sign-off
+        #       OR coi_body_signature_verifies skipped → no CoI sig
+        #   (c) signing_fingerprint_matches_registry skipped → PINNING
+        #       GAP (verify succeeded BUT cannot bind to a registered
+        #       reviewer; e.g. sigstore code path or empty fingerprint
+        #       column placeholder)
+        # Exit code 4 is reserved for "STRICT_GPG=1 + any sig-skip"
+        # generally; the routing distinction is the check name list.
+        keyring_skips = [n for n in skipped if n in ("keyring_present", "signature_verifies")]
+        coi_skips = [n for n in skipped if n == "coi_body_signature_verifies"]
+        pinning_skips = [n for n in skipped if n == "signing_fingerprint_matches_registry"]
+        subclass_msgs = []
+        if keyring_skips:
+            subclass_msgs.append(
+                f"KEYRING/SIG NOT PROVISIONED ({', '.join(keyring_skips)}) — "
+                "provision GPG_REVIEWER_KEYS_ARMOR_BASE64 secret"
+            )
+        if coi_skips:
+            subclass_msgs.append(
+                f"COI BODY SIGNATURE MISSING ({', '.join(coi_skips)}) — "
+                "ensure CoI carries inline armor OR sibling <coi>.asc"
+            )
+        if pinning_skips:
+            subclass_msgs.append(
+                f"FINGERPRINT PINNING GAP ({', '.join(pinning_skips)}) — "
+                "verify succeeded BUT cannot bind to a registered reviewer; "
+                "populate fingerprint column OR disable sigstore for methodology sign-offs"
+            )
         print(
             "FAIL: --strict-gpg policy is in effect (or STRICT_GPG=1 in env) "
             "AND at least one check has signature_check_skipped=True. "
             f"Skipped checks: {', '.join(skipped)}. "
-            "Provision the GPG keyring on the runner via the "
-            "GPG_REVIEWER_KEYS_ARMOR_BASE64 repo secret AND ensure CoI "
-            "declarations carry an inline armor signature OR a sibling "
-            "<coi>.asc detached signature. "
+            f"Subclasses: {' | '.join(subclass_msgs) if subclass_msgs else 'unknown'}. "
             "See docs/governance/operator_gpg_keyring_setup.md and "
             "docs/governance/n3_known_limitations_20260510.md items 1+4.",
             file=sys.stderr,
