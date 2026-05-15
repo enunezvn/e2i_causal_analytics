@@ -26,15 +26,26 @@ def test_pattern_classifier_detects_experiment_monitor() -> None:
 
 
 def test_pattern_classifier_detects_multi_faceted() -> None:
-    # Use queries that uniquely match multi_faceted, not gap_analyzer's "gap"
-    # or segment_analysis's "segment" — otherwise the tie-break (Python
-    # dict order in scores) hands the win to the earlier-inserted intent.
+    # After Issue #254 fix, tie-break is governed by explicit INTENT_PRIORITY,
+    # so queries that score equally against performance_gap / segment_analysis
+    # must still resolve to multi_faceted. The 3 queries below were dropped
+    # by commit 1dbc18fd and have been reinstated.
     assert _classify("synthesize results from multiple analyses then summarize") == "multi_faceted"
     assert _classify("show me both effects across the cohort") == "multi_faceted"
     assert (
         _classify("integrate the findings with the prior research and also report")
         == "multi_faceted"
     )
+    # Reinstated by Issue #254 fix:
+    assert (
+        _classify("compare HCP visits vs prior treatments and also identify high-risk segments")
+        == "multi_faceted"
+    )
+    assert (
+        _classify("combine the causal results with the gap analyses for the brand")
+        == "multi_faceted"
+    )
+    assert _classify("show me both effects across regions") == "multi_faceted"
 
 
 def test_pattern_classifier_keeps_existing_intents() -> None:

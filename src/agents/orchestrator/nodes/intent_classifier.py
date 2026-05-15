@@ -32,6 +32,39 @@ IntentType = Literal[
 ]
 
 
+# Explicit tie-break priority for ``_classify_by_patterns`` / ``_pattern_classify``.
+#
+# Issue #254: previously, ties in pattern-match scores resolved by Python dict
+# iteration order of ``INTENT_PATTERNS`` — i.e. by accident of insertion order.
+# That caused multi-clause conjunctive queries (e.g. "compare X vs Y and also
+# segment Z") to lose to ``performance_gap`` / ``segment_analysis`` whenever
+# they scored equally.
+#
+# Order here is **most-specific → most-general** so the more discriminating
+# intent wins a tie. ``multi_faceted`` outranks ``performance_gap``,
+# ``segment_analysis``, and ``causal_effect`` because conjunctive markers are
+# strictly stronger evidence of multi-part intent than single-topic markers.
+# ``experiment_monitor`` outranks ``experiment_design`` because monitoring
+# language ("check active", "SRM", "interim") is more specific than design
+# language. ``general`` is the catch-all and always last.
+INTENT_PRIORITY: tuple[str, ...] = (
+    "multi_faceted",
+    "cohort_definition",
+    "experiment_monitor",
+    "experiment_design",
+    "drift_check",
+    "system_health",
+    "feedback",
+    "explanation",
+    "resource_allocation",
+    "prediction",
+    "performance_gap",
+    "segment_analysis",
+    "causal_effect",
+    "general",
+)
+
+
 def _get_opik_connector():
     """Lazy import of OpikConnector to avoid circular imports."""
     try:
@@ -206,12 +239,32 @@ class IntentClassifierNode:
                 requires_multi_agent=False,
             )
 
-        primary = max(scores, key=lambda k: scores.get(k, 0.0))
+        # Tie-break is deterministic and independent of INTENT_PATTERNS
+        # insertion order: ties resolve via ``INTENT_PRIORITY``. Intents not
+        # listed in ``INTENT_PRIORITY`` get the worst rank (largest index)
+        # and so lose every tie against listed intents.
+        _priority_rank = {name: idx for idx, name in enumerate(INTENT_PRIORITY)}
+        _worst_rank = len(INTENT_PRIORITY)
+
+        def _tie_break_key(intent_name: str) -> tuple[float, int]:
+            # max() with this key picks the highest score; ties resolve to the
+            # LOWEST priority index, which is the most-specific intent. The
+            # second component is negated so that lower index → higher value.
+            return (scores.get(intent_name, 0.0), -_priority_rank.get(intent_name, _worst_rank))
+
+        primary = max(scores, key=_tie_break_key)
         confidence = scores[primary]
 
-        # Get secondary intents (those with matches but lower score)
+        # Get secondary intents (those with matches but lower score).
+        # Sort by score DESC, then by INTENT_PRIORITY ASC so ties are
+        # deterministic and independent of INTENT_PATTERNS insertion order.
         secondary = [
-            k for k, v in sorted(scores.items(), key=lambda x: -x[1]) if v > 0 and k != primary
+            k
+            for k, v in sorted(
+                scores.items(),
+                key=lambda kv: (-kv[1], _priority_rank.get(kv[0], _worst_rank)),
+            )
+            if v > 0 and k != primary
         ]
 
         return IntentClassification(
