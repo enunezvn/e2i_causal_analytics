@@ -216,3 +216,102 @@ def test_extract_disagreements_filters_to_satisfied_false():
     assert len(events) == 1
     assert events[0].feature == "f-unsat"
     assert events[0].missed_considerations == ("temporal_filter",)
+
+
+def test_dedup_disagreements_collapses_by_feature_name():
+    from src.data.audit_sidecar_reader import (
+        DisagreementEvent,
+        dedup_disagreements,
+    )
+
+    e1 = DisagreementEvent(
+        experiment_id="exp1", written_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+        source_path=Path("/dev/null"), feature="f1",
+        worker_severity="moderate", worker_remediation="keep_with_caveat",
+        rationale_complete=False, missed_considerations=("temporal",),
+        notes="first", evaluator_model="haiku",
+    )
+    e2 = DisagreementEvent(
+        experiment_id="exp2",
+        written_at=datetime(2026, 5, 10, tzinfo=timezone.utc),  # later
+        source_path=Path("/dev/null"), feature="f1",  # same feature
+        worker_severity="moderate", worker_remediation="keep_with_caveat",
+        rationale_complete=False, missed_considerations=("pearl_arrows",),
+        notes="second", evaluator_model="haiku",
+    )
+    e3 = DisagreementEvent(
+        experiment_id="exp3", written_at=datetime(2026, 5, 5, tzinfo=timezone.utc),
+        source_path=Path("/dev/null"), feature="f2",
+        worker_severity="moderate", worker_remediation="keep_with_caveat",
+        rationale_complete=False, missed_considerations=(),
+        notes="other", evaluator_model="haiku",
+    )
+
+    deduped = list(dedup_disagreements([e1, e2, e3]))
+    assert len(deduped) == 2
+    by_feature = {e.feature: e for e in deduped}
+    # For f1, keep the LATEST occurrence (e2) so the curated example
+    # reflects the most recent rationale critique.
+    assert by_feature["f1"].notes == "second"
+    assert by_feature["f1"].experiment_id == "exp2"
+    assert by_feature["f2"].feature == "f2"
+
+
+def test_dedup_disagreements_is_deterministic_under_repeat():
+    """Re-running over the same input must produce byte-identical output.
+    Pinned because the JSON manifest in Task 7 is consumed by humans
+    who compare runs across days; nondeterministic ordering would create
+    spurious diffs."""
+    from src.data.audit_sidecar_reader import (
+        DisagreementEvent,
+        dedup_disagreements,
+    )
+
+    events = [
+        DisagreementEvent(
+            experiment_id="e", written_at=datetime(2026, 5, i, tzinfo=timezone.utc),
+            source_path=Path("/dev/null"), feature=f"f{i}",
+            worker_severity="m", worker_remediation="k",
+            rationale_complete=False, missed_considerations=(),
+            notes="", evaluator_model="haiku",
+        )
+        for i in [3, 1, 2]  # intentionally unordered input
+    ]
+    run1 = [e.feature for e in dedup_disagreements(events)]
+    run2 = [e.feature for e in dedup_disagreements(events)]
+    assert run1 == run2
+    # Deterministic order is by feature name ascending (a stable lex sort).
+    assert run1 == ["f1", "f2", "f3"]
+
+
+def test_dedup_equal_timestamp_uses_composite_tiebreaker():
+    """Codex Gate-2 MED-2: when two events for the same feature share
+    written_at to the second, the composite key (written_at, source_path,
+    experiment_id) determines the winner deterministically. Without this
+    tiebreaker, dict-insertion order would decide and runs would diverge
+    when sidecar discovery order shuffles."""
+    from src.data.audit_sidecar_reader import (
+        DisagreementEvent,
+        dedup_disagreements,
+    )
+
+    same_ts = datetime(2026, 5, 15, 10, 30, 0, tzinfo=timezone.utc)
+    e_low = DisagreementEvent(
+        experiment_id="exp-a", written_at=same_ts,
+        source_path=Path("/artifacts/exp-a/x.json"),
+        feature="f", worker_severity="m", worker_remediation="k",
+        rationale_complete=False, missed_considerations=("a",),
+        notes="from-a", evaluator_model="haiku",
+    )
+    e_high = DisagreementEvent(
+        experiment_id="exp-b", written_at=same_ts,
+        source_path=Path("/artifacts/exp-b/x.json"),  # sorts > exp-a
+        feature="f", worker_severity="m", worker_remediation="k",
+        rationale_complete=False, missed_considerations=("b",),
+        notes="from-b", evaluator_model="haiku",
+    )
+    # Insertion order should not matter — composite key sort wins.
+    winner1 = list(dedup_disagreements([e_low, e_high]))[0]
+    winner2 = list(dedup_disagreements([e_high, e_low]))[0]
+    assert winner1.notes == winner2.notes == "from-b"
+    assert winner1.experiment_id == "exp-b"

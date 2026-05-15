@@ -235,3 +235,34 @@ def extract_disagreements(
             notes=r.evaluator_notes or "",
             evaluator_model=r.evaluator_model,
         )
+
+
+def _dedup_sort_key(e: DisagreementEvent) -> tuple:
+    """Composite key used as the dedup tiebreaker when two events
+    name the same feature with identical ``written_at`` (realistic when
+    the producer's compact timestamp has only second-level granularity
+    and two runs land in the same second). Codex Gate-2 MED-2."""
+    return (e.written_at, str(e.source_path), e.experiment_id)
+
+
+def dedup_disagreements(
+    events: Iterator[DisagreementEvent] | list[DisagreementEvent],
+) -> Iterator[DisagreementEvent]:
+    """Collapse duplicate disagreements by feature name. When multiple
+    events name the same feature, the LATEST (by composite key
+    ``(written_at, source_path, experiment_id)``) is kept so the curated
+    entry reflects the most recent evaluator critique. The composite key
+    is the deterministic tiebreaker required when two events share
+    ``written_at`` to the second — without it, dict-insertion order would
+    decide the winner (codex Gate-2 MED-2).
+
+    Output ordering is deterministic: feature name ascending. Required
+    because the downstream JSON manifest is human-diffed across runs.
+    """
+    by_feature: dict[str, DisagreementEvent] = {}
+    for e in events:
+        existing = by_feature.get(e.feature)
+        if existing is None or _dedup_sort_key(e) > _dedup_sort_key(existing):
+            by_feature[e.feature] = e
+    for feature in sorted(by_feature):
+        yield by_feature[feature]
