@@ -712,22 +712,24 @@ def run_model_eval_ablation(
         )
         combined_sev = _max_rule_severity(perm_sev, abl_sev)
         # ``decided_by`` records which sub-test produced the combined
-        # severity (matches Phase 3.3's _decided_by_to_layer audit
-        # convention; "adversarial_ablation" maps to layer "3" same as
-        # data-prep). Tie-break aligns with Phase 3.3's
-        # ``_combine_ablation_with_permutation`` at
-        # ``adaptive_validity_check.py:2320`` (``if ablation_rank <=
-        # perm_rank: return perm_input``) — ties go to the PERMUTATION
-        # sub-pass. This matters because the permutation pathway is the
-        # canonical Layer-3 entry point in Phase 3.3 (ablation is an
-        # ESCALATION applied on top, never a bypass); attributing ties to
-        # ablation here would silently invert that convention.
+        # severity. Uses Phase 3.3's audit convention BYTE-IDENTICALLY:
+        #   * "adversarial" for perm-only escalation (Phase 3.3 default
+        #     tag at adaptive_validity_check.py:1315, :1371, :1422).
+        #   * "adversarial_ablation" only when ablation strictly
+        #     escalates above perm (Phase 3.3 overwrite at
+        #     adaptive_validity_check.py:2930-2931).
+        # Both keys map to layer "3" via _DECIDED_BY_TO_LAYER at
+        # adaptive_validity_check.py:1153-1160 — audit consumers see the
+        # same layer attribution across both pipeline stages.
+        # Tie-break: ties go to perm (matches Phase 3.3's
+        # _combine_ablation_with_permutation at :2320 where
+        # ablation_rank <= perm_rank keeps perm_input).
         if combined_sev == "info":
             decided_by = None
         elif _SEVERITY_RANK.get(abl_sev, 0) > _SEVERITY_RANK.get(perm_sev, 0):
             decided_by = "adversarial_ablation"
         else:
-            decided_by = "adversarial_permutation"
+            decided_by = "adversarial"
         out_row = {
             "feature": str(col),
             # Ablation-side audit fields. Field NAMES match Phase 3.3's

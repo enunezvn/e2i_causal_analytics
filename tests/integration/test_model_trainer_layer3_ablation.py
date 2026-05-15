@@ -90,14 +90,22 @@ def _build_categorical_per_category_leak_cohort(
     age = rng.normal(50, 15, n)
     eligibility_duration = rng.normal(180, 60, n)
 
-    # Categorical feature with 11 regions. "leak_region" carries ~8% of
-    # rows and is target-leaky; the other 10 are noise. Whole-column
-    # Cramér's V stays below 0.5 because the leaky category is rare —
-    # the rare-category-leak Cramér's V is bounded above by 2 * leak_p
-    # times the conditional p-difference (here 2 * 0.08 * 0.65 ≈ 0.10
-    # in the limit, much smaller in finite samples).
+    # Categorical feature with 11 regions. "leak_region" carries ~12%
+    # of rows and is target-leaky; the other 10 are noise.
+    # Calibration constraints (codex MED-2 fix tightened these):
+    #   * Whole-cohort Cramér's V must stay < 0.5 (legacy
+    #     check_categorical_class_separation HIGH threshold) so the
+    #     legacy categorical check ALSO misses the leak — proves the
+    #     gap is not artificially constructed.
+    #   * Train-split (60% of cohort) single-feature label-shuffle
+    #     delta_AUC for the leak indicator must EXCEED the issue #194
+    #     floor of 0.10 so the joint check escalates severity to high.
+    # At n=2000, leak_p=0.12: train_delta_AUC ≈ 0.157, cohort_V ≈ 0.469
+    # — both invariants satisfied with margin. Lower leak_p (0.06-0.10)
+    # produces train_delta_AUC right at the floor with too little margin
+    # for the test to be robust across seed/split variance.
     non_leak_regions = [f"region_{i}" for i in range(10)]
-    leak_p = 0.08
+    leak_p = 0.12
     is_leak = rng.binomial(1, leak_p, n).astype(bool)
     region = np.where(
         is_leak,
@@ -384,12 +392,18 @@ def test_phase34_model_eval_ablation_catches_per_category_categorical_leak() -> 
     # new detection capability beyond what Phase 3.3 ablation provides
     # (Phase 3.3 ablation's column-shuffle null collapses; ablation
     # alone here would miss the leak too).
-    assert leak_row.get("decided_by") == "adversarial_permutation", (
+    # Phase 3.3 convention (adaptive_validity_check.py:1315): the perm
+    # path tags ``decided_by="adversarial"`` (NOT "adversarial_permutation").
+    # Phase 3.4 mirrors this exactly so audit consumers see byte-identical
+    # tag strings + layer mapping across both pipeline stages
+    # (_DECIDED_BY_TO_LAYER at adaptive_validity_check.py:1155 maps to
+    # layer "3"). Codex MED-3 fix.
+    assert leak_row.get("decided_by") == "adversarial", (
         f"Leak should be caught by the LABEL-SHUFFLE permutation sub-pass "
-        f"(decided_by='adversarial_permutation'), proving the perm pass adds "
-        f"genuine detection capability beyond Phase 3.3 (which cannot run "
-        f"on categoricals). Got decided_by={leak_row.get('decided_by')}. "
-        f"Full row: {leak_row}"
+        f"(decided_by='adversarial', matching Phase 3.3's convention), "
+        f"proving the perm pass adds genuine detection capability beyond "
+        f"Phase 3.3 (which cannot run on categoricals). Got "
+        f"decided_by={leak_row.get('decided_by')}. Full row: {leak_row}"
     )
 
     # Promotion: validation_metrics carries the compact summary.
