@@ -68,20 +68,52 @@ def _services_with_common_env_merge(compose: dict) -> list[str]:
     return out
 
 
-def _services_with_audit_mount(compose: dict) -> list[str]:
+_ACCEPTED_MOUNT_FORMS = frozenset(
+    {
+        # Bare short-form mount (read-write — the default).
+        "audit_artifacts:/app/data/audit_artifacts",
+        # Explicit read-write is fine; ":ro" is NOT (codex review MED-1
+        # on commit dcb73e32 — the producer would silently break writes).
+        "audit_artifacts:/app/data/audit_artifacts:rw",
+    }
+)
+
+
+def _services_with_audit_mount(compose: dict[str, Any]) -> list[str]:
     """Return service names that mount audit_artifacts at
-    /app/data/audit_artifacts."""
+    /app/data/audit_artifacts WITH WRITE PERMISSION. A ``:ro`` suffix
+    would break producer writes silently — reject it (codex review
+    MED-1 on commit dcb73e32, 2026-05-15)."""
     services = compose.get("services", {}) or {}
     out: list[str] = []
     for name, body in services.items():
         for vol in (body or {}).get("volumes") or []:
-            if isinstance(vol, str) and (
-                vol == "audit_artifacts:/app/data/audit_artifacts"
-                or vol.startswith("audit_artifacts:/app/data/audit_artifacts:")
-            ):
+            if isinstance(vol, str) and vol in _ACCEPTED_MOUNT_FORMS:
                 out.append(name)
                 break
     return out
+
+
+def test_audit_artifacts_mount_is_writable():
+    """The producer mkdirs and writes JSON under the mount path. A
+    ``:ro`` suffix would break it silently. Explicit assertion that
+    no service has the mount in read-only mode (codex review MED-1
+    on commit dcb73e32, 2026-05-15)."""
+    compose = _load_compose()
+    services = compose.get("services", {}) or {}
+    ro_violations: list[tuple[str, str]] = []
+    for name, body in services.items():
+        for vol in (body or {}).get("volumes") or []:
+            if isinstance(vol, str) and vol.startswith(
+                "audit_artifacts:/app/data/audit_artifacts:"
+            ):
+                mode = vol.split(":")[-1]
+                if mode != "rw":
+                    ro_violations.append((name, vol))
+    assert not ro_violations, (
+        f"audit_artifacts mount must be writable; found read-only "
+        f"or unrecognized-mode mounts: {ro_violations}"
+    )
 
 
 def test_audit_artifacts_mounted_on_every_common_env_service():
@@ -90,6 +122,14 @@ def test_audit_artifacts_mounted_on_every_common_env_service():
     that doesn't exist in the container filesystem.
 
     Plan acceptance criterion #1; Risk R4 in the plan.
+
+    NOTE on layered coverage (codex review LOW on commit dcb73e32,
+    2026-05-15): when the env var is removed from the anchor entirely,
+    ``services_with_env`` is empty and ``missing_mount`` becomes empty
+    too, so this test vacuously passes. That regression is caught by
+    ``test_audit_artifacts_env_var_in_common_env_anchor`` instead. This
+    test fires when env IS set on some services AND a service is
+    missing the mount.
     """
     compose = _load_compose()
     services_with_env = set(_services_with_common_env_merge(compose))
