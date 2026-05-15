@@ -58,6 +58,7 @@ from src.api.dependencies.supabase_client import (
     supabase_health_check,
 )
 from src.api.middleware.auth_middleware import JWTAuthMiddleware
+from src.api.middleware.insight_verifier import InsightVerifierMiddleware
 from src.api.middleware.rate_limit_middleware import RateLimitMiddleware
 from src.api.middleware.security_middleware import SecurityHeadersMiddleware
 from src.api.middleware.timing import TimingMiddleware
@@ -86,6 +87,8 @@ from src.api.routes.predictions import router as predictions_router
 from src.api.routes.rag import router as rag_router
 from src.api.routes.resource_optimizer import router as resource_optimizer_router
 from src.api.routes.segments import router as segments_router
+from src.api.routes.sentinels import router as sentinels_router
+from src.api.routes.executive_insights import router as executive_insights_router
 
 # Import MLOps connectors
 from src.feature_store.feast_client import FeastClient
@@ -636,6 +639,15 @@ app.add_middleware(
     expose_headers=["X-Request-ID", "X-Correlation-ID"],
 )
 
+# JIT Provenance Verification middleware
+# Replaces stale responses with 410 Gone on configured insight routes. The
+# routes themselves stay simple; verification is a cross-cutting concern.
+# Middleware is LIFO in Starlette, so this runs BEFORE the response is built
+# (inbound) and AFTER (outbound) — we use it on the outbound side to inspect
+# the JSON body. See src/api/middleware/insight_verifier.py.
+app.add_middleware(InsightVerifierMiddleware)
+logger.info("Insight Verifier: ENABLED (JIT provenance check on /api/causal, /api/explain, /api/executive-insights)")
+
 # JWT Authentication middleware (Supabase)
 # Protects all routes except public paths (health, docs, read-only endpoints)
 app.add_middleware(JWTAuthMiddleware)
@@ -948,6 +960,13 @@ add_copilotkit_routes(app, prefix="/api/copilotkit")
 
 # Agent orchestration endpoints (/api/agents/*)
 app.include_router(agents_router, prefix="/api")
+
+# Sentinel watchers (/api/sentinels/*)
+app.include_router(sentinels_router, prefix="/api")
+
+# Executive insights — crystallized cross-agent narratives (/api/executive-insights/*)
+# JIT provenance verification middleware (registered below) intercepts GETs.
+app.include_router(executive_insights_router, prefix="/api")
 
 # Prometheus metrics endpoint (/metrics) - no /api prefix per convention
 app.include_router(metrics_router)

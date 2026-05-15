@@ -329,6 +329,24 @@ celery_app.conf.beat_schedule = {
         "schedule": 2592000.0,  # ~30 days
         "options": {"queue": "analytics"},
     },
+    # -------------------------------------------------------------------------
+    # Insight Lifecycle subsystem (consolidation + sentinels)
+    # -------------------------------------------------------------------------
+    # Daily consolidator: promotes confirmed causal_paths to semantic tier
+    # and high-success procedural_memories to procedural tier.
+    "insight-lifecycle-consolidate": {
+        "task": "src.tasks.consolidate_insights",
+        "schedule": 86400.0,  # 24 hours
+        "options": {"queue": "analytics"},
+    },
+    # Sentinel dispatcher: evaluates data-driven watchers (threshold, freshness, etc.)
+    # and fires actions (invalidate cascade, agent dispatch, notify). Runs every 5
+    # minutes for near-real-time response to data changes.
+    "insight-lifecycle-sentinels": {
+        "task": "src.tasks.sentinel_dispatcher",
+        "schedule": 300.0,  # 5 minutes
+        "options": {"queue": "quick"},
+    },
 }
 
 # =============================================================================
