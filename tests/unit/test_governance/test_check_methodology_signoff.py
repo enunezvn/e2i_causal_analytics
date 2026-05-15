@@ -1400,6 +1400,76 @@ def test_parse_registry_supports_email_aliases(tmp_path: Path):
     assert rows[0].emails == ("alice@example.com", "alice@oldjob.com")
 
 
+def test_pass5_med1_parse_registry_with_warnings_surfaces_malformed_rows(
+    tmp_path: Path,
+):
+    """Codex pass-5 MED-1 fix: parse_registry_with_warnings emits warnings
+    for pipe-delimited rows with wrong column counts.
+
+    Pre-fix: malformed rows were silently skipped, which after pass-4
+    HIGH-1 row aggregation in check_selection_rule could DELETE
+    disqualifying-evidence rows from matching → CoI bypass. Post-fix:
+    malformed rows are tracked + surfaced so the orchestrator can
+    fail-closed.
+    """
+
+    # 2 well-formed rows + 1 malformed (extra | in areas_of_expertise).
+    registry_text = (
+        "| name | email | github_handle | role | date_added | "
+        "areas_of_expertise | status | fingerprint |\n"
+        "|---|---|---|---|---|---|---|---|\n"
+        "| Alice | alice@example.com | alice | clinician | 2026-05-10 | "
+        "methodology | active | `<TBD>` |\n"
+        "| Bob | bob@example.com | bob | biostat | 2026-05-10 | "
+        "methodology|extra-pipe | active | `<TBD>` |\n"
+        "| Carol | carol@example.com | carol | advisor | 2026-05-10 | "
+        "methodology | inactive | `<TBD>` |\n"
+    )
+    reg = tmp_path / "r.md"
+    reg.write_text(registry_text, encoding="utf-8")
+    rows, warnings = cms.parse_registry_with_warnings(reg)
+    # Bob's row has 9 cells (extra |); Alice + Carol parse cleanly.
+    assert len(rows) == 2
+    assert {r.handle for r in rows} == {"alice", "carol"}
+    # Bob's malformed row produces a warning.
+    assert len(warnings) == 1
+    assert "9 cells" in warnings[0] or "expected 8" in warnings[0]
+    assert "bob" in warnings[0].lower() or "Bob" in warnings[0]
+
+
+def test_pass5_med1_orchestrator_fails_on_malformed_registry(tmp_path: Path):
+    """Pass-5 MED-1: orchestrator must FAIL registry_loaded on parser warnings.
+
+    Without this, the malformed-row → silent-skip → CoI-bypass path
+    survives in the full check_signoff orchestrator.
+    """
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "docs" / "results").mkdir(parents=True)
+    (repo / "docs" / "governance").mkdir(parents=True)
+    # Registry with a malformed row.
+    registry_text = (
+        "| name | email | github_handle | role | date_added | "
+        "areas_of_expertise | status | fingerprint |\n"
+        "|---|---|---|---|---|---|---|---|\n"
+        "| A | a@ex.com | alice | clinician | 2026-05-10 | "
+        "methodology|extra | active | `<TBD>` |\n"
+    )
+    (repo / "docs" / "governance" / "methodology_reviewer_registry.md").write_text(
+        registry_text, encoding="utf-8"
+    )
+    # Minimal valid sign-off doc.
+    signoff_path = repo / "docs" / "results" / "optum_methodology_signoff_20260520.md"
+    signoff_path.write_text(_signoff_doc(handle="alice"), encoding="utf-8")
+
+    results = cms.check_signoff(signoff_path, repo, today="2026-05-20")
+    # registry_loaded MUST be False; downstream checks not run.
+    reg_check = next(r for r in results if r.name == "registry_loaded")
+    assert reg_check.ok is False
+    assert "malformed" in reg_check.detail
+
+
 # --------------------------------------------------------------------------- #
 # M2: sign-off age limit — reject artifacts older than max_age_days vs today.
 # --------------------------------------------------------------------------- #
@@ -1872,6 +1942,19 @@ class TestStrictGhResolution:
         monkeypatch.setenv("STRICT_GH", "0")
         # CLI flag True is the explicit operator intent; honor it.
         assert cms._resolve_strict_gh(True) is True
+
+    def test_pass5_low1_cli_flag_false_overrides_env_truthy(self, monkeypatch: pytest.MonkeyPatch):
+        """Codex pass-5 LOW-1 fix: explicit `--no-strict-gh` (cli_flag=False)
+        overrides STRICT_GH=1 in env.
+
+        Pre-fix: cli_flag=False fell through to env check (not
+        intentional — there was no `--no-strict-gh` form). Post-fix:
+        BooleanOptionalAction adds the negative form; resolver honors it.
+        """
+
+        monkeypatch.setenv("STRICT_GH", "1")
+        # Explicit --no-strict-gh wins over env=1.
+        assert cms._resolve_strict_gh(False) is False
 
 
 class TestStrictGhMainExitCode:
@@ -3246,6 +3329,17 @@ class TestStrictGpgResolution:
     def test_cli_flag_true_wins_over_env_falsy(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("STRICT_GPG", "0")
         assert cms._resolve_strict_gpg(True) is True
+
+    def test_pass5_low1_cli_flag_false_overrides_env_truthy(self, monkeypatch: pytest.MonkeyPatch):
+        """Codex pass-5 LOW-1 fix: explicit `--no-strict-gpg` overrides
+        STRICT_GPG=1 in env.
+
+        BooleanOptionalAction adds the negative form so operators have
+        an explicit opt-out from the env-set strict mode.
+        """
+
+        monkeypatch.setenv("STRICT_GPG", "1")
+        assert cms._resolve_strict_gpg(False) is False
 
 
 class TestStrictGpgMainExitCode:

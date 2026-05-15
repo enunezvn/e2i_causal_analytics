@@ -351,13 +351,40 @@ def parse_registry(registry_path: Path) -> List[ReviewerInfo]:
     lockstep with the workflow change.
     """
 
+    rows, _warnings = parse_registry_with_warnings(registry_path)
+    return rows
+
+
+def parse_registry_with_warnings(
+    registry_path: Path,
+) -> tuple[List[ReviewerInfo], List[str]]:
+    """Like :func:`parse_registry` but ALSO returns parser warnings.
+
+    Codex pass-5 MED-1: malformed registry rows (e.g. extra ``|`` in
+    a free-text cell breaking column count) were previously silently
+    skipped — which after pass-4's all-row aggregation in
+    ``check_selection_rule`` could DELETE disqualifying-evidence
+    rows from the matching set. This function returns:
+
+    * The list of successfully parsed rows.
+    * A list of human-readable warnings about rows that LOOKED like
+      table-body rows (in_table+saw_separator was True AND the line
+      started with ``|``) but had wrong column counts. The
+      orchestrator surfaces these as a non-fatal but visible WARN
+      so operators see the rows they thought they added but that
+      didn't parse.
+    """
+
     if not registry_path.is_file():
         raise FileNotFoundError(f"registry not found: {registry_path}")
 
     rows: List[ReviewerInfo] = []
+    warnings: List[str] = []
     in_table = False
     saw_separator = False
-    for raw_line in registry_path.read_text(encoding="utf-8").splitlines():
+    for line_no, raw_line in enumerate(
+        registry_path.read_text(encoding="utf-8").splitlines(), start=1
+    ):
         line = raw_line.strip()
         if not line.startswith("|"):
             in_table = False
@@ -377,7 +404,19 @@ def parse_registry(registry_path: Path) -> List[ReviewerInfo]:
             # Header without separator → malformed.
             in_table = False
             continue
-        if in_table and saw_separator and len(cells) == len(_REGISTRY_HEADERS):
+        if in_table and saw_separator:
+            if len(cells) != len(_REGISTRY_HEADERS):
+                # Codex pass-5 MED-1: emit a warning for rows that look
+                # like table-body rows (in_table + post-separator + |
+                # delimited) but have wrong column counts. Pre-fix this
+                # was silently skipped, hiding disqualifying-evidence rows
+                # from selection-rule aggregation.
+                warnings.append(
+                    f"line {line_no}: pipe-delimited row has "
+                    f"{len(cells)} cells but expected {len(_REGISTRY_HEADERS)} "
+                    f"({_REGISTRY_HEADERS!r}); row skipped — was: {raw_line!r}"
+                )
+                continue
             handle, email_cell, status = cells[2], cells[1], cells[6]
             # Strip Markdown emphasis (e.g. _PLACEHOLDER_).
             handle = handle.strip("_*`")
@@ -400,7 +439,7 @@ def parse_registry(registry_path: Path) -> List[ReviewerInfo]:
                     fingerprint=fingerprint,
                 )
             )
-    return rows
+    return rows, warnings
 
 
 def extract_section_headings(doc_text: str) -> List[str]:
@@ -2136,9 +2175,28 @@ def check_signoff(
 
     registry_path = repo_root / "docs" / "governance" / "methodology_reviewer_registry.md"
     try:
-        registry = parse_registry(registry_path)
+        registry, parser_warnings = parse_registry_with_warnings(registry_path)
     except FileNotFoundError as exc:
         results.append(CheckResult("registry_loaded", False, str(exc)))
+        return results
+
+    # Codex pass-5 MED-1 fix: surface registry parser warnings as a
+    # registry_loaded FAILURE, NOT silent skip. Malformed rows that
+    # look like table-body rows but have wrong column counts could
+    # silently DROP disqualifying-evidence rows from selection-rule
+    # aggregation, defeating the pass-4 HIGH-1 fix. Treat parser
+    # warnings as a hard fail so operators MUST fix the registry
+    # syntax before the validator accepts the sign-off.
+    if parser_warnings:
+        results.append(
+            CheckResult(
+                "registry_loaded",
+                False,
+                f"registry has {len(parser_warnings)} malformed row(s) that "
+                f"would silently drop selection-rule evidence: "
+                f"{'; '.join(parser_warnings)[:600]}",
+            )
+        )
         return results
 
     results.append(CheckResult("registry_loaded", True, f"{len(registry)} rows"))
@@ -2231,9 +2289,17 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help=(
-            "Optional path to a GPG home directory containing the trusted "
-            "public keys for sign-off reviewers. Passed to gpg via "
-            "--homedir. If unset, the system default keyring is used."
+            "Path to a GPG home directory containing the trusted public "
+            "keys for sign-off reviewers. Passed to gpg via --homedir for "
+            "verification AND consulted by check_keyring_present + the H1 "
+            "fingerprint-pinning check. If UNSET, the keyring_present "
+            "check returns advisory pass with signature_check_skipped=True "
+            "(STRICT_GPG=1 escalates to exit 4); the system default "
+            "keyring is NOT consulted (a deliberate change vs pre-#226 — "
+            "the H1 model requires explicit registry-pinned keyring "
+            "binding, not implicit reliance on whatever keys happen to be "
+            "in the user's $GNUPGHOME). Local devs running ad-hoc without "
+            "STRICT_GPG=1 retain advisory back-compat."
         ),
     )
     parser.add_argument(
@@ -2257,7 +2323,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--strict-gh",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=None,
         help=(
             "Fail-closed when any CheckResult has provenance_check_skipped=True "
@@ -2265,23 +2331,25 @@ def build_parser() -> argparse.ArgumentParser:
             "provenance was NOT confirmed). The validator returns exit code 3 "
             "in that case. Defaults to OFF for back-compat with local dev "
             "runs; CI workflows that provision GH_TOKEN MUST set this flag "
-            "(or export STRICT_GH=1, which the CLI also honors). Issue "
+            "(or export STRICT_GH=1, which the CLI also honors). Use "
+            "--no-strict-gh to override STRICT_GH=1 from the env. Issue "
             "#192 H2/M1 fail-closed enforcement."
         ),
     )
     parser.add_argument(
         "--strict-gpg",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=None,
         help=(
             "Fail-closed when (a) the keyring directory passed via "
             "--keyring-dir is missing/empty/unreadable OR (b) any check "
             "has signature_check_skipped=True (no CoI body signature "
-            "found). The validator returns exit code 4 in that case. "
-            "Defaults to OFF for back-compat with local dev runs; CI "
-            "workflows that provision the keyring MUST set this flag (or "
-            "export STRICT_GPG=1, which the CLI also honors). Issue "
-            "#226 H1+H4 fail-closed enforcement."
+            "found OR pinning gap). The validator returns exit code 4 in "
+            "that case. Defaults to OFF for back-compat with local dev "
+            "runs; CI workflows that provision the keyring MUST set this "
+            "flag (or export STRICT_GPG=1, which the CLI also honors). "
+            "Use --no-strict-gpg to override STRICT_GPG=1 from the env. "
+            "Issue #226 H1+H4 fail-closed enforcement."
         ),
     )
     return parser
@@ -2297,12 +2365,18 @@ def _resolve_strict_gh(cli_flag: Optional[bool]) -> bool:
     skipped gh provenance query becomes a hard PR block (exit code 3)
     rather than a logged warning.
 
+    Codex pass-5 LOW-1: CLI flag now uses ``BooleanOptionalAction`` so
+    ``--strict-gh`` → True, ``--no-strict-gh`` → False, omitted → None.
+    An explicit ``--no-strict-gh`` overrides ``STRICT_GH=1`` in env.
     Truthy env values: ``1``, ``true``, ``yes``, ``on`` (case-insensitive).
     Anything else (including absent / empty) defaults to OFF.
     """
 
     if cli_flag is True:
         return True
+    if cli_flag is False:
+        # Pass-5 LOW-1: explicit `--no-strict-gh` overrides STRICT_GH=1.
+        return False
     raw = os.environ.get("STRICT_GH", "").strip().lower()
     return raw in ("1", "true", "yes", "on")
 
@@ -2318,12 +2392,18 @@ def _resolve_strict_gpg(cli_flag: Optional[bool]) -> bool:
     (or export ``STRICT_GPG=1``) so missing keyring / missing CoI body
     signature become hard PR blocks (exit code 4) rather than warnings.
 
+    Codex pass-5 LOW-1: CLI flag now uses ``BooleanOptionalAction`` so
+    ``--strict-gpg`` → True, ``--no-strict-gpg`` → False, omitted → None.
+    An explicit ``--no-strict-gpg`` overrides ``STRICT_GPG=1`` in env.
     Truthy env values: ``1``, ``true``, ``yes``, ``on`` (case-insensitive).
     Anything else (including absent / empty) defaults to OFF.
     """
 
     if cli_flag is True:
         return True
+    if cli_flag is False:
+        # Pass-5 LOW-1: explicit `--no-strict-gpg` overrides STRICT_GPG=1.
+        return False
     raw = os.environ.get("STRICT_GPG", "").strip().lower()
     return raw in ("1", "true", "yes", "on")
 
