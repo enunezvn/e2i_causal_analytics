@@ -27,7 +27,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 
-from src.api.dependencies.auth import require_admin, require_auth, require_operator
+from src.api.dependencies.auth import require_auth, require_operator
 from src.memory.sentinels.registry import register_sentinel
 from src.memory.services.factories import get_supabase_client
 
@@ -84,7 +84,7 @@ async def create_sentinel(
     """Register a sentinel. brand='all' requires ADMIN."""
     if payload.brand == "all":
         # Re-check role: require_operator passed but 'all' needs ADMIN.
-        from src.api.dependencies.auth import has_role, UserRole
+        from src.api.dependencies.auth import UserRole, has_role
 
         if not has_role(user, UserRole.ADMIN):
             raise HTTPException(

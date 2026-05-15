@@ -18,10 +18,9 @@ side channel, but cross-brand signals must be authored explicitly.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from src.memory.services.factories import get_redis_client

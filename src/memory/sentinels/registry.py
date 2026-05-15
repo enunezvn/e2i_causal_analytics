@@ -38,7 +38,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from src.memory.coordination.signals import get_insight_signal_bus
 from src.memory.lifecycle.invalidator import cascade_invalidate

@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import json
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from unittest.mock import patch
 
 import pytest
 
-from src.memory.coordination.signals import InsightSignalBus, SignalStream
+from src.memory.coordination.signals import InsightSignalBus
 
 
 class FakeStreamsRedis:
