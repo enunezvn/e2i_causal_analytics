@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from src.memory.services.factories import get_supabase_client
 
@@ -143,12 +143,12 @@ class Crystallizer:
         members: List[Dict[str, Any]],
         crystallized_by_cycle_id: Optional[str],
         crystallized_by_user_id: Optional[str],
-    ) -> (str, int):  # (insight_id, edges_added)
+    ) -> Tuple[str, int]:  # (insight_id, edges_added)
         client = get_supabase_client()
 
         title, narrative, key_metrics = _compose_narrative(brand, region, members)
         # Time window: earliest..latest occurred_at of the source memories.
-        times = sorted(m.get("occurred_at") for m in members if m.get("occurred_at"))
+        times = sorted(t for t in (m.get("occurred_at") for m in members) if t is not None)
         time_start = times[0] if times else None
         time_end = times[-1] if times else None
 
@@ -245,7 +245,7 @@ def _group_memories(memories: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, 
 
 def _compose_narrative(
     brand: str, region: Optional[str], members: List[Dict[str, Any]]
-) -> (str, str, Dict[str, Any]):
+) -> Tuple[str, str, Dict[str, Any]]:
     """
     Build (title, narrative, key_metrics) from source episodic memories.
 
@@ -284,8 +284,10 @@ def _pick_kpi(members: List[Dict[str, Any]]) -> Optional[str]:
     """Best-effort KPI extraction from raw_content. Returns first hit."""
     for m in members:
         rc = m.get("raw_content") or {}
-        if isinstance(rc, dict) and rc.get("kpi"):
-            return rc["kpi"]
+        if isinstance(rc, dict):
+            kpi = rc.get("kpi")
+            if kpi:
+                return str(kpi)
     return None
 
 

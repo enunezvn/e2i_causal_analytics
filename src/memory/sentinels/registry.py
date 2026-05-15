@@ -125,7 +125,7 @@ async def register_sentinel(
         f"registered sentinel {sentinel_id} name={name!r} brand={brand} "
         f"pattern={pattern_type} action={action_type}"
     )
-    return sentinel_id
+    return str(sentinel_id)
 
 
 def _validate_pattern_config(pattern_type: str, cfg: Dict[str, Any]) -> None:
