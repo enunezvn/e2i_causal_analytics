@@ -267,6 +267,21 @@ PRE_ANCHOR_RAW_COLUMNS: dict[str, frozenset[str]] = {
             "product",
             "diagcode",
             "diagcode_raw",
+            # Payer flags — issue #156 item 6 (PR #230 add). These are
+            # static member-level demographic-payer indicators read
+            # from the same ``demographics`` table that supplies
+            # ``bus`` / ``product`` / ``age`` / ``gdr_cd`` (see
+            # ``scripts/convert_optum_rwd.py:2272-2273``: both
+            # ``health_exch`` and ``lis_dual`` are pulled from the
+            # same ``demo_row`` as the rest of the demographics block,
+            # which the converter loads from the ``demographics``
+            # table at module setup with no temporal join). They are
+            # knowable at enrollment / member.start_date — well before
+            # index_date — and are inputs to the manifest-declared
+            # ``payer_category`` feature
+            # (``knowable_at=KnowableAt(reference="enrollment")``).
+            "health_exch",
+            "lis_dual",
             # Enrollment + index
             "eligeff",
             "eligend",
