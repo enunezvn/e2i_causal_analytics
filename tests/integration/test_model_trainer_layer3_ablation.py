@@ -434,6 +434,125 @@ def test_phase34_flag_off_is_inert() -> None:
 
 
 @pytest.mark.integration
+def test_phase34_permutation_joint_check_clamps_large_n_weak_predictor() -> None:
+    """ISSUE #194 PIN: weak predictor at large n with |delta_AUC| <= 0.10
+    must stay severity=info despite z >> 5σ.
+
+    Tests the codex MED-2 fix: the simple z-band perm classifier had a
+    5σ FPR blowup at n≥10k because the label-shuffle null variance
+    shrinks per CLT, making any tiny signal LOOK statistically
+    significant. Phase 3.3 mitigates this with the issue #194 joint
+    (z, |delta_AUC|) check in ``hblp_classify``; Phase 3.4 must do the
+    same on the model-eval axis.
+
+    Construction: a benign weak predictor at n=10000 with
+    actual_auc ≈ 0.53 (folded), null_mean ≈ 0.50, null_std ≈ 0.005 →
+    z ≈ 6.0σ but |delta_AUC| = 0.03 < 0.10 floor. Pre-fix would have
+    classified severity=high (FALSE POSITIVE); post-fix returns
+    severity=info via the joint clamp.
+
+    The unit-level test directly invokes ``_classify_permutation_severity``
+    rather than the full evaluator — a full-pipeline integration test
+    at n=10k is too slow for routine CI (compute_adversarial_score with
+    200 perms × 10000 rows × 50 features × tree retrain ≈ 5-10 minutes).
+    The integration coverage already proves the joint check is wired
+    through (the existing dual-mode test exercises the full pipeline
+    at n=2000); this test pins the LARGE-N CLAMP behavior directly.
+    """
+    from src.agents.ml_foundation.model_trainer.nodes.model_eval_ablation import (
+        _classify_permutation_severity,
+        MODEL_EVAL_ABLATION_DELTA_AUC_FLOOR_DEFAULT,
+    )
+
+    # PRE-ISSUE-#194 path (no delta_AUC → z-only ladder): z=6.0 → high.
+    assert (
+        _classify_permutation_severity(6.0)
+        == "high"
+    ), "Backward-compat: z-only path with no delta_auc should still ladder."
+
+    # ISSUE #194 fix: z=6.0 but |delta_AUC|=0.03 < floor=0.10 → info.
+    sev = _classify_permutation_severity(
+        6.0,
+        delta_auc=0.03,
+        delta_auc_floor=MODEL_EVAL_ABLATION_DELTA_AUC_FLOOR_DEFAULT,
+    )
+    assert sev == "info", (
+        f"Issue #194 joint check failed to clamp large-n weak predictor "
+        f"(z=6.0σ, |delta_AUC|=0.03 < 0.10 floor). Got severity={sev!r}. "
+        f"The clamp prevents the n≥10k FPR blowup that Phase 3.3 mitigates "
+        f"via hblp_classify."
+    )
+
+    # ISSUE #194 fix: z=6.0 AND |delta_AUC|=0.15 > 0.10 floor → high
+    # (joint check confirms strong signal — both z and delta agree).
+    sev2 = _classify_permutation_severity(
+        6.0,
+        delta_auc=0.15,
+        delta_auc_floor=MODEL_EVAL_ABLATION_DELTA_AUC_FLOOR_DEFAULT,
+    )
+    assert sev2 == "high", (
+        f"Real leak (z=6.0σ AND |delta_AUC|=0.15 > 0.10) should escalate "
+        f"to high. Got severity={sev2!r}."
+    )
+
+    # Negative delta with z above band — also clamped to info (Phase 3.3
+    # joint check is on |delta|; here delta=-0.03 has |delta|=0.03 < floor).
+    sev3 = _classify_permutation_severity(
+        6.0,
+        delta_auc=-0.03,
+        delta_auc_floor=MODEL_EVAL_ABLATION_DELTA_AUC_FLOOR_DEFAULT,
+    )
+    assert sev3 == "info", (
+        f"|delta_AUC|=0.03 < floor=0.10 should clamp regardless of delta sign. "
+        f"Got severity={sev3!r}."
+    )
+
+    # +inf z with strong effect → high (Phase 3.3 mirror escape).
+    sev4 = _classify_permutation_severity(
+        float("inf"),
+        delta_auc=0.15,
+        delta_auc_floor=MODEL_EVAL_ABLATION_DELTA_AUC_FLOOR_DEFAULT,
+    )
+    assert sev4 == "high", (
+        f"+inf z with strong effect (|delta_AUC|=0.15 > 0.10) should escalate "
+        f"to high (degenerate-null escape). Got severity={sev4!r}."
+    )
+
+    # +inf z without strong effect → info (weak deterministic signal).
+    sev5 = _classify_permutation_severity(
+        float("inf"),
+        delta_auc=0.03,
+        delta_auc_floor=MODEL_EVAL_ABLATION_DELTA_AUC_FLOOR_DEFAULT,
+    )
+    assert sev5 == "info", (
+        f"+inf z without strong effect (|delta_AUC|=0.03 < 0.10) should "
+        f"clamp to info. Got severity={sev5!r}."
+    )
+
+    # Moderate band still works: z=4.0, delta=0.15 → moderate.
+    sev6 = _classify_permutation_severity(
+        4.0,
+        delta_auc=0.15,
+        delta_auc_floor=MODEL_EVAL_ABLATION_DELTA_AUC_FLOOR_DEFAULT,
+    )
+    assert sev6 == "moderate", (
+        f"Moderate-band z + strong delta should escalate to moderate. "
+        f"Got severity={sev6!r}."
+    )
+
+    # Moderate band gets clamped by joint check: z=4.0, delta=0.05 → info.
+    sev7 = _classify_permutation_severity(
+        4.0,
+        delta_auc=0.05,
+        delta_auc_floor=MODEL_EVAL_ABLATION_DELTA_AUC_FLOOR_DEFAULT,
+    )
+    assert sev7 == "info", (
+        f"Moderate-band z with weak delta should clamp to info. "
+        f"Got severity={sev7!r}."
+    )
+
+
+@pytest.mark.integration
 def test_phase34_severity_classifier_mirrors_phase33() -> None:
     """COMPOSITION pin: severity rule is byte-identical to Phase 3.3.
 
