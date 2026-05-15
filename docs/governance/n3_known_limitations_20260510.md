@@ -15,6 +15,64 @@ ownership before they can be closed.
 
 ---
 
+## 2026-05-14 update — issue #226 (H1+H4 bridge code)
+
+The PR closing the **issue #226 bridge** (the operator-required follow-up
+spawned from #192) lands all CODE-SIDE infrastructure for H1 (registry-
+pinned GPG keyring) AND H4 (CoI body signature verification). Both items
+flip from ACCEPTED-RISK to **PARTIALLY RESOLVED** with explicit operator
+residual scope (3 items).
+
+**What landed (code-side, this PR)**:
+
+* `scripts/check_methodology_signoff.py` — `ReviewerInfo.fingerprint`
+  field + `_normalize_fingerprint`; new `check_keyring_present` (H1)
+  and `check_coi_body_signature_verifies` (H4) checks; new
+  `--strict-gpg` CLI flag + `STRICT_GPG=1` env var + `_resolve_strict_gpg`
+  helper; new exit code `4` reserved for STRICT_GPG keyring/CoI-sig gaps;
+  schema migration: registry parser now requires the 8-column
+  (`...status, fingerprint`) schema.
+* `.github/workflows/methodology-signoff-validator.yml` — new
+  "Provision GPG keyring" step imports the secret-encoded ASCII-armor
+  bundle from the `GPG_REVIEWER_KEYS_ARMOR_BASE64` repo secret into a
+  per-job `$KEYRING_DIR`; `--keyring-dir` is wired into the validator
+  invocation conditionally; STRICT_GPG=1 default → exit 4 when secret
+  missing; secret routed through `env:` (defense-in-depth, mirrors PR
+  #225 HIGH-2 fix).
+* `.github/workflows/methodology_signoff_guard.yml` — caller now passes
+  `strict_gpg: '1'` and `secrets: inherit`.
+* `docs/governance/methodology_reviewer_registry.md` — added
+  `fingerprint` column; existing rows carry `<TBD — populated by operator>`
+  placeholders.
+* `docs/governance/operator_gpg_keyring_setup.md` — NEW operator
+  handoff doc: pubkey collection, base64-encoding, secret upload,
+  fingerprint pinning, end-to-end verification.
+
+**Architecture decision: secret-encoded ASCII-armor bundle**. Chose this
+over (a) pre-baked runner image (adds image-build pipeline; per-runner
+trust state); (b) cross-account KMS / Vault (overkill for repo-scoped
+reviewer set; introduces external trust dependency); (c) Actions cache
+(eviction risk for security-critical material). Trade-off: secrets-store
+dependency for key distribution. Mitigation: GitHub repo secrets are
+encrypted at rest + access-logged; rotation = re-encode + re-push the
+secret. The `STRICT_GPG` toggle mirrors `STRICT_GH`'s back-compat path
+so local-dev and dev-context CI runs preserve advisory mode.
+
+**Operator residual scope** (3 items — closes both #192 and #226):
+
+1. Generate reviewer GPG keypairs per
+   `methodology_reviewer_registry.md` (one-time, offline).
+2. Concatenate ASCII-armor exports → base64-encode → upload as repo
+   secret `GPG_REVIEWER_KEYS_ARMOR_BASE64` (single secret, all keys).
+3. Populate `fingerprint` column in
+   `methodology_reviewer_registry.md` with the 40-char hex fingerprint
+   for each row whose status is `active`.
+
+Estimated operator effort: 1–2 hours (mostly pubkey-collection
+coordination).
+
+---
+
 ## 2026-05-14 update — issue #192 closure
 
 PR closing issue #192 (the `v4-N3-signature-infra` backlog item) split
@@ -25,8 +83,10 @@ the four PARTIAL findings into:
   split — **PARTIALLY RESOLVED**, see codex pass-1 HIGH-1 honesty
   correction below).
 * **OPERATOR-REQUIRED** (risk-accepted in this PR; tracked as a follow-up
-  issue): H1 (registry-pinned GPG keyring on CI runners) and H4 (CoI body
-  signature verification, blocked on H1's keyring infra).
+  issue #226 — **CODE-SIDE NOW LANDED 2026-05-14 via #226 bridge PR**;
+  operator action remains residual): H1 (registry-pinned GPG keyring on
+  CI runners) and H4 (CoI body signature verification, blocked on H1's
+  keyring infra).
 
 **H3 honesty correction (codex pass-1 HIGH-1).** Initial framing claimed
 H3 was fully RESOLVED by the reusable-workflow split. Codex review
@@ -59,7 +119,7 @@ inline in each section header below.
 
 ---
 
-## 1. Registry-pinned GPG keyring on CI runners (H1 PARTIAL → ACCEPTED-RISK 2026-05-14)
+## 1. Registry-pinned GPG keyring on CI runners (H1 PARTIAL → PARTIALLY RESOLVED 2026-05-14, issue #226)
 
 **Limitation.** The `--require-signature` path of `check_methodology_signoff.py`
 invokes `gpg --verify` against the system keyring (or the `--keyring-dir`
@@ -85,30 +145,48 @@ require a fingerprint match. Until that column exists AND the runner ships
 with the pinned keyring (e.g. `gpg --import` from a SHA-pinned manifest
 during job setup), `--require-signature` is best-effort.
 
-**Mitigation status (2026-05-14).** ACCEPTED-RISK pending operator action.
-Issue #192 closure landed the code-doable mitigations (H2/M1 + H3) but
-GPG keyring provisioning on CI runners requires per-runner state outside
-declarative CI scope. Tracked as a follow-up sub-issue (linked from
-#192) for the infra team.
+**Mitigation status (2026-05-14, issue #226).** PARTIALLY RESOLVED via
+the issue #226 bridge PR. CODE-SIDE infrastructure complete:
 
-**Risk owner.** OWNER: TBD — infra/security team (the follow-up
-sub-issue spawned from #192's merge is the forcing function for owner
-assignment; the sub-issue's first action is to assign a named GitHub
-user/team and a target review date). Codex pass-1 MED-3 (2026-05-14)
-correctly flagged that placeholder ownership is weak for a security
-risk-acceptance; the mitigation chosen here is to make sub-issue
-creation a hard precondition for #192 closure (PR comment on #192 will
-link the sub-issue URL) AND to require the sub-issue to name an owner
-within 14 days of creation. If no owner is named within 14 days, the
-sub-issue is escalated to the security team's incident channel.
+* `scripts/check_methodology_signoff.py` ships `check_keyring_present`
+  + `--strict-gpg` flag + exit code 4 reservation.
+* `.github/workflows/methodology-signoff-validator.yml` ships the
+  "Provision GPG keyring" step that imports
+  `secrets.GPG_REVIEWER_KEYS_ARMOR_BASE64` (env-routed, defense-in-depth)
+  into a per-job `$KEYRING_DIR` and passes `--keyring-dir` to the
+  validator. STRICT_GPG=1 is the workflow default; missing secret →
+  step exits 4.
+* `docs/governance/methodology_reviewer_registry.md` ships the
+  `fingerprint` column with operator-fillable placeholders.
+* `docs/governance/operator_gpg_keyring_setup.md` ships the operator
+  handoff workflow.
 
-**Revisit trigger.** When the standard CI runner image standardizes on a
-GPG keyring strategy (Actions cache + `gpg --homedir` binding OR pre-baked
-runner image), reopen this item and wire the validator's
-`--keyring-dir` flag to that location.
+**Operator residual** (closes this item to fully RESOLVED):
+
+1. Generate per-reviewer GPG keypairs (one-time, offline).
+2. Concatenate ASCII-armor exports → `base64 -w0` → `gh secret set
+   GPG_REVIEWER_KEYS_ARMOR_BASE64`.
+3. Populate `fingerprint` column in
+   `methodology_reviewer_registry.md` with the 40-char hex fingerprints.
+
+See `docs/governance/operator_gpg_keyring_setup.md` for end-to-end
+walkthrough.
+
+**Risk owner.** OWNER: TBD — infra/security team. The sub-issue #226
+remains OPEN until operator scope (3 items above) lands. Codex pass-1
+MED-3 (2026-05-14, issue #192) correctly flagged that placeholder
+ownership is weak for a security risk-acceptance; the mitigation
+chosen here is to make sub-issue creation a hard precondition for
+issue #192 closure AND to require the sub-issue to name an owner
+within 14 days. If no owner is named, the sub-issue escalates to the
+security team's incident channel.
+
+**Revisit trigger.** When the operator action lands, flip status from
+PARTIALLY RESOLVED → RESOLVED, close #226 (which auto-closes #192 if
+last open child).
 
 **Backlog reference.** `v4-N3-signature-infra` (registry-pinned keyring) →
-follow-up sub-issue spawned by issue #192 closure.
+issue #226 (CODE-SIDE landed; operator action remaining).
 
 ---
 
@@ -272,7 +350,7 @@ migration tracked separately under the same backlog entry, blocked on
 
 ---
 
-## 4. CoI declaration signature verification (H4 PARTIAL → ACCEPTED-RISK 2026-05-14)
+## 4. CoI declaration signature verification (H4 PARTIAL → PARTIALLY RESOLVED 2026-05-14, issue #226)
 
 **Limitation.** The CoI declaration referenced from the sign-off
 artifact's `## Conflict-of-interest declaration` section is checked for:
@@ -295,24 +373,50 @@ verifiable against the registry-pinned keyring (item 1) — at which point
 the `coi-self-declared` JSON array is bound to a specific reviewer
 identity at a specific commit time.
 
-**Mitigation status (2026-05-14).** ACCEPTED-RISK pending operator
-action. Same blocker as item 1: requires the registry-pinned keyring
-infra. Closing item 1 (the follow-up sub-issue) unblocks this item, at
-which point the validator can be extended to invoke `gpg --verify` on the
-CoI body using the same keyring.
+**Mitigation status (2026-05-14, issue #226).** PARTIALLY RESOLVED via
+the issue #226 bridge PR. CODE-SIDE infrastructure complete:
 
-**Risk owner.** OWNER: TBD — same forcing-function as item 1 (the
-follow-up sub-issue spawned from #192's merge is the assignment vehicle;
-14-day owner-name deadline + escalation to security team's incident
-channel applies symmetrically here).
+* `scripts/check_methodology_signoff.py` ships
+  `check_coi_body_signature_verifies` which discovers either an inline
+  ASCII-armor block in the CoI body OR a sibling `<coi>.asc` detached
+  signature, then invokes `gpg --homedir $KEYRING_DIR --verify`.
+  Advisory pass (with `signature_check_skipped=True`) when no signature
+  is found; STRICT_GPG=1 escalates to exit code 4. The
+  CoI-body verification activates as soon as the keyring secret (item
+  1 above) is provisioned AND a CoI declaration carries a signature.
+* The reusable workflow's `--keyring-dir` wiring covers BOTH the
+  sign-off doc verification (already in place pre-#226) AND the new
+  CoI body verification.
+* The new test suite (`tests/unit/test_governance/`)
+  exercises 5+ paths: inline-armor pass, sibling-asc pass, tampered
+  body fail, missing path fail, and advisory-pass-with-skip-flag.
 
-**Revisit trigger.** When item 1 (registry-pinned keyring) closes —
-verify CoI body signature using the same keyring; update the validator's
-`check_coi_referenced` (or add a sibling `check_coi_signature_verifies`)
-to invoke `gpg --verify` on the CoI markdown body.
+**Operator residual.** Same as item 1 (operator generates pubkeys +
+sets the secret). Once that lands, reviewers begin signing their CoI
+declarations using either workflow:
+
+* **Inline armor** (operator-friendly default):
+  ```
+  gpg --detach-sign --armor --output /tmp/coi.asc <coi.md>
+  cat <coi.md> /tmp/coi.asc > <coi.md.signed>
+  mv <coi.md.signed> <coi.md>
+  ```
+* **Sibling .asc** (git-attestation-style):
+  ```
+  gpg --detach-sign --armor --output <coi.md.asc> <coi.md>
+  ```
+
+**Risk owner.** OWNER: TBD — same forcing-function as item 1 (issue
+#226).
+
+**Revisit trigger.** When item 1 (registry-pinned keyring) closes
+fully (operator action complete), verify a CoI body signature using
+the production keyring on a real PR; flip status from PARTIALLY
+RESOLVED → RESOLVED.
 
 **Backlog reference.** `v4-N3-signature-infra` (CoI signature verify) →
-same follow-up sub-issue as item 1.
+issue #226 (CODE-SIDE landed; operator action remaining — same
+sub-issue as item 1).
 
 ---
 
@@ -320,14 +424,14 @@ same follow-up sub-issue as item 1.
 
 | Item | Mitigation today | Mitigation status |
 | --- | --- | --- |
-| Registry-pinned keyring (H1) | `--require-signature` invokes gpg | ACCEPTED-RISK 2026-05-14 (operator follow-up) |
+| Registry-pinned keyring (H1) | `--require-signature` invokes gpg with `--keyring-dir` from CI-imported `GPG_REVIEWER_KEYS_ARMOR_BASE64` secret; `--strict-gpg` exit 4 on missing keyring; new `check_keyring_present` + `fingerprint` registry column | PARTIALLY RESOLVED 2026-05-14 (issue #226 — code-side complete; operator action remaining: provision secret + populate fingerprint column) |
 | gh PR/review enforcement (H2 / M1) | `--strict-gh` + GH_TOKEN provisioned | RESOLVED 2026-05-14 |
 | Protected-base-ref reusable workflow (H3) | Reusable workflow checks out `main` for validator script (workflow YAML pinning still PR-controlled) | PARTIALLY RESOLVED 2026-05-14 (validator script pinned; workflow YAML pinning deferred to cross-repo migration) |
-| CoI signature verify (H4) | First-add SHA + filename match | ACCEPTED-RISK 2026-05-14 (blocked on H1) |
+| CoI signature verify (H4) | New `check_coi_body_signature_verifies` invokes `gpg --verify` on inline armor OR sibling `<coi>.asc`; `--strict-gpg` exit 4 on missing CoI sig under STRICT_GPG=1 | PARTIALLY RESOLVED 2026-05-14 (issue #226 — code-side complete; operator action remaining: same as H1 + reviewer signs CoI declarations) |
 
 H2/M1 closed by issue #192 PR; H3 partially closed (validator script
 sourced from main; full close requires cross-repo SHA-pinned migration).
-H1 + H4 deferred to operator action via the follow-up sub-issue spawned
-from that PR's merge. CODEOWNERS gating on both workflow YAMLs +
-validator script remains REQUIRED operator complement until cross-repo
-migration lands.
+H1 + H4 partially closed by issue #226 PR (code-side complete; operator
+action — secret provisioning + reviewer pubkey gathering — remaining).
+CODEOWNERS gating on both workflow YAMLs + validator script remains
+REQUIRED operator complement until cross-repo migration lands.

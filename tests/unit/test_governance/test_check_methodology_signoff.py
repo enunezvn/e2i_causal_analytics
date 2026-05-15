@@ -71,11 +71,11 @@ VALID_REGISTRY = """\
 
 Some prose.
 
-| name | email | github_handle | role | date_added | areas_of_expertise | status |
-|---|---|---|---|---|---|---|
-| Alice Eligible | alice@example.com | alice | clinician | 2026-05-10 | methodology | active |
-| Bob Conflicted | bob@example.com | bob | biostat | 2026-05-10 | methodology | active |
-| Carol Inactive | carol@example.com | carol | advisor | 2026-05-10 | methodology | inactive |
+| name | email | github_handle | role | date_added | areas_of_expertise | status | fingerprint |
+|---|---|---|---|---|---|---|---|
+| Alice Eligible | alice@example.com | alice | clinician | 2026-05-10 | methodology | active | `<TBD>` |
+| Bob Conflicted | bob@example.com | bob | biostat | 2026-05-10 | methodology | active | `<TBD>` |
+| Carol Inactive | carol@example.com | carol | advisor | 2026-05-10 | methodology | inactive | `<TBD>` |
 """
 
 
@@ -1127,10 +1127,10 @@ def test_parse_registry_supports_email_aliases(tmp_path: Path):
     registry_text = (
         "# Reviewers\n\n"
         "| name | email | github_handle | role | date_added | "
-        "areas_of_expertise | status |\n"
-        "|---|---|---|---|---|---|---|\n"
+        "areas_of_expertise | status | fingerprint |\n"
+        "|---|---|---|---|---|---|---|---|\n"
         "| Alice | alice@example.com, alice@oldjob.com | alice | "
-        "clinician | 2026-05-10 | methodology | active |\n"
+        "clinician | 2026-05-10 | methodology | active | `<TBD>` |\n"
     )
     reg = tmp_path / "registry.md"
     reg.write_text(registry_text, encoding="utf-8")
@@ -1262,10 +1262,10 @@ def test_selection_rule_catches_alias_commit(tmp_path: Path):
     registry_text = (
         "# Reviewers\n\n"
         "| name | email | github_handle | role | date_added | "
-        "areas_of_expertise | status |\n"
-        "|---|---|---|---|---|---|---|\n"
+        "areas_of_expertise | status | fingerprint |\n"
+        "|---|---|---|---|---|---|---|---|\n"
         "| Alice | alice@example.com; alice@oldjob.com | alice | "
-        "clinician | 2026-05-10 | methodology | active |\n"
+        "clinician | 2026-05-10 | methodology | active | `<TBD>` |\n"
     )
     (repo / "docs" / "governance" / "methodology_reviewer_registry.md").write_text(
         registry_text, encoding="utf-8"
@@ -1941,3 +1941,786 @@ class TestReusableValidatorWorkflow:
         assert "PARTIALLY RESOLVED" in caller_text or "partial" in caller_text.lower(), (
             "HIGH-1: caller workflow header must reflect the partial-close status of H3"
         )
+
+
+# --------------------------------------------------------------------------- #
+# Issue #226 H1+H4 — fingerprint normalization, keyring-presence check,
+# CoI body signature verification, STRICT_GPG resolution, exit code 4.
+# --------------------------------------------------------------------------- #
+
+
+class TestFingerprintNormalization:
+    """``_normalize_fingerprint`` returns a canonical 40-char uppercase hex
+    string OR the empty string for placeholders / unparseable input.
+
+    Issue #226 H1: registry rows can land with operator-fillable
+    placeholders (`<TBD ...>`); those parse to "" so the keyring check
+    downstream knows the row hasn't been operator-populated yet. Real
+    fingerprints round-trip through the normalizer regardless of
+    surrounding markdown emphasis, internal whitespace, or 0x prefix.
+    """
+
+    def test_empty_input_returns_empty(self):
+        assert cms._normalize_fingerprint("") == ""
+
+    def test_whitespace_only_returns_empty(self):
+        assert cms._normalize_fingerprint("   ") == ""
+
+    @pytest.mark.parametrize(
+        "placeholder",
+        [
+            "<TBD>",
+            "<TBD — populated by operator>",
+            "<placeholder>",
+            "<populated by ops>",
+            "TBD operator",
+            "N/A",
+            "none",
+        ],
+    )
+    def test_placeholder_returns_empty(self, placeholder: str):
+        assert cms._normalize_fingerprint(placeholder) == ""
+
+    def test_backticks_are_stripped(self):
+        assert cms._normalize_fingerprint("`<TBD>`") == ""
+        # Backticked real fingerprint still parses.
+        fp = "abcdef0123456789abcdef0123456789abcdef01"
+        assert cms._normalize_fingerprint(f"`{fp}`") == fp.upper()
+
+    def test_real_fingerprint_lowercase_uppercases(self):
+        fp = "abcdef0123456789abcdef0123456789abcdef01"
+        assert cms._normalize_fingerprint(fp) == fp.upper()
+
+    def test_real_fingerprint_with_internal_spaces(self):
+        # Convention: GPG renders with space-every-4-chars + double-
+        # space at the midpoint. Operators sometimes paste verbatim.
+        spaced = "ABCD EF01 2345 6789 ABCD  EF01 2345 6789 ABCD EF01"
+        assert cms._normalize_fingerprint(spaced) == "ABCDEF0123456789ABCDEF0123456789ABCDEF01"
+
+    def test_real_fingerprint_with_0x_prefix(self):
+        assert (
+            cms._normalize_fingerprint("0xABCDEF0123456789ABCDEF0123456789ABCDEF01")
+            == "ABCDEF0123456789ABCDEF0123456789ABCDEF01"
+        )
+
+    def test_garbage_returns_empty(self):
+        # Not a fingerprint shape — return empty (not raise).
+        assert cms._normalize_fingerprint("not-a-fingerprint") == ""
+        assert cms._normalize_fingerprint("0123") == ""  # too short
+        assert cms._normalize_fingerprint("z" * 40) == ""  # not hex
+
+
+class TestRegistryFingerprintColumn:
+    """Registry parser populates ``ReviewerInfo.fingerprint`` from the 8th cell.
+
+    Issue #226 H1: the registry schema migrated from 7→8 columns. The
+    new column is ``fingerprint`` (after ``status``). Placeholder values
+    parse to ""; real fingerprints round-trip through normalization.
+    """
+
+    def test_placeholder_fingerprint_parses_empty(self, tmp_path: Path):
+        registry_text = (
+            "| name | email | github_handle | role | date_added | "
+            "areas_of_expertise | status | fingerprint |\n"
+            "|---|---|---|---|---|---|---|---|\n"
+            "| A | a@ex.com | a | clinician | 2026-05-10 | methodology | "
+            "active | `<TBD — populated by operator>` |\n"
+        )
+        reg = tmp_path / "r.md"
+        reg.write_text(registry_text, encoding="utf-8")
+        rows = cms.parse_registry(reg)
+        assert len(rows) == 1
+        assert rows[0].fingerprint == ""
+
+    def test_real_fingerprint_parses_canonical(self, tmp_path: Path):
+        fp_spaced = "ABCD EF01 2345 6789 ABCD  EF01 2345 6789 ABCD EF01"
+        registry_text = (
+            "| name | email | github_handle | role | date_added | "
+            "areas_of_expertise | status | fingerprint |\n"
+            "|---|---|---|---|---|---|---|---|\n"
+            "| A | a@ex.com | a | clinician | 2026-05-10 | methodology | "
+            f"active | {fp_spaced} |\n"
+        )
+        reg = tmp_path / "r.md"
+        reg.write_text(registry_text, encoding="utf-8")
+        rows = cms.parse_registry(reg)
+        assert len(rows) == 1
+        assert rows[0].fingerprint == "ABCDEF0123456789ABCDEF0123456789ABCDEF01"
+
+    def test_legacy_7col_registry_rejected(self, tmp_path: Path):
+        """A 7-column registry (no fingerprint) yields zero parsed rows.
+
+        Forcing a header-equality match means operators can't accidentally
+        run the new validator against the old schema; the registry
+        migration must happen in lockstep with the workflow change.
+        """
+
+        registry_text = (
+            "| name | email | github_handle | role | date_added | "
+            "areas_of_expertise | status |\n"
+            "|---|---|---|---|---|---|\n"
+            "| A | a@ex.com | a | clinician | 2026-05-10 | methodology | active |\n"
+        )
+        reg = tmp_path / "r.md"
+        reg.write_text(registry_text, encoding="utf-8")
+        rows = cms.parse_registry(reg)
+        assert rows == [], "legacy 7-col registry must NOT parse against new 8-col schema"
+
+    def test_production_registry_has_fingerprint_column(self):
+        """The shipped registry md uses the 8-col schema."""
+
+        path = PROJECT_ROOT / "docs" / "governance" / "methodology_reviewer_registry.md"
+        text = path.read_text(encoding="utf-8")
+        # Header row must include the fingerprint column.
+        assert "| fingerprint |" in text, (
+            "issue #226 H1: production registry must include fingerprint column"
+        )
+
+    def test_reviewer_info_fingerprint_default_empty(self):
+        """``ReviewerInfo()`` constructed without fingerprint defaults to ''."""
+
+        info = cms.ReviewerInfo(handle="x", email="x@e.com", status="active")
+        assert info.fingerprint == ""
+
+
+class TestKeyringPresentCheck:
+    """``check_keyring_present`` PASSES with WARN when keyring_dir is None;
+    PASSES with key count when populated; FAILS when missing/empty.
+
+    Issue #226 H1.
+    """
+
+    def test_keyring_dir_none_warns(self):
+        result = cms.check_keyring_present(None)
+        assert result.ok is True
+        assert "WARN" in result.detail
+        assert "issue #226" in result.detail
+
+    def test_keyring_dir_missing_fails(self, tmp_path: Path):
+        nonexistent = tmp_path / "nope"
+        result = cms.check_keyring_present(nonexistent)
+        assert result.ok is False
+        assert "missing" in result.detail or "does not exist" in result.detail
+
+    def test_keyring_dir_empty_fails(self, tmp_path: Path):
+        if shutil.which("gpg") is None:
+            pytest.skip("gpg not on PATH")
+        empty = tmp_path / "empty_gpghome"
+        empty.mkdir(mode=0o700)
+        result = cms.check_keyring_present(empty)
+        assert result.ok is False
+        # gpg --list-keys against an empty homedir reports zero keys.
+        assert "zero public keys" in result.detail or "missing" in result.detail
+
+    def test_keyring_dir_with_imported_key_passes(self, gpg_keyring: tuple[Path, str]):
+        home, _ = gpg_keyring
+        result = cms.check_keyring_present(home)
+        assert result.ok is True, f"unexpected fail: {result.detail}"
+        assert "1 public key" in result.detail or "key(s)" in result.detail
+
+
+class TestCoIBodySignatureVerifies:
+    """``check_coi_body_signature_verifies`` honors the H4 contract.
+
+    Issue #226 H4: validates the CoI declaration body (NOT just the
+    sign-off doc) against an inline armor block OR a sibling
+    ``<coi>.asc`` detached signature.
+    """
+
+    def _make_doc_pointing_at_coi(self, coi_path_str: str) -> str:
+        """Minimal sign-off doc text with the CoI document field set."""
+
+        return (
+            "# Sign-off\n"
+            "## Conflict-of-interest declaration\n"
+            f"- **CoI document:** {coi_path_str}\n"
+            f"- **CoI declaration commit SHA:** abc1234567890def\n"
+        )
+
+    def test_missing_coi_path_field_fails(self, tmp_path: Path):
+        doc_text = "# Sign-off (no CoI fields)\n"
+        result = cms.check_coi_body_signature_verifies(
+            doc_text, repo_root=tmp_path, keyring_dir=None
+        )
+        assert result.ok is False
+        assert "missing or placeholder" in result.detail
+
+    def test_placeholder_coi_path_fails(self, tmp_path: Path):
+        doc_text = self._make_doc_pointing_at_coi(
+            "docs/governance/coi_declarations/<github_handle>_<YYYYMMDD>.md"
+        )
+        result = cms.check_coi_body_signature_verifies(
+            doc_text, repo_root=tmp_path, keyring_dir=None
+        )
+        assert result.ok is False
+        assert "placeholder" in result.detail
+
+    def test_coi_path_not_resolvable_fails(self, tmp_path: Path):
+        doc_text = self._make_doc_pointing_at_coi("docs/governance/coi_declarations/nope.md")
+        result = cms.check_coi_body_signature_verifies(
+            doc_text, repo_root=tmp_path, keyring_dir=None
+        )
+        assert result.ok is False
+        assert "not found" in result.detail
+
+    def test_coi_body_no_signature_advisory_pass(self, tmp_path: Path):
+        """No inline armor + no sibling .asc → ADVISORY pass, sig-skip flag set."""
+
+        coi_dir = tmp_path / "docs" / "governance" / "coi_declarations"
+        coi_dir.mkdir(parents=True)
+        coi_path = coi_dir / "alice_20260514.md"
+        coi_path.write_text("# CoI alice\nzero touches\n", encoding="utf-8")
+
+        doc_text = self._make_doc_pointing_at_coi(
+            "docs/governance/coi_declarations/alice_20260514.md"
+        )
+        result = cms.check_coi_body_signature_verifies(
+            doc_text, repo_root=tmp_path, keyring_dir=None
+        )
+        assert result.ok is True
+        assert "WARN" in result.detail
+        assert result.signature_check_skipped is True
+
+    def test_coi_body_inline_signature_verifies(
+        self, tmp_path: Path, gpg_keyring: tuple[Path, str]
+    ):
+        """An inline ASCII-armor signature in the CoI body verifies under keyring."""
+
+        home, _ = gpg_keyring
+        coi_dir = tmp_path / "docs" / "governance" / "coi_declarations"
+        coi_dir.mkdir(parents=True)
+        coi_path = coi_dir / "alice_20260514.md"
+
+        body = "# CoI alice\nzero touches in named period\n"
+
+        # Sign body with the fixture key, then write body + inline armor.
+        import os
+
+        env = os.environ.copy()
+        env["GNUPGHOME"] = str(home)
+        sign = subprocess.run(
+            ["gpg", "--batch", "--detach-sign", "--armor", "--output", "-"],
+            input=body,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        if sign.returncode != 0:
+            pytest.skip(f"gpg --detach-sign failed: {sign.stderr}")
+
+        coi_path.write_text(body + sign.stdout, encoding="utf-8")
+
+        doc_text = self._make_doc_pointing_at_coi(
+            "docs/governance/coi_declarations/alice_20260514.md"
+        )
+        result = cms.check_coi_body_signature_verifies(
+            doc_text, repo_root=tmp_path, keyring_dir=home
+        )
+        assert result.ok is True, f"verify failed: {result.detail}"
+        assert "OK" in result.detail
+        assert result.signature_check_skipped is False
+
+    def test_coi_body_inline_signature_tampered_fails(
+        self, tmp_path: Path, gpg_keyring: tuple[Path, str]
+    ):
+        """Tampered CoI body + valid signature → FAIL with diagnostic."""
+
+        home, _ = gpg_keyring
+        coi_dir = tmp_path / "docs" / "governance" / "coi_declarations"
+        coi_dir.mkdir(parents=True)
+        coi_path = coi_dir / "alice_20260514.md"
+
+        body = "# CoI alice\nzero touches in named period\n"
+        import os
+
+        env = os.environ.copy()
+        env["GNUPGHOME"] = str(home)
+        sign = subprocess.run(
+            ["gpg", "--batch", "--detach-sign", "--armor", "--output", "-"],
+            input=body,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        if sign.returncode != 0:
+            pytest.skip(f"gpg --detach-sign failed: {sign.stderr}")
+
+        # Tamper body BEFORE writing.
+        tampered_body = body.replace("zero", "ONE")
+        coi_path.write_text(tampered_body + sign.stdout, encoding="utf-8")
+
+        doc_text = self._make_doc_pointing_at_coi(
+            "docs/governance/coi_declarations/alice_20260514.md"
+        )
+        result = cms.check_coi_body_signature_verifies(
+            doc_text, repo_root=tmp_path, keyring_dir=home
+        )
+        assert result.ok is False
+        assert "FAILED" in result.detail or "BAD" in result.detail.upper()
+
+    def test_coi_body_sibling_asc_signature_verifies(
+        self, tmp_path: Path, gpg_keyring: tuple[Path, str]
+    ):
+        """A sibling <coi>.asc detached signature verifies."""
+
+        home, _ = gpg_keyring
+        coi_dir = tmp_path / "docs" / "governance" / "coi_declarations"
+        coi_dir.mkdir(parents=True)
+        coi_path = coi_dir / "alice_20260514.md"
+
+        body = "# CoI alice (sibling-asc variant)\nzero touches\n"
+        coi_path.write_text(body, encoding="utf-8")
+
+        # Generate sibling .asc detached signature against the file.
+        import os
+
+        env = os.environ.copy()
+        env["GNUPGHOME"] = str(home)
+        sign = subprocess.run(
+            [
+                "gpg",
+                "--batch",
+                "--detach-sign",
+                "--armor",
+                "--output",
+                str(coi_path) + ".asc",
+                str(coi_path),
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        if sign.returncode != 0:
+            pytest.skip(f"gpg --detach-sign sibling failed: {sign.stderr}")
+
+        doc_text = self._make_doc_pointing_at_coi(
+            "docs/governance/coi_declarations/alice_20260514.md"
+        )
+        result = cms.check_coi_body_signature_verifies(
+            doc_text, repo_root=tmp_path, keyring_dir=home
+        )
+        assert result.ok is True, f"sibling-asc verify failed: {result.detail}"
+        assert "sibling-asc" in result.detail
+
+
+class TestStrictGpgResolution:
+    """``_resolve_strict_gpg`` mirrors ``_resolve_strict_gh`` semantics.
+
+    Issue #226 H1+H4.
+    """
+
+    def test_default_off(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("STRICT_GPG", raising=False)
+        assert cms._resolve_strict_gpg(None) is False
+        assert cms._resolve_strict_gpg(False) is False
+
+    def test_cli_flag_overrides_missing_env(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("STRICT_GPG", raising=False)
+        assert cms._resolve_strict_gpg(True) is True
+
+    @pytest.mark.parametrize("value", ["1", "true", "TRUE", "yes", "on", "On"])
+    def test_env_truthy_values(self, monkeypatch: pytest.MonkeyPatch, value: str):
+        monkeypatch.setenv("STRICT_GPG", value)
+        assert cms._resolve_strict_gpg(None) is True
+
+    @pytest.mark.parametrize("value", ["", "0", "false", "no", "off", "garbage"])
+    def test_env_falsy_values(self, monkeypatch: pytest.MonkeyPatch, value: str):
+        monkeypatch.setenv("STRICT_GPG", value)
+        assert cms._resolve_strict_gpg(None) is False
+
+    def test_cli_flag_true_wins_over_env_falsy(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("STRICT_GPG", "0")
+        assert cms._resolve_strict_gpg(True) is True
+
+
+class TestStrictGpgMainExitCode:
+    """``main()`` returns exit 4 when STRICT_GPG is set AND signature was skipped.
+
+    Issue #226 H1+H4: load-bearing wiring that escalates the H4 advisory
+    warning to a fail-closed CI block. Tests both the strict fail path
+    (exit 4) and the back-compat warn path (exit 0).
+
+    Tests follow the same monkeypatch-check_signoff pattern as
+    ``TestStrictGhMainExitCode`` so the exit-code logic is isolated from
+    upstream concerns.
+    """
+
+    @staticmethod
+    def _make_results(
+        all_pass: bool = True,
+        signature_skipped: bool = False,
+    ) -> list:
+        results = [
+            cms.CheckResult("filename", True, "ok"),
+            cms.CheckResult("signoff_age", True, "ok"),
+            cms.CheckResult("required_sections", True, "ok"),
+            cms.CheckResult("signature_present", True, "ok"),
+            cms.CheckResult("coi_referenced", True, "ok"),
+            cms.CheckResult("registry_loaded", True, "ok"),
+            cms.CheckResult("reviewer_registered", True, "ok"),
+            cms.CheckResult("selection_rule", all_pass, "ok"),
+            cms.CheckResult("signature_verifies", True, "ok"),
+            cms.CheckResult("keyring_present", True, "ok"),
+            cms.CheckResult(
+                "coi_body_signature_verifies",
+                True,
+                "WARN: no CoI body signature found" if signature_skipped else "ok",
+                signature_check_skipped=signature_skipped,
+            ),
+        ]
+        return results
+
+    def _patch_check_signoff(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        all_pass: bool = True,
+        signature_skipped: bool = False,
+    ) -> None:
+        results = self._make_results(all_pass=all_pass, signature_skipped=signature_skipped)
+
+        def fake_check_signoff(*args, **kwargs):  # noqa: ANN001 ANN002 ANN003
+            return results
+
+        monkeypatch.setattr(cms, "check_signoff", fake_check_signoff)
+
+    @staticmethod
+    def _make_doc_path(tmp_path: Path) -> Path:
+        path = tmp_path / "optum_methodology_signoff_20260520.md"
+        path.write_text("# placeholder\n", encoding="utf-8")
+        return path
+
+    def test_strict_gpg_fail_when_sig_skipped(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ):
+        """STRICT_GPG=1 + signature_check_skipped=True → exit 4 + clear message."""
+
+        self._patch_check_signoff(monkeypatch, signature_skipped=True)
+        monkeypatch.setenv("STRICT_GPG", "1")
+        # Ensure STRICT_GH is not set so we don't hit exit 3 by accident.
+        monkeypatch.delenv("STRICT_GH", raising=False)
+        doc = self._make_doc_path(tmp_path)
+        rc = cms.main([str(doc), "--repo-root", str(tmp_path)])
+        captured = capsys.readouterr()
+        assert rc == 4, (
+            f"expected exit 4 (strict-gpg policy violation), got {rc}. Captured: {captured}"
+        )
+        combined = captured.out + captured.err
+        assert "FAIL" in combined
+        assert "--strict-gpg" in combined or "STRICT_GPG=1" in combined
+        assert "coi_body_signature_verifies" in combined
+
+    def test_default_warn_when_sig_skipped(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ):
+        """No STRICT_GPG + signature_skipped=True → exit 0 (advisory back-compat)."""
+
+        self._patch_check_signoff(monkeypatch, signature_skipped=True)
+        monkeypatch.delenv("STRICT_GPG", raising=False)
+        monkeypatch.delenv("STRICT_GH", raising=False)
+        doc = self._make_doc_path(tmp_path)
+        rc = cms.main([str(doc), "--repo-root", str(tmp_path)])
+        captured = capsys.readouterr()
+        assert rc == 0, f"expected exit 0 (advisory back-compat), got {rc}. Captured: {captured}"
+        # The WARN message should still surface in the report.
+        combined = captured.out + captured.err
+        assert "WARN" in combined
+
+    def test_strict_gpg_cli_flag_overrides_missing_env(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """``--strict-gpg`` on its own (no env var) also escalates to exit 4."""
+
+        self._patch_check_signoff(monkeypatch, signature_skipped=True)
+        monkeypatch.delenv("STRICT_GPG", raising=False)
+        monkeypatch.delenv("STRICT_GH", raising=False)
+        doc = self._make_doc_path(tmp_path)
+        rc = cms.main([str(doc), "--repo-root", str(tmp_path), "--strict-gpg"])
+        assert rc == 4, f"expected exit 4 (CLI --strict-gpg), got {rc}"
+
+    def test_validation_failure_takes_precedence_over_strict_gpg(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Exit 1 (generic validation fail) wins over exit 4 (strict-gpg)."""
+
+        self._patch_check_signoff(monkeypatch, all_pass=False, signature_skipped=True)
+        monkeypatch.setenv("STRICT_GPG", "1")
+        monkeypatch.delenv("STRICT_GH", raising=False)
+        doc = self._make_doc_path(tmp_path)
+        rc = cms.main([str(doc), "--repo-root", str(tmp_path)])
+        assert rc == 1, f"expected exit 1 (generic validation precedence), got {rc}"
+
+    def test_strict_gh_takes_precedence_over_strict_gpg(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Exit 3 (strict-gh) wins over exit 4 (strict-gpg).
+
+        Pin: when both strict modes would trigger, the gh-provenance gap
+        (rc=3) is reported first because main() evaluates the
+        ``provenance_check_skipped`` gate before the
+        ``signature_check_skipped`` gate. This keeps the exit-code
+        priority deterministic for log scrapers.
+        """
+
+        # Build a results list with BOTH skip flags set. Use a custom
+        # patcher because the helper only handles signature_skipped.
+        results = [
+            cms.CheckResult("filename", True, "ok"),
+            cms.CheckResult(
+                "selection_rule",
+                True,
+                "ok",
+                provenance_check_skipped=True,
+            ),
+            cms.CheckResult(
+                "coi_body_signature_verifies",
+                True,
+                "WARN",
+                signature_check_skipped=True,
+            ),
+        ]
+
+        def fake_check_signoff(*args, **kwargs):  # noqa: ANN001 ANN002 ANN003
+            return results
+
+        monkeypatch.setattr(cms, "check_signoff", fake_check_signoff)
+        monkeypatch.setenv("STRICT_GH", "1")
+        monkeypatch.setenv("STRICT_GPG", "1")
+        doc = self._make_doc_path(tmp_path)
+        rc = cms.main([str(doc), "--repo-root", str(tmp_path)])
+        assert rc == 3, (
+            f"expected exit 3 (strict-gh wins over strict-gpg by source-order), got {rc}"
+        )
+
+    def test_strict_gpg_pass_when_no_sig_skip(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """STRICT_GPG=1 + all checks pass + no sig skip → exit 0.
+
+        Pin: strict-gpg doesn't false-positive when the keyring + CoI
+        sigs are present and verifying.
+        """
+
+        self._patch_check_signoff(monkeypatch, signature_skipped=False)
+        monkeypatch.setenv("STRICT_GPG", "1")
+        monkeypatch.delenv("STRICT_GH", raising=False)
+        doc = self._make_doc_path(tmp_path)
+        rc = cms.main([str(doc), "--repo-root", str(tmp_path)])
+        assert rc == 0, f"expected exit 0 (strict-gpg satisfied), got {rc}"
+
+
+# --------------------------------------------------------------------------- #
+# Issue #226 H1+H4 — workflow YAML pins for the keyring-import step.
+# --------------------------------------------------------------------------- #
+
+
+class TestKeyringImportWorkflow:
+    """The reusable workflow must:
+
+    1. Declare a ``strict_gpg`` workflow_call input.
+    2. Have a "Provision GPG keyring" step BEFORE the validator step
+       that imports from the GPG_REVIEWER_KEYS_ARMOR_BASE64 secret via
+       env (NOT direct interpolation — same shell-injection lesson as
+       PR #225 HIGH-2).
+    3. Pass --keyring-dir to the validator only when KEYRING_DIR is
+       set (no empty --keyring-dir "" arg).
+    4. Reserve workflow exit code 4 for keyring-missing-under-strict.
+
+    The caller workflow must:
+
+    5. Pass strict_gpg: '1' to the reusable workflow.
+    6. Use ``secrets: inherit`` so the reusable workflow can see the
+       GPG_REVIEWER_KEYS_ARMOR_BASE64 secret.
+    """
+
+    REUSABLE_PATH = PROJECT_ROOT / ".github" / "workflows" / "methodology-signoff-validator.yml"
+    CALLER_PATH = PROJECT_ROOT / ".github" / "workflows" / "methodology_signoff_guard.yml"
+
+    def _parse(self, path: Path):
+        yaml = pytest.importorskip("yaml")
+        return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+    def test_reusable_declares_strict_gpg_input(self):
+        parsed = self._parse(self.REUSABLE_PATH)
+        on_block = parsed.get("on") or parsed.get(True)
+        inputs = on_block["workflow_call"]["inputs"]
+        assert "strict_gpg" in inputs, "issue #226 H1+H4: reusable must declare strict_gpg input"
+        # Default must be '1' so production CI hits fail-closed.
+        assert inputs["strict_gpg"].get("default") == "1"
+
+    def test_reusable_has_keyring_import_step(self):
+        parsed = self._parse(self.REUSABLE_PATH)
+        steps = parsed["jobs"]["validate"]["steps"]
+        keyring_step = next(
+            (s for s in steps if isinstance(s.get("name"), str) and "GPG keyring" in s["name"]),
+            None,
+        )
+        assert keyring_step is not None, (
+            "issue #226 H1+H4: reusable workflow must have a 'Provision GPG keyring' step"
+        )
+
+    def test_keyring_secret_routed_through_env(self):
+        """Secret must be exposed via env: not direct ${{ secrets.X }} interp.
+
+        Mirrors PR #225 HIGH-2 (TOUCHED_FILES) — secret-store values
+        passed through ``env:`` are bash-data; direct interpolation is
+        a shell-injection sink even for secret values (a malicious
+        actor with secret-write access could craft a payload).
+        """
+
+        text = self.REUSABLE_PATH.read_text(encoding="utf-8")
+        # Positive: must define an env var carrying the secret.
+        assert (
+            "GPG_REVIEWER_KEYS_ARMOR_BASE64: ${{ secrets.GPG_REVIEWER_KEYS_ARMOR_BASE64 }}" in text
+        ), "issue #226 H1: secret must be routed through env:"
+        # Negative: must NOT directly interpolate the secret into a run block.
+        # Use the same scan as test_no_direct_input_interpolation_in_run_blocks.
+        parsed = self._parse(self.REUSABLE_PATH)
+        offenders: list[tuple[str, str]] = []
+        for job_name, job in parsed.get("jobs", {}).items():
+            for step in job.get("steps", []):
+                run_block = step.get("run")
+                if not isinstance(run_block, str):
+                    continue
+                step_name = step.get("name", "<unnamed>")
+                if "${{ secrets." in run_block:
+                    offenders.append((f"{job_name}::{step_name}", run_block[:200]))
+        assert not offenders, (
+            "issue #226 H1: ${{ secrets.X }} interpolation inside run: "
+            "blocks is a shell-injection sink. Route through env:. "
+            "Offenders:\n" + "\n".join(f"  {n}: {body!r}" for n, body in offenders)
+        )
+
+    def test_keyring_import_step_runs_before_validator(self):
+        """Step-order pin: keyring must be provisioned BEFORE the validator.
+
+        Without this ordering the validator's --keyring-dir would point
+        at an empty/missing dir on first invocation.
+        """
+
+        parsed = self._parse(self.REUSABLE_PATH)
+        steps = parsed["jobs"]["validate"]["steps"]
+        keyring_idx = None
+        validator_idx = None
+        for idx, step in enumerate(steps):
+            name = step.get("name") or ""
+            if "GPG keyring" in name:
+                keyring_idx = idx
+            if "Run validator" in name:
+                validator_idx = idx
+        assert keyring_idx is not None, "keyring step missing"
+        assert validator_idx is not None, "validator step missing"
+        assert keyring_idx < validator_idx, (
+            f"keyring step (idx={keyring_idx}) must precede validator step (idx={validator_idx})"
+        )
+
+    def test_validator_exit_code_4_reserved(self):
+        """Workflow must propagate validator exit 4 with explicit precedence."""
+
+        text = self.REUSABLE_PATH.read_text(encoding="utf-8")
+        # Positive: STATUS=4 branch must be present in the priority logic.
+        assert "STATUS=4" in text, "issue #226 H1+H4: workflow must propagate validator exit 4"
+        # The keyring-import step must also reserve exit 4 for the
+        # missing-secret-under-strict path.
+        assert "exit 4" in text, "keyring-import step must `exit 4` under STRICT_GPG=1"
+
+    def test_validator_invocation_passes_keyring_dir_when_set(self):
+        """The validator command line must include --keyring-dir conditionally."""
+
+        text = self.REUSABLE_PATH.read_text(encoding="utf-8")
+        # The exact array-construction pattern. The conditional is what
+        # protects against passing --keyring-dir "" (which gpg would
+        # interpret as cwd-relative).
+        assert "--keyring-dir" in text
+        assert 'if [ -n "${KEYRING_DIR:-}"' in text, (
+            "issue #226: validator invocation must guard --keyring-dir on KEYRING_DIR being set"
+        )
+
+    def test_reusable_step_passes_strict_gpg_env(self):
+        text = self.REUSABLE_PATH.read_text(encoding="utf-8")
+        assert "STRICT_GPG: ${{ inputs.strict_gpg }}" in text, (
+            "issue #226: reusable workflow must export STRICT_GPG to validator"
+        )
+
+    def test_caller_passes_strict_gpg_one(self):
+        text = self.CALLER_PATH.read_text(encoding="utf-8")
+        assert "strict_gpg: '1'" in text, "issue #226: caller must pass strict_gpg: '1'"
+
+    def test_caller_uses_secrets_inherit(self):
+        """``secrets: inherit`` is required for the reusable workflow to see secrets."""
+
+        text = self.CALLER_PATH.read_text(encoding="utf-8")
+        assert "secrets: inherit" in text, (
+            "issue #226 H1: caller must use `secrets: inherit` so the reusable "
+            "workflow can read GPG_REVIEWER_KEYS_ARMOR_BASE64"
+        )
+
+    def test_workflow_documents_secret_name(self):
+        text = self.REUSABLE_PATH.read_text(encoding="utf-8")
+        assert "GPG_REVIEWER_KEYS_ARMOR_BASE64" in text, (
+            "issue #226: reusable workflow must document the secret name"
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Issue #226 H1+H4 — n3_known_limitations + operator handoff doc pins.
+# --------------------------------------------------------------------------- #
+
+
+class TestN3LimitationsAndOperatorDoc:
+    """The known-limitations doc and the new operator handoff doc must reflect
+    the issue #226 partial-resolved state.
+    """
+
+    N3_DOC = PROJECT_ROOT / "docs" / "governance" / "n3_known_limitations_20260510.md"
+    OPERATOR_DOC = PROJECT_ROOT / "docs" / "governance" / "operator_gpg_keyring_setup.md"
+
+    def test_n3_doc_marks_h1_partially_resolved(self):
+        text = self.N3_DOC.read_text(encoding="utf-8")
+        # H1 (item 1) must reflect issue #226 partial resolution.
+        # Look for both "H1" anchor AND the PARTIALLY RESOLVED marker
+        # in proximity. Since PARTIALLY RESOLVED is ALSO used for H3,
+        # we require a line that mentions issue #226.
+        assert "issue #226" in text, "n3 doc must reference issue #226"
+        # H1 section header should be updated (was "H1 PARTIAL → ACCEPTED-RISK").
+        assert "H1 PARTIAL → PARTIALLY RESOLVED" in text or (
+            "H1 PARTIAL → ACCEPTED-RISK" not in text and "H1" in text
+        ), "n3 doc must update H1 status from ACCEPTED-RISK to PARTIALLY RESOLVED"
+
+    def test_n3_doc_marks_h4_partially_resolved(self):
+        text = self.N3_DOC.read_text(encoding="utf-8")
+        # H4 (item 4) must similarly flip.
+        assert "H4 PARTIAL → PARTIALLY RESOLVED" in text or (
+            "H4 PARTIAL → ACCEPTED-RISK" not in text and "H4" in text
+        ), "n3 doc must update H4 status from ACCEPTED-RISK to PARTIALLY RESOLVED"
+
+    def test_operator_doc_exists(self):
+        assert self.OPERATOR_DOC.is_file(), (
+            f"issue #226: operator handoff doc must exist at {self.OPERATOR_DOC}"
+        )
+
+    def test_operator_doc_covers_required_steps(self):
+        text = self.OPERATOR_DOC.read_text(encoding="utf-8")
+        # Required content (loose pins so doc can rephrase but must
+        # cover the same operational ground):
+        for marker in (
+            "GPG_REVIEWER_KEYS_ARMOR_BASE64",
+            "fingerprint",
+            "STRICT_GPG",
+            "base64",
+        ):
+            assert marker in text, f"issue #226: operator handoff doc must cover '{marker}'"

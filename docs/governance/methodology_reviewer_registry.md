@@ -1,7 +1,7 @@
 # Methodology Reviewer Registry
 
-**Version:** 1.0
-**Last updated:** 2026-05-10
+**Version:** 1.1 (issue #226: added `fingerprint` column 2026-05-14)
+**Last updated:** 2026-05-14
 **Owner:** E2I Causal Analytics governance
 **Source of truth for:** Tier 1A methodology sign-off (Gate N3 of v4 plan
 `adaptive_disease_agnostic_quality_uplift.md`).
@@ -54,17 +54,31 @@ script on every PR that adds or modifies a file matching
 | `date_added` | ISO-8601 date | Date the row was added to this registry. |
 | `areas_of_expertise` | string | Free-text, comma-separated. Used by humans to choose a reviewer for a given subject. |
 | `status` | string | One of `active`, `inactive`, `recused`. Only `active` rows are eligible. |
+| `fingerprint` | string | **Issue #226 H1:** GPG public-key fingerprint, 40-char hex (no spaces, no `0x` prefix). The validator parses this cell, normalizes it, and at signature-verification time confirms the signing key matches a registered fingerprint. Use the placeholder `<TBD — populated by operator>` for rows pending operator key-collection (the validator treats placeholders as "not pinned yet" → WARN in default mode, FAIL under `STRICT_GPG=1`). |
+
+**Fingerprint format & population workflow (issue #226 H1).** The fingerprint is derived from the reviewer's public key, e.g.
+
+```
+$ gpg --list-keys --with-fingerprint --keyid-format=long etn3724@gmail.com
+pub   rsa4096/AAAAAAAAAAAAAAAA 2026-05-14 [SC]
+      Key fingerprint = ABCD EF01 2345 6789 ABCD  EF01 2345 6789 ABCD EF01
+```
+
+Strip the spaces and paste the 40 hex characters into the `fingerprint` cell. The
+operator handoff doc at `docs/governance/operator_gpg_keyring_setup.md` walks
+through pubkey collection, the `GPG_REVIEWER_KEYS_ARMOR_BASE64` secret, and
+fingerprint pinning end-to-end.
 
 ## Active reviewers
 
 <!-- Append rows below; do not edit historical rows. To deactivate a reviewer
      set their `status` to `inactive` and add a new row with the new state. -->
 
-| name | email | github_handle | role | date_added | areas_of_expertise | status |
-|---|---|---|---|---|---|---|
-| _PLACEHOLDER_ | placeholder@example.com | placeholder | placeholder_role | 2026-05-10 | methodology, biostatistics | inactive |
-| E. Nunez | etn3724@gmail.com | enunezvn | engineering_owner | 2026-05-11 | methodology, causal-inference, biostatistics, mlops | active |
-| E. Nunez (GitHub no-reply) | 64854959+enunezvn@users.noreply.github.com | enunezvn | engineering_owner | 2026-05-11 | methodology, causal-inference, biostatistics, mlops | active |
+| name | email | github_handle | role | date_added | areas_of_expertise | status | fingerprint |
+|---|---|---|---|---|---|---|---|
+| _PLACEHOLDER_ | placeholder@example.com | placeholder | placeholder_role | 2026-05-10 | methodology, biostatistics | inactive | `<TBD — populated by operator>` |
+| E. Nunez | etn3724@gmail.com | enunezvn | engineering_owner | 2026-05-11 | methodology, causal-inference, biostatistics, mlops | active | `<TBD — populated by operator>` |
+| E. Nunez (GitHub no-reply) | 64854959+enunezvn@users.noreply.github.com | enunezvn | engineering_owner | 2026-05-11 | methodology, causal-inference, biostatistics, mlops | active | `<TBD — populated by operator>` |
 
 > The placeholder row remains `inactive` for back-compat with the registry's
 > parse-test fixtures. Both `enunezvn` rows are the load-bearing `active`
