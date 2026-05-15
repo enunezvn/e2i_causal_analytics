@@ -855,3 +855,364 @@ def test_real_cohort_required_columns_satisfied() -> None:
                     f"{cohort.name}/{df.func_name}: required column "
                     f"{req!r} not in discovered surface"
                 )
+
+
+# ---------------------------------------------------------------------------
+# Codex-rescue pass-2: HIGH-3 (helper-call bypass), HIGH-4 (tuple-target
+# subscript), HIGH-5 (shadowed safe-spread name), MEDIUM-2 (conditional alias)
+# ---------------------------------------------------------------------------
+
+
+def test_helper_call_with_output_arg_fails_closed(tmp_path: Path) -> None:
+    """Codex pass-2 HIGH-3: ``self._add_columns(record)`` passes the
+    output dict to a helper that could mutate it. The static analyser
+    cannot see what the helper does, so the call MUST be recorded as
+    ``unsupported_writes`` (exit 2).
+    """
+    converter = textwrap.dedent(
+        """
+        from typing import Any
+
+        class C:
+            def _build_record(self) -> dict[str, Any]:
+                record: dict[str, Any] = {"known": 1}
+                self._add_columns(record)
+                return record
+
+            def _add_columns(self, out: dict[str, Any]) -> None:
+                out["unmapped_helper_key"] = 1
+        """
+    ).strip()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "synthetic_converter.py").write_text(converter)
+    (tmp_path / "_synthetic_manifest.py").write_text(_SYNTHETIC_MANIFEST)
+
+    cohort = _make_synthetic_cohort(
+        tmp_path, "scripts/synthetic_converter.py", "SYNTHETIC_TEST_FEATURES"
+    )
+
+    old_path = list(sys.path)
+    sys.path.insert(0, str(tmp_path))
+    try:
+        discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
+        assert disc_errs, "helper-call bypass must produce a discovery error"
+        assert any("self._add_columns" in e for e in disc_errs)
+    finally:
+        sys.path[:] = old_path
+
+
+def test_helper_call_with_output_kwarg_fails_closed(tmp_path: Path) -> None:
+    """Same as the positional case but the output dict is passed as a
+    keyword argument: ``helper(out=record)``.
+    """
+    converter = textwrap.dedent(
+        """
+        from typing import Any
+
+        class C:
+            def _build_record(self) -> dict[str, Any]:
+                record: dict[str, Any] = {"known": 1}
+                self._add_columns(out=record)
+                return record
+        """
+    ).strip()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "synthetic_converter.py").write_text(converter)
+    (tmp_path / "_synthetic_manifest.py").write_text(_SYNTHETIC_MANIFEST)
+
+    cohort = _make_synthetic_cohort(
+        tmp_path, "scripts/synthetic_converter.py", "SYNTHETIC_TEST_FEATURES"
+    )
+
+    old_path = list(sys.path)
+    sys.path.insert(0, str(tmp_path))
+    try:
+        discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
+        assert disc_errs, "kwarg helper-call bypass must produce a discovery error"
+    finally:
+        sys.path[:] = old_path
+
+
+def test_journeys_append_output_does_not_error(tmp_path: Path) -> None:
+    """``journeys.append(journey_dict)`` is the canonical CSU
+    converter pattern: the per-patient dict is appended to a list
+    after all writes are complete. ``append`` is in
+    ``_NON_MUTATING_METHODS`` so the call must NOT be flagged.
+    """
+    converter = textwrap.dedent(
+        """
+        from typing import Any
+
+        class C:
+            def _build_record(self) -> list[dict[str, Any]]:
+                journeys: list[dict[str, Any]] = []
+                for _ in range(2):
+                    record: dict[str, Any] = {"known": 1, "patient_id": 0}
+                    journeys.append(record)
+                return journeys
+        """
+    ).strip()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "synthetic_converter.py").write_text(converter)
+    (tmp_path / "_synthetic_manifest.py").write_text(_SYNTHETIC_MANIFEST)
+
+    cohort = _make_synthetic_cohort(
+        tmp_path, "scripts/synthetic_converter.py", "SYNTHETIC_TEST_FEATURES"
+    )
+
+    old_path = list(sys.path)
+    sys.path.insert(0, str(tmp_path))
+    try:
+        discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
+        assert disc_errs == [], (
+            f".append() should not trigger helper-call check: {disc_errs}"
+        )
+        assert {"known", "patient_id"}.issubset(discovered)
+    finally:
+        sys.path[:] = old_path
+
+
+def test_tuple_target_subscript_assign_caught(tmp_path: Path) -> None:
+    """Codex pass-2 HIGH-4: ``record["a"], record["b"] = 1, 2`` —
+    top-level target is ``ast.Tuple`` whose elements are subscripts.
+    The visitor's _walk_assign_target recursion must catch both.
+    """
+    converter = textwrap.dedent(
+        """
+        from typing import Any
+
+        class C:
+            def _build_record(self) -> dict[str, Any]:
+                record: dict[str, Any] = {"known": 1}
+                record["tuple_a"], record["tuple_b"] = 1, 2
+                return record
+        """
+    ).strip()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "synthetic_converter.py").write_text(converter)
+    (tmp_path / "_synthetic_manifest.py").write_text(_SYNTHETIC_MANIFEST)
+
+    cohort = _make_synthetic_cohort(
+        tmp_path, "scripts/synthetic_converter.py", "SYNTHETIC_TEST_FEATURES"
+    )
+
+    old_path = list(sys.path)
+    sys.path.insert(0, str(tmp_path))
+    try:
+        discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
+        assert disc_errs == [], f"tuple-target subscript must enumerate cleanly: {disc_errs}"
+        assert "tuple_a" in discovered
+        assert "tuple_b" in discovered
+        # These are not in the manifest → unmapped.
+        manifest, _ = cmc.load_manifest_names(tmp_path, cohort)
+        report = cmc.reconcile_cohort(discovered, manifest, cohort.name)
+        assert "tuple_a" in report.unmapped
+        assert "tuple_b" in report.unmapped
+    finally:
+        sys.path[:] = old_path
+
+
+def test_starred_target_subscript_caught(tmp_path: Path) -> None:
+    """``record["a"], *rest = (1, 2, 3)`` — the visitor must descend
+    into the Starred wrapper to find the inner Subscript target.
+    """
+    converter = textwrap.dedent(
+        """
+        from typing import Any
+
+        class C:
+            def _build_record(self) -> dict[str, Any]:
+                record: dict[str, Any] = {"known": 1}
+                record["starred_a"], *rest = (1, 2, 3)
+                return record
+        """
+    ).strip()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "synthetic_converter.py").write_text(converter)
+    (tmp_path / "_synthetic_manifest.py").write_text(_SYNTHETIC_MANIFEST)
+
+    cohort = _make_synthetic_cohort(
+        tmp_path, "scripts/synthetic_converter.py", "SYNTHETIC_TEST_FEATURES"
+    )
+
+    old_path = list(sys.path)
+    sys.path.insert(0, str(tmp_path))
+    try:
+        discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
+        assert disc_errs == []
+        assert "starred_a" in discovered
+    finally:
+        sys.path[:] = old_path
+
+
+def test_shadowed_safe_spread_fails_closed(tmp_path: Path) -> None:
+    """Codex pass-2 HIGH-5: if a function locally shadows a safe-spread
+    name by assigning a dict literal to it (``feats = {"unmapped": 1}``),
+    the subsequent ``record.update(feats)`` MUST NOT be tolerated —
+    the spread arg's "trusted" identifier has been rebound to a local
+    dict the sibling pass never sees.
+    """
+    converter = textwrap.dedent(
+        """
+        from typing import Any
+
+        class C:
+            def _build_record(self) -> dict[str, Any]:
+                # Shadow the safe-spread name with a fresh local dict.
+                feats: dict[str, Any] = {"unmapped_shadow_key": 1}
+                record: dict[str, Any] = {"known": 1}
+                record.update(feats)
+                return record
+
+            def _compute_features(self) -> dict[str, Any]:
+                feats: dict[str, Any] = {}
+                feats["safe_feature"] = 1
+                return feats
+        """
+    ).strip()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "synthetic_converter.py").write_text(converter)
+    (tmp_path / "_synthetic_manifest.py").write_text(_SYNTHETIC_MANIFEST)
+
+    cohort = cmc.CohortConfig(
+        name="synthetic-shadow",
+        converter_rel_path="scripts/synthetic_converter.py",
+        discovery_funcs=(
+            cmc.DiscoveryFunc(
+                func_name="_build_record",
+                output_dict_names=("record",),
+            ),
+            cmc.DiscoveryFunc(
+                func_name="_compute_features",
+                output_dict_names=("feats",),
+            ),
+        ),
+        manifest_module="_synthetic_manifest",
+        manifest_attr="SYNTHETIC_TEST_FEATURES",
+    )
+
+    old_path = list(sys.path)
+    sys.path.insert(0, str(tmp_path))
+    try:
+        discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
+        # The local-shadow of ``feats`` in _build_record means
+        # ``record.update(feats)`` cannot use the safe-spread tolerance.
+        # Recorded as unsupported_writes.
+        assert disc_errs, f"shadowed safe-spread must error: {disc_errs}"
+        assert any("record.update(feats)" in e for e in disc_errs)
+    finally:
+        sys.path[:] = old_path
+
+
+def test_conditional_alias_assignment_fails_closed(tmp_path: Path) -> None:
+    """Codex pass-2 MEDIUM-2: ``alias = record if cond else other``
+    is a dynamic alias whose binding the static walker can't resolve.
+    Must be recorded as unsupported_writes.
+    """
+    converter = textwrap.dedent(
+        """
+        from typing import Any
+
+        class C:
+            def _build_record(self, cond: bool) -> dict[str, Any]:
+                record: dict[str, Any] = {"known": 1}
+                other: dict[str, Any] = {}
+                alias = record if cond else other
+                alias["ternary_alias_key"] = 1
+                return record
+        """
+    ).strip()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "synthetic_converter.py").write_text(converter)
+    (tmp_path / "_synthetic_manifest.py").write_text(_SYNTHETIC_MANIFEST)
+
+    cohort = _make_synthetic_cohort(
+        tmp_path, "scripts/synthetic_converter.py", "SYNTHETIC_TEST_FEATURES"
+    )
+
+    old_path = list(sys.path)
+    sys.path.insert(0, str(tmp_path))
+    try:
+        discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
+        assert disc_errs, f"ternary alias must error: {disc_errs}"
+        assert any(
+            "alias = record if cond else other" in e for e in disc_errs
+        )
+    finally:
+        sys.path[:] = old_path
+
+
+def test_subscript_read_in_if_expression_does_not_false_positive(
+    tmp_path: Path,
+) -> None:
+    """The MEDIUM-2 fix must NOT false-positive on a normal subscript
+    read inside an IfExp value: this is the Optum
+    ``feats["urban_rural_code"] = "urban" if feats["zip3"] in
+    URBAN_ZIP3_PREFIXES else "suburban"`` pattern, which is a legitimate
+    subscript assignment whose RHS happens to READ the same output
+    dict.
+    """
+    converter = textwrap.dedent(
+        """
+        from typing import Any
+
+        URBAN: tuple[str, ...] = ("100", "200")
+
+        class C:
+            def _build_record(self) -> dict[str, Any]:
+                feats: dict[str, Any] = {"zip3": "100"}
+                feats["urban_rural_code"] = (
+                    "urban" if feats["zip3"] in URBAN else "suburban"
+                )
+                return feats
+        """
+    ).strip()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "synthetic_converter.py").write_text(converter)
+    (tmp_path / "_synthetic_manifest.py").write_text(
+        textwrap.dedent(
+            """
+            from src.data.feature_contract import FeatureContract, KnowableAt
+
+            SYNTHETIC_TEST_FEATURES: list[FeatureContract] = [
+                FeatureContract(
+                    name="zip3",
+                    knowable_at=KnowableAt(reference="enrollment"),
+                    source="demo",
+                ),
+                FeatureContract(
+                    name="urban_rural_code",
+                    knowable_at=KnowableAt(reference="enrollment"),
+                    source="derived",
+                ),
+            ]
+            """
+        ).strip()
+    )
+
+    cohort = cmc.CohortConfig(
+        name="synthetic-ifexp-read",
+        converter_rel_path="scripts/synthetic_converter.py",
+        discovery_funcs=(
+            cmc.DiscoveryFunc(
+                func_name="_build_record",
+                output_dict_names=("feats",),
+            ),
+        ),
+        manifest_module="_synthetic_manifest",
+        manifest_attr="SYNTHETIC_TEST_FEATURES",
+    )
+
+    old_path = list(sys.path)
+    sys.path.insert(0, str(tmp_path))
+    try:
+        discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
+        # The IfExp value reads feats["zip3"], but this is a subscript
+        # READ, not an alias assignment. Must NOT trigger MEDIUM-2.
+        assert disc_errs == [], (
+            f"subscript read in IfExp should not be flagged: {disc_errs}"
+        )
+        assert "urban_rural_code" in discovered
+        assert "zip3" in discovered
+    finally:
+        sys.path[:] = old_path
