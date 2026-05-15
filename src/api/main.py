@@ -448,6 +448,14 @@ openapi_tags = [
         "name": "Model Predictions",
         "description": "Churn, conversion, and custom model inference via BentoML serving layer.",
     },
+    {
+        "name": "Sentinels",
+        "description": "Data-driven watcher registry: register threshold/freshness/drift sentinels that auto-fire cascade invalidation, agent dispatch, or notifications.",
+    },
+    {
+        "name": "Executive Insights",
+        "description": "Crystallized cross-agent narratives for leadership. JIT provenance verification returns 410 Gone when any source artifact has been overturned.",
+    },
 ]
 
 # =============================================================================
