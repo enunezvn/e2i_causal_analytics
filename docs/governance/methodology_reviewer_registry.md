@@ -77,8 +77,8 @@ fingerprint pinning end-to-end.
 | name | email | github_handle | role | date_added | areas_of_expertise | status | fingerprint |
 |---|---|---|---|---|---|---|---|
 | _PLACEHOLDER_ | placeholder@example.com | placeholder | placeholder_role | 2026-05-10 | methodology, biostatistics | inactive | `<TBD — populated by operator>` |
-| E. Nunez | etn3724@gmail.com | enunezvn | engineering_owner | 2026-05-11 | methodology, causal-inference, biostatistics, mlops | active | `<TBD — populated by operator>` |
-| E. Nunez (GitHub no-reply) | 64854959+enunezvn@users.noreply.github.com | enunezvn | engineering_owner | 2026-05-11 | methodology, causal-inference, biostatistics, mlops | active | `<TBD — populated by operator>` |
+| E. Nunez | etn3724@gmail.com | enunezvn | engineering_owner | 2026-05-11 | methodology, causal-inference, biostatistics, mlops | active | `C4AFB94B4FBB05B40E894CBABDE9BB957AD7B060` |
+| E. Nunez (GitHub no-reply) | 64854959+enunezvn@users.noreply.github.com | enunezvn | engineering_owner | 2026-05-11 | methodology, causal-inference, biostatistics, mlops | active | `C4AFB94B4FBB05B40E894CBABDE9BB957AD7B060` |
 
 > The placeholder row remains `inactive` for back-compat with the registry's
 > parse-test fixtures. Both `enunezvn` rows are the load-bearing `active`
