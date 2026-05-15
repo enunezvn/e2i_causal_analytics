@@ -625,6 +625,13 @@ _REGISTRY_HEADERS = (
     "date_added",
     "areas_of_expertise",
     "status",
+    # Issue #226: PR #227 added the `fingerprint` column for registry-pinned
+    # GPG keyring binding (H1). The parser must match the 8-column schema
+    # introduced there or it silently treats every row as "table not found"
+    # and returns an empty active-emails set. That regression caused G3 to
+    # fail-closed with "registry is EMPTY" on PR #228 — surfaced by the
+    # operator-action closure PR's CI run.
+    "fingerprint",
 )
 
 
