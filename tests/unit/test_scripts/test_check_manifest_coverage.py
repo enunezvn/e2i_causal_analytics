@@ -1793,6 +1793,59 @@ def test_output_dict_reassignment_from_arbitrary_name_fails_closed(
         sys.path[:] = old_path
 
 
+@pytest.mark.parametrize(
+    "call_shape",
+    [
+        # Star-args list-unpack: ``some_func(*[record])``
+        "some_func(*[record])",
+        # Star-args tuple-unpack: ``some_func(*(record,))``
+        "some_func(*(record,))",
+        # Kwargs dict-unpack: ``some_func(**{\"arg\": record})``
+        'some_func(**{"arg": record})',
+    ],
+)
+def test_helper_call_unpacked_output_arg_fails_closed(
+    tmp_path: Path, call_shape: str
+) -> None:
+    """Codex pass-7 HIGH-14: an output-dict Name hidden inside a
+    Starred / List / Tuple / Dict unpack passed to a helper still
+    delivers the dict by reference at runtime. The recursive
+    arg-scan (``_bare_output_names_in_expr``) must surface the
+    output Name.
+    """
+    converter = textwrap.dedent(
+        f"""
+        from typing import Any
+
+        def some_func(*args, **kwargs) -> None:
+            pass
+
+        class C:
+            def _build_record(self) -> dict[str, Any]:
+                record: dict[str, Any] = {{"known": 1}}
+                {call_shape}
+                return record
+        """
+    ).strip()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "synthetic_converter.py").write_text(converter)
+    (tmp_path / "_synthetic_manifest.py").write_text(_SYNTHETIC_MANIFEST)
+
+    cohort = _make_synthetic_cohort(
+        tmp_path, "scripts/synthetic_converter.py", "SYNTHETIC_TEST_FEATURES"
+    )
+
+    old_path = list(sys.path)
+    sys.path.insert(0, str(tmp_path))
+    try:
+        discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
+        assert disc_errs, (
+            f"unpack-wrapper hiding output dict must error (shape={call_shape!r})"
+        )
+    finally:
+        sys.path[:] = old_path
+
+
 def test_wrapper_append_with_output_arg_fails_closed(tmp_path: Path) -> None:
     """Codex pass-6 HIGH: ``wrapper.append(record)`` where ``wrapper`` is
     NOT in the cohort's ``collector_names`` must still be flagged. The
