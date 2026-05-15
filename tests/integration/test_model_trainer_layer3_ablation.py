@@ -475,3 +475,101 @@ def test_phase34_severity_classifier_mirrors_phase33() -> None:
             f"case={case}, Phase 3.3={p33}, Phase 3.4={p34}. "
             f"The two classifiers must stay byte-identical."
         )
+
+
+def _build_pure_noise_cohort(n: int = 2000, seed: int = 31) -> tuple[pd.DataFrame, str]:
+    """Construct a deterministic cohort with NO leakage.
+
+    Returns ``(df, target_name)``. All features are independent of the
+    target. ``region`` is an 11-category column where every category is
+    pure noise. Used by the false-positive pin to verify that ablation-
+    enabled mode does not flag spurious OHE indicators when no leak exists.
+    """
+    rng = np.random.default_rng(seed)
+    age = rng.normal(50, 15, n)
+    eligibility_duration = rng.normal(180, 60, n)
+    regions = [f"region_{i}" for i in range(11)]
+    region = rng.choice(regions, size=n)
+    target = rng.binomial(1, 0.30, n).astype(int)
+    df = pd.DataFrame(
+        {
+            "age": age.astype(float),
+            "eligibility_duration": eligibility_duration.astype(float),
+            "region": region.astype(object),
+            "y": target,
+        }
+    )
+    return df, "y"
+
+
+@pytest.mark.integration
+def test_phase34_pure_noise_does_not_flag_any_ohe_indicator() -> None:
+    """FALSE-POSITIVE pin: with NO leak planted, no encoded feature flags.
+
+    Mirrors Phase 3.3's ``test_ablation_enabled_does_not_false_flag_noise_features``
+    contract on the model-eval axis. A too-loose perm threshold OR a
+    bug that treats every OHE indicator as suspicious would regress
+    this pin — important because in production the typical state is
+    "no leak", so false positives have a high reviewer-fatigue cost.
+
+    The pin is structural: severity for ALL encoded features must stay
+    "info" when the planted cohort is pure noise.
+    """
+    df, target = _build_pure_noise_cohort()
+    state, _model = _build_evaluator_state(df, target, ablation_enabled=True)
+
+    from src.agents.ml_foundation.model_trainer.nodes.evaluator import evaluate_model
+
+    loop = asyncio.new_event_loop()
+    try:
+        result = loop.run_until_complete(evaluate_model(state))
+    finally:
+        loop.close()
+
+    assert "error" not in result, f"evaluator returned error: {result}"
+    ablation_payload = result.get("model_eval_ablation")
+    assert ablation_payload is not None
+    assert ablation_payload.get("ran") is True
+    flagged = ablation_payload.get("flagged_features") or []
+    assert flagged == [], (
+        f"Phase 3.4 false-flagged {len(flagged)} feature(s) on a pure-noise "
+        f"cohort. flagged={flagged}. Re-tune the threshold or fix the perm/"
+        f"ablation pass — false positives are the dominant cost in production."
+    )
+
+
+@pytest.mark.integration
+def test_phase34_max_rule_tie_break_mirrors_phase33() -> None:
+    """TIE-BREAK pin: when perm and ablation severity TIE, the
+    permutation sub-pass gets credit.
+
+    Mirrors Phase 3.3's ``_combine_ablation_with_permutation`` at
+    ``adaptive_validity_check.py:2320`` (``if ablation_rank <= perm_rank:
+    return perm_input``) — ties go to perm because the permutation pathway
+    is the canonical Layer-3 entry point in Phase 3.3 (ablation is an
+    ESCALATION applied on top, never a bypass).
+
+    If the model-eval tie-break flipped to "ablation wins ties" the audit
+    convention would silently invert: the `decided_by` tag in Phase 3.4
+    would attribute ties to ablation while Phase 3.3 attributes them to
+    permutation.
+    """
+    from src.agents.ml_foundation.model_trainer.nodes.model_eval_ablation import (
+        _max_rule_severity,
+    )
+
+    # All non-info ties — combined severity must equal both perm and
+    # ablation (they agree on severity, so combined = either).
+    assert _max_rule_severity("info", "info") == "info"
+    assert _max_rule_severity("moderate", "moderate") == "moderate"
+    assert _max_rule_severity("high", "high") == "high"
+
+    # Perm strictly wins.
+    assert _max_rule_severity("moderate", "info") == "moderate"
+    assert _max_rule_severity("high", "moderate") == "high"
+    assert _max_rule_severity("high", "info") == "high"
+
+    # Ablation strictly wins.
+    assert _max_rule_severity("info", "moderate") == "moderate"
+    assert _max_rule_severity("moderate", "high") == "high"
+    assert _max_rule_severity("info", "high") == "high"

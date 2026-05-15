@@ -879,7 +879,8 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
                     validation_metrics["model_eval_ablation_ran"] = False
                     validation_metrics["model_eval_ablation_flagged_features"] = []
                     validation_metrics["model_eval_ablation_skipped_reason"] = (
-                        "ablation pass returned None (X_test or y_test unavailable)"
+                        "ablation pass returned None (X_train or y_train unavailable; "
+                        "the model-eval Phase 3.4 hook runs on the TRAIN split, not test)"
                     )
                 else:
                     validation_metrics["model_eval_ablation_ran"] = bool(
