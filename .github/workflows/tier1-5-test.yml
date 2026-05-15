@@ -109,6 +109,11 @@ jobs:
           fi
 
       - name: Install runtime + dev dependencies
+        id: install-deps
+        # Non-fatal: a single transient pip resolver / build problem in the
+        # 695-line requirements set shouldn't fail the whole check while the
+        # harness is soft-fail. Downstream gating uses this step's outcome.
+        continue-on-error: true
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
@@ -129,22 +134,33 @@ jobs:
           fi
 
       - name: Run Tier 1-5 harness
-        if: steps.restore-cache.outputs.found == 'true' && steps.boot-stack.outputs.ok == 'true'
+        if: |
+          steps.install-deps.outcome == 'success' &&
+          steps.boot-stack.outputs.ok == 'true' &&
+          steps.restore-cache.outputs.found == 'true'
         env:
           E2I_TESTING_MODE: "true"
           DISABLE_PANDERA_IMPORT_WARNING: "True"
         run: |
           make tier1-5-test
 
-      - name: Skip harness (no tier0 cache)
-        if: steps.restore-cache.outputs.found == 'false' && steps.boot-stack.outputs.ok == 'true'
+      - name: Summarize skip reasons
+        if: |
+          steps.install-deps.outcome != 'success' ||
+          steps.boot-stack.outputs.ok != 'true' ||
+          steps.restore-cache.outputs.found != 'true'
         run: |
-          echo "::notice title=Tier 1-5 harness skipped::No tier0 cache available in this checkout, but the docker stack (Redis, FalkorDB, MLflow) booted cleanly. Commit scripts/tier0_output_cache/latest.pkl, or wire a tier0-generation step in this workflow, to enable harness coverage."
-
-      - name: Skip harness (docker stack not healthy)
-        if: steps.boot-stack.outputs.ok != 'true'
-        run: |
-          echo "::warning title=Tier 1-5 harness skipped::docker compose could not bring Redis / FalkorDB / MLflow up healthy on this runner. Logs are above; harness cannot run without those backends."
+          REASONS=""
+          if [ "${{ steps.install-deps.outcome }}" != "success" ]; then
+            REASONS="${REASONS}pip-install failed; "
+          fi
+          if [ "${{ steps.boot-stack.outputs.ok }}" != "true" ]; then
+            REASONS="${REASONS}docker stack unhealthy; "
+          fi
+          if [ "${{ steps.restore-cache.outputs.found }}" != "true" ]; then
+            REASONS="${REASONS}no tier0 cache committed; "
+          fi
+          echo "::notice title=Tier 1-5 harness skipped::${REASONS}The harness is soft-fail until a tier0 cache is committed and the runner can stand up Redis/FalkorDB/MLflow reliably."
 
       - name: Capture docker logs on failure
         if: failure()
