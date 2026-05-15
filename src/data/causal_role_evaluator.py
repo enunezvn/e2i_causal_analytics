@@ -138,11 +138,20 @@ def _coerce_str(value: object) -> str:
 
 
 def _parse_missed_considerations(raw: object) -> tuple[str, ...]:
-    """Coerce the LM's comma-separated string into a tuple of short labels.
+    """Coerce the LM's output into a tuple of short labels.
 
-    Returns an empty tuple on missing / non-string input. Caps at 5
+    The DSPy signature declares this field as ``str``, so the typical
+    output is a comma-separated string. Some provider-side structured
+    parsing paths return a ``list`` / ``tuple`` of strings despite the
+    annotation; we accept both shapes so a future provider change does
+    not silently drop the audit signal.
+
+    Returns an empty tuple on missing / unparseable input. Caps at 5
     items; each item truncated to 80 chars.
     """
+    if isinstance(raw, (list, tuple)):
+        items = [str(item).strip()[:80] for item in raw if str(item).strip()]
+        return tuple(items[:5])
     if not isinstance(raw, str) or not raw.strip():
         return ()
     items = [s.strip()[:80] for s in raw.split(",") if s.strip()]

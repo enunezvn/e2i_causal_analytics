@@ -101,6 +101,35 @@ def test_evaluator_truncates_notes_to_500_chars():
     assert audit.missed_considerations == ()
 
 
+def test_evaluator_accepts_list_missed_considerations():
+    # Codex final-review MEDIUM: some provider-side structured parsing
+    # paths return a list/tuple for a str-annotated field. Accept both
+    # shapes so the audit signal is not silently lost on provider drift.
+    from src.data.causal_role_evaluator import CausalRoleEvaluator
+    from src.data.kg.types import LLMVerdict
+
+    stub_module = MagicMock()
+    stub_module.return_value = MagicMock(
+        satisfied=False,
+        rationale_complete=False,
+        missed_considerations=["temporal_filter", "pearl_arrows"],
+        notes="list-shaped output",
+    )
+    evaluator = CausalRoleEvaluator(module=stub_module)
+    audit = evaluator.evaluate(
+        feature_name="f",
+        derivation_pseudocode="d",
+        dataset_context="c",
+        worker_verdict=LLMVerdict(
+            causal_role="confounder",
+            mechanism="m",
+            recommended_remediation="keep_with_caveat",
+        ),
+        evaluator_model="anthropic/claude-haiku-4-5-20251001",
+    )
+    assert audit.missed_considerations == ("temporal_filter", "pearl_arrows")
+
+
 def test_evaluator_coerces_non_bool_satisfied_to_false():
     from src.data.causal_role_evaluator import CausalRoleEvaluator
     from src.data.kg.types import LLMVerdict
