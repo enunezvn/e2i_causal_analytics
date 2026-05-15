@@ -604,7 +604,16 @@ def check_reviewer_registered(
     doc_text: str,
     registry: Sequence[ReviewerInfo],
 ) -> CheckResult:
-    """Reviewer's handle must appear in the registry as ``status=active``."""
+    """Reviewer's handle must appear in the registry as ``status=active``.
+
+    Codex pass-4 MED-1 fix: walk ALL matching rows and PASS if at
+    least one is active. The pre-fix returned on the FIRST matching
+    row's status, so an inactive/recused historical row appearing
+    BEFORE a later active row would falsely reject the reviewer. The
+    registry is documented as append-only ("do not edit historical
+    rows; to deactivate, set status to inactive AND add a new row")
+    so duplicate handles with mixed statuses are an EXPECTED state.
+    """
 
     handle = extract_handle(doc_text)
     if handle is None:
@@ -613,23 +622,33 @@ def check_reviewer_registered(
             False,
             "GitHub handle missing from sign-off doc",
         )
-    for row in registry:
-        if row.handle == handle:
-            if row.status != "active":
-                return CheckResult(
-                    "reviewer_registered",
-                    False,
-                    f"reviewer {handle!r} is in registry but status={row.status!r} (expected 'active')",
-                )
-            return CheckResult(
-                "reviewer_registered",
-                True,
-                f"{handle} (status=active)",
-            )
+    matching = [row for row in registry if row.handle == handle]
+    if not matching:
+        return CheckResult(
+            "reviewer_registered",
+            False,
+            f"reviewer {handle!r} not in registry",
+        )
+    active_rows = [r for r in matching if r.status == "active"]
+    if active_rows:
+        n_active = len(active_rows)
+        n_total = len(matching)
+        suffix = f" ({n_active}/{n_total} rows active)" if n_total > 1 else ""
+        return CheckResult(
+            "reviewer_registered",
+            True,
+            f"{handle} (status=active){suffix}",
+        )
+    # No active rows but matches exist → reviewer is registered as
+    # historical / recused / inactive only. FAIL with clear detail
+    # listing the statuses found so the operator knows the row is
+    # historical, not missing.
+    statuses_found = sorted({r.status for r in matching})
     return CheckResult(
         "reviewer_registered",
         False,
-        f"reviewer {handle!r} not in registry",
+        f"reviewer {handle!r} is in registry but no active rows "
+        f"(found {len(matching)} row(s) with statuses {statuses_found!r})",
     )
 
 
@@ -996,40 +1015,31 @@ def check_selection_rule(
             False,
             f"reviewer {handle!r} not in registry — cannot resolve email",
         )
-    # Codex pass-3 MED-2 fix: filter to ACTIVE rows only. The pre-fix
-    # aggregation included inactive/recused rows whose emails would be
-    # checked by git-log — that is technically defensible (a recused
-    # reviewer's prior commit is still a touch) BUT it conflicts with
-    # the registry's documented "only active rows are eligible"
-    # contract. A reviewer whose ONLY entries are inactive/recused
-    # has no business reviewing — but that is caught by
-    # check_reviewer_registered upstream, not by this check.
-    active_matching = [r for r in matching if r.status == "active"]
-    if not active_matching:
-        # Handle is in registry but no active row → already caught by
-        # check_reviewer_registered. Return advisory pass with a note
-        # so this check doesn't double-fail; the upstream check is
-        # the authoritative gate.
-        return CheckResult(
-            "selection_rule",
-            True,
-            f"WARN: no active rows for {handle} (caught upstream by reviewer_registered)",
-        )
-    # Codex pass-2 MED-1 + pass-3 MED-2 fix: aggregate across ACTIVE
-    # rows for the handle (not just matching[0], not all rows). The
-    # production registry has 2 active rows for handle `enunezvn`
-    # (canonical email + GitHub no-reply). Union the email-alias
-    # tuples across all active matching rows and dedupe.
-    row = active_matching[0]
+    # Codex pass-4 HIGH-1 fix: REVERT the pass-3 active-only filter
+    # for selection-rule. Selection-rule evidence is about reviewer
+    # INVOLVEMENT during the named period — historical / recused rows'
+    # emails are STILL valid selection evidence (a reviewer who
+    # touched the subject file in-window then got recused is not
+    # magically un-conflicted). Active-only filtering here would
+    # create a CoI bypass: a reviewer with [historical/recused row
+    # carrying the disqualifying email + active row carrying a clean
+    # email] would slip past the git-log probe. Active-row filtering
+    # is retained ONLY for fingerprint pinning (where it gates
+    # CURRENT signing eligibility) and reviewer-registration
+    # (CURRENT review eligibility). Pass-2 MED-1 row aggregation
+    # across ALL matching rows is the correct semantic for the
+    # selection rule's CoI evidence.
+    row = matching[0]
     email = row.email
-    # M1 + pass-2 MED-1 + pass-3 MED-2: iterate over ALL declared
-    # aliases (across ALL active registry rows for this handle) so a
-    # commit authored under an alternate identity is still caught by
-    # `git log --author=`. Falls back to the primary email if the row
-    # predates the alias-aware schema.
+    # M1 + pass-2 MED-1 + pass-4 HIGH-1: iterate over ALL declared
+    # aliases (across ALL registry rows for this handle, regardless
+    # of status) so a commit authored under an alternate identity —
+    # including historical / recused rows — is still caught by
+    # `git log --author=`. Falls back to the primary email if the
+    # row predates the alias-aware schema.
     aliases_set: list[str] = []
     seen_aliases: set[str] = set()
-    for r in active_matching:
+    for r in matching:
         for alias in r.emails or (r.email,):
             if alias not in seen_aliases:
                 seen_aliases.add(alias)

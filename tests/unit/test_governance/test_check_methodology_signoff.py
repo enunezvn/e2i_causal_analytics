@@ -517,6 +517,143 @@ def test_check_signoff_full_success(
     assert failed == [], f"unexpected failures: {[(r.name, r.detail) for r in failed]}"
 
 
+def test_check_signoff_pass4_low1_full_success_with_strict_signature_and_pinning(
+    fixture_repo: Path, gpg_keyring: tuple[Path, str]
+):
+    """Codex pass-4 LOW-1 fix: end-to-end orchestrator test exercising
+    the FULL strict-signature + pinning path INCLUDING CoI body sig.
+
+    The pre-existing test_check_signoff_full_success passes
+    require_signature=False AND no keyring_dir, so the new H1+H4
+    pinning checks are essentially bypassed (advisory-mode passes).
+    This test exercises the full chain:
+      - Generate a real GPG keypair
+      - Populate the registry with the resulting fingerprint
+      - Sign the sign-off doc with that key (inline armor)
+      - Sign the CoI body with that key (sibling .asc — H4 path)
+      - Pass require_signature=True + keyring_dir
+      - Assert ALL checks pass AND no signature_check_skipped fires
+
+    This catches composition bugs that unit tests can't see.
+    """
+
+    import os as _os
+
+    home, fingerprint = gpg_keyring
+    # Replace the registry with one that has alice's fingerprint pinned.
+    registry_text = (
+        "| name | email | github_handle | role | date_added | "
+        "areas_of_expertise | status | fingerprint |\n"
+        "|---|---|---|---|---|---|---|---|\n"
+        f"| Alice | alice@example.com | alice | clinician | 2026-05-10 | "
+        f"methodology | active | {fingerprint} |\n"
+    )
+    (fixture_repo / "docs" / "governance" / "methodology_reviewer_registry.md").write_text(
+        registry_text, encoding="utf-8"
+    )
+
+    # Sign the CoI body via sibling-asc detached signature — exercises
+    # the H4 sibling-asc code path AND ensures the pinning check sees
+    # signing_fingerprint from BOTH verify checks (sign-off + CoI body).
+    coi_path = fixture_repo / "docs" / "governance" / "coi_declarations" / "alice_20260510.md"
+    env = _os.environ.copy()
+    env["GNUPGHOME"] = str(home)
+    sib_sign = subprocess.run(
+        [
+            "gpg",
+            "--batch",
+            "--detach-sign",
+            "--armor",
+            "--output",
+            str(coi_path) + ".asc",
+            str(coi_path),
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    if sib_sign.returncode != 0:
+        pytest.skip(f"gpg --detach-sign on CoI failed: {sib_sign.stderr}")
+
+    real_sha = _coi_sha(fixture_repo)
+    payload = _signoff_doc(handle="alice", coi_sha=real_sha, include_signature=False)
+    payload_no_sig = payload.replace("## Cryptographic signature\n(missing)\n", "")
+    doc_text = _make_signed_signoff_doc(payload_no_sig, home)
+    signoff_path = fixture_repo / "docs" / "results" / "optum_methodology_signoff_20260520.md"
+    signoff_path.write_text(doc_text, encoding="utf-8")
+
+    results = cms.check_signoff(
+        signoff_path,
+        fixture_repo,
+        require_signature=True,
+        keyring_dir=home,
+        today="2026-05-20",
+    )
+    failed = [r for r in results if not r.ok]
+    assert failed == [], f"unexpected failures: {[(r.name, r.detail) for r in failed]}"
+
+    # Pass-4 LOW-1: NO signature_check_skipped should fire either.
+    skipped = [r for r in results if r.signature_check_skipped]
+    assert skipped == [], f"unexpected signature skips: {[(r.name, r.detail) for r in skipped]}"
+
+    # Specific assertions: signature_verifies + pinning both PASSED with
+    # the expected signing fingerprint.
+    sig_result = next(r for r in results if r.name == "signature_verifies")
+    assert sig_result.signing_fingerprint == fingerprint
+    coi_sig_result = next(r for r in results if r.name == "coi_body_signature_verifies")
+    assert coi_sig_result.signing_fingerprint == fingerprint
+    pinning_result = next(r for r in results if r.name == "signing_fingerprint_matches_registry")
+    assert pinning_result.ok is True
+    assert "match" in pinning_result.detail
+
+
+def test_check_signoff_pass4_low1_full_failure_when_signing_key_not_pinned(
+    fixture_repo: Path, gpg_keyring: tuple[Path, str]
+):
+    """Pass-4 LOW-1 sibling: end-to-end FAIL when signing fp NOT pinned.
+
+    Same setup but the registry pins a DIFFERENT fingerprint than the
+    one that signed. The pinning check MUST fail with ok=False
+    (NOT advisory pass).
+    """
+
+    home, fingerprint = gpg_keyring
+    # Pin a WRONG fingerprint in the registry (not the one used to sign).
+    wrong_fp = "DEADBEEF" + ("0" * 32)
+    registry_text = (
+        "| name | email | github_handle | role | date_added | "
+        "areas_of_expertise | status | fingerprint |\n"
+        "|---|---|---|---|---|---|---|---|\n"
+        f"| Alice | alice@example.com | alice | clinician | 2026-05-10 | "
+        f"methodology | active | {wrong_fp} |\n"
+    )
+    (fixture_repo / "docs" / "governance" / "methodology_reviewer_registry.md").write_text(
+        registry_text, encoding="utf-8"
+    )
+
+    real_sha = _coi_sha(fixture_repo)
+    payload = _signoff_doc(handle="alice", coi_sha=real_sha, include_signature=False)
+    payload_no_sig = payload.replace("## Cryptographic signature\n(missing)\n", "")
+    doc_text = _make_signed_signoff_doc(payload_no_sig, home)
+    signoff_path = fixture_repo / "docs" / "results" / "optum_methodology_signoff_20260520.md"
+    signoff_path.write_text(doc_text, encoding="utf-8")
+
+    results = cms.check_signoff(
+        signoff_path,
+        fixture_repo,
+        require_signature=True,
+        keyring_dir=home,
+        today="2026-05-20",
+    )
+    pinning_result = next(r for r in results if r.name == "signing_fingerprint_matches_registry")
+    # Pinning MUST fail; the wrong fingerprint can't satisfy the
+    # registered one.
+    assert pinning_result.ok is False
+    assert "do not match" in pinning_result.detail
+    assert wrong_fp in pinning_result.detail
+    assert fingerprint in pinning_result.detail
+
+
 def test_check_signoff_missing_signature_section(fixture_repo: Path):
     signoff_path = fixture_repo / "docs" / "results" / "optum_methodology_signoff_20260520.md"
     signoff_path.write_text(
@@ -1501,6 +1638,150 @@ def test_selection_rule_aggregates_duplicate_active_rows(tmp_path: Path):
         "under any active row's email"
     )
     assert "12345+alice@users.noreply.github.com" in result.detail
+
+
+def test_selection_rule_pass4_h1_recused_row_email_still_catches_conflict(tmp_path: Path):
+    """Codex pass-4 HIGH-1 fix pin: selection rule MUST aggregate across
+    ALL rows (including recused/inactive) for CoI evidence.
+
+    The pass-3 active-only filter introduced a CoI bypass: a reviewer
+    with [recused row carrying disqualifying email + active row
+    carrying clean email] could slip past. Pass-4 HIGH-1 reverted to
+    full-row aggregation for selection-rule (active-only filter
+    retained ONLY for fingerprint pinning + reviewer-registration).
+
+    Scenario: alice has 2 rows — 1 active (clean email), 1 recused
+    (email that authored the disqualifying commit). The selection
+    rule MUST catch the recused-email commit.
+    """
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git("init", "--initial-branch=main", "-q", cwd=repo)
+    _git("config", "user.email", "ci@example.com", cwd=repo)
+    _git("config", "user.name", "CI", cwd=repo)
+    _git("config", "commit.gpgsign", "false", cwd=repo)
+    (repo / "scripts").mkdir(parents=True)
+    (repo / "scripts" / "convert_optum_rwd.py").write_text("# stub\n", encoding="utf-8")
+    (repo / "docs" / "governance").mkdir(parents=True)
+
+    # ACTIVE row with clean email + RECUSED row with disqualifying email.
+    registry_text = (
+        "| name | email | github_handle | role | date_added | "
+        "areas_of_expertise | status | fingerprint |\n"
+        "|---|---|---|---|---|---|---|---|\n"
+        "| Alice (current) | alice-current@example.com | alice | clinician | "
+        "2026-05-10 | methodology | active | `<TBD>` |\n"
+        "| Alice (recused) | alice-old@example.com | alice | clinician | "
+        "2026-04-01 | methodology | recused | `<TBD>` |\n"
+    )
+    (repo / "docs" / "governance" / "methodology_reviewer_registry.md").write_text(
+        registry_text, encoding="utf-8"
+    )
+    _git("add", "-A", cwd=repo)
+    _git(
+        "-c",
+        "user.email=ci@example.com",
+        "-c",
+        "user.name=CI",
+        "commit",
+        "--date=2026-04-01T12:00:00",
+        "-m",
+        "initial",
+        cwd=repo,
+        env_overrides={"GIT_COMMITTER_DATE": "2026-04-01T12:00:00"},
+    )
+
+    # The DISQUALIFYING commit is authored by the RECUSED row's email
+    # IN-WINDOW.
+    (repo / "scripts" / "convert_optum_rwd.py").write_text("# touched\n", encoding="utf-8")
+    _git("add", "scripts/convert_optum_rwd.py", cwd=repo)
+    _git(
+        "-c",
+        "user.email=alice-old@example.com",
+        "-c",
+        "user.name=Alice (recused)",
+        "commit",
+        "--date=2026-04-20T12:00:00",
+        "-m",
+        "alice (recused) touched convert in-window",
+        cwd=repo,
+        env_overrides={"GIT_COMMITTER_DATE": "2026-04-20T12:00:00"},
+    )
+
+    rows = cms.parse_registry(repo / "docs" / "governance" / "methodology_reviewer_registry.md")
+    assert len(rows) == 2
+    text = _signoff_doc(handle="alice")
+    result = cms.check_selection_rule(text, repo, rows)
+    # Pass-4 HIGH-1: recused-row email MUST be caught.
+    assert result.ok is False, (
+        "pass-4 HIGH-1: selection-rule MUST aggregate across recused/inactive "
+        "rows for CoI evidence; got pass when commit by recused email "
+        "in-window should fail"
+    )
+    assert "alice-old@example.com" in result.detail
+
+
+def test_reviewer_registered_pass4_med1_inactive_first_then_active_passes(
+    tmp_path: Path,
+):
+    """Codex pass-4 MED-1 fix pin: check_reviewer_registered must walk
+    ALL matching rows and PASS if any is active.
+
+    Pre-fix: returned on the FIRST matching row's status. So a registry
+    with [inactive row, active row] (in that order) for the same handle
+    would FAIL. The registry is documented as append-only with status
+    transitions encoded as new rows, so this scenario IS expected.
+    """
+
+    registry = [
+        cms.ReviewerInfo(
+            handle="alice",
+            email="alice@example.com",
+            status="inactive",  # ← appears FIRST
+            emails=("alice@example.com",),
+        ),
+        cms.ReviewerInfo(
+            handle="alice",
+            email="alice@example.com",
+            status="active",  # ← active row appears SECOND
+            emails=("alice@example.com",),
+        ),
+    ]
+    text = _signoff_doc(handle="alice")
+    result = cms.check_reviewer_registered(text, registry)
+    # Pass-4 MED-1: must walk all rows; an active row exists → PASS.
+    assert result.ok is True, (
+        f"pass-4 MED-1: must PASS when at least one active row exists; got {result.detail}"
+    )
+    assert "active" in result.detail
+    # Helpful detail: total / active row counts surfaced.
+    assert "1/2 rows active" in result.detail or "active" in result.detail
+
+
+def test_reviewer_registered_pass4_med1_only_inactive_rows_fails(tmp_path: Path):
+    """Pass-4 MED-1: matches exist but ZERO active → FAIL with clear detail."""
+
+    registry = [
+        cms.ReviewerInfo(
+            handle="alice",
+            email="alice@example.com",
+            status="inactive",
+            emails=("alice@example.com",),
+        ),
+        cms.ReviewerInfo(
+            handle="alice",
+            email="alice@example.com",
+            status="recused",
+            emails=("alice@example.com",),
+        ),
+    ]
+    text = _signoff_doc(handle="alice")
+    result = cms.check_reviewer_registered(text, registry)
+    assert result.ok is False
+    assert "no active rows" in result.detail
+    # Both statuses surfaced for operator diagnostics.
+    assert "inactive" in result.detail and "recused" in result.detail
 
 
 def test_selection_rule_gh_missing_emits_warning(fixture_repo: Path, monkeypatch):
