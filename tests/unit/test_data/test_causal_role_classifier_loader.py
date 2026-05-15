@@ -97,6 +97,42 @@ def test_classify_feature_evaluator_raise_degrades_gracefully(monkeypatch, caplo
     assert any("evaluator" in rec.message.lower() for rec in caplog.records)
 
 
+def test_classify_feature_evaluator_construction_failure_degrades_gracefully(monkeypatch, caplog):
+    """Codex review MED-1: a raise inside CausalRoleEvaluator.__post_init__
+    (e.g. dspy.ChainOfThought construction failure) must not propagate —
+    the worker's verdict must still return with evaluator_audit=None."""
+    from src.data import causal_role_classifier_loader as loader
+
+    monkeypatch.setenv("ADAPTIVE_VALIDITY_EVALUATOR_ENABLED", "1")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setattr(loader, "_lm_is_configured", lambda: True)
+    monkeypatch.setattr(loader, "_evaluator_lm_is_configured", lambda: True)
+
+    def _raise(*_a, **_k):
+        raise RuntimeError("dspy-init-failed")
+
+    monkeypatch.setattr(loader, "CausalRoleEvaluator", _raise)
+
+    stub_worker = MagicMock()
+    stub_worker.return_value = MagicMock(
+        causal_role="confounder",
+        mechanism="m",
+        recommended_remediation="keep_with_caveat",
+    )
+
+    with caplog.at_level("WARNING"):
+        verdict = loader.classify_feature(
+            feature_name="f",
+            derivation_pseudocode="d",
+            dataset_context="c",
+            classifier=stub_worker,
+        )
+    assert verdict is not None
+    assert verdict.evaluator_audit is None
+    assert verdict.causal_role == "confounder"
+    assert any("construction raised" in rec.message for rec in caplog.records)
+
+
 def test_classify_feature_evaluator_not_invoked_when_worker_returns_none(monkeypatch):
     from src.data import causal_role_classifier_loader as loader
 

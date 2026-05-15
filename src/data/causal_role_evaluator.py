@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 import dspy
 
@@ -167,7 +167,7 @@ class CausalRoleEvaluator:
     ``dspy.ChainOfThought(CausalRoleEvaluatorSignature)``.
     """
 
-    module: Optional[Any] = None
+    module: Any = None
 
     def __post_init__(self) -> None:
         if self.module is None:

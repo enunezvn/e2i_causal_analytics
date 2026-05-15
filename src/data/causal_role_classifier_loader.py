@@ -343,7 +343,16 @@ def _build_evaluator() -> Optional[CausalRoleEvaluator]:
             "Anthropic key to enable the Layer-4 audit evaluator."
         )
         return None
-    return CausalRoleEvaluator()
+    try:
+        return CausalRoleEvaluator()
+    except Exception as exc:
+        logger.warning(
+            "_build_evaluator: CausalRoleEvaluator construction raised "
+            "%s: %s — evaluator skipped, worker verdict preserved.",
+            type(exc).__name__,
+            exc,
+        )
+        return None
 
 
 def _run_evaluator(
