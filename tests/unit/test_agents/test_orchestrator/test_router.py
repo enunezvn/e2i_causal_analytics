@@ -528,12 +528,19 @@ class TestIntentToAgentMapping:
         """Test timeout configurations are reasonable."""
         router = RouterNode()
 
+        # Per-intent ceilings. Most agents <= 120s; tool_composer's
+        # documented SLA is 180s (4-phase decompose/plan/execute/synthesize).
+        max_timeout_ms = {
+            "multi_faceted": 180_000,
+        }
         for intent, dispatches in router.INTENT_TO_AGENTS.items():
             for dispatch in dispatches:
                 timeout = dispatch["timeout_ms"]
+                cap = max_timeout_ms.get(intent, 120_000)
                 assert timeout > 0, f"Invalid timeout for {intent}"
-                # cohort_constructor has 120s SLA for processing 100K patients
-                assert timeout <= 120000, f"Timeout too high for {intent}"
+                assert timeout <= cap, (
+                    f"Timeout {timeout}ms for {intent} exceeds cap {cap}ms"
+                )
 
     def test_multi_agent_patterns_exist(self):
         """Test that multi-agent patterns are defined."""
