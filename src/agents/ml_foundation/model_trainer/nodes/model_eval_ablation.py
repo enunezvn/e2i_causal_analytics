@@ -152,6 +152,20 @@ def _classify_permutation_severity(
       * z > z_threshold (default 5.0) → high
       * moderate_z_threshold < z <= z_threshold → moderate
       * else (incl. NaN, +inf at 0 actual_auc, etc.) → info
+
+    KNOWN LIMITATION (issue #194 mirror): the simple z-band has a 5σ FPR
+    blowup at n≥10k cohorts that Phase 3.3 mitigates via the joint
+    (z, |delta_AUC|) check in ``hblp_classify``. At model-eval time we
+    do not have a single-feature delta_AUC analog for the label-shuffle
+    null (the delta is against the JOINT model, available only through
+    the ablation pass), so the simple ladder is the best we can do
+    without piping joint-model retrains into the perm pathway. The
+    ablation sub-pass DOES include the issue #194 floor (via
+    ``classify_model_eval_ablation_severity``), so cohorts where perm
+    over-fires at large n will still see ablation as a secondary check.
+    Promote to joint check if (a) Phase 3.4 lifecycle transitions out of
+    ADVISORY into ENFORCED, AND (b) large-n FPR observation lands in a
+    cohort where the model-eval hook is active.
     """
     if z_score is None:
         return "info"
@@ -278,8 +292,24 @@ def _build_dataframe_with_names(
     if X is None:
         return None
     if isinstance(X, pd.DataFrame):
-        # Already named — use as-is even if column count diverges (caller
-        # is responsible for shape consistency between X and feature_names).
+        # Already named. Guard against duplicate column names: pandas'
+        # ``X.drop(columns=[name])`` drops ALL columns with that name,
+        # which silently breaks ``compute_feature_ablation``'s per-
+        # feature drop loop (the ablation null becomes a multi-column
+        # drop instead of a single-feature drop). One-hot encoding can
+        # produce duplicates if a categorical column shared a name with
+        # an existing column pre-encoding (e.g., a column literally
+        # named "region_region_0"). Skip cleanly with a warning so the
+        # evaluator records a skip-reason rather than producing wrong
+        # ablation numbers.
+        duplicates = X.columns[X.columns.duplicated()].unique().tolist()
+        if duplicates:
+            logger.warning(
+                "model_eval_ablation: X has duplicate column names %s; "
+                "skipping (ablation drop semantics would be wrong)",
+                duplicates[:5],
+            )
+            return None
         return X.copy()
 
     if not isinstance(X, np.ndarray):
@@ -305,7 +335,21 @@ def _build_dataframe_with_names(
             X.shape[1],
         )
         return None
-    return pd.DataFrame(X, columns=list(feature_names))
+    # Guard against duplicate names in the provided feature_names list
+    # (same rationale as the DataFrame-with-duplicate-columns branch
+    # above). Should not happen in practice given OneHotEncoder's per-
+    # category naming, but the guard is symmetric.
+    names_list = list(feature_names)
+    if len(set(names_list)) != len(names_list):
+        from collections import Counter
+
+        dups = [n for n, c in Counter(names_list).items() if c > 1]
+        logger.warning(
+            "model_eval_ablation: duplicate feature_names %s; skipping",
+            dups[:5],
+        )
+        return None
+    return pd.DataFrame(X, columns=names_list)
 
 
 def _skipped_result(
@@ -605,10 +649,17 @@ def run_model_eval_ablation(
         # ``decided_by`` records which sub-test produced the combined
         # severity (matches Phase 3.3's _decided_by_to_layer audit
         # convention; "adversarial_ablation" maps to layer "3" same as
-        # data-prep).
+        # data-prep). Tie-break aligns with Phase 3.3's
+        # ``_combine_ablation_with_permutation`` at
+        # ``adaptive_validity_check.py:2320`` (``if ablation_rank <=
+        # perm_rank: return perm_input``) — ties go to the PERMUTATION
+        # sub-pass. This matters because the permutation pathway is the
+        # canonical Layer-3 entry point in Phase 3.3 (ablation is an
+        # ESCALATION applied on top, never a bypass); attributing ties to
+        # ablation here would silently invert that convention.
         if combined_sev == "info":
             decided_by = None
-        elif _SEVERITY_RANK.get(abl_sev, 0) >= _SEVERITY_RANK.get(perm_sev, 0) and abl_sev != "info":
+        elif _SEVERITY_RANK.get(abl_sev, 0) > _SEVERITY_RANK.get(perm_sev, 0):
             decided_by = "adversarial_ablation"
         else:
             decided_by = "adversarial_permutation"
