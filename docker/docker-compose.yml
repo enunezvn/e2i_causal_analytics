@@ -49,6 +49,13 @@ x-common-env: &common-env
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
   ENVIRONMENT: production
   LOG_LEVEL: INFO
+  # Layer-4 adaptive-validity audit-trail persistence (Plan
+  # .claude/plans/layer4_evaluator_audit_consumer.md). Producer
+  # (src/agents/ml_foundation/data_preparer/graph.py:write_adaptive_verdicts_sidecar)
+  # silently no-ops when this var is unset; setting it here propagates to
+  # every service that merges *common-env. Operator opt-in for the Haiku
+  # evaluator itself is still ADAPTIVE_VALIDITY_EVALUATOR_ENABLED=1.
+  ADAPTIVE_VALIDITY_ARTIFACTS_DIR: /app/data/audit_artifacts
 
 x-common-worker: &common-worker
   build:
@@ -121,6 +128,12 @@ volumes:
   agent_outputs:
     driver: local
     name: e2i_agent_outputs
+  # Layer-4 adaptive-validity audit sidecars (Plan
+  # .claude/plans/layer4_evaluator_audit_consumer.md). Mounted on every
+  # service that mounts agent_outputs; backed up by scripts/backup_data_stores.sh.
+  audit_artifacts:
+    driver: local
+    name: e2i_audit_artifacts
   experiment_designs:
     driver: local
     name: e2i_experiment_designs
@@ -484,6 +497,7 @@ services:
       - ml_artifacts:/app/data/ml_artifacts
       - causal_outputs:/app/data/causal_outputs
       - agent_outputs:/app/data/agent_outputs
+      - audit_artifacts:/app/data/audit_artifacts
       - experiment_designs:/app/data/experiment_designs
       - feature_cache:/app/data/feature_cache:ro  # Read from Feast
     environment:
@@ -550,6 +564,7 @@ services:
       - ml_artifacts:/app/data/ml_artifacts
       - causal_outputs:/app/data/causal_outputs
       - agent_outputs:/app/data/agent_outputs
+      - audit_artifacts:/app/data/audit_artifacts
       - experiment_designs:/app/data/experiment_designs
       - feature_cache:/app/data/feature_cache:ro
     tmpfs:
@@ -598,6 +613,7 @@ services:
       - ml_artifacts:/app/data/ml_artifacts
       - causal_outputs:/app/data/causal_outputs
       - agent_outputs:/app/data/agent_outputs
+      - audit_artifacts:/app/data/audit_artifacts
       - experiment_designs:/app/data/experiment_designs
       - feature_cache:/app/data/feature_cache:ro
     tmpfs:
@@ -646,6 +662,7 @@ services:
       - ml_artifacts:/app/data/ml_artifacts
       - causal_outputs:/app/data/causal_outputs
       - agent_outputs:/app/data/agent_outputs
+      - audit_artifacts:/app/data/audit_artifacts
       - experiment_designs:/app/data/experiment_designs
       - feature_cache:/app/data/feature_cache:ro
     tmpfs:
