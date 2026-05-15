@@ -293,6 +293,18 @@ jobs:
   container-scan:
     name: Container Scanning (Trivy)
     runs-on: ubuntu-latest
+    # Issue #233 fix part 4: pin the vuln-DB repository list at the job
+    # level so transient registry rate-limits don't surface as opaque
+    # non-zero exits (category D in the issue triage). Trivy supports a
+    # comma-separated list of repositories and tries them in order until
+    # one succeeds — set the GCR mirror FIRST (newer Trivy default,
+    # higher throughput) and keep ghcr.io as fallback so we don't lose
+    # the original default's redundancy by pinning. This is durable
+    # across trivy-action upgrades since Trivy reads TRIVY_DB_REPOSITORY
+    # directly from env.
+    env:
+      TRIVY_DB_REPOSITORY: 'mirror.gcr.io/aquasec/trivy-db:2,ghcr.io/aquasecurity/trivy-db:2'
+      TRIVY_JAVA_DB_REPOSITORY: 'mirror.gcr.io/aquasec/trivy-java-db:1,ghcr.io/aquasecurity/trivy-java-db:1'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -328,6 +340,25 @@ jobs:
             -f docker/Dockerfile \
             .
 
+      - name: 'Reclaim disk after build (Issue #233)'
+        # Issue #233 root cause (run 25931172542): Trivy's image scan calls
+        # `docker save` to materialize an uncompressed tar of every layer
+        # under /var/lib/docker/tmp/docker-export-*. The heavy ML image
+        # (torch + cuda + transformers + scikit-survival) overflowed the
+        # ~10 MB the runner had left mid-scan and the scan died with
+        # `no space left on device`.
+        #
+        # Right after the build finishes — but before Trivy starts —
+        # purge buildx intermediate state and any dangling images so the
+        # docker-export staging area has headroom. We keep e2i-api:scan
+        # (the tag we're about to scan) but drop everything else.
+        if: steps.docker-build.outcome == 'success'
+        run: |
+          docker builder prune --force --all || true
+          docker image prune --force || true
+          docker system df || true
+          df -h / || true
+
       - name: Run Trivy vulnerability scanner
         if: steps.docker-build.outcome == 'success'
         uses: aquasecurity/trivy-action@v0.36.0
@@ -337,15 +368,26 @@ jobs:
           output: 'trivy-results.json'
           severity: 'CRITICAL,HIGH,MEDIUM'
           vuln-type: 'os,library'
-          # /app/.venv is a virtualenv baked into the production image (~1k+
-          # .pyc files in site-packages/). Trivy's library analyzer chokes on
-          # pyc walking — the semaphore acquire times out at 5min, the run
-          # dies with `context deadline exceeded`. Python deps are already
-          # covered by pip-audit (separate job in this workflow), so Trivy
-          # skipping the venv loses no coverage. The OS-package scan and any
-          # libraries installed outside /app/.venv still get scanned.
-          skip-dirs: '/app/.venv'
-          timeout: '15m'
+          # Issue #233 fix part 2: expand skip-dirs beyond /app/.venv to
+          # keep Trivy from walking build/test/cache trees that won't
+          # surface new OS- or library-CVEs but add I/O cost + disk
+          # pressure. Keeps the canonical /app/.venv comment (PR #22 root
+          # cause) intact:
+          #
+          # /app/.venv is a virtualenv baked into the production image
+          # (~1k+ .pyc files in site-packages/). Trivy's library analyzer
+          # chokes on pyc walking — the semaphore acquire times out at
+          # 5min, the run dies with `context deadline exceeded`. Python
+          # deps are already covered by pip-audit (separate job in this
+          # workflow), so Trivy skipping the venv loses no coverage. The
+          # OS-package scan and any libraries installed outside
+          # /app/.venv still get scanned.
+          skip-dirs: '/app/.venv,/app/.cache,/app/.mypy_cache,/app/.pytest_cache,/app/frontend/node_modules,/app/tests,/app/docs'
+          # Issue #233 fix part 1: 15m wasn't enough for the heavy ML
+          # image plus DB pull plus layer export; the failing run took
+          # ~13m of scan time before hitting the disk-space wall. Give
+          # 25m of headroom on slow runners.
+          timeout: '25m'
 
       - name: Upload Trivy artifacts
         uses: actions/upload-artifact@v4
