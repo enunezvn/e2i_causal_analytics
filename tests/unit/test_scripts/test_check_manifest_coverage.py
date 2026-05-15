@@ -1142,6 +1142,291 @@ def test_conditional_alias_assignment_fails_closed(tmp_path: Path) -> None:
         sys.path[:] = old_path
 
 
+# ---------------------------------------------------------------------------
+# Codex-rescue pass-3: HIGH-6 (wrapper-method bypass), HIGH-7 (output-dict
+# reassignment), HIGH-8 (AugAssign on output dicts)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "wrapper_method",
+    ["get", "copy", "items", "keys", "values", "fromkeys"],
+)
+def test_wrapper_method_bypass_fails_closed(
+    tmp_path: Path, wrapper_method: str
+) -> None:
+    """Codex pass-3 HIGH-6: an arbitrary user-defined object's method
+    named with ``get`` / ``copy`` / ``items`` / ``keys`` / ``values``
+    is just user code that could mutate the dict argument. Pass-2's
+    broader ``_NON_MUTATING_METHODS`` exception allowed all of these
+    through; pass-3 tightens to only ``append`` / ``extend`` on
+    non-output receivers.
+    """
+    converter = textwrap.dedent(
+        f"""
+        from typing import Any
+
+        class C:
+            def _build_record(self) -> dict[str, Any]:
+                record: dict[str, Any] = {{"known": 1}}
+                wrapper.{wrapper_method}(record)
+                return record
+        """
+    ).strip()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "synthetic_converter.py").write_text(converter)
+    (tmp_path / "_synthetic_manifest.py").write_text(_SYNTHETIC_MANIFEST)
+
+    cohort = _make_synthetic_cohort(
+        tmp_path, "scripts/synthetic_converter.py", "SYNTHETIC_TEST_FEATURES"
+    )
+
+    old_path = list(sys.path)
+    sys.path.insert(0, str(tmp_path))
+    try:
+        discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
+        assert disc_errs, (
+            f"wrapper.{wrapper_method}(record) must error (pass-3 HIGH-6)"
+        )
+    finally:
+        sys.path[:] = old_path
+
+
+def test_output_dict_reassignment_fromkeys_fails_closed(tmp_path: Path) -> None:
+    """Codex pass-3 HIGH-7: ``record = dict.fromkeys(...)`` reassigns
+    the output dict to a fresh dict whose keys the visitor can't
+    enumerate. The earlier dict-literal keys remain in ``discovered``
+    but the actual returned dict is different. Must error.
+    """
+    converter = textwrap.dedent(
+        """
+        from typing import Any
+
+        class C:
+            def _build_record(self) -> dict[str, Any]:
+                record: dict[str, Any] = {"known": 1}
+                record = dict.fromkeys(["known", "unmapped_fromkeys"], 1)
+                return record
+        """
+    ).strip()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "synthetic_converter.py").write_text(converter)
+    (tmp_path / "_synthetic_manifest.py").write_text(_SYNTHETIC_MANIFEST)
+
+    cohort = _make_synthetic_cohort(
+        tmp_path, "scripts/synthetic_converter.py", "SYNTHETIC_TEST_FEATURES"
+    )
+
+    old_path = list(sys.path)
+    sys.path.insert(0, str(tmp_path))
+    try:
+        discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
+        assert disc_errs, "output-dict reassignment must error (pass-3 HIGH-7)"
+        assert any("dict.fromkeys" in e for e in disc_errs)
+    finally:
+        sys.path[:] = old_path
+
+
+def test_output_dict_walrus_reassignment_fails_closed(tmp_path: Path) -> None:
+    """Codex pass-3 HIGH-7 (walrus form): ``record = (newrec := {...})``."""
+    converter = textwrap.dedent(
+        """
+        from typing import Any
+
+        class C:
+            def _build_record(self) -> dict[str, Any]:
+                record: dict[str, Any] = {"known": 1}
+                record = (newrec := {"known": 1, "unmapped_walrus": 1})
+                return record
+        """
+    ).strip()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "synthetic_converter.py").write_text(converter)
+    (tmp_path / "_synthetic_manifest.py").write_text(_SYNTHETIC_MANIFEST)
+
+    cohort = _make_synthetic_cohort(
+        tmp_path, "scripts/synthetic_converter.py", "SYNTHETIC_TEST_FEATURES"
+    )
+
+    old_path = list(sys.path)
+    sys.path.insert(0, str(tmp_path))
+    try:
+        discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
+        assert disc_errs, "walrus reassignment must error"
+    finally:
+        sys.path[:] = old_path
+
+
+def test_augassign_dict_union_literal_enumerates(tmp_path: Path) -> None:
+    """Codex pass-3 HIGH-8: ``record |= {"new_key": 1}`` MUST enumerate
+    the literal keys (similar to ``.update({...})``). Without this fix,
+    pass-3 had ``visit_AugAssign`` as a no-op.
+    """
+    converter = textwrap.dedent(
+        """
+        from typing import Any
+
+        class C:
+            def _build_record(self) -> dict[str, Any]:
+                record: dict[str, Any] = {"known": 1}
+                record |= {"aug_known_key": 1}
+                return record
+        """
+    ).strip()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "synthetic_converter.py").write_text(converter)
+    (tmp_path / "_synthetic_manifest.py").write_text(_SYNTHETIC_MANIFEST)
+
+    cohort = _make_synthetic_cohort(
+        tmp_path, "scripts/synthetic_converter.py", "SYNTHETIC_TEST_FEATURES"
+    )
+
+    old_path = list(sys.path)
+    sys.path.insert(0, str(tmp_path))
+    try:
+        discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
+        assert disc_errs == [], (
+            f"AugAssign with dict literal should enumerate cleanly: {disc_errs}"
+        )
+        assert "aug_known_key" in discovered
+        # Not in manifest → unmapped
+        manifest, _ = cmc.load_manifest_names(tmp_path, cohort)
+        report = cmc.reconcile_cohort(discovered, manifest, cohort.name)
+        assert "aug_known_key" in report.unmapped
+    finally:
+        sys.path[:] = old_path
+
+
+def test_augassign_dict_union_var_rhs_fails_closed(tmp_path: Path) -> None:
+    """``record |= other_dict_var`` with a non-literal, non-safe-spread
+    RHS must error."""
+    converter = textwrap.dedent(
+        """
+        from typing import Any
+
+        class C:
+            def _build_record(self) -> dict[str, Any]:
+                record: dict[str, Any] = {"known": 1}
+                other = {"unmapped_aug": 1}
+                record |= other
+                return record
+        """
+    ).strip()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "synthetic_converter.py").write_text(converter)
+    (tmp_path / "_synthetic_manifest.py").write_text(_SYNTHETIC_MANIFEST)
+
+    cohort = _make_synthetic_cohort(
+        tmp_path, "scripts/synthetic_converter.py", "SYNTHETIC_TEST_FEATURES"
+    )
+
+    old_path = list(sys.path)
+    sys.path.insert(0, str(tmp_path))
+    try:
+        discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
+        assert disc_errs, f"|= with non-literal RHS must error: {disc_errs}"
+    finally:
+        sys.path[:] = old_path
+
+
+def test_augassign_dict_union_safe_spread_does_not_error(tmp_path: Path) -> None:
+    """``record |= feats`` where ``feats`` is a safe-spread name must
+    NOT error — mirrors the .update(feats) safe path.
+    """
+    converter = textwrap.dedent(
+        """
+        from typing import Any
+
+        class C:
+            def _build_record(self) -> dict[str, Any]:
+                feats = self._compute_features()
+                record: dict[str, Any] = {"known": 1}
+                record |= feats
+                return record
+
+            def _compute_features(self) -> dict[str, Any]:
+                feats: dict[str, Any] = {}
+                feats["safe_feature"] = 1
+                return feats
+        """
+    ).strip()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "synthetic_converter.py").write_text(converter)
+    (tmp_path / "_synthetic_manifest.py").write_text(_SYNTHETIC_MANIFEST)
+
+    cohort = cmc.CohortConfig(
+        name="synthetic-aug-safe",
+        converter_rel_path="scripts/synthetic_converter.py",
+        discovery_funcs=(
+            cmc.DiscoveryFunc(
+                func_name="_build_record",
+                output_dict_names=("record",),
+            ),
+            cmc.DiscoveryFunc(
+                func_name="_compute_features",
+                output_dict_names=("feats",),
+            ),
+        ),
+        manifest_module="_synthetic_manifest",
+        manifest_attr="SYNTHETIC_TEST_FEATURES",
+    )
+
+    old_path = list(sys.path)
+    sys.path.insert(0, str(tmp_path))
+    try:
+        discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
+        assert disc_errs == [], f"|= with safe-spread should not error: {disc_errs}"
+        assert {"known", "safe_feature"}.issubset(discovered)
+    finally:
+        sys.path[:] = old_path
+
+
+def test_list_collector_append_still_accepted(tmp_path: Path) -> None:
+    """After tightening _NON_MUTATING_METHODS → _LIST_COLLECTOR_METHODS
+    (pass-3 HIGH-6), the canonical ``journeys.append(journey_dict)``
+    pattern must still work."""
+    converter = textwrap.dedent(
+        """
+        from typing import Any
+
+        class C:
+            def _build_record(self) -> list[dict[str, Any]]:
+                journeys: list[dict[str, Any]] = []
+                journey_dict: dict[str, Any] = {"known": 1}
+                journeys.append(journey_dict)
+                journeys.extend([journey_dict])
+                return journeys
+        """
+    ).strip()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "synthetic_converter.py").write_text(converter)
+    (tmp_path / "_synthetic_manifest.py").write_text(_SYNTHETIC_MANIFEST)
+
+    cohort = cmc.CohortConfig(
+        name="synthetic-append",
+        converter_rel_path="scripts/synthetic_converter.py",
+        discovery_funcs=(
+            cmc.DiscoveryFunc(
+                func_name="_build_record",
+                output_dict_names=("journey_dict",),
+            ),
+        ),
+        manifest_module="_synthetic_manifest",
+        manifest_attr="SYNTHETIC_TEST_FEATURES",
+    )
+
+    old_path = list(sys.path)
+    sys.path.insert(0, str(tmp_path))
+    try:
+        discovered, disc_errs = cmc.discover_columns_for_cohort(tmp_path, cohort)
+        assert disc_errs == [], (
+            f"journeys.append(journey_dict) should not error: {disc_errs}"
+        )
+        assert "known" in discovered
+    finally:
+        sys.path[:] = old_path
+
+
 def test_subscript_read_in_if_expression_does_not_false_positive(
     tmp_path: Path,
 ) -> None:
