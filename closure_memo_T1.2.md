@@ -2,8 +2,17 @@
 
 **Path chosen**: SHIP
 **Branch**: `phase-3-4-model-trainer-ablation`
-**Commits**: `394913b9` (initial wiring) + `71a9fa81` (self-review fixes)
-**Status**: Implementation + 6 integration tests + adversarial self-review COMPLETE.
+**Commits**:
+- `394913b9` initial wiring (3 files; 6 integration tests)
+- `71a9fa81` self-review fixes (tie-break + duplicate-column guards + 2 new tests)
+- `5a307bdd` + `2f396ee5` closure memo
+- `81f6b23a` codex MED-1: rename per_feature.delta_auc → ablation_delta_auc
+- `8b058ac1` codex MED-2: apply issue #194 delta_AUC joint check to perm pass (cohort recalibration)
+- `d9dd5640` codex MED-3: align decided_by to Phase 3.3 convention ("adversarial" / "adversarial_ablation")
+- `7635805e` codex LOW-1+LOW-2: n_permutations<1 guard + decided_by attribution branch pin
+- `664a7e71` codex LOW-3+NIT: typed state fields + malformed noqa cleanup
+
+**Status**: Implementation + 9 integration tests + adversarial self-review + codex pass-1 fixes COMPLETE. Awaiting codex pass-2.
 **PR URL**: https://github.com/enunezvn/e2i_causal_analytics/pull/229 (supervisor merges per agent constraints).
 
 ## Decision Rationale: SHIP
@@ -49,15 +58,29 @@ Solution: BOTH passes (label-shuffle perm + column-shuffle ablation) with MAX-ru
 
 ## Codex/Self-Review Iteration History
 
-Codex-rescue subagent was unavailable from within this subagent (Agent tool not in scope; documented in codex:rescue command body). Performed thorough adversarial self-review covering the 8 specific concerns the codex review would have addressed:
-
-**Self-review findings (commit `71a9fa81`)**:
+**Pass-0 (self-review, commit `71a9fa81`)**: Codex-rescue subagent unavailable from subagent context; performed thorough self-review covering 8 specific concerns.
 
 - **MEDIUM-1**: `decided_by` tie-break MISMATCH vs Phase 3.3. Initial code used `a_rank >= p_rank` for ablation credit; Phase 3.3 at `adaptive_validity_check.py:2320` uses `<=` so perm wins ties. Fixed to use strict `a_rank > p_rank`. Without fix, audit convention would silently invert between Phase 3.3 (perm tag on ties) and Phase 3.4 (ablation tag on ties).
 
 - **MEDIUM-2**: Duplicate-column-name guard missing. `X.drop(columns=[name])` drops ALL columns with that name (not just one), silently breaking the per-feature drop loop. Added guards in `_build_dataframe_with_names` for both DataFrame input and numpy+names input.
 
-**Concerns reviewed and found ACCEPTABLE**:
+**Pass-1 (codex adversarial review, SHIP-WITH-FIXES; commits `81f6b23a` → `664a7e71`)**: Supervisor dispatched codex pass-1; 3 MEDIUM + 3 LOW + 1 NIT findings. All addressed per-fix per-commit:
+
+- **MEDIUM-1** (codex): `model_eval_ablation.py:669` emitted `delta_auc` field instead of Phase 3.3 audit-trail parity field `ablation_delta_auc` (canonical name at `adaptive_validity_check.py:2313`). Fixed: per_feature row now emits `ablation_delta_auc` matching Phase 3.3.
+
+- **MEDIUM-2** (codex): perm pass was z-only (pre-issue-#194 ladder); at n≥10k label-shuffle null variance shrinks per CLT producing false-positive z >> 5σ on weak predictors. Fixed: `_classify_permutation_severity` now takes `delta_auc` + `delta_auc_floor`, applies issue #194 joint check, mirrors Phase 3.3's `hblp_classify` semantics. Cohort recalibrated (leak_p 0.08 → 0.12) to satisfy both joint-check AND Cramér's V invariants with margin. 7-case test pin.
+
+- **MEDIUM-3** (codex): `decided_by` strings invented `"adversarial_permutation"` not in Phase 3.3's convention (`"adversarial"` for perm-only at `:1315`, `:1371`, `:1422`; only overwritten to `"adversarial_ablation"` on escalation at `:2930-2931`). Fixed: Phase 3.4 now uses byte-identical Phase 3.3 strings; `_DECIDED_BY_TO_LAYER` maps both to layer "3".
+
+- **LOW-1**: `n_permutations < 1` guard missing — silent empty null distributions would degrade every feature's severity to info. Added `ValueError` guards at evaluator state-read boundary for both `model_trainer_ablation_n_permutations` and `model_trainer_ablation_permutation_n_permutations`.
+
+- **LOW-2**: `decided_by` attribution branch was not exercised through assembled per_feature rows in a focused test. Added `test_phase34_decided_by_attribution_per_feature_row` pinning all 4 branches.
+
+- **LOW-3**: Ad-hoc extra state keys not declared in typed `ModelTrainerState` schema. Added 10 typed Optional fields covering the master gate + 7 tuning knobs + factory hook + output payload.
+
+- **NIT**: Invalid `# noqa: random_state=42 — ...` directive at `evaluator.py:523` (no comma-separated code list). Converted to plain comment.
+
+**Concerns reviewed in pass-0 and found ACCEPTABLE**:
 1. Phase 3.3 misses pin: structurally sound (relies on `_select_features` numeric filter + Cramér's V whole-column check, both stable invariants).
 2. Encoded names: correct level of granularity for per-category leak class (leak lives IN `region_leak_region`, not raw column). Known limitation that legitimate strong predictors will also flag via perm pass — same as Phase 3.3's behavior on numeric features; downstream Layer 4 makes the causal call.
 3. State flag namespace `model_trainer_*` distinct from Phase 3.3's `adaptive_*`; different agents/states.
@@ -65,29 +88,28 @@ Codex-rescue subagent was unavailable from within this subagent (Agent tool not 
 5. Default OFF / advisory mode / schema uniformity invariants all preserved.
 6. (Fixed) Tie-break aligned with Phase 3.3.
 7. Performance: 250s worst-case at max_features=100; acceptable given opt-in advisory mode.
-8. Known limitation (issue #194 mirror): simple z-band has 5σ FPR blowup at n≥10k. Documented; promote to joint check if lifecycle transitions ADVISORY → ENFORCED.
+8. ~~Known limitation (issue #194 mirror): simple z-band has 5σ FPR blowup at n≥10k. Documented; promote to joint check if lifecycle transitions ADVISORY → ENFORCED.~~ **FIXED in codex pass-1 MED-2** (commit `8b058ac1`). The perm classifier now applies the issue #194 joint (z, |delta_AUC|) check from the start — no deferred-promotion item remains.
 
-## Verification
+## Verification (post codex pass-1)
 
 ```
-pytest tests/integration/test_model_trainer_layer3_ablation.py -xvs
-================== 6 passed, 75 warnings in 136.87s (0:02:16) ==================
+pytest tests/integration/test_model_trainer_layer3_ablation.py -v
+================== 9 passed, 75 warnings in 153.29s (0:02:33) ==================
 
-pytest tests/integration/test_adaptive_validity_check_ablation_layer3.py -xvs
-================== 3 passed, 75 warnings in 70.91s (0:01:10) ==================
-(Phase 3.3 unchanged)
+pytest tests/integration/test_adaptive_validity_check_ablation_layer3.py
+tests/unit/test_data/test_adversarial_leakage.py -v
+================== 11 passed, 75 warnings in 84.40s (0:01:24) ==================
+(Phase 3.3 + adversarial_leakage unit tests unchanged.)
 
-pytest tests/unit/test_data/test_adversarial_leakage.py -xvs
-======================= 8 passed, 10 warnings in 38.09s ========================
-(adversarial_leakage unit tests unchanged)
-
-ruff check src/agents/ml_foundation/model_trainer/nodes/ tests/integration/test_model_trainer_layer3_ablation.py
+ruff check src/agents/ml_foundation/model_trainer/nodes/ src/agents/ml_foundation/model_trainer/state.py tests/integration/test_model_trainer_layer3_ablation.py
 All checks passed!
 
-mypy --config-file pyproject.toml src/agents/ml_foundation/model_trainer/nodes/model_eval_ablation.py
-Found 21 errors in 15 files (checked 1 source file)
-(All 21 pre-existing in other files; zero new errors in new module.)
+mypy --config-file pyproject.toml src/agents/ml_foundation/model_trainer/nodes/model_eval_ablation.py src/agents/ml_foundation/model_trainer/state.py
+Found 21 errors in 15 files (checked 2 source files)
+(All 21 pre-existing in other files; zero new errors in new modules.)
 ```
+
+Total integration tests after codex pass-1: **9 cases** (added 3 over the original 6).
 
 ## Open Follow-ups for Supervisor
 
