@@ -31,9 +31,9 @@ logger = logging.getLogger(__name__)
 
 
 # Promotion thresholds. Configurable via env later; conservative defaults.
-SEMANTIC_MIN_CONFIRMATIONS = 3       # episodic memories citing the same causal_path
-PROCEDURAL_MIN_USAGE = 5             # procedural_memories.usage_count
-PROCEDURAL_MIN_SUCCESS_RATE = 0.8    # success_rate field on procedural memories
+SEMANTIC_MIN_CONFIRMATIONS = 3  # episodic memories citing the same causal_path
+PROCEDURAL_MIN_USAGE = 5  # procedural_memories.usage_count
+PROCEDURAL_MIN_SUCCESS_RATE = 0.8  # success_rate field on procedural memories
 
 
 @dataclass
@@ -101,9 +101,7 @@ class Consolidator:
 
     # ---------------------------------------------------------- semantic tier
 
-    async def _promote_to_semantic(
-        self, result: ConsolidationResult, brand: Optional[str]
-    ) -> None:
+    async def _promote_to_semantic(self, result: ConsolidationResult, brand: Optional[str]) -> None:
         """
         Find causal_paths that have been confirmed >= N times AND have a
         passing validation_status, and stamp ``consolidated_at = now()``.
@@ -226,8 +224,7 @@ class Consolidator:
                 )
             except Exception as exc:
                 logger.warning(
-                    f"consolidator: update failed for procedural "
-                    f"{proc.get('procedure_id')}: {exc}"
+                    f"consolidator: update failed for procedural {proc.get('procedure_id')}: {exc}"
                 )
                 result.errors.append(f"proc update {proc.get('procedure_id')}: {exc}")
 

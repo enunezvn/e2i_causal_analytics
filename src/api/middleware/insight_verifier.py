@@ -51,7 +51,9 @@ logger = logging.getLogger(__name__)
 # Default path prefixes the verifier inspects. Override via env.
 _DEFAULT_PATHS = "/api/causal,/api/explain,/api/executive-insights"
 INSIGHT_VERIFIER_PATHS = [
-    p.strip() for p in os.environ.get("INSIGHT_VERIFIER_PATHS", _DEFAULT_PATHS).split(",") if p.strip()
+    p.strip()
+    for p in os.environ.get("INSIGHT_VERIFIER_PATHS", _DEFAULT_PATHS).split(",")
+    if p.strip()
 ]
 
 CACHE_TTL_SECONDS = int(os.environ.get("INSIGHT_VERIFIER_CACHE_TTL", "3600"))

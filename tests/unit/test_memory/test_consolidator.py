@@ -89,9 +89,7 @@ def fake_supabase() -> FakeSupabase:
 
 @pytest.fixture(autouse=True)
 def patch_client(fake_supabase):
-    with patch(
-        "src.memory.lifecycle.consolidator.get_supabase_client", return_value=fake_supabase
-    ):
+    with patch("src.memory.lifecycle.consolidator.get_supabase_client", return_value=fake_supabase):
         yield
 
 

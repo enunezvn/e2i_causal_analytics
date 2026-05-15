@@ -250,8 +250,8 @@ async def _eval_new_causal_path(
     """Select causal_paths created since last_fired_at."""
     client = get_supabase_client()
     since = cfg.get("since") or last_fired_at or "1970-01-01T00:00:00+00:00"
-    query = client.table("causal_paths").select("path_id, brand, created_at").gte(
-        "created_at", since
+    query = (
+        client.table("causal_paths").select("path_id, brand, created_at").gte("created_at", since)
     )
     if brand != "all":
         query = query.eq("brand", brand)
@@ -285,13 +285,7 @@ async def dispatch_sentinels() -> SentinelDispatchResult:
     client = get_supabase_client()
     result = SentinelDispatchResult()
 
-    rows = (
-        client.table("sentinels")
-        .select("*")
-        .eq("enabled", True)
-        .execute()
-        .data
-    ) or []
+    rows = (client.table("sentinels").select("*").eq("enabled", True).execute().data) or []
     result.examined = len(rows)
 
     for sentinel in rows:
@@ -349,10 +343,7 @@ async def _fire_action(
                     },
                 )
             elif action_type == "notify":
-                logger.info(
-                    f"sentinel:notify {name} brand={brand} match={match} "
-                    f"cfg={action_cfg}"
-                )
+                logger.info(f"sentinel:notify {name} brand={brand} match={match} cfg={action_cfg}")
             else:
                 continue
             result.actions_taken += 1
@@ -365,8 +356,8 @@ async def _fire_action(
         now_iso = datetime.now(timezone.utc).isoformat()
         new_count = (sentinel.get("fire_count") or 0) + 1
         client = get_supabase_client()
-        client.table("sentinels").update(
-            {"last_fired_at": now_iso, "fire_count": new_count}
-        ).eq("sentinel_id", sentinel_id).execute()
+        client.table("sentinels").update({"last_fired_at": now_iso, "fire_count": new_count}).eq(
+            "sentinel_id", sentinel_id
+        ).execute()
     except Exception as exc:
         logger.warning(f"sentinel {sentinel_id}: failed to bump fire_count: {exc}")
