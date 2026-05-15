@@ -43,6 +43,16 @@ from .advanced_validation import (
     optimize_threshold_f1,
     validate_stratified_splits,
 )
+from .model_eval_ablation import (
+    DEFAULT_MODEL_EVAL_ABLATION_MAX_FEATURES,
+    DEFAULT_MODEL_EVAL_ABLATION_PERMUTATIONS,
+    DEFAULT_MODEL_EVAL_PERMUTATION_PERMS,
+    MODEL_EVAL_ABLATION_DELTA_AUC_FLOOR_DEFAULT,
+    MODEL_EVAL_ABLATION_HIGH_Z,
+    MODEL_EVAL_ABLATION_MODERATE_Z,
+    MODEL_EVAL_ABLATION_STRONG_EFFECT_DEFAULT,
+    run_model_eval_ablation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -737,6 +747,158 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
                 f"{p99:.4f}" if p99 is not None else "None",
                 permutation_result["signal_genuine"],
             )
+
+        # 1.5. Phase 3.4 — model-trainer Layer 3 ablation (advisory, opt-in).
+        # Plan ref: .claude/plans/adaptive_temporal_validity_redesign.md line
+        # 245. Wires ``compute_feature_ablation`` on the encoded test split
+        # AFTER ``preprocessor.fit_transform`` has run (one-hot + scaler +
+        # imputer). The hook catches a leak class Phase 3.3 cannot see:
+        # per-category leak through OneHotEncoder. Phase 3.3 numeric ablation
+        # skips categoricals; Cramér's V on the whole categorical column is
+        # the data-prep first line of defense, but it misses the rare-category
+        # case where ONE OHE indicator carries strong target signal but the
+        # whole column's Cramér's V stays below the 0.5 threshold.
+        #
+        # Default OFF (``model_trainer_layer3_ablation_enabled=False``) —
+        # joint-model retrain cost is O(n_encoded) × O(n_perms). Advisory
+        # mode mirrors §4 T2.2 / T2.3: emits signals on
+        # ``validation_metrics`` but does NOT mutate ``success_criteria_met``.
+        #
+        # Tuning knobs (all read from ``state`` with safe defaults):
+        #   * model_trainer_layer3_ablation_enabled (bool, default False)
+        #   * model_trainer_ablation_n_permutations (int, default 30)
+        #   * model_trainer_ablation_z_threshold (float, default 5.0)
+        #   * model_trainer_ablation_max_features (int, default 100)
+        #   * model_trainer_ablation_strong_effect_threshold (float, default 0.30)
+        #   * model_trainer_ablation_delta_auc_floor (float, default 0.10)
+        #   * model_trainer_ablation_model_factory (callable, default None →
+        #     LogisticRegression). Pass a tree-based factory to detect
+        #     interaction-only leaks the linear baseline cannot learn.
+        if bool(state.get("model_trainer_layer3_ablation_enabled", False)):
+            _ablation_perms_raw = state.get("model_trainer_ablation_n_permutations")
+            ablation_perms = (
+                int(_ablation_perms_raw)
+                if _ablation_perms_raw is not None
+                else DEFAULT_MODEL_EVAL_ABLATION_PERMUTATIONS
+            )
+            _ablation_z_raw = state.get("model_trainer_ablation_z_threshold")
+            ablation_z = (
+                float(_ablation_z_raw)
+                if _ablation_z_raw is not None
+                else MODEL_EVAL_ABLATION_HIGH_Z
+            )
+            _ablation_max_raw = state.get("model_trainer_ablation_max_features")
+            ablation_max = (
+                int(_ablation_max_raw)
+                if _ablation_max_raw is not None
+                else DEFAULT_MODEL_EVAL_ABLATION_MAX_FEATURES
+            )
+            _ablation_strong_raw = state.get("model_trainer_ablation_strong_effect_threshold")
+            ablation_strong = (
+                float(_ablation_strong_raw)
+                if _ablation_strong_raw is not None
+                else MODEL_EVAL_ABLATION_STRONG_EFFECT_DEFAULT
+            )
+            _ablation_floor_raw = state.get("model_trainer_ablation_delta_auc_floor")
+            ablation_floor = (
+                float(_ablation_floor_raw)
+                if _ablation_floor_raw is not None
+                else MODEL_EVAL_ABLATION_DELTA_AUC_FLOOR_DEFAULT
+            )
+            ablation_factory = state.get("model_trainer_ablation_model_factory")
+            ablation_seed = int(state.get("model_trainer_ablation_seed", 42))
+            _ablation_perm_n_raw = state.get("model_trainer_ablation_permutation_n_permutations")
+            ablation_perm_n = (
+                int(_ablation_perm_n_raw)
+                if _ablation_perm_n_raw is not None
+                else DEFAULT_MODEL_EVAL_PERMUTATION_PERMS
+            )
+
+            # Recover encoded feature names. _wrap_with_feature_names already
+            # produces a DataFrame when names are available — use them
+            # directly. If X_test_np is still a numpy array here, names were
+            # unavailable / mismatched, and run_model_eval_ablation will
+            # cleanly skip with a logged reason.
+            try:
+                import pandas as pd
+            except ImportError:
+                pd = None  # type: ignore[assignment]
+            if pd is not None and isinstance(X_test_np, pd.DataFrame):
+                encoded_names = list(X_test_np.columns)
+            else:
+                preprocessor = state.get("preprocessor")
+                encoded_names = None
+                if preprocessor is not None and hasattr(preprocessor, "get_feature_names_out"):
+                    try:
+                        encoded_names = list(preprocessor.get_feature_names_out())
+                    except Exception:
+                        encoded_names = None
+
+            # Phase 3.4 ablation runs on the TRAIN split, not the test
+            # split. Rationale: ``compute_feature_ablation`` internally
+            # retrains the joint model and measures |delta_AUC| against
+            # a permutation null built from re-fits with shuffled feature
+            # columns. The signal we're looking for (a feature whose
+            # removal collapses the joint AUC) is most detectable where
+            # the model has the most data — the training split. Running
+            # on the test split would (a) under-power the per-fold
+            # retraining (test is usually 10-20% of full data), and
+            # (b) conflate test-set predictive power with feature
+            # importance under the alternative null. This mirrors Phase
+            # 3.3 which runs ablation on ``train_df`` at
+            # ``adaptive_validity_check.py:2745`` (the canonical
+            # data-prep call).
+            logger.info(
+                "Running model_trainer Phase 3.4 ablation on TRAIN split "
+                "(n_perms=%d, encoded_features=%s)...",
+                ablation_perms,
+                "unknown" if encoded_names is None else str(len(encoded_names)),
+            )
+            ablation_result = run_model_eval_ablation(
+                X_train_np,
+                y_train_np,
+                feature_names=encoded_names,
+                n_permutations=ablation_perms,
+                permutation_n_permutations=ablation_perm_n,
+                seed=ablation_seed,
+                z_threshold=ablation_z,
+                max_features=ablation_max,
+                strong_effect_threshold=ablation_strong,
+                delta_auc_floor=ablation_floor,
+                moderate_z_threshold=MODEL_EVAL_ABLATION_MODERATE_Z,
+                model_factory=ablation_factory,
+            )
+            metrics_result["model_eval_ablation"] = ablation_result
+            # Promote a compact summary onto validation_metrics so audit
+            # readers can grep without unpacking the nested per_feature
+            # list. Schema-uniform: when ablation_result is None or
+            # ran=False, the summary keys carry None / empty list.
+            validation_metrics = metrics_result.get("validation_metrics") or {}
+            if isinstance(validation_metrics, dict):
+                if ablation_result is None:
+                    validation_metrics["model_eval_ablation_ran"] = False
+                    validation_metrics["model_eval_ablation_flagged_features"] = []
+                    validation_metrics["model_eval_ablation_skipped_reason"] = (
+                        "ablation pass returned None (X_test or y_test unavailable)"
+                    )
+                else:
+                    validation_metrics["model_eval_ablation_ran"] = bool(
+                        ablation_result.get("ran", False)
+                    )
+                    validation_metrics["model_eval_ablation_flagged_features"] = list(
+                        ablation_result.get("flagged_features", []) or []
+                    )
+                    validation_metrics["model_eval_ablation_skipped_reason"] = (
+                        ablation_result.get("skipped_reason")
+                    )
+                metrics_result["validation_metrics"] = validation_metrics
+            if ablation_result is not None and ablation_result.get("ran"):
+                logger.info(
+                    "model_eval_ablation: scored %d encoded features, "
+                    "flagged %d (severity >= moderate)",
+                    len(ablation_result.get("per_feature", []) or []),
+                    len(ablation_result.get("flagged_features", []) or []),
+                )
 
         # 2. Calibration analysis — ECE + calibration curve
         calibration_result = compute_calibration_analysis(y_test_np, y_test_proba)
