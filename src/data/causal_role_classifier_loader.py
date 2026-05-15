@@ -27,6 +27,7 @@ optimised classifier."
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import os
 import re
@@ -36,7 +37,13 @@ from typing import Optional
 import dspy
 
 from src.data.causal_role_classifier import CausalRoleClassifier
-from src.data.kg.types import CausalRole, LLMVerdict, Remediation
+from src.data.causal_role_evaluator import (
+    CausalRoleEvaluator,
+    _evaluator_lm_is_configured,
+    evaluator_is_enabled,
+    resolve_evaluator_model,
+)
+from src.data.kg.types import CausalRole, LLMEvaluatorAudit, LLMVerdict, Remediation
 
 logger = logging.getLogger(__name__)
 
@@ -314,6 +321,66 @@ def _coerce_remediation(value: object) -> Optional[Remediation]:
     return None
 
 
+def _build_evaluator() -> Optional[CausalRoleEvaluator]:
+    """Construct a CausalRoleEvaluator when the operator has opted in.
+
+    Returns ``None`` when the evaluator is disabled or Haiku is
+    unconfigured. The returned evaluator carries no LM binding; the LM
+    is set per-call via ``dspy.settings.context`` inside
+    :func:`_run_evaluator`.
+
+    Plan: ``.claude/plans/layer4_evaluator_audit_signal.md``.
+    """
+    if not evaluator_is_enabled():
+        return None
+    if not _evaluator_lm_is_configured():
+        # INFO-level so operators see the explicit "I enabled this but
+        # nothing is happening" cause. Mirrors the loader's missing-key
+        # diagnostic pattern.
+        logger.info(
+            "_build_evaluator: ADAPTIVE_VALIDITY_EVALUATOR_ENABLED=1 but "
+            "ANTHROPIC_API_KEY missing — evaluator skipped. Set the "
+            "Anthropic key to enable the Layer-4 audit evaluator."
+        )
+        return None
+    return CausalRoleEvaluator()
+
+
+def _run_evaluator(
+    evaluator: CausalRoleEvaluator,
+    *,
+    feature_name: str,
+    derivation_pseudocode: str,
+    dataset_context: str,
+    worker_verdict: LLMVerdict,
+) -> Optional[LLMEvaluatorAudit]:
+    """Call the evaluator inside a Haiku LM context. Returns None on failure.
+
+    The evaluator may raise on rate-limits, malformed outputs, or
+    transient network errors. In all cases we log and return None so
+    the worker's verdict is preserved.
+    """
+    model = resolve_evaluator_model()
+    try:
+        evaluator_lm = dspy.LM(model=model)
+        with dspy.settings.context(lm=evaluator_lm):
+            return evaluator.evaluate(
+                feature_name=feature_name,
+                derivation_pseudocode=derivation_pseudocode,
+                dataset_context=dataset_context,
+                worker_verdict=worker_verdict,
+                evaluator_model=model,
+            )
+    except Exception as exc:
+        logger.warning(
+            "Layer-4 evaluator raised for feature=%s: %s — "
+            "returning verdict with evaluator_audit=None.",
+            feature_name,
+            exc,
+        )
+        return None
+
+
 def classify_feature(
     *,
     feature_name: str,
@@ -424,12 +491,27 @@ def classify_feature(
         )
         mechanism = ""
 
-    return LLMVerdict(
+    worker_verdict = LLMVerdict(
         causal_role=role,
         mechanism=mechanism,
         recommended_remediation=remediation,
         cited_pmids=_extract_pmids(mechanism),
     )
+
+    evaluator = _build_evaluator()
+    if evaluator is None:
+        return worker_verdict
+
+    audit = _run_evaluator(
+        evaluator,
+        feature_name=feature_name,
+        derivation_pseudocode=derivation_pseudocode,
+        dataset_context=dataset_context,
+        worker_verdict=worker_verdict,
+    )
+    if audit is None:
+        return worker_verdict
+    return dataclasses.replace(worker_verdict, evaluator_audit=audit)
 
 
 def is_lm_configured_for_classification() -> bool:
