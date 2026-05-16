@@ -4179,6 +4179,22 @@ class OptumDataConverter:
                 ),
             },
             {
+                "feature": "academic_hcp",
+                "type": "Optional[bool]",
+                "source_table": "NPPES taxonomies via lookup_npi",
+                "lookback_window": "n/a (provider attribute)",
+                "notes": (
+                    "Issue #249 / PR B-prime BP3 — causal-model confounder. "
+                    "TRUE iff any NPPES taxonomy on the provider matches "
+                    "rwd_common.ACADEMIC_MEDICAL_CENTER_CODES (single source "
+                    "of truth). FALSE iff the cache hit but no academic-code "
+                    "match (incl. empty taxonomy list). NULL iff the cache "
+                    "missed (obfuscated-NPI cohort or unknown real NPI) — "
+                    "downstream consumers must distinguish 'not derivable' "
+                    "from 'not academic'."
+                ),
+            },
+            {
                 "feature": "journey_stage",
                 "type": (
                     "enum{aware,considering,first_fill,adherent,"
