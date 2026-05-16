@@ -231,6 +231,50 @@ class RedisWorkingMemory:
         await redis.hset(session_key, mapping=updates)
         await redis.expire(session_key, self.ttl_seconds)
 
+    async def list_sessions(
+        self,
+        user_id: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """
+        List active sessions, most-recent-activity first.
+
+        Args:
+            user_id: Optional user filter
+            limit: Maximum number of sessions to return
+
+        Returns:
+            List of session dicts (same shape as get_session)
+        """
+        redis = await self.get_client()
+        pattern = f"{self.session_prefix}*"
+
+        sessions: List[Dict[str, Any]] = []
+        async for key in redis.scan_iter(match=pattern, count=200):
+            # Skip nested keys (e.g. :messages, :evidence)
+            if key.count(":") > self.session_prefix.count(":"):
+                continue
+            data = await redis.hgetall(key)
+            if not data:
+                continue
+            if user_id and data.get("user_id") != user_id:
+                continue
+            for json_field in ("user_preferences", "active_filters"):
+                if data.get(json_field):
+                    try:
+                        data[json_field] = json.loads(data[json_field])
+                    except (TypeError, ValueError):
+                        pass
+            if data.get("message_count"):
+                try:
+                    data["message_count"] = int(data["message_count"])
+                except (TypeError, ValueError):
+                    data["message_count"] = 0
+            sessions.append(data)
+
+        sessions.sort(key=lambda s: s.get("last_activity_at", ""), reverse=True)
+        return sessions[:limit]
+
     async def delete_session(self, session_id: str) -> bool:
         """
         Delete a session and all associated data.

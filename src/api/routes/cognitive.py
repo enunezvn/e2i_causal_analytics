@@ -580,6 +580,77 @@ async def delete_session(session_id: str) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Failed to delete session: {str(e)}") from e
 
 
+@router.get(
+    "/sessions",
+    summary="List cognitive sessions",
+    operation_id="list_cognitive_sessions",
+)
+async def list_sessions(
+    user_id: Optional[str] = None,
+    limit: int = 50,
+) -> Dict[str, Any]:
+    """
+    List active cognitive sessions, ordered by most recent activity.
+
+    Returns a lightweight summary per session (context only, no messages).
+    """
+    try:
+        working_memory = get_working_memory()
+        rows = await working_memory.list_sessions(user_id=user_id, limit=limit)
+
+        sessions: List[Dict[str, Any]] = []
+        for row in rows:
+            sessions.append(
+                {
+                    "session_id": row.get("session_id"),
+                    "user_id": row.get("user_id"),
+                    "brand": row.get("active_brand"),
+                    "region": row.get("active_region"),
+                    "state": row.get("current_phase", "active"),
+                    "created_at": row.get("created_at"),
+                    "last_activity": row.get("last_activity_at"),
+                    "message_count": row.get("message_count", 0),
+                }
+            )
+
+        return {"sessions": sessions, "total": len(sessions)}
+
+    except Exception as e:
+        logger.error(f"Failed to list sessions: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list sessions: {str(e)}") from e
+
+
+@router.get(
+    "/status",
+    summary="Get cognitive service status",
+    operation_id="get_cognitive_status",
+)
+async def get_cognitive_status() -> Dict[str, Any]:
+    """
+    Get current cognitive service status: configured agents and dependency health.
+    """
+    try:
+        orchestrator = None
+        agents: List[str] = []
+        try:
+            orchestrator = get_orchestrator()
+            registry = getattr(orchestrator, "agent_registry", None) or {}
+            agents = sorted(registry.keys()) if isinstance(registry, dict) else []
+        except Exception:
+            pass
+
+        return {
+            "status": "healthy" if orchestrator is not None else "degraded",
+            "version": "4.2.0",
+            "agents": agents,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get cognitive status: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get status: {str(e)}") from e
+
+
 # =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
