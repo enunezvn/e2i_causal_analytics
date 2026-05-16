@@ -37,14 +37,30 @@ _orchestrator_instance = None
 
 
 def get_orchestrator():
-    """Get or create OrchestratorAgent singleton."""
+    """Get or create OrchestratorAgent singleton.
+
+    Wires the orchestrator with a registry of real Tier 0-5 agents via
+    ``create_agent_registry``. Without a registry the dispatcher silently
+    falls back to canned mock narratives (``dispatcher._mock_agent_execution``),
+    so every "cognitive" API response would be fabricated — that mode is now
+    only used when the factory itself fails to instantiate any agents.
+    """
     global _orchestrator_instance
     if _orchestrator_instance is None:
         try:
+            from src.agents.factory import create_agent_registry
             from src.agents.orchestrator import OrchestratorAgent
 
-            _orchestrator_instance = OrchestratorAgent()
-            logger.info("OrchestratorAgent initialized for cognitive workflow")
+            # Exclude orchestrator from its own dispatch registry — it
+            # routes to OTHER agents, not to itself, and including it
+            # would also cause the factory to instantiate a second
+            # OrchestratorAgent during registry construction.
+            registry = create_agent_registry(exclude_agents=["orchestrator"])
+            _orchestrator_instance = OrchestratorAgent(agent_registry=registry)
+            logger.info(
+                f"OrchestratorAgent initialized for cognitive workflow with "
+                f"{len(registry)} real agents: {sorted(registry.keys())}"
+            )
         except Exception as e:
             logger.warning(f"OrchestratorAgent initialization failed: {e}")
             return None
@@ -346,6 +362,17 @@ async def process_cognitive_query(
 
                 if agents_dispatched:
                     agent_name = agents_dispatched[0]  # Primary agent used
+                else:
+                    # Issue #251 F1+F2: the orchestrator ran but produced no
+                    # dispatch. Surface that as a degraded marker — DO NOT
+                    # fall through to the query_type-derived default, which
+                    # silently mislabels the response as 'orchestrator' (for
+                    # QueryType.GENERAL) or 'health_score' (for
+                    # QueryType.MONITORING) and hides the real failure.
+                    # Falsifiability-verified 2026-05-16: removing this else
+                    # branch trips test_cognitive_degraded_marker.py with
+                    # agent_used='orchestrator' (F1 leak).
+                    agent_name = "orchestrator_degraded"
 
                 logger.info(
                     f"Orchestrator processed query: agents={agents_dispatched}, "
@@ -354,6 +381,12 @@ async def process_cognitive_query(
 
             except Exception as e:
                 logger.warning(f"Orchestrator execution failed, using fallback: {e}")
+                # Issue #251 F1 (live Docker path): when orchestrator.run()
+                # raises, agent_name would otherwise stay at the
+                # _route_to_agent(query_type) default — leaking 'orchestrator'
+                # for GENERAL queries or 'health_score' for MONITORING. Surface
+                # the degraded marker so operators see the real failure mode.
+                agent_name = "orchestrator_degraded"
                 response_text = _generate_placeholder_response(
                     query=request.query,
                     query_type=query_type,

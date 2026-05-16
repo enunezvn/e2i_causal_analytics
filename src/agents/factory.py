@@ -252,6 +252,12 @@ def _create_agent(module_path: str, class_name: str) -> Optional[Any]:
     try:
         module = importlib.import_module(module_path)
         agent_class = getattr(module, class_name)
+        # Phase 3 / G5: prediction_synthesizer needs production model clients
+        # loaded from a deployment manifest when available. Falls back to {}
+        # so the agent enters UNVALIDATED mode rather than crashing on import.
+        if class_name == "PredictionSynthesizerAgent":
+            clients = _try_load_prod_model_clients()
+            return agent_class(model_clients=clients)
         return agent_class()
     except ImportError as e:
         logger.warning(f"Import error for {module_path}.{class_name}: {e}")
@@ -259,6 +265,38 @@ def _create_agent(module_path: str, class_name: str) -> Optional[Any]:
     except AttributeError as e:
         logger.warning(f"Class not found: {class_name} in {module_path}: {e}")
         return None
+
+
+def _try_load_prod_model_clients() -> Dict[str, Any]:
+    """Best-effort loader for prediction_synthesizer model clients.
+
+    Resolution order:
+      1. ``E2I_MODEL_DEPLOYMENT_MANIFEST_PATH`` env var (JSON file path)
+      2. ``data/deployment_manifest.json`` if it exists in CWD
+
+    Any failure (file missing, parse error, bad URI) returns ``{}`` and logs
+    a warning. The agent then runs in UNVALIDATED mode.
+    """
+    import os
+    from pathlib import Path
+
+    try:
+        from src.agents.prediction_synthesizer.clients.inproc_model_client import (
+            load_clients_from_deployment_manifest_file,
+        )
+    except ImportError as e:
+        logger.warning(f"In-process model client unavailable: {e}")
+        return {}
+
+    manifest_path_str = os.environ.get("E2I_MODEL_DEPLOYMENT_MANIFEST_PATH")
+    if manifest_path_str:
+        return load_clients_from_deployment_manifest_file(manifest_path_str)
+
+    default_path = Path("data/deployment_manifest.json")
+    if default_path.exists():
+        return load_clients_from_deployment_manifest_file(default_path)
+
+    return {}
 
 
 def get_agent_config(agent_name: str) -> Optional[Dict[str, Any]]:

@@ -200,138 +200,17 @@ class AgentTestResult:
 # AGENT CONFIGURATION
 # =============================================================================
 
-# Agent configurations: name -> (tier, state_class_import_path, method, etc.)
-# method: the method to call (default: "run")
-# is_async: whether the method is async (default: True)
-# input_model: Pydantic input model class name if agent expects a model instead of dict
-# input_module: module path for input model (if needed)
-AGENT_CONFIGS = {
-    # Tier 1: Orchestration
-    "orchestrator": {
-        "tier": 1,
-        "state_module": "src.agents.orchestrator.state",
-        "state_class": "OrchestratorState",
-        "agent_module": "src.agents.orchestrator",
-        "agent_class": "OrchestratorAgent",
-        "method": "run",
-        "is_async": True,
-    },
-    "tool_composer": {
-        "tier": 1,
-        "state_module": "src.agents.tool_composer.state",
-        "state_class": "ToolComposerState",
-        "agent_module": "src.agents.tool_composer",
-        "agent_class": "ToolComposerAgent",
-        "method": "run",
-        "is_async": True,
-        "timeout": 90,  # 3 sequential LLM calls + tool execution + memory queries
-    },
-    # Tier 2: Causal
-    "causal_impact": {
-        "tier": 2,
-        "state_module": "src.agents.causal_impact.state",
-        "state_class": "CausalImpactOutput",  # Use Output contract, not State
-        "agent_module": "src.agents.causal_impact",
-        "agent_class": "CausalImpactAgent",
-        "method": "run",
-        "is_async": True,
-        "timeout": 120,  # Matches agent SLA (estimation + refutation + sensitivity)
-    },
-    "gap_analyzer": {
-        "tier": 2,
-        "state_module": "src.agents.gap_analyzer.state",
-        "state_class": "GapAnalyzerOutput",  # Use Output contract, not State
-        "agent_module": "src.agents.gap_analyzer",
-        "agent_class": "GapAnalyzerAgent",
-        "method": "run",
-        "is_async": True,
-    },
-    "heterogeneous_optimizer": {
-        "tier": 2,
-        "state_module": "src.agents.heterogeneous_optimizer.state",
-        "state_class": "HeterogeneousOptimizerOutput",  # Use Output contract, not State
-        "agent_module": "src.agents.heterogeneous_optimizer",
-        "agent_class": "HeterogeneousOptimizerAgent",
-        "method": "run",
-        "is_async": True,
-    },
-    # Tier 3: Monitoring
-    "drift_monitor": {
-        "tier": 3,
-        "state_module": "src.agents.drift_monitor.state",
-        "state_class": "DriftMonitorState",
-        "agent_module": "src.agents.drift_monitor",
-        "agent_class": "DriftMonitorAgent",
-        "method": "run",
-        "is_async": True,
-        "input_module": "src.agents.drift_monitor.agent",
-        "input_model": "DriftMonitorInput",
-    },
-    "experiment_designer": {
-        "tier": 3,
-        "state_module": "src.agents.experiment_designer.state",
-        "state_class": "ExperimentDesignState",
-        "agent_module": "src.agents.experiment_designer",
-        "agent_class": "ExperimentDesignerAgent",
-        "method": "run",
-        "is_async": False,  # sync method
-        "input_module": "src.agents.experiment_designer.agent",
-        "input_model": "ExperimentDesignerInput",
-        "timeout": 120.0,  # LLM-based validity audit needs more time
-    },
-    "health_score": {
-        "tier": 3,
-        "state_module": "src.agents.health_score.state",
-        "state_class": "HealthScoreState",
-        "agent_module": "src.agents.health_score",
-        "agent_class": "HealthScoreAgent",
-        "method": "check_health",
-        "is_async": True,
-        "uses_kwargs": True,  # scope, query, experiment_name
-    },
-    # Tier 4: ML Predictions
-    "prediction_synthesizer": {
-        "tier": 4,
-        "state_module": "src.agents.prediction_synthesizer.state",
-        "state_class": "PredictionSynthesizerState",
-        "agent_module": "src.agents.prediction_synthesizer",
-        "agent_class": "PredictionSynthesizerAgent",
-        "method": "synthesize",
-        "is_async": True,
-        "uses_kwargs": True,  # entity_id, prediction_target, features, etc.
-    },
-    "resource_optimizer": {
-        "tier": 4,
-        "state_module": "src.agents.resource_optimizer.state",
-        "state_class": "ResourceOptimizerState",
-        "agent_module": "src.agents.resource_optimizer",
-        "agent_class": "ResourceOptimizerAgent",
-        "method": "optimize",
-        "is_async": True,
-        "uses_kwargs": True,  # allocation_targets, constraints, etc.
-    },
-    # Tier 5: Self-Improvement
-    "explainer": {
-        "tier": 5,
-        "state_module": "src.agents.explainer.state",
-        "state_class": "ExplainerState",
-        "agent_module": "src.agents.explainer",
-        "agent_class": "ExplainerAgent",
-        "method": "explain",
-        "is_async": True,
-        "uses_kwargs": True,  # analysis_results, query, user_expertise, etc.
-    },
-    "feedback_learner": {
-        "tier": 5,
-        "state_module": "src.agents.feedback_learner.state",
-        "state_class": "FeedbackLearnerState",
-        "agent_module": "src.agents.feedback_learner",
-        "agent_class": "FeedbackLearnerAgent",
-        "method": "learn",
-        "is_async": True,
-        "uses_kwargs": True,  # time_range_start, time_range_end, batch_id, etc.
-    },
-}
+# Per-agent dispatch + harness metadata is owned by
+# src.agents.orchestrator._agent_method_map::AGENT_METHOD_MAP. The harness was
+# previously duplicating these values in a literal AGENT_CONFIGS dict, which
+# allowed silent drift between the production dispatcher and the harness.
+# Issue #252 unified them: AGENT_CONFIGS is now computed once at import time
+# from AGENT_METHOD_MAP via get_harness_configs(). Per-harness-only fields
+# (tier, agent module/class, state module/class, timeout) layer on top of the
+# shared dispatch spec.
+from src.agents.orchestrator._agent_method_map import get_harness_configs
+
+AGENT_CONFIGS = get_harness_configs()
 
 
 # =============================================================================
@@ -342,7 +221,9 @@ AGENT_CONFIGS = {
 class Tier0ModelClient:
     """Wraps a tier0 trained sklearn model as a prediction client."""
 
-    def __init__(self, model, model_id: str = "tier0_model", feature_names: list[str] | None = None):
+    def __init__(
+        self, model, model_id: str = "tier0_model", feature_names: list[str] | None = None
+    ):
         self.model = model
         self.model_id = model_id
         # Get feature names from model if available, otherwise use provided names
@@ -358,8 +239,9 @@ class Tier0ModelClient:
         time_horizon: str,
     ) -> dict[str, Any]:
         """Make prediction using the wrapped model."""
-        import numpy as np
         import time
+
+        import numpy as np
 
         start = time.time()
 
@@ -469,6 +351,7 @@ def _get_agent_kwargs(
         # Inject real health client for health_score agent
         try:
             from src.agents.health_score.health_client import get_health_client_for_testing
+
             return {"health_client": get_health_client_for_testing()}
         except ImportError:
             return {}
@@ -492,8 +375,6 @@ def _get_agent_kwargs(
         # for reliability_assessment != "UNVALIDATED".
         # Disable Opik tracing to avoid async generator cancellation issues with timeouts
         if tier0_state and tier0_state.get("trained_model"):
-            import numpy as np
-
             model = tier0_state["trained_model"]
             model_id = tier0_state.get("experiment_id", "tier0_model")
             feature_names = tier0_state.get("feature_names")  # Get from tier0 state
@@ -652,7 +533,7 @@ def print_metrics_table(metrics: list[tuple[str, Any, str | None, bool | None]])
     """
     print("\n  📊 Key Metrics:")
     print(f"    {'Metric':<25} {'Value':<15} {'Threshold':<15} {'Status':<10}")
-    print(f"    {'-'*65}")
+    print(f"    {'-' * 65}")
 
     for name, value, threshold, passed in metrics:
         # Format value
@@ -772,7 +653,12 @@ AGENT_ANALYSIS_CONFIG = {
         ],
     },
     "drift_monitor": {
-        "key_fields": ["overall_drift_score", "features_with_drift", "recommended_actions", "drift_interpretation"],
+        "key_fields": [
+            "overall_drift_score",
+            "features_with_drift",
+            "recommended_actions",
+            "drift_interpretation",
+        ],
         "insights_template": [
             "Overall drift score: {overall_drift_score}",
             "Features with drift: {features_with_drift}",
@@ -780,18 +666,42 @@ AGENT_ANALYSIS_CONFIG = {
         ],
     },
     "experiment_designer": {
-        "key_fields": ["experiment_design", "required_sample_size", "statistical_power", "validity_assessment"],
+        "key_fields": [
+            "experiment_design",
+            "required_sample_size",
+            "statistical_power",
+            "validity_assessment",
+        ],
         "insights_template": [
             "Experiment design created with n={required_sample_size}",
             "Statistical power: {statistical_power}",
         ],
     },
     "health_score": {
-        "key_fields": ["overall_health_score", "health_grade", "critical_issues", "recommendations"],
+        "key_fields": [
+            "overall_health_score",
+            "health_grade",
+            "critical_issues",
+            "recommendations",
+        ],
         "insights_template": [
             "Health grade: {health_grade}",
             "Overall health score: {overall_health_score}",
             "Recommendations: {recommendations}",
+        ],
+    },
+    "experiment_monitor": {
+        "key_fields": [
+            "experiments_checked",
+            "healthy_count",
+            "warning_count",
+            "critical_count",
+            "monitor_summary",
+        ],
+        "insights_template": [
+            "Experiments checked: {experiments_checked}",
+            "Health breakdown: {healthy_count} healthy, {warning_count} warning, {critical_count} critical",
+            "Summary: {monitor_summary}",
         ],
     },
     "prediction_synthesizer": {
@@ -802,7 +712,12 @@ AGENT_ANALYSIS_CONFIG = {
         ],
     },
     "resource_optimizer": {
-        "key_fields": ["optimization_summary", "projected_roi", "recommendations", "projected_savings"],
+        "key_fields": [
+            "optimization_summary",
+            "projected_roi",
+            "recommendations",
+            "projected_savings",
+        ],
         "insights_template": [
             "Optimization completed: {optimization_summary}",
             "Projected ROI: {projected_roi}",
@@ -816,7 +731,12 @@ AGENT_ANALYSIS_CONFIG = {
         ],
     },
     "feedback_learner": {
-        "key_fields": ["feedback_summary", "learning_summary", "learning_recommendations", "detected_patterns"],
+        "key_fields": [
+            "feedback_summary",
+            "learning_summary",
+            "learning_recommendations",
+            "detected_patterns",
+        ],
         "insights_template": [
             "Learning summary: {learning_summary}",
             "Patterns detected: {detected_patterns}",
@@ -867,7 +787,9 @@ def extract_agent_insights(agent_name: str, output: dict[str, Any]) -> list[str]
                     elif isinstance(val, dict):
                         # For dicts, show key count or first few keys
                         keys_preview = list(val.keys())[:3]
-                        values[key] = f"{{{', '.join(keys_preview)}...}}" if len(val) > 3 else str(val)
+                        values[key] = (
+                            f"{{{', '.join(keys_preview)}...}}" if len(val) > 3 else str(val)
+                        )
                     elif isinstance(val, str):
                         # Show full string value (no truncation)
                         values[key] = val
@@ -958,7 +880,7 @@ async def run_tier0_and_cache(cache_dir: str = "scripts/tier0_output_cache") -> 
     Returns:
         Tier0 state dictionary
     """
-    from scripts.run_tier0_test import run_pipeline, CONFIG
+    from scripts.run_tier0_test import CONFIG, run_pipeline
 
     print("  Running tier0 pipeline to generate synthetic data...")
 
@@ -1077,6 +999,7 @@ async def test_agent(
                 loop = asyncio.get_event_loop()
                 if uses_kwargs:
                     import functools
+
                     output = await asyncio.wait_for(
                         loop.run_in_executor(None, functools.partial(method, **agent_input)),
                         timeout=timeout_seconds,
@@ -1131,15 +1054,21 @@ async def test_agent(
                 if present:
                     required_present.append(fld)
                 # Check if there's a type error for this field
-                type_err = next((te for te in validation_result.type_errors if te.get("field") == fld), None)
-                required_valid.append(FieldValidationResult(
-                    name=fld,
-                    expected_type=field_types.get(fld, "Any"),
-                    present=present,
-                    valid_type=present and type_err is None,
-                    actual_type=type(result.agent_output.get(fld)).__name__ if present else None,
-                    error=type_err.get("message") if type_err else None,
-                ))
+                type_err = next(
+                    (te for te in validation_result.type_errors if te.get("field") == fld), None
+                )
+                required_valid.append(
+                    FieldValidationResult(
+                        name=fld,
+                        expected_type=field_types.get(fld, "Any"),
+                        present=present,
+                        valid_type=present and type_err is None,
+                        actual_type=type(result.agent_output.get(fld)).__name__
+                        if present
+                        else None,
+                        error=type_err.get("message") if type_err else None,
+                    )
+                )
 
             optional_valid = []
             optional_present = []
@@ -1148,15 +1077,21 @@ async def test_agent(
                 if present:
                     optional_present.append(fld)
                     # Check if there's a type error for this field
-                    type_err = next((te for te in validation_result.type_errors if te.get("field") == fld), None)
-                    optional_valid.append(FieldValidationResult(
-                        name=fld,
-                        expected_type=field_types.get(fld, "Any"),
-                        present=present,
-                        valid_type=type_err is None,
-                        actual_type=type(result.agent_output.get(fld)).__name__ if present else None,
-                        error=type_err.get("message") if type_err else None,
-                    ))
+                    type_err = next(
+                        (te for te in validation_result.type_errors if te.get("field") == fld), None
+                    )
+                    optional_valid.append(
+                        FieldValidationResult(
+                            name=fld,
+                            expected_type=field_types.get(fld, "Any"),
+                            present=present,
+                            valid_type=type_err is None,
+                            actual_type=type(result.agent_output.get(fld)).__name__
+                            if present
+                            else None,
+                            error=type_err.get("message") if type_err else None,
+                        )
+                    )
 
             result.contract_validation = ContractValidationDetail(
                 valid=validation_result.valid,
@@ -1264,7 +1199,7 @@ async def test_agent(
                         duration_ms=trace_result.duration_ms,
                         error_captured=trace_result.error_captured,
                     )
-                except Exception as e:
+                except Exception:
                     result.trace_verification = TraceVerificationDetail(
                         trace_exists=False,
                         trace_id=trace_id,
@@ -1314,23 +1249,23 @@ def print_agent_result(result: AgentTestResult, verbose: bool = True) -> None:
     # Processing steps
     processing_steps = [
         (f"Agent {result.agent_name} instantiated", True),
-        (f"Input validation passed", not result.error or "input" not in (result.error or "").lower()),
-        (f"Agent execution completed", result.error is None),
+        (
+            "Input validation passed",
+            not result.error or "input" not in (result.error or "").lower(),
+        ),
+        ("Agent execution completed", result.error is None),
     ]
     if result.contract_validation:
         processing_steps.append(
-            (f"Contract validation ({result.contract_validation.state_class})",
-             result.contract_validation.valid)
+            (
+                f"Contract validation ({result.contract_validation.state_class})",
+                result.contract_validation.valid,
+            )
         )
     if result.quality_gate:
-        processing_steps.append(
-            (f"Quality gate validation",
-             result.quality_gate.passed)
-        )
+        processing_steps.append(("Quality gate validation", result.quality_gate.passed))
     if result.trace_verification:
-        processing_steps.append(
-            (f"Opik trace captured", result.trace_verification.trace_exists)
-        )
+        processing_steps.append(("Opik trace captured", result.trace_verification.trace_exists))
     print_processing_section(processing_steps)
 
     # Validation checks
@@ -1339,47 +1274,54 @@ def print_agent_result(result: AgentTestResult, verbose: bool = True) -> None:
         cv = result.contract_validation
         req_present = len(cv.required_fields_present)
         req_total = cv.required_total
-        checks.append((
-            "Required fields present",
-            req_present == req_total,
-            f"{req_total} required fields",
-            f"{req_present}/{req_total} present"
-        ))
-        checks.append((
-            "Type validation",
-            len(cv.type_errors) == 0,
-            "no type errors",
-            f"{len(cv.type_errors)} type errors" if cv.type_errors else "all types valid"
-        ))
+        checks.append(
+            (
+                "Required fields present",
+                req_present == req_total,
+                f"{req_total} required fields",
+                f"{req_present}/{req_total} present",
+            )
+        )
+        checks.append(
+            (
+                "Type validation",
+                len(cv.type_errors) == 0,
+                "no type errors",
+                f"{len(cv.type_errors)} type errors" if cv.type_errors else "all types valid",
+            )
+        )
     if result.quality_gate:
         qg = result.quality_gate
-        checks.append((
-            "Quality gate",
-            qg.passed,
-            f"{qg.total_checks} checks pass",
-            f"{qg.checks_passed}/{qg.total_checks} passed" if qg.total_checks > 0 else "no checks"
-        ))
+        checks.append(
+            (
+                "Quality gate",
+                qg.passed,
+                f"{qg.total_checks} checks pass",
+                f"{qg.checks_passed}/{qg.total_checks} passed"
+                if qg.total_checks > 0
+                else "no checks",
+            )
+        )
         if qg.status_failure:
-            checks.append((
-                "Status check",
-                False,
-                "no failure status",
-                f"status={qg.status_value}"
-            ))
-    checks.append((
-        "Overall result",
-        result.success,
-        "success",
-        "PASS" if result.success else f"FAIL: {(result.error or 'quality gate failed')[:40]}"
-    ))
+            checks.append(("Status check", False, "no failure status", f"status={qg.status_value}"))
+    checks.append(
+        (
+            "Overall result",
+            result.success,
+            "success",
+            "PASS" if result.success else f"FAIL: {(result.error or 'quality gate failed')[:40]}",
+        )
+    )
     if result.trace_verification:
         tv = result.trace_verification
-        checks.append((
-            "Observability trace",
-            tv.trace_exists,
-            "trace captured",
-            "trace exists" if tv.trace_exists else "no trace"
-        ))
+        checks.append(
+            (
+                "Observability trace",
+                tv.trace_exists,
+                "trace captured",
+                "trace exists" if tv.trace_exists else "no trace",
+            )
+        )
     print_validation_checks(checks)
 
     # Key metrics table
@@ -1389,8 +1331,22 @@ def print_agent_result(result: AgentTestResult, verbose: bool = True) -> None:
     ]
     if result.contract_validation:
         cv = result.contract_validation
-        metrics.append(("required_fields", f"{len(cv.required_fields_present)}/{cv.required_total}", None, None))
-        metrics.append(("optional_fields", f"{len(cv.optional_fields_present)}/{cv.optional_total}", None, None))
+        metrics.append(
+            (
+                "required_fields",
+                f"{len(cv.required_fields_present)}/{cv.required_total}",
+                None,
+                None,
+            )
+        )
+        metrics.append(
+            (
+                "optional_fields",
+                f"{len(cv.optional_fields_present)}/{cv.optional_total}",
+                None,
+                None,
+            )
+        )
         metrics.append(("contract_valid", cv.valid, "True", cv.valid))
     if result.trace_verification and result.trace_verification.trace_exists:
         tv = result.trace_verification
@@ -1402,8 +1358,16 @@ def print_agent_result(result: AgentTestResult, verbose: bool = True) -> None:
     if result.agent_output:
         output = result.agent_output
         # Extract key numeric/boolean metrics
-        priority_metrics = ["overall_ate", "heterogeneity_score", "drift_score", "health_score",
-                          "overall_score", "confidence", "statistical_power", "p_value"]
+        priority_metrics = [
+            "overall_ate",
+            "heterogeneity_score",
+            "drift_score",
+            "health_score",
+            "overall_score",
+            "confidence",
+            "statistical_power",
+            "p_value",
+        ]
         for key in priority_metrics:
             if key in output and output[key] is not None:
                 val = output[key]
@@ -1424,12 +1388,26 @@ def print_agent_result(result: AgentTestResult, verbose: bool = True) -> None:
 
         # Prioritize important fields (shown first for readability)
         priority_fields = [
-            "status", "executive_summary", "learning_summary",
-            "overall_ate", "heterogeneity_score", "causal_effect",
-            "overall_drift_score", "recommended_actions", "drift_interpretation",
-            "overall_health_score", "health_grade", "health_summary", "recommendations",
-            "prediction", "prediction_summary", "optimization_result", "optimization_summary",
-            "drift_detected", "experiment_design", "analysis_complete",
+            "status",
+            "executive_summary",
+            "learning_summary",
+            "overall_ate",
+            "heterogeneity_score",
+            "causal_effect",
+            "overall_drift_score",
+            "recommended_actions",
+            "drift_interpretation",
+            "overall_health_score",
+            "health_grade",
+            "health_summary",
+            "recommendations",
+            "prediction",
+            "prediction_summary",
+            "optimization_result",
+            "optimization_summary",
+            "drift_detected",
+            "experiment_design",
+            "analysis_complete",
         ]
         priority_items = [(k, v) for k, v in output_items if k in priority_fields]
         other_items = [(k, v) for k, v in output_items if k not in priority_fields]
@@ -1452,14 +1430,14 @@ def print_agent_result(result: AgentTestResult, verbose: bool = True) -> None:
         if qg.status_failure:
             print(f"    • ❌ Status failure: {qg.status_value}")
         if qg.failed_check_messages:
-            print(f"    • Failed checks:")
+            print("    • Failed checks:")
             for msg in qg.failed_check_messages:
                 # No truncation - show full message
                 print(f"      - {msg}")
         if qg.passed:
-            print(f"    • QUALITY GATE: ✅ PASS")
+            print("    • QUALITY GATE: ✅ PASS")
         else:
-            print(f"    • QUALITY GATE: ❌ FAIL")
+            print("    • QUALITY GATE: ❌ FAIL")
 
     # Contract validation details (verbose)
     if verbose and result.contract_validation:
@@ -1467,7 +1445,9 @@ def print_agent_result(result: AgentTestResult, verbose: bool = True) -> None:
         if cv.type_errors:
             print("\n  ⚠️  Type Errors:")
             for te in cv.type_errors[:3]:
-                print(f"    • {te.get('field')}: expected {te.get('expected')}, got {te.get('actual')}")
+                print(
+                    f"    • {te.get('field')}: expected {te.get('expected')}, got {te.get('actual')}"
+                )
         if cv.warnings:
             print(f"\n  ⚠️  Warnings ({len(cv.warnings)}):")
             for w in cv.warnings:
@@ -1653,7 +1633,9 @@ def print_summary(
                 print(f"    \u2717 {r.agent_name} ({time_str}) - {error_brief}")
         else:
             # Compact listing
-            all_agents = [r.agent_name for r in passed] + [f"{r.agent_name} (FAILED)" for r in failed]
+            all_agents = [r.agent_name for r in passed] + [
+                f"{r.agent_name} (FAILED)" for r in failed
+            ]
             print(f"    Agents: {', '.join(all_agents)}")
 
     print()
@@ -1693,15 +1675,9 @@ def print_summary(
                 print(f"     Last line: {last_line}")
 
     # Quality gate summary
-    quality_gates_passed = sum(
-        1 for r in results if r.quality_gate and r.quality_gate.passed
-    )
-    quality_gates_failed = sum(
-        1 for r in results if r.quality_gate and not r.quality_gate.passed
-    )
-    status_failures = sum(
-        1 for r in results if r.quality_gate and r.quality_gate.status_failure
-    )
+    quality_gates_passed = sum(1 for r in results if r.quality_gate and r.quality_gate.passed)
+    quality_gates_failed = sum(1 for r in results if r.quality_gate and not r.quality_gate.passed)
+    status_failures = sum(1 for r in results if r.quality_gate and r.quality_gate.status_failure)
 
     print("\nQUALITY GATES:")
     print(f"  Passed: \033[92m{quality_gates_passed}\033[0m/{total}")
@@ -1729,8 +1705,7 @@ def print_summary(
         1 for r in results if r.contract_validation and r.contract_validation.valid
     )
     type_errors_total = sum(
-        len(r.contract_validation.type_errors)
-        for r in results if r.contract_validation
+        len(r.contract_validation.type_errors) for r in results if r.contract_validation
     )
 
     print("\nCONTRACT VALIDATION:")
@@ -1786,11 +1761,11 @@ async def run_tests(
         Full test results dict
     """
     from src.testing import (
-        Tier0OutputMapper,
         ContractValidator,
+        DataSourceValidator,
         OpikTraceVerifier,
         QualityGateValidator,
-        DataSourceValidator,
+        Tier0OutputMapper,
     )
 
     print_header("TIER 1-5 AGENT TESTING FRAMEWORK")
@@ -1806,9 +1781,7 @@ async def run_tests(
         if default_cache.exists():
             tier0_state = load_tier0_state(str(default_cache))
         else:
-            raise ValueError(
-                "No tier0 state available. Use --run-tier0-first or --tier0-cache"
-            )
+            raise ValueError("No tier0 state available. Use --run-tier0-first or --tier0-cache")
 
     experiment_id = tier0_state.get("experiment_id", "unknown")
     print(f"Tier0 Experiment ID: {experiment_id}")
@@ -1850,7 +1823,7 @@ async def run_tests(
     # Summarize tier0 state
     df = tier0_state.get("eligible_df")
     if df is not None:
-        print(f"\nTier0 Data:")
+        print("\nTier0 Data:")
         print(f"  eligible_df: {len(df)} rows x {len(df.columns)} columns")
 
     trained_model = tier0_state.get("trained_model")
@@ -1912,7 +1885,9 @@ async def run_tests(
         "quality_gate_summary": {
             "passed": sum(1 for r in results if r.quality_gate and r.quality_gate.passed),
             "failed": sum(1 for r in results if r.quality_gate and not r.quality_gate.passed),
-            "status_failures": sum(1 for r in results if r.quality_gate and r.quality_gate.status_failure),
+            "status_failures": sum(
+                1 for r in results if r.quality_gate and r.quality_gate.status_failure
+            ),
             "failed_agents": [
                 {
                     "agent": r.agent_name,
@@ -1920,7 +1895,8 @@ async def run_tests(
                     "status_value": r.quality_gate.status_value if r.quality_gate else None,
                     "failed_checks": r.quality_gate.failed_check_names if r.quality_gate else [],
                 }
-                for r in results if r.quality_gate and not r.quality_gate.passed
+                for r in results
+                if r.quality_gate and not r.quality_gate.passed
             ],
         },
         "observability_summary": {
@@ -1937,8 +1913,7 @@ async def run_tests(
             "passed": sum(1 for r in results if r.data_source and r.data_source.passed),
             "failed": sum(1 for r in results if r.data_source and not r.data_source.passed),
             "mock_detected": sum(
-                1 for r in results
-                if r.data_source and r.data_source.detected_source == "mock"
+                1 for r in results if r.data_source and r.data_source.detected_source == "mock"
             ),
             "failed_agents": [
                 {
@@ -1946,13 +1921,14 @@ async def run_tests(
                     "detected_source": r.data_source.detected_source if r.data_source else None,
                     "message": r.data_source.message if r.data_source else None,
                 }
-                for r in results if r.data_source and not r.data_source.passed
+                for r in results
+                if r.data_source and not r.data_source.passed
             ],
         },
     }
 
     # Build tier breakdown
-    for tier in sorted(set(r.tier for r in results)):
+    for tier in sorted({r.tier for r in results}):
         tier_results = [r for r in results if r.tier == tier]
         full_results["tier_breakdown"][f"tier_{tier}"] = {
             "passed": sum(1 for r in tier_results if r.success),
@@ -1973,9 +1949,7 @@ async def run_tests(
 
 def main():
     """Main entry point."""
-    parser = argparse.ArgumentParser(
-        description="Run Tier 1-5 agent tests using tier0 outputs"
-    )
+    parser = argparse.ArgumentParser(description="Run Tier 1-5 agent tests using tier0 outputs")
     parser.add_argument(
         "--run-tier0-first",
         action="store_true",
@@ -2017,7 +1991,8 @@ def main():
         help="Timeout per agent in seconds (default: 30)",
     )
     parser.add_argument(
-        "--verbose", "-v",
+        "--verbose",
+        "-v",
         action="store_true",
         default=True,
         help="Show detailed output per agent (default: True)",
@@ -2059,6 +2034,7 @@ def main():
 
     class TeeOutput:
         """Write to both console and buffer."""
+
         def __init__(self, console, buffer):
             self.console = console
             self.buffer = buffer
@@ -2066,7 +2042,8 @@ def main():
         def write(self, text):
             # Strip ANSI color codes for markdown file
             import re
-            clean_text = re.sub(r'\x1b\[[0-9;]*m', '', text)
+
+            clean_text = re.sub(r"\x1b\[[0-9;]*m", "", text)
             self.buffer.write(clean_text)
             self.console.write(text)
 
@@ -2111,7 +2088,9 @@ def main():
             md_content += f"- **Tiers Tested**: {args.tiers or 'all (1-5)'}\n"
             md_content += f"- **Agents Tested**: {args.agents or 'all'}\n"
             md_content += f"- **Tier0 Cache**: {args.tier0_cache or 'auto-generated'}\n"
-            md_content += f"- **Observability**: {'skipped' if args.skip_observability else 'enabled'}\n"
+            md_content += (
+                f"- **Observability**: {'skipped' if args.skip_observability else 'enabled'}\n"
+            )
             md_content += f"- **Timeout**: {args.timeout}s per agent\n\n"
             md_content += "## Results\n\n"
             md_content += "```\n"

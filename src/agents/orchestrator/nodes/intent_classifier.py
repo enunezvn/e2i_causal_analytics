@@ -32,6 +32,29 @@ IntentType = Literal[
 ]
 
 
+# Tie-break priority for ``_pattern_classify``. When two intents tie on score,
+# the one earlier in this tuple wins. Order: most-specific → least-specific.
+# Documented + tested so behaviour cannot drift back to the dict-insertion-order
+# arbitrary tie-breaks that commit 1dbc18fd papered over by dropping test
+# queries. See issue #254.
+INTENT_PRIORITY: tuple[str, ...] = (
+    "experiment_monitor",  # most specific: active A/B experiment health
+    "multi_faceted",  # multi-question composition signal (wins over component intents)
+    "cohort_definition",  # patient-set construction
+    "experiment_design",  # A/B planning
+    "drift_check",  # data/model drift
+    "segment_analysis",  # CATE / cohort effects
+    "performance_gap",  # ROI / underperformance
+    "resource_allocation",  # optimization
+    "prediction",  # forecasts
+    "feedback",  # learning from outcomes
+    "causal_effect",  # general "why" — broader than the specific intents above
+    "explanation",  # interpretation
+    "system_health",  # operational status (catch-all for "health")
+    "general",  # fallback
+)
+
+
 def _get_opik_connector():
     """Lazy import of OpikConnector to avoid circular imports."""
     try:
@@ -108,6 +131,20 @@ class IntentClassifierNode:
         "feedback": [
             r"feedback|learn.*from",
             r"improve.*based on",
+        ],
+        "experiment_monitor": [
+            r"(monitor|check|status).*(experiment|trial|a\/?b ?test)",
+            r"sample ratio mismatch|\bsrm\b",
+            r"interim analysis",
+            r"(active|running).*(experiments?|trials?)",
+            r"experiments?.*(health|status|issues)",
+        ],
+        "multi_faceted": [
+            # Conjunctive multi-question markers ("and also", "compare X vs Y, then ...").
+            r"and (also|then|additionally|furthermore)",
+            r"compare .* (vs|versus|against|to) .* and",
+            r"(combine|integrate|synthes).*(analyses|results|findings)",
+            r"(both|multiple) (effects?|analyses|perspectives?)",
         ],
         "cohort_definition": [
             r"(define|create|build|construct).*(cohort|patient set|patient population)",
@@ -192,13 +229,23 @@ class IntentClassifierNode:
                 requires_multi_agent=False,
             )
 
-        primary = max(scores, key=lambda k: scores.get(k, 0.0))
+        # Deterministic tie-break: sort by (-score, INTENT_PRIORITY index). Lower
+        # priority index = higher priority. Intents not in INTENT_PRIORITY lose
+        # all ties to those that are. Issue #254.
+        def _sort_key(item: tuple[str, float]) -> tuple[float, int]:
+            name, score = item
+            try:
+                priority_idx = INTENT_PRIORITY.index(name)
+            except ValueError:
+                priority_idx = len(INTENT_PRIORITY)
+            return (-score, priority_idx)
+
+        ranked = sorted(scores.items(), key=_sort_key)
+        primary = ranked[0][0]
         confidence = scores[primary]
 
-        # Get secondary intents (those with matches but lower score)
-        secondary = [
-            k for k, v in sorted(scores.items(), key=lambda x: -x[1]) if v > 0 and k != primary
-        ]
+        # Secondary intents in the same deterministic order.
+        secondary = [k for k, v in ranked[1:] if v > 0]
 
         return IntentClassification(
             primary_intent=cast(IntentType, primary),
@@ -225,6 +272,7 @@ Intents:
 - performance_gap: ROI opportunities, underperformance, potential improvements
 - segment_analysis: Segment-specific effects, CATE, cohort analysis
 - experiment_design: A/B tests, experiment planning, sample size
+- experiment_monitor: Monitor running A/B experiments for SRM, interim, enrollment health
 - prediction: Forecasting, projections, likelihood estimates
 - resource_allocation: Budget/resource optimization, prioritization
 - explanation: Clarifying results, interpreting findings
@@ -232,6 +280,7 @@ Intents:
 - drift_check: Data/model drift, distribution changes
 - feedback: Learning from outcomes, improvement suggestions
 - cohort_definition: Patient cohort construction, eligibility criteria, inclusion/exclusion rules
+- multi_faceted: Multi-part questions combining 2+ distinct analyses (compare X and Y, then identify Z)
 - general: Other/unclear
 
 Respond with ONLY a JSON object:

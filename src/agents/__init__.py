@@ -1,10 +1,10 @@
 """E2I Causal Analytics Agents.
 
-This module provides the 18-agent tiered architecture:
-- Tier 0: ML Foundation (7 agents)
+This module provides the 21-agent tiered architecture (incl. cohort_constructor):
+- Tier 0: ML Foundation (7 agents) + cohort_constructor
 - Tier 1: Coordination (2 agents: orchestrator, tool_composer)
 - Tier 2: Causal Analytics (3 agents)
-- Tier 3: Monitoring (3 agents)
+- Tier 3: Monitoring (4 agents: drift_monitor, experiment_designer, experiment_monitor, health_score)
 - Tier 4: ML Predictions (2 agents)
 - Tier 5: Self-Improvement (2 agents)
 

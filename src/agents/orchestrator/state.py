@@ -51,12 +51,15 @@ class IntentClassification(TypedDict, total=False):
         "performance_gap",  # → Gap Analyzer Agent
         "segment_analysis",  # → Heterogeneous Optimizer
         "experiment_design",  # → Experiment Designer
+        "experiment_monitor",  # → Experiment Monitor Agent (Tier 3)
         "prediction",  # → Prediction Synthesizer
         "resource_allocation",  # → Resource Optimizer
         "explanation",  # → Explainer Agent
         "system_health",  # → Health Score Agent
         "drift_check",  # → Drift Monitor Agent
         "feedback",  # → Feedback Learner
+        "cohort_definition",  # → Cohort Constructor (Tier 0)
+        "multi_faceted",  # → Tool Composer (multi-agent composition)
         "general",  # → Direct response
     ]
     confidence: float
