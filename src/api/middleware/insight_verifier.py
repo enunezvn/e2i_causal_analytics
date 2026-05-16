@@ -285,5 +285,17 @@ async def _log_verification(
             }
         ).execute()
     except Exception:
-        # Log failures are non-fatal — verifier behavior must not depend on it.
-        logger.debug("jit verifier: audit log insert failed", exc_info=True)
+        # Audit-log failures are non-fatal for the response path but ARE
+        # regulatory-grade — surface them at warning level with enough
+        # context to triage downstream. Future hardening should also page
+        # if this fires for the same (insight_type, insight_id) twice in
+        # a row. (Was logger.debug; bumped 2026-05-16 per PR #250 review.)
+        logger.warning(
+            "jit verifier: audit_chain_verification_log insert failed "
+            "for insight_type=%s insight_id=%s strict=%s verdict=%s",
+            insight_type,
+            insight_id,
+            strict,
+            verdict,
+            exc_info=True,
+        )
