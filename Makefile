@@ -1,4 +1,4 @@
-.PHONY: help install dev-install test test-fast test-seq test-cov tier1-5-test lint format clean docker-up docker-down docker-logs deploy deploy-build db-init data-generate api-docs curate-candidates
+.PHONY: help install dev-install test test-fast test-seq test-cov tier1-5-test lint format clean docker-up docker-down docker-logs deploy deploy-build db-init data-generate api-docs curate-candidates check-compile-backlog
 
 help:
 	@echo "E2I Causal Analytics - Available Commands"
@@ -33,6 +33,8 @@ help:
 	@echo "  make curate-candidates  Generate compile-set candidate report from"
 	@echo "                          the Layer-4 audit trail (REQUIRED before"
 	@echo "                          running scripts/compile_causal_role_classifier.py)"
+	@echo "  make check-compile-backlog  Count accepted candidates vs threshold"
+	@echo "                              (issue #236; suitable for cron/Slack)"
 	@echo ""
 
 # Layer-4 audit-signal curation entry point. Plan:
@@ -49,6 +51,18 @@ curate-candidates:
 	.venv/bin/python scripts/curate_compile_set_candidates.py \
 	    --artifacts-dir "$$ADAPTIVE_VALIDITY_ARTIFACTS_DIR" \
 	    --output-dir ./candidates
+
+# Phase 4.5 auto-trigger surface (issue #236). Counts accepted compile-set
+# candidates (those whose 4 required fill-ins are non-null) under
+# ./candidates/ since the compiled artifact's mtime, and prints a
+# grep-friendly "READY" signal when the backlog crosses the threshold
+# (default 5). Wire this into a weekly cron / GitHub Action to nudge
+# operators when the classifier has enough new evidence to warrant a
+# recompile, without auto-running the 5-15min compile job itself.
+check-compile-backlog:
+	@python scripts/check_compile_set_candidate_backlog.py \
+	    --candidates-dir ./candidates \
+	    --artifact artifacts/dspy/causal_role_classifier.json
 
 install:
 	pip install -r requirements.txt
