@@ -25,6 +25,7 @@ from src.memory.episodic_memory import (
     E2IEntityReferences,
     count_memories_by_type,
     get_memory_by_id,
+    get_recent_memories,
     insert_episodic_memory_with_text,
 )
 from src.memory.episodic_memory import (
@@ -388,6 +389,54 @@ async def create_episodic_memory(
         raise HTTPException(
             status_code=500, detail=f"Failed to create episodic memory: {str(e)}"
         ) from e
+
+
+@router.get(
+    "/episodic",
+    response_model=List[EpisodicMemoryResponse],
+    summary="List recent episodic memories",
+    operation_id="list_episodic_memories",
+)
+async def list_episodic_memories(
+    limit: int = 20,
+    event_type: Optional[str] = None,
+    agent_name: Optional[str] = None,
+    brand: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> List[EpisodicMemoryResponse]:
+    """
+    List recent episodic memories ordered by occurrence time (most recent first).
+
+    Supports filtering by event type, agent, brand, and session.
+    """
+    try:
+        rows = await get_recent_memories(
+            limit=limit,
+            event_types=[event_type] if event_type else None,
+            agent_name=agent_name,
+            brand=brand,
+        )
+        if session_id:
+            rows = [r for r in rows if r.get("session_id") == session_id]
+
+        return [
+            EpisodicMemoryResponse(
+                id=r.get("memory_id") or r.get("id", ""),
+                content=r.get("description", ""),
+                event_type=r.get("event_type", "unknown"),
+                session_id=r.get("session_id"),
+                agent_name=r.get("agent_name"),
+                brand=r.get("brand"),
+                region=r.get("region"),
+                created_at=r.get("occurred_at", datetime.now(timezone.utc)),
+                metadata=r.get("raw_content") or {},
+            )
+            for r in rows
+        ]
+
+    except Exception as e:
+        logger.error(f"Failed to list episodic memories: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list memories: {str(e)}") from e
 
 
 @router.get(
