@@ -540,6 +540,21 @@ filled in at review). Accepted candidates are hand-merged into
 re-run `scripts/compile_causal_role_classifier.py` to produce a new
 compiled artifact.
 
+**Auto-trigger surface (Phase 4.5, issue #236)**: the compile script
+runs a pre-flight backlog check that refuses to recompile when zero
+accepted candidates (rows with all four `_REQUIRED_FILL_INS` non-null —
+`expected_causal_role`, `expected_remediation`, `derivation_pseudocode`,
+`dataset_context`) have landed in `./candidates/` since the existing
+artifact's mtime. Pass `--force` to bypass for determinism re-runs.
+The standalone `make check-compile-backlog` (wraps
+`scripts/check_compile_set_candidate_backlog.py`) counts the same
+backlog and prints a grep-friendly `READY` signal when it crosses the
+default threshold (5 — tunable via `--threshold`); suitable for a
+weekly cron / GitHub Action that nudges operators without running the
+5-15min compile job itself. The auto-merge of accepted candidates into
+`build_compile_set()` remains explicitly manual (issue #236
+out-of-scope).
+
 Each sidecar verdict carries 5 evaluator audit keys (`evaluator_satisfied`,
 `evaluator_rationale_complete`, `evaluator_missed_considerations`,
 `evaluator_notes`, `evaluator_model`) plus 4 telemetry keys

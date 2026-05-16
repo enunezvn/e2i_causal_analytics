@@ -9,6 +9,15 @@ must be hand-merged into ``build_compile_set()`` in
 this step means new evaluator-flagged disagreements never reach the
 compile set; the new artifact will be a copy of the old one.
 
+Phase 4.5 enforcement (issue #236): this script now runs a pre-flight
+backlog check against ``./candidates/*.json`` (configurable via
+``--candidates-dir``) and refuses to recompile when zero accepted
+candidates have landed since the existing artifact's mtime. Pass
+``--force`` to override (the operator's explicit acknowledgement that
+they intend a no-evidence recompile, e.g. for a determinism re-run).
+The pre-flight is skipped automatically when the artifact does not yet
+exist (cold-start bootstrap).
+
 Compiles ``src.data.causal_role_classifier.CausalRoleClassifier`` via
 ``BootstrapFewShot`` against the 12-example compile set produced by
 ``build_compile_set()`` and writes the compiled program JSON to::
@@ -55,17 +64,20 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-import dspy  # noqa: E402
-from dspy.teleprompt import BootstrapFewShot  # noqa: E402
-
-from src.data.causal_role_classifier import (  # noqa: E402
-    CausalRoleClassifier,
-    build_compile_set,
+# dspy / classifier imports are deferred to ``compile_and_persist`` so
+# the lightweight ``preflight_candidate_check`` helper (and its tests)
+# can run in environments without the full DSPy + LangChain dep stack
+# installed.
+from scripts.check_compile_set_candidate_backlog import (  # noqa: E402
+    count_accepted_candidates,
 )
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_OUT_PATH = PROJECT_ROOT / "artifacts" / "dspy" / "causal_role_classifier.json"
+# Default location for ``make curate-candidates`` output. The pre-flight
+# (issue #236) walks this dir for newer-than-artifact manifests.
+DEFAULT_CANDIDATES_DIR = PROJECT_ROOT / "candidates"
 DEFAULT_LM_MODEL = "anthropic/claude-sonnet-4-20250514"
 DEFAULT_SEED = 7
 DEFAULT_MAX_BOOTSTRAPPED_DEMOS = 4
@@ -80,6 +92,59 @@ DEFAULT_MAX_BOOTSTRAPPED_DEMOS = 4
 # labeled examples randomly; pass-4 audit found this routinely dropped
 # the provider IV family entirely.
 DEFAULT_MAX_LABELED_DEMOS = 24
+
+
+def preflight_candidate_check(
+    *,
+    candidates_dir: Path,
+    compiled_artifact_path: Path,
+    force: bool,
+) -> tuple[bool, str]:
+    """Phase 4.5 pre-flight: gate the compile on the curation pipeline.
+
+    Returns ``(proceed, message)``. The compile is allowed when:
+
+      * ``force=True`` (operator's explicit override), OR
+      * the compiled artifact does not yet exist (cold-start bootstrap), OR
+      * at least one accepted candidate exists in a manifest whose mtime
+        is newer than the artifact's mtime.
+
+    A candidate is "accepted" iff every one of the four required
+    fill-ins (``expected_causal_role``, ``expected_remediation``,
+    ``derivation_pseudocode``, ``dataset_context``) is non-null on its
+    JSON manifest row. See
+    ``scripts/check_compile_set_candidate_backlog.py`` for the
+    canonical definition and the standalone CLI.
+
+    Rationale (issue #236): without this gate, an operator who forgets
+    to hand-merge accepted candidates into ``build_compile_set()`` will
+    silently produce a new compiled artifact that's a byte-equivalent
+    copy of the old one. The gate forces either evidence-driven
+    recompiles or an explicit ``--force`` acknowledgement.
+    """
+    if force:
+        return True, "preflight: --force passed; bypassing backlog check"
+
+    if not compiled_artifact_path.exists():
+        return True, (
+            f"preflight: no prior artifact at {compiled_artifact_path} (bootstrap path); proceeding"
+        )
+
+    result = count_accepted_candidates(
+        candidates_dir=candidates_dir,
+        compiled_artifact_path=compiled_artifact_path,
+        logger=logger,
+    )
+    if result.count == 0:
+        return False, (
+            "preflight: backlog is zero — no new accepted candidates in "
+            f"{candidates_dir} since artifact mtime. Run "
+            "`make curate-candidates`, fill in the 4 required fields "
+            "per accepted row, or pass --force to override."
+        )
+    return True, (
+        f"preflight: {result.count} accepted candidate(s) in backlog since last compile; proceeding"
+    )
 
 
 def _seed_all(seed: int) -> None:
@@ -99,13 +164,18 @@ def _seed_all(seed: int) -> None:
     os.environ.setdefault("DSPY_RANDOM_SEED", str(seed))
 
 
-def _exact_match_metric(example: dspy.Example, prediction: dspy.Prediction, _trace=None) -> bool:
+def _exact_match_metric(example, prediction, _trace=None) -> bool:
     """Bootstrap metric: prediction's ``causal_role`` matches the labeled role.
 
     BootstrapFewShot uses this to decide whether a teacher-bootstrapped demo
     is kept as a few-shot exemplar. Strict-equality on ``causal_role`` is the
     discriminating signal — ``mechanism`` and ``recommended_remediation`` are
     free-text / dependent-output that vary even when the role is correct.
+
+    ``example`` and ``prediction`` are duck-typed ``dspy.Example`` /
+    ``dspy.Prediction`` instances. We intentionally do NOT annotate the
+    type so the module imports cleanly without DSPy installed (issue
+    #236 pre-flight helper path).
     """
     expected = getattr(example, "causal_role", None)
     actual = getattr(prediction, "causal_role", None)
@@ -121,6 +191,8 @@ def _configure_lm(model: str, max_tokens: int) -> None:
     silently degrading to a no-op), which is the desired behaviour for a
     compile script — failure should be visible, not buried.
     """
+    import dspy
+
     lm = dspy.LM(model, max_tokens=max_tokens)
     dspy.configure(lm=lm)
 
@@ -163,6 +235,15 @@ def compile_and_persist(
         The path the compiled program JSON was written to (mirror of
         ``out_path``).
     """
+    # Deferred so the lightweight ``preflight_candidate_check`` helper
+    # (issue #236) can run without the full DSPy + classifier dep stack.
+    from dspy.teleprompt import BootstrapFewShot
+
+    from src.data.causal_role_classifier import (
+        CausalRoleClassifier,
+        build_compile_set,
+    )
+
     _seed_all(seed)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -239,12 +320,48 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
     )
+    parser.add_argument(
+        "--candidates-dir",
+        type=Path,
+        default=DEFAULT_CANDIDATES_DIR,
+        help=(
+            "Directory of curate_compile_set_candidates JSON manifests "
+            "for the Phase 4.5 backlog pre-flight (issue #236). "
+            f"Default: {DEFAULT_CANDIDATES_DIR}."
+        ),
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "Bypass the Phase 4.5 backlog pre-flight. Use only when "
+            "you explicitly want to recompile without new accepted "
+            "candidates (e.g. determinism re-run, hyperparameter "
+            "experiment)."
+        ),
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     logging.basicConfig(level=args.log_level, format="%(levelname)s %(name)s: %(message)s")
+
+    proceed, preflight_message = preflight_candidate_check(
+        candidates_dir=args.candidates_dir,
+        compiled_artifact_path=args.out,
+        force=args.force,
+    )
+    if not proceed:
+        # Print to stderr with a unique prefix so the refusal is grep-able
+        # and falsifiability tests can distinguish "gate fired" from
+        # "import failure on a downstream step."
+        print(
+            f"REFUSED: compile_causal_role_classifier pre-flight blocked: {preflight_message}",
+            file=sys.stderr,
+        )
+        return 1
+    logger.info("%s", preflight_message)
 
     compile_and_persist(
         out_path=args.out,
