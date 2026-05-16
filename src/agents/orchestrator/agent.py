@@ -15,6 +15,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 
+from ._self_dispatch_guard import strip_self_dispatch
 from .graph import create_orchestrator_graph
 from .state import OrchestratorState
 
@@ -213,9 +214,26 @@ class OrchestratorAgent:
         # Collect all agents that were dispatched (deduplicated, preserving order)
         # LangGraph's Annotated[List, operator.add] accumulates results across steps,
         # which can produce duplicate entries when agents are retried or re-dispatched.
-        agents_dispatched = list(dict.fromkeys(r["agent_name"] for r in agent_results))
-        successful_agents = list(dict.fromkeys(r["agent_name"] for r in successful_results))
-        failed_agents = list(dict.fromkeys(r["agent_name"] for r in failed_results))
+        #
+        # Issue #251 F1 (codex MED-1): RouterNode's `_strip_self_dispatch` cleans
+        # the *dispatch plan* — but this rebuild reads from `agent_results.keys()`
+        # downstream of that strip. A worker-side path that yields an
+        # `agent_name="orchestrator"` result (reflection loop, stub registry,
+        # rogue dispatcher) would re-introduce the F1 invariant violation here
+        # and leak it to chatbot_graph.py:1001 / chatbot_tools.py:1072 / the API.
+        # Defense-in-depth: re-apply the centralized strip at the rebuild site.
+        agents_dispatched = strip_self_dispatch(
+            dict.fromkeys(r["agent_name"] for r in agent_results),
+            context="orchestrator._build_output:agents_dispatched",
+        )
+        successful_agents = strip_self_dispatch(
+            dict.fromkeys(r["agent_name"] for r in successful_results),
+            context="orchestrator._build_output:successful_agents",
+        )
+        failed_agents = strip_self_dispatch(
+            dict.fromkeys(r["agent_name"] for r in failed_results),
+            context="orchestrator._build_output:failed_agents",
+        )
 
         # Determine status based on partial vs complete failure
         status = state.get("status", "failed")

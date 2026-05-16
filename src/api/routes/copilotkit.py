@@ -3188,7 +3188,16 @@ async def chat(
 
         # Extract dispatch observability fields (Phase 1 System Evaluation + Phase 4)
         orchestrator_used = result.get("orchestrator_used", False)
-        agents_dispatched = result.get("agents_dispatched", [])
+        # Issue #251 F1 (codex MED-1): defense-in-depth at this API
+        # serializer too — RouterNode + _build_output + chatbot_graph
+        # all strip, but the API boundary is the last chance before
+        # clients see the value.
+        from src.agents.orchestrator._self_dispatch_guard import strip_self_dispatch
+
+        agents_dispatched = strip_self_dispatch(
+            result.get("agents_dispatched", []),
+            context="api.routes.copilotkit:result",
+        )
         routed_agent = result.get("routed_agent")
         response_confidence = result.get("response_confidence")
         intent = result.get("intent")

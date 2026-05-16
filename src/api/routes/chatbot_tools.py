@@ -1069,7 +1069,15 @@ async def orchestrator_tool(
         # Extract key fields from orchestrator response
         response_text = orchestrator_result.get("response_text", "")
         response_confidence = orchestrator_result.get("response_confidence", 0.85)
-        agents_dispatched = orchestrator_result.get("agents_dispatched", [])
+        # Issue #251 F1 (codex MED-1): defense-in-depth at the API
+        # serializer. RouterNode + `_build_output` both strip, but the
+        # API boundary is the last chance before clients see the value.
+        from src.agents.orchestrator._self_dispatch_guard import strip_self_dispatch
+
+        agents_dispatched = strip_self_dispatch(
+            orchestrator_result.get("agents_dispatched", []),
+            context="api.routes.chatbot_tools:orchestrator_result",
+        )
         analysis_results = orchestrator_result.get("analysis_results", {})
 
         return {

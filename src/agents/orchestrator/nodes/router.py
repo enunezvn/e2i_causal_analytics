@@ -11,10 +11,16 @@ import time
 from collections import defaultdict
 from typing import Any, Dict, List, Literal, cast
 
+from .._self_dispatch_guard import SELF_AGENT_NAME
 from ..state import AgentDispatch, OrchestratorState
 
 logger = logging.getLogger(__name__)
 
+# Issue #251 F1: invariant — the orchestrator routes to OTHER agents.
+# ``SELF_AGENT_NAME`` is re-exported here for backward compatibility with
+# call sites that import it from this module (e.g. unit tests). The
+# canonical definition lives in ``_self_dispatch_guard``.
+__all__ = ["SELF_AGENT_NAME", "RouterNode"]
 
 class RouterNode:
     """Fast routing decisions based on intent classification.
@@ -241,11 +247,12 @@ class RouterNode:
         # name 'orchestrator' today; this guard makes that invariant
         # structurally enforced so a future intent addition can't regress it.
         # If anything snuck through, fall back to explainer with a warning.
-        filtered_plan = [d for d in dispatch_plan if d["agent_name"] != "orchestrator"]
+        filtered_plan = [d for d in dispatch_plan if d["agent_name"] != SELF_AGENT_NAME]
         if len(filtered_plan) != len(dispatch_plan):
             logger.warning(
-                "RouterNode #251 guard: dropped 'orchestrator' from dispatch_plan; "
+                "RouterNode #251 guard: dropped %r from dispatch_plan; "
                 "primary_intent=%s",
+                SELF_AGENT_NAME,
                 intent.get("primary_intent") if intent else "(none)",
             )
         if not filtered_plan:
