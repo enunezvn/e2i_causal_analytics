@@ -70,12 +70,18 @@ class BacklogResult:
     """Outcome of a backlog scan.
 
     Attributes:
-        count: Number of accepted-candidate rows across all manifests
-            newer than the compiled artifact.
-        accepted_features: Feature names from those accepted rows. Same
-            feature appearing in two manifests counts twice — at this
-            layer we don't de-dup (the curator's the dedup boundary
-            via ``make curate-candidates`` window selection).
+        count: Number of DISTINCT accepted candidates across all
+            manifests newer than the compiled artifact. Identity is the
+            ``(feature_name, source_run_id)`` composite — same feature
+            from the same audit run, reappearing in N manifests because
+            the operator re-ran ``make curate-candidates`` over an
+            overlapping window, counts as ONE unit of backlog (codex
+            gate-on-diff iter-1 MED).
+        accepted_features: Feature names of the deduped accepted set,
+            in the order first seen. A given feature_name appears at
+            most once even if it has multiple distinct source_run_ids
+            — feature_name is the operator-facing identity (it's what
+            they hand-merge into ``build_compile_set()``).
         scanned_manifests: Paths of JSON manifests parsed successfully.
         malformed_paths: Paths that exist but couldn't be parsed as the
             expected manifest shape. Surfaced for operator visibility,
@@ -135,6 +141,16 @@ def count_accepted_candidates(
     """
     log = logger or logging.getLogger(__name__)
     result = BacklogResult(count=0)
+    # Identity = (feature_name, source_run_id). Codex gate-on-diff
+    # iter-1 MED: without dedup, a curator who reruns
+    # ``make curate-candidates`` over an overlapping window would emit
+    # the same accepted feature in N timestamped manifests, falsely
+    # inflating backlog. We deliberately do NOT include the manifest
+    # path in identity — two manifests with the same
+    # (feature, source_run_id) are by construction the same audit
+    # signal.
+    seen_identities: set[tuple[str, str]] = set()
+    seen_features: set[str] = set()
 
     if not candidates_dir.exists():
         log.info("candidates_dir %s does not exist; backlog=0", candidates_dir)
@@ -158,11 +174,19 @@ def count_accepted_candidates(
             result.malformed_paths.append(manifest_path)
             continue
 
-        # Skip manifests older than the (existing) artifact — those
-        # candidates were already folded in.
-        if artifact_mtime is not None and mtime <= artifact_mtime:
+        # Skip manifests strictly older than the (existing) artifact —
+        # those candidates were already folded in. Equal-mtime is
+        # INCLUDED (codex gate-on-diff iter-1 LOW-2): on coarse-mtime
+        # filesystems (HFS+, FAT, NFS truncated to second), a
+        # legitimate curate→compile→curate-fast sequence can produce
+        # artifact_mtime == manifest_mtime; excluding it would silently
+        # drop fresh candidates. The (feature_name, source_run_id)
+        # dedup just above absorbs the false-positive case where the
+        # equal-mtime manifest is genuinely a republish of pre-folded
+        # candidates.
+        if artifact_mtime is not None and mtime < artifact_mtime:
             log.debug(
-                "skipping %s (mtime %.0f <= artifact mtime %.0f)",
+                "skipping %s (mtime %.0f < artifact mtime %.0f)",
                 manifest_path,
                 mtime,
                 artifact_mtime,
@@ -189,10 +213,29 @@ def count_accepted_candidates(
         for cand in candidates:
             if not isinstance(cand, dict):
                 continue
-            if _is_accepted(cand):
-                result.count += 1
-                feature_name = cand.get("feature_name", "<unknown>")
-                result.accepted_features.append(str(feature_name))
+            if not _is_accepted(cand):
+                continue
+            feature_name = str(cand.get("feature_name", "<unknown>"))
+            source_run_id = str(cand.get("source_run_id", "<unknown>"))
+            identity = (feature_name, source_run_id)
+            if identity in seen_identities:
+                log.debug(
+                    "skipping duplicate (feature=%s, source_run_id=%s) in %s",
+                    feature_name,
+                    source_run_id,
+                    manifest_path,
+                )
+                continue
+            seen_identities.add(identity)
+            result.count += 1
+            # accepted_features keeps each feature_name at most once
+            # (the operator-facing identity for hand-merging). The
+            # count tracks the finer (feature, source_run_id) identity
+            # so multi-run features stay correctly weighted in the
+            # backlog total.
+            if feature_name not in seen_features:
+                seen_features.add(feature_name)
+                result.accepted_features.append(feature_name)
 
     return result
 
@@ -232,6 +275,26 @@ def _format_summary(result: BacklogResult, threshold: int) -> str:
     return "\n".join(lines)
 
 
+def _positive_int(value: str) -> int:
+    """argparse type that rejects 0 / negative thresholds.
+
+    Codex gate-on-diff iter-1 LOW-1: ``--threshold 0`` or negative
+    values silently fell through to "backlog below threshold (3 < 0)",
+    which is mathematically false. Reject at parse time so the failure
+    is loud + obvious.
+    """
+    try:
+        ivalue = int(value)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError(f"expected integer, got {value!r}") from exc
+    if ivalue < 1:
+        raise argparse.ArgumentTypeError(
+            f"--threshold must be >= 1 (got {ivalue}); "
+            "zero or negative thresholds don't have a coherent READY semantic"
+        )
+    return ivalue
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
@@ -248,7 +311,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--threshold",
-        type=int,
+        type=_positive_int,
         default=DEFAULT_THRESHOLD,
         help=(f"Backlog count at which the READY signal fires (default: {DEFAULT_THRESHOLD})."),
     )
