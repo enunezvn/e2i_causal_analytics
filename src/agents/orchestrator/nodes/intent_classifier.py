@@ -16,19 +16,13 @@ Contract (issue #266 — invariant, enforced at import time):
     The reverse direction is intentionally *not* enforced: ``INTENT_PRIORITY``
     may declare future intents ahead of patterns being shipped.
 
-Multi-faceted detection (issue #256 — Option A, lean):
-    The ``multi_faceted`` patterns in ``INTENT_PATTERNS['multi_faceted']``
-    below are kept inline here rather than imported from
-    ``src/agents/orchestrator/router_v42.py``'s ``MultiFacetedDetector``.
-    Both ``router.py`` and ``router_v42.py`` at the orchestrator package
-    level were retired as abandoned earlier iterations (they had no in-tree
-    callers).
-
-    The trade-off vs the plan-aligned Option B (import detector, use
-    ``detect()``): we accept ~4 simple regexes here over the detector's
-    chaining-phrase and conjunction-count semantics. If multi-faceted
-    classification regressions surface, revisit by reviving a focused
-    detector module rather than the full v42 router.
+Multi-faceted detection (issues #256 + #288):
+    The ``multi_faceted`` regex tuple lives in ``src/agents/multi_faceted.py``
+    as the single source of truth — see that module for context on why
+    convergence is structural rather than semantic. The same module also
+    hosts the boolean facet-scorer consumed by the chatbot routes;
+    identity is asserted in
+    ``tests/unit/test_agents/test_orchestrator/test_multi_faceted_ssot.py``.
 """
 
 import logging
@@ -36,9 +30,9 @@ import re
 import time
 from typing import Literal, cast
 
+from src.agents.multi_faceted import MULTI_FACETED_PATTERNS
 from src.utils.llm_factory import get_fast_llm, get_llm_provider
 
-from ..multi_faceted import MULTI_FACETED_PATTERNS
 from ..state import IntentClassification, OrchestratorState
 
 logger = logging.getLogger(__name__)
@@ -166,7 +160,7 @@ class IntentClassifierNode:
             r"(active|running).*(experiments?|trials?)",
             r"experiments?.*(health|status|issues)",
         ],
-        # Single source of truth at ``src/agents/orchestrator/multi_faceted.py``
+        # Single source of truth at ``src/agents/multi_faceted.py``
         # (issue #288). Identity-checked in test_multi_faceted_ssot.py.
         "multi_faceted": MULTI_FACETED_PATTERNS,
         "cohort_definition": [

@@ -24,6 +24,13 @@ Background: PR #287 retired the v42 ``MultiFacetedDetector``, leaving the
 4 inline regexes in ``intent_classifier.py`` and the duplicated
 ``_is_multi_faceted_query`` functions in the two chatbot routes. Issue
 #288 surfaces the drift risk and this module is the fix.
+
+Module location note: this module lives at ``src/agents/`` rather than
+``src/agents/orchestrator/`` so that the lightweight chatbot route
+modules (``chatbot_dspy.py`` in particular, which has no other
+``src.agents.orchestrator`` import) can consume the SSOT without
+transitively requiring ``langgraph`` via the orchestrator package
+``__init__``.
 """
 
 from __future__ import annotations
