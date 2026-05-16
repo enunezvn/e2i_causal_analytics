@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 
+from src.agents.orchestrator.multi_faceted import is_multi_faceted_facet_score
+
 from .chatbot_state import IntentType
 
 logger = logging.getLogger(__name__)
@@ -426,40 +428,11 @@ def _matches_pattern(query_lower: str, patterns: list[str]) -> bool:
     return False
 
 
-def _is_multi_faceted_query(query: str) -> bool:
-    """
-    Detect if query needs Tool Composer for multi-faceted processing.
-
-    Multi-faceted queries require aggregating results from multiple agents
-    or analyzing multiple aspects of the same question.
-    """
-    query_lower = query.lower()
-
-    facets = {
-        # Query contains comparative/conjunction keywords suggesting multiple questions
-        "conjunction_keywords": any(
-            w in query_lower for w in ["compare", "trends", "explain", "also", "and then", "both"]
-        ),
-        # Query mentions multiple KPIs
-        "multiple_kpis": len(
-            re.findall(r"(trx|nrx|market share|conversion|volume|patient starts)", query_lower)
-        )
-        > 1,
-        # Query spans cross-agent capabilities
-        "cross_agent": any(
-            w in query_lower for w in ["drift", "health", "causal", "experiment", "prediction"]
-        ),
-        # Query mentions multiple brands
-        "multiple_brands": len(
-            re.findall(r"(kisqali|fabhalta|remibrutinib|all brands)", query_lower)
-        )
-        > 1,
-        # Query asks for both analysis AND recommendations
-        "analysis_and_recommendation": ("why" in query_lower or "what caused" in query_lower)
-        and any(w in query_lower for w in ["recommend", "suggest", "should"]),
-    }
-
-    return sum(facets.values()) >= 2
+# Multi-faceted detector — single source of truth at
+# ``src/agents/orchestrator/multi_faceted.py`` (issue #288).
+# Re-exported as ``_is_multi_faceted_query`` to preserve the historical
+# module-level callable name used in ``classify_intent_hardcoded`` below.
+_is_multi_faceted_query = is_multi_faceted_facet_score
 
 
 def classify_intent_hardcoded(query: str) -> Tuple[str, float, str]:

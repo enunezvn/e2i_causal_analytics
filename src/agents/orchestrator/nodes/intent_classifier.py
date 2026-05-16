@@ -38,6 +38,7 @@ from typing import Literal, cast
 
 from src.utils.llm_factory import get_fast_llm, get_llm_provider
 
+from ..multi_faceted import MULTI_FACETED_PATTERNS
 from ..state import IntentClassification, OrchestratorState
 
 logger = logging.getLogger(__name__)
@@ -165,13 +166,9 @@ class IntentClassifierNode:
             r"(active|running).*(experiments?|trials?)",
             r"experiments?.*(health|status|issues)",
         ],
-        "multi_faceted": [
-            # Conjunctive multi-question markers ("and also", "compare X vs Y, then ...").
-            r"and (also|then|additionally|furthermore)",
-            r"compare .* (vs|versus|against|to) .* and",
-            r"(combine|integrate|synthes).*(analyses|results|findings)",
-            r"(both|multiple) (effects?|analyses|perspectives?)",
-        ],
+        # Single source of truth at ``src/agents/orchestrator/multi_faceted.py``
+        # (issue #288). Identity-checked in test_multi_faceted_ssot.py.
+        "multi_faceted": MULTI_FACETED_PATTERNS,
         "cohort_definition": [
             r"(define|create|build|construct).*(cohort|patient set|patient population)",
             r"cohort.*(definition|construction|criteria)",

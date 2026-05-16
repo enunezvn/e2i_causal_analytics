@@ -28,6 +28,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
 
+from src.agents.orchestrator.multi_faceted import is_multi_faceted_facet_score
 from src.api.routes.chatbot_dspy import (
     CHATBOT_COGNITIVE_RAG_ENABLED,
     CHATBOT_DSPY_SYNTHESIS_ENABLED,
@@ -272,52 +273,11 @@ def _matches_pattern(query_lower: str, patterns: list[str]) -> bool:
     return False
 
 
-def _is_multi_faceted_query(query: str) -> bool:
-    """
-    Detect if query needs Tool Composer for multi-faceted processing.
-
-    Multi-faceted queries require aggregating results from multiple agents
-    or analyzing multiple aspects of the same question. Examples:
-    - "Compare TRx trends across all brands and explain the causal factors"
-    - "Show me the health score and recommendations for Kisqali"
-
-    Args:
-        query: User's query text
-
-    Returns:
-        True if query is multi-faceted and should use Tool Composer
-    """
-    import re
-
-    query_lower = query.lower()
-
-    # Score different facets of complexity
-    facets = {
-        # Query contains comparative/conjunction keywords suggesting multiple questions
-        "conjunction_keywords": any(
-            w in query_lower for w in ["compare", "trends", "explain", "also", "and then", "both"]
-        ),
-        # Query mentions multiple KPIs
-        "multiple_kpis": len(
-            re.findall(r"(trx|nrx|market share|conversion|volume|patient starts)", query_lower)
-        )
-        > 1,
-        # Query spans cross-agent capabilities
-        "cross_agent": any(
-            w in query_lower for w in ["drift", "health", "causal", "experiment", "prediction"]
-        ),
-        # Query mentions multiple brands
-        "multiple_brands": len(
-            re.findall(r"(kisqali|fabhalta|remibrutinib|all brands)", query_lower)
-        )
-        > 1,
-        # Query asks for both analysis AND recommendations
-        "analysis_and_recommendation": ("why" in query_lower or "what caused" in query_lower)
-        and any(w in query_lower for w in ["recommend", "suggest", "should"]),
-    }
-
-    # Need at least 2 facets to qualify as multi-faceted
-    return sum(facets.values()) >= 2
+# Multi-faceted detector — single source of truth at
+# ``src/agents/orchestrator/multi_faceted.py`` (issue #288).
+# Re-exported as ``_is_multi_faceted_query`` to preserve the historical
+# module-level callable name used by ``classify_intent`` below.
+_is_multi_faceted_query = is_multi_faceted_facet_score
 
 
 def classify_intent(query: str) -> str:
