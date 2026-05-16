@@ -13,6 +13,9 @@ from typing import Any, Dict, Optional, Type
 
 import numpy as np
 
+from src.agents.ml_foundation.model_trainer.nodes.hyperparameter_tuner import (
+    _LR_FIXED_PARAMS,
+)
 from src.agents.ml_foundation.model_trainer.random_state import (
     resolve_fold_random_state,
 )
@@ -672,8 +675,14 @@ def _filter_hyperparameters(
         if "verbose" not in filtered:
             filtered["verbose"] = -1
     elif algorithm_name in {"LogisticRegression", "LogisticRegression_Conformal"}:
-        if "max_iter" not in filtered:
-            filtered["max_iter"] = 1000
+        # Issue #232 defense-in-depth: route through the shared
+        # ``_LR_FIXED_PARAMS`` helper so the final training constructor cannot
+        # silently drop ``solver="saga"`` when a direct caller bypasses HPO
+        # (or seeds ``best_hyperparameters={"penalty": "l1"}``) — same
+        # ``Solver lbfgs supports only 'l2' or None penalties`` crash mode.
+        for _lr_key, _lr_val in _LR_FIXED_PARAMS.items():
+            if _lr_key not in filtered:
+                filtered[_lr_key] = _lr_val
 
     return filtered
 

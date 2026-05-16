@@ -185,6 +185,104 @@ class TestA3Tier0AltTrainImportsHelper:
             "variant inherits solver=saga"
         )
 
+    def test_tier0_alt_train_unpacks_helper_in_lr_family_branch(self, tier0_ast: ast.AST) -> None:
+        """Non-vacuous AST check (codex MED-2): the alt-train builder must
+        contain an ``if alt["name"] in (... LogisticRegression ...
+        LogisticRegression_Conformal ...)`` body that assigns a dict
+        literal containing ``**_LR_FIXED_PARAMS``. Pre-fix the unpack
+        does not exist; under the fix this assertion holds exactly at the
+        alt-train use site, so reverting just the unpack (not the import,
+        not the literal) trips this test.
+        """
+        # Walk every ``if`` node whose Compare test mentions a Tuple of
+        # str constants including both LR names. Inside that branch's body,
+        # there must be at least one dict literal with a ``**_LR_FIXED_PARAMS``
+        # keyword (i.e. a Dict node whose keys list contains None matched to
+        # a Name value ``_LR_FIXED_PARAMS``).
+        found = False
+        for node in ast.walk(tier0_ast):
+            if not isinstance(node, ast.If):
+                continue
+            test = node.test
+            # Look for a Compare node with `in` operator and Tuple right-hand
+            # side containing both LR family names.
+            if not isinstance(test, ast.Compare):
+                continue
+            if not (len(test.ops) == 1 and isinstance(test.ops[0], ast.In)):
+                continue
+            rhs = test.comparators[0] if test.comparators else None
+            if not isinstance(rhs, ast.Tuple):
+                continue
+            tuple_strs = {
+                elt.value
+                for elt in rhs.elts
+                if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
+            }
+            if not {"LogisticRegression", "LogisticRegression_Conformal"} <= tuple_strs:
+                continue
+            # Found the LR-family branch. Now scan its body for a dict
+            # literal that double-stars _LR_FIXED_PARAMS.
+            for body_node in ast.walk(ast.Module(body=node.body, type_ignores=[])):
+                if not isinstance(body_node, ast.Dict):
+                    continue
+                # ``**X`` shows up as a (key=None, value=Name('X')) pair.
+                for k, v in zip(body_node.keys, body_node.values, strict=True):
+                    if k is None and isinstance(v, ast.Name) and v.id == "_LR_FIXED_PARAMS":
+                        found = True
+                        break
+                if found:
+                    break
+            if found:
+                break
+
+        assert found, (
+            "Did not find an ``if alt['name'] in (... 'LogisticRegression', "
+            "'LogisticRegression_Conformal' ...)`` branch whose body unpacks "
+            "``**_LR_FIXED_PARAMS`` into a dict literal in "
+            "scripts/run_tier0_test.py. The alt-train must actually consume "
+            "the helper inside that branch, not merely reference it elsewhere."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Defense-in-depth (codex MED-1): the final training constructor in
+# ``model_trainer_node._filter_hyperparameters`` also merges _LR_FIXED_PARAMS
+# so direct callers that bypass HPO can't smuggle penalty=l1 + lbfgs through.
+# ---------------------------------------------------------------------------
+
+
+class TestModelTrainerNodeFiltersLRFamily:
+    """Defense-in-depth: ``_filter_hyperparameters`` injects ``solver=saga``
+    and ``max_iter=1000`` for LR + LR_Conformal when not already set.
+    """
+
+    def _call_filter(self, algorithm_name: str, hyperparameters):
+        from src.agents.ml_foundation.model_trainer.nodes import model_trainer_node
+
+        return model_trainer_node._filter_hyperparameters(algorithm_name, hyperparameters)
+
+    def test_lr_gets_saga_in_filter(self) -> None:
+        filtered = self._call_filter("LogisticRegression", {"penalty": "l1", "C": 1.0})
+        assert filtered["solver"] == "saga"
+        assert filtered["max_iter"] == 1000
+
+    def test_lr_conformal_gets_saga_in_filter(self) -> None:
+        filtered = self._call_filter("LogisticRegression_Conformal", {"penalty": "l1", "C": 1.0})
+        assert filtered["solver"] == "saga"
+        assert filtered["max_iter"] == 1000
+
+    def test_caller_override_wins(self) -> None:
+        """If the caller has explicitly set ``solver`` or ``max_iter``, the
+        helper must not overwrite it — preserves the original constructor
+        contract.
+        """
+        filtered = self._call_filter(
+            "LogisticRegression",
+            {"penalty": "l2", "solver": "liblinear", "max_iter": 500},
+        )
+        assert filtered["solver"] == "liblinear"
+        assert filtered["max_iter"] == 500
+
 
 # ---------------------------------------------------------------------------
 # Cross-cutting / smoke: the failing builder no longer crashes
