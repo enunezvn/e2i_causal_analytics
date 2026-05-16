@@ -6131,11 +6131,11 @@ async def run_pipeline(
 
                 alternatives = list(state.get("alternative_candidates", []))
                 if alternatives and not state.get("pipeline_halted"):
-                    from src.agents.ml_foundation.model_selector.nodes.candidate_ranker import (
-                        _get_algorithm_class,
-                    )
                     from src.agents.ml_foundation.model_selector.nodes.algorithm_registry import (
                         REGULARIZATION_SEARCH_SPACE,
+                    )
+                    from src.agents.ml_foundation.model_selector.nodes.candidate_ranker import (
+                        _get_algorithm_class,
                     )
 
                     # Issue #232: import the shared LR-family fixed-params helper
