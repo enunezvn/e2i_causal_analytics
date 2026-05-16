@@ -32,12 +32,12 @@ jobs:
     name: Tier 1-5 agent harness
     runs-on: ubuntu-22.04
     timeout-minutes: 30
-    # Soft-fail initially; flip-off tracked by issue #263 (earliest 2026-05-30).
-    # Hard-fail requires (a) committed tier0 cache or runner-side restore, plus
-    # (b) the dispatcher input-wrap fix in #260 so wrapped-input agents
-    # (experiment_monitor, drift_check, experiment_design) actually produce
-    # meaningful PASS verdicts rather than dispatch-failure-as-success.
-    continue-on-error: true
+    # Hard-fail mode (flipped 2026-05-16 per issue #263) — the dispatcher
+    # wrapped-input fix landed in PR #275 (commit ac68ae41), and the
+    # boot-stack + install-deps steps have been stable on consecutive
+    # runs. Graceful-skip on missing tier0 cache is still honoured via
+    # ``steps.restore-cache.outputs.found`` ``if:`` gating below — that's
+    # a legitimate skip path, not a soft-fail.
 
     env:
       # CI-only dummy passwords. docker-compose.yml uses ${VAR:?msg} syntax
@@ -67,11 +67,13 @@ jobs:
 
       - name: Boot Redis + FalkorDB + MLflow from docker-compose
         id: boot-stack
-        # Non-fatal: a compose problem (image pull rate-limit, healthcheck
-        # timeout, etc.) shouldn't fail the whole check. Downstream steps
-        # inspect ``steps.boot-stack.outputs.ok`` to decide whether the
-        # harness can run, and the failure() guard below captures logs.
-        continue-on-error: true
+        # Graceful-skip: ``set +e`` + explicit ``exit 0`` + ``ok=false``
+        # output keeps a transient compose issue (image pull rate-limit,
+        # healthcheck timeout) from being mistaken for a real regression.
+        # Real regressions (compose-file parse errors, network conflicts)
+        # still surface as a non-zero exit via shell defaults. Downstream
+        # steps inspect ``steps.boot-stack.outputs.ok`` to gate the
+        # harness, and the failure() guard below captures logs.
         run: |
           set +e
           # docker-compose.yml references an external 'supabase-network'
@@ -114,10 +116,12 @@ jobs:
 
       - name: Install runtime + dev dependencies
         id: install-deps
-        # Non-fatal: a single transient pip resolver / build problem in the
-        # 695-line requirements set shouldn't fail the whole check while the
-        # harness is soft-fail. Downstream gating uses this step's outcome.
-        continue-on-error: true
+        # Hard-fail (#263 flip-off 2026-05-16): a pip resolver / build
+        # regression must trip the check; the harness cannot meaningfully
+        # run on a broken dep set. Downstream ``if:`` still gates the
+        # harness run on ``steps.install-deps.outcome == 'success'`` so
+        # the skip-summary path remains coherent if a future contributor
+        # re-introduces structured graceful-skip here.
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
@@ -164,7 +168,7 @@ jobs:
           if [ "${{ steps.restore-cache.outputs.found }}" != "true" ]; then
             REASONS="${REASONS}no tier0 cache committed; "
           fi
-          echo "::notice title=Tier 1-5 harness skipped::${REASONS}The harness is soft-fail until a tier0 cache is committed and the runner can stand up Redis/FalkorDB/MLflow reliably."
+          echo "::notice title=Tier 1-5 harness skipped::${REASONS}A skip is currently emitted only on missing tier0 cache or unhealthy infra; pip-install failures hard-fail (#263)."
 
       - name: Capture docker logs on failure
         if: failure()
