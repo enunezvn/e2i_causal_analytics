@@ -118,6 +118,12 @@ class Crystallizer:
                     crystallized_by_cycle_id=crystallized_by_cycle_id,
                     crystallized_by_user_id=crystallized_by_user_id,
                 )
+                if not insight_id:
+                    # Skip-signal from _crystallize_group: an active row for
+                    # this (brand, region, kpi, causal_path) already exists.
+                    # Backed by the partial-unique-index in migration 021. Not
+                    # an error — concurrent crystallizer runs are expected.
+                    continue
                 result.insights_created += 1
                 result.edges_created += edges_added
                 result.by_brand[brand] = result.by_brand.get(brand, 0) + 1
@@ -153,25 +159,40 @@ class Crystallizer:
         time_end = times[-1] if times else None
 
         # Insert executive_insight row.
-        insert = (
-            client.table("executive_insights")
-            .insert(
-                {
-                    "title": title[:500],
-                    "narrative": narrative,
-                    "brand": brand,
-                    "region": region,
-                    "kpi": _pick_kpi(members),
-                    "time_window_start": time_start,
-                    "time_window_end": time_end,
-                    "key_metrics": key_metrics,
-                    "crystallized_by_cycle_id": crystallized_by_cycle_id,
-                    "crystallized_by_user_id": crystallized_by_user_id,
-                    "source_count": len(members),
-                }
+        # Migration 021 has a partial-unique-index on
+        # (brand, region, kpi, key_metrics->>'causal_path_id') WHERE
+        # invalidated_at IS NULL. Concurrent crystallizer runs (Celery beat
+        # + operator-triggered POST /crystallize) collide here; catch and
+        # return ("", 0) as a skip-signal that the caller observes.
+        try:
+            insert = (
+                client.table("executive_insights")
+                .insert(
+                    {
+                        "title": title[:500],
+                        "narrative": narrative,
+                        "brand": brand,
+                        "region": region,
+                        "kpi": _pick_kpi(members),
+                        "time_window_start": time_start,
+                        "time_window_end": time_end,
+                        "key_metrics": key_metrics,
+                        "crystallized_by_cycle_id": crystallized_by_cycle_id,
+                        "crystallized_by_user_id": crystallized_by_user_id,
+                        "source_count": len(members),
+                    }
+                )
+                .execute()
             )
-            .execute()
-        )
+        except Exception as exc:
+            err_str = str(exc).lower()
+            if "unique" in err_str or "duplicate" in err_str or "uix_executive_insights" in err_str:
+                logger.info(
+                    f"crystallizer: skipping duplicate for brand={brand} "
+                    f"group={group_key} (existing active row): {exc}"
+                )
+                return ("", 0)
+            raise
         rows = insert.data or []
         if not rows:
             raise RuntimeError("executive_insight insert returned no rows")

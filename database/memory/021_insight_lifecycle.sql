@@ -26,6 +26,15 @@
 BEGIN;
 
 -- ----------------------------------------------------------------------------
+-- 0. EXTENSIONS
+-- ----------------------------------------------------------------------------
+-- pgcrypto provides gen_random_uuid(). Supabase enables this by default but
+-- older / self-hosted Postgres projects may not, so declare explicitly so the
+-- migration is portable. Must come BEFORE the first gen_random_uuid() call.
+
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+-- ----------------------------------------------------------------------------
 -- 1. ENUMS
 -- ----------------------------------------------------------------------------
 
@@ -193,6 +202,17 @@ CREATE INDEX IF NOT EXISTS idx_executive_insights_brand_recall
     ON executive_insights(brand, recall, crystallized_at DESC);
 CREATE INDEX IF NOT EXISTS idx_executive_insights_invalidated
     ON executive_insights(invalidated_at) WHERE invalidated_at IS NOT NULL;
+
+-- Partial-unique-index prevents duplicate active crystallizations for the
+-- same (brand, region, kpi, causal_path) group. Concurrent crystallizer
+-- runs (Celery beat + operator-triggered POST /crystallize) collide here;
+-- crystallizer.py catches the unique-violation and skips. Recall +
+-- recrystallize is allowed because the index is partial on invalidated_at:
+-- once invalidated_at IS NOT NULL, the row is no longer subject to this
+-- constraint and a new active row can be inserted in its place.
+CREATE UNIQUE INDEX IF NOT EXISTS uix_executive_insights_active_causal_path
+    ON executive_insights (brand, region, kpi, ((key_metrics ->> 'causal_path_id')))
+    WHERE invalidated_at IS NULL;
 
 COMMENT ON TABLE executive_insights IS
 'Crystallized cross-agent narratives. Crystallizer aggregates strictly within (brand, region, kpi, time_window). NEVER produced cross-brand. recall=TRUE means at least one provenance ancestor was overturned (set by JIT verifier).';
