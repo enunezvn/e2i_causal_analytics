@@ -236,30 +236,13 @@ class RouterNode:
             )
             discovery_routing_applied = len(discovery_aware_agents) > 0
 
-        # Issue #251 F1 hard guard: the orchestrator must NEVER dispatch to
-        # itself. None of the INTENT_TO_AGENTS or MULTI_AGENT_PATTERNS entries
-        # name 'orchestrator' today; this guard makes that invariant
-        # structurally enforced so a future intent addition can't regress it.
-        # If anything snuck through, fall back to explainer with a warning.
-        filtered_plan = [d for d in dispatch_plan if d["agent_name"] != "orchestrator"]
-        if len(filtered_plan) != len(dispatch_plan):
-            logger.warning(
-                "RouterNode #251 guard: dropped 'orchestrator' from dispatch_plan; "
-                "primary_intent=%s",
-                intent.get("primary_intent") if intent else "(none)",
-            )
-        if not filtered_plan:
-            # Whole plan was orchestrator entries; fall through to explainer.
-            filtered_plan = [
-                AgentDispatch(
-                    agent_name="explainer",
-                    priority="medium",
-                    parameters={"depth": "minimal"},
-                    timeout_ms=30000,
-                    fallback_agent=None,
-                )
-            ]
-        dispatch_plan = filtered_plan
+        # Issue #251 F1 hard guard (centralized for Issue #269).
+        # Funnel through a shared finalization so `_default_routing` cannot
+        # bypass the strip. See `_apply_self_dispatch_guard` for the helper.
+        dispatch_plan = self._apply_self_dispatch_guard(
+            dispatch_plan,
+            source=f"execute(primary_intent={intent.get('primary_intent', '(none)') if intent else '(none)'!r})",
+        )
 
         routing_time = int((time.time() - start_time) * 1000)
 
@@ -274,8 +257,67 @@ class RouterNode:
             "discovery_aware_agents": discovery_aware_agents if discovery_aware_agents else None,
         }
 
+    def _apply_self_dispatch_guard(
+        self,
+        dispatch_plan: List[AgentDispatch],
+        *,
+        source: str = "unknown",
+    ) -> List[AgentDispatch]:
+        """Strip ``"orchestrator"`` entries from a dispatch plan (Issue #251 F1).
+
+        The orchestrator routes to OTHER agents and must never appear in its
+        own ``dispatch_plan``. None of the INTENT_TO_AGENTS or
+        MULTI_AGENT_PATTERNS entries name 'orchestrator' today; this helper
+        makes that invariant structurally enforced so a future intent
+        addition (or a configurable default agent in ``_default_routing``)
+        cannot regress it.
+
+        Issue #269: extracted from the inline guard inside ``execute()`` so
+        ``_default_routing`` shares the same finalization. Both call sites
+        invoke this helper before constructing the return state.
+
+        Args:
+            dispatch_plan: The proposed dispatch plan, possibly containing
+                an ``agent_name == "orchestrator"`` entry that violates F1.
+            source: Free-form caller tag for the warning log line, e.g.
+                ``"execute(primary_intent='multi_faceted')"`` or
+                ``"_default_routing"``.
+
+        Returns:
+            A dispatch plan with all ``"orchestrator"`` entries removed.
+            If the strip leaves the plan empty, falls back to a single
+            ``"explainer"`` dispatch so the contract that
+            ``len(dispatch_plan) >= 1`` is preserved for downstream
+            consumers.
+        """
+        filtered_plan = [d for d in dispatch_plan if d["agent_name"] != "orchestrator"]
+        if len(filtered_plan) != len(dispatch_plan):
+            logger.warning(
+                "RouterNode #251/#269 guard: dropped 'orchestrator' from dispatch_plan; source=%s",
+                source,
+            )
+        if not filtered_plan:
+            # Whole plan was orchestrator entries; fall through to explainer.
+            filtered_plan = [
+                AgentDispatch(
+                    agent_name="explainer",
+                    priority="medium",
+                    parameters={"depth": "minimal"},
+                    timeout_ms=30000,
+                    fallback_agent=None,
+                )
+            ]
+        return filtered_plan
+
     def _default_routing(self, state: OrchestratorState, start_time: float) -> OrchestratorState:
         """Default routing when intent classification fails.
+
+        Issue #269: this path used to return early WITHOUT the F1 strip, so
+        a future refactor that changed the default agent to a configurable
+        value (env var, config) could silently re-introduce the self-dispatch
+        leak. The fix routes the dispatch plan through
+        ``_apply_self_dispatch_guard`` before returning, matching the
+        finalization the main ``execute()`` path applies.
 
         Args:
             state: Current state
@@ -294,12 +336,18 @@ class RouterNode:
             )
         ]
 
+        # Issue #269: funnel through the same finalization as `execute()`.
+        # Today this is a no-op because the hard-coded default is "explainer",
+        # but the structural by-construction guard prevents a future refactor
+        # from leaking "orchestrator" through this path.
+        dispatch_plan = self._apply_self_dispatch_guard(dispatch_plan, source="_default_routing")
+
         routing_time = int((time.time() - start_time) * 1000)
 
         return {
             **state,
             "dispatch_plan": dispatch_plan,
-            "parallel_groups": [["explainer"]],
+            "parallel_groups": [[d["agent_name"] for d in dispatch_plan]],
             "routing_latency_ms": routing_time,
             "current_phase": "dispatching",
         }
