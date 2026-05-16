@@ -2056,9 +2056,16 @@ def main():
     if not args.no_save:
         sys.stdout = TeeOutput(original_stdout, output_buffer)
 
+    # Track whether any agent failed so we can propagate a non-zero
+    # exit. Issue #263 acceptance: the harness must hard-fail the
+    # GitHub Actions check when any tier1-5 agent regresses; the
+    # workflow's ``continue-on-error`` flip is necessary but not
+    # sufficient without a real exit code here. ``run_tests`` records
+    # failures in ``summary["failed"]`` but does not raise.
+    full_results: dict[str, Any] | None = None
     try:
         # Run tests
-        asyncio.run(
+        full_results = asyncio.run(
             run_tests(
                 tier0_cache=args.tier0_cache,
                 run_tier0_first=args.run_tier0_first,
@@ -2101,6 +2108,17 @@ def main():
                 f.write(md_content)
 
             print(f"\n📄 Results saved to: {output_file}")
+
+    # Propagate non-zero exit when any agent failed. Defensive on the
+    # results-dict shape: ``run_tests`` always returns ``summary.failed``
+    # as an int, but if any future refactor swaps the shape we err on
+    # the side of failing loudly rather than silently exiting 0.
+    if full_results is None:
+        sys.exit(1)
+    summary = full_results.get("summary") or {}
+    failed_count = summary.get("failed")
+    if not isinstance(failed_count, int) or failed_count > 0:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

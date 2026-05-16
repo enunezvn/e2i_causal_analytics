@@ -67,27 +67,32 @@ jobs:
 
       - name: Boot Redis + FalkorDB + MLflow from docker-compose
         id: boot-stack
-        # Graceful-skip: ``set +e`` + explicit ``exit 0`` + ``ok=false``
-        # output keeps a transient compose issue (image pull rate-limit,
-        # healthcheck timeout) from being mistaken for a real regression.
-        # Real regressions (compose-file parse errors, network conflicts)
-        # still surface as a non-zero exit via shell defaults. Downstream
-        # steps inspect ``steps.boot-stack.outputs.ok`` to gate the
-        # harness, and the failure() guard below captures logs.
+        # Hard-fail (#263): real compose regressions — compose-file
+        # parse errors, missing services, network-create failures,
+        # ``docker compose up`` errors — must trip the job. Shell defaults
+        # (``set -e``-equivalent via ``run: |`` + explicit propagation
+        # below) ensure that. The only graceful-skip retained is the
+        # health-probe timeout path: an image pull can still rate-limit
+        # transiently and we don't want that to flap the check while
+        # the workflow stabilizes. That timeout signals ``ok=false``
+        # via outputs; the downstream Summarize-skip-reasons step
+        # emits a notice. A hard infra failure (parse error, network
+        # conflict, ``compose up`` non-zero) escapes via shell defaults
+        # and hard-fails the job.
         run: |
-          set +e
+          set -euo pipefail
           # docker-compose.yml references an external 'supabase-network'
           # (used by api / feast / scheduler — not by our 3 services). Even
           # when only starting a subset, compose validates external networks
           # exist, so pre-create it as an empty bridge to satisfy the
           # declaration without bringing Supabase up.
-          docker network inspect supabase-network >/dev/null 2>&1 \
-            || docker network create supabase-network
-          if ! docker compose -f docker/docker-compose.yml up -d redis falkordb mlflow; then
-            echo "::warning::docker compose up failed; harness will be skipped"
-            echo "ok=false" >> $GITHUB_OUTPUT
-            exit 0
+          if ! docker network inspect supabase-network >/dev/null 2>&1; then
+            docker network create supabase-network
           fi
+          # docker compose up is now hard-fail: a parse error or missing
+          # service definition is a real regression that the harness
+          # exists to catch.
+          docker compose -f docker/docker-compose.yml up -d redis falkordb mlflow
           echo "Waiting for services to report healthy..."
           ALL_HEALTHY=true
           for svc in redis falkordb mlflow; do
@@ -108,6 +113,9 @@ jobs:
             fi
           done
           docker compose -f docker/docker-compose.yml ps
+          # Health-probe timeout is the one retained graceful-skip: an
+          # image pull can rate-limit transiently. The harness run-step
+          # checks outputs.ok=='true' before invoking make tier1-5-test.
           if [ "$ALL_HEALTHY" = "true" ]; then
             echo "ok=true" >> $GITHUB_OUTPUT
           else
@@ -142,6 +150,7 @@ jobs:
           fi
 
       - name: Run Tier 1-5 harness
+        id: run-harness
         if: |
           steps.install-deps.outcome == 'success' &&
           steps.boot-stack.outputs.ok == 'true' &&
@@ -153,6 +162,7 @@ jobs:
           make tier1-5-test
 
       - name: Summarize skip reasons
+        id: summarize-skip
         if: |
           steps.install-deps.outcome != 'success' ||
           steps.boot-stack.outputs.ok != 'true' ||
