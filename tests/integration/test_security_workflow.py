@@ -292,15 +292,36 @@ def test_step_id_references_resolve_within_container_scan_job() -> None:
     Multi-job safety: we scope the assertion to the `container-scan`
     job. Other jobs in `security.yml` (gitleaks, bandit, semgrep,
     pip-audit, npm-audit, hadolint, summary) are out of scope for this
-    invariant — they don't use `steps.*.outcome` guards. Helper
-    `_collect_step_id_refs` is reusable if a future regression spreads.
+    invariant — they don't use `steps.*.outcome` guards.
+
+    Codex gate-on-diff iter-1 LOW finding: also assert that every
+    `if:` value is either absent or a string. A malformed non-string
+    `if:` (list/dict/None) would have been silently skipped under the
+    original implementation, so a future regression that breaks a
+    guard's YAML shape would not have tripped this test as long as
+    another well-formed `if:` still referenced `docker-build`. GHA's
+    expression language requires `if:` to be a string per spec, so a
+    non-string is malformed by definition.
     """
     workflow = _load_workflow()
     job = workflow["jobs"]["container-scan"]
     steps = cast(list[dict[str, Any]], job["steps"])
 
     # Build the authoritative set of step ids declared in this job.
-    declared_ids = {step["id"] for step in steps if isinstance(step, dict) and "id" in step}
+    # `id:` is a GHA scalar string per spec; reject non-string ids that
+    # would silently break ref-integrity (e.g. yaml-int `id: 1` would
+    # produce a set with `1` (int) while string refs would never match).
+    declared_ids: set[str] = set()
+    for step in steps:
+        if not isinstance(step, dict) or "id" not in step:
+            continue
+        sid = step["id"]
+        assert isinstance(sid, str), (
+            f"Issue #271: step `id:` must be a string per GHA spec, got "
+            f"{type(sid).__name__} (value={sid!r}) on step "
+            f"{step.get('name', '<unnamed>')!r}"
+        )
+        declared_ids.add(sid)
     assert "docker-build" in declared_ids, (
         f"container-scan must declare a step with `id: docker-build` "
         f"(Issue #271 anchor). Currently declared: {sorted(declared_ids)}"
@@ -309,14 +330,25 @@ def test_step_id_references_resolve_within_container_scan_job() -> None:
     # Collect every steps.<id>.outcome / .conclusion / .outputs.* ref
     # from every step's `if:` predicate. Pattern matches the GHA
     # expression-context spec: identifiers are [A-Za-z0-9_-]+.
+    #
+    # Codex gate-on-diff iter-1 LOW finding: also fail on malformed
+    # non-string `if:` values (list/dict/None). Per GHA spec `if:` is
+    # always a string expression — a non-string is a YAML shape bug
+    # that would silently skip the guard on the runner.
     step_ref_re = re.compile(r"steps\.([A-Za-z0-9_-]+)\.")
     referenced_ids: dict[str, list[str]] = {}
     for step in steps:
         if not isinstance(step, dict):
             continue
-        if_expr = step.get("if")
-        if not isinstance(if_expr, str):
+        if "if" not in step:
             continue
+        if_expr = step["if"]
+        assert isinstance(if_expr, str), (
+            f"Issue #271: step `if:` must be a string expression per "
+            f"GHA spec, got {type(if_expr).__name__} (value={if_expr!r}) "
+            f"on step {step.get('name', '<unnamed>')!r}. A non-string "
+            "`if:` would silently skip the step on the runner."
+        )
         for match in step_ref_re.finditer(if_expr):
             ref = match.group(1)
             referenced_ids.setdefault(ref, []).append(step.get("name", "<unnamed>"))
