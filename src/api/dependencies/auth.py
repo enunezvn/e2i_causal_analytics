@@ -36,7 +36,7 @@ Version: 4.3.0
 import logging
 import os
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -145,6 +145,29 @@ def get_user_role(user: Dict[str, Any]) -> UserRole:
             logger.warning(f"Unknown role '{role_str}', defaulting to viewer")
 
     return UserRole.VIEWER
+
+
+def get_user_brands(user: Dict[str, Any]) -> List[str]:
+    """Extract brand-access grants from user data.
+
+    Returns the list of brand strings the user is permitted to read/operate
+    on. ``['all']`` means cross-brand access (typically admin operators).
+
+    Look-up order (matches ``get_user_role``):
+    1. ``app_metadata.brands`` (Supabase convention)
+    2. top-level ``brands`` field
+    3. Empty list when neither is set
+
+    Used by routes that enforce per-tenant access until full RLS lands —
+    e.g. ``GET /api/sentinels`` filters by this set so an Operator with
+    Brand-X grant cannot list Brand-Y sentinels via ``?brand=Brand-Y``.
+    """
+    brands = user.get("app_metadata", {}).get("brands")
+    if brands is None:
+        brands = user.get("brands", [])
+    if isinstance(brands, str):
+        return [brands]
+    return list(brands or [])
 
 
 def has_role(user: Dict[str, Any], required_role: UserRole) -> bool:
