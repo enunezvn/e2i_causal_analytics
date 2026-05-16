@@ -4,17 +4,129 @@ Parallel agent dispatch with timeout handling.
 """
 
 import asyncio
+import dataclasses
 import functools
 import importlib
 import logging
 import time
 import uuid
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Optional, Set, Type, cast
 
 from .._agent_method_map import get_method_spec
 from ..state import AgentDispatch, AgentResult, OrchestratorState
 
 logger = logging.getLogger(__name__)
+
+
+def _declared_field_names(input_cls: Type[Any]) -> Set[str]:
+    """Return the set of field names declared on a dataclass or pydantic model.
+
+    Supports the two wrapping shapes the dispatcher must serve: strict
+    ``@dataclass`` (e.g. ``ExperimentMonitorInput``) and pydantic v2
+    ``BaseModel`` (e.g. ``DriftMonitorInput``, ``ExperimentDesignerInput``).
+    Returns an empty set for anything else; the caller treats that as "do not
+    project — splat as-is and let the constructor decide".
+    """
+    if dataclasses.is_dataclass(input_cls):
+        return {f.name for f in dataclasses.fields(input_cls)}
+    # Pydantic v2: BaseModel exposes ``model_fields`` on the class.
+    model_fields = getattr(input_cls, "model_fields", None)
+    if isinstance(model_fields, dict):
+        return set(model_fields.keys())
+    return set()
+
+
+# Per-agent AC-3 defaults sourced from the orchestrator dispatch context.
+# Each entry maps an agent_name → a callable returning a dict of (field_name →
+# default_value) computed from ``payload`` (the generic orchestrator payload)
+# and ``dispatch`` (the AgentDispatch entry). Defaults are applied AFTER the
+# generic payload + dispatch.parameters merge but BEFORE final field-projection,
+# so they only land for fields the input_model actually declares and only when
+# the merge did not already supply a value.
+#
+# Issue #260 AC-3: required fields the wrapped input model declares but the
+# orchestrator payload does not naturally carry must get a reasonable default.
+def _wrapped_input_defaults(
+    agent_name: str, payload: Dict[str, Any], dispatch: AgentDispatch
+) -> Dict[str, Any]:
+    """Return per-agent ACs-#3 defaults for wrapped-input fields."""
+    query = payload.get("query") or ""
+    defaults: Dict[str, Any] = {}
+    if agent_name == "experiment_monitor":
+        # ExperimentMonitorInput.experiment_ids defaults to None on the
+        # dataclass itself; explicitly normalising to [] keeps the agent's
+        # contract clearer (None vs [] both mean "no specific IDs", but
+        # pinning [] avoids ambiguity downstream).
+        defaults["experiment_ids"] = []
+    elif agent_name == "drift_monitor":
+        # DriftMonitorInput.features_to_monitor is required with min_length=1.
+        # The orchestrator payload does not naturally supply this — it must
+        # come from dispatch.parameters or fall back to an empty list. The
+        # pydantic validator will surface min_length=1 violation as a
+        # structured AgentResult.error when no features are provided; that
+        # is the correct behaviour (don't fabricate features).
+        defaults["features_to_monitor"] = []
+    elif agent_name == "experiment_designer":
+        # ExperimentDesignerInput.business_question is required with
+        # min_length=10. Default it from the orchestrator-level ``query`` —
+        # that's how the harness's Tier0OutputMapper bridges the two contracts.
+        defaults["business_question"] = query
+    return defaults
+
+
+def _coerce_to_input_model(
+    input_cls: Type[Any],
+    payload: Dict[str, Any],
+    dispatch: AgentDispatch,
+    agent_name: str,
+) -> Any:
+    """Project ``payload`` to the fields declared by ``input_cls`` and build it.
+
+    Resolves issue #260: instantiating the per-agent ``input_model``
+    (``ExperimentMonitorInput``, ``DriftMonitorInput``,
+    ``ExperimentDesignerInput``) directly from the generic orchestrator
+    payload fails because the generic payload carries
+    ``user_context``/``parsed_query``/``span_id``/``dispatch_id``/
+    ``execution_mode`` — none of which any wrapped model declares — and
+    because some wrapped models require fields the generic payload does
+    not carry (``features_to_monitor``, ``business_question``).
+
+    Strategy:
+
+    1. Merge ``dispatch.parameters`` (router-supplied per-agent kwargs)
+       over the generic payload. ``parameters`` wins because the router put
+       them there specifically for this agent.
+    2. Apply per-agent ACs-#3 defaults via ``_wrapped_input_defaults``;
+       defaults only fill values that are not already present in the merge.
+    3. Project to the union of the model's declared field names. Models
+       declaring no detectable fields (neither dataclass nor pydantic v2
+       BaseModel) are constructed with the raw merged dict — the original
+       splat path — to preserve backward compatibility.
+    """
+    parameters = dispatch.get("parameters") or {}
+    merged: Dict[str, Any] = {**payload, **parameters}
+
+    declared = _declared_field_names(input_cls)
+
+    # AC-3: fill in per-agent defaults for fields the model declares but the
+    # merge did not supply.
+    if declared:
+        defaults = _wrapped_input_defaults(agent_name, payload, dispatch)
+        for field_name, default_value in defaults.items():
+            if field_name in declared and field_name not in merged:
+                merged[field_name] = default_value
+
+    # If we can introspect declared fields, project the merge onto them. This
+    # is the load-bearing fix: strict @dataclass models would otherwise raise
+    # TypeError on user_context / parsed_query / span_id / etc.
+    if declared:
+        projected = {k: v for k, v in merged.items() if k in declared}
+        return input_cls(**projected)
+
+    # Backward-compat path: model we cannot introspect — splat the merge as-is
+    # (the original behaviour before this fix). The caller wraps construction
+    # exceptions into a structured AgentResult.error.
+    return input_cls(**merged)
 
 
 def _generate_dispatch_id() -> str:
@@ -131,11 +243,23 @@ class DispatcherNode:
 
             # Wrap input in a Pydantic / dataclass model when the agent expects
             # one (e.g. DriftMonitorInput, ExperimentMonitorInput).
+            #
+            # Issue #260: the generic orchestrator payload carries fields the
+            # wrapped models don't declare (user_context, parsed_query, span_id,
+            # ...) and is missing required fields some wrapped models declare
+            # (features_to_monitor, business_question). ``_coerce_to_input_model``
+            # projects the merged payload onto the model's declared fields and
+            # supplies per-agent defaults from the dispatch context.
             if spec.input_model and spec.input_module:
                 try:
                     input_module = importlib.import_module(spec.input_module)
                     input_cls = getattr(input_module, spec.input_model)
-                    agent_input = input_cls(**agent_input)
+                    agent_input = _coerce_to_input_model(
+                        input_cls,
+                        cast(Dict[str, Any], agent_input),
+                        dispatch,
+                        agent_name,
+                    )
                 except (ImportError, AttributeError, TypeError, ValueError) as e:
                     # ValueError covers pydantic.ValidationError (subclass) so a
                     # bad input dict produces a structured AgentResult.error
