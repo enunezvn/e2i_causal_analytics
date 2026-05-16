@@ -128,7 +128,26 @@ async def list_sentinels(
     enabled_only: bool = True,
     user: Dict[str, Any] = Depends(require_auth),
 ) -> List[SentinelResponse]:
-    """List sentinels visible to the caller."""
+    """List sentinels visible to the caller.
+
+    Brand enforcement (until full RLS lands):
+
+    * Admin role (or brand grant ``'all'``) can query any brand.
+    * Otherwise the caller's ``brands`` claim is the allowed set.
+    * ``?brand=X`` with X not in the allowed set returns an empty list
+      (defensive — doesn't leak whether brand X exists).
+    * Omitting ``?brand`` returns sentinels across the caller's allowed
+      brands only.
+    """
+    from src.api.dependencies.auth import UserRole, get_user_brands, has_role
+
+    allowed_brands = set(get_user_brands(user))
+    is_admin = has_role(user, UserRole.ADMIN) or "all" in allowed_brands
+
+    if brand is not None and not is_admin and brand not in allowed_brands:
+        # Defensive empty list — avoid leaking existence of other-brand rows.
+        return []
+
     client = get_supabase_client()
     query = client.table("sentinels").select(
         "sentinel_id, name, pattern_type, action_type, brand, region, "
@@ -136,6 +155,12 @@ async def list_sentinels(
     )
     if brand:
         query = query.eq("brand", brand)
+    elif not is_admin and allowed_brands:
+        # No brand param + non-admin: restrict to caller's allowed brands.
+        query = query.in_("brand", list(allowed_brands))
+    elif not is_admin and not allowed_brands:
+        # No brand param + non-admin + no grants: nothing visible.
+        return []
     if enabled_only:
         query = query.eq("enabled", True)
     rows = (query.execute().data) or []
@@ -167,6 +192,16 @@ async def get_sentinel(
     if not rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="sentinel not found")
     r = rows[0]
+
+    # Brand-membership check: return 404 (not 403) for out-of-grant rows so
+    # the response doesn't leak existence to unauthorized callers.
+    from src.api.dependencies.auth import UserRole, get_user_brands, has_role
+
+    allowed_brands = set(get_user_brands(user))
+    is_admin = has_role(user, UserRole.ADMIN) or "all" in allowed_brands
+    if not is_admin and r.get("brand") not in allowed_brands:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="sentinel not found")
+
     return SentinelResponse(
         sentinel_id=str(r["sentinel_id"]),
         name=r["name"],
