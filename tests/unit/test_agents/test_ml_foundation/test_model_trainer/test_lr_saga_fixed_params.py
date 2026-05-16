@@ -327,3 +327,144 @@ class TestA4LRBuildsWithL1Penalty:
         clf = LogisticRegression(**params)
         clf.fit(X, y)
         assert clf.coef_.shape == (1, 4)
+
+
+# ---------------------------------------------------------------------------
+# Issue #273 — algorithm_registry.py's LR-family ``default_hyperparameters``
+# MUST agree with ``_LR_FIXED_PARAMS`` (SSOT) for ``solver`` and ``max_iter``.
+#
+# Approach chosen: Option (B) — AST-anchored runtime tests, NOT a module-level
+# import of ``_LR_FIXED_PARAMS`` into ``algorithm_registry.py``. The direct
+# import would create a circular dependency:
+#
+#     algorithm_registry
+#       -> hyperparameter_tuner (target import)
+#         -> model_trainer (parent package)
+#           -> model_trainer.nodes.__init__
+#             -> quality_remediation
+#               -> algorithm_registry  (cycle back-edge)
+#
+# Empirically verified during this fix attempt: the module-level import trips
+# ``ImportError: cannot import name 'REGULARIZATION_SEARCH_SPACE' from
+# partially initialized module ... (most likely due to a circular import)``.
+# Per the issue ACs, Option (B) is the accepted fallback.
+#
+# Failure mode: a future edit to the registry's LR defaults (e.g. flipping
+# ``solver=saga`` to ``solver=lbfgs`` or dropping ``max_iter``) could silently
+# re-introduce the lbfgs+l1 crash from #232. The runtime AC check here trips
+# on divergence; the AST check ensures the divergence note in the registry
+# docstring stays anchored to the SSOT module path.
+# ---------------------------------------------------------------------------
+
+
+class TestIssue273RegistryDefaultsAgreeWithSSOT:
+    """Issue #273: ``algorithm_registry.py`` LR-family ``default_hyperparameters``
+    must contain ``solver`` and ``max_iter`` values that agree with
+    ``_LR_FIXED_PARAMS`` (SSOT). Drift trips this test.
+
+    Two-pronged guard:
+
+    1. Runtime invariant — the registry's runtime values must equal SSOT.
+       Any divergent value (e.g. ``solver="liblinear"``) trips the test.
+    2. Runtime negative invariant — no SSOT key may carry a *conflicting*
+       value (guards against re-adding a literal that contradicts SSOT).
+    """
+
+    # Path discovered at import time so the test fails-loud if the module moves.
+    REGISTRY_PATH = (
+        REPO_ROOT
+        / "src"
+        / "agents"
+        / "ml_foundation"
+        / "model_selector"
+        / "nodes"
+        / "algorithm_registry.py"
+    )
+
+    @pytest.fixture(scope="class")
+    def registry_source(self) -> str:
+        assert self.REGISTRY_PATH.exists(), (
+            f"algorithm_registry.py not found at {self.REGISTRY_PATH}"
+        )
+        return self.REGISTRY_PATH.read_text()
+
+    def test_registry_lr_defaults_agree_with_ssot(self) -> None:
+        """Runtime invariant: the registry's LR ``default_hyperparameters``
+        contains ``solver`` and ``max_iter`` with values matching SSOT.
+        Any divergent value (e.g. ``solver="liblinear"``) trips this test.
+        """
+        from src.agents.ml_foundation.model_selector.nodes.algorithm_registry import (
+            ALGORITHM_REGISTRY,
+        )
+
+        lr_defaults = ALGORITHM_REGISTRY["LogisticRegression"]["default_hyperparameters"]
+        for key, value in _LR_FIXED_PARAMS.items():
+            assert key in lr_defaults, (
+                f"Registry LogisticRegression.default_hyperparameters is missing "
+                f"SSOT key {key!r}. Expected {value!r} (per _LR_FIXED_PARAMS)."
+            )
+            assert lr_defaults[key] == value, (
+                f"Registry LogisticRegression.default_hyperparameters[{key!r}] = "
+                f"{lr_defaults[key]!r} diverges from SSOT _LR_FIXED_PARAMS[{key!r}] = "
+                f"{value!r}. Sync the values, or refactor to remove the duplicate."
+            )
+
+    def test_registry_lr_defaults_has_no_conflicting_keys(self) -> None:
+        """Negative invariant: the registry's LR ``default_hyperparameters``
+        must not contain any SSOT key with a *conflicting* value. Guards
+        against partial drift (e.g. ``solver`` synced but ``max_iter`` stale).
+        """
+        from src.agents.ml_foundation.model_selector.nodes.algorithm_registry import (
+            ALGORITHM_REGISTRY,
+        )
+
+        lr_defaults = ALGORITHM_REGISTRY["LogisticRegression"]["default_hyperparameters"]
+        conflicts = {
+            key: (lr_defaults[key], _LR_FIXED_PARAMS[key])
+            for key in _LR_FIXED_PARAMS
+            if key in lr_defaults and lr_defaults[key] != _LR_FIXED_PARAMS[key]
+        }
+        assert not conflicts, (
+            f"Registry LR default_hyperparameters has values that conflict "
+            f"with _LR_FIXED_PARAMS (SSOT): {conflicts}. Sync the literals."
+        )
+
+    def test_registry_lr_solver_is_saga_safe_for_l1(self) -> None:
+        """End-to-end smoke: build a LogisticRegression from the registry's
+        default_hyperparameters with ``penalty=l1`` (overriding the default
+        ``l2``) and confirm construction+fit does not raise. Pre-fix scenario:
+        if the registry ever flips back to ``solver=lbfgs``, this trips with
+        ``ValueError: Solver lbfgs supports only 'l2' or None penalties``.
+        """
+        from sklearn.linear_model import LogisticRegression
+
+        from src.agents.ml_foundation.model_selector.nodes.algorithm_registry import (
+            ALGORITHM_REGISTRY,
+        )
+
+        lr_defaults = dict(ALGORITHM_REGISTRY["LogisticRegression"]["default_hyperparameters"])
+        # Simulate the failure scenario: HPO trial samples penalty=l1.
+        lr_defaults["penalty"] = "l1"
+        import numpy as np
+
+        rng = np.random.default_rng(0)
+        X = rng.normal(size=(40, 4))
+        y = (rng.random(40) > 0.5).astype(int)
+        clf = LogisticRegression(**lr_defaults)
+        clf.fit(X, y)  # would raise if solver had reverted to lbfgs
+        assert clf.coef_.shape == (1, 4)
+
+    def test_registry_docstring_references_ssot_module(self, registry_source: str) -> None:
+        """Anchor invariant: the registry source must mention
+        ``_LR_FIXED_PARAMS`` and the SSOT module path, so a developer editing
+        the LR literals sees the contract and runs this test. Pure text
+        check — cheap and AST-free.
+        """
+        assert "_LR_FIXED_PARAMS" in registry_source, (
+            "algorithm_registry.py must mention `_LR_FIXED_PARAMS` in its "
+            "docstring or comments so the SSOT contract is auditable in-source."
+        )
+        assert "hyperparameter_tuner" in registry_source, (
+            "algorithm_registry.py must mention `hyperparameter_tuner` so the "
+            "SSOT module path is auditable in-source."
+        )

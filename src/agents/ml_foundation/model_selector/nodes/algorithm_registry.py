@@ -1,6 +1,19 @@
 """Algorithm registry and filtering logic for model_selector.
 
 This module defines the catalog of supported algorithms and filtering logic.
+
+Issue #273: the LogisticRegression entry's ``default_hyperparameters`` contains
+``solver`` and ``max_iter`` values that MUST stay in sync with the SSOT
+``_LR_FIXED_PARAMS`` constant in
+``src/agents/ml_foundation/model_trainer/nodes/hyperparameter_tuner.py`` (the
+three production-consumption sites: HPO dispatcher, tier-0 alt-train builder,
+``model_trainer_node._filter_hyperparameters``). A direct module-level import
+of ``_LR_FIXED_PARAMS`` here would create a circular import via
+``model_trainer/nodes/__init__.py`` → ``quality_remediation`` →
+``algorithm_registry`` (back-edge). The contract is therefore enforced by the
+runtime tests in
+``tests/unit/test_agents/test_ml_foundation/test_model_trainer/test_lr_saga_fixed_params.py::TestIssue273RegistryDefaultsAgreeWithSSOT``
+— if either ``solver`` or ``max_iter`` here diverges from SSOT, the tests trip.
 """
 
 from typing import Any, Dict, List
@@ -134,6 +147,17 @@ ALGORITHM_REGISTRY = {
         "default_hyperparameters": {
             "C": 1.0,
             "penalty": "l2",
+            # Issue #273: these two values mirror
+            # ``_LR_FIXED_PARAMS`` in
+            # ``src/agents/ml_foundation/model_trainer/nodes/hyperparameter_tuner.py``.
+            # A direct import would create a circular dependency via
+            # ``model_trainer/nodes/__init__.py`` → ``quality_remediation`` →
+            # ``algorithm_registry``. The SSOT contract is enforced at test
+            # time by ``test_lr_saga_fixed_params.py::TestIssue273RegistryReferencesSSOT``
+            # — diverging from SSOT here makes that test trip.
+            # ``solver=saga`` is load-bearing: per PR #261 / #232, HPO trials
+            # with ``penalty="l1"`` crash under ``solver=lbfgs`` with
+            # ``Solver lbfgs supports only 'l2' or None penalties``.
             "solver": "saga",
             "max_iter": 1000,
         },
