@@ -371,13 +371,22 @@ async def process_cognitive_query(
 
                 response_text = orchestrator_result.get("response_text", "")
                 response_confidence = orchestrator_result.get("response_confidence", 0.85)
-                agents_dispatched = orchestrator_result.get("agents_dispatched", [])
 
                 # Issue #251 F1: hard-reject the orchestrator's own name if
                 # it somehow leaked into ``agents_dispatched`` (RouterNode
-                # also guards this, but defence-in-depth at the API boundary
-                # is cheap and prevents future regressions).
-                agents_dispatched = [a for a in agents_dispatched if a != "orchestrator"]
+                # and ``_build_output`` also guard this, but defence-in-depth
+                # at the API boundary is cheap and prevents future
+                # regressions). Imported locally to avoid app-startup
+                # circular imports.
+                from src.agents.orchestrator._self_dispatch_guard import (
+                    SELF_DEGRADED_MARKER,
+                    strip_self_dispatch,
+                )
+
+                agents_dispatched = strip_self_dispatch(
+                    orchestrator_result.get("agents_dispatched", []),
+                    context="api.routes.cognitive:orchestrator_result",
+                )
 
                 if agents_dispatched:
                     agent_name = agents_dispatched[0]  # Primary agent used
@@ -386,8 +395,8 @@ async def process_cognitive_query(
                     # results. Surface the recognisable degraded marker —
                     # NEVER the ``_route_to_agent(query_type)`` API default,
                     # which leaks ``health_score`` for MONITORING and
-                    # ``orchestrator`` for GENERAL queries.
-                    agent_name = "orchestrator_degraded"
+                    # (pre-codex-MED-2) ``"orchestrator"`` for GENERAL.
+                    agent_name = SELF_DEGRADED_MARKER
 
                 logger.info(
                     f"Orchestrator processed query: agents={agents_dispatched}, "
@@ -620,16 +629,51 @@ def _detect_query_type(query: str) -> QueryType:
 
 
 def _route_to_agent(query_type: QueryType) -> str:
-    """Route query type to appropriate agent."""
+    """Route query type to appropriate agent.
+
+    Issue #251 F1 / codex MED-2: this helper is the API fallback used when
+    the orchestrator threw or is unavailable. Historically ``GENERAL`` mapped
+    to ``"orchestrator"`` — the literal name of the orchestrator itself —
+    which re-introduced the F1 self-dispatch leak at the API boundary even
+    after RouterNode + ``_build_output`` stripped it upstream.
+
+    The mapping now surfaces the recognisable F2 degraded marker for the
+    GENERAL / unknown cases, and we defensively strip any other mapping
+    value that would equal ``SELF_AGENT_NAME`` (belt + braces for future
+    edits to the routing dict). The marker is reserved — no actual agent
+    in the registry uses it — so downstream consumers can distinguish a
+    real agent dispatch from an API-fallback dispatch.
+    """
+    # Imported locally to avoid a top-level circular import between
+    # API routes and the orchestrator package during app startup.
+    from src.agents.orchestrator._self_dispatch_guard import (
+        SELF_AGENT_NAME,
+        SELF_DEGRADED_MARKER,
+    )
+
     routing = {
         QueryType.CAUSAL: "causal_impact",
         QueryType.PREDICTION: "prediction_synthesizer",
         QueryType.OPTIMIZATION: "resource_optimizer",
         QueryType.MONITORING: "health_score",
         QueryType.EXPLANATION: "explainer",
-        QueryType.GENERAL: "orchestrator",
+        # Was ``"orchestrator"`` (codex MED-2). The orchestrator must never
+        # be returned by the API fallback; the degraded marker is the
+        # explicit signal to clients that no real agent was reached.
+        QueryType.GENERAL: SELF_DEGRADED_MARKER,
     }
-    return routing.get(query_type, "orchestrator")
+    mapped = routing.get(query_type, SELF_DEGRADED_MARKER)
+    # Defensive: if any value in the dict ever becomes the self literal
+    # (e.g. via a future copy-paste edit), trip it to the degraded marker
+    # rather than leak the F1 violation to ``agent_used``.
+    if mapped == SELF_AGENT_NAME:
+        logger.warning(
+            "_route_to_agent mapping for %s resolved to SELF_AGENT_NAME — "
+            "Issue #251 F1 invariant violation, returning degraded marker instead.",
+            query_type,
+        )
+        return SELF_DEGRADED_MARKER
+    return mapped
 
 
 def _extract_kpi_from_query(query: str) -> Optional[str]:

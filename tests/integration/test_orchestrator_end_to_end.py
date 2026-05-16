@@ -339,3 +339,84 @@ class TestOrchestratorSingletonContract:
         assert len(registry) >= 5, f"registry too small: {sorted(registry)}"
         # The orchestrator must NOT include itself in the dispatch registry.
         assert "orchestrator" not in registry
+
+
+# ---------------------------------------------------------------------------
+# Issue #251 — codex MED-2 regression guards.
+#
+# The original F2 fix routed the *empty-dispatch* path through the
+# ``"orchestrator_degraded"`` marker. The codex follow-up gate caught
+# two surviving leaks for ``query_type=GENERAL`` queries:
+#
+# * cognitive.py:408 — orchestrator threw → ``agent_name = _route_to_agent(query_type)``
+# * cognitive.py:416 — orchestrator is None → same fall-through
+#
+# ``_route_to_agent`` at :630 maps ``QueryType.GENERAL → "orchestrator"``,
+# so both paths re-introduce the F1 violation at the API boundary. The
+# fix changes the GENERAL mapping (and any other agent-name string that
+# matches ``SELF_AGENT_NAME``) to ``"orchestrator_degraded"`` / ``None``.
+# ---------------------------------------------------------------------------
+
+
+class TestApiFallbackNeverLeaksSelfDispatch:
+    """codex MED-2 — `_route_to_agent` GENERAL default must not leak."""
+
+    def test_route_to_agent_general_does_not_return_orchestrator(self) -> None:
+        """Unit-level invariant on the helper itself."""
+        from src.api.routes.cognitive import QueryType, _route_to_agent
+
+        result = _route_to_agent(QueryType.GENERAL)
+        assert result != "orchestrator", result
+
+    def test_route_to_agent_never_returns_self_agent_name(self) -> None:
+        """Audit ALL QueryType enum values — none may map to the
+        forbidden self literal. This guards against future enum additions
+        that pick up the historic GENERAL behaviour by copy-paste."""
+        from src.agents.orchestrator._self_dispatch_guard import SELF_AGENT_NAME
+        from src.api.routes.cognitive import QueryType, _route_to_agent
+
+        for qt in QueryType:
+            mapped = _route_to_agent(qt)
+            assert mapped != SELF_AGENT_NAME, (
+                f"QueryType.{qt.name} → {mapped!r} re-introduces F1 self-dispatch leak"
+            )
+
+    def test_general_query_with_orchestrator_exception_does_not_leak_orchestrator(
+        self, client_realistic_rag: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """codex MED-2: cognitive.py:408 exception path with
+        ``query_type=GENERAL`` previously returned ``agent_used="orchestrator"``
+        via ``_route_to_agent(GENERAL) == "orchestrator"``. The fix must
+        surface the degraded marker (or null), NEVER the self literal."""
+        cognitive_route._orchestrator_instance = None
+
+        fake_orchestrator = MagicMock()
+        fake_orchestrator.run = AsyncMock(side_effect=RuntimeError("orchestrator crashed"))
+        monkeypatch.setattr(cognitive_route, "get_orchestrator", lambda: fake_orchestrator)
+
+        body = _post_query(
+            client_realistic_rag,
+            "Tell me something.",
+            query_type="general",
+        )
+        # F1 invariant: must never leak the self literal.
+        assert body["agent_used"] != "orchestrator", body
+        # Acceptable: null or degraded marker.
+        assert body["agent_used"] in (None, "orchestrator_degraded"), body
+
+    def test_general_query_with_null_orchestrator_does_not_leak_orchestrator(
+        self, client_realistic_rag: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """codex MED-2: cognitive.py:416 null-orchestrator path with
+        ``query_type=GENERAL`` previously returned ``agent_used="orchestrator"``
+        via the same ``_route_to_agent`` mapping."""
+        cognitive_route._orchestrator_instance = None
+        monkeypatch.setattr(cognitive_route, "get_orchestrator", lambda: None)
+
+        body = _post_query(
+            client_realistic_rag,
+            "Tell me something.",
+            query_type="general",
+        )
+        assert body["agent_used"] != "orchestrator", body
+        assert body["agent_used"] in (None, "orchestrator_degraded"), body

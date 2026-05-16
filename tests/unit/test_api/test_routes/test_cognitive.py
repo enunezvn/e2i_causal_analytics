@@ -396,13 +396,22 @@ class TestHelperFunctions:
         assert _detect_query_type("Show me the data") == QueryType.GENERAL
 
     def test_route_to_agent(self):
-        """Test agent routing."""
+        """Test agent routing.
+
+        Issue #251 F1 / codex MED-2: GENERAL must NOT map to
+        ``"orchestrator"`` (the API fallback is reached only when the
+        orchestrator threw or is unavailable — returning its own name
+        would re-introduce the F1 self-dispatch leak). Surface the F2
+        degraded marker instead.
+        """
+        from src.agents.orchestrator._self_dispatch_guard import SELF_DEGRADED_MARKER
+
         assert _route_to_agent(QueryType.CAUSAL) == "causal_impact"
         assert _route_to_agent(QueryType.PREDICTION) == "prediction_synthesizer"
         assert _route_to_agent(QueryType.OPTIMIZATION) == "resource_optimizer"
         assert _route_to_agent(QueryType.MONITORING) == "health_score"
         assert _route_to_agent(QueryType.EXPLANATION) == "explainer"
-        assert _route_to_agent(QueryType.GENERAL) == "orchestrator"
+        assert _route_to_agent(QueryType.GENERAL) == SELF_DEGRADED_MARKER
 
     def test_extract_kpi_from_query(self):
         """Test KPI extraction from query."""
