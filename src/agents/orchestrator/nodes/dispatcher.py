@@ -60,18 +60,52 @@ def _wrapped_input_defaults(
         defaults["experiment_ids"] = []
     elif agent_name == "drift_monitor":
         # DriftMonitorInput.features_to_monitor is required with min_length=1.
-        # The orchestrator payload does not naturally supply this — it must
-        # come from dispatch.parameters or fall back to an empty list. The
-        # pydantic validator will surface min_length=1 violation as a
-        # structured AgentResult.error when no features are provided; that
-        # is the correct behaviour (don't fabricate features).
-        defaults["features_to_monitor"] = []
+        # The router should normally populate
+        # ``dispatch.parameters['features_to_monitor']`` — when it doesn't,
+        # derive a sensible default from ``parsed_query.entities`` (KPI/feature
+        # mentions in the user's query) so the agent runs against the entities
+        # the user actually named. When neither source produces ≥1 entry,
+        # leave it absent so the pydantic min_length=1 validator surfaces a
+        # clear structured AgentResult.error — better than fabricating phantom
+        # feature names. (Codex MED-required on PR #275 issue #260.)
+        parsed_query = payload.get("parsed_query") or {}
+        entities = (parsed_query.get("entities") if isinstance(parsed_query, dict) else None) or []
+        kpi_features = [
+            ent["value"]
+            for ent in entities
+            if isinstance(ent, dict)
+            and ent.get("type") in {"kpi", "feature_name"}
+            and isinstance(ent.get("value"), str)
+            and ent["value"]
+        ]
+        if kpi_features:
+            defaults["features_to_monitor"] = kpi_features
     elif agent_name == "experiment_designer":
         # ExperimentDesignerInput.business_question is required with
         # min_length=10. Default it from the orchestrator-level ``query`` —
         # that's how the harness's Tier0OutputMapper bridges the two contracts.
         defaults["business_question"] = query
     return defaults
+
+
+def _to_kwargs_dict(model_instance: Any) -> Dict[str, Any]:
+    """Re-flatten a wrapped-input model instance back into a kwargs dict.
+
+    Used only when an ``AGENT_METHOD_MAP`` entry declares BOTH ``input_model``
+    AND ``uses_kwargs`` — the dispatcher first wraps the payload into the
+    model (validating it), then splats it into the agent method. The current
+    registry has no such entry; this is defense-in-depth so future additions
+    are robust. Prefers pydantic v2 ``model_dump()`` then falls back to
+    ``dataclasses.asdict()``. Returns ``{}`` for shapes it cannot flatten.
+    """
+    dump = getattr(model_instance, "model_dump", None)
+    if callable(dump):
+        result = dump()
+        if isinstance(result, dict):
+            return cast(Dict[str, Any], result)
+    if dataclasses.is_dataclass(model_instance) and not isinstance(model_instance, type):
+        return dataclasses.asdict(model_instance)
+    return {}
 
 
 def _coerce_to_input_model(
@@ -288,6 +322,20 @@ class DispatcherNode:
                 )
 
             timeout_seconds = timeout_ms / 1000
+
+            # When the spec declares BOTH ``input_model`` AND ``uses_kwargs``,
+            # the validated model must be re-flattened back into a kwargs dict
+            # before splatting — splatting a dataclass/pydantic instance with
+            # ``**`` raises TypeError. No production AGENT_METHOD_MAP entry
+            # combines both today; this guard makes the dispatcher robust
+            # against future additions (codex MED-tracker on PR #275 / #260).
+            if (
+                spec.input_model
+                and spec.input_module
+                and spec.uses_kwargs
+                and not isinstance(agent_input, dict)
+            ):
+                agent_input = _to_kwargs_dict(agent_input)
 
             if spec.is_async:
                 if spec.uses_kwargs:
