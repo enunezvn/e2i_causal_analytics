@@ -361,6 +361,49 @@ describe('useCognitiveQuery', () => {
 
     await waitFor(() => expect(result.current.isError).toBe(true));
   });
+
+  // Issue #267: API contract is Optional[str] — agent_used can be null or
+  // 'orchestrator_degraded' when the orchestrator short-circuits. The
+  // CognitiveQueryResponse.agent_used type must accept both shapes; if it is
+  // narrowed back to plain `string`, the null fixture below will fail to
+  // type-check (TS2322) and these tests will fail to compile.
+  it('accepts agent_used === null (null-orchestrator path, issue #267)', async () => {
+    const nullAgentResponse: CognitiveQueryResponse = {
+      ...mockQueryResponse,
+      agent_used: null,
+    };
+    vi.mocked(cognitiveApi.processCognitiveQuery).mockResolvedValueOnce(nullAgentResponse);
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useCognitiveQuery(), { wrapper });
+
+    result.current.mutate({ query: 'null-agent path' });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(result.current.data?.agent_used).toBeNull();
+    // Defensive runtime guard: caller may default null to a sentinel without
+    // hitting `.toLowerCase()` on null.
+    const safe = result.current.data?.agent_used ?? 'unknown';
+    expect(safe.toLowerCase()).toBe('unknown');
+  });
+
+  it('accepts agent_used === "orchestrator_degraded" marker (issue #267)', async () => {
+    const degradedResponse: CognitiveQueryResponse = {
+      ...mockQueryResponse,
+      agent_used: 'orchestrator_degraded',
+    };
+    vi.mocked(cognitiveApi.processCognitiveQuery).mockResolvedValueOnce(degradedResponse);
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useCognitiveQuery(), { wrapper });
+
+    result.current.mutate({ query: 'degraded path' });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(result.current.data?.agent_used).toBe('orchestrator_degraded');
+  });
 });
 
 describe('useCreateSession', () => {

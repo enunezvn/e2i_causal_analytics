@@ -110,8 +110,17 @@ export interface CognitiveQueryResponse extends Metadata, TimestampedResponse {
   query_type: QueryType;
   /** Response confidence (0-1) */
   confidence: number;
-  /** Primary agent that handled the query */
-  agent_used: string;
+  /**
+   * Primary agent that handled the query.
+   *
+   * Matches API contract `Optional[str]` (issue #267): can be a known agent
+   * name, the literal `"orchestrator_degraded"` marker (when the orchestrator
+   * runs but produces no dispatch / raises — see PR #247 and
+   * `src/api/routes/cognitive.py`), or `null` on degraded fallback paths.
+   * Callers MUST guard with `?? 'unknown'` (or similar) before calling
+   * string methods like `.toLowerCase()`.
+   */
+  agent_used: string | null;
   /** Evidence trail */
   evidence?: EvidenceItem[];
   /** Workflow phases completed */
