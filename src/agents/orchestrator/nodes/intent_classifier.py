@@ -17,11 +17,12 @@ Contract (issue #266 — invariant, enforced at import time):
     may declare future intents ahead of patterns being shipped.
 
 Multi-faceted detection (issue #256 — Option A, lean):
-    The ``multi_faceted`` patterns at line 154 are kept inline here rather
-    than imported from ``src/agents/orchestrator/router_v42.py``'s
-    ``MultiFacetedDetector``. Both ``router.py`` and ``router_v42.py`` at the
-    orchestrator package level were retired as abandoned earlier iterations
-    (they had no in-tree callers).
+    The ``multi_faceted`` patterns in ``INTENT_PATTERNS['multi_faceted']``
+    below are kept inline here rather than imported from
+    ``src/agents/orchestrator/router_v42.py``'s ``MultiFacetedDetector``.
+    Both ``router.py`` and ``router_v42.py`` at the orchestrator package
+    level were retired as abandoned earlier iterations (they had no in-tree
+    callers).
 
     The trade-off vs the plan-aligned Option B (import detector, use
     ``detect()``): we accept ~4 simple regexes here over the detector's
