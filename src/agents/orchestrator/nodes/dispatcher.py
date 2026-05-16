@@ -136,7 +136,10 @@ class DispatcherNode:
                     input_module = importlib.import_module(spec.input_module)
                     input_cls = getattr(input_module, spec.input_model)
                     agent_input = input_cls(**agent_input)
-                except (ImportError, AttributeError, TypeError) as e:
+                except (ImportError, AttributeError, TypeError, ValueError) as e:
+                    # ValueError covers pydantic.ValidationError (subclass) so a
+                    # bad input dict produces a structured AgentResult.error
+                    # instead of propagating as an unhandled exception.
                     latency = int((time.time() - start_time) * 1000)
                     return AgentResult(
                         agent_name=agent_name,
@@ -169,7 +172,11 @@ class DispatcherNode:
                     coro = method(agent_input)
                 raw_result = await asyncio.wait_for(coro, timeout=timeout_seconds)
             else:
-                loop = asyncio.get_event_loop()
+                # asyncio.get_event_loop() is deprecated in Python 3.12+ when
+                # called outside a running loop; this dispatch path is always
+                # inside an active loop (we're in an async method), so
+                # get_running_loop() is the correct API.
+                loop = asyncio.get_running_loop()
                 if spec.uses_kwargs:
                     call = functools.partial(method, **agent_input)
                 else:

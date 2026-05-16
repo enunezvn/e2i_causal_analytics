@@ -204,3 +204,67 @@ async def test_dispatcher_keeps_mock_path_when_agent_not_registered() -> None:
     agent_result = result["agent_results"][0]
     assert agent_result["success"] is True
     assert "narrative" in (agent_result["result"] or {})
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_catches_pydantic_validation_error_on_input_wrapper() -> None:
+    """Pydantic ValidationError (subclass of ValueError) on input wrapping must
+    produce a structured AgentResult.error, not propagate uncaught.
+
+    Plan review-polish: catch (ImportError, AttributeError, TypeError, ValueError).
+    """
+    import sys
+    import types
+
+    from pydantic import BaseModel, Field
+
+    class StrictInput(BaseModel):
+        required_field: str = Field(..., min_length=1)
+
+    # Inject a fake module so dispatcher's import_module resolves StrictInput.
+    fake_module = types.ModuleType("__test_strict_input__")
+    fake_module.StrictInput = StrictInput  # type: ignore[attr-defined]
+    sys.modules["__test_strict_input__"] = fake_module
+
+    from src.agents.orchestrator import _agent_method_map as mm
+
+    original = mm.AGENT_METHOD_MAP.get("explainer")
+    mm.AGENT_METHOD_MAP["explainer"] = mm.AgentMethodSpec(
+        method="explain",
+        is_async=True,
+        uses_kwargs=True,
+        input_model="StrictInput",
+        input_module="__test_strict_input__",
+    )
+
+    agent = MagicMock()
+    agent.explain = AsyncMock(return_value={"narrative": "ok"})
+
+    dispatcher = DispatcherNode(agent_registry={"explainer": agent})
+    state = {
+        "query": "explain something",
+        "dispatch_plan": [
+            {
+                "agent_name": "explainer",
+                "priority": "critical",
+                "parameters": {"required_field": ""},  # min_length=1 → ValidationError
+                "timeout_ms": 5000,
+                "fallback_agent": None,
+            }
+        ],
+        "parallel_groups": [["explainer"]],
+    }
+
+    try:
+        result = await dispatcher.execute(state)
+    finally:
+        if original is not None:
+            mm.AGENT_METHOD_MAP["explainer"] = original
+
+    agent_result = result["agent_results"][0]
+    assert agent_result["success"] is False, agent_result
+    # The error message should mention either the input model or validation.
+    error_msg = (agent_result["error"] or "").lower()
+    assert "validation" in error_msg or "strictinput" in error_msg or "min_length" in error_msg, (
+        f"expected validation-related error, got: {error_msg}"
+    )
