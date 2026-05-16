@@ -48,7 +48,13 @@ dependencies = [
     # MLOps Stack (7 Tools)
     "mlflow>=2.16.0",              # Experiment tracking
     "opik>=0.2.0",                 # LLM/Agent observability
-    "feast>=0.40.0",               # Feature store
+    # ``feast`` lives at ``[project.optional-dependencies] feast`` rather than here:
+    # feast {all versions 0.43..0.63} pins ``tenacity<9``, which is unsatisfiable
+    # against ``tenacity>=9.0.0`` required below (and by ``graphiti-core>=0.26``).
+    # In production, feast runs as a separate service container
+    # (``docker/Dockerfile.feast``); the API venv does not co-install the SDK.
+    # All ``src/`` feast imports are guarded (TYPE_CHECKING / try-inside-method)
+    # so the app starts without the SDK. See issue #307 for context.
     "great-expectations>=1.0.0",   # Data quality validation
     "optuna>=3.6.0",               # Hyperparameter optimization
     "bentoml>=1.3.0",              # Model serving
@@ -83,7 +89,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "requests>=2.32.0",
     "httpx>=0.27.0",
-    "tenacity>=9.0.0",  # Note: conflicts with feast<9 requirement - see requirements-synthetic.txt
+    "tenacity>=9.0.0",  # Floor set by graphiti-core>=0.26 (declares tenacity>=9.0.0). Unsatisfiable against feast's tenacity<9 — feast is therefore extracted to ``[project.optional-dependencies] feast``; see issue #307 + ``requirements-synthetic.txt`` for the split-install pattern.
     "tqdm>=4.66.0",
     "python-json-logger>=2.0.7",
 
@@ -120,6 +126,17 @@ dev = [
     "ipython>=8.27.0",
     "jupyter>=1.1.0",
     "types-PyYAML>=6.0.0",
+]
+
+# Feature-store SDK. Opt-in because feast {all versions 0.43..0.63} pins
+# ``tenacity<9``, unsatisfiable against the core ``tenacity>=9.0.0`` floor
+# imposed by graphiti-core>=0.26. In production, feast runs as its own service
+# container (``docker/Dockerfile.feast``) and the API venv does not include the
+# SDK. Install in dev only when working on feast-touching code:
+#   pip install -e ".[feast]"
+# See issue #307 for the layered-conflict diagnosis.
+feast = [
+    "feast[postgres]>=0.44.0,<0.45",
 ]
 
 [build-system]

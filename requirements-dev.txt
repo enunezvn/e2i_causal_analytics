@@ -283,7 +283,7 @@ supabase-auth==2.27.0
 supabase-functions==2.27.0
 sympy==1.14.0
 tabulate==0.9.0
-tenacity==9.1.2
+tenacity>=8.5.0,<9  # Loosened from ==9.1.2 to match what pip's resolver silently does when feast[postgres] is co-installed (feast pins tenacity<9,>=7). Prior pin was aspirational; .venv installs landed at 8.5.0 regardless. Prod (requirements.txt:319) stays at 9.1.2 — graphiti-core>=0.26 requires it and feast is not co-installed in the prod image. Issue #307.
 threadpoolctl==3.6.0
 tiktoken==0.12.0
 tokenizers==0.22.2
