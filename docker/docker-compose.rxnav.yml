@@ -1,83 +1,74 @@
 # =============================================================================
-# E2I Causal Analytics - rxnav-in-a-box Offline Overlay (issue #246)
+# E2I Causal Analytics - rxnav-in-a-box Offline Setup Pointer (issue #246)
 # =============================================================================
-# Routes RxNav traffic to a locally-hosted NLM rxnav-in-a-box Docker instance
-# instead of the public ``rxnav.nlm.nih.gov/REST`` endpoint. Use this overlay
-# when:
-#   - Building KG caches in bulk (public API has rate limits + occasional 5xx).
-#   - Operating air-gapped / restricted-egress environments.
-#   - Reproducibility (pin a specific monthly RxNorm release).
+# Image-provenance note (codex gate-on-diff 2026-05-16, MED finding):
 #
-# Usage:
-#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml \
-#     -f docker/docker-compose.rxnav.yml up -d rxnav
+# An earlier revision of this file declared `services.rxnav.image:
+# rxnavinabox/rxnavinabox:${RXNAV_IMAGE_TAG:-latest}`. That image source could
+# NOT be verified as NLM-official. Evidence gathered 2026-05-16:
+#   - `docker manifest inspect rxnavinabox/rxnavinabox:latest` →
+#     `unauthorized: authentication required` (image absent or private).
+#   - `https://hub.docker.com/v2/repositories/rxnavinabox/` → 0 public repos
+#     in that namespace.
+#   - Docker Hub search for "rxnav" surfaces only third-party / community
+#     forks (`nbonime/rxnav-wsrx`, `farooq905/rxnav-web`) — neither is NLM.
+#   - `https://hub.docker.com/v2/repositories/nlmnih/` and `.../nih/` → 0
+#     repos. No NLM-affiliated Docker Hub publisher is locatable.
+#   - NLM's own page
+#     (https://lhncbc.nlm.nih.gov/RxNav/applications/RxNav-in-a-Box.html)
+#     documents distribution as a downloadable .zip (UMLS-license-gated,
+#     monthly versioned, e.g. `rxnav-in-a-box-20260504.zip`), NOT a Docker
+#     Hub image.
 #
-# Then point the application at it (include the /REST path prefix that
-# rxnav-in-a-box mounts to mirror the public NLM REST surface):
-#   export RXNAV_BASE_URL=http://localhost:4000/REST
-#   # (or set in .env / compose env for api + worker services)
+# Conclusion: there is no canonical NLM Docker Hub image to pull. The
+# previous `services:` block has been removed; this file is intentionally
+# a documentation-stub + pointer to the official setup procedure.
+#
+# -----------------------------------------------------------------------------
+# Official rxnav-in-a-box setup (operator workflow)
+# -----------------------------------------------------------------------------
+#
+# 1. Accept NLM's UMLS license agreement (free, requires registration):
+#       https://uts.nlm.nih.gov/uts/license
+#
+# 2. Download the latest monthly RxNav-in-a-Box .zip from NLM:
+#       https://lhncbc.nlm.nih.gov/RxNav/applications/RxNav-in-a-Box.html
+#    e.g. ``rxnav-in-a-box-20260504.zip``. The README.txt inside the .zip
+#    documents system requirements + install steps.
+#
+# 3. Unpack and bring up NLM's bundled compose stack directly:
+#       unzip rxnav-in-a-box-20260504.zip -d rxnav-in-a-box/
+#       cd rxnav-in-a-box/
+#       docker compose -f docker-compose.yml up -d
+#    The .zip ships its own ``docker-compose.yml`` with NLM-signed image
+#    references + the RxNorm/RxTerms/ATC/DailyMed data tarballs preloaded.
+#
+# 4. Point this application's RxNav client at the local instance. The /REST
+#    path prefix is part of the env var so the client's URL concatenation
+#    (``f"{base}{path}"`` where ``path`` starts with ``/rxcui.json``) lands
+#    on the right routes:
+#       export RXNAV_BASE_URL=http://localhost:4000/REST
+#       # Note: the trailing /REST is part of the env var so the client's
+#       # f"{base}{path}" concat resolves /REST/rxcui.json etc.
+#    (Set in .env or the compose env block of api + worker_* services to
+#    propagate cluster-wide.)
+#
+# 5. Confirm reachability:
+#       curl -fsS http://localhost:4000/REST/version
 #
 # Code default is unchanged: with RXNAV_BASE_URL unset, ``src/data/kg/rxnav.py``
-# continues to hit the public NLM endpoint. See ``docs/ARCHITECTURE.md`` §4.7.
+# continues to hit the public NLM endpoint at ``https://rxnav.nlm.nih.gov/REST``.
+# See ``docs/ARCHITECTURE.md`` §4.7 for the full operator runbook.
 #
-# Image:
-#   NLM publishes ``rxnavinabox/rxnavinabox`` on Docker Hub with monthly tags
-#   (e.g. ``25.12.4``) tracking the RxNorm release calendar. ``:latest`` floats
-#   to the most recent monthly cut. Pin a tag in production via
-#   ``RXNAV_IMAGE_TAG`` for reproducibility — defaults to ``:latest`` for dev.
-#
-# Storage budget warning:
-#   The image bundles RxNorm + RxTerms + ATC + DailyMed pull data — ~15-20 GB on
-#   disk and ~12 GB RAM steady-state. Allocate accordingly before ``up -d``.
+# Storage budget warning (per NLM README): ~15-20 GB on disk, ~12 GB RAM
+# steady-state once data tarballs ingest. Plan host capacity accordingly.
 #
 # References:
-#   - Official docs: https://lhncbc.nlm.nih.gov/RxNav/applications/RxNav-in-a-Box.html
-#   - Docker Hub:    https://hub.docker.com/r/rxnavinabox/rxnavinabox
-#   - REST API parity with public endpoint: yes (drop-in replacement).
+#   - Official docs / .zip download: https://lhncbc.nlm.nih.gov/RxNav/applications/RxNav-in-a-Box.html
+#   - README.txt inside the .zip:    https://data.lhncbc.nlm.nih.gov/public/rxnav/rxnav-in-a-box/README.txt
+#   - UMLS license:                  https://uts.nlm.nih.gov/uts/license
+#
+# Note: this file intentionally contains no ``services:`` block; it cannot
+# be used as ``-f docker/docker-compose.rxnav.yml up`` like the prior draft.
+# Use NLM's bundled compose file from the unpacked .zip directly.
 # =============================================================================
-
-services:
-  # ---------------------------------------------------------------------------
-  # rxnav-in-a-box — NLM drug-terminology REST service
-  # ---------------------------------------------------------------------------
-  # Exposes the same REST surface as https://rxnav.nlm.nih.gov/REST on port
-  # 4000 (NLM's documented default). The application client picks this up
-  # via RXNAV_BASE_URL=http://localhost:4000 (or the in-network DNS name
-  # ``http://rxnav:4000`` when called from another compose service).
-  rxnav:
-    image: rxnavinabox/rxnavinabox:${RXNAV_IMAGE_TAG:-latest}
-    hostname: rxnav
-    restart: unless-stopped
-
-    ports:
-      - "127.0.0.1:4000:4000"
-
-    healthcheck:
-      # /REST/version returns the RxNorm release stamp; lightweight + cacheable.
-      test: ["CMD-SHELL", "curl -fsS http://localhost:4000/REST/version || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 10
-      start_period: 60s
-
-    networks:
-      - e2i_network
-
-    security_opt:
-      - no-new-privileges:true
-
-    deploy:
-      resources:
-        limits:
-          # NLM documents ~12 GB RAM for steady-state; cap at 16 GB to leave
-          # headroom for startup ingestion. Tune down once the box is warm.
-          cpus: '2'
-          memory: 16G
-
-    labels:
-      - "e2i.service=rxnav"
-      - "e2i.component=drug-terminology"
-
-networks:
-  e2i_network:
-    external: true
