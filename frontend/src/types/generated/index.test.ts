@@ -24,17 +24,28 @@ describe('generated/index.ts (#281)', () => {
   const source = readFileSync(INDEX_PATH, 'utf-8');
 
   it('must not unconditionally re-export from ./api (causes TS2307 when api.ts absent)', () => {
-    // Matches `export * from './api'` and `export ... from './api'`
-    expect(source).not.toMatch(/export\s+(?:\*|\{[^}]*\})\s+from\s+['"]\.\/api['"]/);
+    // Matches all flavors of static `export ... from './api'`:
+    //   export * from './api'
+    //   export type * from './api'
+    //   export { X } from './api'
+    //   export type { X } from './api'
+    // `tsc -b` still resolves the module specifier for `export type`, so
+    // type-only re-exports trigger the same TS2307 as value re-exports.
+    expect(source).not.toMatch(
+      /export\s+(?:type\s+)?(?:\*|\{[^}]*\})\s+from\s+['"]\.\/api['"]/,
+    );
   });
 
   it('must not contain top-level static imports from ./api', () => {
-    // Matches `import ... from './api'` (static)
-    expect(source).not.toMatch(/^\s*import\b[^;]*\bfrom\s+['"]\.\/api['"]/m);
+    // Matches `import ... from './api'` (static, including `import type`)
+    expect(source).not.toMatch(
+      /^\s*import\b(?:\s+type)?[^;]*\bfrom\s+['"]\.\/api['"]/m,
+    );
   });
 
   it('must not reference ./api via inline import() type expressions', () => {
-    // Matches `import('./api').X` patterns used by ExtractResponse/ExtractRequestBody
+    // Matches `import('./api').X` patterns used by removed ExtractResponse /
+    // ExtractRequestBody helpers
     expect(source).not.toMatch(/import\(['"]\.\/api['"]\)/);
   });
 
