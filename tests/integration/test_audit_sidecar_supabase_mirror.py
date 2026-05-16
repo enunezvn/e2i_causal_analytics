@@ -493,3 +493,227 @@ def test_family_bucket_query_surfaces_unknown_sentinel(
         f"family bucket '' should never appear; got families={families}. "
         f"Indicates the CASE branch for '__unknown__' is missing."
     )
+
+
+# ----------------------------------------------------------------------------
+# Iter-2 codex gate-on-diff regressions
+# ----------------------------------------------------------------------------
+
+
+def test_naive_since_does_not_raise_and_matches_zulu(
+    tmp_path: Path, db_conn: psycopg.Connection, test_namespace: str
+) -> None:
+    """``--since=2025-01-01T00:00:00`` (no trailing Z / no offset) must
+    NOT raise TypeError when the SidecarReader compares the cursor to
+    its tz-aware ``written_at``. Naive timestamps are normalized to UTC
+    by the mirror's CLI parsing.
+
+    FALSIFIABILITY ANCHOR: revert the ``if parsed.tzinfo is None: parsed
+    = parsed.replace(tzinfo=timezone.utc)`` block in
+    ``scripts/mirror_audit_sidecar_to_supabase.py`` and this test trips
+    with TypeError ("can't compare offset-naive and offset-aware
+    datetimes") when SidecarReader iterates the first sidecar.
+    """
+    exp = f"{test_namespace}-naive"
+    _write_sidecar(
+        tmp_path,
+        experiment_id=exp,
+        written_at="2026-05-15T10:00:00Z",
+        verdicts=[_make_verdict(feature="age")],
+    )
+
+    # Naive form: no trailing Z, no offset. Production paths that
+    # provide --since from a config file or env var commonly omit the
+    # Z; this is the exact shape that triggered the codex iter-2 MED.
+    _run_mirror(tmp_path, since="2025-01-01T00:00:00")
+    count_naive = _count_rows(db_conn, experiment_id_prefix=test_namespace)
+    assert count_naive == 1, (
+        f"naive --since path mirrored {count_naive} rows; expected 1 "
+        f"(if this was TypeError on comparison, _run_mirror would have raised)"
+    )
+
+    # And the Z-suffixed form must behave equivalently for the same
+    # sidecar (the upsert is idempotent, so no net-new row).
+    _run_mirror(tmp_path, since="2025-01-01T00:00:00Z")
+    count_z = _count_rows(db_conn, experiment_id_prefix=test_namespace)
+    assert count_z == 1, (
+        f"after Z-suffix re-run, row count should still be 1 (idempotent), got {count_z}"
+    )
+
+
+def test_explicit_offset_since_is_honored(
+    tmp_path: Path, db_conn: psycopg.Connection, test_namespace: str
+) -> None:
+    """``--since=2026-05-15T05:00:00+05:00`` (= 00:00:00Z UTC) must be
+    honored at the specified offset, not silently coerced.
+
+    A sidecar at 2026-05-15T03:00:00Z (= 08:00:00+05:00, which is AFTER
+    the floor of 05:00:00+05:00 = 00:00:00Z) admits in; a sidecar at
+    2026-05-14T00:00:00Z (well before) would be filtered out by the
+    floor. We only assert the admit case here because the cursor logic
+    of test_since_as_floor_blocks_future already covers the filter side.
+    """
+    exp = f"{test_namespace}-offset"
+    # 2026-05-15T03:00:00Z = 08:00:00+05:00 — AFTER the floor below
+    # (05:00:00+05:00 = 00:00:00Z).
+    _write_sidecar(
+        tmp_path,
+        experiment_id=exp,
+        written_at="2026-05-15T03:00:00Z",
+        verdicts=[_make_verdict(feature="age")],
+    )
+
+    _run_mirror(tmp_path, since="2026-05-15T05:00:00+05:00")
+    count = _count_rows(db_conn, experiment_id_prefix=test_namespace)
+    assert count == 1, (
+        f"sidecar at 03:00:00Z (= 08:00:00+05:00) must admit under floor "
+        f"05:00:00+05:00 (= 00:00:00Z); got {count} rows"
+    )
+
+
+def test_since_as_floor_blocks_when_floor_is_future(
+    tmp_path: Path, db_conn: psycopg.Connection, test_namespace: str
+) -> None:
+    """``--since=2099-01-01T00:00:00Z`` is far in the future — no test
+    sidecar's ``written_at`` exceeds it, so the reader admits NONE and
+    the table stays empty.
+
+    This pins the floor semantic in the simplest form: --since must
+    actually filter sidecars whose written_at is earlier."""
+    exp = f"{test_namespace}-future"
+    _write_sidecar(
+        tmp_path,
+        experiment_id=exp,
+        written_at="2026-05-15T10:00:00Z",
+        verdicts=[_make_verdict(feature="age")],
+    )
+
+    _run_mirror(tmp_path, since="2099-01-01T00:00:00Z")
+    assert _count_rows(db_conn, experiment_id_prefix=test_namespace) == 0, (
+        "sidecar at 2026-05-15 must be filtered out by --since=2099-01-01 floor"
+    )
+
+
+def test_since_acts_as_floor_not_replacement_when_db_cursor_is_later(
+    tmp_path: Path, db_conn: psycopg.Connection, test_namespace: str
+) -> None:
+    """The load-bearing iter-2 fix: ``--since=1970-01-01T00:00:00Z`` with
+    a non-empty DB MUST NOT rescan the entire sidecar history. The
+    effective cursor is ``max(db_cursor, --since)`` — when the DB
+    cursor is later, IT wins and old sidecars stay filtered.
+
+    Sequence:
+      1. Mirror sidecar-A (written_at=2026-05-15) → DB has row → DB
+         cursor advances to that imported_at (effectively "now").
+      2. Drop sidecar-B (written_at=2026-05-14, EARLIER than A).
+      3. Re-run mirror with ``--since=1970-01-01T00:00:00Z``.
+         If --since REPLACES the cursor (iter-1 behavior, the bug),
+         B is admitted and we get 2 rows.
+         If --since is a FLOOR (iter-2 fix), the DB cursor wins
+         because it's later than 1970, so the reader's effective
+         floor is roughly "now - 1h overlap" and B (yesterday) is
+         filtered out.
+
+    FALSIFIABILITY ANCHOR: revert to the iter-1 ``cursor = since_override``
+    branch and this test trips (count_pass2 == 2 instead of 1).
+    """
+    exp_a = f"{test_namespace}-floorA"
+    exp_b = f"{test_namespace}-floorB"
+
+    # Pass 1: mirror sidecar-A. This populates the DB and advances
+    # max(imported_at) to ~now.
+    _write_sidecar(
+        tmp_path,
+        experiment_id=exp_a,
+        written_at="2026-05-15T10:00:00Z",
+        verdicts=[_make_verdict(feature="age")],
+    )
+    _run_mirror(tmp_path)
+    assert _count_rows(db_conn, experiment_id_prefix=test_namespace) == 1
+
+    # Pass 2: add sidecar-B with written_at EARLIER than the imported_at
+    # that pass-1 stamped. Then run mirror with --since far in the past
+    # (1970). If --since replaces the cursor, B admits (BUG). If
+    # --since is a floor under the DB cursor, B is filtered (FIX).
+    _write_sidecar(
+        tmp_path,
+        experiment_id=exp_b,
+        written_at="2026-05-14T10:00:00Z",  # 1 day before A
+        verdicts=[_make_verdict(feature="age")],
+    )
+    _run_mirror(tmp_path, since="1970-01-01T00:00:00Z")
+
+    count_pass2 = _count_rows(db_conn, experiment_id_prefix=test_namespace)
+    assert count_pass2 == 1, (
+        f"FALSIFIABILITY-ANCHOR: --since=1970 must act as a FLOOR under the DB "
+        f"cursor, not REPLACE it. Got {count_pass2} rows after pass-2 "
+        f"(expected 1: sidecar-B is older than pass-1's imported_at and the "
+        f"DB cursor wins). If this trips, the iter-2 max(db_cursor, since) "
+        f"floor regressed back to iter-1's replace-the-cursor behavior."
+    )
+
+
+def test_since_without_flag_uses_db_cursor_as_before(
+    tmp_path: Path, db_conn: psycopg.Connection, test_namespace: str
+) -> None:
+    """When ``--since`` is NOT passed at all, the mirror behaves exactly
+    as before iter-2: ``cursor = _read_cursor()``. This pins the
+    backward-compat path — the iter-2 floor logic must not change the
+    no-flag case.
+
+    Sequence:
+      1. Mirror sidecar-A → DB populated, cursor advances.
+      2. Add sidecar-B with written_at EARLIER than A's imported_at.
+      3. Re-run mirror WITHOUT --since.
+         Result: B is filtered by the DB cursor (its written_at is
+         earlier than max(imported_at) - overlap), count stays at 1.
+    """
+    exp_a = f"{test_namespace}-noflagA"
+    exp_b = f"{test_namespace}-noflagB"
+
+    _write_sidecar(
+        tmp_path,
+        experiment_id=exp_a,
+        written_at="2026-05-15T10:00:00Z",
+        verdicts=[_make_verdict(feature="age")],
+    )
+
+    # Inline run WITHOUT --since: bypass _run_mirror which always passes
+    # the test floor. We call mirror_main directly with no --since.
+    assert _TEST_DB_URL is not None
+    rc1 = mirror_main(
+        [
+            "--artifacts-dir",
+            str(tmp_path),
+            "--database-url",
+            _TEST_DB_URL,
+            "--log-level",
+            "WARNING",
+        ]
+    )
+    assert rc1 == 0
+    assert _count_rows(db_conn, experiment_id_prefix=test_namespace) == 1
+
+    # Older sidecar — should be filtered out by the DB cursor on pass-2.
+    _write_sidecar(
+        tmp_path,
+        experiment_id=exp_b,
+        written_at="2026-05-14T10:00:00Z",
+        verdicts=[_make_verdict(feature="age")],
+    )
+    rc2 = mirror_main(
+        [
+            "--artifacts-dir",
+            str(tmp_path),
+            "--database-url",
+            _TEST_DB_URL,
+            "--log-level",
+            "WARNING",
+        ]
+    )
+    assert rc2 == 0
+    count_pass2 = _count_rows(db_conn, experiment_id_prefix=test_namespace)
+    assert count_pass2 == 1, (
+        f"no-flag path: older sidecar must be filtered by DB cursor, "
+        f"got {count_pass2} rows (expected 1)"
+    )

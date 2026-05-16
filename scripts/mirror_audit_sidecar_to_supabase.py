@@ -77,11 +77,12 @@ import json
 import logging
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
-import psycopg
+if TYPE_CHECKING:
+    import psycopg
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -173,6 +174,61 @@ def _evaluator_audit_payload(record: VerdictRecord) -> Optional[dict[str, Any]]:
         if value is not None:
             payload[field] = value
     return payload or None
+
+
+def _parse_since(value: str) -> datetime:
+    """Parse the ``--since`` CLI value into a tz-AWARE datetime.
+
+    Accepts ISO8601 with trailing ``Z`` (Zulu), explicit offset, or
+    naive (no offset / no Z). Naive timestamps are normalized to UTC
+    so the value is safe to compare against ``SidecarReader``'s
+    tz-aware ``written_at`` (audit_sidecar_reader.py:268-269 forces
+    written_at to UTC; comparing naive-vs-aware raises TypeError).
+
+    Raises ``ValueError`` on unparseable input — caller is responsible
+    for mapping that to a user-facing CLI error.
+
+    Iter-2 codex MED: production callers passing
+    ``--since=2025-01-01T00:00:00`` (no Z) would TypeError before this
+    function existed. Pinned by
+    ``tests/unit/test_scripts/test_mirror_audit_sidecar_helpers.py``.
+    """
+    raw = value.strip()
+    # ``datetime.fromisoformat`` only learned ``Z`` in 3.11; tolerate
+    # older releases by rewriting to ``+00:00``.
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    parsed = datetime.fromisoformat(raw)  # raises ValueError
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _resolve_cursor(
+    *,
+    db_cursor: Optional[datetime],
+    since_override: Optional[datetime],
+) -> Optional[datetime]:
+    """Compute the effective ``since`` floor for the SidecarReader.
+
+    ``--since`` is a FLOOR ON TOP OF the DB cursor, never a replacement.
+    Iter-1 set ``cursor = since_override`` which let
+    ``--since=1970-01-01`` re-scan the entire sidecar history —
+    re-creating the write-amp risk the cursor exists to prevent.
+
+    Returns:
+      - ``max(db_cursor, since_override)`` when both are set.
+      - The non-None one when exactly one is set.
+      - ``None`` (first run, no --since) → reader admits every sidecar.
+
+    Iter-2 codex MED: pinned by
+    ``tests/unit/test_scripts/test_mirror_audit_sidecar_helpers.py``.
+    """
+    if since_override is not None and db_cursor is not None:
+        return max(db_cursor, since_override)
+    if since_override is not None:
+        return since_override
+    return db_cursor
 
 
 def _read_cursor(conn: psycopg.Connection, overlap_hours: int) -> Optional[datetime]:
@@ -286,12 +342,15 @@ def main(argv: Optional[list[str]] = None) -> int:
         type=str,
         default=None,
         help=(
-            "ISO8601 timestamp used as the floor for sidecar selection, "
-            "OVERRIDING the default max(imported_at) - overlap_hours cursor. "
-            "Used by integration tests that write synthetic sidecars with "
-            "older written_at values than the in-DB imported_at would allow "
-            "through. Production runs should leave this unset so the default "
-            "cursor avoids repeatedly scanning years-old sidecars."
+            "ISO8601 timestamp used as a FLOOR on top of the default "
+            "max(imported_at) - overlap_hours cursor. The effective cursor "
+            "is max(db_cursor, --since) when both are present, so passing "
+            "--since=1970-01-01 does NOT force a full re-scan of years-old "
+            "sidecars (the DB cursor wins if it is more recent). Naive "
+            "timestamps (no offset or Z) are normalized to UTC. Used by "
+            "integration tests that write synthetic sidecars with older "
+            "written_at values than the in-DB imported_at would otherwise "
+            "admit."
         ),
     )
     parser.add_argument(
@@ -337,33 +396,41 @@ def main(argv: Optional[list[str]] = None) -> int:
     if not database_url:
         parser.error("neither --database-url nor $DATABASE_URL is set")
 
-    # Parse --since override (test escape-hatch). We accept the trailing
-    # ``Z`` (Zulu) shorthand that ISO8601 producers in this codebase use.
+    # Parse --since floor (test escape-hatch + production knob).
     since_override: Optional[datetime] = None
     if args.since is not None:
-        raw = args.since.strip()
-        # ``datetime.fromisoformat`` only learned ``Z`` in 3.11; tolerate
-        # older releases by rewriting to ``+00:00``.
-        if raw.endswith("Z"):
-            raw = raw[:-1] + "+00:00"
         try:
-            since_override = datetime.fromisoformat(raw)
+            since_override = _parse_since(args.since)
         except ValueError as exc:
             parser.error(f"--since={args.since!r} is not a valid ISO8601 timestamp: {exc}")
 
     # Open connection (autocommit=False; we commit explicitly after the
     # full batch upsert so a mid-batch crash rolls back cleanly).
+    # Lazy import: keeps ``import scripts.mirror_audit_sidecar_to_supabase``
+    # working in unit tests that don't have psycopg-v3 installed (the
+    # helpers _parse_since / _resolve_cursor have no DB dependency).
+    import psycopg  # noqa: PLC0415
+
     logger.info("connecting to Postgres ...")
     with psycopg.connect(database_url) as conn:
-        cursor: Optional[datetime]
-        if since_override is not None:
+        # Effective cursor = max(db_cursor, since_override). --since is a
+        # FLOOR, not a replacement: passing --since=1970-01-01 must NOT
+        # rescan the entire sidecar history (that would re-create the
+        # write-amp risk the cursor exists to prevent). See _resolve_cursor.
+        db_cursor = _read_cursor(conn, overlap_hours=args.overlap_hours)
+        cursor = _resolve_cursor(db_cursor=db_cursor, since_override=since_override)
+        if since_override is not None and db_cursor is not None:
             logger.info(
-                "cursor: --since override active; using floor=%s",
+                "cursor: --since=%s and db_cursor=%s; effective floor=%s",
+                since_override.isoformat(),
+                db_cursor.isoformat(),
+                cursor.isoformat() if cursor is not None else "<none>",
+            )
+        elif since_override is not None:
+            logger.info(
+                "cursor: db empty; using --since floor=%s",
                 since_override.isoformat(),
             )
-            cursor = since_override
-        else:
-            cursor = _read_cursor(conn, overlap_hours=args.overlap_hours)
         reader = SidecarReader(artifacts_dir=artifacts_dir, since=cursor)
         records = list(reader.iter_verdict_records())
         logger.info("read %d verdict records from %s", len(records), artifacts_dir)
