@@ -6,11 +6,14 @@ No LLM calls - pure logic.
 V4.4: Added discovery routing to pass DAG data to discovery-aware agents.
 """
 
+import logging
 import time
 from collections import defaultdict
 from typing import Any, Dict, List, Literal, cast
 
 from ..state import AgentDispatch, OrchestratorState
+
+logger = logging.getLogger(__name__)
 
 
 class RouterNode:
@@ -232,6 +235,31 @@ class RouterNode:
                 dispatch_plan, state
             )
             discovery_routing_applied = len(discovery_aware_agents) > 0
+
+        # Issue #251 F1 hard guard: the orchestrator must NEVER dispatch to
+        # itself. None of the INTENT_TO_AGENTS or MULTI_AGENT_PATTERNS entries
+        # name 'orchestrator' today; this guard makes that invariant
+        # structurally enforced so a future intent addition can't regress it.
+        # If anything snuck through, fall back to explainer with a warning.
+        filtered_plan = [d for d in dispatch_plan if d["agent_name"] != "orchestrator"]
+        if len(filtered_plan) != len(dispatch_plan):
+            logger.warning(
+                "RouterNode #251 guard: dropped 'orchestrator' from dispatch_plan; "
+                "primary_intent=%s",
+                intent.get("primary_intent") if intent else "(none)",
+            )
+        if not filtered_plan:
+            # Whole plan was orchestrator entries; fall through to explainer.
+            filtered_plan = [
+                AgentDispatch(
+                    agent_name="explainer",
+                    priority="medium",
+                    parameters={"depth": "minimal"},
+                    timeout_ms=30000,
+                    fallback_agent=None,
+                )
+            ]
+        dispatch_plan = filtered_plan
 
         routing_time = int((time.time() - start_time) * 1000)
 

@@ -362,6 +362,14 @@ async def process_cognitive_query(
 
                 if agents_dispatched:
                     agent_name = agents_dispatched[0]  # Primary agent used
+                else:
+                    # Issue #251 F1+F2: the orchestrator ran but produced no
+                    # dispatch. Surface that as a degraded marker — DO NOT
+                    # fall through to the query_type-derived default, which
+                    # silently mislabels the response as 'orchestrator' (for
+                    # QueryType.GENERAL) or 'health_score' (for
+                    # QueryType.MONITORING) and hides the real failure.
+                    agent_name = "orchestrator_degraded"
 
                 logger.info(
                     f"Orchestrator processed query: agents={agents_dispatched}, "
