@@ -13,7 +13,7 @@ Components:
 Integration Points:
 - nlp/intent_classifier.py → Add EXPLAIN intent
 - nlp/entity_extractor.py → Extract patient_id, model_type
-- agents/orchestrator/router.py → Route EXPLAIN to this handler
+- agents/orchestrator/nodes/router.py → Route EXPLAIN to this handler
 - visualization/shap_viz.py → Render charts in chat response
 
 Author: E2I Causal Analytics Team
@@ -544,7 +544,7 @@ class ExplanationResponseFormatter:
 
 
 # =============================================================================
-# 6. ORCHESTRATOR ROUTING - Add to agents/orchestrator/router.py
+# 6. ORCHESTRATOR ROUTING - Add to agents/orchestrator/nodes/router.py
 # =============================================================================
 
 
@@ -728,7 +728,7 @@ INTEGRATION INSTRUCTIONS
    - Import ExplanationEntities, extract_explanation_entities
    - Call for EXPLAIN intents
 
-4. Add to agents/orchestrator/router.py:
+4. Add to agents/orchestrator/nodes/router.py:
 
    ```python
    from src.agents.orchestrator.tools.explain_tool import (
