@@ -111,14 +111,21 @@ def _is_accepted(candidate: dict) -> bool:
     return True
 
 
-def _artifact_mtime(path: Path) -> float | None:
-    """Return the artifact's mtime in seconds, or ``None`` if missing.
+def _artifact_mtime_ns(path: Path) -> int | None:
+    """Return the artifact's mtime in nanoseconds, or ``None`` if missing.
 
-    A missing artifact means cold-start: no prior compile, so every
-    accepted candidate counts as backlog.
+    Nanosecond precision (vs second-resolution ``st_mtime``) keeps the
+    strict newer-than semantics meaningful on filesystems that ARE
+    nanosecond-capable (ext4, btrfs, modern HFS+, APFS). On coarse-
+    resolution filesystems (FAT, NFS, old HFS+) ``st_mtime_ns`` is
+    truncated to the second, but that's still strictly better than the
+    bare ``st_mtime`` float — every ns we keep reduces same-tick
+    collisions. Codex gate-on-diff iter-2 MED-1: equal-mtime inclusion
+    would silently re-count pre-folded manifests forever; per-scan
+    dedup doesn't carry across scans.
     """
     try:
-        return path.stat().st_mtime
+        return path.stat().st_mtime_ns
     except (FileNotFoundError, NotADirectoryError):
         return None
 
@@ -156,8 +163,8 @@ def count_accepted_candidates(
         log.info("candidates_dir %s does not exist; backlog=0", candidates_dir)
         return result
 
-    artifact_mtime = _artifact_mtime(compiled_artifact_path)
-    if artifact_mtime is None:
+    artifact_mtime_ns = _artifact_mtime_ns(compiled_artifact_path)
+    if artifact_mtime_ns is None:
         log.info(
             "compiled artifact %s missing — counting every accepted candidate",
             compiled_artifact_path,
@@ -168,28 +175,29 @@ def count_accepted_candidates(
             continue
 
         try:
-            mtime = manifest_path.stat().st_mtime
+            mtime_ns = manifest_path.stat().st_mtime_ns
         except OSError as exc:  # broken symlink, racey delete, etc.
             log.warning("stat failed on %s: %s", manifest_path, exc)
             result.malformed_paths.append(manifest_path)
             continue
 
-        # Skip manifests strictly older than the (existing) artifact —
-        # those candidates were already folded in. Equal-mtime is
-        # INCLUDED (codex gate-on-diff iter-1 LOW-2): on coarse-mtime
-        # filesystems (HFS+, FAT, NFS truncated to second), a
-        # legitimate curate→compile→curate-fast sequence can produce
-        # artifact_mtime == manifest_mtime; excluding it would silently
-        # drop fresh candidates. The (feature_name, source_run_id)
-        # dedup just above absorbs the false-positive case where the
-        # equal-mtime manifest is genuinely a republish of pre-folded
-        # candidates.
-        if artifact_mtime is not None and mtime < artifact_mtime:
+        # Skip manifests with mtime <= artifact mtime — strict
+        # newer-than semantics. Codex gate-on-diff iter-2 MED-1: the
+        # iter-1 attempt to "include equal-mtime to support coarse-FS"
+        # was unsound — per-scan dedup doesn't carry across scans, so
+        # an equal-mtime manifest from a prior fold would silently
+        # re-count forever. We use ``st_mtime_ns`` (vs. bare
+        # ``st_mtime``) to reduce same-tick collisions on FSes that
+        # support nanosecond resolution; on coarse-mtime FSes the
+        # ns is truncated to the second but the dedup-by-identity
+        # still prevents the SAME (feature, run_id) pair from
+        # double-counting *within a single scan*.
+        if artifact_mtime_ns is not None and mtime_ns <= artifact_mtime_ns:
             log.debug(
-                "skipping %s (mtime %.0f < artifact mtime %.0f)",
+                "skipping %s (mtime_ns %d <= artifact mtime_ns %d)",
                 manifest_path,
-                mtime,
-                artifact_mtime,
+                mtime_ns,
+                artifact_mtime_ns,
             )
             continue
 
