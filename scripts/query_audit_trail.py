@@ -56,7 +56,16 @@ _DISAGREEMENT_PREDICATE = "evaluator_audit ->> 'evaluator_satisfied' = 'false'"
 _BY_FEATURE_FAMILY_SQL = f"""
 WITH families AS (
     SELECT
-        split_part(feature, '_', 1) AS family,
+        -- The '__unknown__' sentinel leads with an underscore, which
+        -- makes ``split_part('__unknown__', '_', 1)`` return the empty
+        -- string. Surface the sentinel as its own literal bucket so
+        -- operators can distinguish "feature missing" from "feature ''
+        -- legitimately starts empty" (the latter is unreachable in
+        -- practice but defensive).
+        CASE
+            WHEN feature = '__unknown__' THEN '__unknown__'
+            ELSE split_part(feature, '_', 1)
+        END AS family,
         ({_DISAGREEMENT_PREDICATE})::int AS is_disagreement
     FROM adaptive_validity_verdicts
 )

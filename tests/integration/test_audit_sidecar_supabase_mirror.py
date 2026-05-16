@@ -191,18 +191,40 @@ def _fetch_one(
         return cur.fetchone()
 
 
-def _run_mirror(artifacts_dir: Path) -> None:
+def _fetch_imported_at_map(
+    conn: psycopg.Connection, *, experiment_id_prefix: str
+) -> dict[tuple[str, str, Any], Any]:
+    """Return a stable ``{(experiment_id, feature, written_at): imported_at}``
+    map for every row whose experiment_id begins with ``prefix``. Used by
+    the no-write-on-unchanged assertion to detect whether a re-run
+    advanced any ``imported_at`` value."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT experiment_id, feature, written_at, imported_at "
+            "FROM adaptive_validity_verdicts "
+            "WHERE experiment_id LIKE %s",
+            (experiment_id_prefix + "%",),
+        )
+        rows = cur.fetchall()
+    return {(r[0], r[1], r[2]): r[3] for r in rows}
+
+
+# Fixed-floor cutoff for tests: older than every synthetic written_at the
+# fixtures emit so the reader admits every test sidecar regardless of the
+# in-DB imported_at history. ``--since`` is the production-safe replacement
+# for the test-only ``--no-cursor`` flag — production runs leave it unset
+# and rely on the default ``max(imported_at) - overlap_hours`` cursor.
+_TEST_SINCE_FLOOR = "2025-01-01T00:00:00Z"
+
+
+def _run_mirror(artifacts_dir: Path, *, since: str = _TEST_SINCE_FLOOR) -> None:
     assert _TEST_DB_URL is not None
-    # --no-cursor: tests use synthetic written_at values (e.g. 2026-05-15)
-    # that are older than the moment the previous test wrote into the
-    # table. The production-mode cursor would filter those out as already
-    # mirrored. --no-cursor makes the assertions test the upsert
-    # semantics directly without cursor interference.
     rc = mirror_main(
         [
             "--artifacts-dir",
             str(artifacts_dir),
-            "--no-cursor",
+            "--since",
+            since,
             "--database-url",
             _TEST_DB_URL,
             "--log-level",
@@ -365,3 +387,109 @@ def test_missing_experiment_id_uses_sentinel(
                 (unique_feature,),
             )
         db_conn.commit()
+
+
+def test_rerun_on_unchanged_sidecars_does_not_advance_imported_at(
+    tmp_path: Path, db_conn: psycopg.Connection, test_namespace: str
+) -> None:
+    """Re-running the mirror on byte-identical sidecars must NOT advance
+    ``imported_at``. This pins the write-amplification dampener: the
+    upsert's WHERE clause filters the UPDATE when neither verdict nor
+    evaluator_audit changed, so the row's imported_at value stays
+    pegged at pass-1.
+
+    FALSIFIABILITY ANCHOR: drop the WHERE
+    ``IS DISTINCT FROM`` clause from ``_UPSERT_SQL`` → pass-2's imported_at
+    will jump forward → this assertion trips. Restore the WHERE clause →
+    GREEN.
+
+    The companion test ``test_changed_verdict_for_same_natural_key_updates_in_place``
+    guards the inverse direction (changed payload MUST update).
+    """
+    exp = f"{test_namespace}-D"
+    _write_sidecar(
+        tmp_path,
+        experiment_id=exp,
+        written_at="2026-05-15T11:00:00Z",
+        verdicts=[
+            _make_verdict(feature="age"),
+            _make_verdict(feature="gender"),
+            _make_verdict(feature="region", evaluator_satisfied=True),
+        ],
+    )
+
+    _run_mirror(tmp_path)
+    snapshot_pass1 = _fetch_imported_at_map(db_conn, experiment_id_prefix=test_namespace)
+    assert len(snapshot_pass1) == 3, (
+        f"pass-1 expected 3 rows in snapshot, got {len(snapshot_pass1)}"
+    )
+
+    # Sleep-free: Postgres ``now()`` has microsecond resolution and a
+    # second-pass UPDATE would land STRICTLY after pass-1's timestamps
+    # regardless of wall-clock latency. If the WHERE clause works, the
+    # UPDATE doesn't fire at all → timestamps are identical.
+    _run_mirror(tmp_path)
+    snapshot_pass2 = _fetch_imported_at_map(db_conn, experiment_id_prefix=test_namespace)
+    assert len(snapshot_pass2) == 3, (
+        f"pass-2 expected SAME 3 rows in snapshot, got {len(snapshot_pass2)}"
+    )
+
+    # The load-bearing assertion: every imported_at is byte-equal across
+    # passes. If the WHERE clause is missing, pass-2 advances them all.
+    drifted: list[tuple[Any, ...]] = []
+    for key, ts1 in snapshot_pass1.items():
+        ts2 = snapshot_pass2.get(key)
+        if ts1 != ts2:
+            drifted.append((key, ts1, ts2))
+    assert not drifted, (
+        f"FALSIFIABILITY-ANCHOR: imported_at advanced on unchanged sidecars — "
+        f"the IS DISTINCT FROM WHERE clause is missing or broken. "
+        f"Drifted rows: {drifted}"
+    )
+
+
+def test_family_bucket_query_surfaces_unknown_sentinel(
+    tmp_path: Path, db_conn: psycopg.Connection, test_namespace: str
+) -> None:
+    """The ``--by-feature-family`` query must surface the ``__unknown__``
+    sentinel as a literal bucket rather than letting ``split_part`` on a
+    leading-underscore string emit an empty-string family.
+
+    Falsifiability: replace the ``CASE`` in ``_BY_FEATURE_FAMILY_SQL``
+    with the original bare ``split_part(feature, '_', 1)`` → this test
+    trips because the family for ``feature='__unknown__'`` becomes ``''``.
+    """
+    from scripts.query_audit_trail import _BY_FEATURE_FAMILY_SQL
+
+    exp = f"{test_namespace}-E"
+    # Insert one row with the literal sentinel feature value. We bypass
+    # the mirror script (which would coerce via the reader) and go
+    # straight to SQL: this exercises the CASE branch the migration's
+    # column-DEFAULT documents.
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO adaptive_validity_verdicts "
+            "  (experiment_id, feature, written_at, source_path, verdict) "
+            "VALUES (%s, %s, %s, %s, %s::jsonb)",
+            (
+                exp,
+                "__unknown__",
+                "2026-05-15T13:00:00Z",
+                "/dev/null/synthetic",
+                '{"feature": "__unknown__", "severity": "moderate"}',
+            ),
+        )
+    db_conn.commit()
+
+    with db_conn.cursor() as cur:
+        cur.execute(_BY_FEATURE_FAMILY_SQL, (100,))
+        rows = cur.fetchall()
+    families = {row[0] for row in rows}
+    assert "__unknown__" in families, (
+        f"expected '__unknown__' as a literal family bucket; got families={families}. "
+        f"Empty-string family suggests split_part('__unknown__','_',1)='' regression."
+    )
+    assert "" not in families, (
+        f"family bucket '' should never appear; got families={families}. "
+        f"Indicates the CASE branch for '__unknown__' is missing."
+    )

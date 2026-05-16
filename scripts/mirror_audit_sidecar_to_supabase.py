@@ -49,10 +49,18 @@ Logging
 Counts logged at INFO on success:
   - ``read``: total VerdictRecord rows yielded by the reader.
   - ``upserted_new``: rows where ON CONFLICT did NOT fire.
-  - ``upserted_existing``: rows where ON CONFLICT fired (DO UPDATE).
+  - ``upserted_updated``: rows where ON CONFLICT fired AND verdict /
+    evaluator_audit payload changed (IS DISTINCT FROM WHERE passed).
+  - ``noop``: rows where ON CONFLICT fired BUT the payload was
+    byte-identical (IS DISTINCT FROM WHERE filtered the UPDATE).
+    On a steady-state re-run over unchanged sidecars this should be
+    the dominant count — that's the write-amplification dampener
+    working.
 
-The split between new/existing is computed via the ``xmax`` system column
-(see ``_UPSERT_SQL`` below) — Postgres-standard trick.
+The split between new/updated is computed via the ``xmax`` system column
+(see ``_UPSERT_SQL`` below) — Postgres-standard trick. The noop count is
+inferred from no row being returned: when the WHERE clause filters out
+the UPDATE there's no RETURNING tuple.
 
 CLI
 ---
@@ -113,6 +121,18 @@ _EVALUATOR_FIELDS: tuple[str, ...] = (
 # Postgres trick: xmax is 0 on a freshly inserted row, nonzero on a row
 # that an ON CONFLICT UPDATE touched. Lets us count new-vs-existing
 # without a second query.
+#
+# WHERE ... IS DISTINCT FROM ... clause: prevents write-amplification when
+# rerunning the mirror on byte-identical sidecars. Without it, every
+# conflict would refresh ``imported_at = now()`` and produce a write per
+# row per run. ``IS DISTINCT FROM`` is the NULL-safe equality negation
+# Postgres ships (NULL IS DISTINCT FROM NULL is FALSE; NULL = NULL is
+# NULL, which would silently skip the UPDATE). This is exactly the
+# semantic we want: "only fire UPDATE when the payload actually changed".
+#
+# Note for jsonb: ``IS DISTINCT FROM`` on jsonb is structural equality
+# (key-order-insensitive object compare, see Postgres docs on jsonb
+# comparison). That is the natural meaning for a payload-changed test.
 _UPSERT_SQL = """
 INSERT INTO adaptive_validity_verdicts (
     experiment_id, feature, written_at, source_path, verdict, evaluator_audit, imported_at
@@ -127,6 +147,8 @@ ON CONFLICT (
     evaluator_audit = EXCLUDED.evaluator_audit,
     source_path = EXCLUDED.source_path,
     imported_at = now()
+WHERE adaptive_validity_verdicts.verdict IS DISTINCT FROM EXCLUDED.verdict
+   OR adaptive_validity_verdicts.evaluator_audit IS DISTINCT FROM EXCLUDED.evaluator_audit
 RETURNING (xmax = 0) AS inserted;
 """
 
@@ -184,13 +206,22 @@ def _upsert_records(
     records: list[VerdictRecord],
     *,
     dry_run: bool,
-) -> tuple[int, int]:
-    """Upsert ``records`` and return (new_count, existing_count)."""
+) -> tuple[int, int, int]:
+    """Upsert ``records`` and return (new_count, updated_count, noop_count).
+
+    - ``new_count``: rows where ON CONFLICT did NOT fire (xmax = 0 path).
+    - ``updated_count``: rows where ON CONFLICT fired AND the WHERE clause
+      passed because payload changed (xmax != 0 with row returned).
+    - ``noop_count``: rows where ON CONFLICT fired BUT the WHERE clause
+      filtered out the UPDATE (no row returned). These are byte-identical
+      re-imports — exactly the case the WHERE clause exists to skip.
+    """
     if dry_run:
         logger.info("DRY-RUN: would upsert %d records; skipping DB writes.", len(records))
-        return (0, 0)
+        return (0, 0, 0)
     new_count = 0
-    existing_count = 0
+    updated_count = 0
+    noop_count = 0
     with conn.cursor() as cur:
         for r in records:
             evaluator_payload = _evaluator_audit_payload(r)
@@ -208,12 +239,15 @@ def _upsert_records(
                 ),
             )
             row = cur.fetchone()
-            if row is not None and row[0]:
+            if row is None:
+                # WHERE clause filtered out the UPDATE: unchanged payload.
+                noop_count += 1
+            elif row[0]:
                 new_count += 1
             else:
-                existing_count += 1
+                updated_count += 1
     conn.commit()
-    return (new_count, existing_count)
+    return (new_count, updated_count, noop_count)
 
 
 # ----------------------------------------------------------------------------
@@ -248,12 +282,16 @@ def main(argv: Optional[list[str]] = None) -> int:
         ),
     )
     parser.add_argument(
-        "--no-cursor",
-        action="store_true",
+        "--since",
+        type=str,
+        default=None,
         help=(
-            "Skip the max(imported_at) cursor entirely and process every sidecar "
-            "in the directory. Used by integration tests; production runs should "
-            "leave this off so we don't repeatedly scan stale years-old sidecars."
+            "ISO8601 timestamp used as the floor for sidecar selection, "
+            "OVERRIDING the default max(imported_at) - overlap_hours cursor. "
+            "Used by integration tests that write synthetic sidecars with "
+            "older written_at values than the in-DB imported_at would allow "
+            "through. Production runs should leave this unset so the default "
+            "cursor avoids repeatedly scanning years-old sidecars."
         ),
     )
     parser.add_argument(
@@ -299,24 +337,43 @@ def main(argv: Optional[list[str]] = None) -> int:
     if not database_url:
         parser.error("neither --database-url nor $DATABASE_URL is set")
 
+    # Parse --since override (test escape-hatch). We accept the trailing
+    # ``Z`` (Zulu) shorthand that ISO8601 producers in this codebase use.
+    since_override: Optional[datetime] = None
+    if args.since is not None:
+        raw = args.since.strip()
+        # ``datetime.fromisoformat`` only learned ``Z`` in 3.11; tolerate
+        # older releases by rewriting to ``+00:00``.
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        try:
+            since_override = datetime.fromisoformat(raw)
+        except ValueError as exc:
+            parser.error(f"--since={args.since!r} is not a valid ISO8601 timestamp: {exc}")
+
     # Open connection (autocommit=False; we commit explicitly after the
     # full batch upsert so a mid-batch crash rolls back cleanly).
     logger.info("connecting to Postgres ...")
     with psycopg.connect(database_url) as conn:
-        if args.no_cursor:
-            logger.info("cursor: --no-cursor set; processing every sidecar")
-            cursor = None
+        cursor: Optional[datetime]
+        if since_override is not None:
+            logger.info(
+                "cursor: --since override active; using floor=%s",
+                since_override.isoformat(),
+            )
+            cursor = since_override
         else:
             cursor = _read_cursor(conn, overlap_hours=args.overlap_hours)
         reader = SidecarReader(artifacts_dir=artifacts_dir, since=cursor)
         records = list(reader.iter_verdict_records())
         logger.info("read %d verdict records from %s", len(records), artifacts_dir)
-        new_count, existing_count = _upsert_records(conn, records, dry_run=args.dry_run)
+        new_count, updated_count, noop_count = _upsert_records(conn, records, dry_run=args.dry_run)
         logger.info(
-            "done: read=%d, upserted_new=%d, upserted_existing=%d, dry_run=%s",
+            "done: read=%d, upserted_new=%d, upserted_updated=%d, noop=%d, dry_run=%s",
             len(records),
             new_count,
-            existing_count,
+            updated_count,
+            noop_count,
             args.dry_run,
         )
         # ``conn.commit()`` is called inside ``_upsert_records`` on success;
