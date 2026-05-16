@@ -72,6 +72,10 @@ query DrugDiseaseEvidence($drugId: String!, $diseaseId: String!, $size: Int!) {
         id
         name
       }
+      target {
+        id
+        approvedSymbol
+      }
     }
   }
 }

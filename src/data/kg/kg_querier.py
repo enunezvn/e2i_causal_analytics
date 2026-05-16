@@ -38,22 +38,30 @@ import logging
 import math
 from typing import Iterable, Optional
 
+from src.data.kg.chembl import ChEMBLClient
 from src.data.kg.entity_linker import EntityLinker
 from src.data.kg.open_targets import OpenTargetsClient, OpenTargetsError
-from src.data.kg.types import KGEdge
+from src.data.kg.types import EvidenceItem, KGEdge
 from src.data.kg.umls_uts import UMLSAuthError, UMLSClient, UMLSError
 
 logger = logging.getLogger(__name__)
 
 
 class KnowledgeGraphQuerier:
-    """Structured KGEdge extraction over UMLS + Open Targets.
+    """Structured KGEdge extraction over UMLS + Open Targets + ChEMBL.
 
     Args:
         umls: A constructed UMLSClient. If None and ``entity_linker`` is also
             None, a default client is constructed (which reads the
             ``UMLS_UTS_API_KEY`` env var).
         open_targets: A constructed OpenTargetsClient. Same fallback rules.
+        chembl: Optional ChEMBLClient. When provided, drug-disease edges
+            populate ``KGEdge.evidence[i].chembl_target_id`` by
+            cross-walking the Open Targets target gene symbol → ChEMBL
+            target ID. When ``None``, evidence is still threaded from
+            Open Targets but ``chembl_target_id`` is left ``None`` on
+            every item. v1 callers that pre-date #245 keep working
+            unchanged.
         entity_linker: Optional pre-constructed ``EntityLinker``; if
             provided, its UMLS + Open Targets clients are reused so caching
             and connection pooling are shared with the linker.
@@ -64,12 +72,15 @@ class KnowledgeGraphQuerier:
         *,
         umls: Optional[UMLSClient] = None,
         open_targets: Optional[OpenTargetsClient] = None,
+        chembl: Optional[ChEMBLClient] = None,
         entity_linker: Optional[EntityLinker] = None,
     ) -> None:
         # Track which clients we constructed so close() only closes those —
         # never the ones borrowed from a caller-supplied EntityLinker.
         self._owns_umls = False
         self._owns_open_targets = False
+        # ChEMBL is never auto-constructed; the path is opt-in.
+        self._owns_chembl = False
         if entity_linker is not None:
             self.umls = umls if umls is not None else entity_linker.umls
             self.open_targets = (
@@ -86,6 +97,9 @@ class KnowledgeGraphQuerier:
                 self._owns_open_targets = True
             else:
                 self.open_targets = open_targets
+        # Optional ChEMBL client. Borrowed only — KGQuerier never
+        # auto-constructs ChEMBL (would surprise existing callers).
+        self.chembl: Optional[ChEMBLClient] = chembl
 
     def __enter__(self) -> "KnowledgeGraphQuerier":
         return self
@@ -103,6 +117,8 @@ class KnowledgeGraphQuerier:
             self.umls.close()
         if self._owns_open_targets:
             self.open_targets.close()
+        if self._owns_chembl and self.chembl is not None:
+            self.chembl.close()
 
     def query_drug_disease_edges(
         self,
@@ -212,6 +228,22 @@ class KnowledgeGraphQuerier:
             # reconciliation-design.md`` §"Out of scope (future work)".
             datatype_id = str(row.get("datatypeId") or "")
             predicate = "treats" if datatype_id == "known_drug" else "associated_with"
+            # ----------------------------------------------------------
+            # Issue #245: per-evidence-item provenance threading.
+            # The KGEdge.pmids tuple remains a coarse list of PMIDs for
+            # backwards compat; KGEdge.evidence carries the structured
+            # per-PMID provenance with optional ChEMBL target cross-walk.
+            # ----------------------------------------------------------
+            chembl_target_id = self._resolve_chembl_target(row)
+            evidence_items = tuple(
+                EvidenceItem(
+                    pmid=pmid,
+                    source="open_targets",
+                    chembl_target_id=chembl_target_id,
+                    datasource_score=score,
+                )
+                for pmid in pmids
+            )
             edges.append(
                 KGEdge(
                     subject_id=str(drug.get("id") or drug_id),
@@ -223,10 +255,36 @@ class KnowledgeGraphQuerier:
                     score=score,
                     pmids=pmids,
                     datasource=row.get("datasourceId"),
+                    evidence=evidence_items,
                     raw=row,
                 )
             )
         return edges
+
+    def _resolve_chembl_target(self, row: dict[str, object]) -> Optional[str]:
+        """Resolve an Open Targets evidence row's target → ChEMBL target ID.
+
+        Returns ``None`` when (a) no ChEMBL client is attached, (b) the
+        row exposes no ``target.approvedSymbol``, or (c) the ChEMBL
+        cross-walk returns no match. Errors from the ChEMBL client are
+        logged at warning level and swallowed to ``None`` so a transient
+        ChEMBL outage does not break the Open Targets evidence path
+        (the v1 contract is "ChEMBL enrichment is best-effort, not a
+        gating dependency").
+        """
+        if self.chembl is None:
+            return None
+        target = row.get("target")
+        if not isinstance(target, dict):
+            return None
+        gene_symbol = target.get("approvedSymbol")
+        if not isinstance(gene_symbol, str) or not gene_symbol:
+            return None
+        try:
+            return self.chembl.open_targets_target_to_chembl(gene_symbol)
+        except Exception as exc:  # noqa: BLE001 — best-effort enrichment
+            logger.warning("ChEMBL cross-walk failed for gene %s: %s", gene_symbol, exc)
+            return None
 
     def query_disease_hierarchy(self, cui: str) -> list[KGEdge]:
         """UMLS taxonomic relations for a disease CUI.

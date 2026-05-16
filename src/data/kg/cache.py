@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Iterable, Literal, get_args
 
 from src.data.feature_contract import FeatureContract
-from src.data.kg.types import KGEdge
+from src.data.kg.types import EvidenceItem, KGEdge
 
 CacheRecordStatus = Literal["ok", "queried_no_edges", "entity_unresolved", "source_error"]
 
@@ -112,6 +112,10 @@ def _kg_edge_to_json(edge: KGEdge) -> dict[str, Any]:
         "score": edge.score,
         "pmids": list(edge.pmids),
         "datasource": edge.datasource,
+        # Issue #245: structured evidence items round-trip too. Older
+        # cache files lack this key — see ``_kg_edge_from_json`` for the
+        # missing-key default.
+        "evidence": [_evidence_item_to_json(e) for e in edge.evidence],
     }
 
 
@@ -126,6 +130,25 @@ def _kg_edge_from_json(payload: dict[str, Any]) -> KGEdge:
         score=payload.get("score"),
         pmids=tuple(payload.get("pmids", [])),
         datasource=payload.get("datasource"),
+        evidence=tuple(_evidence_item_from_json(e) for e in payload.get("evidence", [])),
+    )
+
+
+def _evidence_item_to_json(item: EvidenceItem) -> dict[str, Any]:
+    return {
+        "pmid": item.pmid,
+        "source": item.source,
+        "chembl_target_id": item.chembl_target_id,
+        "datasource_score": item.datasource_score,
+    }
+
+
+def _evidence_item_from_json(payload: dict[str, Any]) -> EvidenceItem:
+    return EvidenceItem(
+        pmid=payload["pmid"],
+        source=payload["source"],
+        chembl_target_id=payload.get("chembl_target_id"),
+        datasource_score=payload.get("datasource_score"),
     )
 
 
