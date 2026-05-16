@@ -328,6 +328,23 @@ class LLMEvaluatorAudit:
             500 chars at the audit boundary.
         evaluator_model: Pinned model identifier (default
             ``"anthropic/claude-haiku-4-5-20251001"``).
+        latency_ms: Wall-clock duration of the evaluator call in
+            milliseconds. ``None`` when telemetry was not captured
+            (legacy call-sites). Recorded by ``_run_evaluator`` in
+            ``src/data/causal_role_classifier_loader.py``. Issue #241.
+        input_tokens: Number of Haiku prompt tokens consumed by this
+            evaluator call, extracted from the DSPy LM ``.history``
+            usage block. ``None`` when usage was not surfaced by the
+            underlying LM (e.g. cache hit, missing history). Issue #241.
+        output_tokens: Number of Haiku completion tokens emitted by this
+            evaluator call. Same nullability semantics as
+            ``input_tokens``. Issue #241.
+        cost_usd: Cost of the evaluator call in USD, computed from the
+            documented Haiku pricing constants
+            (``HAIKU_INPUT_USD_PER_MTOK`` /
+            ``HAIKU_OUTPUT_USD_PER_MTOK`` in
+            ``src/data/causal_role_evaluator.py``). ``None`` when token
+            counts could not be extracted. Issue #241.
     """
 
     satisfied: bool
@@ -335,6 +352,12 @@ class LLMEvaluatorAudit:
     missed_considerations: tuple[str, ...]
     notes: str
     evaluator_model: str
+    # Issue #241: telemetry. ``None`` when not captured (e.g. legacy
+    # callers, cache-hit responses with no usage block).
+    latency_ms: Optional[float] = None
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    cost_usd: Optional[float] = None
 
 
 @dataclass(frozen=True)

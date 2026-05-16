@@ -76,6 +76,21 @@ def write_adaptive_verdicts_sidecar(state: Dict[str, Any]) -> Path | None:
     them. ``evaluator_missed_considerations`` is serialized as a tuple
     by the producer; downstream JSON readers receive a Python list.
 
+    Issue #241 — Layer-4 evaluator telemetry: ``evaluator_latency_ms``
+    (float, milliseconds), ``evaluator_input_tokens`` (int),
+    ``evaluator_output_tokens`` (int), ``evaluator_cost_usd`` (float).
+    Same nullability semantics as the 5 audit keys above, plus an
+    additional partial-telemetry case: ``evaluator_latency_ms`` may be
+    non-``None`` while ``evaluator_input_tokens`` /
+    ``evaluator_output_tokens`` / ``evaluator_cost_usd`` are ``None``
+    when the underlying DSPy LM emitted no usage block (cache hit,
+    stub LM in tests, etc.). Cost is computed at write time using the
+    pinned Haiku rate constants in ``src/data/causal_role_evaluator.py``
+    (``HAIKU_INPUT_USD_PER_MTOK`` / ``HAIKU_OUTPUT_USD_PER_MTOK``);
+    operators bumping those constants surface the change in the
+    pricing-pin unit test. The telemetry keys are audit-only — never
+    consumed by the orchestrator.
+
     Args:
         state: DataPreparerState dict-like with adaptive_verdicts.
 

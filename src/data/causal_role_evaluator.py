@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Optional
 
 import dspy
 
@@ -65,6 +65,53 @@ and note the uncertainty. You are NOT the verdict.
 DEFAULT_EVALUATOR_MODEL: str = "anthropic/claude-haiku-4-5-20251001"
 ENABLE_ENV_VAR: str = "ADAPTIVE_VALIDITY_EVALUATOR_ENABLED"
 MODEL_ENV_VAR: str = "ADAPTIVE_VALIDITY_EVALUATOR_MODEL"
+
+
+# --- Issue #241: Haiku pricing constants -------------------------------------
+#
+# Source: Anthropic public pricing page (https://www.anthropic.com/pricing),
+# checked 2026-05-15 for ``claude-haiku-4-5-20251001``.
+#
+# These constants are PINNED here (not pulled at runtime from an SDK or
+# settings store) for two reasons:
+#   1. The pricing-pin unit test in
+#      ``tests/unit/test_data/test_evaluator_telemetry.py`` will trip on a
+#      silent edit, forcing a deliberate update when Anthropic re-prices.
+#   2. Cost reporting is post-hoc audit telemetry, not a live billing
+#      signal — operators should see what the code *recorded* the cost as
+#      at the time the call ran, not a back-computed value using
+#      whatever rates are current today.
+#
+# Units: USD per 1,000,000 tokens.
+HAIKU_INPUT_USD_PER_MTOK: float = 1.00
+HAIKU_OUTPUT_USD_PER_MTOK: float = 5.00
+
+
+def compute_haiku_cost_usd(
+    *,
+    input_tokens: Optional[int],
+    output_tokens: Optional[int],
+) -> float:
+    """Compute the USD cost of one Haiku evaluator call.
+
+    Either argument may be ``None`` when the upstream LM did not surface
+    a usage block; the helper coerces ``None`` to ``0`` so the audit
+    field is always a numeric value. The caller is responsible for
+    deciding whether to attach the (possibly partial) cost to the audit
+    or to leave the field as ``None`` (see ``_run_evaluator``).
+
+    Args:
+        input_tokens: Haiku prompt tokens (``usage.prompt_tokens``).
+        output_tokens: Haiku completion tokens
+            (``usage.completion_tokens``).
+
+    Returns:
+        Cost in USD as a float. Returns ``0.0`` when both inputs are
+        ``None`` / zero.
+    """
+    in_t = int(input_tokens) if input_tokens else 0
+    out_t = int(output_tokens) if output_tokens else 0
+    return (in_t * HAIKU_INPUT_USD_PER_MTOK + out_t * HAIKU_OUTPUT_USD_PER_MTOK) / 1_000_000.0
 
 
 def evaluator_is_enabled() -> bool:

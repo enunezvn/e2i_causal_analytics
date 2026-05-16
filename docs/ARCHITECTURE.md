@@ -540,9 +540,27 @@ filled in at review). Accepted candidates are hand-merged into
 re-run `scripts/compile_causal_role_classifier.py` to produce a new
 compiled artifact.
 
+Each sidecar verdict carries 5 evaluator audit keys (`evaluator_satisfied`,
+`evaluator_rationale_complete`, `evaluator_missed_considerations`,
+`evaluator_notes`, `evaluator_model`) plus 4 telemetry keys
+(`evaluator_latency_ms`, `evaluator_input_tokens`,
+`evaluator_output_tokens`, `evaluator_cost_usd` — issue #241). All 9
+keys are `null` when the evaluator was disabled, failed, or no LLM
+verdict was produced for that feature.
+
+The telemetry keys exist for cost monitoring as the evaluator moves
+from operator-opt-in to wider use. Cost is computed at write time from
+the Haiku rate constants pinned in
+`src/data/causal_role_evaluator.py` (`HAIKU_INPUT_USD_PER_MTOK = 1.00`,
+`HAIKU_OUTPUT_USD_PER_MTOK = 5.00`; source: Anthropic public pricing
+page, checked 2026-05-15). A unit test pins the constants; when
+Anthropic re-prices Haiku, operators bump the constants and the test
+trips, surfacing a deliberate update.
+
 Plans:
 - Producer (shipped 2026-05-15): `.claude/plans/layer4_evaluator_audit_signal.md`
 - Persistence + curation CLI (shipped 2026-05-15): `.claude/plans/layer4_evaluator_audit_consumer.md`
+- Cost + latency telemetry (issue #241, shipped 2026-05-15)
 
 ---
 

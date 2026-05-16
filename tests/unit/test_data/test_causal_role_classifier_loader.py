@@ -42,7 +42,16 @@ def test_classify_feature_returns_evaluator_audit_when_enabled(monkeypatch):
         classifier=stub_worker,
     )
     assert isinstance(verdict, LLMVerdict)
-    assert verdict.evaluator_audit is canned_audit
+    # Issue #241: ``_run_evaluator`` now returns ``dataclasses.replace(audit,
+    # latency_ms=..., input_tokens=..., output_tokens=..., cost_usd=...)``, so
+    # identity is no longer expected. Verify the audit content survived
+    # the telemetry attachment.
+    assert verdict.evaluator_audit is not None
+    assert verdict.evaluator_audit.satisfied == canned_audit.satisfied
+    assert verdict.evaluator_audit.rationale_complete == canned_audit.rationale_complete
+    assert verdict.evaluator_audit.missed_considerations == canned_audit.missed_considerations
+    assert verdict.evaluator_audit.notes == canned_audit.notes
+    assert verdict.evaluator_audit.evaluator_model == canned_audit.evaluator_model
 
 
 def test_classify_feature_evaluator_audit_none_when_flag_off(monkeypatch):
