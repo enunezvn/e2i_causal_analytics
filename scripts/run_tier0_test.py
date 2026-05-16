@@ -6138,6 +6138,13 @@ async def run_pipeline(
                         REGULARIZATION_SEARCH_SPACE,
                     )
 
+                    # Issue #232: import the shared LR-family fixed-params helper
+                    # so the Step 5b alt-train builder can't drift from the HPO
+                    # dispatcher (both consume the same constant).
+                    from src.agents.ml_foundation.model_trainer.nodes.hyperparameter_tuner import (
+                        _LR_FIXED_PARAMS,
+                    )
+
                     imb_sev = state.get("class_imbalance_info", {}).get("imbalance_severity")
 
                     for alt in alternatives:
@@ -6165,10 +6172,26 @@ async def run_pipeline(
                         ):
                             if _flag in alt:
                                 new_candidate[_flag] = alt[_flag]
+                        # Issue #232: ALWAYS pin solver=saga + max_iter=1000 for
+                        # LR-family alts (incl. LogisticRegression_Conformal) so
+                        # an HPO best_params with penalty="l1" doesn't crash the
+                        # alt-train builder with
+                        # ``Solver lbfgs supports only 'l2' or None penalties``.
+                        # The shared `_LR_FIXED_PARAMS` is the single source of
+                        # truth — same constant the HPO dispatcher consumes.
+                        if alt["name"] in (
+                            "LogisticRegression",
+                            "LogisticRegression_Conformal",
+                        ):
+                            new_candidate["default_hyperparameters"] = {
+                                **new_candidate["default_hyperparameters"],
+                                **_LR_FIXED_PARAMS,
+                            }
                         # Force class_weight for imbalanced tree/linear models
                         if imb_sev in ("severe", "extreme") and alt["name"] in (
                             "RandomForest",
                             "LogisticRegression",
+                            "LogisticRegression_Conformal",
                         ):
                             new_candidate["default_hyperparameters"] = {
                                 **new_candidate["default_hyperparameters"],

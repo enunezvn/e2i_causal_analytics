@@ -25,6 +25,24 @@ from src.agents.ml_foundation.model_trainer.random_state import (
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Issue #232: LR + LR_Conformal must pin ``solver="saga"`` so HPO trials with
+# ``penalty="l1"`` don't crash with
+#     ``Solver lbfgs supports only 'l2' or None penalties, got l1 penalty.``
+#
+# Module-level helper so the HPO dispatcher (Path 2) and the tier-0 Step 5b
+# alt-train builder (Path 1, ``scripts/run_tier0_test.py``) consume the same
+# constant — guaranteeing the two paths cannot drift independently.
+#
+# Per-call kwargs (e.g. ``random_state``) are NOT part of this constant; they
+# stay as call-site arguments so each fold/trial can still pin its own seed.
+# ---------------------------------------------------------------------------
+_LR_FIXED_PARAMS: Dict[str, Any] = {
+    "max_iter": 1000,
+    "solver": "saga",
+}
+
+
 def _get_opik_connector():
     """Lazy import of OpikConnector to avoid circular imports."""
     try:
@@ -701,7 +719,14 @@ def _inject_class_weight_sweep(
                 "type": "categorical",
                 "choices": [True, False],
             }
-    elif algorithm_name in ("RandomForest", "LogisticRegression", "ExtraTrees"):
+    elif algorithm_name in (
+        "RandomForest",
+        "LogisticRegression",
+        "LogisticRegression_Conformal",
+        "ExtraTrees",
+    ):
+        # Issue #232: include LogisticRegression_Conformal so the conformal LR
+        # variant sees the same class_weight sweep as bare LR.
         if "class_weight" not in out:
             out["class_weight"] = {
                 "type": "categorical",
@@ -771,11 +796,13 @@ def _get_fixed_params(
             "random_state": random_state,
             "n_jobs": 1,
         }
-    elif algorithm_name == "LogisticRegression":
+    elif algorithm_name in ("LogisticRegression", "LogisticRegression_Conformal"):
+        # Issue #232: route BOTH LR and LR_Conformal through the shared
+        # ``_LR_FIXED_PARAMS`` helper so penalty=l1 HPO trials don't crash
+        # with ``Solver lbfgs supports only 'l2' or None penalties``.
         fixed_params = {
             "random_state": random_state,
-            "max_iter": 1000,
-            "solver": "saga",
+            **_LR_FIXED_PARAMS,
         }
     elif algorithm_name in ["Ridge", "Lasso"]:
         fixed_params = {
@@ -822,8 +849,15 @@ def _get_fixed_params(
                     logger.info(
                         f"Added scale_pos_weight={fixed_params['scale_pos_weight']:.2f} for XGBoost"
                     )
-                elif algorithm_name in ("RandomForest", "LogisticRegression", "ExtraTrees"):
-                    # sklearn models use class_weight
+                elif algorithm_name in (
+                    "RandomForest",
+                    "LogisticRegression",
+                    "LogisticRegression_Conformal",
+                    "ExtraTrees",
+                ):
+                    # sklearn models use class_weight. Issue #232: include
+                    # LogisticRegression_Conformal so the conformal LR variant
+                    # also gets balanced class_weight under imbalance.
                     fixed_params["class_weight"] = "balanced"
                     logger.info(f"Added class_weight='balanced' for {algorithm_name}")
                 elif algorithm_name == "LightGBM":
