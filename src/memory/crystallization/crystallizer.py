@@ -185,8 +185,14 @@ class Crystallizer:
                 .execute()
             )
         except Exception as exc:
+            # Narrow match: only treat as a duplicate-skip if the error
+            # message names the specific partial-unique-index from migration
+            # 021. A broader match (just "unique" or "duplicate" anywhere in
+            # the message) would mis-classify any unrelated RuntimeError /
+            # API error that happens to contain those substrings, silently
+            # swallowing real failures. See codex-rescue iter-0 HIGH-1.
             err_str = str(exc).lower()
-            if "unique" in err_str or "duplicate" in err_str or "uix_executive_insights" in err_str:
+            if "uix_executive_insights_active_causal_path" in err_str:
                 logger.info(
                     f"crystallizer: skipping duplicate for brand={brand} "
                     f"group={group_key} (existing active row): {exc}"
