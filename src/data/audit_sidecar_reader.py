@@ -100,6 +100,15 @@ class VerdictRecord:
     evaluator_notes: Optional[str]
     evaluator_model: Optional[str]
     raw_verdict: dict[str, Any]
+    # Issue #241: evaluator telemetry — latency + tokens + cost. ``None``
+    # on pre-#241 sidecars (older sidecars don't carry these keys; the
+    # reader is intentionally schema-tolerant). Defaults so existing
+    # test fixtures that construct VerdictRecord positionally without
+    # the telemetry fields keep working.
+    evaluator_latency_ms: Optional[float] = None
+    evaluator_input_tokens: Optional[int] = None
+    evaluator_output_tokens: Optional[int] = None
+    evaluator_cost_usd: Optional[float] = None
 
 
 class SidecarReader:
@@ -289,6 +298,13 @@ class SidecarReader:
             ),
             evaluator_notes=_opt_str(raw.get("evaluator_notes")),
             evaluator_model=_opt_str(raw.get("evaluator_model")),
+            # Issue #241: telemetry fields. Pre-#241 sidecars don't
+            # carry these keys; ``_opt_float`` / ``_opt_int`` return
+            # ``None`` on missing input.
+            evaluator_latency_ms=_opt_float(raw.get("evaluator_latency_ms")),
+            evaluator_input_tokens=_opt_int(raw.get("evaluator_input_tokens")),
+            evaluator_output_tokens=_opt_int(raw.get("evaluator_output_tokens")),
+            evaluator_cost_usd=_opt_float(raw.get("evaluator_cost_usd")),
             raw_verdict=raw,
         )
 
@@ -319,6 +335,22 @@ def _opt_float(value: Any) -> Optional[float]:
     if isinstance(value, bool):
         return None
     return float(value) if isinstance(value, (int, float)) else None
+
+
+def _opt_int(value: Any) -> Optional[int]:
+    """Strict int coercion: token counts are integer counts, not floats.
+    Issue #241.
+
+    Returns ``None`` for non-int / non-numeric values (including bools,
+    which trivially-subclass int but never represent a token count) and
+    for missing keys (pre-#241 sidecars)."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return None
 
 
 def _opt_str_list(value: Any) -> Optional[list[str]]:

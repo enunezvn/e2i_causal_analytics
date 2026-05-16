@@ -31,6 +31,7 @@ import dataclasses
 import logging
 import os
 import re
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -40,6 +41,7 @@ from src.data.causal_role_classifier import CausalRoleClassifier
 from src.data.causal_role_evaluator import (
     CausalRoleEvaluator,
     _evaluator_lm_is_configured,
+    compute_haiku_cost_usd,
     evaluator_is_enabled,
     resolve_evaluator_model,
 )
@@ -368,12 +370,27 @@ def _run_evaluator(
     The evaluator may raise on rate-limits, malformed outputs, or
     transient network errors. In all cases we log and return None so
     the worker's verdict is preserved.
+
+    Issue #241: captures per-call telemetry — wall-clock latency,
+    Haiku ``usage.prompt_tokens`` / ``usage.completion_tokens`` pulled
+    from the DSPy LM ``.history`` after the call, and a computed
+    USD cost (using the constants in ``causal_role_evaluator``). The
+    telemetry is attached to the returned ``LLMEvaluatorAudit``. When
+    usage extraction fails (empty history, missing keys), latency is
+    still recorded but the token / cost fields are ``None`` —
+    partial-telemetry is better than dropping the audit.
+
+    The WARNING log on exceptions includes the timing so operators can
+    see how long a rate-limited / failed call took before the worker
+    verdict falls through.
     """
     model = resolve_evaluator_model()
+    evaluator_lm = None
+    start = time.perf_counter()
     try:
         evaluator_lm = dspy.LM(model=model)
         with dspy.settings.context(lm=evaluator_lm):
-            return evaluator.evaluate(
+            audit = evaluator.evaluate(
                 feature_name=feature_name,
                 derivation_pseudocode=derivation_pseudocode,
                 dataset_context=dataset_context,
@@ -381,13 +398,71 @@ def _run_evaluator(
                 evaluator_model=model,
             )
     except Exception as exc:
+        latency_ms = (time.perf_counter() - start) * 1000.0
         logger.warning(
-            "Layer-4 evaluator raised for feature=%s: %s — "
+            "Layer-4 evaluator raised for feature=%s after latency_ms=%.2f: %s — "
             "returning verdict with evaluator_audit=None.",
             feature_name,
+            latency_ms,
             exc,
         )
         return None
+
+    latency_ms = (time.perf_counter() - start) * 1000.0
+    input_tokens, output_tokens = _extract_lm_usage(evaluator_lm)
+    cost_usd: Optional[float]
+    if input_tokens is None and output_tokens is None:
+        cost_usd = None
+    else:
+        cost_usd = compute_haiku_cost_usd(input_tokens=input_tokens, output_tokens=output_tokens)
+    return dataclasses.replace(
+        audit,
+        latency_ms=latency_ms,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cost_usd=cost_usd,
+    )
+
+
+def _extract_lm_usage(
+    evaluator_lm: object,
+) -> tuple[Optional[int], Optional[int]]:
+    """Return ``(input_tokens, output_tokens)`` from the most recent
+    LM call recorded on ``evaluator_lm.history``.
+
+    Issue #241. Defensive: returns ``(None, None)`` when the LM has no
+    history, when the latest entry has no ``usage`` block, or when
+    the usage block has neither OpenAI-style (``prompt_tokens`` /
+    ``completion_tokens``) nor Anthropic-native (``input_tokens`` /
+    ``output_tokens``) keys.
+
+    The DSPy LM stores each call as
+    ``{"usage": dict(response.usage), ...}`` in ``self.history``. For
+    Anthropic via litellm the usage block is the OpenAI shape
+    (litellm normalizes the response); we accept both shapes so a
+    future provider change doesn't silently drop telemetry.
+    """
+    history = getattr(evaluator_lm, "history", None)
+    if not history:
+        return (None, None)
+    try:
+        usage = history[-1].get("usage")
+    except (AttributeError, IndexError, TypeError):
+        return (None, None)
+    if not isinstance(usage, dict):
+        return (None, None)
+    # Accept OpenAI shape first (litellm normalizes Anthropic to this).
+    in_t = usage.get("prompt_tokens")
+    out_t = usage.get("completion_tokens")
+    # Fall back to Anthropic-native field names if the OpenAI shape is
+    # absent (e.g. provider drift, direct Anthropic SDK in future).
+    if in_t is None:
+        in_t = usage.get("input_tokens")
+    if out_t is None:
+        out_t = usage.get("output_tokens")
+    in_t = int(in_t) if isinstance(in_t, (int, float)) and not isinstance(in_t, bool) else None
+    out_t = int(out_t) if isinstance(out_t, (int, float)) and not isinstance(out_t, bool) else None
+    return (in_t, out_t)
 
 
 def classify_feature(

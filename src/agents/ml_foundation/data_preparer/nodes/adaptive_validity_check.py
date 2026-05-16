@@ -1273,6 +1273,16 @@ def _ensemble_to_legacy_dict(
         "evaluator_missed_considerations": (llm_audit.missed_considerations if llm_audit else None),
         "evaluator_notes": llm_audit.notes if llm_audit else None,
         "evaluator_model": llm_audit.evaluator_model if llm_audit else None,
+        # Issue #241: Layer-4 evaluator telemetry. Same nullability
+        # semantics as the 5 audit keys above plus an additional
+        # partial-telemetry case: ``latency_ms`` may be non-None while
+        # ``input_tokens`` / ``output_tokens`` / ``cost_usd`` are None
+        # when the underlying LM emitted no usage block (cache hit, stub
+        # LM, etc.). Consumers must treat these as audit-only metrics.
+        "evaluator_latency_ms": llm_audit.latency_ms if llm_audit else None,
+        "evaluator_input_tokens": llm_audit.input_tokens if llm_audit else None,
+        "evaluator_output_tokens": llm_audit.output_tokens if llm_audit else None,
+        "evaluator_cost_usd": llm_audit.cost_usd if llm_audit else None,
     }
 
 
@@ -1342,6 +1352,13 @@ def _legacy_adversarial_alone_verdict(
         "evaluator_missed_considerations": None,
         "evaluator_notes": None,
         "evaluator_model": None,
+        # Issue #241: telemetry fields. Bypass paths never invoke the
+        # evaluator, so all four are explicitly None (not missing) for
+        # sidecar-schema uniformity.
+        "evaluator_latency_ms": None,
+        "evaluator_input_tokens": None,
+        "evaluator_output_tokens": None,
+        "evaluator_cost_usd": None,
     }
 
 
@@ -1404,6 +1421,11 @@ def _legacy_info_verdict(
         "evaluator_missed_considerations": None,
         "evaluator_notes": None,
         "evaluator_model": None,
+        # Issue #241: telemetry fields, all None on info-only bypass.
+        "evaluator_latency_ms": None,
+        "evaluator_input_tokens": None,
+        "evaluator_output_tokens": None,
+        "evaluator_cost_usd": None,
     }
 
 
@@ -1463,6 +1485,11 @@ def _legacy_short_circuit_verdict(feature: str, *, evidence: str) -> dict[str, A
         "evaluator_missed_considerations": None,
         "evaluator_notes": None,
         "evaluator_model": None,
+        # Issue #241: telemetry fields, all None on short-circuit bypass.
+        "evaluator_latency_ms": None,
+        "evaluator_input_tokens": None,
+        "evaluator_output_tokens": None,
+        "evaluator_cost_usd": None,
     }
 
 
