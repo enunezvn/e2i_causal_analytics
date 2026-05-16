@@ -25,10 +25,13 @@ Test surface:
       - Candidate manifest modified AFTER artifact mtime -> included
       - Missing artifact (no prior compile) -> count all accepted
       - Malformed manifest -> skipped with warning, no crash
-      - Multiple manifests with same feature -> double-counted across
-        files (we do NOT de-dup at this layer — the curator can rerun
-        ``curate_compile_set_candidates.py`` and ship a fresh window
-        that supersedes the old).
+      - Duplicate (feature_name, source_run_id) across manifests ->
+        deduped (codex iter-1 MED): rerunning ``make curate-candidates``
+        over an overlapping window must NOT inflate backlog.
+      - Same feature_name with DIFFERENT source_run_id -> counted
+        separately (distinct audit-run evidence).
+      - Equal mtime artifact vs manifest -> manifest INCLUDED (codex
+        iter-1 LOW-2: coarse-mtime filesystems).
   * CLI exit codes:
       - Default: always exit 0 (informational).
       - ``--strict`` + backlog < threshold: exit 0, no error
@@ -303,6 +306,84 @@ def test_malformed_manifest_skipped_no_crash(tmp_path):
     assert any("garbage.json" in str(p) for p in result.malformed_paths)
 
 
+def test_duplicate_feature_same_source_run_deduped(tmp_path):
+    """Codex gate-on-diff iter-1 MED: same (feature, source_run_id) in
+    two manifests counts ONCE. Curator re-running ``make
+    curate-candidates`` over an overlapping window must NOT inflate
+    backlog and trip a false READY signal at N=5."""
+    cdir = tmp_path / "candidates"
+    cdir.mkdir()
+    # Same accepted feature with same source_run_id ('exp-1') in two
+    # manifests — must dedup to 1.
+    cand_a = _accepted_candidate("ondansetron_fills_180d")
+    cand_b = _accepted_candidate("ondansetron_fills_180d")
+    _write_manifest(cdir / "compile_set_candidates_a.json", [cand_a])
+    _write_manifest(cdir / "compile_set_candidates_b.json", [cand_b])
+
+    artifact = tmp_path / "artifact.json"
+    artifact.write_text("{}")
+    os.utime(artifact, (artifact.stat().st_atime, artifact.stat().st_mtime - 3600))
+
+    result = backlog.count_accepted_candidates(
+        candidates_dir=cdir,
+        compiled_artifact_path=artifact,
+    )
+    assert result.count == 1, (
+        "deduping on (feature_name, source_run_id) should keep this at 1 "
+        "even with two manifests; codex iter-1 MED"
+    )
+    assert result.accepted_features == ["ondansetron_fills_180d"]
+
+
+def test_same_feature_different_source_runs_counted_separately(tmp_path):
+    """Same feature flagged by TWO distinct audit runs is two distinct
+    pieces of evidence and SHOULD count twice toward backlog."""
+    cdir = tmp_path / "candidates"
+    cdir.mkdir()
+    cand_a = _accepted_candidate("metformin_fills_90d")
+    cand_a["source_run_id"] = "exp-A"
+    cand_b = _accepted_candidate("metformin_fills_90d")
+    cand_b["source_run_id"] = "exp-B"
+    _write_manifest(cdir / "compile_set_candidates_a.json", [cand_a, cand_b])
+
+    artifact = tmp_path / "artifact.json"
+    artifact.write_text("{}")
+    os.utime(artifact, (artifact.stat().st_atime, artifact.stat().st_mtime - 3600))
+
+    result = backlog.count_accepted_candidates(
+        candidates_dir=cdir,
+        compiled_artifact_path=artifact,
+    )
+    assert result.count == 2
+    # Feature_name appears once in accepted_features (operator-facing
+    # identity is the feature, not the source_run).
+    assert result.accepted_features == ["metformin_fills_90d"]
+
+
+def test_manifest_mtime_equal_to_artifact_is_included(tmp_path):
+    """Codex gate-on-diff iter-1 LOW-2: coarse-mtime filesystems (HFS+,
+    FAT, NFS truncated to second) can produce artifact.mtime ==
+    manifest.mtime in a fast curate→compile→curate-again sequence.
+    Equal mtime must be INCLUDED (strict-less-than semantics).
+    """
+    cdir = tmp_path / "candidates"
+    cdir.mkdir()
+    fresh = cdir / "fresh.json"
+    _write_manifest(fresh, [_accepted_candidate("f_edge")])
+    artifact = tmp_path / "artifact.json"
+    artifact.write_text("{}")
+    # Pin BOTH to exactly the same mtime
+    common_mtime = artifact.stat().st_mtime
+    os.utime(fresh, (fresh.stat().st_atime, common_mtime))
+    os.utime(artifact, (artifact.stat().st_atime, common_mtime))
+
+    result = backlog.count_accepted_candidates(
+        candidates_dir=cdir,
+        compiled_artifact_path=artifact,
+    )
+    assert result.count == 1, "equal-mtime manifest must be included; coarse-mtime FS scenario"
+
+
 def test_non_json_files_ignored(tmp_path):
     """The candidates dir also has markdown reports — those must be
     ignored, not parsed as JSON."""
@@ -481,6 +562,40 @@ def test_cli_strict_mode_with_backlog_exits_zero(tmp_path):
     )
     # >=1 accepted -> strict pre-flight passes
     assert proc.returncode == 0, proc.stderr
+
+
+def test_cli_rejects_zero_threshold(tmp_path):
+    """Codex gate-on-diff iter-1 LOW-1: ``--threshold 0`` must trip an
+    argparse error (exit 2), not silently fall through with "below
+    threshold (3 < 0)"."""
+    proc = _run_cli(
+        [
+            "--candidates-dir",
+            str(tmp_path),
+            "--artifact",
+            str(tmp_path / "absent.json"),
+            "--threshold",
+            "0",
+        ]
+    )
+    assert proc.returncode != 0
+    assert "threshold" in proc.stderr.lower()
+    assert ">= 1" in proc.stderr or ">=1" in proc.stderr
+
+
+def test_cli_rejects_negative_threshold(tmp_path):
+    proc = _run_cli(
+        [
+            "--candidates-dir",
+            str(tmp_path),
+            "--artifact",
+            str(tmp_path / "absent.json"),
+            "--threshold",
+            "-3",
+        ]
+    )
+    assert proc.returncode != 0
+    assert "threshold" in proc.stderr.lower()
 
 
 def test_cli_custom_threshold_via_flag(tmp_path):
