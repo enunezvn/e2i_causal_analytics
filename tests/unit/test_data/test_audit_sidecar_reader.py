@@ -784,11 +784,18 @@ def test_reader_warns_on_unknown_schema_version_major(tmp_path, caplog):
         records = list(reader.iter_verdict_records())
     assert len(records) == 1
     assert records[0].feature == "f-fut"
+    # codex MED-2 (2026-05-15): pin BOTH versions in the WARN — the payload's
+    # ``"2.0"`` AND the reader's expected ``"1.0"``. Without this assertion
+    # the test would still pass if the WARN stopped naming the reader's
+    # expected version, which is the actionable half of the message.
     matches = [
-        rec for rec in caplog.records if "schema_version" in rec.message and "2.0" in rec.message
+        rec
+        for rec in caplog.records
+        if "schema_version" in rec.message and "2.0" in rec.message and "1.0" in rec.message
     ]
     assert matches, (
-        f"expected unknown-major WARN naming '2.0'; got: {[r.message for r in caplog.records]}"
+        "expected unknown-major WARN naming both '2.0' (payload) and '1.0' (reader); "
+        f"got: {[r.message for r in caplog.records]}"
     )
 
 
@@ -840,4 +847,62 @@ def test_reader_warns_on_unknown_keys_once_per_file(tmp_path, caplog):
     assert len(unknown_warns) == 1, (
         f"expected exactly one unknown-key WARN per file; got {len(unknown_warns)}: "
         f"{[r.message for r in unknown_warns]}"
+    )
+    # codex LOW-1 (2026-05-15): both unknown keys must surface in the single
+    # WARN; without this assertion an implementation that warns only the
+    # first unknown key would pass.
+    assert "another_new_field" in unknown_warns[0].message, (
+        f"second unknown key 'another_new_field' missing from WARN: {unknown_warns[0].message}"
+    )
+
+
+def test_reader_unknown_key_warn_fires_on_lazy_consumption(tmp_path, caplog):
+    """codex MED-1 (2026-05-15): the unknown-key WARN must be emitted at
+    parse time (pre-scan), not after the generator's yield loop. A caller
+    that breaks out early or calls ``next()`` once must still see the WARN.
+    Without the pre-scan, a yield-suffix WARN would silently miss this
+    case in production."""
+    from src.data.audit_sidecar_reader import SidecarReader
+
+    sub = tmp_path / "exp-lazy"
+    sub.mkdir(parents=True)
+    payload = {
+        "experiment_id": "exp-lazy",
+        "schema_version": "1.0",
+        "data_source": "synthetic",
+        "written_at": "2026-05-15T10:00:00Z",
+        "leakage_severity": "none",
+        "leaked_features": [],
+        "adaptive_flagged_features": [],
+        "adaptive_verdicts": [
+            {
+                "feature": "f1",
+                "layer": "4",
+                "lazy_unknown_field": "x",
+                "evaluator_satisfied": False,
+            },
+            {
+                "feature": "f2",
+                "layer": "4",
+                "evaluator_satisfied": False,
+            },
+        ],
+    }
+    out = sub / "adaptive_verdicts_20260515T100000Z.json"
+    out.write_text(json.dumps(payload))
+
+    reader = SidecarReader(artifacts_dir=tmp_path)
+    with caplog.at_level("WARNING"):
+        # Pull exactly ONE record and stop — generator never reaches the
+        # second verdict or any post-loop logic.
+        first = next(reader.iter_verdict_records())
+    assert first.feature == "f1"
+    matches = [
+        rec
+        for rec in caplog.records
+        if "unknown" in rec.message.lower() and "lazy_unknown_field" in rec.message
+    ]
+    assert matches, (
+        "unknown-key WARN must fire on lazy consumption (pre-scan); "
+        f"got: {[r.message for r in caplog.records]}"
     )

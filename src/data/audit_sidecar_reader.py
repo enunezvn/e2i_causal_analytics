@@ -152,29 +152,46 @@ class SidecarReader:
             # unknown-major → WARN with both versions; both still parse).
             self._check_schema_version(path, payload.get("schema_version"))
             experiment_id = str(payload.get("experiment_id", "<unknown>"))
+            verdicts_raw = payload.get("adaptive_verdicts", [])
             # Issue #235 A3: emit unknown-verdict-key WARN at most ONCE per
-            # file (not per-record). Collect unknown keys across all records
-            # in this sidecar, then surface as a single WARN.
-            seen_unknown: set[str] = set()
-            for raw in payload.get("adaptive_verdicts", []):
+            # file (not per-record). PRE-SCAN before yielding so the warning
+            # always fires for parsed files even when the caller consumes
+            # the generator lazily (``next()``, break-early, or mid-iter
+            # error). codex MED-1 (2026-05-15): emitting after the yield
+            # loop was caller-controlled — pre-scanning makes the warning
+            # unconditional on parse.
+            self._warn_unknown_verdict_keys(path, verdicts_raw)
+            for raw in verdicts_raw:
                 if not isinstance(raw, dict):
                     continue
-                seen_unknown.update(k for k in raw.keys() if k not in _KNOWN_VERDICT_KEYS)
                 yield self._build_record(
                     experiment_id=experiment_id,
                     written_at=written_at,
                     source_path=path,
                     raw=raw,
                 )
-            if seen_unknown:
-                logger.warning(
-                    "SidecarReader: sidecar %s contains unknown verdict key(s) %s — "
-                    "producer schema drift or forward-compat additive field. Reader "
-                    "preserves them in raw_verdict but does not surface them on "
-                    "VerdictRecord.",
-                    path,
-                    sorted(seen_unknown),
-                )
+
+    @staticmethod
+    def _warn_unknown_verdict_keys(path: Path, verdicts_raw: Any) -> None:
+        """Pre-scan ``verdicts_raw`` for keys not in ``_KNOWN_VERDICT_KEYS``;
+        emit at most ONE WARN per file naming the sorted unknown-key set.
+        Tolerant of non-dict entries (they are skipped by the main loop)."""
+        if not isinstance(verdicts_raw, list):
+            return
+        seen_unknown: set[str] = set()
+        for raw in verdicts_raw:
+            if not isinstance(raw, dict):
+                continue
+            seen_unknown.update(k for k in raw.keys() if k not in _KNOWN_VERDICT_KEYS)
+        if seen_unknown:
+            logger.warning(
+                "SidecarReader: sidecar %s contains unknown verdict key(s) %s — "
+                "producer schema drift or forward-compat additive field. Reader "
+                "preserves them in raw_verdict but does not surface them on "
+                "VerdictRecord.",
+                path,
+                sorted(seen_unknown),
+            )
 
     def _check_schema_version(self, path: Path, raw_version: Any) -> None:
         """Issue #235 A2: log WARN on missing or unknown-major schema_version.
