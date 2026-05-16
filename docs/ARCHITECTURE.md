@@ -592,46 +592,68 @@ can flip a single env var to redirect all traffic to a locally-hosted
 - Restricted-egress / air-gapped environments.
 - Reproducibility — pin to a specific monthly RxNorm release tag.
 
+**Image-provenance note (iter-1 update 2026-05-16):** an earlier draft of
+this section + `docker/docker-compose.rxnav.yml` referenced a hypothetical
+`rxnavinabox/rxnavinabox` Docker Hub image. That image source could not be
+verified as NLM-official (`docker manifest inspect` → `unauthorized`; the
+`rxnavinabox/` Docker Hub namespace has zero public repositories; only
+third-party forks surface on a "rxnav" search). NLM's own documentation
+(https://lhncbc.nlm.nih.gov/RxNav/applications/RxNav-in-a-Box.html) lists
+distribution as a downloadable .zip — not a Docker Hub image. The runbook
+below now follows NLM's documented .zip-download path. The `docker-compose
+.rxnav.yml` file is retained as a documentation-stub pointing here; it has
+no `services:` block.
+
 **How to start (issue #246):**
 
 ```bash
-# Bring up the rxnav-in-a-box service (NLM's official image, monthly tags
-# track the RxNorm release calendar — pin RXNAV_IMAGE_TAG for prod).
-docker compose -f docker/docker-compose.yml \
-               -f docker/docker-compose.dev.yml \
-               -f docker/docker-compose.rxnav.yml \
-               up -d rxnav
+# 1. Accept the UMLS license at https://uts.nlm.nih.gov/uts/license
+#    (free; required for the .zip download).
 
-# Wait for the healthcheck to flip green (~60s for ingestion warm-up):
-docker compose ps rxnav
+# 2. Download the latest monthly RxNav-in-a-Box .zip from NLM. The download
+#    URL on the NLM page (linked under References) names the date stamp,
+#    e.g. ``rxnav-in-a-box-20260504.zip``.
 
-# Point the app at it:
+# 3. Unpack and bring up NLM's bundled compose stack directly:
+unzip rxnav-in-a-box-20260504.zip -d rxnav-in-a-box/
+cd rxnav-in-a-box/
+docker compose -f docker-compose.yml up -d
+# The .zip ships its own docker-compose.yml + the data tarballs preloaded.
+
+# 4. Wait for ingestion warm-up (~60s) and confirm reachability:
+curl -fsS http://localhost:4000/REST/version
+
+# 5. Point the application at it:
 export RXNAV_BASE_URL=http://localhost:4000/REST
-# (or set it in .env / the compose env block of api + worker_* services)
+# (or set it in .env / the compose env block of api + worker_* services to
+# propagate cluster-wide).
 ```
 
 **Env var contract:**
 - `RXNAV_BASE_URL` — full base URL including the `/REST` path prefix that
   rxnav-in-a-box mounts (mirroring the public endpoint), e.g.
-  `http://localhost:4000/REST` for the overlay above, or
-  `http://rxnav:4000/REST` when called from another compose service via
-  in-network DNS. When unset, the client uses the public NLM endpoint
+  `http://localhost:4000/REST` for a localhost-bound rxnav-in-a-box, or
+  `http://rxnav:4000/REST` when called from another compose service that
+  shares a network with the unpacked rxnav-in-a-box stack via in-network
+  DNS. When unset, the client uses the public NLM endpoint
   (`https://rxnav.nlm.nih.gov/REST`). Read at client instantiation, not at
   module import — safe to monkeypatch in tests + per-worker overrides take
-  effect.
+  effect. The trailing `/REST` is part of the env var because the client
+  constructs URLs as `f"{base}{path}"` where `path` already starts with
+  `/rxcui.json`, `/version`, etc.
 
-**Storage budget warning:** the rxnav-in-a-box image bundles RxNorm + RxTerms
-+ ATC + DailyMed pull data — ~15-20 GB on disk, ~12 GB RAM steady-state.
-Allocate before `up -d`; the overlay caps memory at 16 GB.
+**Storage budget warning:** the rxnav-in-a-box .zip bundles RxNorm +
+RxTerms + ATC + DailyMed data — ~15-20 GB on disk, ~12 GB RAM steady-state
+once tarballs ingest (per NLM README). Allocate before `up -d`.
 
-**Monthly refresh:** NLM publishes a new monthly tag on Docker Hub
-(`rxnavinabox/rxnavinabox:25.12.4`, etc.) shortly after each RxNorm release.
-The overlay defaults `RXNAV_IMAGE_TAG=latest` for dev; production should pin
-to a specific monthly tag and refresh on a known cadence.
+**Monthly refresh:** NLM publishes a new dated .zip shortly after each
+RxNorm release. Production deployments should pin to a specific monthly
+.zip (track the dated filename) and refresh on a known cadence.
 
 References:
-- NLM RxNav-in-a-Box: https://lhncbc.nlm.nih.gov/RxNav/applications/RxNav-in-a-Box.html
-- Docker Hub image: https://hub.docker.com/r/rxnavinabox/rxnavinabox
+- NLM RxNav-in-a-Box page (download .zip): https://lhncbc.nlm.nih.gov/RxNav/applications/RxNav-in-a-Box.html
+- README.txt inside the .zip: https://data.lhncbc.nlm.nih.gov/public/rxnav/rxnav-in-a-box/README.txt
+- UMLS license: https://uts.nlm.nih.gov/uts/license
 
 ---
 
