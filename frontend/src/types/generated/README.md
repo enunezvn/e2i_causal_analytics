@@ -4,8 +4,15 @@ This directory contains auto-generated TypeScript types from the FastAPI backend
 
 ## Usage
 
+Generated types must be imported **directly from `./api`** (not from
+`@/types/generated`). The `index.ts` re-export pattern was removed in
+issue #281 because the static re-export broke `tsc -b` whenever `api.ts`
+was absent (it is gitignored and only present after running
+`npm run generate:types`).
+
 ```typescript
-import type { paths, components, operations } from '@/types/generated';
+// Import generated types directly from ./api after running `npm run generate:types`
+import type { paths, components, operations } from '@/types/generated/api';
 
 // Access schema types directly
 type CausalAnalysisRequest = components['schemas']['HierarchicalAnalysisRequest'];
@@ -14,9 +21,8 @@ type HealthResponse = components['schemas']['HealthCheckResponse'];
 // Access endpoint response types
 type GetHealthResponse = paths['/health']['get']['responses']['200']['content']['application/json'];
 
-// Use helper types from index.ts
-import { ExtractResponse, ExtractRequestBody } from '@/types/generated';
-type AnalysisResponse = ExtractResponse<'/api/causal/hierarchical/analyze', 'post'>;
+// The shared `ApiResponse<T>` envelope still lives on the index
+import type { ApiResponse } from '@/types/generated';
 ```
 
 ## Regeneration
@@ -41,7 +47,7 @@ npm run generate:types:prod
 
 1. **Never edit `api.ts` manually** - Changes will be overwritten on regeneration
 2. **Regenerate after backend changes** - Run generation after modifying Pydantic schemas
-3. **Use helper types** - The `index.ts` provides `ExtractResponse` and `ExtractRequestBody` utilities
+3. **Import generated types from `./api`** - The `index.ts` no longer re-exports them (see issue #281); only `ApiResponse<T>` lives on the index
 4. **Backward compatibility** - Hand-crafted types in parent directory remain available for gradual migration
 
 ## Integration with Existing Types
@@ -52,8 +58,8 @@ The generated types complement the existing hand-crafted types:
 // Existing types (manually maintained)
 import { GraphNode, MemorySearchRequest } from '@/types';
 
-// Generated types (auto-sync with backend)
-import type { components } from '@/types/generated';
+// Generated types (auto-sync with backend) — imported directly from ./api
+import type { components } from '@/types/generated/api';
 type ApiGraphNode = components['schemas']['GraphNode'];
 ```
 
