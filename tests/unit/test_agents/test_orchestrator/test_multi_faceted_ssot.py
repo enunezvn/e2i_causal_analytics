@@ -115,6 +115,9 @@ class TestMultiFacetedPatternsBehaviorLockedIn:
     def test_pattern_matches_canonical_phrase(self, phrase):
         import re
 
-        assert any(re.search(p, phrase) for p in MULTI_FACETED_PATTERNS), (
+        # IGNORECASE mirrors the production call shape at
+        # ``intent_classifier._pattern_classify`` so a regression breaking
+        # case-insensitive matching would trip this test.
+        assert any(re.search(p, phrase, re.IGNORECASE) for p in MULTI_FACETED_PATTERNS), (
             f"No MULTI_FACETED_PATTERNS regex matched canonical phrase: {phrase!r}"
         )
