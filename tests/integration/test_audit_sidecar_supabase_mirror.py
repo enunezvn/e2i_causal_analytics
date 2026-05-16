@@ -39,8 +39,9 @@ import uuid
 from pathlib import Path
 from typing import Any, Iterator
 
-import psycopg
 import pytest
+
+psycopg = pytest.importorskip("psycopg")
 
 from scripts.mirror_audit_sidecar_to_supabase import main as mirror_main
 
