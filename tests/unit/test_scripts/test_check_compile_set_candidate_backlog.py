@@ -30,8 +30,10 @@ Test surface:
         over an overlapping window must NOT inflate backlog.
       - Same feature_name with DIFFERENT source_run_id -> counted
         separately (distinct audit-run evidence).
-      - Equal mtime artifact vs manifest -> manifest INCLUDED (codex
-        iter-1 LOW-2: coarse-mtime filesystems).
+      - Equal mtime artifact vs manifest -> manifest EXCLUDED (codex
+        iter-2 MED-1: strict newer-than via ``st_mtime_ns``; equal
+        would re-count forever since per-scan dedup doesn't persist).
+      - Nanosecond-newer manifest -> manifest INCLUDED (boundary).
   * CLI exit codes:
       - Default: always exit 0 (informational).
       - ``--strict`` + backlog < threshold: exit 0, no error
@@ -360,11 +362,18 @@ def test_same_feature_different_source_runs_counted_separately(tmp_path):
     assert result.accepted_features == ["metformin_fills_90d"]
 
 
-def test_manifest_mtime_equal_to_artifact_is_included(tmp_path):
-    """Codex gate-on-diff iter-1 LOW-2: coarse-mtime filesystems (HFS+,
-    FAT, NFS truncated to second) can produce artifact.mtime ==
-    manifest.mtime in a fast curate→compile→curate-again sequence.
-    Equal mtime must be INCLUDED (strict-less-than semantics).
+def test_manifest_mtime_equal_to_artifact_is_excluded(tmp_path):
+    """Codex gate-on-diff iter-2 MED-1: strict newer-than semantics.
+
+    Equal-mtime manifests MUST be excluded — per-scan dedup doesn't
+    persist across scans, so including equal-mtime would silently
+    re-count a pre-folded manifest forever (every subsequent backlog
+    check sees it as "new"). Nanosecond precision via ``st_mtime_ns``
+    reduces same-tick collisions on capable FSes; on coarse-mtime FSes
+    the operator should ``touch`` the artifact after compile (or the
+    compile script's write naturally advances mtime past any prior
+    manifest) — the rare false-negative is preferred to the
+    false-positive of a permanent ghost backlog.
     """
     cdir = tmp_path / "candidates"
     cdir.mkdir()
@@ -372,16 +381,37 @@ def test_manifest_mtime_equal_to_artifact_is_included(tmp_path):
     _write_manifest(fresh, [_accepted_candidate("f_edge")])
     artifact = tmp_path / "artifact.json"
     artifact.write_text("{}")
-    # Pin BOTH to exactly the same mtime
-    common_mtime = artifact.stat().st_mtime
-    os.utime(fresh, (fresh.stat().st_atime, common_mtime))
-    os.utime(artifact, (artifact.stat().st_atime, common_mtime))
+    # Pin BOTH to exactly the same mtime_ns
+    common_ns = artifact.stat().st_mtime_ns
+    os.utime(fresh, ns=(fresh.stat().st_atime_ns, common_ns))
+    os.utime(artifact, ns=(artifact.stat().st_atime_ns, common_ns))
 
     result = backlog.count_accepted_candidates(
         candidates_dir=cdir,
         compiled_artifact_path=artifact,
     )
-    assert result.count == 1, "equal-mtime manifest must be included; coarse-mtime FS scenario"
+    assert result.count == 0, (
+        "equal-mtime manifest must be excluded under strict newer-than; codex iter-2 MED-1"
+    )
+
+
+def test_manifest_mtime_nanosecond_newer_than_artifact_is_included(tmp_path):
+    """Sub-second precision matters: a manifest 1 nanosecond newer than
+    the artifact IS in the backlog. Documents the strict ``>`` boundary."""
+    cdir = tmp_path / "candidates"
+    cdir.mkdir()
+    fresh = cdir / "fresh.json"
+    _write_manifest(fresh, [_accepted_candidate("f_ns")])
+    artifact = tmp_path / "artifact.json"
+    artifact.write_text("{}")
+    artifact_ns = artifact.stat().st_mtime_ns
+    os.utime(fresh, ns=(fresh.stat().st_atime_ns, artifact_ns + 1))
+
+    result = backlog.count_accepted_candidates(
+        candidates_dir=cdir,
+        compiled_artifact_path=artifact,
+    )
+    assert result.count == 1
 
 
 def test_non_json_files_ignored(tmp_path):
