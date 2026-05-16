@@ -45,11 +45,12 @@ def test_pattern_classifier_detects_experiment_monitor() -> None:
     """Verify ``experiment_monitor`` patterns are present.
 
     Falsifiability: delete the entire ``experiment_monitor`` entry from
-    ``INTENT_PATTERNS`` and every assertion below falls through to
-    ``general``. Each query has a domain marker (``SRM``,
-    ``running trial enrollment``, ``interim analysis``) that is
-    unique to the experiment_monitor patterns, so removing any single
-    pattern likewise trips the corresponding assertion.
+    ``INTENT_PATTERNS`` and every assertion below trips. Each query
+    falls through to a NON-experiment_monitor intent ("general" for the
+    SRM + interim queries; "experiment_design" for "monitor the running
+    trial enrollment", which matches the ``run.*trial`` pattern at
+    ``intent_classifier.py:113``). Either fallback fails the
+    ``== "experiment_monitor"`` assertion, so falsifiability holds.
     """
     assert _classify("check all active A/B experiments for SRM") == "experiment_monitor"
     assert _classify("monitor the running trial enrollment") == "experiment_monitor"
