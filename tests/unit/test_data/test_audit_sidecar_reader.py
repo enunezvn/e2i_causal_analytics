@@ -906,3 +906,39 @@ def test_reader_unknown_key_warn_fires_on_lazy_consumption(tmp_path, caplog):
         "unknown-key WARN must fire on lazy consumption (pre-scan); "
         f"got: {[r.message for r in caplog.records]}"
     )
+
+
+def test_reader_tolerates_non_list_adaptive_verdicts(tmp_path, caplog):
+    """codex pass-2 MED-1 (2026-05-15): a malformed or forward-drifted
+    sidecar where ``adaptive_verdicts`` is ``null`` / a scalar / a dict
+    must NOT crash ``iter_verdict_records``. Reader normalizes to ``[]``
+    after a WARN so one bad file does not take down the curation CLI."""
+    from src.data.audit_sidecar_reader import SidecarReader
+
+    sub = tmp_path / "exp-broken"
+    sub.mkdir(parents=True)
+    payload = {
+        "experiment_id": "exp-broken",
+        "schema_version": "1.0",
+        "data_source": "synthetic",
+        "written_at": "2026-05-15T10:00:00Z",
+        "leakage_severity": "none",
+        "leaked_features": [],
+        "adaptive_flagged_features": [],
+        "adaptive_verdicts": None,  # WRONG: producer would emit [] but a
+        # forward-drift or hand-edit can land here. Reader must not crash.
+    }
+    out = sub / "adaptive_verdicts_20260515T100000Z.json"
+    out.write_text(json.dumps(payload))
+
+    reader = SidecarReader(artifacts_dir=tmp_path)
+    with caplog.at_level("WARNING"):
+        # If iter_verdict_records crashed, this line would raise TypeError.
+        records = list(reader.iter_verdict_records())
+    assert records == []
+    matches = [
+        rec
+        for rec in caplog.records
+        if "non-list" in rec.message.lower() and "adaptive_verdicts" in rec.message
+    ]
+    assert matches, f"expected non-list WARN; got: {[r.message for r in caplog.records]}"
