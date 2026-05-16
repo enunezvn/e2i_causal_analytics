@@ -198,6 +198,40 @@ def test_trivy_db_repository_pinned_for_rate_limit_resilience() -> None:
     )
 
 
+def test_trivy_java_db_repository_pinned_in_parallel() -> None:
+    """Codex LOW follow-up (gate-on-diff PR #258): the PR body claims a
+    `parallel TRIVY_JAVA_DB_REPOSITORY pin`, but the original test file
+    only asserted the main `TRIVY_DB_REPOSITORY`. Reverting only the
+    Java pin would silently pass — codify it as a forcing function with
+    the same mirror+ghcr fallback invariant.
+
+    Symmetry with `test_trivy_db_repository_pinned_for_rate_limit_resilience`.
+    Trivy's Java DB is a separate download with its own ghcr.io rate-limit
+    surface; the fix is structurally identical."""
+    workflow = _load_workflow()
+    job = workflow["jobs"]["container-scan"]
+    env = job.get("env", {}) or {}
+    java_db_repo = env.get("TRIVY_JAVA_DB_REPOSITORY", "")
+    assert "trivy-java-db" in java_db_repo, (
+        f"container-scan job env must pin TRIVY_JAVA_DB_REPOSITORY to a "
+        f"trivy-java-db mirror (got {java_db_repo!r}). The PR body "
+        "claims this pin landed alongside TRIVY_DB_REPOSITORY; codifying "
+        "it here prevents a silent revert of only the Java pin."
+    )
+    # Same fallback invariant as the main DB: both mirror.gcr.io and
+    # ghcr.io entries must be present so neither registry is a single
+    # point of failure.
+    repos = {r.strip() for r in java_db_repo.split(",") if r.strip()}
+    has_mirror = any("mirror.gcr.io" in r for r in repos)
+    has_ghcr = any("ghcr.io" in r for r in repos)
+    assert has_mirror and has_ghcr, (
+        f"TRIVY_JAVA_DB_REPOSITORY must list both mirror.gcr.io and "
+        f"ghcr.io as comma-separated fallback entries "
+        f"(got {sorted(repos)}). Pinning a single repo removes Trivy's "
+        "default fallback."
+    )
+
+
 def test_cleanup_step_name_is_quoted_so_it_parses_intact() -> None:
     """Codex LOW follow-up (#233 review): an unquoted YAML scalar
     containing `(Issue #233)` gets parsed as `Reclaim disk after build
