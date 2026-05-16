@@ -319,8 +319,8 @@ const memoryHandlers = [
     );
   }),
 
-  // POST /memory/semantic/paths - Query semantic paths
-  http.post(`${baseUrl}/memory/semantic/paths`, async () => {
+  // GET /memory/semantic/paths - Query semantic paths
+  http.get(`${baseUrl}/memory/semantic/paths`, async () => {
     await simulateDelay();
     return HttpResponse.json(createSemanticPathResponse());
   }),
