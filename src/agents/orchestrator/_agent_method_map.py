@@ -22,53 +22,173 @@ from typing import Dict, List, Optional
 
 @dataclass(frozen=True)
 class AgentMethodSpec:
-    """Dispatch specification for a single agent.
+    """Dispatch + harness specification for a single agent.
 
-    Fields mirror ``AGENT_CONFIGS`` in ``scripts/run_tier1_5_test.py`` so the
-    test harness and the production dispatcher use the same source.
+    Fields fall in two groups:
+
+    - **Dispatch** (used by ``orchestrator/nodes/dispatcher.py``):
+      ``method``, ``is_async``, ``uses_kwargs``, ``input_model``, ``input_module``.
+
+    - **Harness** (used by ``scripts/run_tier1_5_test.py``):
+      ``tier``, ``agent_module``, ``agent_class``, ``state_module``,
+      ``state_class``, ``timeout``. The harness was previously duplicating the
+      dispatch fields in its own ``AGENT_CONFIGS`` literal; #252 unified them
+      here so they cannot drift silently.
     """
 
+    # Dispatch — required at construction
     method: str
     is_async: bool = True
     uses_kwargs: bool = False
     input_model: Optional[str] = None
     input_module: Optional[str] = None
+    # Harness — optional (production dispatcher ignores these).
+    tier: Optional[int] = None
+    agent_module: Optional[str] = None
+    agent_class: Optional[str] = None
+    state_module: Optional[str] = None
+    state_class: Optional[str] = None
+    timeout: Optional[float] = None  # seconds; None ⇒ harness default
 
 
-# Per-agent dispatch metadata. Agents not listed here fall through to the
-# legacy ``.analyze(input_data)`` contract.
+# Per-agent dispatch + harness metadata. Single source of truth — issue #252.
+# Agents not listed here fall through to the legacy ``.analyze(input_data)``
+# contract on the dispatcher side.
+#
+# NOTE on method choice: causal_impact, gap_analyzer, heterogeneous_optimizer
+# all implement BOTH ``.run()`` AND ``.analyze()``. ``.run()`` is the newer
+# primary entry point (returns Pydantic Output contract); ``.analyze()`` is
+# a legacy alias. Per #252 unification, both the production dispatcher and
+# the harness now use ``.run()`` so they exercise the same code path.
 AGENT_METHOD_MAP: Dict[str, AgentMethodSpec] = {
     # Tier 1: Coordination
-    "orchestrator": AgentMethodSpec(method="run"),
-    "tool_composer": AgentMethodSpec(method="run"),
-    # Tier 2: Causal Analytics (these implement .analyze; included for clarity)
-    "causal_impact": AgentMethodSpec(method="analyze"),
-    "gap_analyzer": AgentMethodSpec(method="analyze"),
-    "heterogeneous_optimizer": AgentMethodSpec(method="run"),
+    "orchestrator": AgentMethodSpec(
+        method="run",
+        tier=1,
+        agent_module="src.agents.orchestrator",
+        agent_class="OrchestratorAgent",
+        state_module="src.agents.orchestrator.state",
+        state_class="OrchestratorState",
+    ),
+    "tool_composer": AgentMethodSpec(
+        method="run",
+        tier=1,
+        agent_module="src.agents.tool_composer",
+        agent_class="ToolComposerAgent",
+        state_module="src.agents.tool_composer.state",
+        state_class="ToolComposerState",
+        timeout=90.0,  # 3 sequential LLM calls + tool execution + memory queries
+    ),
+    # Tier 2: Causal Analytics
+    "causal_impact": AgentMethodSpec(
+        method="run",
+        tier=2,
+        agent_module="src.agents.causal_impact",
+        agent_class="CausalImpactAgent",
+        state_module="src.agents.causal_impact.state",
+        state_class="CausalImpactOutput",  # Output contract, not State
+        timeout=120.0,  # estimation + refutation + sensitivity SLA
+    ),
+    "gap_analyzer": AgentMethodSpec(
+        method="run",
+        tier=2,
+        agent_module="src.agents.gap_analyzer",
+        agent_class="GapAnalyzerAgent",
+        state_module="src.agents.gap_analyzer.state",
+        state_class="GapAnalyzerOutput",
+    ),
+    "heterogeneous_optimizer": AgentMethodSpec(
+        method="run",
+        tier=2,
+        agent_module="src.agents.heterogeneous_optimizer",
+        agent_class="HeterogeneousOptimizerAgent",
+        state_module="src.agents.heterogeneous_optimizer.state",
+        state_class="HeterogeneousOptimizerOutput",
+    ),
     # Tier 3: Monitoring
     "drift_monitor": AgentMethodSpec(
         method="run",
         input_model="DriftMonitorInput",
         input_module="src.agents.drift_monitor.agent",
+        tier=3,
+        agent_module="src.agents.drift_monitor",
+        agent_class="DriftMonitorAgent",
+        state_module="src.agents.drift_monitor.state",
+        state_class="DriftMonitorState",
     ),
     "experiment_designer": AgentMethodSpec(
         method="run",
         is_async=False,
         input_model="ExperimentDesignerInput",
         input_module="src.agents.experiment_designer.agent",
+        tier=3,
+        agent_module="src.agents.experiment_designer",
+        agent_class="ExperimentDesignerAgent",
+        state_module="src.agents.experiment_designer.state",
+        state_class="ExperimentDesignState",
+        timeout=120.0,  # LLM-based validity audit needs more time
     ),
     "experiment_monitor": AgentMethodSpec(
         method="run_async",
         input_model="ExperimentMonitorInput",
         input_module="src.agents.experiment_monitor.agent",
+        tier=3,
+        agent_module="src.agents.experiment_monitor",
+        agent_class="ExperimentMonitorAgent",
+        # Agent returns ExperimentMonitorOutput dataclass; harness contract
+        # validator flattens via __dict__, so state_class points at the
+        # dataclass on the agent module itself.
+        state_module="src.agents.experiment_monitor.agent",
+        state_class="ExperimentMonitorOutput",
+        timeout=20.0,
     ),
-    "health_score": AgentMethodSpec(method="check_health", uses_kwargs=True),
+    "health_score": AgentMethodSpec(
+        method="check_health",
+        uses_kwargs=True,
+        tier=3,
+        agent_module="src.agents.health_score",
+        agent_class="HealthScoreAgent",
+        state_module="src.agents.health_score.state",
+        state_class="HealthScoreState",
+    ),
     # Tier 4: ML Predictions
-    "prediction_synthesizer": AgentMethodSpec(method="synthesize", uses_kwargs=True),
-    "resource_optimizer": AgentMethodSpec(method="optimize", uses_kwargs=True),
+    "prediction_synthesizer": AgentMethodSpec(
+        method="synthesize",
+        uses_kwargs=True,
+        tier=4,
+        agent_module="src.agents.prediction_synthesizer",
+        agent_class="PredictionSynthesizerAgent",
+        state_module="src.agents.prediction_synthesizer.state",
+        state_class="PredictionSynthesizerState",
+    ),
+    "resource_optimizer": AgentMethodSpec(
+        method="optimize",
+        uses_kwargs=True,
+        tier=4,
+        agent_module="src.agents.resource_optimizer",
+        agent_class="ResourceOptimizerAgent",
+        state_module="src.agents.resource_optimizer.state",
+        state_class="ResourceOptimizerState",
+    ),
     # Tier 5: Self-Improvement
-    "explainer": AgentMethodSpec(method="explain", uses_kwargs=True),
-    "feedback_learner": AgentMethodSpec(method="learn", uses_kwargs=True),
+    "explainer": AgentMethodSpec(
+        method="explain",
+        uses_kwargs=True,
+        tier=5,
+        agent_module="src.agents.explainer",
+        agent_class="ExplainerAgent",
+        state_module="src.agents.explainer.state",
+        state_class="ExplainerState",
+    ),
+    "feedback_learner": AgentMethodSpec(
+        method="learn",
+        uses_kwargs=True,
+        tier=5,
+        agent_module="src.agents.feedback_learner",
+        agent_class="FeedbackLearnerAgent",
+        state_module="src.agents.feedback_learner.state",
+        state_class="FeedbackLearnerState",
+    ),
 }
 
 
@@ -118,10 +238,53 @@ def extract_narrative(agent_name: str, output: Dict[str, object]) -> str:
     return ""
 
 
+def to_harness_config(spec: AgentMethodSpec) -> Dict[str, object]:
+    """Project an ``AgentMethodSpec`` into the legacy ``AGENT_CONFIGS`` shape.
+
+    The harness (``scripts/run_tier1_5_test.py``) reads this dict shape, but
+    AGENT_METHOD_MAP is the source of truth. Only sets keys whose value is
+    non-default so the projection matches the legacy literal field-for-field
+    where the agent doesn't override.
+    """
+    out: Dict[str, object] = {
+        "method": spec.method,
+        "is_async": spec.is_async,
+    }
+    if spec.uses_kwargs:
+        out["uses_kwargs"] = spec.uses_kwargs
+    if spec.input_model is not None:
+        out["input_model"] = spec.input_model
+    if spec.input_module is not None:
+        out["input_module"] = spec.input_module
+    for field_name in (
+        "tier",
+        "agent_module",
+        "agent_class",
+        "state_module",
+        "state_class",
+        "timeout",
+    ):
+        value = getattr(spec, field_name)
+        if value is not None:
+            out[field_name] = value
+    return out
+
+
+def get_harness_configs() -> Dict[str, Dict[str, object]]:
+    """Compute the harness-side AGENT_CONFIGS dict from AGENT_METHOD_MAP.
+
+    Used by ``scripts/run_tier1_5_test.py`` to ensure the harness and the
+    production dispatcher cannot drift on per-agent metadata. See #252.
+    """
+    return {name: to_harness_config(spec) for name, spec in AGENT_METHOD_MAP.items()}
+
+
 __all__ = [
     "AgentMethodSpec",
     "AGENT_METHOD_MAP",
     "AGENT_RESPONSE_FIELDS",
     "get_method_spec",
     "extract_narrative",
+    "to_harness_config",
+    "get_harness_configs",
 ]

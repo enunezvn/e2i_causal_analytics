@@ -50,12 +50,18 @@ def test_get_method_spec_fallback_for_unknown_agent() -> None:
 
 
 def test_method_specs_match_real_agent_entry_points() -> None:
-    """Lock in the actual entry-point method names so refactors must update both."""
+    """Lock in the actual entry-point method names so refactors must update both.
+
+    causal_impact, gap_analyzer, heterogeneous_optimizer all implement BOTH
+    ``.run()`` AND ``.analyze()``. Per #252, both production and harness use
+    ``.run()`` (the newer primary entry point returning the Pydantic Output
+    contract). Updating this set without updating AGENT_METHOD_MAP must fail.
+    """
     cases = {
         "orchestrator": ("run", True, False),
         "tool_composer": ("run", True, False),
-        "causal_impact": ("analyze", True, False),
-        "gap_analyzer": ("analyze", True, False),
+        "causal_impact": ("run", True, False),
+        "gap_analyzer": ("run", True, False),
         "heterogeneous_optimizer": ("run", True, False),
         "drift_monitor": ("run", True, False),
         "experiment_designer": ("run", False, False),
