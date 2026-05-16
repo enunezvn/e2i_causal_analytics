@@ -368,9 +368,7 @@ class TestListEpisodicMemories:
         assert data[0]["event_type"] == "query"
         assert data[0]["metadata"] == {"foo": "bar"}
         # Default kwargs forwarded
-        mock_recent.assert_called_once_with(
-            limit=20, event_types=None, agent_name=None, brand=None
-        )
+        mock_recent.assert_called_once_with(limit=20, event_types=None, agent_name=None, brand=None)
 
     def test_forwards_filter_kwargs(self):
         with patch("src.api.routes.memory.get_recent_memories") as mock_recent:
