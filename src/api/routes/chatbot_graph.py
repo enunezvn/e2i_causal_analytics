@@ -28,7 +28,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
 
-from src.agents.orchestrator.multi_faceted import is_multi_faceted_facet_score
+from src.agents.multi_faceted import is_multi_faceted_facet_score
 from src.api.routes.chatbot_dspy import (
     CHATBOT_COGNITIVE_RAG_ENABLED,
     CHATBOT_DSPY_SYNTHESIS_ENABLED,
@@ -274,9 +274,9 @@ def _matches_pattern(query_lower: str, patterns: list[str]) -> bool:
 
 
 # Multi-faceted detector — single source of truth at
-# ``src/agents/orchestrator/multi_faceted.py`` (issue #288).
-# Re-exported as ``_is_multi_faceted_query`` to preserve the historical
-# module-level callable name used by ``classify_intent`` below.
+# ``src/agents/multi_faceted.py`` (issue #288). Re-exported as
+# ``_is_multi_faceted_query`` to preserve the historical module-level
+# callable name used by ``classify_intent`` below.
 _is_multi_faceted_query = is_multi_faceted_facet_score
 
 

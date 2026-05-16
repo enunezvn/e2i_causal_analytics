@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 
-from src.agents.orchestrator.multi_faceted import is_multi_faceted_facet_score
+from src.agents.multi_faceted import is_multi_faceted_facet_score
 
 from .chatbot_state import IntentType
 
@@ -429,9 +429,9 @@ def _matches_pattern(query_lower: str, patterns: list[str]) -> bool:
 
 
 # Multi-faceted detector — single source of truth at
-# ``src/agents/orchestrator/multi_faceted.py`` (issue #288).
-# Re-exported as ``_is_multi_faceted_query`` to preserve the historical
-# module-level callable name used in ``classify_intent_hardcoded`` below.
+# ``src/agents/multi_faceted.py`` (issue #288). Re-exported as
+# ``_is_multi_faceted_query`` to preserve the historical module-level
+# callable name used in ``classify_intent_hardcoded`` below.
 _is_multi_faceted_query = is_multi_faceted_facet_score
 
 

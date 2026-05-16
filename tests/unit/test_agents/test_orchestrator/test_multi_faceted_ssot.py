@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.agents.orchestrator.multi_faceted import (
+from src.agents.multi_faceted import (
     MULTI_FACETED_PATTERNS,
     is_multi_faceted_facet_score,
 )
