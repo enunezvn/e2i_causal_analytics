@@ -15,8 +15,11 @@ Tests pin:
   * When evaluator is disabled (``ADAPTIVE_VALIDITY_EVALUATOR_ENABLED`` unset
     or missing API key), the 4 new fields are ``None``-stamped (not
     missing) at all 4 verdict-composition sites.
-  * Latency is recorded even when the evaluator raises (so operators can
-    see how long a failing call took before timing out).
+  * On evaluator exceptions (rate-limit, transient errors), ``_run_evaluator``
+    returns ``None`` to preserve the worker verdict — the audit object is
+    therefore absent and the sidecar telemetry fields are ``None``. The
+    measured latency is surfaced via the WARNING log line so operators can
+    still observe slow / timed-out calls.
 """
 
 from __future__ import annotations
