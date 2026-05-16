@@ -81,15 +81,27 @@ async def create_sentinel(
     payload: SentinelCreateRequest,
     user: Dict[str, Any] = Depends(require_operator),
 ) -> SentinelResponse:
-    """Register a sentinel. brand='all' requires ADMIN."""
-    if payload.brand == "all":
-        # Re-check role: require_operator passed but 'all' needs ADMIN.
-        from src.api.dependencies.auth import UserRole, has_role
+    """Register a sentinel. brand='all' requires ADMIN; other brands require
+    that the caller has a grant for that brand (or is admin)."""
+    from src.api.dependencies.auth import UserRole, get_user_brands, has_role
 
-        if not has_role(user, UserRole.ADMIN):
+    is_admin = has_role(user, UserRole.ADMIN)
+    if payload.brand == "all":
+        # 'all' is cross-brand and stronger than any individual grant.
+        if not is_admin:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="brand='all' sentinels require admin role",
+            )
+    else:
+        # Non-'all' brand registration must match the caller's brand grants.
+        # Codex-rescue iter-0 HIGH-3: previously any Operator could register
+        # for any brand; list/get enforced membership but create did not.
+        allowed_brands = set(get_user_brands(user))
+        if not is_admin and "all" not in allowed_brands and payload.brand not in allowed_brands:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"no grant for brand={payload.brand!r}",
             )
 
     try:

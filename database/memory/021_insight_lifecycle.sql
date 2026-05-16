@@ -210,8 +210,19 @@ CREATE INDEX IF NOT EXISTS idx_executive_insights_invalidated
 -- recrystallize is allowed because the index is partial on invalidated_at:
 -- once invalidated_at IS NOT NULL, the row is no longer subject to this
 -- constraint and a new active row can be inserted in its place.
+--
+-- COALESCE on region/kpi: both columns are NULLABLE in the table; Postgres
+-- UNIQUE permits multiple NULLs (each NULL is distinct), so without
+-- COALESCE two crystallizations with region=NULL or kpi=NULL would BOTH
+-- succeed and produce duplicates. Coercing NULL → '' makes the constraint
+-- behave as expected for the dedup contract. See codex-rescue iter-0 HIGH-2.
 CREATE UNIQUE INDEX IF NOT EXISTS uix_executive_insights_active_causal_path
-    ON executive_insights (brand, region, kpi, ((key_metrics ->> 'causal_path_id')))
+    ON executive_insights (
+        brand,
+        COALESCE(region, ''),
+        COALESCE(kpi, ''),
+        COALESCE((key_metrics ->> 'causal_path_id'), '')
+    )
     WHERE invalidated_at IS NULL;
 
 COMMENT ON TABLE executive_insights IS

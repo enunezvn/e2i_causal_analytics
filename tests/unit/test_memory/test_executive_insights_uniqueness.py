@@ -251,3 +251,17 @@ async def test_migration_declares_partial_unique_index() -> None:
     assert "where invalidated_at is null" in content, (
         "Index must be PARTIAL on invalidated_at IS NULL so recall + recrystallize is permitted."
     )
+    # Ralph iter-0 HEDGE: pin the column expression. If the index is
+    # mis-keyed (e.g. ``key_metrics->>'wrong_path_id'``), the FakeDB tests
+    # still pass because they enforce the correct key independently of SQL.
+    assert "key_metrics" in content, "Index expression must reference key_metrics JSONB column"
+    assert "causal_path_id" in content, (
+        "Index expression must extract causal_path_id from key_metrics"
+    )
+    # Codex iter-0 HIGH-2: COALESCE on nullable columns. Without it,
+    # Postgres UNIQUE permits multiple NULLs (multiple region=NULL or
+    # kpi=NULL rows would all coexist without triggering dedup).
+    assert "coalesce" in content, (
+        "Index must use COALESCE on nullable columns so NULL values "
+        "don't bypass the dedup constraint."
+    )

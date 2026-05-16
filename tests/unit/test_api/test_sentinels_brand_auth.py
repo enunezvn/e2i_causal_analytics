@@ -184,6 +184,80 @@ async def test_get_sentinel_returns_404_for_out_of_grant_row() -> None:
 
 
 @pytest.mark.asyncio
+async def test_create_sentinel_rejects_out_of_grant_brand() -> None:
+    """Operator with Brand-X grant cannot create Brand-Y sentinel.
+
+    Codex iter-0 HIGH-3: pre-iter-1 only ``brand='all'`` was blocked for
+    non-admins. Any operator could register a sentinel for any specific
+    brand. Now ``create_sentinel`` enforces the same brand-grant check
+    as list/get.
+    """
+    from fastapi import HTTPException
+
+    from src.api.routes.sentinels import SentinelCreateRequest, create_sentinel
+
+    payload = SentinelCreateRequest(
+        name="oob-sentinel",
+        pattern_type="freshness",
+        pattern_config={"table": "triggers", "ts_column": "updated_at", "max_age_hours": 24},
+        action_type="notify",
+        action_config={},
+        brand="Brand-Y",
+    )
+    with pytest.raises(HTTPException) as excinfo:
+        await create_sentinel(payload=payload, user=_operator_brand_x())
+
+    assert excinfo.value.status_code == 403
+    assert "brand" in str(excinfo.value.detail).lower()
+
+
+@pytest.mark.asyncio
+async def test_create_sentinel_admin_can_register_any_brand() -> None:
+    """Admin retains cross-brand registration capability."""
+    from src.api.routes.sentinels import SentinelCreateRequest, create_sentinel
+
+    payload = SentinelCreateRequest(
+        name="admin-cross",
+        pattern_type="freshness",
+        pattern_config={"table": "triggers", "ts_column": "updated_at", "max_age_hours": 24},
+        action_type="notify",
+        action_config={},
+        brand="Brand-Y",
+    )
+    with patch(
+        "src.api.routes.sentinels.register_sentinel",
+        return_value="s-admin-1",
+    ):
+        result = await create_sentinel(payload=payload, user=_admin_user())
+
+    assert result.sentinel_id == "s-admin-1"
+    assert result.brand == "Brand-Y"
+
+
+@pytest.mark.asyncio
+async def test_create_sentinel_operator_can_register_own_brand() -> None:
+    """Operator with Brand-X grant CAN create Brand-X sentinel."""
+    from src.api.routes.sentinels import SentinelCreateRequest, create_sentinel
+
+    payload = SentinelCreateRequest(
+        name="in-grant",
+        pattern_type="freshness",
+        pattern_config={"table": "triggers", "ts_column": "updated_at", "max_age_hours": 24},
+        action_type="notify",
+        action_config={},
+        brand="Brand-X",
+    )
+    with patch(
+        "src.api.routes.sentinels.register_sentinel",
+        return_value="s-bx-1",
+    ):
+        result = await create_sentinel(payload=payload, user=_operator_brand_x())
+
+    assert result.sentinel_id == "s-bx-1"
+    assert result.brand == "Brand-X"
+
+
+@pytest.mark.asyncio
 async def test_get_sentinel_admin_can_read_any_brand() -> None:
     """Admin role retains cross-brand read on get_sentinel."""
     from src.api.routes.sentinels import get_sentinel
