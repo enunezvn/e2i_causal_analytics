@@ -122,16 +122,54 @@ def test_no_step_in_harness_job_has_continue_on_error_true():
     )
 
 
+def test_boot_stack_does_not_use_set_plus_e_for_compose_up():
+    """The boot-stack step must not blanket-disable ``set -e`` via
+    ``set +e``. Issue #263 acceptance: only the missing-tier0-cache
+    skip is a legitimate graceful-skip — real compose regressions
+    (parse errors, missing services, network conflicts, ``docker
+    compose up`` non-zero) must trip the job.
+
+    Surfaced by codex gate-on-diff iter-1 (HIGH-2, 2026-05-16). The
+    boot-stack step retains a structured health-probe timeout
+    graceful-skip via ``outputs.ok=false`` (image-pull rate limits
+    can flap), but compose-up and network-create are now hard-fail.
+    The script body must use ``set -e``-compatible defaults so a
+    real infra regression escapes via shell exit code.
+    """
+    job = _harness_job()
+    steps = job.get("steps", []) or []
+    boot_steps = [s for s in steps if s.get("id") == "boot-stack"]
+    assert len(boot_steps) == 1
+    run = boot_steps[0].get("run") or ""
+    # ``set +e`` anywhere in the script disables error propagation
+    # globally. The new script uses ``set -euo pipefail`` instead.
+    offenders = [
+        line.strip()
+        for line in run.splitlines()
+        if line.strip() == "set +e"
+        or line.strip().startswith("set +e ")
+        or line.strip().startswith("set +e\t")
+    ]
+    assert not offenders, (
+        f"boot-stack step disables shell error propagation via "
+        f"`set +e` (offending lines: {offenders}). Issue #263 "
+        "requires real compose / network regressions to hard-fail; "
+        "use `set -euo pipefail` and a narrower graceful-skip "
+        "(e.g., ALL_HEALTHY=false → outputs.ok=false) for "
+        "health-probe timeout only."
+    )
+
+
 def test_install_deps_step_has_no_pipe_or_true_soft_fail():
     """The install-deps step must not mask pip failures via ``|| true``.
 
-    The boot-stack step uses ``set +e`` + explicit ``exit 0`` to
-    signal health via ``ok=false`` (a graceful-skip pattern, not a
-    soft-fail), and inside that flow ``docker logs ... || true`` is a
-    legitimate diagnostic that shouldn't crash the loop — so we don't
-    flag it. install-deps has no such structured fallback: any pipe-
-    masking there would silently swallow a real pip resolver / build
-    failure on a hard-fail PR.
+    The boot-stack step uses ``set -euo pipefail`` + an
+    ``ALL_HEALTHY=false → outputs.ok=false`` health-probe-timeout
+    graceful-skip; inside that flow ``docker logs ... || true`` on the
+    diagnostic-only path is fine (the script is already past the
+    healthy-check decision). install-deps has no such structured
+    fallback: any pipe-masking there would silently swallow a real
+    pip resolver / build failure on a hard-fail PR.
     """
     job = _harness_job()
     steps = job.get("steps", []) or []
@@ -146,6 +184,49 @@ def test_install_deps_step_has_no_pipe_or_true_soft_fail():
     assert not offenders, (
         f"install-deps step uses shell soft-fail markers: {offenders}. "
         "Issue #263 requires hard-fail."
+    )
+
+
+def test_harness_main_propagates_nonzero_exit_on_agent_failure():
+    """The Tier 1-5 harness Python entrypoint
+    (``scripts/run_tier1_5_test.py``) must call ``sys.exit(<non-zero>)``
+    when any agent fails — otherwise the workflow's ``continue-on-error``
+    flip is toothless because ``make tier1-5-test`` will exit 0 even
+    while ``summary["failed"] > 0``.
+
+    Surfaced by codex gate-on-diff iter-1 (HIGH-1, 2026-05-16). We
+    check the source rather than execute the harness (which requires
+    a tier0 cache + docker stack); a structural assert is enough to
+    guarantee the failure-exit path exists at all and pin it against
+    regressions.
+    """
+    import ast
+
+    harness = Path(__file__).resolve().parents[2] / "scripts" / "run_tier1_5_test.py"
+    tree = ast.parse(harness.read_text())
+
+    # Find the top-level ``main`` function definition.
+    main_fns = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "main"]
+    assert len(main_fns) == 1, (
+        f"Expected exactly one top-level main() in {harness.name}; found {len(main_fns)}."
+    )
+    main_src = ast.unparse(main_fns[0])
+
+    # The main function must reach sys.exit at all.
+    assert "sys.exit" in main_src, (
+        "scripts/run_tier1_5_test.py main() does not call sys.exit. "
+        "Issue #263 requires the harness to propagate a non-zero exit "
+        "when any agent fails so the workflow check actually fails."
+    )
+
+    # The exit decision must be gated on the failed count — exiting
+    # unconditionally would always-fail every CI run. We accept any
+    # predicate referencing ``failed`` (e.g., ``failed_count > 0``,
+    # ``summary['failed']``, ``failed > 0``).
+    assert "failed" in main_src.lower(), (
+        "scripts/run_tier1_5_test.py main() reaches sys.exit but the "
+        "decision is not gated on a 'failed' count. Issue #263 requires "
+        "exit code to reflect agent-pass/fail status."
     )
 
 
@@ -171,19 +252,33 @@ def test_skip_cache_notice_path_preserved():
 
     Without a committed tier0 cache or runner-side restore, the harness
     cannot run, and that scenario is a graceful skip — not a failure.
-    Encoded as ``if:`` gating on the run step + a notice in the
-    summary step, not as ``continue-on-error``.
+    Encoded as ``if:`` gating on the run step (positive: ``== 'true'``)
+    + a notice in the summary step (negative: ``!= 'true'``), not as
+    ``continue-on-error``. Targets stable step ``id``s rather than
+    display names so a benign step rename doesn't trip the test.
     """
     job = _harness_job()
     steps = job.get("steps", []) or []
-    run_steps = [s for s in steps if s.get("name") == "Run Tier 1-5 harness"]
+
+    run_steps = [s for s in steps if s.get("id") == "run-harness"]
     assert len(run_steps) == 1, (
-        f"Expected exactly one 'Run Tier 1-5 harness' step; found {len(run_steps)}."
+        f"Expected exactly one step with id=run-harness; found {len(run_steps)}."
     )
-    if_expr = run_steps[0].get("if") or ""
-    assert "steps.restore-cache.outputs.found" in if_expr, (
-        f"Run step's if-guard no longer references "
-        f"steps.restore-cache.outputs.found; got: {if_expr!r}. "
-        "Issue #263 acceptance item 4 requires preserving this skip "
-        "path."
+    run_if = run_steps[0].get("if") or ""
+    assert "steps.restore-cache.outputs.found == 'true'" in run_if, (
+        f"Run step's if-guard must positively gate on cache present "
+        f"(steps.restore-cache.outputs.found == 'true'); got: {run_if!r}. "
+        "Issue #263 acceptance item 4 requires preserving this skip path."
+    )
+
+    summarize_steps = [s for s in steps if s.get("id") == "summarize-skip"]
+    assert len(summarize_steps) == 1, (
+        f"Expected exactly one step with id=summarize-skip; found {len(summarize_steps)}."
+    )
+    summarize_if = summarize_steps[0].get("if") or ""
+    assert "steps.restore-cache.outputs.found != 'true'" in summarize_if, (
+        f"Summarize-skip step's if-guard must negatively gate on cache "
+        f"absent (steps.restore-cache.outputs.found != 'true'); got: "
+        f"{summarize_if!r}. Issue #263 acceptance item 4 requires the "
+        "skip notice to fire on this branch."
     )
