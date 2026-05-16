@@ -2,7 +2,12 @@
 
 import pytest
 
-from src.agents.orchestrator.nodes.router import RouterNode, route_to_agents
+from src.agents.orchestrator.nodes.router import (
+    SELF_AGENT_NAME,
+    RouterNode,
+    route_to_agents,
+)
+from src.agents.orchestrator.state import AgentDispatch
 
 
 class TestRouterNode:
@@ -977,3 +982,76 @@ class TestDiscoveryRoutingIntegration:
         assert params["discovered_dag_edge_types"] == {"treatment<->segment": "BIDIRECTED"}
         assert params["discovery_gate_decision"] == "accept"
         assert params["discovery_gate_confidence"] == 0.80
+
+
+class TestRouterNodeSelfDispatchGuard:
+    """Issue #251 F1: RouterNode must never emit ``orchestrator`` in its plan."""
+
+    def test_strip_self_dispatch_removes_orchestrator_entries(self):
+        router = RouterNode()
+        plan = [
+            AgentDispatch(
+                agent_name="orchestrator",
+                priority="critical",
+                parameters={},
+                timeout_ms=30000,
+                fallback_agent=None,
+            ),
+            AgentDispatch(
+                agent_name="causal_impact",
+                priority="critical",
+                parameters={},
+                timeout_ms=30000,
+                fallback_agent=None,
+            ),
+        ]
+        cleaned = router._strip_self_dispatch(plan)
+        assert all(d["agent_name"] != SELF_AGENT_NAME for d in cleaned)
+        assert any(d["agent_name"] == "causal_impact" for d in cleaned)
+
+    def test_strip_self_dispatch_returns_empty_when_only_orchestrator(self):
+        router = RouterNode()
+        plan = [
+            AgentDispatch(
+                agent_name="orchestrator",
+                priority="critical",
+                parameters={},
+                timeout_ms=30000,
+                fallback_agent=None,
+            ),
+        ]
+        cleaned = router._strip_self_dispatch(plan)
+        assert cleaned == []
+
+    @pytest.mark.asyncio
+    async def test_execute_strips_orchestrator_from_final_plan(self):
+        """Even if upstream injects orchestrator, ``execute`` strips it."""
+        router = RouterNode()
+        # Monkey-patch INTENT_TO_AGENTS for this test to simulate the bug.
+        original = RouterNode.INTENT_TO_AGENTS
+        RouterNode.INTENT_TO_AGENTS = {
+            **original,
+            "general": [
+                AgentDispatch(
+                    agent_name="orchestrator",
+                    priority="critical",
+                    parameters={},
+                    timeout_ms=30000,
+                    fallback_agent=None,
+                ),
+            ],
+        }
+        try:
+            state = {
+                "intent": {
+                    "primary_intent": "general",
+                    "confidence": 0.9,
+                    "secondary_intents": [],
+                    "requires_multi_agent": False,
+                }
+            }
+            result = await router.execute(state)
+            for d in result["dispatch_plan"]:
+                assert d["agent_name"] != SELF_AGENT_NAME, result["dispatch_plan"]
+        finally:
+            RouterNode.INTENT_TO_AGENTS = original

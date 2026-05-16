@@ -169,7 +169,15 @@ class CognitiveQueryResponse(BaseModel):
     response: str = Field(..., description="Generated response")
     query_type: QueryType = Field(..., description="Detected or specified query type")
     confidence: float = Field(..., ge=0.0, le=1.0, description="Response confidence")
-    agent_used: str = Field(..., description="Primary agent that handled the query")
+    agent_used: Optional[str] = Field(
+        None,
+        description=(
+            "Primary agent that handled the query. ``null`` or "
+            '``"orchestrator_degraded"`` when the orchestrator returned an '
+            "empty dispatch (Issue #251 F2: never the API ``query_type``-derived "
+            "default in that case)."
+        ),
+    )
     evidence: Optional[List[EvidenceItem]] = Field(None, description="Evidence trail")
     phases_completed: List[CognitivePhase] = Field(..., description="Workflow phases completed")
     processing_time_ms: float = Field(..., description="Total processing time in ms")
@@ -335,7 +343,12 @@ async def process_cognitive_query(
         # Phase 3: Execute - Route to agent
         phases_completed.append(CognitivePhase.EXECUTE)
         query_type = request.query_type or _detect_query_type(request.query)
-        agent_name = _route_to_agent(query_type)
+
+        # Issue #251 F2: agent_name is the API-default ONLY when the
+        # orchestrator is unavailable (the null-orchestrator branch below).
+        # When the orchestrator runs but returns empty dispatch we use the
+        # degraded marker — never the ``_route_to_agent(query_type)`` value.
+        agent_name: Optional[str] = None
 
         # Execute via OrchestratorAgent (with fallback to placeholder)
         orchestrator = get_orchestrator()
@@ -360,12 +373,25 @@ async def process_cognitive_query(
                 response_confidence = orchestrator_result.get("response_confidence", 0.85)
                 agents_dispatched = orchestrator_result.get("agents_dispatched", [])
 
+                # Issue #251 F1: hard-reject the orchestrator's own name if
+                # it somehow leaked into ``agents_dispatched`` (RouterNode
+                # also guards this, but defence-in-depth at the API boundary
+                # is cheap and prevents future regressions).
+                agents_dispatched = [a for a in agents_dispatched if a != "orchestrator"]
+
                 if agents_dispatched:
                     agent_name = agents_dispatched[0]  # Primary agent used
+                else:
+                    # Issue #251 F2: orchestrator ran but produced no agent
+                    # results. Surface the recognisable degraded marker —
+                    # NEVER the ``_route_to_agent(query_type)`` API default,
+                    # which leaks ``health_score`` for MONITORING and
+                    # ``orchestrator`` for GENERAL queries.
+                    agent_name = "orchestrator_degraded"
 
                 logger.info(
                     f"Orchestrator processed query: agents={agents_dispatched}, "
-                    f"confidence={response_confidence:.2f}"
+                    f"confidence={response_confidence:.2f}, agent_used={agent_name}"
                 )
 
             except Exception as e:
@@ -376,11 +402,18 @@ async def process_cognitive_query(
                     evidence=evidence,
                     brand=request.brand,
                 )
+                # Orchestrator threw — fall back to API-default routing for
+                # the placeholder response. This is acceptable because the
+                # orchestrator was unable to run at all.
+                agent_name = _route_to_agent(query_type)
         else:
-            # Fallback to placeholder if orchestrator not available
+            # Fallback to placeholder if orchestrator not available. Use the
+            # API-default routing — this is the "null-orchestrator case"
+            # explicitly preserved per Issue #251 F2 acceptance.
             response_text = _generate_placeholder_response(
                 query=request.query, query_type=query_type, evidence=evidence, brand=request.brand
             )
+            agent_name = _route_to_agent(query_type)
 
         # Phase 4: Reflect - Store response and learn
         phases_completed.append(CognitivePhase.REFLECT)

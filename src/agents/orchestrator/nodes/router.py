@@ -6,11 +6,18 @@ No LLM calls - pure logic.
 V4.4: Added discovery routing to pass DAG data to discovery-aware agents.
 """
 
+import logging
 import time
 from collections import defaultdict
 from typing import Any, Dict, List, Literal, cast
 
 from ..state import AgentDispatch, OrchestratorState
+
+logger = logging.getLogger(__name__)
+
+# Issue #251 F1: invariant — the orchestrator routes to OTHER agents.
+# This name must never appear in ``dispatch_plan`` or ``agents_dispatched``.
+SELF_AGENT_NAME = "orchestrator"
 
 
 class RouterNode:
@@ -233,6 +240,13 @@ class RouterNode:
             )
             discovery_routing_applied = len(discovery_aware_agents) > 0
 
+        # Issue #251 F1: hard-guard. The orchestrator routes to OTHER agents
+        # and must never appear in its own dispatch plan. Any path that puts
+        # "orchestrator" into ``dispatch_plan`` is a bug — strip and warn so
+        # downstream consumers (cognitive.py:364, agent.py:216 agents_dispatched)
+        # never surface it as ``agent_used``.
+        dispatch_plan = self._strip_self_dispatch(dispatch_plan)
+
         routing_time = int((time.time() - start_time) * 1000)
 
         return {
@@ -245,6 +259,31 @@ class RouterNode:
             "discovery_routing_applied": discovery_routing_applied,
             "discovery_aware_agents": discovery_aware_agents if discovery_aware_agents else None,
         }
+
+    def _strip_self_dispatch(self, dispatch_plan: List[AgentDispatch]) -> List[AgentDispatch]:
+        """Remove any dispatch entry whose ``agent_name`` is the orchestrator.
+
+        Issue #251 F1: the orchestrator routes to OTHER agents and must never
+        appear in its own dispatch plan. Any path that names "orchestrator" is
+        a bug — strip silently is unsafe (callers may rely on a non-empty
+        plan), so we log a WARNING for observability. An empty plan after
+        stripping is acceptable; downstream consumers (cognitive.py F2 path)
+        already handle empty dispatch as ``orchestrator_degraded``.
+        """
+        cleaned: List[AgentDispatch] = []
+        stripped: List[str] = []
+        for d in dispatch_plan:
+            if d.get("agent_name") == SELF_AGENT_NAME:
+                stripped.append(d.get("agent_name", "?"))
+                continue
+            cleaned.append(d)
+        if stripped:
+            logger.warning(
+                "RouterNode stripped self-dispatch from plan: %s. Issue #251 F1 invariant "
+                "violation — investigate caller that produced this entry.",
+                stripped,
+            )
+        return cleaned
 
     def _default_routing(self, state: OrchestratorState, start_time: float) -> OrchestratorState:
         """Default routing when intent classification fails.
