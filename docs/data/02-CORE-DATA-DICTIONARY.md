@@ -836,7 +836,7 @@ Master table for patient treatment journeys with 45+ columns including demograph
 | `journey_start_date` | `DATE` | NOT NULL | | Date the patient journey began |
 | `journey_end_date` | `DATE` | YES | | Date the journey ended (NULL if ongoing) |
 | `journey_duration_days` | `INTEGER` | YES | | Calculated duration in days |
-| `journey_stage` | `journey_stage_type` | YES | | Current stage: `diagnosis`, `initial_treatment`, `treatment_optimization`, `maintenance`, `treatment_switch` |
+| `journey_stage` | `journey_stage_type` | YES | | Current stage: `diagnosis`, `initial_treatment`, `treatment_optimization`, `maintenance`, `treatment_switch`, `aware`, `considering`, `prescribed`, `first_fill`, `adherent`, `discontinued`, `maintained` (migration 035 / issue #155 §2: 7 engagement-funnel values added — `aware`/`considering`/`prescribed`/`first_fill`/`adherent`/`discontinued`/`maintained`) |
 | `journey_status` | `journey_status_type` | YES | | Current status: `active`, `stable`, `transitioning`, `completed` |
 | `primary_diagnosis_code` | `VARCHAR(20)` | YES | | Primary ICD-10 diagnosis code |
 | `primary_diagnosis_desc` | `TEXT` | YES | | Human-readable diagnosis description |
