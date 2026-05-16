@@ -3,6 +3,18 @@
 Fast intent classification optimized for <500ms:
 - Pattern matching first (fastest)
 - LLM fallback for ambiguous cases (Haiku)
+
+Contract (issue #266 — invariant, enforced at import time):
+    Any addition to ``IntentClassifierNode.INTENT_PATTERNS`` MUST also be
+    ranked in ``INTENT_PRIORITY``. The import-time assertion at the bottom of
+    this module verifies ``set(INTENT_PATTERNS) <= set(INTENT_PRIORITY)``. If
+    you add a new pattern key without adding it to the priority tuple,
+    ``AssertionError`` will fire on first import and name the missing intent.
+    This is required to keep tie-break deterministic — the bug fixed by
+    PR #247 (#254) was that dict-insertion order resolved ties silently.
+
+    The reverse direction is intentionally *not* enforced: ``INTENT_PRIORITY``
+    may declare future intents ahead of patterns being shipped.
 """
 
 import logging
@@ -330,6 +342,20 @@ Respond with ONLY a JSON object:
                 secondary_intents=[],
                 requires_multi_agent=False,
             )
+
+
+# Import-time invariant (issue #266): every key in INTENT_PATTERNS must be
+# ranked in INTENT_PRIORITY so tie-breaks remain deterministic. The reverse
+# direction is intentionally NOT enforced — INTENT_PRIORITY may legitimately
+# pre-declare future intents. If this fires, add the missing intent(s) to
+# INTENT_PRIORITY in the correct specificity slot (most-specific to least).
+_missing_priority_intents = set(IntentClassifierNode.INTENT_PATTERNS) - set(INTENT_PRIORITY)
+assert not _missing_priority_intents, (
+    f"INTENT_PATTERNS contains intents missing from INTENT_PRIORITY: "
+    f"{sorted(_missing_priority_intents)}. "
+    "Add them to INTENT_PRIORITY to preserve deterministic tie-break."
+)
+del _missing_priority_intents
 
 
 # Export for use in graph
