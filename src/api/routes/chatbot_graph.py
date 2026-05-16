@@ -1017,7 +1017,24 @@ async def orchestrator_node(state: ChatbotState) -> Dict[str, Any]:
             status = orchestrator_result.get("status", "completed")
 
             # Determine primary agent from successful agents
-            primary_agent = "orchestrator"
+            #
+            # Issue #251 F1 (codex MED-1 follow-up): the historical default
+            # was the literal string ``"orchestrator"``. If both
+            # ``successful_agents`` and ``agents_dispatched`` (already
+            # stripped above) are empty, that default leaked downstream
+            # to ``agent_name`` / ``routed_agent`` and into CopilotKit's
+            # non-streaming chat response. Use the recognisable degraded
+            # marker instead — the same value F2 surfaces from the API.
+            from src.agents.orchestrator._self_dispatch_guard import (
+                SELF_DEGRADED_MARKER,
+                strip_self_dispatch,
+            )
+
+            successful_agents = strip_self_dispatch(
+                successful_agents,
+                context="api.routes.chatbot_graph:successful_agents",
+            )
+            primary_agent = SELF_DEGRADED_MARKER
             if successful_agents:
                 primary_agent = successful_agents[0]
             elif agents_dispatched:

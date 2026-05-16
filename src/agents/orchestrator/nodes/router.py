@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 # canonical definition lives in ``_self_dispatch_guard``.
 __all__ = ["SELF_AGENT_NAME", "RouterNode"]
 
+
 class RouterNode:
     """Fast routing decisions based on intent classification.
 
@@ -250,8 +251,7 @@ class RouterNode:
         filtered_plan = [d for d in dispatch_plan if d["agent_name"] != SELF_AGENT_NAME]
         if len(filtered_plan) != len(dispatch_plan):
             logger.warning(
-                "RouterNode #251 guard: dropped %r from dispatch_plan; "
-                "primary_intent=%s",
+                "RouterNode #251 guard: dropped %r from dispatch_plan; primary_intent=%s",
                 SELF_AGENT_NAME,
                 intent.get("primary_intent") if intent else "(none)",
             )
