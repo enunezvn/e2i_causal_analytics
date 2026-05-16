@@ -1,173 +1,44 @@
-"""Phase 5 verification with realistic RAG context.
+"""Phase 5 verification with realistic RAG context — load-bearing RouterNode guard.
 
-The existing TestClient tests in test_orchestrator_end_to_end.py mock
-hybrid_search to return []. That hides routing bugs that depend on retrieval
-context — specifically issue #251 F1 (self-dispatch) and F2 (API-default
-leak), both surfaced by the live Docker smoke after this branch landed.
+Issue #268 (codex LOW-5): the original file shipped under PR #259 contained
+``TestSelfDispatchRegressionWithRealisticRag`` and
+``TestRoutingLeakRegressionWithRealisticRag`` smoke-style integration tests
+that asserted ``agent_used != "orchestrator"`` / ``!= "health_score"`` on
+TestClient responses. Per PR #259's own attenuation finding,
 
-These tests use a realistic_rag fixture (≥2 RetrievalResult entries with
-domain-matched content) to assert the contract under production-equivalent
-conditions. See feedback_testclient_vs_live_divergence for the reusable
-lesson.
+  "Hop 1 (#254) alone made the F1 symptom non-reproducible through
+   TestClient even with realistic_rag — the multi_faceted tie-break
+   produces a real agent name in the dispatch plan, so the
+   self-dispatch path is no longer hit in practice."
+
+That is: with the deterministic INTENT_PRIORITY tie-break (PR #247 commit
+``bf27ff40``) on main, those tests passed by independent code paths.
+Reverting cognitive.py's ``orchestrator_degraded`` marker left them green.
+
+The load-bearing falsifiability-verified tests for the same surface live in:
+
+* ``tests/integration/test_cognitive_degraded_marker.py`` — F1/F2 degraded
+  marker contract (``AsyncMock`` fixtures FORCE the empty-dispatch and
+  raised-orchestrator branches; reverting cognitive.py:365-372 trips them).
+* ``tests/unit/test_agents/test_orchestrator/test_router_default_routing_finalization.py``
+  — Issue #269 ``_default_routing`` finalization guard.
+
+The unit test below (``TestRouterNeverEmitsOrchestratorHardGuard``) is kept
+because it iterates over every ``INTENT_TO_AGENTS`` entry and the synthetic
+"unknown" intent — that test is falsifiability-verified for the
+``RouterNode``-level F1 strip and exercises a code path the
+``test_cognitive_degraded_marker.py`` AsyncMock tests do not (the strip
+inside ``execute()`` for every known intent, plus the
+``_default_routing``-pathway via the unknown-intent leg).
+
+See memory ``feedback-falsifiability-asyncmock-isolation`` for the
+reusable AsyncMock pattern, and ``feedback-testclient-vs-live-divergence``
+for why the original smoke tests under-tested.
 """
 
 from __future__ import annotations
 
-import os
-from typing import Any, Dict
-from unittest.mock import AsyncMock, MagicMock, patch
-
 import pytest
-
-os.environ["E2I_TESTING_MODE"] = "1"
-
-from fastapi.testclient import TestClient
-
-from src.api.main import app
-from src.api.routes import cognitive as cognitive_route
-from src.rag.types import RetrievalResult, RetrievalSource
-
-
-def _realistic_retrieval_results() -> list[RetrievalResult]:
-    """Return ≥2 RetrievalResult entries that match the live-Docker smoke
-    expectations: causal-flavoured + experiment-flavoured content with
-    domain-matched metadata.
-
-    Per feedback_testclient_vs_live_divergence: empty-stub hybrid_search
-    silently strips the routing inputs that drove the F1/F2 bugs the
-    live-Docker curl smoke caught. This fixture restores those inputs.
-    """
-    return [
-        RetrievalResult(
-            id="rr-causal-1",
-            content=(
-                "Brand-X discontinuation rates increased 12% in Q2 2026; "
-                "the leading driver is HCP detailing gap in segment B."
-            ),
-            source=RetrievalSource.VECTOR,
-            score=0.87,
-            metadata={"brand": "Brand-X", "agent": "causal_impact", "source_type": "causal_path"},
-        ),
-        RetrievalResult(
-            id="rr-experiment-1",
-            content=(
-                "A/B experiment exp_2026_05 (n=3200) shows SRM at p=0.0008; "
-                "interim looks scheduled at week 4."
-            ),
-            source=RetrievalSource.VECTOR,
-            score=0.82,
-            metadata={
-                "experiment_id": "exp_2026_05",
-                "agent": "experiment_monitor",
-                "source_type": "experiment",
-            },
-        ),
-    ]
-
-
-@pytest.fixture
-def reset_orchestrator_singleton():
-    """Each test gets a fresh OrchestratorAgent (re-built from the registry)."""
-    cognitive_route._orchestrator_instance = None
-    yield
-    cognitive_route._orchestrator_instance = None
-
-
-@pytest.fixture
-def realistic_rag_patch():
-    """Patch working_memory + hybrid_search with realistic retrieval results.
-
-    Empty-stub fixture (the one in test_orchestrator_end_to_end.py) misses F1
-    and F2 because hybrid_search returns []. This fixture restores ≥2
-    RetrievalResult entries so the orchestrator's user_context.evidence gets
-    populated and the routing path matches production.
-    """
-    fake_memory = MagicMock()
-    fake_memory.create_session = AsyncMock(return_value={"session_id": "s_realistic_rag"})
-    fake_memory.get_session = AsyncMock(return_value={"state": "active"})
-    fake_memory.add_message = AsyncMock(return_value=True)
-    fake_memory.append_evidence = AsyncMock(return_value=True)
-
-    with (
-        patch("src.api.routes.cognitive.get_working_memory", return_value=fake_memory),
-        patch(
-            "src.api.routes.cognitive.hybrid_search",
-            AsyncMock(return_value=_realistic_retrieval_results()),
-        ),
-    ):
-        yield
-
-
-@pytest.fixture
-def client(reset_orchestrator_singleton, realistic_rag_patch):
-    return TestClient(app)
-
-
-def _post(client: TestClient, query: str, query_type: str = "general") -> Dict[str, Any]:
-    response = client.post(
-        "/api/cognitive/query",
-        json={
-            "query": query,
-            "query_type": query_type,
-            "include_evidence": False,
-            "brand": "Brand-X",
-        },
-    )
-    assert response.status_code == 200, response.text
-    return response.json()
-
-
-class TestSelfDispatchRegressionWithRealisticRag:
-    """Issue #251 F1: orchestrator must never emit itself even with RAG context."""
-
-    def test_ambiguous_general_query_does_not_self_dispatch(self, client: TestClient) -> None:
-        """When orchestrator returns agents_dispatched=[], the API must NOT
-        fall through to the query_type-derived 'orchestrator' default."""
-        body = _post(client, "tell me something")
-        assert body["agent_used"] != "orchestrator", body
-        assert body["metadata"]["orchestrator_used"] is True, body
-
-    def test_empty_query_does_not_self_dispatch(self, client: TestClient) -> None:
-        body = _post(client, "...")
-        assert body["agent_used"] != "orchestrator", body
-
-    def test_orchestrator_general_query_uses_degraded_marker_or_real_agent(
-        self, client: TestClient
-    ) -> None:
-        """When the orchestrator was called but emitted no real dispatch, the
-        API must surface a recognisable degraded marker, not 'orchestrator'."""
-        body = _post(client, "what is the meaning of this?")
-        # Either a real agent dispatched, or the documented degraded marker
-        # — but never the orchestrator's own name (which is the false-positive
-        # query-type fallback for GENERAL queries).
-        assert body["agent_used"] != "orchestrator", body
-
-
-class TestRoutingLeakRegressionWithRealisticRag:
-    """Issue #251 F2: API-side query_type→agent default must not leak."""
-
-    def test_monitor_active_experiments_does_not_leak_health_score(
-        self, client: TestClient
-    ) -> None:
-        """For monitoring queries: when orchestrator dispatches, agent_used is
-        the dispatched agent. When orchestrator emits agents_dispatched=[],
-        the API must NOT fall through to QueryType.MONITORING's 'health_score'
-        default.
-        """
-        body = _post(
-            client,
-            "monitor all active A/B experiments for sample ratio mismatch",
-            query_type="monitoring",
-        )
-        # 'health_score' is the QueryType.MONITORING default in _route_to_agent.
-        # If the orchestrator dispatched correctly to experiment_monitor, that
-        # wins. If the orchestrator returned []), the API must NOT default to
-        # health_score — issue #251 F2.
-        assert body["agent_used"] != "health_score", body
-
-    def test_check_experiment_status_does_not_leak_health_score(self, client: TestClient) -> None:
-        body = _post(client, "check the status of running experiments", query_type="monitoring")
-        assert body["agent_used"] != "health_score", body
 
 
 class TestRouterNeverEmitsOrchestratorHardGuard:
