@@ -271,6 +271,13 @@ class KnowledgeGraphQuerier:
         ChEMBL outage does not break the Open Targets evidence path
         (the v1 contract is "ChEMBL enrichment is best-effort, not a
         gating dependency").
+
+        Silent-miss observability: when the cross-walk returns ``None``
+        for a gene that was present in the Open Targets payload, a
+        debug-level log line is emitted so future regressions on the
+        ChEMBL filter shape are visible without escalating into the
+        warning channel (the silent-miss contract is acceptable per
+        the best-effort enrichment policy, but it must be greppable).
         """
         if self.chembl is None:
             return None
@@ -281,10 +288,13 @@ class KnowledgeGraphQuerier:
         if not isinstance(gene_symbol, str) or not gene_symbol:
             return None
         try:
-            return self.chembl.open_targets_target_to_chembl(gene_symbol)
+            result = self.chembl.open_targets_target_to_chembl(gene_symbol)
         except Exception as exc:  # noqa: BLE001 — best-effort enrichment
             logger.warning("ChEMBL cross-walk failed for gene %s: %s", gene_symbol, exc)
             return None
+        if result is None:
+            logger.debug("chembl cross-walk: no target for gene_symbol=%s", gene_symbol)
+        return result
 
     def query_disease_hierarchy(self, cui: str) -> list[KGEdge]:
         """UMLS taxonomic relations for a disease CUI.
