@@ -327,3 +327,95 @@ class TestMemoryStats:
         assert "procedural" in data
         assert "semantic" in data
         assert "last_updated" in data
+
+
+# =============================================================================
+# LIST EPISODIC MEMORIES (PR #293)
+# =============================================================================
+
+
+class TestListEpisodicMemories:
+    """Tests for GET /memory/episodic (PR #293)."""
+
+    def test_returns_array_with_default_limit(self):
+        with patch("src.api.routes.memory.get_recent_memories") as mock_recent:
+            mock_recent.return_value = [
+                {
+                    "memory_id": "mem_1",
+                    "description": "Engagement dropped",
+                    "event_type": "query",
+                    "session_id": "s1",
+                    "agent_name": "orchestrator",
+                    "brand": "Kisqali",
+                    "region": "northeast",
+                    "occurred_at": "2025-01-01T00:00:00",
+                    "raw_content": {"foo": "bar"},
+                },
+                {
+                    "memory_id": "mem_2",
+                    "description": "Result",
+                    "event_type": "result",
+                    "occurred_at": "2025-01-02T00:00:00",
+                },
+            ]
+            response = client.get("/api/memory/episodic")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data, list)
+        assert len(data) == 2
+        assert data[0]["id"] == "mem_1"
+        assert data[0]["event_type"] == "query"
+        assert data[0]["metadata"] == {"foo": "bar"}
+        # Default kwargs forwarded
+        mock_recent.assert_called_once_with(
+            limit=20, event_types=None, agent_name=None, brand=None
+        )
+
+    def test_forwards_filter_kwargs(self):
+        with patch("src.api.routes.memory.get_recent_memories") as mock_recent:
+            mock_recent.return_value = []
+            response = client.get(
+                "/api/memory/episodic?event_type=query&agent_name=orch&brand=K&limit=5"
+            )
+
+        assert response.status_code == 200
+        mock_recent.assert_called_once_with(
+            limit=5, event_types=["query"], agent_name="orch", brand="K"
+        )
+
+    def test_session_id_filter_is_applied_post_query(self):
+        with patch("src.api.routes.memory.get_recent_memories") as mock_recent:
+            mock_recent.return_value = [
+                {
+                    "memory_id": "mem_1",
+                    "session_id": "sess_A",
+                    "description": "a",
+                    "event_type": "q",
+                },
+                {
+                    "memory_id": "mem_2",
+                    "session_id": "sess_B",
+                    "description": "b",
+                    "event_type": "q",
+                },
+            ]
+            response = client.get("/api/memory/episodic?session_id=sess_A")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 1
+        assert data[0]["id"] == "mem_1"
+
+    def test_handles_recent_memories_error(self):
+        with patch(
+            "src.api.routes.memory.get_recent_memories",
+            side_effect=Exception("supabase down"),
+        ):
+            response = client.get("/api/memory/episodic")
+
+        assert response.status_code == 500
+        body = response.json()
+        # E2I error envelope: 'message' is the user-facing field; 'detail' is FastAPI's
+        # raw default but the global handler wraps it.
+        assert "Failed to list memories" in body.get("message", body.get("detail", ""))
