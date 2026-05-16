@@ -3952,6 +3952,22 @@ class OptumDataConverter:
             zip_code_val: str | None = None
             years_experience: int | None = None
             affiliation_primary: str | None = None
+            # Issue #249 / PR B-prime BP3: academic_hcp confounder field.
+            # Derivation uses NPPES org taxonomy (academic medical center /
+            # general acute care hospital codes from
+            # `rwd_common.ACADEMIC_MEDICAL_CENTER_CODES`). Three-valued:
+            #   - None  → cache miss (obfuscated cohort / unknown NPI):
+            #             cannot derive academic status. Distinct from False.
+            #   - True  → any taxonomy on the record matches the academic
+            #             code set.
+            #   - False → cache hit but no academic taxonomy match (incl.
+            #             empty taxonomy list — the lookup established
+            #             "we saw this provider; no academic affiliation").
+            #
+            # The downstream causal-engine confounder set reads this key
+            # directly; obfuscated-NPI cohorts MUST yield None so consumers
+            # distinguish "not derivable" from "not academic". See issue #249.
+            academic_hcp: bool | None = None
             # PII fields (first_name / last_name) are intentionally NOT
             # populated from NppesRecord. Codex PR #162 post-merge MEDIUM-3:
             # the documented 8-field enrichment contract does not include
@@ -3984,6 +4000,16 @@ class OptumDataConverter:
                     practice_size_resolved = "Solo"
                 elif nppes_rec.entity_type == rwdc.NPPES_ENTITY_TYPE_ORGANIZATION:
                     practice_size_resolved = "Group"
+                # Issue #249: academic_hcp — cache HIT establishes derivability,
+                # so the answer is True/False, never None. Match against
+                # rwd_common.ACADEMIC_MEDICAL_CENTER_CODES (single source of
+                # truth) across ALL taxonomies on the record, not just the
+                # primary — a provider whose primary specialty is non-academic
+                # but who lists an academic hospital taxonomy is still academic.
+                academic_hcp = any(
+                    rwdc.taxonomy_in(t.code, rwdc.ACADEMIC_MEDICAL_CENTER_CODES)
+                    for t in nppes_rec.taxonomies
+                )
 
             profiles.append(
                 {
@@ -4014,6 +4040,7 @@ class OptumDataConverter:
                     "influence_network_size": influence_size_by_npi.get(obf),
                     "peer_influence_score": peer_score_by_npi.get(obf),
                     "adoption_category": adoption,
+                    "academic_hcp": academic_hcp,
                     "dupixent_offlabel": dupixent_offlabel,
                     "coverage_status": None,
                     "territory_id": None,

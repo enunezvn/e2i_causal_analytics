@@ -430,3 +430,165 @@ def test_build_hcp_profiles_coincidental_10_digit_obfuscated_routes_to_hashing()
     # Must have been hashed: lookup_key == generated, not raw obf_10digit.
     assert queried_keys == [expected_generated]
     assert profiles[0]["npi"] == expected_generated
+
+
+# --------------------------------------------------------------------------- #
+# Issue #249 — academic_hcp surfacing in _build_hcp_profiles                   #
+# --------------------------------------------------------------------------- #
+
+
+def test_build_hcp_profiles_academic_hcp_key_always_present():
+    """Issue #249 / PR B-prime BP3 — every HCP profile dict must carry an
+    ``academic_hcp`` key, regardless of whether the NPPES cache hit or
+    missed. Downstream consumers (causal-engine confounder set) read the
+    key directly; absence breaks the contract.
+    """
+    c = _make_converter()
+    _seed_provider(c, {"OBF_A": "207K00000X", "OBF_B": "999X00000X"})
+    _seed_claims(c, {"OBF_A": [1, 2], "OBF_B": [3]})
+
+    # No cache loader → every NPPES lookup misses.
+    profiles = c._build_hcp_profiles(kept_patids={1, 2, 3})
+    assert len(profiles) == 2
+    for p in profiles:
+        assert "academic_hcp" in p, (
+            f"profile {p['hcp_id']} missing academic_hcp key: keys={sorted(p)}"
+        )
+
+
+def test_build_hcp_profiles_academic_hcp_none_when_lookup_misses():
+    """Issue #249 acceptance: on cache miss (obfuscated cohort / unknown
+    NPI), ``academic_hcp`` is ``None``, NOT ``False``. Downstream consumers
+    must distinguish 'not derivable' from 'not academic'."""
+    c = _make_converter()
+    _seed_provider(c, {"OBF_A": "207K00000X"})
+    _seed_claims(c, {"OBF_A": [1]})
+
+    # No loader registered → lookup_npi returns None → academic_hcp is None.
+    profiles = c._build_hcp_profiles(kept_patids={1})
+    assert len(profiles) == 1
+    assert profiles[0]["academic_hcp"] is None
+
+
+def test_build_hcp_profiles_academic_hcp_true_for_academic_taxonomy():
+    """Issue #249 acceptance: when the NPPES cache returns a record whose
+    taxonomies include any code in ``ACADEMIC_MEDICAL_CENTER_CODES``,
+    ``academic_hcp`` must be ``True``."""
+    c = _make_converter()
+    _seed_provider(c, {"OBF_A": "282N00000X"})
+    _seed_claims(c, {"OBF_A": list(range(1, 60))})
+
+    generated = rwdc.generate_luhn_npi("OBF_A")
+    rec = NppesRecord(
+        npi=generated,
+        entity_type="2",
+        sole_proprietor=False,
+        # General Acute Care Hospital — the seed academic-medical-center code.
+        taxonomies=(NppesTaxonomy(code="282N00000X", primary=True),),
+    )
+    rwdc.set_npi_cache_loader(lambda npi: rec if npi == generated else None)
+
+    profiles = c._build_hcp_profiles(kept_patids=set(range(1, 60)))
+    assert len(profiles) == 1
+    assert profiles[0]["academic_hcp"] is True
+
+
+def test_build_hcp_profiles_academic_hcp_false_for_non_academic_taxonomy():
+    """Issue #249 acceptance: cache hit + no taxonomy code in
+    ``ACADEMIC_MEDICAL_CENTER_CODES`` → ``academic_hcp`` is ``False``
+    (distinct from cache-miss None)."""
+    c = _make_converter()
+    _seed_provider(c, {"OBF_A": "207K00000X"})
+    _seed_claims(c, {"OBF_A": [1]})
+
+    generated = rwdc.generate_luhn_npi("OBF_A")
+    rec = NppesRecord(
+        npi=generated,
+        entity_type="1",
+        # Allergy & Immunology — NOT in ACADEMIC_MEDICAL_CENTER_CODES.
+        taxonomies=(NppesTaxonomy(code="207K00000X", primary=True),),
+    )
+    rwdc.set_npi_cache_loader(lambda npi: rec if npi == generated else None)
+
+    profiles = c._build_hcp_profiles(kept_patids={1})
+    assert len(profiles) == 1
+    assert profiles[0]["academic_hcp"] is False
+
+
+def test_build_hcp_profiles_academic_hcp_true_when_non_primary_taxonomy_matches():
+    """Issue #249 acceptance: ``academic_hcp`` derivation must consider ALL
+    taxonomies on the NPPES record, not just the primary. A provider whose
+    primary specialty is non-academic but who lists an academic-medical-
+    center taxonomy as secondary is still flagged academic."""
+    c = _make_converter()
+    _seed_provider(c, {"OBF_A": "207K00000X"})
+    _seed_claims(c, {"OBF_A": [1]})
+
+    generated = rwdc.generate_luhn_npi("OBF_A")
+    rec = NppesRecord(
+        npi=generated,
+        entity_type="1",
+        taxonomies=(
+            NppesTaxonomy(code="207K00000X", desc="Allergy & Immunology", primary=True),
+            NppesTaxonomy(code="282N00000X", desc="General Acute Care Hospital", primary=False),
+        ),
+    )
+    rwdc.set_npi_cache_loader(lambda npi: rec if npi == generated else None)
+
+    profiles = c._build_hcp_profiles(kept_patids={1})
+    assert len(profiles) == 1
+    assert profiles[0]["academic_hcp"] is True
+
+
+def test_build_hcp_profiles_academic_hcp_false_when_taxonomies_empty():
+    """Issue #249 acceptance: cache hit but no taxonomies — the record
+    carries no academic signal → ``academic_hcp`` is ``False`` (the cache
+    HIT establishes 'we looked at this provider'; an empty taxonomy list
+    means 'we saw no academic affiliation', which is False, not None)."""
+    c = _make_converter()
+    _seed_provider(c, {"OBF_A": "207K00000X"})
+    _seed_claims(c, {"OBF_A": [1]})
+
+    generated = rwdc.generate_luhn_npi("OBF_A")
+    rec = NppesRecord(npi=generated, entity_type="1", taxonomies=())
+    rwdc.set_npi_cache_loader(lambda npi: rec if npi == generated else None)
+
+    profiles = c._build_hcp_profiles(kept_patids={1})
+    assert len(profiles) == 1
+    assert profiles[0]["academic_hcp"] is False
+
+
+def test_build_hcp_profiles_academic_hcp_uses_rwd_common_constant():
+    """Single-source-of-truth check: the derivation MUST consult
+    ``rwd_common.ACADEMIC_MEDICAL_CENTER_CODES`` (not an inline literal),
+    so future additions to the academic-code set propagate automatically.
+
+    Verification: monkeypatch ACADEMIC_MEDICAL_CENTER_CODES to add a
+    synthetic code and confirm a record carrying that code now classifies
+    academic."""
+    synthetic_academic_code = "999XACADEMICX"  # not in default set
+    original = rwdc.ACADEMIC_MEDICAL_CENTER_CODES
+    try:
+        rwdc.ACADEMIC_MEDICAL_CENTER_CODES = original + (synthetic_academic_code,)  # type: ignore[misc]
+
+        c = _make_converter()
+        _seed_provider(c, {"OBF_A": "207K00000X"})
+        _seed_claims(c, {"OBF_A": [1]})
+
+        generated = rwdc.generate_luhn_npi("OBF_A")
+        rec = NppesRecord(
+            npi=generated,
+            entity_type="1",
+            taxonomies=(NppesTaxonomy(code=synthetic_academic_code, primary=True),),
+        )
+        rwdc.set_npi_cache_loader(lambda npi: rec if npi == generated else None)
+
+        profiles = c._build_hcp_profiles(kept_patids={1})
+        assert profiles[0]["academic_hcp"] is True, (
+            "academic_hcp derivation does not consult "
+            "rwd_common.ACADEMIC_MEDICAL_CENTER_CODES — the synthetic code "
+            "added by monkeypatch did not propagate, indicating an inline "
+            "literal in convert_optum_rwd.py rather than the shared SoT."
+        )
+    finally:
+        rwdc.ACADEMIC_MEDICAL_CENTER_CODES = original  # type: ignore[misc]
