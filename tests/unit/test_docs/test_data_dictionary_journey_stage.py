@@ -50,15 +50,15 @@ def _extract_journey_stage_row_values() -> set[str]:
     )
     row = matches[0]
 
-    # Inside the Description cell, enum values are backtick-quoted bare
-    # identifiers (snake_case). The cell also references the type name
-    # `journey_stage_type` and (after the fix) may reference issue/migration
-    # tokens such as `migration 035`. Restrict to bare snake_case identifiers
-    # that are also present in the canonical Python source — i.e. only count
-    # tokens that are either already legacy values or known new values.
+    # Inside the cells, the type name and enum values are backtick-quoted
+    # bare identifiers (snake_case). Strip non-value tokens that the row
+    # legitimately mentions (the column name itself and the Postgres type
+    # name) so the remaining set is the candidate enum-value set. We do
+    # NOT filter against the canonical Python source here, so that a typo'd
+    # docs value (e.g. ``awarw``) surfaces as an ``extra`` set member.
+    non_value_tokens = {"journey_stage", "journey_stage_type"}
     backticked = re.findall(r"`([a-z0-9_]+)`", row)
-    canonical = set(E2I_JOURNEY_STAGES)
-    return {v for v in backticked if v in canonical}
+    return {v for v in backticked if v not in non_value_tokens}
 
 
 def test_journey_stage_row_matches_canonical_python_source() -> None:
