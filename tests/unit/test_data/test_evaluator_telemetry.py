@@ -27,6 +27,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
+
 # ---------------------------------------------------------------------------
 # Constants — pin canonical Haiku pricing so a silent edit to the rate
 # constants trips the test.
@@ -144,6 +146,114 @@ def _make_stub_lm_with_usage(
             }
         ]
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue #270 — direct unit tests for ``_extract_lm_usage`` to lock in the
+# Anthropic-native usage-shape branch that was implemented in PR #262 but
+# left uncovered by the test suite. ``_make_stub_lm_with_usage`` above only
+# exercises the OpenAI / litellm-normalised shape; the fallback at lines
+# 459-462 of ``causal_role_classifier_loader.py`` (``input_tokens`` /
+# ``output_tokens``) was provably falsifiable — deleting those lines did not
+# trip any existing test. These three parameter rows lock the fallback in.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "usage_block,expected_in,expected_out",
+    [
+        # Row 1 — OpenAI / litellm-normalised shape (baseline; locks existing
+        # branch so a future "drop the OpenAI path" regression also trips).
+        (
+            {"prompt_tokens": 200, "completion_tokens": 50, "total_tokens": 250},
+            200,
+            50,
+        ),
+        # Row 2 — Anthropic-native ONLY (no OpenAI keys present at all). This
+        # is the falsifiable case the issue calls out: a future provider
+        # change to direct Anthropic SDK (no litellm normalisation) would
+        # ship only these keys, and the existing test suite would silently
+        # report None.
+        (
+            {"input_tokens": 200, "output_tokens": 50},
+            200,
+            50,
+        ),
+        # Row 3 — Mixed: OpenAI keys present but ``None``, Anthropic keys
+        # populated. Exercises the ``in_t is None`` / ``out_t is None``
+        # fallback predicate at lines 459-462 specifically — a stricter
+        # implementation that returned early on "OpenAI key present" would
+        # trip this row even though Row 2 still passes.
+        (
+            {
+                "prompt_tokens": None,
+                "completion_tokens": None,
+                "input_tokens": 200,
+                "output_tokens": 50,
+            },
+            200,
+            50,
+        ),
+    ],
+    ids=["openai_shape", "anthropic_native_shape", "mixed_openai_none_anthropic_populated"],
+)
+def test_extract_lm_usage_accepts_both_shapes(usage_block, expected_in, expected_out):
+    """Issue #270. ``_extract_lm_usage`` must extract tokens from EITHER the
+    OpenAI / litellm-normalised usage block (``prompt_tokens`` /
+    ``completion_tokens``) OR the Anthropic-native block (``input_tokens`` /
+    ``output_tokens``). The Anthropic branch is fallback-only: a future
+    provider-drift away from litellm normalisation would otherwise silently
+    drop token / cost telemetry.
+
+    Falsifiability (issue #270): deleting lines 459-462 of
+    ``causal_role_classifier_loader.py`` (the ``if in_t is None: in_t = ...
+    input_tokens`` fallback block) would not trip any pre-existing test.
+    Rows 2 and 3 of this parameterisation trip in that scenario.
+    """
+    from src.data.causal_role_classifier_loader import _extract_lm_usage
+
+    stub_lm = SimpleNamespace(history=[{"usage": usage_block}])
+
+    in_t, out_t = _extract_lm_usage(stub_lm)
+
+    assert in_t == expected_in
+    assert out_t == expected_out
+
+
+def test_extract_lm_usage_prefers_openai_shape_when_both_present():
+    """Issue #270 corollary — when BOTH shapes are present with non-None
+    values, the OpenAI / litellm-normalised keys win. This is the
+    documented precedence at lines 454-462 of
+    ``causal_role_classifier_loader.py`` ("Accept OpenAI shape first") and
+    matters because litellm currently always normalises Anthropic responses
+    to OpenAI keys — if the fallback ever shadowed the primary, the
+    telemetry surface would silently report Anthropic-derived values from a
+    duplicated/echoed block instead of the litellm-canonical totals.
+    """
+    from src.data.causal_role_classifier_loader import _extract_lm_usage
+
+    stub_lm = SimpleNamespace(
+        history=[
+            {
+                "usage": {
+                    # Primary — OpenAI / litellm shape.
+                    "prompt_tokens": 200,
+                    "completion_tokens": 50,
+                    "total_tokens": 250,
+                    # Fallback — Anthropic-native, intentionally different
+                    # numbers to disambiguate which branch fires.
+                    "input_tokens": 9999,
+                    "output_tokens": 9999,
+                }
+            }
+        ]
+    )
+
+    in_t, out_t = _extract_lm_usage(stub_lm)
+
+    # OpenAI shape wins; the 9999/9999 fallback is shadowed.
+    assert in_t == 200
+    assert out_t == 50
 
 
 def test_run_evaluator_attaches_latency_and_token_telemetry(monkeypatch):
