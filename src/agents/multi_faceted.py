@@ -85,8 +85,9 @@ def is_multi_faceted_facet_score(query: str) -> bool:
       - analysis_and_recommendation: ("why" OR "what caused") AND
         (recommend OR suggest OR should).
 
-    Originally duplicated at ``chatbot_graph.py:275`` and
-    ``chatbot_dspy.py:429``; both call sites now delegate here.
+    Originally duplicated as ``_is_multi_faceted_query`` in
+    ``chatbot_graph.py`` and ``chatbot_dspy.py``; both call sites now
+    delegate here.
     """
     query_lower = query.lower()
 
