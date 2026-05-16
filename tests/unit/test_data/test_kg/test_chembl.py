@@ -85,7 +85,13 @@ def test_target_search_returns_chembl_id_by_gene_symbol() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert "/target.json" in request.url.path
-        assert "ABL1" in request.url.query.decode("utf-8")
+        query = request.url.query.decode("utf-8")
+        # Must use the live-API-valid denormalized top-level synonym filter,
+        # not the nested ``target_components__component_synonyms__component_synonym``
+        # path which the live ChEMBL API rejects with HTTP 400 (verified
+        # live by primary at iter-1 gate-on-diff).
+        assert "target_synonym__iexact" in query
+        assert "ABL1" in query
         return httpx.Response(
             200,
             json={
@@ -93,8 +99,8 @@ def test_target_search_returns_chembl_id_by_gene_symbol() -> None:
                     {
                         "target_chembl_id": "CHEMBL1862",
                         "pref_name": "Tyrosine-protein kinase ABL",
-                        "target_components": [
-                            {"component_synonyms": [{"component_synonym": "ABL1"}]}
+                        "target_component_synonyms": [
+                            {"component_synonym": "ABL1", "syn_type": "GENE_SYMBOL"}
                         ],
                     }
                 ]
@@ -103,6 +109,42 @@ def test_target_search_returns_chembl_id_by_gene_symbol() -> None:
 
     with _client_with_handler(handler) as client:
         assert client.target_search("ABL1") == "CHEMBL1862"
+
+
+def test_target_search_uses_target_synonym_iexact_filter() -> None:
+    """Regression test (#245 iter-1): the cross-walk URL must use
+    ``target_synonym__iexact``, NOT the nested
+    ``target_components__component_synonyms__component_synonym__iexact``
+    that the live ChEMBL API rejects with HTTP 400.
+
+    Pins the exact param key. Reverting the production fix back to the
+    nested path must make this test FAIL.
+    """
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["query"] = request.url.query.decode("utf-8")
+        captured["params"] = "&".join(f"{k}={v}" for k, v in request.url.params.multi_items())
+        return httpx.Response(
+            200,
+            json={"targets": [{"target_chembl_id": "CHEMBL1862"}]},
+        )
+
+    with _client_with_handler(handler) as client:
+        assert client.target_search("ABL1") == "CHEMBL1862"
+
+    # Pin the EXACT filter key the live API accepts.
+    assert "target_synonym__iexact" in captured["query"]
+    # Verify the value is the gene symbol that was passed.
+    assert "ABL1" in captured["query"]
+    # Negative pin: the broken nested path must NOT be in the URL.
+    assert (
+        "target_components__component_synonyms__component_synonym__iexact"
+        not in (captured["query"])
+    ), (
+        "Cross-walk regressed to the live-API-invalid nested filter "
+        "path; ChEMBL rejects this with HTTP 400 (see PR #291 iter-1)."
+    )
 
 
 def test_target_search_empty_payload_returns_none() -> None:

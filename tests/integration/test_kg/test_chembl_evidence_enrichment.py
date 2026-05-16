@@ -97,11 +97,22 @@ def _ot_handler() -> Any:
 
 
 def _chembl_handler() -> Any:
-    """ChEMBL mock — target.json for ABL1 returns CHEMBL1862."""
+    """ChEMBL mock — target.json for ABL1 returns CHEMBL1862.
+
+    Pins the live-API-valid ``target_synonym__iexact`` filter shape;
+    if the production code regresses back to the nested
+    ``target_components__component_synonyms__component_synonym__iexact``
+    path the assertion trips and the cross-walk is exercised against
+    the right URL.
+    """
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert "/target.json" in request.url.path
-        assert "ABL1" in request.url.query.decode("utf-8")
+        query = request.url.query.decode("utf-8")
+        assert "target_synonym__iexact" in query, (
+            "Cross-walk regressed to invalid nested filter path"
+        )
+        assert "ABL1" in query
         return httpx.Response(
             200,
             json={
@@ -109,8 +120,8 @@ def _chembl_handler() -> Any:
                     {
                         "target_chembl_id": "CHEMBL1862",
                         "pref_name": "Tyrosine-protein kinase ABL",
-                        "target_components": [
-                            {"component_synonyms": [{"component_synonym": "ABL1"}]}
+                        "target_component_synonyms": [
+                            {"component_synonym": "ABL1", "syn_type": "GENE_SYMBOL"}
                         ],
                     }
                 ]

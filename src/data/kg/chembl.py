@@ -211,18 +211,38 @@ class ChEMBLClient:
     def target_search(self, gene_symbol: str) -> Optional[str]:
         """Return the top ChEMBL target ID for a gene symbol, or None.
 
-        Resolves via ``target_components.component_synonyms.component_synonym``
-        (case-insensitive exact match). Empty input skips the network.
+        Resolves via the denormalized top-level ``target_synonym__iexact``
+        filter (case-insensitive exact match). Empty input skips the
+        network. See ``_target_search_uncached`` for the precision
+        trade-off note.
         """
         if not gene_symbol:
             return None
         return _target_search_cached(self, gene_symbol)
 
     def _target_search_uncached(self, gene_symbol: str) -> Optional[str]:
+        # Use ChEMBL's denormalized top-level synonym filter. The nested
+        # path ``target_components__component_synonyms__component_synonym__iexact``
+        # we tried initially is rejected by the live API with HTTP 400
+        # ("path 'component_synonyms' is not valid in the filter
+        # expression"); on the JSON response the field is actually named
+        # ``target_component_synonyms`` (with the ``target_`` prefix), but
+        # ChEMBL exposes the simpler denormalized filter ``target_synonym``
+        # for query use. Verified live: GET
+        # /target.json?target_synonym__iexact=ABL1 returns 14 hits
+        # including CHEMBL1862 (Tyrosine-protein kinase ABL1).
+        #
+        # Precision trade-off (acceptable for v1): ``target_synonym``
+        # matches across all synonym types — UniProt accession, EC number,
+        # gene symbol, and protein names. Future polish: narrow by
+        # constraining ``syn_type`` (e.g., GENE_SYMBOL) once the worker
+        # surfaces ambiguous-resolution telemetry. For now ``limit=1``
+        # picks the canonical entry which empirically returns the
+        # gene-symbol-keyed target for the workloads in scope.
         payload = self._get(
             "/target.json",
             {
-                "target_components__component_synonyms__component_synonym__iexact": gene_symbol,
+                "target_synonym__iexact": gene_symbol,
                 "limit": 1,
             },
         )
