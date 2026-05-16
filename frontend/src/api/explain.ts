@@ -59,7 +59,7 @@ const EXPLAIN_BASE = '/explain';
 export async function getExplanation(
   request: ExplainRequest
 ): Promise<ExplainResponse> {
-  return post<ExplainResponse, ExplainRequest>(`${EXPLAIN_BASE}`, request);
+  return post<ExplainResponse, ExplainRequest>(`${EXPLAIN_BASE}/predict`, request);
 }
 
 /**
@@ -86,7 +86,7 @@ export async function getBatchExplanations(
   request: BatchExplainRequest
 ): Promise<BatchExplainResponse> {
   return post<BatchExplainResponse, BatchExplainRequest>(
-    `${EXPLAIN_BASE}/batch`,
+    `${EXPLAIN_BASE}/predict/batch`,
     request
   );
 }

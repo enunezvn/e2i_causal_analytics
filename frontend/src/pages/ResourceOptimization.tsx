@@ -402,8 +402,9 @@ export default function ResourceOptimization() {
   const { data: _scenariosData } = useScenarios({ limit: 10 });
   const runOptimization = useRunOptimization();
 
-  // Use sample data for now (API may not be available)
-  const optimizationResult = sampleOptimizationResult;
+  // Prefer live mutation response; fall back to sample data on first render
+  // and when the optimizer service is unavailable.
+  const optimizationResult = runOptimization.data ?? sampleOptimizationResult;
   const scenarios = optimizationResult.scenarios;
 
   // Health status
