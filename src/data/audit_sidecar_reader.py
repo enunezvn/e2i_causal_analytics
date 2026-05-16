@@ -153,6 +153,19 @@ class SidecarReader:
             self._check_schema_version(path, payload.get("schema_version"))
             experiment_id = str(payload.get("experiment_id", "<unknown>"))
             verdicts_raw = payload.get("adaptive_verdicts", [])
+            # codex pass-2 MED-1 (2026-05-15): normalize non-list payloads
+            # to ``[]`` after a WARN — a sidecar carrying ``null`` or a
+            # scalar in ``adaptive_verdicts`` must not crash downstream
+            # consumers (``for raw in verdicts_raw`` would TypeError).
+            if not isinstance(verdicts_raw, list):
+                logger.warning(
+                    "SidecarReader: sidecar %s has non-list adaptive_verdicts=%r "
+                    "(type=%s); treating as empty.",
+                    path,
+                    verdicts_raw,
+                    type(verdicts_raw).__name__,
+                )
+                verdicts_raw = []
             # Issue #235 A3: emit unknown-verdict-key WARN at most ONCE per
             # file (not per-record). PRE-SCAN before yielding so the warning
             # always fires for parsed files even when the caller consumes
