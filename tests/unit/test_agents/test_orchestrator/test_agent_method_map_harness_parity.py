@@ -15,9 +15,13 @@ from src.agents.orchestrator._agent_method_map import AGENT_METHOD_MAP
 
 
 def test_agent_configs_is_derived_from_agent_method_map() -> None:
-    """AGENT_CONFIGS must read its dispatch fields from AGENT_METHOD_MAP.
+    """AGENT_CONFIGS must read its dispatch + harness fields from AGENT_METHOD_MAP.
 
-    Per issue #252 acceptance 1+2.
+    Per issue #252 acceptance 1+2. Pins every overlapping field: dispatch
+    (method, is_async, uses_kwargs, input_model, input_module) AND harness
+    (tier, agent_module, agent_class, state_module, state_class, timeout).
+    Codex-rescue iter-1 flagged that the original parity test only pinned
+    the dispatch fields, leaving harness fields free to drift.
     """
     harness = importlib.import_module("scripts.run_tier1_5_test")
     configs = harness.AGENT_CONFIGS
@@ -27,6 +31,7 @@ def test_agent_configs_is_derived_from_agent_method_map() -> None:
     assert not missing, f"AGENT_CONFIGS missing agents from AGENT_METHOD_MAP: {missing}"
     for agent_name, spec in AGENT_METHOD_MAP.items():
         cfg = configs[agent_name]
+        # Dispatch fields
         assert cfg["method"] == spec.method, (
             f"{agent_name}: method drift "
             f"AGENT_METHOD_MAP={spec.method!r} vs AGENT_CONFIGS={cfg['method']!r}"
@@ -35,6 +40,14 @@ def test_agent_configs_is_derived_from_agent_method_map() -> None:
         assert cfg.get("uses_kwargs", False) == spec.uses_kwargs, f"{agent_name}: uses_kwargs drift"
         assert cfg.get("input_model") == spec.input_model, f"{agent_name}: input_model drift"
         assert cfg.get("input_module") == spec.input_module, f"{agent_name}: input_module drift"
+        # Harness fields (codex-rescue iter-1 #252 acceptance — pin every
+        # overlapping field, not just dispatch)
+        assert cfg.get("tier") == spec.tier, f"{agent_name}: tier drift"
+        assert cfg.get("agent_module") == spec.agent_module, f"{agent_name}: agent_module drift"
+        assert cfg.get("agent_class") == spec.agent_class, f"{agent_name}: agent_class drift"
+        assert cfg.get("state_module") == spec.state_module, f"{agent_name}: state_module drift"
+        assert cfg.get("state_class") == spec.state_class, f"{agent_name}: state_class drift"
+        assert cfg.get("timeout") == spec.timeout, f"{agent_name}: timeout drift"
 
 
 def test_helper_functions_exposed() -> None:

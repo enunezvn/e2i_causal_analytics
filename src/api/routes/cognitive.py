@@ -369,6 +369,9 @@ async def process_cognitive_query(
                     # silently mislabels the response as 'orchestrator' (for
                     # QueryType.GENERAL) or 'health_score' (for
                     # QueryType.MONITORING) and hides the real failure.
+                    # Falsifiability-verified 2026-05-16: removing this else
+                    # branch trips test_cognitive_degraded_marker.py with
+                    # agent_used='orchestrator' (F1 leak).
                     agent_name = "orchestrator_degraded"
 
                 logger.info(
@@ -378,6 +381,12 @@ async def process_cognitive_query(
 
             except Exception as e:
                 logger.warning(f"Orchestrator execution failed, using fallback: {e}")
+                # Issue #251 F1 (live Docker path): when orchestrator.run()
+                # raises, agent_name would otherwise stay at the
+                # _route_to_agent(query_type) default — leaking 'orchestrator'
+                # for GENERAL queries or 'health_score' for MONITORING. Surface
+                # the degraded marker so operators see the real failure mode.
+                agent_name = "orchestrator_degraded"
                 response_text = _generate_placeholder_response(
                     query=request.query,
                     query_type=query_type,
