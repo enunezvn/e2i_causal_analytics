@@ -35,7 +35,8 @@ def test_router_v42_py_retired() -> None:
     assert not p.exists(), (
         f"{p} should be deleted per issue #256 (Option A — lean). "
         "The MultiFacetedDetector patterns are kept inline in "
-        "src/agents/orchestrator/nodes/intent_classifier.py:154-160."
+        "``INTENT_PATTERNS['multi_faceted']`` within "
+        "src/agents/orchestrator/nodes/intent_classifier.py."
     )
 
 
@@ -49,8 +50,15 @@ def test_no_imports_of_dead_routers() -> None:
     """
     dead_import_pattern = re.compile(
         r"(?:^|\s)"
-        r"(?:from\s+src\.agents\.orchestrator\.router(?:_v42)?\s+import"
-        r"|import\s+src\.agents\.orchestrator\.router(?:_v42)?(?:\s|$))",
+        r"(?:"
+        # `from src.agents.orchestrator.router(_v42) import ...`
+        r"from\s+src\.agents\.orchestrator\.router(?:_v42)?\s+import"
+        # `import src.agents.orchestrator.router(_v42)` (incl. `as alias`)
+        r"|import\s+src\.agents\.orchestrator\.router(?:_v42)?(?:\s|$|\.)"
+        # `from src.agents.orchestrator import router(_v42)`
+        # (parent-package re-import shape; catches `import router, router_v42`)
+        r"|from\s+src\.agents\.orchestrator\s+import\s+[^\n#]*\brouter(?:_v42)?\b"
+        r")",
         re.MULTILINE,
     )
     scan_roots = (
