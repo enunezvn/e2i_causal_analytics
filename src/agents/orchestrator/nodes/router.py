@@ -239,17 +239,37 @@ class RouterNode:
         # Issue #251 F1 hard guard (centralized for Issue #269).
         # Funnel through a shared finalization so `_default_routing` cannot
         # bypass the strip. See `_apply_self_dispatch_guard` for the helper.
+        # NOTE: `intent` is guaranteed truthy here because the `if not intent`
+        # branch above returns early via `_default_routing`.
         dispatch_plan = self._apply_self_dispatch_guard(
             dispatch_plan,
-            source=f"execute(primary_intent={intent.get('primary_intent', '(none)') if intent else '(none)'!r})",
+            source=f"execute(primary_intent={intent.get('primary_intent', '(none)')!r})",
         )
+
+        # Re-derive parallel_groups from the CLEANED dispatch_plan to keep
+        # the parallel_groups view consistent with the strip output. If
+        # parallel_groups was computed pre-strip from a multi-agent pattern
+        # (line 210) and the strip removed an entry, the stale view would
+        # otherwise still reference the forbidden agent name. Today the
+        # current MULTI_AGENT_PATTERNS table does not name `orchestrator`,
+        # but Issue #269 is explicitly about by-construction protection
+        # against future regressions.
+        cleaned_names = [d["agent_name"] for d in dispatch_plan]
+        if parallel_groups:
+            # Filter each priority bucket to drop any stripped names; drop
+            # buckets that become empty so downstream consumers don't see
+            # phantom empty groups.
+            parallel_groups = [
+                [name for name in group if name in cleaned_names] for group in parallel_groups
+            ]
+            parallel_groups = [group for group in parallel_groups if group]
 
         routing_time = int((time.time() - start_time) * 1000)
 
         return {
             **state,
             "dispatch_plan": dispatch_plan,
-            "parallel_groups": parallel_groups or [[d["agent_name"] for d in dispatch_plan]],
+            "parallel_groups": parallel_groups or [cleaned_names],
             "routing_latency_ms": routing_time,
             "current_phase": "dispatching",
             # V4.4: Discovery routing metadata
