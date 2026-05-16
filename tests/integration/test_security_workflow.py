@@ -271,6 +271,74 @@ def test_cleanup_step_name_is_quoted_so_it_parses_intact() -> None:
     )
 
 
+def test_step_id_references_resolve_within_container_scan_job() -> None:
+    """Issue #271: codify step-id ref-integrity in the container-scan job.
+
+    The `Reclaim disk after build`, `Run Trivy`, `Upload Trivy artifacts`,
+    and `Display Trivy summary` steps each guard themselves with
+    `if: steps.docker-build.outcome == 'success'` so they skip when the
+    build step (`id: docker-build`) fails. If a future change renames
+    the build step's `id` (e.g. to `docker-build-image`), every guarded
+    step would silently skip on every run and no test would fail.
+
+    Forcing function: enumerate every `steps.<id>.<context>` reference
+    in the job's `if:` predicates and assert each `<id>` actually maps
+    to a step `id` declared in the same job. GitHub Actions `steps.*`
+    context is job-local, so cross-job lookups would be invalid anyway.
+
+    Falsifiability: rename `id: docker-build` -> test trips on every
+    `if:` line that still references the old id.
+
+    Multi-job safety: we scope the assertion to the `container-scan`
+    job. Other jobs in `security.yml` (gitleaks, bandit, semgrep,
+    pip-audit, npm-audit, hadolint, summary) are out of scope for this
+    invariant — they don't use `steps.*.outcome` guards. Helper
+    `_collect_step_id_refs` is reusable if a future regression spreads.
+    """
+    workflow = _load_workflow()
+    job = workflow["jobs"]["container-scan"]
+    steps = cast(list[dict[str, Any]], job["steps"])
+
+    # Build the authoritative set of step ids declared in this job.
+    declared_ids = {step["id"] for step in steps if isinstance(step, dict) and "id" in step}
+    assert "docker-build" in declared_ids, (
+        f"container-scan must declare a step with `id: docker-build` "
+        f"(Issue #271 anchor). Currently declared: {sorted(declared_ids)}"
+    )
+
+    # Collect every steps.<id>.outcome / .conclusion / .outputs.* ref
+    # from every step's `if:` predicate. Pattern matches the GHA
+    # expression-context spec: identifiers are [A-Za-z0-9_-]+.
+    step_ref_re = re.compile(r"steps\.([A-Za-z0-9_-]+)\.")
+    referenced_ids: dict[str, list[str]] = {}
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        if_expr = step.get("if")
+        if not isinstance(if_expr, str):
+            continue
+        for match in step_ref_re.finditer(if_expr):
+            ref = match.group(1)
+            referenced_ids.setdefault(ref, []).append(step.get("name", "<unnamed>"))
+
+    assert "docker-build" in referenced_ids, (
+        "Expected at least one `if: steps.docker-build.*` reference in "
+        f"the container-scan job (Issue #271). Found refs: "
+        f"{sorted(referenced_ids)}"
+    )
+
+    dangling = sorted(set(referenced_ids) - declared_ids)
+    assert not dangling, (
+        f"Issue #271: container-scan job has step `if:` predicates "
+        f"referencing step ids that do not exist in the job. "
+        f"Dangling refs: {dangling}. Declared ids: {sorted(declared_ids)}. "
+        f"Likely cause: a step `id:` was renamed but the `if:` predicates "
+        f"in dependent steps were not updated, leaving them to silently "
+        f"skip on every run. Affected steps per dangling id: "
+        + ", ".join(f"{ref}=>{referenced_ids[ref]}" for ref in dangling)
+    )
+
+
 def test_trivy_action_pin_unchanged() -> None:
     """Anti-regression: PR #22 pinned trivy-action to v0.36.0 because
     @master was silently timing out. Issue #233 fix MUST NOT silently
