@@ -33,6 +33,7 @@ tests/integration/test_audit_artifacts_compose_wiring.py.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, cast
 
@@ -151,18 +152,42 @@ def test_post_build_disk_cleanup_step_present() -> None:
     assert "docker" in cleanup_run and "prune" in cleanup_run, (
         f"Cleanup step must run docker prune; got: {cleanup_run!r}"
     )
+    # Issue #272 (LOW follow-up from PR #258 codex pass): the original
+    # cleanup-body assertion was a loose substring check — a body like
+    # `echo prune || true` would have passed. The production fix is
+    # specifically `docker builder prune` (purges buildx intermediate
+    # cache — the biggest single contributor to /var/lib/docker bloat)
+    # AND `docker image prune` (drops dangling layers from any prior
+    # build attempts on the same runner). Both are load-bearing for the
+    # disk-headroom invariant; assert each by name so a partial revert
+    # (dropping one but keeping the other) trips the test.
+    assert "docker builder prune" in cleanup_run, (
+        f"Cleanup body must invoke `docker builder prune` (Issue #272). Got body:\n{cleanup_run!r}"
+    )
+    assert "docker image prune" in cleanup_run, (
+        f"Cleanup body must invoke `docker image prune` (Issue #272). Got body:\n{cleanup_run!r}"
+    )
     # Codex MED follow-up (#233 review): prune is best-effort cleanup —
     # if `docker builder prune` exits non-zero (e.g. nothing to prune
     # on a fresh runner) we MUST NOT fail the whole scan. Every prune
     # command in the cleanup body must therefore be guarded with
     # `|| true`. Counting `|| true` occurrences is a cheap forcing
     # function: each prune line should have its own guard.
-    prune_lines = [line.strip() for line in cleanup_run.splitlines() if "prune" in line]
+    #
+    # Issue #272 (LOW follow-up from PR #258 codex pass): the prior
+    # check `"|| true" in line` would also accept `|| true_something`
+    # or `|| true && other`. Tighten to an anchored regex requiring
+    # `|| true` at end-of-line after optional whitespace — the exact
+    # shell-suppress-exit-code pattern. Falsifiability: replacing any
+    # guard with `|| true && false` or `|| TRUE` (capitalized) trips it.
+    prune_lines = [line.rstrip() for line in cleanup_run.splitlines() if "prune" in line]
     assert prune_lines, "Expected at least one prune line in cleanup step"
+    _GUARD_RE = re.compile(r"\|\|\s+true\s*$")
     for line in prune_lines:
-        assert "|| true" in line, (
-            f"Cleanup prune line missing `|| true` guard: {line!r}. "
-            "A prune exit-code must not take down the Trivy scan."
+        assert _GUARD_RE.search(line), (
+            f"Cleanup prune line missing anchored `|| true` end-of-line "
+            f"guard (Issue #272): {line!r}. A prune exit-code must not "
+            "take down the Trivy scan."
         )
 
 
