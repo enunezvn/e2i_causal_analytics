@@ -333,9 +333,9 @@ class TestA4LRBuildsWithL1Penalty:
 # Issue #273 — algorithm_registry.py's LR-family ``default_hyperparameters``
 # MUST agree with ``_LR_FIXED_PARAMS`` (SSOT) for ``solver`` and ``max_iter``.
 #
-# Approach chosen: Option (B) — AST-anchored runtime tests, NOT a module-level
-# import of ``_LR_FIXED_PARAMS`` into ``algorithm_registry.py``. The direct
-# import would create a circular dependency:
+# Approach chosen: Option (B) — runtime tests + an in-source anchor check, NOT
+# a module-level import of ``_LR_FIXED_PARAMS`` into ``algorithm_registry.py``.
+# The direct import would create a circular dependency:
 #
 #     algorithm_registry
 #       -> hyperparameter_tuner (target import)
@@ -351,23 +351,29 @@ class TestA4LRBuildsWithL1Penalty:
 #
 # Failure mode: a future edit to the registry's LR defaults (e.g. flipping
 # ``solver=saga`` to ``solver=lbfgs`` or dropping ``max_iter``) could silently
-# re-introduce the lbfgs+l1 crash from #232. The runtime AC check here trips
-# on divergence; the AST check ensures the divergence note in the registry
-# docstring stays anchored to the SSOT module path.
+# re-introduce the lbfgs+l1 crash from #232. The runtime AC checks trip on
+# divergence; the source-anchor check keeps the SSOT pointer in-file so a
+# developer editing the registry sees the contract.
 # ---------------------------------------------------------------------------
 
 
 class TestIssue273RegistryDefaultsAgreeWithSSOT:
     """Issue #273: ``algorithm_registry.py`` LR-family ``default_hyperparameters``
     must contain ``solver`` and ``max_iter`` values that agree with
-    ``_LR_FIXED_PARAMS`` (SSOT). Drift trips this test.
+    ``_LR_FIXED_PARAMS`` (SSOT). Drift trips these tests.
 
-    Two-pronged guard:
+    Four-pronged guard:
 
     1. Runtime invariant — the registry's runtime values must equal SSOT.
        Any divergent value (e.g. ``solver="liblinear"``) trips the test.
     2. Runtime negative invariant — no SSOT key may carry a *conflicting*
-       value (guards against re-adding a literal that contradicts SSOT).
+       value (guards against partial drift, e.g. ``solver`` synced but
+       ``max_iter`` stale).
+    3. End-to-end smoke — building a sklearn LogisticRegression from the
+       registry's defaults with ``penalty=l1`` must not raise. Recreates the
+       exact #232 crash if the registry ever reverts to ``solver=lbfgs``.
+    4. Source anchor — registry source must mention ``_LR_FIXED_PARAMS`` and
+       ``hyperparameter_tuner`` so editing developers find the contract.
     """
 
     # Path discovered at import time so the test fails-loud if the module moves.
