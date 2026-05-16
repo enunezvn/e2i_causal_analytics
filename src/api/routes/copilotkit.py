@@ -1422,6 +1422,18 @@ async def run_causal_analysis(
 
             # Extract causal results if available
             if result and result.get("response_text"):
+                # Issue #251 F1 (codex MED-1 follow-up): the
+                # ``run_causal_analysis`` serializer also forwards
+                # the orchestrator's ``agents_dispatched`` field as
+                # ``agents_used``; strip the self literal here too.
+                from src.agents.orchestrator._self_dispatch_guard import (
+                    strip_self_dispatch as _strip_self_dispatch,
+                )
+
+                _agents_used = _strip_self_dispatch(
+                    result.get("agents_dispatched", []),
+                    context="api.routes.copilotkit:run_causal_analysis_agents_used",
+                )
                 return {
                     "intervention": intervention,
                     "target_kpi": target_kpi,
@@ -1437,7 +1449,7 @@ async def run_causal_analysis(
                     ),
                     "interpretation": result.get("response_text", ""),
                     "data_source": data_source,
-                    "agents_used": result.get("agents_dispatched", []),
+                    "agents_used": _agents_used,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 }
 
@@ -3026,7 +3038,17 @@ async def _stream_chat_response(request: ChatRequest) -> AsyncGenerator[str, Non
                         if "orchestrator_used" in node_output:
                             dispatch_info["orchestrator_used"] = node_output["orchestrator_used"]
                         if "agents_dispatched" in node_output:
-                            dispatch_info["agents_dispatched"] = node_output["agents_dispatched"]
+                            # Issue #251 F1 (codex MED-1 follow-up):
+                            # streaming SSE serializer must also strip the
+                            # self literal before clients see it.
+                            from src.agents.orchestrator._self_dispatch_guard import (
+                                strip_self_dispatch,
+                            )
+
+                            dispatch_info["agents_dispatched"] = strip_self_dispatch(
+                                node_output["agents_dispatched"],
+                                context="api.routes.copilotkit:stream_dispatch_info",
+                            )
                         if "routed_agent" in node_output:
                             dispatch_info["routed_agent"] = node_output["routed_agent"]
                         if "response_confidence" in node_output:

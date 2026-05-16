@@ -139,3 +139,52 @@ class TestBuildOutputStripsSelfDispatch:
         with caplog.at_level("WARNING"):
             orchestrator._build_output(state)  # type: ignore[arg-type]
         assert not any("F1 invariant" in r.message for r in caplog.records), caplog.text
+
+
+class TestDownstreamSerializersCallGuard:
+    """codex MED-1 follow-up LOW-1: the unit tests must non-vacuously
+    cover that the serializer call sites in
+    ``chatbot_graph.py`` / ``chatbot_tools.py`` / ``copilotkit.py`` /
+    ``cognitive.py`` actually call ``strip_self_dispatch`` on the raw
+    ``agents_dispatched`` payload. We assert by AST-scanning the source
+    rather than running the FastAPI app (which requires the full
+    LangGraph stack). Reverting any one strip call would trip the
+    corresponding assertion."""
+
+    def _src(self, rel: str) -> str:
+        from pathlib import Path
+
+        return Path(__file__).resolve().parents[4].joinpath(rel).read_text()
+
+    def test_chatbot_graph_serializer_uses_helper(self) -> None:
+        src = self._src("src/api/routes/chatbot_graph.py")
+        assert "strip_self_dispatch(" in src, (
+            "chatbot_graph.py must call strip_self_dispatch on the "
+            "orchestrator_result agents_dispatched payload"
+        )
+        # The raw orchestrator field must not be assigned without the strip.
+        assert 'agents_dispatched = orchestrator_result.get("agents_dispatched", [])' not in src
+
+    def test_chatbot_tools_serializer_uses_helper(self) -> None:
+        src = self._src("src/api/routes/chatbot_tools.py")
+        assert "strip_self_dispatch(" in src
+        assert 'agents_dispatched = orchestrator_result.get("agents_dispatched", [])' not in src
+
+    def test_copilotkit_serializers_use_helper(self) -> None:
+        src = self._src("src/api/routes/copilotkit.py")
+        # Three sites: non-streaming result, streaming SSE dispatch_info,
+        # run_causal_analysis agents_used.
+        assert src.count("strip_self_dispatch(") >= 3, (
+            "copilotkit.py must call strip_self_dispatch at all three "
+            "serializer sites (non-streaming, streaming, run_causal_analysis)"
+        )
+        # Raw assignment must be gone from the non-streaming path.
+        assert 'agents_dispatched = result.get("agents_dispatched", [])' not in src
+        # Raw forward to agents_used must be gone too.
+        assert '"agents_used": result.get("agents_dispatched", []),' not in src
+
+    def test_cognitive_serializer_uses_helper(self) -> None:
+        src = self._src("src/api/routes/cognitive.py")
+        assert "strip_self_dispatch(" in src
+        # The inline `if a != "orchestrator"` list-comp must be gone.
+        assert "[a for a in agents_dispatched if a !=" not in src
