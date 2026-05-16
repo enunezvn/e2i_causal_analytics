@@ -193,9 +193,9 @@ export async function recordProceduralFeedback(
 export async function querySemanticPaths(
   request: SemanticPathRequest
 ): Promise<SemanticPathResponse> {
-  return post<SemanticPathResponse, SemanticPathRequest>(
+  return get<SemanticPathResponse>(
     `${MEMORY_BASE}/semantic/paths`,
-    request
+    request as unknown as Record<string, unknown>
   );
 }
 

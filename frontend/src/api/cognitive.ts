@@ -111,7 +111,7 @@ export async function createSession(
   request: CreateSessionRequest
 ): Promise<CreateSessionResponse> {
   return post<CreateSessionResponse, CreateSessionRequest>(
-    `${COGNITIVE_BASE}/sessions`,
+    `${COGNITIVE_BASE}/session`,
     request
   );
 }
@@ -133,7 +133,7 @@ export async function createSession(
  */
 export async function getSession(sessionId: string): Promise<SessionResponse> {
   return get<SessionResponse>(
-    `${COGNITIVE_BASE}/sessions/${encodeURIComponent(sessionId)}`
+    `${COGNITIVE_BASE}/session/${encodeURIComponent(sessionId)}`
   );
 }
 
@@ -156,7 +156,7 @@ export async function deleteSession(
   sessionId: string
 ): Promise<DeleteSessionResponse> {
   return del<DeleteSessionResponse>(
-    `${COGNITIVE_BASE}/sessions/${encodeURIComponent(sessionId)}`
+    `${COGNITIVE_BASE}/session/${encodeURIComponent(sessionId)}`
   );
 }
 

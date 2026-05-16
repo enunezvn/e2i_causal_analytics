@@ -32,7 +32,7 @@ import type {
 // RAG API ENDPOINTS
 // =============================================================================
 
-const RAG_BASE = '/rag';
+const RAG_BASE = '/v1/rag';
 
 // =============================================================================
 // SEARCH ENDPOINTS
@@ -139,7 +139,7 @@ export async function getCausalSubgraph(
   depth?: number
 ): Promise<CausalSubgraphResponse> {
   return get<CausalSubgraphResponse>(
-    `${RAG_BASE}/graph/subgraph/${encodeURIComponent(entity)}`,
+    `${RAG_BASE}/graph/${encodeURIComponent(entity)}`,
     depth !== undefined ? { depth } : undefined
   );
 }
@@ -165,7 +165,7 @@ export async function getCausalPaths(
   target: string,
   maxDepth?: number
 ): Promise<CausalPathResponse> {
-  return get<CausalPathResponse>(`${RAG_BASE}/graph/paths`, {
+  return get<CausalPathResponse>(`${RAG_BASE}/causal-path`, {
     source,
     target,
     max_depth: maxDepth,
