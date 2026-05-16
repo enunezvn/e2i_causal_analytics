@@ -32,7 +32,11 @@ jobs:
     name: Tier 1-5 agent harness
     runs-on: ubuntu-22.04
     timeout-minutes: 30
-    # Soft-fail initially; flip this off after the first two clean weeks.
+    # Soft-fail initially; flip-off tracked by issue #263 (earliest 2026-05-30).
+    # Hard-fail requires (a) committed tier0 cache or runner-side restore, plus
+    # (b) the dispatcher input-wrap fix in #260 so wrapped-input agents
+    # (experiment_monitor, drift_check, experiment_design) actually produce
+    # meaningful PASS verdicts rather than dispatch-failure-as-success.
     continue-on-error: true
 
     env:
