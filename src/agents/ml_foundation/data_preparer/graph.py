@@ -92,6 +92,12 @@ def write_adaptive_verdicts_sidecar(state: Dict[str, Any]) -> Path | None:
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         sidecar = base / f"adaptive_verdicts_{ts}.json"
         payload = {
+            # Schema-version pin (Issue #235): ``major.minor`` string. Bump the
+            # major on any breaking change to the sidecar payload shape; bump
+            # the minor on additive forward-compatible changes. The reader
+            # (``src/data/audit_sidecar_reader.py``) WARNs on missing or
+            # unknown-major schema_version values.
+            "schema_version": "1.0",
             "experiment_id": state.get("experiment_id"),
             "data_source": state.get("data_source"),
             "written_at": ts,
