@@ -154,11 +154,19 @@ _NEGATIVE_CASES: list[tuple[str, str, str, str]] = [
         "near-miss-single-regex-hit-loses-on-score",
         "what causes discontinuation and what drives switching and also explain trends",
         "causal_effect",
-        "R1 'and also' fires (multi_faceted scores 0.867 from 1 hit) but "
-        "causal_effect matches 2 patterns ('what.*caus...' + 'what drives') "
-        "and scores 0.933, beating multi_faceted before tie-break is "
-        "consulted (see formula at intent_classifier.py:245-248). "
-        "multi_faceted appears as a secondary intent",
+        # Semantic rationale FIRST (the 'why is causal_effect the right answer'):
+        "this three-part query asks two distinct causal questions ('what "
+        "causes discontinuation', 'what drives switching') plus an "
+        "explanatory request ('explain trends'). The two causal probes "
+        "dominate the semantic intent; multi_faceted would be appropriate "
+        "only if the structural weight of the request types were roughly "
+        "equal. Score mechanics (the 'how the code happens to enforce "
+        "that semantic'): R1 'and also' fires once (multi_faceted scores "
+        "0.867 from 1 hit) but causal_effect matches 2 patterns "
+        "('what.*caus...' + 'what drives') and scores 0.933, correctly "
+        "winning on score before tie-break is consulted (see formula at "
+        "intent_classifier.py:245-248). multi_faceted appears as a "
+        "secondary intent",
     ),
 ]
 
