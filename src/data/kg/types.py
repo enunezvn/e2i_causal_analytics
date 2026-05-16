@@ -40,6 +40,7 @@ EvidenceSource = Literal[
     "rxnav",
     "europe_pmc",
     "crossref",
+    "chembl",
     "manual",
 ]
 
@@ -234,6 +235,41 @@ class EntityLink:
 
 
 @dataclass(frozen=True)
+class EvidenceItem:
+    """Structured evidence backing a single ``KGEdge`` (#245).
+
+    A KGEdge carries a coarse ``pmids`` tuple for backwards compat, but
+    Layer-2 drug-disease enrichment needs richer per-evidence-item
+    provenance: which source emitted the PMID, optional ChEMBL target
+    cross-walk for downstream bioactivity lookups, and the original
+    datasource score so the voter can rank evidence by strength.
+
+    The dataclass is immutable so ``KGEdge.evidence: tuple[EvidenceItem, ...]``
+    remains a hashable, cache-safe value.
+
+    Attributes:
+        pmid: The PubMed identifier this item documents (always populated;
+            free-text identifiers from Europe PMC are preserved verbatim).
+        source: Which Layer-2 client produced this item. Constrained to
+            ``EvidenceSource`` so consumers can switch on the literal
+            value without pattern-matching strings.
+        chembl_target_id: When the upstream payload exposed a target
+            gene/protein AND the ChEMBL cross-walk resolved it, this is
+            the ``CHEMBL<n>`` target identifier. ``None`` otherwise — a
+            None value means "no target known", not an error.
+        datasource_score: Original 0–1 datasource score reported by the
+            upstream client (Open Targets ``score``, ChEMBL
+            ``pchembl_value``, etc.). ``None`` when the source didn't
+            supply one.
+    """
+
+    pmid: str
+    source: EvidenceSource
+    chembl_target_id: Optional[str] = None
+    datasource_score: Optional[float] = None
+
+
+@dataclass(frozen=True)
 class KGEdge:
     """A single Subject–Predicate–Object triple with provenance.
 
@@ -258,6 +294,13 @@ class KGEdge:
             the source doesn't carry literature provenance.
         datasource: Sub-source identifier (e.g., Open Targets'
             ``datasourceId``: "europepmc", "chembl", "clinical_trials").
+        evidence: Structured per-PMID provenance with optional ChEMBL
+            target cross-walk + datasource score. v1 mirrors ``pmids``
+            (one ``EvidenceItem`` per PMID) but is richer: each item
+            carries the source attribution, ChEMBL target ID (when
+            cross-walked), and the original datasource score. Defaults
+            to ``()`` so pre-#245 callers that construct edges without
+            evidence remain unaffected. See ``EvidenceItem``.
     """
 
     subject_id: str
@@ -269,6 +312,7 @@ class KGEdge:
     score: Optional[float] = None
     pmids: tuple[str, ...] = ()
     datasource: Optional[str] = None
+    evidence: tuple[EvidenceItem, ...] = ()
     raw: Optional[dict] = field(default=None, repr=False)
 
 

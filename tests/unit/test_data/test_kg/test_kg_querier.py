@@ -556,3 +556,254 @@ def test_query_drug_disease_edges_predicate_by_datatype(
     assert edges[0].predicate == expected_predicate
     assert edges[0].evidence_source == "open_targets"
     assert edges[0].datasource == datasource_id
+
+
+# ---------------------------------------------------------------------------
+# Issue #245: KGEdge.evidence + ChEMBL drug-disease evidence enrichment
+# ---------------------------------------------------------------------------
+
+
+class _StubChEMBL:
+    """Stub ChEMBL client for KGQuerier wiring tests.
+
+    Records every call so tests can assert call site invariants
+    (cross-walk runs once per gene symbol, bioactivity is queried only
+    when a target resolved, etc.). Does not exercise HTTP — that's
+    covered by ``test_chembl.py``'s MockTransport tests.
+    """
+
+    def __init__(
+        self,
+        *,
+        gene_to_target: dict[str, Optional[str]] | None = None,
+        bioactivity: dict[str, list[Any]] | None = None,
+    ) -> None:
+        self._gene_to_target = gene_to_target or {}
+        self._bioactivity = bioactivity or {}
+        self.calls: list[tuple[str, ...]] = []
+
+    def open_targets_target_to_chembl(self, gene_or_id: Optional[str]) -> Optional[str]:
+        self.calls.append(("cross_walk", str(gene_or_id)))
+        if not gene_or_id:
+            return None
+        return self._gene_to_target.get(gene_or_id)
+
+    def get_bioactivity(self, target_chembl_id: str) -> list[Any]:
+        self.calls.append(("get_bioactivity", target_chembl_id))
+        return self._bioactivity.get(target_chembl_id, [])
+
+    def close(self) -> None:
+        pass
+
+
+def test_kgedge_evidence_field_default_is_empty_tuple() -> None:
+    """KGEdge.evidence is an additive optional field; default is an empty
+    tuple so existing callers don't break."""
+    edge = KGEdge(
+        subject_id="X",
+        predicate="treats",
+        object_id="Y",
+        evidence_source="open_targets",
+    )
+    assert edge.evidence == ()
+
+
+def test_kgedge_evidence_carries_evidence_items() -> None:
+    """KGEdge.evidence is an immutable tuple of EvidenceItem records."""
+    from src.data.kg.types import EvidenceItem
+
+    item = EvidenceItem(
+        pmid="12345678",
+        source="open_targets",
+        chembl_target_id=None,
+        datasource_score=0.91,
+    )
+    edge = KGEdge(
+        subject_id="CHEMBL1234",
+        predicate="treats",
+        object_id="EFO_0000270",
+        evidence_source="open_targets",
+        evidence=(item,),
+    )
+    assert len(edge.evidence) == 1
+    assert edge.evidence[0].pmid == "12345678"
+
+
+def test_query_drug_disease_edges_populates_evidence_from_open_targets() -> None:
+    """When Open Targets returns literature PMIDs + a datatype score, the
+    resulting KGEdge.evidence carries one EvidenceItem per PMID. Each
+    EvidenceItem records the datasource score so consumers can rank
+    edges by evidence strength."""
+    from src.data.kg.types import EvidenceItem  # noqa: F401 — referenced via attr
+
+    umls = _StubUMLS()
+    ot = _StubOT(
+        evidence={
+            "evidences": {
+                "count": 1,
+                "rows": [
+                    {
+                        "score": 0.91,
+                        "datatypeId": "known_drug",
+                        "datasourceId": "chembl",
+                        "literature": ["12345678", "87654321"],
+                        "drug": {"id": "CHEMBL941", "name": "imatinib"},
+                        "disease": {"id": "EFO_0000222", "name": "CML"},
+                    }
+                ],
+            }
+        }
+    )
+    edges = _querier(umls=umls, ot=ot).query_drug_disease_edges("CHEMBL941", "EFO_0000222")
+    assert len(edges) == 1
+    edge = edges[0]
+    assert len(edge.evidence) == 2
+    assert {ev.pmid for ev in edge.evidence} == {"12345678", "87654321"}
+    for ev in edge.evidence:
+        assert ev.source == "open_targets"
+        assert ev.datasource_score == pytest.approx(0.91)
+        # Without a ChEMBL client wired, no target ID is associated.
+        assert ev.chembl_target_id is None
+
+
+def test_query_drug_disease_edges_enriches_with_chembl_when_target_gene_present() -> None:
+    """When (1) a ChEMBL client is attached AND (2) Open Targets exposes
+    the drug's target gene, the querier cross-walks gene → ChEMBL target ID
+    and tags every EvidenceItem with that ID.
+    """
+    umls = _StubUMLS()
+    ot = _StubOT(
+        evidence={
+            "evidences": {
+                "count": 1,
+                "rows": [
+                    {
+                        "score": 0.91,
+                        "datatypeId": "known_drug",
+                        "datasourceId": "chembl",
+                        "literature": ["16480739"],
+                        "drug": {"id": "CHEMBL941", "name": "imatinib"},
+                        "disease": {"id": "EFO_0000222", "name": "CML"},
+                        # Open Targets exposes the drug's primary target
+                        # gene in the evidence row.
+                        "target": {"id": "ENSG00000097007", "approvedSymbol": "ABL1"},
+                    }
+                ],
+            }
+        }
+    )
+    chembl = _StubChEMBL(gene_to_target={"ABL1": "CHEMBL1862"})
+    querier = KnowledgeGraphQuerier(
+        umls=umls,  # type: ignore[arg-type]
+        open_targets=ot,  # type: ignore[arg-type]
+        chembl=chembl,  # type: ignore[arg-type]
+    )
+    edges = querier.query_drug_disease_edges("CHEMBL941", "EFO_0000222")
+    assert len(edges) == 1
+    edge = edges[0]
+    assert len(edge.evidence) == 1
+    assert edge.evidence[0].chembl_target_id == "CHEMBL1862"
+    # Cross-walk should have been called with the gene symbol.
+    assert ("cross_walk", "ABL1") in chembl.calls
+
+
+def test_query_drug_disease_edges_no_chembl_target_still_emits_evidence() -> None:
+    """If ChEMBL cross-walk returns None (target not in ChEMBL), evidence
+    items are still produced from Open Targets PMIDs — chembl_target_id is
+    None. The path must not raise."""
+    umls = _StubUMLS()
+    ot = _StubOT(
+        evidence={
+            "evidences": {
+                "count": 1,
+                "rows": [
+                    {
+                        "score": 0.5,
+                        "datatypeId": "literature",
+                        "datasourceId": "europepmc",
+                        "literature": ["999"],
+                        "drug": {"id": "CHEMBL1", "name": "x"},
+                        "disease": {"id": "EFO_X", "name": "x"},
+                        "target": {"id": "ENSG_unknown", "approvedSymbol": "UNKNOWN"},
+                    }
+                ],
+            }
+        }
+    )
+    chembl = _StubChEMBL(gene_to_target={"UNKNOWN": None})
+    querier = KnowledgeGraphQuerier(
+        umls=umls,  # type: ignore[arg-type]
+        open_targets=ot,  # type: ignore[arg-type]
+        chembl=chembl,  # type: ignore[arg-type]
+    )
+    edges = querier.query_drug_disease_edges("CHEMBL1", "EFO_X")
+    assert len(edges) == 1
+    assert edges[0].evidence[0].chembl_target_id is None
+
+
+def test_query_drug_disease_edges_works_without_chembl_client() -> None:
+    """Backwards-compatible path: existing callers that did not pass a
+    ChEMBL client get the Open Targets PMID evidence threaded through
+    KGEdge.evidence, and no ChEMBL HTTP is attempted."""
+    umls = _StubUMLS()
+    ot = _StubOT(
+        evidence={
+            "evidences": {
+                "count": 1,
+                "rows": [
+                    {
+                        "score": 0.7,
+                        "datatypeId": "known_drug",
+                        "datasourceId": "chembl",
+                        "literature": ["77"],
+                        "drug": {"id": "CHEMBL1", "name": "x"},
+                        "disease": {"id": "EFO_X", "name": "x"},
+                    }
+                ],
+            }
+        }
+    )
+    # No ``chembl=...`` kwarg.
+    querier = KnowledgeGraphQuerier(
+        umls=umls,  # type: ignore[arg-type]
+        open_targets=ot,  # type: ignore[arg-type]
+    )
+    edges = querier.query_drug_disease_edges("CHEMBL1", "EFO_X")
+    assert len(edges) == 1
+    assert len(edges[0].evidence) == 1
+    assert edges[0].evidence[0].chembl_target_id is None
+
+
+def test_query_drug_disease_edges_skips_cross_walk_when_no_target_in_payload() -> None:
+    """If the Open Targets row doesn't expose a target gene symbol, the
+    ChEMBL cross-walk MUST NOT be attempted (avoid wasted HTTP)."""
+    umls = _StubUMLS()
+    ot = _StubOT(
+        evidence={
+            "evidences": {
+                "count": 1,
+                "rows": [
+                    {
+                        "score": 0.1,
+                        "datatypeId": "literature",
+                        "datasourceId": "europepmc",
+                        "literature": ["1"],
+                        "drug": {"id": "CHEMBL1", "name": "x"},
+                        "disease": {"id": "EFO_X", "name": "x"},
+                        # No "target" key.
+                    }
+                ],
+            }
+        }
+    )
+    chembl = _StubChEMBL()
+    querier = KnowledgeGraphQuerier(
+        umls=umls,  # type: ignore[arg-type]
+        open_targets=ot,  # type: ignore[arg-type]
+        chembl=chembl,  # type: ignore[arg-type]
+    )
+    edges = querier.query_drug_disease_edges("CHEMBL1", "EFO_X")
+    assert len(edges) == 1
+    # No cross-walk call.
+    cross_walk_calls = [c for c in chembl.calls if c[0] == "cross_walk"]
+    assert cross_walk_calls == []

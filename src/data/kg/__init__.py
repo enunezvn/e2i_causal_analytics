@@ -18,6 +18,11 @@ from src.data.kg.adversarial_probe import (
     AdversarialProbe,
     AdversarialProbeError,
 )
+from src.data.kg.chembl import (
+    Activity,
+    ChEMBLClient,
+    ChEMBLError,
+)
 from src.data.kg.citation_resolver import (
     CAUSAL_CUE_VERBS,
     CitationResolver,
@@ -43,6 +48,8 @@ from src.data.kg.types import (
     EnsembleSeverity,
     EnsembleVerdict,
     EntityLink,
+    EvidenceItem,
+    EvidenceSource,
     KGConcept,
     KGEdge,
     KGSignal,
@@ -59,11 +66,14 @@ from src.data.kg.umls_uts import (
 
 __all__ = [
     "AbstractRecord",
+    "Activity",
     "AdversarialProbe",
     "AdversarialProbeError",
     "AdversarialProbeResult",
     "CAUSAL_CUE_VERBS",
     "CausalRole",
+    "ChEMBLClient",
+    "ChEMBLError",
     "CitationResolver",
     "CitationResolverError",
     "CitationVerdict",
@@ -78,6 +88,8 @@ __all__ = [
     "EntityLinkerError",
     "EuropePMCClient",
     "EuropePMCError",
+    "EvidenceItem",
+    "EvidenceSource",
     "KGConcept",
     "KGEdge",
     "KGSignal",
