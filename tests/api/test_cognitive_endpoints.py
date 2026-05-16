@@ -330,3 +330,113 @@ class TestErrorHandling:
 
         assert response.status_code == 500
         assert "Query processing failed" in response.json()["detail"]
+
+
+# =============================================================================
+# LIST SESSIONS + STATUS (PR #293)
+# =============================================================================
+
+
+class TestListSessions:
+    """Tests for GET /cognitive/sessions (PR #293)."""
+
+    def test_returns_sessions_and_total(self):
+        mock_memory = MagicMock()
+        mock_memory.list_sessions = AsyncMock(
+            return_value=[
+                {
+                    "session_id": "s1",
+                    "user_id": "u1",
+                    "active_brand": "Kisqali",
+                    "active_region": "northeast",
+                    "current_phase": "active",
+                    "created_at": "2026-01-01T00:00:00",
+                    "last_activity_at": "2026-01-02T00:00:00",
+                    "message_count": 3,
+                },
+                {"session_id": "s2", "user_id": "u2"},
+            ]
+        )
+        with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_memory):
+            response = client.get("/api/cognitive/sessions")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 2
+        assert len(data["sessions"]) == 2
+        # First session full mapping
+        first = data["sessions"][0]
+        assert first["session_id"] == "s1"
+        assert first["brand"] == "Kisqali"
+        assert first["region"] == "northeast"
+        assert first["state"] == "active"
+        assert first["message_count"] == 3
+        # Second session missing fields default to None / 0
+        second = data["sessions"][1]
+        assert second["session_id"] == "s2"
+        assert second["state"] == "active"
+        assert second["message_count"] == 0
+
+    def test_forwards_user_id_and_limit_filters(self):
+        mock_memory = MagicMock()
+        mock_memory.list_sessions = AsyncMock(return_value=[])
+        with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_memory):
+            response = client.get("/api/cognitive/sessions?user_id=u42&limit=10")
+
+        assert response.status_code == 200
+        mock_memory.list_sessions.assert_awaited_once_with(user_id="u42", limit=10)
+
+    def test_handles_memory_error(self):
+        mock_memory = MagicMock()
+        mock_memory.list_sessions = AsyncMock(side_effect=Exception("redis down"))
+        with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_memory):
+            response = client.get("/api/cognitive/sessions")
+
+        assert response.status_code == 500
+        body = response.json()
+        # E2I error envelope: 'message' is the user-facing field; 'detail' is FastAPI's
+        # raw default but the global handler wraps it.
+        assert "Failed to list sessions" in body.get("message", body.get("detail", ""))
+
+
+class TestCognitiveStatus:
+    """Tests for GET /cognitive/status (PR #293)."""
+
+    def test_status_healthy_with_agents(self):
+        mock_orch = MagicMock()
+        mock_orch.agent_registry = {
+            "tier_0_data_preparer": object(),
+            "tier_1_validator": object(),
+        }
+        with patch("src.api.routes.cognitive.get_orchestrator", return_value=mock_orch):
+            response = client.get("/api/cognitive/status")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "healthy"
+        assert sorted(data["agents"]) == ["tier_0_data_preparer", "tier_1_validator"]
+        assert "version" in data
+        assert "timestamp" in data
+
+    def test_status_degraded_when_orchestrator_factory_fails(self):
+        with patch(
+            "src.api.routes.cognitive.get_orchestrator",
+            side_effect=Exception("boom"),
+        ):
+            response = client.get("/api/cognitive/status")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "degraded"
+        assert data["agents"] == []
+
+    def test_status_handles_non_dict_registry(self):
+        mock_orch = MagicMock()
+        mock_orch.agent_registry = None
+        with patch("src.api.routes.cognitive.get_orchestrator", return_value=mock_orch):
+            response = client.get("/api/cognitive/status")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "healthy"
+        assert data["agents"] == []
