@@ -998,7 +998,16 @@ async def orchestrator_node(state: ChatbotState) -> Dict[str, Any]:
             orchestrator_used = True
             response_text = orchestrator_result.get("response_text", "")
             response_confidence = orchestrator_result.get("response_confidence", 0.0)
-            agents_dispatched = orchestrator_result.get("agents_dispatched", [])
+            # Issue #251 F1 (codex MED-1): defense-in-depth at the API
+            # serializer. Even though `_build_output` and RouterNode both
+            # strip self-dispatch, this is the boundary that surfaces
+            # `agents_dispatched` to clients — re-apply the guard.
+            from src.agents.orchestrator._self_dispatch_guard import strip_self_dispatch
+
+            agents_dispatched = strip_self_dispatch(
+                orchestrator_result.get("agents_dispatched", []),
+                context="api.routes.chatbot_graph:orchestrator_result",
+            )
 
             # Phase 3: Extract partial failure information
             has_partial_failure = orchestrator_result.get("has_partial_failure", False)

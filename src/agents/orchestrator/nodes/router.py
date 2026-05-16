@@ -11,13 +11,16 @@ import time
 from collections import defaultdict
 from typing import Any, Dict, List, Literal, cast
 
+from .._self_dispatch_guard import SELF_AGENT_NAME
 from ..state import AgentDispatch, OrchestratorState
 
 logger = logging.getLogger(__name__)
 
 # Issue #251 F1: invariant — the orchestrator routes to OTHER agents.
-# This name must never appear in ``dispatch_plan`` or ``agents_dispatched``.
-SELF_AGENT_NAME = "orchestrator"
+# ``SELF_AGENT_NAME`` is re-exported here for backward compatibility with
+# call sites that import it from this module (e.g. unit tests). The
+# canonical definition lives in ``_self_dispatch_guard``.
+__all__ = ["SELF_AGENT_NAME", "RouterNode"]
 
 
 class RouterNode:
