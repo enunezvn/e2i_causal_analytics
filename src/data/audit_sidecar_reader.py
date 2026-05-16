@@ -24,6 +24,55 @@ from typing import Any, Iterator, Optional
 
 logger = logging.getLogger(__name__)
 
+# Issue #235: schema_version contract between producer (graph.py:
+# write_adaptive_verdicts_sidecar) and reader. Bump major on breaking
+# changes, minor on additive forward-compatible changes.
+_READER_SCHEMA_VERSION = "1.0"
+_READER_SCHEMA_MAJOR = 1
+
+# Issue #235 A3: the set of verdict-dict keys the reader knows how to
+# surface on ``VerdictRecord``. Any unrecognized key is logged ONCE per
+# file (not per-record), with the unknown set sorted for determinism.
+# Extend this set in lockstep with new ``VerdictRecord`` fields.
+_KNOWN_VERDICT_KEYS: frozenset[str] = frozenset(
+    {
+        "feature",
+        "layer",
+        "severity",
+        "remediation",
+        "evidence",
+        "z_score",
+        "p_value",
+        "delta_auc",
+        # Producer-emitted fields surfaced on raw_verdict only:
+        "decided_by",
+        "disagreements",
+        "kg_signal",
+        "actual_auc",
+        "null_mean",
+        "null_std",
+        "n_permutations",
+        "delta_auc_floor",
+        "delta_auc_below_floor",
+        "severity_pre_joint_check",
+        "ablation_z_score",
+        "ablation_delta_auc",
+        "ablation_null_mean",
+        "ablation_null_std",
+        "ablation_severity",
+        "contract_source",
+        "contract_window_days",
+        "llm_role",
+        "llm_remediation",
+        # 5 evaluator audit keys (Plan layer4_evaluator_audit_signal.md):
+        "evaluator_satisfied",
+        "evaluator_rationale_complete",
+        "evaluator_missed_considerations",
+        "evaluator_notes",
+        "evaluator_model",
+    }
+)
+
 
 @dataclass(frozen=True)
 class VerdictRecord:
@@ -99,16 +148,73 @@ class SidecarReader:
                 continue
             if self._until is not None and written_at > self._until:
                 continue
+            # Issue #235: schema_version handling (missing → legacy WARN;
+            # unknown-major → WARN with both versions; both still parse).
+            self._check_schema_version(path, payload.get("schema_version"))
             experiment_id = str(payload.get("experiment_id", "<unknown>"))
+            # Issue #235 A3: emit unknown-verdict-key WARN at most ONCE per
+            # file (not per-record). Collect unknown keys across all records
+            # in this sidecar, then surface as a single WARN.
+            seen_unknown: set[str] = set()
             for raw in payload.get("adaptive_verdicts", []):
                 if not isinstance(raw, dict):
                     continue
+                seen_unknown.update(k for k in raw.keys() if k not in _KNOWN_VERDICT_KEYS)
                 yield self._build_record(
                     experiment_id=experiment_id,
                     written_at=written_at,
                     source_path=path,
                     raw=raw,
                 )
+            if seen_unknown:
+                logger.warning(
+                    "SidecarReader: sidecar %s contains unknown verdict key(s) %s — "
+                    "producer schema drift or forward-compat additive field. Reader "
+                    "preserves them in raw_verdict but does not surface them on "
+                    "VerdictRecord.",
+                    path,
+                    sorted(seen_unknown),
+                )
+
+    def _check_schema_version(self, path: Path, raw_version: Any) -> None:
+        """Issue #235 A2: log WARN on missing or unknown-major schema_version.
+
+        Missing → emit "treating as legacy v0" WARN (one-off per file).
+        Unknown major → emit WARN with both the payload's version and the
+        reader's expected version. In both cases, parsing continues —
+        backward / forward compat is the goal.
+        """
+        if raw_version is None:
+            logger.warning(
+                "SidecarReader: sidecar %s missing schema_version — treating as "
+                "legacy v0 (pre-Issue-#235). All known keys still parsed.",
+                path,
+            )
+            return
+        version_str = str(raw_version)
+        try:
+            major = int(version_str.split(".", 1)[0])
+        except (ValueError, IndexError):
+            logger.warning(
+                "SidecarReader: sidecar %s has unparseable schema_version=%r; "
+                "reader expected major %d (e.g. %s). Parsing known keys only.",
+                path,
+                raw_version,
+                _READER_SCHEMA_MAJOR,
+                _READER_SCHEMA_VERSION,
+            )
+            return
+        if major != _READER_SCHEMA_MAJOR:
+            logger.warning(
+                "SidecarReader: sidecar %s has schema_version=%s (major=%d) but "
+                "reader expects major=%d (current=%s). Parsing known keys; some "
+                "newer fields may not surface.",
+                path,
+                version_str,
+                major,
+                _READER_SCHEMA_MAJOR,
+                _READER_SCHEMA_VERSION,
+            )
 
     @staticmethod
     def _parse_iso8601(value: Any) -> Optional[datetime]:
@@ -237,24 +343,46 @@ def extract_disagreements(
         )
 
 
-def _dedup_sort_key(e: DisagreementEvent) -> tuple:
-    """Composite key used as the dedup tiebreaker when two events
-    name the same feature with identical ``written_at`` (realistic when
-    the producer's compact timestamp has only second-level granularity
-    and two runs land in the same second). Codex Gate-2 MED-2."""
-    return (e.written_at, str(e.source_path), e.experiment_id)
+def _mtime_or_zero(path: Path) -> float:
+    """Best-effort file mtime in epoch seconds. Returns 0.0 (not raise)
+    when the file is missing or unreadable, so the comparator stays
+    total: nonexistent paths sort *below* existing paths, which means
+    real artifacts always win over phantom ones."""
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _dedup_sort_key(e: DisagreementEvent) -> tuple[datetime, float, str, str]:
+    """Recency-first composite key (Issue #234).
+
+    Order of precedence:
+      1. ``written_at`` (payload timestamp, second-resolution per producer).
+      2. ``mtime`` of ``source_path`` — recency fallback when ``written_at``
+         ties to the second. Newer file wins. Missing files contribute 0.0
+         so they never beat a real artifact.
+      3. ``str(source_path)`` — last-resort STABLE lex tiebreaker.
+         Documented as deterministic-only, not semantically meaningful.
+      4. ``experiment_id`` — final lex tiebreaker for total ordering.
+
+    Prior behaviour (codex Gate-2 MED-2) used lex ``str(source_path)`` as
+    the *only* tiebreaker; Issue #234 changes this to recency-based,
+    because numeric subpaths (``exp-1`` < ``exp-10`` < ``exp-2``) made the
+    lex winner unpredictable and unrelated to actual run recency.
+    """
+    return (e.written_at, _mtime_or_zero(e.source_path), str(e.source_path), e.experiment_id)
 
 
 def dedup_disagreements(
     events: Iterator[DisagreementEvent] | list[DisagreementEvent],
 ) -> Iterator[DisagreementEvent]:
     """Collapse duplicate disagreements by feature name. When multiple
-    events name the same feature, the LATEST (by composite key
-    ``(written_at, source_path, experiment_id)``) is kept so the curated
-    entry reflects the most recent evaluator critique. The composite key
-    is the deterministic tiebreaker required when two events share
-    ``written_at`` to the second — without it, dict-insertion order would
-    decide the winner (codex Gate-2 MED-2).
+    events name the same feature, the LATEST (per ``_dedup_sort_key``)
+    is kept so the curated entry reflects the most recent evaluator
+    critique. The composite key is ordered ``written_at`` descending,
+    then file mtime descending, then ``source_path``/``experiment_id``
+    lex as last-resort deterministic tiebreakers (Issue #234).
 
     Output ordering is deterministic: feature name ascending. Required
     because the downstream JSON manifest is human-diffed across runs.

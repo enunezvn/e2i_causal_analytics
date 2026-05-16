@@ -489,11 +489,15 @@ def test_dedup_disagreements_is_deterministic_under_repeat():
 
 
 def test_dedup_equal_timestamp_uses_composite_tiebreaker():
-    """Codex Gate-2 MED-2: when two events for the same feature share
-    written_at to the second, the composite key (written_at, source_path,
-    experiment_id) determines the winner deterministically. Without this
-    tiebreaker, dict-insertion order would decide and runs would diverge
-    when sidecar discovery order shuffles."""
+    """Issue #234: when two events for the same feature share
+    written_at AND their source_paths do not point at real files on disk
+    (so mtime fallback is unavailable), dedup falls back to the documented
+    stable lex tiebreaker on ``source_path`` then ``experiment_id``.
+
+    Documented as the *last-resort* tiebreaker, not the primary one — see
+    ``test_dedup_tiebreaker_prefers_newer_written_at_when_paths_differ``
+    and ``test_dedup_tiebreaker_falls_back_to_path_lex_when_written_at_ties``
+    for the recency-then-lex contract."""
     from src.data.audit_sidecar_reader import (
         DisagreementEvent,
         dedup_disagreements,
@@ -529,3 +533,311 @@ def test_dedup_equal_timestamp_uses_composite_tiebreaker():
     winner2 = list(dedup_disagreements([e_high, e_low]))[0]
     assert winner1.notes == winner2.notes == "from-b"
     assert winner1.experiment_id == "exp-b"
+
+
+# -----------------------------------------------------------------------------
+# Issue #234 — dedup tiebreaker by recency, not lex.
+# -----------------------------------------------------------------------------
+
+
+def test_dedup_tiebreaker_prefers_newer_written_at_when_paths_differ(tmp_path):
+    """Issue #234: when two events for the same feature have *different*
+    written_at, the newer one wins regardless of lex order of source_path.
+    Anchor: paths like ``/artifacts/exp-1/x.json`` and
+    ``/artifacts/exp-10/x.json`` — lex sort orders ``exp-10`` after
+    ``exp-1`` but BEFORE ``exp-2``; the dedup contract is *recency*, so
+    the newer written_at must win even when its path lex-sorts earlier."""
+    from src.data.audit_sidecar_reader import (
+        DisagreementEvent,
+        dedup_disagreements,
+    )
+
+    # exp-10 (lex-mid: "exp-1" < "exp-10" < "exp-2") but newest written_at.
+    e_old = DisagreementEvent(
+        experiment_id="exp-2",
+        written_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+        source_path=tmp_path / "exp-2" / "x.json",
+        feature="f",
+        worker_severity="m",
+        worker_remediation="k",
+        rationale_complete=False,
+        missed_considerations=("old",),
+        notes="from-exp-2",
+        evaluator_model="haiku",
+    )
+    e_new = DisagreementEvent(
+        experiment_id="exp-10",
+        written_at=datetime(2026, 5, 15, tzinfo=timezone.utc),
+        source_path=tmp_path / "exp-10" / "x.json",
+        feature="f",
+        worker_severity="m",
+        worker_remediation="k",
+        rationale_complete=False,
+        missed_considerations=("new",),
+        notes="from-exp-10",
+        evaluator_model="haiku",
+    )
+    deduped = list(dedup_disagreements([e_old, e_new]))
+    assert len(deduped) == 1
+    assert deduped[0].notes == "from-exp-10"
+    assert deduped[0].experiment_id == "exp-10"
+
+
+def test_dedup_tiebreaker_falls_back_to_path_lex_when_written_at_ties(tmp_path):
+    """Issue #234 A5: when ``written_at`` ties exactly AND mtime tiebreaker
+    is unavailable (paths do not exist on disk OR mtimes are equal), the
+    fallback is stable lex sort on ``source_path`` then ``experiment_id``.
+    Documented as deterministic-only, not semantically meaningful."""
+    from src.data.audit_sidecar_reader import (
+        DisagreementEvent,
+        dedup_disagreements,
+    )
+
+    same_ts = datetime(2026, 5, 15, 10, 30, 0, tzinfo=timezone.utc)
+    # Both source_paths point at nonexistent files: mtime fallback skipped.
+    e_low = DisagreementEvent(
+        experiment_id="exp-a",
+        written_at=same_ts,
+        source_path=Path("/nonexistent/exp-a/x.json"),
+        feature="g",
+        worker_severity="m",
+        worker_remediation="k",
+        rationale_complete=False,
+        missed_considerations=("a",),
+        notes="from-a",
+        evaluator_model="haiku",
+    )
+    e_high = DisagreementEvent(
+        experiment_id="exp-b",
+        written_at=same_ts,
+        source_path=Path("/nonexistent/exp-b/x.json"),
+        feature="g",
+        worker_severity="m",
+        worker_remediation="k",
+        rationale_complete=False,
+        missed_considerations=("b",),
+        notes="from-b",
+        evaluator_model="haiku",
+    )
+    deduped = list(dedup_disagreements([e_low, e_high]))
+    assert len(deduped) == 1
+    assert deduped[0].experiment_id == "exp-b"  # lex-higher path wins
+
+
+def test_dedup_tiebreaker_prefers_newer_mtime_when_written_at_ties(tmp_path):
+    """Issue #234: when ``written_at`` ties to the second AND both source
+    files exist on disk, the file with the *newer mtime* wins. mtime is
+    the recency proxy when the payload timestamp lacks sub-second
+    granularity (producer uses ``%Y%m%dT%H%M%SZ``)."""
+    import os
+    import time
+
+    from src.data.audit_sidecar_reader import (
+        DisagreementEvent,
+        dedup_disagreements,
+    )
+
+    same_ts = datetime(2026, 5, 15, 10, 30, 0, tzinfo=timezone.utc)
+    older_path = tmp_path / "exp-z" / "older.json"
+    newer_path = tmp_path / "exp-a" / "newer.json"
+    older_path.parent.mkdir(parents=True)
+    newer_path.parent.mkdir(parents=True)
+    older_path.write_text("{}")
+    # Force mtime of older to be in the past; newer is "now".
+    past = time.time() - 3600
+    os.utime(older_path, (past, past))
+    newer_path.write_text("{}")
+    # Sanity: lex order of strs puts exp-a < exp-z, so a naive lex
+    # tiebreaker would pick exp-z (the older, lex-higher one).
+    assert str(older_path) > str(newer_path)
+
+    e_older = DisagreementEvent(
+        experiment_id="exp-z",
+        written_at=same_ts,
+        source_path=older_path,
+        feature="f",
+        worker_severity="m",
+        worker_remediation="k",
+        rationale_complete=False,
+        missed_considerations=("old",),
+        notes="from-older",
+        evaluator_model="haiku",
+    )
+    e_newer = DisagreementEvent(
+        experiment_id="exp-a",
+        written_at=same_ts,
+        source_path=newer_path,
+        feature="f",
+        worker_severity="m",
+        worker_remediation="k",
+        rationale_complete=False,
+        missed_considerations=("new",),
+        notes="from-newer",
+        evaluator_model="haiku",
+    )
+    deduped = list(dedup_disagreements([e_older, e_newer]))
+    assert len(deduped) == 1
+    assert deduped[0].notes == "from-newer", (
+        "newer mtime must win over lex-higher path when written_at ties"
+    )
+
+
+# -----------------------------------------------------------------------------
+# Issue #235 — producer schema_version + reader unknown-key warning.
+# -----------------------------------------------------------------------------
+
+
+def test_sidecar_payload_includes_schema_version_v1(tmp_path, monkeypatch):
+    """Issue #235 A1: a fresh producer run writes ``schema_version`` at
+    the top level of the payload, pinned to the current canonical
+    major.minor (``"1.0"``)."""
+    from src.agents.ml_foundation.data_preparer.graph import (
+        write_adaptive_verdicts_sidecar,
+    )
+
+    monkeypatch.setenv("ADAPTIVE_VALIDITY_ARTIFACTS_DIR", str(tmp_path))
+    state = {
+        "experiment_id": "exp-schema",
+        "data_source": "synthetic",
+        "leakage_severity": "none",
+        "leaked_features": [],
+        "adaptive_flagged_features": [],
+        "adaptive_verdicts": [
+            {
+                "feature": "f",
+                "layer": "4",
+                "severity": "moderate",
+                "evaluator_satisfied": False,
+            }
+        ],
+    }
+    path = write_adaptive_verdicts_sidecar(state)
+    assert path is not None
+    payload = json.loads(Path(path).read_text())
+    assert payload.get("schema_version") == "1.0", (
+        f"producer must emit top-level schema_version='1.0'; got {payload.get('schema_version')!r}"
+    )
+
+
+def test_reader_warns_on_missing_schema_version_legacy_fallback(tmp_path, caplog):
+    """Issue #235 A2a: a sidecar with no ``schema_version`` (legacy v0
+    sidecars from runs before 2026-05-15 + this fix) must be parsed
+    successfully, with a WARN noting the legacy fallback."""
+    from src.data.audit_sidecar_reader import SidecarReader
+
+    _write_sidecar(
+        tmp_path,
+        "exp-legacy",
+        "2026-04-15T10:00:00Z",
+        [
+            {
+                "feature": "f-legacy",
+                "layer": "4",
+                "evaluator_satisfied": False,
+                "evaluator_rationale_complete": False,
+                "evaluator_missed_considerations": [],
+                "evaluator_notes": "",
+                "evaluator_model": "haiku",
+            }
+        ],
+    )
+    reader = SidecarReader(artifacts_dir=tmp_path)
+    with caplog.at_level("WARNING"):
+        records = list(reader.iter_verdict_records())
+    assert len(records) == 1
+    assert records[0].feature == "f-legacy"
+    assert any(
+        "schema_version" in rec.message and "legacy" in rec.message.lower()
+        for rec in caplog.records
+    ), f"expected legacy-fallback WARN; got: {[r.message for r in caplog.records]}"
+
+
+def test_reader_warns_on_unknown_schema_version_major(tmp_path, caplog):
+    """Issue #235 A2b: a sidecar carrying a ``schema_version`` whose major
+    bumps past the reader's expected major must WARN with both versions
+    surfaced. Reader still parses the known keys."""
+    from src.data.audit_sidecar_reader import SidecarReader
+
+    sub = tmp_path / "exp-future"
+    sub.mkdir(parents=True)
+    payload = {
+        "experiment_id": "exp-future",
+        "schema_version": "2.0",  # future major
+        "data_source": "synthetic",
+        "written_at": "2026-05-15T10:00:00Z",
+        "leakage_severity": "none",
+        "leaked_features": [],
+        "adaptive_flagged_features": [],
+        "adaptive_verdicts": [
+            {
+                "feature": "f-fut",
+                "layer": "4",
+                "evaluator_satisfied": False,
+            }
+        ],
+    }
+    out = sub / "adaptive_verdicts_20260515T100000Z.json"
+    out.write_text(json.dumps(payload))
+
+    reader = SidecarReader(artifacts_dir=tmp_path)
+    with caplog.at_level("WARNING"):
+        records = list(reader.iter_verdict_records())
+    assert len(records) == 1
+    assert records[0].feature == "f-fut"
+    matches = [
+        rec for rec in caplog.records if "schema_version" in rec.message and "2.0" in rec.message
+    ]
+    assert matches, (
+        f"expected unknown-major WARN naming '2.0'; got: {[r.message for r in caplog.records]}"
+    )
+
+
+def test_reader_warns_on_unknown_keys_once_per_file(tmp_path, caplog):
+    """Issue #235 A3: when a verdict carries keys the reader doesn't
+    recognize, log a WARN *once per file*, not per-record. Bounds log
+    spam when a future producer adds a new field across N verdicts."""
+    from src.data.audit_sidecar_reader import SidecarReader
+
+    sub = tmp_path / "exp-fwd"
+    sub.mkdir(parents=True)
+    payload = {
+        "experiment_id": "exp-fwd",
+        "schema_version": "1.0",
+        "data_source": "synthetic",
+        "written_at": "2026-05-15T10:00:00Z",
+        "leakage_severity": "none",
+        "leaked_features": [],
+        "adaptive_flagged_features": [],
+        "adaptive_verdicts": [
+            {
+                "feature": "f1",
+                "layer": "4",
+                "future_field": 42,
+                "another_new_field": "blah",
+                "evaluator_satisfied": False,
+            },
+            {
+                "feature": "f2",
+                "layer": "4",
+                "future_field": 99,  # SAME unknown key on a 2nd record
+                "evaluator_satisfied": False,
+            },
+        ],
+    }
+    out = sub / "adaptive_verdicts_20260515T100000Z.json"
+    out.write_text(json.dumps(payload))
+
+    reader = SidecarReader(artifacts_dir=tmp_path)
+    with caplog.at_level("WARNING"):
+        records = list(reader.iter_verdict_records())
+    assert len(records) == 2
+    unknown_warns = [
+        rec
+        for rec in caplog.records
+        if "unknown" in rec.message.lower() and "future_field" in rec.message
+    ]
+    # Exactly ONE warn for this file, even though future_field appears in 2 records.
+    assert len(unknown_warns) == 1, (
+        f"expected exactly one unknown-key WARN per file; got {len(unknown_warns)}: "
+        f"{[r.message for r in unknown_warns]}"
+    )
