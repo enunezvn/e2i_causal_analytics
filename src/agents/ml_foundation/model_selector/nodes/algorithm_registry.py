@@ -153,7 +153,8 @@ ALGORITHM_REGISTRY = {
             # A direct import would create a circular dependency via
             # ``model_trainer/nodes/__init__.py`` → ``quality_remediation`` →
             # ``algorithm_registry``. The SSOT contract is enforced at test
-            # time by ``test_lr_saga_fixed_params.py::TestIssue273RegistryReferencesSSOT``
+            # time by
+            # ``test_lr_saga_fixed_params.py::TestIssue273RegistryDefaultsAgreeWithSSOT``
             # — diverging from SSOT here makes that test trip.
             # ``solver=saga`` is load-bearing: per PR #261 / #232, HPO trials
             # with ``penalty="l1"`` crash under ``solver=lbfgs`` with
