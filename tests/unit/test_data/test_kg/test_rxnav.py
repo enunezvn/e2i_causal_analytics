@@ -7,7 +7,7 @@ from typing import Callable
 import httpx
 import pytest
 
-from src.data.kg.rxnav import RxCUIMatch, RxNavClient, RxNavError, reset_caches
+from src.data.kg.rxnav import RXNAV_BASE, RxCUIMatch, RxNavClient, RxNavError, reset_caches
 
 
 @pytest.fixture(autouse=True)
@@ -151,3 +151,87 @@ def test_non_json_body_raises() -> None:
         with pytest.raises(RxNavError) as exc:
             client.rxcui_for_name("ibuprofen")
         assert "non-JSON" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# Issue #246: rxnav-in-a-box offline-mode support via RXNAV_BASE_URL env var.
+# ---------------------------------------------------------------------------
+
+
+def test_default_base_url_is_public_nlm_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With no env var, the client must hit the public NLM REST endpoint.
+
+    Default-preservation invariant: existing callers (EntityLinker) construct
+    RxNavClient() with zero args; that path must continue to target NLM.
+    """
+    monkeypatch.delenv("RXNAV_BASE_URL", raising=False)
+    captured: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(str(request.url))
+        return httpx.Response(200, json={"idGroup": {"rxnormId": ["5640"]}})
+
+    transport = httpx.MockTransport(handler)
+    http = httpx.Client(transport=transport)
+    # Construct with no `base=` kwarg to exercise the default-resolution path.
+    with RxNavClient(client=http) as client:
+        client.rxcui_for_name("ibuprofen")
+
+    assert captured, "handler must have been invoked"
+    assert captured[0].startswith("https://rxnav.nlm.nih.gov/REST/"), captured[0]
+    # And the module constant must still expose the public default.
+    assert RXNAV_BASE == "https://rxnav.nlm.nih.gov/REST"
+
+
+def test_rxnav_base_url_env_var_redirects_to_local_instance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RXNAV_BASE_URL must redirect all traffic to the local rxnav-in-a-box.
+
+    Operators flip this when running the offline Docker overlay
+    (`docker compose -f docker/docker-compose.rxnav.yml up -d`). Read at
+    construction time, not at module import, so monkeypatch works.
+    """
+    monkeypatch.setenv("RXNAV_BASE_URL", "http://localhost:4000/REST")
+    captured: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(str(request.url))
+        return httpx.Response(200, json={"idGroup": {"rxnormId": ["5640"]}})
+
+    transport = httpx.MockTransport(handler)
+    http = httpx.Client(transport=transport)
+    with RxNavClient(client=http) as client:
+        client.rxcui_for_name("ibuprofen")
+
+    assert captured, "handler must have been invoked"
+    assert captured[0].startswith("http://localhost:4000/REST/"), captured[0]
+    assert "rxnav.nlm.nih.gov" not in captured[0]
+
+
+def test_explicit_base_kwarg_overrides_env_var(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit `base=` kwarg must win over RXNAV_BASE_URL.
+
+    Belt-and-suspenders: callers that pin a URL programmatically (e.g.,
+    tests, dependency-injection containers) must not be silently rerouted
+    by an env var leaking in from the shell.
+    """
+    monkeypatch.setenv("RXNAV_BASE_URL", "http://localhost:4000/REST")
+    captured: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(str(request.url))
+        return httpx.Response(200, json={"idGroup": {"rxnormId": ["5640"]}})
+
+    transport = httpx.MockTransport(handler)
+    http = httpx.Client(transport=transport)
+    with RxNavClient(base="https://example.test/REST", client=http) as client:
+        client.rxcui_for_name("ibuprofen")
+
+    assert captured, "handler must have been invoked"
+    assert captured[0].startswith("https://example.test/REST/"), captured[0]
+    assert "localhost:4000" not in captured[0]

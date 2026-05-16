@@ -1,0 +1,83 @@
+# =============================================================================
+# E2I Causal Analytics - rxnav-in-a-box Offline Overlay (issue #246)
+# =============================================================================
+# Routes RxNav traffic to a locally-hosted NLM rxnav-in-a-box Docker instance
+# instead of the public ``rxnav.nlm.nih.gov/REST`` endpoint. Use this overlay
+# when:
+#   - Building KG caches in bulk (public API has rate limits + occasional 5xx).
+#   - Operating air-gapped / restricted-egress environments.
+#   - Reproducibility (pin a specific monthly RxNorm release).
+#
+# Usage:
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml \
+#     -f docker/docker-compose.rxnav.yml up -d rxnav
+#
+# Then point the application at it (include the /REST path prefix that
+# rxnav-in-a-box mounts to mirror the public NLM REST surface):
+#   export RXNAV_BASE_URL=http://localhost:4000/REST
+#   # (or set in .env / compose env for api + worker services)
+#
+# Code default is unchanged: with RXNAV_BASE_URL unset, ``src/data/kg/rxnav.py``
+# continues to hit the public NLM endpoint. See ``docs/ARCHITECTURE.md`` §4.7.
+#
+# Image:
+#   NLM publishes ``rxnavinabox/rxnavinabox`` on Docker Hub with monthly tags
+#   (e.g. ``25.12.4``) tracking the RxNorm release calendar. ``:latest`` floats
+#   to the most recent monthly cut. Pin a tag in production via
+#   ``RXNAV_IMAGE_TAG`` for reproducibility — defaults to ``:latest`` for dev.
+#
+# Storage budget warning:
+#   The image bundles RxNorm + RxTerms + ATC + DailyMed pull data — ~15-20 GB on
+#   disk and ~12 GB RAM steady-state. Allocate accordingly before ``up -d``.
+#
+# References:
+#   - Official docs: https://lhncbc.nlm.nih.gov/RxNav/applications/RxNav-in-a-Box.html
+#   - Docker Hub:    https://hub.docker.com/r/rxnavinabox/rxnavinabox
+#   - REST API parity with public endpoint: yes (drop-in replacement).
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # rxnav-in-a-box — NLM drug-terminology REST service
+  # ---------------------------------------------------------------------------
+  # Exposes the same REST surface as https://rxnav.nlm.nih.gov/REST on port
+  # 4000 (NLM's documented default). The application client picks this up
+  # via RXNAV_BASE_URL=http://localhost:4000 (or the in-network DNS name
+  # ``http://rxnav:4000`` when called from another compose service).
+  rxnav:
+    image: rxnavinabox/rxnavinabox:${RXNAV_IMAGE_TAG:-latest}
+    hostname: rxnav
+    restart: unless-stopped
+
+    ports:
+      - "127.0.0.1:4000:4000"
+
+    healthcheck:
+      # /REST/version returns the RxNorm release stamp; lightweight + cacheable.
+      test: ["CMD-SHELL", "curl -fsS http://localhost:4000/REST/version || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+    networks:
+      - e2i_network
+
+    security_opt:
+      - no-new-privileges:true
+
+    deploy:
+      resources:
+        limits:
+          # NLM documents ~12 GB RAM for steady-state; cap at 16 GB to leave
+          # headroom for startup ingestion. Tune down once the box is warm.
+          cpus: '2'
+          memory: 16G
+
+    labels:
+      - "e2i.service=rxnav"
+      - "e2i.component=drug-terminology"
+
+networks:
+  e2i_network:
+    external: true
