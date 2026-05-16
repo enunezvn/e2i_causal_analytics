@@ -577,6 +577,62 @@ Plans:
 - Persistence + curation CLI (shipped 2026-05-15): `.claude/plans/layer4_evaluator_audit_consumer.md`
 - Cost + latency telemetry (issue #241, shipped 2026-05-15)
 
+### 4.7 KG External APIs — Offline mode (rxnav-in-a-box)
+
+The RxNav client at `src/data/kg/rxnav.py` resolves drug names + NDC codes
+to RxCUIs against the public NLM REST endpoint
+(`https://rxnav.nlm.nih.gov/REST`) by default. For bulk cache builds, air-
+gapped deployments, or pinning a specific monthly RxNorm release, operators
+can flip a single env var to redirect all traffic to a locally-hosted
+`rxnav-in-a-box` Docker instance.
+
+**When to use:**
+- Building or rebuilding KG caches in bulk (public API rate-limits +
+  occasional 5xx + variable latency can stall multi-hour runs).
+- Restricted-egress / air-gapped environments.
+- Reproducibility — pin to a specific monthly RxNorm release tag.
+
+**How to start (issue #246):**
+
+```bash
+# Bring up the rxnav-in-a-box service (NLM's official image, monthly tags
+# track the RxNorm release calendar — pin RXNAV_IMAGE_TAG for prod).
+docker compose -f docker/docker-compose.yml \
+               -f docker/docker-compose.dev.yml \
+               -f docker/docker-compose.rxnav.yml \
+               up -d rxnav
+
+# Wait for the healthcheck to flip green (~60s for ingestion warm-up):
+docker compose ps rxnav
+
+# Point the app at it:
+export RXNAV_BASE_URL=http://localhost:4000/REST
+# (or set it in .env / the compose env block of api + worker_* services)
+```
+
+**Env var contract:**
+- `RXNAV_BASE_URL` — full base URL including the `/REST` path prefix that
+  rxnav-in-a-box mounts (mirroring the public endpoint), e.g.
+  `http://localhost:4000/REST` for the overlay above, or
+  `http://rxnav:4000/REST` when called from another compose service via
+  in-network DNS. When unset, the client uses the public NLM endpoint
+  (`https://rxnav.nlm.nih.gov/REST`). Read at client instantiation, not at
+  module import — safe to monkeypatch in tests + per-worker overrides take
+  effect.
+
+**Storage budget warning:** the rxnav-in-a-box image bundles RxNorm + RxTerms
++ ATC + DailyMed pull data — ~15-20 GB on disk, ~12 GB RAM steady-state.
+Allocate before `up -d`; the overlay caps memory at 16 GB.
+
+**Monthly refresh:** NLM publishes a new monthly tag on Docker Hub
+(`rxnavinabox/rxnavinabox:25.12.4`, etc.) shortly after each RxNorm release.
+The overlay defaults `RXNAV_IMAGE_TAG=latest` for dev; production should pin
+to a specific monthly tag and refresh on a known cadence.
+
+References:
+- NLM RxNav-in-a-Box: https://lhncbc.nlm.nih.gov/RxNav/applications/RxNav-in-a-Box.html
+- Docker Hub image: https://hub.docker.com/r/rxnavinabox/rxnavinabox
+
 ---
 
 ## 5. Security Architecture

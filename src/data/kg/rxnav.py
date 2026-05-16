@@ -25,6 +25,7 @@ References:
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Optional
@@ -34,8 +35,25 @@ import httpx
 logger = logging.getLogger(__name__)
 
 RXNAV_BASE = "https://rxnav.nlm.nih.gov/REST"
+RXNAV_BASE_URL_ENV = "RXNAV_BASE_URL"
 DEFAULT_TIMEOUT = 10.0
 _LRU_MAXSIZE = 4096
+
+
+def _resolve_base_url(explicit: Optional[str]) -> str:
+    """Resolve the RxNav base URL with precedence: explicit > env > default.
+
+    Operators flip ``RXNAV_BASE_URL`` to redirect requests to a locally-hosted
+    ``rxnav-in-a-box`` Docker instance (see ``docker/docker-compose.rxnav.yml``)
+    without code changes. Defaults to the public NLM REST endpoint.
+
+    The env var is read at instantiation (not import) so tests can use
+    ``monkeypatch.setenv`` and per-process operator overrides work in long-
+    running workers.
+    """
+    if explicit is not None:
+        return explicit
+    return os.environ.get(RXNAV_BASE_URL_ENV) or RXNAV_BASE
 
 
 @dataclass(frozen=True)
@@ -64,11 +82,14 @@ class RxNavClient:
     def __init__(
         self,
         *,
-        base: str = RXNAV_BASE,
+        base: Optional[str] = None,
         timeout: float = DEFAULT_TIMEOUT,
         client: Optional[httpx.Client] = None,
     ) -> None:
-        self._base = base.rstrip("/")
+        # Precedence: explicit `base=` > RXNAV_BASE_URL env > public NLM default.
+        # Env var is read here (not at import) so tests/monkeypatch + per-worker
+        # overrides take effect. See `_resolve_base_url` docstring + issue #246.
+        self._base = _resolve_base_url(base).rstrip("/")
         self._client = client if client is not None else httpx.Client(timeout=timeout)
         self._owns_client = client is None
 
