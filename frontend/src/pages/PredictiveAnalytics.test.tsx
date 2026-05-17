@@ -2,16 +2,38 @@
  * PredictiveAnalytics Page Tests
  * ==============================
  *
- * Tests for the Predictive Analytics dashboard page with
- * risk scores, distributions, uplift models, and AI recommendations.
+ * Tests for the live-data Predictive Analytics page that wires
+ * to /api/models/predict/{model_name} via the predictions hooks.
+ *
+ * Acceptance criteria (issue #300):
+ * - Model selector populated from useModelsStatus
+ * - Form fields driven by useModelInfo(modelName).input_schema
+ * - Run-prediction button invokes usePredict mutation
+ * - Display prediction + confidence + feature contributions
+ * - Loading/error states via QueryErrorState
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import * as React from 'react';
 import PredictiveAnalytics from './PredictiveAnalytics';
 
-// Mock Recharts components to avoid canvas/SVG rendering issues in tests
+// Mock predictions hooks
+vi.mock('@/hooks/api/use-predictions', () => ({
+  useModelsStatus: vi.fn(),
+  useModelInfo: vi.fn(),
+  usePredict: vi.fn(),
+}));
+
+import {
+  useModelsStatus,
+  useModelInfo,
+  usePredict,
+} from '@/hooks/api/use-predictions';
+
+// Mock Recharts to skip canvas/SVG rendering
 vi.mock('recharts', async () => {
   const actual = await vi.importActual('recharts');
   return {
@@ -24,682 +46,530 @@ vi.mock('recharts', async () => {
   };
 });
 
-// Mock URL.createObjectURL and URL.revokeObjectURL for export tests
-const mockCreateObjectURL = vi.fn(() => 'blob:mock-url');
-const mockRevokeObjectURL = vi.fn();
+function createWrapper() {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, gcTime: 0 },
+      mutations: { retry: false },
+    },
+  });
+  return ({ children }: { children: React.ReactNode }) => (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  );
+}
 
-beforeEach(() => {
-  vi.clearAllMocks();
-  global.URL.createObjectURL = mockCreateObjectURL;
-  global.URL.revokeObjectURL = mockRevokeObjectURL;
-});
+// Sample mock data
+const mockModelsStatus = {
+  total_models: 2,
+  healthy_count: 2,
+  unhealthy_count: 0,
+  models: [
+    {
+      model_name: 'churn_model',
+      status: 'healthy',
+      endpoint: 'http://localhost:8080/predictions/churn_model',
+      last_check: '2026-01-04T10:00:00Z',
+    },
+    {
+      model_name: 'conversion_model',
+      status: 'healthy',
+      endpoint: 'http://localhost:8080/predictions/conversion_model',
+      last_check: '2026-01-04T10:00:00Z',
+    },
+  ],
+  timestamp: '2026-01-04T10:00:00Z',
+};
 
-describe('PredictiveAnalytics', () => {
-  it('renders page header with title and description', () => {
-    render(<PredictiveAnalytics />);
+const mockModelInfo = {
+  name: 'churn_model',
+  version: '1.0.0',
+  type: 'classification',
+  description: 'Churn risk model',
+  input_schema: {
+    hcp_id: 'string',
+    territory: 'string',
+    specialty: 'string',
+    visits_last_quarter: 'number',
+  },
+  metadata: {},
+};
 
+const mockPredictionResponse = {
+  model_name: 'churn_model',
+  prediction: 'high_risk',
+  confidence: 0.87,
+  feature_importance: {
+    hcp_id: 0.05,
+    territory: 0.21,
+    specialty: 0.34,
+    visits_last_quarter: 0.4,
+  },
+  latency_ms: 42,
+  model_version: '1.0.0',
+  timestamp: '2026-01-04T10:00:00Z',
+};
+
+describe('PredictiveAnalytics (live API)', () => {
+  const mockMutate = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    (useModelsStatus as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: mockModelsStatus,
+      isLoading: false,
+      error: null,
+    });
+    (useModelInfo as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: mockModelInfo,
+      isLoading: false,
+      error: null,
+    });
+    (usePredict as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: mockMutate,
+      data: undefined,
+      isPending: false,
+      isError: false,
+      error: null,
+      reset: vi.fn(),
+    });
+  });
+
+  // ===========================================================================
+  // AC 1: Model selector from useModelsStatus
+  // ===========================================================================
+
+  it('renders the page title', () => {
+    render(<PredictiveAnalytics />, { wrapper: createWrapper() });
     expect(screen.getByText('Predictive Analytics')).toBeInTheDocument();
+  });
+
+  it('calls useModelsStatus to populate the model selector', () => {
+    render(<PredictiveAnalytics />, { wrapper: createWrapper() });
+    expect(useModelsStatus).toHaveBeenCalled();
+  });
+
+  it('shows models from useModelsStatus in the selector dropdown', async () => {
+    const user = userEvent.setup();
+    render(<PredictiveAnalytics />, { wrapper: createWrapper() });
+
+    const trigger = screen.getByRole('combobox', { name: /model/i });
+    await user.click(trigger);
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole('option', { name: /churn_model/i })
+      ).toBeInTheDocument();
+    });
     expect(
-      screen.getByText(/Risk scores, probability distributions, uplift models/i)
+      screen.getByRole('option', { name: /conversion_model/i })
+    ).toBeInTheDocument();
+  }, 15000);
+
+  // ===========================================================================
+  // AC 2: Form fields driven by useModelInfo input_schema
+  // ===========================================================================
+
+  it('calls useModelInfo with the selected model name', () => {
+    render(<PredictiveAnalytics />, { wrapper: createWrapper() });
+    // useModelInfo should be called with churn_model (first healthy model)
+    expect(useModelInfo).toHaveBeenCalledWith('churn_model');
+  });
+
+  it('renders an input field per feature in input_schema', () => {
+    render(<PredictiveAnalytics />, { wrapper: createWrapper() });
+    // Each feature key should map to a labelled input
+    expect(screen.getByLabelText(/hcp_id/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/territory/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/specialty/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/visits_last_quarter/i)).toBeInTheDocument();
+  });
+
+  // ===========================================================================
+  // AC 3: Run-prediction button invokes usePredict
+  // ===========================================================================
+
+  it('invokes the usePredict mutation when the Run Prediction button is clicked', async () => {
+    render(<PredictiveAnalytics />, { wrapper: createWrapper() });
+
+    // Fill at least one field so the request has feature data. fireEvent is
+    // synchronous and avoids the per-keystroke delay of userEvent.type, which
+    // matters because Radix UI re-renders after each change.
+    const input = screen.getByLabelText(/hcp_id/i);
+    fireEvent.change(input, { target: { value: 'HCP001' } });
+
+    const runButton = screen.getByRole('button', { name: /run prediction/i });
+    fireEvent.click(runButton);
+
+    await waitFor(() => {
+      expect(mockMutate).toHaveBeenCalledTimes(1);
+    });
+    const callArgs = mockMutate.mock.calls[0][0];
+    expect(callArgs.modelName).toBe('churn_model');
+    expect(callArgs.request.features).toMatchObject({ hcp_id: 'HCP001' });
+  });
+
+  // ===========================================================================
+  // AC 4: Display prediction + confidence + feature contributions
+  // ===========================================================================
+
+  it('displays the prediction value from the API response', () => {
+    (usePredict as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: mockMutate,
+      data: mockPredictionResponse,
+      isPending: false,
+      isError: false,
+      error: null,
+      reset: vi.fn(),
+    });
+
+    render(<PredictiveAnalytics />, { wrapper: createWrapper() });
+    // Prediction value rendered on the page
+    expect(screen.getByText(/high_risk/i)).toBeInTheDocument();
+  });
+
+  it('displays the confidence value from the API response', () => {
+    (usePredict as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: mockMutate,
+      data: mockPredictionResponse,
+      isPending: false,
+      isError: false,
+      error: null,
+      reset: vi.fn(),
+    });
+
+    render(<PredictiveAnalytics />, { wrapper: createWrapper() });
+    // Confidence 0.87 -> 87%
+    expect(screen.getByText(/87(\.0)?%/)).toBeInTheDocument();
+  });
+
+  it('renders feature_importance entries from the API response', () => {
+    (usePredict as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: mockMutate,
+      data: mockPredictionResponse,
+      isPending: false,
+      isError: false,
+      error: null,
+      reset: vi.fn(),
+    });
+
+    render(<PredictiveAnalytics />, { wrapper: createWrapper() });
+    // "Feature Contributions" section title proves the section rendered
+    expect(screen.getByText('Feature Contributions')).toBeInTheDocument();
+    // Each feature key from feature_importance also appears as a percentage
+    // (the keys themselves also appear as form labels, so we assert the
+    // signed percentage strings rendered next to each contribution)
+    expect(screen.getByText('+40.0%')).toBeInTheDocument(); // visits_last_quarter 0.4
+    expect(screen.getByText('+34.0%')).toBeInTheDocument(); // specialty 0.34
+    expect(screen.getByText('+21.0%')).toBeInTheDocument(); // territory 0.21
+    expect(screen.getByText('+5.0%')).toBeInTheDocument(); // hcp_id 0.05
+  });
+
+  it('does NOT render synthetic risk score entities (Generate sample data removed)', () => {
+    render(<PredictiveAnalytics />, { wrapper: createWrapper() });
+    // Sentinels from generateRiskScores() / generateUpliftSegments() / generateRecommendations()
+    expect(screen.queryByText('Dr. Sarah Chen')).not.toBeInTheDocument();
+    expect(screen.queryByText('Memorial Hospital')).not.toBeInTheDocument();
+    expect(screen.queryByText('High-Value Responders')).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('Focus on High-Value Responders Segment')
+    ).not.toBeInTheDocument();
+  });
+
+  // ===========================================================================
+  // AC 5: Loading/error states
+  // ===========================================================================
+
+  it('shows a loading indicator while useModelsStatus is loading', () => {
+    (useModelsStatus as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      error: null,
+    });
+
+    render(<PredictiveAnalytics />, { wrapper: createWrapper() });
+    expect(screen.getByText(/loading/i)).toBeInTheDocument();
+  });
+
+  it('renders a QueryErrorState when useModelsStatus errors', () => {
+    (useModelsStatus as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: new Error('Failed to fetch models'),
+      refetch: vi.fn(),
+      isFetching: false,
+    });
+
+    render(<PredictiveAnalytics />, { wrapper: createWrapper() });
+    // QueryErrorState renders error.message in the description
+    expect(screen.getByText('Failed to fetch models')).toBeInTheDocument();
+  });
+
+  it('renders a prediction error message when usePredict errors', () => {
+    (usePredict as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: mockMutate,
+      data: undefined,
+      isPending: false,
+      isError: true,
+      error: new Error('Prediction service unavailable'),
+      reset: vi.fn(),
+    });
+
+    render(<PredictiveAnalytics />, { wrapper: createWrapper() });
+    // QueryErrorState renders error.message in the description
+    expect(screen.getByText('Prediction service unavailable')).toBeInTheDocument();
+  });
+
+  it('disables the Run Prediction button while the mutation is pending', () => {
+    (usePredict as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: mockMutate,
+      data: undefined,
+      isPending: true,
+      isError: false,
+      error: null,
+      reset: vi.fn(),
+    });
+
+    render(<PredictiveAnalytics />, { wrapper: createWrapper() });
+    const runButton = screen.getByRole('button', { name: /running|run prediction/i });
+    expect(runButton).toBeDisabled();
+  });
+
+  // ===========================================================================
+  // Empty / edge states
+  // ===========================================================================
+
+  it('renders gracefully when the models list is empty', () => {
+    (useModelsStatus as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { ...mockModelsStatus, models: [], total_models: 0 },
+      isLoading: false,
+      error: null,
+    });
+    (useModelInfo as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: null,
+    });
+
+    render(<PredictiveAnalytics />, { wrapper: createWrapper() });
+    expect(
+      screen.getByText(/no models available|no models/i)
     ).toBeInTheDocument();
   });
 
-  it('displays model and timeframe selectors', () => {
-    render(<PredictiveAnalytics />);
+  it('switches to a different model when the user picks another option', async () => {
+    const user = userEvent.setup();
+    render(<PredictiveAnalytics />, { wrapper: createWrapper() });
 
-    // Should have 2 comboboxes (model selector and timeframe)
-    const comboboxes = screen.getAllByRole('combobox');
-    expect(comboboxes.length).toBe(2);
+    const trigger = screen.getByRole('combobox', { name: /model/i });
+    await user.click(trigger);
+    await waitFor(() => {
+      expect(
+        screen.getByRole('option', { name: /conversion_model/i })
+      ).toBeInTheDocument();
+    });
+    const option = screen.getByRole('option', { name: /conversion_model/i });
+    await user.click(option);
+
+    await waitFor(() => {
+      expect(useModelInfo).toHaveBeenCalledWith('conversion_model');
+    });
+  }, 15000);
+
+  // ===========================================================================
+  // Backend schema-shape fallback coverage (codex iter-1 LOW)
+  // ===========================================================================
+
+  it('falls back to metadata.feature_names when input_schema is absent', () => {
+    (useModelInfo as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        name: 'churn_model',
+        // No input_schema; only metadata.feature_names
+        metadata: { feature_names: ['alpha', 'beta', 'gamma'] },
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<PredictiveAnalytics />, { wrapper: createWrapper() });
+
+    expect(screen.getByLabelText(/alpha/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/beta/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/gamma/i)).toBeInTheDocument();
   });
 
-  it('displays refresh and export buttons', () => {
-    const { container } = render(<PredictiveAnalytics />);
+  it('falls back to metadata.input_schema with typed fields', () => {
+    (useModelInfo as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        name: 'churn_model',
+        metadata: {
+          input_schema: {
+            visits: 'number',
+            territory: 'string',
+          },
+        },
+      },
+      isLoading: false,
+      error: null,
+    });
 
-    // Refresh button has RefreshCw icon
-    const refreshButton = container.querySelector('button svg.lucide-refresh-cw');
-    expect(refreshButton).toBeInTheDocument();
-    // Export button has Download icon
-    const exportButton = container.querySelector('button svg.lucide-download');
-    expect(exportButton).toBeInTheDocument();
+    render(<PredictiveAnalytics />, { wrapper: createWrapper() });
+
+    expect(screen.getByLabelText(/visits/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/territory/i)).toBeInTheDocument();
   });
 
-  it('displays model performance card with metrics', () => {
-    render(<PredictiveAnalytics />);
+  // ===========================================================================
+  // Type-aware coercion (codex iter-1 MED — string-typed id stays a string)
+  // ===========================================================================
 
-    expect(screen.getByText('Active Model')).toBeInTheDocument();
-    expect(screen.getByText('Churn Prediction Model')).toBeInTheDocument();
-    expect(screen.getByText('AUC-ROC')).toBeInTheDocument();
-    expect(screen.getByText('Accuracy')).toBeInTheDocument();
-    expect(screen.getByText('F1 Score')).toBeInTheDocument();
-    expect(screen.getByText('Last Trained')).toBeInTheDocument();
-    expect(screen.getByText('Model Healthy')).toBeInTheDocument();
+  it('does NOT coerce string-typed features to numbers when submitting', async () => {
+    render(<PredictiveAnalytics />, { wrapper: createWrapper() });
+
+    // hcp_id is declared as 'string' in mockModelInfo.input_schema; a
+    // numeric-looking input must stay a string in the mutation payload
+    const input = screen.getByLabelText(/hcp_id/i);
+    fireEvent.change(input, { target: { value: '12345' } });
+
+    const runButton = screen.getByRole('button', { name: /run prediction/i });
+    fireEvent.click(runButton);
+
+    await waitFor(() => {
+      expect(mockMutate).toHaveBeenCalledTimes(1);
+    });
+    const features = mockMutate.mock.calls[0][0].request.features;
+    expect(features.hcp_id).toBe('12345');
+    expect(typeof features.hcp_id).toBe('string');
   });
 
-  it('displays 4 KPI cards', () => {
-    render(<PredictiveAnalytics />);
+  it('coerces number-typed features to numbers when submitting', async () => {
+    render(<PredictiveAnalytics />, { wrapper: createWrapper() });
 
-    expect(screen.getByText('High Risk Entities')).toBeInTheDocument();
-    expect(screen.getByText('Avg Model Confidence')).toBeInTheDocument();
-    expect(screen.getByText('Avg Uplift Potential')).toBeInTheDocument();
-    expect(screen.getByText('High Priority Actions')).toBeInTheDocument();
+    // visits_last_quarter is declared as 'number' — input must come
+    // through as a number on the wire
+    const input = screen.getByLabelText(/visits_last_quarter/i);
+    fireEvent.change(input, { target: { value: '7' } });
+
+    const runButton = screen.getByRole('button', { name: /run prediction/i });
+    fireEvent.click(runButton);
+
+    await waitFor(() => {
+      expect(mockMutate).toHaveBeenCalledTimes(1);
+    });
+    const features = mockMutate.mock.calls[0][0].request.features;
+    expect(features.visits_last_quarter).toBe(7);
+    expect(typeof features.visits_last_quarter).toBe('number');
   });
 
-  it('displays 4 main tabs', () => {
-    render(<PredictiveAnalytics />);
+  // ===========================================================================
+  // Stale-prediction reset on model change (codex iter-1 MED)
+  // ===========================================================================
 
-    expect(screen.getByRole('tab', { name: /Risk Scores/i })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /Distributions/i })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /Uplift Models/i })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /Recommendations/i })).toBeInTheDocument();
+  it('resets the previous prediction when the user switches models', async () => {
+    const reset = vi.fn();
+    (usePredict as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: mockMutate,
+      data: mockPredictionResponse,
+      isPending: false,
+      isError: false,
+      error: null,
+      reset,
+    });
+
+    const user = userEvent.setup();
+    render(<PredictiveAnalytics />, { wrapper: createWrapper() });
+
+    // Wait for initial mount to settle (reset() also fires on mount when
+    // selectedModel becomes 'churn_model' via the useEffect default).
+    await waitFor(() => {
+      expect(reset).toHaveBeenCalled();
+    });
+    const callsBeforeSwitch = reset.mock.calls.length;
+
+    const trigger = screen.getByRole('combobox', { name: /model/i });
+    await user.click(trigger);
+    await waitFor(() => {
+      expect(
+        screen.getByRole('option', { name: /conversion_model/i })
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole('option', { name: /conversion_model/i }));
+
+    // The switch must trigger at least one additional reset() call;
+    // weaker implementations that only reset on mount would NOT increase
+    // the count.
+    await waitFor(() => {
+      expect(reset.mock.calls.length).toBeGreaterThan(callsBeforeSwitch);
+    });
+  }, 15000);
+
+  // ===========================================================================
+  // Stale prediction must NOT be shown alongside a fresh error (codex iter-2)
+  // ===========================================================================
+
+  it('hides stale prediction data when a retry errors', () => {
+    (usePredict as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: mockMutate,
+      // React Query keeps `data` from the last successful call; if a retry
+      // errors we get both `data` (stale) and `isError: true` simultaneously
+      data: mockPredictionResponse,
+      isPending: false,
+      isError: true,
+      error: new Error('Prediction service unavailable'),
+      reset: vi.fn(),
+    });
+
+    render(<PredictiveAnalytics />, { wrapper: createWrapper() });
+
+    // Error banner is shown
+    expect(screen.getByText('Prediction service unavailable')).toBeInTheDocument();
+    // Stale prediction value must NOT also be on the page
+    expect(screen.queryByText(/high_risk/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('Feature Contributions')).not.toBeInTheDocument();
   });
 
-  it('shows Risk Scores tab content by default', () => {
-    render(<PredictiveAnalytics />);
+  // ===========================================================================
+  // Top-level info.features fallback (codex iter-2 MED)
+  // ===========================================================================
 
-    expect(screen.getByText('Entity Risk Scores')).toBeInTheDocument();
+  it('falls back to top-level info.features when input_schema is absent', () => {
+    (useModelInfo as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        name: 'churn_model',
+        // No input_schema; only top-level info.features (matches backend
+        // fixture in tests/api/test_predictions_endpoints.py)
+        features: ['feature_a', 'feature_b', 'feature_c'],
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<PredictiveAnalytics />, { wrapper: createWrapper() });
+
+    expect(screen.getByLabelText(/feature_a/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/feature_b/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/feature_c/i)).toBeInTheDocument();
+  });
+
+  // ===========================================================================
+  // Schema-error must NOT also surface the "No input schema" empty state
+  // (codex iter-3 LOW)
+  // ===========================================================================
+
+  it('shows only the schema error (not "No input schema available") when info errors', () => {
+    (useModelInfo as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: new Error('Schema service unreachable'),
+      refetch: vi.fn(),
+      isFetching: false,
+    });
+
+    render(<PredictiveAnalytics />, { wrapper: createWrapper() });
+
+    expect(screen.getByText('Schema service unreachable')).toBeInTheDocument();
     expect(
-      screen.getByText(/Individual risk assessments with contributing factors/i)
-    ).toBeInTheDocument();
-    // Filter button in Risk Scores tab
-    expect(screen.getByRole('button', { name: /Filter/i })).toBeInTheDocument();
-  });
-
-  it('displays risk score cards with entity names', () => {
-    render(<PredictiveAnalytics />);
-
-    // Sample entities from the risk scores
-    expect(screen.getByText('Dr. Sarah Chen')).toBeInTheDocument();
-    expect(screen.getByText('Dr. Michael Roberts')).toBeInTheDocument();
-    expect(screen.getByText('Memorial Hospital')).toBeInTheDocument();
-  });
-
-  it('displays entity type badges in risk cards', () => {
-    render(<PredictiveAnalytics />);
-
-    // Entity types displayed as uppercase badges
-    const hcpBadges = screen.getAllByText('HCP');
-    expect(hcpBadges.length).toBeGreaterThanOrEqual(1);
-    const accountBadges = screen.getAllByText('ACCOUNT');
-    expect(accountBadges.length).toBeGreaterThanOrEqual(1);
-    const territoryBadges = screen.getAllByText('TERRITORY');
-    expect(territoryBadges.length).toBeGreaterThanOrEqual(1);
-  });
-
-  it('displays risk categories in risk cards', () => {
-    render(<PredictiveAnalytics />);
-
-    // Risk categories displayed as labels
-    const churnLabels = screen.getAllByText('Churn Risk');
-    expect(churnLabels.length).toBeGreaterThanOrEqual(1);
-  });
-
-  it('displays key factors section in risk cards', () => {
-    render(<PredictiveAnalytics />);
-
-    // Key factors labels
-    const keyFactorsLabels = screen.getAllByText('Key Factors');
-    expect(keyFactorsLabels.length).toBeGreaterThanOrEqual(1);
-    // Factor names appear in cards
-    const recentActivityFactors = screen.getAllByText('Recent Activity');
-    expect(recentActivityFactors.length).toBeGreaterThanOrEqual(1);
-  });
-
-  it('has clickable Distributions tab', () => {
-    render(<PredictiveAnalytics />);
-
-    const distributionsTab = screen.getByRole('tab', { name: /Distributions/i });
-    expect(distributionsTab).toBeInTheDocument();
-    expect(distributionsTab).not.toBeDisabled();
-  });
-
-  it('has clickable Uplift Models tab', () => {
-    render(<PredictiveAnalytics />);
-
-    const upliftTab = screen.getByRole('tab', { name: /Uplift Models/i });
-    expect(upliftTab).toBeInTheDocument();
-    expect(upliftTab).not.toBeDisabled();
-  });
-
-  it('has clickable Recommendations tab', () => {
-    render(<PredictiveAnalytics />);
-
-    const recommendationsTab = screen.getByRole('tab', { name: /Recommendations/i });
-    expect(recommendationsTab).toBeInTheDocument();
-    expect(recommendationsTab).not.toBeDisabled();
-  });
-
-  it('displays probability and confidence labels in risk cards', () => {
-    render(<PredictiveAnalytics />);
-
-    // Probability and confidence metrics
-    const probabilityLabels = screen.getAllByText('Probability');
-    expect(probabilityLabels.length).toBeGreaterThanOrEqual(1);
-    const confidenceLabels = screen.getAllByText('Confidence');
-    expect(confidenceLabels.length).toBeGreaterThanOrEqual(1);
-  });
-
-  it('displays trend indicators in risk cards', () => {
-    render(<PredictiveAnalytics />);
-
-    // Trend label appears in risk cards
-    const trendLabels = screen.getAllByText('Trend');
-    expect(trendLabels.length).toBeGreaterThanOrEqual(1);
-  });
-
-  it('displays default model selection', () => {
-    render(<PredictiveAnalytics />);
-
-    // Default model is Churn Model
-    expect(screen.getByText('Churn Model')).toBeInTheDocument();
-    // Default timeframe is 30 days
-    expect(screen.getByText('30 days')).toBeInTheDocument();
-  });
-
-  it('displays AUC-ROC metric value', () => {
-    render(<PredictiveAnalytics />);
-
-    // AUC-ROC shows 91.0% (0.91 * 100)
-    expect(screen.getByText('91.0%')).toBeInTheDocument();
-  });
-
-  it('displays accuracy metric value', () => {
-    render(<PredictiveAnalytics />);
-
-    // Accuracy shows 87.0% (0.87 * 100)
-    expect(screen.getByText('87.0%')).toBeInTheDocument();
-  });
-
-  it('displays F1 score metric value', () => {
-    render(<PredictiveAnalytics />);
-
-    // F1 Score shows 82.0% (0.82 * 100)
-    expect(screen.getByText('82.0%')).toBeInTheDocument();
-  });
-
-  it('displays historical pattern factor in risk cards', () => {
-    render(<PredictiveAnalytics />);
-
-    // Historical Pattern is a factor in risk cards
-    const historyFactors = screen.getAllByText('Historical Pattern');
-    expect(historyFactors.length).toBeGreaterThanOrEqual(1);
-  });
-
-  // =========================================================================
-  // DISTRIBUTIONS TAB TESTS
-  // =========================================================================
-
-  describe('Distributions Tab', () => {
-    it('switches to Distributions tab and displays content', async () => {
-      render(<PredictiveAnalytics />);
-      const user = userEvent.setup();
-
-      const distributionsTab = screen.getByRole('tab', { name: /Distributions/i });
-      await user.click(distributionsTab);
-
-      // Distribution tab content
-      expect(screen.getByText('Score Probability Distribution')).toBeInTheDocument();
-      expect(screen.getByText(/Distribution of prediction scores across all entities/i)).toBeInTheDocument();
-    });
-
-    it('displays Model Calibration chart in Distributions tab', async () => {
-      render(<PredictiveAnalytics />);
-      const user = userEvent.setup();
-
-      const distributionsTab = screen.getByRole('tab', { name: /Distributions/i });
-      await user.click(distributionsTab);
-
-      expect(screen.getByText('Model Calibration')).toBeInTheDocument();
-      expect(screen.getByText(/Predicted vs actual outcome rates/i)).toBeInTheDocument();
-    });
-
-    it('displays Cumulative Score Distribution chart in Distributions tab', async () => {
-      render(<PredictiveAnalytics />);
-      const user = userEvent.setup();
-
-      const distributionsTab = screen.getByRole('tab', { name: /Distributions/i });
-      await user.click(distributionsTab);
-
-      expect(screen.getByText('Cumulative Score Distribution')).toBeInTheDocument();
-      expect(screen.getByText(/Running total of entities at each score threshold/i)).toBeInTheDocument();
-    });
-
-    it('renders responsive chart containers in Distributions tab', async () => {
-      render(<PredictiveAnalytics />);
-      const user = userEvent.setup();
-
-      const distributionsTab = screen.getByRole('tab', { name: /Distributions/i });
-      await user.click(distributionsTab);
-
-      const chartContainers = screen.getAllByTestId('responsive-container');
-      expect(chartContainers.length).toBeGreaterThanOrEqual(3);
-    });
-  });
-
-  // =========================================================================
-  // UPLIFT MODELS TAB TESTS
-  // =========================================================================
-
-  describe('Uplift Models Tab', () => {
-    it('switches to Uplift Models tab and displays content', async () => {
-      render(<PredictiveAnalytics />);
-      const user = userEvent.setup();
-
-      const upliftTab = screen.getByRole('tab', { name: /Uplift Models/i });
-      await user.click(upliftTab);
-
-      expect(screen.getByText('Uplift Model Segments')).toBeInTheDocument();
-      expect(screen.getByText(/Identify high-impact segments for targeted interventions/i)).toBeInTheDocument();
-    });
-
-    it('displays Segment Uplift Analysis chart in Uplift tab', async () => {
-      render(<PredictiveAnalytics />);
-      const user = userEvent.setup();
-
-      const upliftTab = screen.getByRole('tab', { name: /Uplift Models/i });
-      await user.click(upliftTab);
-
-      expect(screen.getByText('Segment Uplift Analysis')).toBeInTheDocument();
-      expect(screen.getByText(/Comparing baseline vs predicted conversion with uplift potential/i)).toBeInTheDocument();
-    });
-
-    it('displays Segment ROI Comparison chart in Uplift tab', async () => {
-      render(<PredictiveAnalytics />);
-      const user = userEvent.setup();
-
-      const upliftTab = screen.getByRole('tab', { name: /Uplift Models/i });
-      await user.click(upliftTab);
-
-      expect(screen.getByText('Segment ROI Comparison')).toBeInTheDocument();
-      expect(screen.getByText(/Expected return on investment by segment/i)).toBeInTheDocument();
-    });
-
-    it('displays uplift segment cards with segment names', async () => {
-      render(<PredictiveAnalytics />);
-      const user = userEvent.setup();
-
-      const upliftTab = screen.getByRole('tab', { name: /Uplift Models/i });
-      await user.click(upliftTab);
-
-      // Segment names from upliftSegments data
-      expect(screen.getByText('High-Value Responders')).toBeInTheDocument();
-      expect(screen.getByText('Persuadables')).toBeInTheDocument();
-      expect(screen.getByText('Sure Things')).toBeInTheDocument();
-      expect(screen.getByText('Lost Causes')).toBeInTheDocument();
-      expect(screen.getByText('Sleeping Giants')).toBeInTheDocument();
-    });
-
-    it('displays segment entity counts', async () => {
-      render(<PredictiveAnalytics />);
-      const user = userEvent.setup();
-
-      const upliftTab = screen.getByRole('tab', { name: /Uplift Models/i });
-      await user.click(upliftTab);
-
-      expect(screen.getByText('1,250 entities')).toBeInTheDocument();
-      expect(screen.getByText('3,400 entities')).toBeInTheDocument();
-    });
-
-    it('displays ROI badges with correct colors', async () => {
-      render(<PredictiveAnalytics />);
-      const user = userEvent.setup();
-
-      const upliftTab = screen.getByRole('tab', { name: /Uplift Models/i });
-      await user.click(upliftTab);
-
-      // Different ROI levels
-      expect(screen.getByText('+4.2x ROI')).toBeInTheDocument(); // High ROI (≥3)
-      expect(screen.getByText('+2.8x ROI')).toBeInTheDocument(); // Medium ROI (≥1)
-      expect(screen.getByText('+0.5x ROI')).toBeInTheDocument(); // Low ROI (≥0)
-      expect(screen.getByText('-0.2x ROI')).toBeInTheDocument(); // Negative ROI
-    });
-
-    it('displays baseline, predicted, and uplift metrics in segment cards', async () => {
-      render(<PredictiveAnalytics />);
-      const user = userEvent.setup();
-
-      const upliftTab = screen.getByRole('tab', { name: /Uplift Models/i });
-      await user.click(upliftTab);
-
-      // Column headers in segment cards
-      const baselineLabels = screen.getAllByText('Baseline');
-      expect(baselineLabels.length).toBeGreaterThanOrEqual(1);
-      const predictedLabels = screen.getAllByText('Predicted');
-      expect(predictedLabels.length).toBeGreaterThanOrEqual(1);
-      const upliftLabels = screen.getAllByText('Uplift');
-      expect(upliftLabels.length).toBeGreaterThanOrEqual(1);
-    });
-
-    it('displays recommended actions in segment cards', async () => {
-      render(<PredictiveAnalytics />);
-      const user = userEvent.setup();
-
-      const upliftTab = screen.getByRole('tab', { name: /Uplift Models/i });
-      await user.click(upliftTab);
-
-      expect(screen.getByText('Prioritize for intensive engagement')).toBeInTheDocument();
-      expect(screen.getByText('Target with personalized messaging')).toBeInTheDocument();
-      expect(screen.getByText('Maintain light touch engagement')).toBeInTheDocument();
-      expect(screen.getByText('Deprioritize - low ROI potential')).toBeInTheDocument();
-    });
-  });
-
-  // =========================================================================
-  // RECOMMENDATIONS TAB TESTS
-  // =========================================================================
-
-  describe('Recommendations Tab', () => {
-    it('switches to Recommendations tab and displays content', async () => {
-      render(<PredictiveAnalytics />);
-      const user = userEvent.setup();
-
-      const recommendationsTab = screen.getByRole('tab', { name: /Recommendations/i });
-      await user.click(recommendationsTab);
-
-      expect(screen.getByText('AI-Powered Recommendations')).toBeInTheDocument();
-      expect(screen.getByText(/Actionable insights derived from predictive models/i)).toBeInTheDocument();
-    });
-
-    it('displays recommendation priority badges', async () => {
-      render(<PredictiveAnalytics />);
-      const user = userEvent.setup();
-
-      const recommendationsTab = screen.getByRole('tab', { name: /Recommendations/i });
-      await user.click(recommendationsTab);
-
-      // Priority badges
-      const highBadges = screen.getAllByText('HIGH');
-      expect(highBadges.length).toBeGreaterThanOrEqual(2);
-      const mediumBadges = screen.getAllByText('MEDIUM');
-      expect(mediumBadges.length).toBeGreaterThanOrEqual(2);
-      const lowBadges = screen.getAllByText('LOW');
-      expect(lowBadges.length).toBeGreaterThanOrEqual(1);
-    });
-
-    it('displays recommendation type badges', async () => {
-      render(<PredictiveAnalytics />);
-      const user = userEvent.setup();
-
-      const recommendationsTab = screen.getByRole('tab', { name: /Recommendations/i });
-      await user.click(recommendationsTab);
-
-      // Type badges
-      expect(screen.getAllByText('targeting').length).toBeGreaterThanOrEqual(1);
-      expect(screen.getAllByText('timing').length).toBeGreaterThanOrEqual(1);
-      expect(screen.getAllByText('channel').length).toBeGreaterThanOrEqual(1);
-      expect(screen.getAllByText('messaging').length).toBeGreaterThanOrEqual(1);
-    });
-
-    it('displays recommendation titles and descriptions', async () => {
-      render(<PredictiveAnalytics />);
-      const user = userEvent.setup();
-
-      const recommendationsTab = screen.getByRole('tab', { name: /Recommendations/i });
-      await user.click(recommendationsTab);
-
-      expect(screen.getByText('Focus on High-Value Responders Segment')).toBeInTheDocument();
-      expect(screen.getByText('Optimal Engagement Window Detected')).toBeInTheDocument();
-      expect(screen.getByText('Channel Mix Optimization')).toBeInTheDocument();
-    });
-
-    it('displays recommendation impact values', async () => {
-      render(<PredictiveAnalytics />);
-      const user = userEvent.setup();
-
-      const recommendationsTab = screen.getByRole('tab', { name: /Recommendations/i });
-      await user.click(recommendationsTab);
-
-      expect(screen.getByText('+$2.4M projected impact')).toBeInTheDocument();
-      expect(screen.getByText('+18% engagement rate')).toBeInTheDocument();
-      expect(screen.getByText('+12% conversion rate')).toBeInTheDocument();
-    });
-
-    it('displays confidence percentages for recommendations', async () => {
-      render(<PredictiveAnalytics />);
-      const user = userEvent.setup();
-
-      const recommendationsTab = screen.getByRole('tab', { name: /Recommendations/i });
-      await user.click(recommendationsTab);
-
-      expect(screen.getByText('89% confidence')).toBeInTheDocument();
-      expect(screen.getByText('92% confidence')).toBeInTheDocument();
-      expect(screen.getByText('78% confidence')).toBeInTheDocument();
-    });
-
-    it('displays "Needs Validation" badge for non-actionable recommendations', async () => {
-      render(<PredictiveAnalytics />);
-      const user = userEvent.setup();
-
-      const recommendationsTab = screen.getByRole('tab', { name: /Recommendations/i });
-      await user.click(recommendationsTab);
-
-      expect(screen.getByText('Needs Validation')).toBeInTheDocument();
-    });
-
-    it('displays summary badges for high priority and actionable counts', async () => {
-      render(<PredictiveAnalytics />);
-      const user = userEvent.setup();
-
-      const recommendationsTab = screen.getByRole('tab', { name: /Recommendations/i });
-      await user.click(recommendationsTab);
-
-      expect(screen.getByText('2 High Priority')).toBeInTheDocument();
-      expect(screen.getByText('4 Actionable')).toBeInTheDocument();
-    });
-
-    it('displays Summary Impact section with revenue estimate', async () => {
-      render(<PredictiveAnalytics />);
-      const user = userEvent.setup();
-
-      const recommendationsTab = screen.getByRole('tab', { name: /Recommendations/i });
-      await user.click(recommendationsTab);
-
-      expect(screen.getByText('Summary Impact')).toBeInTheDocument();
-      expect(screen.getByText(/\+\$4\.8M/)).toBeInTheDocument();
-      expect(screen.getByText(/85%/)).toBeInTheDocument();
-    });
-
-    it('displays Generate Action Plan button', async () => {
-      render(<PredictiveAnalytics />);
-      const user = userEvent.setup();
-
-      const recommendationsTab = screen.getByRole('tab', { name: /Recommendations/i });
-      await user.click(recommendationsTab);
-
-      expect(screen.getByRole('button', { name: /Generate Action Plan/i })).toBeInTheDocument();
-    });
-  });
-
-  // =========================================================================
-  // RISK SCORE CARD VARIATIONS
-  // =========================================================================
-
-  describe('RiskScoreCard variations', () => {
-    it('displays different entity types correctly', () => {
-      render(<PredictiveAnalytics />);
-
-      // HCP type
-      const hcpBadges = screen.getAllByText('HCP');
-      expect(hcpBadges.length).toBeGreaterThanOrEqual(1);
-      // ACCOUNT type
-      const accountBadges = screen.getAllByText('ACCOUNT');
-      expect(accountBadges.length).toBeGreaterThanOrEqual(1);
-      // TERRITORY type
-      const territoryBadges = screen.getAllByText('TERRITORY');
-      expect(territoryBadges.length).toBeGreaterThanOrEqual(1);
-    });
-
-    it('displays all risk category labels', () => {
-      render(<PredictiveAnalytics />);
-
-      // Different category labels
-      const churnLabels = screen.getAllByText('Churn Risk');
-      expect(churnLabels.length).toBeGreaterThanOrEqual(1);
-    });
-
-    it('displays Engagement Score factor', () => {
-      render(<PredictiveAnalytics />);
-
-      const engagementFactors = screen.getAllByText('Engagement Score');
-      expect(engagementFactors.length).toBeGreaterThanOrEqual(1);
-    });
-
-    it('displays increasing trend indicators', () => {
-      render(<PredictiveAnalytics />);
-
-      // Note: Due to randomization in sample data, we check for presence of at least one trend type
-      // The trend can be Increasing, Decreasing, or Stable
-      const trendContainer = screen.getAllByText('Trend');
-      expect(trendContainer.length).toBeGreaterThanOrEqual(1);
-    });
-  });
-
-  // =========================================================================
-  // MODEL SELECTION AND TIMEFRAME
-  // =========================================================================
-
-  describe('Model and Timeframe Selection', () => {
-    it('can change model selection', async () => {
-      render(<PredictiveAnalytics />);
-      const user = userEvent.setup();
-
-      // Get the model selector (first combobox)
-      const comboboxes = screen.getAllByRole('combobox');
-      const modelSelector = comboboxes[0];
-
-      await user.click(modelSelector);
-
-      // Select a different model
-      const adoptionOption = screen.getByRole('option', { name: /Adoption Model/i });
-      await user.click(adoptionOption);
-
-      // Model name should update in the active model display
-      expect(screen.getByText('Adoption Prediction Model')).toBeInTheDocument();
-    });
-
-    it('can change timeframe selection', async () => {
-      render(<PredictiveAnalytics />);
-      const user = userEvent.setup();
-
-      // Get the timeframe selector (second combobox)
-      const comboboxes = screen.getAllByRole('combobox');
-      const timeframeSelector = comboboxes[1];
-
-      await user.click(timeframeSelector);
-
-      // Select a different timeframe
-      const sevenDaysOption = screen.getByRole('option', { name: /7 days/i });
-      await user.click(sevenDaysOption);
-
-      // The timeframe should be updated
-      expect(screen.getByText('7 days')).toBeInTheDocument();
-    });
-
-    it('displays conversion model when selected', async () => {
-      render(<PredictiveAnalytics />);
-      const user = userEvent.setup();
-
-      const comboboxes = screen.getAllByRole('combobox');
-      const modelSelector = comboboxes[0];
-
-      await user.click(modelSelector);
-      const conversionOption = screen.getByRole('option', { name: /Conversion Model/i });
-      await user.click(conversionOption);
-
-      expect(screen.getByText('Conversion Prediction Model')).toBeInTheDocument();
-    });
-
-    it('displays engagement model when selected', async () => {
-      render(<PredictiveAnalytics />);
-      const user = userEvent.setup();
-
-      const comboboxes = screen.getAllByRole('combobox');
-      const modelSelector = comboboxes[0];
-
-      await user.click(modelSelector);
-      const engagementOption = screen.getByRole('option', { name: /Engagement Model/i });
-      await user.click(engagementOption);
-
-      expect(screen.getByText('Engagement Prediction Model')).toBeInTheDocument();
-    });
-
-    it('can select 90 days timeframe', async () => {
-      render(<PredictiveAnalytics />);
-      const user = userEvent.setup();
-
-      const comboboxes = screen.getAllByRole('combobox');
-      const timeframeSelector = comboboxes[1];
-
-      await user.click(timeframeSelector);
-      const ninetyDaysOption = screen.getByRole('option', { name: /90 days/i });
-      await user.click(ninetyDaysOption);
-
-      expect(screen.getByText('90 days')).toBeInTheDocument();
-    });
-  });
-
-  // =========================================================================
-  // TAB NAVIGATION TESTS
-  // =========================================================================
-
-  describe('Tab Navigation', () => {
-    it('navigates between all tabs correctly', async () => {
-      render(<PredictiveAnalytics />);
-      const user = userEvent.setup();
-
-      // Start on Risk Scores (default)
-      expect(screen.getByText('Entity Risk Scores')).toBeInTheDocument();
-
-      // Navigate to Distributions
-      const distributionsTab = screen.getByRole('tab', { name: /Distributions/i });
-      await user.click(distributionsTab);
-      expect(screen.getByText('Score Probability Distribution')).toBeInTheDocument();
-
-      // Navigate to Uplift
-      const upliftTab = screen.getByRole('tab', { name: /Uplift Models/i });
-      await user.click(upliftTab);
-      expect(screen.getByText('Uplift Model Segments')).toBeInTheDocument();
-
-      // Navigate to Recommendations
-      const recommendationsTab = screen.getByRole('tab', { name: /Recommendations/i });
-      await user.click(recommendationsTab);
-      expect(screen.getByText('AI-Powered Recommendations')).toBeInTheDocument();
-
-      // Navigate back to Risk Scores
-      const riskScoresTab = screen.getByRole('tab', { name: /Risk Scores/i });
-      await user.click(riskScoresTab);
-      expect(screen.getByText('Entity Risk Scores')).toBeInTheDocument();
-    });
-
-    it('maintains tab state correctly', async () => {
-      render(<PredictiveAnalytics />);
-      const user = userEvent.setup();
-
-      // Navigate to Recommendations
-      const recommendationsTab = screen.getByRole('tab', { name: /Recommendations/i });
-      await user.click(recommendationsTab);
-
-      // Verify we're on recommendations tab
-      expect(screen.getByText('Generate Action Plan')).toBeInTheDocument();
-
-      // Risk Scores content should not be visible
-      expect(screen.queryByText('Entity Risk Scores')).not.toBeInTheDocument();
-    });
-  });
-
-  // =========================================================================
-  // REFRESH BUTTON TEST
-  // =========================================================================
-
-  describe('Refresh button', () => {
-    it('refresh button is clickable', () => {
-      const { container } = render(<PredictiveAnalytics />);
-
-      const refreshIcon = container.querySelector('svg.lucide-refresh-cw');
-      const refreshButton = refreshIcon?.closest('button');
-      expect(refreshButton).toBeInTheDocument();
-
-      // Click should not throw
-      fireEvent.click(refreshButton!);
-    });
+      screen.queryByText('No input schema available for this model.')
+    ).not.toBeInTheDocument();
   });
 });
