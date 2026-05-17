@@ -228,19 +228,21 @@ export class FeatureImportancePage extends BasePage {
         return false
       }
 
-      // The only signals we trust here are the two labels that ONLY render
-      // inside the model-info card (gated on `hasExplanation` in
-      // src/pages/FeatureImportance.tsx). Page header / model selector are
-      // present even on the empty-state, so they cannot be used here.
+      // Both the Base Value label AND the Top Feature label only render
+      // inside the model-info card (gated on `hasExplanation &&
+      // selectedModelInfo` in src/pages/FeatureImportance.tsx). Page
+      // header / model selector are present even on the empty-state, so
+      // they cannot be used here. Requiring BOTH labels also catches the
+      // case where a 200 response missing `top_features` would leave the
+      // Top Feature value at the `'—'` fallback (codex iter-2 MED), since
+      // both labels live in the same conditional render.
       const hasBaseValue = await this.baseValueDisplay
         .isVisible({ timeout: 3000 })
         .catch(() => false)
-      if (hasBaseValue) return true
-
       const hasTopFeature = await this.topFeatureDisplay
         .isVisible({ timeout: 2000 })
         .catch(() => false)
-      return hasTopFeature
+      return hasBaseValue && hasTopFeature
     } catch {
       return false
     }

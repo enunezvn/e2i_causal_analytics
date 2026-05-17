@@ -170,11 +170,30 @@ test.describe('Feature Importance Page', () => {
       // Base Value only renders post-Explain; drive the mutation first.
       await featurePage.runExplanation()
       await expect(featurePage.baseValueDisplay).toBeVisible()
+      // Falsifiability anchor: the rendered value reflects MOCK_RESPONSE
+      // (`base_value=0.25` → formatted as "0.250"). A 200 with the wrong
+      // payload shape would leave the number at the `?? 0` fallback ("0.000"),
+      // so this catches a regression in the ExplainResponse contract.
+      // Scoped to modelInfoCard so an unrelated "0.250" elsewhere in the
+      // page (e.g. a tooltip / feature row) cannot satisfy the assertion.
+      await expect(featurePage.modelInfoCard.getByText('0.250')).toBeVisible()
     })
 
     test('should show Top Feature stat', async () => {
       await featurePage.runExplanation()
       await expect(featurePage.topFeatureDisplay).toBeVisible()
+      // Top Feature renders `features[0]?.feature_name.replace(/_/g, ' ')`. If
+      // the mock returned a 200 without `top_features`, this would render "—"
+      // and the assertion would fail — pinning the test to the live shape
+      // beyond just the label visibility (codex iter-2 MED).
+      // SCOPED to the model-info card: `prior visits` also appears in the
+      // Feature Rankings list and chart labels from the same `top_features`
+      // payload, so a page-wide `getByText(/prior visits/i)` would pass even
+      // when the Top Feature stat fell back to "—". The card-scoped locator
+      // only matches the value next to the `Top Feature` label (codex iter-3 MED).
+      await expect(
+        featurePage.modelInfoCard.getByText(/prior visits/i),
+      ).toBeVisible()
     })
   })
 
