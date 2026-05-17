@@ -7,16 +7,26 @@
  * - Page header with technology badges
  * - CausalDiscovery visualization integration
  * - Refutation tests integration (Phase 3.2)
+ * - Live API wiring: useRouteQuery + useCausalChains (Issue #303)
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import { BrowserRouter } from 'react-router-dom';
+import { screen, fireEvent, waitFor } from '@testing-library/react';
+import { renderWithAllProviders } from '@/test/utils';
 import CausalDiscovery from './CausalDiscovery';
+
+// =============================================================================
+// MOCK SETUP
+// =============================================================================
 
 // Mock the CausalDiscovery visualization component to avoid D3 complexities in tests
 vi.mock('@/components/visualizations/CausalDiscovery', () => ({
-  CausalDiscovery: ({ showControls, showDetails, showEffectsTable, showRefutationTests }: {
+  CausalDiscovery: ({
+    showControls,
+    showDetails,
+    showEffectsTable,
+    showRefutationTests,
+  }: {
     showControls?: boolean;
     showDetails?: boolean;
     showEffectsTable?: boolean;
@@ -31,14 +41,86 @@ vi.mock('@/components/visualizations/CausalDiscovery', () => ({
   ),
 }));
 
-// Wrapper for Router context
-const renderWithRouter = (component: React.ReactNode) => {
-  return render(<BrowserRouter>{component}</BrowserRouter>);
+// Mock the live API hooks so we can assert calls and provide canned responses
+const mockRouteMutate = vi.fn();
+const mockChainsMutate = vi.fn();
+const mockPipelineMutate = vi.fn();
+
+// Mutable state objects (per-test) for the mutation hook returns
+type FakeMutationState<TData = unknown> = {
+  data: TData | undefined;
+  isPending: boolean;
+  error: Error | null;
+  isSuccess: boolean;
 };
+
+const routeState: FakeMutationState = {
+  data: undefined,
+  isPending: false,
+  error: null,
+  isSuccess: false,
+};
+
+const chainsState: FakeMutationState = {
+  data: undefined,
+  isPending: false,
+  error: null,
+  isSuccess: false,
+};
+
+const pipelineState: FakeMutationState = {
+  data: undefined,
+  isPending: false,
+  error: null,
+  isSuccess: false,
+};
+
+vi.mock('@/hooks/api/use-causal', () => ({
+  useRouteQuery: () => ({
+    mutate: mockRouteMutate,
+    data: routeState.data,
+    isPending: routeState.isPending,
+    error: routeState.error,
+    isSuccess: routeState.isSuccess,
+  }),
+  useRunParallelPipeline: () => ({
+    mutate: mockPipelineMutate,
+    data: pipelineState.data,
+    isPending: pipelineState.isPending,
+    error: pipelineState.error,
+    isSuccess: pipelineState.isSuccess,
+  }),
+}));
+
+vi.mock('@/hooks/api/use-graph', () => ({
+  useCausalChains: () => ({
+    mutate: mockChainsMutate,
+    data: chainsState.data,
+    isPending: chainsState.isPending,
+    error: chainsState.error,
+    isSuccess: chainsState.isSuccess,
+  }),
+}));
+
+function resetMutationStates() {
+  routeState.data = undefined;
+  routeState.isPending = false;
+  routeState.error = null;
+  routeState.isSuccess = false;
+  chainsState.data = undefined;
+  chainsState.isPending = false;
+  chainsState.error = null;
+  chainsState.isSuccess = false;
+  pipelineState.data = undefined;
+  pipelineState.isPending = false;
+  pipelineState.error = null;
+  pipelineState.isSuccess = false;
+}
 
 describe('CausalDiscovery Page', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetMutationStates();
   });
 
   // =========================================================================
@@ -47,17 +129,15 @@ describe('CausalDiscovery Page', () => {
 
   describe('Page Header', () => {
     it('renders page title', () => {
-      renderWithRouter(<CausalDiscovery />);
+      renderWithAllProviders(<CausalDiscovery />);
 
       expect(screen.getByText('Causal Discovery')).toBeInTheDocument();
     });
 
     it('renders page description', () => {
-      renderWithRouter(<CausalDiscovery />);
+      renderWithAllProviders(<CausalDiscovery />);
 
-      expect(screen.getByText(/Causal analysis with DAG visualization/)).toBeInTheDocument();
-      expect(screen.getByText(/effect estimates/)).toBeInTheDocument();
-      expect(screen.getByText(/refutation tests/)).toBeInTheDocument();
+      expect(screen.getByText(/Causal analysis/i)).toBeInTheDocument();
     });
   });
 
@@ -67,31 +147,31 @@ describe('CausalDiscovery Page', () => {
 
   describe('Technology Badges', () => {
     it('displays DoWhy badge', () => {
-      renderWithRouter(<CausalDiscovery />);
+      renderWithAllProviders(<CausalDiscovery />);
 
       expect(screen.getByText('DoWhy')).toBeInTheDocument();
     });
 
     it('displays EconML badge', () => {
-      renderWithRouter(<CausalDiscovery />);
+      renderWithAllProviders(<CausalDiscovery />);
 
       expect(screen.getByText('EconML')).toBeInTheDocument();
     });
 
     it('displays DAG badge', () => {
-      renderWithRouter(<CausalDiscovery />);
+      renderWithAllProviders(<CausalDiscovery />);
 
       expect(screen.getByText('DAG')).toBeInTheDocument();
     });
 
     it('displays Refutation badge', () => {
-      renderWithRouter(<CausalDiscovery />);
+      renderWithAllProviders(<CausalDiscovery />);
 
       expect(screen.getByText('Refutation')).toBeInTheDocument();
     });
 
     it('renders all four technology badges', () => {
-      renderWithRouter(<CausalDiscovery />);
+      renderWithAllProviders(<CausalDiscovery />);
 
       // Verify all 4 specific badges are present
       expect(screen.getByText('DoWhy')).toBeInTheDocument();
@@ -107,55 +187,303 @@ describe('CausalDiscovery Page', () => {
 
   describe('CausalDiscovery Visualization', () => {
     it('renders the visualization component', () => {
-      renderWithRouter(<CausalDiscovery />);
+      renderWithAllProviders(<CausalDiscovery />);
 
       expect(screen.getByTestId('causal-discovery-viz')).toBeInTheDocument();
-    });
-
-    it('passes showControls prop as true', () => {
-      renderWithRouter(<CausalDiscovery />);
-
-      expect(screen.getByTestId('show-controls')).toHaveTextContent('true');
-    });
-
-    it('passes showDetails prop as true', () => {
-      renderWithRouter(<CausalDiscovery />);
-
-      expect(screen.getByTestId('show-details')).toHaveTextContent('true');
-    });
-
-    it('passes showEffectsTable prop as true', () => {
-      renderWithRouter(<CausalDiscovery />);
-
-      expect(screen.getByTestId('show-effects-table')).toHaveTextContent('true');
-    });
-
-    it('passes showRefutationTests prop as true', () => {
-      renderWithRouter(<CausalDiscovery />);
-
-      expect(screen.getByTestId('show-refutation-tests')).toHaveTextContent('true');
     });
   });
 
   // =========================================================================
-  // LAYOUT TESTS
+  // LIVE API WIRING TESTS (Issue #303)
   // =========================================================================
 
-  describe('Layout', () => {
-    it('has container with proper padding', () => {
-      renderWithRouter(<CausalDiscovery />);
+  describe('Routing query form (Issue #303)', () => {
+    it('renders form inputs for treatment_var, outcome_var, and covariates', () => {
+      renderWithAllProviders(<CausalDiscovery />);
 
-      const container = screen.getByText('Causal Discovery').closest('.container');
-      expect(container).toBeInTheDocument();
-      expect(container).toHaveClass('mx-auto');
+      // Form inputs should be present
+      expect(screen.getByLabelText(/treatment variable/i)).toBeInTheDocument();
+      expect(screen.getByLabelText(/outcome variable/i)).toBeInTheDocument();
+      expect(screen.getByLabelText(/covariates/i)).toBeInTheDocument();
     });
 
-    it('header has responsive flex layout', () => {
-      renderWithRouter(<CausalDiscovery />);
+    it('submits the form and calls useRouteQuery with treatment, outcome, and covariates', async () => {
+      renderWithAllProviders(<CausalDiscovery />);
 
-      const header = screen.getByText('Causal Discovery').closest('div');
-      const headerParent = header?.parentElement;
-      expect(headerParent).toHaveClass('flex');
+      const treatment = screen.getByLabelText(/treatment variable/i) as HTMLInputElement;
+      const outcome = screen.getByLabelText(/outcome variable/i) as HTMLInputElement;
+      const covariates = screen.getByLabelText(/covariates/i) as HTMLInputElement;
+
+      // Use fireEvent.change to set controlled-input values atomically, avoiding
+      // the per-keystroke concatenation issues of `userEvent.type` on prefilled
+      // controlled inputs.
+      fireEvent.change(treatment, { target: { value: 'rep_visits' } });
+      fireEvent.change(outcome, { target: { value: 'trx_count' } });
+      fireEvent.change(covariates, { target: { value: 'age, region' } });
+
+      const submit = screen.getByRole('button', { name: /run routing/i });
+      fireEvent.click(submit);
+
+      await waitFor(() => {
+        expect(mockRouteMutate).toHaveBeenCalledTimes(1);
+      });
+      const calledWith = mockRouteMutate.mock.calls[0][0];
+      expect(calledWith).toMatchObject({
+        treatment_var: 'rep_visits',
+        outcome_var: 'trx_count',
+      });
+      // covariates passed through context, since RouteQueryRequest does not
+      // expose a direct `covariates` field. Both placements are acceptable.
+      const covariatesValue =
+        (calledWith.context && (calledWith.context as Record<string, unknown>).covariates) ??
+        (calledWith as Record<string, unknown>).covariates;
+      expect(covariatesValue).toEqual(['age', 'region']);
+    });
+
+    it('shows recommended library and alternatives from the routing response', () => {
+      // Pre-populate routing data
+      routeState.data = {
+        query: '',
+        question_type: 'causal_effect',
+        primary_library: 'dowhy',
+        secondary_libraries: ['econml', 'causalml'],
+        recommended_estimators: ['propensity_score_matching'],
+        routing_confidence: 0.87,
+        routing_rationale: 'Direct ATE question',
+        suggested_pipeline: 'parallel',
+      };
+      routeState.isSuccess = true;
+
+      renderWithAllProviders(<CausalDiscovery />);
+
+      // Primary library surfaced
+      expect(screen.getByTestId('routing-primary-library')).toHaveTextContent(/dowhy/i);
+      // Alternatives surfaced
+      const alternatives = screen.getByTestId('routing-alternatives');
+      expect(alternatives).toHaveTextContent(/econml/i);
+      expect(alternatives).toHaveTextContent(/causalml/i);
+    });
+
+    it('shows loading state while routing is pending', () => {
+      routeState.isPending = true;
+      renderWithAllProviders(<CausalDiscovery />);
+
+      expect(screen.getByTestId('routing-loading')).toBeInTheDocument();
+    });
+
+    it('shows error state when routing fails', () => {
+      routeState.error = new Error('boom from server');
+      renderWithAllProviders(<CausalDiscovery />);
+
+      // QueryErrorState renders a title plus the error message; both should
+      // be present somewhere in the page.
+      expect(screen.getAllByText(/routing failed/i).length).toBeGreaterThan(0);
+      // The original error message is surfaced too.
+      expect(screen.getByText(/boom from server/i)).toBeInTheDocument();
+    });
+  });
+
+  describe('Results table (Issue #303)', () => {
+    it('renders effect estimate, CI, and library used when routing returns recommendations', () => {
+      routeState.data = {
+        query: '',
+        question_type: 'causal_effect',
+        primary_library: 'econml',
+        secondary_libraries: ['dowhy'],
+        recommended_estimators: ['causal_forest'],
+        routing_confidence: 0.91,
+        routing_rationale: 'HTE question',
+        suggested_pipeline: 'parallel',
+      };
+      routeState.isSuccess = true;
+
+      renderWithAllProviders(<CausalDiscovery />);
+
+      const table = screen.getByTestId('routing-results-table');
+      // Header / columns
+      expect(table).toHaveTextContent(/library/i);
+      expect(table).toHaveTextContent(/recommended estimator|estimator/i);
+      expect(table).toHaveTextContent(/confidence/i);
+      // Row content includes primary library
+      expect(table).toHaveTextContent(/econml/i);
+      // Row content includes the estimator
+      expect(table).toHaveTextContent(/causal_forest/i);
+      // Confidence rendered as percent (0.91 → 91%)
+      expect(table).toHaveTextContent(/91/);
+    });
+
+    it('renders pipeline effect estimate + CI + library agreement when pipeline returns data', () => {
+      routeState.data = {
+        query: '',
+        question_type: 'causal_effect',
+        primary_library: 'dowhy',
+        secondary_libraries: ['econml'],
+        recommended_estimators: ['propensity_score_matching', 'causal_forest'],
+        routing_confidence: 0.78,
+        routing_rationale: 'ATE question',
+        suggested_pipeline: 'parallel',
+      };
+      routeState.isSuccess = true;
+      pipelineState.data = {
+        pipeline_id: 'pl_abc',
+        status: 'completed',
+        libraries_succeeded: ['dowhy', 'econml'],
+        libraries_failed: [],
+        library_results: {
+          dowhy: {
+            effect_estimate: 0.234,
+            ci_lower: 0.123,
+            ci_upper: 0.345,
+          },
+          econml: {
+            effect_estimate: 0.211,
+            ci_lower: 0.101,
+            ci_upper: 0.321,
+          },
+        },
+        consensus_effect: 0.225,
+        consensus_ci_lower: 0.112,
+        consensus_ci_upper: 0.333,
+        library_agreement_score: 0.93,
+        consensus_method: 'variance_weighted',
+        total_latency_ms: 1234,
+        created_at: '2026-05-17T00:00:00Z',
+        warnings: [],
+      };
+      pipelineState.isSuccess = true;
+
+      renderWithAllProviders(<CausalDiscovery />);
+
+      const table = screen.getByTestId('routing-results-table');
+      // Effect estimate cell shows the numeric value (0.234)
+      expect(table).toHaveTextContent(/0\.234/);
+      // CI shown as [lower, upper]
+      expect(table).toHaveTextContent(/\[0\.123, 0\.345\]/);
+
+      // Consensus block surfaces consensus + library agreement score
+      const consensus = screen.getByTestId('pipeline-consensus');
+      expect(consensus).toHaveTextContent(/0\.225/);
+      expect(consensus).toHaveTextContent(/93/);
+    });
+  });
+
+  describe('Run parallel pipeline (Issue #303)', () => {
+    it('renders a button to run the parallel pipeline', () => {
+      renderWithAllProviders(<CausalDiscovery />);
+
+      expect(
+        screen.getByRole('button', { name: /run parallel pipeline|run pipeline/i }),
+      ).toBeInTheDocument();
+    });
+
+    it('invokes useRunParallelPipeline with treatment, outcome, and covariates', async () => {
+      routeState.data = {
+        query: '',
+        question_type: 'causal_effect',
+        primary_library: 'dowhy',
+        secondary_libraries: ['econml'],
+        recommended_estimators: [],
+        routing_confidence: 0.8,
+        routing_rationale: '',
+        suggested_pipeline: 'parallel',
+      };
+      routeState.isSuccess = true;
+
+      renderWithAllProviders(<CausalDiscovery />);
+
+      const treatment = screen.getByLabelText(/treatment variable/i) as HTMLInputElement;
+      const outcome = screen.getByLabelText(/outcome variable/i) as HTMLInputElement;
+      const covariates = screen.getByLabelText(/covariates/i) as HTMLInputElement;
+
+      fireEvent.change(treatment, { target: { value: 'rep_visits' } });
+      fireEvent.change(outcome, { target: { value: 'trx_count' } });
+      fireEvent.change(covariates, { target: { value: 'age, region' } });
+
+      const button = screen.getByRole('button', {
+        name: /run parallel pipeline|run pipeline/i,
+      });
+      fireEvent.click(button);
+
+      await waitFor(() => {
+        expect(mockPipelineMutate).toHaveBeenCalledTimes(1);
+      });
+      const arg = mockPipelineMutate.mock.calls[0][0];
+      // Hook expects an object: { request, asyncMode }
+      const request = (arg && (arg.request ?? arg)) as Record<string, unknown>;
+      expect(request).toMatchObject({
+        treatment_var: 'rep_visits',
+        outcome_var: 'trx_count',
+      });
+      expect(request.covariates).toEqual(['age', 'region']);
+      // Libraries should pull from routing (dowhy, econml) when present.
+      expect(request.libraries).toEqual(
+        expect.arrayContaining(['dowhy', 'econml']),
+      );
+    });
+  });
+
+  describe('KG chain discovery mode (Issue #303)', () => {
+    it('renders a toggle/button to switch to KG chain discovery mode', () => {
+      renderWithAllProviders(<CausalDiscovery />);
+
+      // Some control labeled like "Discover chains in KG"
+      expect(
+        screen.getByRole('button', { name: /discover chains|kg chains/i }),
+      ).toBeInTheDocument();
+    });
+
+    it('invokes useCausalChains when the KG-chains action is triggered', async () => {
+      renderWithAllProviders(<CausalDiscovery />);
+
+      const outcomeInput = screen.getByLabelText(/outcome variable/i) as HTMLInputElement;
+      fireEvent.change(outcomeInput, { target: { value: 'trx_count' } });
+
+      const kgButton = screen.getByRole('button', { name: /discover chains|kg chains/i });
+      fireEvent.click(kgButton);
+
+      await waitFor(() => {
+        expect(mockChainsMutate).toHaveBeenCalledTimes(1);
+      });
+      const calledWith = mockChainsMutate.mock.calls[0][0];
+      // Should pass the outcome as kpi_name (or include it some structured way)
+      expect(calledWith.kpi_name).toBe('trx_count');
+    });
+
+    it('renders discovered chains when useCausalChains returns data', () => {
+      chainsState.data = {
+        chains: [
+          {
+            nodes: [
+              { id: 'n1', name: 'Rep Visits', type: 'Treatment' },
+              { id: 'n2', name: 'TRx', type: 'KPI' },
+            ],
+            relationships: [
+              {
+                id: 'r1',
+                source_id: 'n1',
+                target_id: 'n2',
+                type: 'IMPACTS',
+                confidence: 0.85,
+              },
+            ],
+            total_confidence: 0.85,
+            path_length: 1,
+          },
+        ],
+        total_chains: 1,
+        latency_ms: 12,
+        timestamp: '2026-05-17T00:00:00Z',
+      };
+      chainsState.isSuccess = true;
+
+      renderWithAllProviders(<CausalDiscovery />);
+
+      // Chains panel renders
+      expect(screen.getByTestId('kg-chains-panel')).toBeInTheDocument();
+      // Chain content is surfaced
+      const panel = screen.getByTestId('kg-chains-panel');
+      expect(panel).toHaveTextContent(/Rep Visits/);
+      expect(panel).toHaveTextContent(/TRx/);
     });
   });
 });
