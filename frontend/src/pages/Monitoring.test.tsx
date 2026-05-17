@@ -164,12 +164,19 @@ describe('Monitoring page — live-backend wiring (issue #297)', { timeout: 20_0
     // narrowed/displayed count, otherwise it disagrees with the chart and
     // table (codex iter-2 MED finding).
     render(<Monitoring />, { wrapper: createWrapper() });
+
     // 42 from the fixture must NOT appear as a Total Runs KPI value.
     expect(screen.queryByText('42')).not.toBeInTheDocument();
-    // And the Total Runs card MUST render alongside the value 1 (one run).
-    expect(screen.getByText('Total Runs')).toBeInTheDocument();
-    // The KPI value 1 should appear at least once in the document tree.
-    expect(screen.getAllByText('1').length).toBeGreaterThanOrEqual(1);
+
+    // Scope the value assertion to the Total Runs KPI card so we don't
+    // accidentally match `1` from `alerts_generated` etc. (codex iter-4 LOW).
+    // The KPI renders the label "Total Runs" inside the card, so the
+    // value `1` must be present in the same KPI card.
+    const totalRunsLabel = screen.getByText('Total Runs');
+    const card = totalRunsLabel.closest('[class*="rounded"]') as HTMLElement | null;
+    expect(card).not.toBeNull();
+    // Within that scoped card, the displayed value must be 1.
+    expect(card!.textContent ?? '').toMatch(/(?:^|\D)1(?:\D|$)/);
   });
 
   it('renders alert content from the live hook (not hard-coded SAMPLE_ERROR_LOGS)', async () => {
