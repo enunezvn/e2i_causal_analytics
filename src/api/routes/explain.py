@@ -15,6 +15,7 @@ Author: E2I Causal Analytics Team
 Version: 4.2.0
 """
 
+import inspect
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -227,8 +228,21 @@ def _normalize_history_row(row: Dict[str, Any], masked_patient_id: str) -> Dict[
     The DB row uses different column names and stores SHAP values as a dict;
     this helper bridges the two without forcing a Pydantic re-validation
     (which would fail on missing optional fields and reject legacy rows).
+
+    Column-name precedence for the SHAP map (signed per-feature contributions):
+
+    1. ``local_shap_values`` — canonical column in ``ml_shap_analyses`` per
+       ``database/ml/mlops_tables.sql``. Local-realtime rows store signed
+       per-patient SHAP contributions here.
+    2. ``shap_values`` — referenced by views/functions in migration
+       ``database/ml/011_realtime_shap_audit.sql`` for legacy callers.
+    3. ``global_importance`` — last-resort fallback. NOTE: this column
+       stores mean-absolute importance, so sign is lost. Only used when
+       neither of the signed columns is present (legacy global rows).
     """
-    shap_values: Dict[str, Any] = row.get("shap_values") or row.get("global_importance") or {}
+    shap_values: Dict[str, Any] = (
+        row.get("local_shap_values") or row.get("shap_values") or row.get("global_importance") or {}
+    )
     if isinstance(shap_values, dict):
         ranked = sorted(
             shap_values.items(),
@@ -289,17 +303,19 @@ async def _get_latest_versions_by_model_type() -> Dict[str, Optional[str]]:
 
         # Fetch (model_name, model_version) for any of our model types. The
         # set is small (4); a single SELECT with ``in_`` is cheaper than 4
-        # per-type round-trips.
+        # per-type round-trips. ``ml_model_registry.registered_at`` is the
+        # canonical timestamp column (see database/ml/mlops_tables.sql:166);
+        # there is no ``created_at`` column on this table.
         result = await (
             client.table("ml_model_registry")
-            .select("model_name,model_version,created_at")
+            .select("model_name,model_version,registered_at")
             .in_("model_name", list(versions.keys()))
-            .order("created_at", desc=True)
+            .order("registered_at", desc=True)
             .execute()
         )
 
         rows: List[Dict[str, Any]] = result.data or []
-        # Order desc by created_at — first row per model_name wins.
+        # Order desc by registered_at — first row per model_name wins.
         for r in rows:
             name = r.get("model_name")
             if name in versions and versions[name] is None:
@@ -568,42 +584,68 @@ class RealTimeSHAPService:
         shap_values: Dict[str, float],
         prediction: Dict[str, Any],
     ) -> bool:
-        """Store explanation in ml_shap_analyses for regulatory audit."""
+        """Store explanation in ``ml_shap_analyses`` for regulatory audit.
+
+        Issue #321 HIGH — write rows with ``analysis_type='local_realtime'``
+        and the canonical local-explanation columns (``patient_id``,
+        ``entity_type='patient'``, ``entity_id=patient_id``, signed
+        ``local_shap_values``, ``prediction_*``, ``model_type``,
+        ``model_version_id``, ``explanation_id``, ``request_timestamp``)
+        so that ``/explain/history/{patient_id}`` can actually retrieve
+        the writes produced by ``/explain/predict``.
+
+        Previously the route called ``ShapAnalysisRepository.store_analysis``,
+        which writes ``analysis_type='global'`` plus mean-absolute
+        ``global_importance`` only — meaning new realtime explanations
+        could not be looked up by patient_id (the new HIGH symptom of #321).
+        """
         await self._ensure_initialized()
 
-        if self.shap_repo is None:
+        if self.shap_repo is None or self.shap_repo.client is None:
             logger.warning("SHAP repository not available, skipping audit storage")
             return False
 
         try:
-            # Build analysis dict matching repository schema
-            analysis_dict = {
-                "experiment_id": explanation_id,
-                "feature_importance": [
-                    {"feature": name, "importance": abs(value)}
-                    for name, value in sorted(
+            now = datetime.now(timezone.utc).isoformat()
+            db_record: Dict[str, Any] = {
+                "id": str(uuid.uuid4()),
+                "model_registry_id": None,
+                "analysis_type": "local_realtime",
+                "explanation_id": explanation_id,
+                "patient_id": patient_id,
+                "entity_type": "patient",
+                "entity_id": patient_id,
+                "model_type": model_type,
+                "model_version_id": model_version_id,
+                # Signed per-feature contributions — the canonical schema
+                # column for local explanations. Mirror to ``shap_values``
+                # for the legacy views/functions defined in migration 011.
+                "local_shap_values": dict(shap_values),
+                "shap_values": dict(shap_values),
+                "prediction_class": prediction.get("prediction_class"),
+                "prediction_probability": prediction.get("prediction_probability"),
+                "base_value": prediction.get("base_value"),
+                "request_timestamp": now,
+                "computed_at": now,
+                "key_drivers": [
+                    name
+                    for name, _ in sorted(
                         shap_values.items(), key=lambda x: abs(x[1]), reverse=True
-                    )
+                    )[:5]
                 ],
-                "interactions": [],  # Local explanations don't compute interactions
-                "interpretation": f"Real-time explanation for patient {patient_id}",
-                "top_features": list(shap_values.keys())[:5],
-                "samples_analyzed": 1,
-                "computation_time_seconds": 0,  # Will be updated
-                "explainer_type": "TreeExplainer",  # Most common
+                "computation_method": "TreeExplainer",
             }
+            # Strip None to let DB defaults apply.
+            db_record = {k: v for k, v in db_record.items() if v is not None}
 
-            result = await self.shap_repo.store_analysis(
-                analysis_dict=analysis_dict,
-                model_registry_id=None,  # Real-time doesn't have registry ID
+            result_or_coro = (
+                self.shap_repo.client.table(self.shap_repo.table_name).insert(db_record).execute()
             )
+            if inspect.isawaitable(result_or_coro):
+                await result_or_coro
 
-            if result:
-                logger.info(f"Stored audit record for explanation {explanation_id}")
-                return True
-            else:
-                logger.warning(f"Failed to store audit record for {explanation_id}")
-                return False
+            logger.info(f"Stored audit record for explanation {explanation_id}")
+            return True
 
         except Exception as e:
             logger.error(f"Error storing audit record: {e}", exc_info=True)
@@ -831,10 +873,20 @@ async def get_explanation_history(
         # used directly; previously the route ignored it. Rows are normalized
         # to the FE ``ExplanationHistoryResponse { explanations: ExplainResponse[] }``
         # contract so the frontend type matches runtime.
+        #
+        # ``get_shap_analysis_repository`` installs an async Supabase client
+        # (see ``src/repositories/shap_analysis.py``), so ``.execute()``
+        # returns a coroutine and must be awaited. We detect awaitability so
+        # the same code path works with both async clients (live) and the
+        # sync ``MagicMock`` chains used by unit tests.
         query = repo.client.table(repo.table_name).select("*").eq("patient_id", patient_id)
         if model_type is not None:
             query = query.eq("model_type", model_type.value)
-        result = query.order("request_timestamp", desc=True).limit(limit).execute()
+        result_or_coro = query.order("request_timestamp", desc=True).limit(limit).execute()
+        if inspect.isawaitable(result_or_coro):
+            result = await result_or_coro
+        else:
+            result = result_or_coro
 
         rows = result.data if result.data else []
         explanations = [_normalize_history_row(row, masked_patient_id) for row in rows]

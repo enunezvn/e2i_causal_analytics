@@ -358,20 +358,51 @@ class TestRealTimeSHAPService:
         assert "days since last hcp visit" in narrative
 
     @pytest.mark.asyncio
-    async def test_store_audit_record_success(self, shap_service, mock_shap_repo):
-        """Test audit record storage."""
+    async def test_store_audit_record_writes_canonical_fields(self, shap_service):
+        """Issue #321 codex HIGH: audit writes must persist patient_id,
+        analysis_type='local_realtime', and signed local_shap_values so that
+        /explain/history/{patient_id} can actually retrieve the row.
+
+        Previously the path called ShapAnalysisRepository.store_analysis,
+        which writes analysis_type='global' + mean-abs global_importance and
+        drops patient_id entirely — the feedback loop that makes the new
+        history-filter useful.
+        """
+        repo = MagicMock()
+        repo.client = MagicMock()
+        repo.table_name = "ml_shap_analyses"
+        # Capture the insert payload
+        chain = MagicMock()
+        chain.insert.return_value = chain
+        chain.execute.return_value = MagicMock(data=[{"id": "row-1"}])
+        repo.client.table.return_value = chain
+        shap_service.shap_repo = repo
+
         result = await shap_service.store_audit_record(
             explanation_id="EXPL-123",
             patient_id="PAT-123",
             model_type="propensity",
             model_version_id="v2.3.1",
             features={"feature1": 1.0},
-            shap_values={"feature1": 0.15},
-            prediction={"prediction_class": "high"},
+            shap_values={"feature1": 0.15, "feature2": -0.05},
+            prediction={"prediction_class": "high", "prediction_probability": 0.8},
         )
 
         assert result is True
-        mock_shap_repo.store_analysis.assert_called_once()
+        chain.insert.assert_called_once()
+        payload = chain.insert.call_args.args[0]
+        assert payload["analysis_type"] == "local_realtime"
+        assert payload["patient_id"] == "PAT-123"
+        assert payload["entity_type"] == "patient"
+        assert payload["entity_id"] == "PAT-123"
+        assert payload["model_type"] == "propensity"
+        assert payload["model_version_id"] == "v2.3.1"
+        assert payload["explanation_id"] == "EXPL-123"
+        assert payload["prediction_class"] == "high"
+        assert payload["prediction_probability"] == 0.8
+        # Signed contributions stored — sign must survive the round-trip.
+        assert payload["local_shap_values"]["feature1"] == 0.15
+        assert payload["local_shap_values"]["feature2"] == -0.05
 
     @pytest.mark.asyncio
     async def test_store_audit_record_no_repo(self, shap_service):
@@ -391,9 +422,16 @@ class TestRealTimeSHAPService:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_store_audit_record_error(self, shap_service, mock_shap_repo):
+    async def test_store_audit_record_error(self, shap_service):
         """Test audit storage error handling."""
-        mock_shap_repo.store_analysis.side_effect = Exception("DB error")
+        repo = MagicMock()
+        repo.client = MagicMock()
+        repo.table_name = "ml_shap_analyses"
+        chain = MagicMock()
+        chain.insert.return_value = chain
+        chain.execute.side_effect = Exception("DB error")
+        repo.client.table.return_value = chain
+        shap_service.shap_repo = repo
 
         result = await shap_service.store_audit_record(
             explanation_id="EXPL-123",
@@ -756,6 +794,11 @@ class TestGetExplanationHistoryEndpoint:
         request_timestamp, patient_id, model_type, model_version_id,
         prediction_class, prediction_probability, top_features, shap_sum,
         computation_time_ms, audit_stored).
+
+        Uses the canonical ``local_shap_values`` column (from
+        ``database/ml/mlops_tables.sql`` — local explanations are stored
+        there, not in ``global_importance``). Verifies signed contributions
+        survive normalization so that direction and shap_sum are preserved.
         """
         from datetime import datetime, timezone
 
@@ -768,7 +811,7 @@ class TestGetExplanationHistoryEndpoint:
             "prediction_class": "high_propensity",
             "prediction_probability": 0.78,
             "base_value": 0.42,
-            "shap_values": {
+            "local_shap_values": {
                 "days_since_last_hcp_visit": 0.15,
                 "therapy_adherence_score": -0.05,
             },
@@ -826,6 +869,85 @@ class TestGetExplanationHistoryEndpoint:
                 ):
                     assert f in first, f"missing {f!r} in top_features entry"
 
+            # Signed-direction preservation: the negative SHAP value must map
+            # to direction='negative'. Falling back to global_importance
+            # would silently absolutize signs.
+            directions = {
+                f["feature_name"]: f["contribution_direction"] for f in item["top_features"]
+            }
+            assert directions["therapy_adherence_score"] == "negative"
+            assert directions["days_since_last_hcp_visit"] == "positive"
+
+    @pytest.mark.asyncio
+    async def test_get_history_local_shap_values_preferred_over_global_importance(self):
+        """Issue #321 codex MED: when a row has both ``local_shap_values``
+        (canonical, signed) and ``global_importance`` (mean-absolute),
+        normalization must prefer ``local_shap_values`` so signs survive.
+        """
+        sample_row = {
+            "id": "r1",
+            "explanation_id": "EXPL-1",
+            "patient_id": "PAT-X",
+            "model_type": "propensity",
+            "model_version_id": "v1",
+            "prediction_class": "high",
+            "prediction_probability": 0.8,
+            # Mixed presence — local has signs, global lost them.
+            "local_shap_values": {"feat_a": -0.3, "feat_b": 0.1},
+            "global_importance": {"feat_a": 0.3, "feat_b": 0.1},
+        }
+        with patch("src.api.routes.explain.get_shap_analysis_repository") as mock_get_repo:
+            mock_repo = MagicMock()
+            mock_repo.client = MagicMock()
+            mock_repo.table_name = "ml_shap_analyses"
+            chain = MagicMock()
+            chain.execute.return_value = MagicMock(data=[sample_row])
+            chain.limit.return_value = chain
+            chain.order.return_value = chain
+            chain.eq.return_value = chain
+            chain.select.return_value = chain
+            mock_repo.client.table.return_value = chain
+            mock_get_repo.return_value = mock_repo
+
+            resp = await get_explanation_history("PAT-X")
+            item = resp["explanations"][0]
+            directions = {
+                f["feature_name"]: f["contribution_direction"] for f in item["top_features"]
+            }
+            assert directions["feat_a"] == "negative"
+            # shap_sum reflects signed contributions: -0.3 + 0.1 = -0.2
+            assert item["shap_sum"] == pytest.approx(-0.2)
+
+    @pytest.mark.asyncio
+    async def test_get_history_awaits_async_execute(self):
+        """Issue #321 codex HIGH: ``get_shap_analysis_repository`` installs
+        an async Supabase client, so ``.execute()`` returns a coroutine.
+        The endpoint must await it; reading ``.data`` on a coroutine raises.
+        """
+
+        async def async_execute():
+            return MagicMock(data=[])
+
+        with patch("src.api.routes.explain.get_shap_analysis_repository") as mock_get_repo:
+            mock_repo = MagicMock()
+            mock_repo.client = MagicMock()
+            mock_repo.table_name = "ml_shap_analyses"
+            chain = MagicMock()
+            chain.select.return_value = chain
+            chain.eq.return_value = chain
+            chain.order.return_value = chain
+            chain.limit.return_value = chain
+            # IMPORTANT: execute returns a coroutine, simulating async client.
+            chain.execute.side_effect = lambda: async_execute()
+            mock_repo.client.table.return_value = chain
+            mock_get_repo.return_value = mock_repo
+
+            response = await get_explanation_history("PAT-async")
+            assert response["total_explanations"] == 0
+            assert "error" not in response, (
+                f"endpoint did not await async execute (fell into error path): {response!r}"
+            )
+
 
 class TestListExplainableModelsEndpoint:
     """Tests for /explain/models endpoint."""
@@ -867,6 +989,79 @@ class TestListExplainableModelsEndpoint:
                 assert "latest_version" in entry, f"missing latest_version in entry {entry!r}"
                 # type is Optional[str]
                 assert entry["latest_version"] is None or isinstance(entry["latest_version"], str)
+
+    @pytest.mark.asyncio
+    async def test_list_models_uses_registered_at_and_picks_newest(self):
+        """Issue #321 codex HIGH: ml_model_registry has ``registered_at``, not
+        ``created_at`` (see database/ml/mlops_tables.sql:166). The lookup must
+        query that column and pick the newest row per model_name.
+        """
+
+        async def async_execute():
+            return MagicMock(
+                data=[
+                    {
+                        "model_name": "propensity",
+                        "model_version": "v3.0",
+                        "registered_at": "2026-05-15T00:00:00Z",
+                    },
+                    {
+                        "model_name": "propensity",
+                        "model_version": "v2.3.1",
+                        "registered_at": "2026-04-01T00:00:00Z",
+                    },
+                    {
+                        "model_name": "churn_prediction",
+                        "model_version": "v1.0",
+                        "registered_at": "2026-05-01T00:00:00Z",
+                    },
+                ]
+            )
+
+        captured = {}
+
+        def select_capture(cols):
+            captured["select"] = cols
+            return chain
+
+        def order_capture(col, desc=False):
+            captured["order"] = (col, desc)
+            return chain
+
+        chain = MagicMock()
+        chain.in_.return_value = chain
+        chain.select.side_effect = select_capture
+        chain.order.side_effect = order_capture
+        chain.execute.side_effect = lambda: async_execute()
+
+        fake_client = MagicMock()
+        fake_client.table.return_value = chain
+
+        async def fake_get_client():
+            return fake_client
+
+        with (
+            patch("src.api.routes.explain.get_shap_service") as mock_get_service,
+            patch(
+                "src.memory.services.factories.get_async_supabase_client",
+                side_effect=fake_get_client,
+            ),
+        ):
+            mock_service = MagicMock()
+            mock_service.shap_explainer.get_cache_stats.return_value = {}
+            mock_get_service.return_value = mock_service
+
+            response = await list_explainable_models()
+
+            # Confirm SELECT and ORDER targeted the canonical column.
+            assert "registered_at" in captured.get("select", ""), captured
+            assert captured.get("order", (None, None))[0] == "registered_at"
+
+            by_type = {m["model_type"]: m["latest_version"] for m in response["supported_models"]}
+            assert by_type["propensity"] == "v3.0"  # newest, not v2.3.1
+            assert by_type["churn_prediction"] == "v1.0"
+            assert by_type["next_best_action"] is None  # absent from registry
+            assert by_type["risk_stratification"] is None
 
 
 class TestHealthCheckEndpoint:
