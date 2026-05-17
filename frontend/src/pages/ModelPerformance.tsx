@@ -155,9 +155,14 @@ function ModelPerformance() {
     [modelsQuery.data?.models]
   );
 
-  // Auto-select first model once data lands
+  // Auto-select first model once data lands.
+  // If `selectedModelId` is non-empty but no longer present in `models`
+  // (e.g. backend removed it), fall back to `models[0]` instead of keeping
+  // the trend/alerts/comparison hooks pointing at a stale id.
   const effectiveModelId = useMemo(() => {
-    if (selectedModelId) return selectedModelId;
+    if (selectedModelId && models.some((m) => m.model_name === selectedModelId)) {
+      return selectedModelId;
+    }
     return models[0]?.model_name ?? '';
   }, [selectedModelId, models]);
 
@@ -193,6 +198,8 @@ function ModelPerformance() {
       modelsQuery.refetch(),
       trendQuery.refetch?.(),
       alertsQuery.refetch?.(),
+      // Comparison may not be enabled — refetch only if a second model picked
+      compareModelId ? comparisonQuery.refetch?.() : Promise.resolve(),
     ]);
   };
 
@@ -220,7 +227,10 @@ function ModelPerformance() {
   const isTrendError = trendQuery.isError && !!effectiveModelId;
 
   const isRefetching =
-    modelsQuery.isRefetching || trendQuery.isRefetching || alertsQuery.isRefetching;
+    modelsQuery.isRefetching ||
+    trendQuery.isRefetching ||
+    alertsQuery.isRefetching ||
+    comparisonQuery.isRefetching;
 
   // =============================================================================
   // RENDER

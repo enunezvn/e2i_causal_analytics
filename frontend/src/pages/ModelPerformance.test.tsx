@@ -183,6 +183,25 @@ describe('ModelPerformance', () => {
     expect(usePerformanceAlerts).toHaveBeenCalled();
   });
 
+  it('issue-298: useModelComparison is called with both ids and disabled until 2nd model picked', () => {
+    render(<ModelPerformance />, { wrapper: createWrapper() });
+
+    // Comparison hook is invoked on first render — initial 2nd-model id is ''.
+    expect(useModelComparison).toHaveBeenCalled();
+    const compareCalls = (useModelComparison as ReturnType<typeof vi.fn>).mock.calls;
+    const lastCall = compareCalls[compareCalls.length - 1] ?? [];
+    // Args are: (modelId, otherModelId, metricName, options)
+    const [firstId, otherId, metric, opts] = lastCall;
+    // First id should be the auto-selected model from useModelsStatus
+    expect(firstId).toBe('propensity_v2.1.0');
+    // Other id is initially empty string (no comparison picked yet)
+    expect(otherId).toBe('');
+    // Default metric should be 'accuracy'
+    expect(metric).toBe('accuracy');
+    // Query MUST be disabled until comparison id is picked
+    expect(opts?.enabled).toBe(false);
+  });
+
   it('issue-298: does NOT render hard-coded sample model names (churn-v3 / hcp-tier / conversion-v2 / adherence-v1)', () => {
     render(<ModelPerformance />, { wrapper: createWrapper() });
 
@@ -251,6 +270,31 @@ describe('ModelPerformance', () => {
       screen.queryByRole('alert') ||
       screen.queryByText(/Something went wrong|Network|Error|Unable to/i);
     expect(errorIndicator).toBeTruthy();
+  });
+
+  it('issue-298: when models list is empty, hooks are disabled (no live id leakage)', () => {
+    (useModelsStatus as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        total_models: 0,
+        healthy_count: 0,
+        unhealthy_count: 0,
+        models: [],
+        timestamp: '2026-05-17T10:00:00Z',
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(<ModelPerformance />, { wrapper: createWrapper() });
+
+    // With empty models, trend hook should be invoked but disabled
+    const trendCalls = (usePerformanceTrend as ReturnType<typeof vi.fn>).mock.calls;
+    const trendCall = trendCalls[trendCalls.length - 1] ?? [];
+    const [trendParams, trendOpts] = trendCall;
+    expect(trendParams?.model_id).toBe('');
+    expect(trendOpts?.enabled).toBe(false);
   });
 
   it('displays visualization tabs', () => {
