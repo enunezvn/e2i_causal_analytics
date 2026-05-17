@@ -6,22 +6,131 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import FeatureImportance from './FeatureImportance';
+import { ModelType } from '@/types/explain';
+
+// Mock the explain hooks so we can control returned values
+vi.mock('@/hooks/api/use-explain', () => ({
+  useExplain: vi.fn(),
+  useExplainableModels: vi.fn(),
+  useExplanationHistory: vi.fn(),
+}));
+
+import {
+  useExplain,
+  useExplainableModels,
+  useExplanationHistory,
+} from '@/hooks/api/use-explain';
 
 // Mock URL.createObjectURL and URL.revokeObjectURL for export tests
 const mockCreateObjectURL = vi.fn(() => 'blob:mock-url');
 const mockRevokeObjectURL = vi.fn();
 
+// QueryClient wrapper required because page uses tanstack-query hooks
+function createWrapper() {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, gcTime: 0 },
+      mutations: { retry: false },
+    },
+  });
+  return ({ children }: { children: React.ReactNode }) => (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  );
+}
+
+// =============================================================================
+// HOOK MOCK DEFAULTS
+// =============================================================================
+
+const mockExplainableModels = {
+  supported_models: [
+    {
+      model_type: ModelType.PROPENSITY,
+      latest_version: 'v3.2.1',
+      explainer_type: 'TreeExplainer' as const,
+      avg_latency_ms: 45,
+    },
+    {
+      model_type: ModelType.CHURN_PREDICTION,
+      latest_version: 'v1.5.0',
+      explainer_type: 'TreeExplainer' as const,
+      avg_latency_ms: 32,
+    },
+  ],
+  total_models: 2,
+};
+
+const mockExplainResponse = {
+  explanation_id: 'expl_test_123',
+  request_timestamp: '2026-05-17T10:00:00Z',
+  patient_id: 'patient_42',
+  model_type: ModelType.PROPENSITY,
+  model_version_id: 'v3.2.1',
+  prediction_class: 'high_risk',
+  prediction_probability: 0.78,
+  base_value: 0.42,
+  top_features: [
+    {
+      feature_name: 'live_feature_alpha',
+      feature_value: 99,
+      shap_value: 0.51,
+      contribution_direction: 'positive' as const,
+      contribution_rank: 1,
+    },
+    {
+      feature_name: 'live_feature_beta',
+      feature_value: 7,
+      shap_value: -0.33,
+      contribution_direction: 'negative' as const,
+      contribution_rank: 2,
+    },
+  ],
+  shap_sum: 0.18,
+  computation_time_ms: 38,
+  audit_stored: true,
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   global.URL.createObjectURL = mockCreateObjectURL;
   global.URL.revokeObjectURL = mockRevokeObjectURL;
+
+  // Default: models load, no explanation yet (initial state).
+  (useExplainableModels as ReturnType<typeof vi.fn>).mockReturnValue({
+    data: mockExplainableModels,
+    isLoading: false,
+    isError: false,
+    error: null,
+  });
+
+  (useExplain as ReturnType<typeof vi.fn>).mockReturnValue({
+    mutate: vi.fn(),
+    data: undefined,
+    isPending: false,
+    isError: false,
+    error: null,
+    reset: vi.fn(),
+  });
+
+  (useExplanationHistory as ReturnType<typeof vi.fn>).mockReturnValue({
+    data: { patient_id: '', total_explanations: 0, explanations: [] },
+    isLoading: false,
+    isError: false,
+    error: null,
+  });
 });
+
+// Cold-start render of this page (radix tabs + recharts + react-query wrapper)
+// can exceed the default 5s when the full suite is running in parallel; give
+// each test enough headroom so flakes don't mask real regressions.
+vi.setConfig({ testTimeout: 15000 });
 
 describe('FeatureImportance', () => {
   it('renders page header with title and description', () => {
-    render(<FeatureImportance />);
+    render(<FeatureImportance />, { wrapper: createWrapper() });
 
     expect(screen.getByText('Feature Importance')).toBeInTheDocument();
     expect(
@@ -30,73 +139,21 @@ describe('FeatureImportance', () => {
   });
 
   it('displays model selector dropdown', () => {
-    render(<FeatureImportance />);
+    render(<FeatureImportance />, { wrapper: createWrapper() });
 
     expect(screen.getByRole('combobox')).toBeInTheDocument();
   });
 
-  it('shows default model info card', () => {
-    render(<FeatureImportance />);
-
-    // First model is Patient Churn Predictor (appears in dropdown and info card)
-    const modelNames = screen.getAllByText('Patient Churn Predictor');
-    expect(modelNames.length).toBeGreaterThanOrEqual(1);
-    // Version appears in dropdown and info card
-    const versions = screen.getAllByText('v3.2.1');
-    expect(versions.length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('47 features')).toBeInTheDocument();
-  });
-
-  it('displays base value for selected model', () => {
-    render(<FeatureImportance />);
-
-    expect(screen.getByText('Base Value')).toBeInTheDocument();
-    expect(screen.getByText('0.350')).toBeInTheDocument();
-  });
-
-  it('displays top feature label', () => {
-    render(<FeatureImportance />);
-
-    expect(screen.getByText('Top Feature')).toBeInTheDocument();
-    // First feature is days_since_last_visit, displayed with spaces (may appear multiple times)
-    const topFeatures = screen.getAllByText('days since last visit');
-    expect(topFeatures.length).toBeGreaterThanOrEqual(1);
-  });
-
-  it('displays feature rankings section', () => {
-    render(<FeatureImportance />);
-
-    expect(screen.getByText('Feature Rankings')).toBeInTheDocument();
-    // Badge showing feature count (10 may appear multiple times)
-    const counts = screen.getAllByText('10');
-    expect(counts.length).toBeGreaterThanOrEqual(1);
-  });
-
-  it('shows feature search input', () => {
-    render(<FeatureImportance />);
-
-    expect(screen.getByPlaceholderText('Search features...')).toBeInTheDocument();
-  });
-
   it('displays visualization tabs', () => {
-    render(<FeatureImportance />);
+    render(<FeatureImportance />, { wrapper: createWrapper() });
 
     expect(screen.getByRole('tab', { name: /Bar Chart/i })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /Beeswarm/i })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /Waterfall/i })).toBeInTheDocument();
   });
 
-  it('shows Bar Chart tab content by default', () => {
-    render(<FeatureImportance />);
-
-    expect(screen.getByText('Global Feature Importance')).toBeInTheDocument();
-    expect(
-      screen.getByText(/Mean absolute SHAP values showing overall feature importance/i)
-    ).toBeInTheDocument();
-  });
-
   it('has clickable Beeswarm tab', () => {
-    render(<FeatureImportance />);
+    render(<FeatureImportance />, { wrapper: createWrapper() });
 
     const beeswarmTab = screen.getByRole('tab', { name: /Beeswarm/i });
     expect(beeswarmTab).toBeInTheDocument();
@@ -104,7 +161,7 @@ describe('FeatureImportance', () => {
   });
 
   it('has clickable Waterfall tab', () => {
-    render(<FeatureImportance />);
+    render(<FeatureImportance />, { wrapper: createWrapper() });
 
     const waterfallTab = screen.getByRole('tab', { name: /Waterfall/i });
     expect(waterfallTab).toBeInTheDocument();
@@ -112,7 +169,7 @@ describe('FeatureImportance', () => {
   });
 
   it('displays refresh button', () => {
-    const { container } = render(<FeatureImportance />);
+    const { container } = render(<FeatureImportance />, { wrapper: createWrapper() });
 
     // Refresh button has RefreshCw icon
     const refreshButton = container.querySelector('button svg.lucide-refresh-cw');
@@ -120,74 +177,277 @@ describe('FeatureImportance', () => {
   });
 
   it('displays export button', () => {
-    render(<FeatureImportance />);
+    render(<FeatureImportance />, { wrapper: createWrapper() });
 
     expect(screen.getByRole('button', { name: /Export/i })).toBeInTheDocument();
   });
+});
 
-  it('handles export button click', () => {
-    const mockClick = vi.fn();
-    const originalCreateElement = document.createElement.bind(document);
-    vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
-      if (tag === 'a') {
-        const link = originalCreateElement('a');
-        link.click = mockClick;
-        return link;
-      }
-      return originalCreateElement(tag);
+// =============================================================================
+// LIVE-DATA WIRING TESTS (Issue #299)
+// =============================================================================
+
+describe('FeatureImportance — live data wiring (#299)', () => {
+  it('populates model selector from useExplainableModels', async () => {
+    render(<FeatureImportance />, { wrapper: createWrapper() });
+
+    // Open the model selector dropdown
+    const trigger = screen.getByRole('combobox');
+    fireEvent.click(trigger);
+
+    // Both supported models should appear in dropdown
+    await waitFor(() => {
+      // Model types render with title-cased / formatted names
+      const propensityOptions = screen.getAllByText(/propensity/i);
+      expect(propensityOptions.length).toBeGreaterThanOrEqual(1);
+      const churnOptions = screen.getAllByText(/churn/i);
+      expect(churnOptions.length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  it('provides a patient ID input', () => {
+    render(<FeatureImportance />, { wrapper: createWrapper() });
+
+    expect(
+      screen.getByPlaceholderText(/patient/i)
+    ).toBeInTheDocument();
+  });
+
+  it('invokes useExplain.mutate with patient_id + model_type when Explain is clicked', () => {
+    const mockMutate = vi.fn();
+    (useExplain as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: mockMutate,
+      data: undefined,
+      isPending: false,
+      isError: false,
+      error: null,
+      reset: vi.fn(),
     });
 
-    render(<FeatureImportance />);
+    render(<FeatureImportance />, { wrapper: createWrapper() });
 
-    const exportButton = screen.getByRole('button', { name: /Export/i });
-    fireEvent.click(exportButton);
+    const patientInput = screen.getByPlaceholderText(/patient/i);
+    fireEvent.change(patientInput, { target: { value: 'patient_42' } });
 
-    expect(mockCreateObjectURL).toHaveBeenCalled();
-    expect(mockClick).toHaveBeenCalled();
+    const explainBtn = screen.getByRole('button', { name: /^explain$/i });
+    fireEvent.click(explainBtn);
 
-    vi.restoreAllMocks();
+    expect(mockMutate).toHaveBeenCalledTimes(1);
+    const callArg = mockMutate.mock.calls[0][0];
+    expect(callArg).toMatchObject({
+      patient_id: 'patient_42',
+      model_type: expect.any(String),
+      // Format + top_k must be supplied so the backend returns a usable
+      // top-K SHAP slice (default is 5 server-side; we ask for more).
+      format: 'top_k',
+      top_k: 10,
+    });
   });
 
-  it('renders feature rows with SHAP values', () => {
-    render(<FeatureImportance />);
+  it('clears stale selectedFeature when explain is re-run', () => {
+    // Start with an explanation that has features
+    (useExplain as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: vi.fn(),
+      data: mockExplainResponse,
+      isPending: false,
+      isError: false,
+      error: null,
+      reset: vi.fn(),
+    });
 
-    // Check for SHAP values displayed (days_since_last_visit has +0.3500)
-    expect(screen.getByText('+0.3500')).toBeInTheDocument();
-    // Negative value (total_prescriptions_ytd has -0.2800)
-    expect(screen.getByText('-0.2800')).toBeInTheDocument();
+    render(<FeatureImportance />, { wrapper: createWrapper() });
+
+    // Click on the first feature row to select it (Feature Details card appears)
+    const firstFeatureRow = screen.getByText(/live feature alpha/i, { selector: 'div.font-medium.truncate' });
+    fireEvent.click(firstFeatureRow);
+    expect(
+      screen.getByText(/Feature Details: live feature alpha/i)
+    ).toBeInTheDocument();
+
+    // Now run Explain again — selectedFeature must be cleared
+    const patientInput = screen.getByPlaceholderText(/patient/i);
+    fireEvent.change(patientInput, { target: { value: 'new_patient' } });
+    const explainBtn = screen.getByRole('button', { name: /^explain$/i });
+    fireEvent.click(explainBtn);
+
+    expect(
+      screen.queryByText(/Feature Details: live feature alpha/i)
+    ).not.toBeInTheDocument();
   });
 
-  it('shows feature value in feature rows', () => {
-    render(<FeatureImportance />);
+  it('renders a falsy prediction_probability in history without crashing', () => {
+    // Force-render with an explanation + history that has a malformed row
+    (useExplain as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: vi.fn(),
+      data: mockExplainResponse,
+      isPending: false,
+      isError: false,
+      error: null,
+      reset: vi.fn(),
+    });
+    (useExplanationHistory as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        patient_id: 'patient_42',
+        total_explanations: 1,
+        // Legacy ml_shap_analyses row missing several ExplainResponse fields
+        explanations: [
+          {
+            explanation_id: 'legacy_row_1',
+            // No request_timestamp, no prediction_probability, no model_version_id
+            model_type: 'legacy_model',
+            prediction_class: null,
+            prediction_probability: null,
+          },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+    });
 
-    // Feature values are displayed as "Value: X"
-    expect(screen.getByText('Value: 45')).toBeInTheDocument();
-    expect(screen.getByText('Value: 12')).toBeInTheDocument();
+    render(<FeatureImportance />, { wrapper: createWrapper() });
+
+    // Submit a patient to enable the history hook
+    const patientInput = screen.getByPlaceholderText(/patient/i);
+    fireEvent.change(patientInput, { target: { value: 'patient_42' } });
+    const explainBtn = screen.getByRole('button', { name: /^explain$/i });
+    fireEvent.click(explainBtn);
+
+    // History tab must remain accessible — no crash thrown during render
+    expect(screen.getByRole('tab', { name: /History/i })).toBeInTheDocument();
   });
 
-  it('filters features when searching', () => {
-    render(<FeatureImportance />);
+  it('renders real SHAP values from useExplain response (not synthetic data)', () => {
+    (useExplain as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: vi.fn(),
+      data: mockExplainResponse,
+      isPending: false,
+      isError: false,
+      error: null,
+      reset: vi.fn(),
+    });
 
-    // Before filtering, multiple features visible in list
-    const beforeFilter = screen.getAllByText(/Value:/);
-    expect(beforeFilter.length).toBe(10);
+    render(<FeatureImportance />, { wrapper: createWrapper() });
 
-    const searchInput = screen.getByPlaceholderText('Search features...');
-    fireEvent.change(searchInput, { target: { value: 'territory' } });
+    // Real features should be displayed (may appear in both feature list AND chart)
+    expect(screen.getAllByText(/live feature alpha/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/live feature beta/i).length).toBeGreaterThanOrEqual(1);
 
-    // After filtering, should show only territory_revenue feature in list
-    expect(screen.getByText('territory revenue')).toBeInTheDocument();
-    // Only one feature with "Value:" should remain in filtered list
-    const afterFilter = screen.getAllByText(/Value:/);
-    expect(afterFilter.length).toBe(1);
+    // Real SHAP values should appear (live_feature_alpha +0.5100, beta -0.3300)
+    expect(screen.getByText('+0.5100')).toBeInTheDocument();
+    expect(screen.getByText('-0.3300')).toBeInTheDocument();
+
+    // Synthetic data markers from the original hard-coded SAMPLE_FEATURES MUST NOT be present
+    expect(screen.queryByText('days since last visit')).not.toBeInTheDocument();
+    expect(screen.queryByText('total prescriptions ytd')).not.toBeInTheDocument();
+    expect(screen.queryByText('+0.3500')).not.toBeInTheDocument();
+    expect(screen.queryByText('-0.2800')).not.toBeInTheDocument();
   });
 
-  it('shows no results message when search has no matches', () => {
-    render(<FeatureImportance />);
+  it('uses real base_value from response (not synthetic SAMPLE_BASE_VALUES)', () => {
+    (useExplain as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: vi.fn(),
+      data: mockExplainResponse, // base_value = 0.42
+      isPending: false,
+      isError: false,
+      error: null,
+      reset: vi.fn(),
+    });
 
-    const searchInput = screen.getByPlaceholderText('Search features...');
-    fireEvent.change(searchInput, { target: { value: 'nonexistent' } });
+    render(<FeatureImportance />, { wrapper: createWrapper() });
 
-    expect(screen.getByText('No features match your search')).toBeInTheDocument();
+    expect(screen.getByText('0.420')).toBeInTheDocument();
+    // Synthetic default base value MUST NOT be present
+    expect(screen.queryByText('0.350')).not.toBeInTheDocument();
+  });
+
+  it('shows a loading state while useExplain is pending', () => {
+    (useExplain as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: vi.fn(),
+      data: undefined,
+      isPending: true,
+      isError: false,
+      error: null,
+      reset: vi.fn(),
+    });
+
+    render(<FeatureImportance />, { wrapper: createWrapper() });
+
+    // Some sort of loading indicator (text or aria-busy element) must be present
+    const loadingNodes = screen.queryAllByText(/loading|computing|explaining/i);
+    expect(loadingNodes.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('shows an error state when useExplain errors', () => {
+    (useExplain as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: vi.fn(),
+      data: undefined,
+      isPending: false,
+      isError: true,
+      error: { message: 'patient not found' },
+      reset: vi.fn(),
+    });
+
+    render(<FeatureImportance />, { wrapper: createWrapper() });
+
+    expect(screen.getByText(/patient not found|error|failed/i)).toBeInTheDocument();
+  });
+
+  it('shows empty state when no patient has been explained yet', () => {
+    // Default beforeEach mock: data === undefined, no pending, no error
+    render(<FeatureImportance />, { wrapper: createWrapper() });
+
+    // Should NOT crash and should show some kind of prompt asking to pick a patient
+    expect(screen.getByPlaceholderText(/patient/i)).toBeInTheDocument();
+    // And MUST NOT show the legacy synthetic features
+    expect(screen.queryByText('days since last visit')).not.toBeInTheDocument();
+  });
+
+  it('renders a History tab that invokes useExplanationHistory for the submitted patient', () => {
+    // Force-render with an explanation already returned so the history hook is enabled
+    (useExplain as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: vi.fn(),
+      data: mockExplainResponse,
+      isPending: false,
+      isError: false,
+      error: null,
+      reset: vi.fn(),
+    });
+    const mockHistoryHook = vi.fn().mockReturnValue({
+      data: {
+        patient_id: 'patient_42',
+        total_explanations: 1,
+        explanations: [
+          {
+            ...mockExplainResponse,
+            explanation_id: 'expl_hist_1',
+            request_timestamp: '2026-05-16T08:00:00Z',
+            prediction_class: 'high_risk',
+            prediction_probability: 0.81,
+          },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+    });
+    (useExplanationHistory as ReturnType<typeof vi.fn>).mockImplementation(mockHistoryHook);
+
+    render(<FeatureImportance />, { wrapper: createWrapper() });
+
+    // History tab trigger must exist
+    expect(screen.getByRole('tab', { name: /History/i })).toBeInTheDocument();
+
+    // Submit a patient so the history hook gets a real id
+    const patientInput = screen.getByPlaceholderText(/patient/i);
+    fireEvent.change(patientInput, { target: { value: 'patient_42' } });
+    const explainBtn = screen.getByRole('button', { name: /^explain$/i });
+    fireEvent.click(explainBtn);
+
+    // useExplanationHistory must have been called with the submitted patient id
+    const callsWithPatient42 = mockHistoryHook.mock.calls.filter(
+      (call) => call[0] === 'patient_42'
+    );
+    expect(callsWithPatient42.length).toBeGreaterThanOrEqual(1);
   });
 });

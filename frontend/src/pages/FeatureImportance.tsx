@@ -2,20 +2,20 @@
  * Feature Importance Page
  * =======================
  *
- * Dashboard for analyzing feature importance and SHAP explanations
- * with multiple visualization types.
+ * Dashboard for analyzing live feature importance and SHAP explanations
+ * by calling the backend `/api/explain/predict` endpoint.
  *
  * Features:
- * - Model selector dropdown
- * - Global feature importance bar chart
- * - SHAP Beeswarm plot (distribution analysis)
- * - Individual prediction waterfall explanation
- * - Feature details table
+ * - Model selector dropdown populated from `useExplainableModels`
+ * - Patient ID input that drives `useExplain` mutation
+ * - Real SHAP feature contributions from the response
+ * - SHAP Beeswarm + Waterfall + Bar visualizations
+ * - Loading / error / empty states
  *
  * @module pages/FeatureImportance
  */
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import {
   Select,
   SelectContent,
@@ -37,6 +37,8 @@ import {
   TrendingUp,
   TrendingDown,
   Minus,
+  AlertCircle,
+  Loader2,
 } from 'lucide-react';
 import {
   SHAPBarChart,
@@ -44,93 +46,99 @@ import {
   SHAPWaterfall,
   type BeeswarmDataPoint,
 } from '@/components/visualizations';
-import type { FeatureContribution } from '@/types/explain';
+import {
+  ExplanationFormat,
+  ModelType,
+  type ExplainableModelInfo,
+  type FeatureContribution,
+} from '@/types/explain';
+import {
+  useExplain,
+  useExplainableModels,
+  useExplanationHistory,
+} from '@/hooks/api/use-explain';
 import { cn } from '@/lib/utils';
 
 // =============================================================================
-// TYPES
+// CONSTANTS
 // =============================================================================
 
-interface ModelInfo {
-  id: string;
-  name: string;
-  version: string;
-  featureCount: number;
+const DEFAULT_TOP_K = 10;
+
+// =============================================================================
+// HELPERS
+// =============================================================================
+
+/**
+ * Human-readable label for a backend model_type enum value.
+ */
+function formatModelLabel(model: ExplainableModelInfo): string {
+  const raw = String(model.model_type);
+  return raw
+    .split('_')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
 }
 
-// =============================================================================
-// SAMPLE DATA
-// =============================================================================
+/**
+ * Convert each live feature contribution into a single beeswarm point.
+ *
+ * The `/api/explain/predict` endpoint returns one explanation per call, so the
+ * beeswarm only shows one dot per feature corresponding to *this* patient's
+ * SHAP value. A true distribution view would require batch endpoints; until
+ * then we honor "real SHAP values + feature names" by NOT fabricating extra
+ * points. `instanceId` falls back to `patient_id` so each dot stays uniquely
+ * keyed.
+ *
+ * `featureValue` is the *normalized* coloring axis expected by SHAPBeeswarm
+ * (`[0, 1]`), so we derive it from each feature's SHAP magnitude relative to
+ * the max so values don't saturate the high-color band. The original domain
+ * value is preserved on `originalValue` for tooltips.
+ */
+function buildBeeswarmData(
+  features: FeatureContribution[],
+  patientId: string
+): BeeswarmDataPoint[] {
+  const maxAbsShap =
+    features.reduce((acc, f) => Math.max(acc, Math.abs(f.shap_value)), 0) || 1;
 
-const SAMPLE_MODELS: ModelInfo[] = [
-  { id: 'churn-v3', name: 'Patient Churn Predictor', version: 'v3.2.1', featureCount: 47 },
-  { id: 'hcp-tier', name: 'HCP Tier Classifier', version: 'v2.1.0', featureCount: 35 },
-  { id: 'conversion-v2', name: 'Conversion Predictor', version: 'v2.0.5', featureCount: 42 },
-];
-
-const SAMPLE_FEATURES: Record<string, FeatureContribution[]> = {
-  'churn-v3': [
-    { feature_name: 'days_since_last_visit', feature_value: 45, shap_value: 0.35, contribution_direction: 'positive', contribution_rank: 1 },
-    { feature_name: 'total_prescriptions_ytd', feature_value: 12, shap_value: -0.28, contribution_direction: 'negative', contribution_rank: 2 },
-    { feature_name: 'territory_revenue', feature_value: 150000, shap_value: 0.22, contribution_direction: 'positive', contribution_rank: 3 },
-    { feature_name: 'specialty_oncology', feature_value: 1, shap_value: 0.18, contribution_direction: 'positive', contribution_rank: 4 },
-    { feature_name: 'recent_engagement_count', feature_value: 3, shap_value: -0.15, contribution_direction: 'negative', contribution_rank: 5 },
-    { feature_name: 'competitor_market_share', feature_value: 0.35, shap_value: -0.12, contribution_direction: 'negative', contribution_rank: 6 },
-    { feature_name: 'formulary_status_preferred', feature_value: 1, shap_value: 0.10, contribution_direction: 'positive', contribution_rank: 7 },
-    { feature_name: 'hcp_experience_years', feature_value: 15, shap_value: 0.08, contribution_direction: 'positive', contribution_rank: 8 },
-    { feature_name: 'patient_volume', feature_value: 250, shap_value: 0.07, contribution_direction: 'positive', contribution_rank: 9 },
-    { feature_name: 'payer_mix_commercial', feature_value: 0.65, shap_value: -0.05, contribution_direction: 'negative', contribution_rank: 10 },
-  ],
-  'hcp-tier': [
-    { feature_name: 'prescription_volume', feature_value: 85, shap_value: 0.42, contribution_direction: 'positive', contribution_rank: 1 },
-    { feature_name: 'patient_count', feature_value: 120, shap_value: 0.35, contribution_direction: 'positive', contribution_rank: 2 },
-    { feature_name: 'influence_score', feature_value: 0.78, shap_value: 0.25, contribution_direction: 'positive', contribution_rank: 3 },
-    { feature_name: 'kol_status', feature_value: 1, shap_value: 0.18, contribution_direction: 'positive', contribution_rank: 4 },
-    { feature_name: 'academic_affiliation', feature_value: 1, shap_value: 0.12, contribution_direction: 'positive', contribution_rank: 5 },
-    { feature_name: 'practice_size', feature_value: 'large', shap_value: 0.09, contribution_direction: 'positive', contribution_rank: 6 },
-    { feature_name: 'geography_urban', feature_value: 1, shap_value: -0.06, contribution_direction: 'negative', contribution_rank: 7 },
-    { feature_name: 'tenure_years', feature_value: 12, shap_value: 0.05, contribution_direction: 'positive', contribution_rank: 8 },
-  ],
-  'conversion-v2': [
-    { feature_name: 'engagement_frequency', feature_value: 8, shap_value: 0.38, contribution_direction: 'positive', contribution_rank: 1 },
-    { feature_name: 'sample_requests', feature_value: 4, shap_value: 0.32, contribution_direction: 'positive', contribution_rank: 2 },
-    { feature_name: 'content_interactions', feature_value: 15, shap_value: 0.28, contribution_direction: 'positive', contribution_rank: 3 },
-    { feature_name: 'webinar_attendance', feature_value: 2, shap_value: 0.15, contribution_direction: 'positive', contribution_rank: 4 },
-    { feature_name: 'competitor_loyalty', feature_value: 0.6, shap_value: -0.22, contribution_direction: 'negative', contribution_rank: 5 },
-    { feature_name: 'time_since_switch', feature_value: 180, shap_value: -0.18, contribution_direction: 'negative', contribution_rank: 6 },
-    { feature_name: 'peer_influence', feature_value: 0.45, shap_value: 0.12, contribution_direction: 'positive', contribution_rank: 7 },
-    { feature_name: 'price_sensitivity', feature_value: 0.35, shap_value: -0.08, contribution_direction: 'negative', contribution_rank: 8 },
-  ],
-};
-
-const SAMPLE_BASE_VALUES: Record<string, number> = {
-  'churn-v3': 0.35,
-  'hcp-tier': 0.48,
-  'conversion-v2': 0.42,
-};
-
-function generateBeeswarmData(features: FeatureContribution[]): BeeswarmDataPoint[] {
-  const data: BeeswarmDataPoint[] = [];
-  const random = (min: number, max: number) => Math.random() * (max - min) + min;
-
-  features.slice(0, 8).forEach((f) => {
-    // Generate 25 sample points per feature
-    for (let i = 0; i < 25; i++) {
-      const featureValue = Math.random();
-      // SHAP values correlate with feature direction
-      const baseShap = f.shap_value * (0.5 + featureValue);
-      const noise = random(-Math.abs(f.shap_value) * 0.3, Math.abs(f.shap_value) * 0.3);
-      data.push({
-        feature: f.feature_name,
-        shapValue: baseShap + noise,
-        featureValue,
-        originalValue: Math.round(featureValue * 100),
-        instanceId: `instance_${i}`,
-      });
-    }
+  return features.slice(0, 8).map((f) => {
+    // Map SHAP value to [0, 1] symmetrically around 0.5 for the coloring axis
+    const normalized = 0.5 + (f.shap_value / maxAbsShap) * 0.5;
+    return {
+      feature: f.feature_name,
+      shapValue: f.shap_value,
+      featureValue: Math.max(0, Math.min(1, normalized)),
+      // Preserve the real domain value for tooltips
+      originalValue: f.feature_value,
+      instanceId: patientId || 'current',
+    };
   });
+}
 
-  return data;
+/**
+ * Defensive accessor: history rows come straight from `ml_shap_analyses`
+ * (see `/api/explain/history/{patient_id}` in src/api/routes/explain.py),
+ * which is a superset of `ExplainResponse` with optional columns. Treat
+ * everything as unknown and coerce.
+ */
+type HistoryRowLike = {
+  explanation_id?: string | null;
+  request_timestamp?: string | null;
+  model_type?: string | null;
+  model_version_id?: string | null;
+  prediction_class?: string | null;
+  prediction_probability?: number | null;
+};
+
+function formatHistoryProbability(p: HistoryRowLike['prediction_probability']): string {
+  return typeof p === 'number' && Number.isFinite(p) ? p.toFixed(3) : '—';
+}
+
+function formatHistoryTimestamp(ts: HistoryRowLike['request_timestamp']): string {
+  if (!ts) return 'Unknown time';
+  const d = new Date(ts);
+  return Number.isNaN(d.getTime()) ? String(ts) : d.toLocaleString();
 }
 
 // =============================================================================
@@ -192,30 +200,62 @@ function FeatureRow({
 // =============================================================================
 
 function FeatureImportance() {
-  const [selectedModelId, setSelectedModelId] = useState<string>(SAMPLE_MODELS[0].id);
-  const [selectedFeature, setSelectedFeature] = useState<FeatureContribution | null>(null);
+  // -- Live backend state --------------------------------------------------
+  const {
+    data: modelsData,
+    isLoading: isLoadingModels,
+    isError: isModelsError,
+  } = useExplainableModels();
+
+  const {
+    mutate: runExplain,
+    data: explanation,
+    isPending: isExplaining,
+    isError: isExplainError,
+    error: explainError,
+    reset: resetExplain,
+  } = useExplain();
+
+  // -- Form state ----------------------------------------------------------
+  const supportedModels = useMemo(
+    () => modelsData?.supported_models ?? [],
+    [modelsData]
+  );
+  const [selectedModelType, setSelectedModelType] = useState<string>('');
+  const [patientId, setPatientId] = useState<string>('');
+  const [submittedPatientId, setSubmittedPatientId] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
-  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [selectedFeature, setSelectedFeature] = useState<FeatureContribution | null>(null);
 
-  // Get selected model data
-  const selectedModel = useMemo(
-    () => SAMPLE_MODELS.find((m) => m.id === selectedModelId) ?? SAMPLE_MODELS[0],
-    [selectedModelId]
+  // -- Historical explanations for the submitted patient ------------------
+  const {
+    data: historyData,
+    isLoading: isLoadingHistory,
+    isError: isHistoryError,
+  } = useExplanationHistory(submittedPatientId, undefined, 10, {
+    enabled: !!submittedPatientId,
+  });
+  const historyExplanations = historyData?.explanations ?? [];
+
+  // Default to first available model once list arrives
+  const effectiveModelType =
+    selectedModelType || (supportedModels[0]?.model_type as string | undefined) || '';
+
+  const selectedModelInfo = useMemo(
+    () => supportedModels.find((m) => String(m.model_type) === effectiveModelType),
+    [supportedModels, effectiveModelType]
   );
 
-  const features = useMemo(
-    () => SAMPLE_FEATURES[selectedModelId] ?? SAMPLE_FEATURES['churn-v3'],
-    [selectedModelId]
+  // -- Derived data from live response -------------------------------------
+  const features: FeatureContribution[] = useMemo(
+    () => explanation?.top_features ?? [],
+    [explanation]
   );
-
-  const baseValue = useMemo(
-    () => SAMPLE_BASE_VALUES[selectedModelId] ?? 0.35,
-    [selectedModelId]
-  );
+  const baseValue: number = explanation?.base_value ?? 0;
 
   const beeswarmData = useMemo(
-    () => generateBeeswarmData(features),
-    [features]
+    () => buildBeeswarmData(features, explanation?.patient_id ?? ''),
+    [features, explanation?.patient_id]
   );
 
   const filteredFeatures = useMemo(() => {
@@ -226,27 +266,50 @@ function FeatureImportance() {
     );
   }, [features, searchQuery]);
 
-  const handleRefresh = async () => {
-    setIsRefreshing(true);
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    setIsRefreshing(false);
-  };
+  // -- Handlers ------------------------------------------------------------
+  const handleExplain = useCallback(() => {
+    const trimmed = patientId.trim();
+    if (!trimmed || !effectiveModelType) return;
 
-  const handleExport = () => {
+    resetExplain();
+    // Drop any previously selected feature so the details card doesn't show
+    // stale info from a prior patient/model while the new explanation loads.
+    setSelectedFeature(null);
+    setSubmittedPatientId(trimmed);
+    runExplain({
+      patient_id: trimmed,
+      model_type: effectiveModelType as ModelType,
+      format: ExplanationFormat.TOP_K,
+      top_k: DEFAULT_TOP_K,
+    });
+  }, [patientId, effectiveModelType, runExplain, resetExplain]);
+
+  const handleRefresh = useCallback(() => {
+    if (!patientId.trim()) return;
+    handleExplain();
+  }, [patientId, handleExplain]);
+
+  const handleExport = useCallback(() => {
+    if (!explanation) return;
     const exportData = {
-      model: selectedModel,
-      features,
-      baseValue,
+      model_type: effectiveModelType,
+      explanation,
       exportedAt: new Date().toISOString(),
     };
     const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.download = `${selectedModel.id}-shap-values.json`;
+    link.download = `${effectiveModelType || 'shap'}-${explanation.patient_id}-shap.json`;
     link.href = url;
     link.click();
     URL.revokeObjectURL(url);
-  };
+  }, [explanation, effectiveModelType]);
+
+  // -- Render --------------------------------------------------------------
+  const hasExplanation = !!explanation;
+  const errorMessage = explainError
+    ? (explainError as { message?: string }).message || 'Failed to compute explanation'
+    : null;
 
   return (
     <div className="container mx-auto px-4 py-8">
@@ -260,65 +323,166 @@ function FeatureImportance() {
         </div>
 
         <div className="flex items-center gap-3">
-          <Select value={selectedModelId} onValueChange={setSelectedModelId}>
+          <Select
+            value={effectiveModelType}
+            onValueChange={(v) => {
+              setSelectedModelType(v);
+              setSelectedFeature(null);
+              resetExplain();
+            }}
+            disabled={isLoadingModels || supportedModels.length === 0}
+          >
             <SelectTrigger className="w-[280px]">
-              <SelectValue placeholder="Select a model" />
+              <SelectValue placeholder={isLoadingModels ? 'Loading models...' : 'Select a model'} />
             </SelectTrigger>
             <SelectContent>
-              {SAMPLE_MODELS.map((model) => (
-                <SelectItem key={model.id} value={model.id}>
+              {supportedModels.map((model) => (
+                <SelectItem key={String(model.model_type)} value={String(model.model_type)}>
                   <div className="flex items-center gap-2">
-                    <span>{model.name}</span>
-                    <span className="text-xs text-muted-foreground">{model.version}</span>
+                    <span>{formatModelLabel(model)}</span>
+                    {model.latest_version && (
+                      <span className="text-xs text-muted-foreground">{model.latest_version}</span>
+                    )}
                   </div>
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
 
-          <Button variant="outline" size="icon" onClick={handleRefresh} disabled={isRefreshing}>
-            <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+          <Button variant="outline" size="icon" onClick={handleRefresh} disabled={isExplaining || !patientId.trim()}>
+            <RefreshCw className={`h-4 w-4 ${isExplaining ? 'animate-spin' : ''}`} />
           </Button>
 
-          <Button variant="outline" onClick={handleExport}>
+          <Button variant="outline" onClick={handleExport} disabled={!hasExplanation}>
             <Download className="h-4 w-4 mr-2" />
             Export
           </Button>
         </div>
       </div>
 
-      {/* Model Info */}
+      {/* Patient ID + Explain action */}
       <Card className="mb-6">
         <CardContent className="pt-6">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div className="flex items-center gap-4">
-              <div className="p-3 rounded-lg bg-primary/10">
-                <BarChart3 className="h-6 w-6 text-primary" />
-              </div>
-              <div>
-                <h2 className="text-xl font-semibold">{selectedModel.name}</h2>
-                <div className="flex items-center gap-4 text-sm text-muted-foreground mt-1">
-                  <span>{selectedModel.version}</span>
-                  <span>•</span>
-                  <span>{selectedModel.featureCount} features</span>
-                </div>
-              </div>
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="flex-1 min-w-[240px]">
+              <label
+                htmlFor="patient-id-input"
+                className="block text-sm font-medium mb-1"
+              >
+                Patient ID
+              </label>
+              <Input
+                id="patient-id-input"
+                placeholder="Enter patient ID (e.g. patient_123)"
+                value={patientId}
+                onChange={(e) => setPatientId(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleExplain();
+                }}
+              />
             </div>
-            <div className="flex items-center gap-6">
-              <div className="text-center">
-                <div className="text-sm text-muted-foreground">Base Value</div>
-                <div className="text-2xl font-bold">{baseValue.toFixed(3)}</div>
-              </div>
-              <div className="text-center">
-                <div className="text-sm text-muted-foreground">Top Feature</div>
-                <div className="text-lg font-semibold">
-                  {features[0]?.feature_name.replace(/_/g, ' ')}
-                </div>
-              </div>
-            </div>
+            <Button
+              onClick={handleExplain}
+              disabled={!patientId.trim() || !effectiveModelType || isExplaining}
+            >
+              {isExplaining ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Loading...
+                </>
+              ) : (
+                'Explain'
+              )}
+            </Button>
           </div>
+
+          {isModelsError && (
+            <div
+              role="alert"
+              className="mt-3 flex items-center gap-2 text-sm text-rose-600"
+            >
+              <AlertCircle className="h-4 w-4" />
+              Failed to load model list
+            </div>
+          )}
+
+          {isExplainError && (
+            <div
+              role="alert"
+              className="mt-3 flex items-center gap-2 text-sm text-rose-600"
+            >
+              <AlertCircle className="h-4 w-4" />
+              Error: {errorMessage}
+            </div>
+          )}
+
+          {isExplaining && (
+            <div className="mt-3 flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Computing explanation...
+            </div>
+          )}
         </CardContent>
       </Card>
+
+      {/* Empty state when nothing has been explained yet */}
+      {!hasExplanation && !isExplaining && !isExplainError && (
+        <Card className="mb-6">
+          <CardContent className="pt-6">
+            <div className="flex flex-col items-center justify-center py-12 text-center">
+              <BarChart3 className="h-12 w-12 text-muted-foreground mb-3" />
+              <h2 className="text-lg font-semibold mb-1">
+                No explanation yet
+              </h2>
+              <p className="text-sm text-muted-foreground max-w-md">
+                Enter a patient ID and click <strong>Explain</strong> to compute live SHAP
+                feature contributions from the model.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Model Info — only rendered once we have an explanation */}
+      {hasExplanation && selectedModelInfo && (
+        <Card className="mb-6">
+          <CardContent className="pt-6">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-4">
+                <div className="p-3 rounded-lg bg-primary/10">
+                  <BarChart3 className="h-6 w-6 text-primary" />
+                </div>
+                <div>
+                  <h2 className="text-xl font-semibold">{formatModelLabel(selectedModelInfo)}</h2>
+                  <div className="flex items-center gap-4 text-sm text-muted-foreground mt-1">
+                    {selectedModelInfo.latest_version && (
+                      <>
+                        <span>{selectedModelInfo.latest_version}</span>
+                        <span>•</span>
+                      </>
+                    )}
+                    <span>{features.length} features</span>
+                    <span>•</span>
+                    <span>Patient {explanation.patient_id}</span>
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-6">
+                <div className="text-center">
+                  <div className="text-sm text-muted-foreground">Base Value</div>
+                  <div className="text-2xl font-bold">{baseValue.toFixed(3)}</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-sm text-muted-foreground">Top Feature</div>
+                  <div className="text-lg font-semibold">
+                    {features[0]?.feature_name.replace(/_/g, ' ') ?? '—'}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Main Content */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -351,9 +515,14 @@ function FeatureImportance() {
                   )}
                 />
               ))}
-              {filteredFeatures.length === 0 && (
+              {filteredFeatures.length === 0 && searchQuery && (
                 <div className="text-center py-8 text-muted-foreground">
                   No features match your search
+                </div>
+              )}
+              {filteredFeatures.length === 0 && !searchQuery && (
+                <div className="text-center py-8 text-muted-foreground text-sm">
+                  Run an explanation to see feature contributions.
                 </div>
               )}
             </CardContent>
@@ -367,6 +536,7 @@ function FeatureImportance() {
               <TabsTrigger value="bar">Bar Chart</TabsTrigger>
               <TabsTrigger value="beeswarm">Beeswarm</TabsTrigger>
               <TabsTrigger value="waterfall">Waterfall</TabsTrigger>
+              <TabsTrigger value="history">History</TabsTrigger>
             </TabsList>
 
             <TabsContent value="bar">
@@ -393,10 +563,12 @@ function FeatureImportance() {
             <TabsContent value="beeswarm">
               <Card>
                 <CardHeader>
-                  <CardTitle>Feature Value Distribution</CardTitle>
+                  <CardTitle>Per-Feature SHAP Contributions</CardTitle>
                   <CardDescription>
-                    Each dot represents one sample. Color shows feature value (blue=low, red=high).
-                    Position shows SHAP impact on prediction.
+                    One dot per top feature for this patient. Color reflects the
+                    direction and magnitude of the SHAP contribution
+                    (blue = negative impact, red = positive impact). Position
+                    along the x-axis shows the raw SHAP value.
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -404,7 +576,10 @@ function FeatureImportance() {
                     data={beeswarmData}
                     maxFeatures={8}
                     height={450}
-                    showLegend
+                    // Built-in legend reads "Feature Value" which doesn't match
+                    // our SHAP-direction coloring. Hide it; the CardDescription
+                    // above documents what the coloring means.
+                    showLegend={false}
                     showReferenceLine
                     onPointClick={(point) => {
                       const feature = features.find((f) => f.feature_name === point.feature);
@@ -436,6 +611,74 @@ function FeatureImportance() {
                     height={450}
                     onBarClick={(f) => setSelectedFeature(f)}
                   />
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="history">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Explanation History</CardTitle>
+                  <CardDescription>
+                    Past SHAP explanations for {submittedPatientId
+                      ? `patient ${submittedPatientId}`
+                      : 'the selected patient'}.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {!submittedPatientId && (
+                    <div className="text-sm text-muted-foreground">
+                      Enter a patient ID and run an explanation to view history.
+                    </div>
+                  )}
+                  {submittedPatientId && isLoadingHistory && (
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Loading history...
+                    </div>
+                  )}
+                  {submittedPatientId && isHistoryError && (
+                    <div role="alert" className="flex items-center gap-2 text-sm text-rose-600">
+                      <AlertCircle className="h-4 w-4" />
+                      Failed to load explanation history
+                    </div>
+                  )}
+                  {submittedPatientId &&
+                    !isLoadingHistory &&
+                    !isHistoryError &&
+                    historyExplanations.length === 0 && (
+                      <div className="text-sm text-muted-foreground">
+                        No historical explanations found for this patient.
+                      </div>
+                    )}
+                  {submittedPatientId && historyExplanations.length > 0 && (
+                    <ul className="space-y-2">
+                      {(historyExplanations as HistoryRowLike[]).map((h, idx) => (
+                        <li
+                          key={h.explanation_id ?? `history-${idx}`}
+                          className="flex items-center justify-between p-3 rounded-lg bg-muted/50"
+                        >
+                          <div className="flex flex-col">
+                            <span className="text-sm font-medium">
+                              {h.model_type ?? 'unknown model'}
+                            </span>
+                            <span className="text-xs text-muted-foreground">
+                              {formatHistoryTimestamp(h.request_timestamp)}
+                              {h.model_version_id ? ` • ${h.model_version_id}` : ''}
+                            </span>
+                          </div>
+                          <div className="text-right">
+                            <div className="text-sm font-mono">
+                              {h.prediction_class ?? '—'}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              p = {formatHistoryProbability(h.prediction_probability)}
+                            </div>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </CardContent>
               </Card>
             </TabsContent>
