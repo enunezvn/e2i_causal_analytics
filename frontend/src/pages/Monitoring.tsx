@@ -260,6 +260,10 @@ function Monitoring() {
     const driftRate = totalFeatures > 0 ? (totalDrift / totalFeatures) * 100 : 0;
     const driftScore = Math.round((healthData?.drift_score ?? 0) * 100);
 
+    // totalRuns reflects the *displayed* runs, i.e. after the client-side
+    // sub-day filter has been applied. Otherwise the KPI would show the
+    // server's day-bucket total while charts/tables show the narrower
+    // sub-day window — they must agree (see codex iter-2 MED finding).
     return {
       totalFeatures,
       totalDrift,
@@ -267,9 +271,9 @@ function Monitoring() {
       driftRate: driftRate.toFixed(2),
       driftScore,
       activeAlerts: alertsData?.active_count ?? alerts.length,
-      totalRuns: runsData?.total_runs ?? runs.length,
+      totalRuns: runs.length,
     };
-  }, [runs, alerts.length, alertsData?.active_count, runsData?.total_runs, healthData?.drift_score]);
+  }, [runs, alerts.length, alertsData?.active_count, healthData?.drift_score]);
 
   // Filter alerts for the error-log tab.
   const filteredAlerts = useMemo(() => {

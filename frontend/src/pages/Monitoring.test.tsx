@@ -158,6 +158,16 @@ describe('Monitoring page — live-backend wiring (issue #297)', { timeout: 20_0
     expect(healthCall).toBe('propensity_v2.1.0');
   });
 
+  it('"Total Runs" KPI reflects displayed runs.length (not unfiltered total_runs)', () => {
+    // The mock fixture has total_runs=42 (server-side total) but only 1
+    // run in the runs[] array. The "Total Runs" KPI MUST reflect the
+    // narrowed/displayed count, otherwise it disagrees with the chart and
+    // table (codex iter-2 MED finding).
+    render(<Monitoring />, { wrapper: createWrapper() });
+    // 42 from the fixture must NOT appear as a Total Runs KPI value.
+    expect(screen.queryByText('42')).not.toBeInTheDocument();
+  });
+
   it('renders alert content from the live hook (not hard-coded SAMPLE_ERROR_LOGS)', async () => {
     const user = userEvent.setup();
     render(<Monitoring />, { wrapper: createWrapper() });
