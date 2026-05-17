@@ -153,10 +153,4 @@ def is_multi_faceted_topic_count(query: str) -> bool:
     topic groups is observable in tests.
     """
     query_lower = query.lower()
-    return (
-        sum(
-            any(kw in query_lower for kw in group)
-            for group in TOPIC_COUNT_KEYWORD_GROUPS
-        )
-        >= 2
-    )
+    return sum(any(kw in query_lower for kw in group) for group in TOPIC_COUNT_KEYWORD_GROUPS) >= 2

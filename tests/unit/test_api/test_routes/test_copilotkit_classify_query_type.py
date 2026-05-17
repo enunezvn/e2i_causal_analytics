@@ -70,9 +70,7 @@ class TestNoDuplicateKeywordGroupingInline:
         ``Name('topic_count', ctx=Store())`` assignment.
         """
         tree = ast.parse(self._source())
-        func = next(
-            node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
-        )
+        func = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef))
         local_assignments_to_topic_count = [
             node
             for node in ast.walk(func)
@@ -105,9 +103,7 @@ class TestNoDuplicateKeywordGroupingInline:
         the 5 keyword lists trips the assertion.
         """
         tree = ast.parse(self._source())
-        func = next(
-            node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
-        )
+        func = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef))
 
         # Find the line number of the first `return "multi_faceted"`.
         multi_faceted_return_lineno: int | None = None
@@ -158,13 +154,9 @@ class TestNoDuplicateKeywordGroupingInline:
         # match against the real attribute names (forward-compatible
         # if a new helper is added).
         ssot_callable_names = tuple(
-            name
-            for name, obj in vars(ssot).items()
-            if callable(obj) and not name.startswith("_")
+            name for name, obj in vars(ssot).items() if callable(obj) and not name.startswith("_")
         )
-        calls_ssot_helper = any(
-            name in function_source for name in ssot_callable_names
-        )
+        calls_ssot_helper = any(name in function_source for name in ssot_callable_names)
 
         assert imports_ssot and calls_ssot_helper, (
             "_classify_query_type must import from and call into "
@@ -184,9 +176,7 @@ class TestNoDuplicateKeywordGroupingInline:
         """
         source = self._source()
         tree = ast.parse(source)
-        func = next(
-            node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
-        )
+        func = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef))
 
         # Find the return-"multi_faceted" statement.
         multi_faceted_returns = [
@@ -196,16 +186,12 @@ class TestNoDuplicateKeywordGroupingInline:
             and isinstance(node.value, ast.Constant)
             and node.value.value == "multi_faceted"
         ]
-        assert multi_faceted_returns, (
-            'Expected at least one `return "multi_faceted"` statement.'
-        )
+        assert multi_faceted_returns, 'Expected at least one `return "multi_faceted"` statement.'
 
         # The controlling If for at least one such return must contain
         # an ast.Call referencing an SSOT-module callable.
         ssot_callable_names = {
-            name
-            for name, obj in vars(ssot).items()
-            if callable(obj) and not name.startswith("_")
+            name for name, obj in vars(ssot).items() if callable(obj) and not name.startswith("_")
         }
 
         def call_targets(node: ast.AST) -> set[str]:
