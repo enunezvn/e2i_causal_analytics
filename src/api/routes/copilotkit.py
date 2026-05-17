@@ -238,6 +238,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
 from pydantic import BaseModel, Field
 
+from src.agents.multi_faceted import is_multi_faceted_topic_count
 from src.api.dependencies.auth import require_viewer
 from src.api.middleware.tracing import get_request_id  # Phase 1 G08
 from src.api.routes.chatbot_tools import E2I_CHATBOT_TOOLS
@@ -999,20 +1000,18 @@ def _classify_query_type(query: str) -> str:
     - drift_alert
     - general
     - multi_faceted
+
+    Multi-faceted detection is delegated to
+    ``src.agents.multi_faceted.is_multi_faceted_topic_count`` (issue #295)
+    so the 5 topic-keyword groups have a single source of truth and a
+    future change is observable in SSOT tests.
     """
     query_lower = query.lower()
 
-    # Multi-faceted detection (multiple topics)
-    topic_count = sum(
-        [
-            any(kw in query_lower for kw in ["trx", "nrx", "kpi", "metric", "performance"]),
-            any(kw in query_lower for kw in ["causal", "impact", "effect", "intervention"]),
-            any(kw in query_lower for kw in ["predict", "forecast", "future"]),
-            any(kw in query_lower for kw in ["experiment", "test", "ab test", "a/b"]),
-            any(kw in query_lower for kw in ["drift", "shift", "degradation"]),
-        ]
-    )
-    if topic_count >= 2:
+    # Multi-faceted detection — delegated to SSOT (issue #295). The 5
+    # topic-keyword groups (KPI/causal/predict/experiment/drift) live in
+    # ``src/agents/multi_faceted.py::TOPIC_COUNT_KEYWORD_GROUPS``.
+    if is_multi_faceted_topic_count(query):
         return "multi_faceted"
 
     # Single topic detection

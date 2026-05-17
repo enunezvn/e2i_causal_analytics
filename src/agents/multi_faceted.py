@@ -1,6 +1,7 @@
-"""Single source of truth for multi-faceted query detection (issue #288).
+"""Single source of truth for multi-faceted query detection (issues #288, #295).
 
-Two distinct algorithms participate in classifying queries as "multi-faceted":
+Three distinct algorithms participate in classifying queries as
+"multi-faceted":
 
 1. ``MULTI_FACETED_PATTERNS`` — 4 conjunctive-marker regexes. Consumed by
    ``IntentClassifierNode.INTENT_PATTERNS['multi_faceted']`` and scored
@@ -14,16 +15,26 @@ Two distinct algorithms participate in classifying queries as "multi-faceted":
    facets fire. Consumed by ``src/api/routes/chatbot_graph.py`` and
    ``src/api/routes/chatbot_dspy.py`` as a pre-classification flag.
 
-The two algorithms intentionally remain distinct — they're triggered at
-different layers of the stack and against different query distributions.
-Convergence here is structural (one module, identity-checked) so that
-future drift is observable in tests; it is not semantic (the regex set
-and the facet scorer remain independent).
+3. ``is_multi_faceted_topic_count`` — 5-topic-group boolean detector
+   (KPI/metric, causal/impact, predict/forecast, experiment/AB,
+   drift/shift). Returns ``True`` when ≥2 topic groups fire. Consumed
+   by ``src/api/routes/copilotkit.py:_classify_query_type`` to flip the
+   analytics query_type label to ``"multi_faceted"`` on chat-message
+   telemetry. Added by issue #295.
 
-Background: PR #287 retired the v42 ``MultiFacetedDetector``, leaving the
-4 inline regexes in ``intent_classifier.py`` and the duplicated
+The three algorithms intentionally remain distinct — they're triggered
+at different layers of the stack and against different query
+distributions. Convergence here is structural (one module,
+identity-checked) so that future drift is observable in tests; it is
+not semantic (the regex set, the facet scorer, and the topic-count
+scorer remain independent).
+
+Background: PR #287 retired the v42 ``MultiFacetedDetector``, leaving
+the 4 inline regexes in ``intent_classifier.py`` and the duplicated
 ``_is_multi_faceted_query`` functions in the two chatbot routes. Issue
-#288 surfaces the drift risk and this module is the fix.
+#288 surfaced the drift risk; this module is the fix. Issue #295
+extended convergence to a fourth detector inside copilotkit's
+analytics-labeling helper.
 
 Module location note: this module lives at ``src/agents/`` rather than
 ``src/agents/orchestrator/`` so that the lightweight chatbot route
@@ -103,3 +114,49 @@ def is_multi_faceted_facet_score(query: str) -> bool:
     )
 
     return sum(facets) >= 2
+
+
+# ---------------------------------------------------------------------------
+# Topic-count detector (issue #295) — analytics-label algorithm used by
+# ``src/api/routes/copilotkit.py:_classify_query_type``. Kept distinct from
+# the facet-scorer above on purpose: different keyword set, different
+# call site, different consumer (analytics field vs Tool Composer dispatch).
+# ---------------------------------------------------------------------------
+
+# Each tuple is one topic-group; >=2 firing groups means the query crosses
+# multiple analytics topics and should be labelled "multi_faceted" in
+# chat-message telemetry. Tuples are immutable; the public name is
+# referenced by tests in ``tests/unit/test_agents/test_orchestrator/test_multi_faceted_ssot.py``.
+TOPIC_COUNT_KEYWORD_GROUPS: tuple[tuple[str, ...], ...] = (
+    ("trx", "nrx", "kpi", "metric", "performance"),
+    ("causal", "impact", "effect", "intervention"),
+    ("predict", "forecast", "future"),
+    ("experiment", "test", "ab test", "a/b"),
+    ("drift", "shift", "degradation"),
+)
+
+
+def is_multi_faceted_topic_count(query: str) -> bool:
+    """Return ``True`` when ≥2 of 5 analytics topic groups fire on ``query``.
+
+    Topic groups (see ``TOPIC_COUNT_KEYWORD_GROUPS``):
+
+      - KPI/metric/performance (trx, nrx, kpi, metric, performance)
+      - causal/impact/effect/intervention
+      - predict/forecast/future
+      - experiment/A-B test (experiment, test, ab test, a/b)
+      - drift/shift/degradation
+
+    Originally inlined at ``src/api/routes/copilotkit.py:1006-1014`` as
+    the analytics-label-flipping heuristic in ``_classify_query_type``.
+    Surfaced by issue #295; consolidated here so a future change to the
+    topic groups is observable in tests.
+    """
+    query_lower = query.lower()
+    return (
+        sum(
+            any(kw in query_lower for kw in group)
+            for group in TOPIC_COUNT_KEYWORD_GROUPS
+        )
+        >= 2
+    )

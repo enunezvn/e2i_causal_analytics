@@ -1,20 +1,23 @@
 """SSOT (single source of truth) tests for multi-faceted query detection.
 
 Issue #288 — converge three multi_faceted heuristics into one module so
-future drift is observable.
+future drift is observable. Issue #295 — extend convergence to the
+fourth detector (copilotkit analytics-labeling helper).
 
-The two algorithms remain distinct in behavior but each has exactly one
+Three algorithms remain distinct in behavior but each has exactly one
 implementation:
 
   - ``MULTI_FACETED_PATTERNS`` — used by ``IntentClassifierNode``.
   - ``is_multi_faceted_facet_score`` — used by both chatbot routes.
+  - ``is_multi_faceted_topic_count`` — used by
+    ``copilotkit._classify_query_type`` (issue #295).
 
 These tests are deliberately structural (identity / ``is`` checks) so
 they fail loudly if a future refactor reintroduces a parallel copy.
 
 Falsifiability: temporarily replace the SSOT export with a stub that
 returns a different shape / value and re-run; the structural assertions
-trip. Verified manually as part of the PR landing for #288.
+trip. Verified manually as part of the PR landing for #288 and #295.
 """
 
 from __future__ import annotations
@@ -23,10 +26,12 @@ import pytest
 
 from src.agents.multi_faceted import (
     MULTI_FACETED_PATTERNS,
+    TOPIC_COUNT_KEYWORD_GROUPS,
     is_multi_faceted_facet_score,
+    is_multi_faceted_topic_count,
 )
 from src.agents.orchestrator.nodes.intent_classifier import IntentClassifierNode
-from src.api.routes import chatbot_dspy, chatbot_graph
+from src.api.routes import chatbot_dspy, chatbot_graph, copilotkit
 
 
 class TestPatternsAreSSOT:
@@ -88,6 +93,69 @@ class TestFacetScorerBehaviorLockedIn:
         # (truthy-int return) is observable.
         result = is_multi_faceted_facet_score("compare trx and nrx")
         assert isinstance(result, bool)
+
+
+class TestTopicCountScorerBehaviorLockedIn:
+    """Issue #295: lock the analytics-label topic-count semantics so a
+    future change to the 5 keyword groups is observable. The SSOT
+    function ``is_multi_faceted_topic_count`` replaced the inline
+    heuristic at ``copilotkit.py:1006-1014``.
+    """
+
+    def test_topic_groups_count_locked(self):
+        # The pre-#295 inline heuristic was 5 groups; a silent addition
+        # or removal of a group is observable.
+        assert len(TOPIC_COUNT_KEYWORD_GROUPS) == 5
+
+    def test_topic_groups_are_immutable(self):
+        assert isinstance(TOPIC_COUNT_KEYWORD_GROUPS, tuple)
+        for group in TOPIC_COUNT_KEYWORD_GROUPS:
+            assert isinstance(group, tuple)
+
+    def test_topic_groups_content_locked(self):
+        # Lock the exact pre-#295 keyword content so any future change
+        # to the analytics-labeling semantics is observable.
+        assert TOPIC_COUNT_KEYWORD_GROUPS == (
+            ("trx", "nrx", "kpi", "metric", "performance"),
+            ("causal", "impact", "effect", "intervention"),
+            ("predict", "forecast", "future"),
+            ("experiment", "test", "ab test", "a/b"),
+            ("drift", "shift", "degradation"),
+        )
+
+    @pytest.mark.parametrize(
+        "query,expected",
+        [
+            # Two groups: KPI + causal → True
+            ("show trx and the causal effect of the campaign", True),
+            # Two groups: KPI + drift → True
+            ("forecast trx and detect drift", True),
+            # Two groups: experiment + predict → True
+            ("run an experiment to predict future trx", True),
+            # Single group: KPI only → False
+            ("what is the trx for kisqali", False),
+            # Single group: drift only → False
+            ("any drift in the data", False),
+            # Zero groups → False
+            ("hello world", False),
+        ],
+    )
+    def test_topic_count_known_queries(self, query, expected):
+        assert is_multi_faceted_topic_count(query) is expected
+
+    def test_returns_bool_not_int(self):
+        result = is_multi_faceted_topic_count("forecast trx and detect drift")
+        assert isinstance(result, bool)
+
+
+class TestCopilotKitDelegatesToSSOT:
+    """Issue #295: ``copilotkit._classify_query_type`` must use the SSOT
+    helper rather than re-implementing the topic-count heuristic. We
+    assert the imported callable IS the SSOT object (not a wrapper).
+    """
+
+    def test_copilotkit_imports_ssot_helper(self):
+        assert copilotkit.is_multi_faceted_topic_count is is_multi_faceted_topic_count
 
 
 class TestMultiFacetedPatternsBehaviorLockedIn:
