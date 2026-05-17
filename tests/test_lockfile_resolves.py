@@ -27,6 +27,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+REQS_PROD = REPO_ROOT / "requirements.txt"
 REQS_DEV = REPO_ROOT / "requirements-dev.txt"
 
 # Resolver dry-run against a clean venv can take 60-180s the first time
@@ -52,14 +53,11 @@ def test_requirements_dev_resolves(tmp_path: Path) -> None:
     otherwise pick to satisfy a downstream pin). pip exits non-zero with a
     "ResolutionImpossible" error in stderr.
 
-    Coverage gap: this test only checks ``requirements-dev.txt`` in
-    isolation. The Tier 1-5 harness install path is
-    ``pip install -r requirements.txt && pip install -r requirements-dev.txt``
-    (two invocations, not one). A future expansion could mirror that
-    sequential install — but the second invocation silently reconciles
-    cross-file pin drift (e.g. bentoml in requirements.txt vs
-    requirements-dev.txt), so single-file resolution remains the
-    primary guard against transitive-constraint regressions.
+    Companion test: ``test_combined_requirements_resolve`` (below)
+    extends this to a single-invocation
+    ``pip install -r requirements.txt -r requirements-dev.txt``,
+    catching the cross-file pin-drift class the sequential Tier 1-5
+    harness install silently reconciles (issue #310).
     """
     assert REQS_DEV.is_file(), f"missing requirements file: {REQS_DEV}"
 
@@ -98,6 +96,70 @@ def test_requirements_dev_resolves(tmp_path: Path) -> None:
             "pip strict resolver could not satisfy requirements-dev.txt. "
             "A pinned package's transitive constraint conflicts with "
             "another pin (or with what pip would otherwise resolve).\n"
+            f"exit code: {result.returncode}\n\n"
+            "stderr (last 2 KB):\n"
+            f"{tail}"
+        )
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+@pytest.mark.timeout(RESOLVER_TIMEOUT_S)
+def test_combined_requirements_resolve(tmp_path: Path) -> None:
+    """pip's strict resolver must satisfy the COMBINED requirements set.
+
+    This closes the coverage gap surfaced by issue #310: the Tier 1-5
+    harness installs the two files sequentially
+    (``pip install -r requirements.txt && pip install -r requirements-dev.txt``)
+    which silently reconciles cross-file pin drift. A single-invocation
+    install with BOTH files supplied at once exercises pip's strict
+    resolver against the union of pins and is the faithful mirror of
+    what ``pip-compile``, ``uv pip compile``, or a clean-room CI install
+    will hit.
+
+    To falsify: revert this PR's bentoml alignment (set
+    ``bentoml==1.4.30`` in requirements-dev.txt while leaving
+    ``bentoml==1.4.39`` in requirements.txt) — the test then trips with
+    ``ResolutionImpossible: bentoml==1.4.39 and bentoml==1.4.30``.
+
+    Same hermeticity contract as ``test_requirements_dev_resolves``:
+    fresh tempdir venv per run, ``--no-cache-dir --isolated``.
+    """
+    assert REQS_PROD.is_file(), f"missing requirements file: {REQS_PROD}"
+    assert REQS_DEV.is_file(), f"missing requirements file: {REQS_DEV}"
+
+    venv_root = tmp_path / "venv"
+    venv.EnvBuilder(with_pip=True, clear=True).create(str(venv_root))
+    venv_python = venv_root / "bin" / "python"
+    assert venv_python.is_file(), f"venv build failed: {venv_python} missing"
+
+    result = subprocess.run(
+        [
+            str(venv_python),
+            "-m",
+            "pip",
+            "install",
+            "--dry-run",
+            "--no-cache-dir",
+            "--isolated",
+            "-r",
+            str(REQS_PROD),
+            "-r",
+            str(REQS_DEV),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=RESOLVER_TIMEOUT_S,
+    )
+
+    if result.returncode != 0:
+        tail = result.stderr[-2000:] if result.stderr else "(no stderr)"
+        pytest.fail(
+            "pip strict resolver could not satisfy the COMBINED set "
+            "(-r requirements.txt -r requirements-dev.txt). This typically "
+            "indicates cross-file pin drift: the two lockfiles disagree on "
+            "the same package's version. See issue #310 for the canonical "
+            "example (bentoml==1.4.39 vs 1.4.30).\n"
             f"exit code: {result.returncode}\n\n"
             "stderr (last 2 KB):\n"
             f"{tail}"
