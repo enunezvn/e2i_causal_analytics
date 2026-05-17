@@ -79,7 +79,13 @@ const MONITORING_MODELS: Array<{ id: string; label: string }> = [
   { id: 'conversion_v3.0.1', label: 'Conversion Model (v3.0.1)' },
 ];
 
-/** Map UI time-range strings → API `days` parameter. */
+/**
+ * Map a UI time-range string → API `days` parameter.
+ *
+ * The backend `/api/monitoring/runs` endpoint takes day-resolution windows
+ * only, so for sub-day windows (`1h`, `6h`) we fetch the minimum supported
+ * day window (1) and then filter client-side via {@link timeRangeToMs}.
+ */
 function timeRangeToDays(tr: string): number {
   switch (tr) {
     case '1h':
@@ -92,6 +98,28 @@ function timeRangeToDays(tr: string): number {
       return 30;
     default:
       return 1;
+  }
+}
+
+/**
+ * Map a UI time-range string → the corresponding window size in milliseconds.
+ *
+ * Used for client-side filtering of runs by `started_at` when the backend's
+ * day-resolution `days` parameter is too coarse (i.e. `1h` and `6h`).
+ *
+ * Returns `null` if no sub-day filter is needed (i.e. the window equals or
+ * exceeds the API's day-resolution unit).
+ */
+function timeRangeToMs(tr: string): number | null {
+  switch (tr) {
+    case '1h':
+      return 60 * 60 * 1000;
+    case '6h':
+      return 6 * 60 * 60 * 1000;
+    default:
+      // 24h / 7d / 30d already match the backend's day resolution; no
+      // additional client-side filtering required.
+      return null;
   }
 }
 
@@ -179,7 +207,21 @@ function Monitoring() {
 
   // --- Derived state ----------------------------------------------------------
   const alerts: AlertItem[] = useMemo(() => alertsData?.alerts ?? [], [alertsData?.alerts]);
-  const runs: MonitoringRunItem[] = useMemo(() => runsData?.runs ?? [], [runsData?.runs]);
+
+  /**
+   * Runs from the backend (day-resolution window) further filtered client-side
+   * when the user picks a sub-day window (`1h` / `6h`) the API can't express.
+   */
+  const runs: MonitoringRunItem[] = useMemo(() => {
+    const fetched = runsData?.runs ?? [];
+    const subDayMs = timeRangeToMs(timeRange);
+    if (subDayMs == null) return fetched;
+    const cutoff = Date.now() - subDayMs;
+    return fetched.filter((r) => {
+      const t = new Date(r.started_at).getTime();
+      return Number.isFinite(t) && t >= cutoff;
+    });
+  }, [runsData?.runs, timeRange]);
 
   /**
    * Build the per-period request/drift/alert telemetry from the live runs feed.

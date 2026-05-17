@@ -137,6 +137,27 @@ describe('Monitoring page — live-backend wiring (issue #297)', { timeout: 20_0
     expect(useModelHealth).toHaveBeenCalled();
   });
 
+  it('passes selected model_id and time-range-derived days into the hooks', () => {
+    render(<Monitoring />, { wrapper: createWrapper() });
+
+    // The page defaults to the first MONITORING_MODELS entry (propensity_v2.1.0)
+    // and the "24h" time range (which maps to days=1).
+    const alertsCall = (useAlerts as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
+    expect(alertsCall).toMatchObject({
+      model_id: 'propensity_v2.1.0',
+      status: AlertStatus.ACTIVE,
+    });
+
+    const runsCall = (useMonitoringRuns as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
+    expect(runsCall).toMatchObject({
+      model_id: 'propensity_v2.1.0',
+      days: 1,
+    });
+
+    const healthCall = (useModelHealth as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
+    expect(healthCall).toBe('propensity_v2.1.0');
+  });
+
   it('renders alert content from the live hook (not hard-coded SAMPLE_ERROR_LOGS)', async () => {
     const user = userEvent.setup();
     render(<Monitoring />, { wrapper: createWrapper() });
