@@ -104,22 +104,30 @@ function timeRangeToDays(tr: string): number {
 /**
  * Map a UI time-range string → the corresponding window size in milliseconds.
  *
- * Used for client-side filtering of runs by `started_at` when the backend's
- * day-resolution `days` parameter is too coarse (i.e. `1h` and `6h`).
+ * Used for client-side filtering of runs by `started_at`. We always apply this
+ * filter defensively for every range, not just `1h`/`6h`. Rationale:
  *
- * Returns `null` if no sub-day filter is needed (i.e. the window equals or
- * exceeds the API's day-resolution unit).
+ *   - The backend `/api/monitoring/runs` route currently passes `days` only
+ *     loosely (the parameter is accepted but the underlying repository call
+ *     `get_recent_runs(model_version, limit)` does not use it as of writing).
+ *     Filtering client-side keeps the page truthful regardless.
+ *   - This also keeps `1h` and `6h` correct, which the API can't express at
+ *     all.
  */
-function timeRangeToMs(tr: string): number | null {
+function timeRangeToMs(tr: string): number {
   switch (tr) {
     case '1h':
       return 60 * 60 * 1000;
     case '6h':
       return 6 * 60 * 60 * 1000;
+    case '24h':
+      return 24 * 60 * 60 * 1000;
+    case '7d':
+      return 7 * 24 * 60 * 60 * 1000;
+    case '30d':
+      return 30 * 24 * 60 * 60 * 1000;
     default:
-      // 24h / 7d / 30d already match the backend's day resolution; no
-      // additional client-side filtering required.
-      return null;
+      return 24 * 60 * 60 * 1000;
   }
 }
 
@@ -209,14 +217,14 @@ function Monitoring() {
   const alerts: AlertItem[] = useMemo(() => alertsData?.alerts ?? [], [alertsData?.alerts]);
 
   /**
-   * Runs from the backend (day-resolution window) further filtered client-side
-   * when the user picks a sub-day window (`1h` / `6h`) the API can't express.
+   * Runs from the backend further filtered client-side by `started_at` so
+   * the rendered set always reflects the user's chosen time window (see
+   * {@link timeRangeToMs} for the rationale).
    */
   const runs: MonitoringRunItem[] = useMemo(() => {
     const fetched = runsData?.runs ?? [];
-    const subDayMs = timeRangeToMs(timeRange);
-    if (subDayMs == null) return fetched;
-    const cutoff = Date.now() - subDayMs;
+    const windowMs = timeRangeToMs(timeRange);
+    const cutoff = Date.now() - windowMs;
     return fetched.filter((r) => {
       const t = new Date(r.started_at).getTime();
       return Number.isFinite(t) && t >= cutoff;

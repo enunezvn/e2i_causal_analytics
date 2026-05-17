@@ -166,6 +166,10 @@ describe('Monitoring page — live-backend wiring (issue #297)', { timeout: 20_0
     render(<Monitoring />, { wrapper: createWrapper() });
     // 42 from the fixture must NOT appear as a Total Runs KPI value.
     expect(screen.queryByText('42')).not.toBeInTheDocument();
+    // And the Total Runs card MUST render alongside the value 1 (one run).
+    expect(screen.getByText('Total Runs')).toBeInTheDocument();
+    // The KPI value 1 should appear at least once in the document tree.
+    expect(screen.getAllByText('1').length).toBeGreaterThanOrEqual(1);
   });
 
   it('renders alert content from the live hook (not hard-coded SAMPLE_ERROR_LOGS)', async () => {
