@@ -550,4 +550,26 @@ describe('PredictiveAnalytics (live API)', () => {
     expect(screen.getByLabelText(/feature_b/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/feature_c/i)).toBeInTheDocument();
   });
+
+  // ===========================================================================
+  // Schema-error must NOT also surface the "No input schema" empty state
+  // (codex iter-3 LOW)
+  // ===========================================================================
+
+  it('shows only the schema error (not "No input schema available") when info errors', () => {
+    (useModelInfo as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: new Error('Schema service unreachable'),
+      refetch: vi.fn(),
+      isFetching: false,
+    });
+
+    render(<PredictiveAnalytics />, { wrapper: createWrapper() });
+
+    expect(screen.getByText('Schema service unreachable')).toBeInTheDocument();
+    expect(
+      screen.queryByText('No input schema available for this model.')
+    ).not.toBeInTheDocument();
+  });
 });

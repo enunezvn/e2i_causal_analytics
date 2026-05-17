@@ -395,11 +395,13 @@ function PredictiveAnalytics() {
                   isRetrying={modelInfoQuery.isFetching}
                 />
               )}
-              {!modelInfoQuery.isLoading && featureKeys.length === 0 && (
-                <p className="text-sm text-muted-foreground py-4">
-                  No input schema available for this model.
-                </p>
-              )}
+              {!modelInfoQuery.isLoading &&
+                !modelInfoQuery.error &&
+                featureKeys.length === 0 && (
+                  <p className="text-sm text-muted-foreground py-4">
+                    No input schema available for this model.
+                  </p>
+                )}
               {featureKeys.length > 0 && (
                 <form
                   className="space-y-3"
