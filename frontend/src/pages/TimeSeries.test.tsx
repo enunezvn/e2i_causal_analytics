@@ -170,7 +170,8 @@ describe('TimeSeries (live data wiring — issue #302)', () => {
     const user = userEvent.setup();
     render(<TimeSeries />, { wrapper: createWrapper() });
 
-    const defaultDaysParam = mockUsePerformanceTrend.mock.calls.at(-1)?.[0]?.days;
+    const defaultCalls = mockUsePerformanceTrend.mock.calls;
+    const defaultDaysParam = defaultCalls[defaultCalls.length - 1]?.[0]?.days;
     expect(defaultDaysParam).toBe(90);
 
     const timeRangeTrigger = screen.getByRole('combobox', { name: /time range/i });
@@ -179,7 +180,8 @@ describe('TimeSeries (live data wiring — issue #302)', () => {
     await user.click(option);
 
     await waitFor(() => {
-      const lastDaysParam = mockUsePerformanceTrend.mock.calls.at(-1)?.[0]?.days;
+      const allCalls = mockUsePerformanceTrend.mock.calls;
+      const lastDaysParam = allCalls[allCalls.length - 1]?.[0]?.days;
       expect(lastDaysParam).toBe(30);
     });
   });
@@ -204,7 +206,8 @@ describe('TimeSeries (live data wiring — issue #302)', () => {
 
     // And useKPIValue was called with a string KPI ID.
     expect(mockUseKPIValue).toHaveBeenCalled();
-    const lastCall = mockUseKPIValue.mock.calls.at(-1);
+    const kpiCalls = mockUseKPIValue.mock.calls;
+    const lastCall = kpiCalls[kpiCalls.length - 1];
     expect(typeof lastCall?.[0]).toBe('string');
     expect((lastCall?.[0] as string).length).toBeGreaterThan(0);
   });

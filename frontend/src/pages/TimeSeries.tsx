@@ -25,6 +25,11 @@ import {
   Legend,
   ResponsiveContainer,
 } from 'recharts';
+import type {
+  Formatter as TooltipValueFormatter,
+  NameType,
+  ValueType,
+} from 'recharts/types/component/DefaultTooltipContent';
 import { RefreshCw, Download, Activity } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -87,6 +92,19 @@ function formatDate(dateStr: string | undefined): string {
 function rangeToDays(range: string): number {
   return TIME_RANGES.find((r) => r.value === range)?.days ?? 90;
 }
+
+/**
+ * Recharts Tooltip value formatter matching `Formatter<ValueType, NameType>`.
+ *
+ * `ValueType` is `number | string | ReadonlyArray<number | string>`, so we
+ * narrow before calling `.toFixed`. Arrays + undefined fall through to the
+ * default string coercion (recharts handles `undefined`/`null` cells itself).
+ */
+const formatTooltipValue: TooltipValueFormatter<ValueType, NameType> = (value) => {
+  if (typeof value === 'number') return value.toFixed(4);
+  if (typeof value === 'string') return value;
+  return '';
+};
 
 interface ChartPoint {
   date: string;
@@ -410,9 +428,7 @@ function TimeSeries() {
                   <XAxis dataKey="date" tickFormatter={formatDate} fontSize={12} tickLine={false} />
                   <YAxis fontSize={12} tickLine={false} axisLine={false} />
                   <Tooltip
-                    formatter={(value: number | string) =>
-                      typeof value === 'number' ? value.toFixed(4) : value
-                    }
+                    formatter={formatTooltipValue}
                     labelFormatter={formatDate}
                   />
                   <Legend />
@@ -482,9 +498,7 @@ function TimeSeries() {
                   <XAxis dataKey="date" tickFormatter={formatDate} fontSize={12} tickLine={false} />
                   <YAxis fontSize={12} tickLine={false} axisLine={false} />
                   <Tooltip
-                    formatter={(value: number | string) =>
-                      typeof value === 'number' ? value.toFixed(4) : value
-                    }
+                    formatter={formatTooltipValue}
                     labelFormatter={formatDate}
                   />
                   <Legend />
