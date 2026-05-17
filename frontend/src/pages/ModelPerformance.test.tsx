@@ -232,15 +232,30 @@ describe('ModelPerformance', () => {
     expect(enabledCall?.[2]).toBe('accuracy');
   });
 
-  it('issue-298: useModelComparison filters self-comparison + missing ids — invariant on every call', () => {
-    // Render with the default 2-model list, then re-render with the SAME
-    // primary but a 1-model list. The comparison hook's `enabled` flag must
-    // ALWAYS be false on the initial render (compareModelId stays '').
-    // Critically: across all calls (initial + re-render), the comparison id
-    // arg MUST NOT leak any non-empty string that isn't in the live list.
+  it('issue-298: stale compareModelId after models-list shrink -> otherId=="" + enabled=false', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
     const { rerender } = render(<ModelPerformance />, { wrapper: createWrapper() });
 
-    // Shrink to a single model
+    // STEP 1: actually select churn_v1.5.2 as comparison so compareModelId is non-empty
+    const compareTab = screen.getByRole('tab', { name: /Comparison/i });
+    await user.click(compareTab);
+
+    const compareSelects = screen.getAllByRole('combobox');
+    const compareWithTrigger = compareSelects[compareSelects.length - 1];
+    await user.click(compareWithTrigger);
+    const churnOption = await screen.findByRole('option', { name: /churn_v1\.5\.2/ });
+    await user.click(churnOption);
+
+    // Sanity: hook should now be enabled with both ids
+    let compareCalls = (useModelComparison as ReturnType<typeof vi.fn>).mock.calls;
+    const enabledCall = compareCalls.find((c) => c[3]?.enabled === true);
+    expect(enabledCall).toBeDefined();
+    expect(enabledCall?.[1]).toBe('churn_v1.5.2');
+
+    // STEP 2: shrink the models list so churn is GONE — the stale
+    // compareModelId would normally leak into useModelComparison, but
+    // effectiveCompareModelId must clamp it back to ''.
     (useModelsStatus as ReturnType<typeof vi.fn>).mockReturnValue({
       data: {
         total_models: 1,
@@ -256,25 +271,11 @@ describe('ModelPerformance', () => {
     });
     rerender(<ModelPerformance />);
 
-    // INVARIANT: every call to useModelComparison must satisfy
-    //   if comparison id is non-empty, it must equal a model name in the
-    //   live list AND differ from the primary id.
-    const compareCalls = (useModelComparison as ReturnType<typeof vi.fn>).mock.calls;
-    expect(compareCalls.length).toBeGreaterThanOrEqual(2);
-
-    for (const call of compareCalls) {
-      const [primaryId, otherId, , opts] = call;
-      if (otherId) {
-        // Must differ from primary
-        expect(otherId).not.toBe(primaryId);
-      }
-      // If enabled, both ids must be set
-      if (opts?.enabled) {
-        expect(primaryId).toBeTruthy();
-        expect(otherId).toBeTruthy();
-        expect(otherId).not.toBe(primaryId);
-      }
-    }
+    compareCalls = (useModelComparison as ReturnType<typeof vi.fn>).mock.calls;
+    const latest = compareCalls[compareCalls.length - 1] ?? [];
+    // Stale comparison id must be clamped to '' and the hook disabled
+    expect(latest[1]).toBe('');
+    expect(latest[3]?.enabled).toBe(false);
   });
 
   it('issue-298: does NOT render hard-coded sample model names (churn-v3 / hcp-tier / conversion-v2 / adherence-v1)', () => {
