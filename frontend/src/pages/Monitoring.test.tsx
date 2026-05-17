@@ -51,6 +51,17 @@ global.URL.revokeObjectURL = mockRevokeObjectURL;
 
 // Distinctive fixture values so we can differentiate from the previous
 // hard-coded SAMPLE_* arrays that used to live in Monitoring.tsx.
+//
+// Timestamps are RELATIVE to test wall-clock (computed at module-load time)
+// so the suite stays stable as the calendar advances — Monitoring.tsx
+// filters runs against `Date.now() - windowMs` (codex iter-5 LOW).
+const ONE_HOUR_MS = 60 * 60 * 1000;
+const ONE_DAY_MS = 24 * ONE_HOUR_MS;
+const NOW = Date.now();
+const HOUR_AGO_ISO = new Date(NOW - ONE_HOUR_MS).toISOString();
+const TWO_HOURS_AGO_ISO = new Date(NOW - 2 * ONE_HOUR_MS).toISOString();
+const ONE_WEEK_AGO_ISO = new Date(NOW - 7 * ONE_DAY_MS).toISOString();
+
 const mockAlertsData = {
   total_count: 7,
   active_count: 3,
@@ -63,7 +74,7 @@ const mockAlertsData = {
       title: 'LIVE_API_ALERT_TITLE_DISTINCT',
       description: 'Live-API description that should appear in the DOM.',
       status: AlertStatus.ACTIVE,
-      triggered_at: '2026-05-17T10:00:00Z',
+      triggered_at: HOUR_AGO_ISO,
     },
   ],
 };
@@ -76,8 +87,8 @@ const mockRunsData = {
       id: 'run-001',
       model_version: 'propensity_v2.1.0',
       run_type: 'scheduled',
-      started_at: '2026-05-17T08:00:00Z',
-      completed_at: '2026-05-17T08:02:30Z',
+      started_at: TWO_HOURS_AGO_ISO,
+      completed_at: HOUR_AGO_ISO,
       features_checked: 47,
       drift_detected_count: 2,
       alerts_generated: 1,
@@ -89,10 +100,10 @@ const mockRunsData = {
 const mockHealthData = {
   model_id: 'propensity_v2.1.0',
   overall_health: 'warning' as const,
-  last_check: '2026-05-17T10:00:00Z',
+  last_check: HOUR_AGO_ISO,
   drift_score: 0.42,
   active_alerts: 3,
-  last_retrained: '2026-05-10T00:00:00Z',
+  last_retrained: ONE_WEEK_AGO_ISO,
   performance_trend: 'degrading' as const,
   recommendations: ['Increase training frequency'],
 };
