@@ -57,9 +57,14 @@ jobs:
           python-version: '3.12'
 
       - name: Install pytest + pytest-timeout
+        # ``--isolated --no-cache-dir`` on the bootstrap mirrors the
+        # hermeticity the inner resolver subprocess already enforces
+        # (see ``tests/test_lockfile_resolves.py`` for the inner venv +
+        # ``--isolated`` design). Prevents user-level pip config or
+        # poisoned wheel caches from leaking into the workflow runner.
         run: |
-          pip install --upgrade pip
-          pip install pytest==9.0.2 pytest-timeout
+          python -m pip install --isolated --no-cache-dir --upgrade pip
+          python -m pip install --isolated --no-cache-dir pytest==9.0.2 pytest-timeout
 
       - name: Run resolver test
         # ``--noconftest`` skips loading tests/conftest.py — the resolver
