@@ -149,7 +149,11 @@ function ModelPerformance() {
 
   // -- Live data ----------------------------------------------------------
   const modelsQuery = useModelsStatus();
-  const models = modelsQuery.data?.models ?? [];
+  // Stabilise `models` reference so memo deps don't change on every render.
+  const models = useMemo<ModelEndpointHealth[]>(
+    () => modelsQuery.data?.models ?? [],
+    [modelsQuery.data?.models]
+  );
 
   // Auto-select first model once data lands
   const effectiveModelId = useMemo(() => {
