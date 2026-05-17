@@ -39,7 +39,6 @@ import pytest
 from src.agents import multi_faceted as ssot
 from src.api.routes import copilotkit
 
-
 # ---------------------------------------------------------------------------
 # Structural — the function body does not duplicate the SSOT's job.
 # ---------------------------------------------------------------------------
