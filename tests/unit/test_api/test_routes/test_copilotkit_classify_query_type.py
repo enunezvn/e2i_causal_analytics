@@ -46,39 +46,99 @@ from src.api.routes import copilotkit
 
 
 class TestNoDuplicateKeywordGroupingInline:
-    """The 5 topic-keyword groups must not all be inlined in
-    ``_classify_query_type`` — the multi-facet decision must be delegated
-    to ``src/agents/multi_faceted.py``.
-    """
+    """The 5 topic-keyword groups must not all be inlined as a
+    ``topic_count = sum([any(kw in ...) for kw in [...]])`` heuristic in
+    ``_classify_query_type`` — the multi-faceted decision must be
+    delegated to ``src/agents/multi_faceted.py``.
 
-    # These are the literal keyword groups from the pre-convergence
-    # implementation (copilotkit.py:1006-1013). We use minimal "tripwire"
-    # subsets — if a future regression re-introduces the 5-group pattern,
-    # all five subsets re-appear and this test trips.
-    _GROUP_TRIPWIRES: tuple[tuple[str, str, str], ...] = (
-        ("trx", "nrx", "kpi"),
-        ("causal", "impact", "intervention"),
-        ("predict", "forecast", "future"),
-        ("experiment", "ab test", "a/b"),
-        ("drift", "shift", "degradation"),
-    )
+    The single-topic dispatch branches inside ``_classify_query_type``
+    legitimately reference the same keywords (e.g. ``trx``, ``causal``,
+    ``drift``) to route to the per-enum labels (``kpi_inquiry``,
+    ``causal_analysis``, ``drift_alert``); the duplication risk #295
+    surfaces is specifically the *combining* heuristic that decides
+    ``"multi_faceted"`` by counting topic-group hits inline.
+    """
 
     def _source(self) -> str:
         return inspect.getsource(copilotkit._classify_query_type)
 
-    def test_does_not_inline_all_five_topic_groups(self):
-        """A re-introduction of the topic-count heuristic would put all
-        5 groups inline. With ≥1 group missing from the source, the
-        multi-faceted decision cannot be the original inline algorithm.
+    def test_does_not_assign_topic_count_local(self):
+        """The pre-#295 inline implementation had the literal
+        ``topic_count = sum([...])`` pattern. A re-introduction would
+        put a top-level ``ast.Assign`` to a ``topic_count`` name back in
+        the function body. Falsifiability: paste the pre-#295 inline
+        heuristic back and this test trips because the AST shows a
+        ``Name('topic_count', ctx=Store())`` assignment.
         """
-        source = self._source()
-        present_groups = sum(
-            all(kw in source for kw in group) for group in self._GROUP_TRIPWIRES
+        tree = ast.parse(self._source())
+        func = next(
+            node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
         )
-        assert present_groups < 5, (
-            "All 5 topic keyword groups present inline in _classify_query_type — "
-            "the multi-faceted detection has been re-duplicated. Delegate to "
-            "src.agents.multi_faceted instead."
+        local_assignments_to_topic_count = [
+            node
+            for node in ast.walk(func)
+            if isinstance(node, ast.Assign)
+            for target in node.targets
+            if isinstance(target, ast.Name) and target.id == "topic_count"
+        ]
+        assert not local_assignments_to_topic_count, (
+            "Found a `topic_count = ...` local assignment inside "
+            "_classify_query_type — the topic-count heuristic appears to "
+            "have been re-inlined. Delegate to src.agents.multi_faceted "
+            "instead (issue #295)."
+        )
+
+    def test_function_body_has_no_inline_any_keyword_lists_above_multi_faceted_return(self):
+        """AST-level structural check: between the start of the
+        function body and the ``return "multi_faceted"`` statement,
+        the body must not contain inline ``any(kw in ... for kw in
+        [literal-list])`` calls (the topic-count heuristic shape). A
+        single SSOT call ``is_multi_faceted_topic_count(query)`` has
+        zero such inline ``ast.List`` literals.
+
+        The pre-#295 inline implementation had 5 inline keyword lists
+        sitting between the function body start and the multi_faceted
+        return. The single-topic dispatch branches BELOW the
+        multi_faceted return are legitimate and not counted by this
+        test.
+
+        Falsifiability: re-inline the topic-count heuristic and any of
+        the 5 keyword lists trips the assertion.
+        """
+        tree = ast.parse(self._source())
+        func = next(
+            node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+        )
+
+        # Find the line number of the first `return "multi_faceted"`.
+        multi_faceted_return_lineno: int | None = None
+        for node in ast.walk(func):
+            if (
+                isinstance(node, ast.Return)
+                and isinstance(node.value, ast.Constant)
+                and node.value.value == "multi_faceted"
+            ):
+                multi_faceted_return_lineno = node.lineno
+                break
+
+        assert multi_faceted_return_lineno is not None, (
+            'Expected a `return "multi_faceted"` statement.'
+        )
+
+        # Collect inline ast.List literals that appear BEFORE the
+        # multi_faceted return (defines the multi-faceted decision
+        # zone). The 5-group inline heuristic placed all of its keyword
+        # lists inside this zone.
+        pre_return_lists = [
+            n
+            for n in ast.walk(func)
+            if isinstance(n, ast.List) and n.lineno < multi_faceted_return_lineno
+        ]
+        assert not pre_return_lists, (
+            f"Found {len(pre_return_lists)} inline list literal(s) in the "
+            'function body before the `return "multi_faceted"` statement '
+            "— looks like the topic-count keyword-group heuristic has been "
+            "re-inlined. Delegate to src.agents.multi_faceted (issue #295)."
         )
 
     def test_delegates_to_multi_faceted_ssot(self):
