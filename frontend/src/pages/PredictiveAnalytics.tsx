@@ -106,8 +106,9 @@ function PredictiveAnalytics() {
    * is service-specific. Try the most likely shapes in priority order:
    *   1. `info.input_schema`             -> Record<string, type>
    *   2. `info.metadata.input_schema`    -> Record<string, type>
-   *   3. `info.metadata.feature_names`   -> string[]
-   *   4. `info.metadata.features`        -> string[] | Record<string, type>
+   *   3. `info.features`                 -> string[] | Record<string, type>
+   *   4. `info.metadata.feature_names`   -> string[]
+   *   5. `info.metadata.features`        -> string[] | Record<string, type>
    *
    * Returns a Record keyed by feature name with a coarse type tag
    * ('number' | 'string' | 'unknown'). Empty record if nothing usable.
@@ -119,6 +120,10 @@ function PredictiveAnalytics() {
     if (!info) return {};
 
     const meta = (info.metadata ?? {}) as Record<string, unknown>;
+    // `info` is typed as ModelInfoResponse, but backend forwards raw
+    // metadata so top-level `features` may exist too. Cast to record for
+    // safe property probing without losing the structured type elsewhere.
+    const infoBag = info as unknown as Record<string, unknown>;
 
     const classify = (raw: unknown): 'number' | 'string' | 'unknown' => {
       if (typeof raw !== 'string') return 'unknown';
@@ -142,6 +147,17 @@ function PredictiveAnalytics() {
       return out;
     };
 
+    const fromList = (
+      list: unknown[]
+    ): Record<string, 'number' | 'string' | 'unknown'> => {
+      const out: Record<string, 'number' | 'string' | 'unknown'> = {};
+      for (const name of list) {
+        if (typeof name === 'string') out[name] = 'unknown';
+      }
+      return out;
+    };
+
+    // 1) Top-level info.input_schema
     if (
       info.input_schema &&
       typeof info.input_schema === 'object' &&
@@ -150,6 +166,7 @@ function PredictiveAnalytics() {
       return fromRecord(info.input_schema as Record<string, unknown>);
     }
 
+    // 2) metadata.input_schema
     const metaInputSchema = meta['input_schema'];
     if (
       metaInputSchema &&
@@ -159,25 +176,37 @@ function PredictiveAnalytics() {
       return fromRecord(metaInputSchema as Record<string, unknown>);
     }
 
-    const featureNames = meta['feature_names'];
-    if (Array.isArray(featureNames)) {
-      const out: Record<string, 'number' | 'string' | 'unknown'> = {};
-      for (const name of featureNames) {
-        if (typeof name === 'string') out[name] = 'unknown';
-      }
-      return out;
+    // 3) Top-level info.features (string[] OR record) — used by the
+    //    backend test fixture and BentoML model_info passthrough.
+    const topFeatures = infoBag['features'];
+    if (Array.isArray(topFeatures)) {
+      return fromList(topFeatures);
+    }
+    if (
+      topFeatures &&
+      typeof topFeatures === 'object' &&
+      !Array.isArray(topFeatures)
+    ) {
+      return fromRecord(topFeatures as Record<string, unknown>);
     }
 
-    const features = meta['features'];
-    if (Array.isArray(features)) {
-      const out: Record<string, 'number' | 'string' | 'unknown'> = {};
-      for (const name of features) {
-        if (typeof name === 'string') out[name] = 'unknown';
-      }
-      return out;
+    // 4) metadata.feature_names (string[])
+    const featureNames = meta['feature_names'];
+    if (Array.isArray(featureNames)) {
+      return fromList(featureNames);
     }
-    if (features && typeof features === 'object' && !Array.isArray(features)) {
-      return fromRecord(features as Record<string, unknown>);
+
+    // 5) metadata.features (string[] OR record)
+    const metaFeatures = meta['features'];
+    if (Array.isArray(metaFeatures)) {
+      return fromList(metaFeatures);
+    }
+    if (
+      metaFeatures &&
+      typeof metaFeatures === 'object' &&
+      !Array.isArray(metaFeatures)
+    ) {
+      return fromRecord(metaFeatures as Record<string, unknown>);
     }
 
     return {};
@@ -430,12 +459,15 @@ function PredictiveAnalytics() {
                   isRetrying={isPredicting}
                 />
               )}
+              {/* Empty state — only when there's no error AND no prior result */}
               {!predictionError && !prediction && (
                 <p className="text-sm text-muted-foreground py-4">
                   Submit features above to run a prediction.
                 </p>
               )}
-              {prediction && (
+              {/* Suppress stale result if a fresh attempt errored — */}
+              {/* otherwise the user sees an error AND a prior result */}
+              {!predictionError && prediction && (
                 <div className="space-y-4">
                   <div>
                     <p className="text-xs text-muted-foreground mb-1">

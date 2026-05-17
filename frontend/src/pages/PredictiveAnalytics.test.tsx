@@ -479,6 +479,13 @@ describe('PredictiveAnalytics (live API)', () => {
     const user = userEvent.setup();
     render(<PredictiveAnalytics />, { wrapper: createWrapper() });
 
+    // Wait for initial mount to settle (reset() also fires on mount when
+    // selectedModel becomes 'churn_model' via the useEffect default).
+    await waitFor(() => {
+      expect(reset).toHaveBeenCalled();
+    });
+    const callsBeforeSwitch = reset.mock.calls.length;
+
     const trigger = screen.getByRole('combobox', { name: /model/i });
     await user.click(trigger);
     await waitFor(() => {
@@ -488,8 +495,59 @@ describe('PredictiveAnalytics (live API)', () => {
     });
     await user.click(screen.getByRole('option', { name: /conversion_model/i }));
 
+    // The switch must trigger at least one additional reset() call;
+    // weaker implementations that only reset on mount would NOT increase
+    // the count.
     await waitFor(() => {
-      expect(reset).toHaveBeenCalled();
+      expect(reset.mock.calls.length).toBeGreaterThan(callsBeforeSwitch);
     });
   }, 15000);
+
+  // ===========================================================================
+  // Stale prediction must NOT be shown alongside a fresh error (codex iter-2)
+  // ===========================================================================
+
+  it('hides stale prediction data when a retry errors', () => {
+    (usePredict as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: mockMutate,
+      // React Query keeps `data` from the last successful call; if a retry
+      // errors we get both `data` (stale) and `isError: true` simultaneously
+      data: mockPredictionResponse,
+      isPending: false,
+      isError: true,
+      error: new Error('Prediction service unavailable'),
+      reset: vi.fn(),
+    });
+
+    render(<PredictiveAnalytics />, { wrapper: createWrapper() });
+
+    // Error banner is shown
+    expect(screen.getByText('Prediction service unavailable')).toBeInTheDocument();
+    // Stale prediction value must NOT also be on the page
+    expect(screen.queryByText(/high_risk/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('Feature Contributions')).not.toBeInTheDocument();
+  });
+
+  // ===========================================================================
+  // Top-level info.features fallback (codex iter-2 MED)
+  // ===========================================================================
+
+  it('falls back to top-level info.features when input_schema is absent', () => {
+    (useModelInfo as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        name: 'churn_model',
+        // No input_schema; only top-level info.features (matches backend
+        // fixture in tests/api/test_predictions_endpoints.py)
+        features: ['feature_a', 'feature_b', 'feature_c'],
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<PredictiveAnalytics />, { wrapper: createWrapper() });
+
+    expect(screen.getByLabelText(/feature_a/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/feature_b/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/feature_c/i)).toBeInTheDocument();
+  });
 });
