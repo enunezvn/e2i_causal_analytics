@@ -20,9 +20,10 @@ Exit code is the resolver verdict.
 
 from __future__ import annotations
 
-import shutil
+import os
 import subprocess
 import sys
+import venv
 from pathlib import Path
 
 import pytest
@@ -30,44 +31,60 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 REQS_DEV = REPO_ROOT / "requirements-dev.txt"
 
-# Resolver dry-run can take 30-90s against cold pypi.org. Override the
-# global 30s pytest timeout.
-RESOLVER_TIMEOUT_S = 300
+# Resolver dry-run against a clean venv can take 60-180s the first time
+# (cold metadata fetch). Override the global 30s pytest timeout.
+RESOLVER_TIMEOUT_S = 600
 
 
 @pytest.mark.slow
 @pytest.mark.integration
 @pytest.mark.timeout(RESOLVER_TIMEOUT_S)
-def test_requirements_dev_resolves() -> None:
+def test_requirements_dev_resolves(tmp_path: Path) -> None:
     """pip's strict resolver must satisfy every pin in requirements-dev.txt.
+
+    Hermeticity: builds a fresh tempdir venv and points pip's cache at a
+    fresh temp directory. This avoids false positives or negatives caused
+    by packages currently installed in the host venv (which can interfere
+    with how pip computes ``would install``/conflict text). Falsifiability
+    verified against this design — see test_lockfile_resolves notes in
+    pyproject [project.optional-dependencies] feast.
 
     Failure shape: one of the pinned packages declares a ``Requires-Dist``
     constraint that contradicts another pin (or contradicts what pip would
     otherwise pick to satisfy a downstream pin). pip exits non-zero with a
-    "ResolutionImpossible" error.
-
-    Falsifiability: revert any lockfile-conflicting change (e.g.
-    re-add ``feast[postgres]==0.44.0`` while ``numpy==2.3.5`` is pinned)
-    and this test will trip.
+    "ResolutionImpossible" error in stderr.
     """
     assert REQS_DEV.is_file(), f"missing requirements file: {REQS_DEV}"
-    assert shutil.which("pip") is not None or sys.executable, "no python/pip available"
+
+    # Step 1: build a fresh venv (without pip upgrade to save time;
+    # the bundled pip is recent enough for --dry-run).
+    venv_root = tmp_path / "venv"
+    venv.EnvBuilder(with_pip=True, clear=True).create(str(venv_root))
+    venv_python = venv_root / "bin" / "python"
+    assert venv_python.is_file(), f"venv build failed: {venv_python} missing"
+
+    # Step 2: run pip dry-run inside the fresh venv. PIP_CACHE_DIR also
+    # gets a fresh path so prior runs in the same pytest session can't
+    # leak resolver state.
+    env = dict(os.environ)
+    env["PIP_CACHE_DIR"] = str(tmp_path / "pipcache")
 
     result = subprocess.run(
         [
-            sys.executable,
+            str(venv_python),
             "-m",
             "pip",
             "install",
             "--dry-run",
             "--no-cache-dir",
-            "--quiet",
+            "--isolated",
             "-r",
             str(REQS_DEV),
         ],
         capture_output=True,
         text=True,
         timeout=RESOLVER_TIMEOUT_S,
+        env=env,
     )
 
     if result.returncode != 0:
