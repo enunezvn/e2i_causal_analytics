@@ -469,6 +469,44 @@ describe('DataQuality (live wiring + Playwright contract)', () => {
 // =============================================================================
 
 describe('PR #322-326,328 — adversarial-review fixes', () => {
+  it('#322 shows empty-state when status filter hides every row (codex MED-1)', async () => {
+    // Both KPIs compute to 'pass' (value above warning threshold). Select 'fail'
+    // -> 0 rows visible -> empty-state must render. Codex iter-1 flagged that
+    // the original filteredKpis.length-based empty-state would NOT fire here.
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockReset();
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const idx = kpiId === 'WS1-DQ-002' ? 1 : 0;
+      return {
+        metadata: dqKpis[idx],
+        value: {
+          kpi_id: kpiId,
+          value: 99,
+          status: 'good',
+          calculated_at: '2026-01-02T08:30:00Z',
+          cached: false,
+          metadata: {},
+        },
+        isLoading: false,
+        error: null,
+        isMetadataLoading: false,
+        isValueLoading: false,
+        refetch: vi.fn(),
+      };
+    });
+
+    render(<DataQuality />, { wrapper: createWrapper() });
+
+    const statusTrigger = screen.getByRole('combobox');
+    fireEvent.click(statusTrigger);
+    const failOpt = screen.getByRole('option', { name: /^Fail$/ });
+    fireEvent.click(failOpt);
+
+    // Empty state appears (no rows match 'fail')
+    expect(
+      await screen.findByText(/No data quality KPIs match your filters/i)
+    ).toBeInTheDocument();
+  });
+
   it('#322 wires status filter to rule.status field', async () => {
     // Override useKPIDetail so the two KPIs produce DIFFERENT computed statuses:
     //   WS1-DQ-001 -> value=94.5 vs threshold {target:85, warning:70, critical:50} = 'pass'

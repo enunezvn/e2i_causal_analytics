@@ -20,7 +20,7 @@
  * @module pages/DataQuality
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Database,
   RefreshCw,
@@ -139,9 +139,11 @@ function severityBadgeVariant(
 function KPIDrilldownRow({
   kpi,
   statusFilter = 'all',
+  onStatusComputed,
 }: {
   kpi: KPIMetadata;
   statusFilter?: string;
+  onStatusComputed?: (kpiId: string, status: 'pass' | 'warning' | 'fail') => void;
 }) {
   const { metadata, value, isLoading, error } = useKPIDetail(kpi.id);
 
@@ -154,7 +156,12 @@ function KPIDrilldownRow({
   // #322 — wire status filter to the computed per-rule status. The KPI list
   // endpoint does NOT return a rolled-up status; we compute it here from
   // (value, threshold) using the same helper that drives the row's status
-  // icon. Selecting Pass/Warning/Fail hides non-matching rows.
+  // icon. Selecting Pass/Warning/Fail hides non-matching rows; parent uses
+  // the reported status to drive the empty-state when ALL rows are filtered.
+  useEffect(() => {
+    onStatusComputed?.(kpi.id, ruleStatus);
+  }, [kpi.id, ruleStatus, onStatusComputed]);
+
   if (statusFilter !== 'all' && statusFilter !== ruleStatus) {
     return null;
   }
@@ -217,6 +224,12 @@ function KPIDrilldownRow({
 function DataQuality() {
   const [searchQuery, setSearchQuery] = useState('');
   const [ruleStatusFilter, setRuleStatusFilter] = useState<string>('all');
+  // #322 — per-row computed status reported up by each KPIDrilldownRow.
+  // Lets us render the "No data quality KPIs match your filters" empty-state
+  // when the status filter hides every row.
+  const [kpiStatuses, setKpiStatuses] = useState<Record<string, 'pass' | 'warning' | 'fail'>>(
+    {}
+  );
 
   // ---------------------------------------------------------------------------
   // LIVE DATA — KPI workstream ws1_data_quality
@@ -279,6 +292,19 @@ function DataQuality() {
     // Status filter (#322) is applied per-row inside KPIDrilldownRow since the
     // computed status depends on useKPIDetail's per-row value fetch.
   }, [allKpis, searchQuery]);
+
+  // #322 — visible-row count after status filter is applied. Drives the
+  // empty-state message when no row matches the chosen status.
+  const visibleKpiCount = useMemo(() => {
+    if (ruleStatusFilter === 'all') return filteredKpis.length;
+    return filteredKpis.reduce((count, kpi) => {
+      const status = kpiStatuses[kpi.id];
+      // Conservatively treat unknown (not yet reported) as visible; the row
+      // will hide itself once it reports its status on the next render tick.
+      if (status === undefined || status === ruleStatusFilter) return count + 1;
+      return count;
+    }, 0);
+  }, [filteredKpis, ruleStatusFilter, kpiStatuses]);
 
   // Derive dimension scores from drift signal + KPI count health.
   // overall_drift_score is in [0, 1] where higher = worse; we invert to a
@@ -622,11 +648,16 @@ function DataQuality() {
                           key={kpi.id}
                           kpi={kpi}
                           statusFilter={ruleStatusFilter}
+                          onStatusComputed={(id, status) =>
+                            setKpiStatuses((prev) =>
+                              prev[id] === status ? prev : { ...prev, [id]: status }
+                            )
+                          }
                         />
                       ))}
                     </tbody>
                   </table>
-                  {filteredKpis.length === 0 && (
+                  {visibleKpiCount === 0 && (
                     <div className="text-center py-8 text-muted-foreground">
                       <FileText className="h-8 w-8 mx-auto mb-2 opacity-50" />
                       <p>No data quality KPIs match your filters</p>
