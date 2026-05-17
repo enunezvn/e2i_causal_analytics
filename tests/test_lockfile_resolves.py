@@ -20,7 +20,6 @@ Exit code is the resolver verdict.
 
 from __future__ import annotations
 
-import os
 import subprocess
 import venv
 from pathlib import Path
@@ -41,17 +40,26 @@ RESOLVER_TIMEOUT_S = 600
 def test_requirements_dev_resolves(tmp_path: Path) -> None:
     """pip's strict resolver must satisfy every pin in requirements-dev.txt.
 
-    Hermeticity: builds a fresh tempdir venv and points pip's cache at a
-    fresh temp directory. This avoids false positives or negatives caused
-    by packages currently installed in the host venv (which can interfere
-    with how pip computes ``would install``/conflict text). Falsifiability
-    verified against this design — see test_lockfile_resolves notes in
-    pyproject [project.optional-dependencies] feast.
+    Hermeticity: builds a fresh tempdir venv per run via ``venv.EnvBuilder``
+    and passes ``--no-cache-dir --isolated`` to pip. This avoids false
+    positives or negatives caused by packages installed in the host venv
+    or by user-level pip configuration. To falsify: revert this PR's
+    feast removal from requirements-dev.txt — the test then trips with
+    ``ResolutionImpossible: feast and numpy==2.3.5``.
 
     Failure shape: one of the pinned packages declares a ``Requires-Dist``
     constraint that contradicts another pin (or contradicts what pip would
     otherwise pick to satisfy a downstream pin). pip exits non-zero with a
     "ResolutionImpossible" error in stderr.
+
+    Coverage gap: this test only checks ``requirements-dev.txt`` in
+    isolation. The Tier 1-5 harness install path is
+    ``pip install -r requirements.txt && pip install -r requirements-dev.txt``
+    (two invocations, not one). A future expansion could mirror that
+    sequential install — but the second invocation silently reconciles
+    cross-file pin drift (e.g. bentoml in requirements.txt vs
+    requirements-dev.txt), so single-file resolution remains the
+    primary guard against transitive-constraint regressions.
     """
     assert REQS_DEV.is_file(), f"missing requirements file: {REQS_DEV}"
 
@@ -62,12 +70,9 @@ def test_requirements_dev_resolves(tmp_path: Path) -> None:
     venv_python = venv_root / "bin" / "python"
     assert venv_python.is_file(), f"venv build failed: {venv_python} missing"
 
-    # Step 2: run pip dry-run inside the fresh venv. PIP_CACHE_DIR also
-    # gets a fresh path so prior runs in the same pytest session can't
-    # leak resolver state.
-    env = dict(os.environ)
-    env["PIP_CACHE_DIR"] = str(tmp_path / "pipcache")
-
+    # Step 2: run pip dry-run inside the fresh venv. ``--isolated``
+    # ignores user-level pip config; ``--no-cache-dir`` skips the wheel
+    # cache so the resolver always re-fetches metadata.
     result = subprocess.run(
         [
             str(venv_python),
@@ -83,7 +88,6 @@ def test_requirements_dev_resolves(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
         timeout=RESOLVER_TIMEOUT_S,
-        env=env,
     )
 
     if result.returncode != 0:
