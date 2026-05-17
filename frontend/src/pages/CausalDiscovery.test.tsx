@@ -198,13 +198,34 @@ describe('CausalDiscovery Page', () => {
   // =========================================================================
 
   describe('Routing query form (Issue #303)', () => {
-    it('renders form inputs for treatment_var, outcome_var, and covariates', () => {
+    it('renders form inputs for query, treatment_var, outcome_var, and covariates', () => {
       renderWithAllProviders(<CausalDiscovery />);
 
       // Form inputs should be present
+      expect(screen.getByLabelText(/causal question/i)).toBeInTheDocument();
       expect(screen.getByLabelText(/treatment variable/i)).toBeInTheDocument();
       expect(screen.getByLabelText(/outcome variable/i)).toBeInTheDocument();
       expect(screen.getByLabelText(/covariates/i)).toBeInTheDocument();
+    });
+
+    it('forwards the user-typed causal question verbatim to useRouteQuery', async () => {
+      renderWithAllProviders(<CausalDiscovery />);
+
+      const query = screen.getByLabelText(/causal question/i) as HTMLInputElement;
+      // A targeting question — backend router maps this to CausalML.
+      fireEvent.change(query, {
+        target: { value: 'Who should we target with rep visits?' },
+      });
+
+      const submit = screen.getByRole('button', { name: /run routing/i });
+      fireEvent.click(submit);
+
+      await waitFor(() => {
+        expect(mockRouteMutate).toHaveBeenCalledTimes(1);
+      });
+      expect(mockRouteMutate.mock.calls[0][0].query).toBe(
+        'Who should we target with rep visits?',
+      );
     });
 
     it('submits the form and calls useRouteQuery with treatment, outcome, and covariates', async () => {

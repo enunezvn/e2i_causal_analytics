@@ -76,6 +76,7 @@ function fmtCI(lower: unknown, upper: unknown): string {
 
 function CausalDiscovery() {
   // Form state ---------------------------------------------------------------
+  const [queryText, setQueryText] = useState('Does X cause Y?');
   const [treatmentVar, setTreatmentVar] = useState('rep_visits');
   const [outcomeVar, setOutcomeVar] = useState('trx_count');
   const [covariatesText, setCovariatesText] = useState('age, region');
@@ -106,9 +107,18 @@ function CausalDiscovery() {
   const handleRouteSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const covariates = parseCovariates(covariatesText);
+    // The backend router (`src/causal_engine/pipeline/router.py`) classifies
+    // by question keywords. Use the user-typed question verbatim so the
+    // router can branch to EconML / CausalML / NetworkX when the user is
+    // asking about heterogeneity / targeting / impact flow rather than ATE.
+    const trimmed = queryText.trim();
     const query =
-      `Effect of ${treatmentVar || '<treatment>'} on ${outcomeVar || '<outcome>'}` +
-      (covariates.length > 0 ? ` controlling for ${covariates.join(', ')}` : '');
+      trimmed.length > 0
+        ? trimmed
+        : `Effect of ${treatmentVar || '<treatment>'} on ${outcomeVar || '<outcome>'}` +
+          (covariates.length > 0
+            ? ` controlling for ${covariates.join(', ')}`
+            : '');
     const request: RouteQueryRequest = {
       query,
       treatment_var: treatmentVar || undefined,
@@ -227,6 +237,20 @@ function CausalDiscovery() {
             aria-label="Library routing form"
             className="grid grid-cols-1 md:grid-cols-3 gap-4"
           >
+            <div className="space-y-2 md:col-span-3">
+              <Label htmlFor="causal-query">Causal question</Label>
+              <Input
+                id="causal-query"
+                value={queryText}
+                placeholder='e.g. "Does X cause Y?", "Who should we target?", "How does effect vary?"'
+                onChange={(event) => setQueryText(event.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                The router classifies the wording to recommend DoWhy
+                (causation), EconML (heterogeneity), CausalML (targeting), or
+                NetworkX (impact flow).
+              </p>
+            </div>
             <div className="space-y-2">
               <Label htmlFor="treatment-var">Treatment variable</Label>
               <Input
