@@ -81,34 +81,58 @@ function formatModelLabel(model: ExplainableModelInfo): string {
 }
 
 /**
- * Build per-feature jittered beeswarm points from the SHAP top features.
- * Each feature gets `pointsPerFeature` synthetic samples for distribution
- * visualization, since the per-instance SHAP endpoint returns a single
- * point — beeswarm visualization remains illustrative around that point.
+ * Convert each live feature contribution into a single beeswarm point.
+ *
+ * The `/api/explain/predict` endpoint returns one explanation per call, so the
+ * beeswarm only shows one dot per feature corresponding to *this* patient's
+ * SHAP value. A true distribution view would require batch endpoints; until
+ * then we honor "real SHAP values + feature names" by NOT fabricating extra
+ * points. `instanceId` falls back to `patient_id` so each dot stays uniquely
+ * keyed.
  */
 function buildBeeswarmData(
   features: FeatureContribution[],
-  pointsPerFeature = 25
+  patientId: string
 ): BeeswarmDataPoint[] {
-  const data: BeeswarmDataPoint[] = [];
-  const random = (min: number, max: number) => Math.random() * (max - min) + min;
-
-  features.slice(0, 8).forEach((f) => {
-    for (let i = 0; i < pointsPerFeature; i++) {
-      const featureValue = Math.random();
-      const baseShap = f.shap_value * (0.5 + featureValue);
-      const noise = random(-Math.abs(f.shap_value) * 0.3, Math.abs(f.shap_value) * 0.3);
-      data.push({
-        feature: f.feature_name,
-        shapValue: baseShap + noise,
-        featureValue,
-        originalValue: Math.round(featureValue * 100),
-        instanceId: `instance_${i}`,
-      });
-    }
+  return features.slice(0, 8).map((f) => {
+    const numericValue =
+      typeof f.feature_value === 'number'
+        ? f.feature_value
+        : Number(f.feature_value);
+    const featureValue = Number.isFinite(numericValue) ? numericValue : 0;
+    return {
+      feature: f.feature_name,
+      shapValue: f.shap_value,
+      featureValue,
+      originalValue: featureValue,
+      instanceId: patientId || 'current',
+    };
   });
+}
 
-  return data;
+/**
+ * Defensive accessor: history rows come straight from `ml_shap_analyses`
+ * (see `/api/explain/history/{patient_id}` in src/api/routes/explain.py),
+ * which is a superset of `ExplainResponse` with optional columns. Treat
+ * everything as unknown and coerce.
+ */
+type HistoryRowLike = {
+  explanation_id?: string | null;
+  request_timestamp?: string | null;
+  model_type?: string | null;
+  model_version_id?: string | null;
+  prediction_class?: string | null;
+  prediction_probability?: number | null;
+};
+
+function formatHistoryProbability(p: HistoryRowLike['prediction_probability']): string {
+  return typeof p === 'number' && Number.isFinite(p) ? p.toFixed(3) : '—';
+}
+
+function formatHistoryTimestamp(ts: HistoryRowLike['request_timestamp']): string {
+  if (!ts) return 'Unknown time';
+  const d = new Date(ts);
+  return Number.isNaN(d.getTime()) ? String(ts) : d.toLocaleString();
 }
 
 // =============================================================================
@@ -223,7 +247,10 @@ function FeatureImportance() {
   );
   const baseValue: number = explanation?.base_value ?? 0;
 
-  const beeswarmData = useMemo(() => buildBeeswarmData(features), [features]);
+  const beeswarmData = useMemo(
+    () => buildBeeswarmData(features, explanation?.patient_id ?? ''),
+    [features, explanation?.patient_id]
+  );
 
   const filteredFeatures = useMemo(() => {
     if (!searchQuery) return features;
@@ -303,7 +330,9 @@ function FeatureImportance() {
                 <SelectItem key={String(model.model_type)} value={String(model.model_type)}>
                   <div className="flex items-center gap-2">
                     <span>{formatModelLabel(model)}</span>
-                    <span className="text-xs text-muted-foreground">{model.latest_version}</span>
+                    {model.latest_version && (
+                      <span className="text-xs text-muted-foreground">{model.latest_version}</span>
+                    )}
                   </div>
                 </SelectItem>
               ))}
@@ -416,8 +445,12 @@ function FeatureImportance() {
                 <div>
                   <h2 className="text-xl font-semibold">{formatModelLabel(selectedModelInfo)}</h2>
                   <div className="flex items-center gap-4 text-sm text-muted-foreground mt-1">
-                    <span>{selectedModelInfo.latest_version}</span>
-                    <span>•</span>
+                    {selectedModelInfo.latest_version && (
+                      <>
+                        <span>{selectedModelInfo.latest_version}</span>
+                        <span>•</span>
+                      </>
+                    )}
                     <span>{features.length} features</span>
                     <span>•</span>
                     <span>Patient {explanation.patient_id}</span>
@@ -605,24 +638,26 @@ function FeatureImportance() {
                     )}
                   {submittedPatientId && historyExplanations.length > 0 && (
                     <ul className="space-y-2">
-                      {historyExplanations.map((h) => (
+                      {(historyExplanations as HistoryRowLike[]).map((h, idx) => (
                         <li
-                          key={h.explanation_id}
+                          key={h.explanation_id ?? `history-${idx}`}
                           className="flex items-center justify-between p-3 rounded-lg bg-muted/50"
                         >
                           <div className="flex flex-col">
-                            <span className="text-sm font-medium">{h.model_type}</span>
+                            <span className="text-sm font-medium">
+                              {h.model_type ?? 'unknown model'}
+                            </span>
                             <span className="text-xs text-muted-foreground">
-                              {new Date(h.request_timestamp).toLocaleString()} •{' '}
-                              {h.model_version_id}
+                              {formatHistoryTimestamp(h.request_timestamp)}
+                              {h.model_version_id ? ` • ${h.model_version_id}` : ''}
                             </span>
                           </div>
                           <div className="text-right">
                             <div className="text-sm font-mono">
-                              {h.prediction_class}
+                              {h.prediction_class ?? '—'}
                             </div>
                             <div className="text-xs text-muted-foreground">
-                              p = {h.prediction_probability.toFixed(3)}
+                              p = {formatHistoryProbability(h.prediction_probability)}
                             </div>
                           </div>
                         </li>

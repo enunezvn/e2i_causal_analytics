@@ -237,7 +237,53 @@ describe('FeatureImportance — live data wiring (#299)', () => {
     expect(callArg).toMatchObject({
       patient_id: 'patient_42',
       model_type: expect.any(String),
+      // Format + top_k must be supplied so the backend returns a usable
+      // top-K SHAP slice (default is 5 server-side; we ask for more).
+      format: 'top_k',
+      top_k: 10,
     });
+  });
+
+  it('renders a falsy prediction_probability in history without crashing', () => {
+    // Force-render with an explanation + history that has a malformed row
+    (useExplain as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: vi.fn(),
+      data: mockExplainResponse,
+      isPending: false,
+      isError: false,
+      error: null,
+      reset: vi.fn(),
+    });
+    (useExplanationHistory as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        patient_id: 'patient_42',
+        total_explanations: 1,
+        // Legacy ml_shap_analyses row missing several ExplainResponse fields
+        explanations: [
+          {
+            explanation_id: 'legacy_row_1',
+            // No request_timestamp, no prediction_probability, no model_version_id
+            model_type: 'legacy_model',
+            prediction_class: null,
+            prediction_probability: null,
+          },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+    });
+
+    render(<FeatureImportance />, { wrapper: createWrapper() });
+
+    // Submit a patient to enable the history hook
+    const patientInput = screen.getByPlaceholderText(/patient/i);
+    fireEvent.change(patientInput, { target: { value: 'patient_42' } });
+    const explainBtn = screen.getByRole('button', { name: /^explain$/i });
+    fireEvent.click(explainBtn);
+
+    // History tab must remain accessible — no crash thrown during render
+    expect(screen.getByRole('tab', { name: /History/i })).toBeInTheDocument();
   });
 
   it('renders real SHAP values from useExplain response (not synthetic data)', () => {
