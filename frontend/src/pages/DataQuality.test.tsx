@@ -32,6 +32,27 @@ vi.mock('@/hooks/api/use-monitoring', () => ({
   useTriggerDriftDetection: vi.fn(),
 }));
 
+// -----------------------------------------------------------------------------
+// VISUALIZATION STUBS — record KPICard props so we can assert no fabricated
+// sparkline fallback leaks (HIGH-1 from adversarial review of PR #320; mirrors
+// the same anti-pattern PR #313 captured at memory
+// `feedback_mock_data_scans_must_check_imported_defaults`).
+// -----------------------------------------------------------------------------
+const kpiCardCalls: Array<Record<string, unknown>> = [];
+
+vi.mock('@/components/visualizations', async () => {
+  const actual = await vi.importActual<typeof import('@/components/visualizations')>(
+    '@/components/visualizations'
+  );
+  return {
+    ...actual,
+    KPICard: (props: Record<string, unknown>) => {
+      kpiCardCalls.push(props);
+      return <div data-testid="kpi-card-stub">{String(props.title)}</div>;
+    },
+  };
+});
+
 import { useKPIList, useKPIDetail } from '@/hooks/api/use-kpi';
 import {
   useLatestDriftStatus,
@@ -136,6 +157,7 @@ const mockMutate = vi.fn();
 
 beforeEach(() => {
   vi.clearAllMocks();
+  kpiCardCalls.length = 0;
   global.URL.createObjectURL = mockCreateObjectURL;
   global.URL.revokeObjectURL = mockRevokeObjectURL;
 
@@ -397,5 +419,37 @@ describe('DataQuality (live wiring + Playwright contract)', () => {
     expect(mockClick).toHaveBeenCalled();
 
     vi.restoreAllMocks();
+  });
+
+  // ===========================================================================
+  // ADVERSARIAL REVIEW HIGH-1 — KPICard SAMPLE_SPARKLINE fallback leak
+  // (mirrors A5/PR #313's `feedback_mock_data_scans_must_check_imported_defaults`).
+  // Each dimension <KPICard> must pass an explicit sparklineData prop and it
+  // must NOT equal the SAMPLE_SPARKLINE fabricated constant from KPICard.tsx:70
+  // `[45, 52, 48, 55, 60, 58, 62, 65, 63, 68]`.
+  // ===========================================================================
+
+  it('passes explicit sparklineData to every dimension KPICard (no SAMPLE_SPARKLINE leak)', () => {
+    render(<DataQuality />, { wrapper: createWrapper() });
+
+    // 5 dimension cards: Overall Quality, Completeness, Accuracy, Consistency, Timeliness
+    expect(kpiCardCalls.length).toBeGreaterThanOrEqual(5);
+
+    const SAMPLE_SPARKLINE = [45, 52, 48, 55, 60, 58, 62, 65, 63, 68];
+
+    for (const props of kpiCardCalls) {
+      // The prop MUST be defined (so KPICard's `??` fallback to SAMPLE_SPARKLINE
+      // never triggers).
+      expect(
+        props.sparklineData,
+        `KPICard "${String(props.title)}" must pass sparklineData; got undefined (would fall back to SAMPLE_SPARKLINE)`
+      ).toBeDefined();
+
+      // And the value must not be the fabricated SAMPLE_SPARKLINE constant.
+      expect(
+        props.sparklineData,
+        `KPICard "${String(props.title)}" must not pass the fabricated SAMPLE_SPARKLINE array`
+      ).not.toEqual(SAMPLE_SPARKLINE);
+    }
   });
 });

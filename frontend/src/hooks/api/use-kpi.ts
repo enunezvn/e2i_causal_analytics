@@ -46,7 +46,11 @@ import type {
 // TYPE DEFINITIONS
 // =============================================================================
 
-type KPIQueryKey = ReturnType<typeof queryKeys.kpi.list>;
+type KPIQueryKey = readonly [
+  ...ReturnType<typeof queryKeys.kpi.list>,
+  string | null,
+  string | null,
+];
 
 // =============================================================================
 // QUERY HOOKS - LIST OPERATIONS
@@ -77,7 +81,14 @@ export function useKPIList(
   options?: Omit<UseQueryOptions<KPIListResponse, Error, KPIListResponse, KPIQueryKey>, 'queryKey' | 'queryFn'>
 ) {
   return useQuery({
-    queryKey: queryKeys.kpi.list(),
+    // Adversarial review HIGH-2: the queryKey must vary with `params` so different
+    // workstream / causal_library filters do NOT silently share one cache entry
+    // (first-call-wins → wrong data on subsequent pages).
+    queryKey: [
+      ...queryKeys.kpi.list(),
+      params?.workstream ?? null,
+      params?.causal_library ?? null,
+    ] as const,
     queryFn: () => listKPIs(params),
     staleTime: 5 * 60 * 1000, // 5 minutes
     ...options,

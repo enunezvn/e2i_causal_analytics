@@ -366,6 +366,7 @@ function DataQuality() {
               unit="%"
               status={getStatusFromScore(qualityScores.overall)}
               description="Composite score across the four DQ dimensions"
+              sparklineData={[]}
               higherIsBetter
             />
             <KPICard
@@ -374,6 +375,7 @@ function DataQuality() {
               unit="%"
               status={getStatusFromScore(qualityScores.completeness)}
               description="Monitoring coverage across registered DQ KPIs"
+              sparklineData={[]}
               higherIsBetter
             />
             <KPICard
@@ -382,6 +384,7 @@ function DataQuality() {
               unit="%"
               status={getStatusFromScore(qualityScores.accuracy)}
               description="Drift-free feature share"
+              sparklineData={[]}
               higherIsBetter
             />
             <KPICard
@@ -390,6 +393,7 @@ function DataQuality() {
               unit="%"
               status={getStatusFromScore(qualityScores.consistency)}
               description="Inverse of overall drift severity"
+              sparklineData={[]}
               higherIsBetter
             />
             <KPICard
@@ -398,6 +402,7 @@ function DataQuality() {
               unit="%"
               status={getStatusFromScore(qualityScores.timeliness)}
               description="Pipeline freshness vs baseline window"
+              sparklineData={[]}
               higherIsBetter
             />
           </>
