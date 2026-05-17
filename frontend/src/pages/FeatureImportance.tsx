@@ -576,7 +576,10 @@ function FeatureImportance() {
                     data={beeswarmData}
                     maxFeatures={8}
                     height={450}
-                    showLegend
+                    // Built-in legend reads "Feature Value" which doesn't match
+                    // our SHAP-direction coloring. Hide it; the CardDescription
+                    // above documents what the coloring means.
+                    showLegend={false}
                     showReferenceLine
                     onPointClick={(point) => {
                       const feature = features.find((f) => f.feature_name === point.feature);
