@@ -1,0 +1,70 @@
+name: Lockfile Resolves
+
+# Dedicated workflow to verify pip's strict resolver can satisfy
+# requirements-dev.txt end-to-end. Closes the gap that allowed PR #305
+# (multiprocess) and PR #308 (feast/protobuf — and the latent
+# numpy/pyarrow/tenacity conflicts PR #308 did NOT clear) to merge
+# without the actual install being verified: the Tier 1-5 harness's
+# ``paths:`` filter excludes requirements-dev.txt, and backend-tests.yml
+# only included requirements.txt.
+#
+# Triggered when any requirements file or pyproject.toml changes. The
+# single test executes ``pip install --dry-run`` in a fresh tempdir
+# venv and asserts exit-0. Cold metadata fetch is ~60-180s.
+
+on:
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'requirements.txt'
+      - 'requirements-dev.txt'
+      - 'requirements-ragas.txt'
+      - 'requirements-synthetic.txt'
+      - 'pyproject.toml'
+      - 'tests/test_lockfile_resolves.py'
+      - '.github/workflows/lockfile-resolves.yml'
+  push:
+    branches: [main, develop]
+    paths:
+      - 'requirements.txt'
+      - 'requirements-dev.txt'
+      - 'requirements-ragas.txt'
+      - 'requirements-synthetic.txt'
+      - 'pyproject.toml'
+      - 'tests/test_lockfile_resolves.py'
+      - '.github/workflows/lockfile-resolves.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lockfile-resolves-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  resolves:
+    name: requirements-dev.txt resolves under pip
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pytest + pytest-timeout
+        run: |
+          pip install --upgrade pip
+          pip install pytest==9.0.2 pytest-timeout
+
+      - name: Run resolver test
+        run: |
+          pytest tests/test_lockfile_resolves.py \
+            -v \
+            -m "slow and integration" \
+            --override-ini="addopts=" \
+            --no-header
