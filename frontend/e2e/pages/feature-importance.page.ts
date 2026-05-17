@@ -215,28 +215,32 @@ export class FeatureImportancePage extends BasePage {
       // After PR #316 the model-info card only renders once an explanation
       // has been computed. Drive the Explain action so the live response
       // populates the card before we look for it.
-      await this.runExplanation().catch(() => {})
+      //
+      // We do NOT swallow runExplanation() errors: if the mutation never
+      // completes (e.g. the predict mock broke, the page never reached
+      // `hasExplanation`), this helper MUST return false rather than fall
+      // through to a weaker signal — otherwise a regression in the
+      // /api/explain/predict contract would still pass `should display
+      // model info` (codex iter-0 HIGH).
+      try {
+        await this.runExplanation()
+      } catch {
+        return false
+      }
 
-      // Look for Base Value text inside the model-info card.
+      // The only signals we trust here are the two labels that ONLY render
+      // inside the model-info card (gated on `hasExplanation` in
+      // src/pages/FeatureImportance.tsx). Page header / model selector are
+      // present even on the empty-state, so they cannot be used here.
       const hasBaseValue = await this.baseValueDisplay
         .isVisible({ timeout: 3000 })
         .catch(() => false)
       if (hasBaseValue) return true
 
-      // Fallback: Top Feature label.
       const hasTopFeature = await this.topFeatureDisplay
         .isVisible({ timeout: 2000 })
         .catch(() => false)
-      if (hasTopFeature) return true
-
-      // Fallback: model selector value reflects the chosen model.
-      const hasModelSelector = await this.modelSelector
-        .isVisible({ timeout: 1000 })
-        .catch(() => false)
-      if (hasModelSelector) return true
-
-      // Ultimate fallback: at minimum the page header rendered.
-      return await this.pageHeader.isVisible({ timeout: 1000 }).catch(() => false)
+      return hasTopFeature
     } catch {
       return false
     }
