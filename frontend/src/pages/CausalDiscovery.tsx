@@ -412,15 +412,31 @@ function CausalDiscovery() {
                             effect_estimate?: number;
                             ci_lower?: number;
                             ci_upper?: number;
+                            estimator?: string;
+                            estimator_type?: string;
                           }
                         | undefined;
                       const isPrimary = idx === 0;
+                      // The routing endpoint returns `recommended_estimators`
+                      // only for the primary library. Showing them by row
+                      // index would mis-label secondary rows (e.g. DoWhy
+                      // estimators on the EconML row). Use them for the
+                      // primary row only; fall back to whatever estimator the
+                      // parallel pipeline actually used for each library.
+                      const primaryEstimator =
+                        isPrimary && recommendedEstimators.length > 0
+                          ? recommendedEstimators.join(', ')
+                          : null;
+                      const pipelineEstimator =
+                        libraryResult?.estimator ??
+                        libraryResult?.estimator_type ??
+                        null;
+                      const estimatorCell =
+                        primaryEstimator ?? pipelineEstimator ?? '-';
                       return (
                         <tr key={library} className="border-t">
                           <td className="p-2 font-medium">{library}</td>
-                          <td className="p-2">
-                            {recommendedEstimators[idx] ?? '-'}
-                          </td>
+                          <td className="p-2">{estimatorCell}</td>
                           <td className="p-2">
                             {libraryResult
                               ? fmtNumber(libraryResult.effect_estimate)

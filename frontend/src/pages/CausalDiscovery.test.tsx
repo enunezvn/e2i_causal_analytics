@@ -228,16 +228,18 @@ describe('CausalDiscovery Page', () => {
         expect(mockRouteMutate).toHaveBeenCalledTimes(1);
       });
       const calledWith = mockRouteMutate.mock.calls[0][0];
+      // RouteQueryRequest's schema is { query, treatment_var?, outcome_var?,
+      // context?, prefer_library? } — there is no top-level `covariates`
+      // field, so a top-level placement would be silently ignored by the
+      // backend. Assert the canonical `context.covariates` shape exactly.
       expect(calledWith).toMatchObject({
         treatment_var: 'rep_visits',
         outcome_var: 'trx_count',
+        context: { covariates: ['age', 'region'] },
       });
-      // covariates passed through context, since RouteQueryRequest does not
-      // expose a direct `covariates` field. Both placements are acceptable.
-      const covariatesValue =
-        (calledWith.context && (calledWith.context as Record<string, unknown>).covariates) ??
-        (calledWith as Record<string, unknown>).covariates;
-      expect(covariatesValue).toEqual(['age', 'region']);
+      expect(
+        (calledWith as Record<string, unknown>).covariates,
+      ).toBeUndefined();
     });
 
     it('shows recommended library and alternatives from the routing response', () => {
@@ -310,6 +312,39 @@ describe('CausalDiscovery Page', () => {
       expect(table).toHaveTextContent(/causal_forest/i);
       // Confidence rendered as percent (0.91 → 91%)
       expect(table).toHaveTextContent(/91/);
+    });
+
+    it('does not mis-label DoWhy estimators on the EconML secondary row', () => {
+      // /api/causal/route returns `recommended_estimators` only for the
+      // primary library. If we naively zipped them by row index we'd render
+      // DoWhy estimators on the EconML row.
+      routeState.data = {
+        query: '',
+        question_type: 'causal_effect',
+        primary_library: 'dowhy',
+        secondary_libraries: ['econml'],
+        recommended_estimators: [
+          'propensity_score_matching',
+          'inverse_propensity_weighting',
+        ],
+        routing_confidence: 0.8,
+        routing_rationale: '',
+        suggested_pipeline: 'parallel',
+      };
+      routeState.isSuccess = true;
+
+      renderWithAllProviders(<CausalDiscovery />);
+
+      const table = screen.getByTestId('routing-results-table');
+      const rows = table.querySelectorAll('tbody > tr');
+      expect(rows.length).toBe(2);
+      // Primary row (DoWhy) renders its recommended estimators
+      expect(rows[0].textContent).toMatch(/dowhy/i);
+      expect(rows[0].textContent).toMatch(/propensity_score_matching/);
+      // Secondary row (EconML) must NOT show DoWhy estimators
+      expect(rows[1].textContent).toMatch(/econml/i);
+      expect(rows[1].textContent).not.toMatch(/propensity_score_matching/);
+      expect(rows[1].textContent).not.toMatch(/inverse_propensity_weighting/);
     });
 
     it('renders pipeline effect estimate + CI + library agreement when pipeline returns data', () => {
