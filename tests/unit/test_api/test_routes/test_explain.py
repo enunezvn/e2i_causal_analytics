@@ -964,6 +964,58 @@ class TestGetExplanationHistoryEndpoint:
             assert item["shap_sum"] == pytest.approx(-0.2)
 
     @pytest.mark.asyncio
+    async def test_get_history_model_type_filter_is_client_side(self):
+        """Issue #321 codex iter-3 MED: ``model_type`` is not a column on
+        ``ml_shap_analyses`` (per the checked-in schema), so the optional
+        ``model_type`` query param MUST be applied client-side after the
+        supabase fetch — pushing it into a ``.eq("model_type", ...)`` would
+        get rejected by PostgREST.
+
+        Falsifiability: the supabase chain's ``.eq`` must be called with
+        ``patient_id`` once and never with ``model_type``; the response
+        must reflect only rows matching the requested model_type.
+        """
+        rows = [
+            {
+                "id": "r1",
+                "explanation_id": "EXPL-1",
+                "patient_id": "PAT-Y",
+                "model_type": "propensity",
+                "local_shap_values": {"f1": 0.1},
+            },
+            {
+                "id": "r2",
+                "explanation_id": "EXPL-2",
+                "patient_id": "PAT-Y",
+                "model_type": "churn_prediction",
+                "local_shap_values": {"f2": 0.2},
+            },
+        ]
+        with patch("src.api.routes.explain.get_shap_analysis_repository") as mock_get_repo:
+            mock_repo = MagicMock()
+            mock_repo.client = MagicMock()
+            mock_repo.table_name = "ml_shap_analyses"
+            chain = MagicMock()
+            chain.select.return_value = chain
+            chain.eq.return_value = chain
+            chain.order.return_value = chain
+            chain.limit.return_value = chain
+            chain.execute.return_value = MagicMock(data=rows)
+            mock_repo.client.table.return_value = chain
+            mock_get_repo.return_value = mock_repo
+
+            resp = await get_explanation_history("PAT-Y", model_type=ModelType.PROPENSITY)
+            # Filter must be applied client-side, not pushed into supabase.
+            eq_keys = [c.args[0] for c in chain.eq.call_args_list if c.args]
+            assert "model_type" not in eq_keys, (
+                f"unexpected .eq('model_type', ...): {chain.eq.call_args_list!r}"
+            )
+            assert eq_keys.count("patient_id") == 1
+            # Only the propensity row should be returned.
+            assert resp["total_explanations"] == 1
+            assert resp["explanations"][0]["explanation_id"] == "EXPL-1"
+
+    @pytest.mark.asyncio
     async def test_get_history_awaits_async_execute(self):
         """Issue #321 codex HIGH: ``get_shap_analysis_repository`` installs
         an async Supabase client, so ``.execute()`` returns a coroutine.

@@ -892,8 +892,13 @@ async def get_explanation_history(
         # the same code path works with both async clients (live) and the
         # sync ``MagicMock`` chains used by unit tests.
         query = repo.client.table(repo.table_name).select("*").eq("patient_id", patient_id)
-        if model_type is not None:
-            query = query.eq("model_type", model_type.value)
+        # NOTE: ``model_type`` is not a column on the current
+        # ``ml_shap_analyses`` schema (only ``model_registry_id`` FK is), so
+        # we cannot push the optional ``model_type`` filter into the
+        # supabase query — doing so would 4xx with PostgREST. We retrieve
+        # all rows for the patient and apply the filter client-side after
+        # row normalization. A schema migration adding ``model_type`` will
+        # let us push this back into the query.
         result_or_coro = query.order("request_timestamp", desc=True).limit(limit).execute()
         if inspect.isawaitable(result_or_coro):
             result = await result_or_coro
@@ -901,6 +906,10 @@ async def get_explanation_history(
             result = result_or_coro
 
         rows = result.data if result.data else []
+        # Optional client-side ``model_type`` filter (see note above on why
+        # this is not pushed into the supabase query).
+        if model_type is not None:
+            rows = [r for r in rows if r.get("model_type") == model_type.value]
         explanations = [_normalize_history_row(row, masked_patient_id) for row in rows]
 
         return {
