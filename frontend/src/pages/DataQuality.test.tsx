@@ -32,6 +32,14 @@ vi.mock('@/hooks/api/use-monitoring', () => ({
   useTriggerDriftDetection: vi.fn(),
 }));
 
+// Toast mock for #324 (mutation success/error feedback). Captures every call
+// so assertions can check that triggerDrift's onSuccess/onError emit toasts.
+const toastMock = vi.fn();
+vi.mock('@/hooks/use-toast', () => ({
+  useToast: () => ({ toast: toastMock, toasts: [], dismiss: vi.fn() }),
+  toast: (...args: unknown[]) => toastMock(...args),
+}));
+
 // -----------------------------------------------------------------------------
 // VISUALIZATION STUBS — record KPICard props so we can assert no fabricated
 // sparkline fallback leaks (HIGH-1 from adversarial review of PR #320; mirrors
@@ -158,6 +166,7 @@ const mockMutate = vi.fn();
 beforeEach(() => {
   vi.clearAllMocks();
   kpiCardCalls.length = 0;
+  toastMock.mockClear();
   global.URL.createObjectURL = mockCreateObjectURL;
   global.URL.revokeObjectURL = mockRevokeObjectURL;
 
@@ -451,5 +460,208 @@ describe('DataQuality (live wiring + Playwright contract)', () => {
         `KPICard "${String(props.title)}" must not pass the fabricated SAMPLE_SPARKLINE array`
       ).not.toEqual(SAMPLE_SPARKLINE);
     }
+  });
+});
+
+// =============================================================================
+// PR #322-326,328 — adversarial-review fixes (additive describe block; left
+// existing blocks for #327 / Agent C). See issues #322 #323 #324 #325 #326 #328.
+// =============================================================================
+
+describe('PR #322-326,328 — adversarial-review fixes', () => {
+  it('#322 shows empty-state when status filter hides every row (codex MED-1)', async () => {
+    // Both KPIs compute to 'pass' (value above warning threshold). Select 'fail'
+    // -> 0 rows visible -> empty-state must render. Codex iter-1 flagged that
+    // the original filteredKpis.length-based empty-state would NOT fire here.
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockReset();
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const idx = kpiId === 'WS1-DQ-002' ? 1 : 0;
+      return {
+        metadata: dqKpis[idx],
+        value: {
+          kpi_id: kpiId,
+          value: 99,
+          status: 'good',
+          calculated_at: '2026-01-02T08:30:00Z',
+          cached: false,
+          metadata: {},
+        },
+        isLoading: false,
+        error: null,
+        isMetadataLoading: false,
+        isValueLoading: false,
+        refetch: vi.fn(),
+      };
+    });
+
+    render(<DataQuality />, { wrapper: createWrapper() });
+
+    const statusTrigger = screen.getByRole('combobox');
+    fireEvent.click(statusTrigger);
+    const failOpt = screen.getByRole('option', { name: /^Fail$/ });
+    fireEvent.click(failOpt);
+
+    // Empty state appears (no rows match 'fail')
+    expect(
+      await screen.findByText(/No data quality KPIs match your filters/i)
+    ).toBeInTheDocument();
+  });
+
+  it('#322 wires status filter to rule.status field', async () => {
+    // Override useKPIDetail so the two KPIs produce DIFFERENT computed statuses:
+    //   WS1-DQ-001 -> value=94.5 vs threshold {target:85, warning:70, critical:50} = 'pass'
+    //   WS1-DQ-002 -> value=85   vs threshold {target:98, warning:90, critical:80} = 'warning'
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockReset();
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      if (kpiId === 'WS1-DQ-002') {
+        return {
+          metadata: dqKpis[1],
+          value: {
+            kpi_id: 'WS1-DQ-002',
+            value: 85,
+            status: 'warning',
+            calculated_at: '2026-01-02T08:30:00Z',
+            cached: false,
+            metadata: {},
+          },
+          isLoading: false,
+          error: null,
+          isMetadataLoading: false,
+          isValueLoading: false,
+          refetch: vi.fn(),
+        };
+      }
+      return {
+        metadata: dqKpis[0],
+        value: {
+          kpi_id: 'WS1-DQ-001',
+          value: 94.5,
+          status: 'good',
+          calculated_at: '2026-01-02T08:30:00Z',
+          cached: false,
+          metadata: {},
+        },
+        isLoading: false,
+        error: null,
+        isMetadataLoading: false,
+        isValueLoading: false,
+        refetch: vi.fn(),
+      };
+    });
+
+    render(<DataQuality />, { wrapper: createWrapper() });
+
+    // Both rows visible under 'all'
+    expect(screen.getAllByText('Source Coverage - Patients').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('Completeness - HCP Master').length).toBeGreaterThanOrEqual(1);
+
+    // Open the status filter and pick "Warning"
+    const statusTrigger = screen.getByRole('combobox');
+    fireEvent.click(statusTrigger);
+    const warningOpt = screen.getByRole('option', { name: /^Warning$/ });
+    fireEvent.click(warningOpt);
+
+    // Only the WS1-DQ-002 'warning' row remains in the Validation Rules table
+    expect(screen.queryByText('Source Coverage - Patients')).not.toBeInTheDocument();
+    expect(screen.getAllByText('Completeness - HCP Master').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('#323 surfaces driftHistoryError on default tab (rules)', () => {
+    (useDriftHistory as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: new Error('drift history 503'),
+      refetch: vi.fn(),
+    });
+
+    render(<DataQuality />, { wrapper: createWrapper() });
+
+    // Default tab is 'rules'. The driftHistoryError banner must render at the
+    // page level (NOT only inside the Quality Issues tab), so it's visible from
+    // the default tab. There may also be an in-tab banner; getAllByText covers
+    // both. The page-level banner must specifically use the "30-day" title to
+    // distinguish from the latest-status `driftError` banner above.
+    const matches = screen.getAllByText(/Could not load 30-day drift history/i);
+    expect(matches.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('#324 toasts on triggerDrift success and error', () => {
+    let capturedOptions:
+      | { onSuccess?: (data: unknown) => void; onError?: (err: unknown) => void }
+      | undefined;
+    (useTriggerDriftDetection as ReturnType<typeof vi.fn>).mockImplementation((opts) => {
+      capturedOptions = opts;
+      return { mutate: mockMutate, isPending: false, error: null };
+    });
+
+    render(<DataQuality />, { wrapper: createWrapper() });
+
+    // Production code must pass onSuccess + onError callbacks
+    expect(capturedOptions).toBeDefined();
+    expect(typeof capturedOptions?.onSuccess).toBe('function');
+    expect(typeof capturedOptions?.onError).toBe('function');
+
+    // Invoke onSuccess -> a toast fires
+    capturedOptions!.onSuccess!({ task_id: 'task-xyz' });
+    expect(toastMock).toHaveBeenCalled();
+    const successCalls = toastMock.mock.calls;
+    const successCall = successCalls[successCalls.length - 1]?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    expect(JSON.stringify(successCall).toLowerCase()).toMatch(/drift|trigger|success|task-xyz/);
+
+    toastMock.mockClear();
+
+    // Invoke onError -> a (destructive) toast fires
+    capturedOptions!.onError!({ message: 'queue full' });
+    expect(toastMock).toHaveBeenCalled();
+    const errorCalls = toastMock.mock.calls;
+    const errorCall = errorCalls[errorCalls.length - 1]?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    expect(JSON.stringify(errorCall).toLowerCase()).toMatch(/fail|error|queue full/);
+  });
+
+  it('#325 disables Export button while data is loading', () => {
+    (useKPIList as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(<DataQuality />, { wrapper: createWrapper() });
+
+    const exportBtn = screen.getByRole('button', { name: /Export/i });
+    expect(exportBtn).toBeDisabled();
+  });
+
+  it('#326 triggerDrift sends time_window=30d', () => {
+    render(<DataQuality />, { wrapper: createWrapper() });
+
+    const refreshBtn = screen.getByRole('button', { name: /refresh/i });
+    fireEvent.click(refreshBtn);
+
+    expect(mockMutate).toHaveBeenCalled();
+    const mutateCalls = mockMutate.mock.calls;
+    const callArg = mutateCalls[mutateCalls.length - 1]?.[0] as
+      | { request?: { time_window?: string } }
+      | undefined;
+    expect(callArg?.request?.time_window).toBe('30d');
+  });
+
+  it('#328 has aria-label / label on search input and status select', () => {
+    render(<DataQuality />, { wrapper: createWrapper() });
+
+    // Search input must be reachable by accessible name "Search validation rules"
+    // (either via <Label htmlFor> association or aria-label on the input).
+    const searchInput = screen.getByRole('textbox', {
+      name: /search.*(rules|validation)/i,
+    });
+    expect(searchInput).toBeInTheDocument();
+
+    // Status select trigger must carry an aria-label
+    const statusTrigger = screen.getByRole('combobox', { name: /filter.*status|status/i });
+    expect(statusTrigger).toBeInTheDocument();
   });
 });
