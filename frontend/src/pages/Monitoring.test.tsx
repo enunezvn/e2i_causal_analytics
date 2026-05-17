@@ -2,136 +2,257 @@
  * Monitoring Page Tests
  * =====================
  *
- * Tests for the Monitoring dashboard page with API usage,
- * user activity, error tracking, and system metrics.
+ * Tests for the Monitoring page — verifies it pulls live data
+ * via the monitoring hooks rather than rendering hard-coded mock arrays.
+ *
+ * Reference: GitHub issue #297 — "Wire Monitoring page to live backend".
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import Monitoring from './Monitoring';
+import { AlertStatus } from '@/types/monitoring';
 
-// Mock URL.createObjectURL and URL.revokeObjectURL for export tests
+// Mock the monitoring hooks BEFORE importing them so the page renders against
+// these stubs instead of hitting the real API.
+vi.mock('@/hooks/api/use-monitoring', () => ({
+  useAlerts: vi.fn(),
+  useMonitoringRuns: vi.fn(),
+  useModelHealth: vi.fn(),
+}));
+
+import {
+  useAlerts,
+  useMonitoringRuns,
+  useModelHealth,
+} from '@/hooks/api/use-monitoring';
+
+// QueryClient wrapper for tests (required because the page uses TanStack
+// Query under the hood through these hooks).
+function createWrapper() {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, gcTime: 0 },
+    },
+  });
+  return ({ children }: { children: React.ReactNode }) => (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  );
+}
+
+// Mock URL.createObjectURL/revokeObjectURL so export-button tests do not blow up
+// when the test environment lacks Blob URL support.
 const mockCreateObjectURL = vi.fn(() => 'blob:mock-url');
 const mockRevokeObjectURL = vi.fn();
+global.URL.createObjectURL = mockCreateObjectURL;
+global.URL.revokeObjectURL = mockRevokeObjectURL;
 
-beforeEach(() => {
-  vi.clearAllMocks();
-  global.URL.createObjectURL = mockCreateObjectURL;
-  global.URL.revokeObjectURL = mockRevokeObjectURL;
-});
+// Distinctive fixture values so we can differentiate from the previous
+// hard-coded SAMPLE_* arrays that used to live in Monitoring.tsx.
+const mockAlertsData = {
+  total_count: 7,
+  active_count: 3,
+  alerts: [
+    {
+      id: 'alert-distinct-001',
+      model_version: 'churn_v1.5.2',
+      alert_type: 'data_drift',
+      severity: 'high',
+      title: 'LIVE_API_ALERT_TITLE_DISTINCT',
+      description: 'Live-API description that should appear in the DOM.',
+      status: AlertStatus.ACTIVE,
+      triggered_at: '2026-05-17T10:00:00Z',
+    },
+  ],
+};
 
-describe('Monitoring', () => {
-  it('renders page header with title and description', () => {
-    render(<Monitoring />);
+const mockRunsData = {
+  model_id: 'propensity_v2.1.0',
+  total_runs: 42,
+  runs: [
+    {
+      id: 'run-001',
+      model_version: 'propensity_v2.1.0',
+      run_type: 'scheduled',
+      started_at: '2026-05-17T08:00:00Z',
+      completed_at: '2026-05-17T08:02:30Z',
+      features_checked: 47,
+      drift_detected_count: 2,
+      alerts_generated: 1,
+      duration_ms: 150_000,
+    },
+  ],
+};
 
-    expect(screen.getByText('Monitoring')).toBeInTheDocument();
-    expect(
-      screen.getByText(/User activity logs, API usage statistics, error tracking/i)
-    ).toBeInTheDocument();
-  });
+const mockHealthData = {
+  model_id: 'propensity_v2.1.0',
+  overall_health: 'warning' as const,
+  last_check: '2026-05-17T10:00:00Z',
+  drift_score: 0.42,
+  active_alerts: 3,
+  last_retrained: '2026-05-10T00:00:00Z',
+  performance_trend: 'degrading' as const,
+  recommendations: ['Increase training frequency'],
+};
 
-  it('displays 6 overview KPI cards', () => {
-    render(<Monitoring />);
+// Recharts ResponsiveContainer + jsdom can stretch render time well past
+// the default 5000 ms timeout when many cards/charts are in the tree. Bump
+// per-suite to keep this stable in CI.
+describe('Monitoring page — live-backend wiring (issue #297)', { timeout: 20_000 }, () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
 
-    // Some labels appear in both KPI cards and table headers
-    expect(screen.getByText('Total Requests')).toBeInTheDocument();
-    expect(screen.getAllByText('Error Rate').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText('Avg Latency').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('Active Users')).toBeInTheDocument();
-    expect(screen.getByText('Total Errors')).toBeInTheDocument();
-    expect(screen.getByText('Uptime')).toBeInTheDocument();
-  });
-
-  it('displays time range selector', () => {
-    render(<Monitoring />);
-
-    // Time range dropdown - look for trigger button
-    expect(screen.getByRole('combobox')).toBeInTheDocument();
-  });
-
-  it('displays refresh and export buttons', () => {
-    render(<Monitoring />);
-
-    expect(screen.getByRole('button', { name: /Refresh/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Export/i })).toBeInTheDocument();
-  });
-
-  it('handles export button click', () => {
-    const mockClick = vi.fn();
-    const originalCreateElement = document.createElement.bind(document);
-    vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
-      if (tag === 'a') {
-        const link = originalCreateElement('a');
-        link.click = mockClick;
-        return link;
-      }
-      return originalCreateElement(tag);
+    (useAlerts as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: mockAlertsData,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn().mockResolvedValue({}),
     });
 
-    render(<Monitoring />);
+    (useMonitoringRuns as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: mockRunsData,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn().mockResolvedValue({}),
+    });
 
-    const exportButton = screen.getByRole('button', { name: /Export/i });
-    fireEvent.click(exportButton);
-
-    expect(mockCreateObjectURL).toHaveBeenCalled();
-    expect(mockClick).toHaveBeenCalled();
-
-    vi.restoreAllMocks();
+    (useModelHealth as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: mockHealthData,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn().mockResolvedValue({}),
+    });
   });
 
-  it('displays 4 main tabs', () => {
-    render(<Monitoring />);
+  it('calls useAlerts, useMonitoringRuns, and useModelHealth (live-data wiring)', () => {
+    render(<Monitoring />, { wrapper: createWrapper() });
 
-    expect(screen.getByRole('tab', { name: /API Usage/i })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /User Activity/i })).toBeInTheDocument();
-    // Errors tab includes badge count
-    const errorsTab = screen.getByRole('tab', { name: /Errors/i });
-    expect(errorsTab).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /System/i })).toBeInTheDocument();
+    expect(useAlerts).toHaveBeenCalled();
+    expect(useMonitoringRuns).toHaveBeenCalled();
+    expect(useModelHealth).toHaveBeenCalled();
   });
 
-  it('shows API Usage tab content by default', () => {
-    render(<Monitoring />);
+  it('renders alert content from the live hook (not hard-coded SAMPLE_ERROR_LOGS)', async () => {
+    const user = userEvent.setup();
+    render(<Monitoring />, { wrapper: createWrapper() });
 
-    expect(screen.getByText('Request Volume & Errors')).toBeInTheDocument();
-    expect(screen.getByText('Response Latency')).toBeInTheDocument();
-    expect(screen.getByText('Endpoint Statistics')).toBeInTheDocument();
+    // Switch to the Errors tab so live-API alert content is visible.
+    await user.click(screen.getByRole('tab', { name: /Errors/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/LIVE_API_ALERT_TITLE_DISTINCT/i)).toBeInTheDocument();
+    });
+
+    // And ensure the prior hard-coded error messages no longer appear.
+    expect(
+      screen.queryByText(/Causal discovery timeout: operation exceeded 30s limit/i)
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Database connection pool exhausted/i)
+    ).not.toBeInTheDocument();
   });
 
-  it('displays endpoint statistics table headers', () => {
-    render(<Monitoring />);
+  it('renders model selector for selecting model_id', () => {
+    render(<Monitoring />, { wrapper: createWrapper() });
 
-    // Table headers - may appear multiple times if there are multiple tables
-    expect(screen.getAllByText('Endpoint').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText('Method').length).toBeGreaterThanOrEqual(1);
+    // At minimum, multiple combobox elements should exist
+    // (time range + model selector).
+    const comboboxes = screen.getAllByRole('combobox');
+    expect(comboboxes.length).toBeGreaterThanOrEqual(2);
   });
 
-  it('displays HTTP method badges', () => {
-    render(<Monitoring />);
+  it('shows loading state when hooks are still fetching', () => {
+    (useAlerts as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    (useMonitoringRuns as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    (useModelHealth as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
 
-    // Method badges
-    const getBadges = screen.getAllByText('GET');
-    expect(getBadges.length).toBeGreaterThanOrEqual(1);
-    const postBadges = screen.getAllByText('POST');
-    expect(postBadges.length).toBeGreaterThanOrEqual(1);
+    const { container } = render(<Monitoring />, { wrapper: createWrapper() });
+
+    // Loading state must show some loading affordance
+    // (spinner via animate-pulse / animate-spin / aria-busy / role=status / "Loading" text).
+    const loadingMarkers = container.querySelectorAll(
+      '[aria-busy="true"], [role="status"], .animate-pulse, .animate-spin'
+    );
+    const hasLoadingText = !!screen.queryByText(/loading/i);
+    expect(loadingMarkers.length + (hasLoadingText ? 1 : 0)).toBeGreaterThan(0);
   });
 
-  it('shows endpoint paths in statistics table', () => {
-    render(<Monitoring />);
+  it('shows error state when a monitoring hook errors', () => {
+    const apiErr = new Error('Network unreachable');
+    (useAlerts as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: apiErr,
+      refetch: vi.fn(),
+    });
+    (useMonitoringRuns as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    (useModelHealth as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
 
-    expect(screen.getByText('/api/v1/query')).toBeInTheDocument();
-    expect(screen.getByText('/api/v1/kpis')).toBeInTheDocument();
-    expect(screen.getByText('/api/v1/health')).toBeInTheDocument();
+    render(<Monitoring />, { wrapper: createWrapper() });
+
+    // QueryErrorState renders the message text from the Error.
+    expect(screen.getByText(/Network unreachable/i)).toBeInTheDocument();
   });
 
-  it('displays error count badge on Errors tab', () => {
-    render(<Monitoring />);
+  it('does NOT render the hard-coded SAMPLE_ERROR_LOGS messages anywhere', () => {
+    render(<Monitoring />, { wrapper: createWrapper() });
 
-    // Errors tab has a badge with count of critical/error level logs
-    // There are 4 error/critical level entries in sample data
-    const errorsTab = screen.getByRole('tab', { name: /Errors/i });
-    expect(errorsTab).toBeInTheDocument();
-    // Badge should contain "4" (3 errors + 1 critical)
-    expect(screen.getByText('4')).toBeInTheDocument();
+    // The 6 SAMPLE_ERROR_LOGS messages from the old mock data
+    const hardcodedMessages = [
+      /Causal discovery timeout: operation exceeded 30s limit/i,
+      /Database connection pool exhausted/i,
+      /Rate limit exceeded for user usr-006/i,
+      /Model inference failed: insufficient memory/i,
+      /Slow query detected: 2.5s response time/i,
+      /Authentication token expired/i,
+    ];
+
+    for (const re of hardcodedMessages) {
+      expect(screen.queryByText(re)).not.toBeInTheDocument();
+    }
+  });
+
+  it('does NOT render the hard-coded SAMPLE_ENDPOINT_STATS endpoint paths', () => {
+    render(<Monitoring />, { wrapper: createWrapper() });
+
+    // Endpoints from SAMPLE_ENDPOINT_STATS that were inline literals.
+    expect(screen.queryByText('/api/v1/causal/discover')).not.toBeInTheDocument();
+    expect(screen.queryByText('/api/v1/agents/orchestrate')).not.toBeInTheDocument();
   });
 });
