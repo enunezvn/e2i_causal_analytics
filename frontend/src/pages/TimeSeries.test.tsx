@@ -184,18 +184,73 @@ describe('TimeSeries (live data wiring — issue #302)', () => {
     });
   });
 
-  it('switches to KPI history mode and calls useKPIValue', async () => {
+  it('renders KPI history mode content after switching tabs (mock-boundary)', async () => {
     const user = userEvent.setup();
     render(<TimeSeries />, { wrapper: createWrapper() });
+
+    // Pre-click: KPI panel content not visible. The "Current KPI Status"
+    // card only renders inside the KPI tab panel.
+    expect(screen.queryByText('Current KPI Status')).not.toBeInTheDocument();
+    // Performance panel is visible by default.
+    expect(screen.getByText('Performance Trend')).toBeInTheDocument();
 
     const kpiTab = screen.getByRole('tab', { name: /KPI history/i });
     await user.click(kpiTab);
 
+    // Post-click: the KPI status panel becomes visible.
     await waitFor(() => {
-      expect(mockUseKPIValue).toHaveBeenCalled();
+      expect(screen.getByText('Current KPI Status')).toBeInTheDocument();
     });
+
+    // And useKPIValue was called with a string KPI ID.
+    expect(mockUseKPIValue).toHaveBeenCalled();
     const lastCall = mockUseKPIValue.mock.calls.at(-1);
-    expect(lastCall?.[0]).toEqual(expect.any(String));
+    expect(typeof lastCall?.[0]).toBe('string');
+    expect((lastCall?.[0] as string).length).toBeGreaterThan(0);
+  });
+
+  it('time-range filter applies in KPI history mode too (filters embedded history)', async () => {
+    const user = userEvent.setup();
+    // Build history that spans 200+ days so a 30d window strictly shrinks the series.
+    const today = new Date();
+    const longHistory = Array.from({ length: 200 }, (_, i) => {
+      const d = new Date(today.getTime() - (200 - i) * 24 * 60 * 60 * 1000);
+      return { recorded_at: d.toISOString(), value: 0.5 + i * 0.001 };
+    });
+    mockUseKPIValue.mockReturnValue({
+      data: { ...sampleKPIValue, metadata: { history: longHistory } },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+      isRefetching: false,
+    });
+
+    const { container } = render(<TimeSeries />, { wrapper: createWrapper() });
+
+    // Switch to KPI mode.
+    await user.click(screen.getByRole('tab', { name: /KPI history/i }));
+    await waitFor(() => {
+      expect(screen.getByText('Current KPI Status')).toBeInTheDocument();
+    });
+
+    // The recharts container is present. The "Data Points" KPI card reflects
+    // the filtered series length; default range is 90d so we expect a count
+    // strictly less than the full 200-point history.
+    const recharts = container.querySelector('.recharts-responsive-container');
+    expect(recharts).toBeInTheDocument();
+
+    // Find the Data Points card by its title's parent card.
+    const dataPointsLabel = screen.getByText('Data Points');
+    const card = dataPointsLabel.closest('[class*="rounded"]');
+    expect(card).not.toBeNull();
+    const txt = card!.textContent ?? '';
+    // Extract digits; must be a positive integer less than 200.
+    const m = txt.match(/(\d{1,4})/);
+    expect(m).not.toBeNull();
+    const count = Number(m![1]);
+    expect(count).toBeGreaterThan(0);
+    expect(count).toBeLessThan(200);
   });
 
   it('renders a recharts container fed by live hook history data', () => {
@@ -237,7 +292,7 @@ describe('TimeSeries (live data wiring — issue #302)', () => {
     expect(screen.getByTestId('timeseries-loading')).toBeInTheDocument();
   });
 
-  it('source file contains NO `sample*` constants (sample data fully removed)', () => {
+  it('source file contains NO sample/mock data — by identifier AND by behavior', () => {
     const sourcePath = path.resolve(__dirname, 'TimeSeries.tsx');
     const source = fs.readFileSync(sourcePath, 'utf-8');
 
@@ -246,23 +301,50 @@ describe('TimeSeries (live data wiring — issue #302)', () => {
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .replace(/\/\/.*$/gm, '');
 
-    // Forbid identifiers of the form sample*, SAMPLE_*, generate*Data
-    // (the 38 constants enumerated in the original file).
-    const forbiddenPatterns = [
+    // (a) Identifier-level — forbid the 38 enumerated constants + common
+    //     bypass renames (MOCK_*, DEMO_*, FAKE_*, FIXTURE_*).
+    const forbiddenIdentifiers = [
       /\bSAMPLE_[A-Z_]+\b/,
       /\bsample[A-Z]\w*\b/,
+      /\bMOCK_[A-Z_]+\b/,
+      /\bDEMO_[A-Z_]+\b/,
+      /\bFAKE_[A-Z_]+\b/,
+      /\bFIXTURE_[A-Z_]+\b/,
       /\bgenerateTimeSeriesData\b/,
       /\bgenerateForecastData\b/,
       /\bgenerateSeasonalityData\b/,
     ];
-
-    for (const pattern of forbiddenPatterns) {
+    for (const pattern of forbiddenIdentifiers) {
       const match = stripped.match(pattern);
       if (match) {
         throw new Error(
           `TimeSeries.tsx still contains forbidden mock-data identifier: ${match[0]} (pattern ${pattern})`,
         );
       }
+    }
+
+    // (b) Behavior-level — forbid large static array literals of
+    //     `{date: ..., value: ...}` shape OR `{date: ..., trend: ...}` shape,
+    //     which are how the original sample arrays were materialised. Caps
+    //     are conservative; live test fixtures live in the .test.tsx file,
+    //     not in the page source.
+    const bigDateValueArray =
+      /\[\s*(\{\s*[a-zA-Z_]+\s*:\s*['"`][\d-]+['"`]\s*,\s*value\s*:[^}]+\}\s*,\s*){5,}/;
+    if (bigDateValueArray.test(stripped)) {
+      throw new Error(
+        'TimeSeries.tsx contains a large static `[{date, value}, ...]` array literal — looks like inlined sample data.',
+      );
+    }
+
+    // (c) Behavior-level — forbid for-loops that synthesise time-series
+    //     data inside the page (the original used `for (let i = 0; i < 90; i++)`
+    //     plus `new Date(startDate)` to build mock arrays).
+    const syntheticDateLoop =
+      /for\s*\(\s*let\s+\w+\s*=\s*0\s*;\s*\w+\s*<\s*\d{2,}\s*;\s*\w+\+\+\s*\)\s*\{[\s\S]{0,400}new\s+Date\s*\(/;
+    if (syntheticDateLoop.test(stripped)) {
+      throw new Error(
+        'TimeSeries.tsx contains a synthetic Date-loop — looks like client-side mock-data generation.',
+      );
     }
   });
 });

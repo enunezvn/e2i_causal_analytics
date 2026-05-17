@@ -157,8 +157,15 @@ function TimeSeries() {
   }, [performanceTrend.data]);
 
   const kpiSeries: ChartPoint[] = useMemo(() => {
-    return kpiHistoryToSeries(kpiValue.data?.metadata);
-  }, [kpiValue.data]);
+    const full = kpiHistoryToSeries(kpiValue.data?.metadata);
+    if (full.length === 0) return full;
+    // Apply the same time-range filter to KPI history (AC #2 — both modes).
+    const cutoffMs = Date.now() - days * 24 * 60 * 60 * 1000;
+    return full.filter((p) => {
+      const t = Date.parse(p.date);
+      return Number.isNaN(t) ? true : t >= cutoffMs;
+    });
+  }, [kpiValue.data, days]);
 
   const currentSeries = mode === 'performance' ? performanceSeries : kpiSeries;
   const currentSeriesLabel =
@@ -239,32 +246,18 @@ function TimeSeries() {
         </div>
         <div className="flex items-center gap-3">
           {mode === 'performance' ? (
-            <>
-              <Select value={metricName} onValueChange={setMetricName}>
-                <SelectTrigger className="w-[160px]" aria-label="metric">
-                  <SelectValue placeholder="Select metric" />
-                </SelectTrigger>
-                <SelectContent>
-                  {METRIC_OPTIONS.map((m) => (
-                    <SelectItem key={m.value} value={m.value}>
-                      {m.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Select value={timeRange} onValueChange={setTimeRange}>
-                <SelectTrigger className="w-[120px]" aria-label="time range">
-                  <SelectValue placeholder="Time range" />
-                </SelectTrigger>
-                <SelectContent>
-                  {TIME_RANGES.map((r) => (
-                    <SelectItem key={r.value} value={r.value}>
-                      {r.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </>
+            <Select value={metricName} onValueChange={setMetricName}>
+              <SelectTrigger className="w-[160px]" aria-label="metric">
+                <SelectValue placeholder="Select metric" />
+              </SelectTrigger>
+              <SelectContent>
+                {METRIC_OPTIONS.map((m) => (
+                  <SelectItem key={m.value} value={m.value}>
+                    {m.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           ) : (
             <Select value={kpiId} onValueChange={setKpiId}>
               <SelectTrigger className="w-[220px]" aria-label="kpi">
@@ -279,6 +272,19 @@ function TimeSeries() {
               </SelectContent>
             </Select>
           )}
+          {/* Time-range filter applies to BOTH modes (AC #2). */}
+          <Select value={timeRange} onValueChange={setTimeRange}>
+            <SelectTrigger className="w-[120px]" aria-label="time range">
+              <SelectValue placeholder="Time range" />
+            </SelectTrigger>
+            <SelectContent>
+              {TIME_RANGES.map((r) => (
+                <SelectItem key={r.value} value={r.value}>
+                  {r.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <Button
             variant="outline"
             size="icon"
@@ -448,7 +454,7 @@ function TimeSeries() {
                 <div>
                   <CardTitle>KPI History</CardTitle>
                   <CardDescription>
-                    {currentSeriesLabel} ({kpiId}) historical values
+                    {currentSeriesLabel} ({kpiId}) historical values — last {days} days
                   </CardDescription>
                 </div>
               </div>
