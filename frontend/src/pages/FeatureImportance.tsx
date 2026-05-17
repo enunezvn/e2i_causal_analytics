@@ -89,22 +89,28 @@ function formatModelLabel(model: ExplainableModelInfo): string {
  * then we honor "real SHAP values + feature names" by NOT fabricating extra
  * points. `instanceId` falls back to `patient_id` so each dot stays uniquely
  * keyed.
+ *
+ * `featureValue` is the *normalized* coloring axis expected by SHAPBeeswarm
+ * (`[0, 1]`), so we derive it from each feature's SHAP magnitude relative to
+ * the max so values don't saturate the high-color band. The original domain
+ * value is preserved on `originalValue` for tooltips.
  */
 function buildBeeswarmData(
   features: FeatureContribution[],
   patientId: string
 ): BeeswarmDataPoint[] {
+  const maxAbsShap =
+    features.reduce((acc, f) => Math.max(acc, Math.abs(f.shap_value)), 0) || 1;
+
   return features.slice(0, 8).map((f) => {
-    const numericValue =
-      typeof f.feature_value === 'number'
-        ? f.feature_value
-        : Number(f.feature_value);
-    const featureValue = Number.isFinite(numericValue) ? numericValue : 0;
+    // Map SHAP value to [0, 1] symmetrically around 0.5 for the coloring axis
+    const normalized = 0.5 + (f.shap_value / maxAbsShap) * 0.5;
     return {
       feature: f.feature_name,
       shapValue: f.shap_value,
-      featureValue,
-      originalValue: featureValue,
+      featureValue: Math.max(0, Math.min(1, normalized)),
+      // Preserve the real domain value for tooltips
+      originalValue: f.feature_value,
       instanceId: patientId || 'current',
     };
   });
@@ -266,6 +272,9 @@ function FeatureImportance() {
     if (!trimmed || !effectiveModelType) return;
 
     resetExplain();
+    // Drop any previously selected feature so the details card doesn't show
+    // stale info from a prior patient/model while the new explanation loads.
+    setSelectedFeature(null);
     setSubmittedPatientId(trimmed);
     runExplain({
       patient_id: trimmed,
@@ -318,6 +327,7 @@ function FeatureImportance() {
             value={effectiveModelType}
             onValueChange={(v) => {
               setSelectedModelType(v);
+              setSelectedFeature(null);
               resetExplain();
             }}
             disabled={isLoadingModels || supportedModels.length === 0}

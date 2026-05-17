@@ -244,6 +244,37 @@ describe('FeatureImportance — live data wiring (#299)', () => {
     });
   });
 
+  it('clears stale selectedFeature when explain is re-run', () => {
+    // Start with an explanation that has features
+    (useExplain as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: vi.fn(),
+      data: mockExplainResponse,
+      isPending: false,
+      isError: false,
+      error: null,
+      reset: vi.fn(),
+    });
+
+    render(<FeatureImportance />, { wrapper: createWrapper() });
+
+    // Click on the first feature row to select it (Feature Details card appears)
+    const firstFeatureRow = screen.getByText(/live feature alpha/i, { selector: 'div.font-medium.truncate' });
+    fireEvent.click(firstFeatureRow);
+    expect(
+      screen.getByText(/Feature Details: live feature alpha/i)
+    ).toBeInTheDocument();
+
+    // Now run Explain again — selectedFeature must be cleared
+    const patientInput = screen.getByPlaceholderText(/patient/i);
+    fireEvent.change(patientInput, { target: { value: 'new_patient' } });
+    const explainBtn = screen.getByRole('button', { name: /^explain$/i });
+    fireEvent.click(explainBtn);
+
+    expect(
+      screen.queryByText(/Feature Details: live feature alpha/i)
+    ).not.toBeInTheDocument();
+  });
+
   it('renders a falsy prediction_probability in history without crashing', () => {
     // Force-render with an explanation + history that has a malformed row
     (useExplain as ReturnType<typeof vi.fn>).mockReturnValue({
