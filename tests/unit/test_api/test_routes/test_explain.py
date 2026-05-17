@@ -395,14 +395,59 @@ class TestRealTimeSHAPService:
         assert payload["patient_id"] == "PAT-123"
         assert payload["entity_type"] == "patient"
         assert payload["entity_id"] == "PAT-123"
-        assert payload["model_type"] == "propensity"
-        assert payload["model_version_id"] == "v2.3.1"
         assert payload["explanation_id"] == "EXPL-123"
         assert payload["prediction_class"] == "high"
         assert payload["prediction_probability"] == 0.8
         # Signed contributions stored — sign must survive the round-trip.
         assert payload["local_shap_values"]["feature1"] == 0.15
         assert payload["local_shap_values"]["feature2"] == -0.05
+
+    @pytest.mark.asyncio
+    async def test_store_audit_record_writes_only_schema_columns(self, shap_service):
+        """Issue #321 codex iter-2 HIGH: PostgREST/Supabase rejects inserts
+        that reference columns absent from the schema. The actual columns on
+        ``ml_shap_analyses`` are defined by ``database/ml/mlops_tables.sql``
+        + migration ``database/ml/011_realtime_shap_audit.sql``.
+
+        Specifically, these columns do NOT exist on the table and MUST NOT
+        appear in the insert payload (even though they exist on the FE
+        ExplainResponse type — surface them via the migration tracker
+        instead): ``model_type``, ``model_version_id``, ``shap_values``,
+        ``hcp_id`` (column exists, but unused by this path),
+        ``response_time_ms`` (column exists, but unused).
+        """
+        repo = MagicMock()
+        repo.client = MagicMock()
+        repo.table_name = "ml_shap_analyses"
+        chain = MagicMock()
+        chain.insert.return_value = chain
+        chain.execute.return_value = MagicMock(data=[{"id": "row-1"}])
+        repo.client.table.return_value = chain
+        shap_service.shap_repo = repo
+
+        await shap_service.store_audit_record(
+            explanation_id="EXPL-X",
+            patient_id="PAT-X",
+            model_type="propensity",
+            model_version_id="v2.3.1",
+            features={"feature1": 1.0},
+            shap_values={"feature1": 0.15},
+            prediction={"prediction_class": "h", "prediction_probability": 0.7},
+        )
+
+        payload = chain.insert.call_args.args[0]
+        # Hard fail if any unknown column slips into the write — PostgREST
+        # would 4xx the insert in production, and audit storage would
+        # silently fail in the background task.
+        for forbidden in (
+            "model_type",
+            "model_version_id",
+            "shap_values",
+        ):
+            assert forbidden not in payload, (
+                f"forbidden column {forbidden!r} present in insert payload "
+                f"(not in checked-in ml_shap_analyses schema): {payload!r}"
+            )
 
     @pytest.mark.asyncio
     async def test_store_audit_record_no_repo(self, shap_service):

@@ -268,11 +268,17 @@ def _normalize_history_row(row: Dict[str, Any], masked_patient_id: str) -> Dict[
 
     request_ts = row.get("request_timestamp") or row.get("computed_at")
 
+    # NOTE: ``model_type`` and ``model_version_id`` are NOT columns on the
+    # current ``ml_shap_analyses`` schema (only ``model_registry_id`` FK is).
+    # The FE type declares them as required strings, so we surface ``""``
+    # when the row carries nothing — better than null which would break
+    # FE deserialization. A follow-up issue tracks adding these as proper
+    # columns + persisting them in the audit-write path.
     return {
         "explanation_id": row.get("explanation_id") or row.get("id") or "",
         "request_timestamp": request_ts,
         "patient_id": masked_patient_id,
-        "model_type": row.get("model_type"),
+        "model_type": row.get("model_type") or "",
         "model_version_id": row.get("model_version_id") or row.get("model_registry_id") or "",
         "prediction_class": row.get("prediction_class") or "",
         "prediction_probability": float(row.get("prediction_probability") or 0.0),
@@ -607,25 +613,31 @@ class RealTimeSHAPService:
 
         try:
             now = datetime.now(timezone.utc).isoformat()
+            # Only the columns actually present on ``ml_shap_analyses`` per
+            # ``database/ml/mlops_tables.sql`` + migration
+            # ``database/ml/011_realtime_shap_audit.sql``. PostgREST rejects
+            # inserts that name unknown columns, so we MUST NOT write fields
+            # like ``model_type`` / ``model_version_id`` / ``shap_values`` that
+            # have no schema column. (The retrieval normalizer still surfaces
+            # these via best-effort row.get() so future schema additions can
+            # widen the column set without code changes.)
             db_record: Dict[str, Any] = {
                 "id": str(uuid.uuid4()),
                 "model_registry_id": None,
                 "analysis_type": "local_realtime",
+                # migration 011 columns
                 "explanation_id": explanation_id,
                 "patient_id": patient_id,
-                "entity_type": "patient",
-                "entity_id": patient_id,
-                "model_type": model_type,
-                "model_version_id": model_version_id,
-                # Signed per-feature contributions — the canonical schema
-                # column for local explanations. Mirror to ``shap_values``
-                # for the legacy views/functions defined in migration 011.
-                "local_shap_values": dict(shap_values),
-                "shap_values": dict(shap_values),
+                "request_timestamp": now,
                 "prediction_class": prediction.get("prediction_class"),
                 "prediction_probability": prediction.get("prediction_probability"),
+                # mlops_tables.sql local-explanation columns
+                "entity_type": "patient",
+                "entity_id": patient_id,
+                # Signed per-feature contributions — canonical column for
+                # local explanations (mlops_tables.sql:363).
+                "local_shap_values": dict(shap_values),
                 "base_value": prediction.get("base_value"),
-                "request_timestamp": now,
                 "computed_at": now,
                 "key_drivers": [
                     name
