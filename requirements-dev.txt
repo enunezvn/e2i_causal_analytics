@@ -72,12 +72,13 @@ fastuuid==0.14.0
 #   tenacity<9, numpy<2, and pyarrow<18.1.0
 # which contradict lockfile pins tenacity==9.1.2, numpy==2.3.5,
 # pyarrow==21.0.0. The core ``tenacity>=9.0.0`` floor is required by
-# graphiti-core>=0.26, so downgrading tenacity is not viable.
+# graphiti-core (every version since 0.15 declares tenacity>=9.0.0).
 # Production runs feast as a sidecar container (docker/Dockerfile.feast,
 # feastdev/feature-server:0.43.0); the API venv does not co-install the
-# SDK. Install in dev only when working on feast-touching code:
-#   pip install -e ".[feast]"
-# See issue #307 for the layered-conflict diagnosis and PR #308 review.
+# SDK. For dev work that calls the feast SDK from Python, install feast
+# into a DEDICATED venv distinct from this project's — both ``pip
+# install feast`` into the project venv and any ``.[feast]`` extra are
+# unresolvable. See issue #307 + PR #308 review for full diagnosis.
 filelock==3.20.1
 Flask==3.1.2
 flask-cors==6.0.2
@@ -292,7 +293,7 @@ supabase-auth==2.27.0
 supabase-functions==2.27.0
 sympy==1.14.0
 tabulate==0.9.0
-tenacity==9.1.2  # Matches prod (requirements.txt). Floor set by graphiti-core>=0.26 + this project's own ``tenacity>=9.0.0``. Conflicts with feast (which pins tenacity<9); pip downgrades tenacity locally when a developer opts in via ``pip install -e ".[feast]"`` — see pyproject.toml [project.optional-dependencies] feast and issue #307.
+tenacity==9.1.2  # Matches prod (requirements.txt). Floor set by graphiti-core (every version since 0.15 declares ``tenacity>=9.0.0``) + this project's own ``tenacity>=9.0.0`` in pyproject.toml. Unsatisfiable with feast (``tenacity<9``); feast is therefore install-in-a-dedicated-venv only — see the feast-comment block at line 86. Issue #307.
 threadpoolctl==3.6.0
 tiktoken==0.12.0
 tokenizers==0.22.2

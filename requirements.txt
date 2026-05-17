@@ -83,17 +83,20 @@ FalkorDB==1.2.2
 fastapi==0.128.0
 fasttext==0.9.3
 fastuuid==0.14.0
-# feast: intentionally NOT pinned here. Every feast release (0.43..0.63) pins
-# ``tenacity<9``, unsatisfiable against the prod ``tenacity==9.1.2`` pin which
-# graphiti-core>=0.26 (``graphiti-core==0.24.3`` line 98 — held back precisely
-# for tenacity) requires. (The earlier comment blamed dspy; that was incorrect:
-# dspy only requires ``tenacity>=8.2.3`` and is fine with either branch.)
-# Production runs feast as its own service container — see
+# feast: intentionally NOT pinned here. Every feast release (0.43..0.63)
+# pins ``tenacity<9``, unsatisfiable against the prod ``tenacity==9.1.2``
+# required by graphiti-core (every version since 0.15 declares
+# ``tenacity>=9.0.0``). Earlier maintainer comment blamed dspy; that was
+# wrong — dspy requires ``tenacity>=8.2.3`` and is compatible with either
+# branch. Production runs feast as its own service container — see
 # ``docker/Dockerfile.feast`` (``feastdev/feature-server:0.43.0``) and the
-# isolated CI job at ``.github/workflows/feast-apply.yml``. The API venv does
-# not co-install the SDK; all ``src/`` feast imports are guarded so app start
-# succeeds without it. Dev install: ``pip install -e ".[feast]"`` — see
-# ``[project.optional-dependencies]`` in ``pyproject.toml``. Issue #307.
+# isolated CI job at ``.github/workflows/feast-apply.yml``. The API venv
+# does not co-install the SDK; all ``src/`` feast imports are guarded
+# (TYPE_CHECKING / inside-method) so app start succeeds without it.
+# For dev work that calls the feast SDK from Python, install feast into a
+# DEDICATED venv distinct from this project's venv (the project's
+# ``tenacity>=9.0.0`` constraint makes both ``pip install feast`` and any
+# ``[project.optional-dependencies]`` feast extra unresolvable). Issue #307.
 filelock==3.20.3
 Flask==3.1.3
 flask-cors==6.0.2
