@@ -15,7 +15,7 @@ import { dirname, resolve } from 'node:path';
 import { render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
-import type { ReactNode } from 'react';
+import type { ReactElement, ReactNode } from 'react';
 
 // ----------------------------------------------------------------------------
 // Mocks
@@ -83,11 +83,13 @@ describe('AIAgentInsights', () => {
       expect(screen.getByText('AI Agent Insights')).toBeInTheDocument();
     });
 
-    it('renders all five live insight components', () => {
+    it('renders all seven insight components', () => {
       render(<AIAgentInsights />, { wrapper: createWrapperWithUrl('/ai-insights') });
       expect(screen.getByTestId('executive-ai-brief')).toBeInTheDocument();
+      expect(screen.getByTestId('priority-actions-roi')).toBeInTheDocument();
       expect(screen.getByTestId('predictive-alerts')).toBeInTheDocument();
       expect(screen.getByTestId('active-causal-chains')).toBeInTheDocument();
+      expect(screen.getByTestId('experiment-recommendations')).toBeInTheDocument();
       expect(screen.getByTestId('heterogeneous-treatment-effects')).toBeInTheDocument();
       expect(screen.getByTestId('system-health-score')).toBeInTheDocument();
     });
@@ -130,74 +132,186 @@ describe('AIAgentInsights', () => {
       expect(screen.getByTestId('system-health-score')).toHaveTextContent('modelId:churn_v3.0.0');
     });
 
-    it('falls back to a non-empty default when no URL param is set', () => {
+    it('passes no modelId (falls through to component default) when neither URL nor env override is set', () => {
       render(<AIAgentInsights />, { wrapper: createWrapperWithUrl('/ai-insights') });
-      // Issue #304's gripe is that the literal lived inline in JSX — not that the
-      // value itself is wrong. A single-source-of-truth default constant is fine.
+      // Page-level fallback must NOT hard-code "propensity_v2.1.0" — when no
+      // override is set, the page should pass `undefined` so the leaf
+      // component's own default kicks in.
       const node = screen.getByTestId('system-health-score');
-      expect(node.textContent).toMatch(/^modelId:.+/);
-      expect(node.textContent).not.toBe('modelId:__none__');
+      expect(node.textContent).toBe('modelId:__none__');
     });
   });
 
   describe('Source-text forcing function (AC: no hard-coded literals in JSX)', () => {
-    it('does not contain hard-coded brand or modelId attributes in the JSX', () => {
+    it('does not contain the stale brand or modelId literals from issue #304', () => {
       const here = dirname(fileURLToPath(import.meta.url));
       const src = readFileSync(resolve(here, 'AIAgentInsights.tsx'), 'utf8');
-      // The two literal-as-JSX-attribute forms called out in issue #304.
-      // The bare strings may legitimately appear as constants — what we
-      // forbid is them appearing inside an attribute assignment on JSX.
+      // Forbid the JSX-attribute forms called out in issue #304 ...
       expect(src).not.toMatch(/brand=["']Remibrutinib["']/);
       expect(src).not.toMatch(/modelId=["']propensity_v2\.1\.0["']/);
+      // ... and forbid the modelId literal appearing anywhere in the page,
+      // since the only legitimate home for it is the leaf SystemHealthScore
+      // component's own default.
+      expect(src).not.toMatch(/propensity_v2\.1\.0/);
     });
   });
 
   describe('Error boundaries (AC: one failing insight does not blank the page)', () => {
-    it('renders other insights when one insight throws during render', async () => {
-      // Suppress noisy React error-boundary console output for this test.
-      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    // Each row pairs the insight component to make throw with the data-testids
+    // of the surviving insights expected to still render.
+    const INSIGHTS: ReadonlyArray<{
+      throwing: string;
+      survivors: ReadonlyArray<string>;
+    }> = [
+      {
+        throwing: 'ExecutiveAIBrief',
+        survivors: [
+          'priority-actions-roi',
+          'predictive-alerts',
+          'active-causal-chains',
+          'experiment-recommendations',
+          'heterogeneous-treatment-effects',
+          'system-health-score',
+        ],
+      },
+      {
+        throwing: 'PriorityActionsROI',
+        survivors: [
+          'executive-ai-brief',
+          'predictive-alerts',
+          'active-causal-chains',
+          'experiment-recommendations',
+          'heterogeneous-treatment-effects',
+          'system-health-score',
+        ],
+      },
+      {
+        throwing: 'PredictiveAlerts',
+        survivors: [
+          'executive-ai-brief',
+          'priority-actions-roi',
+          'active-causal-chains',
+          'experiment-recommendations',
+          'heterogeneous-treatment-effects',
+          'system-health-score',
+        ],
+      },
+      {
+        throwing: 'ActiveCausalChains',
+        survivors: [
+          'executive-ai-brief',
+          'priority-actions-roi',
+          'predictive-alerts',
+          'experiment-recommendations',
+          'heterogeneous-treatment-effects',
+          'system-health-score',
+        ],
+      },
+      {
+        throwing: 'ExperimentRecommendations',
+        survivors: [
+          'executive-ai-brief',
+          'priority-actions-roi',
+          'predictive-alerts',
+          'active-causal-chains',
+          'heterogeneous-treatment-effects',
+          'system-health-score',
+        ],
+      },
+      {
+        throwing: 'HeterogeneousTreatmentEffects',
+        survivors: [
+          'executive-ai-brief',
+          'priority-actions-roi',
+          'predictive-alerts',
+          'active-causal-chains',
+          'experiment-recommendations',
+          'system-health-score',
+        ],
+      },
+      {
+        throwing: 'SystemHealthScore',
+        survivors: [
+          'executive-ai-brief',
+          'priority-actions-roi',
+          'predictive-alerts',
+          'active-causal-chains',
+          'experiment-recommendations',
+          'heterogeneous-treatment-effects',
+        ],
+      },
+    ];
 
-      // Re-mock insights so ExecutiveAIBrief throws.
-      vi.doMock('@/components/insights', () => ({
-        ExecutiveAIBrief: () => {
-          throw new Error('boom from ExecutiveAIBrief');
-        },
-        PriorityActionsROI: () => <div data-testid="priority-actions-roi" />,
-        PredictiveAlerts: () => <div data-testid="predictive-alerts" />,
-        ActiveCausalChains: () => <div data-testid="active-causal-chains" />,
-        ExperimentRecommendations: () => <div data-testid="experiment-recommendations" />,
-        HeterogeneousTreatmentEffects: () => <div data-testid="heterogeneous-treatment-effects" />,
-        SystemHealthScore: ({ modelId }: { modelId?: string }) => (
-          <div data-testid="system-health-score">modelId:{modelId ?? '__none__'}</div>
-        ),
-      }));
+    /**
+     * Build the seven insight mocks where exactly one throws. Each healthy
+     * mock renders a data-testid we can later assert on.
+     */
+    function buildInsightMocks(throwName: string) {
+      const ALL_NAMES = [
+        'ExecutiveAIBrief',
+        'PriorityActionsROI',
+        'PredictiveAlerts',
+        'ActiveCausalChains',
+        'ExperimentRecommendations',
+        'HeterogeneousTreatmentEffects',
+        'SystemHealthScore',
+      ] as const;
+      const NAME_TO_TESTID: Record<(typeof ALL_NAMES)[number], string> = {
+        ExecutiveAIBrief: 'executive-ai-brief',
+        PriorityActionsROI: 'priority-actions-roi',
+        PredictiveAlerts: 'predictive-alerts',
+        ActiveCausalChains: 'active-causal-chains',
+        ExperimentRecommendations: 'experiment-recommendations',
+        HeterogeneousTreatmentEffects: 'heterogeneous-treatment-effects',
+        SystemHealthScore: 'system-health-score',
+      };
+      const out: Record<string, () => ReactElement> = {};
+      for (const n of ALL_NAMES) {
+        if (n === throwName) {
+          out[n] = () => {
+            throw new Error(`boom from ${throwName}`);
+          };
+        } else {
+          const testid = NAME_TO_TESTID[n];
+          out[n] = () => <div data-testid={testid} />;
+        }
+      }
+      return out;
+    }
 
-      // Re-import the page module so it picks up the new doMock.
-      vi.resetModules();
-      // Re-mock provider after resetModules so the import resolves correctly.
-      vi.doMock('@/providers/E2ICopilotProvider', () => ({
-        useE2ICopilot: () => ({ filters: { brand: 'Remibrutinib' } }),
-      }));
-      const { AIAgentInsights: Page } = await import('./AIAgentInsights');
+    for (const { throwing, survivors } of INSIGHTS) {
+      it(`isolates a render error in ${throwing} from the other six insights`, async () => {
+        const consoleErrorSpy = vi
+          .spyOn(console, 'error')
+          .mockImplementation(() => {});
 
-      render(<Page />, { wrapper: createWrapperWithUrl('/ai-insights') });
+        vi.resetModules();
+        vi.doMock('@/components/insights', () => buildInsightMocks(throwing));
+        vi.doMock('@/providers/E2ICopilotProvider', () => ({
+          useE2ICopilot: () => ({ filters: { brand: 'Remibrutinib' } }),
+        }));
 
-      // Page header still renders.
-      expect(screen.getByText('AI Agent Insights')).toBeInTheDocument();
+        const { AIAgentInsights: Page } = await import('./AIAgentInsights');
+        render(<Page />, { wrapper: createWrapperWithUrl('/ai-insights') });
 
-      // The 4 healthy insights still mount.
-      expect(screen.getByTestId('predictive-alerts')).toBeInTheDocument();
-      expect(screen.getByTestId('active-causal-chains')).toBeInTheDocument();
-      expect(screen.getByTestId('heterogeneous-treatment-effects')).toBeInTheDocument();
-      expect(screen.getByTestId('system-health-score')).toBeInTheDocument();
+        // Page header still renders.
+        expect(screen.getByText('AI Agent Insights')).toBeInTheDocument();
 
-      // The throwing insight is replaced with the boundary fallback.
-      expect(screen.queryByTestId('executive-ai-brief')).not.toBeInTheDocument();
-      expect(screen.getByText(/Something went wrong/i)).toBeInTheDocument();
+        // All other insights mount.
+        for (const testid of survivors) {
+          expect(
+            screen.getByTestId(testid),
+            `expected survivor ${testid} to render when ${throwing} throws`,
+          ).toBeInTheDocument();
+        }
 
-      consoleErrorSpy.mockRestore();
-      vi.doUnmock('@/components/insights');
-      vi.doUnmock('@/providers/E2ICopilotProvider');
-    });
+        // The throwing insight's testid is absent and the fallback is shown.
+        expect(screen.getAllByText(/Something went wrong/i).length).toBeGreaterThan(0);
+
+        consoleErrorSpy.mockRestore();
+        vi.doUnmock('@/components/insights');
+        vi.doUnmock('@/providers/E2ICopilotProvider');
+      });
+    }
   });
 });

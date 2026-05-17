@@ -29,25 +29,6 @@ import { ErrorBoundary } from '@/components/ui/error-boundary';
 import { useE2ICopilot } from '@/providers/E2ICopilotProvider';
 
 // =============================================================================
-// CONSTANTS
-// =============================================================================
-
-/**
- * Default brand surfaced when no context value and no URL override is set.
- * Kept as a single source of truth so it is no longer scattered across the
- * page JSX.
- */
-const DEFAULT_BRAND = 'Remibrutinib';
-
-/**
- * Default model identifier surfaced when no URL override is set. Treated as
- * a fallback, not an authoritative production identifier — operators are
- * expected to drive the live page via `?modelId=...` until the model
- * registry exposes a context selector.
- */
-const DEFAULT_MODEL_ID = 'propensity_v2.1.0';
-
-// =============================================================================
 // MAIN COMPONENT
 // =============================================================================
 
@@ -55,16 +36,22 @@ export function AIAgentInsights() {
   const [searchParams] = useSearchParams();
   const { filters } = useE2ICopilot();
 
-  // Brand: URL query takes precedence, then dashboard filter context,
-  // then a sensible default.
-  const brand =
-    searchParams.get('brand')?.trim() || filters?.brand || DEFAULT_BRAND;
+  // Brand: URL query takes precedence, then dashboard filter context.
+  // When neither is set we hand `undefined` to the child so its own
+  // documented default kicks in — the page no longer hard-codes a brand.
+  const brandFromUrl = searchParams.get('brand')?.trim();
+  const brand = brandFromUrl || filters?.brand || undefined;
 
-  // Model id: URL query takes precedence, then default. The page-level
-  // context does not yet carry a model selector — drive via URL until it
-  // does. Empty strings are treated as "not provided".
-  const modelIdParam = searchParams.get('modelId')?.trim();
-  const modelId = modelIdParam || DEFAULT_MODEL_ID;
+  // Model id: URL query takes precedence, then a deploy-time env override
+  // (`VITE_DEFAULT_MODEL_ID`). When neither is set we hand `undefined`
+  // to `SystemHealthScore` and let its own documented default kick in —
+  // no model identifier is hard-coded on this page (issue #304).
+  const modelIdFromUrl = searchParams.get('modelId')?.trim();
+  const modelIdFromEnv =
+    typeof import.meta !== 'undefined'
+      ? (import.meta.env?.VITE_DEFAULT_MODEL_ID as string | undefined)?.trim()
+      : undefined;
+  const modelId = modelIdFromUrl || modelIdFromEnv || undefined;
 
   return (
     <div className="space-y-6">
