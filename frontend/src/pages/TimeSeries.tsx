@@ -190,6 +190,13 @@ function TimeSeries() {
     };
   }, [currentSeries]);
 
+  // Sparkline series for the "Current Value" KPI card — real hook data, not
+  // KPICard's `SAMPLE_SPARKLINE` fallback.
+  const sparklineSeries = useMemo(
+    () => currentSeries.map((p) => p.value),
+    [currentSeries],
+  );
+
   // ---- Loading / error per mode ----
   const isLoading =
     mode === 'performance' ? performanceTrend.isLoading : kpiValue.isLoading;
@@ -343,33 +350,42 @@ function TimeSeries() {
           </div>
         )}
 
-        {/* KPI Summary cards */}
+        {/* KPI Summary cards.
+            Pass real `sparklineSeries` everywhere — never the KPICard
+            default fallback (SAMPLE_SPARKLINE), which would render
+            fake trend visuals from a fixture array. Empty `[]` opts
+            out of sparkline rendering for non-trend metrics. */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
           <KPICard
             title="Current Value"
             value={summary.current.toLocaleString()}
             description="Latest value"
+            sparklineData={sparklineSeries}
           />
           <KPICard
             title="Average"
             value={Math.round(summary.average * 1000) / 1000 + ''}
             description="Over period"
+            sparklineData={[]}
           />
           <KPICard
             title="Maximum"
             value={summary.max.toLocaleString()}
             description="Peak value"
             status="healthy"
+            sparklineData={[]}
           />
           <KPICard
             title="Minimum"
             value={summary.min.toLocaleString()}
             description="Lowest value"
+            sparklineData={[]}
           />
           <KPICard
             title="Data Points"
             value={summary.count.toLocaleString()}
             description="Observations"
+            sparklineData={[]}
           />
         </div>
 

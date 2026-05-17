@@ -292,6 +292,35 @@ describe('TimeSeries (live data wiring — issue #302)', () => {
     expect(screen.getByTestId('timeseries-loading')).toBeInTheDocument();
   });
 
+  it('KPICard usages never trigger the SAMPLE_SPARKLINE fallback (codex MED iter-2)', () => {
+    // KPICard.tsx falls back to a `SAMPLE_SPARKLINE = [45, 52, 48, ...]` when
+    // `sparklineData` is undefined. Every KPICard usage in TimeSeries.tsx
+    // MUST pass `sparklineData=` explicitly (real series or [] to opt out).
+    const sourcePath = path.resolve(__dirname, 'TimeSeries.tsx');
+    const source = fs.readFileSync(sourcePath, 'utf-8');
+
+    // Find every `<KPICard ... />` invocation and check it includes
+    // `sparklineData=` as a prop.
+    const kpiCardRegex = /<KPICard\b([^>]*?)\/>/gs;
+    const matches = [...source.matchAll(kpiCardRegex)];
+    expect(matches.length).toBeGreaterThan(0);
+
+    const offenders: string[] = [];
+    for (const match of matches) {
+      const propsBlob = match[1];
+      if (!/\bsparklineData\s*=/.test(propsBlob)) {
+        offenders.push(match[0].slice(0, 120));
+      }
+    }
+
+    if (offenders.length > 0) {
+      throw new Error(
+        `KPICard usages missing explicit \`sparklineData=\` (would trigger SAMPLE_SPARKLINE fallback):\n` +
+          offenders.join('\n'),
+      );
+    }
+  });
+
   it('source file contains NO sample/mock data — by identifier AND by behavior', () => {
     const sourcePath = path.resolve(__dirname, 'TimeSeries.tsx');
     const source = fs.readFileSync(sourcePath, 'utf-8');
