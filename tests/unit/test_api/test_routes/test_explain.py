@@ -661,13 +661,22 @@ class TestGetExplanationHistoryEndpoint:
             mock_repo.client = MagicMock()
             mock_repo.table_name = "ml_shap_analyses"
 
-            # Mock the chain of table query methods
-            mock_execute = MagicMock()
-            mock_execute.data = [
-                {"id": 1, "experiment_id": "exp1"},
-                {"id": 2, "experiment_id": "exp2"},
-            ]
-            mock_repo.client.table.return_value.select.return_value.order.return_value.limit.return_value.execute.return_value = mock_execute
+            # Mock the supabase query chain. The route now calls
+            # table().select().eq("patient_id", ...).order().limit().execute(),
+            # so build a self-returning chain.
+            mock_execute = MagicMock(
+                data=[
+                    {"id": 1, "patient_id": "PAT-123", "explanation_id": "EXPL-1"},
+                    {"id": 2, "patient_id": "PAT-123", "explanation_id": "EXPL-2"},
+                ]
+            )
+            chain = MagicMock()
+            chain.select.return_value = chain
+            chain.eq.return_value = chain
+            chain.order.return_value = chain
+            chain.limit.return_value = chain
+            chain.execute.return_value = mock_execute
+            mock_repo.client.table.return_value = chain
             mock_get_repo.return_value = mock_repo
 
             response = await get_explanation_history("PAT-123")
@@ -701,6 +710,122 @@ class TestGetExplanationHistoryEndpoint:
             assert response["total_explanations"] == 0
             assert "error" in response
 
+    @pytest.mark.asyncio
+    async def test_get_history_filters_by_patient_id(self):
+        """Issue #321 HIGH: /history/{patient_id} must filter rows by patient_id.
+
+        The schema has a `patient_id` column on ml_shap_analyses (per migration
+        database/ml/011_realtime_shap_audit.sql). The endpoint previously ignored
+        the path-param and returned recent rows for any patient. Verify the
+        supabase query chain calls `.eq("patient_id", patient_id)`.
+        """
+        with patch("src.api.routes.explain.get_shap_analysis_repository") as mock_get_repo:
+            mock_repo = MagicMock()
+            mock_repo.client = MagicMock()
+            mock_repo.table_name = "ml_shap_analyses"
+
+            # Build a fake chain: table().select().eq().order().limit().execute()
+            chain = MagicMock()
+            chain.execute.return_value = MagicMock(data=[])
+            chain.limit.return_value = chain
+            chain.order.return_value = chain
+            chain.eq.return_value = chain
+            chain.select.return_value = chain
+            mock_repo.client.table.return_value = chain
+            mock_get_repo.return_value = mock_repo
+
+            await get_explanation_history("PAT-FILTER-ME")
+
+            # Verify .eq("patient_id", ...) was called with the actual patient_id
+            eq_calls = [
+                call_args
+                for call_args in chain.eq.call_args_list
+                if call_args.args and call_args.args[0] == "patient_id"
+            ]
+            assert eq_calls, (
+                f"Expected .eq('patient_id', ...) call but got: {chain.eq.call_args_list!r}"
+            )
+            assert eq_calls[0].args[1] == "PAT-FILTER-ME"
+
+    @pytest.mark.asyncio
+    async def test_get_history_response_shape_matches_fe_type(self):
+        """Issue #321 HIGH: /history/{patient_id} response must match the FE type
+        `ExplanationHistoryResponse { explanations: ExplainResponse[] }`.
+
+        Each item should carry ExplainResponse fields (explanation_id,
+        request_timestamp, patient_id, model_type, model_version_id,
+        prediction_class, prediction_probability, top_features, shap_sum,
+        computation_time_ms, audit_stored).
+        """
+        from datetime import datetime, timezone
+
+        sample_row = {
+            "explanation_id": "EXPL-20251217-abc123",
+            "patient_id": "PAT-001",
+            "hcp_id": "HCP-7",
+            "model_type": "propensity",
+            "model_version_id": "v2.3.1",
+            "prediction_class": "high_propensity",
+            "prediction_probability": 0.78,
+            "base_value": 0.42,
+            "shap_values": {
+                "days_since_last_hcp_visit": 0.15,
+                "therapy_adherence_score": -0.05,
+            },
+            "request_timestamp": datetime.now(timezone.utc).isoformat(),
+            "response_time_ms": 127.5,
+        }
+
+        with patch("src.api.routes.explain.get_shap_analysis_repository") as mock_get_repo:
+            mock_repo = MagicMock()
+            mock_repo.client = MagicMock()
+            mock_repo.table_name = "ml_shap_analyses"
+
+            chain = MagicMock()
+            chain.execute.return_value = MagicMock(data=[sample_row])
+            chain.limit.return_value = chain
+            chain.order.return_value = chain
+            chain.eq.return_value = chain
+            chain.select.return_value = chain
+            mock_repo.client.table.return_value = chain
+            mock_get_repo.return_value = mock_repo
+
+            response = await get_explanation_history("PAT-001")
+
+            assert "explanations" in response
+            assert response["total_explanations"] == 1
+            assert len(response["explanations"]) == 1
+
+            item = response["explanations"][0]
+            # FE ExplainResponse fields (per frontend/src/types/explain.ts)
+            for field in (
+                "explanation_id",
+                "request_timestamp",
+                "patient_id",
+                "model_type",
+                "model_version_id",
+                "prediction_class",
+                "prediction_probability",
+                "top_features",
+                "shap_sum",
+                "computation_time_ms",
+                "audit_stored",
+            ):
+                assert field in item, f"missing {field!r} in normalized item: {item!r}"
+
+            # top_features should be a list of FeatureContribution-shaped dicts
+            assert isinstance(item["top_features"], list)
+            if item["top_features"]:
+                first = item["top_features"][0]
+                for f in (
+                    "feature_name",
+                    "feature_value",
+                    "shap_value",
+                    "contribution_direction",
+                    "contribution_rank",
+                ):
+                    assert f in first, f"missing {f!r} in top_features entry"
+
 
 class TestListExplainableModelsEndpoint:
     """Tests for /explain/models endpoint."""
@@ -720,6 +845,28 @@ class TestListExplainableModelsEndpoint:
             assert len(response["supported_models"]) == len(ModelType)
             assert response["total_models"] == len(ModelType)
             assert response["cache_stats"]["hits"] == 100
+
+    @pytest.mark.asyncio
+    async def test_list_models_includes_latest_version(self):
+        """Issue #321 LOW: /api/explain/models must emit `latest_version` per model.
+
+        FE type `ExplainableModelInfo` declares `latest_version: string` but route
+        previously emitted nothing for the field. Verify every entry now has it.
+        """
+        with patch("src.api.routes.explain.get_shap_service") as mock_get_service:
+            mock_service = MagicMock()
+            mock_service.shap_explainer = MagicMock()
+            mock_service.shap_explainer.get_cache_stats.return_value = {"hits": 0, "misses": 0}
+            mock_get_service.return_value = mock_service
+
+            response = await list_explainable_models()
+
+            assert "supported_models" in response
+            for entry in response["supported_models"]:
+                # field must be present (may be None when no registry data)
+                assert "latest_version" in entry, f"missing latest_version in entry {entry!r}"
+                # type is Optional[str]
+                assert entry["latest_version"] is None or isinstance(entry["latest_version"], str)
 
 
 class TestHealthCheckEndpoint:

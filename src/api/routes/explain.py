@@ -214,6 +214,104 @@ class BatchExplainResponse(BaseModel):
 # =============================================================================
 
 
+# =============================================================================
+# HELPERS (Issue #321 — FE/BE contract drift cleanup)
+# =============================================================================
+
+
+def _normalize_history_row(row: Dict[str, Any], masked_patient_id: str) -> Dict[str, Any]:
+    """Normalize an ``ml_shap_analyses`` row to the FE ``ExplainResponse`` shape.
+
+    The FE type ``ExplanationHistoryResponse`` (see
+    ``frontend/src/types/explain.ts``) declares ``explanations: ExplainResponse[]``.
+    The DB row uses different column names and stores SHAP values as a dict;
+    this helper bridges the two without forcing a Pydantic re-validation
+    (which would fail on missing optional fields and reject legacy rows).
+    """
+    shap_values: Dict[str, Any] = row.get("shap_values") or row.get("global_importance") or {}
+    if isinstance(shap_values, dict):
+        ranked = sorted(
+            shap_values.items(),
+            key=lambda kv: abs(float(kv[1]) if kv[1] is not None else 0.0),
+            reverse=True,
+        )
+        top_features = [
+            {
+                "feature_name": name,
+                "feature_value": None,
+                "shap_value": float(value) if value is not None else 0.0,
+                "contribution_direction": "positive"
+                if (value is not None and float(value) >= 0)
+                else "negative",
+                "contribution_rank": idx + 1,
+            }
+            for idx, (name, value) in enumerate(ranked)
+        ]
+        shap_sum = float(sum(float(v) for v in shap_values.values() if v is not None))
+    else:
+        top_features = []
+        shap_sum = 0.0
+
+    request_ts = row.get("request_timestamp") or row.get("computed_at")
+
+    return {
+        "explanation_id": row.get("explanation_id") or row.get("id") or "",
+        "request_timestamp": request_ts,
+        "patient_id": masked_patient_id,
+        "model_type": row.get("model_type"),
+        "model_version_id": row.get("model_version_id") or row.get("model_registry_id") or "",
+        "prediction_class": row.get("prediction_class") or "",
+        "prediction_probability": float(row.get("prediction_probability") or 0.0),
+        "base_value": (float(row["base_value"]) if row.get("base_value") is not None else None),
+        "top_features": top_features,
+        "shap_sum": shap_sum,
+        "narrative_explanation": row.get("natural_language_explanation"),
+        "computation_time_ms": float(row.get("response_time_ms") or 0.0),
+        "audit_stored": True,
+    }
+
+
+async def _get_latest_versions_by_model_type() -> Dict[str, Optional[str]]:
+    """Look up the latest ``model_version`` for each ``model_name`` in the
+    registry, keyed by the matching ``ModelType.value``.
+
+    Returns ``{model_type_value: latest_version_or_None}`` for every member
+    of :class:`ModelType`. Best-effort: any error yields all-``None`` values
+    so the response shape stays stable even with no DB connection.
+    """
+    versions: Dict[str, Optional[str]] = {mt.value: None for mt in ModelType}
+    try:
+        from src.memory.services.factories import get_async_supabase_client
+
+        client = await get_async_supabase_client()
+        if client is None:
+            return versions
+
+        # Fetch (model_name, model_version) for any of our model types. The
+        # set is small (4); a single SELECT with ``in_`` is cheaper than 4
+        # per-type round-trips.
+        result = await (
+            client.table("ml_model_registry")
+            .select("model_name,model_version,created_at")
+            .in_("model_name", list(versions.keys()))
+            .order("created_at", desc=True)
+            .execute()
+        )
+
+        rows: List[Dict[str, Any]] = result.data or []
+        # Order desc by created_at — first row per model_name wins.
+        for r in rows:
+            name = r.get("model_name")
+            if name in versions and versions[name] is None:
+                versions[name] = r.get("model_version")
+        return versions
+
+    except Exception as e:
+        # Surface as debug — this is best-effort enrichment, not load-bearing.
+        logger.debug(f"latest_version enrichment unavailable: {e}")
+        return versions
+
+
 class RealTimeSHAPService:
     """
     Service layer for real-time SHAP explanations.
@@ -727,25 +825,24 @@ async def get_explanation_history(
                 "message": "Database connection not available",
             }
 
-        # Query ml_shap_analyses table
-        # Note: Current schema tracks by model_registry_id, not patient_id
-        # For patient-level history, we'd need to extend the schema
-        # For now, return recent analyses as a demonstration
-        result = (
-            repo.client.table(repo.table_name)
-            .select("*")
-            .order("computed_at", desc=True)
-            .limit(limit)
-            .execute()
-        )
+        # Issue #321 HIGH — filter rows by patient_id. The ml_shap_analyses
+        # table has a `patient_id` column (per migration
+        # database/ml/011_realtime_shap_audit.sql) so the path-param can be
+        # used directly; previously the route ignored it. Rows are normalized
+        # to the FE ``ExplanationHistoryResponse { explanations: ExplainResponse[] }``
+        # contract so the frontend type matches runtime.
+        query = repo.client.table(repo.table_name).select("*").eq("patient_id", patient_id)
+        if model_type is not None:
+            query = query.eq("model_type", model_type.value)
+        result = query.order("request_timestamp", desc=True).limit(limit).execute()
 
-        explanations = result.data if result.data else []
+        rows = result.data if result.data else []
+        explanations = [_normalize_history_row(row, masked_patient_id) for row in rows]
 
         return {
             "patient_id": masked_patient_id,
             "total_explanations": len(explanations),
             "explanations": explanations,
-            "note": "Currently showing recent analyses. Patient-level filtering requires schema extension.",
         }
 
     except Exception as e:
@@ -773,10 +870,17 @@ async def list_explainable_models() -> Dict[str, Any]:
     # Get cache stats from SHAP explainer
     cache_stats = service.shap_explainer.get_cache_stats()
 
+    # Issue #321 LOW — emit `latest_version` per model so the response matches
+    # the FE type ``ExplainableModelInfo`` (frontend/src/types/explain.ts).
+    # Enrichment is best-effort: if the registry is unreachable, the field
+    # is still present but ``None``.
+    latest_versions = await _get_latest_versions_by_model_type()
+
     return {
         "supported_models": [
             {
                 "model_type": mt.value,
+                "latest_version": latest_versions.get(mt.value),
                 "explainer_type": "TreeExplainer"
                 if mt
                 in [ModelType.PROPENSITY, ModelType.RISK_STRATIFICATION, ModelType.CHURN_PREDICTION]
