@@ -180,11 +180,22 @@ function ModelPerformance() {
     enabled: !!effectiveModelId,
   });
 
+  // Validate the comparison id the same way as the primary: must exist in
+  // the live model list AND differ from the primary. Anything else means
+  // the comparison query stays disabled (avoids self-comparison + stale-id
+  // requests after the primary changes).
+  const effectiveCompareModelId = useMemo(() => {
+    if (!compareModelId) return '';
+    if (compareModelId === effectiveModelId) return '';
+    if (!models.some((m) => m.model_name === compareModelId)) return '';
+    return compareModelId;
+  }, [compareModelId, effectiveModelId, models]);
+
   const comparisonQuery = useModelComparison(
     effectiveModelId,
-    compareModelId,
+    effectiveCompareModelId,
     'accuracy',
-    { enabled: !!effectiveModelId && !!compareModelId }
+    { enabled: !!effectiveModelId && !!effectiveCompareModelId }
   );
 
   const accuracyHistory = useMemo(
@@ -198,8 +209,8 @@ function ModelPerformance() {
       modelsQuery.refetch(),
       trendQuery.refetch?.(),
       alertsQuery.refetch?.(),
-      // Comparison may not be enabled — refetch only if a second model picked
-      compareModelId ? comparisonQuery.refetch?.() : Promise.resolve(),
+      // Comparison may not be enabled — refetch only if effective second model exists
+      effectiveCompareModelId ? comparisonQuery.refetch?.() : Promise.resolve(),
     ]);
   };
 
@@ -525,7 +536,7 @@ function ModelPerformance() {
                 </Select>
               </div>
 
-              {!compareModelId ? (
+              {!effectiveCompareModelId ? (
                 <div className="py-8 text-center text-sm text-muted-foreground">
                   Pick a second model above to run a comparison.
                 </div>

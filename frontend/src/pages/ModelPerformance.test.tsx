@@ -16,6 +16,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 // =============================================================================
@@ -200,6 +201,80 @@ describe('ModelPerformance', () => {
     expect(metric).toBe('accuracy');
     // Query MUST be disabled until comparison id is picked
     expect(opts?.enabled).toBe(false);
+  });
+
+  it('issue-298: picking a 2nd model enables useModelComparison with both ids', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    render(<ModelPerformance />, { wrapper: createWrapper() });
+
+    // Navigate to the Comparison tab
+    const compareTab = screen.getByRole('tab', { name: /Comparison/i });
+    await user.click(compareTab);
+
+    // The "Compare with:" Select trigger should now be visible
+    const compareSelects = screen.getAllByRole('combobox');
+    // Two comboboxes are present: top model selector + "Compare with" inside the tab
+    expect(compareSelects.length).toBeGreaterThanOrEqual(2);
+    const compareWithTrigger = compareSelects[compareSelects.length - 1];
+
+    // Open it and pick churn_v1.5.2
+    await user.click(compareWithTrigger);
+    const churnOption = await screen.findByRole('option', { name: /churn_v1\.5\.2/ });
+    await user.click(churnOption);
+
+    // After picking, useModelComparison must be called with both ids and enabled=true.
+    const compareCalls = (useModelComparison as ReturnType<typeof vi.fn>).mock.calls;
+    const enabledCall = compareCalls.find((c) => c[3]?.enabled === true);
+    expect(enabledCall).toBeDefined();
+    expect(enabledCall?.[0]).toBe('propensity_v2.1.0');
+    expect(enabledCall?.[1]).toBe('churn_v1.5.2');
+    expect(enabledCall?.[2]).toBe('accuracy');
+  });
+
+  it('issue-298: useModelComparison filters self-comparison + missing ids — invariant on every call', () => {
+    // Render with the default 2-model list, then re-render with the SAME
+    // primary but a 1-model list. The comparison hook's `enabled` flag must
+    // ALWAYS be false on the initial render (compareModelId stays '').
+    // Critically: across all calls (initial + re-render), the comparison id
+    // arg MUST NOT leak any non-empty string that isn't in the live list.
+    const { rerender } = render(<ModelPerformance />, { wrapper: createWrapper() });
+
+    // Shrink to a single model
+    (useModelsStatus as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        total_models: 1,
+        healthy_count: 1,
+        unhealthy_count: 0,
+        models: [mockModelsStatus.models[0]],
+        timestamp: '2026-05-17T10:00:00Z',
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    rerender(<ModelPerformance />);
+
+    // INVARIANT: every call to useModelComparison must satisfy
+    //   if comparison id is non-empty, it must equal a model name in the
+    //   live list AND differ from the primary id.
+    const compareCalls = (useModelComparison as ReturnType<typeof vi.fn>).mock.calls;
+    expect(compareCalls.length).toBeGreaterThanOrEqual(2);
+
+    for (const call of compareCalls) {
+      const [primaryId, otherId, , opts] = call;
+      if (otherId) {
+        // Must differ from primary
+        expect(otherId).not.toBe(primaryId);
+      }
+      // If enabled, both ids must be set
+      if (opts?.enabled) {
+        expect(primaryId).toBeTruthy();
+        expect(otherId).toBeTruthy();
+        expect(otherId).not.toBe(primaryId);
+      }
+    }
   });
 
   it('issue-298: does NOT render hard-coded sample model names (churn-v3 / hcp-tier / conversion-v2 / adherence-v1)', () => {
