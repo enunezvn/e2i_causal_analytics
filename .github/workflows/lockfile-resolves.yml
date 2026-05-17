@@ -62,9 +62,14 @@ jobs:
           pip install pytest==9.0.2 pytest-timeout
 
       - name: Run resolver test
+        # ``--noconftest`` skips loading tests/conftest.py — the resolver
+        # test is a pure subprocess wrapper that needs no fixtures and
+        # no async support, and conftest pulls in pytest-asyncio which
+        # isn't installed in this lightweight workflow.
         run: |
           pytest tests/test_lockfile_resolves.py \
             -v \
+            --noconftest \
             -m "slow and integration" \
             --override-ini="addopts=" \
             --no-header
