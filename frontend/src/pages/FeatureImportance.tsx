@@ -563,10 +563,12 @@ function FeatureImportance() {
             <TabsContent value="beeswarm">
               <Card>
                 <CardHeader>
-                  <CardTitle>Feature Value Distribution</CardTitle>
+                  <CardTitle>Per-Feature SHAP Contributions</CardTitle>
                   <CardDescription>
-                    Each dot represents one sample. Color shows feature value (blue=low, red=high).
-                    Position shows SHAP impact on prediction.
+                    One dot per top feature for this patient. Color reflects the
+                    direction and magnitude of the SHAP contribution
+                    (blue = negative impact, red = positive impact). Position
+                    along the x-axis shows the raw SHAP value.
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
