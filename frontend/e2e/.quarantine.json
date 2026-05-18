@@ -2,7 +2,6 @@
   "budget": 5,
   "specs": [
     "intervention-impact.spec.ts",
-    "knowledge-graph.spec.ts",
     "kpi-dictionary.spec.ts",
     "memory-architecture.spec.ts",
     "system-health.spec.ts"
