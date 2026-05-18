@@ -9,7 +9,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { KPIListResponse, KPIMetadata } from '@/types/kpi';
 import type { DriftDetectionResponse, DriftHistoryResponse } from '@/types/monitoring';
@@ -225,16 +226,22 @@ describe('DataQuality (live wiring + Playwright contract)', () => {
   // Page chrome that the Playwright spec asserts (issue #306)
   // ===========================================================================
 
-  it('renders page header (Playwright: pageHeader)', () => {
+  it('renders page header alongside live drift model id (Playwright: pageHeader + #301 wiring)', () => {
     render(<DataQuality />, { wrapper: createWrapper() });
 
     // h1 must include "Data Quality"
     expect(
       screen.getByRole('heading', { level: 1, name: /Data Quality/i })
     ).toBeInTheDocument();
+
+    // Vacuity gate (#327): live drift wiring renders the DQ_MODEL_ID in the
+    // Drift Status section's CardDescription ("Latest drift detection for the
+    // data quality pipeline (data_quality_pipeline)"). Pre-#320 baseline had
+    // no drift section at all and would trip this assertion.
+    expect(screen.getByText(/data_quality_pipeline/)).toBeInTheDocument();
   });
 
-  it('renders page description matching Playwright pageDescription regex', () => {
+  it('renders page description + live workstream id (Playwright regex + #301 wiring)', () => {
     render(<DataQuality />, { wrapper: createWrapper() });
 
     // Spec (data-quality.page.ts): getByText(/profiling|completeness|accuracy|validation/i).first()
@@ -242,57 +249,151 @@ describe('DataQuality (live wiring + Playwright contract)', () => {
     // (KPI card titles, descriptions, etc). We mirror that by asserting >= 1 match.
     const matches = screen.getAllByText(/profiling|completeness|accuracy|validation/i);
     expect(matches.length).toBeGreaterThanOrEqual(1);
+
+    // Vacuity gate (#327): live KPI wiring surfaces the workstream name as a
+    // <code>ws1_data_quality</code> token inside the Validation Rules
+    // CardDescription. Pre-#320 baseline had no workstream reference.
+    expect(screen.getByText('ws1_data_quality')).toBeInTheDocument();
   });
 
-  it('renders Validation Rules tab (Playwright: validationRulesTab)', () => {
+  it('renders Validation Rules tab with live KPI rows (Playwright + #301 wiring)', () => {
+    // Override useKPIDetail to return per-kpi metadata so each row shows the
+    // KPI's own name (default `beforeEach` mock returns dqKpis[0] for every
+    // call, which would collapse both rows to the same name).
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const meta = dqKpis.find((k) => k.id === kpiId) ?? dqKpis[0];
+      return {
+        metadata: meta,
+        value: { kpi_id: meta.id, value: 90, status: 'good', calculated_at: '', cached: false, metadata: {} },
+        isLoading: false,
+        error: null,
+        isMetadataLoading: false,
+        isValueLoading: false,
+        refetch: vi.fn(),
+      };
+    });
+
     render(<DataQuality />, { wrapper: createWrapper() });
 
     expect(
       screen.getByRole('tab', { name: /Validation Rules/i })
     ).toBeInTheDocument();
+
+    // Vacuity gate (#327): default tab is "rules" and the body renders a row
+    // per `kpiList.kpis`. Assert both fixture KPI names appear (pre-#320
+    // baseline rendered only SAMPLE_VALIDATION_RULES.name like "HCP ID Not Null"
+    // — neither fixture name would appear without the live useKPIList wiring).
+    expect(screen.getByText('Source Coverage - Patients')).toBeInTheDocument();
+    expect(screen.getByText('Completeness - HCP Master')).toBeInTheDocument();
   });
 
-  it('renders Data Profiling tab (Playwright: dataProfilingTab)', () => {
+  it('renders Data Profiling tab with live KPI table data (Playwright + #301 wiring)', async () => {
+    const user = userEvent.setup();
     render(<DataQuality />, { wrapper: createWrapper() });
 
-    expect(
-      screen.getByRole('tab', { name: /Data Profiling/i })
-    ).toBeInTheDocument();
+    const profilingTab = screen.getByRole('tab', { name: /Data Profiling/i });
+    expect(profilingTab).toBeInTheDocument();
+
+    // Vacuity gate (#327): switch to Data Profiling tab; the body renders one
+    // row per `kpiList.kpis` with the KPI id + table name + column name from
+    // the fixture. Pre-#320 used SAMPLE_COLUMN_PROFILES with names like
+    // "patient_id" *but never* an id like "WS1-DQ-002". The KPI id is the
+    // unique fixture-derived marker that proves wiring.
+    await user.click(profilingTab);
+
+    await waitFor(() => {
+      expect(screen.getByText('WS1-DQ-002')).toBeInTheDocument();
+    });
+    expect(screen.getByText('hcp_master')).toBeInTheDocument();
   });
 
-  it('renders Quality Issues tab (Playwright: qualityIssuesTab)', () => {
+  it('renders Quality Issues tab with live drift records (Playwright + #301 wiring)', async () => {
+    const user = userEvent.setup();
     render(<DataQuality />, { wrapper: createWrapper() });
 
-    expect(
-      screen.getByRole('tab', { name: /Quality Issues/i })
-    ).toBeInTheDocument();
+    const issuesTab = screen.getByRole('tab', { name: /Quality Issues/i });
+    expect(issuesTab).toBeInTheDocument();
+
+    // Vacuity gate (#327): switch to Quality Issues tab; body renders a row
+    // per `driftHistory.records`. Pre-#320 used SAMPLE_QUALITY_ISSUES (entirely
+    // different shape, no drift_type field) so asserting the drift_type from
+    // the fixture catches the regression.
+    await user.click(issuesTab);
+
+    // drift_type 'data drift' from driftHistoryResponse fixture; pre-#320 had
+    // SAMPLE_QUALITY_ISSUES with no drift_type concept. Strong fixture-derived
+    // marker: the Quality Issues tab body renders "(data drift)" from
+    // rec.drift_type.replace(/_/g, ' ').
+    await waitFor(() => {
+      expect(screen.getByText(/data drift/i)).toBeInTheDocument();
+    });
+    // feature_name 'hcp_id' appears both in latestDrift.features_with_drift
+    // (Drift Status section, top of page) AND in driftHistory.records[0]
+    // (Quality Issues tab body) — total >= 2 occurrences confirms BOTH
+    // hooks are wired.
+    expect(screen.getAllByText(/hcp_id/).length).toBeGreaterThanOrEqual(2);
   });
 
-  it('renders Refresh button (Playwright: refreshButton)', () => {
+  it('Refresh button reflects useTriggerDriftDetection.isPending (Playwright + #301 wiring)', () => {
+    // Vacuity gate (#327): pre-#320 used a local setTimeout `isRefreshing`
+    // useState that the test can't reach. Wiring the button's `disabled` prop
+    // to `isPending` from the mutation hook is a load-bearing wiring AC; assert
+    // the button trips disabled when the hook reports isPending=true.
+    (useTriggerDriftDetection as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: mockMutate,
+      isPending: true,
+      error: null,
+    });
+
     render(<DataQuality />, { wrapper: createWrapper() });
 
-    expect(
-      screen.getByRole('button', { name: /refresh/i })
-    ).toBeInTheDocument();
+    const refreshBtn = screen.getByRole('button', { name: /refresh/i });
+    expect(refreshBtn).toBeInTheDocument();
+    expect(refreshBtn).toBeDisabled();
   });
 
   // ===========================================================================
   // Dimension cards / KPI cards (Playwright: dimensionCards)
   // ===========================================================================
 
-  it('renders the four quality dimension cards', () => {
+  it('renders four dimension cards with values derived from live drift score (#301 wiring)', () => {
     render(<DataQuality />, { wrapper: createWrapper() });
 
     expect(screen.getByText('Completeness')).toBeInTheDocument();
     expect(screen.getByText('Accuracy')).toBeInTheDocument();
     expect(screen.getByText('Consistency')).toBeInTheDocument();
     expect(screen.getByText('Timeliness')).toBeInTheDocument();
+
+    // Vacuity gate (#327): pre-#320 hardcoded consistency = 96.2 and derived
+    // accuracy from SAMPLE_VALIDATION_RULES pass rate. Wired production
+    // derives accuracy from latestDrift: (features_checked - features_with_drift) / features_checked
+    // = (8 - 2) / 8 * 100 = 75. Consistency = (1 - drift_score) * 100 = 88. Both differ from
+    // the pre-#320 baseline values. Capture KPICard props and assert.
+    const accuracyCall = kpiCardCalls.find((c) => c.title === 'Accuracy');
+    const consistencyCall = kpiCardCalls.find((c) => c.title === 'Consistency');
+    expect(accuracyCall).toBeDefined();
+    expect(consistencyCall).toBeDefined();
+    expect(accuracyCall!.value).toBeCloseTo(75, 1); // (8-2)/8 * 100
+    expect(consistencyCall!.value).toBeCloseTo(88, 1); // (1 - 0.12) * 100
   });
 
-  it('renders Overall Quality card', () => {
+  it('renders Overall Quality card with value composed from live signals (#301 wiring)', () => {
     render(<DataQuality />, { wrapper: createWrapper() });
 
     expect(screen.getByText('Overall Quality')).toBeInTheDocument();
+
+    // Vacuity gate (#327): pre-#320 derived overall from SAMPLE_DATA_SOURCES /
+    // SAMPLE_VALIDATION_RULES → very different value. Wired production:
+    //   completeness = min(100, 70 + min(30, kpiCount*2)) where kpiCount=2 → 74
+    //   accuracy     = (features_checked - features_with_drift)/features_checked * 100 = 75
+    //   consistency  = (1 - drift_score) * 100 = 88
+    //   timeliness   = (1 - drift_score) * 100 = 88
+    //   overall      = (74 + 75 + 88 + 88) / 4 = 81.25
+    // Assert against this composite; pre-#320 produced ~average across mock
+    // data sources/rules with no awareness of drift.
+    const overallCall = kpiCardCalls.find((c) => c.title === 'Overall Quality');
+    expect(overallCall).toBeDefined();
+    expect(overallCall!.value).toBeCloseTo(81.25, 1);
   });
 
   // ===========================================================================
@@ -365,6 +466,31 @@ describe('DataQuality (live wiring + Playwright contract)', () => {
     fireEvent.click(refreshBtn);
 
     expect(mockMutate).toHaveBeenCalled();
+  });
+
+  it('Refresh button POSTs drift detection with model_id, time_window=30d, check_data_drift (#327 request-shape gate)', () => {
+    // Strengthens the weak `toHaveBeenCalled()` assertion above (issue #327
+    // section (b)). Asserts the exact request payload shape passed to the
+    // useTriggerDriftDetection mutation: {model_id, time_window, check_data_drift}.
+    //
+    // Coordination note: time_window value tracks Agent A's PR (#326) which
+    // changes the production call from '7d' → '30d' to match the 30-day
+    // useDriftHistory window. This assertion will be RED on this branch until
+    // #326 merges; intentional — see PR body.
+    render(<DataQuality />, { wrapper: createWrapper() });
+
+    const refreshBtn = screen.getByRole('button', { name: /refresh/i });
+    fireEvent.click(refreshBtn);
+
+    expect(mockMutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request: expect.objectContaining({
+          model_id: 'data_quality_pipeline',
+          time_window: '30d',
+          check_data_drift: true,
+        }),
+      })
+    );
   });
 
   // ===========================================================================
