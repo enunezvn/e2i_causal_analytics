@@ -8,6 +8,7 @@ from .feast_registrar import register_features_in_feast
 from .feature_engineering import engineer_features, engineer_features_node
 from .ge_validator import run_ge_validation
 from .imputation_audit import compute_imputation_audit, summarize_recommendations
+from .kg_role_enrichment import kg_role_enrichment
 from .leakage_detector import detect_leakage
 from .leakage_remediation import review_and_remediate_leakage
 from .qc_remediation import review_and_remediate_qc
@@ -29,6 +30,7 @@ __all__ = [
     "transform_data",
     "register_features_in_feast",
     "compute_baseline_metrics",
+    "kg_role_enrichment",
     "review_and_remediate_qc",
     "compute_imputation_audit",
     "summarize_recommendations",

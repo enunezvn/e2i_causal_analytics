@@ -73,7 +73,8 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Any, Iterable, Optional
+from datetime import datetime, timezone
+from typing import Any, Iterable, Optional, TypedDict
 
 from src.data.kg.types import (
     CausalRole,
@@ -938,3 +939,176 @@ class EnsembleVoter:
         # only; we do NOT record it as a disagreement (KG cannot
         # contradict a deterministic veto by design).
         _ = kg_signal
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 — FalkorDB causal-role persistence (Issue #237)
+#
+# Plan: ``.claude/plans/causal_role_propagation_FINAL.md`` §6.1-§6.4.
+#
+# These helpers form the Phase-6 Layer-2 KG voter for causal-role
+# attributions. Unlike the older ``classify_kg_signal``/``EnsembleVoter``
+# above (which classifies feature→target relations into a KGSignal for
+# Layer-3 audit purposes), ``layer_2_kg_signal`` consults a per-feature
+# ``(:Feature {experiment_id, name})`` node whose ``causal_role`` was
+# persisted by ``scripts/mirror_role_attributions_to_falkordb.py`` or
+# (in tests) by ``upsert_feature_role_node`` directly. The output is a
+# typed ``KGRoleSignal`` dict that the ``kg_role_enrichment`` data-
+# preparer node reconciles with the existing ``role_attributions``
+# list (Phase-1 output) to either promote ``source="llm"`` to
+# ``source="kg"`` (KG corroborates) or downgrade
+# ``evaluator_satisfied`` (KG contradicts).
+#
+# Schema decision (codex-2 §6.1):
+#   (:Feature {name, experiment_id, causal_role, causal_role_source,
+#              evaluator_model, written_at})-[:FOR_BRAND]->(:Brand)
+#
+# ``FOR_BRAND`` is used (NOT ``BELONGS_TO``) to avoid type-name overload
+# with ``model_trainer/memory_hooks.py:367`` which already uses
+# ``BELONGS_TO`` for ``(:Model)-[:BELONGS_TO]->(:Experiment)``.
+# ---------------------------------------------------------------------------
+
+
+class KGRoleSignal(TypedDict):
+    """One Phase-6 Layer-2 KG role signal for a feature.
+
+    Returned by ``layer_2_kg_signal`` when a ``(:Feature)`` node exists
+    for ``(feature, experiment_id)`` in the FalkorDB graph; ``None``
+    otherwise (KG-silent, the enrichment node leaves the attribution
+    unchanged).
+    """
+
+    causal_role: str
+    causal_role_source: str
+    evaluator_model: str
+
+
+# Cypher pinned at module level so a future schema change requires
+# touching one site, and the Phase-6 forcing tests can substring-grep
+# for the ``Feature`` label and ``FOR_BRAND`` edge type at audit time.
+_LAYER_2_KG_QUERY = (
+    "MATCH (f:Feature {name: $feature, experiment_id: $experiment_id}) "
+    "RETURN f.causal_role, f.causal_role_source, f.evaluator_model"
+)
+
+_UPSERT_FEATURE_QUERY = (
+    "MERGE (f:Feature {name: $feature, experiment_id: $experiment_id}) "
+    "SET f.causal_role = $causal_role, "
+    "    f.causal_role_source = $causal_role_source, "
+    "    f.evaluator_model = $evaluator_model, "
+    "    f.written_at = $written_at "
+    "WITH f "
+    "MERGE (b:Brand {name: $brand}) "
+    "MERGE (f)-[:FOR_BRAND]->(b)"
+)
+
+
+def layer_2_kg_signal(
+    graph: Any,
+    *,
+    feature: str,
+    experiment_id: str,
+) -> Optional[KGRoleSignal]:
+    """Query FalkorDB for the per-feature causal role persisted in Phase 6.
+
+    Plan §6.4. Returns a ``KGRoleSignal`` when a Feature node exists,
+    ``None`` (KG-silent) when not. Robust to malformed graph rows: any
+    non-string field in the result row is treated as a miss.
+
+    Args:
+        graph: A FalkorDB graph handle (``client.select_graph(...)`` or
+            the test fakes in ``test_falkordb_role_persistence.py``).
+            Anything with a ``.query(cypher, params) -> result``
+            interface works.
+        feature: The feature name (matches the ``RoleAttribution.feature``
+            and ``adaptive_verdicts[i]["feature"]``).
+        experiment_id: The experiment that wrote the role. Scoped reads
+            avoid cross-experiment role leakage; the mirror script writes
+            ``(feature, experiment_id)`` pairs as the natural key.
+
+    Returns:
+        ``KGRoleSignal`` if a Feature node exists with non-None
+        ``causal_role`` and ``causal_role_source``; ``None`` otherwise.
+    """
+    try:
+        result = graph.query(
+            _LAYER_2_KG_QUERY,
+            {"feature": feature, "experiment_id": experiment_id},
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "layer_2_kg_signal: graph.query raised for feature=%r exp=%r — "
+            "treating as KG-silent. Cause: %s",
+            feature,
+            experiment_id,
+            exc,
+        )
+        return None
+    result_set = getattr(result, "result_set", None) or []
+    if not result_set:
+        return None
+    row = result_set[0]
+    if len(row) < 2:
+        return None
+    causal_role = row[0]
+    causal_role_source = row[1]
+    evaluator_model = row[2] if len(row) >= 3 else None
+    if not isinstance(causal_role, str) or not causal_role:
+        return None
+    if not isinstance(causal_role_source, str) or not causal_role_source:
+        return None
+    if not isinstance(evaluator_model, str) or not evaluator_model:
+        # Sentinel — Phase-6 KG-corroborated attributions stamp this
+        # provenance string (``role_attribution.py`` documents
+        # ``"kg:falkordb"`` for kg sources).
+        evaluator_model = "kg:falkordb"
+    return KGRoleSignal(
+        causal_role=causal_role,
+        causal_role_source=causal_role_source,
+        evaluator_model=evaluator_model,
+    )
+
+
+def upsert_feature_role_node(
+    graph: Any,
+    *,
+    feature: str,
+    experiment_id: str,
+    causal_role: str,
+    causal_role_source: str,
+    evaluator_model: str,
+    brand: str,
+    written_at: Optional[datetime] = None,
+) -> None:
+    """MERGE a Feature node + FOR_BRAND edge.
+
+    Plan §6.1 / §6.2. Idempotent: re-upserting overwrites the role,
+    source, and evaluator_model but does not create duplicate nodes or
+    edges (``MERGE`` semantics).
+
+    Args:
+        graph: FalkorDB graph handle (see ``layer_2_kg_signal``).
+        feature: The feature name.
+        experiment_id: Scoping experiment.
+        causal_role: One of {ancestor, confounder, mediator, collider,
+            descendant, instrument}. Caller is responsible for
+            validation; FalkorDB does not enforce CHECK constraints.
+        causal_role_source: One of {manifest, llm, kg}.
+        evaluator_model: Provenance string (``"n/a"`` for manifest,
+            ``"kg:falkordb"`` for kg, model id for llm).
+        brand: Brand name for the ``FOR_BRAND`` edge.
+        written_at: Timestamp (UTC). Defaults to now.
+    """
+    ts = (written_at or datetime.now(timezone.utc)).isoformat()
+    graph.query(
+        _UPSERT_FEATURE_QUERY,
+        {
+            "feature": feature,
+            "experiment_id": experiment_id,
+            "causal_role": causal_role,
+            "causal_role_source": causal_role_source,
+            "evaluator_model": evaluator_model,
+            "written_at": ts,
+            "brand": brand,
+        },
+    )

@@ -20,6 +20,7 @@ from .nodes import (
     compute_baseline_metrics,
     detect_leakage,
     engineer_features_node,
+    kg_role_enrichment,
     load_data,
     register_features_in_feast,
     review_and_remediate_leakage,
@@ -258,6 +259,12 @@ def create_data_preparer_graph() -> StateGraph:  # type: ignore[type-arg]
     graph.add_node("transform_data", transform_data)  # type: ignore[type-var,arg-type,call-overload]
     graph.add_node("register_features_in_feast", register_features_in_feast)  # type: ignore[type-var,arg-type,call-overload]
     graph.add_node("compute_baseline_metrics", compute_baseline_metrics)  # type: ignore[type-var,arg-type,call-overload]
+    # Phase 6 of causal-role propagation (Issue #237). Sits between
+    # ``compute_baseline_metrics`` and ``finalize_output`` to reconcile
+    # LLM-source role attributions against the Phase-6 FalkorDB
+    # ``(:Feature)`` nodes. Non-blocking: a graph outage or malformed
+    # state passes the input ``role_attributions`` through unchanged.
+    graph.add_node("kg_role_enrichment", kg_role_enrichment)  # type: ignore[type-var,arg-type,call-overload]
     graph.add_node("finalize_output", finalize_output)  # type: ignore[type-var,arg-type,call-overload]
     graph.add_node("qc_remediation", review_and_remediate_qc)  # type: ignore[type-var,arg-type,call-overload]
 
@@ -306,7 +313,14 @@ def create_data_preparer_graph() -> StateGraph:  # type: ignore[type-arg]
 
     graph.add_edge("transform_data", "register_features_in_feast")
     graph.add_edge("register_features_in_feast", "compute_baseline_metrics")
-    graph.add_edge("compute_baseline_metrics", "finalize_output")
+    # Phase 6 wiring (Issue #237 plan §6.3): the direct edge from
+    # ``compute_baseline_metrics`` to ``finalize_output`` is replaced
+    # with a two-hop path through ``kg_role_enrichment``. Operating
+    # post-baseline avoids restructuring the leakage-remediation
+    # conditional and lets the enrichment node act on the final
+    # post-transform feature set.
+    graph.add_edge("compute_baseline_metrics", "kg_role_enrichment")
+    graph.add_edge("kg_role_enrichment", "finalize_output")
 
     # Conditional edge: after finalize_output, check if QC passed
     graph.add_conditional_edges(
