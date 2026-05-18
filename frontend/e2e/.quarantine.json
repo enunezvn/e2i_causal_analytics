@@ -1,5 +1,5 @@
 {
-  "budget": 3,
+  "budget": 2,
   "specs": [
     "intervention-impact.spec.ts",
     "memory-architecture.spec.ts"
