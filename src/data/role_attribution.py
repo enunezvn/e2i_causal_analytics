@@ -136,12 +136,16 @@ def derive_role_attributions(
             )
         )
 
-    # Step 3: LLM sources for features NOT in the manifest.
+    # Step 3: LLM sources for features NOT in the manifest. Bind to a
+    # distinct local name (``verdict_feature``) so mypy's narrowing
+    # does not collide with step 2's ``feature: str`` from the
+    # ``manifest_role_map.items()`` iteration above (Any|None vs str
+    # rebind warning under strict checking).
     for verdict in adaptive_verdicts:
-        feature = verdict.get("feature")
-        if not isinstance(feature, str):
+        verdict_feature = verdict.get("feature")
+        if not isinstance(verdict_feature, str):
             continue
-        if feature in manifest_role_map:
+        if verdict_feature in manifest_role_map:
             continue
         llm_role = verdict.get("llm_role")
         if not isinstance(llm_role, str) or not llm_role:
@@ -158,7 +162,7 @@ def derive_role_attributions(
         )
         attributions.append(
             RoleAttribution(
-                feature=feature,
+                feature=verdict_feature,
                 causal_role=llm_role,
                 source="llm",
                 evaluator_satisfied=evaluator_satisfied,

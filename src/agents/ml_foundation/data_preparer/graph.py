@@ -40,7 +40,7 @@ MAX_REMEDIATION_ATTEMPTS = 2
 from .nodes.leakage_remediation import MAX_LEAKAGE_REMEDIATION_ATTEMPTS
 
 
-def _derive_role_attributions_safely(state: Dict[str, Any]) -> list[Dict[str, Any]]:
+def _derive_role_attributions_safely(state: Any) -> list[Dict[str, Any]]:
     """Derive ``RoleAttribution`` rows from ``adaptive_verdicts`` + the
     resolved manifest's ``FeatureContract`` registry.
 
