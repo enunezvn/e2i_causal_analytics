@@ -14,6 +14,7 @@
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
+    "test:e2e:noserver": "playwright test --config=playwright.noserver.config.ts",
     "generate:types": "openapi-typescript http://localhost:8000/api/openapi.json -o src/types/generated/api.ts",
     "generate:types:prod": "openapi-typescript https://eznomics.site/api/openapi.json -o src/types/generated/api.ts"
   },
