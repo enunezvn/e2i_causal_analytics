@@ -11,8 +11,6 @@ Observability:
 """
 
 import functools
-import hashlib
-import json
 import logging
 import tempfile
 import time
@@ -159,31 +157,23 @@ def traced_node(node_name: str) -> Callable[[F], F]:
                     if latency_key in result:
                         span.set_attribute("node_latency_ms", result[latency_key])
 
-                    # Record audit chain entry
+                    # Record audit chain entry. add_entry hashes input_data /
+                    # output_data internally via AuditChainService.hash_payload;
+                    # user_id / session_id / brand are inherited from the
+                    # workflow's genesis entry (see audit_chain.py:348-350).
                     if workflow_id and audit_service:
                         try:
-                            # Compute input/output hashes
-                            input_hash = hashlib.sha256(
-                                json.dumps(sanitized_input, sort_keys=True, default=str).encode()
-                            ).hexdigest()[:32]
-                            output_hash = hashlib.sha256(
-                                json.dumps(output_summary, sort_keys=True, default=str).encode()
-                            ).hexdigest()[:32]
-
-                            audit_service.add_entry(  # type: ignore[call-arg]
+                            audit_service.add_entry(
                                 workflow_id=workflow_id,
                                 agent_name="causal_impact",
-                                agent_tier=AgentTier.CAUSAL_ANALYTICS.value,  # type: ignore[arg-type]
+                                agent_tier=AgentTier.CAUSAL_ANALYTICS,
                                 action_type=node_name,
                                 duration_ms=duration_ms,
-                                input_hash=input_hash,
-                                output_hash=output_hash,
+                                input_data=sanitized_input,
+                                output_data=output_summary,
                                 validation_passed=validation_passed,
                                 confidence_score=confidence_score,
                                 refutation_results=refutation_results,
-                                user_id=state.get("user_id"),
-                                session_id=state.get("session_id"),
-                                brand=state.get("brand"),
                             )
                             logger.debug(f"Recorded audit entry for {node_name}")
                         except Exception as ae:
