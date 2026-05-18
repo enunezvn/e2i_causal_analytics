@@ -1,5 +1,5 @@
 {
-  "budget": 12,
+  "budget": 11,
   "specs": [
     "ai-insights.spec.ts",
     "feature-importance.spec.ts",
