@@ -5,7 +5,11 @@
     "data-quality.spec.ts",
     "feature-importance.spec.ts",
     "model-performance.spec.ts",
+<<<<<<< HEAD
     "monitoring.spec.ts",
+=======
+    "predictive-analytics.spec.ts",
+>>>>>>> origin/main
     "time-series.spec.ts",
     "agent-orchestration.spec.ts",
     "digital-twin.spec.ts",
