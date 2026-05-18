@@ -11,8 +11,6 @@ Observability:
 """
 
 import functools
-import hashlib
-import json
 import logging
 import tempfile
 import time
@@ -32,7 +30,7 @@ from src.agents.causal_impact.nodes.sensitivity import analyze_sensitivity
 from src.agents.causal_impact.state import CausalImpactState
 from src.mlops.mlflow_connector import get_mlflow_connector
 from src.mlops.opik_connector import get_opik_connector
-from src.utils.audit_chain import AgentTier
+from src.utils.audit_chain import AgentTier, RefutationResults
 
 logger = logging.getLogger(__name__)
 
@@ -139,9 +137,29 @@ def traced_node(node_name: str) -> Callable[[F], F]:
                         output_summary["tests_passed"] = ref.get("tests_passed")
                         output_summary["overall_robust"] = ref.get("overall_robust")
                         output_summary["gate_decision"] = ref.get("gate_decision")
-                        # Capture refutation results for audit
                         validation_passed = ref.get("overall_robust")
-                        refutation_results = ref
+                        # add_entry calls refutation_results.to_dict() internally
+                        # (audit_chain.py:345); the refutation node persists a
+                        # dict via RefutationSuite.to_legacy_format() so we wrap
+                        # it in the dataclass here. Field mapping mirrors
+                        # audit_chain_mixin.audited_traced_node (:388-403).
+                        # When the refutation node failed early ref/individual_tests
+                        # is empty — leave refutation_results=None so the audit row
+                        # distinguishes "no refutation ran" from "all tests null".
+                        individual = ref.get("individual_tests", {})
+                        if individual:
+                            refutation_results = RefutationResults(
+                                placebo_treatment=individual.get("placebo_treatment", {}).get(
+                                    "passed"
+                                ),
+                                random_common_cause=individual.get("random_common_cause", {}).get(
+                                    "passed"
+                                ),
+                                data_subset=individual.get("data_subset", {}).get("passed"),
+                                unobserved_confound=individual.get(
+                                    "unobserved_common_cause", {}
+                                ).get("passed"),
+                            )
                     elif node_name == "sensitivity":
                         sens = result.get("sensitivity_analysis", {})
                         output_summary["e_value"] = sens.get("e_value")
@@ -159,31 +177,23 @@ def traced_node(node_name: str) -> Callable[[F], F]:
                     if latency_key in result:
                         span.set_attribute("node_latency_ms", result[latency_key])
 
-                    # Record audit chain entry
+                    # Record audit chain entry. add_entry hashes input_data /
+                    # output_data internally via AuditChainService.hash_payload;
+                    # user_id / session_id / brand are inherited from the
+                    # workflow's genesis entry (see audit_chain.py:348-350).
                     if workflow_id and audit_service:
                         try:
-                            # Compute input/output hashes
-                            input_hash = hashlib.sha256(
-                                json.dumps(sanitized_input, sort_keys=True, default=str).encode()
-                            ).hexdigest()[:32]
-                            output_hash = hashlib.sha256(
-                                json.dumps(output_summary, sort_keys=True, default=str).encode()
-                            ).hexdigest()[:32]
-
-                            audit_service.add_entry(  # type: ignore[call-arg]
+                            audit_service.add_entry(
                                 workflow_id=workflow_id,
                                 agent_name="causal_impact",
-                                agent_tier=AgentTier.CAUSAL_ANALYTICS.value,  # type: ignore[arg-type]
+                                agent_tier=AgentTier.CAUSAL_ANALYTICS,
                                 action_type=node_name,
                                 duration_ms=duration_ms,
-                                input_hash=input_hash,
-                                output_hash=output_hash,
+                                input_data=sanitized_input,
+                                output_data=output_summary,
                                 validation_passed=validation_passed,
                                 confidence_score=confidence_score,
                                 refutation_results=refutation_results,
-                                user_id=state.get("user_id"),
-                                session_id=state.get("session_id"),
-                                brand=state.get("brand"),
                             )
                             logger.debug(f"Recorded audit entry for {node_name}")
                         except Exception as ae:
