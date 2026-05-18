@@ -1,5 +1,5 @@
 {
-  "budget": 16,
+  "budget": 15,
   "specs": [
     "ai-insights.spec.ts",
     "causal-discovery.spec.ts",
@@ -8,7 +8,6 @@
     "model-performance.spec.ts",
     "monitoring.spec.ts",
     "predictive-analytics.spec.ts",
-    "time-series.spec.ts",
     "agent-orchestration.spec.ts",
     "digital-twin.spec.ts",
     "home.spec.ts",
