@@ -1,5 +1,5 @@
 {
-  "budget": 5,
+  "budget": 4,
   "specs": [
     "agent-orchestration.spec.ts",
     "intervention-impact.spec.ts",
