@@ -1,7 +1,7 @@
 {
   "budget": 9,
   "specs": [
-    "feature-importance.spec.ts",
+    "ai-insights.spec.ts",
     "agent-orchestration.spec.ts",
     "digital-twin.spec.ts",
     "home.spec.ts",
