@@ -19,6 +19,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from src.data.adaptive_validity_repository import query_active_role_attributions
+from src.data.role_attribution import RoleAttribution, should_act
 from src.tool_registry.registry import ToolRegistry
 
 # Import tool_registrations to ensure tools are registered before execution
@@ -491,6 +493,23 @@ class PlanExecutor:
         # Resolve input parameters
         resolved_inputs = self._resolve_inputs(step.input_mapping, prior_outputs, context)
 
+        # Phase 7.2 + S14: tool composer auto-population hook
+        # ===========================================================
+        # When the planned tool accepts a ``confounders`` parameter AND
+        # the caller did NOT supply an explicit value AND the context
+        # carries an ``experiment_id``, pre-fill ``confounders`` from
+        # the adaptive_validity_verdicts mirror. The C1 trust-gate
+        # (``should_act``) is rechecked at the consumer boundary for
+        # defense-in-depth.
+        #
+        # Plan: .claude/plans/causal_role_propagation_FINAL.md §7.2.
+        # ===========================================================
+        autopop_confounders = self._maybe_autopopulate_confounders(step, resolved_inputs, context)
+        if autopop_confounders is not None:
+            # Build a new params dict rather than mutating caller's resolved_inputs
+            # (codex audit PR #367 INVARIANT 8 — preserve caller's dict identity).
+            resolved_inputs = {**resolved_inputs, "confounders": autopop_confounders}
+
         tool_input = ToolInput(
             tool_name=step.tool_name, parameters=resolved_inputs, context=context
         )
@@ -726,6 +745,102 @@ class PlanExecutor:
                 return None
 
         return current
+
+    # ------------------------------------------------------------------
+    # Phase 7.2 + S14: causal-role auto-population
+    # ------------------------------------------------------------------
+
+    def _maybe_autopopulate_confounders(
+        self,
+        step: ExecutionStep,
+        resolved_inputs: Dict[str, Any],
+        context: Dict[str, Any],
+    ) -> Optional[List[str]]:
+        """Pre-fill ``confounders`` from the role-attribution repository.
+
+        Fires when ALL of the following hold:
+
+        1. ``context["experiment_id"]`` is a non-empty string (S14
+           propagation — the caller carries the experiment id through
+           the existing context dict).
+        2. The tool's schema declares a ``confounders`` parameter (we
+           don't inject a kwarg the tool can't accept).
+        3. The caller did NOT supply an explicit ``confounders`` value
+           in the resolved inputs (caller-explicit always wins per the
+           C1 trust-gate — the most-authoritative source).
+
+        The repository's default ``only_evaluator_satisfied=True``
+        already filters unverified LLM rows at the SQL layer; this
+        method ALSO re-checks ``should_act`` at the consumer boundary
+        so a future caller passing ``only_evaluator_satisfied=False``
+        cannot leak unverified roles into tool calls.
+
+        Plan: ``.claude/plans/causal_role_propagation_FINAL.md`` §7.2.
+        """
+        # Gate 1: experiment_id present in context (S14)
+        experiment_id = context.get("experiment_id")
+        if not isinstance(experiment_id, str) or not experiment_id:
+            return None
+
+        # Gate 2: tool schema declares a ``confounders`` parameter
+        schema = self.registry.get_schema(step.tool_name)
+        if schema is None:
+            return None
+        param_names = {p.name for p in schema.input_parameters}
+        if "confounders" not in param_names:
+            return None
+
+        # Gate 3: caller did not supply explicit confounders.
+        # Codex audit (PR #367): key presence — not non-None value — is the
+        # explicit-caller signal. An explicit ``confounders=None`` is still
+        # a caller decision and must NOT be auto-populated.
+        if "confounders" in resolved_inputs:
+            return None
+
+        # Query + filter + assign — Phase 7.2 is an enhancement, not a hard
+        # dependency for tool execution. Codex audit (PR #367): the broad
+        # try/except must envelope the FULL hook (query, filter, assignment),
+        # not only the SQL query — a malformed attribution row would otherwise
+        # raise KeyError outside the try and fail tool execution.
+        try:
+            attributions: list[RoleAttribution] = query_active_role_attributions(experiment_id)
+        except Exception as e:  # noqa: BLE001 — broad on purpose
+            logger.warning(
+                f"Role-attribution auto-pop query failed for "
+                f"experiment_id={experiment_id!r}: {e}. "
+                f"Proceeding without confounder pre-fill."
+            )
+            return None
+
+        # Filter: causal_role == 'confounder' AND C1 trust-gate (consumer-
+        # boundary defense-in-depth). Each row is wrapped in its own
+        # try/except so a single malformed row doesn't discard ALL valid
+        # rows in the same batch (codex iter-2 LOW finding).
+        confounder_features: list[str] = []
+        for attr in attributions:
+            if not isinstance(attr, dict):
+                continue
+            try:
+                if attr.get("causal_role") != "confounder":
+                    continue
+                feature = attr.get("feature")
+                if not isinstance(feature, str):
+                    continue
+                if not should_act(attr):
+                    continue
+                confounder_features.append(feature)
+            except Exception as e:  # noqa: BLE001
+                logger.debug(
+                    f"Auto-pop skipped malformed attribution row "
+                    f"for experiment_id={experiment_id!r}: {e}"
+                )
+                continue
+
+        logger.debug(
+            f"Auto-populated {len(confounder_features)} confounder(s) for "
+            f"tool '{step.tool_name}' from experiment_id={experiment_id!r}"
+        )
+        return confounder_features
 
     def get_tool_stats(self) -> Dict[str, Dict[str, Any]]:
         """

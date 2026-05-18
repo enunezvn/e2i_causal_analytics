@@ -34,7 +34,12 @@ from typing import Any, Iterable, Literal, TypedDict
 
 from src.data.feature_contract import FeatureContract
 
-__all__ = ["RoleAttribution", "RoleAttributionSource", "derive_role_attributions"]
+__all__ = [
+    "RoleAttribution",
+    "RoleAttributionSource",
+    "derive_role_attributions",
+    "should_act",
+]
 
 
 RoleAttributionSource = Literal["manifest", "llm", "kg"]
