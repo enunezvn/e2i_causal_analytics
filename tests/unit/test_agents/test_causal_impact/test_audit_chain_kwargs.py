@@ -225,6 +225,39 @@ async def test_traced_node_refutation_wraps_dict_in_refutation_results_dataclass
 
 
 @pytest.mark.asyncio
+async def test_traced_node_refutation_empty_ref_leaves_refutation_results_none(
+    mock_audit_service, mock_opik, base_state
+):
+    """When the refutation node fails early (no ``individual_tests`` in
+    state), we leave ``refutation_results=None`` instead of constructing
+    ``RefutationResults(None, None, None, None)``. This preserves the
+    semantic difference between "no refutation ran" and "all tests
+    returned null" in the audit chain.
+
+    Both ralph-iter-2 and codex-iter-2 independently surfaced this guard.
+    """
+
+    @traced_node("refutation")
+    async def _node(state):
+        # Refutation failed early — no refutation_results field at all
+        return {
+            "status": "failed",
+            "current_phase": "failed",
+            "refutation_error": "early failure",
+        }
+
+    await _node(base_state)
+
+    kwargs = mock_audit_service.add_entry.call_args.kwargs
+    assert "refutation_results" in kwargs
+    assert kwargs["refutation_results"] is None, (
+        "Empty refutation result must propagate as None — "
+        "not RefutationResults(None,None,None,None). "
+        f"Got {kwargs['refutation_results']!r}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_traced_node_audit_entry_does_not_warning_log_failure(mock_opik, base_state, caplog):
     """End-to-end shape check: with a real :class:`AuditChainService` autospec,
     the add_entry call must succeed without exception. Pre-fix, the TypeError

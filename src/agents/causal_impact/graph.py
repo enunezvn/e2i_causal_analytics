@@ -143,17 +143,23 @@ def traced_node(node_name: str) -> Callable[[F], F]:
                         # dict via RefutationSuite.to_legacy_format() so we wrap
                         # it in the dataclass here. Field mapping mirrors
                         # audit_chain_mixin.audited_traced_node (:388-403).
+                        # When the refutation node failed early ref/individual_tests
+                        # is empty — leave refutation_results=None so the audit row
+                        # distinguishes "no refutation ran" from "all tests null".
                         individual = ref.get("individual_tests", {})
-                        refutation_results = RefutationResults(
-                            placebo_treatment=individual.get("placebo_treatment", {}).get("passed"),
-                            random_common_cause=individual.get("random_common_cause", {}).get(
-                                "passed"
-                            ),
-                            data_subset=individual.get("data_subset", {}).get("passed"),
-                            unobserved_confound=individual.get("unobserved_common_cause", {}).get(
-                                "passed"
-                            ),
-                        )
+                        if individual:
+                            refutation_results = RefutationResults(
+                                placebo_treatment=individual.get("placebo_treatment", {}).get(
+                                    "passed"
+                                ),
+                                random_common_cause=individual.get("random_common_cause", {}).get(
+                                    "passed"
+                                ),
+                                data_subset=individual.get("data_subset", {}).get("passed"),
+                                unobserved_confound=individual.get(
+                                    "unobserved_common_cause", {}
+                                ).get("passed"),
+                            )
                     elif node_name == "sensitivity":
                         sens = result.get("sensitivity_analysis", {})
                         output_summary["e_value"] = sens.get("e_value")
