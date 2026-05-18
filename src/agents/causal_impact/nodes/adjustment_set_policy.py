@@ -218,16 +218,16 @@ def apply_role_attributions(
     # producer ordering means a single feature has at most one
     # attribution (manifest|kg|llm), so a dict-keyed-by-feature is safe.
     attr_by_feature: Dict[str, Dict[str, Any]] = {}
-    for attr in role_attributions:
-        if not isinstance(attr, dict):
+    for raw_attr in role_attributions:
+        if not isinstance(raw_attr, dict):
             continue
-        feature = attr.get("feature")
-        if not isinstance(feature, str):
+        attr_feature = raw_attr.get("feature")
+        if not isinstance(attr_feature, str):
             continue
         # First attribution wins (matches producer ordering: manifest
         # before llm). A duplicate manifest+llm row would have been
         # collapsed in the producer; this is defensive.
-        attr_by_feature.setdefault(feature, attr)
+        attr_by_feature.setdefault(attr_feature, raw_attr)
 
     for set_idx, adj_set in enumerate(new_sets):
         survivors: List[str] = []
@@ -350,7 +350,7 @@ async def apply_adjustment_set_policy(state: CausalImpactState) -> Dict[str, Any
             ],
         }
 
-    log_was_truncated = bool(post_graph.pop("policy_log_was_truncated", False))  # type: ignore[misc]
+    log_was_truncated = bool(post_graph.pop("policy_log_was_truncated", False))  # type: ignore[misc,typeddict-item]
 
     latency_ms = (time.time() - start_time) * 1000.0
 

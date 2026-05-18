@@ -18,7 +18,6 @@ function body and the listed case trips. The case set covers:
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 from unittest.mock import MagicMock
 from uuid import uuid4
@@ -220,7 +219,7 @@ def test_case7_stategraph_edge_wiring() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_case8_audit_chain_uses_output_data_kwarg() -> None:
+async def test_case8_audit_chain_uses_output_data_kwarg() -> None:
     """The traced node MUST pass ``output_data=`` to ``add_entry`` so the
     audit service does its own hashing. The pre-existing
     ``output_hash=...`` call at ``graph.py:173-180`` is a bug — the
@@ -257,7 +256,7 @@ def test_case8_audit_chain_uses_output_data_kwarg() -> None:
             mod.get_audit_chain_service = lambda: mock_service  # type: ignore[assignment]
 
         traced = graph_mod.traced_apply_adjustment_policy
-        asyncio.run(traced(state))  # type: ignore[arg-type]
+        await traced(state)  # type: ignore[arg-type]
     finally:
         graph_mod.get_audit_chain_service = original_getter  # type: ignore[assignment]
         if node_original is not None:  # type: ignore[possibly-undefined]
@@ -370,7 +369,7 @@ def test_default_log_cap_is_100() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_node_wrapper_returns_state_update_with_policy_summary() -> None:
+async def test_node_wrapper_returns_state_update_with_policy_summary() -> None:
     """The state-update node (non-traced; what the traced wrapper
     invokes) must return a partial state dict suitable for LangGraph
     merge — ``causal_graph`` with new hashes, plus ``policy_log`` and
@@ -384,7 +383,7 @@ def test_node_wrapper_returns_state_update_with_policy_summary() -> None:
         "warnings": [],
     }
 
-    update = asyncio.run(apply_adjustment_set_policy(state))  # type: ignore[arg-type]
+    update = await apply_adjustment_set_policy(state)  # type: ignore[arg-type]
 
     assert "causal_graph" in update
     assert "adjustment_set_hash" in update["causal_graph"]
