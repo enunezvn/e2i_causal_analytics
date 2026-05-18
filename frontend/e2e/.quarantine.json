@@ -1,8 +1,7 @@
 {
-  "budget": 8,
+  "budget": 7,
   "specs": [
     "agent-orchestration.spec.ts",
-    "digital-twin.spec.ts",
     "home.spec.ts",
     "intervention-impact.spec.ts",
     "knowledge-graph.spec.ts",
