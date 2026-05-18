@@ -5,6 +5,14 @@ import { ROUTES } from '../fixtures/test-data'
 /**
  * Page Object Model for Feature Importance page.
  * Displays SHAP values, feature importance bar charts, beeswarm plots, and waterfall charts.
+ *
+ * NOTE: After PR #316, this page is wired to the live `/api/explain/*` endpoints
+ * (see src/pages/FeatureImportance.tsx). The Model Info, Refresh, and most
+ * visualization tabs are gated on a successful POST to /api/explain/predict,
+ * which only fires once the user provides a Patient ID and clicks Explain.
+ * The spec is responsible for stubbing those endpoints (the shared
+ * `**\/api/explain/**` mock returns a legacy shape) and for driving the
+ * Patient ID + Explain action when an explanation is required.
  */
 export class FeatureImportancePage extends BasePage {
   readonly url = ROUTES.FEATURE_IMPORTANCE
@@ -23,25 +31,54 @@ export class FeatureImportancePage extends BasePage {
     return this.page.getByText(/SHAP|feature importance|beeswarm|force plot/i).first()
   }
 
-  // Model Selector
+  // Model Selector — shadcn SelectTrigger renders as a [role="combobox"] button
+  // with the w-[280px] class set by FeatureImportance.tsx.
   get modelSelector(): Locator {
-    // shadcn Select uses SelectTrigger which renders as a button
-    // Look for the select trigger with specific width class or combobox role
-    return this.page.locator('button.w-\\[280px\\], [role="combobox"], button:has-text("Select a model")').first()
+    return this.page
+      .locator('button.w-\\[280px\\], [role="combobox"], button:has-text("Select a model")')
+      .first()
   }
 
-  // Action Buttons
+  // Patient ID + Explain action (post-PR #316)
+  get patientIdInput(): Locator {
+    return this.page.getByLabel(/patient id/i).first()
+  }
+
+  get explainButton(): Locator {
+    return this.page.getByRole('button', { name: /^explain$/i }).first()
+  }
+
+  // Action Buttons. The refresh button has no accessible name; it is a
+  // <Button variant="outline" size="icon"> whose only child is the
+  // <RefreshCw /> lucide icon, so we match by the icon class.
   get refreshButton(): Locator {
-    return this.page.getByRole('button').filter({ has: this.page.locator('svg.lucide-refresh-cw') }).first()
+    return this.page
+      .getByRole('button')
+      .filter({ has: this.page.locator('svg.lucide-refresh-cw') })
+      .first()
   }
 
   get exportButton(): Locator {
     return this.page.getByRole('button', { name: /export/i })
   }
 
-  // Model Info Card
+  // Model Info Card — only rendered once `useExplain` has data + a model is
+  // selected. Both the "Base Value" and "Top Feature" labels live inside this
+  // card as `text-sm text-muted-foreground` divs.
+  //
+  // The shadcn `<Card>` component (src/components/ui/card.tsx) renders as a
+  // div with classes `rounded-xl border …`. The previous locator used
+  // `.rounded-lg.border`, which matches NO element on this page — the only
+  // `rounded-lg`+`border` combo in the codebase is the shadcn `<Alert>`
+  // (src/components/ui/alert.tsx), which is unrelated. That silent miss made
+  // `modelInfoCard.getByText('0.250')` resolve against an empty set, so the
+  // codex-iter-2/3 falsifiability anchors timed out in CI. Scope to the
+  // actual Card class instead.
   get modelInfoCard(): Locator {
-    return this.page.locator('.rounded-lg.border').filter({ hasText: /Base Value|Top Feature/i }).first()
+    return this.page
+      .locator('div.rounded-xl.border')
+      .filter({ hasText: /Base Value|Top Feature/i })
+      .first()
   }
 
   get baseValueDisplay(): Locator {
@@ -52,9 +89,13 @@ export class FeatureImportancePage extends BasePage {
     return this.page.getByText('Top Feature').first()
   }
 
-  // Feature Rankings
+  // Feature Rankings — same `<Card>` (rounded-xl border) issue as
+  // modelInfoCard above; do NOT use `.rounded-lg.border` here.
   get featureRankingsCard(): Locator {
-    return this.page.locator('.rounded-lg.border').filter({ hasText: 'Feature Rankings' }).first()
+    return this.page
+      .locator('div.rounded-xl.border')
+      .filter({ hasText: 'Feature Rankings' })
+      .first()
   }
 
   get featureSearchInput(): Locator {
@@ -88,7 +129,12 @@ export class FeatureImportancePage extends BasePage {
   }
 
   get featureDistributionCard(): Locator {
-    return this.page.getByText('Feature Value Distribution').first()
+    // Bar Chart's CardDescription wording. The Beeswarm card title was renamed
+    // in PR #316 to "Per-Feature SHAP Contributions"; we keep the broader
+    // matcher so it still resolves either way.
+    return this.page
+      .getByText(/Feature Value Distribution|Per-Feature SHAP Contributions/i)
+      .first()
   }
 
   get predictionExplanationCard(): Locator {
@@ -102,32 +148,33 @@ export class FeatureImportancePage extends BasePage {
 
   // Actions
   async selectModel(modelName: string): Promise<void> {
-    // Wait for page to be ready
-    await this.page.waitForTimeout(300)
+    // Wait for the models query to settle so the trigger isn't disabled.
+    await this.modelSelector.waitFor({ state: 'visible', timeout: 5000 })
 
-    // Click the select trigger to open dropdown
+    // Click the select trigger to open dropdown.
     await this.modelSelector.click()
 
-    // Wait for dropdown to appear
-    await this.page.waitForTimeout(300)
+    // Wait briefly for Radix to mount the listbox portal.
+    await this.page.waitForTimeout(200)
 
-    // shadcn Select uses SelectItem which renders as option in listbox
-    // Try multiple approaches to find the option
+    // Radix Select uses `[role="option"]` for items inside `[role="listbox"]`
+    // (the portal-rendered SelectContent). Match by accessible name first,
+    // then fall back to a text match inside the viewport.
     const option = this.page.getByRole('option', { name: new RegExp(modelName, 'i') })
-    const selectItem = this.page.locator('[role="listbox"] [role="option"]').filter({ hasText: new RegExp(modelName, 'i') })
-    const textOption = this.page.locator('[data-radix-select-viewport] [role="option"]').filter({ hasText: new RegExp(modelName, 'i') })
+    const viewportOption = this.page
+      .locator('[data-radix-select-viewport] [role="option"], [role="listbox"] [role="option"]')
+      .filter({ hasText: new RegExp(modelName, 'i') })
 
-    // Try each approach
     if (await option.first().isVisible({ timeout: 2000 }).catch(() => false)) {
       await option.first().click()
-    } else if (await selectItem.first().isVisible({ timeout: 1000 }).catch(() => false)) {
-      await selectItem.first().click()
-    } else if (await textOption.first().isVisible({ timeout: 1000 }).catch(() => false)) {
-      await textOption.first().click()
-    } else {
-      // Fallback: click by text in SelectContent
-      await this.page.getByText(new RegExp(modelName, 'i')).first().click()
+      return
     }
+    if (await viewportOption.first().isVisible({ timeout: 2000 }).catch(() => false)) {
+      await viewportOption.first().click()
+      return
+    }
+    // Fallback: click by visible text anywhere on the page (last resort).
+    await this.page.getByText(new RegExp(modelName, 'i')).first().click()
   }
 
   async clickTab(tabName: string): Promise<void> {
@@ -138,7 +185,58 @@ export class FeatureImportancePage extends BasePage {
     await this.featureSearchInput.fill(query)
   }
 
+  async fillPatientId(patientId: string): Promise<void> {
+    await this.patientIdInput.fill(patientId)
+  }
+
+  async clickExplain(): Promise<void> {
+    await this.explainButton.click()
+  }
+
+  /**
+   * Drive the Explain mutation end-to-end and wait for the resulting card to
+   * render. After PR #316, the model-info card and the feature rankings only
+   * appear once `useExplain.data` is populated, so any test that asserts on
+   * downstream UI must call this first.
+   *
+   * The Explain button is disabled until BOTH the patient-id input is
+   * populated AND the models query has resolved (so `effectiveModelType` is
+   * non-empty). We fill the patient id first, then explicitly wait for the
+   * button to be enabled before clicking — otherwise a slow `/api/explain/
+   * models` response races the click and Playwright times out trying to click
+   * a disabled button (observed locally under contention).
+   */
+  async runExplanation(patientId: string = 'patient_e2e_001'): Promise<void> {
+    await this.fillPatientId(patientId)
+    // Wait for the models query to resolve so `effectiveModelType` is set;
+    // otherwise the Explain button stays disabled.
+    await this.modelSelector.waitFor({ state: 'visible', timeout: 5000 })
+    await this.explainButton.waitFor({ state: 'visible', timeout: 5000 })
+    // Poll until the button is enabled (Playwright's click auto-waits for
+    // enabled, but we surface the readiness explicitly for debuggability).
+    await this.page.waitForFunction(
+      () => {
+        const btn = Array.from(document.querySelectorAll('button')).find(
+          (b) => b.textContent?.trim().toLowerCase() === 'explain',
+        )
+        return !!btn && !(btn as HTMLButtonElement).disabled
+      },
+      undefined,
+      { timeout: 5000 },
+    )
+    await this.clickExplain()
+    // Wait for the live response to flow through the card. "Base Value" is the
+    // first stable label inside the model-info card, so it doubles as the
+    // ready-signal for downstream assertions.
+    await this.baseValueDisplay.waitFor({ state: 'visible', timeout: 10000 })
+  }
+
   async clickRefresh(): Promise<void> {
+    // The refresh button is disabled until a patient ID has been entered.
+    // Drive a baseline explanation so the click actually fires the mutation.
+    if (!(await this.refreshButton.isEnabled().catch(() => false))) {
+      await this.runExplanation()
+    }
     await this.refreshButton.click()
   }
 
@@ -153,42 +251,37 @@ export class FeatureImportancePage extends BasePage {
   // Verification methods
   async verifyModelInfoDisplayed(): Promise<boolean> {
     try {
-      // Wait for page to fully render (model info can take time to load)
-      await this.page.waitForTimeout(2000)
+      // After PR #316 the model-info card only renders once an explanation
+      // has been computed. Drive the Explain action so the live response
+      // populates the card before we look for it.
+      //
+      // We do NOT swallow runExplanation() errors: if the mutation never
+      // completes (e.g. the predict mock broke, the page never reached
+      // `hasExplanation`), this helper MUST return false rather than fall
+      // through to a weaker signal — otherwise a regression in the
+      // /api/explain/predict contract would still pass `should display
+      // model info` (codex iter-0 HIGH).
+      try {
+        await this.runExplanation()
+      } catch {
+        return false
+      }
 
-      // Wait for main content to be visible first (uses container or space-y-6 div)
-      const mainContent = this.page.locator('.container, div.space-y-6, div.p-6').first()
-      await mainContent.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {})
-
-      // Look for Base Value text (rendered in a div with text-muted-foreground class)
-      const baseValueLocator = this.page.locator('div:has-text("Base Value")').first()
-      const hasBaseValue = await baseValueLocator.isVisible({ timeout: 3000 }).catch(() => false)
-      if (hasBaseValue) return true
-
-      // Fallback: look for Top Feature text
-      const topFeatureLocator = this.page.locator('div:has-text("Top Feature")').first()
-      const hasTopFeature = await topFeatureLocator.isVisible({ timeout: 2000 }).catch(() => false)
-      if (hasTopFeature) return true
-
-      // Fallback: look for model name in selector or info section
-      const hasModelName = await this.page.getByText(/Patient Churn|HCP Tier|Conversion|Propensity/i).first().isVisible({ timeout: 2000 }).catch(() => false)
-      if (hasModelName) return true
-
-      // Fallback: look for any numeric value in model info area (base value is a number)
-      const hasNumericInfo = await this.page.locator('.text-2xl.font-bold').first().isVisible({ timeout: 1000 }).catch(() => false)
-      if (hasNumericInfo) return true
-
-      // Fallback: look for model selector dropdown
-      const hasModelSelector = await this.page.locator('button:has-text("Select a model"), [role="combobox"]').first().isVisible({ timeout: 1000 }).catch(() => false)
-      if (hasModelSelector) return true
-
-      // Fallback: look for any card with model-related content
-      const hasCard = await this.page.locator('.rounded-lg.border').filter({ hasText: /model|feature|importance/i }).first().isVisible({ timeout: 1000 }).catch(() => false)
-      if (hasCard) return true
-
-      // Ultimate fallback: check if page header is visible (means page loaded)
-      const hasHeader = await this.page.getByRole('heading', { name: /Feature Importance/i }).first().isVisible({ timeout: 1000 }).catch(() => false)
-      return hasHeader
+      // Both the Base Value label AND the Top Feature label only render
+      // inside the model-info card (gated on `hasExplanation &&
+      // selectedModelInfo` in src/pages/FeatureImportance.tsx). Page
+      // header / model selector are present even on the empty-state, so
+      // they cannot be used here. Requiring BOTH labels also catches the
+      // case where a 200 response missing `top_features` would leave the
+      // Top Feature value at the `'—'` fallback (codex iter-2 MED), since
+      // both labels live in the same conditional render.
+      const hasBaseValue = await this.baseValueDisplay
+        .isVisible({ timeout: 3000 })
+        .catch(() => false)
+      const hasTopFeature = await this.topFeatureDisplay
+        .isVisible({ timeout: 2000 })
+        .catch(() => false)
+      return hasBaseValue && hasTopFeature
     } catch {
       return false
     }
@@ -214,17 +307,28 @@ export class FeatureImportancePage extends BasePage {
 
   async verifyBarChartDisplayed(): Promise<boolean> {
     try {
-      // Wait for page to fully render
-      await this.page.waitForTimeout(500)
-      // Bar Chart tab shows Global Feature Importance (card title)
-      const hasGlobalImportance = await this.page.getByText('Global Feature Importance').first().isVisible().catch(() => false)
+      // Wait for tab content to render.
+      await this.page.waitForTimeout(300)
+      // The Bar Chart tab shows "Global Feature Importance" as the CardTitle.
+      const hasGlobalImportance = await this.page
+        .getByText('Global Feature Importance')
+        .first()
+        .isVisible()
+        .catch(() => false)
       if (hasGlobalImportance) return true
-      // Fallback: look for SHAP-related content
-      const hasShapContent = await this.page.getByText(/SHAP values|feature importance/i).first().isVisible().catch(() => false)
-      if (hasShapContent) return true
-      // Fallback: look for the bar chart SVG or chart container
-      const hasChart = await this.page.locator('svg, [class*="chart"], [class*="recharts"]').first().isVisible().catch(() => false)
-      return hasChart
+      // Fallback: empty-state copy emitted by SHAPBarChart when `features=[]`.
+      const hasEmptyState = await this.page
+        .getByText(/No feature data available/i)
+        .first()
+        .isVisible()
+        .catch(() => false)
+      if (hasEmptyState) return true
+      // Fallback: any chart SVG.
+      return await this.page
+        .locator('svg, [class*="chart"], [class*="recharts"]')
+        .first()
+        .isVisible()
+        .catch(() => false)
     } catch {
       return false
     }
@@ -232,17 +336,28 @@ export class FeatureImportancePage extends BasePage {
 
   async verifyBeeswarmDisplayed(): Promise<boolean> {
     try {
-      // Wait for tab content to render
-      await this.page.waitForTimeout(500)
-      // Beeswarm tab shows Feature Value Distribution (card title)
-      const hasContent = await this.page.getByText('Feature Value Distribution').first().isVisible().catch(() => false)
+      await this.page.waitForTimeout(300)
+      // PR #316 renamed the card title; accept either wording.
+      const hasContent = await this.page
+        .getByText(/Per-Feature SHAP Contributions|Feature Value Distribution/i)
+        .first()
+        .isVisible()
+        .catch(() => false)
       if (hasContent) return true
-      // Fallback: look for beeswarm-related content
-      const hasDescription = await this.page.getByText(/dot represents|SHAP impact/i).first().isVisible().catch(() => false)
+      const hasDescription = await this.page
+        .getByText(/dot represents|SHAP impact|One dot per top feature/i)
+        .first()
+        .isVisible()
+        .catch(() => false)
       if (hasDescription) return true
-      // Fallback: check for chart SVG
-      const hasChart = await this.page.locator('svg').first().isVisible().catch(() => false)
-      return hasChart
+      // SHAPBeeswarm empty state.
+      const hasEmptyState = await this.page
+        .getByText(/No data available for beeswarm plot/i)
+        .first()
+        .isVisible()
+        .catch(() => false)
+      if (hasEmptyState) return true
+      return await this.page.locator('svg').first().isVisible().catch(() => false)
     } catch {
       return false
     }
@@ -250,17 +365,27 @@ export class FeatureImportancePage extends BasePage {
 
   async verifyWaterfallDisplayed(): Promise<boolean> {
     try {
-      // Wait for tab content to render
-      await this.page.waitForTimeout(500)
-      // Waterfall tab shows Individual Prediction Explanation (card title)
-      const hasContent = await this.page.getByText('Individual Prediction Explanation').first().isVisible().catch(() => false)
+      await this.page.waitForTimeout(300)
+      const hasContent = await this.page
+        .getByText('Individual Prediction Explanation')
+        .first()
+        .isVisible()
+        .catch(() => false)
       if (hasContent) return true
-      // Fallback: look for waterfall-related content
-      const hasDescription = await this.page.getByText(/base value|final prediction/i).first().isVisible().catch(() => false)
+      const hasDescription = await this.page
+        .getByText(/base value|final prediction/i)
+        .first()
+        .isVisible()
+        .catch(() => false)
       if (hasDescription) return true
-      // Fallback: check for chart SVG
-      const hasChart = await this.page.locator('svg').first().isVisible().catch(() => false)
-      return hasChart
+      // SHAPWaterfall empty state.
+      const hasEmptyState = await this.page
+        .getByText(/No feature data available/i)
+        .first()
+        .isVisible()
+        .catch(() => false)
+      if (hasEmptyState) return true
+      return await this.page.locator('svg').first().isVisible().catch(() => false)
     } catch {
       return false
     }

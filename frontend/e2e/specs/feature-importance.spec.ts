@@ -1,14 +1,122 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, type Page, type Route } from '@playwright/test'
 import { FeatureImportancePage } from '../pages/feature-importance.page'
 import { mockApiRoutes } from '../fixtures/api-mocks'
 import { TIMEOUTS } from '../fixtures/test-data'
 import { assertNotLoading, assertNoErrors } from '../utils/assertions'
+
+// =============================================================================
+// LOCAL MOCK OVERRIDES (post-PR #316 live-wired contract)
+// =============================================================================
+//
+// PR #316 rewired src/pages/FeatureImportance.tsx onto the real `/api/explain/*`
+// endpoints. The shared `mockApiRoutes` fixture serves a legacy `{ features:
+// [...] }` payload for `**/api/explain/**`, which:
+//   1. Leaves the model selector empty (model list never resolves), and
+//   2. Means the Model Info / Base Value / Top Feature card never renders
+//      because `hasExplanation` is false.
+//
+// We register more specific routes here AFTER mockApiRoutes so Playwright's
+// route-dispatch ordering picks ours first (last-registered wins on
+// per-request match). This keeps the fix scoped to spec + page-object per
+// the agent contract (do not modify api-mocks.ts).
+// =============================================================================
+
+const MOCK_MODEL_TYPES = ['propensity', 'churn_prediction'] as const
+
+const MOCK_FEATURES = [
+  {
+    feature_name: 'prior_visits',
+    feature_value: 4,
+    shap_value: 0.31,
+    contribution_direction: 'positive' as const,
+    contribution_rank: 1,
+  },
+  {
+    feature_name: 'rx_count_90d',
+    feature_value: 12,
+    shap_value: 0.18,
+    contribution_direction: 'positive' as const,
+    contribution_rank: 2,
+  },
+  {
+    feature_name: 'days_since_last_fill',
+    feature_value: 28,
+    shap_value: -0.12,
+    contribution_direction: 'negative' as const,
+    contribution_rank: 3,
+  },
+]
+
+async function stubExplainEndpoints(page: Page): Promise<void> {
+  // Models list — drives the Select dropdown options.
+  await page.route('**/api/explain/models', async (route: Route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        supported_models: MOCK_MODEL_TYPES.map((model_type) => ({
+          model_type,
+          latest_version: '4.7.0',
+          explainer_type: 'TreeExplainer',
+          avg_latency_ms: 42,
+        })),
+        total_models: MOCK_MODEL_TYPES.length,
+      }),
+    })
+  })
+
+  // Predict — fires on Explain / Refresh click. Returns the ExplainResponse
+  // shape declared in src/types/explain.ts.
+  await page.route('**/api/explain/predict', async (route: Route) => {
+    const request = route.request()
+    let body: { patient_id?: string; model_type?: string } = {}
+    try {
+      body = (request.postDataJSON() ?? {}) as typeof body
+    } catch {
+      // postData wasn't JSON — fall back to defaults.
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        explanation_id: 'e2e-mock-explanation-id',
+        request_timestamp: new Date().toISOString(),
+        patient_id: body.patient_id ?? 'patient_e2e_001',
+        model_type: body.model_type ?? MOCK_MODEL_TYPES[0],
+        model_version_id: '4.7.0',
+        prediction_class: 'positive',
+        prediction_probability: 0.78,
+        base_value: 0.25,
+        top_features: MOCK_FEATURES,
+        shap_sum: MOCK_FEATURES.reduce((acc, f) => acc + f.shap_value, 0),
+        computation_time_ms: 42,
+        audit_stored: false,
+      }),
+    })
+  })
+
+  // History — empty list keeps the History tab benign.
+  await page.route('**/api/explain/history/**', async (route: Route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        patient_id: 'patient_e2e_001',
+        total_explanations: 0,
+        explanations: [],
+      }),
+    })
+  })
+}
 
 test.describe('Feature Importance Page', () => {
   let featurePage: FeatureImportancePage
 
   test.beforeEach(async ({ page }) => {
     await mockApiRoutes(page)
+    // Register the explain-specific overrides AFTER the shared mocks so
+    // Playwright picks ours first for `/api/explain/*` URLs.
+    await stubExplainEndpoints(page)
     featurePage = new FeatureImportancePage(page)
     await featurePage.goto()
   })
@@ -45,9 +153,10 @@ test.describe('Feature Importance Page', () => {
     })
 
     test('should allow model selection', async () => {
-      // Use a valid model name from SAMPLE_MODELS: 'HCP Tier Classifier'
-      await featurePage.selectModel('HCP Tier')
-      await featurePage.page.waitForTimeout(500)
+      // `Propensity` is the formatModelLabel() output for model_type='propensity'
+      // — one of the entries we serve from the stubbed /api/explain/models above.
+      await featurePage.selectModel('Propensity')
+      await featurePage.page.waitForTimeout(300)
     })
   })
 
@@ -58,11 +167,33 @@ test.describe('Feature Importance Page', () => {
     })
 
     test('should show Base Value stat', async () => {
+      // Base Value only renders post-Explain; drive the mutation first.
+      await featurePage.runExplanation()
       await expect(featurePage.baseValueDisplay).toBeVisible()
+      // Falsifiability anchor: the rendered value reflects MOCK_RESPONSE
+      // (`base_value=0.25` → formatted as "0.250"). A 200 with the wrong
+      // payload shape would leave the number at the `?? 0` fallback ("0.000"),
+      // so this catches a regression in the ExplainResponse contract.
+      // Scoped to modelInfoCard so an unrelated "0.250" elsewhere in the
+      // page (e.g. a tooltip / feature row) cannot satisfy the assertion.
+      await expect(featurePage.modelInfoCard.getByText('0.250')).toBeVisible()
     })
 
     test('should show Top Feature stat', async () => {
+      await featurePage.runExplanation()
       await expect(featurePage.topFeatureDisplay).toBeVisible()
+      // Top Feature renders `features[0]?.feature_name.replace(/_/g, ' ')`. If
+      // the mock returned a 200 without `top_features`, this would render "—"
+      // and the assertion would fail — pinning the test to the live shape
+      // beyond just the label visibility (codex iter-2 MED).
+      // SCOPED to the model-info card: `prior visits` also appears in the
+      // Feature Rankings list and chart labels from the same `top_features`
+      // payload, so a page-wide `getByText(/prior visits/i)` would pass even
+      // when the Top Feature stat fell back to "—". The card-scoped locator
+      // only matches the value next to the `Top Feature` label (codex iter-3 MED).
+      await expect(
+        featurePage.modelInfoCard.getByText(/prior visits/i),
+      ).toBeVisible()
     })
   })
 
@@ -86,7 +217,7 @@ test.describe('Feature Importance Page', () => {
 
     test('should allow tab switching', async () => {
       await featurePage.clickTab('Beeswarm')
-      await featurePage.page.waitForTimeout(500)
+      await featurePage.page.waitForTimeout(300)
     })
   })
 
@@ -119,8 +250,10 @@ test.describe('Feature Importance Page', () => {
     })
 
     test('should allow refresh', async () => {
+      // Refresh is disabled until a patient ID is set; clickRefresh() handles
+      // that by driving a baseline explanation when the button isn't enabled.
       await featurePage.clickRefresh()
-      await featurePage.page.waitForTimeout(500)
+      await featurePage.page.waitForTimeout(300)
     })
   })
 
