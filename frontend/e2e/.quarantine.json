@@ -3,7 +3,6 @@
   "specs": [
     "agent-orchestration.spec.ts",
     "kpi-dictionary.spec.ts",
-    "memory-architecture.spec.ts",
-    "system-health.spec.ts"
+    "memory-architecture.spec.ts"
   ]
 }
