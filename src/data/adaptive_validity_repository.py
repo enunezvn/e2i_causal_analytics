@@ -180,11 +180,16 @@ def _row_to_attribution(
     if causal_role_source in ("manifest", "kg"):
         evaluator_satisfied = True
     else:  # llm
-        if isinstance(evaluator_audit, dict):
-            raw = evaluator_audit.get("satisfied")
-            evaluator_satisfied = raw is True
-        else:
-            evaluator_satisfied = False
+        # Codex audit (PR #367): an LLM row missing ``evaluator_audit`` is
+        # malformed/incomplete — skip defensively rather than converting to
+        # ``evaluator_satisfied=False``. Letting such rows through with a
+        # downgraded flag would still expose them at the consumer boundary
+        # (filtered out only by ``should_act``); skipping at the conversion
+        # layer is the conservative-failure choice under C1.
+        if not isinstance(evaluator_audit, dict):
+            return None
+        raw = evaluator_audit.get("satisfied")
+        evaluator_satisfied = raw is True
 
     # evaluator_model: pulled from ``verdict.evaluator_model`` for llm
     # sources; sentinel for manifest; KG sentinel for kg.
