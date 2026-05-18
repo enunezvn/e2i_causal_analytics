@@ -1,9 +1,8 @@
 {
-  "budget": 4,
+  "budget": 3,
   "specs": [
     "agent-orchestration.spec.ts",
     "intervention-impact.spec.ts",
-    "kpi-dictionary.spec.ts",
-    "memory-architecture.spec.ts"
+    "kpi-dictionary.spec.ts"
   ]
 }
