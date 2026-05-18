@@ -179,6 +179,18 @@ class FeatureContract:
     # source of truth for which entities a feature represents in the KG.
     # See docs/superpowers/specs/2026-05-08-phase29-stage2-entity-mapping-design.md.
     kg_entity_codes: tuple[tuple[str, str], ...] = ()
+    # Phase 1 of causal-role propagation (Issue #237 reframe). When the
+    # manifest maintainer can attest the feature's causal role with
+    # respect to the prediction target, it's recorded here. Allowed
+    # values mirror ``src.data.causal_role_classifier.CausalRole``:
+    # ancestor | confounder | mediator | collider | descendant |
+    # instrument. ``None`` (the default) means "manifest does not
+    # certify" — the LLM (Layer-4) classifier remains authoritative
+    # for that feature. The role is propagated into the typed
+    # ``RoleAttribution`` list by ``src.data.role_attribution
+    # .derive_role_attributions``; manifest sources bypass the
+    # LLM-evaluator gate per C1.
+    causal_role: Optional[str] = None
     # Test-only escape hatch: allows constructing a contract that DECLARES
     # itself unwindowed (so its honest knowable_at is post_index). Used in
     # validate_contract_chain tests to verify propagation. Never set in

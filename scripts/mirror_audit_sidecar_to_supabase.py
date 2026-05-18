@@ -136,9 +136,11 @@ _EVALUATOR_FIELDS: tuple[str, ...] = (
 # comparison). That is the natural meaning for a payload-changed test.
 _UPSERT_SQL = """
 INSERT INTO adaptive_validity_verdicts (
-    experiment_id, feature, written_at, source_path, verdict, evaluator_audit, imported_at
+    experiment_id, feature, written_at, source_path,
+    verdict, evaluator_audit, causal_role_final, causal_role_source,
+    imported_at
 )
-VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, now())
+VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, now())
 ON CONFLICT (
     COALESCE(experiment_id, '__unknown__'),
     COALESCE(feature, '__unknown__'),
@@ -146,10 +148,18 @@ ON CONFLICT (
 ) DO UPDATE SET
     verdict = EXCLUDED.verdict,
     evaluator_audit = EXCLUDED.evaluator_audit,
+    -- Phase 1 of Issue #237 causal-role propagation: source-of-truth
+    -- writes through on every conflict. Together with the IS DISTINCT
+    -- FROM filter below, repeated mirror runs over unchanged sidecars
+    -- remain no-ops.
+    causal_role_final = EXCLUDED.causal_role_final,
+    causal_role_source = EXCLUDED.causal_role_source,
     source_path = EXCLUDED.source_path,
     imported_at = now()
 WHERE adaptive_validity_verdicts.verdict IS DISTINCT FROM EXCLUDED.verdict
    OR adaptive_validity_verdicts.evaluator_audit IS DISTINCT FROM EXCLUDED.evaluator_audit
+   OR adaptive_validity_verdicts.causal_role_final IS DISTINCT FROM EXCLUDED.causal_role_final
+   OR adaptive_validity_verdicts.causal_role_source IS DISTINCT FROM EXCLUDED.causal_role_source
 RETURNING (xmax = 0) AS inserted;
 """
 
@@ -174,6 +184,33 @@ def _evaluator_audit_payload(record: VerdictRecord) -> Optional[dict[str, Any]]:
         if value is not None:
             payload[field] = value
     return payload or None
+
+
+def _role_attribution_payload(
+    record: VerdictRecord,
+) -> tuple[Optional[str], Optional[str]]:
+    """Return ``(causal_role_final, causal_role_source)`` for the row's mirror columns.
+
+    Phase 1 of Issue #237 causal-role propagation. The sidecar reader's
+    ``VerdictRecord.role_attribution`` is ``None`` on pre-1.1 sidecars
+    (the producer did not yet emit the ``role_attributions`` list) — in
+    that case both columns are NULL.
+
+    For 1.1+ sidecars, the per-feature lookup map built by the reader at
+    file-load time hands us a dict of shape ``{feature, causal_role,
+    source, evaluator_satisfied, evaluator_model}``. We pull ``causal_role``
+    and ``source`` for the mirror; the other fields stay in the sidecar
+    JSON as audit context (the database does not need them for
+    cross-experiment queries).
+    """
+    if record.role_attribution is None:
+        return (None, None)
+    causal_role = record.role_attribution.get("causal_role")
+    source = record.role_attribution.get("source")
+    return (
+        causal_role if isinstance(causal_role, str) else None,
+        source if isinstance(source, str) else None,
+    )
 
 
 def _parse_since(value: str) -> datetime:
@@ -281,6 +318,7 @@ def _upsert_records(
     with conn.cursor() as cur:
         for r in records:
             evaluator_payload = _evaluator_audit_payload(r)
+            causal_role_final, causal_role_source = _role_attribution_payload(r)
             cur.execute(
                 _UPSERT_SQL,
                 (
@@ -292,6 +330,8 @@ def _upsert_records(
                     json.dumps(evaluator_payload, default=str)
                     if evaluator_payload is not None
                     else None,
+                    causal_role_final,
+                    causal_role_source,
                 ),
             )
             row = cur.fetchone()

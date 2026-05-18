@@ -12,6 +12,8 @@ from typing import Any, Dict, Literal
 
 from langgraph.graph import END, StateGraph
 
+from src.data.role_attribution import derive_role_attributions
+
 from .nodes import (
     adaptive_validity_check,
     audit_sampling_frame,
@@ -27,6 +29,7 @@ from .nodes import (
     run_schema_validation,
     transform_data,
 )
+from .nodes.adaptive_validity_check import _resolve_manifest_features
 from .state import DataPreparerState
 
 logger = logging.getLogger(__name__)
@@ -35,6 +38,43 @@ logger = logging.getLogger(__name__)
 MAX_REMEDIATION_ATTEMPTS = 2
 
 from .nodes.leakage_remediation import MAX_LEAKAGE_REMEDIATION_ATTEMPTS
+
+
+def _derive_role_attributions_safely(state: Dict[str, Any]) -> list[Dict[str, Any]]:
+    """Derive ``RoleAttribution`` rows from ``adaptive_verdicts`` + the
+    resolved manifest's ``FeatureContract`` registry.
+
+    Phase 1 of Issue #237 reframe (plan
+    ``.claude/plans/causal_role_propagation_FINAL.md`` §1.2/§1.3).
+
+    Failure-mode: any exception (unknown manifest source, malformed
+    state) returns ``[]`` and logs a WARNING. The producer is additive;
+    a bug here must NEVER cascade into the existing QC gate. The
+    sidecar still writes (with ``role_attributions=[]``), and Phase 2
+    interprets an empty attribution list as "no source attests any
+    role; gate everything through the C1 default predicate".
+    """
+    try:
+        verdicts = list(state.get("adaptive_verdicts") or [])
+        scope_spec = state.get("scope_spec") or {}
+        manifest_source = (
+            scope_spec.get("feature_manifest_source") if isinstance(scope_spec, dict) else None
+        )
+        feature_contracts: Dict[str, Any] = {}
+        if isinstance(manifest_source, str) and manifest_source:
+            contracts_list = _resolve_manifest_features(manifest_source)
+            if contracts_list:
+                feature_contracts = {c.name: c for c in contracts_list}
+        # Cast to list[dict] for the sidecar payload (TypedDict is a
+        # dict at runtime; this is just a type-system formality).
+        return [dict(a) for a in derive_role_attributions(verdicts, feature_contracts)]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "derive_role_attributions failed; emitting empty role_attributions list. "
+            "Sidecar will record role_attributions=[]. Cause: %s",
+            exc,
+        )
+        return []
 
 
 def write_adaptive_verdicts_sidecar(state: Dict[str, Any]) -> Path | None:
@@ -106,13 +146,26 @@ def write_adaptive_verdicts_sidecar(state: Dict[str, Any]) -> Path | None:
         base.mkdir(parents=True, exist_ok=True)
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         sidecar = base / f"adaptive_verdicts_{ts}.json"
+        # Phase 1 of causal-role propagation (Issue #237): the producer
+        # writes a typed ``role_attributions`` list alongside the existing
+        # ``adaptive_verdicts``. Reader sidecar contract: a feature's
+        # role_attribution carries ``{feature, causal_role, source,
+        # evaluator_satisfied, evaluator_model}``. Phase 2 acts on this;
+        # in Phase 1 the field is audit-only. ``state.get`` falls back to
+        # ``[]`` for pre-Phase-1 callers (forward-compat with the
+        # data_preparer state shape; the field is declared on
+        # ``DataPreparerState`` as ``Optional[List[Dict[str, Any]]]``).
+        role_attributions = state.get("role_attributions") or []
         payload = {
             # Schema-version pin (Issue #235): ``major.minor`` string. Bump the
             # major on any breaking change to the sidecar payload shape; bump
             # the minor on additive forward-compatible changes. The reader
             # (``src/data/audit_sidecar_reader.py``) WARNs on missing or
             # unknown-major schema_version values.
-            "schema_version": "1.0",
+            #
+            # 1.1 (Phase 1, Issue #237): additive ``role_attributions``
+            # list. Reader pins MAJOR=1; minor bumps do not WARN.
+            "schema_version": "1.1",
             "experiment_id": state.get("experiment_id"),
             "data_source": state.get("data_source"),
             "written_at": ts,
@@ -120,6 +173,7 @@ def write_adaptive_verdicts_sidecar(state: Dict[str, Any]) -> Path | None:
             "leaked_features": state.get("leaked_features", []),
             "adaptive_flagged_features": state.get("adaptive_flagged_features", []),
             "adaptive_verdicts": verdicts,
+            "role_attributions": role_attributions,
         }
         # Atomic write: stage to .tmp then rename so an interrupted run
         # never leaves a half-written JSON (codex review LOW-9).
@@ -474,6 +528,15 @@ async def finalize_output(state: DataPreparerState) -> Dict[str, Any]:
         if missing_required_features:
             blockers.append(f"Missing required features: {', '.join(missing_required_features)}")
 
+        # Phase 1 of causal-role propagation (Issue #237 reframe).
+        # Derive typed RoleAttribution rows from adaptive_verdicts + the
+        # resolved manifest's FeatureContracts. The list is persisted to
+        # the sidecar via write_adaptive_verdicts_sidecar and is
+        # audit-only in this phase (Phase 2 is the first consumer).
+        # Failure here is non-blocking — propagation is additive and a
+        # producer-side bug must never block the existing QC gate.
+        role_attributions = _derive_role_attributions_safely(state)
+
         # Update state. ``blocking_issues`` is propagated explicitly so that
         # the sampling-frame audit's re-promoted entry (if any) survives into
         # the final state — otherwise ``run_quality_checks``' fresh list
@@ -492,10 +555,15 @@ async def finalize_output(state: DataPreparerState) -> Dict[str, Any]:
             "missing_required_features": missing_required_features,
             "blockers": blockers,
             "blocking_issues": blocking_issues,
+            "role_attributions": role_attributions,
         }
 
         # Persist adaptive-validity audit trail to a JSON sidecar so the
-        # per-feature verdicts survive outside the run state.
+        # per-feature verdicts survive outside the run state. The sidecar
+        # writer reads ``state.role_attributions`` directly, so seed it
+        # in the dict-shaped pydantic state via ``__setitem__`` (the
+        # BaseAgentSchema dict-compat shim accepts it).
+        state["role_attributions"] = role_attributions  # type: ignore[index]
         write_adaptive_verdicts_sidecar(state)
 
         logger.info(

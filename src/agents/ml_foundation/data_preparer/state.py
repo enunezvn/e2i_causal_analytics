@@ -112,6 +112,19 @@ class DataPreparerState(BaseAgentSchema):
     adaptive_n_permutations: Optional[int] = None  # override default permutation count
     adaptive_seed: Optional[int] = None  # override default RNG seed
 
+    # Phase 1 of causal-role propagation (Issue #237 reframe). Typed
+    # list of ``RoleAttribution`` rows (see
+    # ``src.data.role_attribution.RoleAttribution`` TypedDict): one row
+    # per feature whose causal role has been attested by either the
+    # manifest (``source="manifest"``) or the Layer-4 LLM classifier
+    # (``source="llm"``). Computed in ``finalize_output`` from
+    # ``adaptive_verdicts`` and the resolved manifest's feature
+    # contracts. Persisted to the sidecar JSON as ``role_attributions``
+    # under ``schema_version="1.1"``. The field is audit-only in
+    # Phase 1; Phase 2 (collider/mediator exclusion policy) will be the
+    # first consumer.
+    role_attributions: Optional[List[Dict[str, Any]]] = None
+
     # Leakage remediation (LLM-assisted)
     leakage_remediation_status: Optional[
         Literal[
