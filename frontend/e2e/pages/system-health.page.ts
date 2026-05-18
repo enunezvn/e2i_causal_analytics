@@ -20,7 +20,9 @@ export class SystemHealthPage extends BasePage {
   }
 
   get pageDescription(): Locator {
-    return this.page.getByText(/Service status|model health|alerts/i).first()
+    // Match the page subtitle "Comprehensive system monitoring with health scores"
+    // or a stats-card section label as a fallback.
+    return this.page.getByText(/system monitoring|health scores|Service status|model health|alerts/i).first()
   }
 
   // Action Buttons
