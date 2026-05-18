@@ -57,9 +57,24 @@ def _derive_role_attributions_safely(state: Dict[str, Any]) -> list[Dict[str, An
     try:
         verdicts = list(state.get("adaptive_verdicts") or [])
         scope_spec = state.get("scope_spec") or {}
-        manifest_source = (
-            scope_spec.get("feature_manifest_source") if isinstance(scope_spec, dict) else None
-        )
+        # ``scope_spec`` may be either a raw dict (legacy callers, tests)
+        # or a ``ScopeSpecSchema`` pydantic BaseModel (the typed scope
+        # contract, BaseAgentSchema). BaseAgentSchema provides a dict-
+        # compat ``.get`` shim, but pydantic instances also expose
+        # attribute access; the helper accepts both shapes so the
+        # producer works regardless of whether the caller constructed
+        # scope_spec via schema or via dict literal. Codex iter-0 HIGH
+        # fix: ``isinstance(scope_spec, dict)`` would silently skip the
+        # manifest path for the typed-schema code path.
+        manifest_source = None
+        if isinstance(scope_spec, dict):
+            manifest_source = scope_spec.get("feature_manifest_source")
+        else:
+            getter = getattr(scope_spec, "get", None)
+            if callable(getter):
+                manifest_source = getter("feature_manifest_source")
+            if manifest_source is None:
+                manifest_source = getattr(scope_spec, "feature_manifest_source", None)
         feature_contracts: Dict[str, Any] = {}
         if isinstance(manifest_source, str) and manifest_source:
             contracts_list = _resolve_manifest_features(manifest_source)

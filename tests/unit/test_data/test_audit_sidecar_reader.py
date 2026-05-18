@@ -690,7 +690,11 @@ def test_dedup_tiebreaker_prefers_newer_mtime_when_written_at_ties(tmp_path):
 def test_sidecar_payload_includes_schema_version_v1(tmp_path, monkeypatch):
     """Issue #235 A1: a fresh producer run writes ``schema_version`` at
     the top level of the payload, pinned to the current canonical
-    major.minor (``"1.0"``)."""
+    major.minor.
+
+    Bumped to ``"1.1"`` by Phase 1 of Issue #237 (additive
+    ``role_attributions`` key). Reader still pins MAJOR=1, so the
+    forward-compat contract is unchanged."""
     from src.agents.ml_foundation.data_preparer.graph import (
         write_adaptive_verdicts_sidecar,
     )
@@ -714,8 +718,8 @@ def test_sidecar_payload_includes_schema_version_v1(tmp_path, monkeypatch):
     path = write_adaptive_verdicts_sidecar(state)
     assert path is not None
     payload = json.loads(Path(path).read_text())
-    assert payload.get("schema_version") == "1.0", (
-        f"producer must emit top-level schema_version='1.0'; got {payload.get('schema_version')!r}"
+    assert payload.get("schema_version") == "1.1", (
+        f"producer must emit top-level schema_version='1.1'; got {payload.get('schema_version')!r}"
     )
 
 
@@ -785,16 +789,18 @@ def test_reader_warns_on_unknown_schema_version_major(tmp_path, caplog):
     assert len(records) == 1
     assert records[0].feature == "f-fut"
     # codex MED-2 (2026-05-15): pin BOTH versions in the WARN — the payload's
-    # ``"2.0"`` AND the reader's expected ``"1.0"``. Without this assertion
+    # ``"2.0"`` AND the reader's expected current version. Without this assertion
     # the test would still pass if the WARN stopped naming the reader's
     # expected version, which is the actionable half of the message.
+    # Phase 1 of Issue #237: reader's current version bumped to "1.1"
+    # (still MAJOR=1).
     matches = [
         rec
         for rec in caplog.records
-        if "schema_version" in rec.message and "2.0" in rec.message and "1.0" in rec.message
+        if "schema_version" in rec.message and "2.0" in rec.message and "1.1" in rec.message
     ]
     assert matches, (
-        "expected unknown-major WARN naming both '2.0' (payload) and '1.0' (reader); "
+        "expected unknown-major WARN naming both '2.0' (payload) and '1.1' (reader); "
         f"got: {[r.message for r in caplog.records]}"
     )
 
