@@ -329,6 +329,11 @@ class HeterogeneousOptimizerAgent:
                 "data_source": input_data["data_source"],
                 "filters": input_data.get("filters"),
                 "tier0_data": input_data.get("tier0_data"),  # Passthrough for tier0 testing
+                # Phase 3 (#237) — confounder routing inputs (NotRequired on state).
+                # Forwarded from input_data so callers using agent.run() can route
+                # explicit confounders or role_attributions into the CATE estimator.
+                "confounders": input_data.get("confounders"),
+                "role_attributions": input_data.get("role_attributions"),
                 # Configuration
                 "n_estimators": input_data.get("n_estimators", 100),
                 "min_samples_leaf": input_data.get("min_samples_leaf", 10),

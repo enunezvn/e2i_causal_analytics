@@ -153,12 +153,37 @@ class CATEEstimatorNode:
             X_df = df[state["effect_modifiers"]].copy()
             X = self._encode_features(X_df)
 
-            # W (confounders for nuisance model) is set to None unconditionally.
-            # segment_vars are for post-hoc CATE-by-segment analysis in
-            # _calculate_cate_by_segment(), NOT for CausalForestDML's W parameter.
-            # Using segment_vars as W conflates segmentation with confounding and
-            # can produce ATE=0 when segment categories absorb treatment variation.
-            W = None
+            # Phase 3 (Issue #237): route confounders into CausalForestDML's
+            # nuisance-model ``W`` parameter when the caller (or upstream
+            # data_preparer via role_attributions) has identified them.
+            #
+            # Precedence (high → low):
+            #   1. Explicit ``state["confounders"]`` (caller override).
+            #   2. Derived from ``state["role_attributions"]`` filtered by
+            #      the C1 trust-gate (manifest|kg unconditional, llm only
+            #      when ``evaluator_satisfied=True``).
+            #   3. None — preserves the pre-#237 baseline behavior (W=None).
+            #
+            # segment_vars are NOT considered: they are for post-hoc
+            # CATE-by-segment analysis in ``_calculate_cate_by_segment()``.
+            # Using segment_vars as W conflates segmentation with confounding
+            # and can produce ATE=0 when segment categories absorb treatment
+            # variation (the original rationale for the unconditional
+            # W=None default).
+            confounders = self._resolve_confounders(state, list(df.columns))
+            if confounders:
+                W_df = df[confounders].copy()
+                W = self._encode_features(W_df)
+                logger.info(
+                    "CATE nuisance controls routed",
+                    extra={
+                        "node": "cate_estimator",
+                        "confounders": confounders,
+                        "confounder_count": len(confounders),
+                    },
+                )
+            else:
+                W = None
 
             # Fit Causal Forest
             is_binary_treatment = self._is_binary(T)
@@ -379,6 +404,84 @@ class CATEEstimatorNode:
             },
         )
         return df
+
+    def _resolve_confounders(
+        self,
+        state: HeterogeneousOptimizerState,
+        available_columns: List[str],
+    ) -> List[str]:
+        """Determine the confounder column list to route into ``W``.
+
+        Phase 3 (Issue #237) — see ``execute()`` for the precedence rules.
+
+        Args:
+            state: Current HeterogeneousOptimizerState. Reads optional
+                ``confounders`` and ``role_attributions`` keys.
+            available_columns: Columns present on the fetched DataFrame.
+                Confounders the caller / role_attributions reference that
+                are absent from ``available_columns`` are silently dropped
+                with a warning (the alternative — raising — would break
+                callers that mix declared confounders across multiple
+                data sources).
+
+        Returns:
+            Ordered, de-duplicated list of column names to use as ``W``.
+            Empty list (NOT ``None``) when no confounders should be routed;
+            the caller branches on truthiness.
+        """
+        # Source-1: explicit caller override. ``state.get`` is used (not
+        # subscripting) because ``confounders`` is ``NotRequired``.
+        explicit = state.get("confounders")
+        if explicit:
+            resolved: List[str] = list(explicit)
+        else:
+            # Source-2: derived from role_attributions. Only attributions
+            # whose causal_role == "confounder" AND pass the C1 trust-gate
+            # (manifest|kg unconditional, llm gated on evaluator_satisfied)
+            # contribute. ``should_act`` is the single source of truth for
+            # the gate so any future policy change (e.g. ADVISORY vs
+            # STRICT) lands in one place.
+            from src.data.role_attribution import RoleAttribution, should_act
+
+            role_attrs = state.get("role_attributions") or []
+            resolved = []
+            for attr in role_attrs:
+                # Defensive: state typing allows ``List[Dict[str, Any]]``
+                # so we shape-check before consuming.
+                if not isinstance(attr, dict):
+                    continue
+                feature = attr.get("feature")
+                role = attr.get("causal_role")
+                if not isinstance(feature, str) or role != "confounder":
+                    continue
+                # Cast through RoleAttribution to exercise the same gate
+                # contract Phase 2 will use; should_act tolerates the
+                # dict shape because RoleAttribution is a TypedDict.
+                if not should_act(cast("RoleAttribution", attr)):
+                    continue
+                resolved.append(feature)
+
+        # De-duplicate while preserving first-seen order. ``dict.fromkeys``
+        # is the canonical Py3.7+ idiom for order-preserving uniqueness.
+        deduped = list(dict.fromkeys(resolved))
+
+        # Drop any column not present on the fetched DataFrame. This
+        # tolerates schema drift between the manifest / role-attribution
+        # producer and the connector's row payload without failing the
+        # whole estimation.
+        available = set(available_columns)
+        present = [c for c in deduped if c in available]
+        missing = [c for c in deduped if c not in available]
+        if missing:
+            logger.warning(
+                "Confounders referenced but not present in dataframe",
+                extra={
+                    "node": "cate_estimator",
+                    "missing_confounders": missing,
+                    "available_count": len(available_columns),
+                },
+            )
+        return present
 
     def _is_binary(self, T: np.ndarray) -> bool:
         """Check if treatment is binary."""

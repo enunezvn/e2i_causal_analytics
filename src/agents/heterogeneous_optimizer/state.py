@@ -77,6 +77,18 @@ class HeterogeneousOptimizerState(TypedDict):
         Any
     ]  # DataFrame passthrough from tier0 testing (use Any to avoid pd import)
 
+    # Phase 3 (Issue #237 causal-role propagation):
+    # Optional caller-provided confounder list. When present and non-empty,
+    # the CATE estimator routes these columns into CausalForestDML's W
+    # parameter (the nuisance-model controls). When absent, the estimator
+    # may still derive a confounder list from ``role_attributions`` below
+    # for source ∈ {manifest, kg} or source=llm with evaluator_satisfied=True
+    # (the C1 trust-gate, see ``src/data/role_attribution.py::should_act``).
+    # When BOTH are absent, behavior is unchanged from the pre-#237 baseline
+    # (W=None). Plan: ``.claude/plans/causal_role_propagation_FINAL.md`` §3.
+    confounders: NotRequired[List[str]]
+    role_attributions: NotRequired[List[Dict[str, Any]]]
+
     # === CONFIGURATION (4 fields) ===
     n_estimators: int  # Causal Forest trees (default: 100)
     min_samples_leaf: int  # Minimum samples per leaf (default: 10)
