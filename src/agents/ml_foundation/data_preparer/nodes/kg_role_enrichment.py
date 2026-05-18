@@ -9,8 +9,10 @@ the sidecar via ``write_adaptive_verdicts_sidecar``) with a per-feature
 Phase-6 KG signal (``ensemble_voter.layer_2_kg_signal``):
 
   - LLM attribution + ``evaluator_satisfied=True``:
-      * KG corroborates (same role) → promote ``source="kg"`` and stamp
-        the KG provenance into ``evaluator_model="kg:falkordb"``.
+      * KG corroborates (same role) → promote ``source="kg"`` and
+        PRESERVE the upstream LLM's ``evaluator_model``. KG is a
+        corroborating store, not an evaluator; overwriting with a
+        "kg:falkordb" sentinel would corrupt audit provenance.
       * KG contradicts (different role) → keep ``source="llm"`` but
         set ``evaluator_satisfied=False``. Phase 2's ``_should_act``
         predicate then gates the attribution out.
@@ -52,12 +54,6 @@ from src.data.kg.ensemble_voter import layer_2_kg_signal
 from ..state import DataPreparerState
 
 logger = logging.getLogger(__name__)
-
-
-# Stamped into ``evaluator_model`` when KG corroborates and we promote
-# ``source="kg"``. Mirrors the documented sentinel in
-# ``src.data.role_attribution.RoleAttribution`` docstring ("``kg:falkordb``").
-_KG_EVALUATOR_MODEL = "kg:falkordb"
 
 
 async def kg_role_enrichment(
