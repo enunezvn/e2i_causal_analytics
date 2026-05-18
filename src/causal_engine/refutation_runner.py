@@ -237,6 +237,69 @@ class RefutationSuite:
 
 
 # ============================================================================
+# PHASE 5 DIAGNOSTIC HELPERS (Issue #237, plan §5)
+# ============================================================================
+
+
+def _enrich_offending_features(
+    offending: List[str],
+    role_attributions: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Resolve ``offending`` feature names against ``role_attributions``.
+
+    Returns one dict per offending feature with shape::
+
+        {
+            "feature": str,
+            "causal_role": Optional[str],
+            "source": Optional[str],
+            "evaluator_satisfied": Optional[bool],
+        }
+
+    Features absent from ``role_attributions`` get ``None`` for the
+    three role fields — this is the "absent" branch from plan §5
+    Case 2, and is the load-bearing signal that the placebo trip is
+    on a feature the causal pipeline never classified.
+
+    The lookup is keyed on ``RoleAttribution["feature"]``. Duplicate
+    rows for the same feature (which should not happen post-Phase 1
+    derivation but may arise from concatenated sources) resolve to
+    the first match, matching dict-iteration order.
+
+    Pure function — no side effects, no estimator behavior change.
+    """
+    by_feature: Dict[str, Dict[str, Any]] = {}
+    for attr in role_attributions:
+        feature = attr.get("feature")
+        if feature is None or feature in by_feature:
+            continue
+        by_feature[feature] = attr
+
+    rows: List[Dict[str, Any]] = []
+    for name in offending:
+        match = by_feature.get(name)
+        if match is None:
+            rows.append(
+                {
+                    "feature": name,
+                    "causal_role": None,
+                    "source": None,
+                    "evaluator_satisfied": None,
+                }
+            )
+        else:
+            rows.append(
+                {
+                    "feature": name,
+                    "causal_role": match.get("causal_role"),
+                    "source": match.get("source"),
+                    "evaluator_satisfied": match.get("evaluator_satisfied"),
+                }
+            )
+    return rows
+
+
+# ============================================================================
 # REFUTATION RUNNER
 # ============================================================================
 
@@ -370,6 +433,8 @@ class RefutationRunner:
         brand: Optional[str] = None,
         estimate_id: Optional[str] = None,
         trace_id: Optional[str] = None,
+        role_attributions: Optional[List[Dict[str, Any]]] = None,
+        offending_features: Optional[List[str]] = None,
     ) -> RefutationSuite:
         """Run all enabled refutation tests with Opik tracing.
 
@@ -424,6 +489,8 @@ class RefutationRunner:
                 identified_estimand=identified_estimand,
                 estimate=estimate,
                 use_dowhy=use_dowhy,
+                role_attributions=role_attributions,
+                offending_features=offending_features,
             )
             tests.append(test_result)
 
@@ -621,11 +688,35 @@ class RefutationRunner:
         identified_estimand: Optional[Any],
         estimate: Optional[Any],
         use_dowhy: bool,
+        role_attributions: Optional[List[Dict[str, Any]]] = None,
+        offending_features: Optional[List[str]] = None,
     ) -> RefutationResult:
         """Run placebo treatment refutation test.
 
         Replaces the treatment with random noise. If the effect disappears
         (p-value > 0.05), the original effect is likely causal.
+
+        Phase 5 enrichment (Issue #237, plan §5): when the test FAILS,
+        ``details["offending_features"]`` is populated with per-feature
+        rows of the shape::
+
+            {
+                "feature": str,
+                "causal_role": Optional[str],
+                "source": Optional[str],
+                "evaluator_satisfied": Optional[bool],
+            }
+
+        Role information is resolved against ``role_attributions``
+        (typed ``RoleAttribution`` rows; see
+        ``src.data.role_attribution.RoleAttribution``). Features not
+        present in the lookup get ``None`` for the three role fields.
+
+        ``offending_features`` is the list of feature names that
+        "tripped" the placebo. Caller-supplied; in DoWhy mode the
+        upstream wiring (``run_all_tests``) extracts this best-effort
+        from ``refutation.refutation_result``. No estimator behavior
+        changes — enrichment is additive on ``details`` only.
         """
         import time
 
@@ -667,6 +758,19 @@ class RefutationRunner:
         )
         execution_time = (time.time() - start_time) * 1000
 
+        details: Dict[str, Any] = {
+            "message": message,
+            "num_simulations": self.config["placebo_treatment"]["num_simulations"],
+        }
+
+        # Phase 5: enrich diagnostic with role-attribution context on FAILED.
+        # Gated on FAILED status — "placebo trips" semantics. PASSED/WARNING
+        # do not need offending-feature surfacing.
+        if status == RefutationStatus.FAILED and offending_features:
+            details["offending_features"] = _enrich_offending_features(
+                offending_features, role_attributions or []
+            )
+
         return RefutationResult(
             test_name=test_name,
             status=status,
@@ -674,10 +778,7 @@ class RefutationRunner:
             refuted_effect=refuted_effect,
             p_value=p_value,
             delta_percent=delta_percent,
-            details={
-                "message": message,
-                "num_simulations": self.config["placebo_treatment"]["num_simulations"],
-            },
+            details=details,
             execution_time_ms=execution_time,
         )
 
