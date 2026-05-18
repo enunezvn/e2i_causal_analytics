@@ -87,36 +87,34 @@ async function mockSystemHealthRoutes(page: Page): Promise<void> {
 // Resilient navigation: the route loads a Vite-lazy chunk (SystemHealth-*.js).
 // Under high test concurrency, the dynamic import occasionally fails with
 // "Failed to fetch dynamically imported module", surfacing as the page-level
-// error boundary with a "Try Again" button. Clicking Try Again retries the
-// import; we retry up to 3x before giving up.
+// error boundary with a "Try Again" button. We retry the navigation by full
+// page.reload() until the in-page heading appears (up to 5 attempts).
 async function gotoSystemHealth(page: Page, healthPage: SystemHealthPage): Promise<void> {
-  await healthPage.goto()
   const errorText = /Failed to fetch dynamically imported module/i
   const heading = page.getByRole('heading', { name: /^System Health$/i }).first()
 
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    // Wait for either the in-page heading OR the dynamic-import failure
-    // banner, whichever resolves first.
-    await Promise.race([
-      heading.waitFor({ state: 'visible', timeout: 8000 }).catch(() => {}),
-      page.getByText(errorText).first().waitFor({ state: 'visible', timeout: 8000 }).catch(() => {}),
-    ])
+  await healthPage.goto()
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    // Wait for the in-page heading (the only reliable signal that the lazy
+    // chunk loaded and the page actually rendered, vs. the ErrorBoundary).
+    try {
+      await heading.waitFor({ state: 'visible', timeout: 10000 })
+      return // heading visible — page loaded successfully.
+    } catch {
+      // Heading didn't appear within 10s — check for ErrorBoundary.
+    }
 
     const errorVisible = await page.getByText(errorText).first().isVisible().catch(() => false)
     if (!errorVisible) {
-      // Heading is up or no error surfaced — proceed.
+      // No error and no heading either — bail; test will surface the issue.
       return
     }
 
-    const retry = page.getByRole('button', { name: /Try Again/i }).first()
-    if (!(await retry.isVisible().catch(() => false))) {
-      // Error visible but no retry — best-effort full reload.
-      await page.reload()
-      continue
-    }
-    await retry.click()
-    // Allow the chunk fetch to settle before re-checking.
-    await page.waitForTimeout(800)
+    // ErrorBoundary present — full reload (more reliable than Try Again button
+    // under concurrent chunk-fetch contention).
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await page.waitForTimeout(500)
   }
 }
 
