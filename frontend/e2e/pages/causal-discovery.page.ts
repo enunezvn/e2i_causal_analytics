@@ -30,12 +30,18 @@ export class CausalDiscoveryPage extends BasePage {
   // Technology Badges
   // ========================================================================
 
+  // Use exact match for all four technology badges. PR #314 added a form
+  // description paragraph ("The router classifies the wording to recommend
+  // DoWhy (causation), EconML (heterogeneity)...") that breaks substring
+  // matches with Playwright's strict mode. The badges are <div>s whose
+  // textContent is exactly the library name (lucide SVG icons contribute no
+  // text), so exact: true uniquely targets the header badges.
   get dowhyBadge(): Locator {
-    return this.page.getByText('DoWhy')
+    return this.page.getByText('DoWhy', { exact: true })
   }
 
   get econmlBadge(): Locator {
-    return this.page.getByText('EconML')
+    return this.page.getByText('EconML', { exact: true })
   }
 
   get dagBadge(): Locator {
