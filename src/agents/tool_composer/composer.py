@@ -175,16 +175,28 @@ class ToolComposer:
 
         logger.info(f"Starting composition for query: {query[:100]}...")
 
+        # S14 (Phase 7 prerequisite): extract experiment_id from the
+        # existing context-dict carrier. Phase 7.2's auto-population
+        # hook in executor.py reads ``context["experiment_id"]`` to
+        # query active role attributions. We log it here for audit
+        # provenance (downstream queries can join compositions to
+        # experiments) while keeping ``start_workflow``'s kwarg surface
+        # unchanged.
+        experiment_id = context.get("experiment_id")
+
         # Initialize audit chain workflow
         audit_workflow_id: Optional[UUID] = None
         audit_service = get_audit_chain_service()
         if audit_service:
             try:
+                audit_input_data: Dict[str, Any] = {"query": query[:500]}
+                if isinstance(experiment_id, str) and experiment_id:
+                    audit_input_data["experiment_id"] = experiment_id
                 entry = audit_service.start_workflow(
                     agent_name="tool_composer",
                     agent_tier=AgentTier.COORDINATION,
                     action_type="workflow_start",
-                    input_data={"query": query[:500]},  # Truncate for storage
+                    input_data=audit_input_data,  # Truncate for storage
                     user_id=context.get("user_id"),
                     session_id=context.get("session_id"),
                     query_text=query,
