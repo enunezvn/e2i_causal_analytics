@@ -27,7 +27,7 @@ import pytest
 
 from src.agents.base.audit_chain_mixin import set_audit_chain_service
 from src.agents.causal_impact.graph import traced_node
-from src.utils.audit_chain import AgentTier, AuditChainService
+from src.utils.audit_chain import AgentTier, AuditChainService, RefutationResults
 
 
 @pytest.fixture(autouse=True)
@@ -164,6 +164,64 @@ async def test_traced_node_does_not_pass_user_id_session_id_brand(
             f"{forbidden!r} is not in add_entry signature; remove it "
             f"(inherited from genesis entry via previous.{forbidden})"
         )
+
+
+@pytest.mark.asyncio
+async def test_traced_node_refutation_wraps_dict_in_refutation_results_dataclass(
+    mock_audit_service, mock_opik, base_state
+):
+    """The refutation node persists ``refutation_results`` as a *dict* (via
+    :py:meth:`RefutationSuite.to_legacy_format`). But
+    :py:meth:`AuditChainService.add_entry` calls
+    ``refutation_results.to_dict()`` on the kwarg unconditionally
+    (``audit_chain.py:345``). Passing a raw dict would raise
+    ``AttributeError: 'dict' object has no attribute 'to_dict'`` — caught by
+    the same ``try/except Exception`` that hid the kwarg-mismatch bug, so the
+    refutation node's audit entry would still be silently dropped post the
+    kwarg fix unless we construct a :class:`RefutationResults` dataclass here.
+
+    This pre-existing dict-vs-dataclass mismatch is exposed by the kwarg fix:
+    pre-fix the call failed with TypeError on ``input_hash`` *before* Python
+    entered ``add_entry``'s body and reached ``.to_dict()``, so the
+    AttributeError was unreachable.
+    """
+
+    @traced_node("refutation")
+    async def _node(state):
+        return {
+            "status": "ok",
+            "current_phase": "done",
+            "refutation_results": {
+                "tests_passed": 3,
+                "tests_failed": 1,
+                "total_tests": 4,
+                "overall_robust": False,
+                "gate_decision": "BLOCK",
+                "individual_tests": {
+                    "placebo_treatment": {"passed": True},
+                    "random_common_cause": {"passed": True},
+                    "data_subset": {"passed": True},
+                    "unobserved_common_cause": {"passed": False},
+                },
+            },
+        }
+
+    await _node(base_state)
+
+    kwargs = mock_audit_service.add_entry.call_args.kwargs
+    assert "refutation_results" in kwargs
+    rr = kwargs["refutation_results"]
+    assert isinstance(rr, RefutationResults), (
+        "refutation_results must be a RefutationResults dataclass — "
+        "add_entry calls .to_dict() on it. "
+        f"Got {type(rr).__name__}={rr!r}"
+    )
+    # Field mapping spot-check (mirrors audit_chain_mixin.audited_traced_node)
+    assert rr.placebo_treatment is True
+    assert rr.random_common_cause is True
+    assert rr.data_subset is True
+    # unobserved_common_cause (dict key) maps to unobserved_confound (dataclass field)
+    assert rr.unobserved_confound is False
 
 
 @pytest.mark.asyncio

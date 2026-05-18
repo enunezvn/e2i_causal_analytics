@@ -30,7 +30,7 @@ from src.agents.causal_impact.nodes.sensitivity import analyze_sensitivity
 from src.agents.causal_impact.state import CausalImpactState
 from src.mlops.mlflow_connector import get_mlflow_connector
 from src.mlops.opik_connector import get_opik_connector
-from src.utils.audit_chain import AgentTier
+from src.utils.audit_chain import AgentTier, RefutationResults
 
 logger = logging.getLogger(__name__)
 
@@ -137,9 +137,23 @@ def traced_node(node_name: str) -> Callable[[F], F]:
                         output_summary["tests_passed"] = ref.get("tests_passed")
                         output_summary["overall_robust"] = ref.get("overall_robust")
                         output_summary["gate_decision"] = ref.get("gate_decision")
-                        # Capture refutation results for audit
                         validation_passed = ref.get("overall_robust")
-                        refutation_results = ref
+                        # add_entry calls refutation_results.to_dict() internally
+                        # (audit_chain.py:345); the refutation node persists a
+                        # dict via RefutationSuite.to_legacy_format() so we wrap
+                        # it in the dataclass here. Field mapping mirrors
+                        # audit_chain_mixin.audited_traced_node (:388-403).
+                        individual = ref.get("individual_tests", {})
+                        refutation_results = RefutationResults(
+                            placebo_treatment=individual.get("placebo_treatment", {}).get("passed"),
+                            random_common_cause=individual.get("random_common_cause", {}).get(
+                                "passed"
+                            ),
+                            data_subset=individual.get("data_subset", {}).get("passed"),
+                            unobserved_confound=individual.get("unobserved_common_cause", {}).get(
+                                "passed"
+                            ),
+                        )
                     elif node_name == "sensitivity":
                         sens = result.get("sensitivity_analysis", {})
                         output_summary["e_value"] = sens.get("e_value")
