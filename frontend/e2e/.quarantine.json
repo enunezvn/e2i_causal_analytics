@@ -4,6 +4,6 @@
     "agent-orchestration.spec.ts",
     "intervention-impact.spec.ts",
     "kpi-dictionary.spec.ts",
-    "system-health.spec.ts"
+    "memory-architecture.spec.ts"
   ]
 }
