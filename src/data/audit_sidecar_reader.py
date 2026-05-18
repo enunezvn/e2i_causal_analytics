@@ -27,7 +27,10 @@ logger = logging.getLogger(__name__)
 # Issue #235: schema_version contract between producer (graph.py:
 # write_adaptive_verdicts_sidecar) and reader. Bump major on breaking
 # changes, minor on additive forward-compatible changes.
-_READER_SCHEMA_VERSION = "1.0"
+#
+# 1.1 (Issue #237 Phase 1): additive ``role_attributions`` list. Reader
+# pins MAJOR=1; minor bumps do not WARN.
+_READER_SCHEMA_VERSION = "1.1"
 _READER_SCHEMA_MAJOR = 1
 
 # Issue #235 A3: the set of verdict-dict keys the reader knows how to
@@ -109,6 +112,14 @@ class VerdictRecord:
     evaluator_input_tokens: Optional[int] = None
     evaluator_output_tokens: Optional[int] = None
     evaluator_cost_usd: Optional[float] = None
+    # Phase 1 of causal-role propagation (Issue #237, schema 1.1).
+    # ``None`` on pre-1.1 sidecars (the role_attributions key is
+    # absent). When set, mirrors one row of the sidecar's
+    # ``role_attributions`` list: ``{feature, causal_role, source,
+    # evaluator_satisfied, evaluator_model}``. The lookup map is built
+    # ONCE per file at ``iter_verdict_records`` (O(n) construction,
+    # O(1) per-record lookup) — see codex iter-2 fix in plan §1.5.
+    role_attribution: Optional[dict[str, Any]] = None
 
 
 class SidecarReader:
@@ -183,14 +194,31 @@ class SidecarReader:
             # loop was caller-controlled — pre-scanning makes the warning
             # unconditional on parse.
             self._warn_unknown_verdict_keys(path, verdicts_raw)
+            # Phase 1 of Issue #237 (schema 1.1): build a per-file
+            # {feature: role_attribution} map ONCE so per-record lookup
+            # is O(1). The plan §1.5 codex iter-2 fix is explicit: do
+            # this at file-load boundary, not per-record (which would be
+            # O(n²)).
+            role_attributions_raw = payload.get("role_attributions") or []
+            role_map: dict[str, dict[str, Any]] = {}
+            if isinstance(role_attributions_raw, list):
+                for attr in role_attributions_raw:
+                    if not isinstance(attr, dict):
+                        continue
+                    feature_name = attr.get("feature")
+                    if isinstance(feature_name, str):
+                        role_map[feature_name] = attr
             for raw in verdicts_raw:
                 if not isinstance(raw, dict):
                     continue
+                feature_name = raw.get("feature")
+                attr = role_map.get(feature_name) if isinstance(feature_name, str) else None
                 yield self._build_record(
                     experiment_id=experiment_id,
                     written_at=written_at,
                     source_path=path,
                     raw=raw,
+                    role_attribution=attr,
                 )
 
     @staticmethod
@@ -278,6 +306,7 @@ class SidecarReader:
         written_at: datetime,
         source_path: Path,
         raw: dict[str, Any],
+        role_attribution: Optional[dict[str, Any]] = None,
     ) -> VerdictRecord:
         return VerdictRecord(
             experiment_id=experiment_id,
@@ -306,6 +335,7 @@ class SidecarReader:
             evaluator_output_tokens=_opt_int(raw.get("evaluator_output_tokens")),
             evaluator_cost_usd=_opt_float(raw.get("evaluator_cost_usd")),
             raw_verdict=raw,
+            role_attribution=role_attribution,
         )
 
 
