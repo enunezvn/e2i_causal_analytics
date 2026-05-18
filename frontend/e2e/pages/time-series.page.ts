@@ -3,8 +3,16 @@ import { BasePage } from './base.page'
 import { ROUTES } from '../fixtures/test-data'
 
 /**
- * Page Object Model for Time Series Analysis page.
- * Displays time series trends, forecasting, seasonality decomposition, and anomaly detection.
+ * Page Object Model for the Time Series Analysis page.
+ *
+ * NOTE (post-PR #313, issue #302): The page was rewired onto the live
+ * `/api/monitoring/performance/{model_id}/trend` + `/api/kpis/{id}` endpoints,
+ * and the 38 `sample*` constants were retired. The current UI exposes two
+ * mode tabs — "Model performance" and "KPI history" — instead of the
+ * earlier "Trends & Forecast / Seasonality / Anomalies / Comparison" tabs.
+ * This page object reflects that contract. See `time-series.spec.ts` for
+ * inline performance-trend mocks; do not modify `e2e/fixtures/api-mocks.ts`
+ * per the agent contract on #332.
  */
 export class TimeSeriesPage extends BasePage {
   readonly url = ROUTES.TIME_SERIES
@@ -14,16 +22,35 @@ export class TimeSeriesPage extends BasePage {
     super(page)
   }
 
+  /**
+   * Override the base `goto()` to wait for the React-lazy chunk to mount.
+   * The TimeSeries page is `lazy()`-imported (see `src/router/routes.tsx`)
+   * and the Suspense fallback renders a generic spinner inside `<main>`,
+   * so the base-page heuristic returns prematurely. Wait for the `<h1>`
+   * explicitly before letting assertions run.
+   */
+  async goto(): Promise<void> {
+    await super.goto()
+    // Allow the lazy chunk + initial render to settle. The page header
+    // is unconditional inside TimeSeries.tsx — its visibility is the
+    // canonical signal that the lazy module has mounted.
+    await this.pageHeader.waitFor({ state: 'visible', timeout: 20000 }).catch(() => {})
+  }
+
   // Page Header
   get pageHeader(): Locator {
+    // <h1>Time Series Analysis</h1> in TimeSeries.tsx
     return this.page.getByRole('heading', { name: /Time Series/i }).first()
   }
 
   get pageDescription(): Locator {
+    // "Time series trends, forecasting, seasonality decomposition, and anomaly detection."
     return this.page.getByText(/trends|forecasting|seasonality|anomaly/i).first()
   }
 
-  // Selectors
+  // Selectors. The header renders the metric Select (or KPI Select in KPI mode)
+  // first and the time-range Select second. shadcn SelectTrigger surfaces as
+  // role="combobox".
   get metricSelector(): Locator {
     return this.page.getByRole('combobox').first()
   }
@@ -32,16 +59,18 @@ export class TimeSeriesPage extends BasePage {
     return this.page.getByRole('combobox').nth(1)
   }
 
-  // Action Buttons
+  // Action Buttons. The refresh / export buttons have aria-labels in the
+  // new TimeSeries.tsx (`Refresh` / `Export`).
   get refreshButton(): Locator {
-    return this.page.getByRole('button').filter({ has: this.page.locator('svg.lucide-refresh-cw') }).first()
+    return this.page.getByRole('button', { name: /refresh/i }).first()
   }
 
   get exportButton(): Locator {
-    return this.page.getByRole('button').filter({ has: this.page.locator('svg.lucide-download') }).first()
+    return this.page.getByRole('button', { name: /export/i }).first()
   }
 
-  // KPI Summary Cards
+  // KPI Summary Cards (post-#302). The five cards are titled "Current Value",
+  // "Average", "Maximum", "Minimum", "Data Points".
   get currentValueCard(): Locator {
     return this.page.getByText('Current Value').first()
   }
@@ -58,122 +87,80 @@ export class TimeSeriesPage extends BasePage {
     return this.page.getByText('Minimum').first()
   }
 
-  get anomaliesCard(): Locator {
-    return this.page.getByText('Anomalies').first()
+  get dataPointsCard(): Locator {
+    return this.page.getByText('Data Points').first()
   }
 
+  /**
+   * "Trend stat" — the new UI surfaces a "Trend Summary" card whose body
+   * contains a `<p>Trend</p>` label (alongside Current / Baseline / Change
+   * labels). Match the card title to keep the assertion stable across
+   * styling changes — the title is unconditional within the trend-summary
+   * card and is rendered once `performanceTrend.data` resolves.
+   */
   get trendCard(): Locator {
-    // Look for "Trend" in KPI cards (not the tab)
-    return this.page.locator('h3:has-text("Trend"), .text-sm:has-text("Trend")').first()
+    return this.page.getByText('Trend Summary').first()
   }
 
-  get forecastMapeCard(): Locator {
-    return this.page.getByText('Forecast MAPE').first()
-  }
-
-  get forecastR2Card(): Locator {
-    return this.page.getByText('Forecast R').first()
-  }
-
-  // Tabs - actual tabs are: "Trends & Forecast", "Seasonality", "Anomalies", "Comparison"
+  // Tabs (post-#302): "Model performance" / "KPI history"
   get tabsList(): Locator {
     return this.page.getByRole('tablist')
   }
 
+  get modelPerformanceTab(): Locator {
+    return this.page.getByRole('tab', { name: /model performance/i })
+  }
+
+  get kpiHistoryTab(): Locator {
+    return this.page.getByRole('tab', { name: /kpi history/i })
+  }
+
+  /**
+   * Legacy alias for "Trend tab" — the first/primary tab on the page.
+   * The post-#302 UI calls this "Model performance".
+   */
   get trendTab(): Locator {
-    // Actual tab name is "Trends & Forecast"
-    return this.page.getByRole('tab', { name: /trends/i })
+    return this.modelPerformanceTab
   }
 
-  get trendsTab(): Locator {
-    return this.page.getByRole('tab', { name: /trends/i })
-  }
-
-  get decompositionTab(): Locator {
-    // "Decomposition" is actually "Seasonality" in the UI
-    return this.page.getByRole('tab', { name: /seasonality/i })
-  }
-
+  /**
+   * Legacy alias for "Seasonality tab" — the second tab on the page.
+   * The post-#302 UI calls this "KPI history".
+   */
   get seasonalityTab(): Locator {
-    return this.page.getByRole('tab', { name: /seasonality/i })
+    return this.kpiHistoryTab
   }
 
-  get forecastTab(): Locator {
-    // "Forecast" is combined with Trends in the UI as "Trends & Forecast"
-    return this.page.getByRole('tab', { name: /trends.*forecast|forecast/i })
-  }
-
+  /**
+   * Legacy alias for "Anomalies tab" — the page no longer surfaces a
+   * dedicated anomalies tab, so we fall back to the KPI history tab.
+   */
   get anomaliesTab(): Locator {
-    return this.page.getByRole('tab', { name: /anomalies/i })
+    return this.kpiHistoryTab
   }
 
-  get comparisonTab(): Locator {
-    return this.page.getByRole('tab', { name: /comparison/i })
+  // Performance mode content (active tab on load)
+  get performanceTrendCard(): Locator {
+    return this.page.getByText('Performance Trend').first()
   }
 
-  // Trends & Forecast Tab Content
-  get timeSeriesChart(): Locator {
-    return this.page.getByText('Time Series with Forecast').first()
+  get trendSummaryCard(): Locator {
+    return this.page.getByText('Trend Summary').first()
   }
 
-  get forecastHorizonSelector(): Locator {
-    return this.page.getByRole('combobox').filter({ hasText: /days/i }).first()
+  // KPI mode content
+  get kpiHistoryCard(): Locator {
+    return this.page.getByText('KPI History').first()
   }
 
-  get confidenceIntervalToggle(): Locator {
-    return this.page.getByRole('button', { name: /95% CI/i })
+  // Recharts surface — present in both modes.
+  get chartSurface(): Locator {
+    return this.page.locator('svg.recharts-surface').first()
   }
 
-  // Forecast Metrics Cards
-  get mapeCard(): Locator {
-    return this.page.getByText('MAPE').first()
-  }
-
-  get rmseCard(): Locator {
-    return this.page.getByText('RMSE').first()
-  }
-
-  get maeCard(): Locator {
-    return this.page.getByText('MAE').first()
-  }
-
-  get r2ScoreCard(): Locator {
-    return this.page.getByText('R² Score').first()
-  }
-
-  // Seasonality Tab Content
-  get trendComponentCard(): Locator {
-    return this.page.getByText('Trend Component').first()
-  }
-
-  get seasonalComponentCard(): Locator {
-    return this.page.getByText('Seasonal Component').first()
-  }
-
-  get residualComponentCard(): Locator {
-    return this.page.getByText('Residual Component').first()
-  }
-
-  get seasonalitySummaryCard(): Locator {
-    return this.page.getByText('Seasonality Summary').first()
-  }
-
-  // Anomalies Tab Content
-  get anomalyDetectionCard(): Locator {
-    return this.page.getByText('Anomaly Detection').first()
-  }
-
-  get detectedAnomaliesCard(): Locator {
-    return this.page.getByText('Detected Anomalies').first()
-  }
-
-  get anomalyItems(): Locator {
-    return this.page.locator('.rounded-lg.border').filter({ hasText: /critical|high|medium|low/i })
-  }
-
-  // Comparison Tab Content
-  get periodComparisonCard(): Locator {
-    return this.page.getByText('Period-over-Period Comparison').first()
+  // Model selector (footer card, performance mode only).
+  get modelIdInput(): Locator {
+    return this.page.getByLabel(/model id/i).first()
   }
 
   // Actions
@@ -188,7 +175,15 @@ export class TimeSeriesPage extends BasePage {
   }
 
   async clickTab(tabName: string): Promise<void> {
-    await this.page.getByRole('tab', { name: new RegExp(tabName, 'i') }).click()
+    // Map legacy tab names to the new UI labels so existing specs keep working.
+    const legacyMap: Record<string, RegExp> = {
+      Trend: /model performance/i,
+      Trends: /model performance/i,
+      Seasonality: /kpi history/i,
+      Anomalies: /kpi history/i,
+    }
+    const matcher = legacyMap[tabName] ?? new RegExp(tabName, 'i')
+    await this.page.getByRole('tab', { name: matcher }).first().click()
   }
 
   async clickRefresh(): Promise<void> {
@@ -199,117 +194,69 @@ export class TimeSeriesPage extends BasePage {
     await this.exportButton.click()
   }
 
-  async toggleConfidenceInterval(): Promise<void> {
-    await this.confidenceIntervalToggle.click()
-  }
-
-  // Verification methods
-  async verifyKPISummaryDisplayed(): Promise<boolean> {
+  // Verification helpers
+  async verifyKPICardsDisplayed(): Promise<boolean> {
     try {
-      await this.page.getByText('Current Value').first().waitFor({ state: 'visible', timeout: 5000 })
+      // Use 10s timeout to match the default `toBeVisible` wait — the
+      // large dist bundle can delay KPICard hydration past 5s in CI.
+      await this.currentValueCard.waitFor({ state: 'visible', timeout: 10000 })
       return true
     } catch {
-      const kpis = ['Average', 'Maximum', 'Minimum', 'Anomalies']
-      for (const kpi of kpis) {
-        if (await this.page.getByText(kpi).first().isVisible().catch(() => false)) {
-          return true
-        }
+      // Fallback: any of the other four cards is sufficient.
+      const fallbacks = [
+        this.averageCard,
+        this.maximumCard,
+        this.minimumCard,
+        this.dataPointsCard,
+      ]
+      for (const card of fallbacks) {
+        if (await card.isVisible().catch(() => false)) return true
       }
       return false
     }
   }
 
-  // Alias for backward compatibility
-  async verifyKPICardsDisplayed(): Promise<boolean> {
-    return this.verifyKPISummaryDisplayed()
-  }
-
   async verifyTabsDisplayed(): Promise<boolean> {
     try {
-      await this.tabsList.waitFor({ state: 'visible', timeout: 5000 })
+      await this.tabsList.waitFor({ state: 'visible', timeout: 10000 })
       return await this.tabsList.isVisible()
     } catch {
       return false
     }
   }
 
-  async verifyForecastMetricsDisplayed(): Promise<boolean> {
-    try {
-      await this.page.getByText('MAPE').first().waitFor({ state: 'visible', timeout: 5000 })
-      return true
-    } catch {
-      return false
-    }
-  }
-
+  /**
+   * Validate that the active tab's chart is rendered. Requires BOTH the
+   * "Performance Trend" card title AND the recharts SVG to be visible —
+   * the card title is unconditional within `<TabsContent value="performance">`
+   * but does not by itself prove the chart actually rendered. No page-header
+   * fallback: that would let this method pass when the hook payload is
+   * malformed and the chart never mounts.
+   */
   async verifyTrendChartDisplayed(): Promise<boolean> {
     try {
-      // Wait for page to fully render (charts can take time to load)
-      await this.page.waitForTimeout(2000)
-
-      // Wait for main content to be visible first (uses container or space-y-6 div)
-      const mainContent = this.page.locator('.container, div.space-y-6, div.p-6').first()
-      await mainContent.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {})
-
-      // Look for the time series chart title
-      const hasChartTitle = await this.page.getByText('Time Series with Forecast').first().isVisible({ timeout: 3000 }).catch(() => false)
-      if (hasChartTitle) return true
-
-      // Fallback: look for Trends tab content
-      const hasTrendTab = await this.page.getByRole('tabpanel', { name: /trends/i }).isVisible({ timeout: 2000 }).catch(() => false)
-      if (hasTrendTab) return true
-
-      // Fallback: look for any recharts/chart elements
-      const hasChart = await this.page.locator('[role="application"]').first().isVisible({ timeout: 2000 }).catch(() => false)
-      if (hasChart) return true
-
-      // Fallback: look for SVG chart element (recharts renders to SVG)
-      const hasSvgChart = await this.page.locator('svg.recharts-surface').first().isVisible({ timeout: 1500 }).catch(() => false)
-      if (hasSvgChart) return true
-
-      // Fallback: look for any SVG element in a card
-      const hasAnySvg = await this.page.locator('.rounded-lg svg').first().isVisible({ timeout: 1000 }).catch(() => false)
-      if (hasAnySvg) return true
-
-      // Fallback: look for chart-related text
-      const hasChartText = await this.page.getByText(/forecast|trend|actual|predicted/i).first().isVisible({ timeout: 1000 }).catch(() => false)
-      if (hasChartText) return true
-
-      // Ultimate fallback: check if page header is visible (means page loaded)
-      const hasHeader = await this.page.getByRole('heading', { name: /Time Series/i }).first().isVisible({ timeout: 1000 }).catch(() => false)
-      return hasHeader
+      const cardVisible = await this.performanceTrendCard
+        .isVisible({ timeout: 10000 })
+        .catch(() => false)
+      if (!cardVisible) return false
+      return await this.chartSurface.isVisible({ timeout: 10000 }).catch(() => false)
     } catch {
       return false
     }
   }
 
+  /**
+   * Validate that the "KPI history" tab content renders after a switch.
+   * Requires BOTH the "KPI History" card AND the recharts SVG to be
+   * visible. No page-header fallback (see `verifyTrendChartDisplayed`).
+   */
   async verifyDecompositionDisplayed(): Promise<boolean> {
     try {
-      await this.page.waitForTimeout(1000)
-      // Decomposition is shown in Seasonality tab - look for components
-      const hasTrendComponent = await this.page.getByText('Trend Component').first().isVisible({ timeout: 3000 }).catch(() => false)
-      if (hasTrendComponent) return true
-      const hasSeasonalComponent = await this.page.getByText('Seasonal Component').first().isVisible({ timeout: 2000 }).catch(() => false)
-      if (hasSeasonalComponent) return true
-      const hasSeasonality = await this.page.getByText(/Seasonality Summary|Seasonality/i).first().isVisible({ timeout: 2000 }).catch(() => false)
-      return hasSeasonality
-    } catch {
-      return false
-    }
-  }
-
-  async verifyForecastDisplayed(): Promise<boolean> {
-    try {
-      await this.page.waitForTimeout(1000)
-      // Forecast is shown in Trends & Forecast tab
-      const hasForecastChart = await this.page.getByText(/Time Series with Forecast|Forecast/i).first().isVisible({ timeout: 3000 }).catch(() => false)
-      if (hasForecastChart) return true
-      // Fallback: look for forecast metrics
-      const hasMetrics = await this.page.getByText(/MAPE|RMSE|MAE|R² Score/i).first().isVisible({ timeout: 2000 }).catch(() => false)
-      if (hasMetrics) return true
-      // Fallback: look for chart
-      const hasChart = await this.page.locator('svg.recharts-surface').first().isVisible({ timeout: 2000 }).catch(() => false)
-      return hasChart
+      const cardVisible = await this.kpiHistoryCard
+        .isVisible({ timeout: 10000 })
+        .catch(() => false)
+      if (!cardVisible) return false
+      return await this.chartSurface.isVisible({ timeout: 10000 }).catch(() => false)
     } catch {
       return false
     }
