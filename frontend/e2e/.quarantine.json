@@ -5,7 +5,6 @@
     "data-quality.spec.ts",
     "feature-importance.spec.ts",
     "model-performance.spec.ts",
-    "monitoring.spec.ts",
     "predictive-analytics.spec.ts",
     "agent-orchestration.spec.ts",
     "digital-twin.spec.ts",

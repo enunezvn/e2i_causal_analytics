@@ -1,14 +1,143 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, Route } from '@playwright/test'
 import { MonitoringPage } from '../pages/monitoring.page'
 import { mockApiRoutes } from '../fixtures/api-mocks'
 import { TIMEOUTS } from '../fixtures/test-data'
 import { assertNotLoading, assertNoErrors } from '../utils/assertions'
+
+// ---------------------------------------------------------------------------
+// Inline mocks for the live Monitoring endpoints.
+//
+// Monitoring.tsx (live-wired in PR #318) consumes three endpoints not mocked
+// by the shared fixture (`api-mocks.ts`):
+//
+//   GET /api/monitoring/runs        → MonitoringRunsResponse
+//   GET /api/monitoring/alerts      → AlertListResponse
+//   GET /api/monitoring/health/:id  → ModelHealthSummary
+//
+// We register these via inline `page.route()` calls AFTER `mockApiRoutes()` so
+// Playwright dispatches the latest-registered handler first (#318 already
+// shipped `/api/monitoring/drift/*` mocks in the shared fixture, but those are
+// orthogonal to the three endpoints above).
+//
+// Shape: keep payloads narrow but valid against `frontend/src/types/monitoring.ts`.
+// ---------------------------------------------------------------------------
+
+const MOCK_RUNS = {
+  model_id: 'propensity_v2.1.0',
+  total_runs: 3,
+  runs: [
+    {
+      id: 'run-1',
+      model_version: 'propensity_v2.1.0',
+      run_type: 'scheduled',
+      // Recent timestamp so the client-side time-range filter (defaults to 24h)
+      // keeps the row visible.
+      started_at: new Date(Date.now() - 60_000).toISOString(),
+      completed_at: new Date(Date.now() - 30_000).toISOString(),
+      features_checked: 42,
+      drift_detected_count: 2,
+      alerts_generated: 1,
+      duration_ms: 18_500,
+    },
+    {
+      id: 'run-2',
+      model_version: 'propensity_v2.1.0',
+      run_type: 'manual',
+      started_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+      completed_at: new Date(Date.now() - 4 * 60_000).toISOString(),
+      features_checked: 38,
+      drift_detected_count: 0,
+      alerts_generated: 0,
+      duration_ms: 22_400,
+    },
+    {
+      id: 'run-3',
+      model_version: 'propensity_v2.1.0',
+      run_type: 'scheduled',
+      started_at: new Date(Date.now() - 30 * 60_000).toISOString(),
+      completed_at: new Date(Date.now() - 29 * 60_000).toISOString(),
+      features_checked: 40,
+      drift_detected_count: 1,
+      alerts_generated: 1,
+      duration_ms: 19_100,
+    },
+  ],
+}
+
+const MOCK_ALERTS = {
+  total_count: 2,
+  active_count: 2,
+  alerts: [
+    {
+      id: 'alert-1',
+      model_version: 'propensity_v2.1.0',
+      alert_type: 'drift_detected',
+      severity: 'high',
+      title: 'Feature drift detected',
+      description: 'tenure_months PSI exceeded warning threshold.',
+      status: 'active',
+      triggered_at: new Date(Date.now() - 10 * 60_000).toISOString(),
+    },
+    {
+      id: 'alert-2',
+      model_version: 'propensity_v2.1.0',
+      alert_type: 'performance_degradation',
+      severity: 'critical',
+      title: 'AUC dropped below SLO',
+      description: 'Rolling AUC fell below 0.80 over the last 24h.',
+      status: 'active',
+      triggered_at: new Date(Date.now() - 20 * 60_000).toISOString(),
+    },
+  ],
+}
+
+const MOCK_HEALTH = {
+  model_id: 'propensity_v2.1.0',
+  overall_health: 'warning' as const,
+  last_check: new Date().toISOString(),
+  drift_score: 0.42,
+  active_alerts: 2,
+  last_retrained: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
+  performance_trend: 'stable' as const,
+  recommendations: ['Investigate tenure_months PSI', 'Schedule a refresh of the holdout snapshot'],
+}
+
+async function mockMonitoringEndpoints(
+  page: Parameters<typeof mockApiRoutes>[0],
+): Promise<void> {
+  await page.route('**/api/monitoring/alerts**', async (route: Route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(MOCK_ALERTS),
+    })
+  })
+
+  await page.route('**/api/monitoring/runs**', async (route: Route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(MOCK_RUNS),
+    })
+  })
+
+  await page.route('**/api/monitoring/health/**', async (route: Route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(MOCK_HEALTH),
+    })
+  })
+}
 
 test.describe('Monitoring Page', () => {
   let monitoringPage: MonitoringPage
 
   test.beforeEach(async ({ page }) => {
     await mockApiRoutes(page)
+    // Register live-monitoring mocks AFTER `mockApiRoutes` so Playwright matches
+    // our specific endpoints first (last-registered wins).
+    await mockMonitoringEndpoints(page)
     monitoringPage = new MonitoringPage(page)
     await monitoringPage.goto()
   })
@@ -45,20 +174,28 @@ test.describe('Monitoring Page', () => {
       expect(hasMetrics).toBeTruthy()
     })
 
-    test('should show Total Requests metric', async () => {
-      await expect(monitoringPage.totalRequestsCard).toBeVisible()
+    test('should show Total Runs metric', async () => {
+      await expect(monitoringPage.totalRunsCard).toBeVisible()
     })
 
-    test('should show Error Rate metric', async () => {
-      await expect(monitoringPage.errorRateCard).toBeVisible()
+    test('should show Drift Rate metric', async () => {
+      await expect(monitoringPage.driftRateCard).toBeVisible()
     })
 
-    test('should show Avg Latency metric', async () => {
-      await expect(monitoringPage.avgLatencyCard).toBeVisible()
+    test('should show Avg Run Duration metric', async () => {
+      await expect(monitoringPage.avgRunDurationCard).toBeVisible()
     })
 
-    test('should show Active Users metric', async () => {
-      await expect(monitoringPage.activeUsersCard).toBeVisible()
+    test('should show Active Alerts metric', async () => {
+      await expect(monitoringPage.activeAlertsCard).toBeVisible()
+    })
+
+    test('should show Drift Events metric', async () => {
+      await expect(monitoringPage.driftEventsCard).toBeVisible()
+    })
+
+    test('should show Health Score metric', async () => {
+      await expect(monitoringPage.healthScoreCard).toBeVisible()
     })
   })
 
@@ -68,8 +205,15 @@ test.describe('Monitoring Page', () => {
     })
 
     test('should allow time range selection', async () => {
-      await monitoringPage.selectTimeRange('24 hours')
+      await monitoringPage.selectTimeRange('24 Hours')
+      // Give the runs query time to refetch with new `days` param.
       await monitoringPage.page.waitForTimeout(500)
+    })
+  })
+
+  test.describe('Model Selector', () => {
+    test('should display model selector', async () => {
+      await expect(monitoringPage.modelSelector).toBeVisible()
     })
   })
 
@@ -83,8 +227,8 @@ test.describe('Monitoring Page', () => {
       await expect(monitoringPage.apiUsageTab).toBeVisible()
     })
 
-    test('should show User Activity tab', async () => {
-      await expect(monitoringPage.userActivityTab).toBeVisible()
+    test('should show Runs tab', async () => {
+      await expect(monitoringPage.runsTab).toBeVisible()
     })
 
     test('should show Errors tab', async () => {
@@ -108,26 +252,28 @@ test.describe('Monitoring Page', () => {
     })
   })
 
-  test.describe('User Activity Tab', () => {
-    test('should display user activity when tab clicked', async () => {
-      await monitoringPage.clickTab('User Activity')
-      const hasActivity = await monitoringPage.verifyUserActivityDisplayed()
-      expect(hasActivity).toBeTruthy()
+  test.describe('Runs Tab', () => {
+    test('should display monitoring runs when tab clicked', async () => {
+      // The live page renames the "User Activity" tab → "Runs" but keeps the
+      // underlying TabsTrigger value="activity".
+      await monitoringPage.clickTab('^Runs$')
+      const hasRuns = await monitoringPage.verifyRunsDisplayed()
+      expect(hasRuns).toBeTruthy()
     })
   })
 
   test.describe('Errors Tab', () => {
-    test('should display error logs when tab clicked', async () => {
+    test('should display alert feed when tab clicked', async () => {
       await monitoringPage.clickTab('Errors')
-      const hasErrors = await monitoringPage.verifyErrorLogsDisplayed()
-      expect(hasErrors).toBeTruthy()
+      const hasAlerts = await monitoringPage.verifyAlertFeedDisplayed()
+      expect(hasAlerts).toBeTruthy()
     })
   })
 
   test.describe('System Tab', () => {
-    test('should display system metrics when tab clicked', async () => {
+    test('should display model health when tab clicked', async () => {
       await monitoringPage.clickTab('System')
-      const hasSystem = await monitoringPage.verifySystemMetricsDisplayed()
+      const hasSystem = await monitoringPage.verifyModelHealthDisplayed()
       expect(hasSystem).toBeTruthy()
     })
   })
@@ -140,6 +286,10 @@ test.describe('Monitoring Page', () => {
     test('should allow refresh', async () => {
       await monitoringPage.clickRefresh()
       await monitoringPage.page.waitForTimeout(500)
+    })
+
+    test('should have export button', async () => {
+      await expect(monitoringPage.exportButton).toBeVisible()
     })
   })
 
