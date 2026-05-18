@@ -1,6 +1,6 @@
 {
   "budget": 1,
   "specs": [
-    "agent-orchestration.spec.ts"
+    "memory-architecture.spec.ts"
   ]
 }
