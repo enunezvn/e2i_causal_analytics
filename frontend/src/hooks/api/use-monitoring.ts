@@ -199,15 +199,23 @@ export function useTriggerDriftDetection(
   >
 ) {
   const queryClient = useQueryClient();
+  // #324 — compose caller's onSuccess with the hook's invalidation so
+  // consumers (e.g. DataQuality.tsx) can add their own toasts without losing
+  // the cache-invalidation contract this hook documents. Same idea for
+  // onError so caller hooks don't silently override mutation-level error
+  // handling either.
+  const callerOnSuccess = options?.onSuccess;
+  const callerOnError = options?.onError;
 
   return useMutation<
     DriftDetectionResponse,
     ApiError,
     { request: TriggerDriftDetectionRequest; asyncMode?: boolean }
   >({
+    ...options,
     mutationFn: ({ request, asyncMode = true }) =>
       triggerDriftDetection(request, asyncMode),
-    onSuccess: (_data, variables) => {
+    onSuccess: (data, variables, onMutateResult, context) => {
       // Invalidate drift queries for this model
       queryClient.invalidateQueries({
         queryKey: queryKeys.monitoring.driftLatest(variables.request.model_id),
@@ -215,8 +223,11 @@ export function useTriggerDriftDetection(
       queryClient.invalidateQueries({
         queryKey: queryKeys.monitoring.driftHistory(variables.request.model_id),
       });
+      callerOnSuccess?.(data, variables, onMutateResult, context);
     },
-    ...options,
+    onError: (error, variables, onMutateResult, context) => {
+      callerOnError?.(error, variables, onMutateResult, context);
+    },
   });
 }
 

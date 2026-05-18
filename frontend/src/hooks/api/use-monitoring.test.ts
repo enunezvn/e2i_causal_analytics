@@ -431,6 +431,56 @@ describe('useTriggerDriftDetection', () => {
     );
     expect(invalidateSpy).toHaveBeenCalled();
   });
+
+  // #324 regression — caller-supplied onSuccess MUST compose with the hook's
+  // built-in invalidation, not replace it. Codex iter-1 caught the original
+  // `...options` after onSuccess pattern silently overriding invalidation.
+  it('still invalidates drift queries when caller passes onSuccess option', async () => {
+    vi.mocked(monitoringApi.triggerDriftDetection).mockResolvedValueOnce(mockDriftResponse);
+    const { wrapper, queryClient } = createWrapper();
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    const callerOnSuccess = vi.fn();
+
+    const { result } = renderHook(
+      () => useTriggerDriftDetection({ onSuccess: callerOnSuccess }),
+      { wrapper }
+    );
+
+    result.current.mutate({
+      request: { model_id: 'propensity_v2.1.0', time_window: '30d' },
+      asyncMode: true,
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    // Caller's callback runs
+    expect(callerOnSuccess).toHaveBeenCalledTimes(1);
+    // AND invalidation still fires (the contract this hook documents)
+    expect(invalidateSpy).toHaveBeenCalled();
+  });
+
+  // #324 regression — caller-supplied onError MUST run (was previously also
+  // replaceable by `...options` spread; symmetric guard).
+  it('runs caller onError on mutation failure', async () => {
+    const error = new Error('boom');
+    vi.mocked(monitoringApi.triggerDriftDetection).mockRejectedValueOnce(error);
+    const { wrapper } = createWrapper();
+    const callerOnError = vi.fn();
+
+    const { result } = renderHook(
+      () => useTriggerDriftDetection({ onError: callerOnError }),
+      { wrapper }
+    );
+
+    result.current.mutate({
+      request: { model_id: 'propensity_v2.1.0', time_window: '30d' },
+      asyncMode: true,
+    });
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+
+    expect(callerOnError).toHaveBeenCalledTimes(1);
+  });
 });
 
 // =============================================================================

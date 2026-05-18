@@ -143,4 +143,106 @@ test.describe('Data Quality Page', () => {
       await expect(dataPage.mainContent).toBeVisible()
     })
   })
+
+  // ---------------------------------------------------------------------------
+  // Post-#330 DOM contract — coverage for live-wired behaviors that #320 +
+  // #330 introduced. #306 was closed by #320 but the spec was never updated
+  // to assert against the new accessible-name + interaction surfaces:
+  //   - #322 status filter Select wired to per-row computed status
+  //   - #323 page-level driftHistoryError banner (default tab visible)
+  //   - #325 Export button disabled while datasets are loading
+  //   - #326 triggerDrift POST sends time_window=30d (aligned with display)
+  //   - #328 accessible names on Search input + Status SelectTrigger
+  // Refs #332.
+  // ---------------------------------------------------------------------------
+  test.describe('Post-#330 features', () => {
+    test('#328 search input has accessible label', async () => {
+      // The Input is associated with an sr-only <Label htmlFor="dq-search">.
+      // getByLabel proves the association by accessible-name, not placeholder.
+      await expect(dataPage.ruleSearchInputByLabel).toBeVisible()
+    })
+
+    test('#328 status filter SelectTrigger has accessible aria-label', async () => {
+      // Addressed as a combobox by its aria-label rather than visible text
+      // (the visible text is the SelectValue placeholder "Status").
+      await expect(dataPage.statusFilter).toBeVisible()
+    })
+
+    test('#322 status filter exposes Pass / Warning / Fail / All options', async () => {
+      await dataPage.statusFilter.click()
+      // Radix SelectContent renders options as role=option once open.
+      for (const label of [/^all$/i, /^pass$/i, /^warning$/i, /^fail$/i]) {
+        await expect(dataPage.page.getByRole('option', { name: label })).toBeVisible()
+      }
+    })
+
+    test('#322 search filter hides every row and triggers the empty-state', async () => {
+      // The empty-state ("No data quality KPIs match your filters") is shared
+      // between the status filter (#322) and the search filter. We assert via
+      // search — it's deterministic regardless of per-row useKPIDetail timing
+      // (the status filter path depends on every row's value query having
+      // resolved, which the shared api-mocks don't currently surface as a
+      // numeric value with the URL shape useKPIValue produces).
+      await dataPage.searchRules('this-rule-id-does-not-exist-zzzzz')
+      await expect(dataPage.noKpisMatchEmptyState).toBeVisible()
+    })
+
+    test('#322 clearing the search restores rows and hides the empty-state', async () => {
+      // Round-trip: empty-state → cleared → table rows back. Guards the parent's
+      // visibleKpiCount memo against filter-state staleness.
+      await dataPage.searchRules('this-rule-id-does-not-exist-zzzzz')
+      await expect(dataPage.noKpisMatchEmptyState).toBeVisible()
+      await dataPage.searchRules('')
+      await expect(dataPage.noKpisMatchEmptyState).not.toBeVisible()
+    })
+
+    test('#323 surfaces drift-history error banner on default (Validation Rules) tab', async ({ page }) => {
+      // Override the shared drift-history mock to a 5xx BEFORE navigating so
+      // the page mounts with an error state already populated. The banner is
+      // hoisted page-level (#323) so it's visible from the default tab.
+      //
+      // Using 4xx (404) rather than 5xx so the shared QueryClient's shouldRetry
+      // skips retries (4xx => no retry except 408/429); 5xx would trigger 3
+      // exponential-backoff retries (~7s) before the error state lands.
+      await page.route('**/api/monitoring/drift/history/**', async (route) => {
+        await route.fulfill({
+          status: 404,
+          contentType: 'application/json',
+          body: JSON.stringify({ detail: 'simulated drift-history failure' }),
+        })
+      })
+      // Re-navigate so the new route takes effect on the underlying query.
+      await dataPage.goto()
+      await expect(dataPage.driftHistoryErrorBanner).toBeVisible({ timeout: 15000 })
+      // And we are on the default (rules) tab, NOT Quality Issues.
+      await expect(dataPage.validationRulesTab).toHaveAttribute('data-state', 'active')
+    })
+
+    test('#325 Export button becomes enabled once the datasets finish loading', async () => {
+      // isAnyLoading = kpiLoading || driftLoading || driftHistoryLoading. Once
+      // all three resolve via the shared mocks, the button must be enabled.
+      // This guards the disabled-while-loading wiring against a regression
+      // where isAnyLoading is left "true" forever.
+      await expect(dataPage.exportButton).toBeEnabled()
+    })
+
+    test('#326 Refresh triggers drift detection with time_window=30d', async ({ page }) => {
+      // Issue #326 aligned the trigger window with the 30-day display window.
+      // Assert on the request payload to catch a silent revert to '7d'.
+      const requestPromise = page.waitForRequest(
+        (req) =>
+          req.url().includes('/api/monitoring/drift/detect') && req.method() === 'POST'
+      )
+      await dataPage.clickRefresh()
+      const request = await requestPromise
+      const body = request.postDataJSON() as {
+        model_id?: string
+        time_window?: string
+        check_data_drift?: boolean
+      } | null
+      expect(body?.time_window).toBe('30d')
+      expect(body?.model_id).toBe('data_quality_pipeline')
+      expect(body?.check_data_drift).toBe(true)
+    })
+  })
 })

@@ -600,6 +600,58 @@ class TestListMonitoringRuns:
         assert data["total_runs"] == 0
         assert data["runs"] == []
 
+    def test_list_runs_honors_days_param(self, client, mock_run_record):
+        """Issue #321 MED: /api/monitoring/runs must pass `days` through.
+
+        Previously the route computed a cutoff datetime but never forwarded it
+        to `get_recent_runs`, so the endpoint silently ignored the query param.
+        Verify that `get_recent_runs` is called with a `since` kwarg derived
+        from the requested days.
+        """
+        with patch("src.repositories.drift_monitoring.MonitoringRunRepository") as MockRepo:
+            mock_repo = AsyncMock()
+            mock_repo.get_recent_runs.return_value = [mock_run_record]
+            MockRepo.return_value = mock_repo
+
+            response = client.get("/monitoring/runs", params={"days": 7})
+
+            assert response.status_code == 200
+            assert mock_repo.get_recent_runs.called
+            kwargs = mock_repo.get_recent_runs.call_args.kwargs
+            assert "since" in kwargs, f"expected get_recent_runs(since=...) kwarg, got {kwargs!r}"
+            since = kwargs["since"]
+            assert isinstance(since, datetime)
+            expected = datetime.now(timezone.utc) - timedelta(days=7)
+            # tolerate a few seconds of clock drift during test setup
+            assert abs((since - expected).total_seconds()) < 30, (
+                f"since={since!r} not within 30s of days=7 cutoff {expected!r}"
+            )
+
+    def test_list_runs_days_param_changes_cutoff(self, client, mock_run_record):
+        """Calling /runs with days=7 vs days=30 must yield different `since` cutoffs."""
+        captured = []
+
+        with patch("src.repositories.drift_monitoring.MonitoringRunRepository") as MockRepo:
+            mock_repo = AsyncMock()
+
+            async def fake_get_recent_runs(*args, **kwargs):
+                captured.append(kwargs.get("since"))
+                return [mock_run_record]
+
+            mock_repo.get_recent_runs.side_effect = fake_get_recent_runs
+            MockRepo.return_value = mock_repo
+
+            client.get("/monitoring/runs", params={"days": 7})
+            client.get("/monitoring/runs", params={"days": 30})
+
+        assert len(captured) == 2
+        since_7, since_30 = captured
+        assert since_7 is not None and since_30 is not None
+        # 30-day cutoff should be earlier than 7-day cutoff
+        assert since_30 < since_7, (
+            f"days=30 cutoff {since_30!r} should be earlier than days=7 cutoff {since_7!r}"
+        )
+
 
 # =============================================================================
 # MODEL HEALTH ENDPOINT TESTS

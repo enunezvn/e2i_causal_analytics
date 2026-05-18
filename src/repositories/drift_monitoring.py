@@ -486,6 +486,7 @@ class MonitoringRunRepository(BaseRepository[MonitoringRunRecord]):
         self,
         model_version: Optional[str] = None,
         limit: int = 10,
+        since: Optional[datetime] = None,
     ) -> List[MonitoringRunRecord]:
         """
         Get recent monitoring runs.
@@ -493,6 +494,7 @@ class MonitoringRunRepository(BaseRepository[MonitoringRunRecord]):
         Args:
             model_version: Optional filter by model
             limit: Maximum records
+            since: If provided, only return runs with ``started_at >= since``.
 
         Returns:
             List of recent runs
@@ -509,6 +511,9 @@ class MonitoringRunRepository(BaseRepository[MonitoringRunRecord]):
 
         if model_version:
             query = query.eq("model_version", model_version)
+
+        if since is not None:
+            query = query.gte("started_at", since.isoformat())
 
         result = await query.execute()
 

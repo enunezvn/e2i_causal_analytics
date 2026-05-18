@@ -9,6 +9,25 @@ test.describe('KPI Dictionary Page', () => {
 
   test.beforeEach(async ({ page }) => {
     await mockApiRoutes(page)
+    // Override the shared `/workstreams` stub (which returns only one) with
+    // the full 4-workstream payload matching WORKSTREAM_DISPLAY so the inner
+    // workstream tabs (Model Performance / Trigger Performance / Business
+    // Impact) actually render. Inline route runs LIFO above mockApiRoutes.
+    await page.route('**/api/kpis/workstreams', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          workstreams: [
+            { id: 'ws1_data_quality', name: 'WS1: Data Quality', kpi_count: 9 },
+            { id: 'ws1_model_performance', name: 'WS1: Model Performance', kpi_count: 9 },
+            { id: 'ws2_triggers', name: 'WS2: Trigger Performance', kpi_count: 8 },
+            { id: 'ws3_business', name: 'WS3: Business Impact', kpi_count: 10 },
+          ],
+          total: 4,
+        }),
+      }),
+    )
     kpiPage = new KPIDictionaryPage(page)
     await kpiPage.goto()
   })

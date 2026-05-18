@@ -15,6 +15,7 @@ Author: E2I Causal Analytics Team
 Version: 4.2.0
 """
 
+import inspect
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -212,6 +213,125 @@ class BatchExplainResponse(BaseModel):
 # =============================================================================
 # DEPENDENCY INJECTION
 # =============================================================================
+
+
+# =============================================================================
+# HELPERS (Issue #321 — FE/BE contract drift cleanup)
+# =============================================================================
+
+
+def _normalize_history_row(row: Dict[str, Any], masked_patient_id: str) -> Dict[str, Any]:
+    """Normalize an ``ml_shap_analyses`` row to the FE ``ExplainResponse`` shape.
+
+    The FE type ``ExplanationHistoryResponse`` (see
+    ``frontend/src/types/explain.ts``) declares ``explanations: ExplainResponse[]``.
+    The DB row uses different column names and stores SHAP values as a dict;
+    this helper bridges the two without forcing a Pydantic re-validation
+    (which would fail on missing optional fields and reject legacy rows).
+
+    Column-name precedence for the SHAP map (signed per-feature contributions):
+
+    1. ``local_shap_values`` — canonical column in ``ml_shap_analyses`` per
+       ``database/ml/mlops_tables.sql``. Local-realtime rows store signed
+       per-patient SHAP contributions here.
+    2. ``shap_values`` — referenced by views/functions in migration
+       ``database/ml/011_realtime_shap_audit.sql`` for legacy callers.
+    3. ``global_importance`` — last-resort fallback. NOTE: this column
+       stores mean-absolute importance, so sign is lost. Only used when
+       neither of the signed columns is present (legacy global rows).
+    """
+    shap_values: Dict[str, Any] = (
+        row.get("local_shap_values") or row.get("shap_values") or row.get("global_importance") or {}
+    )
+    if isinstance(shap_values, dict):
+        ranked = sorted(
+            shap_values.items(),
+            key=lambda kv: abs(float(kv[1]) if kv[1] is not None else 0.0),
+            reverse=True,
+        )
+        top_features = [
+            {
+                "feature_name": name,
+                "feature_value": None,
+                "shap_value": float(value) if value is not None else 0.0,
+                "contribution_direction": "positive"
+                if (value is not None and float(value) >= 0)
+                else "negative",
+                "contribution_rank": idx + 1,
+            }
+            for idx, (name, value) in enumerate(ranked)
+        ]
+        shap_sum = float(sum(float(v) for v in shap_values.values() if v is not None))
+    else:
+        top_features = []
+        shap_sum = 0.0
+
+    request_ts = row.get("request_timestamp") or row.get("computed_at")
+
+    # NOTE: ``model_type`` and ``model_version_id`` are NOT columns on the
+    # current ``ml_shap_analyses`` schema (only ``model_registry_id`` FK is).
+    # The FE type declares them as required strings, so we surface ``""``
+    # when the row carries nothing — better than null which would break
+    # FE deserialization. A follow-up issue tracks adding these as proper
+    # columns + persisting them in the audit-write path.
+    return {
+        "explanation_id": row.get("explanation_id") or row.get("id") or "",
+        "request_timestamp": request_ts,
+        "patient_id": masked_patient_id,
+        "model_type": row.get("model_type") or "",
+        "model_version_id": row.get("model_version_id") or row.get("model_registry_id") or "",
+        "prediction_class": row.get("prediction_class") or "",
+        "prediction_probability": float(row.get("prediction_probability") or 0.0),
+        "base_value": (float(row["base_value"]) if row.get("base_value") is not None else None),
+        "top_features": top_features,
+        "shap_sum": shap_sum,
+        "narrative_explanation": row.get("natural_language_explanation"),
+        "computation_time_ms": float(row.get("response_time_ms") or 0.0),
+        "audit_stored": True,
+    }
+
+
+async def _get_latest_versions_by_model_type() -> Dict[str, Optional[str]]:
+    """Look up the latest ``model_version`` for each ``model_name`` in the
+    registry, keyed by the matching ``ModelType.value``.
+
+    Returns ``{model_type_value: latest_version_or_None}`` for every member
+    of :class:`ModelType`. Best-effort: any error yields all-``None`` values
+    so the response shape stays stable even with no DB connection.
+    """
+    versions: Dict[str, Optional[str]] = {mt.value: None for mt in ModelType}
+    try:
+        from src.memory.services.factories import get_async_supabase_client
+
+        client = await get_async_supabase_client()
+        if client is None:
+            return versions
+
+        # Fetch (model_name, model_version) for any of our model types. The
+        # set is small (4); a single SELECT with ``in_`` is cheaper than 4
+        # per-type round-trips. ``ml_model_registry.registered_at`` is the
+        # canonical timestamp column (see database/ml/mlops_tables.sql:166);
+        # there is no ``created_at`` column on this table.
+        result = await (
+            client.table("ml_model_registry")
+            .select("model_name,model_version,registered_at")
+            .in_("model_name", list(versions.keys()))
+            .order("registered_at", desc=True)
+            .execute()
+        )
+
+        rows: List[Dict[str, Any]] = result.data or []
+        # Order desc by registered_at — first row per model_name wins.
+        for r in rows:
+            name = r.get("model_name")
+            if name in versions and versions[name] is None:
+                versions[name] = r.get("model_version")
+        return versions
+
+    except Exception as e:
+        # Surface as debug — this is best-effort enrichment, not load-bearing.
+        logger.debug(f"latest_version enrichment unavailable: {e}")
+        return versions
 
 
 class RealTimeSHAPService:
@@ -470,42 +590,74 @@ class RealTimeSHAPService:
         shap_values: Dict[str, float],
         prediction: Dict[str, Any],
     ) -> bool:
-        """Store explanation in ml_shap_analyses for regulatory audit."""
+        """Store explanation in ``ml_shap_analyses`` for regulatory audit.
+
+        Issue #321 HIGH — write rows with ``analysis_type='local_realtime'``
+        and the canonical local-explanation columns (``patient_id``,
+        ``entity_type='patient'``, ``entity_id=patient_id``, signed
+        ``local_shap_values``, ``prediction_*``, ``model_type``,
+        ``model_version_id``, ``explanation_id``, ``request_timestamp``)
+        so that ``/explain/history/{patient_id}`` can actually retrieve
+        the writes produced by ``/explain/predict``.
+
+        Previously the route called ``ShapAnalysisRepository.store_analysis``,
+        which writes ``analysis_type='global'`` plus mean-absolute
+        ``global_importance`` only — meaning new realtime explanations
+        could not be looked up by patient_id (the new HIGH symptom of #321).
+        """
         await self._ensure_initialized()
 
-        if self.shap_repo is None:
+        if self.shap_repo is None or self.shap_repo.client is None:
             logger.warning("SHAP repository not available, skipping audit storage")
             return False
 
         try:
-            # Build analysis dict matching repository schema
-            analysis_dict = {
-                "experiment_id": explanation_id,
-                "feature_importance": [
-                    {"feature": name, "importance": abs(value)}
-                    for name, value in sorted(
+            now = datetime.now(timezone.utc).isoformat()
+            # Only the columns actually present on ``ml_shap_analyses`` per
+            # ``database/ml/mlops_tables.sql`` + migration
+            # ``database/ml/011_realtime_shap_audit.sql``. PostgREST rejects
+            # inserts that name unknown columns, so we MUST NOT write fields
+            # like ``model_type`` / ``model_version_id`` / ``shap_values`` that
+            # have no schema column. (The retrieval normalizer still surfaces
+            # these via best-effort row.get() so future schema additions can
+            # widen the column set without code changes.)
+            db_record: Dict[str, Any] = {
+                "id": str(uuid.uuid4()),
+                "model_registry_id": None,
+                "analysis_type": "local_realtime",
+                # migration 011 columns
+                "explanation_id": explanation_id,
+                "patient_id": patient_id,
+                "request_timestamp": now,
+                "prediction_class": prediction.get("prediction_class"),
+                "prediction_probability": prediction.get("prediction_probability"),
+                # mlops_tables.sql local-explanation columns
+                "entity_type": "patient",
+                "entity_id": patient_id,
+                # Signed per-feature contributions — canonical column for
+                # local explanations (mlops_tables.sql:363).
+                "local_shap_values": dict(shap_values),
+                "base_value": prediction.get("base_value"),
+                "computed_at": now,
+                "key_drivers": [
+                    name
+                    for name, _ in sorted(
                         shap_values.items(), key=lambda x: abs(x[1]), reverse=True
-                    )
+                    )[:5]
                 ],
-                "interactions": [],  # Local explanations don't compute interactions
-                "interpretation": f"Real-time explanation for patient {patient_id}",
-                "top_features": list(shap_values.keys())[:5],
-                "samples_analyzed": 1,
-                "computation_time_seconds": 0,  # Will be updated
-                "explainer_type": "TreeExplainer",  # Most common
+                "computation_method": "TreeExplainer",
             }
+            # Strip None to let DB defaults apply.
+            db_record = {k: v for k, v in db_record.items() if v is not None}
 
-            result = await self.shap_repo.store_analysis(
-                analysis_dict=analysis_dict,
-                model_registry_id=None,  # Real-time doesn't have registry ID
+            result_or_coro = (
+                self.shap_repo.client.table(self.shap_repo.table_name).insert(db_record).execute()
             )
+            if inspect.isawaitable(result_or_coro):
+                await result_or_coro
 
-            if result:
-                logger.info(f"Stored audit record for explanation {explanation_id}")
-                return True
-            else:
-                logger.warning(f"Failed to store audit record for {explanation_id}")
-                return False
+            logger.info(f"Stored audit record for explanation {explanation_id}")
+            return True
 
         except Exception as e:
             logger.error(f"Error storing audit record: {e}", exc_info=True)
@@ -727,25 +879,43 @@ async def get_explanation_history(
                 "message": "Database connection not available",
             }
 
-        # Query ml_shap_analyses table
-        # Note: Current schema tracks by model_registry_id, not patient_id
-        # For patient-level history, we'd need to extend the schema
-        # For now, return recent analyses as a demonstration
-        result = (
-            repo.client.table(repo.table_name)
-            .select("*")
-            .order("computed_at", desc=True)
-            .limit(limit)
-            .execute()
-        )
+        # Issue #321 HIGH — filter rows by patient_id. The ml_shap_analyses
+        # table has a `patient_id` column (per migration
+        # database/ml/011_realtime_shap_audit.sql) so the path-param can be
+        # used directly; previously the route ignored it. Rows are normalized
+        # to the FE ``ExplanationHistoryResponse { explanations: ExplainResponse[] }``
+        # contract so the frontend type matches runtime.
+        #
+        # ``get_shap_analysis_repository`` installs an async Supabase client
+        # (see ``src/repositories/shap_analysis.py``), so ``.execute()``
+        # returns a coroutine and must be awaited. We detect awaitability so
+        # the same code path works with both async clients (live) and the
+        # sync ``MagicMock`` chains used by unit tests.
+        query = repo.client.table(repo.table_name).select("*").eq("patient_id", patient_id)
+        # NOTE: ``model_type`` is not a column on the current
+        # ``ml_shap_analyses`` schema (only ``model_registry_id`` FK is), so
+        # we cannot push the optional ``model_type`` filter into the
+        # supabase query — doing so would 4xx with PostgREST. We retrieve
+        # all rows for the patient and apply the filter client-side after
+        # row normalization. A schema migration adding ``model_type`` will
+        # let us push this back into the query.
+        result_or_coro = query.order("request_timestamp", desc=True).limit(limit).execute()
+        if inspect.isawaitable(result_or_coro):
+            result = await result_or_coro
+        else:
+            result = result_or_coro
 
-        explanations = result.data if result.data else []
+        rows = result.data if result.data else []
+        # Optional client-side ``model_type`` filter (see note above on why
+        # this is not pushed into the supabase query).
+        if model_type is not None:
+            rows = [r for r in rows if r.get("model_type") == model_type.value]
+        explanations = [_normalize_history_row(row, masked_patient_id) for row in rows]
 
         return {
             "patient_id": masked_patient_id,
             "total_explanations": len(explanations),
             "explanations": explanations,
-            "note": "Currently showing recent analyses. Patient-level filtering requires schema extension.",
         }
 
     except Exception as e:
@@ -773,10 +943,17 @@ async def list_explainable_models() -> Dict[str, Any]:
     # Get cache stats from SHAP explainer
     cache_stats = service.shap_explainer.get_cache_stats()
 
+    # Issue #321 LOW — emit `latest_version` per model so the response matches
+    # the FE type ``ExplainableModelInfo`` (frontend/src/types/explain.ts).
+    # Enrichment is best-effort: if the registry is unreachable, the field
+    # is still present but ``None``.
+    latest_versions = await _get_latest_versions_by_model_type()
+
     return {
         "supported_models": [
             {
                 "model_type": mt.value,
+                "latest_version": latest_versions.get(mt.value),
                 "explainer_type": "TreeExplainer"
                 if mt
                 in [ModelType.PROPENSITY, ModelType.RISK_STRATIFICATION, ModelType.CHURN_PREDICTION]

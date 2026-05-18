@@ -20,7 +20,7 @@
  * @module pages/DataQuality
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Database,
   RefreshCw,
@@ -41,6 +41,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   Select,
@@ -57,6 +58,7 @@ import {
   useDriftHistory,
   useTriggerDriftDetection,
 } from '@/hooks/api/use-monitoring';
+import { toast } from '@/hooks/use-toast';
 import { Workstream } from '@/types/kpi';
 import type { KPIMetadata, KPIThreshold } from '@/types/kpi';
 
@@ -134,7 +136,15 @@ function severityBadgeVariant(
  *
  * Page-local (NOT exported) to avoid collisions with sibling wiring PRs.
  */
-function KPIDrilldownRow({ kpi }: { kpi: KPIMetadata }) {
+function KPIDrilldownRow({
+  kpi,
+  statusFilter = 'all',
+  onStatusComputed,
+}: {
+  kpi: KPIMetadata;
+  statusFilter?: string;
+  onStatusComputed?: (kpiId: string, status: 'pass' | 'warning' | 'fail') => void;
+}) {
   const { metadata, value, isLoading, error } = useKPIDetail(kpi.id);
 
   // Prefer freshly fetched metadata; fall back to the list item to avoid a flash
@@ -142,6 +152,19 @@ function KPIDrilldownRow({ kpi }: { kpi: KPIMetadata }) {
   const numericValue = typeof value?.value === 'number' ? value.value : undefined;
   const threshold = effectiveMeta.threshold;
   const ruleStatus = statusFromThreshold(numericValue, threshold);
+
+  // #322 — wire status filter to the computed per-rule status. The KPI list
+  // endpoint does NOT return a rolled-up status; we compute it here from
+  // (value, threshold) using the same helper that drives the row's status
+  // icon. Selecting Pass/Warning/Fail hides non-matching rows; parent uses
+  // the reported status to drive the empty-state when ALL rows are filtered.
+  useEffect(() => {
+    onStatusComputed?.(kpi.id, ruleStatus);
+  }, [kpi.id, ruleStatus, onStatusComputed]);
+
+  if (statusFilter !== 'all' && statusFilter !== ruleStatus) {
+    return null;
+  }
 
   return (
     <tr className="border-b border-border hover:bg-muted/50">
@@ -201,6 +224,12 @@ function KPIDrilldownRow({ kpi }: { kpi: KPIMetadata }) {
 function DataQuality() {
   const [searchQuery, setSearchQuery] = useState('');
   const [ruleStatusFilter, setRuleStatusFilter] = useState<string>('all');
+  // #322 — per-row computed status reported up by each KPIDrilldownRow.
+  // Lets us render the "No data quality KPIs match your filters" empty-state
+  // when the status filter hides every row.
+  const [kpiStatuses, setKpiStatuses] = useState<Record<string, 'pass' | 'warning' | 'fail'>>(
+    {}
+  );
 
   // ---------------------------------------------------------------------------
   // LIVE DATA — KPI workstream ws1_data_quality
@@ -228,7 +257,22 @@ function DataQuality() {
     error: driftHistoryError,
   } = useDriftHistory({ model_id: DQ_MODEL_ID, days: 30 });
 
-  const { mutate: triggerDrift, isPending: driftRefreshing } = useTriggerDriftDetection();
+  // #324 — surface mutation result via toast (was silent on success + error).
+  const { mutate: triggerDrift, isPending: driftRefreshing } = useTriggerDriftDetection({
+    onSuccess: (data) => {
+      toast({
+        title: 'Drift detection triggered',
+        description: `Task ${data.task_id} queued for ${DQ_MODEL_ID}.`,
+      });
+    },
+    onError: (error) => {
+      toast({
+        variant: 'destructive',
+        title: 'Drift detection failed',
+        description: error?.message ?? 'Unknown error triggering drift detection.',
+      });
+    },
+  });
 
   // ---------------------------------------------------------------------------
   // DERIVED VALUES
@@ -243,12 +287,24 @@ function DataQuality() {
         kpi.name.toLowerCase().includes(q) ||
         kpi.id.toLowerCase().includes(q) ||
         (kpi.definition ?? '').toLowerCase().includes(q);
-      // status filter is best-effort: only pass-rate "all" really works without batch
-      // execution; we keep the surface (#301 AC tracks evolution of this).
-      const matchesStatus = ruleStatusFilter === 'all';
-      return matchesSearch && matchesStatus;
+      return matchesSearch;
     });
-  }, [allKpis, searchQuery, ruleStatusFilter]);
+    // Status filter (#322) is applied per-row inside KPIDrilldownRow since the
+    // computed status depends on useKPIDetail's per-row value fetch.
+  }, [allKpis, searchQuery]);
+
+  // #322 — visible-row count after status filter is applied. Drives the
+  // empty-state message when no row matches the chosen status.
+  const visibleKpiCount = useMemo(() => {
+    if (ruleStatusFilter === 'all') return filteredKpis.length;
+    return filteredKpis.reduce((count, kpi) => {
+      const status = kpiStatuses[kpi.id];
+      // Conservatively treat unknown (not yet reported) as visible; the row
+      // will hide itself once it reports its status on the next render tick.
+      if (status === undefined || status === ruleStatusFilter) return count + 1;
+      return count;
+    }, 0);
+  }, [filteredKpis, ruleStatusFilter, kpiStatuses]);
 
   // Derive dimension scores from drift signal + KPI count health.
   // overall_drift_score is in [0, 1] where higher = worse; we invert to a
@@ -283,10 +339,11 @@ function DataQuality() {
     // 1) Re-fetch the KPI list
     refetchKpis();
     // 2) Trigger a new drift-detection task for the DQ pipeline
+    // #326 — align trigger window with display window (30d history view)
     triggerDrift({
       request: {
         model_id: DQ_MODEL_ID,
-        time_window: '7d',
+        time_window: '30d',
         check_data_drift: true,
       },
     });
@@ -310,6 +367,9 @@ function DataQuality() {
   };
 
   const isRefreshing = kpiRefetching || driftRefreshing;
+  // #325 — Export button disabled while any underlying dataset is still loading.
+  // Prevents partial JSON export (undefined latestDrift / driftHistory / [] kpis).
+  const isAnyLoading = kpiLoading || driftLoading || driftHistoryLoading;
 
   // ---------------------------------------------------------------------------
   // RENDER
@@ -332,7 +392,7 @@ function DataQuality() {
             <RefreshCw className={`h-4 w-4 mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
-          <Button variant="outline" onClick={handleExport}>
+          <Button variant="outline" onClick={handleExport} disabled={isAnyLoading}>
             <Download className="h-4 w-4 mr-2" />
             Export Report
           </Button>
@@ -347,6 +407,17 @@ function DataQuality() {
             onRetry={refetchKpis}
             isRetrying={kpiRefetching}
             title="Could not load KPI list"
+          />
+        </div>
+      )}
+
+      {/* #323 — surface drift-history error page-level so it's visible from the
+          default Validation Rules tab (used to be hidden inside Quality Issues). */}
+      {driftHistoryError && (
+        <div className="mb-6">
+          <QueryErrorState
+            error={driftHistoryError}
+            title="Could not load 30-day drift history"
           />
         </div>
       )}
@@ -505,8 +576,16 @@ function DataQuality() {
                 </div>
                 <div className="flex items-center gap-2">
                   <div className="relative">
-                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Search
+                      className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground"
+                      aria-hidden="true"
+                    />
+                    {/* #328 — sr-only label associates accessible name with the input */}
+                    <Label htmlFor="dq-search" className="sr-only">
+                      Search validation rules
+                    </Label>
                     <Input
+                      id="dq-search"
                       placeholder="Search rules..."
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
@@ -514,8 +593,9 @@ function DataQuality() {
                     />
                   </div>
                   <Select value={ruleStatusFilter} onValueChange={setRuleStatusFilter}>
-                    <SelectTrigger className="w-32">
-                      <Filter className="h-4 w-4 mr-2" />
+                    {/* #328 — aria-label gives the SelectTrigger an accessible name */}
+                    <SelectTrigger className="w-32" aria-label="Filter rules by status">
+                      <Filter className="h-4 w-4 mr-2" aria-hidden="true" />
                       <SelectValue placeholder="Status" />
                     </SelectTrigger>
                     <SelectContent>
@@ -564,11 +644,20 @@ function DataQuality() {
                     </thead>
                     <tbody>
                       {filteredKpis.map((kpi) => (
-                        <KPIDrilldownRow key={kpi.id} kpi={kpi} />
+                        <KPIDrilldownRow
+                          key={kpi.id}
+                          kpi={kpi}
+                          statusFilter={ruleStatusFilter}
+                          onStatusComputed={(id, status) =>
+                            setKpiStatuses((prev) =>
+                              prev[id] === status ? prev : { ...prev, [id]: status }
+                            )
+                          }
+                        />
                       ))}
                     </tbody>
                   </table>
-                  {filteredKpis.length === 0 && (
+                  {visibleKpiCount === 0 && (
                     <div className="text-center py-8 text-muted-foreground">
                       <FileText className="h-8 w-8 mx-auto mb-2 opacity-50" />
                       <p>No data quality KPIs match your filters</p>
