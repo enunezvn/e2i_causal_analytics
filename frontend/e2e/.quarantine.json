@@ -4,7 +4,6 @@
     "ai-insights.spec.ts",
     "feature-importance.spec.ts",
     "model-performance.spec.ts",
-    "monitoring.spec.ts",
     "predictive-analytics.spec.ts",
     "time-series.spec.ts",
     "agent-orchestration.spec.ts",
