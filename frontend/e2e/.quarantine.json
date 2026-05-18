@@ -1,5 +1,5 @@
 {
-  "budget": 4,
+  "budget": 3,
   "specs": [
     "intervention-impact.spec.ts",
     "kpi-dictionary.spec.ts",
