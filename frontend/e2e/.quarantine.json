@@ -1,8 +1,7 @@
 {
-  "budget": 14,
+  "budget": 13,
   "specs": [
     "ai-insights.spec.ts",
-    "data-quality.spec.ts",
     "feature-importance.spec.ts",
     "model-performance.spec.ts",
     "predictive-analytics.spec.ts",

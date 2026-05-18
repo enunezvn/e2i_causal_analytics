@@ -88,8 +88,39 @@ export class DataQualityPage extends BasePage {
     return this.page.getByPlaceholder(/search rules/i)
   }
 
+  /**
+   * Search input addressed by its sr-only Label (#328).
+   * Resilient to placeholder changes; primary accessible-name selector.
+   */
+  get ruleSearchInputByLabel(): Locator {
+    return this.page.getByLabel(/search validation rules/i)
+  }
+
   get dataSourceFilter(): Locator {
     return this.page.getByRole('combobox').filter({ hasText: /all sources|data source/i }).first()
+  }
+
+  /**
+   * Status filter SelectTrigger (#322 + #328) — addressed by aria-label.
+   * Renders the per-rule status filter dropdown (All/Pass/Warning/Fail).
+   */
+  get statusFilter(): Locator {
+    return this.page.getByRole('combobox', { name: /filter rules by status/i })
+  }
+
+  /**
+   * Empty-state shown when status filter (#322) hides every matching row.
+   */
+  get noKpisMatchEmptyState(): Locator {
+    return this.page.getByText(/no data quality kpis match your filters/i)
+  }
+
+  /**
+   * Page-level drift-history error banner (#323) — hoisted out of Quality
+   * Issues tab so it's visible from the default Validation Rules tab.
+   */
+  get driftHistoryErrorBanner(): Locator {
+    return this.page.getByText(/could not load 30-day drift history/i)
   }
 
   // Actions
@@ -99,6 +130,22 @@ export class DataQualityPage extends BasePage {
 
   async searchRules(query: string): Promise<void> {
     await this.ruleSearchInput.fill(query)
+  }
+
+  /**
+   * Select an option in the status filter (#322).
+   * @param status One of 'all' | 'pass' | 'warning' | 'fail' (case-insensitive)
+   */
+  async selectStatusFilter(status: 'all' | 'pass' | 'warning' | 'fail'): Promise<void> {
+    await this.statusFilter.click()
+    // SelectContent renders options as role=option with the visible label
+    const labelByValue: Record<typeof status, RegExp> = {
+      all: /^all$/i,
+      pass: /^pass$/i,
+      warning: /^warning$/i,
+      fail: /^fail$/i,
+    }
+    await this.page.getByRole('option', { name: labelByValue[status] }).click()
   }
 
   async clickRefresh(): Promise<void> {
