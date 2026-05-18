@@ -14,6 +14,7 @@ import functools
 import hashlib
 import json
 import logging
+import os
 import tempfile
 import time
 from typing import Any, Callable, Dict, Literal, Optional, TypeVar
@@ -23,6 +24,9 @@ from langgraph.graph import END, StateGraph
 from src.agents.base.audit_chain_mixin import (
     create_workflow_initializer,
     get_audit_chain_service,
+)
+from src.agents.causal_impact.nodes.adjustment_set_policy import (
+    apply_adjustment_set_policy,
 )
 from src.agents.causal_impact.nodes.estimation import estimate_causal_effect
 from src.agents.causal_impact.nodes.graph_builder import build_causal_graph
@@ -211,6 +215,107 @@ traced_analyze_sensitivity = traced_node("sensitivity")(analyze_sensitivity)
 traced_interpret_results = traced_node("interpretation")(interpret_results)
 
 
+# ----------------------------------------------------------------------
+# Phase 2 (Issue #237) — adjustment_set_policy traced wrapper
+# ----------------------------------------------------------------------
+#
+# This wrapper deliberately diverges from ``traced_node`` above on a
+# single point: it passes ``output_data=...`` to ``audit_service.add_entry``
+# instead of the pre-existing ``output_hash=...`` (which is not a valid
+# kwarg on the service signature; see ``src/utils/audit_chain.py:288-301``).
+# Plan §2.1 + case 8 of the forcing tests pin this contract.
+async def traced_apply_adjustment_policy(state: CausalImpactState) -> Dict[str, Any]:
+    """Opik-traced + audit-chained wrapper for the policy node."""
+
+    opik = get_opik_connector()
+    audit_service = get_audit_chain_service()
+
+    trace_id = state.get("query_id")
+    parent_span_id = state.get("span_id")
+    session_id = state.get("session_id")
+    workflow_id = state.get("audit_workflow_id")
+
+    sanitized_input = {
+        "query_id": state.get("query_id"),
+        "treatment_var": state.get("treatment_var"),
+        "outcome_var": state.get("outcome_var"),
+        "role_attributions_n": len(state.get("role_attributions") or []),
+        "current_phase": state.get("current_phase"),
+        "session_id": session_id,
+    }
+
+    metadata = {
+        "node_name": "adjustment_set_policy",
+        "agent_name": "causal_impact",
+        "session_id": session_id,
+        "dispatch_id": state.get("dispatch_id"),
+        "audit_workflow_id": str(workflow_id) if workflow_id else None,
+    }
+
+    start_time = time.time()
+
+    async with opik.trace_agent(
+        agent_name="causal_impact",
+        operation="adjustment_set_policy",
+        trace_id=trace_id,
+        parent_span_id=parent_span_id,
+        metadata=metadata,
+        tags=["causal_impact", "adjustment_set_policy", "workflow_node", "audited"],
+        input_data=sanitized_input,
+    ) as span:
+        try:
+            result = await apply_adjustment_set_policy(state)
+
+            duration_ms = int((time.time() - start_time) * 1000)
+
+            policy_log = result.get("policy_log") or []
+            cg = result.get("causal_graph") or {}
+            output_payload: Dict[str, Any] = {
+                "policy": os.environ.get("CAUSAL_IMPACT_ADJUSTMENT_POLICY", "OFF").upper(),
+                "mutated": cg.get("adjustment_set_hash")
+                != cg.get("adjustment_set_hash_pre_policy"),
+                "n_dropped": sum(1 for e in policy_log if e.get("kind", "").startswith("dropped_")),
+                "n_warned": sum(1 for e in policy_log if e.get("kind", "").startswith("warning_")),
+                "log_was_truncated": bool(result.get("policy_log_was_truncated")),
+                "adjustment_set_hash": cg.get("adjustment_set_hash"),
+                "adjustment_set_hash_pre_policy": cg.get("adjustment_set_hash_pre_policy"),
+                "has_error": bool(result.get("adjustment_set_policy_error")),
+            }
+
+            span.set_output(output_payload)
+            span.set_attribute(
+                "node_latency_ms",
+                result.get("adjustment_set_policy_latency_ms", 0.0),
+            )
+
+            if workflow_id and audit_service:
+                try:
+                    # CORRECT KWARG: output_data= (NOT output_hash=). The
+                    # pre-existing traced_node wrapper uses output_hash;
+                    # this Phase 2 wrapper uses output_data so the audit
+                    # service can do its own canonical hashing.
+                    audit_service.add_entry(
+                        workflow_id=workflow_id,
+                        agent_name="causal_impact",
+                        agent_tier=AgentTier.CAUSAL_ANALYTICS,
+                        action_type="adjustment_set_policy",
+                        duration_ms=duration_ms,
+                        input_data=sanitized_input,
+                        output_data=output_payload,
+                    )
+                    logger.debug("Recorded audit entry for adjustment_set_policy")
+                except Exception as ae:
+                    logger.warning(f"Failed to record audit entry: {ae}")
+
+            return result
+
+        except Exception as e:
+            span.set_attribute("error", str(e))
+            span.set_attribute("error_type", type(e).__name__)
+            logger.error(f"Node adjustment_set_policy failed: {e}")
+            raise
+
+
 def should_continue_after_estimation(
     state: CausalImpactState,
 ) -> Literal["refutation", "interpretation", "error_handler"]:
@@ -306,6 +411,10 @@ def create_causal_impact_graph(enable_checkpointing: bool = False):
     # Add nodes with Opik tracing wrappers (CONTRACT_VALIDATION.md #12)
     workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain
     workflow.add_node("graph_builder", traced_build_causal_graph)  # type: ignore[type-var,arg-type,call-overload]
+    # Phase 2 (Issue #237): collider/mediator exclusion policy sits
+    # between graph_builder and estimation. Default policy OFF makes
+    # this a no-op until explicitly enabled.
+    workflow.add_node("adjustment_set_policy", traced_apply_adjustment_policy)  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("estimation", traced_estimate_causal_effect)  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("refutation", traced_refute_causal_estimate)  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("sensitivity", traced_analyze_sensitivity)  # type: ignore[type-var,arg-type,call-overload]
@@ -315,9 +424,11 @@ def create_causal_impact_graph(enable_checkpointing: bool = False):
     # Set entry point to audit initializer
     workflow.set_entry_point("audit_init")
 
-    # Linear edge: audit_init → graph_builder → estimation
+    # Linear edge: audit_init → graph_builder → adjustment_set_policy → estimation
+    # (Phase 2 wedge — OFF by default; see nodes/adjustment_set_policy.py.)
     workflow.add_edge("audit_init", "graph_builder")
-    workflow.add_edge("graph_builder", "estimation")
+    workflow.add_edge("graph_builder", "adjustment_set_policy")
+    workflow.add_edge("adjustment_set_policy", "estimation")
 
     # Conditional edge after estimation (contract: partial success routing)
     workflow.add_conditional_edges(
