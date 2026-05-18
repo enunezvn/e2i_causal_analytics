@@ -123,6 +123,44 @@ def _create_canonical_representation(
     return json.dumps(canonical_dict, sort_keys=True, separators=(",", ":"))
 
 
+def compute_adjustment_set_hash(adjustment_sets: List[List[str]]) -> str:
+    """Compute deterministic SHA256 hash of an ``adjustment_sets`` list.
+
+    Plan: ``.claude/plans/causal_role_propagation_FINAL.md`` §2.2.1
+    (codex-2 B1 fix).
+
+    Used by the Phase 2 adjustment-set policy node to track mutations to
+    ``CausalGraph.adjustment_sets`` *independently* of ``dag_version_hash``.
+    The base DAG hash is keyed by ``src/repositories/expert_review.py``
+    (15 lookup sites) and must NEVER be mutated post-graph-builder; this
+    separate hash carries adjustment-set provenance for the policy audit
+    trail.
+
+    The canonical form sorts inner lists then sorts outer list by the
+    sorted-tuple of each inner — deterministic regardless of input order.
+
+    Args:
+        adjustment_sets: List of adjustment sets (each is a list of
+            variable names). Empty list is permitted.
+
+    Returns:
+        64-character SHA256 hex digest.
+
+    Examples:
+        >>> h1 = compute_adjustment_set_hash([["A", "B"], ["C"]])
+        >>> h2 = compute_adjustment_set_hash([["C"], ["B", "A"]])
+        >>> assert h1 == h2  # same set; order-invariant
+        >>> h3 = compute_adjustment_set_hash([["A"], ["C"]])
+        >>> assert h1 != h3
+    """
+    canonical = json.dumps(
+        [sorted(s) for s in sorted(adjustment_sets, key=lambda x: tuple(sorted(x)))],
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def compute_dag_hash_from_dot(dot_string: str) -> str:
     """
     Compute DAG hash from DOT format string.

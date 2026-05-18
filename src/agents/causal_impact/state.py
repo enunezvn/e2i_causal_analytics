@@ -23,6 +23,14 @@ class CausalGraph(TypedDict, total=False):
     confidence: float  # Graph construction confidence (0-1)
     dag_version_hash: str  # SHA256 hash for expert review tracking
 
+    # Phase 2 (Issue #237): adjustment-set-only mutation tracking. SEPARATE
+    # from ``dag_version_hash`` because the base DAG hash is keyed by
+    # ``src/repositories/expert_review.py`` (15 lookup sites) and must
+    # never be mutated post-graph-builder. Populated by the
+    # ``adjustment_set_policy`` node.
+    adjustment_set_hash: NotRequired[str]
+    adjustment_set_hash_pre_policy: NotRequired[str]
+
     # V4.4: Causal Discovery Integration
     discovery_enabled: bool  # Whether auto-discovery was used
     discovery_gate_decision: Literal["accept", "review", "reject", "augment"]  # Gate outcome
@@ -204,6 +212,13 @@ class CausalImpactState(TypedDict):
     dag_version_hash: NotRequired[str]  # SHA256 hash for expert review tracking
     graph_builder_latency_ms: NotRequired[float]
     graph_builder_error: NotRequired[str]
+
+    # Phase 2 (Issue #237): adjustment-set policy outputs
+    role_attributions: NotRequired[List[Dict[str, Any]]]  # consumed by policy node
+    policy_log: NotRequired[List[Dict[str, Any]]]  # per-feature drop/warn entries
+    policy_log_was_truncated: NotRequired[bool]  # log-cap eviction flag
+    adjustment_set_policy_latency_ms: NotRequired[float]
+    adjustment_set_policy_error: NotRequired[str]
 
     # V4.4: Causal Discovery Configuration
     auto_discover: NotRequired[bool]  # Enable automatic DAG discovery (default: False)
