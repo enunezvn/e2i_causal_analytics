@@ -804,31 +804,43 @@ class PlanExecutor:
         # raise KeyError outside the try and fail tool execution.
         try:
             attributions: list[RoleAttribution] = query_active_role_attributions(experiment_id)
-
-            # Filter: causal_role == 'confounder' AND C1 trust-gate (consumer-
-            # boundary defense-in-depth). Skip rows missing either key rather
-            # than letting them raise.
-            confounder_features: list[str] = [
-                attr["feature"]
-                for attr in attributions
-                if isinstance(attr, dict)
-                and attr.get("causal_role") == "confounder"
-                and should_act(attr)
-                and isinstance(attr.get("feature"), str)
-            ]
-
-            logger.debug(
-                f"Auto-populated {len(confounder_features)} confounder(s) for "
-                f"tool '{step.tool_name}' from experiment_id={experiment_id!r}"
-            )
-            return confounder_features
         except Exception as e:  # noqa: BLE001 — broad on purpose
             logger.warning(
-                f"Role-attribution auto-pop failed for "
+                f"Role-attribution auto-pop query failed for "
                 f"experiment_id={experiment_id!r}: {e}. "
                 f"Proceeding without confounder pre-fill."
             )
             return None
+
+        # Filter: causal_role == 'confounder' AND C1 trust-gate (consumer-
+        # boundary defense-in-depth). Each row is wrapped in its own
+        # try/except so a single malformed row doesn't discard ALL valid
+        # rows in the same batch (codex iter-2 LOW finding).
+        confounder_features: list[str] = []
+        for attr in attributions:
+            if not isinstance(attr, dict):
+                continue
+            try:
+                if attr.get("causal_role") != "confounder":
+                    continue
+                feature = attr.get("feature")
+                if not isinstance(feature, str):
+                    continue
+                if not should_act(attr):
+                    continue
+                confounder_features.append(feature)
+            except Exception as e:  # noqa: BLE001
+                logger.debug(
+                    f"Auto-pop skipped malformed attribution row "
+                    f"for experiment_id={experiment_id!r}: {e}"
+                )
+                continue
+
+        logger.debug(
+            f"Auto-populated {len(confounder_features)} confounder(s) for "
+            f"tool '{step.tool_name}' from experiment_id={experiment_id!r}"
+        )
+        return confounder_features
 
     def get_tool_stats(self) -> Dict[str, Dict[str, Any]]:
         """
