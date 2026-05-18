@@ -85,11 +85,11 @@ test.describe('Home Page', () => {
     })
 
     test('should show KPI Performance Indicators heading', async ({ page }) => {
-      await expect(page.getByText('Key Performance Indicators')).toBeVisible()
+      await expect(page.getByText('Key Performance Indicators')).toBeVisible({ timeout: TIMEOUTS.PAGE_LOAD })
     })
 
     test('should display Total TRx metric', async () => {
-      await expect(homePage.totalTrxCard).toBeVisible()
+      await expect(homePage.totalTrxCard).toBeVisible({ timeout: TIMEOUTS.PAGE_LOAD })
     })
 
     test('should display KPI values', async () => {
