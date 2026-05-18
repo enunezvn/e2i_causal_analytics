@@ -13,7 +13,7 @@ test.describe('KPI Dictionary Page', () => {
     // the full 4-workstream payload matching WORKSTREAM_DISPLAY so the inner
     // workstream tabs (Model Performance / Trigger Performance / Business
     // Impact) actually render. Inline route runs LIFO above mockApiRoutes.
-    await page.route('**/api/kpi/workstreams', (route) =>
+    await page.route('**/api/kpis/workstreams', (route) =>
       route.fulfill({
         status: 200,
         contentType: 'application/json',
