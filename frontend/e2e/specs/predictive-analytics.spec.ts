@@ -1,21 +1,125 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, Page, Route } from '@playwright/test'
 import { PredictiveAnalyticsPage } from '../pages/predictive-analytics.page'
 import { mockApiRoutes } from '../fixtures/api-mocks'
 import { TIMEOUTS } from '../fixtures/test-data'
 import { assertNotLoading, assertNoErrors } from '../utils/assertions'
 
+/**
+ * Predictive Analytics e2e suite (post-PR #319 wiring; closes #332).
+ *
+ * The page was rewired from a synthetic dashboard to a live-data form
+ * backed by /api/models/predict/{model_name}. The selector + form only
+ * render when /api/models/status returns at least one model, and the
+ * feature inputs only render once /api/models/{name}/info responds.
+ *
+ * api-mocks.ts is intentionally not extended — those endpoints are
+ * specific to this page and we inline the routes here so the shared
+ * fixture stays small. We register them AFTER mockApiRoutes() so they
+ * win when multiple handlers match (Playwright dispatches routes in
+ * reverse registration order — last-added first).
+ */
+
+const MOCK_MODELS = [
+  {
+    model_name: 'Conversion Model',
+    status: 'healthy',
+    endpoint: '/api/models/predict/Conversion%20Model',
+    last_check: new Date().toISOString(),
+  },
+  {
+    model_name: 'Churn Model',
+    status: 'healthy',
+    endpoint: '/api/models/predict/Churn%20Model',
+    last_check: new Date().toISOString(),
+  },
+]
+
+const MOCK_STATUS_RESPONSE = {
+  total_models: MOCK_MODELS.length,
+  healthy_count: MOCK_MODELS.length,
+  unhealthy_count: 0,
+  models: MOCK_MODELS,
+  timestamp: new Date().toISOString(),
+}
+
+const MOCK_MODEL_INFO = {
+  name: 'Conversion Model',
+  version: '1.0.0',
+  type: 'classification',
+  description: 'Test conversion model',
+  input_schema: {
+    hcp_id: 'string',
+    territory: 'string',
+    visits: 'number',
+  },
+  trained_at: '2026-01-01T00:00:00Z',
+  metadata: {},
+}
+
+async function mockPredictionRoutes(page: Page): Promise<void> {
+  // GET /api/models/status — drives the selector
+  await page.route('**/api/models/status*', async (route: Route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(MOCK_STATUS_RESPONSE),
+    })
+  })
+
+  // GET /api/models/{name}/info — drives the feature form
+  // Match BEFORE the catch-all so it isn't shadowed.
+  await page.route('**/api/models/*/info*', async (route: Route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(MOCK_MODEL_INFO),
+    })
+  })
+
+  // POST /api/models/predict/{name} — only used by Run Prediction; harmless if
+  // never triggered by the basic suite.
+  await page.route('**/api/models/predict/**', async (route: Route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        model_name: 'Conversion Model',
+        prediction: 0.87,
+        confidence: 0.91,
+        latency_ms: 42,
+        model_version: '1.0.0',
+        timestamp: new Date().toISOString(),
+      }),
+    })
+  })
+}
+
 test.describe('Predictive Analytics Page', () => {
   let predictivePage: PredictiveAnalyticsPage
 
   test.beforeEach(async ({ page }) => {
+    // Register shared catch-alls first, then our page-specific routes so
+    // ours win in reverse-LIFO matching when patterns overlap.
     await mockApiRoutes(page)
+    await mockPredictionRoutes(page)
     predictivePage = new PredictiveAnalyticsPage(page)
     await predictivePage.goto()
+    // The live-data UI is gated on /api/models/status resolving and at
+    // least one model being present. Wait for the resulting Active Model
+    // card to render so subsequent assertions don't race the React Query
+    // cache hydration. Tolerate failure here — the Page Load + Responsive
+    // suites only need the bare page shell, so a missed model render
+    // shouldn't fail those tests.
+    await predictivePage.activeModelLabel
+      .waitFor({ state: 'visible', timeout: 10000 })
+      .catch(() => {})
   })
 
   test.describe('Page Load', () => {
     test('should load successfully', async () => {
-      await expect(predictivePage.mainContent).toBeVisible({ timeout: TIMEOUTS.PAGE_LOAD })
+      await expect(predictivePage.mainContent).toBeVisible({
+        timeout: TIMEOUTS.PAGE_LOAD,
+      })
     })
 
     test('should display page title', async ({ page }) => {
@@ -45,85 +149,39 @@ test.describe('Predictive Analytics Page', () => {
     })
 
     test('should allow model selection', async () => {
-      // Use a valid model name: 'Conversion Model'
-      await predictivePage.selectModel('Conversion')
-      await predictivePage.page.waitForTimeout(500)
+      await predictivePage.selectModel('Churn')
+      // Auto-selection of the first model means the selector is already
+      // populated; verify the Active Model card still renders after switch.
+      await expect(predictivePage.activeModelLabel).toBeVisible()
     })
   })
 
-  test.describe('KPI Cards', () => {
-    test('should display KPI cards', async () => {
-      const hasKpis = await predictivePage.verifyKPICardsDisplayed()
-      expect(hasKpis).toBeTruthy()
-    })
-
-    test('should show Accuracy stat', async () => {
-      await expect(predictivePage.accuracyCard).toBeVisible()
-    })
-
-    test('should show High Risk Entities stat', async () => {
-      // Note: KPI cards are High Risk Entities, Avg Model Confidence, etc.
-      await expect(predictivePage.highRiskEntitiesCard).toBeVisible()
+  test.describe('Active Model Summary', () => {
+    test('should display Active Model card after models load', async () => {
+      const ok = await predictivePage.verifyActiveModelCard()
+      expect(ok).toBeTruthy()
     })
   })
 
-  test.describe('Tabs', () => {
-    test('should display tabs', async () => {
-      const hasTabs = await predictivePage.verifyTabsDisplayed()
-      expect(hasTabs).toBeTruthy()
+  test.describe('Input Features Form', () => {
+    test('should display Input Features card', async () => {
+      const ok = await predictivePage.verifyInputFeaturesCard()
+      expect(ok).toBeTruthy()
     })
 
-    test('should show Predictions tab', async () => {
-      await expect(predictivePage.predictionsTab).toBeVisible()
-    })
-
-    test('should show Distribution tab', async () => {
-      await expect(predictivePage.distributionTab).toBeVisible()
-    })
-
-    test('should show Uplift tab', async () => {
-      // Note: Tab is called "Uplift" in UI
-      await expect(predictivePage.upliftTab).toBeVisible()
-    })
-
-    test('should allow tab switching', async () => {
-      await predictivePage.clickTab('Distribution')
-      await predictivePage.page.waitForTimeout(500)
+    test('should display Run Prediction button', async () => {
+      await expect(predictivePage.runPredictionButton).toBeVisible()
     })
   })
 
-  test.describe('Predictions Tab', () => {
-    test('should display predictions', async () => {
-      const hasPredictions = await predictivePage.verifyPredictionsDisplayed()
-      expect(hasPredictions).toBeTruthy()
-    })
-  })
-
-  test.describe('Distribution Tab', () => {
-    test('should display distribution when tab clicked', async () => {
-      await predictivePage.clickTab('Distribution')
-      const hasDistribution = await predictivePage.verifyDistributionDisplayed()
-      expect(hasDistribution).toBeTruthy()
-    })
-  })
-
-  test.describe('Uplift Tab', () => {
-    test('should display uplift segments when tab clicked', async () => {
-      // Note: Tab is called "Uplift" in UI, not "Segments"
-      await predictivePage.clickTab('Uplift')
-      const hasSegments = await predictivePage.verifySegmentsDisplayed()
-      expect(hasSegments).toBeTruthy()
-    })
-  })
-
-  test.describe('Actions', () => {
-    test('should have refresh button', async () => {
-      await expect(predictivePage.refreshButton).toBeVisible()
+  test.describe('Prediction Result', () => {
+    test('should display Prediction Result card', async () => {
+      const ok = await predictivePage.verifyPredictionResultCard()
+      expect(ok).toBeTruthy()
     })
 
-    test('should allow refresh', async () => {
-      await predictivePage.clickRefresh()
-      await predictivePage.page.waitForTimeout(500)
+    test('should show placeholder before any prediction', async () => {
+      await expect(predictivePage.predictionResultPlaceholder).toBeVisible()
     })
   })
 
