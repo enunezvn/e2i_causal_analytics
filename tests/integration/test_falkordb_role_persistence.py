@@ -163,8 +163,11 @@ async def test_case_2_kg_corroborates_llm_promotes_to_kg() -> None:
     assert out[0]["source"] == "kg"
     assert out[0]["causal_role"] == "confounder"
     assert out[0]["evaluator_satisfied"] is True
-    # evaluator_model becomes the KG provenance string.
-    assert out[0]["evaluator_model"] == "kg:falkordb"
+    # KG corroborates → flip source to "kg" but PRESERVE the upstream LLM's
+    # evaluator_model. KG is a corroborating store, not an evaluator; clobbering
+    # evaluator_model would corrupt audit provenance ("which model produced
+    # this verdict?").
+    assert out[0]["evaluator_model"] == "anthropic/claude-haiku-4-5-20251001"
 
 
 # ---------------------------------------------------------------------------

@@ -165,14 +165,11 @@ async def kg_role_enrichment(
         kg_role = signal["causal_role"]
         llm_role = new_attr.get("causal_role")
         if kg_role == llm_role:
-            # Corroborate: promote to kg source. Stamp the KG provenance
-            # sentinel into ``evaluator_model`` REGARDLESS of what the
-            # KG node itself carries: the trust source is "FalkorDB
-            # said so", not the upstream LLM whose verdict the mirror
-            # script copied into the Feature node. Phase 1's
-            # ``RoleAttribution`` docstring pins this sentinel for kg.
+            # Corroborate: promote source to kg. Preserve evaluator_model
+            # as the upstream LLM's model id — KG is a corroborating
+            # store, not an evaluator. Overwriting evaluator_model would
+            # corrupt audit provenance ("which model produced this verdict?").
             new_attr["source"] = "kg"
-            new_attr["evaluator_model"] = _KG_EVALUATOR_MODEL
             promoted += 1
             enriched.append(new_attr)
         else:
