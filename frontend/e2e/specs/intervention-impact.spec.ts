@@ -159,6 +159,15 @@ test.describe('Intervention Impact Page', () => {
   })
 
   test.describe('Responsive Design', () => {
+    // These three tests each call `impactPage.goto()` twice — once in the
+    // top-level `beforeEach` and once again after `setViewportSize`. In the
+    // worst case where both navigations need the one-shot heading-wait
+    // reload-retry (8s + reload + 8s ≈ 16s each), the pair can land around
+    // ~32s, just over Playwright's default 30s per-test budget. We raise the
+    // test budget to 60s so the slow path stays inside the timeout (Refs #332
+    // Cat-B).
+    test.setTimeout(60_000)
+
     test('should work on mobile viewport', async ({ page }) => {
       await page.setViewportSize({ width: 375, height: 667 })
       await impactPage.goto()

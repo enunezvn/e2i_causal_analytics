@@ -14,6 +14,35 @@ export class InterventionImpactPage extends BasePage {
     super(page)
   }
 
+  /**
+   * Navigate to the page and wait for it to mount.
+   *
+   * The base `goto()` only waits for a generic container locator. Under heavy
+   * dev-server load (parallel e2e shards) or transient lazy-chunk hiccups the
+   * Vite-served SPA can leave `<div id="root">` empty for several seconds —
+   * the resulting blank screenshot is the historical Cat-B failure mode for
+   * this spec (Refs #332). We mirror the ai-insights gold-pattern (PR #345):
+   * goto → wait for page heading → one reload-retry if the heading never
+   * appears. Kept to a single retry so the responsive-design tests (which call
+   * `goto()` a second time inside the test body, on top of `beforeEach`) stay
+   * within the 30s per-test timeout under heavy dev-server load.
+   */
+  async goto(): Promise<void> {
+    await this.page.goto(this.url)
+    await this.page.waitForLoadState('domcontentloaded')
+    const heading = this.pageHeader
+    try {
+      await heading.waitFor({ state: 'visible', timeout: 8000 })
+      return
+    } catch {
+      // SPA didn't hydrate in time — most often a Vite lazy-chunk hiccup under
+      // parallel-agent load. One reload usually clears it.
+      await this.page.reload()
+    }
+    // Final swing — surfaces the real assertion error if it still fails.
+    await heading.waitFor({ state: 'visible', timeout: 8000 })
+  }
+
   // Page Header
   get pageHeader(): Locator {
     return this.page.getByRole('heading', { name: /Intervention Impact/i }).first()
