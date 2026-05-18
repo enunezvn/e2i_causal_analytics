@@ -17,6 +17,58 @@ env:
   NODE_VERSION: 20
 
 jobs:
+  quarantine-ratchet:
+    name: Quarantine ratchet (one-way down)
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare on-disk manifest to base ref
+        working-directory: frontend
+        run: |
+          set -e
+          python3 - <<'PY'
+          import json, os, subprocess, sys
+
+          head = json.load(open('e2e/.quarantine.json'))
+          budget = head.get('budget')
+          specs  = head.get('specs', [])
+
+          # Invariant 1: budget must equal len(specs).
+          if not isinstance(budget, int) or budget != len(specs):
+              print(f"::error::budget ({budget}) must equal len(specs) ({len(specs)})")
+              print("::error::Edit e2e/.quarantine.json so both stay in sync.")
+              sys.exit(1)
+
+          # Invariant 2: the smoke spec is never quarantined.
+          if '_smoke.spec.ts' in specs:
+              print("::error::_smoke.spec.ts MUST NOT be quarantined — it's the floor signal.")
+              sys.exit(1)
+
+          # Invariant 3: ratchet is one-way down vs the base ref's manifest.
+          base_ref = os.environ.get('GITHUB_BASE_REF') or 'main'
+          try:
+              subprocess.check_call(
+                  ['git', 'fetch', '--depth=1', 'origin', base_ref],
+                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+              )
+              base_raw = subprocess.check_output(
+                  ['git', 'show', f'origin/{base_ref}:frontend/e2e/.quarantine.json'],
+                  stderr=subprocess.DEVNULL,
+              )
+          except subprocess.CalledProcessError:
+              print(f"Base ref origin/{base_ref} has no quarantine manifest yet; allowing.")
+              sys.exit(0)
+
+          base = json.loads(base_raw)
+          if budget > base['budget']:
+              print(f"::error::Quarantine budget grew ({base['budget']} -> {budget}).")
+              print("::error::A new spec was added to quarantine. Either fix it OR")
+              print("::error::confirm in the PR body why the bump is unavoidable.")
+              sys.exit(1)
+          print(f"Ratchet OK: budget {base['budget']} -> {budget}")
+          PY
+
   lint-and-typecheck:
     runs-on: ubuntu-latest
     steps:
@@ -191,7 +243,7 @@ jobs:
   # Summary job to ensure all tests pass
   ci-success:
     runs-on: ubuntu-latest
-    needs: [lint-and-typecheck, unit-tests, build, e2e-tests]
+    needs: [lint-and-typecheck, unit-tests, build, e2e-tests, quarantine-ratchet]
     if: always()
     steps:
       - name: Check all jobs passed
@@ -210,6 +262,10 @@ jobs:
           fi
           if [[ "${{ needs.e2e-tests.result }}" != "success" ]]; then
             echo "E2E tests failed"
+            exit 1
+          fi
+          if [[ "${{ needs.quarantine-ratchet.result }}" != "success" ]]; then
+            echo "Quarantine ratchet failed"
             exit 1
           fi
           echo "All jobs passed successfully!"

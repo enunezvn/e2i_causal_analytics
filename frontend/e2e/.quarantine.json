@@ -1,0 +1,21 @@
+{
+  "budget": 16,
+  "specs": [
+    "ai-insights.spec.ts",
+    "causal-discovery.spec.ts",
+    "data-quality.spec.ts",
+    "feature-importance.spec.ts",
+    "model-performance.spec.ts",
+    "monitoring.spec.ts",
+    "predictive-analytics.spec.ts",
+    "time-series.spec.ts",
+    "agent-orchestration.spec.ts",
+    "digital-twin.spec.ts",
+    "home.spec.ts",
+    "intervention-impact.spec.ts",
+    "knowledge-graph.spec.ts",
+    "kpi-dictionary.spec.ts",
+    "memory-architecture.spec.ts",
+    "system-health.spec.ts"
+  ]
+}
