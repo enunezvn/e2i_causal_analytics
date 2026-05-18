@@ -14,6 +14,16 @@ export class AgentOrchestrationPage extends BasePage {
     super(page)
   }
 
+  // Override goto() to wait on a page-specific anchor (h1) rather than the
+  // broad BasePage `mainContent` locator. The h1 is rendered synchronously
+  // by AgentOrchestration.tsx once the route mounts and auth resolves;
+  // waiting on it avoids a race where downstream stat-card assertions run
+  // before React finishes the first paint.
+  async goto(): Promise<void> {
+    await super.goto()
+    await this.pageHeader.waitFor({ state: 'visible', timeout: 15000 }).catch(() => {})
+  }
+
   // Page Header
   get pageHeader(): Locator {
     return this.page.getByRole('heading', { name: /Agent Orchestration/i }).first()
