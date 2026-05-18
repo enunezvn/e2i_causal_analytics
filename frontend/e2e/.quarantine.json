@@ -1,5 +1,5 @@
 {
-  "budget": 15,
+  "budget": 14,
   "specs": [
     "ai-insights.spec.ts",
     "data-quality.spec.ts",
