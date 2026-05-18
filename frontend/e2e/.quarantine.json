@@ -2,7 +2,7 @@
   "budget": 3,
   "specs": [
     "agent-orchestration.spec.ts",
-    "kpi-dictionary.spec.ts",
+    "intervention-impact.spec.ts",
     "memory-architecture.spec.ts"
   ]
 }
