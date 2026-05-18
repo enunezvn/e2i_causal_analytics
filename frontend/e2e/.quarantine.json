@@ -1,7 +1,6 @@
 {
-  "budget": 6,
+  "budget": 5,
   "specs": [
-    "agent-orchestration.spec.ts",
     "intervention-impact.spec.ts",
     "knowledge-graph.spec.ts",
     "kpi-dictionary.spec.ts",
