@@ -1,4 +1,14 @@
 import { defineConfig, devices } from '@playwright/test'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+// frontend/package.json has "type": "module"; __dirname is not defined in ESM.
+const __dirname = dirname(fileURLToPath(import.meta.url))
+
+const quarantine = JSON.parse(
+  readFileSync(join(__dirname, 'e2e/.quarantine.json'), 'utf8'),
+) as { budget: number; specs: string[] }
 
 /**
  * Playwright configuration for E2E testing.
@@ -7,6 +17,12 @@ import { defineConfig, devices } from '@playwright/test'
 export default defineConfig({
   testDir: './e2e',
   testMatch: ['**/specs/**/*.spec.ts', '**/e2e/**/*.spec.ts'],
+  // Specs listed in e2e/.quarantine.json are excluded until fixed. See
+  // e2e/README.md for the un-quarantine protocol. Override locally with
+  // E2E_QUARANTINE_OFF=1 npx playwright test <spec> for diagnosis.
+  testIgnore: process.env.E2E_QUARANTINE_OFF
+    ? []
+    : quarantine.specs.map((f) => `**/specs/${f}`),
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 0 : 0,  // Disable retries to fail fast and get clear results
