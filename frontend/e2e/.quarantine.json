@@ -3,7 +3,7 @@
   "specs": [
     "ai-insights.spec.ts",
     "feature-importance.spec.ts",
-    "predictive-analytics.spec.ts",
+    "model-performance.spec.ts",
     "agent-orchestration.spec.ts",
     "digital-twin.spec.ts",
     "home.spec.ts",
