@@ -1,6 +1,8 @@
 # BentoML Model Serving Dependencies
 # Core framework
-bentoml>=1.4.0,<2.0.0
+# Exact pin to match root requirements.txt and prevent silent version skew on
+# Docker rebuild (Issue #321, surfaced by PR #315 / wave 2026-05-17).
+bentoml==1.4.39
 
 # ML frameworks
 scikit-learn>=1.3.0

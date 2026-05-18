@@ -779,10 +779,13 @@ async def list_monitoring_runs(
 
     try:
         repo = MonitoringRunRepository()
-        datetime.now(timezone.utc) - timedelta(days=days)
+        # Issue #321 MED — honor the `days` query param by passing the cutoff
+        # through to the repository. Previously this datetime was computed and
+        # discarded, so the endpoint silently ignored the time-window request.
+        since = datetime.now(timezone.utc) - timedelta(days=days)
 
         # Get runs for model or all (get_recent_runs handles both cases)
-        all_records = await repo.get_recent_runs(model_version=model_id, limit=limit)
+        all_records = await repo.get_recent_runs(model_version=model_id, limit=limit, since=since)
 
         items = [
             MonitoringRunItem(
