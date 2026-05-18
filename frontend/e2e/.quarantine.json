@@ -1,7 +1,7 @@
 {
   "budget": 2,
   "specs": [
-    "intervention-impact.spec.ts",
+    "agent-orchestration.spec.ts",
     "memory-architecture.spec.ts"
   ]
 }
