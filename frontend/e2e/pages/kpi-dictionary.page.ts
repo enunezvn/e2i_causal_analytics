@@ -14,6 +14,23 @@ export class KPIDictionaryPage extends BasePage {
     super(page)
   }
 
+  /**
+   * Override base goto with an explicit wait for the KPI Dictionary heading.
+   * Under load (Vite dev server + sequential beforeEach), the page can still
+   * be white when assertions begin because BasePage.goto only waits on the
+   * generic mainContent selector and swallows timeouts. Anchor on a
+   * page-specific element to ensure the React tree mounted before each test.
+   */
+  async goto(): Promise<void> {
+    await this.page.goto(this.url)
+    await this.page.waitForLoadState('domcontentloaded')
+    // Wait for the page-specific heading so subsequent locators find the
+    // rendered content rather than racing the React mount.
+    await this.pageHeader.waitFor({ state: 'visible', timeout: 15000 }).catch(() => {})
+    // Allow React Query to populate data + interactive elements to settle.
+    await this.page.waitForTimeout(300)
+  }
+
   // Page Header
   get pageHeader(): Locator {
     return this.page.getByRole('heading', { name: /KPI Dictionary/i }).first()
@@ -128,37 +145,29 @@ export class KPIDictionaryPage extends BasePage {
 
   // Verification methods
   async verifyStatsDisplayed(): Promise<boolean> {
-    try {
-      await this.page.getByText('Total KPIs').first().waitFor({ state: 'visible', timeout: 5000 })
+    if (await this.page.getByText('Total KPIs').first().isVisible({ timeout: 10000 }).catch(() => false)) {
       return true
-    } catch {
-      const stats = ['Workstreams', 'Causal KPIs', 'System Status']
-      for (const stat of stats) {
-        if (await this.page.getByText(stat).first().isVisible().catch(() => false)) {
-          return true
-        }
-      }
-      return false
     }
+    const stats = ['Workstreams', 'Causal KPIs', 'System Status']
+    for (const stat of stats) {
+      if (await this.page.getByText(stat).first().isVisible({ timeout: 2000 }).catch(() => false)) {
+        return true
+      }
+    }
+    return false
   }
 
   async verifyTabsDisplayed(): Promise<boolean> {
-    try {
-      // The page has multiple tablists - main sections and workstream tabs
-      // First try to find any tablist
-      const allTablists = this.page.getByRole('tablist')
-      await allTablists.first().waitFor({ state: 'visible', timeout: 5000 })
-      return await allTablists.first().isVisible()
-    } catch {
-      // Fallback: check for specific tab triggers
-      try {
-        const hasAllKPIs = await this.page.getByRole('tab', { name: /all kpis/i }).isVisible({ timeout: 2000 }).catch(() => false)
-        const hasKPICards = await this.page.getByRole('tab', { name: /kpi cards/i }).isVisible({ timeout: 2000 }).catch(() => false)
-        return hasAllKPIs || hasKPICards
-      } catch {
-        return false
-      }
+    // The page has multiple tablists - main sections and workstream tabs.
+    // Wait for any tablist to be visible.
+    const allTablists = this.page.getByRole('tablist')
+    if (await allTablists.first().isVisible({ timeout: 10000 }).catch(() => false)) {
+      return true
     }
+    // Fallback: check for specific tab triggers
+    const hasAllKPIs = await this.page.getByRole('tab', { name: /all kpis/i }).isVisible({ timeout: 2000 }).catch(() => false)
+    const hasKPICards = await this.page.getByRole('tab', { name: /kpi cards/i }).isVisible({ timeout: 2000 }).catch(() => false)
+    return hasAllKPIs || hasKPICards
   }
 
   async verifyKPICardsDisplayed(): Promise<boolean> {
@@ -173,11 +182,16 @@ export class KPIDictionaryPage extends BasePage {
 
   async verifySearchWorks(): Promise<boolean> {
     try {
+      // Ensure the search input is ready before interacting; the filter count
+      // text only renders once the page has populated KPI data.
+      await this.searchInput.waitFor({ state: 'visible', timeout: 10000 })
       await this.searchInput.fill('ROI')
-      // Wait for filter to apply
-      await this.page.waitForTimeout(500)
+      // Wait for filter to apply and the count line to be visible.
+      await this.filterCountText.waitFor({ state: 'visible', timeout: 10000 })
       const filterText = await this.filterCountText.textContent()
-      return filterText !== null && filterText.includes('Showing')
+      // Accept either "Showing X of Y" or any non-empty match for the regex,
+      // since the page renders "Showing {filteredKPIs.length} of {stats.total} KPIs".
+      return !!filterText && /showing.*of.*kpis/i.test(filterText)
     } catch {
       return false
     }
