@@ -1,6 +1,4 @@
 {
-  "budget": 1,
-  "specs": [
-    "memory-architecture.spec.ts"
-  ]
+  "budget": 0,
+  "specs": []
 }
