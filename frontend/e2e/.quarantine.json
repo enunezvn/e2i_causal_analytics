@@ -1,12 +1,7 @@
 {
-  "budget": 15,
+  "budget": 14,
   "specs": [
     "ai-insights.spec.ts",
-<<<<<<< HEAD
-    "causal-discovery.spec.ts",
-=======
-    "data-quality.spec.ts",
->>>>>>> origin/main
     "feature-importance.spec.ts",
     "model-performance.spec.ts",
     "monitoring.spec.ts",
