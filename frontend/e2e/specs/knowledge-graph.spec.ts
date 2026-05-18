@@ -4,12 +4,98 @@ import { mockApiRoutes } from '../fixtures/api-mocks'
 import { TIMEOUTS } from '../fixtures/test-data'
 import { assertNotLoading, assertNoErrors } from '../utils/assertions'
 
+// Spec-local typed stubs for the Knowledge Graph endpoints.
+//
+// The page consumes the live API contract via TanStack Query hooks:
+//   * useNodes()         -> GET /api/graph/nodes        -> ListNodesResponse
+//   * useRelationships() -> GET /api/graph/relationships -> ListRelationshipsResponse
+//   * useGraphStats()    -> GET /api/graph/stats        -> GraphStatsResponse
+//
+// The shared `mockApiRoutes` registers a single `**/api/graph/**` handler
+// that returns one legacy payload for ALL three endpoints. That payload
+// lacks `nodes_by_type`, so the page crashed at
+// `Object.entries(stats.nodesByType)` with "Cannot convert undefined or
+// null to object", and the AppErrorBoundary replaced the entire page
+// (search input included) with the error fallback. That detached the
+// `getByPlaceholder('Search nodes by name or type...')` input mid-action,
+// which is the exact failure mode the (long-running) baseline e2e was
+// hitting on `should allow text input in search` /
+// `should show search results after search`.
+//
+// We register endpoint-specific stubs AFTER the shared mock so Playwright's
+// LIFO route matcher picks ours first. The shared `**/api/graph/**` route
+// remains the catch-all for other graph endpoints (e.g. /traverse, /search)
+// that this spec doesn't exercise. We do NOT mutate `api-mocks.ts`: it is
+// shared by 15+ specs and out of scope for this Cat-B baseline repair.
+const mockNodesResponse = {
+  nodes: [
+    { id: 'brand-1', type: 'Brand', name: 'Remibrutinib', properties: {}, created_at: '2026-01-01T00:00:00Z' },
+    { id: 'kpi-1', type: 'KPI', name: 'TRx Volume', properties: {}, created_at: '2026-01-01T00:00:00Z' },
+    { id: 'hcp-1', type: 'HCP', name: 'Dr Smith', properties: {}, created_at: '2026-01-01T00:00:00Z' },
+    { id: 'patient-1', type: 'Patient', name: 'Patient Cohort A', properties: {}, created_at: '2026-01-01T00:00:00Z' },
+  ],
+  total: 4,
+  limit: 100,
+  offset: 0,
+  has_more: false,
+  query_latency_ms: 5,
+  timestamp: '2026-05-18T00:00:00Z',
+}
+
+const mockRelationshipsResponse = {
+  relationships: [
+    { id: 'rel-1', type: 'INFLUENCES', source_id: 'brand-1', target_id: 'kpi-1', properties: {}, confidence: 0.85 },
+    { id: 'rel-2', type: 'PRESCRIBES', source_id: 'hcp-1', target_id: 'brand-1', properties: {}, confidence: 0.91 },
+    { id: 'rel-3', type: 'TREATED_BY', source_id: 'patient-1', target_id: 'brand-1', properties: {}, confidence: 0.78 },
+  ],
+  total: 3,
+  limit: 200,
+  offset: 0,
+  has_more: false,
+  query_latency_ms: 4,
+  timestamp: '2026-05-18T00:00:00Z',
+}
+
+const mockGraphStatsResponse = {
+  total_nodes: 4,
+  total_relationships: 3,
+  nodes_by_type: { Brand: 1, KPI: 1, HCP: 1, Patient: 1 },
+  relationships_by_type: { INFLUENCES: 1, PRESCRIBES: 1, TREATED_BY: 1 },
+  total_episodes: 0,
+  total_communities: 0,
+  timestamp: '2026-05-18T00:00:00Z',
+}
+
 test.describe('Knowledge Graph Page', () => {
   let graphPage: KnowledgeGraphPage
 
   test.beforeEach(async ({ page }) => {
-    // Setup API mocks
+    // Setup shared API mocks (broad **/api/** catch-alls).
     await mockApiRoutes(page)
+
+    // Endpoint-specific stubs registered AFTER the broad mock so they win
+    // LIFO route matching. Shapes must match `src/types/graph.ts`.
+    await page.route('**/api/graph/stats', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(mockGraphStatsResponse),
+      })
+    })
+    await page.route('**/api/graph/nodes**', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(mockNodesResponse),
+      })
+    })
+    await page.route('**/api/graph/relationships**', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(mockRelationshipsResponse),
+      })
+    })
 
     // Initialize page object
     graphPage = new KnowledgeGraphPage(page)
@@ -72,13 +158,17 @@ test.describe('Knowledge Graph Page', () => {
       }
     })
 
-    test('should show search results after search', async () => {
+    test('should show search results after search', async ({ page }) => {
+      // The mock node set contains exactly one node whose `name` matches the
+      // case-insensitive substring "TRx" (the "TRx Volume" KPI node). Once
+      // the page filters, the results banner must render and report
+      // exactly 1 node found. Anchored to the page's literal output so a
+      // regression that breaks the filter or the banner trips this test
+      // instead of passing on a typeof check.
       const searchInput = graphPage.searchInput
-      if (await searchInput.isVisible()) {
-        await graphPage.search('TRx')
-        const resultsShown = await graphPage.areSearchResultsShown()
-        expect(typeof resultsShown).toBe('boolean')
-      }
+      await expect(searchInput).toBeVisible()
+      await graphPage.search('TRx')
+      await expect(page.getByText(/Found 1 nodes/)).toBeVisible()
     })
 
     test('should clear search when clear button clicked', async () => {
