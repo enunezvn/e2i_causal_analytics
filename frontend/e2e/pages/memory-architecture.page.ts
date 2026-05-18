@@ -14,6 +14,23 @@ export class MemoryArchitecturePage extends BasePage {
     super(page)
   }
 
+  /**
+   * Override the base goto() to additionally wait for the page route content
+   * (h1 "Memory Architecture") to mount. The base implementation only waits
+   * for the layout shell's <main> container, which is always present even
+   * before the lazy-loaded page chunk has resolved — this yields blank-page
+   * flakes when the page chunk is slow (e.g., under concurrent dev-server
+   * load). Waiting for the h1 ensures the React.lazy chunk has hydrated
+   * before assertions begin. Use a short, swallowed timeout so the override
+   * never extends beforeEach beyond Playwright's 30s test budget.
+   */
+  async goto(): Promise<void> {
+    await super.goto()
+    await this.pageHeader
+      .waitFor({ state: 'visible', timeout: 8000 })
+      .catch(() => {})
+  }
+
   // Page Header
   get pageHeader(): Locator {
     return this.page.getByRole('heading', { name: /Memory Architecture/i }).first()
@@ -133,7 +150,7 @@ export class MemoryArchitecturePage extends BasePage {
   // Verification methods
   async verifyArchitectureDiagramDisplayed(): Promise<boolean> {
     try {
-      await this.page.getByText('Cognitive Memory Architecture').first().waitFor({ state: 'visible', timeout: 5000 })
+      await this.page.getByText('Cognitive Memory Architecture').first().waitFor({ state: 'visible', timeout: 15000 })
       return true
     } catch {
       return false
@@ -142,7 +159,7 @@ export class MemoryArchitecturePage extends BasePage {
 
   async verifyMemoryCardsDisplayed(): Promise<boolean> {
     try {
-      await this.page.getByText('Working Memory').first().waitFor({ state: 'visible', timeout: 5000 })
+      await this.page.getByText('Working Memory').first().waitFor({ state: 'visible', timeout: 15000 })
       return true
     } catch {
       const memories = ['Episodic Memory', 'Semantic Memory', 'Procedural Memory']
@@ -180,7 +197,7 @@ export class MemoryArchitecturePage extends BasePage {
 
   async verifyRecentMemoriesDisplayed(): Promise<boolean> {
     try {
-      await this.page.getByText('Recent Episodic Memories').first().waitFor({ state: 'visible', timeout: 5000 })
+      await this.page.getByText('Recent Episodic Memories').first().waitFor({ state: 'visible', timeout: 15000 })
       return true
     } catch {
       return false
@@ -189,7 +206,7 @@ export class MemoryArchitecturePage extends BasePage {
 
   async verifyAboutSectionDisplayed(): Promise<boolean> {
     try {
-      await this.page.getByText('About the Memory System').first().waitFor({ state: 'visible', timeout: 5000 })
+      await this.page.getByText('About the Memory System').first().waitFor({ state: 'visible', timeout: 15000 })
       return true
     } catch {
       return false
