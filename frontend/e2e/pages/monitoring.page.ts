@@ -4,7 +4,15 @@ import { ROUTES } from '../fixtures/test-data'
 
 /**
  * Page Object Model for Monitoring page.
- * Displays user activity logs, API usage statistics, error tracking, and performance metrics.
+ *
+ * Backend: `src/api/routes/monitoring.py`
+ *   - `/api/monitoring/runs`
+ *   - `/api/monitoring/alerts`
+ *   - `/api/monitoring/health/{model_id}`
+ *
+ * After PR #318 wired this page to live data, the rendered UI is no longer
+ * the legacy "Total Requests / Error Rate / Avg Latency / Active Users" mock.
+ * Selectors here reflect the live KPI cards + tabs (see Monitoring.tsx).
  */
 export class MonitoringPage extends BasePage {
   readonly url = ROUTES.MONITORING
@@ -23,9 +31,14 @@ export class MonitoringPage extends BasePage {
     return this.page.getByText(/user activity|API usage|error tracking|performance/i).first()
   }
 
-  // Selectors
+  // Selectors — the page has TWO comboboxes (Model + Time Range), so always
+  // target by aria-label to avoid ordering accidents.
+  get modelSelector(): Locator {
+    return this.page.getByRole('combobox', { name: /Model/i })
+  }
+
   get timeRangeSelector(): Locator {
-    return this.page.getByRole('combobox').first()
+    return this.page.getByRole('combobox', { name: /Time Range/i })
   }
 
   // Action Buttons
@@ -37,29 +50,29 @@ export class MonitoringPage extends BasePage {
     return this.page.getByRole('button', { name: /export/i })
   }
 
-  // Overview Metrics
-  get totalRequestsCard(): Locator {
-    return this.page.getByText('Total Requests').first()
+  // Overview Metrics (live KPI cards from Monitoring.tsx).
+  get totalRunsCard(): Locator {
+    return this.page.getByText('Total Runs').first()
   }
 
-  get errorRateCard(): Locator {
-    return this.page.getByText('Error Rate').first()
+  get driftRateCard(): Locator {
+    return this.page.getByText('Drift Rate').first()
   }
 
-  get avgLatencyCard(): Locator {
-    return this.page.getByText('Avg Latency').first()
+  get avgRunDurationCard(): Locator {
+    return this.page.getByText('Avg Run Duration').first()
   }
 
-  get activeUsersCard(): Locator {
-    return this.page.getByText('Active Users').first()
+  get activeAlertsCard(): Locator {
+    return this.page.getByText('Active Alerts').first()
   }
 
-  get totalErrorsCard(): Locator {
-    return this.page.getByText('Total Errors').first()
+  get driftEventsCard(): Locator {
+    return this.page.getByText('Drift Events').first()
   }
 
-  get uptimeCard(): Locator {
-    return this.page.getByText('Uptime').first()
+  get healthScoreCard(): Locator {
+    return this.page.getByText('Health Score').first()
   }
 
   // Tabs
@@ -71,8 +84,11 @@ export class MonitoringPage extends BasePage {
     return this.page.getByRole('tab', { name: /api usage/i })
   }
 
-  get userActivityTab(): Locator {
-    return this.page.getByRole('tab', { name: /user activity/i })
+  get runsTab(): Locator {
+    // The "Runs" tab is the live equivalent of the legacy "User Activity" tab
+    // (TabsTrigger value="activity" but label "Runs"). Use exact match so we
+    // don't accidentally hit the heading "Recent Runs" if it were ever a tab.
+    return this.page.getByRole('tab', { name: /^Runs$/i })
   }
 
   get errorsTab(): Locator {
@@ -84,53 +100,55 @@ export class MonitoringPage extends BasePage {
   }
 
   // API Usage Tab Content
-  get requestVolumeCard(): Locator {
-    return this.page.getByText('Request Volume').first()
+  get featuresCheckedCard(): Locator {
+    // Live CardTitle: "Features Checked & Drift Detected"
+    return this.page.getByText(/Features Checked/i).first()
   }
 
-  get responseLatencyCard(): Locator {
-    return this.page.getByText('Response Latency').first()
+  get runDurationCard(): Locator {
+    return this.page.getByText('Run Duration').first()
   }
 
-  get endpointStatisticsCard(): Locator {
-    return this.page.getByText('Endpoint Statistics').first()
+  get recentRunsCard(): Locator {
+    return this.page.getByText('Recent Runs').first()
   }
 
-  // User Activity Tab Content
-  get userActivityLogCard(): Locator {
-    return this.page.getByText('User Activity Log').first()
+  // Runs Tab Content (live equivalent of "User Activity")
+  get monitoringRunsCard(): Locator {
+    return this.page.getByText('Monitoring Runs').first()
   }
 
-  get activitySearchInput(): Locator {
-    return this.page.getByPlaceholder(/search activities/i)
-  }
-
-  // Errors Tab Content
-  get errorLogsCard(): Locator {
-    return this.page.getByText('Error Logs').first()
+  // Errors Tab Content (live equivalent of "Error Logs")
+  get alertFeedCard(): Locator {
+    return this.page.getByText('Alert Feed').first()
   }
 
   get errorSearchInput(): Locator {
-    return this.page.getByPlaceholder(/search errors/i)
+    return this.page.getByPlaceholder(/search alerts/i)
   }
 
   get errorLevelFilter(): Locator {
-    return this.page.getByRole('combobox').filter({ hasText: /level|all/i }).first()
+    return this.page.getByRole('combobox', { name: /Severity Filter/i })
   }
 
-  // System Tab Content
-  get systemResourcesCard(): Locator {
-    return this.page.getByText('System Resources').first()
+  // System Tab Content (live equivalent of "System Resources")
+  get modelHealthCard(): Locator {
+    return this.page.getByText('Model Health').first()
   }
 
-  get serviceHealthCard(): Locator {
-    return this.page.getByText('Service Health').first()
+  get recommendationsCard(): Locator {
+    return this.page.getByText('Recommendations').first()
   }
 
   // Actions
   async selectTimeRange(range: string): Promise<void> {
     await this.timeRangeSelector.click()
     await this.page.getByRole('option', { name: new RegExp(range, 'i') }).click()
+  }
+
+  async selectModel(modelLabel: string): Promise<void> {
+    await this.modelSelector.click()
+    await this.page.getByRole('option', { name: new RegExp(modelLabel, 'i') }).click()
   }
 
   async clickTab(tabName: string): Promise<void> {
@@ -145,87 +163,104 @@ export class MonitoringPage extends BasePage {
     await this.exportButton.click()
   }
 
-  async searchActivities(query: string): Promise<void> {
-    await this.activitySearchInput.fill(query)
-  }
-
-  async searchErrors(query: string): Promise<void> {
+  async searchAlerts(query: string): Promise<void> {
     await this.errorSearchInput.fill(query)
   }
 
   // Verification methods
   async verifyOverviewMetricsDisplayed(): Promise<boolean> {
-    try {
-      await this.page.getByText('Total Requests').first().waitFor({ state: 'visible', timeout: 5000 })
-      return true
-    } catch {
-      const metrics = ['Error Rate', 'Avg Latency', 'Active Users', 'Uptime']
-      for (const metric of metrics) {
-        if (await this.page.getByText(metric).first().isVisible().catch(() => false)) {
-          return true
-        }
+    // At least one of the live KPI cards must be visible.
+    //
+    // NB: We use `waitFor({ state: 'visible' })` (not `.isVisible()`) because
+    // `.isVisible()` is a single synchronous check that doesn't auto-retry on
+    // visibility — it only retries the locator resolution. When the page is
+    // still hydrating, `.isVisible()` can return `false` immediately while
+    // `waitFor` polls until the element resolves visible OR the timeout fires.
+    const cards = ['Total Runs', 'Drift Rate', 'Avg Run Duration', 'Active Alerts', 'Drift Events', 'Health Score']
+    for (const c of cards) {
+      try {
+        await this.page.getByText(c).first().waitFor({ state: 'visible', timeout: 5000 })
+        return true
+      } catch {
+        // try next card
       }
-      return false
     }
+    return false
   }
 
   async verifyTabsDisplayed(): Promise<boolean> {
     try {
-      // Wait for main content to load first
-      await this.page.waitForTimeout(1000)
+      await this.page.waitForTimeout(500)
       await this.tabsList.waitFor({ state: 'visible', timeout: 5000 })
       return await this.tabsList.isVisible()
     } catch {
-      // Fallback: check for specific tab triggers
-      try {
-        const hasApiTab = await this.page.getByRole('tab', { name: /api/i }).first().isVisible({ timeout: 2000 }).catch(() => false)
-        const hasActivityTab = await this.page.getByRole('tab', { name: /activity/i }).first().isVisible({ timeout: 2000 }).catch(() => false)
-        const hasErrorsTab = await this.page.getByRole('tab', { name: /errors/i }).first().isVisible({ timeout: 2000 }).catch(() => false)
-        return hasApiTab || hasActivityTab || hasErrorsTab
-      } catch {
-        return false
-      }
+      const hasApiTab = await this.page
+        .getByRole('tab', { name: /api/i })
+        .first()
+        .isVisible({ timeout: 2000 })
+        .catch(() => false)
+      const hasErrorsTab = await this.page
+        .getByRole('tab', { name: /errors/i })
+        .first()
+        .isVisible({ timeout: 2000 })
+        .catch(() => false)
+      return hasApiTab || hasErrorsTab
     }
   }
 
   async verifyAPIUsageDisplayed(): Promise<boolean> {
     try {
-      // The CardTitle text is "Request Volume & Errors" - use regex for partial match
-      await this.page.getByText(/Request Volume/i).first().waitFor({ state: 'visible', timeout: 5000 })
+      // Live CardTitle: "Features Checked & Drift Detected"
+      await this.page
+        .getByText(/Features Checked/i)
+        .first()
+        .waitFor({ state: 'visible', timeout: 5000 })
       return true
     } catch {
-      // Fallback: check for other API usage elements
-      try {
-        const hasLatency = await this.page.getByText('Response Latency').first().isVisible({ timeout: 2000 }).catch(() => false)
-        const hasEndpoint = await this.page.getByText('Endpoint Statistics').first().isVisible({ timeout: 2000 }).catch(() => false)
-        return hasLatency || hasEndpoint
-      } catch {
-        return false
-      }
+      const hasRunDuration = await this.page
+        .getByText('Run Duration')
+        .first()
+        .isVisible({ timeout: 2000 })
+        .catch(() => false)
+      const hasRecentRuns = await this.page
+        .getByText('Recent Runs')
+        .first()
+        .isVisible({ timeout: 2000 })
+        .catch(() => false)
+      return hasRunDuration || hasRecentRuns
     }
   }
 
-  async verifyUserActivityDisplayed(): Promise<boolean> {
+  async verifyRunsDisplayed(): Promise<boolean> {
     try {
-      await this.page.getByText('User Activity Log').first().waitFor({ state: 'visible', timeout: 5000 })
+      await this.page
+        .getByText('Monitoring Runs')
+        .first()
+        .waitFor({ state: 'visible', timeout: 5000 })
       return true
     } catch {
       return false
     }
   }
 
-  async verifyErrorLogsDisplayed(): Promise<boolean> {
+  async verifyAlertFeedDisplayed(): Promise<boolean> {
     try {
-      await this.page.getByText('Error Logs').first().waitFor({ state: 'visible', timeout: 5000 })
+      await this.page
+        .getByText('Alert Feed')
+        .first()
+        .waitFor({ state: 'visible', timeout: 5000 })
       return true
     } catch {
       return false
     }
   }
 
-  async verifySystemMetricsDisplayed(): Promise<boolean> {
+  async verifyModelHealthDisplayed(): Promise<boolean> {
     try {
-      await this.page.getByText('System Resources').first().waitFor({ state: 'visible', timeout: 5000 })
+      await this.page
+        .getByText('Model Health')
+        .first()
+        .waitFor({ state: 'visible', timeout: 5000 })
       return true
     } catch {
       return false

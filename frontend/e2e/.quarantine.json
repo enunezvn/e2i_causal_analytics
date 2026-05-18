@@ -1,11 +1,10 @@
 {
-  "budget": 15,
+  "budget": 14,
   "specs": [
     "ai-insights.spec.ts",
     "data-quality.spec.ts",
     "feature-importance.spec.ts",
     "model-performance.spec.ts",
-    "monitoring.spec.ts",
     "predictive-analytics.spec.ts",
     "time-series.spec.ts",
     "agent-orchestration.spec.ts",
