@@ -202,15 +202,32 @@ def _role_attribution_payload(
     and ``source`` for the mirror; the other fields stay in the sidecar
     JSON as audit context (the database does not need them for
     cross-experiment queries).
+
+    Codex iter-1 MED: returning a partial ``(str, None)`` or
+    ``(None, str)`` would trip migration 041's co-presence CHECK
+    constraint
+    ``chk_adaptive_validity_verdicts_role_copresence`` and abort the
+    upsert. Instead, if EITHER field is missing or non-string on a
+    malformed sidecar attribution, emit ``(None, None)`` and log a
+    WARN so the producer-side schema drift is visible to operators
+    rather than corrupting the cross-experiment query surface.
     """
     if record.role_attribution is None:
         return (None, None)
     causal_role = record.role_attribution.get("causal_role")
     source = record.role_attribution.get("source")
-    return (
-        causal_role if isinstance(causal_role, str) else None,
-        source if isinstance(source, str) else None,
+    if isinstance(causal_role, str) and isinstance(source, str):
+        return (causal_role, source)
+    logger.warning(
+        "mirror: skipping malformed role_attribution for feature=%r — "
+        "causal_role=%r source=%r (one or both not a string). "
+        "Migration 041 co-presence CHECK requires both columns set "
+        "together; emitting (NULL, NULL) to preserve the constraint.",
+        record.feature,
+        causal_role,
+        source,
     )
+    return (None, None)
 
 
 def _parse_since(value: str) -> datetime:
