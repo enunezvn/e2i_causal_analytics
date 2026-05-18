@@ -1,6 +1,6 @@
 import { Page, Locator } from '@playwright/test'
 import { BasePage } from './base.page'
-import { ROUTES } from '../fixtures/test-data'
+import { ROUTES, TIMEOUTS } from '../fixtures/test-data'
 
 /**
  * Page Object Model for the Home page.
@@ -13,6 +13,19 @@ export class HomePage extends BasePage {
   constructor(page: Page) {
     super(page)
   }
+
+  /**
+   * Home renders ExecutiveSummary + CausalValueChains + KPI grid that all
+   * depend on async hooks (useKPIList, useGraphStats, useAlerts). The base
+   * `goto()` only waits 300ms after main content, which is racey under load.
+   * Keep the parent `goto()` and let individual tests wait for their target
+   * locators with PAGE_LOAD-scoped timeouts (the alternative — waiting for
+   * everything synchronously in `goto()` — easily blows the 30s test budget
+   * via `beforeEach` when CPU is shared with sibling Playwright runs).
+   *
+   * The H1 page header and the first combobox are wired via individual
+   * assertions in the spec; do not block here.
+   */
 
   // ========================================================================
   // Page Header
@@ -212,7 +225,7 @@ export class HomePage extends BasePage {
   async verifyKpiCardsDisplayed(_minCount = 1): Promise<boolean> {
     // Wait for KPI section to render - look for the Key Performance Indicators heading
     try {
-      await this.page.getByText('Key Performance Indicators').first().waitFor({ state: 'visible', timeout: 5000 })
+      await this.page.getByText('Key Performance Indicators').first().waitFor({ state: 'visible', timeout: TIMEOUTS.PAGE_LOAD })
       return true
     } catch {
       // Fallback: check for KPI-related headings/labels on the page
@@ -263,7 +276,7 @@ export class HomePage extends BasePage {
   async verifyQuickStatsDisplayed(): Promise<boolean> {
     // Wait for quick stats to render - look for the first stat text
     try {
-      await this.page.getByText('Total TRx (MTD)').first().waitFor({ state: 'visible', timeout: 5000 })
+      await this.page.getByText('Total TRx (MTD)').first().waitFor({ state: 'visible', timeout: TIMEOUTS.PAGE_LOAD })
       return true
     } catch {
       // Fallback: check for any stat text
