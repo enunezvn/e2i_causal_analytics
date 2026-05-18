@@ -3,7 +3,7 @@
   "specs": [
     "agent-orchestration.spec.ts",
     "intervention-impact.spec.ts",
-    "knowledge-graph.spec.ts",
+    "kpi-dictionary.spec.ts",
     "memory-architecture.spec.ts",
     "system-health.spec.ts"
   ]
