@@ -210,6 +210,7 @@ markers = [
     "heavy_ml: Tests with heavy ML imports (dspy, econml, dowhy) - grouped on single worker",
     "xdist_group(name): Group tests to run on same worker (prevents DSPy import race conditions)",
     "real_data: Test requires real cohort data (CSU/Optum) on disk - skips when absent",
+    "benchmark: Retrieval-quality (Recall@10 / MRR) benchmark — excluded from default unit-test sweep, run via .github/workflows/retrieval-benchmarks.yml (issue #377)",
 ]
 # Filter warnings
 filterwarnings = [

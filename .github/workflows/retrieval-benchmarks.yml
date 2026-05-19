@@ -1,0 +1,120 @@
+name: Retrieval Benchmarks
+
+# Issue #377: regression-gated benchmark for src/rag/retriever.py
+# HybridRetriever. See tests/benchmarks/test_retrieval_quality.py +
+# tests/benchmarks/data/CURATION.md for harness shape + curation policy.
+#
+# Trigger semantics: paths-filtered so the workflow only fires when the
+# retriever or the benchmark itself changes. Avoids running a quality
+# benchmark against unrelated changes (e.g., frontend, docs).
+#
+# Tolerances (codified in tests/benchmarks/baselines/retrieval_quality.json,
+# NOT in this workflow — keep tolerances next to the baseline so they
+# version together):
+#   - Recall@10 regression > 5pp → FAIL
+#     (5pp is the issue #377 §D verbatim ceiling; MTEB/BEIR convention
+#     Thakur et al. 2021 §5.3 cites ~3-5pp as typical noise floor on
+#     labeled query-sets of this size — document as "default, tighten on
+#     signal" until corpus-seeding follow-up lands.)
+#   - MRR regression > 0.05 absolute → FAIL
+#     (Verbatim from issue #377 §D; revisit after first non-zero baseline.)
+#
+# To re-bless the baseline (intentional shift): update
+# tests/benchmarks/baselines/retrieval_quality.json in the same PR; the
+# regression gate will accept the new mean. The PR body must document
+# the reason for the shift. Do NOT loosen tolerances to mask a regression.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/rag/**'
+      - 'tests/benchmarks/**'
+      - '.github/workflows/retrieval-benchmarks.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/rag/**'
+      - 'tests/benchmarks/**'
+      - '.github/workflows/retrieval-benchmarks.yml'
+  workflow_dispatch: {}
+
+jobs:
+  retrieval-benchmarks:
+    name: HybridRetriever Recall@10 + MRR
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    strategy:
+      matrix:
+        python-version: ['3.12']
+
+    env:
+      # Disable rate limiting so the benchmark's 36-query run doesn't
+      # 429 on a shared CI surface (mirrors tests/conftest.py).
+      DISABLE_RATE_LIMITING: '1'
+      # E2I_TESTING_MODE matches pyproject.toml [tool.pytest.ini_options]
+      # env block so auth bypass is consistent with the unit-test sweep.
+      E2I_TESTING_MODE: 'true'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Full project deps are required: the retriever pulls in
+          # supabase + pgvector + (optionally) falkordb. Use the same
+          # requirements file as backend-tests.yml for parity.
+          pip install -r requirements.txt
+          pip install -e .
+          pip install pytest pytest-timeout pytest-asyncio
+
+      - name: Run retrieval benchmark harness
+        # Per memory ``causal_role_propagation_phases_2_7_close_20260518``:
+        # xdist can starve async retriever calls under load; benchmark
+        # MUST run with -p no:xdist. We also clear addopts so the
+        # pyproject ``-n 4 --dist=loadscope`` default doesn't sneak xdist
+        # back in.
+        #
+        # ``-m benchmark`` selects only the benchmark-tagged tests
+        # (defined at pyproject.toml [tool.pytest.ini_options] markers).
+        # The harness's own skip semantics handle missing services:
+        # ``requires_supabase`` skips when credentials are absent,
+        # and the OPENAI_API_KEY sk-* shape check skips when no key is
+        # available (per feedback_live_lm_skip_must_check_key_shape).
+        run: |
+          pytest -m benchmark tests/benchmarks/test_retrieval_quality.py \
+            -v --tb=short \
+            -p no:xdist \
+            -o "addopts=" \
+            --junitxml=test-results/retrieval-benchmarks.xml \
+            -o junit_family=xunit2
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: retrieval-benchmark-results
+          path: test-results/
+          retention-days: 30
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Retrieval Benchmark Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Tolerances (from tests/benchmarks/baselines/retrieval_quality.json):" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Recall@10: regression > 5pp → fail" >> $GITHUB_STEP_SUMMARY
+          echo "- MRR:       regression > 0.05 absolute → fail" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Improvements (current > baseline) always pass; the PR body" >> $GITHUB_STEP_SUMMARY
+          echo "must document any intentional shift + re-bless the baseline." >> $GITHUB_STEP_SUMMARY
