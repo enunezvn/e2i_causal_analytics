@@ -216,10 +216,15 @@ async def notify_and_queue_reanalysis(
             # count still goes up because the finding made it into the
             # alert payload — operators can see the malformed shape via
             # the alert subscriber.
+            #
+            # L1 (codex iter-0): log only safe-shape metadata, never the
+            # full finding dict. Findings can carry PHI / patient-level
+            # fields and per-HIPAA we MUST NOT page that through general
+            # logging. Brand + key list is enough for ops to triage.
             logger.warning(
                 f"sentinel-action notify_and_queue_reanalysis: skipping enqueue "
                 f"for finding without finding_id sentinel={sentinel_id} "
-                f"finding={finding!r}"
+                f"brand={finding.get('brand')} keys={sorted(finding.keys())}"
             )
             continue
         try:

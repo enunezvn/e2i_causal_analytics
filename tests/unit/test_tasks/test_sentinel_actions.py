@@ -274,6 +274,52 @@ async def test_notify_and_queue_reanalysis_uses_finding_brand_when_present(
 
 
 @pytest.mark.asyncio
+async def test_notify_and_queue_reanalysis_malformed_finding_log_omits_sensitive_payload(
+    fake_redis: _CapturingRedis,
+    caplog: pytest.LogCaptureFixture,
+):
+    """L1 (codex iter-0): when a finding lacks a ``finding_id``, the
+    skip-enqueue warning MUST log only safe-shape metadata (brand + key
+    names), never the full finding dict — findings can carry PHI fields
+    and per-HIPAA we MUST NOT page that through general logging.
+
+    Pre-fix: ``f"finding={finding!r}"`` interpolated the full dict,
+    including any sensitive payload fields (patient identifiers, hashed
+    PHI, free-text clinical notes).
+    """
+    import logging
+
+    sensitive_finding = {
+        "brand": "Kisqali",
+        "staleness_score": 0.9,
+        # finding_id intentionally missing so we hit the skip path.
+        "patient_mrn": "MRN-SENSITIVE-12345",
+        "patient_dob": "1972-04-19",
+        "clinical_notes": "PII: patient reports adverse event with details",
+    }
+    with patch("src.tasks.sentinel_actions.celery_app.send_task"):
+        with caplog.at_level(logging.WARNING):
+            await notify_and_queue_reanalysis(
+                sentinel_id="s-no-pk",
+                brands=["Kisqali"],
+                trigger_data={"stale_findings": [sensitive_finding]},
+            )
+    # The warning fired.
+    skip_records = [
+        rec for rec in caplog.records if "skipping enqueue" in rec.message
+    ]
+    assert len(skip_records) == 1
+    skip_msg = skip_records[0].message
+    # The brand + key names are safe to log.
+    assert "Kisqali" in skip_msg
+    assert "patient_mrn" in skip_msg  # key NAME is fine
+    # The sensitive VALUES MUST NOT appear.
+    assert "MRN-SENSITIVE-12345" not in skip_msg
+    assert "1972-04-19" not in skip_msg
+    assert "PII: patient reports" not in skip_msg
+
+
+@pytest.mark.asyncio
 async def test_notify_and_queue_reanalysis_programming_errors_propagate(
     fake_redis: _CapturingRedis,
 ):
