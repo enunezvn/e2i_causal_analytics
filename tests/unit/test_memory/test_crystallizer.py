@@ -402,8 +402,11 @@ async def test_crystallize_arrays_sorted_across_multi_member_dedup(fake_supabase
     from datetime import datetime, timezone
 
     now = datetime.now(timezone.utc).isoformat()
-    # Member A: confounders in alphabetical order, sensitivity in
-    # reverse alphabetical order.
+    # Member A: confounders in alphabetical order, sensitivity-passed
+    # in reverse alphabetical order, sensitivity-FAILED with the
+    # alphabetically-LARGER value listed first (codex iter-2 M2:
+    # adversarial fixture for sensitivity_checks_failed so encounter-
+    # order ≠ sorted-order even on the failed array).
     fake_supabase.rows["episodic_memories"].append(
         {
             "memory_id": str(uuid.uuid4()),
@@ -420,13 +423,15 @@ async def test_crystallize_arrays_sorted_across_multi_member_dedup(fake_supabase
                 "confidence_interval": [0.2, 0.6],
                 "confounders": ["a_age", "z_zip"],
                 "refutation_passed_tests": ["z_random_cc", "a_placebo"],
-                "refutation_failed_tests": [],
+                "refutation_failed_tests": ["wald_test", "bootstrap"],
             },
         }
     )
     # Member B: introduces NEW confounder in the middle of the sorted
-    # output, and new sensitivity-pass test that's lexicographically
-    # smaller than member A's passes.
+    # output, a sensitivity-pass test that's lexicographically smaller
+    # than member A's passes, and a sensitivity-FAILED test that is
+    # alphabetically EARLIEST (must sort to front; encounter-order
+    # would put it 3rd after A's two values).
     fake_supabase.rows["episodic_memories"].append(
         {
             "memory_id": str(uuid.uuid4()),
@@ -441,7 +446,14 @@ async def test_crystallize_arrays_sorted_across_multi_member_dedup(fake_supabase
             "raw_content": {
                 "confounders": ["m_middle"],
                 "refutation_passed_tests": ["aa_first_alphabetical"],
-                "refutation_failed_tests": ["b_data_subset"],
+                # Three failed tests across both members:
+                #   A: ["wald_test", "bootstrap"]
+                #   B: ["anderson_test", "wald_test"]   (wald_test dup)
+                # Encounter-order dedup → ["wald_test", "bootstrap", "anderson_test"]
+                # sorted() → ["anderson_test", "bootstrap", "wald_test"]
+                # The two orderings are distinguishable, so this fixture
+                # falsifies any non-sort implementation.
+                "refutation_failed_tests": ["anderson_test", "wald_test"],
             },
         }
     )
@@ -457,7 +469,16 @@ async def test_crystallize_arrays_sorted_across_multi_member_dedup(fake_supabase
         "aa_first_alphabetical",
         "z_random_cc",
     ]
-    assert insight["sensitivity_checks_failed"] == ["b_data_subset"]
+    # Codex iter-2 M2: now multi-value, deduplicated, AND sorted.
+    # Encounter-order dedup would produce
+    #   ["wald_test", "bootstrap", "anderson_test"]
+    # which fails this assertion. Only sorted() produces the asserted
+    # alphabetical order.
+    assert insight["sensitivity_checks_failed"] == [
+        "anderson_test",
+        "bootstrap",
+        "wald_test",
+    ]
 
 
 @pytest.mark.asyncio
