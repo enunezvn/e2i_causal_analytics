@@ -671,57 +671,61 @@ async def test_crystallize_calls_llm_narrator_when_flag_on(fake_supabase, monkey
 async def test_crystallize_narrator_swallows_only_anthropic_errors(
     fake_supabase, monkeypatch
 ):
-    """Codex iter-1 H2 (LOAD-BEARING): the Haiku call must catch only
-    the four anthropic.* SDK error classes, NOT broad Exception.
+    """Codex iter-1 H2 (LOAD-BEARING) + iter-3 H1 (test rigor): the
+    Haiku call must catch only the four anthropic.* SDK error classes,
+    NOT broad Exception.
 
     Programming errors (TypeError, AttributeError, KeyError) MUST
     propagate so they surface in CI / DLQ instead of being silently
     swallowed as "empty narrator audit". This mirrors the
     #378-iter-0-M1 / sibling narrow-catch contract.
 
-    We assert this by injecting a TypeError-raising stub at the
-    AsyncAnthropic.messages.create boundary and confirming the
-    exception escapes the crystallizer's group-level try/except into
-    the `errors` list (the outer wrapper catches it but does NOT
-    silently substitute an empty audit).
+    Test rigor (codex iter-3 H1): we patch
+    ``anthropic.AsyncAnthropic`` at the SDK boundary so the REAL
+    ``_invoke_llm_narrator`` body executes — its real catch tuple
+    ``(anthropic.APIConnectionError, APITimeoutError, RateLimitError,
+    APIStatusError)`` is the assertion target. If a future regression
+    broadens that tuple to ``Exception``, the TypeError gets swallowed
+    and ``pytest.raises(TypeError)`` fails — regression caught.
+
+    The prior iter-2 shape (monkeypatching ``_invoke_llm_narrator``
+    itself) tested the MOCK, not the real catch tuple.
+
+    Companion positive-control:
+    ``test_crystallize_narrator_falls_back_on_anthropic_api_error``
+    below — patches the SAME SDK boundary, raises an
+    ``anthropic.APIConnectionError``, and asserts the real catch DOES
+    swallow it (insight created with empty prose). Together the two
+    tests bracket the catch boundary.
     """
     monkeypatch.setenv("E2I_CRYSTAL_LLM_NARRATIVES_ENABLED", "1")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-fake-key-for-shape")
 
-    # The load-bearing claim of H2's narrow-catch contract is that
-    # NON-anthropic exceptions ESCAPE _invoke_llm_narrator as uncaught
-    # exceptions (so they surface in CI / DLQ instead of being
-    # swallowed as "empty narrator audit"). Codex iter-2 H1: assert
-    # the ESCAPE directly with pytest.raises — the prior observation-
-    # via-errors-list assertion did not distinguish "TypeError escaped
-    # the narrow catch" from "TypeError was caught by the outer
-    # group-level except Exception and recorded as a per-group error".
-    #
-    # Patch _invoke_llm_narrator itself (the module-level patch
-    # surface) so the TypeError is raised at the exact boundary where
-    # H2's narrow-catch lives — no intermediate frames can swallow it.
+    import anthropic as anthropic_mod
     from src.memory.crystallization import crystallizer as crystallizer_module
 
-    async def _raise_type_error(**_kwargs):
-        raise TypeError("programmer error not in anthropic catch tuple")
+    # SDK-level stub: AsyncAnthropic().messages.create() raises
+    # TypeError. This is one level DEEPER than the prior shape —
+    # the real _invoke_llm_narrator body runs, instantiates the
+    # (fake) client, awaits create, and hits the real catch tuple.
+    class _BoomMessages:
+        async def create(self, **_kwargs):
+            raise TypeError("programmer error not in anthropic catch tuple")
 
-    monkeypatch.setattr(
-        crystallizer_module, "_invoke_llm_narrator", _raise_type_error
-    )
+    class _BoomClient:
+        def __init__(self, **_kwargs):
+            self.messages = _BoomMessages()
 
-    _seed_episodic_with_causal_content(
-        fake_supabase,
-        brand="Kisqali",
-        causal_path_id="cp1",
-        agents=["causal_impact", "gap_analyzer"],
-    )
+    monkeypatch.setattr(anthropic_mod, "AsyncAnthropic", _BoomClient)
 
-    # The TypeError must propagate out of _invoke_llm_narrator and
-    # bubble up through the await. The crystallizer's outer per-group
-    # try/except (at _crystallize_group level) catches it and records
-    # it in result.errors — BUT we also assert via pytest.raises that
-    # if we call _invoke_llm_narrator directly (no outer wrapper),
-    # the TypeError escapes uncaught. This is the precise H2 contract.
+    # PRIMARY assertion: direct await on the real function must
+    # propagate the TypeError. The real catch at
+    # ``crystallizer.py:789-807`` includes only the four anthropic.*
+    # SDK classes, so a TypeError raised inside the `try` block
+    # escapes uncaught. If someone broadens the catch to `Exception`
+    # tomorrow, this assertion FAILS (pytest.raises receives no
+    # exception) → regression caught at the SDK-call boundary, not
+    # at a test-internal mock layer.
     with pytest.raises(TypeError, match="programmer error not in anthropic catch tuple"):
         await crystallizer_module._invoke_llm_narrator(
             brand="Kisqali",
@@ -739,11 +743,16 @@ async def test_crystallize_narrator_swallows_only_anthropic_errors(
             },
         )
 
-    # Secondary observation: when the same TypeError is raised from
-    # within run_for_brand's per-group loop, the outer group-level
-    # try/except DOES catch it (it has `except Exception`) and records
-    # the error — but it does NOT silently substitute an empty audit.
-    # No row is inserted; the error is surfaced.
+    # SECONDARY observation (kept from iter-1 + iter-2): when the
+    # same TypeError surfaces inside the per-group loop, the outer
+    # ``_crystallize_group`` try/except catches it and records it
+    # in result.errors. No row is inserted; no empty-audit shadowing.
+    _seed_episodic_with_causal_content(
+        fake_supabase,
+        brand="Kisqali",
+        causal_path_id="cp1",
+        agents=["causal_impact", "gap_analyzer"],
+    )
     result = await Crystallizer().run_for_brand("Kisqali")
     assert result.insights_created == 0, (
         "TypeError must escape narrow narrator catch, not be swallowed "
