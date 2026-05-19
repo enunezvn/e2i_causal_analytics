@@ -493,7 +493,11 @@ async def test_crystallize_calls_llm_narrator_when_flag_on(fake_supabase, monkey
         cost_usd=0.0018,
     )
 
-    def stub_narrator(*args, **kwargs):
+    # Codex iter-1 H1: _invoke_llm_narrator is now async, so the stub
+    # MUST be async too (calling site is `await _invoke_llm_narrator(...)`).
+    # A plain sync `def` would return a coroutine-shaped value once
+    # awaited — not the LLMCrystalNarrativeAudit instance.
+    async def stub_narrator(*args, **kwargs):
         return stub_audit
 
     monkeypatch.setattr(

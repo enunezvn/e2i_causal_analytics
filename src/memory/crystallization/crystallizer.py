@@ -279,7 +279,7 @@ class Crystallizer:
 
         # --- Compose the 2 narrative-prose fields (LLM-flagged) ---
         if _llm_narratives_enabled():
-            audit = _invoke_llm_narrator(
+            audit = await _invoke_llm_narrator(
                 brand=brand,
                 region=region,
                 members=members,
@@ -710,7 +710,7 @@ def _deterministic_narrative_prose(
     return limitations, recommended
 
 
-def _invoke_llm_narrator(
+async def _invoke_llm_narrator(
     *,
     brand: str,
     region: Optional[str],
@@ -720,19 +720,23 @@ def _invoke_llm_narrator(
     """Invoke the Haiku narrator and return an
     :class:`src.data.kg.types.LLMCrystalNarrativeAudit`.
 
-    PRODUCTION shape: this is a thin wrapper around the Anthropic SDK
-    (``anthropic.Anthropic`` client) with the Haiku model pinned via
-    :data:`DEFAULT_NARRATOR_MODEL`. Telemetry (latency_ms,
+    PRODUCTION shape: thin wrapper around
+    :class:`anthropic.AsyncAnthropic` (NOT the sync
+    :class:`anthropic.Anthropic` — the crystallizer is async-end-to-
+    end; a sync client here would block the event loop and stall the
+    FastAPI / Celery worker pool). Telemetry (latency_ms,
     input_tokens, output_tokens, cost_usd) is captured into the audit.
 
-    UNIT TESTS: monkeypatch this function (see
-    ``tests/unit/test_memory/test_crystallizer.py``) so no network
+    UNIT TESTS: monkeypatch this function with an ``AsyncMock`` (or a
+    plain async stub) — see
+    ``tests/unit/test_memory/test_crystallizer.py`` — so no network
     call happens and the audit is fully deterministic.
 
-    Exception path: on SDK / API failure, return an audit with empty
-    prose fields so the row insert still completes; the deterministic
-    heuristic prose is NOT auto-substituted here (the caller can detect
-    empty prose and decide).
+    Exception path: SDK / API exceptions narrow-caught on the four
+    anthropic.* error classes (APIConnectionError, APITimeoutError,
+    RateLimitError, APIStatusError); programming errors
+    (TypeError/AttributeError/KeyError) propagate per the codex-rescue
+    H2 / #378-iter-0-M1 narrow-catch contract.
     """
     # Lazy imports so a flag-off module load does not pay for these.
     from src.data.kg.types import LLMCrystalNarrativeAudit
@@ -759,9 +763,7 @@ def _invoke_llm_narrator(
         )
         return LLMCrystalNarrativeAudit(narrator_model=DEFAULT_NARRATOR_MODEL)
 
-    import anthropic as anthropic_mod  # re-imported under alias for live path
-
-    client = anthropic_mod.Anthropic(api_key=api_key)
+    client = anthropic.AsyncAnthropic(api_key=api_key)
 
     prompt = _build_narrator_prompt(
         brand=brand, region=region, members=members, derived=derived
@@ -769,13 +771,26 @@ def _invoke_llm_narrator(
 
     started = time.monotonic()
     try:
-        response = client.messages.create(
+        response = await client.messages.create(
             model=DEFAULT_NARRATOR_MODEL,
             max_tokens=512,
             messages=[{"role": "user", "content": prompt}],
         )
-    except Exception:  # pragma: no cover — covered by stub in tests
-        logger.exception("narrator: Haiku call failed; emitting empty audit")
+    except (
+        anthropic.APIConnectionError,
+        anthropic.APITimeoutError,
+        anthropic.RateLimitError,
+        anthropic.APIStatusError,
+    ) as exc:
+        # Narrow catch (codex iter-1 H2 + sibling #378 iter-0 M1):
+        # SDK-level transient errors fall back to empty audit; the
+        # row insert still completes with empty prose. Programming
+        # errors (TypeError, AttributeError, KeyError) MUST propagate
+        # so they surface in CI / DLQ instead of being silently
+        # swallowed as "empty narrator audit".
+        logger.warning(
+            "crystal-narrator-haiku-failure %s: %s", type(exc).__name__, exc
+        )
         return LLMCrystalNarrativeAudit(
             narrator_model=DEFAULT_NARRATOR_MODEL,
             latency_ms=(time.monotonic() - started) * 1000.0,
