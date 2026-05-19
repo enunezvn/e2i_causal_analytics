@@ -62,9 +62,10 @@ from src.tasks.feedback_loop_tasks import (
     run_full_feedback_loop,
 )
 
-# Insight lifecycle (consolidator + sentinel dispatcher)
+# Insight lifecycle (consolidator + sentinel dispatcher + #378 reanalysis)
 from src.tasks.insight_lifecycle_tasks import (
     consolidate_insights,
+    reanalyze_finding,
     sentinel_dispatcher,
 )
 
@@ -119,6 +120,7 @@ __all__ = [
     # Insight lifecycle subsystem
     "consolidate_insights",
     "sentinel_dispatcher",
+    "reanalyze_finding",
     # Crystallization subsystem (#376 Phase 4)
     "crystallize_portfolio",
 ]
