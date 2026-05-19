@@ -1,0 +1,63 @@
+"""Celery tasks for the crystallization subsystem (#376 Phase 4).
+
+- ``crystallize_portfolio``  : every 6h offset 30 min after the daily
+                               consolidator. Iterates the configured
+                               brand list and aggregates per-brand
+                               counts.
+
+The task wraps :meth:`src.memory.crystallization.crystallizer.Crystallizer.crystallize_portfolio`
+and returns a JSON-serializable summary so beat-logs / dispatcher
+audits can inspect the per-run result without re-querying the DB.
+
+Idempotency: re-running within the schedule window collides on the
+partial-unique-index ``uix_executive_insights_active_causal_path``
+(see ``database/memory/021_insight_lifecycle.sql:219-226``); the
+crystallizer treats the collision as a skip-signal and continues.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from typing import Any, Dict
+
+from src.workers.celery_app import celery_app
+
+logger = logging.getLogger(__name__)
+
+
+def _run_crystallize_portfolio() -> Any:
+    """Synchronous bridge wrapping
+    :meth:`Crystallizer.crystallize_portfolio` so the Celery task body
+    stays asyncio-import-free.
+
+    Extracted as a module-level callable so unit tests can patch it
+    without monkeypatching the whole crystallizer.
+    """
+    from src.memory.crystallization.crystallizer import Crystallizer
+
+    return asyncio.run(Crystallizer().crystallize_portfolio())
+
+
+@celery_app.task(
+    bind=True,
+    name="src.tasks.crystallization_tasks.crystallize_portfolio",
+)
+def crystallize_portfolio(self) -> Dict[str, Any]:
+    """6-hourly portfolio-crystallization pass.
+
+    Returns a JSON-serializable summary. Exceptions propagate so the
+    Celery autoretry / DLQ pipeline kicks in.
+    """
+    try:
+        result = _run_crystallize_portfolio()
+        return {
+            "examined_groups": int(getattr(result, "examined_groups", 0) or 0),
+            "insights_created": int(getattr(result, "insights_created", 0) or 0),
+            "edges_created": int(getattr(result, "edges_created", 0) or 0),
+            "by_brand": dict(getattr(result, "by_brand", {}) or {}),
+            "errors": list(getattr(result, "errors", []) or []),
+        }
+    except Exception:
+        logger.exception("crystallize_portfolio task failed")
+        raise

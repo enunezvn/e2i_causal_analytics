@@ -68,6 +68,13 @@ from src.tasks.insight_lifecycle_tasks import (
     sentinel_dispatcher,
 )
 
+# Crystallization subsystem (#376 Phase 4): importing the module fires the
+# @celery_app.task decorator so the portfolio task is discoverable by the
+# Celery worker. Without this line, the worker boot would NOT see
+# ``crystallize_portfolio`` and beat-driven dispatches would dead-letter.
+# Memory: [[feat-375-phase3-hardening-close-20260519]].
+from src.tasks.crystallization_tasks import crystallize_portfolio
+
 # NPPES NPI taxonomy cache (issue #154)
 from src.tasks.nppes_tasks import refresh_npi_taxonomy_cache
 
@@ -112,4 +119,6 @@ __all__ = [
     # Insight lifecycle subsystem
     "consolidate_insights",
     "sentinel_dispatcher",
+    # Crystallization subsystem (#376 Phase 4)
+    "crystallize_portfolio",
 ]

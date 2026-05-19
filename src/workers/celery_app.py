@@ -347,6 +347,20 @@ celery_app.conf.beat_schedule = {
         "schedule": 300.0,  # 5 minutes
         "options": {"queue": "quick"},
     },
+    # Crystallization (#376 Phase 4): aggregate cross-agent findings into
+    # executive_insights every 6 hours. The 30-minute offset from the daily
+    # consolidator is approximate under Celery beat's relative-schedule
+    # semantics (the offset is from worker start, not from a fixed clock
+    # time), so 6h cadence is the load-bearing knob; the "30 min after
+    # consolidation" framing in plan §Phase 4 line 141 is an ops-shape
+    # hint rather than a wall-clock constraint. If a fixed-clock offset
+    # is required later, switch to a crontab entry; the celery_app already
+    # imports crontab via celery.schedules in adjacent modules.
+    "crystallization-portfolio": {
+        "task": "src.tasks.crystallization_tasks.crystallize_portfolio",
+        "schedule": 21600.0,  # 6 hours
+        "options": {"queue": "analytics"},
+    },
 }
 
 # =============================================================================
