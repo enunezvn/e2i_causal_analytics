@@ -19,7 +19,8 @@ The pre-flight is skipped automatically when the artifact does not yet
 exist (cold-start bootstrap).
 
 Compiles ``src.data.causal_role_classifier.CausalRoleClassifier`` via
-``BootstrapFewShot`` against the 12-example compile set produced by
+``BootstrapFewShot`` against the 33-example compile set (21 legacy +
+12 Phase-4 S12 Option C paired demos) produced by
 ``build_compile_set()`` and writes the compiled program JSON to::
 
     artifacts/dspy/causal_role_classifier.json
@@ -91,7 +92,19 @@ DEFAULT_MAX_BOOTSTRAPPED_DEMOS = 4
 # persisted few-shot demos. Pass-3 set this to 16 which dropped 4-8
 # labeled examples randomly; pass-4 audit found this routinely dropped
 # the provider IV family entirely.
-DEFAULT_MAX_LABELED_DEMOS = 24
+#
+# Phase-4 S12 Option C recompile (2026-05-19): raised from 24 -> 40 so
+# all 33 labeled compile-set examples (21 legacy + 12 new (T, Y)-
+# explicit paired-fixture demos per `.claude/plans/option_c_dspy_recompile_for_s12_FINAL.md`)
+# survive the random.sample step inside BootstrapFewShot._train.
+# Computed as 33 labeled + 4 bootstrapped = 37, +3 slot conservative
+# headroom for any future small additions. The §3.5 paired-fixture
+# falsifiability gate requires all 12 quadruples to land in the
+# persisted artifact: if any single (T, Y) variant gets dropped by
+# random.sample (likelihood ~12/40 = 30% per variant at cap=24 vs ~0
+# at cap=40 since 33 < 40), the gate trips. The new ceiling pins this
+# to ~0% loss probability.
+DEFAULT_MAX_LABELED_DEMOS = 40
 
 
 def preflight_candidate_check(
@@ -223,13 +236,17 @@ def compile_and_persist(
         max_bootstrapped_demos: Cap on teacher-generated demos. BootstrapFewShot
             default is 4; keeping it low so the compile run stays cheap.
         max_labeled_demos: Cap on labeled (compile-set) demos retained as
-            few-shot exemplars. Default 24 > ``len(build_compile_set()) == 20``
-            so every labeled exemplar (including all 4 collider and all
-            4 instrument examples) survives the random.sample step
-            inside BootstrapFewShot._train (raised from 8 -> 16 on
-            codex pass-3 and from 16 -> 24 on codex pass-4 after the
-            artifact-pin audit found that random.sample at 16 was
-            routinely dropping the provider IV exemplars).
+            few-shot exemplars. Default 40 > ``len(build_compile_set()) == 33``
+            so every labeled exemplar (including all 4 collider, 6
+            instrument, and 12 Phase-4 S12 Option C paired-fixture
+            demos) survives the random.sample step inside
+            BootstrapFewShot._train (raised from 8 -> 16 on codex
+            pass-3, 16 -> 24 on codex pass-4 after the artifact-pin
+            audit found that random.sample at 16 was routinely dropping
+            the provider IV exemplars, and 24 -> 40 on Phase-4 S12
+            Option C to accommodate the 12 new paired-fixture demos
+            whose individual loss would trip the §3.5 falsifiability
+            quadruple gate).
 
     Returns:
         The path the compiled program JSON was written to (mirror of

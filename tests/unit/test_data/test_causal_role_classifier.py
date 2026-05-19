@@ -21,10 +21,22 @@ def test_compile_set_has_diverse_examples():
     # Issue #198: compile set extended from 12 to 21 examples to add
     # collider + instrument coverage and one explicit confounder
     # negative-direction discrimination exemplar
-    # (baseline_severity_score_preindex, added on codex pass-5). Bar
-    # raised to 21 so a regression that drops examples fires the test.
-    assert summary["n_examples"] >= 21, (
-        f"Compile set too small: {summary['n_examples']}; need at least 21"
+    # (baseline_severity_score_preindex, added on codex pass-5).
+    #
+    # Phase-4 S12 Option C recompile (2026-05-19): extended from 21 to
+    # 33 to add 12 (T, Y)-explicit paired-fixture demos (6 features x 2
+    # (treatment, outcome) variants each) that teach the classifier to
+    # read `treatment=X; outcome=Y` fields in `dataset_context` as
+    # first-class input. The 12 paired demos enable instrument-role
+    # falsifiability (codex iter-2 redesign: same Z, different (T, Y) =>
+    # different graph-theoretic-correct role) and are pinned by feature
+    # name + (T, Y) + role quadruple in
+    # `test_persisted_artifact_emits_role_conditional_on_treatment_outcome`.
+    # Bar raised to 33 (not the plan's nominal 35) because the §3.5 binding
+    # 12-demo paired-fixture design overrides §3.1's notional 14-demo split
+    # — see Option C plan §3.1/§3.5 reconciliation note in the PR body.
+    assert summary["n_examples"] >= 33, (
+        f"Compile set too small: {summary['n_examples']}; need at least 33"
     )
     # Must have at least 2 distinct roles (else DSPy can't learn classification)
     assert len(summary["role_distribution"]) >= 2, (
@@ -730,3 +742,330 @@ def test_dummy_lm_pure_severity_confounder_is_not_classified_as_collider():
         f"'confounder' role; got {prediction.causal_role!r}."
     )
     assert prediction.causal_role != "collider"
+
+
+# --- Phase-4 S12 Option C recompile (2026-05-19): (T, Y)-explicit demos -----
+#
+# These tests pin the artifact-level forward contract of the Option C
+# recompile (see `.claude/plans/option_c_dspy_recompile_for_s12_FINAL.md`):
+#
+# 1. `test_persisted_artifact_preserves_legacy_demo_roles` (§3.4) — pins all
+#    21 pre-Option-C demos by (feature_name, causal_role) so the recompile
+#    cannot silently shift legacy roles. This is the production-safety gate:
+#    the sole production caller at adaptive_validity_check.py:892-893 emits
+#    cohort-only dataset_context strings, so legacy role labels must be
+#    preserved under cohort-only replay.
+#
+# 2. `test_persisted_artifact_emits_role_conditional_on_treatment_outcome`
+#    (§3.5 Stage 1) — pins 12 quadruples (feature_name, treatment, outcome,
+#    role) covering the 6 paired (T, Y) fixtures designed to be falsifiable:
+#    the same feature with the same derivation_pseudocode is asserted to
+#    classify into different causal roles under different (T, Y) variants.
+#    Same-feature-different-role under different (T, Y) is the binding
+#    behavioural signature that the instrument-role schema gap has closed.
+#
+# 3. `test_persisted_artifact_has_treatment_outcome_explicit_instruments`
+#    (§3.3) — pins ≥2 distinct instrument features whose dataset_context
+#    contains explicit `treatment=` markers, ensuring BootstrapFewShot
+#    actually persists the (T, Y)-explicit demos rather than dropping the
+#    new schema in favour of legacy-cohort-only retention.
+
+
+# Legacy demo (feature_name -> expected causal_role) pin. These 21 features
+# pre-date the Phase-4 S12 Option C recompile and must continue to classify
+# unchanged in the persisted artifact under cohort-only dataset_context.
+# Refer to `src/data/causal_role_classifier.py::build_compile_set()` for the
+# canonical labels. Updating either side requires updating the other.
+LEGACY_DEMO_EXPECTED_ROLES: dict[str, str] = {
+    "disease_severity": "descendant",
+    "engagement_score": "descendant",
+    "days_on_therapy": "descendant",
+    "medication_claim_count": "descendant",
+    "journey_duration_days": "mediator",
+    "journey_status": "descendant",
+    "charlson_score": "descendant",
+    "has_angioedema": "descendant",
+    "atopy_score": "descendant",
+    "prior_treatments": "confounder",
+    "age_at_index": "ancestor",
+    "insurance_product": "confounder",
+    "baseline_severity_score_preindex": "confounder",
+    "hospitalizations_total": "collider",
+    "concomitant_steroid_burst_count_followup": "collider",
+    "alive_at_180d_observation_window": "collider",
+    "diagnostic_test_count_followup": "collider",
+    "urban_rural_code": "instrument",
+    "geographic_region": "instrument",
+    "provider_preference_score": "instrument",
+    "index_provider_biologic_volume_prior_year": "instrument",
+}
+
+
+# 12 paired-fixture quadruples (feature_name, treatment, outcome, role) from
+# Option C plan §3.5. Two of the six features (concomitant_steroid_burst_-
+# count_followup, provider_preference_score) appear in both the legacy
+# compile set AND the paired-fixture set: the paired variants share the
+# feature name but differ from legacy in dataset_context (legacy lacks the
+# `treatment=` field; paired variants embed `treatment={T}; outcome={Y}`).
+# Demo matching for this test uses the substring `treatment={T}; outcome={Y}`
+# to disambiguate paired variants from legacy ones in the persisted demos.
+EXPECTED_TREATMENT_OUTCOME_QUADRUPLES: list[tuple[str, str, str, str]] = [
+    # Pair 1 — provider-volume IV vs care-quality confounder
+    (
+        "index_provider_omalizumab_volume_prior_year",
+        "omalizumab_init",
+        "remission_180d",
+        "instrument",
+    ),
+    (
+        "index_provider_omalizumab_volume_prior_year",
+        "omalizumab_init",
+        "hospitalization_180d",
+        "confounder",
+    ),
+    # Pair 2 — post-T renal event: mediator vs collider
+    (
+        "acute_kidney_injury_event_count_followup",
+        "ace_inhibitor_init",
+        "cv_death_5y",
+        "mediator",
+    ),
+    (
+        "acute_kidney_injury_event_count_followup",
+        "baseline_egfr_category",
+        "ace_inhibitor_init",
+        "collider",
+    ),
+    # Pair 3 — steroid burst: collider vs descendant
+    (
+        "concomitant_steroid_burst_count_followup",
+        "biologic_init",
+        "hospitalization_180d",
+        "collider",
+    ),
+    (
+        "concomitant_steroid_burst_count_followup",
+        "steroid_burst_policy_indicator",
+        "biologic_init",
+        "descendant",
+    ),
+    # Pair 4 — Oncotype DX: confounder vs ancestor (d-separation assumption;
+    # see Option C plan §3.5 Pair 4 + §9 — domain reviewer may swap if the
+    # Oncotype ⊥ tumor_size | pre-diagnosis covariates assumption is disputed).
+    (
+        "baseline_oncotype_dx_recurrence_score",
+        "cdk46i_init",
+        "recurrence_5y",
+        "confounder",
+    ),
+    (
+        "baseline_oncotype_dx_recurrence_score",
+        "tumor_size_at_diagnosis",
+        "cdk46i_init",
+        "ancestor",
+    ),
+    # Pair 5 — provider preference: instrument vs mediator on region path
+    (
+        "provider_preference_score",
+        "biologic_init",
+        "remission_180d",
+        "instrument",
+    ),
+    (
+        "provider_preference_score",
+        "provider_geographic_region",
+        "biologic_init",
+        "mediator",
+    ),
+    # Pair 6 — prior treatment count: confounder vs mediator on duration path
+    (
+        "prior_treatment_count_preindex",
+        "biologic_init",
+        "remission_180d",
+        "confounder",
+    ),
+    (
+        "prior_treatment_count_preindex",
+        "time_since_diagnosis_years",
+        "biologic_init",
+        "mediator",
+    ),
+]
+
+
+def _load_artifact_demos() -> list[dict]:
+    """Read the persisted classifier artifact and return its demo list.
+
+    Raised separately so the asserts below produce focused failure
+    messages rather than a tangle of `KeyError` traces.
+    """
+    import json
+    from pathlib import Path
+
+    artifact_path = (
+        Path(__file__).resolve().parents[3] / "artifacts" / "dspy" / "causal_role_classifier.json"
+    )
+    assert artifact_path.exists(), (
+        f"Artifact missing at {artifact_path}. Recompile via "
+        f"`python scripts/compile_causal_role_classifier.py`."
+    )
+    data = json.loads(artifact_path.read_text())
+    classify_predict = data.get("classify.predict") or {}
+    demos = classify_predict.get("demos") or []
+    assert demos, (
+        f"Artifact at {artifact_path} has 0 demos under classify.predict; "
+        f"recompile may have degraded to --no-lm or the optimizer dropped "
+        f"every labeled example. Top-level keys: {list(data.keys())}."
+    )
+    return demos
+
+
+def test_persisted_artifact_preserves_legacy_demo_roles():
+    """Phase-4 S12 Option C (§3.4): all 21 pre-Option-C demos retain their
+    labeled causal_role in the recompiled artifact under cohort-only
+    dataset_context.
+
+    Falsifiability: this is the production-safety gate. The sole production
+    caller at `adaptive_validity_check.py:892-893` builds cohort-only
+    `dataset_context` strings (no `treatment=` / `outcome=` fields), so the
+    recompile must preserve the classifier's behavior on cohort-only inputs.
+    The assertion has two parts:
+
+    * **Retention**: every legacy feature_name must have at least one demo
+      in the persisted artifact whose dataset_context does NOT contain
+      `treatment=` (i.e., a cohort-only legacy variant — not a Phase-4
+      paired-fixture variant that happens to share the feature_name).
+    * **Role match**: every retained legacy demo's causal_role matches
+      the labeled role in ``LEGACY_DEMO_EXPECTED_ROLES``.
+
+    Codex iter-1 redesign of the original v1 "live LLM 21/21" gate: this
+    test is artifact-level and deterministic (no LM call), aligning with
+    repo test practice (DummyLM / no live LM in CI). See Option C plan
+    §3.4 for the rationale + falsifiability narrative.
+    """
+    demos = _load_artifact_demos()
+
+    # Find LEGACY (cohort-only) variant per feature_name. Filter out Phase-4
+    # paired-fixture variants (which carry `treatment=` in dataset_context).
+    legacy_demos_by_feature: dict[str, list[dict]] = {}
+    for d in demos:
+        feature_name = d.get("feature_name")
+        dataset_context = d.get("dataset_context") or ""
+        if not feature_name or feature_name not in LEGACY_DEMO_EXPECTED_ROLES:
+            continue
+        if "treatment=" in dataset_context:
+            continue
+        legacy_demos_by_feature.setdefault(feature_name, []).append(d)
+
+    missing_legacy = set(LEGACY_DEMO_EXPECTED_ROLES) - set(legacy_demos_by_feature)
+    assert not missing_legacy, (
+        f"Recompiled artifact dropped legacy demos: {sorted(missing_legacy)}. "
+        f"The Phase-4 S12 Option C recompile must preserve all 21 pre-Option-C "
+        f"demos under cohort-only dataset_context (the sole production caller "
+        f"at adaptive_validity_check.py:892-893 emits cohort-only contexts). "
+        f"Investigate BootstrapFewShot's `random.sample` step at "
+        f"max_labeled_demos cap — if some labeled demos were dropped, raise "
+        f"DEFAULT_MAX_LABELED_DEMOS in scripts/compile_causal_role_classifier.py."
+    )
+
+    role_mismatches: list[tuple[str, str, str]] = []
+    for feature_name, expected_role in LEGACY_DEMO_EXPECTED_ROLES.items():
+        for demo in legacy_demos_by_feature[feature_name]:
+            actual_role = demo.get("causal_role")
+            if actual_role != expected_role:
+                role_mismatches.append((feature_name, expected_role, actual_role or "?"))
+
+    assert not role_mismatches, (
+        f"Recompiled artifact reassigned legacy demo roles "
+        f"(feature, expected, actual): {role_mismatches}. The Phase-4 S12 "
+        f"Option C recompile must NOT shift legacy roles under cohort-only "
+        f"replay. To recover: `git checkout artifacts/dspy/causal_role_classifier.json` "
+        f"and inspect the new (T, Y)-explicit demos for context-leak into the "
+        f"legacy LLM reasoning (Option C plan §5 risk-register row 1)."
+    )
+
+
+def test_persisted_artifact_emits_role_conditional_on_treatment_outcome():
+    """Phase-4 S12 Option C (§3.5 Stage 1): 12 paired-fixture quadruples
+    `(feature_name, treatment, outcome, role)` are present in the artifact.
+
+    This is the binding falsifiability for the instrument-role schema gap
+    closure: the same feature with the same `derivation_pseudocode` must
+    classify into a different causal role under different (T, Y) variants.
+    Asserting all 12 quadruples (not 6 feature names) closes the
+    optimizer-drop gap (codex iter-2 HIGH-F1): if BootstrapFewShot drops
+    one variant of a paired fixture, this test trips.
+
+    Demo matching: dataset_context must contain the literal substring
+    `treatment={T}; outcome={Y}` (the schema the new compile demos use)
+    AND causal_role must equal the expected role. The Pair 4 (Oncotype DX)
+    ancestor assumption is flagged for expert review in Option C plan
+    §3.5 + §9; if the d-separation assumption is disputed the pair is
+    swappable without affecting the other 5 pairs.
+    """
+    demos = _load_artifact_demos()
+
+    missing_quadruples: list[tuple[str, str, str, str]] = []
+    for feature_name, treatment, outcome, expected_role in EXPECTED_TREATMENT_OUTCOME_QUADRUPLES:
+        marker = f"treatment={treatment}; outcome={outcome}"
+        match = next(
+            (
+                d
+                for d in demos
+                if d.get("feature_name") == feature_name
+                and marker in (d.get("dataset_context") or "")
+                and d.get("causal_role") == expected_role
+            ),
+            None,
+        )
+        if match is None:
+            missing_quadruples.append((feature_name, treatment, outcome, expected_role))
+
+    assert not missing_quadruples, (
+        f"Phase-4 S12 Option C: the following (feature, T, Y, role) "
+        f"quadruples are NOT present in the persisted artifact: "
+        f"{missing_quadruples}. The recompile must persist all 12 paired-"
+        f"fixture demos so the classifier learns that role label depends "
+        f"on (T, Y), not on feature_name alone. Recovery: `git checkout "
+        f"artifacts/dspy/causal_role_classifier.json`, verify the 12 paired "
+        f"demos in `build_compile_set()` carry the exact "
+        f"`treatment={{T}}; outcome={{Y}}` markers in dataset_context, then "
+        f"recompile with --force if backlog gate blocks (see Option C plan "
+        f"§5 risk-register row 2)."
+    )
+
+
+def test_persisted_artifact_has_treatment_outcome_explicit_instruments():
+    """Phase-4 S12 Option C (§3.3 strengthening): the recompile actually
+    persists instrument demos with `treatment=` markers — not just retains
+    the 4 legacy cohort-only instruments.
+
+    Falsifiability: if BootstrapFewShot drops all new (T, Y)-explicit
+    instrument demos (e.g., metric fails on the new schema), the artifact's
+    instrument demos collapse to the 4 legacy cohort-only ones. This test
+    catches that regression by requiring ≥2 distinct instrument
+    feature_names whose persisted demo dataset_context contains
+    `treatment=`. Two such features are guaranteed by §3.5 Pair 1
+    (index_provider_omalizumab_volume_prior_year, instrument arm) and
+    Pair 5 (provider_preference_score, instrument arm under
+    biologic_init/remission_180d).
+    """
+    demos = _load_artifact_demos()
+    treatment_explicit_instruments = {
+        d["feature_name"]
+        for d in demos
+        if d.get("causal_role") == "instrument"
+        and d.get("feature_name")
+        and "treatment=" in (d.get("dataset_context") or "")
+    }
+    assert len(treatment_explicit_instruments) >= 2, (
+        f"Persisted artifact has only {len(treatment_explicit_instruments)} "
+        f"distinct (T, Y)-explicit instrument features "
+        f"(got: {sorted(treatment_explicit_instruments)}). Phase-4 S12 "
+        f"Option C requires >=2 so the classifier carries training signal "
+        f"for instrument-role discrimination under explicit (T, Y) input. "
+        f"The plan binds two such features (Pair 1 + Pair 5 instrument "
+        f"arms): if both are missing, BootstrapFewShot may have failed on "
+        f"the new (T, Y) schema. Recompile with the §3.5 demos verified "
+        f"present in build_compile_set()."
+    )
