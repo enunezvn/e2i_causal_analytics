@@ -150,9 +150,7 @@ async def notify_and_queue_reanalysis(
     """
     stale_findings: List[Dict[str, Any]] = list(trigger_data.get("stale_findings") or [])
     # Stable sort: most-stale first. Treat missing scores as 1.0 (max stale).
-    stale_findings.sort(
-        key=lambda f: float(f.get("staleness_score") or 1.0), reverse=True
-    )
+    stale_findings.sort(key=lambda f: float(f.get("staleness_score") or 1.0), reverse=True)
     top = stale_findings[:_REANALYSIS_CAP]
 
     payload = {

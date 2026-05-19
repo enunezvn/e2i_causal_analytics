@@ -18,7 +18,7 @@ small dict summary for observability.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List
+from typing import Any, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -31,7 +31,6 @@ from src.tasks.sentinel_actions import (
     rerun_all_active_cohorts,
     run_full_consolidation,
 )
-
 
 # ---------------------------------------------------------------------------
 # Module-level constant
@@ -66,9 +65,7 @@ def fake_redis() -> _CapturingRedis:
 def patch_redis(fake_redis):
     # publish_alert lazy-imports get_redis_client from the factory module,
     # so we patch the canonical source rather than a re-export.
-    with patch(
-        "src.memory.services.factories.get_redis_client", return_value=fake_redis
-    ):
+    with patch("src.memory.services.factories.get_redis_client", return_value=fake_redis):
         yield fake_redis
 
 
@@ -168,10 +165,7 @@ async def test_notify_and_queue_reanalysis_caps_reanalysis_at_5(
     fake_redis: _CapturingRedis,
 ):
     """Plan §3.8 caps re-analysis to top-5 most-stale findings."""
-    stale = [
-        {"finding_id": f"f{i}", "brand": "Kisqali", "staleness_score": 0.9}
-        for i in range(20)
-    ]
+    stale = [{"finding_id": f"f{i}", "brand": "Kisqali", "staleness_score": 0.9} for i in range(20)]
     summary = await notify_and_queue_reanalysis(
         sentinel_id="s-2",
         brands=["Kisqali"],
@@ -245,9 +239,9 @@ def test_all_four_actions_are_celery_tasks():
     can route to them by name.
     """
     from src.tasks.sentinel_actions import (  # noqa: F401
-        celery_rerun_all_active_cohorts,
-        celery_notify_and_queue_reanalysis,
         celery_flag_for_review,
+        celery_notify_and_queue_reanalysis,
+        celery_rerun_all_active_cohorts,
         celery_run_full_consolidation,
     )
 

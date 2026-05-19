@@ -114,9 +114,7 @@ def fake_redis():
 
 
 @pytest.mark.asyncio
-async def test_notify_action_publishes_to_e2i_alerts(
-    fake_supabase: FakeSupabase, fake_redis
-):
+async def test_notify_action_publishes_to_e2i_alerts(fake_supabase: FakeSupabase, fake_redis):
     """A sentinel with action_type='notify' MUST publish to e2i:alerts."""
     fake_supabase.rows["sentinels"].append(
         {
@@ -149,6 +147,6 @@ async def test_notify_action_publishes_to_e2i_alerts(
     assert result.fired == 1
     # At least one publish call to e2i:alerts.
     publish_calls = fake_redis.publish.await_args_list
-    assert any(
-        call.args and call.args[0] == "e2i:alerts" for call in publish_calls
-    ), f"expected publish on 'e2i:alerts'; actual calls: {publish_calls}"
+    assert any(call.args and call.args[0] == "e2i:alerts" for call in publish_calls), (
+        f"expected publish on 'e2i:alerts'; actual calls: {publish_calls}"
+    )

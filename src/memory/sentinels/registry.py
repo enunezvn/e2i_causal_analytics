@@ -439,9 +439,7 @@ async def _fire_action(
                 # ``e2i:alerts``. Falls back to log-only if the alerts
                 # publisher is unreachable; the original log line is
                 # preserved for operator continuity with prior behaviour.
-                logger.info(
-                    f"sentinel:notify {name} brand={brand} match={match} cfg={action_cfg}"
-                )
+                logger.info(f"sentinel:notify {name} brand={brand} match={match} cfg={action_cfg}")
                 try:
                     # Lazy import: ``src.tasks.sentinel_actions`` depends on
                     # ``celery_app`` which transitively pulls in this module
@@ -464,9 +462,7 @@ async def _fire_action(
                     # so any further unexpected issue here still doesn't break
                     # the dispatcher loop. Narrow class would be preferable but
                     # the import itself can raise on misconfigured deployments.
-                    logger.exception(
-                        f"sentinel:notify {name} alert publication crashed"
-                    )
+                    logger.exception(f"sentinel:notify {name} alert publication crashed")
             else:
                 continue
             result.actions_taken += 1

@@ -65,9 +65,7 @@ logger = logging.getLogger(__name__)
 # ``src/memory/sentinels/config_loader.py``; we ascend four parents to reach
 # the repo root, then descend into ``config/sentinels.yaml``.
 # ----------------------------------------------------------------------------
-DEFAULT_CONFIG_PATH: Final[Path] = (
-    Path(__file__).resolve().parents[3] / "config" / "sentinels.yaml"
-)
+DEFAULT_CONFIG_PATH: Final[Path] = Path(__file__).resolve().parents[3] / "config" / "sentinels.yaml"
 
 
 # ----------------------------------------------------------------------------
@@ -137,14 +135,11 @@ def _validate_yaml_entry(entry: Dict[str, Any]) -> None:
     required = {"name", "trigger_type", "condition", "action"}
     missing = required - set(entry.keys())
     if missing:
-        raise SentinelConfigLoadError(
-            f"sentinel entry missing required fields: {sorted(missing)}"
-        )
+        raise SentinelConfigLoadError(f"sentinel entry missing required fields: {sorted(missing)}")
     trigger = entry["trigger_type"]
     if trigger not in PLAN_TRIGGER_TO_INTERNAL_PATTERN:
         raise SentinelConfigLoadError(
-            f"unknown trigger_type {trigger!r}; "
-            f"allowed: {sorted(PLAN_TRIGGER_TO_INTERNAL_PATTERN)}"
+            f"unknown trigger_type {trigger!r}; allowed: {sorted(PLAN_TRIGGER_TO_INTERNAL_PATTERN)}"
         )
     action = entry["action"]
     if action not in PLAN_ACTION_TASK_NAMES and action not in VALID_ACTION_TYPES:
@@ -162,9 +157,7 @@ def _validate_yaml_entry(entry: Dict[str, Any]) -> None:
                 f"got {type(cooldown).__name__}={cooldown!r}"
             )
         if cooldown < 0:
-            raise SentinelConfigLoadError(
-                f"cooldown_minutes must be non-negative, got {cooldown}"
-            )
+            raise SentinelConfigLoadError(f"cooldown_minutes must be non-negative, got {cooldown}")
 
 
 def _build_pattern_config(entry: Dict[str, Any]) -> Dict[str, Any]:
@@ -257,9 +250,7 @@ async def load_sentinels_from_yaml(
         raise SentinelConfigLoadError(f"failed to parse YAML at {p}: {exc}") from exc
 
     if not isinstance(config, dict) or "sentinels" not in config:
-        raise SentinelConfigLoadError(
-            f"YAML at {p} missing required top-level key 'sentinels'"
-        )
+        raise SentinelConfigLoadError(f"YAML at {p} missing required top-level key 'sentinels'")
     entries = config["sentinels"]
     if not isinstance(entries, list):
         raise SentinelConfigLoadError(
@@ -279,9 +270,7 @@ async def load_sentinels_from_yaml(
         brand = _coerce_brand_list(raw_entry.get("brands"))
         name = str(raw_entry["name"])
         if await _sentinel_exists(name=name, brand=brand):
-            logger.info(
-                f"sentinel-loader: {name!r} already registered for brand={brand}; skipping"
-            )
+            logger.info(f"sentinel-loader: {name!r} already registered for brand={brand}; skipping")
             continue
         internal_pattern = PLAN_TRIGGER_TO_INTERNAL_PATTERN[raw_entry["trigger_type"]]
         pattern_config = _build_pattern_config(raw_entry)

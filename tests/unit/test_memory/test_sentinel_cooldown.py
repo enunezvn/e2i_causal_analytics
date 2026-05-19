@@ -88,7 +88,9 @@ class _FakeQuery:
             for r in rows_to_insert:
                 row = dict(r)
                 if self.table_name == "sentinels":
-                    row.setdefault("sentinel_id", f"fake-{len(self.store.rows[self.table_name]) + 1}")
+                    row.setdefault(
+                        "sentinel_id", f"fake-{len(self.store.rows[self.table_name]) + 1}"
+                    )
                 self.store.rows.setdefault(self.table_name, []).append(row)
                 inserted.append(row)
             mock.data = inserted
