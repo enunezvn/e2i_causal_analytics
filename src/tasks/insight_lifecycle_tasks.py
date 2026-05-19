@@ -25,7 +25,10 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import (
+    ConnectionError as RedisConnectionError,
+    TimeoutError as RedisTimeoutError,
+)
 
 from src.workers.celery_app import celery_app
 
@@ -117,10 +120,15 @@ async def _publish_reanalysis_signal(
         redis = get_redis_client()
         await redis.publish(channel, payload)
         return True
-    except (ConnectionError, RedisConnectionError) as exc:
+    except (
+        ConnectionError,
+        RedisConnectionError,
+        TimeoutError,
+        RedisTimeoutError,
+    ) as exc:
         # Narrow: only redis-py transport-error classes.
         #
-        # Catch surface (codex iter-1 H2 + M3):
+        # Catch surface (codex iter-1 H2 + M3, iter-2 M4):
         # * builtin ``ConnectionError`` — defensive coverage for lower
         #   socket-layer errors that can escape redis-py's normalization.
         # * ``redis.exceptions.ConnectionError`` (aliased as
@@ -128,6 +136,13 @@ async def _publish_reanalysis_signal(
         #   failure class. Does NOT inherit from builtin ``ConnectionError``
         #   (inherits from ``redis.exceptions.RedisError -> Exception``),
         #   so the explicit alias is load-bearing. (H2)
+        # * builtin ``TimeoutError`` — defensive coverage for socket-layer
+        #   timeouts. Symmetric with the ConnectionError pair. (M4)
+        # * ``redis.exceptions.TimeoutError`` (aliased as
+        #   ``RedisTimeoutError``) — redis-py's timeout class. Inherits
+        #   from ``redis.exceptions.ConnectionError -> RedisError ->
+        #   Exception``, so it does NOT match builtin ``TimeoutError``.
+        #   Same root-cause shape as H2. (M4)
         #
         # ``RuntimeError`` was dropped (M3): a source-grep of redis-py
         # shows the only ``raise RuntimeError`` sites are on the

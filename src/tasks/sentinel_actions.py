@@ -53,7 +53,10 @@ import logging
 from typing import Any, Dict, Final, List, Optional
 
 from kombu.exceptions import OperationalError as KombuOperationalError
-from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import (
+    ConnectionError as RedisConnectionError,
+    TimeoutError as RedisTimeoutError,
+)
 
 from src.workers.celery_app import celery_app
 
@@ -253,6 +256,7 @@ async def notify_and_queue_reanalysis(
             ConnectionError,
             RedisConnectionError,
             TimeoutError,
+            RedisTimeoutError,
         ) as exc:
             # Narrow: only broker/transport failures. Programming errors
             # (TypeError, AttributeError, KeyError from bad finding shapes)
@@ -273,6 +277,12 @@ async def notify_and_queue_reanalysis(
             #   alias, a bare redis-py call in the celery transport path
             #   would escape this catch. (Codex iter-1 H1.)
             # * builtin ``TimeoutError`` — broker timeout.
+            # * ``redis.exceptions.TimeoutError`` (aliased as
+            #   ``RedisTimeoutError``) — redis-py's timeout class. Inherits
+            #   from ``redis.exceptions.ConnectionError -> RedisError ->
+            #   Exception``, so it does NOT match builtin ``TimeoutError``.
+            #   Same root-cause shape as the H1 ConnectionError gap. (Codex
+            #   iter-2 M4.)
             #
             # The Redis alert already published, so subscribers still see
             # the staleness signal. Mirrors registry.py:680 pattern.
