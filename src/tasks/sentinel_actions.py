@@ -136,9 +136,7 @@ async def rerun_all_active_cohorts(
 _REANALYSIS_CAP: Final[int] = 5
 
 
-_REANALYSIS_TASK_NAME: Final[str] = (
-    "src.tasks.insight_lifecycle_tasks.reanalyze_finding"
-)
+_REANALYSIS_TASK_NAME: Final[str] = "src.tasks.insight_lifecycle_tasks.reanalyze_finding"
 
 
 async def notify_and_queue_reanalysis(

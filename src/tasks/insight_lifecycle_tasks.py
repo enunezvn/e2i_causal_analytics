@@ -120,16 +120,14 @@ async def _publish_reanalysis_signal(
         # failure. A programming error (TypeError etc.) propagates so we
         # don't silently mask shape mismatches.
         logger.warning(
-            f"reanalysis-signal publish failed for finding={finding_id} "
-            f"brand={brand}: {exc}"
+            f"reanalysis-signal publish failed for finding={finding_id} brand={brand}: {exc}"
         )
         return False
     except Exception:
         # Defensive last-resort log; an unexpected exception class shouldn't
         # crash the Celery task, but we make the noise loud.
         logger.exception(
-            f"unexpected reanalysis-signal publish failure for "
-            f"finding={finding_id} brand={brand}"
+            f"unexpected reanalysis-signal publish failure for finding={finding_id} brand={brand}"
         )
         return False
 
@@ -182,13 +180,9 @@ def reanalyze_finding(
         ValueError: if ``finding_id`` or ``brand`` is empty / None.
     """
     if not finding_id:
-        raise ValueError(
-            "reanalyze_finding: finding_id is required (got empty/None)"
-        )
+        raise ValueError("reanalyze_finding: finding_id is required (got empty/None)")
     if not brand:
-        raise ValueError(
-            "reanalyze_finding: brand is required (got empty/None)"
-        )
+        raise ValueError("reanalyze_finding: brand is required (got empty/None)")
 
     signal_published = asyncio.run(
         _publish_reanalysis_signal(
