@@ -65,14 +65,33 @@ def test_stage2_classifier_reproduces_paired_fixture_roles() -> None:
     (b) swap the paired fixture per Option C plan §5 row 2 recovery, or
     (c) recompile with a stronger demo for that role.
     """
-    # Skip cleanly when no provider key is present (developer laptops, CI).
-    # The loader scrubs the key for default-no-LM runs; this skip ensures
-    # the test doesn't hard-fail in those environments.
-    if not os.environ.get("ANTHROPIC_API_KEY", "").strip():
+    # Skip cleanly when no usable provider key is present (developer
+    # laptops without `.env` loaded; CI environments that set a
+    # placeholder). The repo's CI workflow (`.github/workflows/backend-tests.yml`
+    # `integration-tests` job) sets ``ANTHROPIC_API_KEY: 'test-key'`` as a
+    # placeholder so other code paths don't crash on a missing var — but
+    # that placeholder is rejected by the Anthropic API with 401. A
+    # plain non-empty check would let the test fire against the bad key,
+    # which is exactly what happened on PR #371's first CI run (0/12
+    # PASS via 12x `litellm.AuthenticationError: invalid x-api-key`).
+    #
+    # We require the value to look like a real Anthropic key by prefix
+    # (``sk-ant-``). This correctly skips:
+    #   - empty / unset (no key at all)
+    #   - ``test-key`` (CI placeholder per backend-tests.yml)
+    #   - ``sk-test`` (unit-test placeholder per
+    #     ``tests/integration/test_layer4_evaluator_audit.py:23``)
+    # and correctly proceeds on real provider keys.
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not api_key.startswith("sk-ant-"):
         pytest.skip(
-            "ANTHROPIC_API_KEY not set in env. Stage 2 requires a live "
-            "Anthropic key — run locally with `.env` loaded "
-            "(`set -a && source .env && set +a`) before invoking pytest."
+            "ANTHROPIC_API_KEY missing or not a real Anthropic key "
+            "(expected `sk-ant-` prefix; got "
+            f"{api_key[:7] + '…' if api_key else '<empty>'!r}). Stage 2 "
+            "requires a live Anthropic key — run locally with `.env` loaded "
+            "(`set -a && source .env && set +a`) before invoking pytest. "
+            "CI environments that set `ANTHROPIC_API_KEY=test-key` will "
+            "skip this test as designed (plan §3.5 Stage 2 is manual-only)."
         )
 
     # Local imports so import-time costs don't fire when the test is
