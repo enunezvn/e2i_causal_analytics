@@ -247,6 +247,43 @@ def test_publish_reanalysis_signal_swallows_redis_py_connection_error(
     assert any("reanalysis-signal publish failed" in rec.message for rec in caplog.records)
 
 
+def test_publish_reanalysis_signal_swallows_redis_py_timeout_error(
+    fake_redis: _CapturingRedis,
+    caplog: pytest.LogCaptureFixture,
+):
+    """M4 (codex iter-2): same root-cause shape as H2.
+    ``redis.exceptions.TimeoutError`` does NOT inherit from builtin
+    ``TimeoutError`` — it inherits from
+    ``redis.exceptions.ConnectionError -> RedisError -> Exception``.
+
+    Pre-fix (iter-1): the catch tuple was ``(ConnectionError,
+    RedisConnectionError)`` with NO timeout at all. A redis-py timeout
+    would escape and propagate, defeating the broker-outage best-effort
+    contract.
+
+    Post-fix: the catch tuple includes both builtin ``TimeoutError`` and
+    ``RedisTimeoutError``. Task returns ``signal_published=False``
+    without crashing.
+    """
+    from redis.exceptions import TimeoutError as RedisTimeoutError
+
+    async def boom(*args: Any, **kwargs: Any) -> int:
+        # redis-py's canonical timeout class — what
+        # `redis.asyncio.Redis.publish` raises on a transport timeout.
+        raise RedisTimeoutError("redis timeout")
+
+    fake_redis.publish = boom  # type: ignore[method-assign]
+    with caplog.at_level(logging.WARNING):
+        result = reanalyze_finding.run(  # type: ignore[attr-defined]
+            "f-redis-timeout",
+            "Kisqali",
+            triggered_by="sentinel:staleness",
+        )
+    # Caught + classified as degraded (best-effort), NOT propagated.
+    assert result["signal_published"] is False
+    assert any("reanalysis-signal publish failed" in rec.message for rec in caplog.records)
+
+
 def test_publish_reanalysis_signal_does_not_catch_runtime_error(
     fake_redis: _CapturingRedis,
 ):

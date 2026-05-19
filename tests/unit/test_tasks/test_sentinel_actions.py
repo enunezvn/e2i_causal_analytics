@@ -288,6 +288,40 @@ async def test_notify_and_queue_reanalysis_swallows_redis_py_connection_error(
 
 
 @pytest.mark.asyncio
+async def test_notify_and_queue_reanalysis_swallows_redis_py_timeout_error(
+    fake_redis: _CapturingRedis,
+):
+    """M4 (codex iter-2): same root-cause shape as H1.
+    ``redis.exceptions.TimeoutError`` does NOT inherit from builtin
+    ``TimeoutError`` — it inherits from
+    ``redis.exceptions.ConnectionError -> RedisError -> Exception``. The
+    iter-1 catch tuple (which only had builtin ``TimeoutError``) would
+    NOT match a redis-py timeout, so the error would propagate as if it
+    were a programming bug.
+
+    Post-fix: ``RedisTimeoutError`` is in the catch tuple so redis-py
+    timeouts are correctly classified as broker outage (best-effort
+    skipped, queued_count not incremented, handler keeps going).
+    """
+    from redis.exceptions import TimeoutError as RedisTimeoutError
+
+    stale = [{"finding_id": f"f{i}", "brand": "Kisqali", "staleness_score": 0.9} for i in range(3)]
+    with patch(
+        "src.tasks.sentinel_actions.celery_app.send_task",
+        side_effect=RedisTimeoutError("redis timeout"),
+    ) as mock_send:
+        summary = await notify_and_queue_reanalysis(
+            sentinel_id="s-redis-timeout",
+            brands=["Kisqali"],
+            trigger_data={"stale_findings": stale},
+        )
+    assert mock_send.call_count == 3
+    assert summary["notified_for_reanalysis"] == 3
+    # All three send_task attempts timed out → queued_count stays at 0.
+    assert summary["queued_for_reanalysis"] == 0
+
+
+@pytest.mark.asyncio
 async def test_notify_and_queue_reanalysis_uses_finding_brand_when_present(
     fake_redis: _CapturingRedis,
 ):
