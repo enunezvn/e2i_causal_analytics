@@ -222,6 +222,19 @@ async def notify_and_queue_reanalysis(
             # full finding dict. Findings can carry PHI / patient-level
             # fields and per-HIPAA we MUST NOT page that through general
             # logging. Brand + key list is enough for ops to triage.
+            #
+            # L3 (codex iter-1) — intentional schema-key exposure: the
+            # warning logs ``sorted(finding.keys())``, which exposes
+            # schema-level column NAMES (e.g. ``patient_mrn``,
+            # ``patient_dob``). The trade-off is deliberate: operators
+            # need to see what KEYS were present on the malformed match
+            # to triage the upstream evaluator bug (missing finding_id),
+            # but the corresponding VALUES are NEVER interpolated. The
+            # boundary is pinned by
+            # ``test_notify_and_queue_reanalysis_malformed_finding_log_omits_sensitive_payload``
+            # which puts MRN/DOB/clinical-notes VALUES in the finding
+            # and asserts the key NAMES appear in the log but the VALUES
+            # do not.
             logger.warning(
                 f"sentinel-action notify_and_queue_reanalysis: skipping enqueue "
                 f"for finding without finding_id sentinel={sentinel_id} "
