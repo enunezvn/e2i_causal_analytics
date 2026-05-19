@@ -244,9 +244,7 @@ def test_publish_reanalysis_signal_swallows_redis_py_connection_error(
         )
     # Caught + classified as degraded (best-effort), NOT propagated.
     assert result["signal_published"] is False
-    assert any(
-        "reanalysis-signal publish failed" in rec.message for rec in caplog.records
-    )
+    assert any("reanalysis-signal publish failed" in rec.message for rec in caplog.records)
 
 
 def test_publish_reanalysis_signal_does_not_catch_runtime_error(
