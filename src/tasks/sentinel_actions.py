@@ -53,6 +53,7 @@ import logging
 from typing import Any, Dict, Final, List, Optional
 
 from kombu.exceptions import OperationalError as KombuOperationalError
+from redis.exceptions import ConnectionError as RedisConnectionError
 
 from src.workers.celery_app import celery_app
 
@@ -234,17 +235,31 @@ async def notify_and_queue_reanalysis(
                 kwargs={"triggered_by": "sentinel:staleness"},
             )
             queued_count += 1
-        except (KombuOperationalError, ConnectionError, TimeoutError) as exc:
+        except (
+            KombuOperationalError,
+            ConnectionError,
+            RedisConnectionError,
+            TimeoutError,
+        ) as exc:
             # Narrow: only broker/transport failures. Programming errors
             # (TypeError, AttributeError, KeyError from bad finding shapes)
             # propagate so they surface in error tracking instead of being
             # silently indistinguishable from broker outage.
             #
-            # `kombu.exceptions.OperationalError` is what Celery raises on
-            # broker connection failure (it's re-exported as
-            # `celery.exceptions.OperationalError`). `ConnectionError` and
-            # `TimeoutError` cover lower-level transport errors that can
-            # escape kombu's normalization in some broker configurations.
+            # Catch surface:
+            # * ``kombu.exceptions.OperationalError`` — Celery's canonical
+            #   broker connection failure (re-exported as
+            #   ``celery.exceptions.OperationalError``).
+            # * builtin ``ConnectionError`` — lower-level transport errors
+            #   that can escape kombu's normalization in some broker
+            #   configurations.
+            # * ``redis.exceptions.ConnectionError`` — redis-py's own
+            #   transport-error class, which does NOT inherit from builtin
+            #   ``ConnectionError`` (it inherits from
+            #   ``redis.exceptions.RedisError -> Exception``). Without this
+            #   alias, a bare redis-py call in the celery transport path
+            #   would escape this catch. (Codex iter-1 H1.)
+            # * builtin ``TimeoutError`` — broker timeout.
             #
             # The Redis alert already published, so subscribers still see
             # the staleness signal. Mirrors registry.py:680 pattern.

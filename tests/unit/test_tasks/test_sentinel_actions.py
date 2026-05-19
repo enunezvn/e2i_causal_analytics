@@ -250,6 +250,44 @@ async def test_notify_and_queue_reanalysis_send_task_failure_keeps_handler_alive
 
 
 @pytest.mark.asyncio
+async def test_notify_and_queue_reanalysis_swallows_redis_py_connection_error(
+    fake_redis: _CapturingRedis,
+):
+    """H1 (codex iter-1): ``redis.exceptions.ConnectionError`` does NOT
+    inherit from builtin ``ConnectionError`` — it inherits from
+    ``redis.exceptions.RedisError -> Exception``. Without an explicit
+    catch, a redis-py transport error would escape the narrow catch and
+    propagate, defeating the broker-outage best-effort contract.
+
+    Pre-fix (iter-0): the catch tuple was
+    ``(KombuOperationalError, ConnectionError, TimeoutError)`` — would
+    NOT match ``redis.exceptions.ConnectionError`` and would propagate
+    a Redis transport error as if it were a programming bug.
+
+    Post-fix: the catch tuple includes ``RedisConnectionError`` so
+    redis-py transport errors are correctly classified as broker-outage
+    and counted toward "best-effort skipped" (queued_count not
+    incremented, handler keeps going).
+    """
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    stale = [{"finding_id": f"f{i}", "brand": "Kisqali", "staleness_score": 0.9} for i in range(3)]
+    with patch(
+        "src.tasks.sentinel_actions.celery_app.send_task",
+        side_effect=RedisConnectionError("redis transport down"),
+    ) as mock_send:
+        summary = await notify_and_queue_reanalysis(
+            sentinel_id="s-redis-down",
+            brands=["Kisqali"],
+            trigger_data={"stale_findings": stale},
+        )
+    assert mock_send.call_count == 3
+    assert summary["notified_for_reanalysis"] == 3
+    # All three send_task attempts failed → queued_count stays at 0.
+    assert summary["queued_for_reanalysis"] == 0
+
+
+@pytest.mark.asyncio
 async def test_notify_and_queue_reanalysis_uses_finding_brand_when_present(
     fake_redis: _CapturingRedis,
 ):
