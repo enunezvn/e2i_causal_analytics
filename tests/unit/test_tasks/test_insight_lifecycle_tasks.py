@@ -187,7 +187,7 @@ def test_reanalyze_finding_programming_errors_propagate(
     fake_redis: _CapturingRedis,
 ):
     """L2 (codex iter-0): the publish path's catch is narrowed to
-    ConnectionError + RuntimeError only. Programming errors
+    ConnectionError + RedisConnectionError only. Programming errors
     (TypeError, AttributeError, KeyError) from an unexpected publish
     failure MUST propagate so they surface in error tracking and the
     Celery task_failure handler can route them to the dead-letter queue.
@@ -206,6 +206,71 @@ def test_reanalyze_finding_programming_errors_propagate(
     with pytest.raises(TypeError, match="programming error"):
         reanalyze_finding.run(  # type: ignore[attr-defined]
             "f-99",
+            "Kisqali",
+            triggered_by="sentinel:staleness",
+        )
+
+
+def test_publish_reanalysis_signal_swallows_redis_py_connection_error(
+    fake_redis: _CapturingRedis,
+    caplog: pytest.LogCaptureFixture,
+):
+    """H2 (codex iter-1): ``redis.exceptions.ConnectionError`` does NOT
+    inherit from builtin ``ConnectionError``. The iter-0 narrow catch
+    ``(ConnectionError, RuntimeError)`` would NOT match a redis-py
+    transport error, defeating the broker-outage best-effort contract.
+
+    Pre-fix: a real redis transport outage escaped the catch and
+    propagated to the Celery task wrapper, indistinguishable from a
+    programming bug.
+
+    Post-fix: the catch tuple is ``(ConnectionError, RedisConnectionError)``
+    so redis-py transport errors are correctly classified as broker
+    outage. Task returns ``signal_published=False`` without crashing.
+    """
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    async def boom(*args: Any, **kwargs: Any) -> int:
+        # redis-py's canonical transport-failure class — what
+        # `redis.asyncio.Redis.publish` raises on a real network outage.
+        raise RedisConnectionError("redis transport down")
+
+    fake_redis.publish = boom  # type: ignore[method-assign]
+    with caplog.at_level(logging.WARNING):
+        result = reanalyze_finding.run(  # type: ignore[attr-defined]
+            "f-redis-down",
+            "Kisqali",
+            triggered_by="sentinel:staleness",
+        )
+    # Caught + classified as degraded (best-effort), NOT propagated.
+    assert result["signal_published"] is False
+    assert any(
+        "reanalysis-signal publish failed" in rec.message for rec in caplog.records
+    )
+
+
+def test_publish_reanalysis_signal_does_not_catch_runtime_error(
+    fake_redis: _CapturingRedis,
+):
+    """M3 (codex iter-1): ``RuntimeError`` was dropped from the catch
+    tuple — redis-py's only ``raise RuntimeError`` sites are on the
+    PubSub-CONSUMER side (subscribe/psubscribe lifecycle gates), not on
+    publish. Keeping it would have masked real programming bugs.
+
+    Pre-fix: ``RuntimeError`` in the catch tuple was unjustified
+    over-catch. Post-fix: a stray ``RuntimeError`` propagates as a
+    programming bug.
+    """
+
+    async def boom(*args: Any, **kwargs: Any) -> int:
+        # E.g. a real codepath defect that raises RuntimeError —
+        # operators want this to surface, not be silently swallowed.
+        raise RuntimeError("dispatch logic invariant violated")
+
+    fake_redis.publish = boom  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="invariant violated"):
+        reanalyze_finding.run(  # type: ignore[attr-defined]
+            "f-runtime",
             "Kisqali",
             triggered_by="sentinel:staleness",
         )

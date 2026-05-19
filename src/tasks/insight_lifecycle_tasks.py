@@ -25,6 +25,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
+from redis.exceptions import ConnectionError as RedisConnectionError
+
 from src.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -115,17 +117,30 @@ async def _publish_reanalysis_signal(
         redis = get_redis_client()
         await redis.publish(channel, payload)
         return True
-    except (ConnectionError, RuntimeError) as exc:
-        # Narrow: only the two error classes Redis raises on transport
-        # failure. Programming errors (TypeError, AttributeError, etc.)
-        # propagate so we don't silently mask shape mismatches.
+    except (ConnectionError, RedisConnectionError) as exc:
+        # Narrow: only redis-py transport-error classes.
         #
-        # L2 (codex iter-0): no broad ``except Exception`` fallback —
-        # such a fallback would contradict the contract documented above
-        # by swallowing the very errors we want to surface. If an
-        # unexpected exception class escapes here, that's a real bug we
-        # want the Celery task wrapper to record (via the
-        # ``task_failure`` signal handler in celery_app.py).
+        # Catch surface (codex iter-1 H2 + M3):
+        # * builtin ``ConnectionError`` — defensive coverage for lower
+        #   socket-layer errors that can escape redis-py's normalization.
+        # * ``redis.exceptions.ConnectionError`` (aliased as
+        #   ``RedisConnectionError``) — redis-py's canonical transport
+        #   failure class. Does NOT inherit from builtin ``ConnectionError``
+        #   (inherits from ``redis.exceptions.RedisError -> Exception``),
+        #   so the explicit alias is load-bearing. (H2)
+        #
+        # ``RuntimeError`` was dropped (M3): a source-grep of redis-py
+        # shows the only ``raise RuntimeError`` sites are on the
+        # PubSub-CONSUMER side (subscribe/psubscribe lifecycle gates), not
+        # on publish. Keeping it would have masked real programming bugs.
+        #
+        # Programming errors (TypeError, AttributeError, etc.) propagate
+        # so we don't silently mask shape mismatches. No broad
+        # ``except Exception`` fallback (L2 codex iter-0) — such a fallback
+        # would contradict the contract documented above. If an unexpected
+        # exception class escapes here, that's a real bug we want the
+        # Celery task wrapper to record (via the ``task_failure`` signal
+        # handler in celery_app.py).
         logger.warning(
             f"reanalysis-signal publish failed for finding={finding_id} brand={brand}: {exc}"
         )
