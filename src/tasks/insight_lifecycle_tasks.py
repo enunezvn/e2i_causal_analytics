@@ -5,20 +5,38 @@ Celery tasks for the insight-lifecycle subsystem.
                               semantic and procedural_memories to procedural.
 - ``sentinel_dispatcher``   : every 5 minutes. Evaluates all enabled
                               sentinels and fires matching actions.
+- ``reanalyze_finding``     : per-finding reanalysis hand-off (#378). Enqueued
+                              by the ``notify_and_queue_reanalysis`` sentinel
+                              action handler; publishes a brand-scoped
+                              ``reanalysis:e2i:{brand}`` signal carrying the
+                              finding metadata so downstream consumers can
+                              re-run analysis.
 
-Both tasks are idempotent — re-running them within their schedule produces
-no extra side effects beyond a few SELECTs.
+All three tasks are idempotent — re-running them within their schedule
+produces no extra side effects beyond a few SELECTs / a duplicate pub/sub
+notification (subscribers are expected to dedupe by finding_id).
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from src.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
+
+
+# Brand-namespaced reanalysis-request channel. The orchestrator (or a future
+# Tier-3 single-finding re-evaluation worker) subscribes to
+# ``reanalysis:e2i:{brand}`` and picks up requests as JSON payloads. The
+# channel name mirrors the ``invalidation:e2i:{brand}`` pattern used by
+# ``src.memory.lifecycle.invalidator._publish_invalidation_signal`` so
+# subscribers can fan-in both signal types per brand.
+REANALYSIS_CHANNEL_PREFIX = "reanalysis:e2i:"
 
 
 @celery_app.task(bind=True, name="src.tasks.consolidate_insights")
@@ -63,3 +81,130 @@ def sentinel_dispatcher(self) -> Dict[str, Any]:
     except Exception:
         logger.exception("sentinel_dispatcher task failed")
         raise
+
+
+async def _publish_reanalysis_signal(
+    *,
+    finding_id: str,
+    brand: str,
+    triggered_by: str,
+) -> bool:
+    """
+    Publish a per-brand reanalysis request on ``reanalysis:e2i:{brand}``.
+
+    Returns ``True`` if the publish succeeded, ``False`` if Redis was
+    unreachable (in which case the failure is logged at WARNING but the
+    Celery task does NOT crash — best-effort mirrors the
+    ``cascade_invalidate`` and ``publish_alert`` patterns).
+    """
+    # Lazy import to avoid hardening the task module's import-time
+    # dependency on the Redis client factory.
+    from src.memory.services.factories import get_redis_client
+
+    channel = f"{REANALYSIS_CHANNEL_PREFIX}{brand}"
+    payload = json.dumps(
+        {
+            "type": "reanalysis_requested",
+            "finding_id": finding_id,
+            "brand": brand,
+            "triggered_by": triggered_by,
+            "requested_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    try:
+        redis = get_redis_client()
+        await redis.publish(channel, payload)
+        return True
+    except (ConnectionError, RuntimeError) as exc:
+        # Narrow: only the two error classes Redis raises on transport
+        # failure. A programming error (TypeError etc.) propagates so we
+        # don't silently mask shape mismatches.
+        logger.warning(
+            f"reanalysis-signal publish failed for finding={finding_id} "
+            f"brand={brand}: {exc}"
+        )
+        return False
+    except Exception:
+        # Defensive last-resort log; an unexpected exception class shouldn't
+        # crash the Celery task, but we make the noise loud.
+        logger.exception(
+            f"unexpected reanalysis-signal publish failure for "
+            f"finding={finding_id} brand={brand}"
+        )
+        return False
+
+
+@celery_app.task(
+    bind=True,
+    name="src.tasks.insight_lifecycle_tasks.reanalyze_finding",
+)
+def reanalyze_finding(
+    self: Any,
+    finding_id: str,
+    brand: str,
+    *,
+    triggered_by: str = "manual",
+) -> Dict[str, Any]:
+    """
+    Per-finding reanalysis hand-off (#378).
+
+    Enqueued by ``notify_and_queue_reanalysis`` (sentinel_actions.py) for
+    each of the top-5 most-stale findings when a ``staleness_threshold``
+    sentinel fires. The task is the durable Celery boundary the sentinel
+    action handler sends to; the actual single-finding re-evaluation
+    pipeline is still moving under #237 / #373 follow-ups, so this task
+    intentionally restricts its scope to:
+
+    1. Validate the dispatch shape (raises ``ValueError`` on empty inputs
+       so a malformed enqueue does not silently no-op).
+    2. Publish a ``reanalysis_requested`` event on the brand-scoped
+       ``reanalysis:e2i:{brand}`` Redis pub/sub channel. Downstream
+       orchestrator consumers subscribe here.
+    3. Return a JSON-serializable summary so Celery result-backend
+       observers see what was attempted.
+
+    Args:
+        finding_id: row pk of the finding (causal_path / trigger /
+            ml_prediction / executive_insight, per the invalidation-aware
+            table set).
+        brand: per-finding brand carried in the sentinel match dict.
+        triggered_by: free-text origin tag; the sentinel action handler
+            uses ``"sentinel:staleness"``. Other entry points (manual
+            re-run, ops tooling) supply their own.
+
+    Returns:
+        Dict with ``finding_id``, ``brand``, ``triggered_by``,
+        ``signal_published`` (bool). ``signal_published=False`` means the
+        Redis publish itself failed — observers should treat that as a
+        degraded but non-crashing run.
+
+    Raises:
+        ValueError: if ``finding_id`` or ``brand`` is empty / None.
+    """
+    if not finding_id:
+        raise ValueError(
+            "reanalyze_finding: finding_id is required (got empty/None)"
+        )
+    if not brand:
+        raise ValueError(
+            "reanalyze_finding: brand is required (got empty/None)"
+        )
+
+    signal_published = asyncio.run(
+        _publish_reanalysis_signal(
+            finding_id=finding_id,
+            brand=brand,
+            triggered_by=triggered_by,
+        )
+    )
+
+    logger.info(
+        f"reanalyze_finding finding={finding_id} brand={brand} "
+        f"triggered_by={triggered_by} signal_published={signal_published}"
+    )
+    return {
+        "finding_id": finding_id,
+        "brand": brand,
+        "triggered_by": triggered_by,
+        "signal_published": signal_published,
+    }
