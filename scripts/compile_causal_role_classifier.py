@@ -19,7 +19,8 @@ The pre-flight is skipped automatically when the artifact does not yet
 exist (cold-start bootstrap).
 
 Compiles ``src.data.causal_role_classifier.CausalRoleClassifier`` via
-``BootstrapFewShot`` against the 12-example compile set produced by
+``BootstrapFewShot`` against the 33-example compile set (21 legacy +
+12 Phase-4 S12 Option C paired demos) produced by
 ``build_compile_set()`` and writes the compiled program JSON to::
 
     artifacts/dspy/causal_role_classifier.json
@@ -81,17 +82,28 @@ DEFAULT_CANDIDATES_DIR = PROJECT_ROOT / "candidates"
 DEFAULT_LM_MODEL = "anthropic/claude-sonnet-4-20250514"
 DEFAULT_SEED = 7
 DEFAULT_MAX_BOOTSTRAPPED_DEMOS = 4
-# Issue #198 codex pass-4 MED-1: raised from 16 -> 24 so all 20 labeled
-# compile-set examples survive the random.sample step inside
-# BootstrapFewShot._train (which caps `augmented_demos + raw_demos` at
-# max_labeled_demos). With max_labeled_demos=24 and 20 examples + 4
-# bootstrapped, every labeled exemplar — including both provider IV
-# variants (provider_preference_score and
-# index_provider_biologic_volume_prior_year) — is preserved in the
-# persisted few-shot demos. Pass-3 set this to 16 which dropped 4-8
-# labeled examples randomly; pass-4 audit found this routinely dropped
-# the provider IV family entirely.
-DEFAULT_MAX_LABELED_DEMOS = 24
+# Historical pre-Option-C context (issue #198 codex pass-4 MED-1, 2025
+# era when len(build_compile_set()) == 20): the cap was raised
+# 16 -> 24 so all 20 labeled compile-set examples survived
+# BootstrapFewShot._train's random.sample(demos, max_labeled_demos)
+# step. The cap=16 setting from pass-3 dropped 4-8 labeled examples
+# randomly per run; the pass-4 audit found this routinely dropped the
+# provider IV family (provider_preference_score and
+# index_provider_biologic_volume_prior_year) entirely.
+#
+# Phase-4 S12 Option C recompile (2026-05-19): raised from 24 -> 40 so
+# all 33 labeled compile-set examples (21 legacy + 12 new (T, Y)-
+# explicit paired-fixture demos per `.claude/plans/option_c_dspy_recompile_for_s12_FINAL.md`)
+# survive the random.sample step inside BootstrapFewShot._train.
+# Computed as 33 labeled + 4 bootstrapped = 37, +3 slot conservative
+# headroom for any future small additions. The §3.5 paired-fixture
+# falsifiability gate requires all 12 quadruples to land in the
+# persisted artifact, so the cap must be >= len(build_compile_set()).
+# Pre-Option-C cap of 24 < 33 would force random.sample(33, 24) to
+# drop 9 of 33 demos uniformly per run (~27% per-demo loss probability);
+# at cap=40 >= 33 the sample step retains all labeled demos
+# deterministically.
+DEFAULT_MAX_LABELED_DEMOS = 40
 
 
 def preflight_candidate_check(
@@ -223,13 +235,17 @@ def compile_and_persist(
         max_bootstrapped_demos: Cap on teacher-generated demos. BootstrapFewShot
             default is 4; keeping it low so the compile run stays cheap.
         max_labeled_demos: Cap on labeled (compile-set) demos retained as
-            few-shot exemplars. Default 24 > ``len(build_compile_set()) == 20``
-            so every labeled exemplar (including all 4 collider and all
-            4 instrument examples) survives the random.sample step
-            inside BootstrapFewShot._train (raised from 8 -> 16 on
-            codex pass-3 and from 16 -> 24 on codex pass-4 after the
-            artifact-pin audit found that random.sample at 16 was
-            routinely dropping the provider IV exemplars).
+            few-shot exemplars. Default 40 > ``len(build_compile_set()) == 33``
+            so every labeled exemplar (including all 4 collider, 6
+            instrument, and 12 Phase-4 S12 Option C paired-fixture
+            demos) survives the random.sample step inside
+            BootstrapFewShot._train (raised from 8 -> 16 on codex
+            pass-3, 16 -> 24 on codex pass-4 after the artifact-pin
+            audit found that random.sample at 16 was routinely dropping
+            the provider IV exemplars, and 24 -> 40 on Phase-4 S12
+            Option C to accommodate the 12 new paired-fixture demos
+            whose individual loss would trip the §3.5 falsifiability
+            quadruple gate).
 
     Returns:
         The path the compiled program JSON was written to (mirror of
@@ -302,23 +318,59 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "program shape only. CI fallback when no API key is available."
         ),
     )
-    parser.add_argument("--max-tokens", type=int, default=1024)
-    parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=1024,
+        help="dspy.LM max-tokens cap per request. Default: 1024.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=DEFAULT_SEED,
+        help=(
+            "PRNG seed pinned via random.seed + numpy.random.seed for "
+            "deterministic demo selection (BootstrapFewShot.random.sample). "
+            "Also installed into DSPY_RANDOM_SEED via os.environ.setdefault "
+            "— if the env var is already set in the environment the "
+            "existing value wins, so set the env var explicitly for "
+            f"full determinism. Default: {DEFAULT_SEED}."
+        ),
+    )
     parser.add_argument(
         "--max-bootstrapped-demos",
         type=int,
         default=DEFAULT_MAX_BOOTSTRAPPED_DEMOS,
+        help=(
+            "Cap on teacher-bootstrapped demos appended to the persisted "
+            "few-shot set. The aggregate persisted demo count is "
+            "bounded by max_labeled_demos + max_bootstrapped_demos = "
+            f"{DEFAULT_MAX_LABELED_DEMOS} + {DEFAULT_MAX_BOOTSTRAPPED_DEMOS} "
+            f"= {DEFAULT_MAX_LABELED_DEMOS + DEFAULT_MAX_BOOTSTRAPPED_DEMOS} "
+            "(Phase-4 S12 Option C; covers the 33-example compile set + "
+            f"slot headroom). Default: {DEFAULT_MAX_BOOTSTRAPPED_DEMOS}."
+        ),
     )
     parser.add_argument(
         "--max-labeled-demos",
         type=int,
         default=DEFAULT_MAX_LABELED_DEMOS,
+        help=(
+            "Cap on labeled (compile-set) demos retained as persisted "
+            "few-shot exemplars. BootstrapFewShot._train calls "
+            "random.sample(demos, max_labeled_demos); raising this above "
+            "len(build_compile_set()) keeps every labeled exemplar. "
+            f"Default: {DEFAULT_MAX_LABELED_DEMOS} (set on Phase-4 S12 "
+            "Option C recompile to accommodate the 33-example compile "
+            "set: 21 legacy + 12 (T, Y)-explicit paired-fixture demos)."
+        ),
     )
     parser.add_argument(
         "--log-level",
         type=str,
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="logging.basicConfig level for this script. Default: INFO.",
     )
     parser.add_argument(
         "--candidates-dir",

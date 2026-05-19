@@ -8,10 +8,30 @@ plus 8 domain-expert collider / instrument exemplars added under issue #198
 plus 1 explicit negative-direction confounder exemplar
 (baseline_severity_score_preindex) added on codex pass-5 to teach the
 discrimination boundary between confounder (arrows OUT of severity) and
-collider (arrows IN to V).
+collider (arrows IN to V), plus 12 paired (T, Y)-explicit demos added on
+Phase-4 S12 Option C recompile (2026-05-19) to teach the classifier to
+read ``treatment=X; outcome=Y`` as first-class semicolon-delimited fields
+in ``dataset_context``.
 
-Compile-set role coverage: ancestor=1, confounder=3, mediator=1, descendant=8,
-collider=4, instrument=4 (total: 21). All six declared ``CausalRole`` Literal values are
+Compile-set role coverage:
+- Legacy 21 (cohort-only context): ancestor=1, confounder=3, mediator=1,
+  descendant=8, collider=4, instrument=4.
+- Phase-4 S12 Option C 12 paired demos ((T, Y)-explicit context): 1 ancestor,
+  3 confounder, 4 mediator, 0 descendant, 2 collider, 2 instrument.
+  (Pair 3b corrected on codex iter-0 M1 from descendant -> mediator
+  because the step-therapy policy mechanism puts Z on the T_b -> Z ->
+  Y_b path.)
+- Combined 33: ancestor=2, confounder=6, mediator=5, descendant=8, collider=6,
+  instrument=6.
+
+``dataset_context`` schema (Phase-4 S12 Option C — backward-compatible):
+the field remains ``str``; recognized semicolon-delimited keys are
+``cohort=``, ``target=``, ``anchor=``, plus newly optional
+``treatment=`` and ``outcome=``. Production callers (cohort-only) continue
+working unchanged; S12 callers may supply explicit (T, Y) to enable
+formal instrument-recall identification on a per-(T, Y)-pair basis.
+
+All six declared ``CausalRole`` Literal values are
 represented (previously: 4 of 6; collider + instrument were deferred to issue
 #198 pending domain-expert labeling). All 4 collider examples are
 confounder-collider / M-structures per Greenland-Pearl-Robins 1999 (the
@@ -140,7 +160,12 @@ class CausalRoleClassifier(dspy.Module):
 
 
 def build_compile_set() -> list[dspy.Example]:
-    """Build the DSPy compile set: 21 curated examples covering all 6 roles.
+    """Build the DSPy compile set: 33 curated examples covering all 6 roles.
+
+    Composition:
+    - 21 legacy demos (cohort-only ``dataset_context``).
+    - 12 Phase-4 S12 Option C paired (T, Y)-explicit demos (2026-05-19;
+      see ``.claude/plans/option_c_dspy_recompile_for_s12_FINAL.md``).
 
     Of the 18 incidents catalogued at
     ``.claude/state/leakage_compile_set_20260507.md``, 12 have been distilled
@@ -151,7 +176,12 @@ def build_compile_set() -> list[dspy.Example]:
     explicit negative-direction confounder exemplar
     (baseline_severity_score_preindex) added on codex pass-5 to teach the
     discrimination boundary between confounder (arrows OUT) and collider
-    (arrows IN).
+    (arrows IN). Phase-4 S12 Option C adds 12 paired demos covering 6
+    feature/derivation pairs × 2 (T, Y) variants each, designed for
+    falsifiability: same Z + same derivation, different (T, Y) =>
+    different graph-theoretic role. The 12 paired demos are pinned by
+    quadruple in
+    ``tests/unit/test_data/test_causal_role_classifier.py::test_persisted_artifact_emits_role_conditional_on_treatment_outcome``.
 
     All 4 collider examples are confounder-collider M-structures (per
     Greenland-Pearl-Robins 1999) — the dominant collider failure mode
@@ -185,10 +215,13 @@ def build_compile_set() -> list[dspy.Example]:
     `insurance_product` confounder exemplar and creates contradictory
     training signal for an access/coverage variable.
 
-    Coverage by role: ancestor=1, confounder=2, mediator=1, descendant=8,
-    collider=4, instrument=4.
+    Coverage by role: ancestor=2 (1 legacy + 1 Option C), confounder=6
+    (3 legacy + 3 Option C), mediator=5 (1 legacy + 4 Option C),
+    descendant=8 (8 legacy + 0 Option C), collider=6 (4 legacy + 2 Option C),
+    instrument=6 (4 legacy + 2 Option C). Total: 33.
 
-    Source: .claude/state/leakage_compile_set_20260507.md + issue #198.
+    Source: .claude/state/leakage_compile_set_20260507.md + issue #198
+    + .claude/plans/option_c_dspy_recompile_for_s12_FINAL.md (Phase-4 S12).
     """
     examples = [
         # Incident 1
@@ -796,6 +829,490 @@ def build_compile_set() -> list[dspy.Example]:
                 "biologic care quality, reject the IV interpretation."
             ),
             recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # =====================================================================
+        # Phase-4 S12 Option C recompile (2026-05-19) — 12 paired (T, Y)-
+        # explicit demos. Plan: `.claude/plans/option_c_dspy_recompile_for_s12_FINAL.md`.
+        # ---------------------------------------------------------------------
+        # These 12 demos teach the classifier to read `treatment={T};
+        # outcome={Y}` as first-class semicolon-delimited fields in
+        # `dataset_context` and to condition role classification on the
+        # explicit (T, Y) pair rather than inferring T implicitly from
+        # cohort/target convention. The legacy 21 demos above continue
+        # to drive the cohort-only-context production path (the sole
+        # production caller at adaptive_validity_check.py:892-893 emits
+        # cohort-only contexts); the 12 paired demos below extend the
+        # classifier to S12-style callers that supply explicit (T, Y).
+        # Backward-compatible by construction: the input field is still
+        # `str`; production behavior on cohort-only contexts is pinned
+        # by tests/unit/test_data/test_causal_role_classifier.py::
+        # test_persisted_artifact_preserves_legacy_demo_roles.
+        #
+        # Falsifiability design (codex iter-2 redesign): the 12 demos
+        # are 6 paired fixtures. Each pair shares ONE feature_name AND
+        # ONE derivation_pseudocode, varying only (T, Y) in
+        # dataset_context — and the graph-theoretic-correct causal role
+        # FLIPS across the variants. This is the strongest possible
+        # falsifiability signal: classification cannot be by feature_name
+        # alone (else role would not flip); the classifier MUST be
+        # reading the (T, Y) fields. The 12 quadruples are pinned by
+        # `test_persisted_artifact_emits_role_conditional_on_treatment_outcome`.
+        #
+        # Pair 4 (baseline_oncotype_dx_recurrence_score) carries a
+        # d-separation assumption (Oncotype ⊥ tumor_size | pre-diagnosis
+        # covariates) flagged for expert review in Option C plan §3.5
+        # + §9. If the assumption is disputed, swap the pair for one
+        # with a less-contestable ancestor — see plan §5 row 2 recovery
+        # procedure (`git checkout artifacts/dspy/causal_role_classifier.json`,
+        # redesign pair, recompile).
+        #
+        # Pairs 3 and 5 share feature_name with legacy demos
+        # (concomitant_steroid_burst_count_followup, provider_preference_score).
+        # The shared feature is intentional — same Z, same derivation,
+        # the only delta is the dataset_context's (T, Y) fields. This is
+        # the cleanest falsifiability anchor: a classifier that ignores
+        # (T, Y) would re-emit the legacy role label; a classifier that
+        # reads (T, Y) flips correctly.
+        # =====================================================================
+        # Pair 1a — instrument: provider omalizumab volume IV.
+        # Z = high-volume omalizumab prescriber proxy; (T = omalizumab
+        # initiation, Y = remission within 180d). Z->T arrow: operational
+        # familiarity + established prior-auth workflows drive higher
+        # initiation rates. Exclusion restriction (Z->Y only through T)
+        # holds under the standard IV assumption that prior-year volume
+        # on OTHER patients does not directly affect THIS patient's
+        # remission. IV audit step: test for provider-level care quality
+        # in non-omalizumab CSU management across volume tiers.
+        dspy.Example(
+            feature_name="index_provider_omalizumab_volume_prior_year",
+            derivation_pseudocode=(
+                "count(distinct patients of index_provider where "
+                "omalizumab_initiation_date in [index_date - 365d, index_date - 1d]) "
+                "EXCLUDING this patient — provider-level omalizumab initiation "
+                "volume measured strictly pre-index from OTHER patients"
+            ),
+            dataset_context=(
+                "ConcertAI CSU claims; cohort=CSU; target=remission_180d; "
+                "anchor=index_date; treatment=omalizumab_init; outcome=remission_180d"
+            ),
+            causal_role="instrument",
+            mechanism=(
+                "Provider-volume IV for treatment=omalizumab_init. Z->T arrow: "
+                "high-omalizumab-volume providers initiate omalizumab more "
+                "readily for this patient (operational familiarity, prior-auth "
+                "workflows). Exclusion restriction: Z->Y holds only through T "
+                "under the IV assumption that the provider's PRIOR-year "
+                "omalizumab volume on OTHER patients has no direct path to "
+                "THIS patient's remission_180d outcome beyond the omalizumab "
+                "initiation decision. Z is exogenous (other-patient-derived) "
+                "and pre-index. IV-VALIDITY AUDIT STEP: test for provider-"
+                "level differences in non-omalizumab CSU management quality "
+                "across volume tiers; reject IV interpretation if care quality "
+                "differs systematically (the exclusion restriction would then "
+                "fail via direct Z -> care quality -> Y path)."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Pair 1b — confounder: same Z, same T, different Y. Now Y =
+        # hospitalization_180d. Z -> Y now has a direct path through
+        # care-quality / adverse-event management: high-volume providers
+        # manage AEs better, reducing hospitalization independent of T
+        # assignment. Z has both Z -> T (volume effect) and Z -> Y
+        # (care quality), so Z is a confounder of (T, Y_b) rather than
+        # an instrument.
+        dspy.Example(
+            feature_name="index_provider_omalizumab_volume_prior_year",
+            derivation_pseudocode=(
+                "count(distinct patients of index_provider where "
+                "omalizumab_initiation_date in [index_date - 365d, index_date - 1d]) "
+                "EXCLUDING this patient — provider-level omalizumab initiation "
+                "volume measured strictly pre-index from OTHER patients"
+            ),
+            dataset_context=(
+                "ConcertAI CSU claims; cohort=CSU; target=hospitalization_180d; "
+                "anchor=index_date; treatment=omalizumab_init; outcome=hospitalization_180d"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Confounder of (T=omalizumab_init, Y=hospitalization_180d). "
+                "Same Z -> T arrow as Pair 1a (volume drives initiation), but "
+                "the exclusion restriction FAILS for this outcome: high-volume "
+                "providers also manage CSU adverse events (anaphylaxis, "
+                "infusion reactions, secondary infections) more competently, "
+                "so Z -> hospitalization runs through a care-quality path "
+                "independent of the omalizumab treatment decision. With both "
+                "Z -> T and Z -> Y arrows present, Z is a confounder of the "
+                "(T, Y_b) relationship, NOT an instrument. Standard remediation "
+                "is condition on Z in downstream models to close the backdoor "
+                "T <- Z -> Y_b path."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Pair 2a — mediator: acute kidney injury post-index on the
+        # T -> AKI -> CV-death path. ACE inhibitors are known to induce
+        # AKI in susceptible patients (renal-dose-response mechanism);
+        # AKI is then on the path from ACE -> AKI -> cardiovascular
+        # death. Standard mediation pattern.
+        dspy.Example(
+            feature_name="acute_kidney_injury_event_count_followup",
+            derivation_pseudocode=(
+                "count(diagnosis_events where dx_code in ['N17.x'] AND "
+                "event_date in [index_date, index_date + 5y]) — followup "
+                "AKI count; no temporal exclusion of post-T events"
+            ),
+            dataset_context=(
+                "Optum claims; cohort=Hypertension; target=cv_death_5y; "
+                "anchor=index_date; treatment=ace_inhibitor_init; outcome=cv_death_5y"
+            ),
+            causal_role="mediator",
+            mechanism=(
+                "Mediator on the (T=ace_inhibitor_init, Y=cv_death_5y) path. "
+                "ACE inhibitors induce acute kidney injury in susceptible "
+                "patients via afferent-arteriole vasodilation (renal-dose-"
+                "response mechanism). AKI events post-T then mediate "
+                "cardiovascular outcomes: T -> AKI -> renal compromise -> "
+                "cardiac strain -> Y. AKI is structurally ON the causal path "
+                "from T to Y, not a confounder or descendant. Standard "
+                "mediation remediation is windowing (use pre-index AKI "
+                "history as a confounder; exclude post-T AKI from the model)."
+            ),
+            recommended_remediation="window",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Pair 2b — collider: same Z, different (T, Y). Now T = baseline
+        # eGFR category (a pre-index renal-function bin) and Y = ACE
+        # initiation. AKI in followup is downstream of BOTH baseline
+        # renal function (low-eGFR patients have more AKI events) AND
+        # downstream of ACE initiation (ACE-induced AKI). Two arrowheads
+        # into V from distinct sources = collider on the (T, Y) backdoor.
+        dspy.Example(
+            feature_name="acute_kidney_injury_event_count_followup",
+            derivation_pseudocode=(
+                "count(diagnosis_events where dx_code in ['N17.x'] AND "
+                "event_date in [index_date, index_date + 5y]) — followup "
+                "AKI count; no temporal exclusion of post-T events"
+            ),
+            dataset_context=(
+                "Optum claims; cohort=Hypertension; target=ace_inhibitor_init; "
+                "anchor=index_date; treatment=baseline_egfr_category; "
+                "outcome=ace_inhibitor_init"
+            ),
+            causal_role="collider",
+            mechanism=(
+                "Confounder-collider (M-structure per Greenland-Pearl-Robins "
+                "1999) on the (T=baseline_egfr_category, Y=ace_inhibitor_init) "
+                "relationship. AKI in followup has TWO arrowheads from "
+                "distinct sources: (a) baseline renal function (low-eGFR "
+                "patients have more spontaneous AKI; baseline_egfr -> AKI) "
+                "AND (b) any ACE initiation that follows (T -> AKI). V has "
+                "arrowheads from both T and a downstream/confounding source, "
+                "so V is a collider on the (T, Y) backdoor. Conditioning on "
+                "V opens a non-causal egfr <-> ace-init path. Drop the "
+                "feature; do not condition on it for this (T, Y) analysis."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Pair 3a — collider: SAME feature as legacy collider
+        # `concomitant_steroid_burst_count_followup`, but now with
+        # explicit (T = biologic_init, Y = hospitalization_180d). Same
+        # confounder-collider pattern as the legacy demo, but the (T, Y)
+        # fields make the role inference explicit-rather-than-implicit.
+        # Falsifiability for the new schema: a classifier that ignores
+        # (T, Y) would re-emit the legacy role (`collider`) by feature_name
+        # alone — but the EXPLICIT (T, Y) here happens to agree, so role
+        # remains collider. Pair 3b (below) flips the role with a
+        # different T, proving the classifier reads (T, Y).
+        dspy.Example(
+            feature_name="concomitant_steroid_burst_count_followup",
+            derivation_pseudocode=(
+                "count(medication_events where med_class='oral_steroid_burst' AND "
+                "fill_date in [index_date, index_date+180d]) — driven by "
+                "both pre-index severity and post-treatment non-response"
+            ),
+            dataset_context=(
+                "Optum claims; cohort=CSU; target=hospitalization_180d; "
+                "anchor=index_date; treatment=biologic_init; outcome=hospitalization_180d"
+            ),
+            causal_role="collider",
+            mechanism=(
+                "Confounder-collider for (T=biologic_init, Y=hospitalization_180d). "
+                "Two arrowheads in from distinct sources: (a) baseline disease "
+                "severity is a (T, Y) confounder (severity -> T via prescriber "
+                "escalation to biologic; severity -> Y via uncontrolled disease "
+                "activity) AND drives bursts. (b) Biologic non-response forms "
+                "the path T -> non-response -> burst-prescription. V has "
+                "arrowheads from both severity (confounder) and non-response "
+                "(T-driven). Conditioning on V opens the severity <-> Y "
+                "backdoor for this specific (T, Y) pair. Drop the feature."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Pair 3b — mediator (codex iter-0 M1 fix): SAME feature, NEW T.
+        # T_b = step-therapy policy indicator. Under the payer-mandated
+        # step-therapy interpretation (policy REQUIRES documented
+        # steroid-burst failure before authorizing biologic), the
+        # steroid-burst count Z is ON the path from T_b to Y_b:
+        # T_b -> Z (policy mandates bursts as pre-biologic step) ->
+        # Y_b (documented burst failure enables biologic authorization).
+        # Z has both an incoming arrow from T_b AND an outgoing arrow
+        # to Y_b — the textbook mediator pattern, NOT a pure descendant
+        # (which would require Z -> nothing relevant to Y_b). Codex
+        # iter-0 caught the v1 descendant label as graph-theoretically
+        # inconsistent with the policy mechanism in the rationale.
+        # Different role than Pair 3a despite the same feature + same
+        # derivation, proving (T, Y) drives the classification.
+        dspy.Example(
+            feature_name="concomitant_steroid_burst_count_followup",
+            derivation_pseudocode=(
+                "count(medication_events where med_class='oral_steroid_burst' AND "
+                "fill_date in [index_date, index_date+180d]) — driven by "
+                "both pre-index severity and post-treatment non-response"
+            ),
+            dataset_context=(
+                "Optum claims; cohort=CSU; target=biologic_init; "
+                "anchor=index_date; treatment=steroid_burst_policy_indicator; "
+                "outcome=biologic_init"
+            ),
+            causal_role="mediator",
+            mechanism=(
+                "Mediator on the (T_b=steroid_burst_policy_indicator, "
+                "Y_b=biologic_init) path. Under a payer-mandated "
+                "step-therapy policy, T_b causally requires Z (steroid-"
+                "burst count) to reach a documented-failure threshold "
+                "BEFORE Y_b (biologic authorization) is granted: "
+                "T_b -> Z -> Y_b. Z has an INCOMING arrow from T_b "
+                "(policy mandates bursts as the pre-biologic step) AND "
+                "an OUTGOING arrow to Y_b (the documented failure "
+                "enables biologic authorization). That's the textbook "
+                "mediator pattern, NOT a descendant (codex iter-0 M1: "
+                "descendant would require Z with no outgoing causal "
+                "path to Y_b, which contradicts the policy's "
+                "gatekeeping role). Differs from Pair 3a's collider "
+                "framing because T_b here is the policy that drives V "
+                "rather than the biologic decision that converges on V "
+                "with severity. Standard mediator remediation: window "
+                "to pre-T_b only — but here Z is defined as post-T_b "
+                "by construction, so the active question is whether to "
+                "block the mediated effect in (T_b -> Y_b) estimation."
+            ),
+            recommended_remediation="window",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Pair 4a — confounder: baseline Oncotype DX recurrence score on
+        # (T = cdk46i_init, Y = recurrence_5y). Oncotype score is measured
+        # at diagnosis (pre-index) and drives BOTH the cdk4/6 inhibitor
+        # decision (high-score patients are escalated) AND the recurrence
+        # outcome (high-score patients recur more from baseline biology).
+        # Classic (T, Y) confounder.
+        dspy.Example(
+            feature_name="baseline_oncotype_dx_recurrence_score",
+            derivation_pseudocode=(
+                "Oncotype DX 21-gene recurrence score from tumor RNA "
+                "expression panel; measured at diagnosis BEFORE index_date "
+                "(pre-index, used in treatment-decision pathway)"
+            ),
+            dataset_context=(
+                "ConcertAI Breast Cancer claims; cohort=HR+_BreastCancer; "
+                "target=recurrence_5y; anchor=index_date; treatment=cdk46i_init; "
+                "outcome=recurrence_5y"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Classical (T=cdk46i_init, Y=recurrence_5y) confounder. "
+                "Z -> T arrow: high Oncotype score (>25) escalates patients "
+                "to CDK4/6 inhibitor combination therapy per NCCN guidelines. "
+                "Z -> Y arrow: high Oncotype score reflects tumor biology "
+                "(proliferation, ER/PR status, HER2 expression) directly "
+                "associated with recurrence risk independent of treatment. "
+                "Z is measured at diagnosis (pre-index) so arrows are "
+                "outgoing only; not a collider. Standard remediation: "
+                "condition on Z in causal estimation to close the backdoor "
+                "T <- Z -> Y path."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Pair 4b — ancestor: SAME Z, NEW (T, Y). When T_b is tumor size
+        # at diagnosis (an earlier-in-the-causal-chain measurement) and
+        # Y_b is cdk46i_init (a downstream treatment decision), Oncotype
+        # is upstream of cdk46i_init (Z causes T_b via downstream
+        # treatment-decision algorithm). The ancestor claim requires Z⊥T_b
+        # given the pre-diagnosis covariate set (patient demographics,
+        # screening history). PLAN §3.5 + §9: this d-separation assumption
+        # is flagged for expert review; Oncotype is computed from tumor
+        # biology and could share unobserved upstream tumor-genomic causes
+        # with tumor size, making Z a confounder rather than ancestor of
+        # (T_b, Y_b). Recovery procedure: swap Pair 4 for a cleaner
+        # ancestor (e.g., provider-specialty indicator) if domain expert
+        # rejects the d-separation assumption.
+        dspy.Example(
+            feature_name="baseline_oncotype_dx_recurrence_score",
+            derivation_pseudocode=(
+                "Oncotype DX 21-gene recurrence score from tumor RNA "
+                "expression panel; measured at diagnosis BEFORE index_date "
+                "(pre-index, used in treatment-decision pathway)"
+            ),
+            dataset_context=(
+                "ConcertAI Breast Cancer claims; cohort=HR+_BreastCancer; "
+                "target=cdk46i_init; anchor=index_date; treatment=tumor_size_at_diagnosis; "
+                "outcome=cdk46i_init"
+            ),
+            causal_role="ancestor",
+            mechanism=(
+                "Ancestor of (T_b=tumor_size_at_diagnosis, Y_b=cdk46i_init) "
+                "under the d-separation assumption Oncotype ⊥ tumor_size | "
+                "{pre-diagnosis demographics, screening history}. Oncotype "
+                "is biology-derived from tumor RNA expression (proliferation "
+                "markers, ER/PR pathway); tumor_size is morphologic. Both "
+                "feed into the cdk46i treatment-decision algorithm but the "
+                "biology-vs-morphology streams are conditionally independent "
+                "given the dataset's standard covariate set. NOTE (Option C "
+                "plan §3.5 + §9): if domain reviewer disputes the "
+                "conditional-independence assumption (e.g., upstream tumor-"
+                "genomic causes link RNA expression and tumor size), Z would "
+                "become a confounder of (T_b, Y_b) rather than ancestor; "
+                "swap this pair per plan §5 risk row 2."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Pair 5a — instrument: SAME feature as legacy
+        # `provider_preference_score`, NEW explicit (T, Y) = (biologic_init,
+        # remission_180d). Same preference-based IV pattern as the legacy
+        # demo, but with explicit (T, Y) fields making the role assignment
+        # context-aware. Role agrees with legacy (instrument) because the
+        # (T, Y) framing matches the legacy's implicit biologic + remission
+        # framing. Pair 5b (below) flips the role.
+        dspy.Example(
+            feature_name="provider_preference_score",
+            derivation_pseudocode=(
+                "fraction(prior_patients_of(index_provider) where "
+                "biologic_initiation=1) over the 12 months BEFORE this "
+                "patient's index_date; patient excluded from own provider's "
+                "denominator"
+            ),
+            dataset_context=(
+                "Optum claims; cohort=CSU; target=remission_180d; "
+                "anchor=index_date; treatment=biologic_init; outcome=remission_180d"
+            ),
+            causal_role="instrument",
+            mechanism=(
+                "Preference-based provider IV for (T=biologic_init, "
+                "Y=remission_180d) per Brookhart-Schneeweiss 2007. Z -> T "
+                "arrow: high-preference providers initiate biologics more "
+                "frequently. Exclusion restriction: Z -> Y holds only through "
+                "T under the standard IV assumption that provider preference "
+                "acts on remission solely via the biologic prescribing "
+                "decision, with no direct effect on disease biology. Patient "
+                "excluded from own denominator so Z is genuinely pre-index "
+                "and exogenous. IV-VALIDITY AUDIT STEP: test for unbalanced "
+                "patient-level baseline covariates across high- vs low-"
+                "preference providers."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Pair 5b — mediator: SAME feature, NEW T. When T_b is provider's
+        # geographic region (a system-level upstream variable), the
+        # preference score is downstream of region (region -> provider
+        # mix -> preference) AND upstream of biologic_init (preference ->
+        # init). Provider preference is on the textbook region -> provider
+        # -> prescribing mediator path — NOT a descendant of T_b alone
+        # but a true mediator on the (T_b, Y_b) path. Codex iter-2 caught
+        # the v2 "descendant" label as wrong; mediator is correct because
+        # preference has an arrow OUT to Y_b (biologic_init).
+        dspy.Example(
+            feature_name="provider_preference_score",
+            derivation_pseudocode=(
+                "fraction(prior_patients_of(index_provider) where "
+                "biologic_initiation=1) over the 12 months BEFORE this "
+                "patient's index_date; patient excluded from own provider's "
+                "denominator"
+            ),
+            dataset_context=(
+                "Optum claims; cohort=CSU; target=biologic_init; "
+                "anchor=index_date; treatment=provider_geographic_region; "
+                "outcome=biologic_init"
+            ),
+            causal_role="mediator",
+            mechanism=(
+                "Mediator on the (T_b=provider_geographic_region, "
+                "Y_b=biologic_init) path. Geographic region determines "
+                "provider mix (regional formulary policy, specialist "
+                "density, payer-mix-driven prescribing norms), which "
+                "shapes per-provider biologic preference, which directly "
+                "drives biologic initiation. The textbook region -> "
+                "provider-attribute -> prescribing pathway places "
+                "preference ON the causal path from T_b to Y_b. Codex "
+                "iter-2 correction: this is mediator, not descendant — "
+                "the feature has an outgoing arrow to Y_b. Standard "
+                "mediation remediation is windowing to use only pre-T_b "
+                "provider attributes (but T_b here is exogenous region, "
+                "so windowing is trivially satisfied)."
+            ),
+            recommended_remediation="window",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Pair 6a — confounder: prior treatment count pre-index on
+        # (T = biologic_init, Y = remission_180d). More prior failed
+        # treatments drives both the biologic escalation decision (T)
+        # AND lower remission rates (Y) via treatment-refractory biology.
+        # Classical (T, Y) confounder.
+        dspy.Example(
+            feature_name="prior_treatment_count_preindex",
+            derivation_pseudocode=(
+                "count(distinct medication_events where therapy_line < "
+                "index_therapy_line AND fill_date < index_date) — pre-index "
+                "count of distinct prior therapy lines, strictly pre-index"
+            ),
+            dataset_context=(
+                "Optum claims; cohort=CSU; target=remission_180d; "
+                "anchor=index_date; treatment=biologic_init; outcome=remission_180d"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Classical (T=biologic_init, Y=remission_180d) confounder. "
+                "Z -> T arrow: patients with more failed prior treatments are "
+                "escalated to biologic per step-therapy protocols. Z -> Y "
+                "arrow: more prior failures reflects treatment-refractory "
+                "underlying disease biology, depressing remission rates "
+                "regardless of current treatment. Z is pre-index (strict "
+                "fill_date < index_date filter) so arrows are outgoing only; "
+                "not a collider. Remediation: condition on Z in causal "
+                "estimation to close the backdoor T <- Z -> Y path."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Pair 6b — mediator: SAME feature, NEW T. When T_b is time since
+        # diagnosis (a temporal upstream variable), prior treatment count
+        # is downstream of time (longer disease duration -> more
+        # treatment attempts) AND upstream of biologic_init (more prior
+        # attempts -> biologic eligibility -> biologic_init). The
+        # T_b -> Z -> Y_b path makes Z a mediator. Codex iter-3 noted
+        # partial mediation is still mediation; no swap needed.
+        dspy.Example(
+            feature_name="prior_treatment_count_preindex",
+            derivation_pseudocode=(
+                "count(distinct medication_events where therapy_line < "
+                "index_therapy_line AND fill_date < index_date) — pre-index "
+                "count of distinct prior therapy lines, strictly pre-index"
+            ),
+            dataset_context=(
+                "Optum claims; cohort=CSU; target=biologic_init; "
+                "anchor=index_date; treatment=time_since_diagnosis_years; "
+                "outcome=biologic_init"
+            ),
+            causal_role="mediator",
+            mechanism=(
+                "Mediator on the (T_b=time_since_diagnosis_years, "
+                "Y_b=biologic_init) path. Longer disease duration causally "
+                "drives more prior treatment attempts (more time = more "
+                "step-therapy trials), and accumulated prior failures drive "
+                "step-therapy eligibility for biologic. The T_b -> Z -> Y_b "
+                "path places Z structurally on the mediation pathway. "
+                "Codex iter-3 noted: partial mediation (some of T_b's "
+                "effect on Y_b runs through other paths like disease "
+                "severity progression) is still mediation. Standard "
+                "remediation is windowing — but since Z is already strictly "
+                "pre-index by construction, the active concern is whether "
+                "to include Z in the (T_b -> Y_b) effect estimate (excludes "
+                "the mediated effect)."
+            ),
+            recommended_remediation="window",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
     ]
     return examples
