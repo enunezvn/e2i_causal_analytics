@@ -521,6 +521,104 @@ async def test_crystallize_calls_llm_narrator_when_flag_on(fake_supabase, monkey
 
 
 @pytest.mark.asyncio
+async def test_crystallize_narrator_swallows_only_anthropic_errors(
+    fake_supabase, monkeypatch
+):
+    """Codex iter-1 H2 (LOAD-BEARING): the Haiku call must catch only
+    the four anthropic.* SDK error classes, NOT broad Exception.
+
+    Programming errors (TypeError, AttributeError, KeyError) MUST
+    propagate so they surface in CI / DLQ instead of being silently
+    swallowed as "empty narrator audit". This mirrors the
+    #378-iter-0-M1 / sibling narrow-catch contract.
+
+    We assert this by injecting a TypeError-raising stub at the
+    AsyncAnthropic.messages.create boundary and confirming the
+    exception escapes the crystallizer's group-level try/except into
+    the `errors` list (the outer wrapper catches it but does NOT
+    silently substitute an empty audit).
+    """
+    monkeypatch.setenv("E2I_CRYSTAL_LLM_NARRATIVES_ENABLED", "1")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-fake-key-for-shape")
+
+    # Stub the AsyncAnthropic class so messages.create raises a
+    # TypeError (a programming error — must NOT be swallowed by the
+    # narrow except clause).
+    import anthropic as anthropic_mod
+
+    class _BoomMessages:
+        async def create(self, **kwargs):
+            raise TypeError("programming-error-must-propagate")
+
+    class _BoomClient:
+        def __init__(self, **_kwargs):
+            self.messages = _BoomMessages()
+
+    monkeypatch.setattr(anthropic_mod, "AsyncAnthropic", _BoomClient)
+
+    _seed_episodic_with_causal_content(
+        fake_supabase,
+        brand="Kisqali",
+        causal_path_id="cp1",
+        agents=["causal_impact", "gap_analyzer"],
+    )
+    result = await Crystallizer().run_for_brand("Kisqali")
+
+    # The TypeError must surface as a per-group error, not be swallowed
+    # as an empty audit (which would let the row insert with empty
+    # prose pass through).
+    assert result.insights_created == 0, (
+        "TypeError must propagate, not be swallowed as empty narrator audit"
+    )
+    assert any(
+        "programming-error-must-propagate" in e or "TypeError" in e
+        for e in result.errors
+    ), f"Expected TypeError to surface in errors; got {result.errors}"
+
+
+@pytest.mark.asyncio
+async def test_crystallize_narrator_falls_back_on_anthropic_api_error(
+    fake_supabase, monkeypatch
+):
+    """The narrow catch DOES swallow anthropic.* SDK errors and emits
+    an empty audit (fall-back contract). Pin so the boundary is
+    explicit."""
+    monkeypatch.setenv("E2I_CRYSTAL_LLM_NARRATIVES_ENABLED", "1")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-fake-key-for-shape")
+
+    import anthropic as anthropic_mod
+
+    class _BoomMessages:
+        async def create(self, **kwargs):
+            # anthropic.APIConnectionError accepts a `message` arg in
+            # modern SDK; positional-or-kwarg works across versions.
+            raise anthropic_mod.APIConnectionError(request=None)  # type: ignore[arg-type]
+
+    class _BoomClient:
+        def __init__(self, **_kwargs):
+            self.messages = _BoomMessages()
+
+    monkeypatch.setattr(anthropic_mod, "AsyncAnthropic", _BoomClient)
+
+    _seed_episodic_with_causal_content(
+        fake_supabase,
+        brand="Kisqali",
+        causal_path_id="cp1",
+        agents=["causal_impact", "gap_analyzer"],
+    )
+    result = await Crystallizer().run_for_brand("Kisqali")
+
+    # Insight still created — fall-back path emits empty prose, the
+    # row insert succeeds. Critical contract: SDK errors do NOT block
+    # the crystal pipeline.
+    assert result.insights_created == 1
+    insight = fake_supabase.rows["executive_insights"][0]
+    # Empty prose (length 0 string) confirms the fall-back audit shape
+    assert insight["limitations"] == ""
+    assert insight["recommended_next_analysis"] == ""
+
+
+@pytest.mark.asyncio
 async def test_crystallize_finding_method_exists():
     """``crystallize_finding(finding_id: str, *, brand: str)`` must be a
     bound method of Crystallizer (#376 DoD §D)."""
