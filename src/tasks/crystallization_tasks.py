@@ -14,6 +14,16 @@ two run independently. Plan §Phase 4 line 141's "30 min after
 consolidation" framing was a planning-level suggestion, not a
 load-bearing operational contract.
 
+Migration path to a strict wall-clock offset (codex iter-2 M3
+symmetric-doc with celery_app.py:350-368): if CI / production
+observability surfaces a real race between the consolidator and
+this task, swap the relative-interval form for
+``celery.schedules.crontab(hour='*/6', minute=30)`` in the beat
+entry. The crontab form is supported out-of-the-box by Celery beat
+and adjacent modules in this repo already import ``crontab`` —
+no new dependency. Absent a demonstrated need, the relative form
+is simpler, idempotent, and avoids cron-style timezone surprises.
+
 The task wraps :meth:`src.memory.crystallization.crystallizer.Crystallizer.crystallize_portfolio`
 and returns a JSON-serializable summary so beat-logs / dispatcher
 audits can inspect the per-run result without re-querying the DB.
