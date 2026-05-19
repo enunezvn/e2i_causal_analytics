@@ -100,10 +100,11 @@ DEFAULT_MAX_BOOTSTRAPPED_DEMOS = 4
 # Computed as 33 labeled + 4 bootstrapped = 37, +3 slot conservative
 # headroom for any future small additions. The §3.5 paired-fixture
 # falsifiability gate requires all 12 quadruples to land in the
-# persisted artifact: if any single (T, Y) variant gets dropped by
-# random.sample (likelihood ~12/40 = 30% per variant at cap=24 vs ~0
-# at cap=40 since 33 < 40), the gate trips. The new ceiling pins this
-# to ~0% loss probability.
+# persisted artifact, so the cap must be >= len(build_compile_set()).
+# Pre-Option-C cap of 24 < 33 would force random.sample(33, 24) to
+# drop 9 of 33 demos uniformly per run (~27% per-demo loss probability);
+# at cap=40 >= 33 the sample step retains all labeled demos
+# deterministically.
 DEFAULT_MAX_LABELED_DEMOS = 40
 
 
@@ -325,11 +326,24 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--max-bootstrapped-demos",
         type=int,
         default=DEFAULT_MAX_BOOTSTRAPPED_DEMOS,
+        help=(
+            "Cap on teacher-bootstrapped demos appended to the persisted "
+            f"few-shot set. Default: {DEFAULT_MAX_BOOTSTRAPPED_DEMOS}."
+        ),
     )
     parser.add_argument(
         "--max-labeled-demos",
         type=int,
         default=DEFAULT_MAX_LABELED_DEMOS,
+        help=(
+            "Cap on labeled (compile-set) demos retained as persisted "
+            "few-shot exemplars. BootstrapFewShot._train calls "
+            "random.sample(demos, max_labeled_demos); raising this above "
+            "len(build_compile_set()) keeps every labeled exemplar. "
+            f"Default: {DEFAULT_MAX_LABELED_DEMOS} (set on Phase-4 S12 "
+            "Option C recompile to accommodate the 33-example compile "
+            "set: 21 legacy + 12 (T, Y)-explicit paired-fixture demos)."
+        ),
     )
     parser.add_argument(
         "--log-level",

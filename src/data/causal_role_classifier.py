@@ -17,8 +17,11 @@ Compile-set role coverage:
 - Legacy 21 (cohort-only context): ancestor=1, confounder=3, mediator=1,
   descendant=8, collider=4, instrument=4.
 - Phase-4 S12 Option C 12 paired demos ((T, Y)-explicit context): 1 ancestor,
-  3 confounder, 3 mediator, 1 descendant, 2 collider, 2 instrument.
-- Combined 33: ancestor=2, confounder=6, mediator=4, descendant=9, collider=6,
+  3 confounder, 4 mediator, 0 descendant, 2 collider, 2 instrument.
+  (Pair 3b corrected on codex iter-0 M1 from descendant -> mediator
+  because the step-therapy policy mechanism puts Z on the T_b -> Z ->
+  Y_b path.)
+- Combined 33: ancestor=2, confounder=6, mediator=5, descendant=8, collider=6,
   instrument=6.
 
 ``dataset_context`` schema (Phase-4 S12 Option C — backward-compatible):
@@ -213,8 +216,8 @@ def build_compile_set() -> list[dspy.Example]:
     training signal for an access/coverage variable.
 
     Coverage by role: ancestor=2 (1 legacy + 1 Option C), confounder=6
-    (3 legacy + 3 Option C), mediator=4 (1 legacy + 3 Option C),
-    descendant=9 (8 legacy + 1 Option C), collider=6 (4 legacy + 2 Option C),
+    (3 legacy + 3 Option C), mediator=5 (1 legacy + 4 Option C),
+    descendant=8 (8 legacy + 0 Option C), collider=6 (4 legacy + 2 Option C),
     instrument=6 (4 legacy + 2 Option C). Total: 33.
 
     Source: .claude/state/leakage_compile_set_20260507.md + issue #198
@@ -1043,14 +1046,20 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             recommended_remediation="drop",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
-        # Pair 3b — descendant: SAME feature, NEW T. When T_b is the
-        # steroid-burst policy indicator itself (a payer/protocol policy
-        # that drives steroid burst rates), the steroid-burst count V
-        # is downstream of T_b by definition. No second arrowhead from
-        # an independent source — V is a pure descendant of T_b on the
-        # T_b -> V path. Different role than Pair 3a despite the same
-        # feature + same derivation, proving (T, Y) drives the
-        # classification.
+        # Pair 3b — mediator (codex iter-0 M1 fix): SAME feature, NEW T.
+        # T_b = step-therapy policy indicator. Under the payer-mandated
+        # step-therapy interpretation (policy REQUIRES documented
+        # steroid-burst failure before authorizing biologic), the
+        # steroid-burst count Z is ON the path from T_b to Y_b:
+        # T_b -> Z (policy mandates bursts as pre-biologic step) ->
+        # Y_b (documented burst failure enables biologic authorization).
+        # Z has both an incoming arrow from T_b AND an outgoing arrow
+        # to Y_b — the textbook mediator pattern, NOT a pure descendant
+        # (which would require Z -> nothing relevant to Y_b). Codex
+        # iter-0 caught the v1 descendant label as graph-theoretically
+        # inconsistent with the policy mechanism in the rationale.
+        # Different role than Pair 3a despite the same feature + same
+        # derivation, proving (T, Y) drives the classification.
         dspy.Example(
             feature_name="concomitant_steroid_burst_count_followup",
             derivation_pseudocode=(
@@ -1063,20 +1072,29 @@ def build_compile_set() -> list[dspy.Example]:
                 "anchor=index_date; treatment=steroid_burst_policy_indicator; "
                 "outcome=biologic_init"
             ),
-            causal_role="descendant",
+            causal_role="mediator",
             mechanism=(
-                "Descendant of T=steroid_burst_policy_indicator. The policy "
-                "indicator (e.g., payer-mandated step-therapy requiring a "
-                "documented steroid-burst failure before authorizing biologic) "
-                "directly causes steroid-burst prescriptions. V is downstream "
-                "of T_b on the T_b -> V path, with no independent second "
-                "parent for this (T_b, Y_b) framing. Differs from Pair 3a's "
-                "collider role because T_b is now the policy that drives V "
-                "rather than the biologic decision that converges on V with "
-                "severity. Window or drop the feature; do not use it as a "
-                "covariate in (T_b, Y_b) analysis."
+                "Mediator on the (T_b=steroid_burst_policy_indicator, "
+                "Y_b=biologic_init) path. Under a payer-mandated "
+                "step-therapy policy, T_b causally requires Z (steroid-"
+                "burst count) to reach a documented-failure threshold "
+                "BEFORE Y_b (biologic authorization) is granted: "
+                "T_b -> Z -> Y_b. Z has an INCOMING arrow from T_b "
+                "(policy mandates bursts as the pre-biologic step) AND "
+                "an OUTGOING arrow to Y_b (the documented failure "
+                "enables biologic authorization). That's the textbook "
+                "mediator pattern, NOT a descendant (codex iter-0 M1: "
+                "descendant would require Z with no outgoing causal "
+                "path to Y_b, which contradicts the policy's "
+                "gatekeeping role). Differs from Pair 3a's collider "
+                "framing because T_b here is the policy that drives V "
+                "rather than the biologic decision that converges on V "
+                "with severity. Standard mediator remediation: window "
+                "to pre-T_b only — but here Z is defined as post-T_b "
+                "by construction, so the active question is whether to "
+                "block the mediated effect in (T_b -> Y_b) estimation."
             ),
-            recommended_remediation="drop",
+            recommended_remediation="window",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
         # Pair 4a — confounder: baseline Oncotype DX recurrence score on
         # (T = cdk46i_init, Y = recurrence_5y). Oncotype score is measured

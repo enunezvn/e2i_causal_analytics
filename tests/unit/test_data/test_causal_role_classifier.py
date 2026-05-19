@@ -607,7 +607,8 @@ def test_persisted_artifact_demos_carry_diverse_new_role_features():
         f"Expected >= 2 distinct collider features so the compiled "
         f"classifier has diverse training signal for the confounder-collider "
         f"pattern across both count and binary derivations. Recompile with "
-        f"the default max_labeled_demos=24 (raised from 16 on codex pass-4)."
+        f"the default max_labeled_demos=40 (raised from 24 on Phase-4 S12 "
+        f"Option C to cover the 33-example compile set)."
     )
     assert len(instrument_overlap) >= 2, (
         f"Persisted artifact demos carry only {len(instrument_overlap)} of "
@@ -634,8 +635,8 @@ def test_persisted_artifact_demos_carry_diverse_new_role_features():
         f"needs at least one Brookhart-Schneeweiss provider IV demo "
         f"(preference-fraction or volume-based) to teach the preference-"
         f"based IV pattern as distinct from the geographic IV family. "
-        f"Recompile with the default max_labeled_demos=24 (raised from "
-        f"16 on codex pass-4 so all 20 labeled examples survive)."
+        f"Recompile with the default max_labeled_demos=40 (raised from "
+        f"24 on Phase-4 S12 Option C so all 33 labeled examples survive)."
     )
 
 
@@ -836,7 +837,10 @@ EXPECTED_TREATMENT_OUTCOME_QUADRUPLES: list[tuple[str, str, str, str]] = [
         "ace_inhibitor_init",
         "collider",
     ),
-    # Pair 3 — steroid burst: collider vs descendant
+    # Pair 3 — steroid burst: collider vs mediator (codex iter-0 M1 fix:
+    # T_b=policy mandates Z as pre-Y_b step → T_b → Z → Y_b path makes
+    # Z a mediator not a descendant; descendant would require no
+    # outgoing arrow from Z to Y_b).
     (
         "concomitant_steroid_burst_count_followup",
         "biologic_init",
@@ -847,7 +851,7 @@ EXPECTED_TREATMENT_OUTCOME_QUADRUPLES: list[tuple[str, str, str, str]] = [
         "concomitant_steroid_burst_count_followup",
         "steroid_burst_policy_indicator",
         "biologic_init",
-        "descendant",
+        "mediator",
     ),
     # Pair 4 — Oncotype DX: confounder vs ancestor (d-separation assumption;
     # see Option C plan §3.5 Pair 4 + §9 — domain reviewer may swap if the

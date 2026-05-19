@@ -8,9 +8,9 @@
         "feature_name": "disease_severity",
         "derivation_pseudocode": "min(3.0, sum(med.fill_count) * 0.5) + min(2.0, count(proc.code='J2357')) + count(lab.flag='abnormal')  # over entire patient panel, NO pre-index filter",
         "dataset_context": "ConcertAI CSU claims; target=treatment_initiated; prevalence=0.024; prediction_anchor=index_date",
-        "reasoning": "The disease_severity feature aggregates medication fills, procedure codes, and abnormal lab flags across the entire patient panel without any pre-index temporal filtering. This means it includes both pre-index disease activity (which would be a legitimate confounder) and post-treatment events (medication fills after treatment initiation, procedures following treatment, lab abnormalities that occur post-treatment). For treated patients, the medication fill component will be inflated by the treatment itself, and procedures/labs may reflect treatment monitoring or adverse events. The feature thus captures information from both before and after the prediction time.",
+        "reasoning": "The disease_severity score aggregates medication fills, procedure codes, and lab abnormalities across the entire patient timeline without temporal filtering. For treated patients, this includes post-treatment events that are causally downstream of the treatment decision. The score mixes pre-index disease activity (legitimate severity signal) with post-treatment monitoring, adverse events, and treatment-related procedures. This creates data leakage where the feature incorporates information that occurs after the prediction time.",
         "causal_role": "descendant",
-        "mechanism": "Composite severity score aggregates clinical events across the entire patient timeline without temporal filtering. Post-treatment medication fills, procedures, and lab abnormalities contaminate the score with treatment-dependent information.",
+        "mechanism": "Severity score aggregates clinical events across the entire patient timeline without pre-prediction-time filtering. Post-treatment medication fills, procedures, and lab abnormalities contaminate the score with information causally downstream of the treatment decision.",
         "recommended_remediation": "window"
       },
       {
@@ -18,9 +18,9 @@
         "feature_name": "engagement_score",
         "derivation_pseudocode": "len(unique(med.npi)) + count(med.fills) + count(lab.tests)  # over entire panel",
         "dataset_context": "ConcertAI CSU; target=treatment_initiated; anchor=index_date",
-        "reasoning": "The engagement score aggregates unique providers, medication fills, and lab tests across the entire patient panel without temporal filtering. This creates a structural dependency on treatment status: treated patients will have more medication fills (from the treatment itself) and potentially more provider interactions and lab monitoring. The score increases mechanically for patients who receive treatment, making it a post-prediction-time feature that leaks information about the target variable.",
+        "reasoning": "Engagement score aggregates provider count, medication fills, and lab tests across the entire patient panel without temporal filtering. Treated patients accumulate post-index medication fills and monitoring labs that inflate the score, creating a structural dependency on the target variable.",
         "causal_role": "descendant",
-        "mechanism": "Aggregates medication fills and healthcare utilization across the entire patient timeline without pre-prediction-time filtering. Treated patients accumulate post-index medication fills and monitoring events that artificially inflate the engagement score, creating structural dependency on treatment status.",
+        "mechanism": "Aggregates healthcare utilization events (medication fills, lab tests, provider contacts) across the entire patient timeline without filtering to pre-prediction-time events. Treated patients systematically accumulate more post-index fills and monitoring labs, making the score structurally post-treatment.",
         "recommended_remediation": "window"
       },
       {
@@ -28,9 +28,9 @@
         "feature_name": "days_on_therapy",
         "derivation_pseudocode": "sum(med.days_supply) over entire panel",
         "dataset_context": "CSU; target=treatment_initiated; anchor=index_date",
-        "reasoning": "The feature sums medication days_supply across the entire patient panel without temporal filtering to pre-prediction time. For untreated patients (target=0), the sum is definitionally zero since they have no medication events. For treated patients (target=1), the sum includes post-index medication fills, making this feature a direct function of the treatment decision.",
+        "reasoning": "Days on therapy aggregates medication days_supply across the entire patient panel without temporal filtering. For untreated patients (target=0), this feature is systematically zero since no medication events exist. For treated patients (target=1), the feature accumulates positive days_supply values from the medication fills. This creates a deterministic relationship where the feature directly encodes the target variable - it's a perfect class separator.",
         "causal_role": "descendant",
-        "mechanism": "Total days on therapy is tautologically zero for untreated patients and positive for treated patients. Perfect class separator derived directly from the target variable.",
+        "mechanism": "Sum of days_supply over the entire panel is tautologically zero for untreated patients and positive for treated patients. Perfect class separator that directly encodes the target variable.",
         "recommended_remediation": "drop"
       },
       {
@@ -38,9 +38,9 @@
         "feature_name": "medication_claim_count",
         "derivation_pseudocode": "count(rows in medication_events where patient_id=p)",
         "dataset_context": "CSU/Optum; target=treatment_initiated; anchor=index_date",
-        "reasoning": "The feature counts all medication claims in the medication_events table for each patient without any temporal filtering relative to the index_date. This means it aggregates both pre-index medications (which could be legitimate confounders or ancestors) and post-index medications (which are structurally dependent on the treatment decision). For treated patients, the post-index medication events will inflate the count, while untreated patients will have lower counts since they lack the treatment-related medication fills. This creates a structural dependency where the feature value depends on the target variable.",
+        "reasoning": "The medication claim count aggregates all medication events for a patient without any temporal filtering relative to the index_date. For untreated patients (treatment_initiated=0), this count reflects only pre-index medications. For treated patients (treatment_initiated=1), the count includes both pre-index medications AND the treatment initiation event itself, plus any subsequent medication fills. This creates a deterministic relationship where treated patients will always have a higher count than their pre-treatment baseline, making this feature a post-prediction-time indicator.",
         "causal_role": "descendant",
-        "mechanism": "Aggregates medication events across the entire patient timeline without pre-prediction-time filtering. Treated patients accumulate post-index medication fills that inflate the count, creating structural dependence on the treatment decision.",
+        "mechanism": "Aggregates medication events across the entire patient timeline without temporal filtering. Treated patients accumulate post-index medication events including the treatment itself, making the count structurally dependent on the target variable.",
         "recommended_remediation": "window"
       },
       {
@@ -271,9 +271,9 @@
         "feature_name": "concomitant_steroid_burst_count_followup",
         "derivation_pseudocode": "count(medication_events where med_class='oral_steroid_burst' AND fill_date in [index_date, index_date+180d]) — driven by both pre-index severity and post-treatment non-response",
         "dataset_context": "Optum claims; cohort=CSU; target=biologic_init; anchor=index_date; treatment=steroid_burst_policy_indicator; outcome=biologic_init",
-        "causal_role": "descendant",
-        "mechanism": "Descendant of T=steroid_burst_policy_indicator. The policy indicator (e.g., payer-mandated step-therapy requiring a documented steroid-burst failure before authorizing biologic) directly causes steroid-burst prescriptions. V is downstream of T_b on the T_b -> V path, with no independent second parent for this (T_b, Y_b) framing. Differs from Pair 3a's collider role because T_b is now the policy that drives V rather than the biologic decision that converges on V with severity. Window or drop the feature; do not use it as a covariate in (T_b, Y_b) analysis.",
-        "recommended_remediation": "drop"
+        "causal_role": "mediator",
+        "mechanism": "Mediator on the (T_b=steroid_burst_policy_indicator, Y_b=biologic_init) path. Under a payer-mandated step-therapy policy, T_b causally requires Z (steroid-burst count) to reach a documented-failure threshold BEFORE Y_b (biologic authorization) is granted: T_b -> Z -> Y_b. Z has an INCOMING arrow from T_b (policy mandates bursts as the pre-biologic step) AND an OUTGOING arrow to Y_b (the documented failure enables biologic authorization). That's the textbook mediator pattern, NOT a descendant (codex iter-0 M1: descendant would require Z with no outgoing causal path to Y_b, which contradicts the policy's gatekeeping role). Differs from Pair 3a's collider framing because T_b here is the policy that drives V rather than the biologic decision that converges on V with severity. Standard mediator remediation: window to pre-T_b only — but here Z is defined as post-T_b by construction, so the active question is whether to block the mediated effect in (T_b -> Y_b) estimation.",
+        "recommended_remediation": "window"
       }
     ],
     "signature": {
