@@ -8,10 +8,11 @@ Four async handlers + their Celery-task wrappers:
                                     queues per-brand pipeline runs
 * ``notify_and_queue_reanalysis`` — fired by staleness_threshold sentinels;
                                     publishes a ``staleness_alert`` for the
-                                    top-5 most-stale findings. Real Celery
-                                    enqueue of reanalysis tasks is deferred
-                                    to TODO(#378); the handler currently
-                                    notifies-only.
+                                    top-5 most-stale findings AND enqueues
+                                    a ``reanalyze_finding`` Celery task per
+                                    finding (#378). Broker outage on the
+                                    per-finding enqueue is best-effort: the
+                                    Redis alert publication still goes out.
 * ``flag_for_review``             — fired by cohort_drift sentinels; publishes
                                     a ``cohort_drift`` alert for SME review
 * ``run_full_consolidation``      — fired by schedule sentinels; runs a
@@ -135,6 +136,11 @@ async def rerun_all_active_cohorts(
 _REANALYSIS_CAP: Final[int] = 5
 
 
+_REANALYSIS_TASK_NAME: Final[str] = (
+    "src.tasks.insight_lifecycle_tasks.reanalyze_finding"
+)
+
+
 async def notify_and_queue_reanalysis(
     *,
     sentinel_id: str,
@@ -143,7 +149,8 @@ async def notify_and_queue_reanalysis(
 ) -> Dict[str, Any]:
     """
     Plan §3.8 ``staleness_threshold`` action — publishes a ``staleness_alert``
-    for the top-5 most-stale findings.
+    for the top-5 most-stale findings AND enqueues a ``reanalyze_finding``
+    Celery task per finding (#378).
 
     Plan body specifies "top 5 most stale" — we sort by ``staleness_score``
     descending, slice to :data:`_REANALYSIS_CAP`, and notify. Findings
@@ -151,23 +158,30 @@ async def notify_and_queue_reanalysis(
     KEEP BINARY) come through as ``staleness_score=1.0`` so they're treated
     as the most urgent.
 
-    iter-1 M1 honesty fix (#375 codex iter-0 M1):
-    -----------------------------------------------
-    The previous return contract claimed ``queued_for_reanalysis`` but the
-    handler only logged + included the findings in the alert payload — no
-    Celery task was actually enqueued. The return dict now exposes:
+    Return contract
+    ---------------
+    * ``notified_for_reanalysis`` — count of findings logged + included in
+                                    the Redis ``staleness_alert`` payload
+                                    (== ``len(top)`` for the cap).
+    * ``queued_for_reanalysis``   — count of ACTUAL successful Celery
+                                    ``send_task`` calls. May be less than
+                                    ``notified_for_reanalysis`` if the
+                                    broker is degraded — the field
+                                    separation lets observers detect a
+                                    partial degraded run.
 
-    * ``notified_for_reanalysis``  — how many findings were logged + made
-                                     available to alert subscribers
-                                     (== ``len(top)`` for the cap)
-    * ``queued_for_reanalysis``    — actual count of Celery enqueues, which
-                                     is **0** until TODO(#378) lands a real
-                                     reanalysis-task wire-up.
+    Both fields kept for back-compat with #375's honesty fix contract:
+    ``notified_for_reanalysis`` was the iter-1 honesty rename, kept here
+    even though it numerically equals ``queued_for_reanalysis`` in the
+    happy path. They diverge under broker outage.
 
-    TODO(#378): when a reanalysis Celery task is added (likely
-    ``src.tasks.<finding_reanalysis>`` once #237's pipeline-trigger surface
-    settles), replace the log-only loop with ``celery_app.send_task(...)``
-    per finding in ``top`` and increment the queued counter accordingly.
+    Best-effort enqueue
+    -------------------
+    A ``send_task`` failure (broker down, transient ConnectionError) is
+    logged at WARNING but does NOT propagate — the Redis alert publish is
+    the cross-process audit trail and the queued counter reflects only
+    successful enqueues. This mirrors the dispatcher's per-match send_task
+    pattern in :mod:`src.memory.sentinels.registry`.
     """
     stale_findings: List[Dict[str, Any]] = list(trigger_data.get("stale_findings") or [])
     # Stable sort: most-stale first. Treat missing scores as 1.0 (max stale).
@@ -182,20 +196,47 @@ async def notify_and_queue_reanalysis(
     }
     await publish_alert(payload)
 
-    # Notification-only today: we log + include in the alert. The
-    # orchestrator subscribes to e2i:alerts and dispatches downstream.
-    # TODO(#378): swap this for celery_app.send_task per finding once the
-    # reanalysis task lands. Coupling to a specific pipeline-trigger surface
-    # here would block on #237's still-moving target — defer per plan.
     notified_count = 0
+    queued_count = 0
+    # Default brand for findings missing one: the first sentinel-scope brand,
+    # else "all". The `reanalyze_finding` task ValueErrors on empty brand,
+    # so we always resolve to a non-empty string here.
+    default_brand = brands[0] if brands else "all"
     for finding in top:
+        finding_id = finding.get("finding_id")
+        finding_brand = finding.get("brand") or default_brand
         logger.info(
             f"sentinel-action notified-for-reanalysis sentinel={sentinel_id} "
-            f"finding={finding.get('finding_id')} "
+            f"finding={finding_id} "
             f"staleness={finding.get('staleness_score')}"
         )
         notified_count += 1
-    queued_count = 0  # TODO(#378): will become len(top) when real enqueue lands
+        if not finding_id:
+            # Skip enqueue if the match is malformed (no pk). The notify
+            # count still goes up because the finding made it into the
+            # alert payload — operators can see the malformed shape via
+            # the alert subscriber.
+            logger.warning(
+                f"sentinel-action notify_and_queue_reanalysis: skipping enqueue "
+                f"for finding without finding_id sentinel={sentinel_id} "
+                f"finding={finding!r}"
+            )
+            continue
+        try:
+            celery_app.send_task(
+                _REANALYSIS_TASK_NAME,
+                args=[finding_id, finding_brand],
+                kwargs={"triggered_by": "sentinel:staleness"},
+            )
+            queued_count += 1
+        except Exception:
+            # Best-effort: broker outage MUST NOT crash the action loop.
+            # The Redis alert already published, so subscribers still see
+            # the staleness signal. Mirrors registry.py:680 pattern.
+            logger.exception(
+                f"sentinel-action notify_and_queue_reanalysis: send_task "
+                f"failed for finding={finding_id} sentinel={sentinel_id}"
+            )
 
     return {
         "sentinel_id": str(sentinel_id),
