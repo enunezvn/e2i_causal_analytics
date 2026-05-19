@@ -305,6 +305,21 @@ async def dispatch_sentinels() -> SentinelDispatchResult:
 
     Called every 5 minutes by the ``sentinel_dispatcher`` Celery beat task.
     Errors in one sentinel never block others.
+
+    Cooldown gate (#375 item 2)
+    ---------------------------
+    A sentinel with ``cooldown_minutes`` set is SKIPPED at evaluation time
+    if ``now - last_fired_at < cooldown_minutes``. The gate is per-sentinel,
+    counted from the last successful fire (not from the last evaluation —
+    so a sentinel that hasn't matched in 24h with a 6h cooldown still
+    evaluates every dispatcher tick).
+
+    Semantics:
+        * ``cooldown_minutes IS NULL``       → no cooldown (always evaluate)
+        * ``cooldown_minutes == 0``          → no cooldown (always evaluate)
+        * ``last_fired_at IS NULL``          → never fired; evaluate
+        * ``now - last_fired_at >= cooldown_minutes`` → cooldown elapsed; evaluate
+        * otherwise                          → SKIP (cooldown in effect)
     """
     client = get_supabase_client()
     result = SentinelDispatchResult()
@@ -312,8 +327,18 @@ async def dispatch_sentinels() -> SentinelDispatchResult:
     rows = (client.table("sentinels").select("*").eq("enabled", True).execute().data) or []
     result.examined = len(rows)
 
+    now = datetime.now(timezone.utc)
+
     for sentinel in rows:
         sentinel_id = sentinel.get("sentinel_id")
+        if _is_in_cooldown(sentinel, now=now):
+            # Logged at INFO so operators can see why a sentinel is quiet.
+            logger.info(
+                f"sentinel {sentinel_id} in cooldown "
+                f"(cooldown_minutes={sentinel.get('cooldown_minutes')}, "
+                f"last_fired_at={sentinel.get('last_fired_at')}); skipping"
+            )
+            continue
         try:
             matches = await evaluate_sentinel(sentinel)
             if not matches:
@@ -325,8 +350,51 @@ async def dispatch_sentinels() -> SentinelDispatchResult:
             logger.exception(f"sentinel {sentinel_id} evaluation failed")
             result.errors.append(f"{sentinel_id}: {exc}")
 
-    result.finished_at = datetime.now(timezone.utc)
+    result.finished_at = now
     return result
+
+
+def _is_in_cooldown(sentinel: Dict[str, Any], *, now: datetime) -> bool:
+    """Return True if the sentinel was fired within ``cooldown_minutes`` of now.
+
+    Defensive against:
+    * bool-as-int (``cooldown_minutes=False`` or ``=True`` smuggled past the
+      registration gate by direct DB write) — both treated as "no cooldown"
+      since the gate is no longer trustworthy under bool semantics
+    * NaN / non-numeric cooldown values — treated as "no cooldown"
+    * Unparseable ``last_fired_at`` strings — treated as "never fired"
+    """
+    cooldown = sentinel.get("cooldown_minutes")
+    # NULL / 0 / missing → no gate.
+    if cooldown is None:
+        return False
+    # bool exclusion before numeric check; same load-bearing pattern as
+    # register_sentinel — Python's True/False are int subclasses.
+    if isinstance(cooldown, bool) or not isinstance(cooldown, (int, float)):
+        return False
+    # NaN-safe: not (x > 0) is the PostgreSQL-parity pattern (in PG, NaN
+    # comparisons are False; we mirror that by inverting the guard).
+    if not (cooldown > 0):
+        return False
+    last_fired_raw = sentinel.get("last_fired_at")
+    if not last_fired_raw:
+        return False
+    try:
+        # Supabase serializes timestamptz as ISO 8601 string; tolerate Z suffix.
+        if isinstance(last_fired_raw, str):
+            iso = last_fired_raw.replace("Z", "+00:00")
+            last_fired = datetime.fromisoformat(iso)
+        elif isinstance(last_fired_raw, datetime):
+            last_fired = last_fired_raw
+        else:
+            return False
+    except ValueError:
+        # Unparseable; treat as never-fired so the sentinel can evaluate.
+        return False
+    if last_fired.tzinfo is None:
+        last_fired = last_fired.replace(tzinfo=timezone.utc)
+    elapsed = now - last_fired
+    return elapsed < timedelta(minutes=float(cooldown))
 
 
 async def _fire_action(
