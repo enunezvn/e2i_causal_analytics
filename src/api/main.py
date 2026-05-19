@@ -290,6 +290,32 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("OpenTelemetry: Tracing not available")
 
+    # Load YAML-configured sentinels (#375 item 1: YAML config + startup
+    # loader). The four plan-specced sentinels (Optum quarterly, staleness
+    # alert, Pluvicto cohort drift, weekly consolidation) live in
+    # config/sentinels.yaml. The loader is idempotent — re-running it on
+    # restart does not duplicate existing rows (matched on name+brand).
+    # If Supabase is unavailable (degraded mode), the loader fails fast
+    # and we log + continue without sentinels.
+    try:
+        # Lazy import: keeps the API boot path free of memory-subsystem
+        # transitive imports unless sentinels actually need to load.
+        from src.memory.sentinels.config_loader import load_sentinels_from_yaml
+
+        if getattr(app.state, "supabase_available", False):
+            registered = await load_sentinels_from_yaml()
+            logger.info(
+                f"Sentinel loader: {registered} new sentinel(s) registered "
+                f"from config/sentinels.yaml"
+            )
+        else:
+            logger.info("Sentinel loader: Supabase unavailable, skipping YAML load")
+    except Exception as e:
+        # Best-effort: a malformed YAML or unreachable DB must not crash
+        # startup. The dispatcher will still run against whatever is
+        # already in the sentinels table.
+        logger.warning(f"Sentinel loader: YAML load failed (non-critical): {e}")
+
     logger.info("API server ready to accept connections")
 
     yield  # Application runs here
