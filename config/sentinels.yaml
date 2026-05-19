@@ -51,18 +51,37 @@ sentinels:
     cooldown_minutes: 1440  # 24h
 
   # ------------------------------------------------------------------- 2.
-  # High-staleness alert. Fires when ≥1 promoted (semantic) causal_path
-  # exceeds the staleness threshold. Routes to notify_and_queue_reanalysis
-  # which publishes to e2i:alerts and queues re-runs.
+  # High-staleness alert. Fires when ≥1 promoted (semantic-tier) executive
+  # insight carries ``invalidated_at IS NOT NULL``. Routes to
+  # ``notify_and_queue_reanalysis`` which publishes a ``staleness_alert``
+  # on ``e2i:alerts`` with the top-5 most-stale findings.
+  #
+  # M2 (#381) fix history
+  # ---------------------
+  # Pre-fix this entry used ``trigger_type: staleness_threshold`` →
+  # internal ``threshold_breach`` against ``causal_effect_size``, which:
+  # (a) didn't match the "staleness" name (it measured effect size),
+  # (b) targeted ``causal_paths`` which carries no ``invalidated_at`` column
+  #     (021_insight_lifecycle.sql:78-92 — causal_paths has
+  #     ``validation_status``, not ``invalidated_at``), and
+  # (c) the handler ``notify_and_queue_reanalysis`` reads
+  #     ``trigger_data["stale_findings"]`` which the threshold_breach
+  #     evaluator never set.
+  #
+  # Post-fix: ``staleness_threshold`` now translates to the shipped
+  # ``invalidation_count`` pattern (registry.py) which queries
+  # ``invalidated_at IS NOT NULL`` on the configured table. Per
+  # Decision 3 = KEEP BINARY (plan §"DECISIONS ADOPTED" 2026-05-19),
+  # every match has ``staleness_score=1.0``. The dispatcher packages
+  # matches into ``trigger_data["stale_findings"]`` so the handler can
+  # iterate them (single-fire-with-list semantics — see
+  # ``registry._trigger_data_for_dispatch``).
   - id: sentinel_staleness_alert
     name: High staleness alert
     trigger_type: staleness_threshold
     condition:
-      table: causal_paths
-      column: causal_effect_size
-      op: "<"
-      value: 0.05
-      tier: semantic  # only alert on promoted findings
+      table: executive_insights  # semantic-tier table carrying invalidated_at
+      tier: semantic  # human-readable label for alert payloads
     action: notify_and_queue_reanalysis
     brands: ["all"]
     active: true

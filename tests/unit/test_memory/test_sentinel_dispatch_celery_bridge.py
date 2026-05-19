@@ -34,6 +34,22 @@ from src.memory.sentinels.registry import dispatch_sentinels
 # ---------------------------------------------------------------------------
 
 
+class _NotProxy:
+    """Stand-in for the Supabase ``.not_`` accessor.
+
+    M2 (#381): the invalidation_count evaluator uses
+    ``query.not_.is_("invalidated_at", "null")`` to enumerate invalidated rows.
+    The proxy forwards the next call into the underlying ``_FakeQuery`` with
+    the negation flag set.
+    """
+
+    def __init__(self, query: "_FakeQuery") -> None:
+        self._query = query
+
+    def is_(self, col: str, val: str) -> "_FakeQuery":
+        return self._query._apply_is(col, val, negated=True)
+
+
 class _FakeQuery:
     def __init__(self, store: "FakeSupabase", table: str) -> None:
         self.store = store
@@ -41,8 +57,27 @@ class _FakeQuery:
         self._mode: Optional[str] = None
         self._filters: Dict[str, Any] = {}
         self._lt: Dict[str, Any] = {}
+        # Null-shaped filters: (col -> "null") with negation flag tracked
+        # separately so we can model both ``is_(col, "null")`` and
+        # ``not_.is_(col, "null")``.
+        self._is_null: Dict[str, bool] = {}  # col -> True if filter requires NULL
+        self._is_not_null: Dict[str, bool] = {}  # col -> True if filter requires NOT NULL
         self._update_payload: Dict[str, Any] = {}
         self._insert_payload: Any = None
+
+    @property
+    def not_(self) -> _NotProxy:
+        return _NotProxy(self)
+
+    def _apply_is(self, col: str, val: str, *, negated: bool) -> "_FakeQuery":
+        # Supabase serializes IS NULL via the string "null" / "NULL".
+        normalized = (val or "").lower()
+        if normalized in {"null", "none"}:
+            if negated:
+                self._is_not_null[col] = True
+            else:
+                self._is_null[col] = True
+        return self
 
     def select(self, cols: str, count: Optional[str] = None) -> "_FakeQuery":
         self._mode = "select"
@@ -79,7 +114,7 @@ class _FakeQuery:
         return self
 
     def is_(self, col: str, val: str) -> "_FakeQuery":
-        return self
+        return self._apply_is(col, val, negated=False)
 
     def order(self, *args: Any, **kwargs: Any) -> "_FakeQuery":
         return self
@@ -113,6 +148,12 @@ class _FakeQuery:
             rows = [r for r in rows if r.get(col) == want]
         for col, threshold in self._lt.items():
             rows = [r for r in rows if (r.get(col) or 0) < threshold]
+        # NULL filters: row.get(col) is None
+        for col in self._is_null:
+            rows = [r for r in rows if r.get(col) is None]
+        # NOT NULL filters: row.get(col) is not None
+        for col in self._is_not_null:
+            rows = [r for r in rows if r.get(col) is not None]
         if self._mode == "update":
             for r in rows:
                 for orig in self.store.rows[self.table_name]:
@@ -131,6 +172,8 @@ class FakeSupabase:
             "causal_paths": [],
             "triggers": [],
             "insight_edges": [],
+            "executive_insights": [],
+            "ml_predictions": [],
         }
 
     def table(self, name: str) -> _FakeQuery:
@@ -364,3 +407,194 @@ def test_plan_action_constants_are_in_lockstep():
         f"loader-only: {set(PLAN_ACTION_TASK_NAMES) - set(PLAN_ACTION_TO_CELERY_TASK)!r}; "
         f"registry-only: {set(PLAN_ACTION_TO_CELERY_TASK) - set(PLAN_ACTION_TASK_NAMES)!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# M2 (#381) — staleness_threshold sentinel must populate trigger_data["stale_findings"]
+# ---------------------------------------------------------------------------
+
+
+def _seed_invalidation_count_sentinel(
+    fake_supabase: FakeSupabase,
+    *,
+    table: str = "executive_insights",
+    brand: str = "Kisqali",
+    sentinel_id: str = "s-staleness",
+) -> None:
+    """Seed a sentinel whose internal pattern_type is invalidation_count (the
+    shipped analog of the plan's staleness_threshold trigger), wired to
+    dispatch the notify_and_queue_reanalysis Celery task.
+
+    M2 (#381): the bug pre-fix was that the YAML's ``sentinel_staleness_alert``
+    used ``trigger_type: staleness_threshold`` (plan vocab) which the loader
+    translated to ``threshold_breach`` against ``causal_effect_size`` — never
+    populating ``stale_findings`` in trigger_data. The fix introduces an
+    ``invalidation_count`` internal pattern_type that queries
+    ``invalidated_at IS NOT NULL`` (Decision 3 = KEEP BINARY semantics) and
+    a dispatcher special-case that packages the matches into
+    ``trigger_data['stale_findings']`` before enqueuing the Celery task.
+    """
+    fake_supabase.rows["sentinels"].append(
+        {
+            "sentinel_id": sentinel_id,
+            "name": "High staleness alert",
+            "pattern_type": "invalidation_count",
+            "pattern_config": {
+                "table": table,
+                "tier": "semantic",
+            },
+            "action_type": "dispatch_agent",
+            "action_config": {
+                "agent_name": "notify_and_queue_reanalysis",
+                "input": {},
+            },
+            "brand": brand,
+            "enabled": True,
+            "fire_count": 0,
+            "last_fired_at": None,
+            "cooldown_minutes": None,
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_staleness_threshold_dispatcher_populates_stale_findings(
+    fake_supabase: FakeSupabase,
+):
+    """M2 (#381): when an invalidation_count sentinel matches invalidated rows
+    and the action is ``notify_and_queue_reanalysis``, the dispatcher MUST
+    package the matches into ``trigger_data['stale_findings']`` so the
+    Celery handler can iterate them. Without this packaging, the handler at
+    src/tasks/sentinel_actions.py:172 sees ``trigger_data.get('stale_findings')
+    or []`` → notifies 0 findings.
+
+    Pre-fix this test FAILS for the right reason: trigger_data only carries
+    ``match`` + ``action_input``, not ``stale_findings``.
+    """
+    _seed_invalidation_count_sentinel(fake_supabase)
+    # Two invalidated rows in executive_insights with brand=Kisqali.
+    fake_supabase.rows["executive_insights"] = [
+        {
+            "insight_id": "ei-stale-1",
+            "brand": "Kisqali",
+            "invalidated_at": "2026-05-18T12:00:00+00:00",
+            "invalidation_reason": "cascade",
+        },
+        {
+            "insight_id": "ei-stale-2",
+            "brand": "Kisqali",
+            "invalidated_at": "2026-05-19T01:00:00+00:00",
+            "invalidation_reason": "cascade",
+        },
+        # One non-invalidated row that MUST NOT be packaged into stale_findings.
+        {
+            "insight_id": "ei-fresh",
+            "brand": "Kisqali",
+            "invalidated_at": None,
+        },
+    ]
+    with patch("src.memory.sentinels.registry.celery_app") as celery_mock:
+        celery_mock.send_task = MagicMock()
+        result = await dispatch_sentinels()
+    assert result.fired == 1, f"expected staleness sentinel to fire, got {result}"
+    celery_mock.send_task.assert_called()
+    # Pull the FIRST send_task call (single-fire-with-list semantics for
+    # notify_and_queue_reanalysis; the handler caps at top-5 internally).
+    call_args = celery_mock.send_task.call_args_list[0]
+    inner_kwargs = call_args.kwargs.get("kwargs") or {}
+    trigger_data = inner_kwargs.get("trigger_data") or {}
+    stale_findings = trigger_data.get("stale_findings")
+    assert stale_findings is not None, (
+        "M2: trigger_data MUST carry 'stale_findings' for notify_and_queue_reanalysis; "
+        f"got trigger_data={trigger_data!r}"
+    )
+    assert isinstance(stale_findings, list), (
+        f"M2: stale_findings must be a list, got {type(stale_findings).__name__}"
+    )
+    finding_ids = {f.get("finding_id") for f in stale_findings}
+    assert finding_ids == {"ei-stale-1", "ei-stale-2"}, (
+        f"M2: stale_findings must enumerate only invalidated rows; got finding_ids={finding_ids}"
+    )
+    # Decision 3 = KEEP BINARY: every finding's staleness_score is 1.0.
+    for finding in stale_findings:
+        assert finding.get("staleness_score") == 1.0, (
+            f"M2: under Decision 3 = KEEP BINARY, staleness_score MUST be 1.0; "
+            f"got finding={finding!r}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_staleness_threshold_brand_scoping(fake_supabase: FakeSupabase):
+    """M2 (#381) brand scoping: an invalidation_count sentinel scoped to brand X
+    MUST only include invalidated rows whose brand matches X.
+
+    Cross-brand bleed would be a security regression — sentinels are
+    brand-scoped at every layer per the registry docstring (lines 51-58).
+    """
+    _seed_invalidation_count_sentinel(
+        fake_supabase,
+        table="executive_insights",
+        brand="Kisqali",
+        sentinel_id="s-stale-brand",
+    )
+    fake_supabase.rows["executive_insights"] = [
+        {
+            "insight_id": "ei-kisqali",
+            "brand": "Kisqali",
+            "invalidated_at": "2026-05-18T12:00:00+00:00",
+        },
+        # Pluvicto invalidation MUST NOT leak into the Kisqali sentinel's
+        # stale_findings.
+        {
+            "insight_id": "ei-pluvicto",
+            "brand": "Pluvicto",
+            "invalidated_at": "2026-05-18T12:00:00+00:00",
+        },
+    ]
+    with patch("src.memory.sentinels.registry.celery_app") as celery_mock:
+        celery_mock.send_task = MagicMock()
+        await dispatch_sentinels()
+    call_args = celery_mock.send_task.call_args_list[0]
+    inner_kwargs = call_args.kwargs.get("kwargs") or {}
+    trigger_data = inner_kwargs.get("trigger_data") or {}
+    finding_ids = {f.get("finding_id") for f in (trigger_data.get("stale_findings") or [])}
+    assert finding_ids == {"ei-kisqali"}, (
+        f"M2: cross-brand bleed — Kisqali sentinel must not include Pluvicto rows; "
+        f"got finding_ids={finding_ids}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_staleness_threshold_no_invalidated_rows_no_fire(
+    fake_supabase: FakeSupabase,
+):
+    """M2 (#381): when no rows are invalidated, the sentinel MUST NOT fire.
+
+    Edge case: if the evaluator returns [] (no matches), the dispatcher
+    should not fire (per ``if not matches: continue`` at registry.py:401-402).
+    """
+    _seed_invalidation_count_sentinel(
+        fake_supabase,
+        table="executive_insights",
+        brand="Kisqali",
+        sentinel_id="s-stale-empty",
+    )
+    fake_supabase.rows["executive_insights"] = [
+        {
+            "insight_id": "ei-fresh-1",
+            "brand": "Kisqali",
+            "invalidated_at": None,
+        },
+        {
+            "insight_id": "ei-fresh-2",
+            "brand": "Kisqali",
+            "invalidated_at": None,
+        },
+    ]
+    with patch("src.memory.sentinels.registry.celery_app") as celery_mock:
+        celery_mock.send_task = MagicMock()
+        result = await dispatch_sentinels()
+    assert result.fired == 0, (
+        f"M2: with no invalidated rows, staleness sentinel MUST NOT fire; got {result}"
+    )
+    celery_mock.send_task.assert_not_called()
