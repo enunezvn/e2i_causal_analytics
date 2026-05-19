@@ -129,11 +129,18 @@ class Crystallizer:
 
         cutoff = (datetime.now(timezone.utc) - timedelta(days=self.window_days)).isoformat()
         # Pull candidate episodic memories: same brand, recent, completed agent actions.
+        # ``consolidation_tier`` (migration 021 line 99) is required so the
+        # crystal's tier inherits from the highest tier among sources; without
+        # this column in the SELECT, _derive_crystal_digest_fields defaults
+        # every crystal to 'episodic' regardless of whether sources had been
+        # promoted to semantic/procedural by the consolidator. Codex iter-1
+        # M1 silent-bug repair.
         query = (
             client.table("episodic_memories")
             .select(
                 "memory_id, agent_name, brand, region, causal_path_id, "
-                "event_type, description, outcome_type, occurred_at, raw_content"
+                "event_type, description, outcome_type, occurred_at, "
+                "raw_content, consolidation_tier"
             )
             .eq("brand", brand)
             .gte("occurred_at", cutoff)

@@ -425,6 +425,48 @@ async def test_crystallize_derives_consolidation_tier(fake_supabase):
 
 
 @pytest.mark.asyncio
+async def test_crystallize_inherits_highest_tier_from_sources(fake_supabase):
+    """Codex iter-1 M1 (LOAD-BEARING): when source episodic_memories
+    rows carry consolidation_tier='semantic' or 'procedural' (set by
+    the consolidator post-promotion), the crystal's consolidation_tier
+    MUST be the highest tier among sources, NOT the default 'episodic'.
+
+    Failure mode pre-fix: the episodic_memories SELECT did not include
+    consolidation_tier, so `m.get("consolidation_tier")` in
+    _derive_crystal_digest_fields returned None on every row, and the
+    crystal defaulted to 'episodic' silently — even when sources had
+    been promoted by the consolidator.
+
+    Tier rank: working < episodic < semantic < procedural.
+    """
+    _seed_episodic_with_causal_content(
+        fake_supabase,
+        brand="Kisqali",
+        causal_path_id="cp1",
+        agents=["causal_impact", "gap_analyzer"],
+    )
+    # Override the tier on each source row to a non-episodic value.
+    # 'semantic' is the tier the consolidator promotes to; one source
+    # 'procedural' should win because tier_rank says it's highest.
+    rows = fake_supabase.rows["episodic_memories"]
+    assert len(rows) >= 2, "fixture must seed at least 2 source rows"
+    rows[0]["consolidation_tier"] = "semantic"
+    rows[1]["consolidation_tier"] = "procedural"
+
+    await Crystallizer().run_for_brand("Kisqali")
+
+    insight = fake_supabase.rows["executive_insights"][0]
+    # Procedural is the highest tier among sources, so the crystal
+    # must inherit it (NOT default to 'episodic').
+    assert insight["consolidation_tier"] == "procedural", (
+        f"Expected highest source tier 'procedural'; got "
+        f"{insight['consolidation_tier']!r}. "
+        "The episodic_memories SELECT must include consolidation_tier "
+        "for tier inheritance to work."
+    )
+
+
+@pytest.mark.asyncio
 async def test_crystallize_derives_data_version(fake_supabase):
     """data_version comes from the cohort manifest tag in raw_content."""
     _seed_episodic_with_causal_content(
