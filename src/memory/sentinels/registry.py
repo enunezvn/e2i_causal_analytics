@@ -6,13 +6,27 @@ about table Y happens, fire action Z." Operators register sentinels via
 ``POST /api/sentinels``; a single Celery beat task ``sentinel_dispatcher``
 runs every 5 minutes and evaluates each enabled sentinel.
 
-Patterns:
+Patterns (shipped vocabulary — this is the storage layer):
     threshold_breach   - {"table": "causal_paths", "column": "causal_effect_size",
                           "op": "<", "value": 0.05}
     freshness          - {"table": "triggers", "ts_column": "updated_at",
                           "max_age_hours": 24}
     drift_score        - {"max_drift_score": 0.3}
     new_causal_path    - {"since": "<iso>"} (auto-bumped on fire)
+
+Pattern-vocabulary divergence vs the plan
+-----------------------------------------
+The plan (``.claude/plans/e2i_memory_subsystems_implementation_plan.md``
+§3.6) names triggers with operator-friendly nouns
+(``data_drop``, ``staleness_threshold``, ``cohort_drift``, ``schedule``);
+this module ships the internal/mechanistic vocab above. Plan→shipped
+mapping lives in
+:data:`src.memory.sentinels.config_loader.PLAN_TRIGGER_TO_INTERNAL_PATTERN`
+and is the SINGLE translation point — the registry itself never sees the
+plan vocabulary. Rationale: renaming the shipped enum would break the
+PR #250 audit trail and the existing API contract; keeping the plan vocab
+in YAML lets operators write what they mean while the storage layer stays
+stable.
 
 Actions:
     invalidate         - {"source_type": "causal_path"} — passes matched row id
@@ -22,7 +36,10 @@ Actions:
                           (placeholder — emits a signal on InsightSignalBus;
                           actual dispatch is the orchestrator's job)
     notify             - {"channel": "slack#alerts", "template": "..."}
-                          (placeholder — logs only in v1)
+                          Logs the match AND publishes to the Redis
+                          ``e2i:alerts`` channel (via
+                          ``src.tasks.sentinel_actions.publish_alert``) for
+                          CopilotKit real-time delivery (#375 item 3).
 
 Brand scoping is enforced at every layer:
 - register_sentinel rejects NULL brand
@@ -31,6 +48,14 @@ Brand scoping is enforced at every layer:
 - evaluate_sentinel restricts pattern evaluation to rows in the sentinel's
   brand
 - invalidate action passes the sentinel's brand to cascade_invalidate
+
+Cooldown (#375 item 2)
+----------------------
+``register_sentinel`` accepts an optional ``cooldown_minutes`` argument.
+``dispatch_sentinels`` skips a sentinel if
+``now - last_fired_at < cooldown_minutes``. NULL or 0 means "no cooldown".
+The column is persisted by migration ``023_sentinel_cooldown.sql`` with
+defense-in-depth CHECK constraints (non-negative, ≤ 365 days).
 """
 
 from __future__ import annotations
