@@ -35,6 +35,16 @@ def _is_invalidated_under_max_staleness(
       - max_staleness < 1.0 (incl. 0.0, negative): drop iff
         metadata['invalidated_at'] is truthy
 
+    Public-API contract (M1 of #381): the four public retriever surfaces
+    (``HybridRetriever.search``, ``hybrid_search`` convenience function,
+    ``DenseRetriever.search``, ``BM25Retriever.search``) all accept a
+    ``max_staleness: Optional[float]`` parameter whose contract is THIS
+    binary-degradation predicate. Fractional values (e.g. 0.5) are accepted
+    for forward compatibility with a possible future graded-staleness
+    reinstatement (see the plan's Decision-3 reinstatement checklist) but
+    currently behave identically to 0.0. The implementation is intentionally
+    centralised here so any future reinstatement has one mutation point.
+
     Type guard (codex iter-1 LOW): non-(int|float) inputs (including bool — a
     bool is technically an int in Python but ``False == 0.0`` would
     spuriously activate the filter — and any string/None/Any) degrade to
