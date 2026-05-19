@@ -329,9 +329,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=DEFAULT_SEED,
         help=(
-            "PRNG seed pinned via random.seed + numpy.random.seed + "
-            "DSPY_RANDOM_SEED env var for deterministic demo selection "
-            f"(BootstrapFewShot.random.sample). Default: {DEFAULT_SEED}."
+            "PRNG seed pinned via random.seed + numpy.random.seed for "
+            "deterministic demo selection (BootstrapFewShot.random.sample). "
+            "Also installed into DSPY_RANDOM_SEED via os.environ.setdefault "
+            "— if the env var is already set in the environment the "
+            "existing value wins, so set the env var explicitly for "
+            f"full determinism. Default: {DEFAULT_SEED}."
         ),
     )
     parser.add_argument(
