@@ -151,7 +151,7 @@ Manning IIR §8.5.1.)
 
 When changing this file:
 
-1. Run `pytest tests/benchmarks/_metrics_test.py -v` to confirm metric
+1. Run `pytest tests/benchmarks/test_metrics.py -v` to confirm metric
    primitives still green.
 2. Run `pytest -m benchmark tests/benchmarks/test_retrieval_quality.py -v
    -p no:xdist -o "addopts="` to see how the change moves aggregate
