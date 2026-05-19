@@ -7,12 +7,20 @@ about table Y happens, fire action Z." Operators register sentinels via
 runs every 5 minutes and evaluates each enabled sentinel.
 
 Patterns (shipped vocabulary — this is the storage layer):
-    threshold_breach   - {"table": "causal_paths", "column": "causal_effect_size",
-                          "op": "<", "value": 0.05}
-    freshness          - {"table": "triggers", "ts_column": "updated_at",
-                          "max_age_hours": 24}
-    drift_score        - {"max_drift_score": 0.3}
-    new_causal_path    - {"since": "<iso>"} (auto-bumped on fire)
+    threshold_breach    - {"table": "causal_paths", "column": "causal_effect_size",
+                           "op": "<", "value": 0.05}
+    freshness           - {"table": "triggers", "ts_column": "updated_at",
+                           "max_age_hours": 24}
+    drift_score         - {"max_drift_score": 0.3}
+    new_causal_path     - {"since": "<iso>"} (auto-bumped on fire)
+    invalidation_count  - {"table": "executive_insights", "tier": "semantic"}
+                           Decision 3 = KEEP BINARY (plan §"DECISIONS ADOPTED"
+                           2026-05-19): selects rows where
+                           ``invalidated_at IS NOT NULL`` AND brand matches.
+                           The shipped analog of the plan's
+                           ``staleness_threshold`` trigger vocabulary; see
+                           ``src.memory.sentinels.config_loader.
+                           PLAN_TRIGGER_TO_INTERNAL_PATTERN``.
 
 Pattern-vocabulary divergence vs the plan
 -----------------------------------------
@@ -80,9 +88,30 @@ from src.workers.celery_app import celery_app
 logger = logging.getLogger(__name__)
 
 
-VALID_PATTERN_TYPES = {"threshold_breach", "freshness", "drift_score", "new_causal_path"}
+VALID_PATTERN_TYPES = {
+    "threshold_breach",
+    "freshness",
+    "drift_score",
+    "new_causal_path",
+    # invalidation_count: enumerates rows with invalidated_at IS NOT NULL.
+    # Shipped analog of the plan's ``staleness_threshold`` trigger vocab,
+    # specifically aligned with Decision 3 = KEEP BINARY (no graded
+    # staleness_score; each match degrades to staleness_score=1.0).
+    "invalidation_count",
+}
 VALID_ACTION_TYPES = {"invalidate", "dispatch_agent", "notify"}
 VALID_OPS = {">", ">=", "<", "<=", "==", "!="}
+
+# ----------------------------------------------------------------------------
+# Tables that carry an ``invalidated_at`` column. Used by the
+# ``invalidation_count`` evaluator below to validate the pattern_config (the
+# query only makes sense for tables in this set). New invalidation-bearing
+# tables should be added here together with their migration.
+#
+# Source of truth: database/memory/021_insight_lifecycle.sql (the migration
+# that introduced the invalidated_at column on these tables).
+# ----------------------------------------------------------------------------
+INVALIDATION_AWARE_TABLES = {"triggers", "ml_predictions", "executive_insights"}
 
 
 # ----------------------------------------------------------------------------
@@ -226,6 +255,19 @@ def _validate_pattern_config(pattern_type: str, cfg: Dict[str, Any]) -> None:
     elif pattern_type == "new_causal_path":
         # 'since' defaults to "epoch" on first fire; no requirement.
         pass
+    elif pattern_type == "invalidation_count":
+        if "table" not in cfg:
+            raise ValueError("invalidation_count requires 'table'")
+        table = cfg["table"]
+        if table not in INVALIDATION_AWARE_TABLES:
+            # Fail loudly rather than emit an unfilterable query — the
+            # invalidation_count semantic is only well-defined on tables that
+            # carry an invalidated_at column (see migration 021).
+            raise ValueError(
+                f"invalidation_count table {table!r} does not carry an "
+                f"invalidated_at column; allowed tables: "
+                f"{sorted(INVALIDATION_AWARE_TABLES)}"
+            )
 
 
 def _validate_action_config(action_type: str, cfg: Dict[str, Any]) -> None:
@@ -264,6 +306,8 @@ async def evaluate_sentinel(sentinel: Dict[str, Any]) -> List[Dict[str, Any]]:
         return await _eval_drift_score(cfg, brand)
     if pattern_type == "new_causal_path":
         return await _eval_new_causal_path(cfg, brand, sentinel.get("last_fired_at"))
+    if pattern_type == "invalidation_count":
+        return await _eval_invalidation_count(cfg, brand)
     raise SentinelEvaluationError(f"unknown pattern_type {pattern_type}")
 
 
@@ -338,6 +382,60 @@ async def _eval_new_causal_path(
         query = query.eq("brand", brand)
     rows = (query.execute().data) or []
     return [{"row_id": r["path_id"], "brand": r.get("brand", brand)} for r in rows]
+
+
+async def _eval_invalidation_count(cfg: Dict[str, Any], brand: str) -> List[Dict[str, Any]]:
+    """Enumerate rows whose ``invalidated_at IS NOT NULL`` (binary staleness).
+
+    M2 (#381): shipped analog of the plan's ``staleness_threshold`` trigger.
+    Per Decision 3 = KEEP BINARY (plan §"DECISIONS ADOPTED" 2026-05-19),
+    staleness collapses to ``invalidated_at IS NOT NULL`` — every match is
+    treated with ``staleness_score=1.0``.
+
+    pattern_config shape::
+
+        {"table": "<invalidation-aware table>",
+         "tier": "<optional human label>"}
+
+    Currently supported tables: those in :data:`INVALIDATION_AWARE_TABLES`
+    (validated up-front by :func:`_validate_pattern_config`).
+
+    Returned match shape (finding-shaped so the dispatcher can package these
+    as ``stale_findings`` for the ``notify_and_queue_reanalysis`` handler)::
+
+        {"row_id":           <pk>,
+         "finding_id":       <pk>,       # alias kept for the handler
+         "brand":            <row brand>,
+         "table":            <source table>,
+         "invalidated_at":   <iso str>,
+         "staleness_score":  1.0}        # binary per Decision 3
+    """
+    client = get_supabase_client()
+    table = cfg["table"]
+    pk_col = _pk_column_for_table(table)
+    select_cols = f"{pk_col}, brand, invalidated_at"
+    query = client.table(table).select(select_cols).not_.is_("invalidated_at", "null")
+    if brand != "all":
+        query = query.eq("brand", brand)
+    rows = (query.execute().data) or []
+    matches: List[Dict[str, Any]] = []
+    for r in rows:
+        row_id = r.get(pk_col)
+        matches.append(
+            {
+                "row_id": row_id,
+                # ``finding_id`` is the key the notify_and_queue_reanalysis
+                # handler uses when logging top-5 findings; we expose both
+                # so the dispatcher can package these as stale_findings
+                # without further translation.
+                "finding_id": row_id,
+                "brand": r.get("brand", brand),
+                "table": table,
+                "invalidated_at": r.get("invalidated_at"),
+                "staleness_score": 1.0,
+            }
+        )
+    return matches
 
 
 def _pk_column_for_table(table: str) -> str:
@@ -454,19 +552,68 @@ def _is_in_cooldown(sentinel: Dict[str, Any], *, now: datetime) -> bool:
     return elapsed < timedelta(minutes=float(cooldown))
 
 
+def _trigger_data_for_dispatch(
+    *,
+    agent_name: str,
+    match: Dict[str, Any],
+    matches: List[Dict[str, Any]],
+    action_cfg: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Build the ``trigger_data`` payload for a ``dispatch_agent`` Celery enqueue.
+
+    M2 (#381): the ``notify_and_queue_reanalysis`` handler at
+    :mod:`src.tasks.sentinel_actions` reads ``trigger_data["stale_findings"]``
+    (sorting by ``staleness_score`` and capping at top-5). The dispatcher's
+    per-match shape pre-fix only carried ``{"match": ..., "action_input": ...}``
+    so the handler always saw an empty list. This helper centralises the
+    payload construction: for the ``notify_and_queue_reanalysis`` path it
+    packages the FULL matches list under ``stale_findings`` (the handler caps
+    internally); for all other agent_names the original per-match shape is
+    preserved (back-compat with PR #250).
+    """
+    base: Dict[str, Any] = {
+        "match": match,
+        "action_input": action_cfg.get("input", {}),
+    }
+    if agent_name == "notify_and_queue_reanalysis":
+        # Single-fire-with-list semantics: the staleness handler iterates the
+        # full matches list. Per Decision 3 = KEEP BINARY each match already
+        # carries staleness_score=1.0 (set by _eval_invalidation_count).
+        base["stale_findings"] = list(matches)
+    return base
+
+
 async def _fire_action(
     sentinel: Dict[str, Any],
     matches: List[Dict[str, Any]],
     result: SentinelDispatchResult,
 ) -> None:
-    """Execute the sentinel's action_type for each match."""
+    """Execute the sentinel's action_type for each match.
+
+    Per-match iteration is the default (each match → one bus publish + one
+    Celery enqueue). Single-fire-with-list semantics apply only to the
+    ``notify_and_queue_reanalysis`` agent path, where the handler expects the
+    full list of stale_findings in one invocation (M2 of #381) — we still
+    iterate ``matches`` for the bus publish but enqueue a single Celery task
+    with the aggregated list to keep the back-compat contract for the bus
+    subscriber while honoring the handler's expected shape.
+    """
     action_type = sentinel["action_type"]
     action_cfg = sentinel.get("action_config", {}) or {}
     brand = sentinel["brand"]
     sentinel_id = sentinel.get("sentinel_id")
     name = sentinel.get("name", "unnamed")
 
-    for match in matches:
+    # M2 (#381): for notify_and_queue_reanalysis we enqueue a SINGLE Celery
+    # task carrying the full matches list; the per-match bus events still
+    # fire (preserving the PR #250 bus contract). The flag lets us early-out
+    # of the per-match Celery enqueue inside the loop body.
+    is_staleness_dispatch = (
+        action_type == "dispatch_agent"
+        and action_cfg.get("agent_name") == "notify_and_queue_reanalysis"
+    )
+
+    for match_index, match in enumerate(matches):
         try:
             if action_type == "invalidate":
                 # cascade_invalidate uses the sentinel's brand as scope_brand,
@@ -501,19 +648,29 @@ async def _fire_action(
                 # ``PLAN_ACTION_TO_CELERY_TASK``); ``agent_name`` values
                 # outside the map continue to flow bus-only, preserving
                 # back-compat with the PR #250 contract.
+                #
+                # M2 (#381): notify_and_queue_reanalysis is the single
+                # exception to per-match enqueue — the handler iterates the
+                # full matches list internally, so we enqueue exactly once
+                # (on match_index == 0).
                 agent_name = action_cfg["agent_name"]
                 celery_task_name = PLAN_ACTION_TO_CELERY_TASK.get(agent_name)
-                if celery_task_name is not None:
+                should_enqueue = celery_task_name is not None and (
+                    not is_staleness_dispatch or match_index == 0
+                )
+                if should_enqueue:
                     try:
                         celery_app.send_task(
                             celery_task_name,
                             kwargs={
                                 "sentinel_id": str(sentinel_id),
                                 "brands": [brand],
-                                "trigger_data": {
-                                    "match": match,
-                                    "action_input": action_cfg.get("input", {}),
-                                },
+                                "trigger_data": _trigger_data_for_dispatch(
+                                    agent_name=agent_name,
+                                    match=match,
+                                    matches=matches,
+                                    action_cfg=action_cfg,
+                                ),
                             },
                         )
                         logger.info(

@@ -71,10 +71,19 @@ DEFAULT_CONFIG_PATH: Final[Path] = Path(__file__).resolve().parents[3] / "config
 
 # ----------------------------------------------------------------------------
 # Plan-vocab → internal-vocab translation. Documented in this file's docstring.
+#
+# M2 (#381): the plan's ``staleness_threshold`` was previously aliased to the
+# shipped ``threshold_breach`` pattern, but that resulted in a three-way name
+# mismatch (sentinel name promises staleness, condition evaluates effect size,
+# handler reads ``stale_findings`` from trigger_data that the evaluator never
+# set). The shipped ``invalidation_count`` pattern (added 2026-05-19) is the
+# binary-staleness analog per Decision 3 = KEEP BINARY (plan §"DECISIONS
+# ADOPTED" 2026-05-19): enumerates rows with ``invalidated_at IS NOT NULL``
+# in the configured invalidation-aware table.
 # ----------------------------------------------------------------------------
 PLAN_TRIGGER_TO_INTERNAL_PATTERN: Final[Dict[str, str]] = {
     "data_drop": "freshness",
-    "staleness_threshold": "threshold_breach",
+    "staleness_threshold": "invalidation_count",
     "cohort_drift": "drift_score",
     "schedule": "new_causal_path",
 }
@@ -190,6 +199,18 @@ def _build_pattern_config(entry: Dict[str, Any]) -> Dict[str, Any]:
         cfg: Dict[str, Any] = {}
         if condition.get("since"):
             cfg["since"] = condition["since"]
+        return cfg
+    if internal == "invalidation_count":
+        # M2 (#381): invalidation_count needs ``table``; we default to
+        # ``executive_insights`` because it is the semantic-tier table that
+        # carries ``invalidated_at`` (matches plan intent "promoted findings
+        # with staleness"). ``tier`` is a human-readable label preserved for
+        # operator clarity in alerts; the evaluator does not key off it.
+        cfg = {
+            "table": condition.get("table", "executive_insights"),
+        }
+        if condition.get("tier"):
+            cfg["tier"] = condition["tier"]
         return cfg
     raise SentinelConfigLoadError(f"internal pattern type {internal!r} not handled")
 

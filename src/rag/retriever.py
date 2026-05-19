@@ -57,8 +57,17 @@ class DenseRetriever:
             query: Search query text
             k: Number of results to return
             filters: Optional filters (brand, region, agent_name)
-            max_staleness: Optional staleness ceiling (see HybridRetriever.search).
-                None = no filter; < 1.0 = exclude invalidated rows.
+            max_staleness: float in [0.0, 1.0] or None. Under Decision 3 = KEEP
+                BINARY (plan §"DECISIONS ADOPTED" 2026-05-19, see
+                ``.claude/plans/e2i_memory_subsystems_implementation_plan.md``),
+                staleness collapses to a boolean predicate (the underlying
+                row's ``invalidated_at IS NULL``). The implementation
+                degrades any value < 1.0 to "exclude all rows with
+                ``invalidated_at IS NOT NULL``". Any value >= 1.0, NaN, or
+                None disables the filter. Fractional values (e.g. 0.5) are
+                accepted but semantically equivalent to 0.0; this affordance
+                is preserved for future graded-staleness reinstatement (see
+                the plan's Decision-3 reinstatement checklist).
 
         Returns:
             List of RetrievalResult with dense retrieval method
@@ -107,8 +116,20 @@ class BM25Retriever:
             query: Search query text
             k: Number of results to return
             filters: Optional filters (brand, agent_name)
-            max_staleness: Optional staleness ceiling (see HybridRetriever.search).
-                None = no filter; < 1.0 = exclude invalidated rows.
+            max_staleness: float in [0.0, 1.0] or None. Under Decision 3 = KEEP
+                BINARY (plan §"DECISIONS ADOPTED" 2026-05-19, see
+                ``.claude/plans/e2i_memory_subsystems_implementation_plan.md``),
+                staleness collapses to a boolean predicate (the underlying
+                row's ``invalidated_at IS NULL``). The implementation
+                degrades any value < 1.0 to "exclude all rows with
+                ``invalidated_at IS NOT NULL``". Any value >= 1.0, NaN, or
+                None disables the filter. Fractional values (e.g. 0.5) are
+                accepted but semantically equivalent to 0.0; this affordance
+                is preserved for future graded-staleness reinstatement (see
+                the plan's Decision-3 reinstatement checklist).
+                Only ``triggers`` carries an ``invalidated_at`` column in this
+                BM25 search path; ``causal_paths`` and ``agent_activities``
+                are unaffected by the filter (see migration 022 line 20).
 
         Returns:
             List of RetrievalResult with sparse retrieval method
@@ -244,15 +265,24 @@ class HybridRetriever:
             entities: Entity IDs for graph traversal
             kpi_name: KPI name for targeted graph traversal
             filters: Filters for dense/sparse search
-            max_staleness: Optional staleness ceiling for dense/sparse results.
-                Under Decision 3 = KEEP BINARY (adopted 2026-05-19, plan
-                §"DECISIONS ADOPTED"), this degrades to a boolean predicate:
-                  - None (default): no filter (include all rows)
-                  - >= 1.0: include all rows (functionally equivalent to None)
-                  - < 1.0 (incl 0.0): exclude any row whose metadata carries
-                    ``invalidated_at`` set
-                Graph results are not filtered (FalkorDB carries no
-                invalidated_at). Phase 2 finishing (issue #373).
+            max_staleness: float in [0.0, 1.0] or None. Under Decision 3 = KEEP
+                BINARY (plan §"DECISIONS ADOPTED" 2026-05-19, see
+                ``.claude/plans/e2i_memory_subsystems_implementation_plan.md``),
+                staleness collapses to a boolean predicate (the underlying
+                row's ``invalidated_at IS NULL``). The implementation
+                degrades any value < 1.0 to "exclude all rows with
+                ``invalidated_at IS NOT NULL``". Any value >= 1.0, NaN, or
+                None disables the filter. Fractional values (e.g. 0.5) are
+                accepted but semantically equivalent to 0.0; this affordance
+                is preserved for future graded-staleness reinstatement (see
+                the plan's Decision-3 reinstatement checklist).
+                The filter is applied to dense/sparse search paths only;
+                graph results are NOT filtered (FalkorDB carries no
+                ``invalidated_at`` column). Phase 2 finishing (issue #373).
+                The shared binary-degradation predicate lives at
+                ``src.rag.memory_connector._is_invalidated_under_max_staleness``;
+                see also the SQL RPC at
+                ``database/memory/022_hybrid_search_max_staleness.sql``.
 
         Returns:
             Fused results from all retrieval methods
@@ -370,8 +400,18 @@ async def hybrid_search(
         entities: Optional entity IDs for graph traversal
         kpi_name: Optional KPI name for targeted traversal
         filters: Optional filters
-        max_staleness: Optional staleness ceiling (see HybridRetriever.search).
-            None = no filter; < 1.0 = exclude rows with invalidated_at set.
+        max_staleness: float in [0.0, 1.0] or None. Under Decision 3 = KEEP
+            BINARY (plan §"DECISIONS ADOPTED" 2026-05-19, see
+            ``.claude/plans/e2i_memory_subsystems_implementation_plan.md``),
+            staleness collapses to a boolean predicate (the underlying
+            row's ``invalidated_at IS NULL``). The implementation degrades
+            any value < 1.0 to "exclude all rows with
+            ``invalidated_at IS NOT NULL``". Any value >= 1.0, NaN, or None
+            disables the filter. Fractional values (e.g. 0.5) are accepted
+            but semantically equivalent to 0.0; this affordance is preserved
+            for future graded-staleness reinstatement (see the plan's
+            Decision-3 reinstatement checklist).
+            See :meth:`HybridRetriever.search` for the full contract.
 
     Returns:
         Fused retrieval results
