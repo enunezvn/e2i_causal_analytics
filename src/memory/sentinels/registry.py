@@ -6,7 +6,7 @@ about table Y happens, fire action Z." Operators register sentinels via
 ``POST /api/sentinels``; a single Celery beat task ``sentinel_dispatcher``
 runs every 5 minutes and evaluates each enabled sentinel.
 
-Patterns:
+Patterns (shipped vocabulary — this is the storage layer):
     threshold_breach   - {"table": "causal_paths", "column": "causal_effect_size",
                           "op": "<", "value": 0.05}
     freshness          - {"table": "triggers", "ts_column": "updated_at",
@@ -14,15 +14,39 @@ Patterns:
     drift_score        - {"max_drift_score": 0.3}
     new_causal_path    - {"since": "<iso>"} (auto-bumped on fire)
 
+Pattern-vocabulary divergence vs the plan
+-----------------------------------------
+The plan (``.claude/plans/e2i_memory_subsystems_implementation_plan.md``
+§3.6) names triggers with operator-friendly nouns
+(``data_drop``, ``staleness_threshold``, ``cohort_drift``, ``schedule``);
+this module ships the internal/mechanistic vocab above. Plan→shipped
+mapping lives in
+:data:`src.memory.sentinels.config_loader.PLAN_TRIGGER_TO_INTERNAL_PATTERN`
+and is the SINGLE translation point — the registry itself never sees the
+plan vocabulary. Rationale: renaming the shipped enum would break the
+PR #250 audit trail and the existing API contract; keeping the plan vocab
+in YAML lets operators write what they mean while the storage layer stays
+stable.
+
 Actions:
     invalidate         - {"source_type": "causal_path"} — passes matched row id
                           as source_id to cascade_invalidate with sentinel's brand
                           as scope_brand
     dispatch_agent     - {"agent_name": "drift_monitor", "input": {...}}
-                          (placeholder — emits a signal on InsightSignalBus;
-                          actual dispatch is the orchestrator's job)
+                          Always emits an ``InsightSignalBus`` signal.
+                          For the four plan-specced agent names
+                          (``rerun_all_active_cohorts``,
+                          ``notify_and_queue_reanalysis``, ``flag_for_review``,
+                          ``run_full_consolidation``), ADDITIONALLY enqueues
+                          the corresponding Celery task in
+                          ``src.tasks.sentinel_actions`` so a worker runs
+                          the handler. Mapping lives in
+                          :data:`PLAN_ACTION_TO_CELERY_TASK` (#375 iter-1 H1).
     notify             - {"channel": "slack#alerts", "template": "..."}
-                          (placeholder — logs only in v1)
+                          Logs the match AND publishes to the Redis
+                          ``e2i:alerts`` channel (via
+                          ``src.tasks.sentinel_actions.publish_alert``) for
+                          CopilotKit real-time delivery (#375 item 3).
 
 Brand scoping is enforced at every layer:
 - register_sentinel rejects NULL brand
@@ -31,6 +55,14 @@ Brand scoping is enforced at every layer:
 - evaluate_sentinel restricts pattern evaluation to rows in the sentinel's
   brand
 - invalidate action passes the sentinel's brand to cascade_invalidate
+
+Cooldown (#375 item 2)
+----------------------
+``register_sentinel`` accepts an optional ``cooldown_minutes`` argument.
+``dispatch_sentinels`` skips a sentinel if
+``now - last_fired_at < cooldown_minutes``. NULL or 0 means "no cooldown".
+The column is persisted by migration ``023_sentinel_cooldown.sql`` with
+defense-in-depth CHECK constraints (non-negative, ≤ 365 days).
 """
 
 from __future__ import annotations
@@ -43,6 +75,7 @@ from typing import Any, Dict, List, Optional
 from src.memory.coordination.signals import get_insight_signal_bus
 from src.memory.lifecycle.invalidator import cascade_invalidate
 from src.memory.services.factories import get_supabase_client
+from src.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +83,30 @@ logger = logging.getLogger(__name__)
 VALID_PATTERN_TYPES = {"threshold_breach", "freshness", "drift_score", "new_causal_path"}
 VALID_ACTION_TYPES = {"invalidate", "dispatch_agent", "notify"}
 VALID_OPS = {">", ">=", "<", "<=", "==", "!="}
+
+
+# ----------------------------------------------------------------------------
+# Plan-specced action name → Celery task path mapping (#375 iter-1 H1).
+#
+# When a ``dispatch_agent`` action's ``agent_name`` is one of the four
+# plan-specced action names, the dispatcher additionally calls
+# ``celery_app.send_task(...)`` so a Celery worker enqueues the corresponding
+# handler in ``src.tasks.sentinel_actions``. The bus event still fires (it's
+# the non-Celery-subscriber contract).
+#
+# Single source of truth (#375 iter-1 M1): this dict is the canonical mapping
+# for the plan-specced action vocabulary. ``src.memory.sentinels.config_loader.
+# PLAN_ACTION_TASK_NAMES`` is DERIVED from this dict's keys via
+# ``frozenset(PLAN_ACTION_TO_CELERY_TASK)`` — adding a plan action here
+# automatically extends the YAML loader's accept-list. The lockstep invariant
+# is locked by ``test_plan_action_constants_are_in_lockstep``.
+# ----------------------------------------------------------------------------
+PLAN_ACTION_TO_CELERY_TASK: Dict[str, str] = {
+    "rerun_all_active_cohorts": "src.tasks.sentinel_actions.rerun_all_active_cohorts",
+    "notify_and_queue_reanalysis": "src.tasks.sentinel_actions.notify_and_queue_reanalysis",
+    "flag_for_review": "src.tasks.sentinel_actions.flag_for_review",
+    "run_full_consolidation": "src.tasks.sentinel_actions.run_full_consolidation",
+}
 
 
 class SentinelEvaluationError(RuntimeError):
@@ -85,6 +142,7 @@ async def register_sentinel(
     region: Optional[str] = None,
     created_by_user_id: Optional[str] = None,
     description: Optional[str] = None,
+    cooldown_minutes: Optional[int] = None,
 ) -> str:
     """
     Register a new sentinel. Returns sentinel_id.
@@ -93,6 +151,12 @@ async def register_sentinel(
     callers (e.g. ``POST /api/sentinels``) MUST additionally enforce that
     the user has access to the requested brand, and that ``brand='all'``
     requires ADMIN role.
+
+    ``cooldown_minutes`` is optional (NULL = no cooldown gate, dispatcher
+    always re-evaluates). When set, the dispatcher (Celery beat
+    ``sentinel_dispatcher``) only re-fires the sentinel after
+    ``now - last_fired_at >= cooldown_minutes``. Persisted to the
+    ``sentinels.cooldown_minutes`` column (migration 023).
     """
     if not brand:
         raise ValueError("brand is required")
@@ -100,11 +164,24 @@ async def register_sentinel(
         raise ValueError(f"unknown pattern_type {pattern_type}")
     if action_type not in VALID_ACTION_TYPES:
         raise ValueError(f"unknown action_type {action_type}")
+    if cooldown_minutes is not None:
+        # bool exclusion before numeric check — Python's True/False are int
+        # subclasses; isinstance(False, int) is True. Without this guard a
+        # caller passing cooldown_minutes=False would silently coerce to 0
+        # and disable the cooldown gate. (Load-bearing pattern from
+        # max_staleness filter, PR #374 / memory feedback.)
+        if isinstance(cooldown_minutes, bool) or not isinstance(cooldown_minutes, (int, float)):
+            raise ValueError(
+                f"cooldown_minutes must be a non-negative number, "
+                f"got {type(cooldown_minutes).__name__}"
+            )
+        if cooldown_minutes < 0:
+            raise ValueError(f"cooldown_minutes must be non-negative, got {cooldown_minutes}")
     _validate_pattern_config(pattern_type, pattern_config)
     _validate_action_config(action_type, action_config)
 
     client = get_supabase_client()
-    record = {
+    record: Dict[str, Any] = {
         "name": name,
         "description": description,
         "pattern_type": pattern_type,
@@ -116,6 +193,10 @@ async def register_sentinel(
         "created_by_user_id": created_by_user_id,
         "enabled": True,
     }
+    if cooldown_minutes is not None:
+        # int() coerces 0.0 / 60.5 to nearest int; values are stored as INTEGER
+        # by migration 023.
+        record["cooldown_minutes"] = int(cooldown_minutes)
     result = client.table("sentinels").insert(record).execute()
     rows = result.data or []
     if not rows:
@@ -281,6 +362,21 @@ async def dispatch_sentinels() -> SentinelDispatchResult:
 
     Called every 5 minutes by the ``sentinel_dispatcher`` Celery beat task.
     Errors in one sentinel never block others.
+
+    Cooldown gate (#375 item 2)
+    ---------------------------
+    A sentinel with ``cooldown_minutes`` set is SKIPPED at evaluation time
+    if ``now - last_fired_at < cooldown_minutes``. The gate is per-sentinel,
+    counted from the last successful fire (not from the last evaluation —
+    so a sentinel that hasn't matched in 24h with a 6h cooldown still
+    evaluates every dispatcher tick).
+
+    Semantics:
+        * ``cooldown_minutes IS NULL``       → no cooldown (always evaluate)
+        * ``cooldown_minutes == 0``          → no cooldown (always evaluate)
+        * ``last_fired_at IS NULL``          → never fired; evaluate
+        * ``now - last_fired_at >= cooldown_minutes`` → cooldown elapsed; evaluate
+        * otherwise                          → SKIP (cooldown in effect)
     """
     client = get_supabase_client()
     result = SentinelDispatchResult()
@@ -288,8 +384,18 @@ async def dispatch_sentinels() -> SentinelDispatchResult:
     rows = (client.table("sentinels").select("*").eq("enabled", True).execute().data) or []
     result.examined = len(rows)
 
+    now = datetime.now(timezone.utc)
+
     for sentinel in rows:
         sentinel_id = sentinel.get("sentinel_id")
+        if _is_in_cooldown(sentinel, now=now):
+            # Logged at INFO so operators can see why a sentinel is quiet.
+            logger.info(
+                f"sentinel {sentinel_id} in cooldown "
+                f"(cooldown_minutes={sentinel.get('cooldown_minutes')}, "
+                f"last_fired_at={sentinel.get('last_fired_at')}); skipping"
+            )
+            continue
         try:
             matches = await evaluate_sentinel(sentinel)
             if not matches:
@@ -301,8 +407,51 @@ async def dispatch_sentinels() -> SentinelDispatchResult:
             logger.exception(f"sentinel {sentinel_id} evaluation failed")
             result.errors.append(f"{sentinel_id}: {exc}")
 
-    result.finished_at = datetime.now(timezone.utc)
+    result.finished_at = now
     return result
+
+
+def _is_in_cooldown(sentinel: Dict[str, Any], *, now: datetime) -> bool:
+    """Return True if the sentinel was fired within ``cooldown_minutes`` of now.
+
+    Defensive against:
+    * bool-as-int (``cooldown_minutes=False`` or ``=True`` smuggled past the
+      registration gate by direct DB write) — both treated as "no cooldown"
+      since the gate is no longer trustworthy under bool semantics
+    * NaN / non-numeric cooldown values — treated as "no cooldown"
+    * Unparseable ``last_fired_at`` strings — treated as "never fired"
+    """
+    cooldown = sentinel.get("cooldown_minutes")
+    # NULL / 0 / missing → no gate.
+    if cooldown is None:
+        return False
+    # bool exclusion before numeric check; same load-bearing pattern as
+    # register_sentinel — Python's True/False are int subclasses.
+    if isinstance(cooldown, bool) or not isinstance(cooldown, (int, float)):
+        return False
+    # NaN-safe: not (x > 0) is the PostgreSQL-parity pattern (in PG, NaN
+    # comparisons are False; we mirror that by inverting the guard).
+    if not (cooldown > 0):
+        return False
+    last_fired_raw = sentinel.get("last_fired_at")
+    if not last_fired_raw:
+        return False
+    try:
+        # Supabase serializes timestamptz as ISO 8601 string; tolerate Z suffix.
+        if isinstance(last_fired_raw, str):
+            iso = last_fired_raw.replace("Z", "+00:00")
+            last_fired = datetime.fromisoformat(iso)
+        elif isinstance(last_fired_raw, datetime):
+            last_fired = last_fired_raw
+        else:
+            return False
+    except ValueError:
+        # Unparseable; treat as never-fired so the sentinel can evaluate.
+        return False
+    if last_fired.tzinfo is None:
+        last_fired = last_fired.replace(tzinfo=timezone.utc)
+    elapsed = now - last_fired
+    return elapsed < timedelta(minutes=float(cooldown))
 
 
 async def _fire_action(
@@ -342,8 +491,71 @@ async def _fire_action(
                         "action_input": action_cfg.get("input", {}),
                     },
                 )
+                # #375 iter-1 H1: for the four plan-specced action names,
+                # ALSO enqueue the corresponding Celery task so a worker
+                # actually runs the handler. The bus event above is
+                # complementary — non-Celery subscribers (e.g. an in-process
+                # orchestrator) still see the dispatch.
+                #
+                # The mapping is intentionally narrow (whitelist via
+                # ``PLAN_ACTION_TO_CELERY_TASK``); ``agent_name`` values
+                # outside the map continue to flow bus-only, preserving
+                # back-compat with the PR #250 contract.
+                agent_name = action_cfg["agent_name"]
+                celery_task_name = PLAN_ACTION_TO_CELERY_TASK.get(agent_name)
+                if celery_task_name is not None:
+                    try:
+                        celery_app.send_task(
+                            celery_task_name,
+                            kwargs={
+                                "sentinel_id": str(sentinel_id),
+                                "brands": [brand],
+                                "trigger_data": {
+                                    "match": match,
+                                    "action_input": action_cfg.get("input", {}),
+                                },
+                            },
+                        )
+                        logger.info(
+                            f"sentinel {sentinel_id}: enqueued "
+                            f"{celery_task_name} for agent={agent_name}"
+                        )
+                    except Exception:
+                        # Best-effort: a broker outage MUST NOT crash the
+                        # dispatcher loop. The bus event already fired so
+                        # local subscribers still get the dispatch.
+                        logger.exception(
+                            f"sentinel {sentinel_id}: send_task failed for {celery_task_name}"
+                        )
             elif action_type == "notify":
+                # #375 item 3: wire ``notify`` to Redis pub/sub on
+                # ``e2i:alerts``. Falls back to log-only if the alerts
+                # publisher is unreachable; the original log line is
+                # preserved for operator continuity with prior behaviour.
                 logger.info(f"sentinel:notify {name} brand={brand} match={match} cfg={action_cfg}")
+                try:
+                    # Lazy import: ``src.tasks.sentinel_actions`` depends on
+                    # ``celery_app`` which transitively pulls in this module
+                    # at worker boot. Importing inside the action keeps the
+                    # cycle from forming at module-load time.
+                    from src.tasks.sentinel_actions import publish_alert
+
+                    await publish_alert(
+                        {
+                            "type": "sentinel_notify",
+                            "sentinel_id": str(sentinel_id),
+                            "sentinel_name": name,
+                            "brand": brand,
+                            "match": match,
+                            "action_config": action_cfg,
+                        }
+                    )
+                except Exception:
+                    # publish_alert is itself best-effort; we wrap defensively
+                    # so any further unexpected issue here still doesn't break
+                    # the dispatcher loop. Narrow class would be preferable but
+                    # the import itself can raise on misconfigured deployments.
+                    logger.exception(f"sentinel:notify {name} alert publication crashed")
             else:
                 continue
             result.actions_taken += 1

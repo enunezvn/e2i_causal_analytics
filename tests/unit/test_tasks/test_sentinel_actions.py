@@ -1,0 +1,298 @@
+"""Unit tests for sentinel action handlers (#375 item 3 + 4).
+
+The plan (§3.8) specifies four action handlers:
+* ``rerun_all_active_cohorts``     — fired by ``data_drop``
+* ``notify_and_queue_reanalysis``  — fired by ``staleness_threshold``
+* ``flag_for_review``              — fired by ``cohort_drift``
+* ``run_full_consolidation``       — fired by ``schedule``
+
+All four publish to the Redis pub/sub channel ``e2i:alerts`` (the
+``notify_and_queue_reanalysis`` and ``flag_for_review`` actions explicitly so
+per plan; the other two implicitly via this audit-trail-friendly shape).
+
+The actions are Celery tasks registered under ``src.tasks.sentinel_actions``.
+They take ``(sentinel_id, brands, trigger_data)`` per plan and return a
+small dict summary for observability.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any, List
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from src.tasks.sentinel_actions import (
+    ALERTS_CHANNEL,
+    flag_for_review,
+    notify_and_queue_reanalysis,
+    publish_alert,
+    rerun_all_active_cohorts,
+    run_full_consolidation,
+)
+
+# ---------------------------------------------------------------------------
+# Module-level constant
+# ---------------------------------------------------------------------------
+
+
+def test_alerts_channel_constant():
+    """Plan §3.8 wires actions to publish on ``e2i:alerts``."""
+    assert ALERTS_CHANNEL == "e2i:alerts"
+
+
+# ---------------------------------------------------------------------------
+# publish_alert helper (shared by all four actions)
+# ---------------------------------------------------------------------------
+
+
+class _CapturingRedis:
+    def __init__(self) -> None:
+        self.published: List[tuple[str, str]] = []
+
+    async def publish(self, channel: str, payload: str) -> int:
+        self.published.append((channel, payload))
+        return 1
+
+
+@pytest.fixture
+def fake_redis() -> _CapturingRedis:
+    return _CapturingRedis()
+
+
+@pytest.fixture(autouse=True)
+def patch_redis(fake_redis):
+    # publish_alert lazy-imports get_redis_client from the factory module,
+    # so we patch the canonical source rather than a re-export.
+    with patch("src.memory.services.factories.get_redis_client", return_value=fake_redis):
+        yield fake_redis
+
+
+@pytest.mark.asyncio
+async def test_publish_alert_writes_json_to_e2i_alerts_channel(
+    fake_redis: _CapturingRedis,
+):
+    """The helper publishes the payload as a JSON string on ``e2i:alerts``."""
+    await publish_alert({"type": "test", "brand": "Kisqali", "data": [1, 2, 3]})
+    assert len(fake_redis.published) == 1
+    channel, raw = fake_redis.published[0]
+    assert channel == "e2i:alerts"
+    decoded = json.loads(raw)
+    assert decoded["type"] == "test"
+    assert decoded["brand"] == "Kisqali"
+    assert decoded["data"] == [1, 2, 3]
+
+
+@pytest.mark.asyncio
+async def test_publish_alert_swallow_redis_failure(fake_redis: _CapturingRedis):
+    """Alert publication is best-effort — a Redis outage MUST NOT break the action."""
+
+    async def boom(*args: Any, **kwargs: Any) -> int:
+        raise RuntimeError("redis down")
+
+    fake_redis.publish = boom  # type: ignore[method-assign]
+    # No exception should leak.
+    await publish_alert({"type": "test"})
+
+
+# ---------------------------------------------------------------------------
+# rerun_all_active_cohorts
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_rerun_all_active_cohorts_publishes_per_brand(
+    fake_redis: _CapturingRedis,
+):
+    summary = await rerun_all_active_cohorts(
+        sentinel_id="s-1",
+        brands=["Kisqali", "Pluvicto"],
+        trigger_data={"source": "optum_cdm", "refreshed_at": "2026-05-19T00:00:00Z"},
+    )
+    assert summary["brands_dispatched"] == 2
+    # One alert published containing both brands so subscribers see them atomically.
+    assert any(
+        '"data_refresh"' in raw and '"Kisqali"' in raw and '"Pluvicto"' in raw
+        for _ch, raw in fake_redis.published
+    )
+
+
+@pytest.mark.asyncio
+async def test_rerun_all_active_cohorts_empty_brands_noop(fake_redis: _CapturingRedis):
+    summary = await rerun_all_active_cohorts(
+        sentinel_id="s-1",
+        brands=[],
+        trigger_data={},
+    )
+    assert summary["brands_dispatched"] == 0
+    assert fake_redis.published == []
+
+
+# ---------------------------------------------------------------------------
+# notify_and_queue_reanalysis
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_notify_and_queue_reanalysis_publishes_staleness_alert(
+    fake_redis: _CapturingRedis,
+):
+    stale_findings = [
+        {"finding_id": "f1", "brand": "Kisqali", "staleness_score": 0.95},
+        {"finding_id": "f2", "brand": "Kisqali", "staleness_score": 0.80},
+    ]
+    summary = await notify_and_queue_reanalysis(
+        sentinel_id="s-2",
+        brands=["Kisqali"],
+        trigger_data={"stale_findings": stale_findings},
+    )
+    assert summary["stale_findings_count"] == 2
+    # iter-1 M1: ``queued_for_reanalysis`` is reserved for ACTUAL Celery
+    # enqueues (which #378 will add). For now the handler only notifies via
+    # the alerts channel + log; the honest field name is
+    # ``notified_for_reanalysis``.
+    assert summary["notified_for_reanalysis"] >= 1
+    # The dishonest field MUST stay 0 until a real reanalysis task lands.
+    assert summary["queued_for_reanalysis"] == 0, (
+        "queued_for_reanalysis must be 0 until #378 wires the real Celery "
+        "enqueue — see TODO in notify_and_queue_reanalysis"
+    )
+    found = False
+    for _ch, raw in fake_redis.published:
+        if "staleness_alert" in raw:
+            found = True
+            payload = json.loads(raw)
+            assert payload["type"] == "staleness_alert"
+            assert payload["brands"] == ["Kisqali"]
+            assert len(payload["findings"]) == 2
+    assert found, "expected at least one staleness_alert publication"
+
+
+@pytest.mark.asyncio
+async def test_notify_and_queue_reanalysis_caps_reanalysis_at_5(
+    fake_redis: _CapturingRedis,
+):
+    """Plan §3.8 caps re-analysis to top-5 most-stale findings.
+
+    iter-1 M1: until #378 lands the real Celery enqueue, the cap applies to
+    the ``notified_for_reanalysis`` count (top-5 logged + included in the
+    alert). ``queued_for_reanalysis`` remains 0.
+    """
+    stale = [{"finding_id": f"f{i}", "brand": "Kisqali", "staleness_score": 0.9} for i in range(20)]
+    summary = await notify_and_queue_reanalysis(
+        sentinel_id="s-2",
+        brands=["Kisqali"],
+        trigger_data={"stale_findings": stale},
+    )
+    assert summary["notified_for_reanalysis"] == 5
+    assert summary["queued_for_reanalysis"] == 0
+
+
+@pytest.mark.asyncio
+async def test_notify_and_queue_reanalysis_return_contract_is_honest(
+    fake_redis: _CapturingRedis,
+):
+    """Codex iter-0 M1: the return contract MUST NOT claim ``queued_for_reanalysis``
+    when the handler only notifies. Until #378 implements the real Celery
+    enqueue, ``queued_for_reanalysis`` is reserved == 0 and the honest count
+    is exposed as ``notified_for_reanalysis``.
+    """
+    stale = [{"finding_id": f"f{i}", "brand": "Kisqali", "staleness_score": 0.9} for i in range(3)]
+    summary = await notify_and_queue_reanalysis(
+        sentinel_id="s-honest",
+        brands=["Kisqali"],
+        trigger_data={"stale_findings": stale},
+    )
+    # Both fields present so downstream observers can disambiguate
+    # "intent to reanalyze" vs "actually enqueued".
+    assert "notified_for_reanalysis" in summary
+    assert "queued_for_reanalysis" in summary
+    # No actual enqueue has happened yet.
+    assert summary["queued_for_reanalysis"] == 0
+    # The notify count reflects what the handler actually did.
+    assert summary["notified_for_reanalysis"] == 3
+
+
+# ---------------------------------------------------------------------------
+# flag_for_review
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_flag_for_review_publishes_cohort_drift(fake_redis: _CapturingRedis):
+    summary = await flag_for_review(
+        sentinel_id="s-3",
+        brands=["Pluvicto"],
+        trigger_data={"drift_data": {"baseline": 1000, "current": 1080, "shift": 0.08}},
+    )
+    assert summary["flagged"] is True
+    assert any("cohort_drift" in raw for _ch, raw in fake_redis.published)
+
+
+# ---------------------------------------------------------------------------
+# run_full_consolidation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_full_consolidation_invokes_consolidator(fake_redis: _CapturingRedis):
+    """The action triggers a full consolidator run and publishes a heartbeat."""
+
+    mock_consolidator = AsyncMock()
+    fake_result = MagicMock()
+    fake_result.promoted_to_semantic = 3
+    fake_result.promoted_to_procedural = 1
+    fake_result.causal_paths_examined = 17
+    fake_result.procedural_examined = 5
+    fake_result.errors = []
+    fake_result.by_brand = {"Kisqali": {"semantic": 3}}
+    mock_consolidator.return_value = fake_result
+
+    with patch(
+        "src.memory.lifecycle.consolidator.consolidate_insights",
+        new=mock_consolidator,
+    ):
+        summary = await run_full_consolidation(
+            sentinel_id="s-4",
+            brands=["all"],
+            trigger_data={},
+        )
+    assert summary["promoted_to_semantic"] == 3
+    assert summary["promoted_to_procedural"] == 1
+    # Plan §3.8 publishes a heartbeat-style alert so subscribers (CopilotKit)
+    # know a full consolidation just happened.
+    assert any("full_consolidation_run" in raw for _ch, raw in fake_redis.published)
+
+
+# ---------------------------------------------------------------------------
+# Action handlers are registered as Celery tasks (sanity)
+# ---------------------------------------------------------------------------
+
+
+def test_all_four_actions_are_celery_tasks():
+    """The four actions are reachable via ``celery_app.tasks[name]``.
+
+    This is a placeholder check — we don't actually need a worker for unit
+    tests, but the registration must be present so ``celery worker`` can
+    enqueue them and the dispatcher's ``dispatch_agent → Celery`` bridge
+    can route to them by name.
+    """
+    from src.tasks.sentinel_actions import (  # noqa: F401
+        celery_flag_for_review,
+        celery_notify_and_queue_reanalysis,
+        celery_rerun_all_active_cohorts,
+        celery_run_full_consolidation,
+    )
+
+    # Each ``celery_*`` is a registered Celery task wrapping the async helper.
+    # The wrapping is the side-channel that lets a worker enqueue/execute them.
+    for name in (
+        "src.tasks.sentinel_actions.rerun_all_active_cohorts",
+        "src.tasks.sentinel_actions.notify_and_queue_reanalysis",
+        "src.tasks.sentinel_actions.flag_for_review",
+        "src.tasks.sentinel_actions.run_full_consolidation",
+    ):
+        from src.workers.celery_app import celery_app
+
+        assert name in celery_app.tasks, f"Celery task {name} not registered"

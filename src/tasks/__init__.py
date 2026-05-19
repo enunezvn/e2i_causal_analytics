@@ -10,7 +10,20 @@ Task Categories:
 - A/B Testing: Experiment execution, monitoring, and analysis (Phase 15)
 """
 
-# Import tasks for auto-discovery
+# Import tasks for auto-discovery.
+#
+# Sentinel action handlers (#375 iter-1 H2): importing the module is enough
+# for the @celery_app.task decorators to fire and register the four
+# plan-specced action handlers (``rerun_all_active_cohorts``,
+# ``notify_and_queue_reanalysis``, ``flag_for_review``,
+# ``run_full_consolidation``). Without this line, Celery worker boot — which
+# imports ``src.tasks`` for task discovery — would NOT see the tasks, and
+# ``send_task`` calls from the sentinel dispatcher's
+# ``dispatch_agent → Celery`` bridge would dead-letter. Tests directly
+# importing ``src.tasks.sentinel_actions`` mask the bug — always-on
+# production import is the load-bearing line.
+from src.tasks import sentinel_actions  # noqa: F401
+
 # A/B Testing Tasks (Phase 15)
 from src.tasks.ab_testing_tasks import (
     check_all_active_experiments,
