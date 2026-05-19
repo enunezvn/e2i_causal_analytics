@@ -405,6 +405,72 @@ class LLMEvaluatorAudit:
 
 
 @dataclass(frozen=True)
+class LLMCrystalNarrativeAudit:
+    """Audit-only sidecar produced by the Haiku narrator after the
+    crystallizer assembles 13 deterministic ``CrystalDigest`` fields.
+
+    Mirrors :class:`LLMEvaluatorAudit` (same module, same telemetry
+    shape) so a price-drift or telemetry refactor reaches both surfaces
+    with one diff. Per the adopted Decision 2 = HYBRID
+    (``.claude/plans/e2i_memory_subsystems_implementation_plan.md``):
+    13 deterministic fields ship from estimator/DAG/episodic state;
+    3 prose fields are LLM-generated (``key_finding``, ``limitations``,
+    ``recommended_next_analysis``) wrapped in this struct.
+
+    The narrator is feature-flagged. When the flag is off, the
+    deterministic ``_compose_narrative`` path runs and this audit is
+    not emitted (the audit is the sole writer when the LLM path runs;
+    no shadow path under the flag-off branch).
+
+    Issue #376.
+
+    Attributes:
+        narrator_model: Pinned model identifier (default Haiku
+            4.5: ``"claude-haiku-4-5-20251001"``).
+        key_finding: LLM-generated 1-2 sentence headline distilling the
+            cross-agent finding. Truncated to 500 chars at the audit
+            boundary.
+        limitations: LLM-generated text enumerating the analysis's
+            known limitations (small n, missing washout, sensitivity
+            failures). Truncated to 500 chars.
+        recommended_next_analysis: LLM-generated 1-2 sentence guidance
+            on the follow-up analysis that would strengthen the
+            finding (replication / sensitivity / instrument
+            falsification). Truncated to 500 chars.
+        latency_ms: Wall-clock duration of the narrator call in
+            milliseconds. ``None`` when telemetry was not captured
+            (legacy call-sites, flag-off path, exception path).
+        input_tokens: Prompt tokens consumed by the narrator call,
+            extracted from the Anthropic SDK ``response.usage`` block.
+            ``None`` when usage was not surfaced.
+        output_tokens: Completion tokens emitted by the narrator call.
+            Same nullability semantics as ``input_tokens``.
+        cost_usd: Cost of the narrator call in USD, computed from the
+            documented Haiku pricing constants
+            (:data:`src.data.causal_role_evaluator.HAIKU_INPUT_USD_PER_MTOK` /
+            :data:`src.data.causal_role_evaluator.HAIKU_OUTPUT_USD_PER_MTOK`).
+            ``None`` when token counts could not be extracted.
+    """
+
+    narrator_model: str
+    # LLM-generated prose (per Decision 2 sub-decision 2a: 3 prose
+    # fields). Default empty so a partial narrator response (e.g.
+    # missing one field) does not crash construction; the row insert
+    # is the place that NOT-NULL-enforces the columns.
+    key_finding: str = ""
+    limitations: str = ""
+    recommended_next_analysis: str = ""
+    # Telemetry mirror of LLMEvaluatorAudit. ``None`` when not
+    # captured (e.g. legacy callers, deterministic-only path with
+    # flag off, exception path that fell back to the deterministic
+    # composer).
+    latency_ms: Optional[float] = None
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    cost_usd: Optional[float] = None
+
+
+@dataclass(frozen=True)
 class EnsembleVerdict:
     """Phase 2.7 final verdict for one feature.
 
