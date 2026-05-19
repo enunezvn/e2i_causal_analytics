@@ -85,6 +85,7 @@ async def register_sentinel(
     region: Optional[str] = None,
     created_by_user_id: Optional[str] = None,
     description: Optional[str] = None,
+    cooldown_minutes: Optional[int] = None,
 ) -> str:
     """
     Register a new sentinel. Returns sentinel_id.
@@ -93,6 +94,12 @@ async def register_sentinel(
     callers (e.g. ``POST /api/sentinels``) MUST additionally enforce that
     the user has access to the requested brand, and that ``brand='all'``
     requires ADMIN role.
+
+    ``cooldown_minutes`` is optional (NULL = no cooldown gate, dispatcher
+    always re-evaluates). When set, the dispatcher (Celery beat
+    ``sentinel_dispatcher``) only re-fires the sentinel after
+    ``now - last_fired_at >= cooldown_minutes``. Persisted to the
+    ``sentinels.cooldown_minutes`` column (migration 023).
     """
     if not brand:
         raise ValueError("brand is required")
@@ -100,11 +107,24 @@ async def register_sentinel(
         raise ValueError(f"unknown pattern_type {pattern_type}")
     if action_type not in VALID_ACTION_TYPES:
         raise ValueError(f"unknown action_type {action_type}")
+    if cooldown_minutes is not None:
+        # bool exclusion before numeric check — Python's True/False are int
+        # subclasses; isinstance(False, int) is True. Without this guard a
+        # caller passing cooldown_minutes=False would silently coerce to 0
+        # and disable the cooldown gate. (Load-bearing pattern from
+        # max_staleness filter, PR #374 / memory feedback.)
+        if isinstance(cooldown_minutes, bool) or not isinstance(cooldown_minutes, (int, float)):
+            raise ValueError(
+                f"cooldown_minutes must be a non-negative number, "
+                f"got {type(cooldown_minutes).__name__}"
+            )
+        if cooldown_minutes < 0:
+            raise ValueError(f"cooldown_minutes must be non-negative, got {cooldown_minutes}")
     _validate_pattern_config(pattern_type, pattern_config)
     _validate_action_config(action_type, action_config)
 
     client = get_supabase_client()
-    record = {
+    record: Dict[str, Any] = {
         "name": name,
         "description": description,
         "pattern_type": pattern_type,
@@ -116,6 +136,10 @@ async def register_sentinel(
         "created_by_user_id": created_by_user_id,
         "enabled": True,
     }
+    if cooldown_minutes is not None:
+        # int() coerces 0.0 / 60.5 to nearest int; values are stored as INTEGER
+        # by migration 023.
+        record["cooldown_minutes"] = int(cooldown_minutes)
     result = client.table("sentinels").insert(record).execute()
     rows = result.data or []
     if not rows:

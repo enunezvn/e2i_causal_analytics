@@ -1,0 +1,84 @@
+# =============================================================================
+# E2I Sentinel Configuration — plan §Phase 3 Step 3.7 + issue #375
+# =============================================================================
+#
+# The 4 sentinels below are registered at API startup by
+# ``src.memory.sentinels.config_loader.load_sentinels_from_yaml``.
+#
+# Pattern vocabulary
+# ------------------
+# This YAML uses the plan-specified vocabulary
+# (``data_drop``, ``staleness_threshold``, ``cohort_drift``, ``schedule``)
+# which is then translated to the shipped registry internal vocabulary
+# (``freshness``, ``threshold_breach``, ``drift_score``, ``new_causal_path``)
+# at load time. See ``PLAN_TRIGGER_TO_INTERNAL_PATTERN`` in
+# ``src/memory/sentinels/config_loader.py`` for the mapping rationale.
+#
+# Cooldown enforcement
+# --------------------
+# ``cooldown_minutes`` is enforced in ``src.tasks.insight_lifecycle_tasks
+# .sentinel_dispatcher`` — a sentinel that fired within the last
+# ``cooldown_minutes`` is skipped until the cooldown elapses. This is the
+# fix shipped for #375 (previously the dispatcher had no cooldown gate).
+# =============================================================================
+
+sentinels:
+  # ------------------------------------------------------------------- 1.
+  # Optum quarterly data drop. Fires when the optum_cdm source table receives
+  # a refresh newer than the sentinel's last_fired_at.
+  - id: sentinel_optum_quarterly
+    name: Optum CDM quarterly data drop
+    trigger_type: data_drop
+    condition:
+      table: triggers
+      ts_column: updated_at
+      max_age_hours: 2160  # 90 days — quarterly window
+    action: rerun_all_active_cohorts
+    brands: ["all"]
+    active: true
+    cooldown_minutes: 1440  # 24h
+
+  # ------------------------------------------------------------------- 2.
+  # High-staleness alert. Fires when ≥1 promoted (semantic) causal_path
+  # exceeds the staleness threshold. Routes to notify_and_queue_reanalysis
+  # which publishes to e2i:alerts and queues re-runs.
+  - id: sentinel_staleness_alert
+    name: High staleness alert
+    trigger_type: staleness_threshold
+    condition:
+      table: causal_paths
+      column: causal_effect_size
+      op: "<"
+      value: 0.05
+      tier: semantic  # only alert on promoted findings
+    action: notify_and_queue_reanalysis
+    brands: ["all"]
+    active: true
+    cooldown_minutes: 360  # 6h
+
+  # ------------------------------------------------------------------- 3.
+  # Pluvicto mHSPC cohort drift. Drift-score-based; checks current drift
+  # against the configured threshold. Flags to UI for SME review.
+  - id: sentinel_pluvicto_cohort_drift
+    name: Pluvicto mHSPC cohort drift
+    trigger_type: cohort_drift
+    condition:
+      max_drift_score: 0.30  # 30 % cohort drift
+      cohort_id: pluvicto_mhspc_primary
+    action: flag_for_review
+    brands: ["Pluvicto"]
+    active: true
+    cooldown_minutes: 2880  # 48h
+
+  # ------------------------------------------------------------------- 4.
+  # Weekly full consolidation. Fires on a schedule — looks for new causal
+  # paths since last firing; if any exist, triggers a full consolidation
+  # sweep. Cooldown reflects the 7-day cadence.
+  - id: sentinel_weekly_consolidation
+    name: Weekly full consolidation run
+    trigger_type: schedule
+    condition: {}
+    action: run_full_consolidation
+    brands: ["all"]
+    active: true
+    cooldown_minutes: 10080  # 7 days
