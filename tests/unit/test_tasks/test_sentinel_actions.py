@@ -305,9 +305,7 @@ async def test_notify_and_queue_reanalysis_malformed_finding_log_omits_sensitive
                 trigger_data={"stale_findings": [sensitive_finding]},
             )
     # The warning fired.
-    skip_records = [
-        rec for rec in caplog.records if "skipping enqueue" in rec.message
-    ]
+    skip_records = [rec for rec in caplog.records if "skipping enqueue" in rec.message]
     assert len(skip_records) == 1
     skip_msg = skip_records[0].message
     # The brand + key names are safe to log.
