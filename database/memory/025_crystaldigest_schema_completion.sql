@@ -5,11 +5,11 @@
 -- Adds the 15 missing CrystalDigest analytical/lineage columns to
 -- ``executive_insights`` (shipped in 021_insight_lifecycle.sql with 13 fields).
 --
--- Source-of-truth: GitHub issue #376 + plan
---   .claude/plans/e2i_memory_subsystems_implementation_plan.md
--- §"DECISIONS ADOPTED — 2026-05-19" (Decisions 2 + 3).
+-- Source-of-truth: GitHub issue #376. The two relevant adopted decisions
+-- (paraphrased here so this migration is self-contained for reviewers; the
+-- canonical decision records live in #376 and its companion close memory):
 --
--- Per Decision 2 = HYBRID (sub-decision 2a):
+-- Decision 2 = HYBRID (sub-decision 2a):
 --   * effect_size + ci bounds are NUMERIC (float), not categorical strings.
 --   * 13 of these 15 fields are deterministically derivable from estimator
 --     state / insight_edges graph / tier-table fields / episodic-memory
@@ -17,19 +17,20 @@
 --     ``recommended_next_analysis``) are LLM-narrative; see
 --     src/data/kg/types.py::LLMCrystalNarrativeAudit.
 --
--- Per Decision 3 = KEEP BINARY:
+-- Decision 3 = KEEP BINARY:
 --   * ``staleness_score`` is OMITTED. Staleness remains boolean
 --     (``invalidated_at IS NULL``). If a future workflow surfaces a graded
---     need, the plan §"DECISIONS ADOPTED" reinstatement checklist enumerates
---     the reversal cost (~800-1,200 LoC).
+--     need, the cost is roughly ~800-1,200 LoC (4 migrations + helper
+--     change + test rewrites). See issue #376 for the full reversal
+--     checklist.
 --
 -- Naming/migration number rationale:
 --   * 023 = sentinel_cooldown (#375)
 --   * 024 = sentinel_invalidation_count_pattern (#381)
---   * 025 = this migration (issue #376 DoD says "023" but that slot is
---           already taken; the plan §Recommended sequencing item 3 line
---           reads "the other 15 fields are independent" and does not pin
---           a specific migration number, so 025 is the next free slot).
+--   * 025 = this migration. Issue #376's DoD text reads "023" but that
+--           slot is already taken; the issue does not pin a specific
+--           migration number, so 025 is the next free slot in
+--           database/memory/.
 --
 -- Idempotency:
 --   * All ADD COLUMN statements use IF NOT EXISTS so re-running on a
