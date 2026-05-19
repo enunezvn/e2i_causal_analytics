@@ -1,0 +1,28 @@
+-- =============================================================================
+-- 024_sentinel_invalidation_count_pattern.sql
+--
+-- Decision 3 follow-up (#381 codex iter-0 HIGH-1).
+--
+-- PR #380 shipped `sentinel_staleness_alert` (config/sentinels.yaml) which the
+-- agent originally evaluated as `column: causal_effect_size, op: "<"` — a
+-- three-way name/condition/handler mismatch documented in issue #381.
+--
+-- This PR (PR-decision3-followups) implements the bug fix per option (b) by
+-- introducing a NEW internal pattern type `invalidation_count` that queries
+-- `WHERE invalidated_at IS NOT NULL`. The YAML keeps `trigger_type:
+-- staleness_threshold` for plan §3.6 fidelity; the config loader translates
+-- to `invalidation_count` at load (see `PLAN_TRIGGER_TO_INTERNAL_PATTERN` in
+-- `src/memory/sentinels/config_loader.py`).
+--
+-- BUT: the persisted `sentinels.pattern_type` column is typed
+-- `sentinel_pattern_type` (the enum defined at migration 021 line 59) which
+-- only knew about `threshold_breach / freshness / drift_score /
+-- new_causal_path` until this migration. Without this ALTER TYPE, the YAML
+-- loader's INSERT into the `sentinels` table fails with an enum violation at
+-- production startup (the test suite mocks Supabase so the gap was missed in
+-- CI on PR-decision3-followups iter-0).
+--
+-- Idempotent via `ADD VALUE IF NOT EXISTS` (Postgres 9.6+).
+-- =============================================================================
+
+ALTER TYPE sentinel_pattern_type ADD VALUE IF NOT EXISTS 'invalidation_count';

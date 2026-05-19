@@ -220,3 +220,95 @@ async def test_load_sentinels_yaml_malformed_raises(tmp_path: Path):
     bad.write_text("not_a_sentinels_block: 1\n")
     with pytest.raises(SentinelConfigLoadError):
         await load_sentinels_from_yaml(bad)
+
+
+def test_internal_pattern_types_have_db_enum_coverage():
+    """Lock the invariant: every value in ``PLAN_TRIGGER_TO_INTERNAL_PATTERN``
+    must exist in the ``sentinel_pattern_type`` Postgres enum.
+
+    The enum is declared in ``database/memory/021_insight_lifecycle.sql``
+    (4 original values) and extended by subsequent migrations
+    (``024_sentinel_invalidation_count_pattern.sql`` adds
+    ``invalidation_count`` per issue #381 codex iter-0 HIGH-1).
+
+    Without this lockstep test, a future change that adds a value to
+    ``PLAN_TRIGGER_TO_INTERNAL_PATTERN`` without a corresponding DB migration
+    would fail at production INSERT time with a Postgres enum-violation —
+    the unit-test suite mocks Supabase and would not catch the drift.
+    """
+    import re
+
+    # Resolve repo root via Path.parents — this test lives at
+    # ``tests/unit/test_memory/test_sentinel_yaml_loader.py`` so parents[3]
+    # is the worktree/repo root.
+    repo_root = Path(__file__).resolve().parents[3]
+    migration_021 = (repo_root / "database/memory/021_insight_lifecycle.sql").read_text()
+    migration_024 = (
+        repo_root / "database/memory/024_sentinel_invalidation_count_pattern.sql"
+    ).read_text()
+
+    # Sanity: migration 024 must exist and carry the right ALTER TYPE.
+    assert (
+        "ADD VALUE IF NOT EXISTS 'invalidation_count'" in migration_024
+    ), "migration 024 missing expected ALTER TYPE for invalidation_count"
+
+    # Parse migration 021's CREATE TYPE block for sentinel_pattern_type. The
+    # DDL shape (021:59-64) is:
+    #   CREATE TYPE sentinel_pattern_type AS ENUM (
+    #       'threshold_breach',  -- ...
+    #       'freshness',         -- ...
+    #       'drift_score',       -- ...
+    #       'new_causal_path'    -- ...
+    #   );
+    # Extract the block, then collect every single-quoted string within it.
+    create_match = re.search(
+        r"CREATE TYPE\s+sentinel_pattern_type\s+AS\s+ENUM\s*\((.*?)\);",
+        migration_021,
+        re.DOTALL,
+    )
+    assert (
+        create_match is not None
+    ), "could not locate CREATE TYPE sentinel_pattern_type in migration 021"
+    # Strip ``-- ...`` line comments before extracting quoted enum values; the
+    # comments can contain English apostrophes (``hasn't``) that would
+    # otherwise be captured as spurious single-quoted strings.
+    enum_block = create_match.group(1)
+    enum_block_stripped = re.sub(r"--[^\n]*", "", enum_block)
+    declared_values = set(re.findall(r"'([^']+)'", enum_block_stripped))
+    # Cross-check against the doc-of-record 4 values to catch silent edits to 021.
+    assert declared_values == {
+        "threshold_breach",
+        "freshness",
+        "drift_score",
+        "new_causal_path",
+    }, f"migration 021 sentinel_pattern_type values drifted: {declared_values}"
+
+    # Collect ADD VALUE additions across all later migrations against this enum.
+    added_values: set[str] = set()
+    for migration_path in sorted((repo_root / "database/memory").glob("*.sql")):
+        if migration_path.name == "021_insight_lifecycle.sql":
+            continue
+        text = migration_path.read_text()
+        for match in re.finditer(
+            r"ALTER\s+TYPE\s+sentinel_pattern_type\s+"
+            r"ADD\s+VALUE(?:\s+IF\s+NOT\s+EXISTS)?\s+'([^']+)'",
+            text,
+            re.IGNORECASE,
+        ):
+            added_values.add(match.group(1))
+
+    # ``invalidation_count`` must be in the added set (migration 024 contract).
+    assert (
+        "invalidation_count" in added_values
+    ), f"invalidation_count not added by any migration; added={added_values}"
+
+    valid_db_enum_values = declared_values | added_values
+
+    used_internal_values = set(PLAN_TRIGGER_TO_INTERNAL_PATTERN.values())
+
+    missing_in_db = used_internal_values - valid_db_enum_values
+    assert not missing_in_db, (
+        f"Internal pattern types not in DB enum: {sorted(missing_in_db)}. "
+        f"Add a migration to extend `sentinel_pattern_type` before shipping "
+        f"these values via PLAN_TRIGGER_TO_INTERNAL_PATTERN."
+    )
