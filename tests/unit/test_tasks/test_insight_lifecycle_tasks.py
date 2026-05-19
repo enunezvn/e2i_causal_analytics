@@ -181,3 +181,31 @@ def test_reanalyze_finding_swallows_redis_outage(
     assert result["signal_published"] is False
     # The failure is logged at WARNING level so SREs can see it.
     assert any("reanaly" in rec.message.lower() for rec in caplog.records)
+
+
+def test_reanalyze_finding_programming_errors_propagate(
+    fake_redis: _CapturingRedis,
+):
+    """L2 (codex iter-0): the publish path's catch is narrowed to
+    ConnectionError + RuntimeError only. Programming errors
+    (TypeError, AttributeError, KeyError) from an unexpected publish
+    failure MUST propagate so they surface in error tracking and the
+    Celery task_failure handler can route them to the dead-letter queue.
+
+    Pre-fix: a broad ``except Exception`` fallback swallowed these
+    silently and the task returned ``signal_published=False`` —
+    indistinguishable from a real broker outage.
+    """
+
+    async def boom(*args: Any, **kwargs: Any) -> int:
+        # An unexpected exception class — NOT ConnectionError, NOT
+        # RuntimeError. A real client-shape mismatch could throw this.
+        raise TypeError("unexpected publish shape — programming error")
+
+    fake_redis.publish = boom  # type: ignore[method-assign]
+    with pytest.raises(TypeError, match="programming error"):
+        reanalyze_finding.run(  # type: ignore[attr-defined]
+            "f-99",
+            "Kisqali",
+            triggered_by="sentinel:staleness",
+        )

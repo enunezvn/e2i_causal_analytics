@@ -117,17 +117,17 @@ async def _publish_reanalysis_signal(
         return True
     except (ConnectionError, RuntimeError) as exc:
         # Narrow: only the two error classes Redis raises on transport
-        # failure. A programming error (TypeError etc.) propagates so we
-        # don't silently mask shape mismatches.
+        # failure. Programming errors (TypeError, AttributeError, etc.)
+        # propagate so we don't silently mask shape mismatches.
+        #
+        # L2 (codex iter-0): no broad ``except Exception`` fallback —
+        # such a fallback would contradict the contract documented above
+        # by swallowing the very errors we want to surface. If an
+        # unexpected exception class escapes here, that's a real bug we
+        # want the Celery task wrapper to record (via the
+        # ``task_failure`` signal handler in celery_app.py).
         logger.warning(
             f"reanalysis-signal publish failed for finding={finding_id} brand={brand}: {exc}"
-        )
-        return False
-    except Exception:
-        # Defensive last-resort log; an unexpected exception class shouldn't
-        # crash the Celery task, but we make the noise loud.
-        logger.exception(
-            f"unexpected reanalysis-signal publish failure for finding={finding_id} brand={brand}"
         )
         return False
 
