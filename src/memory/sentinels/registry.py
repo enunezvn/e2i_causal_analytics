@@ -33,8 +33,15 @@ Actions:
                           as source_id to cascade_invalidate with sentinel's brand
                           as scope_brand
     dispatch_agent     - {"agent_name": "drift_monitor", "input": {...}}
-                          (placeholder — emits a signal on InsightSignalBus;
-                          actual dispatch is the orchestrator's job)
+                          Always emits an ``InsightSignalBus`` signal.
+                          For the four plan-specced agent names
+                          (``rerun_all_active_cohorts``,
+                          ``notify_and_queue_reanalysis``, ``flag_for_review``,
+                          ``run_full_consolidation``), ADDITIONALLY enqueues
+                          the corresponding Celery task in
+                          ``src.tasks.sentinel_actions`` so a worker runs
+                          the handler. Mapping lives in
+                          :data:`PLAN_ACTION_TO_CELERY_TASK` (#375 iter-1 H1).
     notify             - {"channel": "slack#alerts", "template": "..."}
                           Logs the match AND publishes to the Redis
                           ``e2i:alerts`` channel (via
@@ -68,6 +75,7 @@ from typing import Any, Dict, List, Optional
 from src.memory.coordination.signals import get_insight_signal_bus
 from src.memory.lifecycle.invalidator import cascade_invalidate
 from src.memory.services.factories import get_supabase_client
+from src.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +83,28 @@ logger = logging.getLogger(__name__)
 VALID_PATTERN_TYPES = {"threshold_breach", "freshness", "drift_score", "new_causal_path"}
 VALID_ACTION_TYPES = {"invalidate", "dispatch_agent", "notify"}
 VALID_OPS = {">", ">=", "<", "<=", "==", "!="}
+
+
+# ----------------------------------------------------------------------------
+# Plan-specced action name → Celery task path mapping (#375 iter-1 H1).
+#
+# When a ``dispatch_agent`` action's ``agent_name`` is one of the four
+# plan-specced action names, the dispatcher additionally calls
+# ``celery_app.send_task(...)`` so a Celery worker enqueues the corresponding
+# handler in ``src.tasks.sentinel_actions``. The bus event still fires (it's
+# the non-Celery-subscriber contract).
+#
+# Keep this mapping in lockstep with
+# ``src.memory.sentinels.config_loader.PLAN_ACTION_TASK_NAMES`` — both are
+# single-source-of-truth for the plan vocabulary; if you add a plan action
+# (e.g. promote-to-procedural), add it in both places.
+# ----------------------------------------------------------------------------
+PLAN_ACTION_TO_CELERY_TASK: Dict[str, str] = {
+    "rerun_all_active_cohorts": "src.tasks.sentinel_actions.rerun_all_active_cohorts",
+    "notify_and_queue_reanalysis": "src.tasks.sentinel_actions.notify_and_queue_reanalysis",
+    "flag_for_review": "src.tasks.sentinel_actions.flag_for_review",
+    "run_full_consolidation": "src.tasks.sentinel_actions.run_full_consolidation",
+}
 
 
 class SentinelEvaluationError(RuntimeError):
@@ -459,6 +489,42 @@ async def _fire_action(
                         "action_input": action_cfg.get("input", {}),
                     },
                 )
+                # #375 iter-1 H1: for the four plan-specced action names,
+                # ALSO enqueue the corresponding Celery task so a worker
+                # actually runs the handler. The bus event above is
+                # complementary — non-Celery subscribers (e.g. an in-process
+                # orchestrator) still see the dispatch.
+                #
+                # The mapping is intentionally narrow (whitelist via
+                # ``PLAN_ACTION_TO_CELERY_TASK``); ``agent_name`` values
+                # outside the map continue to flow bus-only, preserving
+                # back-compat with the PR #250 contract.
+                agent_name = action_cfg["agent_name"]
+                celery_task_name = PLAN_ACTION_TO_CELERY_TASK.get(agent_name)
+                if celery_task_name is not None:
+                    try:
+                        celery_app.send_task(
+                            celery_task_name,
+                            kwargs={
+                                "sentinel_id": str(sentinel_id),
+                                "brands": [brand],
+                                "trigger_data": {
+                                    "match": match,
+                                    "action_input": action_cfg.get("input", {}),
+                                },
+                            },
+                        )
+                        logger.info(
+                            f"sentinel {sentinel_id}: enqueued "
+                            f"{celery_task_name} for agent={agent_name}"
+                        )
+                    except Exception:
+                        # Best-effort: a broker outage MUST NOT crash the
+                        # dispatcher loop. The bus event already fired so
+                        # local subscribers still get the dispatch.
+                        logger.exception(
+                            f"sentinel {sentinel_id}: send_task failed for {celery_task_name}"
+                        )
             elif action_type == "notify":
                 # #375 item 3: wire ``notify`` to Redis pub/sub on
                 # ``e2i:alerts``. Falls back to log-only if the alerts
