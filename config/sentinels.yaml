@@ -20,7 +20,19 @@
 # .sentinel_dispatcher`` — a sentinel that fired within the last
 # ``cooldown_minutes`` is skipped until the cooldown elapses. This is the
 # fix shipped for #375 (previously the dispatcher had no cooldown gate).
+#
+# Lifecycle state
+# ---------------
+# Required by ``scripts/check_lifecycle_state.py`` because the entries below
+# contain threshold-shaped keys (``staleness_threshold`` trigger type,
+# numeric ``max_age_hours`` / ``cooldown_minutes`` guardrails). Per the
+# canonical semantics in ``src/lifecycle/gate_lifecycle.py``: sentinels
+# publish to the ``e2i:alerts`` Redis channel and queue Celery action tasks,
+# but they do NOT drop features, halt pipelines, or deny promotions. That
+# is the textbook ``advisory`` state — emit signals, do not block.
 # =============================================================================
+
+lifecycle_state: advisory
 
 sentinels:
   # ------------------------------------------------------------------- 1.
