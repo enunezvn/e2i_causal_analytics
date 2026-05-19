@@ -52,6 +52,8 @@ import json
 import logging
 from typing import Any, Dict, Final, List, Optional
 
+from kombu.exceptions import OperationalError as KombuOperationalError
+
 from src.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -227,13 +229,24 @@ async def notify_and_queue_reanalysis(
                 kwargs={"triggered_by": "sentinel:staleness"},
             )
             queued_count += 1
-        except Exception:
-            # Best-effort: broker outage MUST NOT crash the action loop.
+        except (KombuOperationalError, ConnectionError, TimeoutError) as exc:
+            # Narrow: only broker/transport failures. Programming errors
+            # (TypeError, AttributeError, KeyError from bad finding shapes)
+            # propagate so they surface in error tracking instead of being
+            # silently indistinguishable from broker outage.
+            #
+            # `kombu.exceptions.OperationalError` is what Celery raises on
+            # broker connection failure (it's re-exported as
+            # `celery.exceptions.OperationalError`). `ConnectionError` and
+            # `TimeoutError` cover lower-level transport errors that can
+            # escape kombu's normalization in some broker configurations.
+            #
             # The Redis alert already published, so subscribers still see
             # the staleness signal. Mirrors registry.py:680 pattern.
-            logger.exception(
+            logger.warning(
                 f"sentinel-action notify_and_queue_reanalysis: send_task "
-                f"failed for finding={finding_id} sentinel={sentinel_id}"
+                f"failed (broker/transport) for finding={finding_id} "
+                f"sentinel={sentinel_id}: {exc}"
             )
 
     return {

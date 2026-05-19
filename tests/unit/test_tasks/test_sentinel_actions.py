@@ -273,6 +273,35 @@ async def test_notify_and_queue_reanalysis_uses_finding_brand_when_present(
     assert brands_seen == {"Kisqali", "Pluvicto"}
 
 
+@pytest.mark.asyncio
+async def test_notify_and_queue_reanalysis_programming_errors_propagate(
+    fake_redis: _CapturingRedis,
+):
+    """M1 (codex iter-0): the per-finding ``send_task`` catch is narrowed
+    to broker/transport exceptions only. Programming errors (``TypeError``,
+    ``AttributeError``, ``KeyError``) MUST propagate so they surface in
+    error tracking instead of being silently indistinguishable from a
+    broker outage.
+
+    Pre-fix: a ``TypeError`` raised by send_task (e.g., bad task-name shape
+    or serialization issue) would be swallowed by ``except Exception`` and
+    the queued_count would remain 0, leaving operators unable to
+    distinguish "broker down" from "programmer broke the dispatch
+    contract".
+    """
+    stale = [{"finding_id": "f1", "brand": "Kisqali", "staleness_score": 0.9}]
+    with patch(
+        "src.tasks.sentinel_actions.celery_app.send_task",
+        side_effect=TypeError("send_task signature mismatch"),
+    ):
+        with pytest.raises(TypeError, match="signature mismatch"):
+            await notify_and_queue_reanalysis(
+                sentinel_id="s-bad-shape",
+                brands=["Kisqali"],
+                trigger_data={"stale_findings": stale},
+            )
+
+
 # ---------------------------------------------------------------------------
 # flag_for_review
 # ---------------------------------------------------------------------------
