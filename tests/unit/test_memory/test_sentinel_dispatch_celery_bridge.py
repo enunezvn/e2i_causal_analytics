@@ -335,3 +335,32 @@ async def test_dispatch_agent_unknown_name_does_not_call_celery(
         celery_mock.send_task = MagicMock()
         await dispatch_sentinels()
     celery_mock.send_task.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Invariant lock — #375 codex iter-1 M1
+# ---------------------------------------------------------------------------
+
+
+def test_plan_action_constants_are_in_lockstep():
+    """``PLAN_ACTION_TASK_NAMES`` (the frozenset used by the YAML loader for
+    validation) MUST stay aligned with ``PLAN_ACTION_TO_CELERY_TASK`` (the dict
+    used by the dispatcher to enqueue Celery tasks). If they diverge silently,
+    either:
+
+    * the loader rejects an action that the dispatcher knows how to enqueue, or
+    * the loader accepts an action the dispatcher can't route → bus-only fire.
+
+    Post-consolidation (codex iter-1 M1) the frozenset is derived from the dict
+    via ``frozenset(PLAN_ACTION_TO_CELERY_TASK)``; this test is the invariant
+    lock for any future hand-edit drift.
+    """
+    from src.memory.sentinels.config_loader import PLAN_ACTION_TASK_NAMES
+    from src.memory.sentinels.registry import PLAN_ACTION_TO_CELERY_TASK
+
+    assert set(PLAN_ACTION_TASK_NAMES) == set(PLAN_ACTION_TO_CELERY_TASK), (
+        "PLAN_ACTION_TASK_NAMES (config_loader) and PLAN_ACTION_TO_CELERY_TASK "
+        "(registry) must reference the same set of plan-specced action names. "
+        f"loader-only: {set(PLAN_ACTION_TASK_NAMES) - set(PLAN_ACTION_TO_CELERY_TASK)!r}; "
+        f"registry-only: {set(PLAN_ACTION_TO_CELERY_TASK) - set(PLAN_ACTION_TASK_NAMES)!r}"
+    )

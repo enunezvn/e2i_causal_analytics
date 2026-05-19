@@ -94,10 +94,12 @@ VALID_OPS = {">", ">=", "<", "<=", "==", "!="}
 # handler in ``src.tasks.sentinel_actions``. The bus event still fires (it's
 # the non-Celery-subscriber contract).
 #
-# Keep this mapping in lockstep with
-# ``src.memory.sentinels.config_loader.PLAN_ACTION_TASK_NAMES`` — both are
-# single-source-of-truth for the plan vocabulary; if you add a plan action
-# (e.g. promote-to-procedural), add it in both places.
+# Single source of truth (#375 iter-1 M1): this dict is the canonical mapping
+# for the plan-specced action vocabulary. ``src.memory.sentinels.config_loader.
+# PLAN_ACTION_TASK_NAMES`` is DERIVED from this dict's keys via
+# ``frozenset(PLAN_ACTION_TO_CELERY_TASK)`` — adding a plan action here
+# automatically extends the YAML loader's accept-list. The lockstep invariant
+# is locked by ``test_plan_action_constants_are_in_lockstep``.
 # ----------------------------------------------------------------------------
 PLAN_ACTION_TO_CELERY_TASK: Dict[str, str] = {
     "rerun_all_active_cohorts": "src.tasks.sentinel_actions.rerun_all_active_cohorts",

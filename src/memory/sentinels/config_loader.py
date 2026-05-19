@@ -48,6 +48,7 @@ from typing import Any, Dict, Final, List
 import yaml
 
 from src.memory.sentinels.registry import (
+    PLAN_ACTION_TO_CELERY_TASK,
     VALID_ACTION_TYPES,
     VALID_PATTERN_TYPES,
     register_sentinel,
@@ -89,13 +90,15 @@ PLAN_TRIGGER_TO_INTERNAL_PATTERN: Final[Dict[str, str]] = {
 # via ``action_config['agent_name']``. The dispatcher's _fire_action path
 # already wires dispatch_agent → signal-bus, so the Celery task fires off
 # the signal-bus subscriber side.
+#
+# Single-source-of-truth (#375 iter-1 M1): the canonical mapping lives in
+# ``src.memory.sentinels.registry.PLAN_ACTION_TO_CELERY_TASK`` (a dict from
+# plan-action-name → full Celery task path). This frozenset is DERIVED from
+# that dict so any future addition propagates automatically — the loader's
+# accept-list and the dispatcher's enqueue-map cannot drift apart. The
+# invariant is locked by ``test_plan_action_constants_are_in_lockstep``.
 # ----------------------------------------------------------------------------
-PLAN_ACTION_TASK_NAMES: Final[set[str]] = {
-    "rerun_all_active_cohorts",
-    "notify_and_queue_reanalysis",
-    "flag_for_review",
-    "run_full_consolidation",
-}
+PLAN_ACTION_TASK_NAMES: Final[frozenset[str]] = frozenset(PLAN_ACTION_TO_CELERY_TASK)
 
 
 class SentinelConfigLoadError(RuntimeError):
