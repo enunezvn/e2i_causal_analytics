@@ -668,9 +668,7 @@ async def test_crystallize_calls_llm_narrator_when_flag_on(fake_supabase, monkey
 
 
 @pytest.mark.asyncio
-async def test_crystallize_narrator_swallows_only_anthropic_errors(
-    fake_supabase, monkeypatch
-):
+async def test_crystallize_narrator_swallows_only_anthropic_errors(fake_supabase, monkeypatch):
     """Codex iter-1 H2 (LOAD-BEARING) + iter-3 H1 (test rigor): the
     Haiku call must catch only the four anthropic.* SDK error classes,
     NOT broad Exception.
@@ -702,6 +700,7 @@ async def test_crystallize_narrator_swallows_only_anthropic_errors(
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-fake-key-for-shape")
 
     import anthropic as anthropic_mod
+
     from src.memory.crystallization import crystallizer as crystallizer_module
 
     # SDK-level stub: AsyncAnthropic().messages.create() raises
@@ -868,9 +867,7 @@ async def test_crystallize_narrator_captures_all_4_telemetry_fields_non_none(
 
 
 @pytest.mark.asyncio
-async def test_crystallize_narrator_falls_back_on_anthropic_api_error(
-    fake_supabase, monkeypatch
-):
+async def test_crystallize_narrator_falls_back_on_anthropic_api_error(fake_supabase, monkeypatch):
     """The narrow catch DOES swallow anthropic.* SDK errors and emits
     an empty audit (fall-back contract). Pin so the boundary is
     explicit."""
@@ -947,4 +944,3 @@ async def test_crystallize_portfolio_method_exists_and_iterates_brands(fake_supa
     # Each brand should have at least 1 insight created.
     assert result.insights_created >= 2
     assert set(result.by_brand.keys()) >= {"kisqali", "fabhalta"}
-

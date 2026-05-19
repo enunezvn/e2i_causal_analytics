@@ -91,16 +91,10 @@ def test_crystallization_task_imported_in_tasks_init():
     see the task and dispatcher.send_task calls dead-letter."""
     from pathlib import Path
 
-    init_path = (
-        Path(__file__).resolve().parents[3]
-        / "src"
-        / "tasks"
-        / "__init__.py"
-    )
+    init_path = Path(__file__).resolve().parents[3] / "src" / "tasks" / "__init__.py"
     content = init_path.read_text()
     assert "crystallization_tasks" in content, (
-        "src/tasks/__init__.py must import crystallization_tasks for "
-        "Celery worker discovery"
+        "src/tasks/__init__.py must import crystallization_tasks for Celery worker discovery"
     )
 
 
@@ -122,6 +116,4 @@ def test_crystallization_beat_schedule_registered_every_6h():
 
     # 21600.0 seconds = 6 hours
     _name, cfg = matches[0]
-    assert cfg["schedule"] == 21600.0, (
-        f"Expected 6h schedule (21600.0s); got {cfg['schedule']}"
-    )
+    assert cfg["schedule"] == 21600.0, f"Expected 6h schedule (21600.0s); got {cfg['schedule']}"

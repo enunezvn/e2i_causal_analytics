@@ -215,8 +215,7 @@ class Crystallizer:
         if not brand:
             raise ValueError("crystallize_finding requires brand")
         logger.info(
-            f"crystallize_finding: finding_id={finding_id} brand={brand} "
-            f"region={region or 'all'}"
+            f"crystallize_finding: finding_id={finding_id} brand={brand} region={region or 'all'}"
         )
         return await self.run_for_brand(
             brand=brand,
@@ -486,9 +485,7 @@ def _pick_kpi(members: List[Dict[str, Any]]) -> Optional[str]:
 # ============================================================================
 
 
-def _derive_crystal_digest_fields(
-    *, brand: str, members: List[Dict[str, Any]]
-) -> Dict[str, Any]:
+def _derive_crystal_digest_fields(*, brand: str, members: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Derive the 13 deterministic CrystalDigest fields from source members.
 
     All fields are extracted from the ``raw_content`` JSONB blob the
@@ -754,9 +751,7 @@ async def _invoke_llm_narrator(
     try:
         import anthropic  # noqa: F401
     except ImportError:
-        logger.warning(
-            "anthropic SDK unavailable; falling back to empty narrator audit"
-        )
+        logger.warning("anthropic SDK unavailable; falling back to empty narrator audit")
         return LLMCrystalNarrativeAudit(narrator_model=DEFAULT_NARRATOR_MODEL)
 
     from src.data.causal_role_evaluator import compute_haiku_cost_usd
@@ -767,17 +762,12 @@ async def _invoke_llm_narrator(
         # presence-only check would let CI placeholders (e.g.
         # ANTHROPIC_API_KEY=test-key) through and produce 401s. Use
         # the prefix check so empty + placeholder both short-circuit.
-        logger.info(
-            "narrator: ANTHROPIC_API_KEY missing or placeholder; emitting "
-            "empty audit"
-        )
+        logger.info("narrator: ANTHROPIC_API_KEY missing or placeholder; emitting empty audit")
         return LLMCrystalNarrativeAudit(narrator_model=DEFAULT_NARRATOR_MODEL)
 
     client = anthropic.AsyncAnthropic(api_key=api_key)
 
-    prompt = _build_narrator_prompt(
-        brand=brand, region=region, members=members, derived=derived
-    )
+    prompt = _build_narrator_prompt(brand=brand, region=region, members=members, derived=derived)
 
     started = time.monotonic()
     try:
@@ -798,9 +788,7 @@ async def _invoke_llm_narrator(
         # errors (TypeError, AttributeError, KeyError) MUST propagate
         # so they surface in CI / DLQ instead of being silently
         # swallowed as "empty narrator audit".
-        logger.warning(
-            "crystal-narrator-haiku-failure %s: %s", type(exc).__name__, exc
-        )
+        logger.warning("crystal-narrator-haiku-failure %s: %s", type(exc).__name__, exc)
         return LLMCrystalNarrativeAudit(
             narrator_model=DEFAULT_NARRATOR_MODEL,
             latency_ms=(time.monotonic() - started) * 1000.0,

@@ -12,14 +12,12 @@ from __future__ import annotations
 
 # E2I_TESTING_MODE is set in tests/unit/test_api/conftest.py at import
 # time so auth dependencies short-circuit.
-
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
-
 
 # ---------------------------------------------------------------------------
 # Lightweight FakeSupabase mirroring the crystallizer test shape
@@ -76,9 +74,9 @@ def client(fake_supabase: _FakeSupabase) -> TestClient:
     independently of the underlying factory implementation, so the
     test does not depend on how the factory dispatches.
     """
-    from src.api.routes.executive_insights import router
-
     from fastapi import FastAPI
+
+    from src.api.routes.executive_insights import router
 
     app = FastAPI()
     app.include_router(router, prefix="/api")
@@ -132,9 +130,7 @@ def test_portfolio_summary_empty_returns_zero_brands(client: TestClient):
     assert body["total_insights"] == 0
 
 
-def test_portfolio_summary_aggregates_by_brand(
-    client: TestClient, fake_supabase: _FakeSupabase
-):
+def test_portfolio_summary_aggregates_by_brand(client: TestClient, fake_supabase: _FakeSupabase):
     """Per-brand: count, latest crystallized_at, average effect_size."""
     now = datetime.now(timezone.utc)
     _seed_insight(
@@ -280,9 +276,7 @@ def test_portfolio_summary_route_does_not_shadow_insight_id_route(
 # ---------------------------------------------------------------------------
 
 
-def test_list_endpoint_round_trips_new_fields(
-    client: TestClient, fake_supabase: _FakeSupabase
-):
+def test_list_endpoint_round_trips_new_fields(client: TestClient, fake_supabase: _FakeSupabase):
     """A row with all 15 new fields populated must round-trip through
     the list endpoint without dropping fields."""
     now = datetime.now(timezone.utc)

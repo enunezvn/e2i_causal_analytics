@@ -102,10 +102,11 @@ def test_migration_025_adds_all_15_expected_columns():
 
     for col_name, col_type in EXPECTED_NEW_COLUMNS:
         # ADD COLUMN IF NOT EXISTS <name> <TYPE>
-        pattern = rf"ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+{re.escape(col_name)}\s+{re.escape(col_type)}"
+        pattern = (
+            rf"ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+{re.escape(col_name)}\s+{re.escape(col_type)}"
+        )
         assert re.search(pattern, body, re.IGNORECASE), (
-            f"Expected column not found: {col_name} {col_type}. "
-            f"Pattern: {pattern}"
+            f"Expected column not found: {col_name} {col_type}. Pattern: {pattern}"
         )
 
 
@@ -140,8 +141,7 @@ def test_migration_025_effect_direction_check_constraint():
     body = sql.lower()
     # Look for a check constraint mentioning the three allowed values
     assert "positive" in body and "negative" in body, (
-        "effect_direction must have a CHECK constraint enumerating "
-        "'positive'/'negative'/'null'"
+        "effect_direction must have a CHECK constraint enumerating 'positive'/'negative'/'null'"
     )
 
 
@@ -157,8 +157,7 @@ def test_migration_025_targets_executive_insights_table():
     alter_targets = re.findall(r"ALTER\s+TABLE\s+(\w+)", body, re.IGNORECASE)
     assert alter_targets, "No ALTER TABLE statements found"
     assert all(t.lower() == "executive_insights" for t in alter_targets), (
-        f"All ALTER TABLE statements must target executive_insights; "
-        f"found: {set(alter_targets)}"
+        f"All ALTER TABLE statements must target executive_insights; found: {set(alter_targets)}"
     )
 
 
