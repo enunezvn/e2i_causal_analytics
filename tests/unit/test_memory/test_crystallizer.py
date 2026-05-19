@@ -703,6 +703,108 @@ async def test_crystallize_narrator_swallows_only_anthropic_errors(
 
 
 @pytest.mark.asyncio
+async def test_crystallize_narrator_captures_all_4_telemetry_fields_non_none(
+    fake_supabase, monkeypatch
+):
+    """Codex iter-1 DoD-10: pin the live narrator integration —
+    when AsyncAnthropic.messages.create() returns a real-shape
+    response (text content + usage block with prompt_tokens +
+    completion_tokens), _invoke_llm_narrator MUST populate all 4
+    telemetry fields (latency_ms, input_tokens, output_tokens,
+    cost_usd) to non-None values.
+
+    The cost UTILITY (compute_haiku_cost_usd) is tested in isolation
+    at tests/unit/test_data/test_crystal_narrative_audit.py; this
+    test pins the END-TO-END capture inside _invoke_llm_narrator so
+    a regression that drops e.g. usage extraction trips here.
+    """
+    monkeypatch.setenv("E2I_CRYSTAL_LLM_NARRATIVES_ENABLED", "1")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-fake-key-for-shape")
+
+    # Build a fake AsyncAnthropic that returns a Haiku-shaped response.
+    # The shape mirrors the real anthropic SDK:
+    #   response.content[0].text   ← JSON string with the 3 prose fields
+    #   response.usage.input_tokens / output_tokens
+    import anthropic as anthropic_mod
+
+    class _FakeContent:
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+    class _FakeUsage:
+        def __init__(self, input_tokens: int, output_tokens: int) -> None:
+            self.input_tokens = input_tokens
+            self.output_tokens = output_tokens
+
+    class _FakeResponse:
+        def __init__(self) -> None:
+            self.content = [
+                _FakeContent(
+                    '{"key_finding": "Northeast lift +0.42 ATE",'
+                    ' "limitations": "Pre-period n=120 small",'
+                    ' "recommended_next_analysis": "Replicate Q3"}'
+                )
+            ]
+            self.usage = _FakeUsage(input_tokens=800, output_tokens=200)
+
+    class _FakeMessages:
+        async def create(self, **kwargs):
+            return _FakeResponse()
+
+    class _FakeClient:
+        def __init__(self, **_kwargs):
+            self.messages = _FakeMessages()
+
+    monkeypatch.setattr(anthropic_mod, "AsyncAnthropic", _FakeClient)
+
+    # Capture the audit emitted by _invoke_llm_narrator by patching
+    # the row-insert site to record the audit-fed fields. Easier:
+    # call _invoke_llm_narrator directly with synthetic inputs.
+    from src.memory.crystallization.crystallizer import _invoke_llm_narrator
+
+    audit = await _invoke_llm_narrator(
+        brand="kisqali",
+        region="northeast",
+        members=[
+            {
+                "memory_id": "m1",
+                "agent_name": "causal_impact",
+                "raw_content": {"ate_estimate": 0.42},
+            }
+        ],
+        derived={
+            "effect_size": 0.42,
+            "effect_ci_lower": 0.30,
+            "effect_ci_upper": 0.55,
+            "effect_direction": "positive",
+            "cohort_size": 1200,
+            "confounders_controlled": ["age", "prior_use"],
+            "sensitivity_checks_passed": ["placebo_treatment"],
+            "sensitivity_checks_failed": [],
+        },
+    )
+
+    # All 4 telemetry fields must be non-None.
+    assert audit.latency_ms is not None, "latency_ms must capture wall-clock"
+    assert audit.latency_ms >= 0.0
+    assert audit.input_tokens == 800, "input_tokens must come from usage block"
+    assert audit.output_tokens == 200, "output_tokens must come from usage block"
+    assert audit.cost_usd is not None, "cost_usd must derive from token counts"
+    # Cost = (800 * 1.00 + 200 * 5.00) / 1_000_000 = 0.0018
+    expected_cost = (800 * 1.00 + 200 * 5.00) / 1_000_000.0
+    assert abs(audit.cost_usd - expected_cost) < 1e-9, (
+        f"cost_usd must follow Haiku pricing constants; expected "
+        f"{expected_cost}, got {audit.cost_usd}"
+    )
+    # Prose round-trips from JSON response (also non-empty)
+    assert audit.key_finding == "Northeast lift +0.42 ATE"
+    assert audit.limitations == "Pre-period n=120 small"
+    assert audit.recommended_next_analysis == "Replicate Q3"
+    # Model identifier pinned
+    assert audit.narrator_model == "claude-haiku-4-5-20251001"
+
+
+@pytest.mark.asyncio
 async def test_crystallize_narrator_falls_back_on_anthropic_api_error(
     fake_supabase, monkeypatch
 ):
