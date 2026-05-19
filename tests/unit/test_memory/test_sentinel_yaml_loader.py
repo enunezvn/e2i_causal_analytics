@@ -11,6 +11,7 @@ new_causal_path) — see ``PLAN_TRIGGER_TO_INTERNAL_PATTERN`` mapping.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock, patch
@@ -25,6 +26,67 @@ from src.memory.sentinels.config_loader import (
     SentinelConfigLoadError,
     load_sentinels_from_yaml,
 )
+
+
+def _strip_sql_comments(sql: str) -> str:
+    """Strip SQL line comments (``--``) and block comments (``/* */``) from a string.
+
+    Used by the sentinel-pattern lockstep test (#381 codex iter-1 MED) to
+    prevent false enum-coverage satisfaction from commented-out ``ALTER TYPE
+    ... ADD VALUE`` clauses. A future migration carrying
+    ``/* ALTER TYPE sentinel_pattern_type ADD VALUE 'phantom' */`` in a block
+    comment, or ``-- ALTER TYPE sentinel_pattern_type ADD VALUE 'phantom'`` in
+    a line comment, must NOT register ``phantom`` as a real enum value.
+
+    Order matters: block comments are stripped first via a non-greedy
+    multi-line match so that a ``--`` inside ``/* */`` does not pre-trigger
+    line-comment stripping. Dollar-quoted strings (``$tag$ ... $tag$``) are
+    uncommon in plain DDL and intentionally not handled here.
+    """
+    # Strip /* ... */ block comments (non-greedy, multi-line).
+    sql = re.sub(r"/\*.*?\*/", "", sql, flags=re.DOTALL)
+    # Strip -- line comments (to end of line).
+    sql = re.sub(r"--[^\n]*", "", sql)
+    return sql
+
+
+def test_strip_sql_comments_helper() -> None:
+    """Sanity-check for ``_strip_sql_comments`` itself (the helper used by the
+    lockstep test below). Verifies that both block- and line-commented
+    ``ALTER TYPE`` clauses are stripped before any downstream scan.
+
+    Codex iter-1 MED (#381): the pre-existing parser only stripped ``--``
+    comments, so a ``/* ALTER TYPE ... ADD VALUE 'foo' */`` block-comment in a
+    future migration would falsely satisfy enum coverage.
+    """
+    fake_block = "/* ALTER TYPE sentinel_pattern_type ADD VALUE 'phantom' */"
+    assert "phantom" not in _strip_sql_comments(fake_block), (
+        "Parser should strip block comments"
+    )
+
+    fake_line = "-- ALTER TYPE sentinel_pattern_type ADD VALUE 'phantom'"
+    assert "phantom" not in _strip_sql_comments(fake_line), (
+        "Parser should strip line comments"
+    )
+
+    # Multi-line block comment that spans real-looking DDL.
+    fake_multiline = (
+        "ALTER TYPE sentinel_pattern_type ADD VALUE 'real';\n"
+        "/* this is a multi-line\n"
+        "   ALTER TYPE sentinel_pattern_type ADD VALUE 'phantom'\n"
+        "   comment */"
+    )
+    stripped = _strip_sql_comments(fake_multiline)
+    assert "real" in stripped, "Parser must keep live DDL"
+    assert "phantom" not in stripped, "Parser must strip multi-line block comments"
+
+    # A ``--`` inside a ``/* */`` should not survive: block-stripping happens
+    # first, so the inner ``--`` and everything after vanish together.
+    nested = "/* foo -- bar */ ALTER TYPE x ADD VALUE 'kept'"
+    stripped_nested = _strip_sql_comments(nested)
+    assert "foo" not in stripped_nested
+    assert "bar" not in stripped_nested
+    assert "kept" in stripped_nested
 
 
 class _FakeQuery:
@@ -236,18 +298,27 @@ def test_internal_pattern_types_have_db_enum_coverage():
     would fail at production INSERT time with a Postgres enum-violation —
     the unit-test suite mocks Supabase and would not catch the drift.
     """
-    import re
+    # ``re`` is imported at module level.
 
     # Resolve repo root via Path.parents — this test lives at
     # ``tests/unit/test_memory/test_sentinel_yaml_loader.py`` so parents[3]
     # is the worktree/repo root.
     repo_root = Path(__file__).resolve().parents[3]
-    migration_021 = (repo_root / "database/memory/021_insight_lifecycle.sql").read_text()
-    migration_024 = (
+    # Strip SQL comments (block ``/* */`` AND line ``--``) before any scan.
+    # Codex iter-1 MED (#381): without block-comment stripping, a future
+    # migration carrying ``/* ALTER TYPE sentinel_pattern_type ADD VALUE 'foo' */``
+    # in a block comment would falsely satisfy enum coverage.
+    migration_021 = _strip_sql_comments(
+        (repo_root / "database/memory/021_insight_lifecycle.sql").read_text()
+    )
+    migration_024_raw = (
         repo_root / "database/memory/024_sentinel_invalidation_count_pattern.sql"
     ).read_text()
+    migration_024 = _strip_sql_comments(migration_024_raw)
 
-    # Sanity: migration 024 must exist and carry the right ALTER TYPE.
+    # Sanity: migration 024 must exist and carry the right ALTER TYPE
+    # (checked against the comment-stripped text, so a commented-out clause
+    # would NOT satisfy this assertion).
     assert (
         "ADD VALUE IF NOT EXISTS 'invalidation_count'" in migration_024
     ), "migration 024 missing expected ALTER TYPE for invalidation_count"
@@ -269,12 +340,12 @@ def test_internal_pattern_types_have_db_enum_coverage():
     assert (
         create_match is not None
     ), "could not locate CREATE TYPE sentinel_pattern_type in migration 021"
-    # Strip ``-- ...`` line comments before extracting quoted enum values; the
-    # comments can contain English apostrophes (``hasn't``) that would
-    # otherwise be captured as spurious single-quoted strings.
+    # ``migration_021`` is already comment-stripped above, so the ``--``
+    # line-comments documented in 021 (e.g. ``-- threshold_breach: ...``)
+    # have already been removed; English-apostrophes in those comments
+    # therefore cannot leak into the quoted-value scan.
     enum_block = create_match.group(1)
-    enum_block_stripped = re.sub(r"--[^\n]*", "", enum_block)
-    declared_values = set(re.findall(r"'([^']+)'", enum_block_stripped))
+    declared_values = set(re.findall(r"'([^']+)'", enum_block))
     # Cross-check against the doc-of-record 4 values to catch silent edits to 021.
     assert declared_values == {
         "threshold_breach",
@@ -288,7 +359,9 @@ def test_internal_pattern_types_have_db_enum_coverage():
     for migration_path in sorted((repo_root / "database/memory").glob("*.sql")):
         if migration_path.name == "021_insight_lifecycle.sql":
             continue
-        text = migration_path.read_text()
+        # Strip block + line comments BEFORE scanning so commented-out
+        # ALTER TYPE clauses cannot falsely satisfy enum coverage.
+        text = _strip_sql_comments(migration_path.read_text())
         for match in re.finditer(
             r"ALTER\s+TYPE\s+sentinel_pattern_type\s+"
             r"ADD\s+VALUE(?:\s+IF\s+NOT\s+EXISTS)?\s+'([^']+)'",
