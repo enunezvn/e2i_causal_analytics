@@ -82,16 +82,14 @@ DEFAULT_CANDIDATES_DIR = PROJECT_ROOT / "candidates"
 DEFAULT_LM_MODEL = "anthropic/claude-sonnet-4-20250514"
 DEFAULT_SEED = 7
 DEFAULT_MAX_BOOTSTRAPPED_DEMOS = 4
-# Issue #198 codex pass-4 MED-1: raised from 16 -> 24 so all 20 labeled
-# compile-set examples survive the random.sample step inside
-# BootstrapFewShot._train (which caps `augmented_demos + raw_demos` at
-# max_labeled_demos). With max_labeled_demos=24 and 20 examples + 4
-# bootstrapped, every labeled exemplar — including both provider IV
-# variants (provider_preference_score and
-# index_provider_biologic_volume_prior_year) — is preserved in the
-# persisted few-shot demos. Pass-3 set this to 16 which dropped 4-8
-# labeled examples randomly; pass-4 audit found this routinely dropped
-# the provider IV family entirely.
+# Historical pre-Option-C context (issue #198 codex pass-4 MED-1, 2025
+# era when len(build_compile_set()) == 20): the cap was raised
+# 16 -> 24 so all 20 labeled compile-set examples survived
+# BootstrapFewShot._train's random.sample(demos, max_labeled_demos)
+# step. The cap=16 setting from pass-3 dropped 4-8 labeled examples
+# randomly per run; the pass-4 audit found this routinely dropped the
+# provider IV family (provider_preference_score and
+# index_provider_biologic_volume_prior_year) entirely.
 #
 # Phase-4 S12 Option C recompile (2026-05-19): raised from 24 -> 40 so
 # all 33 labeled compile-set examples (21 legacy + 12 new (T, Y)-
@@ -320,15 +318,34 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "program shape only. CI fallback when no API key is available."
         ),
     )
-    parser.add_argument("--max-tokens", type=int, default=1024)
-    parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=1024,
+        help="dspy.LM max-tokens cap per request. Default: 1024.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=DEFAULT_SEED,
+        help=(
+            "PRNG seed pinned via random.seed + numpy.random.seed + "
+            "DSPY_RANDOM_SEED env var for deterministic demo selection "
+            f"(BootstrapFewShot.random.sample). Default: {DEFAULT_SEED}."
+        ),
+    )
     parser.add_argument(
         "--max-bootstrapped-demos",
         type=int,
         default=DEFAULT_MAX_BOOTSTRAPPED_DEMOS,
         help=(
             "Cap on teacher-bootstrapped demos appended to the persisted "
-            f"few-shot set. Default: {DEFAULT_MAX_BOOTSTRAPPED_DEMOS}."
+            "few-shot set. The aggregate persisted demo count is "
+            "bounded by max_labeled_demos + max_bootstrapped_demos = "
+            f"{DEFAULT_MAX_LABELED_DEMOS} + {DEFAULT_MAX_BOOTSTRAPPED_DEMOS} "
+            f"= {DEFAULT_MAX_LABELED_DEMOS + DEFAULT_MAX_BOOTSTRAPPED_DEMOS} "
+            "(Phase-4 S12 Option C; covers the 33-example compile set + "
+            f"slot headroom). Default: {DEFAULT_MAX_BOOTSTRAPPED_DEMOS}."
         ),
     )
     parser.add_argument(
@@ -350,6 +367,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=str,
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="logging.basicConfig level for this script. Default: INFO.",
     )
     parser.add_argument(
         "--candidates-dir",
