@@ -126,7 +126,11 @@ class TestDenseRetriever:
             await retriever.search(query="test query", k=20, filters={"brand": "Kisqali"})
 
         mock_memory_connector.vector_search_by_text.assert_called_once_with(
-            query_text="test query", k=20, filters={"brand": "Kisqali"}, min_similarity=0.5
+            query_text="test query",
+            k=20,
+            filters={"brand": "Kisqali"},
+            min_similarity=0.5,
+            max_staleness=None,
         )
 
     @pytest.mark.asyncio
@@ -171,7 +175,10 @@ class TestBM25Retriever:
             await retriever.search(query="TRx drop", k=15, filters={"agent_name": "causal_impact"})
 
         mock_memory_connector.fulltext_search.assert_called_once_with(
-            query_text="TRx drop", k=15, filters={"agent_name": "causal_impact"}
+            query_text="TRx drop",
+            k=15,
+            filters={"agent_name": "causal_impact"},
+            max_staleness=None,
         )
 
     @pytest.mark.asyncio
@@ -478,3 +485,82 @@ class TestWeightConstants:
         assert DENSE_WEIGHT > 0
         assert SPARSE_WEIGHT > 0
         assert GRAPH_WEIGHT > 0
+
+
+# ============================================================================
+# MAX_STALENESS PARAMETER TESTS (Phase 2 finishing, issue #373)
+# ============================================================================
+
+
+class TestHybridRetrieverMaxStaleness:
+    """Tests for max_staleness parameter on HybridRetriever.search.
+
+    Phase 2 finishing per .claude/plans/e2i_memory_subsystems_implementation_plan.md
+    §Recommended-sequencing item 1. Under Decision 3 = KEEP BINARY adopted on
+    2026-05-19, max_staleness < 1.0 excludes invalidated rows; >= 1.0 includes all.
+    """
+
+    @pytest.mark.asyncio
+    async def test_search_default_max_staleness_is_none(self, mock_memory_connector):
+        """search without max_staleness should explicitly forward max_staleness=None to connector."""
+        mock_memory_connector.vector_search_by_text.return_value = []
+        mock_memory_connector.fulltext_search.return_value = []
+
+        with patch("src.rag.retriever.get_memory_connector", return_value=mock_memory_connector):
+            retriever = HybridRetriever()
+            await retriever.search(query="test")
+
+        call_kwargs_vec = mock_memory_connector.vector_search_by_text.call_args.kwargs
+        assert "max_staleness" in call_kwargs_vec, (
+            "max_staleness must be explicitly forwarded to vector_search_by_text"
+        )
+        assert call_kwargs_vec["max_staleness"] is None
+        call_kwargs_ft = mock_memory_connector.fulltext_search.call_args.kwargs
+        assert "max_staleness" in call_kwargs_ft, (
+            "max_staleness must be explicitly forwarded to fulltext_search"
+        )
+        assert call_kwargs_ft["max_staleness"] is None
+
+    @pytest.mark.asyncio
+    async def test_search_max_staleness_zero_forwarded_to_dense_and_sparse(
+        self, mock_memory_connector
+    ):
+        """search with max_staleness=0.0 should forward to dense and sparse connector calls."""
+        mock_memory_connector.vector_search_by_text.return_value = []
+        mock_memory_connector.fulltext_search.return_value = []
+
+        with patch("src.rag.retriever.get_memory_connector", return_value=mock_memory_connector):
+            retriever = HybridRetriever()
+            await retriever.search(query="test", max_staleness=0.0)
+
+        call_kwargs_vec = mock_memory_connector.vector_search_by_text.call_args.kwargs
+        assert call_kwargs_vec.get("max_staleness") == 0.0
+        call_kwargs_ft = mock_memory_connector.fulltext_search.call_args.kwargs
+        assert call_kwargs_ft.get("max_staleness") == 0.0
+
+    @pytest.mark.asyncio
+    async def test_hybrid_search_convenience_forwards_max_staleness(self, mock_memory_connector):
+        """hybrid_search() convenience function should forward max_staleness to HybridRetriever."""
+        mock_memory_connector.vector_search_by_text.return_value = []
+        mock_memory_connector.fulltext_search.return_value = []
+
+        with patch("src.rag.retriever.get_memory_connector", return_value=mock_memory_connector):
+            await hybrid_search(query="test", max_staleness=0.5)
+
+        call_kwargs_vec = mock_memory_connector.vector_search_by_text.call_args.kwargs
+        assert call_kwargs_vec.get("max_staleness") == 0.5
+
+    @pytest.mark.asyncio
+    async def test_search_max_staleness_one_forwarded(self, mock_memory_connector):
+        """search with max_staleness=1.0 (no-op semantic) should still forward 1.0 to connectors."""
+        mock_memory_connector.vector_search_by_text.return_value = []
+        mock_memory_connector.fulltext_search.return_value = []
+
+        with patch("src.rag.retriever.get_memory_connector", return_value=mock_memory_connector):
+            retriever = HybridRetriever()
+            await retriever.search(query="test", max_staleness=1.0)
+
+        call_kwargs_vec = mock_memory_connector.vector_search_by_text.call_args.kwargs
+        assert call_kwargs_vec.get("max_staleness") == 1.0
+        call_kwargs_ft = mock_memory_connector.fulltext_search.call_args.kwargs
+        assert call_kwargs_ft.get("max_staleness") == 1.0
