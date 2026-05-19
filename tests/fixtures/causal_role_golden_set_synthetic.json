@@ -1,0 +1,925 @@
+{
+  "entries": [
+    {
+      "dataset_context": "cohort=A1_confounder_heavy; target=disease_progression_180d; prediction_anchor=index_date",
+      "derivation_pseudocode": "source=lab_events; derivation_inputs=['severity_score']; aggregation=max; window_days=180; knowable_at=index_date-1d",
+      "feature_name": "baseline_severity_score_preindex",
+      "ground_truth_role": "confounder",
+      "rationale": "Pre-index disease severity directly drives clinician's treatment decision (Z1\u2192T) AND independently determines disease progression risk (Z1\u2192Y). Direct parent of both T and Y \u2192 confounder.",
+      "scenario": "A1_confounder_heavy",
+      "treatment_explicit": false
+    },
+    {
+      "dataset_context": "cohort=A1_confounder_heavy; target=disease_progression_180d; prediction_anchor=index_date",
+      "derivation_pseudocode": "source=diagnosis_events; derivation_inputs=['icd10cm_code']; aggregation=count; window_days=365; knowable_at=index_date-1d",
+      "feature_name": "comorbidity_burden_preindex",
+      "ground_truth_role": "confounder",
+      "rationale": "Comorbidity burden modifies treatment selection (sicker patients get different regimens, Z2\u2192T) AND raises baseline progression hazard via competing-risk pathways (Z2\u2192Y). Direct parent of both \u2192 confounder.",
+      "scenario": "A1_confounder_heavy",
+      "treatment_explicit": false
+    },
+    {
+      "dataset_context": "cohort=A1_confounder_heavy; target=disease_progression_180d; prediction_anchor=index_date",
+      "derivation_pseudocode": "source=demographics; derivation_inputs=['date_of_birth']; aggregation=None; window_days=None; knowable_at=index_date",
+      "feature_name": "age_at_index",
+      "ground_truth_role": "confounder",
+      "rationale": "Age affects prescriber's treatment choice (geriatric vs younger dosing, Z3\u2192T) AND independently predicts progression risk (Z3\u2192Y). Direct parent of both \u2192 confounder.",
+      "scenario": "A1_confounder_heavy",
+      "treatment_explicit": false
+    },
+    {
+      "dataset_context": "cohort=A1_confounder_heavy; target=disease_progression_180d; prediction_anchor=index_date",
+      "derivation_pseudocode": "source=lab_events; derivation_inputs=['crp_value']; aggregation=max; window_days=180; knowable_at=index_date-1d",
+      "feature_name": "baseline_inflammatory_marker_preindex",
+      "ground_truth_role": "ancestor",
+      "rationale": "Baseline inflammation drives disease-progression risk (A1\u2192Y) but does not directly determine treatment selection in this cohort. Parent of Y only, not T \u2192 ancestor of Y.",
+      "scenario": "A1_confounder_heavy",
+      "treatment_explicit": false
+    },
+    {
+      "dataset_context": "cohort=A1_confounder_heavy; target=disease_progression_180d; prediction_anchor=index_date",
+      "derivation_pseudocode": "source=demographics; derivation_inputs=['family_history_flag']; aggregation=None; window_days=None; knowable_at=enrollment_date",
+      "feature_name": "family_history_autoimmune",
+      "ground_truth_role": "ancestor",
+      "rationale": "Family history is a stable pre-index trait that predicts genetic predisposition to disease progression (A2\u2192Y) but does not directly affect the index treatment decision. Parent of Y only \u2192 ancestor.",
+      "scenario": "A1_confounder_heavy",
+      "treatment_explicit": false
+    },
+    {
+      "dataset_context": "cohort=A1_confounder_heavy; target=disease_progression_180d; prediction_anchor=index_date",
+      "derivation_pseudocode": "source=medication_events; derivation_inputs=['fill_date']; aggregation=count; window_days=180; knowable_at=index_date+180d",
+      "feature_name": "post_index_medication_fills",
+      "ground_truth_role": "descendant",
+      "rationale": "Post-index pharmacy fills are causally downstream of treatment initiation (T\u2192D1) with no path back to Y \u2192 descendant. Classic leakage pattern: aggregates events AFTER prediction anchor.",
+      "scenario": "A1_confounder_heavy",
+      "treatment_explicit": false
+    },
+    {
+      "dataset_context": "cohort=A1_confounder_heavy; target=disease_progression_180d; prediction_anchor=index_date",
+      "derivation_pseudocode": "source=encounter_events; derivation_inputs=['visit_date']; aggregation=count; window_days=180; knowable_at=index_date+180d",
+      "feature_name": "treatment_followup_visit_count",
+      "ground_truth_role": "descendant",
+      "rationale": "Follow-up visits scheduled in response to treatment initiation (T\u2192D2). Counted in the post-index window with no causal arrow back to Y in this DAG \u2192 descendant.",
+      "scenario": "A1_confounder_heavy",
+      "treatment_explicit": false
+    },
+    {
+      "dataset_context": "cohort=A1_confounder_heavy; target=disease_progression_180d; prediction_anchor=index_date",
+      "derivation_pseudocode": "source=demographics; derivation_inputs=['death_date']; aggregation=None; window_days=None; knowable_at=index_date+180d",
+      "feature_name": "alive_at_180d_observation_window",
+      "ground_truth_role": "collider",
+      "rationale": "Conditioning on survival at 180d is a Greenland-Pearl-Robins M-structure: both T (treatment toxicity affects survival) AND Y (disease progression affects survival) point INTO V1. Common descendant of T and Y \u2192 collider; M-structure under restriction.",
+      "scenario": "A1_confounder_heavy",
+      "treatment_explicit": false
+    },
+    {
+      "dataset_context": "cohort=A1_confounder_heavy; target=disease_progression_180d; prediction_anchor=index_date",
+      "derivation_pseudocode": "source=claims_provider; derivation_inputs=['provider_id', 'prior_initiation_count']; aggregation=mean; window_days=365; knowable_at=index_date-1d",
+      "feature_name": "index_provider_preference_score",
+      "ground_truth_role": "instrument",
+      "rationale": "Brookhart-Schneeweiss 2007 preference-based IV. Z\u2192T via physician prescribing pattern; no Z\u2192Y path bypassing T (verified by removing T from DAG); no common ancestor with Y \u2192 instrument.",
+      "scenario": "A1_confounder_heavy",
+      "treatment_explicit": false
+    },
+    {
+      "dataset_context": "cohort=A2_mediator_heavy; target=clinical_response_180d; prediction_anchor=index_date",
+      "derivation_pseudocode": "source=lab_events; derivation_inputs=['severity_score']; aggregation=max; window_days=180; knowable_at=index_date-1d",
+      "feature_name": "baseline_severity_score_preindex",
+      "ground_truth_role": "confounder",
+      "rationale": "Pre-index severity affects treatment decision (Z1\u2192T) AND clinical response (Z1\u2192Y, sicker patients respond differently). Direct parent of both \u2192 confounder.",
+      "scenario": "A2_mediator_heavy",
+      "treatment_explicit": false
+    },
+    {
+      "dataset_context": "cohort=A2_mediator_heavy; target=clinical_response_180d; prediction_anchor=index_date",
+      "derivation_pseudocode": "source=lab_events; derivation_inputs=['drug_level_value', 'lab_date']; aggregation=mean; window_days=30; knowable_at=index_date+30d",
+      "feature_name": "plasma_drug_concentration_30d",
+      "ground_truth_role": "mediator",
+      "rationale": "Plasma drug level is the proximal pharmacologic intermediate: T\u2192M1 (initiation drives exposure) AND M1\u2192Y (exposure determines response). On the T\u2192Y directed path \u2192 mediator.",
+      "scenario": "A2_mediator_heavy",
+      "treatment_explicit": false
+    },
+    {
+      "dataset_context": "cohort=A2_mediator_heavy; target=clinical_response_180d; prediction_anchor=index_date",
+      "derivation_pseudocode": "source=lab_events; derivation_inputs=['biomarker_value']; aggregation=mean; window_days=60; knowable_at=index_date+60d",
+      "feature_name": "target_engagement_biomarker_60d",
+      "ground_truth_role": "mediator",
+      "rationale": "Target engagement biomarker reflects whether the drug hit its molecular target (T\u2192M2) which in turn drives clinical benefit (M2\u2192Y). On the T\u2192Y path \u2192 mediator.",
+      "scenario": "A2_mediator_heavy",
+      "treatment_explicit": false
+    },
+    {
+      "dataset_context": "cohort=A2_mediator_heavy; target=clinical_response_180d; prediction_anchor=index_date",
+      "derivation_pseudocode": "source=lab_events; derivation_inputs=['crp_value', 'esr_value']; aggregation=mean; window_days=60; knowable_at=index_date+60d",
+      "feature_name": "inflammatory_response_delta_60d",
+      "ground_truth_role": "mediator",
+      "rationale": "Post-treatment inflammatory response is downstream of T and upstream of clinical response (T\u2192M3\u2192Y) \u2192 mediator.",
+      "scenario": "A2_mediator_heavy",
+      "treatment_explicit": false
+    },
+    {
+      "dataset_context": "cohort=A2_mediator_heavy; target=clinical_response_180d; prediction_anchor=index_date",
+      "derivation_pseudocode": "source=medication_events; derivation_inputs=['fill_date']; aggregation=count; window_days=180; knowable_at=index_date+180d",
+      "feature_name": "concomitant_med_fills_followup",
+      "ground_truth_role": "descendant",
+      "rationale": "Concomitant medication fills in the post-index window are downstream of treatment initiation (T\u2192D1) with no causal arrow to Y in this DAG \u2192 descendant.",
+      "scenario": "A2_mediator_heavy",
+      "treatment_explicit": false
+    },
+    {
+      "dataset_context": "cohort=A2_mediator_heavy; target=clinical_response_180d; prediction_anchor=index_date",
+      "derivation_pseudocode": "source=lab_events; derivation_inputs=['lab_date']; aggregation=count; window_days=180; knowable_at=index_date+180d",
+      "feature_name": "routine_monitoring_lab_count_followup",
+      "ground_truth_role": "descendant",
+      "rationale": "Routine monitoring labs ordered per treatment protocol (T\u2192D2); no path to Y. Pure descendant.",
+      "scenario": "A2_mediator_heavy",
+      "treatment_explicit": false
+    },
+    {
+      "dataset_context": "cohort=A2_mediator_heavy; target=clinical_response_180d; prediction_anchor=index_date",
+      "derivation_pseudocode": "source=encounter_events; derivation_inputs=['last_encounter_date']; aggregation=None; window_days=None; knowable_at=index_date+180d",
+      "feature_name": "complete_followup_at_180d",
+      "ground_truth_role": "collider",
+      "rationale": "Conditioning on complete follow-up is a sample-inclusion collider: treatment toxicity affects dropout (T\u2192V1) AND disease progression affects follow-up retention (Y\u2192V1). Common descendant \u2192 collider.",
+      "scenario": "A2_mediator_heavy",
+      "treatment_explicit": false
+    },
+    {
+      "dataset_context": "cohort=A2_mediator_heavy; target=clinical_response_180d; prediction_anchor=index_date",
+      "derivation_pseudocode": "source=demographics; derivation_inputs=['genotype_call']; aggregation=None; window_days=None; knowable_at=enrollment_date",
+      "feature_name": "pharmacogenetic_marker",
+      "ground_truth_role": "ancestor",
+      "rationale": "Pharmacogenetic marker predicts clinical response intensity (A1\u2192Y) but is not used as a prescribing input in this cohort (no A1\u2192T). Parent of Y only \u2192 ancestor.",
+      "scenario": "A2_mediator_heavy",
+      "treatment_explicit": false
+    },
+    {
+      "dataset_context": "cohort=A2_mediator_heavy; target=clinical_response_180d; prediction_anchor=index_date",
+      "derivation_pseudocode": "source=diagnosis_events; derivation_inputs=['first_dx_date']; aggregation=None; window_days=None; knowable_at=index_date-1d",
+      "feature_name": "baseline_disease_duration_months",
+      "ground_truth_role": "ancestor",
+      "rationale": "Disease duration is a stable pre-index attribute that predicts response trajectory (A2\u2192Y) without driving the treatment decision directly. Parent of Y only \u2192 ancestor.",
+      "scenario": "A2_mediator_heavy",
+      "treatment_explicit": false
+    },
+    {
+      "dataset_context": "cohort=A2_mediator_heavy; target=clinical_response_180d; prediction_anchor=index_date",
+      "derivation_pseudocode": "source=claims_provider; derivation_inputs=['region_code', 'formulary_tier']; aggregation=max; window_days=365; knowable_at=index_date-1d",
+      "feature_name": "regional_supply_availability_index",
+      "ground_truth_role": "instrument",
+      "rationale": "Brookhart supply-side IV: regional formulary tier drives treatment availability (Z\u2192T) but does not directly affect response biology (no Z\u2192Y bypassing T; no common ancestor with Y). \u2192 instrument.",
+      "scenario": "A2_mediator_heavy",
+      "treatment_explicit": false
+    },
+    {
+      "dataset_context": "cohort=A3_descendant_collider_rich; target=adverse_event_180d; prediction_anchor=index_date",
+      "derivation_pseudocode": "source=lab_events; derivation_inputs=['risk_panel_value']; aggregation=max; window_days=180; knowable_at=index_date-1d",
+      "feature_name": "baseline_adverse_event_risk_score",
+      "ground_truth_role": "confounder",
+      "rationale": "Baseline AE-risk score informs both treatment intensity (Z1\u2192T) AND independently predicts adverse-event likelihood (Z1\u2192Y). Direct parent of both \u2192 confounder.",
+      "scenario": "A3_descendant_collider_rich",
+      "treatment_explicit": false
+    },
+    {
+      "dataset_context": "cohort=A3_descendant_collider_rich; target=adverse_event_180d; prediction_anchor=index_date",
+      "derivation_pseudocode": "source=medication_events; derivation_inputs=['fill_date']; aggregation=count; window_days=180; knowable_at=index_date+180d",
+      "feature_name": "drug_fill_count_followup",
+      "ground_truth_role": "descendant",
+      "rationale": "Post-index drug fills are downstream of treatment initiation (T\u2192D1) with no path back to Y \u2192 descendant.",
+      "scenario": "A3_descendant_collider_rich",
+      "treatment_explicit": false
+    },
+    {
+      "dataset_context": "cohort=A3_descendant_collider_rich; target=adverse_event_180d; prediction_anchor=index_date",
+      "derivation_pseudocode": "source=medication_events; derivation_inputs=['dose_change_date']; aggregation=count; window_days=180; knowable_at=index_date+180d",
+      "feature_name": "dose_titration_event_count_followup",
+      "ground_truth_role": "descendant",
+      "rationale": "Dose titrations happen only after treatment is initiated (T\u2192D2); no causal arrow back to Y \u2192 descendant.",
+      "scenario": "A3_descendant_collider_rich",
+      "treatment_explicit": false
+    },
+    {
+      "dataset_context": "cohort=A3_descendant_collider_rich; target=adverse_event_180d; prediction_anchor=index_date",
+      "derivation_pseudocode": "source=medication_events; derivation_inputs=['fill_date', 'supply_days']; aggregation=sum; window_days=180; knowable_at=index_date+180d",
+      "feature_name": "treatment_persistence_days_followup",
+      "ground_truth_role": "descendant",
+      "rationale": "Persistence is by-construction a function of post-index dispensing (T\u2192D3). No arrow to Y in this DAG \u2192 descendant.",
+      "scenario": "A3_descendant_collider_rich",
+      "treatment_explicit": false
+    },
+    {
+      "dataset_context": "cohort=A3_descendant_collider_rich; target=adverse_event_180d; prediction_anchor=index_date",
+      "derivation_pseudocode": "source=encounter_events; derivation_inputs=['admit_date']; aggregation=count; window_days=180; knowable_at=index_date+180d",
+      "feature_name": "hospitalization_count_followup",
+      "ground_truth_role": "collider",
+      "rationale": "Confounder-collider on hospitalization: T (treatment toxicity) and Y (adverse-event severity drives admission) both point INTO V1. Common descendant \u2192 collider per Greenland-Pearl-Robins 1999.",
+      "scenario": "A3_descendant_collider_rich",
+      "treatment_explicit": false
+    },
+    {
+      "dataset_context": "cohort=A3_descendant_collider_rich; target=adverse_event_180d; prediction_anchor=index_date",
+      "derivation_pseudocode": "source=lab_events; derivation_inputs=['lab_date']; aggregation=count; window_days=180; knowable_at=index_date+180d",
+      "feature_name": "diagnostic_workup_count_followup",
+      "ground_truth_role": "collider",
+      "rationale": "Workup count is driven by both protocol-mandated post-T monitoring (T\u2192V2) AND AE-specific diagnostic chase (Y\u2192V2). Common descendant \u2192 collider.",
+      "scenario": "A3_descendant_collider_rich",
+      "treatment_explicit": false
+    },
+    {
+      "dataset_context": "cohort=A3_descendant_collider_rich; target=adverse_event_180d; prediction_anchor=index_date",
+      "derivation_pseudocode": "source=encounter_events; derivation_inputs=['ed_date']; aggregation=count; window_days=180; knowable_at=index_date+180d",
+      "feature_name": "ed_visit_count_followup",
+      "ground_truth_role": "collider",
+      "rationale": "ED visits respond both to treatment side effects (T\u2192V3) AND to adverse events themselves (Y\u2192V3). Common descendant \u2192 collider.",
+      "scenario": "A3_descendant_collider_rich",
+      "treatment_explicit": false
+    },
+    {
+      "dataset_context": "cohort=A3_descendant_collider_rich; target=adverse_event_180d; prediction_anchor=index_date",
+      "derivation_pseudocode": "source=demographics; derivation_inputs=['date_of_birth']; aggregation=None; window_days=None; knowable_at=index_date",
+      "feature_name": "age_at_index",
+      "ground_truth_role": "ancestor",
+      "rationale": "Age affects baseline AE likelihood (older patients accumulate more events, A1\u2192Y) but does not directly drive the treatment decision in this cohort. Parent of Y only \u2192 ancestor.",
+      "scenario": "A3_descendant_collider_rich",
+      "treatment_explicit": false
+    },
+    {
+      "dataset_context": "cohort=A3_descendant_collider_rich; target=adverse_event_180d; prediction_anchor=index_date",
+      "derivation_pseudocode": "source=lab_events; derivation_inputs=['egfr_value']; aggregation=min; window_days=180; knowable_at=index_date-1d",
+      "feature_name": "baseline_egfr_preindex",
+      "ground_truth_role": "ancestor",
+      "rationale": "Baseline renal function affects drug clearance and hence AE risk (A2\u2192Y) without being a treatment-selection input in this cohort. Parent of Y only \u2192 ancestor.",
+      "scenario": "A3_descendant_collider_rich",
+      "treatment_explicit": false
+    },
+    {
+      "dataset_context": "cohort=A3_descendant_collider_rich; target=adverse_event_180d; prediction_anchor=index_date",
+      "derivation_pseudocode": "source=demographics; derivation_inputs=['zip3_code']; aggregation=None; window_days=None; knowable_at=enrollment_date",
+      "feature_name": "urban_rural_commuting_area_code",
+      "ground_truth_role": "instrument",
+      "rationale": "Geographic IV (Brookhart): RUCA reflects supply-side specialist access (IV1\u2192T) with no direct path to AE risk (no IV1\u2192Y bypassing T; no common ancestor with Y in DAG). \u2192 instrument.",
+      "scenario": "A3_descendant_collider_rich",
+      "treatment_explicit": false
+    },
+    {
+      "dataset_context": "cohort=A4_instrument_rich; target=hospitalization_180d; prediction_anchor=index_date",
+      "derivation_pseudocode": "source=claims_provider; derivation_inputs=['provider_id', 'prior_biologic_count']; aggregation=mean; window_days=365; knowable_at=index_date-1d",
+      "feature_name": "index_provider_biologic_preference",
+      "ground_truth_role": "instrument",
+      "rationale": "Brookhart-Schneeweiss preference-based IV: provider's historical biologic prescribing rate predicts T but not hospitalization biology (no IV1\u2192Y bypassing T; no shared ancestor). \u2192 instrument.",
+      "scenario": "A4_instrument_rich",
+      "treatment_explicit": false
+    },
+    {
+      "dataset_context": "cohort=A4_instrument_rich; target=hospitalization_180d; prediction_anchor=index_date",
+      "derivation_pseudocode": "source=demographics; derivation_inputs=['zip3_code']; aggregation=None; window_days=None; knowable_at=enrollment_date",
+      "feature_name": "geographic_region_four_level",
+      "ground_truth_role": "instrument",
+      "rationale": "Brookhart-style regional IV: regional formulary heterogeneity drives biologic access (IV2\u2192T) without affecting hospitalization risk biology (no IV2\u2192Y, no shared ancestor with Y). \u2192 instrument.",
+      "scenario": "A4_instrument_rich",
+      "treatment_explicit": false
+    },
+    {
+      "dataset_context": "cohort=A4_instrument_rich; target=hospitalization_180d; prediction_anchor=index_date",
+      "derivation_pseudocode": "source=claims_provider; derivation_inputs=['provider_id', 'prior_init_count']; aggregation=count; window_days=365; knowable_at=index_date-1d",
+      "feature_name": "index_provider_biologic_volume_prior_year",
+      "ground_truth_role": "instrument",
+      "rationale": "Provider-volume IV (distinct from preference-fraction IV1): absolute volume of biologic inits drives prescribing readiness (IV3\u2192T) with no direct path to hospitalization. \u2192 instrument.",
+      "scenario": "A4_instrument_rich",
+      "treatment_explicit": false
+    },
+    {
+      "dataset_context": "cohort=A4_instrument_rich; target=hospitalization_180d; prediction_anchor=index_date",
+      "derivation_pseudocode": "source=lab_events; derivation_inputs=['severity_score']; aggregation=max; window_days=180; knowable_at=index_date-1d",
+      "feature_name": "baseline_disease_severity_preindex",
+      "ground_truth_role": "confounder",
+      "rationale": "Pre-index severity drives both treatment selection (Z1\u2192T) AND baseline hospitalization risk (Z1\u2192Y). Direct parent of both \u2192 confounder.",
+      "scenario": "A4_instrument_rich",
+      "treatment_explicit": false
+    },
+    {
+      "dataset_context": "cohort=A4_instrument_rich; target=hospitalization_180d; prediction_anchor=index_date",
+      "derivation_pseudocode": "source=lab_events; derivation_inputs=['crp_value']; aggregation=mean; window_days=60; knowable_at=index_date+60d",
+      "feature_name": "inflammatory_marker_delta_60d",
+      "ground_truth_role": "mediator",
+      "rationale": "Post-biologic inflammation drop is the pharmacologic intermediate: T\u2192M1 (drug reduces inflammation) and M1\u2192Y (less inflammation \u2192 fewer hospitalizations). On the T\u2192Y path \u2192 mediator.",
+      "scenario": "A4_instrument_rich",
+      "treatment_explicit": false
+    },
+    {
+      "dataset_context": "cohort=A4_instrument_rich; target=hospitalization_180d; prediction_anchor=index_date",
+      "derivation_pseudocode": "source=encounter_events; derivation_inputs=['oxygen_rx_flag']; aggregation=None; window_days=None; knowable_at=enrollment_date",
+      "feature_name": "baseline_oxygen_dependence",
+      "ground_truth_role": "ancestor",
+      "rationale": "Baseline oxygen dependence is a stable pre-index marker predicting hospitalization risk (A1\u2192Y) without driving the biologic decision in this cohort. Parent of Y only \u2192 ancestor.",
+      "scenario": "A4_instrument_rich",
+      "treatment_explicit": false
+    },
+    {
+      "dataset_context": "cohort=A4_instrument_rich; target=hospitalization_180d; prediction_anchor=index_date",
+      "derivation_pseudocode": "source=lab_events; derivation_inputs=['lab_date']; aggregation=count; window_days=180; knowable_at=index_date+180d",
+      "feature_name": "post_index_routine_lab_count",
+      "ground_truth_role": "descendant",
+      "rationale": "Routine post-biologic monitoring labs (LFT/CBC under biologic protocol). T\u2192D1; no arrow back to Y \u2192 descendant.",
+      "scenario": "A4_instrument_rich",
+      "treatment_explicit": false
+    },
+    {
+      "dataset_context": "cohort=A4_instrument_rich; target=hospitalization_180d; prediction_anchor=index_date",
+      "derivation_pseudocode": "source=demographics; derivation_inputs=['death_date']; aggregation=None; window_days=None; knowable_at=index_date+180d",
+      "feature_name": "alive_at_180d_observation_flag",
+      "ground_truth_role": "collider",
+      "rationale": "Survival-at-180d is a sample-inclusion collider: biologic toxicity affects survival (T\u2192V1) AND hospitalization frequency affects mortality (Y\u2192V1). Common descendant \u2192 collider.",
+      "scenario": "A4_instrument_rich",
+      "treatment_explicit": false
+    },
+    {
+      "dataset_context": "cohort=A1_confounder_heavy; target=disease_progression_180d; prediction_anchor=index_date; treatment=treatment_initiated; outcome=disease_progression_180d",
+      "derivation_pseudocode": "source=lab_events; derivation_inputs=['severity_score']; aggregation=max; window_days=180; knowable_at=index_date-1d",
+      "feature_name": "baseline_severity_score_preindex",
+      "ground_truth_role": "confounder",
+      "rationale": "Pre-index disease severity directly drives clinician's treatment decision (Z1\u2192T) AND independently determines disease progression risk (Z1\u2192Y). Direct parent of both T and Y \u2192 confounder.",
+      "scenario": "A1_confounder_heavy",
+      "treatment_explicit": true
+    },
+    {
+      "dataset_context": "cohort=A1_confounder_heavy; target=disease_progression_180d; prediction_anchor=index_date; treatment=treatment_initiated; outcome=disease_progression_180d",
+      "derivation_pseudocode": "source=diagnosis_events; derivation_inputs=['icd10cm_code']; aggregation=count; window_days=365; knowable_at=index_date-1d",
+      "feature_name": "comorbidity_burden_preindex",
+      "ground_truth_role": "confounder",
+      "rationale": "Comorbidity burden modifies treatment selection (sicker patients get different regimens, Z2\u2192T) AND raises baseline progression hazard via competing-risk pathways (Z2\u2192Y). Direct parent of both \u2192 confounder.",
+      "scenario": "A1_confounder_heavy",
+      "treatment_explicit": true
+    },
+    {
+      "dataset_context": "cohort=A1_confounder_heavy; target=disease_progression_180d; prediction_anchor=index_date; treatment=treatment_initiated; outcome=disease_progression_180d",
+      "derivation_pseudocode": "source=demographics; derivation_inputs=['date_of_birth']; aggregation=None; window_days=None; knowable_at=index_date",
+      "feature_name": "age_at_index",
+      "ground_truth_role": "confounder",
+      "rationale": "Age affects prescriber's treatment choice (geriatric vs younger dosing, Z3\u2192T) AND independently predicts progression risk (Z3\u2192Y). Direct parent of both \u2192 confounder.",
+      "scenario": "A1_confounder_heavy",
+      "treatment_explicit": true
+    },
+    {
+      "dataset_context": "cohort=A1_confounder_heavy; target=disease_progression_180d; prediction_anchor=index_date; treatment=treatment_initiated; outcome=disease_progression_180d",
+      "derivation_pseudocode": "source=lab_events; derivation_inputs=['crp_value']; aggregation=max; window_days=180; knowable_at=index_date-1d",
+      "feature_name": "baseline_inflammatory_marker_preindex",
+      "ground_truth_role": "ancestor",
+      "rationale": "Baseline inflammation drives disease-progression risk (A1\u2192Y) but does not directly determine treatment selection in this cohort. Parent of Y only, not T \u2192 ancestor of Y.",
+      "scenario": "A1_confounder_heavy",
+      "treatment_explicit": true
+    },
+    {
+      "dataset_context": "cohort=A1_confounder_heavy; target=disease_progression_180d; prediction_anchor=index_date; treatment=treatment_initiated; outcome=disease_progression_180d",
+      "derivation_pseudocode": "source=demographics; derivation_inputs=['family_history_flag']; aggregation=None; window_days=None; knowable_at=enrollment_date",
+      "feature_name": "family_history_autoimmune",
+      "ground_truth_role": "ancestor",
+      "rationale": "Family history is a stable pre-index trait that predicts genetic predisposition to disease progression (A2\u2192Y) but does not directly affect the index treatment decision. Parent of Y only \u2192 ancestor.",
+      "scenario": "A1_confounder_heavy",
+      "treatment_explicit": true
+    },
+    {
+      "dataset_context": "cohort=A1_confounder_heavy; target=disease_progression_180d; prediction_anchor=index_date; treatment=treatment_initiated; outcome=disease_progression_180d",
+      "derivation_pseudocode": "source=medication_events; derivation_inputs=['fill_date']; aggregation=count; window_days=180; knowable_at=index_date+180d",
+      "feature_name": "post_index_medication_fills",
+      "ground_truth_role": "descendant",
+      "rationale": "Post-index pharmacy fills are causally downstream of treatment initiation (T\u2192D1) with no path back to Y \u2192 descendant. Classic leakage pattern: aggregates events AFTER prediction anchor.",
+      "scenario": "A1_confounder_heavy",
+      "treatment_explicit": true
+    },
+    {
+      "dataset_context": "cohort=A1_confounder_heavy; target=disease_progression_180d; prediction_anchor=index_date; treatment=treatment_initiated; outcome=disease_progression_180d",
+      "derivation_pseudocode": "source=encounter_events; derivation_inputs=['visit_date']; aggregation=count; window_days=180; knowable_at=index_date+180d",
+      "feature_name": "treatment_followup_visit_count",
+      "ground_truth_role": "descendant",
+      "rationale": "Follow-up visits scheduled in response to treatment initiation (T\u2192D2). Counted in the post-index window with no causal arrow back to Y in this DAG \u2192 descendant.",
+      "scenario": "A1_confounder_heavy",
+      "treatment_explicit": true
+    },
+    {
+      "dataset_context": "cohort=A1_confounder_heavy; target=disease_progression_180d; prediction_anchor=index_date; treatment=treatment_initiated; outcome=disease_progression_180d",
+      "derivation_pseudocode": "source=demographics; derivation_inputs=['death_date']; aggregation=None; window_days=None; knowable_at=index_date+180d",
+      "feature_name": "alive_at_180d_observation_window",
+      "ground_truth_role": "collider",
+      "rationale": "Conditioning on survival at 180d is a Greenland-Pearl-Robins M-structure: both T (treatment toxicity affects survival) AND Y (disease progression affects survival) point INTO V1. Common descendant of T and Y \u2192 collider; M-structure under restriction.",
+      "scenario": "A1_confounder_heavy",
+      "treatment_explicit": true
+    },
+    {
+      "dataset_context": "cohort=A1_confounder_heavy; target=disease_progression_180d; prediction_anchor=index_date; treatment=treatment_initiated; outcome=disease_progression_180d",
+      "derivation_pseudocode": "source=claims_provider; derivation_inputs=['provider_id', 'prior_initiation_count']; aggregation=mean; window_days=365; knowable_at=index_date-1d",
+      "feature_name": "index_provider_preference_score",
+      "ground_truth_role": "instrument",
+      "rationale": "Brookhart-Schneeweiss 2007 preference-based IV. Z\u2192T via physician prescribing pattern; no Z\u2192Y path bypassing T (verified by removing T from DAG); no common ancestor with Y \u2192 instrument.",
+      "scenario": "A1_confounder_heavy",
+      "treatment_explicit": true
+    },
+    {
+      "dataset_context": "cohort=A2_mediator_heavy; target=clinical_response_180d; prediction_anchor=index_date; treatment=treatment_initiated; outcome=clinical_response_180d",
+      "derivation_pseudocode": "source=lab_events; derivation_inputs=['severity_score']; aggregation=max; window_days=180; knowable_at=index_date-1d",
+      "feature_name": "baseline_severity_score_preindex",
+      "ground_truth_role": "confounder",
+      "rationale": "Pre-index severity affects treatment decision (Z1\u2192T) AND clinical response (Z1\u2192Y, sicker patients respond differently). Direct parent of both \u2192 confounder.",
+      "scenario": "A2_mediator_heavy",
+      "treatment_explicit": true
+    },
+    {
+      "dataset_context": "cohort=A2_mediator_heavy; target=clinical_response_180d; prediction_anchor=index_date; treatment=treatment_initiated; outcome=clinical_response_180d",
+      "derivation_pseudocode": "source=lab_events; derivation_inputs=['drug_level_value', 'lab_date']; aggregation=mean; window_days=30; knowable_at=index_date+30d",
+      "feature_name": "plasma_drug_concentration_30d",
+      "ground_truth_role": "mediator",
+      "rationale": "Plasma drug level is the proximal pharmacologic intermediate: T\u2192M1 (initiation drives exposure) AND M1\u2192Y (exposure determines response). On the T\u2192Y directed path \u2192 mediator.",
+      "scenario": "A2_mediator_heavy",
+      "treatment_explicit": true
+    },
+    {
+      "dataset_context": "cohort=A2_mediator_heavy; target=clinical_response_180d; prediction_anchor=index_date; treatment=treatment_initiated; outcome=clinical_response_180d",
+      "derivation_pseudocode": "source=lab_events; derivation_inputs=['biomarker_value']; aggregation=mean; window_days=60; knowable_at=index_date+60d",
+      "feature_name": "target_engagement_biomarker_60d",
+      "ground_truth_role": "mediator",
+      "rationale": "Target engagement biomarker reflects whether the drug hit its molecular target (T\u2192M2) which in turn drives clinical benefit (M2\u2192Y). On the T\u2192Y path \u2192 mediator.",
+      "scenario": "A2_mediator_heavy",
+      "treatment_explicit": true
+    },
+    {
+      "dataset_context": "cohort=A2_mediator_heavy; target=clinical_response_180d; prediction_anchor=index_date; treatment=treatment_initiated; outcome=clinical_response_180d",
+      "derivation_pseudocode": "source=lab_events; derivation_inputs=['crp_value', 'esr_value']; aggregation=mean; window_days=60; knowable_at=index_date+60d",
+      "feature_name": "inflammatory_response_delta_60d",
+      "ground_truth_role": "mediator",
+      "rationale": "Post-treatment inflammatory response is downstream of T and upstream of clinical response (T\u2192M3\u2192Y) \u2192 mediator.",
+      "scenario": "A2_mediator_heavy",
+      "treatment_explicit": true
+    },
+    {
+      "dataset_context": "cohort=A2_mediator_heavy; target=clinical_response_180d; prediction_anchor=index_date; treatment=treatment_initiated; outcome=clinical_response_180d",
+      "derivation_pseudocode": "source=medication_events; derivation_inputs=['fill_date']; aggregation=count; window_days=180; knowable_at=index_date+180d",
+      "feature_name": "concomitant_med_fills_followup",
+      "ground_truth_role": "descendant",
+      "rationale": "Concomitant medication fills in the post-index window are downstream of treatment initiation (T\u2192D1) with no causal arrow to Y in this DAG \u2192 descendant.",
+      "scenario": "A2_mediator_heavy",
+      "treatment_explicit": true
+    },
+    {
+      "dataset_context": "cohort=A2_mediator_heavy; target=clinical_response_180d; prediction_anchor=index_date; treatment=treatment_initiated; outcome=clinical_response_180d",
+      "derivation_pseudocode": "source=lab_events; derivation_inputs=['lab_date']; aggregation=count; window_days=180; knowable_at=index_date+180d",
+      "feature_name": "routine_monitoring_lab_count_followup",
+      "ground_truth_role": "descendant",
+      "rationale": "Routine monitoring labs ordered per treatment protocol (T\u2192D2); no path to Y. Pure descendant.",
+      "scenario": "A2_mediator_heavy",
+      "treatment_explicit": true
+    },
+    {
+      "dataset_context": "cohort=A2_mediator_heavy; target=clinical_response_180d; prediction_anchor=index_date; treatment=treatment_initiated; outcome=clinical_response_180d",
+      "derivation_pseudocode": "source=encounter_events; derivation_inputs=['last_encounter_date']; aggregation=None; window_days=None; knowable_at=index_date+180d",
+      "feature_name": "complete_followup_at_180d",
+      "ground_truth_role": "collider",
+      "rationale": "Conditioning on complete follow-up is a sample-inclusion collider: treatment toxicity affects dropout (T\u2192V1) AND disease progression affects follow-up retention (Y\u2192V1). Common descendant \u2192 collider.",
+      "scenario": "A2_mediator_heavy",
+      "treatment_explicit": true
+    },
+    {
+      "dataset_context": "cohort=A2_mediator_heavy; target=clinical_response_180d; prediction_anchor=index_date; treatment=treatment_initiated; outcome=clinical_response_180d",
+      "derivation_pseudocode": "source=demographics; derivation_inputs=['genotype_call']; aggregation=None; window_days=None; knowable_at=enrollment_date",
+      "feature_name": "pharmacogenetic_marker",
+      "ground_truth_role": "ancestor",
+      "rationale": "Pharmacogenetic marker predicts clinical response intensity (A1\u2192Y) but is not used as a prescribing input in this cohort (no A1\u2192T). Parent of Y only \u2192 ancestor.",
+      "scenario": "A2_mediator_heavy",
+      "treatment_explicit": true
+    },
+    {
+      "dataset_context": "cohort=A2_mediator_heavy; target=clinical_response_180d; prediction_anchor=index_date; treatment=treatment_initiated; outcome=clinical_response_180d",
+      "derivation_pseudocode": "source=diagnosis_events; derivation_inputs=['first_dx_date']; aggregation=None; window_days=None; knowable_at=index_date-1d",
+      "feature_name": "baseline_disease_duration_months",
+      "ground_truth_role": "ancestor",
+      "rationale": "Disease duration is a stable pre-index attribute that predicts response trajectory (A2\u2192Y) without driving the treatment decision directly. Parent of Y only \u2192 ancestor.",
+      "scenario": "A2_mediator_heavy",
+      "treatment_explicit": true
+    },
+    {
+      "dataset_context": "cohort=A2_mediator_heavy; target=clinical_response_180d; prediction_anchor=index_date; treatment=treatment_initiated; outcome=clinical_response_180d",
+      "derivation_pseudocode": "source=claims_provider; derivation_inputs=['region_code', 'formulary_tier']; aggregation=max; window_days=365; knowable_at=index_date-1d",
+      "feature_name": "regional_supply_availability_index",
+      "ground_truth_role": "instrument",
+      "rationale": "Brookhart supply-side IV: regional formulary tier drives treatment availability (Z\u2192T) but does not directly affect response biology (no Z\u2192Y bypassing T; no common ancestor with Y). \u2192 instrument.",
+      "scenario": "A2_mediator_heavy",
+      "treatment_explicit": true
+    },
+    {
+      "dataset_context": "cohort=A3_descendant_collider_rich; target=adverse_event_180d; prediction_anchor=index_date; treatment=treatment_initiated; outcome=adverse_event_180d",
+      "derivation_pseudocode": "source=lab_events; derivation_inputs=['risk_panel_value']; aggregation=max; window_days=180; knowable_at=index_date-1d",
+      "feature_name": "baseline_adverse_event_risk_score",
+      "ground_truth_role": "confounder",
+      "rationale": "Baseline AE-risk score informs both treatment intensity (Z1\u2192T) AND independently predicts adverse-event likelihood (Z1\u2192Y). Direct parent of both \u2192 confounder.",
+      "scenario": "A3_descendant_collider_rich",
+      "treatment_explicit": true
+    },
+    {
+      "dataset_context": "cohort=A3_descendant_collider_rich; target=adverse_event_180d; prediction_anchor=index_date; treatment=treatment_initiated; outcome=adverse_event_180d",
+      "derivation_pseudocode": "source=medication_events; derivation_inputs=['fill_date']; aggregation=count; window_days=180; knowable_at=index_date+180d",
+      "feature_name": "drug_fill_count_followup",
+      "ground_truth_role": "descendant",
+      "rationale": "Post-index drug fills are downstream of treatment initiation (T\u2192D1) with no path back to Y \u2192 descendant.",
+      "scenario": "A3_descendant_collider_rich",
+      "treatment_explicit": true
+    },
+    {
+      "dataset_context": "cohort=A3_descendant_collider_rich; target=adverse_event_180d; prediction_anchor=index_date; treatment=treatment_initiated; outcome=adverse_event_180d",
+      "derivation_pseudocode": "source=medication_events; derivation_inputs=['dose_change_date']; aggregation=count; window_days=180; knowable_at=index_date+180d",
+      "feature_name": "dose_titration_event_count_followup",
+      "ground_truth_role": "descendant",
+      "rationale": "Dose titrations happen only after treatment is initiated (T\u2192D2); no causal arrow back to Y \u2192 descendant.",
+      "scenario": "A3_descendant_collider_rich",
+      "treatment_explicit": true
+    },
+    {
+      "dataset_context": "cohort=A3_descendant_collider_rich; target=adverse_event_180d; prediction_anchor=index_date; treatment=treatment_initiated; outcome=adverse_event_180d",
+      "derivation_pseudocode": "source=medication_events; derivation_inputs=['fill_date', 'supply_days']; aggregation=sum; window_days=180; knowable_at=index_date+180d",
+      "feature_name": "treatment_persistence_days_followup",
+      "ground_truth_role": "descendant",
+      "rationale": "Persistence is by-construction a function of post-index dispensing (T\u2192D3). No arrow to Y in this DAG \u2192 descendant.",
+      "scenario": "A3_descendant_collider_rich",
+      "treatment_explicit": true
+    },
+    {
+      "dataset_context": "cohort=A3_descendant_collider_rich; target=adverse_event_180d; prediction_anchor=index_date; treatment=treatment_initiated; outcome=adverse_event_180d",
+      "derivation_pseudocode": "source=encounter_events; derivation_inputs=['admit_date']; aggregation=count; window_days=180; knowable_at=index_date+180d",
+      "feature_name": "hospitalization_count_followup",
+      "ground_truth_role": "collider",
+      "rationale": "Confounder-collider on hospitalization: T (treatment toxicity) and Y (adverse-event severity drives admission) both point INTO V1. Common descendant \u2192 collider per Greenland-Pearl-Robins 1999.",
+      "scenario": "A3_descendant_collider_rich",
+      "treatment_explicit": true
+    },
+    {
+      "dataset_context": "cohort=A3_descendant_collider_rich; target=adverse_event_180d; prediction_anchor=index_date; treatment=treatment_initiated; outcome=adverse_event_180d",
+      "derivation_pseudocode": "source=lab_events; derivation_inputs=['lab_date']; aggregation=count; window_days=180; knowable_at=index_date+180d",
+      "feature_name": "diagnostic_workup_count_followup",
+      "ground_truth_role": "collider",
+      "rationale": "Workup count is driven by both protocol-mandated post-T monitoring (T\u2192V2) AND AE-specific diagnostic chase (Y\u2192V2). Common descendant \u2192 collider.",
+      "scenario": "A3_descendant_collider_rich",
+      "treatment_explicit": true
+    },
+    {
+      "dataset_context": "cohort=A3_descendant_collider_rich; target=adverse_event_180d; prediction_anchor=index_date; treatment=treatment_initiated; outcome=adverse_event_180d",
+      "derivation_pseudocode": "source=encounter_events; derivation_inputs=['ed_date']; aggregation=count; window_days=180; knowable_at=index_date+180d",
+      "feature_name": "ed_visit_count_followup",
+      "ground_truth_role": "collider",
+      "rationale": "ED visits respond both to treatment side effects (T\u2192V3) AND to adverse events themselves (Y\u2192V3). Common descendant \u2192 collider.",
+      "scenario": "A3_descendant_collider_rich",
+      "treatment_explicit": true
+    },
+    {
+      "dataset_context": "cohort=A3_descendant_collider_rich; target=adverse_event_180d; prediction_anchor=index_date; treatment=treatment_initiated; outcome=adverse_event_180d",
+      "derivation_pseudocode": "source=demographics; derivation_inputs=['date_of_birth']; aggregation=None; window_days=None; knowable_at=index_date",
+      "feature_name": "age_at_index",
+      "ground_truth_role": "ancestor",
+      "rationale": "Age affects baseline AE likelihood (older patients accumulate more events, A1\u2192Y) but does not directly drive the treatment decision in this cohort. Parent of Y only \u2192 ancestor.",
+      "scenario": "A3_descendant_collider_rich",
+      "treatment_explicit": true
+    },
+    {
+      "dataset_context": "cohort=A3_descendant_collider_rich; target=adverse_event_180d; prediction_anchor=index_date; treatment=treatment_initiated; outcome=adverse_event_180d",
+      "derivation_pseudocode": "source=lab_events; derivation_inputs=['egfr_value']; aggregation=min; window_days=180; knowable_at=index_date-1d",
+      "feature_name": "baseline_egfr_preindex",
+      "ground_truth_role": "ancestor",
+      "rationale": "Baseline renal function affects drug clearance and hence AE risk (A2\u2192Y) without being a treatment-selection input in this cohort. Parent of Y only \u2192 ancestor.",
+      "scenario": "A3_descendant_collider_rich",
+      "treatment_explicit": true
+    },
+    {
+      "dataset_context": "cohort=A3_descendant_collider_rich; target=adverse_event_180d; prediction_anchor=index_date; treatment=treatment_initiated; outcome=adverse_event_180d",
+      "derivation_pseudocode": "source=demographics; derivation_inputs=['zip3_code']; aggregation=None; window_days=None; knowable_at=enrollment_date",
+      "feature_name": "urban_rural_commuting_area_code",
+      "ground_truth_role": "instrument",
+      "rationale": "Geographic IV (Brookhart): RUCA reflects supply-side specialist access (IV1\u2192T) with no direct path to AE risk (no IV1\u2192Y bypassing T; no common ancestor with Y in DAG). \u2192 instrument.",
+      "scenario": "A3_descendant_collider_rich",
+      "treatment_explicit": true
+    },
+    {
+      "dataset_context": "cohort=A4_instrument_rich; target=hospitalization_180d; prediction_anchor=index_date; treatment=biologic_initiation_180d; outcome=hospitalization_180d",
+      "derivation_pseudocode": "source=claims_provider; derivation_inputs=['provider_id', 'prior_biologic_count']; aggregation=mean; window_days=365; knowable_at=index_date-1d",
+      "feature_name": "index_provider_biologic_preference",
+      "ground_truth_role": "instrument",
+      "rationale": "Brookhart-Schneeweiss preference-based IV: provider's historical biologic prescribing rate predicts T but not hospitalization biology (no IV1\u2192Y bypassing T; no shared ancestor). \u2192 instrument.",
+      "scenario": "A4_instrument_rich",
+      "treatment_explicit": true
+    },
+    {
+      "dataset_context": "cohort=A4_instrument_rich; target=hospitalization_180d; prediction_anchor=index_date; treatment=biologic_initiation_180d; outcome=hospitalization_180d",
+      "derivation_pseudocode": "source=demographics; derivation_inputs=['zip3_code']; aggregation=None; window_days=None; knowable_at=enrollment_date",
+      "feature_name": "geographic_region_four_level",
+      "ground_truth_role": "instrument",
+      "rationale": "Brookhart-style regional IV: regional formulary heterogeneity drives biologic access (IV2\u2192T) without affecting hospitalization risk biology (no IV2\u2192Y, no shared ancestor with Y). \u2192 instrument.",
+      "scenario": "A4_instrument_rich",
+      "treatment_explicit": true
+    },
+    {
+      "dataset_context": "cohort=A4_instrument_rich; target=hospitalization_180d; prediction_anchor=index_date; treatment=biologic_initiation_180d; outcome=hospitalization_180d",
+      "derivation_pseudocode": "source=claims_provider; derivation_inputs=['provider_id', 'prior_init_count']; aggregation=count; window_days=365; knowable_at=index_date-1d",
+      "feature_name": "index_provider_biologic_volume_prior_year",
+      "ground_truth_role": "instrument",
+      "rationale": "Provider-volume IV (distinct from preference-fraction IV1): absolute volume of biologic inits drives prescribing readiness (IV3\u2192T) with no direct path to hospitalization. \u2192 instrument.",
+      "scenario": "A4_instrument_rich",
+      "treatment_explicit": true
+    },
+    {
+      "dataset_context": "cohort=A4_instrument_rich; target=hospitalization_180d; prediction_anchor=index_date; treatment=biologic_initiation_180d; outcome=hospitalization_180d",
+      "derivation_pseudocode": "source=lab_events; derivation_inputs=['severity_score']; aggregation=max; window_days=180; knowable_at=index_date-1d",
+      "feature_name": "baseline_disease_severity_preindex",
+      "ground_truth_role": "confounder",
+      "rationale": "Pre-index severity drives both treatment selection (Z1\u2192T) AND baseline hospitalization risk (Z1\u2192Y). Direct parent of both \u2192 confounder.",
+      "scenario": "A4_instrument_rich",
+      "treatment_explicit": true
+    },
+    {
+      "dataset_context": "cohort=A4_instrument_rich; target=hospitalization_180d; prediction_anchor=index_date; treatment=biologic_initiation_180d; outcome=hospitalization_180d",
+      "derivation_pseudocode": "source=lab_events; derivation_inputs=['crp_value']; aggregation=mean; window_days=60; knowable_at=index_date+60d",
+      "feature_name": "inflammatory_marker_delta_60d",
+      "ground_truth_role": "mediator",
+      "rationale": "Post-biologic inflammation drop is the pharmacologic intermediate: T\u2192M1 (drug reduces inflammation) and M1\u2192Y (less inflammation \u2192 fewer hospitalizations). On the T\u2192Y path \u2192 mediator.",
+      "scenario": "A4_instrument_rich",
+      "treatment_explicit": true
+    },
+    {
+      "dataset_context": "cohort=A4_instrument_rich; target=hospitalization_180d; prediction_anchor=index_date; treatment=biologic_initiation_180d; outcome=hospitalization_180d",
+      "derivation_pseudocode": "source=encounter_events; derivation_inputs=['oxygen_rx_flag']; aggregation=None; window_days=None; knowable_at=enrollment_date",
+      "feature_name": "baseline_oxygen_dependence",
+      "ground_truth_role": "ancestor",
+      "rationale": "Baseline oxygen dependence is a stable pre-index marker predicting hospitalization risk (A1\u2192Y) without driving the biologic decision in this cohort. Parent of Y only \u2192 ancestor.",
+      "scenario": "A4_instrument_rich",
+      "treatment_explicit": true
+    },
+    {
+      "dataset_context": "cohort=A4_instrument_rich; target=hospitalization_180d; prediction_anchor=index_date; treatment=biologic_initiation_180d; outcome=hospitalization_180d",
+      "derivation_pseudocode": "source=lab_events; derivation_inputs=['lab_date']; aggregation=count; window_days=180; knowable_at=index_date+180d",
+      "feature_name": "post_index_routine_lab_count",
+      "ground_truth_role": "descendant",
+      "rationale": "Routine post-biologic monitoring labs (LFT/CBC under biologic protocol). T\u2192D1; no arrow back to Y \u2192 descendant.",
+      "scenario": "A4_instrument_rich",
+      "treatment_explicit": true
+    },
+    {
+      "dataset_context": "cohort=A4_instrument_rich; target=hospitalization_180d; prediction_anchor=index_date; treatment=biologic_initiation_180d; outcome=hospitalization_180d",
+      "derivation_pseudocode": "source=demographics; derivation_inputs=['death_date']; aggregation=None; window_days=None; knowable_at=index_date+180d",
+      "feature_name": "alive_at_180d_observation_flag",
+      "ground_truth_role": "collider",
+      "rationale": "Survival-at-180d is a sample-inclusion collider: biologic toxicity affects survival (T\u2192V1) AND hospitalization frequency affects mortality (Y\u2192V1). Common descendant \u2192 collider.",
+      "scenario": "A4_instrument_rich",
+      "treatment_explicit": true
+    }
+  ],
+  "scenarios": [
+    {
+      "dag_edges": [
+        [
+          "A1_baseline_biomarker",
+          "disease_progression_180d"
+        ],
+        [
+          "A2_family_history",
+          "disease_progression_180d"
+        ],
+        [
+          "IV1_provider_preference_score",
+          "treatment_initiated"
+        ],
+        [
+          "Z1_baseline_severity",
+          "disease_progression_180d"
+        ],
+        [
+          "Z1_baseline_severity",
+          "treatment_initiated"
+        ],
+        [
+          "Z2_comorbidity_burden",
+          "disease_progression_180d"
+        ],
+        [
+          "Z2_comorbidity_burden",
+          "treatment_initiated"
+        ],
+        [
+          "Z3_age_at_index",
+          "disease_progression_180d"
+        ],
+        [
+          "Z3_age_at_index",
+          "treatment_initiated"
+        ],
+        [
+          "disease_progression_180d",
+          "V1_alive_at_180d"
+        ],
+        [
+          "treatment_initiated",
+          "D1_post_index_fills"
+        ],
+        [
+          "treatment_initiated",
+          "D2_treatment_followup_visits"
+        ],
+        [
+          "treatment_initiated",
+          "V1_alive_at_180d"
+        ],
+        [
+          "treatment_initiated",
+          "disease_progression_180d"
+        ]
+      ],
+      "n_features": 9,
+      "name": "A1_confounder_heavy",
+      "outcome_node": "disease_progression_180d",
+      "treatment_node": "treatment_initiated"
+    },
+    {
+      "dag_edges": [
+        [
+          "A1_genetic_marker",
+          "clinical_response_180d"
+        ],
+        [
+          "A2_baseline_disease_duration",
+          "clinical_response_180d"
+        ],
+        [
+          "IV1_supply_side_index",
+          "treatment_initiated"
+        ],
+        [
+          "M1_drug_concentration_30d",
+          "clinical_response_180d"
+        ],
+        [
+          "M2_target_engagement_marker",
+          "clinical_response_180d"
+        ],
+        [
+          "M3_inflammatory_response_60d",
+          "clinical_response_180d"
+        ],
+        [
+          "Z1_baseline_severity",
+          "clinical_response_180d"
+        ],
+        [
+          "Z1_baseline_severity",
+          "treatment_initiated"
+        ],
+        [
+          "clinical_response_180d",
+          "V1_complete_followup_flag"
+        ],
+        [
+          "treatment_initiated",
+          "D1_concomitant_med_fills"
+        ],
+        [
+          "treatment_initiated",
+          "D2_routine_monitoring_labs"
+        ],
+        [
+          "treatment_initiated",
+          "M1_drug_concentration_30d"
+        ],
+        [
+          "treatment_initiated",
+          "M2_target_engagement_marker"
+        ],
+        [
+          "treatment_initiated",
+          "M3_inflammatory_response_60d"
+        ],
+        [
+          "treatment_initiated",
+          "V1_complete_followup_flag"
+        ]
+      ],
+      "n_features": 10,
+      "name": "A2_mediator_heavy",
+      "outcome_node": "clinical_response_180d",
+      "treatment_node": "treatment_initiated"
+    },
+    {
+      "dag_edges": [
+        [
+          "A1_age_at_index",
+          "adverse_event_180d"
+        ],
+        [
+          "A2_baseline_renal_function",
+          "adverse_event_180d"
+        ],
+        [
+          "IV1_urban_rural_code",
+          "treatment_initiated"
+        ],
+        [
+          "Z1_baseline_risk_score",
+          "adverse_event_180d"
+        ],
+        [
+          "Z1_baseline_risk_score",
+          "treatment_initiated"
+        ],
+        [
+          "adverse_event_180d",
+          "V1_hospitalization_count_followup"
+        ],
+        [
+          "adverse_event_180d",
+          "V2_diagnostic_workup_count"
+        ],
+        [
+          "adverse_event_180d",
+          "V3_ed_visit_count_followup"
+        ],
+        [
+          "treatment_initiated",
+          "D1_drug_fills_followup"
+        ],
+        [
+          "treatment_initiated",
+          "D2_dose_titration_count"
+        ],
+        [
+          "treatment_initiated",
+          "D3_treatment_persistence_days"
+        ],
+        [
+          "treatment_initiated",
+          "V1_hospitalization_count_followup"
+        ],
+        [
+          "treatment_initiated",
+          "V2_diagnostic_workup_count"
+        ],
+        [
+          "treatment_initiated",
+          "V3_ed_visit_count_followup"
+        ]
+      ],
+      "n_features": 10,
+      "name": "A3_descendant_collider_rich",
+      "outcome_node": "adverse_event_180d",
+      "treatment_node": "treatment_initiated"
+    },
+    {
+      "dag_edges": [
+        [
+          "A1_baseline_oxygen_dependence",
+          "hospitalization_180d"
+        ],
+        [
+          "IV1_provider_preference_score",
+          "biologic_initiation_180d"
+        ],
+        [
+          "IV2_geographic_region",
+          "biologic_initiation_180d"
+        ],
+        [
+          "IV3_index_provider_volume",
+          "biologic_initiation_180d"
+        ],
+        [
+          "M1_inflammation_decrease",
+          "hospitalization_180d"
+        ],
+        [
+          "Z1_baseline_severity",
+          "biologic_initiation_180d"
+        ],
+        [
+          "Z1_baseline_severity",
+          "hospitalization_180d"
+        ],
+        [
+          "biologic_initiation_180d",
+          "D1_post_index_lab_count"
+        ],
+        [
+          "biologic_initiation_180d",
+          "M1_inflammation_decrease"
+        ],
+        [
+          "biologic_initiation_180d",
+          "V1_alive_at_180d"
+        ],
+        [
+          "biologic_initiation_180d",
+          "hospitalization_180d"
+        ],
+        [
+          "hospitalization_180d",
+          "V1_alive_at_180d"
+        ]
+      ],
+      "n_features": 8,
+      "name": "A4_instrument_rich",
+      "outcome_node": "hospitalization_180d",
+      "treatment_node": "biologic_initiation_180d"
+    }
+  ],
+  "version": "1"
+}
