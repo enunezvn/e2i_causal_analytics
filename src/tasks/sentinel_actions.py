@@ -55,6 +55,8 @@ from typing import Any, Dict, Final, List, Optional
 from kombu.exceptions import OperationalError as KombuOperationalError
 from redis.exceptions import (
     ConnectionError as RedisConnectionError,
+)
+from redis.exceptions import (
     TimeoutError as RedisTimeoutError,
 )
 

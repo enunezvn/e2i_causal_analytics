@@ -27,6 +27,8 @@ from typing import Any, Dict, Optional
 
 from redis.exceptions import (
     ConnectionError as RedisConnectionError,
+)
+from redis.exceptions import (
     TimeoutError as RedisTimeoutError,
 )
 
