@@ -7,8 +7,11 @@ Four async handlers + their Celery-task wrappers:
                                     a ``data_refresh`` alert and (intent:)
                                     queues per-brand pipeline runs
 * ``notify_and_queue_reanalysis`` — fired by staleness_threshold sentinels;
-                                    publishes a ``staleness_alert`` and
-                                    queues the top-5 most-stale findings
+                                    publishes a ``staleness_alert`` for the
+                                    top-5 most-stale findings. Real Celery
+                                    enqueue of reanalysis tasks is deferred
+                                    to TODO(#378); the handler currently
+                                    notifies-only.
 * ``flag_for_review``             — fired by cohort_drift sentinels; publishes
                                     a ``cohort_drift`` alert for SME review
 * ``run_full_consolidation``      — fired by schedule sentinels; runs a
@@ -140,13 +143,31 @@ async def notify_and_queue_reanalysis(
 ) -> Dict[str, Any]:
     """
     Plan §3.8 ``staleness_threshold`` action — publishes a ``staleness_alert``
-    and queues the TOP-5 most-stale findings for re-analysis.
+    for the top-5 most-stale findings.
 
     Plan body specifies "top 5 most stale" — we sort by ``staleness_score``
-    descending, slice to :data:`_REANALYSIS_CAP`, and enqueue. Findings
+    descending, slice to :data:`_REANALYSIS_CAP`, and notify. Findings
     without a ``staleness_score`` (binary-staleness ship per Decision 3 =
     KEEP BINARY) come through as ``staleness_score=1.0`` so they're treated
     as the most urgent.
+
+    iter-1 M1 honesty fix (#375 codex iter-0 M1):
+    -----------------------------------------------
+    The previous return contract claimed ``queued_for_reanalysis`` but the
+    handler only logged + included the findings in the alert payload — no
+    Celery task was actually enqueued. The return dict now exposes:
+
+    * ``notified_for_reanalysis``  — how many findings were logged + made
+                                     available to alert subscribers
+                                     (== ``len(top)`` for the cap)
+    * ``queued_for_reanalysis``    — actual count of Celery enqueues, which
+                                     is **0** until TODO(#378) lands a real
+                                     reanalysis-task wire-up.
+
+    TODO(#378): when a reanalysis Celery task is added (likely
+    ``src.tasks.<finding_reanalysis>`` once #237's pipeline-trigger surface
+    settles), replace the log-only loop with ``celery_app.send_task(...)``
+    per finding in ``top`` and increment the queued counter accordingly.
     """
     stale_findings: List[Dict[str, Any]] = list(trigger_data.get("stale_findings") or [])
     # Stable sort: most-stale first. Treat missing scores as 1.0 (max stale).
@@ -161,20 +182,26 @@ async def notify_and_queue_reanalysis(
     }
     await publish_alert(payload)
 
-    # Re-analysis queueing: we currently log; the orchestrator will subscribe
-    # to e2i:alerts and dispatch. Coupling to a specific pipeline-trigger
-    # surface here would block on #237's still-moving target. Keep the
-    # contract observable via the alert + the summary.
+    # Notification-only today: we log + include in the alert. The
+    # orchestrator subscribes to e2i:alerts and dispatches downstream.
+    # TODO(#378): swap this for celery_app.send_task per finding once the
+    # reanalysis task lands. Coupling to a specific pipeline-trigger surface
+    # here would block on #237's still-moving target — defer per plan.
+    notified_count = 0
     for finding in top:
         logger.info(
-            f"sentinel-action queued reanalysis sentinel={sentinel_id} "
+            f"sentinel-action notified-for-reanalysis sentinel={sentinel_id} "
             f"finding={finding.get('finding_id')} "
             f"staleness={finding.get('staleness_score')}"
         )
+        notified_count += 1
+    queued_count = 0  # TODO(#378): will become len(top) when real enqueue lands
+
     return {
         "sentinel_id": str(sentinel_id),
         "stale_findings_count": len(stale_findings),
-        "queued_for_reanalysis": len(top),
+        "notified_for_reanalysis": notified_count,
+        "queued_for_reanalysis": queued_count,
     }
 
 

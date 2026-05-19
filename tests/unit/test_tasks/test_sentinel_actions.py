@@ -148,7 +148,16 @@ async def test_notify_and_queue_reanalysis_publishes_staleness_alert(
         trigger_data={"stale_findings": stale_findings},
     )
     assert summary["stale_findings_count"] == 2
-    assert summary["queued_for_reanalysis"] >= 1
+    # iter-1 M1: ``queued_for_reanalysis`` is reserved for ACTUAL Celery
+    # enqueues (which #378 will add). For now the handler only notifies via
+    # the alerts channel + log; the honest field name is
+    # ``notified_for_reanalysis``.
+    assert summary["notified_for_reanalysis"] >= 1
+    # The dishonest field MUST stay 0 until a real reanalysis task lands.
+    assert summary["queued_for_reanalysis"] == 0, (
+        "queued_for_reanalysis must be 0 until #378 wires the real Celery "
+        "enqueue — see TODO in notify_and_queue_reanalysis"
+    )
     found = False
     for _ch, raw in fake_redis.published:
         if "staleness_alert" in raw:
@@ -164,14 +173,45 @@ async def test_notify_and_queue_reanalysis_publishes_staleness_alert(
 async def test_notify_and_queue_reanalysis_caps_reanalysis_at_5(
     fake_redis: _CapturingRedis,
 ):
-    """Plan §3.8 caps re-analysis to top-5 most-stale findings."""
+    """Plan §3.8 caps re-analysis to top-5 most-stale findings.
+
+    iter-1 M1: until #378 lands the real Celery enqueue, the cap applies to
+    the ``notified_for_reanalysis`` count (top-5 logged + included in the
+    alert). ``queued_for_reanalysis`` remains 0.
+    """
     stale = [{"finding_id": f"f{i}", "brand": "Kisqali", "staleness_score": 0.9} for i in range(20)]
     summary = await notify_and_queue_reanalysis(
         sentinel_id="s-2",
         brands=["Kisqali"],
         trigger_data={"stale_findings": stale},
     )
-    assert summary["queued_for_reanalysis"] == 5
+    assert summary["notified_for_reanalysis"] == 5
+    assert summary["queued_for_reanalysis"] == 0
+
+
+@pytest.mark.asyncio
+async def test_notify_and_queue_reanalysis_return_contract_is_honest(
+    fake_redis: _CapturingRedis,
+):
+    """Codex iter-0 M1: the return contract MUST NOT claim ``queued_for_reanalysis``
+    when the handler only notifies. Until #378 implements the real Celery
+    enqueue, ``queued_for_reanalysis`` is reserved == 0 and the honest count
+    is exposed as ``notified_for_reanalysis``.
+    """
+    stale = [{"finding_id": f"f{i}", "brand": "Kisqali", "staleness_score": 0.9} for i in range(3)]
+    summary = await notify_and_queue_reanalysis(
+        sentinel_id="s-honest",
+        brands=["Kisqali"],
+        trigger_data={"stale_findings": stale},
+    )
+    # Both fields present so downstream observers can disambiguate
+    # "intent to reanalyze" vs "actually enqueued".
+    assert "notified_for_reanalysis" in summary
+    assert "queued_for_reanalysis" in summary
+    # No actual enqueue has happened yet.
+    assert summary["queued_for_reanalysis"] == 0
+    # The notify count reflects what the handler actually did.
+    assert summary["notified_for_reanalysis"] == 3
 
 
 # ---------------------------------------------------------------------------
