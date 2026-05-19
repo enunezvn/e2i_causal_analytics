@@ -142,22 +142,29 @@ async def test_notify_and_queue_reanalysis_publishes_staleness_alert(
         {"finding_id": "f1", "brand": "Kisqali", "staleness_score": 0.95},
         {"finding_id": "f2", "brand": "Kisqali", "staleness_score": 0.80},
     ]
-    summary = await notify_and_queue_reanalysis(
-        sentinel_id="s-2",
-        brands=["Kisqali"],
-        trigger_data={"stale_findings": stale_findings},
-    )
+    with patch("src.tasks.sentinel_actions.celery_app.send_task") as mock_send:
+        summary = await notify_and_queue_reanalysis(
+            sentinel_id="s-2",
+            brands=["Kisqali"],
+            trigger_data={"stale_findings": stale_findings},
+        )
     assert summary["stale_findings_count"] == 2
-    # iter-1 M1: ``queued_for_reanalysis`` is reserved for ACTUAL Celery
-    # enqueues (which #378 will add). For now the handler only notifies via
-    # the alerts channel + log; the honest field name is
-    # ``notified_for_reanalysis``.
-    assert summary["notified_for_reanalysis"] >= 1
-    # The dishonest field MUST stay 0 until a real reanalysis task lands.
-    assert summary["queued_for_reanalysis"] == 0, (
-        "queued_for_reanalysis must be 0 until #378 wires the real Celery "
-        "enqueue — see TODO in notify_and_queue_reanalysis"
+    # #378: ``queued_for_reanalysis`` now equals the count of actual Celery
+    # ``send_task`` calls — one per finding in the top-5 cap.
+    assert summary["notified_for_reanalysis"] == 2
+    assert summary["queued_for_reanalysis"] == 2, (
+        "queued_for_reanalysis must reflect actual send_task calls per #378"
     )
+    # Verify the Celery enqueue contract.
+    assert mock_send.call_count == 2
+    for call in mock_send.call_args_list:
+        args, kwargs = call.args, call.kwargs
+        assert args[0] == "src.tasks.insight_lifecycle_tasks.reanalyze_finding"
+        send_args = kwargs["args"]
+        assert send_args[1] == "Kisqali"  # brand
+        assert send_args[0] in ("f1", "f2")  # finding_id
+        assert kwargs["kwargs"] == {"triggered_by": "sentinel:staleness"}
+
     found = False
     for _ch, raw in fake_redis.published:
         if "staleness_alert" in raw:
@@ -175,43 +182,95 @@ async def test_notify_and_queue_reanalysis_caps_reanalysis_at_5(
 ):
     """Plan §3.8 caps re-analysis to top-5 most-stale findings.
 
-    iter-1 M1: until #378 lands the real Celery enqueue, the cap applies to
-    the ``notified_for_reanalysis`` count (top-5 logged + included in the
-    alert). ``queued_for_reanalysis`` remains 0.
+    #378: the cap applies to both the notify count AND the queued count —
+    we enqueue ``reanalyze_finding`` for each of the top-5, no more.
     """
     stale = [{"finding_id": f"f{i}", "brand": "Kisqali", "staleness_score": 0.9} for i in range(20)]
-    summary = await notify_and_queue_reanalysis(
-        sentinel_id="s-2",
-        brands=["Kisqali"],
-        trigger_data={"stale_findings": stale},
-    )
+    with patch("src.tasks.sentinel_actions.celery_app.send_task") as mock_send:
+        summary = await notify_and_queue_reanalysis(
+            sentinel_id="s-2",
+            brands=["Kisqali"],
+            trigger_data={"stale_findings": stale},
+        )
     assert summary["notified_for_reanalysis"] == 5
-    assert summary["queued_for_reanalysis"] == 0
+    assert summary["queued_for_reanalysis"] == 5
+    assert mock_send.call_count == 5
 
 
 @pytest.mark.asyncio
 async def test_notify_and_queue_reanalysis_return_contract_is_honest(
     fake_redis: _CapturingRedis,
 ):
-    """Codex iter-0 M1: the return contract MUST NOT claim ``queued_for_reanalysis``
-    when the handler only notifies. Until #378 implements the real Celery
-    enqueue, ``queued_for_reanalysis`` is reserved == 0 and the honest count
-    is exposed as ``notified_for_reanalysis``.
+    """The return contract carries BOTH fields so downstream observers can
+    disambiguate "intent to reanalyze" (notified) from "actually enqueued"
+    (queued). #378 makes them numerically equal for the happy path; the
+    field separation stays for forward compatibility with a future degraded
+    path where send_task fails partway through.
     """
     stale = [{"finding_id": f"f{i}", "brand": "Kisqali", "staleness_score": 0.9} for i in range(3)]
-    summary = await notify_and_queue_reanalysis(
-        sentinel_id="s-honest",
-        brands=["Kisqali"],
-        trigger_data={"stale_findings": stale},
-    )
+    with patch("src.tasks.sentinel_actions.celery_app.send_task"):
+        summary = await notify_and_queue_reanalysis(
+            sentinel_id="s-honest",
+            brands=["Kisqali"],
+            trigger_data={"stale_findings": stale},
+        )
     # Both fields present so downstream observers can disambiguate
     # "intent to reanalyze" vs "actually enqueued".
     assert "notified_for_reanalysis" in summary
     assert "queued_for_reanalysis" in summary
-    # No actual enqueue has happened yet.
-    assert summary["queued_for_reanalysis"] == 0
-    # The notify count reflects what the handler actually did.
     assert summary["notified_for_reanalysis"] == 3
+    assert summary["queued_for_reanalysis"] == 3
+
+
+@pytest.mark.asyncio
+async def test_notify_and_queue_reanalysis_send_task_failure_keeps_handler_alive(
+    fake_redis: _CapturingRedis,
+):
+    """Broker outage on a per-finding ``send_task`` MUST NOT crash the
+    handler — the Redis alert publish is the cross-process audit trail and
+    the queued counter reflects only successful enqueues. This mirrors the
+    sentinel dispatcher's best-effort send_task pattern (registry.py:680).
+    """
+    stale = [{"finding_id": f"f{i}", "brand": "Kisqali", "staleness_score": 0.9} for i in range(3)]
+    with patch(
+        "src.tasks.sentinel_actions.celery_app.send_task",
+        side_effect=ConnectionError("broker down"),
+    ) as mock_send:
+        summary = await notify_and_queue_reanalysis(
+            sentinel_id="s-broker-down",
+            brands=["Kisqali"],
+            trigger_data={"stale_findings": stale},
+        )
+    # All three were attempted.
+    assert mock_send.call_count == 3
+    # Notified count reflects what we logged (top-5 of 3 == 3).
+    assert summary["notified_for_reanalysis"] == 3
+    # Queued count reflects ACTUAL successful enqueues — zero, all failed.
+    assert summary["queued_for_reanalysis"] == 0
+
+
+@pytest.mark.asyncio
+async def test_notify_and_queue_reanalysis_uses_finding_brand_when_present(
+    fake_redis: _CapturingRedis,
+):
+    """The per-finding brand (carried in the match dict from the sentinel
+    evaluator) is what gets passed to ``reanalyze_finding``. This matters
+    when a sentinel watches a brand-agnostic table but the finding row
+    itself carries a specific brand.
+    """
+    stale = [
+        {"finding_id": "f1", "brand": "Kisqali", "staleness_score": 0.9},
+        {"finding_id": "f2", "brand": "Pluvicto", "staleness_score": 0.8},
+    ]
+    with patch("src.tasks.sentinel_actions.celery_app.send_task") as mock_send:
+        summary = await notify_and_queue_reanalysis(
+            sentinel_id="s-multi-brand",
+            brands=["all"],
+            trigger_data={"stale_findings": stale},
+        )
+    assert summary["queued_for_reanalysis"] == 2
+    brands_seen = {call.kwargs["args"][1] for call in mock_send.call_args_list}
+    assert brands_seen == {"Kisqali", "Pluvicto"}
 
 
 # ---------------------------------------------------------------------------
