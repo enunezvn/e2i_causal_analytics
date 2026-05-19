@@ -39,7 +39,7 @@ import os
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple
 
 from src.memory.services.factories import get_supabase_client
 
@@ -60,6 +60,23 @@ DEFAULT_NARRATOR_MODEL = "claude-haiku-4-5-20251001"
 # ``src.agents.cohort_constructor.constants`` but is hard-coded here
 # (not imported) to avoid a heavy import at module load time.
 DEFAULT_PORTFOLIO_BRANDS: Tuple[str, ...] = ("remibrutinib", "fabhalta", "kisqali")
+
+
+class _AnthropicMessagesProtocol(Protocol):
+    async def create(self, **kwargs: Any) -> Any: ...
+
+
+class _AnthropicClientProtocol(Protocol):
+    # Read-only property so the real ``anthropic.AsyncAnthropic`` (whose
+    # ``messages`` attribute is class-level @property → not "settable"
+    # in mypy's structural-subtype check) satisfies this Protocol.
+    # Without ``@property`` here mypy complains
+    #   "expected settable variable, got read-only attribute".
+    @property
+    def messages(self) -> _AnthropicMessagesProtocol: ...
+
+
+_AnthropicClientFactory = Callable[[str], _AnthropicClientProtocol]
 
 
 @dataclass
@@ -103,9 +120,11 @@ class Crystallizer:
         self,
         window_days: int = DEFAULT_WINDOW_DAYS,
         min_agents: int = DEFAULT_MIN_AGENTS,
+        anthropic_client_factory: Optional[_AnthropicClientFactory] = None,
     ):
         self.window_days = window_days
         self.min_agents = min_agents
+        self._anthropic_client_factory = anthropic_client_factory
 
     async def run_for_brand(
         self,
@@ -290,6 +309,7 @@ class Crystallizer:
                 region=region,
                 members=members,
                 derived=derived,
+                client_factory=self._anthropic_client_factory,
             )
             limitations = audit.limitations
             recommended_next = audit.recommended_next_analysis
@@ -723,6 +743,7 @@ async def _invoke_llm_narrator(
     region: Optional[str],
     members: List[Dict[str, Any]],
     derived: Dict[str, Any],
+    client_factory: Optional[_AnthropicClientFactory] = None,
 ) -> Any:
     """Invoke the Haiku narrator and return an
     :class:`src.data.kg.types.LLMCrystalNarrativeAudit`.
@@ -734,10 +755,8 @@ async def _invoke_llm_narrator(
     FastAPI / Celery worker pool). Telemetry (latency_ms,
     input_tokens, output_tokens, cost_usd) is captured into the audit.
 
-    UNIT TESTS: monkeypatch this function with an ``AsyncMock`` (or a
-    plain async stub) — see
-    ``tests/unit/test_memory/test_crystallizer.py`` — so no network
-    call happens and the audit is fully deterministic.
+    UNIT TESTS: pass a fake ``client_factory`` so no network call
+    happens and the audit is fully deterministic.
 
     Exception path: SDK / API exceptions narrow-caught on the four
     anthropic.* error classes (APIConnectionError, APITimeoutError,
@@ -748,13 +767,34 @@ async def _invoke_llm_narrator(
     # Lazy imports so a flag-off module load does not pay for these.
     from src.data.kg.types import LLMCrystalNarrativeAudit
 
+    # We carry the imported module under a separate name (``anthropic_module``)
+    # so mypy does not type ``anthropic`` as ``Module`` and then reject the
+    # ``anthropic = None`` fallback assignment. The local-None sentinel lets
+    # tests inject a ``client_factory`` even when the SDK is not present.
+    anthropic_module: Optional[Any]
     try:
-        import anthropic  # noqa: F401
-    except ImportError:
-        logger.warning("anthropic SDK unavailable; falling back to empty narrator audit")
-        return LLMCrystalNarrativeAudit(narrator_model=DEFAULT_NARRATOR_MODEL)
+        import anthropic as _anthropic_module
 
-    from src.data.causal_role_evaluator import compute_haiku_cost_usd
+        anthropic_module = _anthropic_module
+    except ImportError:
+        if client_factory is None:
+            logger.warning("anthropic SDK unavailable; falling back to empty narrator audit")
+            return LLMCrystalNarrativeAudit(narrator_model=DEFAULT_NARRATOR_MODEL)
+        anthropic_module = None
+
+    # Narrow catch tuple is derived from the real SDK module when present;
+    # empty tuple when only the injected factory is available (tests that
+    # explicitly inject a fake client without anthropic installed).
+    caught_api_errors: Tuple[type[BaseException], ...]
+    if anthropic_module is None:
+        caught_api_errors = ()
+    else:
+        caught_api_errors = (
+            anthropic_module.APIConnectionError,
+            anthropic_module.APITimeoutError,
+            anthropic_module.RateLimitError,
+            anthropic_module.APIStatusError,
+        )
 
     api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if not api_key.startswith("sk-ant-"):
@@ -765,7 +805,20 @@ async def _invoke_llm_narrator(
         logger.info("narrator: ANTHROPIC_API_KEY missing or placeholder; emitting empty audit")
         return LLMCrystalNarrativeAudit(narrator_model=DEFAULT_NARRATOR_MODEL)
 
-    client = anthropic.AsyncAnthropic(api_key=api_key)
+    # Resolve the effective factory. When no factory is injected we
+    # construct the real :class:`anthropic.AsyncAnthropic`; the local
+    # ``effective_factory`` keeps mypy from re-narrowing the parameter.
+    effective_factory: _AnthropicClientFactory
+    if client_factory is not None:
+        effective_factory = client_factory
+    else:
+        assert anthropic_module is not None  # narrowed by the import-fail branch above
+
+        def _default_factory(key: str) -> _AnthropicClientProtocol:
+            return anthropic_module.AsyncAnthropic(api_key=key)  # type: ignore[no-any-return,union-attr]
+
+        effective_factory = _default_factory
+    client = effective_factory(api_key)
 
     prompt = _build_narrator_prompt(brand=brand, region=region, members=members, derived=derived)
 
@@ -776,12 +829,7 @@ async def _invoke_llm_narrator(
             max_tokens=512,
             messages=[{"role": "user", "content": prompt}],
         )
-    except (
-        anthropic.APIConnectionError,
-        anthropic.APITimeoutError,
-        anthropic.RateLimitError,
-        anthropic.APIStatusError,
-    ) as exc:
+    except caught_api_errors as exc:
         # Narrow catch (codex iter-1 H2 + sibling #378 iter-0 M1):
         # SDK-level transient errors fall back to empty audit; the
         # row insert still completes with empty prose. Programming
@@ -806,6 +854,8 @@ async def _invoke_llm_narrator(
     usage = getattr(response, "usage", None)
     input_tokens = getattr(usage, "input_tokens", None) if usage else None
     output_tokens = getattr(usage, "output_tokens", None) if usage else None
+    from src.data.causal_role_evaluator import compute_haiku_cost_usd
+
     cost_usd = (
         compute_haiku_cost_usd(input_tokens=input_tokens, output_tokens=output_tokens)
         if (input_tokens is not None or output_tokens is not None)

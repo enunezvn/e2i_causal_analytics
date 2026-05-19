@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+import types
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -16,7 +18,7 @@ class _FakeQuery:
     def __init__(self, store: "FakeSupabase", table: str) -> None:
         self.store = store
         self.table_name = table
-        self._mode = None
+        self._mode: Optional[str] = None
         self._filters: Dict[str, Any] = {}
         self._in_filters: Dict[str, List[Any]] = {}
         self._gte: Dict[str, Any] = {}
@@ -678,20 +680,23 @@ async def test_crystallize_narrator_swallows_only_anthropic_errors(fake_supabase
     swallowed as "empty narrator audit". This mirrors the
     #378-iter-0-M1 / sibling narrow-catch contract.
 
-    Test rigor (codex iter-3 H1): we patch
-    ``anthropic.AsyncAnthropic`` at the SDK boundary so the REAL
-    ``_invoke_llm_narrator`` body executes — its real catch tuple
-    ``(anthropic.APIConnectionError, APITimeoutError, RateLimitError,
-    APIStatusError)`` is the assertion target. If a future regression
-    broadens that tuple to ``Exception``, the TypeError gets swallowed
-    and ``pytest.raises(TypeError)`` fails — regression caught.
+    Test rigor (codex iter-3 H1): inject a fake client at the SDK
+    boundary so the REAL ``_invoke_llm_narrator`` body executes — its
+    real catch tuple ``(anthropic.APIConnectionError, APITimeoutError,
+    RateLimitError, APIStatusError)`` is the assertion target. If a
+    future regression broadens that tuple to ``Exception``, the
+    TypeError gets swallowed and ``pytest.raises(TypeError)`` fails —
+    regression caught.
 
     The prior iter-2 shape (monkeypatching ``_invoke_llm_narrator``
-    itself) tested the MOCK, not the real catch tuple.
+    itself) tested the MOCK, not the real catch tuple. The prior
+    iter-3 shape monkeypatched ``anthropic.AsyncAnthropic`` globally;
+    this version keeps the same SDK-call boundary coverage without
+    mutating the SDK module.
 
     Companion positive-control:
     ``test_crystallize_narrator_falls_back_on_anthropic_api_error``
-    below — patches the SAME SDK boundary, raises an
+    below — injects at the SAME SDK boundary, raises an
     ``anthropic.APIConnectionError``, and asserts the real catch DOES
     swallow it (insight created with empty prose). Together the two
     tests bracket the catch boundary.
@@ -699,14 +704,12 @@ async def test_crystallize_narrator_swallows_only_anthropic_errors(fake_supabase
     monkeypatch.setenv("E2I_CRYSTAL_LLM_NARRATIVES_ENABLED", "1")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-fake-key-for-shape")
 
-    import anthropic as anthropic_mod
-
     from src.memory.crystallization import crystallizer as crystallizer_module
 
-    # SDK-level stub: AsyncAnthropic().messages.create() raises
+    # SDK-level stub: client.messages.create() raises
     # TypeError. This is one level DEEPER than the prior shape —
-    # the real _invoke_llm_narrator body runs, instantiates the
-    # (fake) client, awaits create, and hits the real catch tuple.
+    # the real _invoke_llm_narrator body runs, receives the fake
+    # client, awaits create, and hits the real catch tuple.
     class _BoomMessages:
         async def create(self, **_kwargs):
             raise TypeError("programmer error not in anthropic catch tuple")
@@ -715,7 +718,8 @@ async def test_crystallize_narrator_swallows_only_anthropic_errors(fake_supabase
         def __init__(self, **_kwargs):
             self.messages = _BoomMessages()
 
-    monkeypatch.setattr(anthropic_mod, "AsyncAnthropic", _BoomClient)
+    def _boom_client_factory(_api_key: str) -> _BoomClient:
+        return _BoomClient()
 
     # PRIMARY assertion: direct await on the real function must
     # propagate the TypeError. The real catch at
@@ -740,6 +744,7 @@ async def test_crystallize_narrator_swallows_only_anthropic_errors(fake_supabase
                 "sensitivity_checks_passed": [],
                 "sensitivity_checks_failed": [],
             },
+            client_factory=_boom_client_factory,
         )
 
     # SECONDARY observation (kept from iter-1 + iter-2): when the
@@ -752,7 +757,9 @@ async def test_crystallize_narrator_swallows_only_anthropic_errors(fake_supabase
         causal_path_id="cp1",
         agents=["causal_impact", "gap_analyzer"],
     )
-    result = await Crystallizer().run_for_brand("Kisqali")
+    result = await Crystallizer(anthropic_client_factory=_boom_client_factory).run_for_brand(
+        "Kisqali"
+    )
     assert result.insights_created == 0, (
         "TypeError must escape narrow narrator catch, not be swallowed "
         "as empty narrator audit (which would let the row insert with "
@@ -782,13 +789,22 @@ async def test_crystallize_narrator_captures_all_4_telemetry_fields_non_none(
     """
     monkeypatch.setenv("E2I_CRYSTAL_LLM_NARRATIVES_ENABLED", "1")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-fake-key-for-shape")
+    if "dspy" not in sys.modules:
+        monkeypatch.setitem(
+            sys.modules,
+            "dspy",
+            types.SimpleNamespace(
+                Signature=object,
+                InputField=lambda **_kwargs: None,
+                OutputField=lambda **_kwargs: None,
+                ChainOfThought=lambda *_args, **_kwargs: None,
+            ),
+        )
 
-    # Build a fake AsyncAnthropic that returns a Haiku-shaped response.
+    # Build a fake client that returns a Haiku-shaped response.
     # The shape mirrors the real anthropic SDK:
     #   response.content[0].text   ← JSON string with the 3 prose fields
     #   response.usage.input_tokens / output_tokens
-    import anthropic as anthropic_mod
-
     class _FakeContent:
         def __init__(self, text: str) -> None:
             self.text = text
@@ -817,11 +833,11 @@ async def test_crystallize_narrator_captures_all_4_telemetry_fields_non_none(
         def __init__(self, **_kwargs):
             self.messages = _FakeMessages()
 
-    monkeypatch.setattr(anthropic_mod, "AsyncAnthropic", _FakeClient)
+    def _fake_client_factory(_api_key: str) -> _FakeClient:
+        return _FakeClient()
 
-    # Capture the audit emitted by _invoke_llm_narrator by patching
-    # the row-insert site to record the audit-fed fields. Easier:
-    # call _invoke_llm_narrator directly with synthetic inputs.
+    # Capture the audit emitted by _invoke_llm_narrator directly with
+    # synthetic inputs.
     from src.memory.crystallization.crystallizer import _invoke_llm_narrator
 
     audit = await _invoke_llm_narrator(
@@ -844,6 +860,7 @@ async def test_crystallize_narrator_captures_all_4_telemetry_fields_non_none(
             "sensitivity_checks_passed": ["placebo_treatment"],
             "sensitivity_checks_failed": [],
         },
+        client_factory=_fake_client_factory,
     )
 
     # All 4 telemetry fields must be non-None.
@@ -874,7 +891,7 @@ async def test_crystallize_narrator_falls_back_on_anthropic_api_error(fake_supab
     monkeypatch.setenv("E2I_CRYSTAL_LLM_NARRATIVES_ENABLED", "1")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-fake-key-for-shape")
 
-    import anthropic as anthropic_mod
+    anthropic_mod = pytest.importorskip("anthropic")
 
     class _BoomMessages:
         async def create(self, **kwargs):
@@ -886,7 +903,8 @@ async def test_crystallize_narrator_falls_back_on_anthropic_api_error(fake_supab
         def __init__(self, **_kwargs):
             self.messages = _BoomMessages()
 
-    monkeypatch.setattr(anthropic_mod, "AsyncAnthropic", _BoomClient)
+    def _boom_client_factory(_api_key: str) -> _BoomClient:
+        return _BoomClient()
 
     _seed_episodic_with_causal_content(
         fake_supabase,
@@ -894,7 +912,9 @@ async def test_crystallize_narrator_falls_back_on_anthropic_api_error(fake_supab
         causal_path_id="cp1",
         agents=["causal_impact", "gap_analyzer"],
     )
-    result = await Crystallizer().run_for_brand("Kisqali")
+    result = await Crystallizer(anthropic_client_factory=_boom_client_factory).run_for_brand(
+        "Kisqali"
+    )
 
     # Insight still created — fall-back path emits empty prose, the
     # row insert succeeds. Critical contract: SDK errors do NOT block
