@@ -40,7 +40,11 @@ class DenseRetriever:
         self.embedding_dim = 1536
 
     async def search(
-        self, query: str, k: int = 10, filters: Optional[Dict[str, Any]] = None
+        self,
+        query: str,
+        k: int = 10,
+        filters: Optional[Dict[str, Any]] = None,
+        max_staleness: Optional[float] = None,
     ) -> List[RetrievalResult]:
         """
         Search vector store for semantically similar content.
@@ -53,6 +57,8 @@ class DenseRetriever:
             query: Search query text
             k: Number of results to return
             filters: Optional filters (brand, region, agent_name)
+            max_staleness: Optional staleness ceiling (see HybridRetriever.search).
+                None = no filter; < 1.0 = exclude invalidated rows.
 
         Returns:
             List of RetrievalResult with dense retrieval method
@@ -61,7 +67,11 @@ class DenseRetriever:
 
         try:
             results = await connector.vector_search_by_text(
-                query_text=query, k=k, filters=filters, min_similarity=0.5
+                query_text=query,
+                k=k,
+                filters=filters,
+                min_similarity=0.5,
+                max_staleness=max_staleness,
             )
             logger.debug(f"Dense retrieval returned {len(results)} results for: {query[:50]}...")
             return results
@@ -79,7 +89,11 @@ class BM25Retriever:
     """
 
     async def search(
-        self, query: str, k: int = 10, filters: Optional[Dict[str, Any]] = None
+        self,
+        query: str,
+        k: int = 10,
+        filters: Optional[Dict[str, Any]] = None,
+        max_staleness: Optional[float] = None,
     ) -> List[RetrievalResult]:
         """
         Search using BM25-like sparse retrieval.
@@ -93,6 +107,8 @@ class BM25Retriever:
             query: Search query text
             k: Number of results to return
             filters: Optional filters (brand, agent_name)
+            max_staleness: Optional staleness ceiling (see HybridRetriever.search).
+                None = no filter; < 1.0 = exclude invalidated rows.
 
         Returns:
             List of RetrievalResult with sparse retrieval method
@@ -100,7 +116,9 @@ class BM25Retriever:
         connector = get_memory_connector()
 
         try:
-            results = await connector.fulltext_search(query_text=query, k=k, filters=filters)
+            results = await connector.fulltext_search(
+                query_text=query, k=k, filters=filters, max_staleness=max_staleness
+            )
             logger.debug(f"Sparse retrieval returned {len(results)} results for: {query[:50]}...")
             return results
 
@@ -211,6 +229,7 @@ class HybridRetriever:
         entities: Optional[List[str]] = None,
         kpi_name: Optional[str] = None,
         filters: Optional[Dict[str, Any]] = None,
+        max_staleness: Optional[float] = None,
     ) -> List[RetrievalResult]:
         """
         Execute hybrid search with configurable weights.
@@ -225,6 +244,15 @@ class HybridRetriever:
             entities: Entity IDs for graph traversal
             kpi_name: KPI name for targeted graph traversal
             filters: Filters for dense/sparse search
+            max_staleness: Optional staleness ceiling for dense/sparse results.
+                Under Decision 3 = KEEP BINARY (adopted 2026-05-19, plan
+                §"DECISIONS ADOPTED"), this degrades to a boolean predicate:
+                  - None (default): no filter (include all rows)
+                  - >= 1.0: include all rows (functionally equivalent to None)
+                  - < 1.0 (incl 0.0): exclude any row whose metadata carries
+                    ``invalidated_at`` set
+                Graph results are not filtered (FalkorDB carries no
+                invalidated_at). Phase 2 finishing (issue #373).
 
         Returns:
             Fused results from all retrieval methods
@@ -236,8 +264,12 @@ class HybridRetriever:
         }
 
         # Run dense and sparse searches concurrently
-        dense_task = asyncio.create_task(self.dense.search(query, k=k * 2, filters=filters))
-        sparse_task = asyncio.create_task(self.sparse.search(query, k=k * 2, filters=filters))
+        dense_task = asyncio.create_task(
+            self.dense.search(query, k=k * 2, filters=filters, max_staleness=max_staleness)
+        )
+        sparse_task = asyncio.create_task(
+            self.sparse.search(query, k=k * 2, filters=filters, max_staleness=max_staleness)
+        )
 
         # Get graph results (synchronous)
         graph_results = []
@@ -327,6 +359,7 @@ async def hybrid_search(
     entities: Optional[List[str]] = None,
     kpi_name: Optional[str] = None,
     filters: Optional[Dict[str, Any]] = None,
+    max_staleness: Optional[float] = None,
 ) -> List[RetrievalResult]:
     """
     Execute hybrid search using default retriever.
@@ -337,11 +370,18 @@ async def hybrid_search(
         entities: Optional entity IDs for graph traversal
         kpi_name: Optional KPI name for targeted traversal
         filters: Optional filters
+        max_staleness: Optional staleness ceiling (see HybridRetriever.search).
+            None = no filter; < 1.0 = exclude rows with invalidated_at set.
 
     Returns:
         Fused retrieval results
     """
     retriever = HybridRetriever()
     return await retriever.search(
-        query=query, k=k, entities=entities, kpi_name=kpi_name, filters=filters
+        query=query,
+        k=k,
+        entities=entities,
+        kpi_name=kpi_name,
+        filters=filters,
+        max_staleness=max_staleness,
     )

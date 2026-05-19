@@ -505,3 +505,210 @@ class TestResultConversion:
         assert "X → Y → Z" in results[0].content
         assert results[0].score == 0.75
         assert results[0].metadata["kpi_impact"] == 0.1
+
+
+# ============================================================================
+# MAX_STALENESS FILTER TESTS (Phase 2 finishing, issue #373)
+# ============================================================================
+
+
+class TestMaxStalenessFilter:
+    """Tests for max_staleness parameter on MemoryConnector search methods.
+
+    Phase 2 finishing per .claude/plans/e2i_memory_subsystems_implementation_plan.md
+    §Recommended-sequencing item 1. Under Decision 3 = KEEP BINARY adopted on
+    2026-05-19, semantics are:
+    - None (default): no filter (backward-compatible)
+    - < 1.0 (incl 0.0): exclude rows with metadata['invalidated_at'] set
+    - >= 1.0: include all rows
+    """
+
+    @pytest.mark.asyncio
+    async def test_vector_search_max_staleness_added_to_rpc_filters_dict(self, mock_supabase):
+        """vector_search with max_staleness should pass it through the RPC filters dict."""
+        mock_supabase.rpc.return_value.execute.return_value.data = []
+
+        with patch("src.rag.memory_connector.get_supabase_client", return_value=mock_supabase):
+            connector = MemoryConnector()
+            await connector.vector_search(query_embedding=[0.1] * 1536, k=10, max_staleness=0.0)
+
+        mock_supabase.rpc.assert_called_once()
+        rpc_args = mock_supabase.rpc.call_args[0][1]
+        assert "max_staleness" in rpc_args["filters"], (
+            "max_staleness must be merged into the filters dict sent to the RPC"
+        )
+        assert rpc_args["filters"]["max_staleness"] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_fulltext_search_python_post_filter_drops_invalidated_rows(self, mock_supabase):
+        """fulltext_search with max_staleness<1.0 should drop rows whose metadata has invalidated_at set."""
+        mock_supabase.rpc.return_value.execute.return_value.data = [
+            {
+                "id": "fresh_1",
+                "content": "fresh row 1",
+                "rank": 1.0,
+                "metadata": {"invalidated_at": None},
+                "source_table": "triggers",
+            },
+            {
+                "id": "stale_2",
+                "content": "invalidated row",
+                "rank": 0.8,
+                "metadata": {"invalidated_at": "2026-05-15T00:00:00Z"},
+                "source_table": "triggers",
+            },
+            {
+                "id": "fresh_3",
+                "content": "fresh row 3",
+                "rank": 0.6,
+                "metadata": {"invalidated_at": None},
+                "source_table": "triggers",
+            },
+        ]
+
+        with patch("src.rag.memory_connector.get_supabase_client", return_value=mock_supabase):
+            connector = MemoryConnector()
+            results = await connector.fulltext_search(query_text="test", k=10, max_staleness=0.5)
+
+        result_ids = {r.source_id for r in results}
+        assert result_ids == {"fresh_1", "fresh_3"}, (
+            f"max_staleness=0.5 should drop the invalidated row; got {result_ids}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_fulltext_search_max_staleness_one_includes_invalidated_rows(self, mock_supabase):
+        """fulltext_search with max_staleness>=1.0 should include rows with invalidated_at set."""
+        mock_supabase.rpc.return_value.execute.return_value.data = [
+            {
+                "id": "fresh_1",
+                "content": "fresh",
+                "rank": 1.0,
+                "metadata": {"invalidated_at": None},
+                "source_table": "triggers",
+            },
+            {
+                "id": "stale_2",
+                "content": "invalidated",
+                "rank": 0.5,
+                "metadata": {"invalidated_at": "2026-05-15T00:00:00Z"},
+                "source_table": "triggers",
+            },
+        ]
+
+        with patch("src.rag.memory_connector.get_supabase_client", return_value=mock_supabase):
+            connector = MemoryConnector()
+            results = await connector.fulltext_search(query_text="test", k=10, max_staleness=1.0)
+
+        result_ids = {r.source_id for r in results}
+        assert result_ids == {"fresh_1", "stale_2"}, (
+            f"max_staleness=1.0 should include all rows; got {result_ids}"
+        )
+
+    def test_helper_drops_invalidated_when_max_staleness_below_one(self):
+        """_is_invalidated_under_max_staleness drops invalidated rows when max_staleness < 1.0."""
+        from src.rag.memory_connector import _is_invalidated_under_max_staleness
+
+        # Drops invalidated row when filter active
+        assert (
+            _is_invalidated_under_max_staleness({"invalidated_at": "2026-05-15T00:00:00Z"}, 0.0)
+            is True
+        )
+        assert (
+            _is_invalidated_under_max_staleness({"invalidated_at": "2026-05-15T00:00:00Z"}, 0.5)
+            is True
+        )
+        # Does NOT drop fresh row when filter active
+        assert _is_invalidated_under_max_staleness({"invalidated_at": None}, 0.0) is False
+        # Does NOT drop when filter inactive (None)
+        assert (
+            _is_invalidated_under_max_staleness({"invalidated_at": "2026-05-15T00:00:00Z"}, None)
+            is False
+        )
+        # Does NOT drop when filter inactive (>= 1.0)
+        assert (
+            _is_invalidated_under_max_staleness({"invalidated_at": "2026-05-15T00:00:00Z"}, 1.0)
+            is False
+        )
+        assert (
+            _is_invalidated_under_max_staleness({"invalidated_at": "2026-05-15T00:00:00Z"}, 1.5)
+            is False
+        )
+        # NaN is treated as no-filter (parity with PostgreSQL semantics in SQL RPC)
+        assert (
+            _is_invalidated_under_max_staleness(
+                {"invalidated_at": "2026-05-15T00:00:00Z"}, float("nan")
+            )
+            is False
+        )
+        # +inf is treated as no-filter
+        assert (
+            _is_invalidated_under_max_staleness(
+                {"invalidated_at": "2026-05-15T00:00:00Z"}, float("inf")
+            )
+            is False
+        )
+        # Negative values activate the filter (strict)
+        assert (
+            _is_invalidated_under_max_staleness({"invalidated_at": "2026-05-15T00:00:00Z"}, -0.1)
+            is True
+        )
+        # Non-dict metadata is safe (no crash)
+        assert _is_invalidated_under_max_staleness(None, 0.0) is False
+        # Empty dict is safe
+        assert _is_invalidated_under_max_staleness({}, 0.0) is False
+        # Falsy invalidated_at values are not "invalidated"
+        assert _is_invalidated_under_max_staleness({"invalidated_at": ""}, 0.0) is False
+        assert _is_invalidated_under_max_staleness({"invalidated_at": 0}, 0.0) is False
+
+    def test_helper_type_guards_against_non_numeric_inputs(self):
+        """_is_invalidated_under_max_staleness must treat bool/str/None inputs as no-filter.
+
+        Bool is excluded despite being an int subclass — False would otherwise coerce
+        to 0.0 and spuriously activate the filter (codex iter-1 LOW).
+        """
+        from src.rag.memory_connector import _is_invalidated_under_max_staleness
+
+        invalidated = {"invalidated_at": "2026-05-15T00:00:00Z"}
+        # Bool inputs degrade to no-filter (NOT to int coercion)
+        assert _is_invalidated_under_max_staleness(invalidated, False) is False  # type: ignore[arg-type]
+        assert _is_invalidated_under_max_staleness(invalidated, True) is False  # type: ignore[arg-type]
+        # String inputs degrade to no-filter (no implicit parse)
+        assert _is_invalidated_under_max_staleness(invalidated, "0.5") is False  # type: ignore[arg-type]
+        assert _is_invalidated_under_max_staleness(invalidated, "") is False  # type: ignore[arg-type]
+        assert _is_invalidated_under_max_staleness(invalidated, "abc") is False  # type: ignore[arg-type]
+        # Real numerics (int, float) still work
+        assert _is_invalidated_under_max_staleness(invalidated, 0) is True
+        assert _is_invalidated_under_max_staleness(invalidated, 0.0) is True
+        assert _is_invalidated_under_max_staleness(invalidated, 1) is False
+        assert _is_invalidated_under_max_staleness(invalidated, 1.0) is False
+
+    @pytest.mark.asyncio
+    async def test_fulltext_search_max_staleness_none_includes_invalidated_rows(
+        self, mock_supabase
+    ):
+        """fulltext_search without max_staleness should include all rows (default backward compat)."""
+        mock_supabase.rpc.return_value.execute.return_value.data = [
+            {
+                "id": "fresh_1",
+                "content": "fresh",
+                "rank": 1.0,
+                "metadata": {"invalidated_at": None},
+                "source_table": "triggers",
+            },
+            {
+                "id": "stale_2",
+                "content": "invalidated",
+                "rank": 0.5,
+                "metadata": {"invalidated_at": "2026-05-15T00:00:00Z"},
+                "source_table": "triggers",
+            },
+        ]
+
+        with patch("src.rag.memory_connector.get_supabase_client", return_value=mock_supabase):
+            connector = MemoryConnector()
+            results = await connector.fulltext_search(query_text="test", k=10)
+
+        result_ids = {r.source_id for r in results}
+        assert result_ids == {"fresh_1", "stale_2"}, (
+            "default max_staleness=None must preserve existing behavior (include all)"
+        )

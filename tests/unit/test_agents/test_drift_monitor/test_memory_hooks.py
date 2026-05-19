@@ -636,3 +636,59 @@ class TestSingletonAccess:
         hooks2 = get_drift_monitor_memory_hooks()
 
         assert hooks1 is not hooks2
+
+
+# ============================================================================
+# HYBRID RETRIEVER WIRE-IN TESTS (Phase 2 finishing, issue #373)
+# ============================================================================
+
+
+class TestGetHybridContext:
+    """Tests for get_hybrid_context wire-in to HybridRetriever.
+
+    Phase 2 finishing per .claude/plans/e2i_memory_subsystems_implementation_plan.md
+    §Recommended-sequencing item 1. Closes the audit gap that
+    drift_monitor had zero hits for HybridRetriever/hybrid_search.
+    """
+
+    def setup_method(self):
+        """Reset singleton before each test."""
+        reset_memory_hooks()
+
+    @pytest.mark.asyncio
+    async def test_get_hybrid_context_calls_hybrid_search_with_freshness_default(self):
+        """get_hybrid_context should call hybrid_search with max_staleness=0.0 + agent_name filter."""
+        from unittest.mock import patch
+
+        hooks = DriftMonitorMemoryHooks()
+        sentinel = [MagicMock(spec=["source_id"])]
+
+        with patch("src.rag.retriever.hybrid_search", new_callable=AsyncMock) as mock_search:
+            mock_search.return_value = sentinel
+            result = await hooks.get_hybrid_context(query="drift in TRx?")
+
+        assert result is sentinel
+        mock_search.assert_called_once()
+        call_kwargs = mock_search.call_args.kwargs
+        assert call_kwargs["query"] == "drift in TRx?"
+        assert call_kwargs["max_staleness"] == 0.0, (
+            "Tier 3 agents default to fresh-only retrieval (max_staleness=0.0)"
+        )
+        assert call_kwargs["filters"]["agent_name"] == "drift_monitor"
+
+    @pytest.mark.asyncio
+    async def test_get_hybrid_context_merges_caller_filters(self):
+        """Caller filters should be merged on top of agent_name default."""
+        from unittest.mock import patch
+
+        hooks = DriftMonitorMemoryHooks()
+        with patch("src.rag.retriever.hybrid_search", new_callable=AsyncMock) as mock_search:
+            mock_search.return_value = []
+            await hooks.get_hybrid_context(
+                query="test", filters={"brand": "Kisqali", "region": "northeast"}
+            )
+
+        merged = mock_search.call_args.kwargs["filters"]
+        assert merged["agent_name"] == "drift_monitor", "agent default must remain"
+        assert merged["brand"] == "Kisqali"
+        assert merged["region"] == "northeast"

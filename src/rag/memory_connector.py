@@ -23,6 +23,49 @@ from src.rag.types import RetrievalSource
 logger = logging.getLogger(__name__)
 
 
+def _is_invalidated_under_max_staleness(
+    metadata: Optional[Dict[str, Any]], max_staleness: Optional[float]
+) -> bool:
+    """Return True iff the row should be dropped by the max_staleness filter.
+
+    Under Decision 3 = KEEP BINARY (plan §"DECISIONS ADOPTED" 2026-05-19), the
+    boolean-degraded semantics are:
+      - max_staleness is None: never drop (no filter active)
+      - max_staleness NOT < 1.0 (incl. NaN, +inf, exactly 1.0): never drop
+      - max_staleness < 1.0 (incl. 0.0, negative): drop iff
+        metadata['invalidated_at'] is truthy
+
+    Type guard (codex iter-1 LOW): non-(int|float) inputs (including bool — a
+    bool is technically an int in Python but ``False == 0.0`` would
+    spuriously activate the filter — and any string/None/Any) degrade to
+    "no filter" rather than raising. This matches the SQL RPC's parse-error
+    no-op contract at database/memory/022_hybrid_search_max_staleness.sql:55-60.
+
+    NaN handling mirrors the SQL RPC (`v_max_staleness < 1.0` evaluates to
+    False for NaN in PostgreSQL, so NaN does not activate the filter in
+    either layer).
+
+    Phase 2 finishing (issue #373). When/if Decision 3 is revisited and graded
+    staleness is introduced, this helper is the single mutation point.
+    """
+    # Type guard — accept only None or real numeric values. Bool is excluded
+    # despite being a subclass of int (False would otherwise coerce to 0.0
+    # and activate the filter).
+    if max_staleness is None:
+        return False
+    if isinstance(max_staleness, bool) or not isinstance(max_staleness, (int, float)):
+        return False
+    # `not (x < 1.0)` correctly returns True for NaN, +inf, and exactly 1.0,
+    # giving the same "no filter" branch as max_staleness=None.
+    if not (max_staleness < 1.0):
+        return False
+    if not isinstance(metadata, dict):
+        return False
+    invalidated_at = metadata.get("invalidated_at")
+    # Falsy values (None, "", 0) all mean "not invalidated"
+    return bool(invalidated_at)
+
+
 class MemoryConnector:
     """
     Connects RAG retriever to memory backends.
@@ -53,6 +96,7 @@ class MemoryConnector:
         k: int = 10,
         filters: Optional[Dict[str, Any]] = None,
         min_similarity: float = 0.5,
+        max_staleness: Optional[float] = None,
     ) -> List[RetrievalResult]:
         """
         Search memories by vector similarity.
@@ -66,36 +110,53 @@ class MemoryConnector:
             k: Number of results to return
             filters: Optional filters (brand, region, agent_name, date_from, date_to)
             min_similarity: Minimum similarity threshold (default 0.5)
+            max_staleness: Optional staleness ceiling. Under Decision 3 = KEEP BINARY
+                (plan §"DECISIONS ADOPTED" 2026-05-19), semantics are:
+                - None (default): no filter, include all rows (backward-compatible)
+                - >= 1.0: include all rows
+                - < 1.0 (incl 0.0): exclude rows whose metadata carries ``invalidated_at``
+                Forwarded into the RPC filters dict AND applied as a Python post-filter
+                (belt-and-suspenders).
 
         Returns:
             List of RetrievalResult with dense retrieval method
         """
         client = get_supabase_client()
 
+        # Build RPC filters dict, including max_staleness when provided
+        rpc_filters: Dict[str, Any] = dict(filters or {})
+        if max_staleness is not None:
+            rpc_filters["max_staleness"] = max_staleness
+
         try:
             # Call Supabase RPC function
             response = client.rpc(
                 "hybrid_vector_search",
-                {"query_embedding": query_embedding, "match_count": k, "filters": filters or {}},
+                {"query_embedding": query_embedding, "match_count": k, "filters": rpc_filters},
             ).execute()
 
             results = []
             for row in response.data or []:
                 # Filter by similarity threshold
                 similarity = row.get("similarity", 0)
-                if similarity >= min_similarity:
-                    result_metadata = row.get("metadata", {}).copy() if row.get("metadata") else {}
-                    result_metadata["source_name"] = row.get("source_table", "unknown")
-                    results.append(
-                        RetrievalResult(
-                            source_id=row.get("id", ""),
-                            content=row.get("content", ""),
-                            source=RetrievalSource.VECTOR.value,
-                            score=float(similarity),
-                            retrieval_method="dense",
-                            metadata=result_metadata,
-                        )
+                if similarity < min_similarity:
+                    continue
+                # Python-side post-filter for max_staleness (belt-and-suspenders;
+                # primary filter is at the SQL RPC layer when migration 022 is applied)
+                if _is_invalidated_under_max_staleness(row.get("metadata"), max_staleness):
+                    continue
+                result_metadata = row.get("metadata", {}).copy() if row.get("metadata") else {}
+                result_metadata["source_name"] = row.get("source_table", "unknown")
+                results.append(
+                    RetrievalResult(
+                        source_id=row.get("id", ""),
+                        content=row.get("content", ""),
+                        source=RetrievalSource.VECTOR.value,
+                        score=float(similarity),
+                        retrieval_method="dense",
+                        metadata=result_metadata,
                     )
+                )
 
             logger.debug(f"Vector search returned {len(results)} results")
             return results
@@ -110,6 +171,7 @@ class MemoryConnector:
         k: int = 10,
         filters: Optional[Dict[str, Any]] = None,
         min_similarity: float = 0.5,
+        max_staleness: Optional[float] = None,
     ) -> List[RetrievalResult]:
         """
         Search memories by text (auto-generates embedding).
@@ -119,6 +181,7 @@ class MemoryConnector:
             k: Number of results to return
             filters: Optional filters
             min_similarity: Minimum similarity threshold
+            max_staleness: Optional staleness ceiling (see vector_search docstring).
 
         Returns:
             List of RetrievalResult with dense retrieval method
@@ -127,7 +190,11 @@ class MemoryConnector:
         embedding = await embedding_service.embed(query_text)
 
         return await self.vector_search(
-            query_embedding=embedding, k=k, filters=filters, min_similarity=min_similarity
+            query_embedding=embedding,
+            k=k,
+            filters=filters,
+            min_similarity=min_similarity,
+            max_staleness=max_staleness,
         )
 
     # ========================================================================
@@ -135,7 +202,11 @@ class MemoryConnector:
     # ========================================================================
 
     async def fulltext_search(
-        self, query_text: str, k: int = 10, filters: Optional[Dict[str, Any]] = None
+        self,
+        query_text: str,
+        k: int = 10,
+        filters: Optional[Dict[str, Any]] = None,
+        max_staleness: Optional[float] = None,
     ) -> List[RetrievalResult]:
         """
         Search using PostgreSQL full-text search (BM25-like ranking).
@@ -149,30 +220,47 @@ class MemoryConnector:
             query_text: Search query text
             k: Number of results to return
             filters: Optional filters (brand, agent_name)
+            max_staleness: Optional staleness ceiling (see vector_search docstring).
 
         Returns:
             List of RetrievalResult with sparse retrieval method
         """
         client = get_supabase_client()
 
+        # Build RPC filters dict, including max_staleness when provided
+        rpc_filters: Dict[str, Any] = dict(filters or {})
+        if max_staleness is not None:
+            rpc_filters["max_staleness"] = max_staleness
+
         try:
             # Call Supabase RPC function
             response = client.rpc(
                 "hybrid_fulltext_search",
-                {"search_query": query_text, "match_count": k, "filters": filters or {}},
+                {"search_query": query_text, "match_count": k, "filters": rpc_filters},
             ).execute()
+
+            # Python-side post-filter for max_staleness (belt-and-suspenders).
+            # The SQL RPC (migration 022) is the authoritative filter for
+            # tables carrying invalidated_at (currently `triggers`); this
+            # post-filter catches any row whose metadata leaks through with
+            # invalidated_at set when max_staleness < 1.0.
+            filtered_rows = [
+                row
+                for row in (response.data or [])
+                if not _is_invalidated_under_max_staleness(row.get("metadata"), max_staleness)
+            ]
 
             results = []
             max_rank = 0.0
 
-            # First pass: find max rank for normalization
-            for row in response.data or []:
+            # First pass: find max rank for normalization (over filtered rows)
+            for row in filtered_rows:
                 rank = float(row.get("rank", 0))
                 if rank > max_rank:
                     max_rank = rank
 
             # Second pass: normalize and create results
-            for row in response.data or []:
+            for row in filtered_rows:
                 rank = float(row.get("rank", 0))
                 # Normalize rank to 0-1 score
                 normalized_score = rank / max_rank if max_rank > 0 else 0.0

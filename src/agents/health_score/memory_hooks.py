@@ -101,6 +101,47 @@ class HealthScoreMemoryHooks:
         return self._working_memory
 
     # =========================================================================
+    # HYBRID RETRIEVER WIRE-IN (Phase 2 finishing, issue #373)
+    # =========================================================================
+
+    async def get_hybrid_context(
+        self,
+        query: str,
+        k: int = 10,
+        filters: Optional[Dict[str, Any]] = None,
+        max_staleness: Optional[float] = 0.0,
+    ) -> List[Any]:
+        """Retrieve cross-source context via the hybrid retriever.
+
+        Wraps :func:`src.rag.retriever.hybrid_search` with the health_score
+        agent_name default filter and freshness-only retrieval
+        (``max_staleness=0.0``). Phase 2 finishing per
+        ``.claude/plans/e2i_memory_subsystems_implementation_plan.md``
+        §Recommended-sequencing item 1.
+
+        Args:
+            query: Search query text.
+            k: Number of results to return.
+            filters: Optional caller filters. Defaults to ``None`` — health_score
+                is the system-wide agent (plan §"Agent-specific filter shape"),
+                so by default it sees activity from ALL agents; callers narrow
+                by passing explicit filters.
+            max_staleness: Freshness ceiling. Default ``0.0`` excludes
+                invalidated rows under Decision 3 = KEEP BINARY.
+
+        Returns:
+            List of :class:`RetrievalResult` from the hybrid retriever.
+        """
+        from src.rag.retriever import hybrid_search
+
+        return await hybrid_search(
+            query=query,
+            k=k,
+            filters=filters,
+            max_staleness=max_staleness,
+        )
+
+    # =========================================================================
     # CONTEXT RETRIEVAL
     # =========================================================================
 

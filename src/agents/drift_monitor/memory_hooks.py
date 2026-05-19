@@ -240,6 +240,50 @@ class DriftMonitorMemoryHooks:
         return self._supabase_client
 
     # ========================================================================
+    # Hybrid Retriever Wire-in (Phase 2 finishing, issue #373)
+    # ========================================================================
+
+    async def get_hybrid_context(
+        self,
+        query: str,
+        k: int = 10,
+        filters: Optional[Dict[str, Any]] = None,
+        max_staleness: Optional[float] = 0.0,
+    ) -> List[Any]:
+        """Retrieve cross-source context via the hybrid retriever.
+
+        Wraps :func:`src.rag.retriever.hybrid_search` with the drift_monitor
+        agent_name default filter and freshness-only retrieval
+        (``max_staleness=0.0``). Phase 2 finishing per
+        ``.claude/plans/e2i_memory_subsystems_implementation_plan.md``
+        §Recommended-sequencing item 1.
+
+        Args:
+            query: Search query text.
+            k: Number of results to return.
+            filters: Optional caller filters; merged with agent default
+                ``{"agent_name": "drift_monitor"}`` (caller overrides agent name).
+            max_staleness: Freshness ceiling. Default ``0.0`` excludes
+                invalidated rows under Decision 3 = KEEP BINARY (plan
+                §"DECISIONS ADOPTED" 2026-05-19).
+
+        Returns:
+            List of :class:`RetrievalResult` from the hybrid retriever.
+        """
+        from src.rag.retriever import hybrid_search
+
+        merged_filters: Dict[str, Any] = {"agent_name": "drift_monitor"}
+        if filters:
+            merged_filters.update(filters)
+
+        return await hybrid_search(
+            query=query,
+            k=k,
+            filters=merged_filters,
+            max_staleness=max_staleness,
+        )
+
+    # ========================================================================
     # Context Retrieval
     # ========================================================================
 
