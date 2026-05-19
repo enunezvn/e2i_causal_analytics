@@ -60,14 +60,10 @@ def test_strip_sql_comments_helper() -> None:
     future migration would falsely satisfy enum coverage.
     """
     fake_block = "/* ALTER TYPE sentinel_pattern_type ADD VALUE 'phantom' */"
-    assert "phantom" not in _strip_sql_comments(fake_block), (
-        "Parser should strip block comments"
-    )
+    assert "phantom" not in _strip_sql_comments(fake_block), "Parser should strip block comments"
 
     fake_line = "-- ALTER TYPE sentinel_pattern_type ADD VALUE 'phantom'"
-    assert "phantom" not in _strip_sql_comments(fake_line), (
-        "Parser should strip line comments"
-    )
+    assert "phantom" not in _strip_sql_comments(fake_line), "Parser should strip line comments"
 
     # Multi-line block comment that spans real-looking DDL.
     fake_multiline = (
@@ -319,9 +315,9 @@ def test_internal_pattern_types_have_db_enum_coverage():
     # Sanity: migration 024 must exist and carry the right ALTER TYPE
     # (checked against the comment-stripped text, so a commented-out clause
     # would NOT satisfy this assertion).
-    assert (
-        "ADD VALUE IF NOT EXISTS 'invalidation_count'" in migration_024
-    ), "migration 024 missing expected ALTER TYPE for invalidation_count"
+    assert "ADD VALUE IF NOT EXISTS 'invalidation_count'" in migration_024, (
+        "migration 024 missing expected ALTER TYPE for invalidation_count"
+    )
 
     # Parse migration 021's CREATE TYPE block for sentinel_pattern_type. The
     # DDL shape (021:59-64) is:
@@ -337,9 +333,9 @@ def test_internal_pattern_types_have_db_enum_coverage():
         migration_021,
         re.DOTALL,
     )
-    assert (
-        create_match is not None
-    ), "could not locate CREATE TYPE sentinel_pattern_type in migration 021"
+    assert create_match is not None, (
+        "could not locate CREATE TYPE sentinel_pattern_type in migration 021"
+    )
     # ``migration_021`` is already comment-stripped above, so the ``--``
     # line-comments documented in 021 (e.g. ``-- threshold_breach: ...``)
     # have already been removed; English-apostrophes in those comments
@@ -371,9 +367,9 @@ def test_internal_pattern_types_have_db_enum_coverage():
             added_values.add(match.group(1))
 
     # ``invalidation_count`` must be in the added set (migration 024 contract).
-    assert (
-        "invalidation_count" in added_values
-    ), f"invalidation_count not added by any migration; added={added_values}"
+    assert "invalidation_count" in added_values, (
+        f"invalidation_count not added by any migration; added={added_values}"
+    )
 
     valid_db_enum_values = declared_values | added_values
 
