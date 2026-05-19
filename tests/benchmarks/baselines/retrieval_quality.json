@@ -1,0 +1,20 @@
+{
+  "_schema_version": 1,
+  "_description": "Retrieval-quality baseline for HybridRetriever (issue #377). Initial values seeded as placeholders under the 'first-run blesses' strategy — see PR body. The harness compares current aggregate metrics against these baselines and fails if regression exceeds the documented tolerances. When tightening the baseline (after corpus-seeding follow-up lands), update both this file and the workflow comment; do NOT loosen tolerances to mask a regression.",
+  "_baseline_strategy": "placeholder-first-run-blesses",
+  "_seeded_on": "2026-05-19",
+  "_seeded_by_issue": 377,
+  "_seeded_in_pr_branch": "feat/377-phase2-benchmark",
+  "recall_at_10": {
+    "mean": 0.0,
+    "tolerance_pp": 5.0,
+    "_tolerance_rationale": "5pp default — common MTEB / BEIR convention for retrieval-regression gating (Thakur et al. 2021 §5.3 cites ~3-5pp as typical noise floor on labeled query-sets of this size). Document as 'default, tighten on signal' until the corpus-seeding follow-up issue lands and we have a non-zero baseline."
+  },
+  "mrr": {
+    "mean": 0.0,
+    "tolerance_abs": 0.05,
+    "_tolerance_rationale": "0.05 absolute — issue #377 §D specifies 'MRR no more than -0.05' verbatim. Adopted as initial gate; revisit after first non-zero baseline."
+  },
+  "queries_evaluated": 0,
+  "queries_with_relevant": 0
+}
