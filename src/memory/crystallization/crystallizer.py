@@ -539,37 +539,40 @@ def _derive_crystal_digest_fields(
     cohort_size = _coerce_int(rc.get("sample_size"))
 
     # --- confounders_controlled (union/dedup across all members) ---
-    confounders: List[str] = []
-    seen: set = set()
+    # SORTED for deterministic serialization (codex iter-1 M2):
+    # encounter-order dedup is non-deterministic across runs because
+    # the upstream episodic_memories query has no stable secondary
+    # ordering. Stable sort here means JSONB diffs are minimal and
+    # the row hash is reproducible across re-crystallization passes.
+    confounders_set: set = set()
     for m in members:
         m_rc = m.get("raw_content") or {}
         if not isinstance(m_rc, dict):
             continue
         for c in m_rc.get("confounders") or []:
             cs = str(c).strip()
-            if cs and cs not in seen:
-                confounders.append(cs)
-                seen.add(cs)
+            if cs:
+                confounders_set.add(cs)
+    confounders: List[str] = sorted(confounders_set)
 
     # --- sensitivity_checks_passed / failed (union/dedup across members) ---
-    passed: List[str] = []
-    failed: List[str] = []
-    seen_p: set = set()
-    seen_f: set = set()
+    # Same sort-for-stability contract as confounders (codex iter-1 M2).
+    passed_set: set = set()
+    failed_set: set = set()
     for m in members:
         m_rc = m.get("raw_content") or {}
         if not isinstance(m_rc, dict):
             continue
         for t in m_rc.get("refutation_passed_tests") or []:
             ts = str(t).strip()
-            if ts and ts not in seen_p:
-                passed.append(ts)
-                seen_p.add(ts)
+            if ts:
+                passed_set.add(ts)
         for t in m_rc.get("refutation_failed_tests") or []:
             ts = str(t).strip()
-            if ts and ts not in seen_f:
-                failed.append(ts)
-                seen_f.add(ts)
+            if ts:
+                failed_set.add(ts)
+    passed: List[str] = sorted(passed_set)
+    failed: List[str] = sorted(failed_set)
 
     # --- provenance_chain_id (deterministic hash of source set) ---
     member_ids = sorted(str(m.get("memory_id", "")) for m in members)

@@ -350,14 +350,23 @@ async def test_crystallize_derives_cohort_size_and_confounders(fake_supabase):
 
     insight = fake_supabase.rows["executive_insights"][0]
     assert insight["cohort_size"] == 1500
-    # confounders_controlled is a deduplicated list
-    assert set(insight["confounders_controlled"]) == {"age", "prior_use", "comorbidity_score"}
+    # confounders_controlled MUST be sorted (codex iter-1 M2): the
+    # crystallizer applies sorted() to the dedup set so downstream
+    # consumers get a stable serialization regardless of seed order.
+    # Asserting exact ordered list (not set equality) pins the
+    # contract — a regression that returns encounter-order trips here.
+    assert insight["confounders_controlled"] == [
+        "age",
+        "comorbidity_score",
+        "prior_use",
+    ]
 
 
 @pytest.mark.asyncio
 async def test_crystallize_derives_sensitivity_check_arrays(fake_supabase):
     """sensitivity_checks_passed / sensitivity_checks_failed reflect
-    the refutation-test outcomes captured in raw_content."""
+    the refutation-test outcomes captured in raw_content, sorted for
+    deterministic serialization (codex iter-1 M2)."""
     _seed_episodic_with_causal_content(
         fake_supabase,
         brand="Kisqali",
@@ -369,11 +378,86 @@ async def test_crystallize_derives_sensitivity_check_arrays(fake_supabase):
     await Crystallizer().run_for_brand("Kisqali")
 
     insight = fake_supabase.rows["executive_insights"][0]
-    assert set(insight["sensitivity_checks_passed"]) == {
+    # Exact ordered list (codex iter-1 M2): sorted alphabetically.
+    assert insight["sensitivity_checks_passed"] == [
         "placebo_treatment",
         "random_common_cause",
-    }
-    assert set(insight["sensitivity_checks_failed"]) == {"data_subset"}
+    ]
+    assert insight["sensitivity_checks_failed"] == ["data_subset"]
+
+
+@pytest.mark.asyncio
+async def test_crystallize_arrays_sorted_across_multi_member_dedup(fake_supabase):
+    """Codex iter-1 M2 regression: when multiple source members carry
+    overlapping confounder + sensitivity-check lists in DIFFERENT
+    orders, the crystallized arrays must be sorted not encounter-
+    ordered.
+
+    Pre-fix: dedup happened in encounter order. The upstream
+    episodic_memories query has no stable secondary ordering, so two
+    crystallization passes on the same data could emit different
+    array orderings — a flaky JSONB diff for downstream consumers.
+    """
+    import uuid
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
+    # Member A: confounders in alphabetical order, sensitivity in
+    # reverse alphabetical order.
+    fake_supabase.rows["episodic_memories"].append(
+        {
+            "memory_id": str(uuid.uuid4()),
+            "agent_name": "causal_impact",
+            "brand": "Kisqali",
+            "region": "northeast",
+            "causal_path_id": "cp1",
+            "event_type": "agent_action",
+            "description": "A",
+            "outcome_type": "success",
+            "occurred_at": now,
+            "raw_content": {
+                "ate_estimate": 0.4,
+                "confidence_interval": [0.2, 0.6],
+                "confounders": ["a_age", "z_zip"],
+                "refutation_passed_tests": ["z_random_cc", "a_placebo"],
+                "refutation_failed_tests": [],
+            },
+        }
+    )
+    # Member B: introduces NEW confounder in the middle of the sorted
+    # output, and new sensitivity-pass test that's lexicographically
+    # smaller than member A's passes.
+    fake_supabase.rows["episodic_memories"].append(
+        {
+            "memory_id": str(uuid.uuid4()),
+            "agent_name": "gap_analyzer",
+            "brand": "Kisqali",
+            "region": "northeast",
+            "causal_path_id": "cp1",
+            "event_type": "agent_action",
+            "description": "B",
+            "outcome_type": "success",
+            "occurred_at": now,
+            "raw_content": {
+                "confounders": ["m_middle"],
+                "refutation_passed_tests": ["aa_first_alphabetical"],
+                "refutation_failed_tests": ["b_data_subset"],
+            },
+        }
+    )
+    await Crystallizer().run_for_brand("Kisqali")
+
+    insight = fake_supabase.rows["executive_insights"][0]
+    # Sorted alphabetically across both members — encounter order
+    # would have been ["a_age", "z_zip", "m_middle"] (A then B),
+    # NOT the alphabetical order asserted here.
+    assert insight["confounders_controlled"] == ["a_age", "m_middle", "z_zip"]
+    assert insight["sensitivity_checks_passed"] == [
+        "a_placebo",
+        "aa_first_alphabetical",
+        "z_random_cc",
+    ]
+    assert insight["sensitivity_checks_failed"] == ["b_data_subset"]
 
 
 @pytest.mark.asyncio
