@@ -1,9 +1,18 @@
 """Celery tasks for the crystallization subsystem (#376 Phase 4).
 
-- ``crystallize_portfolio``  : every 6h offset 30 min after the daily
-                               consolidator. Iterates the configured
-                               brand list and aggregates per-brand
-                               counts.
+- ``crystallize_portfolio``  : every 6h on the ``analytics`` queue.
+                               Iterates the configured brand list and
+                               aggregates per-brand counts.
+
+Schedule semantics (codex iter-1 M3 honest-doc):
+The beat entry in ``src/workers/celery_app.py`` uses the
+relative-interval form (``schedule: 21600.0``), which runs every 6
+hours measured from the beat scheduler start, NOT from a fixed
+wall-clock time. The implementation does NOT enforce any offset
+relative to the daily ``insight-lifecycle-consolidate`` task; the
+two run independently. Plan §Phase 4 line 141's "30 min after
+consolidation" framing was a planning-level suggestion, not a
+load-bearing operational contract.
 
 The task wraps :meth:`src.memory.crystallization.crystallizer.Crystallizer.crystallize_portfolio`
 and returns a JSON-serializable summary so beat-logs / dispatcher
