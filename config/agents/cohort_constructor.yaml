@@ -1,11 +1,12 @@
 # =============================================================================
-# COHORT CONSTRUCTOR DOMAIN VOCABULARY v1.0.0
+# COHORT CONSTRUCTOR DOMAIN VOCABULARY v1.1.0
 # =============================================================================
 #
 # Purpose: Ontology for cohort definition, patient journey analysis, and
 #          temporal relationship specification in pharmaceutical analytics
 #
 # Structure:
+#   - Section 0: Memory-graph awareness (staleness + provenance)
 #   - Section 1: Core Clinical Entities
 #   - Section 2: Cohort Definition Primitives
 #   - Section 3: Temporal Relationships
@@ -24,6 +25,154 @@
 #
 # Changelog:
 #   v1.0.0 - Initial cohort constructor vocabularies
+#   v1.1.0 - Section 0 added: memory-graph staleness + provenance awareness
+#            so the agent surfaces these fields when reading from
+#            episodic_memories / executive_insights / causal_paths.
+#            Refs: issue #391 (post-implementation checklist § Documentation
+#            box 2 — "Add staleness/provenance to agent system prompts so
+#            agents understand the graph has these fields").
+# =============================================================================
+
+
+# =============================================================================
+# SECTION 0: MEMORY-GRAPH AWARENESS (staleness + provenance)
+# =============================================================================
+#
+# The cohort constructor reads from episodic_memories (raw findings) and may
+# emit cohort definitions tagged into executive_insights (crystallized
+# narratives). Both surfaces carry lifecycle + provenance fields the agent
+# MUST honor when reasoning about cohort validity.
+#
+# Source-of-truth references:
+#   - src/memory/lifecycle/consolidator.py:176-233 (Consolidator.run)
+#   - src/memory/crystallization/crystallizer.py:102-117 (Crystallizer)
+#   - database/memory/021_insight_lifecycle.sql (invalidated_at columns)
+#   - database/memory/025_crystaldigest_schema_completion.sql (lineage fields)
+#   - database/memory/026_episodic_dedup.sql (dedup_signature, dedup_counter)
+# =============================================================================
+
+memory_graph_awareness:
+  description: "Lifecycle + provenance fields the agent MUST honor"
+
+  staleness_fields:
+    description: "Fields signalling that a memory or insight is no longer trustworthy"
+
+    invalidated_at:
+      type: timestamptz
+      semantics: |
+        Set by the cascade-invalidator (src/memory/lifecycle/invalidator.py)
+        when an upstream ancestor is overturned. A row with
+        invalidated_at IS NOT NULL MUST be treated as STALE — exclude
+        from cohort construction unless the user explicitly asks for
+        historical/audit context.
+      tables:
+        - episodic_memories
+        - triggers
+        - ml_predictions
+        - executive_insights
+      sql_filter_template: "WHERE invalidated_at IS NULL"
+
+    staleness_score:
+      type: float
+      semantics: |
+        EXPOSED IN ALERT PAYLOADS ONLY, not stored as a column. Per
+        Decision 3 = KEEP BINARY (plan §"DECISIONS ADOPTED" 2026-05-19),
+        staleness is boolean — staleness_score=1.0 in a
+        staleness_alert payload (src/api/routes/staleness_alerts.py)
+        means "this row's invalidated_at IS NOT NULL". Treat any
+        non-zero value as full staleness.
+
+  provenance_fields:
+    description: "Fields tracing where a finding came from"
+
+    provenance_chain_id:
+      type: text
+      semantics: |
+        Deterministic SHA-256 hash (first 32 chars) over the BFS-resolved
+        ancestor set. Two crystals with the same provenance_chain_id
+        share an identical ancestor set — useful for grouping related
+        findings or detecting accidental re-crystallization.
+      source: src/memory/crystallization/crystallizer.py:594-600
+
+    provenance_chain:
+      type: text[]
+      semantics: |
+        OPERATOR-FACING TERM for the BFS-resolved ancestor list. When
+        the agent surfaces a crystal/finding to the user, mention which
+        upstream causal_paths and episodic_memories it derives from
+        (consultable via the insight_edges DAG, source_type +
+        source_id rows linking back).
+      source: database/memory/021_insight_lifecycle.sql (insight_edges)
+
+    provenance_depth:
+      type: integer
+      semantics: |
+        Hop count from this artifact to the deepest ancestor. A depth
+        of 1 means direct episodic sources only; depth >=2 means at
+        least one causal_path was traversed. Higher depth = more
+        indirect evidence chain.
+      source: src/memory/crystallization/crystallizer.py:602-605
+
+    consolidation_tier:
+      type: enum
+      values: [working, episodic, semantic, procedural]
+      semantics: |
+        The "ripeness" of the memory in the consolidation hierarchy:
+          - working    : transient session state (Redis, 24h TTL)
+          - episodic   : raw findings (Supabase + pgvector)
+          - semantic   : promoted causal_paths (>=3 confirmations)
+          - procedural : graduated procedural_memories (>=5 successful uses)
+        Higher tiers are MORE TRUSTED. The cohort constructor should
+        prefer semantic/procedural ancestors when available.
+      source: src/memory/lifecycle/consolidator.py:47-49
+
+  deduplication_fields:
+    description: "Fields used by the deduplication pass (PR #388)"
+
+    dedup_signature:
+      type: text
+      semantics: |
+        Deterministic hash over the dedup key fields
+        (brand, event_type, event_subtype, causal_path_id; fallback
+        includes sha256(description) when causal_path_id is NULL).
+        Two rows with identical dedup_signature represent THE SAME
+        underlying event — the consolidator merges them.
+      source: src/memory/lifecycle/consolidator.py:58
+
+    dedup_counter:
+      type: integer
+      default: 1
+      semantics: |
+        Count of underlying events represented by the canonical row
+        after dedup. When the agent reasons about "how many times has
+        this finding been observed," it should SUM(dedup_counter) not
+        COUNT(*) — undeduped duplicates would inflate the count.
+
+  agent_behavior_rules:
+    description: "Rules the cohort constructor follows when reading memory"
+
+    rules:
+      - id: rule_1_filter_stale
+        condition: "When reading episodic_memories or causal_paths for cohort construction"
+        action: "Append WHERE invalidated_at IS NULL UNLESS user explicitly requests historical view"
+
+      - id: rule_2_prefer_higher_tier
+        condition: "When multiple ancestors with different consolidation_tier values are available"
+        action: "Prefer semantic > procedural > episodic > working ancestors for cohort validation"
+
+      - id: rule_3_surface_provenance
+        condition: "When emitting a cohort definition the user will act on"
+        action: "Cite the provenance_chain ancestors (causal_path_id + memory_id) so the user can JIT-verify"
+
+      - id: rule_4_dedup_aware_counts
+        condition: "When the user asks 'how many findings support this cohort'"
+        action: "Use SUM(dedup_counter) WHERE dedup_signature IS NOT NULL not COUNT(*)"
+
+      - id: rule_5_brand_strictness
+        condition: "ALWAYS"
+        action: "Brand is the tenant boundary; NEVER co-aggregate cohorts across brands without explicit ADMIN-level override"
+
+
 # =============================================================================
 
 

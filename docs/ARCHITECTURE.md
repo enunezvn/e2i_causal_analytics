@@ -10,10 +10,11 @@
 2. [Container Architecture](#2-container-architecture)
 3. [Component Architecture](#3-component-architecture)
 4. [Data Architecture](#4-data-architecture)
-5. [Security Architecture](#5-security-architecture)
-6. [Observability Architecture](#6-observability-architecture)
-7. [Architecture Decision Records](#7-architecture-decision-records)
-8. [Cross-Cutting Concerns](#8-cross-cutting-concerns)
+5. [Memory Subsystems](#5-memory-subsystems)
+6. [Security Architecture](#6-security-architecture)
+7. [Observability Architecture](#7-observability-architecture)
+8. [Architecture Decision Records](#8-architecture-decision-records)
+9. [Cross-Cutting Concerns](#9-cross-cutting-concerns)
 
 ---
 
@@ -657,9 +658,213 @@ References:
 
 ---
 
-## 5. Security Architecture
+## 5. Memory Subsystems
 
-### 5.1 Security Layers
+The platform ships four memory subsystems atop the tri-memory architecture
+described in [ADR-003](#adr-003-tri-memory-architecture). These were added
+in PRs #250, #375-#388 per the plan
+`.claude/plans/e2i_memory_subsystems_implementation_plan.md`.
+
+```mermaid
+graph TB
+    subgraph "Episodic (raw findings)"
+        EM["episodic_memories<br/>Supabase + pgvector<br/>dedup_signature<br/>dedup_counter"]
+    end
+
+    subgraph "Lifecycle (subsystem 1)"
+        CON["Consolidator<br/>src/memory/lifecycle/<br/>consolidator.py:176"]
+        INV["Invalidator<br/>cascade_invalidate"]
+    end
+
+    subgraph "Crystallization (subsystem 2)"
+        CR["Crystallizer<br/>src/memory/crystallization/<br/>crystallizer.py:102"]
+        EI["executive_insights<br/>15 CrystalDigest fields<br/>+ invalidated_at"]
+    end
+
+    subgraph "Sentinels (subsystem 3)"
+        REG["Sentinel Registry<br/>src/memory/sentinels/<br/>registry.py"]
+        ACT["Action Handlers<br/>src/tasks/<br/>sentinel_actions.py"]
+        ALR["Redis e2i:alerts<br/>pub/sub channel"]
+    end
+
+    subgraph "Triple-stream RAG (subsystem 4)"
+        HR["HybridRetriever<br/>src/rag/<br/>hybrid_retriever.py:41"]
+    end
+
+    EM -->|deduplicate then promote| CON
+    CON -->|stamps consolidation_tier| EM
+    CON -->|promotes causal_paths| CR
+    CR -->|crystallizes| EI
+    EI -->|on staleness| INV
+    INV -->|sets invalidated_at| EI
+    REG -->|evaluates against| EI
+    REG -->|fires| ACT
+    ACT -->|publishes| ALR
+    ALR -->|SSE bridge| CR
+    EI -->|fused signals| HR
+```
+
+### 5.1 Subsystem 1 — Lifecycle (consolidation + invalidation)
+
+**Consolidator** (`src/memory/lifecycle/consolidator.py:176-233`) is a
+promotion engine invoked daily by the Celery beat task
+`consolidate_insights`. Its `run()` orchestrates three steps in order:
+
+1. `deduplicate_episodic` — collapses near-duplicate episodic rows so
+   promotion thresholds see effective (deduplicated) counts. Must run
+   first because semantic promotion's confirmation-count threshold reads
+   `SUM(dedup_counter)`.
+2. `_promote_to_semantic` — stamps `causal_paths` rows as consolidated
+   when `confirmation_count >= SEMANTIC_MIN_CONFIRMATIONS` (default `3`,
+   `src/memory/lifecycle/consolidator.py:47`).
+3. `_promote_to_procedural` — graduates `procedural_memories` rows when
+   `usage_count >= PROCEDURAL_MIN_USAGE` (default `5`) AND success rate
+   meets `PROCEDURAL_MIN_SUCCESS_RATE`.
+
+**Episodic deduplication** (PR #388, migration
+`database/memory/026_episodic_dedup.sql`) adds two columns:
+
+- `dedup_signature TEXT` — deterministic hash over the key fields,
+  computed by `_compute_dedup_signature`
+  (`src/memory/lifecycle/consolidator.py:58`).
+- `dedup_counter INT DEFAULT 1` — count of underlying events represented
+  by the canonical row after the dedup pass.
+
+A partial unique index on `(brand, dedup_signature) WHERE dedup_signature
+IS NOT NULL` provides DB-level race-condition safety. Brand is ALWAYS
+included in the key — cross-brand dedup is forbidden by spec.
+
+**Cascade invalidation** (`src/memory/lifecycle/invalidator.py`) walks
+the `insight_edges` DAG to set `invalidated_at` on downstream artifacts
+when an ancestor is overturned. The `invalidated_at` column was added to
+`triggers`, `ml_predictions`, and `executive_insights` by migration
+`database/memory/021_insight_lifecycle.sql:20-21`. Brand scoping is
+enforced at every cascade hop (see plan §"Tenancy Model").
+
+### 5.2 Subsystem 2 — Crystallization
+
+**Crystallizer** (`src/memory/crystallization/crystallizer.py:102-117`)
+aggregates 2+ related episodic memories (different agents, same brand,
+within a 7-day window, on the same `causal_path` or KPI) into a single
+durable `executive_insights` row plus `insight_edges` rows linking back
+to every source. Brand-strict: NEVER co-aggregates across brands.
+
+Public entrypoints:
+
+- `run_for_brand(brand, region=None)` — periodic Celery beat path.
+- `crystallize_finding(finding_id, *, brand)` — single-finding path
+  (#376 DoD §D).
+- `crystallize_portfolio(brands=None)` — iterates the configured
+  portfolio brand list (default: `("remibrutinib", "fabhalta",
+  "kisqali")` per `src/memory/crystallization/crystallizer.py:62`).
+
+**Schema shape (Decision 2 = HYBRID)**: 13 deterministic fields derived
+from estimator state / `insight_edges` / `episodic` `raw_content` + 2
+LLM-narrative prose fields wrapped in `LLMCrystalNarrativeAudit`
+(`src/data/kg/types.py:407-470`). The LLM path is gated by
+`E2I_CRYSTAL_LLM_NARRATIVES_ENABLED`
+(`src/memory/crystallization/crystallizer.py:55`); flag-off falls back
+to a deterministic heuristic. See `docs/api/crystal_digests.md` for the
+full 15-field reference.
+
+**Schema migration**: `database/memory/025_crystaldigest_schema_completion.sql`
+adds the 15 columns to `executive_insights` in lockstep with the Pydantic
+`ExecutiveInsightResponse` (`src/api/routes/executive_insights.py:66-129`).
+
+**Decision 3 = KEEP BINARY**: the `staleness_score` field is intentionally
+omitted from the schema. Staleness remains boolean via `invalidated_at
+IS NULL`.
+
+### 5.3 Subsystem 3 — Sentinels (data-driven watchers)
+
+**Registry** (`src/memory/sentinels/registry.py:91-101`) ships 5 shipped
+pattern types and 4 plan-vocabulary triggers. A single Celery beat task
+`sentinel_dispatcher` runs every 5 minutes
+(`src/memory/sentinels/registry.py:457-509`) and evaluates each enabled
+sentinel; errors in one sentinel never block others.
+
+**YAML configuration**: `config/sentinels.yaml` ships 4 plan-specified
+sentinels with `lifecycle_state: advisory` and per-sentinel
+`cooldown_minutes`. Loaded at API startup by
+`src.memory.sentinels.config_loader.load_sentinels_from_yaml`. See
+`docs/runbooks/sentinels.md` for the full schema + ops guide.
+
+**Cooldown semantics** (migration
+`database/memory/023_sentinel_cooldown.sql`): `cooldown_minutes DEFAULT 0`
+on the column preserves pre-#375 "always-fire" semantics; the dispatcher
+skips re-fires within `now - last_fired_at < cooldown_minutes`. NULL or
+0 means no cooldown.
+
+**Redis alert channel**: `e2i:alerts`, a `Final[str]` constant at
+`src/tasks/sentinel_actions.py:70`. Four action handlers
+(`rerun_all_active_cohorts`, `notify_and_queue_reanalysis`,
+`flag_for_review`, `run_full_consolidation`) publish JSON-serialized
+payloads via the best-effort `publish_alert()` helper.
+
+**SSE bridge to CopilotKit**: `src/api/routes/staleness_alerts.py:395-435`
+exposes `GET /api/alerts/stream?brand=<brand>` returning
+`text/event-stream` with per-connection bounded queue (cap 100,
+drop-oldest backpressure). Authentication is `Depends(require_auth)` at
+`src/api/routes/staleness_alerts.py:407`. Added in PR #394.
+
+### 5.4 Subsystem 4 — Triple-stream Retrieval
+
+The **HybridRetriever** (`src/rag/hybrid_retriever.py:41`) orchestrates
+three parallel search backends and fuses their results via Reciprocal
+Rank Fusion (RRF):
+
+1. **Vector** (`VectorBackend`) — pgvector HNSW similarity on
+   `episodic_memories.embedding` (1536-dim).
+2. **Full-text** (`FulltextBackend`) — PostgreSQL GIN index keyword
+   search.
+3. **Graph** (`GraphBackend`) — FalkorDB Cypher traversal on the
+   knowledge graph (8 node types, 15 edge types).
+
+**Fusion algorithm**: `_apply_rrf_fusion`
+(`src/rag/hybrid_retriever.py:316-382`):
+
+```
+RRF Score = sum(weight_i / (k + rank_i)) for each backend i
+where k = 60 (RRF_K, src/rag/hybrid_retriever.py:82)
+```
+
+Backend weights are configurable via `RAGConfig.search.fusion_weights`
+(default ~0.33 each). After fusion, `_apply_graph_boost`
+(`src/rag/hybrid_retriever.py:384-410`) multiplies graph-connected
+results by 1.3× (`GRAPH_BOOST`, `src/rag/hybrid_retriever.py:85`).
+
+**Health + degradation**: `health_check()` returns per-backend health.
+The retriever gracefully degrades to fewer backends on failure rather
+than raising; only when ALL backends return zero results does it return
+an empty list with a logged warning.
+
+**Source attribution**: each `RetrievalResult` carries
+`metadata['rrf_sources']` listing which backends contributed and
+`metadata['rrf_score']` for audit transparency.
+
+### 5.5 End-to-end signal flow
+
+A typical cascade triggered by a sentinel:
+
+```
+1. Celery beat fires sentinel_dispatcher (every 5 minutes)
+2. Registry evaluates enabled sentinels
+3. sentinel_staleness_alert matches: invalidation_count > 0 on executive_insights
+4. Dispatcher checks cooldown (360 minutes for staleness alert); passes
+5. Action handler notify_and_queue_reanalysis enqueued via Celery
+6. Handler publishes {type: "staleness_alert", brands: [...], findings: [...]}
+   to e2i:alerts Redis channel
+7. Per-finding reanalyze_finding Celery task enqueued (#378)
+8. CopilotKit SSE subscriber receives the staleness_alert event
+9. Frontend invalidates local cache for affected insight_ids
+10. User sees fresh data on next render
+```
+
+---
+
+## 6. Security Architecture
+
+### 6.1 Security Layers
 
 ```
 Internet
@@ -695,7 +900,7 @@ Internet
 └─────────────────────────────────┘
 ```
 
-### 5.2 Authentication & Authorization
+### 6.2 Authentication & Authorization
 
 **JWT Flow:**
 1. User authenticates with Supabase Auth (email/password or OAuth)
@@ -712,7 +917,7 @@ ADMIN (level 4)    → Full system access
           └── VIEWER (1) → Read-only dashboards, KPIs, graphs
 ```
 
-### 5.3 Security Headers
+### 6.3 Security Headers
 
 | Header | Value | Purpose |
 |--------|-------|---------|
@@ -724,7 +929,7 @@ ADMIN (level 4)    → Full system access
 | Permissions-Policy | Restricts camera, mic, geo, payment, USB | Feature restriction |
 | HSTS | Optional (`max-age=31536000`) | HTTPS enforcement |
 
-### 5.4 Rate Limiting
+### 6.4 Rate Limiting
 
 | Endpoint Category | Limit | Window |
 |-------------------|-------|--------|
@@ -736,7 +941,7 @@ ADMIN (level 4)    → Full system access
 | CopilotKit chat | 30 req | 3600s |
 | CopilotKit status | 100 req | 60s |
 
-### 5.5 Network Security
+### 6.5 Network Security
 
 - Management ports (MLflow, Grafana, Prometheus, Opik) bound to `127.0.0.1`
 - Redis and FalkorDB require passwords (`REDIS_PASSWORD`, `FALKORDB_PASSWORD`)
@@ -745,7 +950,7 @@ ADMIN (level 4)    → Full system access
 - Worker containers use `tmpfs` with mode `1770`
 - MLflow UI behind nginx `auth_basic`
 
-### 5.6 CI/CD Security Pipeline
+### 6.6 CI/CD Security Pipeline
 
 | Scan | Tool | Trigger |
 |------|------|---------|
@@ -759,9 +964,9 @@ ADMIN (level 4)    → Full system access
 
 ---
 
-## 6. Observability Architecture
+## 7. Observability Architecture
 
-### 6.1 Three Pillars
+### 7.1 Three Pillars
 
 ```
                     ┌──────────────┐
@@ -789,7 +994,7 @@ ADMIN (level 4)    → Full system access
                                   (span persist)
 ```
 
-### 6.2 Prometheus Scrape Targets
+### 7.2 Prometheus Scrape Targets
 
 | Job | Target | Interval | Metrics |
 |-----|--------|----------|---------|
@@ -799,14 +1004,14 @@ ADMIN (level 4)    → Full system access
 | postgres | postgres-exporter:9187 | 30s | Connections, queries, locks |
 | bentoml | bentoml:3000/metrics | 30s | Model serving latency |
 
-### 6.3 Alert Rules
+### 7.3 Alert Rules
 
 Alertmanager routes to `http://api:8000/api/v1/webhooks/alertmanager` with:
 - Group by: alertname, severity
 - Group wait: 30s, interval: 5m, repeat: 12h
 - Inhibition: critical suppresses warning for same alert+instance
 
-### 6.4 Log Aggregation
+### 7.4 Log Aggregation
 
 - **Loki**: Collects Docker container logs via Promtail
 - **Retention**: 30 days (`720h`)
@@ -815,7 +1020,7 @@ Alertmanager routes to `http://api:8000/api/v1/webhooks/alertmanager` with:
 
 ---
 
-## 7. Architecture Decision Records
+## 8. Architecture Decision Records
 
 ### ADR-001: 6-Tier Agent Architecture
 
@@ -975,9 +1180,9 @@ RRF with k=60 and 1.3x boost for graph-connected results.
 
 ---
 
-## 8. Cross-Cutting Concerns
+## 9. Cross-Cutting Concerns
 
-### 8.1 Resilience
+### 9.1 Resilience
 
 **Circuit Breaker** (`src/utils/circuit_breaker.py`):
 - States: CLOSED -> OPEN (5 failures) -> HALF_OPEN (30s) -> CLOSED (2 successes)
@@ -993,7 +1198,7 @@ RRF with k=60 and 1.3x boost for graph-connected results.
 - Agents lazy-init dependencies and log warnings on failure
 - RAG continues with 2 backends if one fails
 
-### 8.2 Testing Strategy
+### 9.2 Testing Strategy
 
 | Level | Runner | Config |
 |-------|--------|--------|
@@ -1004,7 +1209,7 @@ RRF with k=60 and 1.3x boost for graph-connected results.
 | Batched full suite | `scripts/run_tests_batched.sh` | 43 batches, ~20 minutes |
 | Frontend | `vitest` + Playwright e2e | Coverage thresholds: 62% lines |
 
-### 8.3 Deployment Workflow
+### 9.3 Deployment Workflow
 
 ```
 Developer Machine                       Droplet
@@ -1034,7 +1239,7 @@ Developer Machine                       Droplet
       │  Workers: explicit restart         │
 ```
 
-### 8.4 Configuration Management
+### 9.4 Configuration Management
 
 | Config Type | Location | Format |
 |-------------|----------|--------|
@@ -1047,7 +1252,7 @@ Developer Machine                       Droplet
 | Python tools | `pyproject.toml` | TOML (ruff, mypy, pytest, coverage) |
 | Pre-commit | `.pre-commit-config.yaml` | YAML |
 
-### 8.5 Performance Characteristics
+### 9.5 Performance Characteristics
 
 | Operation | Latency Target | Actual |
 |-----------|---------------|--------|
@@ -1059,7 +1264,7 @@ Developer Machine                       Droplet
 | Causal impact (full) | <120s | 30s estimate + 15s refutation |
 | Health check | <5s | ~1s |
 
-### 8.6 Known Architectural Debt
+### 9.6 Known Architectural Debt
 
 1. **Single droplet**: No HA, no failover. Acceptable for current scale.
 2. **Celery doesn't auto-reload**: Workers require manual restart on code changes.
