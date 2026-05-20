@@ -173,6 +173,16 @@ def _wait_for_port(host: str, port: int, *, timeout: float = 10.0) -> bool:
     return False
 
 
+@pytest.mark.skipif(
+    os.environ.get("CI") == "true" and not os.environ.get("E2I_RUN_SSE_E2E"),
+    reason=(
+        "SSE e2e crashes the xdist worker on GitHub Actions runners under "
+        "cumulative memory pressure (this is the LAST test in the integration "
+        "suite — gw0 OOMs by the time it gets here). The 7 unit tests in "
+        "tests/unit/test_api/test_staleness_alerts.py cover the bridge "
+        "behavior. Run locally pre-PR with E2I_RUN_SSE_E2E=1 set."
+    ),
+)
 def test_e2i_alerts_publish_reaches_sse_subscriber(
     reset_redis_factory: None,
     redis_url: str,
