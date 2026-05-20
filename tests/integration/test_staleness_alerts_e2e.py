@@ -256,8 +256,12 @@ def test_e2i_alerts_publish_reaches_sse_subscriber(
     )
     server_thread.start()
     try:
-        assert _wait_for_port("127.0.0.1", port, timeout=10.0), (
-            "uvicorn server did not start within 10s"
+        # 30s headroom — CI runners are slower than dev laptops for the
+        # full FastAPI app boot (Sentry init + OpenTelemetry init +
+        # MLflow + Opik + the 18-agent router-import graph). Empirically
+        # local boot is ~2s; CI was observed at 10-15s under load.
+        assert _wait_for_port("127.0.0.1", port, timeout=30.0), (
+            "uvicorn server did not start within 30s"
         )
 
         # -------- background publisher --------
