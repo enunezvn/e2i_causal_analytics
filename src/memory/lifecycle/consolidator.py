@@ -33,10 +33,26 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
+import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Mapping, Optional, Set
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Protocol,
+    Sequence,
+    Set,
+    Tuple,
+)
+
+from pydantic import BaseModel, Field, field_validator
 
 from src.memory.services.factories import get_supabase_client
 
@@ -53,6 +69,225 @@ PROCEDURAL_MIN_SUCCESS_RATE = 0.8  # success_rate field on procedural memories
 # (brand, dedup_signature) partial-unique-index treats old + new
 # generations as distinct rather than colliding mid-rollout.
 DEDUP_SIGNATURE_VERSION = "v1"
+
+
+# -------------------------------------------------------------------------
+# Procedural-template extraction (issue #389 — Phase 3 §3.4)
+# -------------------------------------------------------------------------
+# Template-signature version. Bump in lockstep with any change to
+# ``_compute_template_signature`` so old + new generations live as
+# distinct rows on the (brand, template_signature) partial-unique-index
+# instead of colliding mid-rollout.
+TEMPLATE_SIGNATURE_VERSION = "v1"
+
+# Cluster N_MIN — minimum rows per (brand, event_type, event_subtype,
+# sorted(action_keys)) cluster before an extraction attempt fires. Below
+# this threshold the cluster is "too small to call a pattern" and is
+# skipped. Mirrors the conservative N=3 default used by
+# ``SEMANTIC_MIN_CONFIRMATIONS`` (above) — three independent
+# observations are the minimum signal for "real recurring pattern" vs
+# "incidental noise".
+PROCEDURAL_TEMPLATE_MIN_CLUSTER_SIZE = 3
+
+# Confidence threshold below which a template is NOT promoted. Cohesion
+# below 0.3 indicates the cluster is mostly noise (rows that share the
+# cluster key but have widely-divergent action_keys); promoting such a
+# row would generate a misleading "template" that the downstream
+# matching surface would over-trigger on. The threshold is documented
+# in code comments alongside the formula calibration.
+PROCEDURAL_TEMPLATE_MIN_CONFIDENCE = 0.3
+
+# Feature flag for the LLM-augmented extraction path. When set to a
+# truthy env value the symbolic-cohesion confidence is multiplied by an
+# LLM-rated coherence in [0..1]; on SDK exception (narrow catch on the
+# four anthropic.* error classes) the consolidator falls back to the
+# pure symbolic path. Default off keeps the consolidator deterministic
+# and free of per-cluster LLM cost in dev/CI.
+PROCEDURAL_LLM_EXTRACTION_ENV_VAR = "PROCEDURAL_LLM_EXTRACTION_ENABLED"
+
+
+# Anthropic client protocol — kept structural so the real SDK class
+# ``anthropic.AsyncAnthropic`` (whose ``messages`` is a class-level
+# property → "read-only attribute" in mypy structural subtyping)
+# satisfies it without further annotation gymnastics. Mirrors the
+# crystallizer's ``_AnthropicClientProtocol`` definition.
+class _AnthropicMessagesProtocol(Protocol):
+    async def create(self, **kwargs: Any) -> Any: ...
+
+
+class _AnthropicClientProtocol(Protocol):
+    @property
+    def messages(self) -> _AnthropicMessagesProtocol: ...
+
+
+_AnthropicClientFactory = Callable[[str], _AnthropicClientProtocol]
+
+
+def _llm_extraction_enabled() -> bool:
+    """Return True iff the operator explicitly opted in to the LLM
+    extraction path via env. Default off.
+
+    Truthy values: ``"1"``, ``"true"``, ``"yes"``, ``"on"`` (case-
+    insensitive). Matches the crystallizer's ``_llm_narratives_enabled``
+    so operators have a uniform on/off vocabulary across the memory
+    lifecycle.
+    """
+    raw = os.environ.get(PROCEDURAL_LLM_EXTRACTION_ENV_VAR, "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+class ProceduralTemplate(BaseModel):
+    """Pydantic schema for one extracted procedural template (issue #389).
+
+    Serialized to JSONB via ``template_body`` on the
+    ``procedural_templates`` table (migration 027).
+
+    Design choices (per #389 binding decisions, mirror Decision 2 =
+    HYBRID from PR #384):
+
+    * **Pydantic, not Jinja2 / free-form text.** Cross-language
+      consumers (Python + TypeScript dashboards) decode the JSONB
+      payload by schema, not template engine. Jinja2 is fragile across
+      runtimes; free-form ``{var}`` text loses type-safety on
+      round-trip.
+    * **``shared_action_keys``: List[str].** Concrete intersection of
+      ``raw_content["action_keys"]`` across the cluster's rows — the
+      KEYS the template captures as REQUIRED for every instance.
+    * **``variables``: List[str].** Per-instance placeholder keys —
+      the union-minus-intersection of OTHER ``raw_content`` keys
+      across the cluster. These are the dimensions that vary between
+      instances (e.g. ``hcp_id`` / ``region`` / ``cohort``); a
+      consumer materializing the template would bind these.
+    * **``extraction_confidence``: float in [0..1].** Mean pairwise
+      Jaccard cohesion over ``action_keys`` sets (deterministic) ×
+      optional LLM coherence multiplier when the flag is on. Range
+      pinned by both the Pydantic ``Field(ge=0, le=1)`` validator AND
+      the DB ``CHECK (extraction_confidence >= 0 AND <= 1)`` (defense
+      in depth).
+    * **``extraction_method``: Literal['symbolic' | 'llm_with_fallback'].**
+      Pinned to the two paths the consolidator actually emits;
+      mismatched values are caught at Pydantic construction AND at the
+      DB CHECK constraint.
+
+    V2 follow-ups (out of scope here, will be filed as separate issues
+    once production observability confirms #389 V1 lands cleanly):
+
+    * Template revision/versioning (e.g. ``template_version: int``).
+    * Embedding-similarity clustering basis (replacing the
+      exact-match key-tuple).
+    * Cross-brand templates (forbidden in V1 per the brand-tenant
+      boundary).
+    """
+
+    brand: str
+    template_signature: str
+    event_type: str
+    event_subtype: str
+    shared_action_keys: List[str]
+    variables: List[str]
+    derived_from_episodic_ids: List[str]
+    extraction_confidence: float = Field(ge=0.0, le=1.0)
+    extraction_method: Literal["symbolic", "llm_with_fallback"]
+
+    @field_validator("shared_action_keys", "variables", "derived_from_episodic_ids")
+    @classmethod
+    def _no_empty_strings(cls, v: List[str]) -> List[str]:
+        # Defensive: reject any empty strings inside list payloads —
+        # they cannot represent a real action key / variable name /
+        # memory id and would silently break downstream matching.
+        if any(not (isinstance(item, str) and item.strip()) for item in v):
+            raise ValueError("list values must be non-empty strings")
+        return v
+
+
+def _compute_template_signature(
+    *,
+    brand: Optional[str],
+    event_type: Optional[str],
+    event_subtype: Optional[str],
+    action_keys: List[str],
+) -> Optional[str]:
+    """Pure helper returning a deterministic template key for one
+    cluster's (brand, event_type, event_subtype, sorted(action_keys))
+    tuple.
+
+    Mirrors ``_compute_dedup_signature`` (which exists at the top of
+    this module) — same versioned-prefix shape, same brand-included-in-
+    every-variant defense-in-depth, same SHA-256 over a delimited
+    payload.
+
+    Cluster basis (V1): exact-match key-tuples. Embedding-similarity
+    is V2 follow-up. The four tuple-fields are the cluster key;
+    different values for ANY field produce a distinct signature.
+
+    Returns ``None`` when any of the four required inputs is missing
+    or when ``action_keys`` is empty. In that case the row is not safe
+    to template and the caller skips it.
+    """
+    if not brand or not event_type or not event_subtype or not action_keys:
+        return None
+    # sorted(action_keys) means the signature is invariant to encounter
+    # order — two rows with action_keys=["a","b"] and ["b","a"] map to
+    # the same cluster. Decision §3.4 explicitly calls this out.
+    sorted_keys = sorted(action_keys)
+    payload = "|".join(
+        (
+            "template",
+            str(brand),
+            str(event_type),
+            str(event_subtype),
+            "+".join(sorted_keys),
+        )
+    )
+    sig = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return f"{TEMPLATE_SIGNATURE_VERSION}:{sig}"
+
+
+def _jaccard_cohesion(members: Sequence[Mapping[str, Any]]) -> float:
+    """Mean pairwise Jaccard similarity over per-row ``action_keys`` sets.
+
+    Confidence score for V1 extraction. Bounded in [0..1] by definition
+    of the Jaccard index (|A∩B| / |A∪B|). Calibration:
+
+    * All sets identical → cohesion = 1.0 (perfect agreement; the
+      cluster IS a template).
+    * All sets disjoint → cohesion = 0.0 (no agreement; just rows
+      sharing a cluster key by coincidence — should be filtered).
+    * Half-overlapping → cohesion in (0, 1); threshold 0.3 rejects
+      "mostly noise" clusters before they reach the DB.
+
+    A single-member cluster trivially has cohesion 1 (no pairs to
+    average over; returns the limit).
+
+    Empty members → 0 (defensive; the caller should never pass an
+    empty list — the cluster-grouping step filters those out — but
+    this keeps the function total).
+    """
+    if not members:
+        return 0.0
+    if len(members) == 1:
+        # Singleton: the limit as the pair count -> 0 is "perfect"
+        # agreement (there's nothing to disagree with). Conventional
+        # choice — pyramid-up to the symbolic-only ceiling so the
+        # N_MIN filter (not the cohesion filter) is the gate that
+        # rejects too-small clusters.
+        return 1.0
+
+    sets: List[Set[str]] = [{str(k) for k in (m.get("action_keys") or [])} for m in members]
+    n = len(sets)
+    total = 0.0
+    pair_count = 0
+    for i in range(n):
+        for j in range(i + 1, n):
+            a, b = sets[i], sets[j]
+            union = a | b
+            if not union:
+                # Both sets empty: convention — treat as agreement.
+                total += 1.0
+            else:
+                total += len(a & b) / len(union)
+            pair_count += 1
+    return total / pair_count if pair_count else 0.0
 
 
 def _compute_dedup_signature(row: Mapping[str, Any]) -> Optional[str]:
@@ -187,10 +422,22 @@ class Consolidator:
         semantic_min_confirmations: int = SEMANTIC_MIN_CONFIRMATIONS,
         procedural_min_usage: int = PROCEDURAL_MIN_USAGE,
         procedural_min_success_rate: float = PROCEDURAL_MIN_SUCCESS_RATE,
+        anthropic_client_factory: Optional[_AnthropicClientFactory] = None,
     ):
         self.semantic_min_confirmations = semantic_min_confirmations
         self.procedural_min_usage = procedural_min_usage
         self.procedural_min_success_rate = procedural_min_success_rate
+        # Parameter-DI for the procedural-template LLM-augmented path
+        # (issue #389). Mirror of the crystallizer's
+        # ``anthropic_client_factory`` (PR #384). Tests inject a fake
+        # factory; production passes nothing → the helper resolves the
+        # default ``anthropic.AsyncAnthropic`` factory. Forbidden
+        # alternative per [[feedback-test-must-exercise-real-catch-
+        # not-mock]] + [[feedback-codex-audits-within-existing-
+        # signature-not-design]]: monkey-patching
+        # ``anthropic_mod.AsyncAnthropic`` (bypasses the real catch
+        # surface AND is xdist-fragile).
+        self._anthropic_client_factory = anthropic_client_factory
 
     async def run(self, brand: Optional[str] = None) -> ConsolidationResult:
         """
@@ -929,6 +1176,253 @@ class Consolidator:
                 logger.warning(f"consolidator: update failed for {path_id}: {exc}")
                 result.errors.append(f"update {path_id}: {exc}")
 
+    # ---------------------------------------- procedural-template extraction
+    # Issue #389 Phase 3 §3.4. Public sibling to ``_promote_to_procedural``
+    # below — same tier (procedural memory), different mechanism. The
+    # counter-threshold promotion below is for INDIVIDUAL procedural
+    # rows; this method emits TEMPLATES extracted from CLUSTERED episodic
+    # rows (one template per cluster, capturing shared structure +
+    # variables). Both can be enabled independently.
+
+    async def extract_procedural_templates(
+        self,
+        brand: Optional[str] = None,
+    ) -> int:
+        """Extract procedural templates from clustered episodic memories.
+
+        V1 design (binding decisions per issue #389):
+
+        * **Clustering basis**: exact-match key-tuples ``(brand,
+          event_type, event_subtype, sorted(action_keys))``. NOT
+          embedding similarity (V2 follow-up).
+        * **Threshold**: clusters with N rows < ``PROCEDURAL_TEMPLATE_
+          MIN_CLUSTER_SIZE`` (default 3) are skipped.
+        * **Confidence**: mean pairwise Jaccard cohesion over
+          ``action_keys`` sets (deterministic, in [0..1]). When the
+          LLM flag is on AND the SDK call succeeds, multiplied by an
+          LLM-rated coherence in [0..1]. Below ``PROCEDURAL_TEMPLATE_
+          MIN_CONFIDENCE`` (default 0.3), the template is NOT
+          promoted (noise rejection).
+        * **Symbolic always runs first**; LLM augments when flag on.
+        * **Brand boundary preserved** — no cross-brand templates.
+        * **Idempotency**: re-extraction on the same cluster swallows
+          the DB partial-unique-index violation and reports 0 new
+          templates added.
+
+        Returns the count of templates ACTUALLY inserted (excludes
+        skipped + idempotent re-extraction).
+        """
+        client = get_supabase_client()
+
+        # Pull candidate episodic rows scoped to brand (when provided).
+        # We need brand + event_type + event_subtype + raw_content
+        # (for action_keys) + memory_id (for derived_from_episodic_ids).
+        # occurred_at is included only for stable per-cluster ordering
+        # of derived_from_episodic_ids.
+        query = client.table("episodic_memories").select(
+            "memory_id, brand, event_type, event_subtype, raw_content, occurred_at"
+        )
+        if brand:
+            query = query.eq("brand", brand)
+        try:
+            rows = (query.execute().data) or []
+        except Exception as exc:
+            logger.warning(f"consolidator: procedural-template select failed: {exc}")
+            return 0
+
+        # Group by the cluster-key tuple. ``sorted(action_keys)`` is
+        # part of the key — rows with different action_keys land in
+        # different clusters (defense in depth alongside the per-row
+        # Jaccard cohesion check).
+        groups: Dict[Tuple[str, str, str, Tuple[str, ...]], List[Dict[str, Any]]] = defaultdict(
+            list
+        )
+        for row in rows:
+            row_brand = row.get("brand")
+            row_event_type = row.get("event_type")
+            row_event_subtype = row.get("event_subtype")
+            raw_content = row.get("raw_content") or {}
+            action_keys = raw_content.get("action_keys")
+            if not (
+                row_brand
+                and row_event_type
+                and row_event_subtype
+                and isinstance(action_keys, list)
+                and action_keys
+            ):
+                # Row lacks the required cluster-key fields — skip
+                # (mirrors ``_compute_template_signature``'s None
+                # return path).
+                continue
+            sorted_keys = tuple(sorted(str(k) for k in action_keys))
+            key = (
+                str(row_brand),
+                str(row_event_type),
+                str(row_event_subtype),
+                sorted_keys,
+            )
+            # Normalise the row's action_keys to the sorted form so
+            # ``_jaccard_cohesion`` sees the same values _compute_
+            # template_signature uses.
+            row_normalised = dict(row)
+            row_normalised["action_keys"] = list(sorted_keys)
+            groups[key].append(row_normalised)
+
+        if not groups:
+            return 0
+
+        templates_inserted = 0
+        llm_enabled = _llm_extraction_enabled()
+
+        for (g_brand, g_event_type, g_event_subtype, g_sorted_keys), members in groups.items():
+            if len(members) < PROCEDURAL_TEMPLATE_MIN_CLUSTER_SIZE:
+                continue
+
+            # Symbolic-cohesion confidence — ALWAYS computed first.
+            symbolic_confidence = _jaccard_cohesion(members)
+
+            # LLM augmentation: only when flag on. The helper handles
+            # the SDK exception narrow-catch internally and returns
+            # ``(extraction_method, confidence_multiplier)``. On
+            # exception path the multiplier is None and the method
+            # downgrades to 'symbolic' so the row insertion records
+            # the actual code path that ran (not the WANTED path).
+            extraction_method: Literal["symbolic", "llm_with_fallback"] = "symbolic"
+            effective_confidence = symbolic_confidence
+
+            if llm_enabled:
+                multiplier = await _invoke_llm_coherence_rater(
+                    brand=g_brand,
+                    event_type=g_event_type,
+                    event_subtype=g_event_subtype,
+                    action_keys=list(g_sorted_keys),
+                    member_count=len(members),
+                    client_factory=self._anthropic_client_factory,
+                )
+                if multiplier is not None:
+                    extraction_method = "llm_with_fallback"
+                    effective_confidence = symbolic_confidence * multiplier
+
+            if effective_confidence < PROCEDURAL_TEMPLATE_MIN_CONFIDENCE:
+                logger.info(
+                    f"consolidator: template noise-rejected "
+                    f"(brand={g_brand}, subtype={g_event_subtype}, "
+                    f"cohesion={effective_confidence:.3f} < "
+                    f"{PROCEDURAL_TEMPLATE_MIN_CONFIDENCE})"
+                )
+                continue
+
+            signature = _compute_template_signature(
+                brand=g_brand,
+                event_type=g_event_type,
+                event_subtype=g_event_subtype,
+                action_keys=list(g_sorted_keys),
+            )
+            if signature is None:
+                # Defensive: _compute_template_signature returns None
+                # only when the cluster-key fields are missing — but
+                # the grouping above filters those out, so this branch
+                # is unreachable in practice. Skip silently.
+                continue
+
+            # shared_action_keys = sorted intersection of action_keys
+            # sets across the cluster's members. Sort for stable
+            # ordering (matches the cluster-key sort).
+            action_key_sets: List[Set[str]] = [{str(k) for k in m["action_keys"]} for m in members]
+            shared_action_keys = sorted(set.intersection(*action_key_sets))
+
+            # variables = sorted (union − intersection) of OTHER
+            # raw_content keys across the cluster's members, EXCLUDING
+            # the cluster basis key ("action_keys") itself. These are
+            # the per-instance placeholder fields the template would
+            # bind when materialized.
+            raw_key_union: Set[str] = set()
+            raw_key_intersection: Optional[Set[str]] = None
+            for m in members:
+                raw_content = m.get("raw_content") or {}
+                keys = set(raw_content.keys()) - {"action_keys"}
+                raw_key_union |= keys
+                raw_key_intersection = (
+                    keys if raw_key_intersection is None else (raw_key_intersection & keys)
+                )
+            variables = sorted(raw_key_union - (raw_key_intersection or set()))
+
+            # derived_from_episodic_ids: stable sort by occurred_at +
+            # memory_id (matches the dedup canonical-pick rule for
+            # consistency).
+            members_sorted = sorted(
+                members,
+                key=lambda r: (
+                    r.get("occurred_at") or "",
+                    str(r.get("memory_id") or ""),
+                ),
+            )
+            derived_from_episodic_ids = [str(m["memory_id"]) for m in members_sorted]
+
+            # Pydantic ProceduralTemplate construction. Pydantic
+            # validates the confidence range + method literal at
+            # this point — invalid values raise ValidationError and
+            # are NOT silently caught (programming error per the
+            # narrow-catch contract).
+            template = ProceduralTemplate(
+                brand=g_brand,
+                template_signature=signature,
+                event_type=g_event_type,
+                event_subtype=g_event_subtype,
+                shared_action_keys=shared_action_keys,
+                variables=variables,
+                derived_from_episodic_ids=derived_from_episodic_ids,
+                extraction_confidence=float(effective_confidence),
+                extraction_method=extraction_method,
+            )
+
+            # Persist. JSONB-shaped ``template_body`` excludes
+            # provenance / signature / confidence / method (those go
+            # to dedicated columns); body is the BUSINESS surface
+            # consumers read.
+            template_body = {
+                "event_type": template.event_type,
+                "event_subtype": template.event_subtype,
+                "shared_action_keys": template.shared_action_keys,
+                "variables": template.variables,
+            }
+            insert_payload = {
+                "brand": template.brand,
+                "template_signature": template.template_signature,
+                "template_body": template_body,
+                "derived_from_episodic_ids": template.derived_from_episodic_ids,
+                "extraction_confidence": template.extraction_confidence,
+                "extraction_method": template.extraction_method,
+            }
+            try:
+                client.table("procedural_templates").insert(insert_payload).execute()
+                templates_inserted += 1
+                logger.info(
+                    f"consolidator: extracted procedural template "
+                    f"(brand={g_brand}, sig={signature[:24]}..., "
+                    f"n={len(members)}, "
+                    f"confidence={effective_confidence:.3f}, "
+                    f"method={extraction_method})"
+                )
+            except Exception as exc:
+                # Idempotency: DB partial-unique-index UniqueViolation
+                # is the EXPECTED shape on re-extraction (V1 has no
+                # revision logic). Swallow as no-op; other exception
+                # shapes propagate to the caller's error log.
+                if self._is_unique_violation(exc):
+                    logger.info(
+                        f"consolidator: procedural template already exists "
+                        f"(brand={g_brand}, sig={signature[:24]}...) — "
+                        "skipping idempotent re-insert"
+                    )
+                else:
+                    logger.warning(
+                        f"consolidator: procedural template insert failed "
+                        f"(brand={g_brand}, sig={signature[:24]}...): {exc}"
+                    )
+
+        return templates_inserted
+
     # -------------------------------------------------------- procedural tier
 
     async def _promote_to_procedural(
@@ -983,6 +1477,164 @@ class Consolidator:
                     f"consolidator: update failed for procedural {proc.get('procedure_id')}: {exc}"
                 )
                 result.errors.append(f"proc update {proc.get('procedure_id')}: {exc}")
+
+
+async def _invoke_llm_coherence_rater(
+    *,
+    brand: str,
+    event_type: str,
+    event_subtype: str,
+    action_keys: List[str],
+    member_count: int,
+    client_factory: Optional[_AnthropicClientFactory] = None,
+) -> Optional[float]:
+    """Invoke the Haiku coherence rater for one procedural-template cluster.
+
+    Returns the rater's coherence score in [0..1], or ``None`` if the
+    LLM path failed and the caller should fall back to the symbolic-
+    only confidence.
+
+    PRODUCTION shape: thin async wrapper around
+    :class:`anthropic.AsyncAnthropic` (NOT the sync
+    :class:`anthropic.Anthropic` — the consolidator is async-end-to-
+    end; a sync client would block the event loop).
+
+    UNIT TESTS: pass a fake ``client_factory`` so no network call
+    happens. Forbidden alternative per [[feedback-test-must-exercise-
+    real-catch-not-mock]]: ``monkeypatch.setattr(anthropic, ...)`` —
+    bypasses the production catch surface.
+
+    Exception path: narrow-caught on the four anthropic.* error
+    classes (``APIConnectionError``, ``APITimeoutError``,
+    ``RateLimitError``, ``APIStatusError``). Programming errors
+    (TypeError, AttributeError, KeyError) PROPAGATE per the narrow-
+    catch contract (mirror crystallizer ``_invoke_llm_narrator``).
+
+    Returning ``None`` (rather than 1.0 / 0.0 / raising) keeps the
+    caller's downgrade-to-symbolic logic explicit at the call site
+    (``extraction_method = 'symbolic'`` when multiplier is None).
+    """
+    # Lazy import — flag-off module load does not pay for the SDK.
+    anthropic_module: Optional[Any]
+    try:
+        import anthropic as _anthropic_module
+
+        anthropic_module = _anthropic_module
+    except ImportError:
+        if client_factory is None:
+            logger.warning(
+                "consolidator: anthropic SDK unavailable for procedural-template "
+                "LLM rater; falling back to symbolic-only"
+            )
+            return None
+        anthropic_module = None
+
+    # Narrow catch tuple — same shape as crystallizer narrator.
+    caught_api_errors: Tuple[type[BaseException], ...]
+    if anthropic_module is None:
+        caught_api_errors = ()
+    else:
+        caught_api_errors = (
+            anthropic_module.APIConnectionError,
+            anthropic_module.APITimeoutError,
+            anthropic_module.RateLimitError,
+            anthropic_module.APIStatusError,
+        )
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not api_key.startswith("sk-ant-"):
+        # Memory `[[feedback-live-lm-skip-must-check-key-shape]]`:
+        # presence-only check would let the CI placeholder
+        # ANTHROPIC_API_KEY=test-key through and produce 401s. Use
+        # the prefix check so empty + placeholder both short-circuit
+        # to symbolic-only.
+        logger.info(
+            "consolidator: ANTHROPIC_API_KEY missing or placeholder; "
+            "procedural-template LLM rater falling back to symbolic-only"
+        )
+        return None
+
+    effective_factory: _AnthropicClientFactory
+    if client_factory is not None:
+        effective_factory = client_factory
+    else:
+        assert anthropic_module is not None  # narrowed by the import-fail branch above
+
+        def _default_factory(key: str) -> _AnthropicClientProtocol:
+            return anthropic_module.AsyncAnthropic(api_key=key)  # type: ignore[no-any-return,union-attr]
+
+        effective_factory = _default_factory
+    client = effective_factory(api_key)
+
+    # Minimal prompt — Haiku-friendly, ~300 input tokens. Asks for a
+    # single-number coherence rating + JSON response shape so parsing
+    # is deterministic and cheap.
+    prompt = (
+        "You are rating the coherence of a candidate procedural-memory "
+        "template extracted from clustered episodic memories.\n\n"
+        f"Brand: {brand}\n"
+        f"Event type: {event_type}\n"
+        f"Event subtype: {event_subtype}\n"
+        f"Shared action keys: {action_keys}\n"
+        f"Number of observations: {member_count}\n\n"
+        "Output a JSON object with a single key `coherence` whose value "
+        "is a float in [0, 1]:\n"
+        "  - 1.0 = the action keys form a coherent, reusable procedural template\n"
+        "  - 0.5 = somewhat coherent but with noise / overgeneralisation\n"
+        "  - 0.0 = the action keys do not form a coherent template\n\n"
+        "Respond with ONLY the JSON object, no other text."
+    )
+
+    started = time.monotonic()
+    try:
+        response = await client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=64,
+            messages=[{"role": "user", "content": prompt}],
+        )
+    except caught_api_errors as exc:
+        # Narrow catch: SDK / API transient errors fall back to
+        # symbolic-only (return None). Programming errors propagate.
+        logger.warning(
+            "consolidator: procedural-template LLM rater %s: %s",
+            type(exc).__name__,
+            exc,
+        )
+        return None
+
+    latency_ms = (time.monotonic() - started) * 1000.0
+    logger.debug("consolidator: procedural-template LLM rater latency_ms=%.1f", latency_ms)
+
+    # Extract text from response. Anthropic SDK returns
+    # ``response.content`` as a list of content blocks.
+    text = ""
+    if hasattr(response, "content") and response.content:
+        first = response.content[0]
+        if hasattr(first, "text"):
+            text = first.text or ""
+
+    # Parse JSON. Bad JSON → fall back to symbolic-only (return None).
+    import json as _json
+
+    try:
+        parsed = _json.loads(text.strip())
+        coherence = parsed.get("coherence")
+        if not isinstance(coherence, (int, float)):
+            logger.warning(
+                "consolidator: procedural-template LLM rater returned non-numeric "
+                "coherence: %r — falling back to symbolic-only",
+                coherence,
+            )
+            return None
+        # Clamp to [0..1] — defensive against rater drift.
+        return max(0.0, min(1.0, float(coherence)))
+    except (_json.JSONDecodeError, ValueError, KeyError) as exc:
+        logger.warning(
+            "consolidator: procedural-template LLM rater parse failed: %s — "
+            "falling back to symbolic-only",
+            exc,
+        )
+        return None
 
 
 # Module-level convenience entrypoint for Celery / tests.
