@@ -331,6 +331,16 @@ def test_synthetic_graph_topology_invariant() -> None:
     edges = _load_synthetic_graph(_GRAPH_FILE)
     histogram = _compute_bfs_depth_histogram(edges)
     _EXPECTED_HISTOGRAM = [1, 10, 50, 200, 500, 239]
+    # Assertion ORDER (codex iter-3 L1 fix): max-depth assertion FIRST so
+    # the dedicated "5-hop" diagnostic message fires when only depth
+    # drifts (e.g., generator regression that drops a layer entirely).
+    # Without this ordering, the histogram-equality assertion (which is
+    # broader) would fire first and the max-depth diagnostic would be
+    # unreachable.
+    assert len(histogram) - 1 == 5, (
+        f"Synthetic graph max BFS depth from cp-root is "
+        f"{len(histogram) - 1}, expected 5 (issue #391 box-1 '5-hop')."
+    )
     assert histogram == _EXPECTED_HISTOGRAM, (
         f"BFS depth histogram from cp-root drifted: expected "
         f"{_EXPECTED_HISTOGRAM}, got {histogram}. "
@@ -338,14 +348,6 @@ def test_synthetic_graph_topology_invariant() -> None:
         "scripts/benchmarks/gen_synthetic_graph.py) or the JSONL was "
         "edited by hand. The latency benchmark depends on the 5-hop "
         "topology being preserved."
-    )
-    # Defense-in-depth: also assert max_depth == 5 explicitly so a
-    # future change that adds a 7th layer is caught by a separate-named
-    # assertion (better diagnostic than just the histogram-mismatch
-    # message).
-    assert len(histogram) - 1 == 5, (
-        f"Synthetic graph max BFS depth from cp-root is "
-        f"{len(histogram) - 1}, expected 5 (issue #391 box-1 '5-hop')."
     )
 
 
