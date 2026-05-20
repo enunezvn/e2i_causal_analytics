@@ -239,7 +239,13 @@ from langgraph.prebuilt import ToolNode
 from pydantic import BaseModel, Field
 
 from src.agents.multi_faceted import is_multi_faceted_topic_count
-from src.api.dependencies.auth import require_viewer
+from src.api.dependencies.auth import (
+    TEST_USER,
+    TESTING_MODE,
+    AuthError,
+    require_viewer,
+    verify_supabase_token,
+)
 from src.api.middleware.tracing import get_request_id  # Phase 1 G08
 from src.api.routes.chatbot_tools import E2I_CHATBOT_TOOLS
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
@@ -2558,6 +2564,53 @@ def transform_info_response(sdk: CopilotKitRemoteEndpoint) -> Dict[str, Any]:
     }
 
 
+async def _require_auth_for_copilotkit_execution(request: Request) -> Dict[str, Any]:
+    """Validate JWT for CopilotKit execution paths.
+
+    Mirrors ``src.api.dependencies.auth.require_auth`` but callable
+    directly from inside ``copilotkit_custom_handler``. The public
+    ``/api/copilotkit`` + ``/info`` paths permit unauthenticated
+    DISCOVERY requests (empty body / ``{}`` / ``{"method":"info"}``);
+    this function gates EXECUTION request bodies (``agent/run``,
+    ``action/run``, ``agent/connect``, anything else) before they reach
+    the SDK handler.
+
+    Closes #399 codex iter-0 H1+H2: path-based middleware allowlist
+    alone is insufficient because the CopilotKit JSON-RPC protocol
+    mixes discovery and execution under the same paths via the
+    ``method`` field in the request body. Body-aware auth lives where
+    the body is already being inspected — inside the handler.
+
+    Args:
+        request: FastAPI request; ``Authorization`` header is read.
+
+    Returns:
+        User dict (mirror of ``require_auth`` return shape).
+
+    Raises:
+        AuthError: If no token, malformed Authorization header, or
+            invalid/expired JWT. The caller is expected to catch this
+            and convert to a 401 JSONResponse (see usage in
+            ``copilotkit_custom_handler``).
+    """
+    if TESTING_MODE:
+        request.state.user = TEST_USER
+        return TEST_USER
+
+    auth_header = request.headers.get("Authorization", "")
+    parts = auth_header.split() if auth_header else []
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        raise AuthError("Missing or invalid Authorization header for execution endpoint")
+
+    token = parts[1]
+    user = await verify_supabase_token(token)
+    if user is None:
+        raise AuthError("Invalid or expired token")
+
+    request.state.user = user
+    return user
+
+
 async def copilotkit_custom_handler(
     request: Request, sdk: CopilotKitRemoteEndpoint, path: str = ""
 ) -> JSONResponse | StreamingResponse:
@@ -2584,6 +2637,25 @@ async def copilotkit_custom_handler(
         response = transform_info_response(sdk)
         logger.debug(f"GET info response with agents: {list(response['agents'].keys())}")
         return JSONResponse(content=response)
+
+    # #399 iter-1 H1+H2 closure: the JWTAuthMiddleware allowlist permits
+    # ``/api/copilotkit``, ``/api/copilotkit/status``, ``/api/copilotkit/info``
+    # for unauthenticated SDK discovery. But the CopilotKit JSON-RPC
+    # protocol routes EXECUTION (agent/run, action/run, agent/connect,
+    # SDK fallback) via the SAME paths using the request body's
+    # ``method`` field. So path-based allowlist alone cannot tell
+    # discovery from execution — the handler must.
+    #
+    # The ``is_info_request`` branch below catches pure-discovery POSTs
+    # (empty / {} / {"action":"getInfo"} / {"method":"info"}) and returns
+    # before reaching any execution branch. Everything else — agent/run
+    # at L2631, agent/connect at L2748, the SDK fallback at L2753 — is
+    # execution-shaped and must be auth-gated.
+    #
+    # The auth check is wired AFTER the discovery branch (so legitimate
+    # unauthenticated discovery still works) but BEFORE any execution
+    # branch. Mirrors ``require_auth`` semantics: testing-mode bypass,
+    # Bearer-token extraction, JWT verification via ``verify_supabase_token``.
 
     # Handle POST to root or /info - need to check body to determine request type
     # IMPORTANT: Read body FIRST before any other operations that might consume it
@@ -2622,6 +2694,20 @@ async def copilotkit_custom_handler(
                     f"Returning info response with agents: {list(response['agents'].keys())}"
                 )
                 return JSONResponse(content=response)
+
+            # #399 iter-1: this is an execution-shaped POST to a
+            # middleware-public path. Verify JWT before reaching agent/run,
+            # agent/connect, or the SDK fallback handler.
+            try:
+                await _require_auth_for_copilotkit_execution(request)
+            except AuthError as auth_exc:
+                return JSONResponse(
+                    status_code=401,
+                    content={
+                        "error": "Authentication required for CopilotKit execution endpoints",
+                        "detail": str(auth_exc.detail) if auth_exc.detail else str(auth_exc),
+                    },
+                )
 
             # Non-info POST request - check AG-UI protocol method
             agui_method = body_json.get("method", "") if body_json else ""

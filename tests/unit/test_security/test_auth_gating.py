@@ -553,6 +553,130 @@ def test_copilotkit_dynamic_routes_require_auth() -> None:
     assert _is_public_path("POST", "/api/copilotkit/v2/agent/bar") is False
 
 
+def _build_mock_request_with_headers(headers: dict[str, str]) -> object:
+    """Build a Mock request stub for unit testing the auth helper.
+
+    Hand-crafted Starlette Request scopes are fragile (workers crash on
+    incomplete scope dicts under xdist parallelism). A Mock with the
+    fields the helper actually reads — ``headers`` (dict-like .get) +
+    ``state`` (attribute-settable namespace) — is sufficient for the
+    helper's contract and stable across pytest-xdist workers.
+    """
+    from unittest.mock import MagicMock
+
+    request = MagicMock()
+    request.headers = headers
+    # Allow ``request.state.user = ...`` attribute assignment.
+    request.state = MagicMock()
+    return request
+
+
+def test_copilotkit_execution_post_to_public_path_requires_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ALLOWLIST defense-in-depth: even on the middleware-public
+    ``/api/copilotkit`` + ``/info`` paths, POST bodies that route to
+    execution (``agent/run``, ``action/run``, ``agent/connect``, SDK
+    fallback) must require a JWT.
+
+    Codex iter-0 H1+H2 closure: the CopilotKit JSON-RPC protocol mixes
+    discovery and execution under the same paths via the request body's
+    ``method`` field. Path-based allowlist alone CANNOT distinguish the
+    two — only the body can. The ``copilotkit_custom_handler``
+    inspects the body at
+    ``src/api/routes/copilotkit.py:2590-2624`` to detect discovery
+    requests; this test pins that execution-shaped bodies hit the new
+    in-handler auth check
+    (``_require_auth_for_copilotkit_execution``) and produce 401 when
+    no Bearer token is present.
+
+    Production note: TESTING_MODE bypasses this check (mirrors
+    ``require_auth``). The test forces TESTING_MODE off so the real
+    JWT path runs.
+    """
+    from src.api.routes import copilotkit as copilotkit_module
+
+    # Force TESTING_MODE off so the real JWT branch runs.
+    monkeypatch.setattr(copilotkit_module, "TESTING_MODE", False)
+
+    request = _build_mock_request_with_headers({})
+
+    import asyncio
+
+    from src.api.dependencies.auth import AuthError
+
+    loop = asyncio.new_event_loop()
+    try:
+        with pytest.raises(AuthError):
+            loop.run_until_complete(
+                copilotkit_module._require_auth_for_copilotkit_execution(request)  # type: ignore[arg-type]
+            )
+    finally:
+        loop.close()
+
+
+def test_copilotkit_execution_helper_rejects_malformed_authorization_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Malformed Authorization header (missing 'Bearer' prefix, wrong
+    parts count, etc.) is rejected by the in-handler auth check."""
+    from src.api.routes import copilotkit as copilotkit_module
+
+    monkeypatch.setattr(copilotkit_module, "TESTING_MODE", False)
+
+    from src.api.dependencies.auth import AuthError
+
+    # Wrong scheme.
+    request_wrong_scheme = _build_mock_request_with_headers({"Authorization": "Basic xyz"})
+    # Single-part (no token).
+    request_single_part = _build_mock_request_with_headers({"Authorization": "Bearer"})
+    # Three-part (extra junk).
+    request_three_part = _build_mock_request_with_headers({"Authorization": "Bearer abc extra"})
+
+    import asyncio
+
+    for req in (request_wrong_scheme, request_single_part, request_three_part):
+        loop = asyncio.new_event_loop()
+        try:
+            with pytest.raises(AuthError):
+                loop.run_until_complete(
+                    copilotkit_module._require_auth_for_copilotkit_execution(req)  # type: ignore[arg-type]
+                )
+        finally:
+            loop.close()
+
+
+def test_copilotkit_execution_helper_passes_in_testing_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ALLOWLIST: when ``E2I_TESTING_MODE=1``, the in-handler auth
+    helper short-circuits to the TEST_USER mock (mirrors
+    ``require_auth``'s testing-mode branch at
+    ``src/api/dependencies/auth.py:304-306``). This keeps integration
+    tests + e2e flows working without real JWT issuance.
+    """
+    from src.api.routes import copilotkit as copilotkit_module
+
+    monkeypatch.setattr(copilotkit_module, "TESTING_MODE", True)
+
+    request = _build_mock_request_with_headers({})
+
+    import asyncio
+
+    loop = asyncio.new_event_loop()
+    try:
+        user = loop.run_until_complete(
+            copilotkit_module._require_auth_for_copilotkit_execution(request)  # type: ignore[arg-type]
+        )
+    finally:
+        loop.close()
+
+    # TEST_USER is the fixture-shape mock returned by require_auth in
+    # testing mode.
+    assert isinstance(user, dict)
+    assert user.get("id") or user.get("user_id") or user.get("sub")
+
+
 def test_copilotkit_public_path_patterns_does_not_contain_catchall() -> None:
     """ALLOWLIST: the catch-all regex ``^/api/copilotkit(/.*)?$`` MUST
     NOT appear in ``PUBLIC_PATH_PATTERNS``.
