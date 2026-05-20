@@ -465,8 +465,28 @@ class TestJWTAuthMiddleware:
         assert response == mock_response
 
     @pytest.mark.asyncio
-    async def test_copilotkit_endpoints_bypass_auth(self):
-        """Test all CopilotKit endpoints are public (rate-limited, not auth-gated)."""
+    async def test_copilotkit_probe_endpoints_bypass_auth(self):
+        """Test the CopilotKit SDK-probe endpoints bypass auth at the
+        middleware level.
+
+        #399 narrowed the CopilotKit allowlist:
+          - ``/api/copilotkit`` (base) + ``/api/copilotkit/info``:
+            ``*``-method public; in-handler check at
+            ``src/api/routes/copilotkit.py:2701`` gates execution-shaped
+            POSTs (agent/run, action/run, ...) by inspecting the
+            request body.
+          - ``/api/copilotkit/status``: GET-only public; POST/PUT/DELETE
+            require JWT at the middleware (the static router serves
+            GET-only there, so non-GET would otherwise fall through
+            the catch-all to the SDK fallback delegate).
+
+        This test pins the methods the middleware lets through:
+          - POST /api/copilotkit         (base, discovery-allowed)
+          - POST /api/copilotkit/info    (discovery-allowed)
+          - GET  /api/copilotkit/status  (the GET-only public path)
+        The non-GET /status case is covered explicitly in
+        ``test_copilotkit_status_post_requires_auth`` below.
+        """
         from src.api.middleware.auth_middleware import JWTAuthMiddleware
 
         app = MagicMock()
@@ -475,11 +495,45 @@ class TestJWTAuthMiddleware:
         mock_response = MagicMock()
         call_next = AsyncMock(return_value=mock_response)
 
-        for path in ["/api/copilotkit", "/api/copilotkit/status", "/api/copilotkit/info"]:
+        # (path, method) tuples that should pass middleware without auth.
+        public_cases = [
+            ("/api/copilotkit", "POST"),
+            ("/api/copilotkit/info", "POST"),
+            ("/api/copilotkit/status", "GET"),
+        ]
+        for path, method in public_cases:
             mock_request = MagicMock()
-            mock_request.method = "POST"
+            mock_request.method = method
             mock_request.url.path = path
 
             response = await middleware.dispatch(mock_request, call_next)
 
-            assert response == mock_response
+            assert response == mock_response, (
+                f"Middleware should pass through {method} {path} without auth "
+                f"(SDK probe surface — #399 allowlist)."
+            )
+
+    @pytest.mark.asyncio
+    async def test_copilotkit_status_post_requires_auth(self):
+        """Test POST /api/copilotkit/status now requires auth at the
+        middleware level (#399 iter-2 closure of codex iter-1 H1).
+
+        The static router serves GET-only at /status, so a POST/PUT/DELETE
+        falls through to the dynamic catch-all → SDK fallback delegate
+        which could route based on body content. The allowlist entry
+        is method-restricted to GET, so non-GET to /status fails the
+        middleware allowlist check and falls through to the default
+        JWT-required branch.
+
+        This test confirms ``_is_public_path("POST", "/api/copilotkit/status")``
+        returns False — handled directly in the allowlist test file
+        (``tests/unit/test_security/test_auth_gating.py``); here we
+        simply assert the docstring intent for future maintainers.
+        """
+        from src.api.middleware.auth_middleware import _is_public_path
+
+        # The auth-gating test file has the full positive/negative set;
+        # this is a smoke check tied to the dispatch test above.
+        assert _is_public_path("POST", "/api/copilotkit/status") is False
+        assert _is_public_path("PUT", "/api/copilotkit/status") is False
+        assert _is_public_path("DELETE", "/api/copilotkit/status") is False
