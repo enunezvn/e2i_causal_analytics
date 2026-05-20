@@ -55,6 +55,20 @@ deepest BFS path from the seed root has 5 hops — matching issue #391's
 All edges are brand-scoped to a single brand (`bench`) so the BFS does not
 short-circuit at brand boundaries.
 
+### Codex iter-0 H1 closure: adjacent-layer-only extras
+
+The first cut of `gen_synthetic_graph.py` added ~4000 "extra" edges between
+ANY earlier and ANY later layer, which let root reach layer-3 nodes directly
+in one hop. The shortest-path distribution collapsed to
+`[1, 426, 528, 45, 0, 0]` — max depth 3, NOT 5 — which falsified the
+"5-hop BFS" claim of the benchmark.
+
+The corrected generator restricts extras to ADJACENT layers (L → L+1) only.
+This preserves the 5-hop shortest-path invariant: the only path from root to
+any layer-k node goes through exactly k edges, k=1..5. The benchmark
+sanity-check asserts `result.visited == 1000` (the full reachable set) so
+any silent BFS truncation at any layer surfaces loudly.
+
 This is a synthetic-baseline benchmark per the placeholder-first-run policy:
 real production graph topology may not match this synthetic shape and the
 first run on a given environment BLESSES its measured baseline. Subsequent

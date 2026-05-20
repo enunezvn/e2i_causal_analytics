@@ -4,7 +4,15 @@ Box 1 of issue #391 PERFORMANCE slice: benchmark
 ``src.memory.lifecycle.invalidator.cascade_invalidate`` against a synthetic
 5-hop provenance DAG (~1000 nodes / ~5000 edges).
 
-**Target**: < 500ms for 5-hop BFS (issue #391, box 1).
+**Target**: < 500ms for 5-hop BFS (issue #391, box 1 verbatim).
+
+**Tolerance band** (codified in
+``tests/benchmarks/baselines/performance.json``; re-stated here so the
+test docstring carries the same numbers as the JSON, per codex iter-0 L1):
+- 10% relative OR 100ms absolute (whichever wider).
+Relative-vs-absolute policy is `max(rel, abs)` — see ``_within_tolerance``
+for the rationale; absolute band protects against noise on near-zero
+baselines, relative band catches real drift at large baselines.
 
 **Note (current shape)**: The shipped invalidator is BINARY (per plan
 §"DECISIONS ADOPTED" 2026-05-19, Decision 3 = KEEP BINARY), not graded;
@@ -340,13 +348,26 @@ def _run_cascade_once(edges: List[_SyntheticEdge]) -> float:
         _inv.get_supabase_client = orig_get_supabase  # type: ignore[assignment]
         _inv.get_redis_client = orig_get_redis  # type: ignore[assignment]
 
-    # Sanity check: BFS should have visited at least 4 layers (i.e., the
-    # full 5-hop synthetic depth). Without this guard, a regression that
-    # silently truncates the BFS could produce a fast (but wrong)
-    # measurement.
-    assert result.visited >= 100, (
-        f"BFS visited only {result.visited} nodes — synthetic graph may "
-        "have been truncated; expected >=100 reachable nodes."
+    # Sanity check: the shipped synthetic graph has exactly 1000 nodes
+    # reachable from cp-root, distributed across 6 BFS layers [1, 10, 50,
+    # 200, 500, 239] (depths 0-5). A correct cascade BFS must visit ALL
+    # 1000 nodes. The codex iter-0 H1 finding showed that an earlier
+    # generator allowed root-to-deep shortcuts which collapsed effective
+    # BFS depth to 3 with the same `visited >= 100` guard passing — that
+    # guard was too loose. We now assert the exact reachable-node count
+    # so a regression that silently truncates ANY layer surfaces loudly
+    # rather than producing a fast-but-wrong measurement.
+    #
+    # If you change the synthetic graph topology in
+    # ``scripts/benchmarks/gen_synthetic_graph.py``, update this expected
+    # value to match the new ``sum(_LAYER_SIZES)``.
+    _EXPECTED_VISITED = 1000
+    assert result.visited == _EXPECTED_VISITED, (
+        f"BFS visited {result.visited} nodes — expected exactly "
+        f"{_EXPECTED_VISITED} per the shipped synthetic 5-hop DAG. "
+        "Either the generator drifted (regenerate via "
+        "scripts/benchmarks/gen_synthetic_graph.py) or the BFS code "
+        "path was truncated by a regression."
     )
     return elapsed_ms
 

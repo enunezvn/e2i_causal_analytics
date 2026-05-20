@@ -11,13 +11,22 @@
 # calls; we also clear addopts so the pyproject default doesn't sneak
 # xdist back in.
 #
+# Failure-isolation contract (codex iter-0 M1 closure): with the `all`
+# argument, EVERY benchmark runs even if a prior one fails. We capture
+# each invocation's exit code and exit at the end with the max — so the
+# overall script still fails if any benchmark fails (CI signal preserved),
+# but every benchmark gets a chance to write its junit-xml artifact. We
+# explicitly disable `-e` for the run-all path because `set -e` would
+# abort after the first non-zero exit and the comment block above would
+# be false in practice.
+#
 # Usage:
 #   scripts/run_benchmarks.sh           # run all 3 benchmark files
 #   scripts/run_benchmarks.sh cascade   # run just the cascade benchmark
 #   scripts/run_benchmarks.sh hybrid    # run just the hybrid-retriever benchmark
 #   scripts/run_benchmarks.sh bm25      # run just the bm25-rebuild benchmark
 
-set -euo pipefail
+set -uo pipefail
 
 # Resolve repo root regardless of cwd (the script lives at scripts/).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -61,14 +70,42 @@ run_bm25() {
     --junitxml=test-results/benchmark-bm25.xml
 }
 
+# Run a single benchmark target. Echoes the outcome and updates the global
+# `worst_exit` so the script can surface the worst result at the end.
+worst_exit=0
+run_target() {
+  local name="$1"
+  shift
+  echo
+  echo "--- $name --------------------------------------------------------------"
+  "$@"
+  local rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "!!! $name FAILED (exit $rc)"
+    if [ "$rc" -gt "$worst_exit" ]; then
+      worst_exit=$rc
+    fi
+  fi
+  return 0
+}
+
 case "${1:-all}" in
-  cascade) run_cascade ;;
-  hybrid)  run_hybrid ;;
-  bm25)    run_bm25 ;;
+  cascade) run_cascade; exit $? ;;
+  hybrid)  run_hybrid; exit $? ;;
+  bm25)    run_bm25; exit $? ;;
   all)
-    run_cascade
-    run_hybrid
-    run_bm25
+    # `set +e` is implicit (we already removed -e above). Run each target
+    # via the `run_target` helper so an early failure does NOT abort the
+    # remaining benchmarks. The script's overall exit code is the worst
+    # individual exit so CI still flags failures.
+    run_target cascade run_cascade
+    run_target hybrid  run_hybrid
+    run_target bm25    run_bm25
+    if [ "$worst_exit" -ne 0 ]; then
+      echo
+      echo "==> One or more benchmarks failed (worst exit=$worst_exit)."
+    fi
+    exit "$worst_exit"
     ;;
   *)
     echo "Usage: $0 [cascade|hybrid|bm25|all]" >&2

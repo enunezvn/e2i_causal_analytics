@@ -6,6 +6,16 @@ N = 1000 / 5000 / 10000 doc slices, not a single point — finding-count
 growth is a curve, not a step function (per issue #391, Box 3 statement
 "as finding count grows").
 
+**Tolerance bands** (codified in
+``tests/benchmarks/baselines/performance.json``; re-stated here so the
+test docstring carries the same numbers as the JSON, per codex iter-0 L1):
+- bm25_build_1k: 20% relative OR 50ms absolute (whichever wider).
+- bm25_build_5k: 20% relative OR 100ms absolute (whichever wider).
+- bm25_build_10k: 20% relative OR 200ms absolute (whichever wider).
+Absolute floors widen with N because total work is ~5x / ~10x the 1k
+slice. Relative-vs-absolute policy is `max(rel, abs)` — see
+``_within_tolerance`` for rationale.
+
 **Reference implementation**: a pure-Python BM25 indexer
 (``_build_reference_bm25``) that:
 1. tokenizes the corpus (whitespace + lowercase),

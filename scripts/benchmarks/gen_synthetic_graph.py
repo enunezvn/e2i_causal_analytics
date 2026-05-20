@@ -87,15 +87,22 @@ def main() -> None:
                 }
             )
 
-    # Add ~4000 extra cross-layer edges to bring the total to ~5000 edges,
-    # matching CURATION_PERF.md. Each extra edge picks a random "parent"
-    # from any earlier layer and a random "child" from any later layer.
+    # Add ~4000 extra edges. Cross-layer edges are restricted to
+    # immediately-adjacent layers (L → L+1) so BFS depth from root cannot
+    # short-circuit past intermediate layers. With this restriction, the
+    # shortest path from the root to any layer-5 node is EXACTLY 5 hops.
+    #
+    # Initial (codex iter-0 H1) implementation used ``rng.randrange(parent_layer
+    # + 1, layer_count)``, which let root-to-deep shortcuts (e.g.
+    # root → layer 3 directly) collapse the BFS depth distribution to
+    # ``[1, 426, 528, 45, 0]`` — max depth 3, NOT 5. Restricting extras to
+    # adjacent-layer edges preserves the 5-hop shortest-path invariant.
     extra_edges_target = 4000
     layer_count = len(_LAYER_SIZES)
     extras_added = 0
     while extras_added < extra_edges_target:
         parent_layer = rng.randrange(0, layer_count - 1)
-        child_layer = rng.randrange(parent_layer + 1, layer_count)
+        child_layer = parent_layer + 1  # adjacent-layer only (iter-1 fix)
         parent = rng.choice(layers[parent_layer])
         child = rng.choice(layers[child_layer])
         edges.append(
