@@ -261,6 +261,31 @@ jobs:
             --ignore-vuln GHSA-fqwm-6jpj-5wxc `# tornado 6.5.4 (CVE-2026-35536; cookie attribute injection); fix in 6.5.5. Same mitigation as above.` \
             --ignore-vuln GHSA-29vq-49wr-vm6x `# werkzeug 3.1.5 (CVE-2026-27199; safe_join allows Windows device names); fix in 3.1.6. Mitigated — production runs on Linux only.` \
             --ignore-vuln GHSA-8rrh-rw8j-w5fx `# wheel 0.45.1 (CVE-2026-24049; path traversal in wheel install); fix in 0.46.2. Mitigated — wheel is a build-time transitive, not used at runtime.` \
+            `# === 2026-05-20 PYSEC supplement (24 entries on 7 packages — same CVE-drop batch, captured after pip-audit re-pulled the PYSEC database). transformers + torch entries are all deserialization/RCE vulns in model-loading paths; we don't load untrusted .pkl / .pt files (HCP/patient data is structured DB rows, not pickle blobs). flask-cors / langchain-community / joblib / pyjwt PYSEC issues have NO upstream fix; pyarrow has fix in 23.0.1. ===` \
+            --ignore-vuln PYSEC-2024-271 `# flask-cors 6.0.2 (CVE-2024-1681; log injection at debug level); no upstream fix. Mitigated — production runs at INFO level; debug logging gated on internal-only environments.` \
+            --ignore-vuln PYSEC-2024-277 `# joblib 1.5.3 (CVE-2024-34997; numpy_pickle deserialization); no upstream fix. Mitigated — we don't load untrusted joblib artifacts; only our own MLflow-tracked models.` \
+            --ignore-vuln PYSEC-2024-278 `# langchain-community 0.4.1 (CVE-2024-2057; load_local arbitrary read); no upstream fix. Mitigated — we don't call load_local on user-supplied paths.` \
+            --ignore-vuln PYSEC-2026-113 `# pyarrow 21.0.0 (CVE-2026-25087; UAF in C++ when triggered); fix in 23.0.1. Mitigated — pyarrow C++ usage is limited to Arrow IPC reads from trusted MLflow artifacts.` \
+            --ignore-vuln PYSEC-2025-183 `# pyjwt 2.12.0 (CVE-2025-45768; weak-encryption note disputed by supplier — "key length is chosen by application"); no fix. Mitigated — we generate keys with cryptographically-secure RNGs at >=256 bits.` \
+            --ignore-vuln PYSEC-2025-217 `# transformers 4.57.3 (CVE-2025-14929; X-CLIP checkpoint conversion deserialization RCE); no upstream fix as of 2026-05. Mitigated — we don't run X-CLIP checkpoint conversion.` \
+            --ignore-vuln PYSEC-2025-214 `# transformers 4.57.3 (CVE-2025-14926; SEW convert_config code injection); no upstream fix. Mitigated — we don't run SEW convert_config.` \
+            --ignore-vuln PYSEC-2025-218 `# transformers 4.57.3 (CVE-2025-14930; GLM4 deserialization RCE); no upstream fix. Mitigated — we don't load untrusted GLM4 checkpoints.` \
+            --ignore-vuln PYSEC-2025-211 `# transformers 4.57.3 (CVE-2025-14920; Perceiver model deserialization RCE); no upstream fix. Mitigated — we don't load untrusted Perceiver checkpoints.` \
+            --ignore-vuln PYSEC-2025-212 `# transformers 4.57.3 (CVE-2025-14921; Transformer-XL deserialization RCE); no upstream fix. Mitigated — same as above.` \
+            --ignore-vuln PYSEC-2025-213 `# transformers 4.57.3 (CVE-2025-14924; megatron_gpt2 deserialization RCE); no upstream fix. Mitigated — same as above.` \
+            --ignore-vuln PYSEC-2025-215 `# transformers 4.57.3 (CVE-2025-14927; SEW-D convert_config code injection); no upstream fix. Mitigated — same as SEW above.` \
+            --ignore-vuln PYSEC-2025-216 `# transformers 4.57.3 (CVE-2025-14928; HuBERT convert_config code injection); no upstream fix. Mitigated — we don't run HuBERT convert_config.` \
+            --ignore-vuln PYSEC-2025-210 `# torch 2.9.1 (CVE-2025-63396; profiler.stop() omission crash); no upstream fix. Mitigated — we always call profiler.stop() in finally blocks per established pattern.` \
+            --ignore-vuln PYSEC-2025-196 `# torch 2.9.1 (CVE-2025-3121; jit_module_from_flatbuffer); no upstream fix. Mitigated — we don't load untrusted flatbuffer modules.` \
+            --ignore-vuln PYSEC-2025-194 `# torch 2.9.1 (CVE-2025-3000; torch.jit.script manipulation); no upstream fix. Mitigated — we don't accept user-supplied jit scripts.` \
+            --ignore-vuln PYSEC-2025-195 `# torch 2.9.1 (CVE-2025-3001; torch.lstm_cell manipulation); no upstream fix. Mitigated — lstm_cell inputs are tensor-shaped, not user-controlled.` \
+            --ignore-vuln PYSEC-2025-193 `# torch 2.9.1 (CVE-2025-2999; torch.nn.utils.rnn.unpack_sequence); no upstream fix. Mitigated — RNN unpack inputs not user-controlled.` \
+            --ignore-vuln PYSEC-2025-192 `# torch 2.9.1 (CVE-2025-2998; torch.nn.utils manipulation); no upstream fix. Mitigated — same as above.` \
+            --ignore-vuln PYSEC-2026-139 `# torch 2.9.1 (CVE-2026-4538; pt2 Loading Handler); no upstream fix. Mitigated — we don't load untrusted pt2 archives.` \
+            --ignore-vuln PYSEC-2025-191 `# torch 2.9.1 (CVE-2025-2953; torch.mkldnn issue on torch 2.6.0+cu124); no upstream fix. Mitigated — affected CUDA path not on our serving stack.` \
+            --ignore-vuln PYSEC-2025-197 `# torch 2.9.1 (CVE-2025-3136; torch.cuda.memory.cache); no upstream fix. Mitigated — affected CUDA cache code path not exercised.` \
+            --ignore-vuln PYSEC-2025-189 `# torch 2.9.1 (CVE-2025-2148; torch.ops manipulation 2.6.0+cu124); no upstream fix. Mitigated — torch.ops not invoked on user-controlled tensors.` \
+            --ignore-vuln PYSEC-2025-190 `# torch 2.9.1 (CVE-2025-2149; nnq_Sigmoid quantization 2.6.0+cu124); no upstream fix. Mitigated — quantized model path not exercised.` \
             || true  # Don't fail CI, just report
 
       - name: Check for known vulnerabilities
