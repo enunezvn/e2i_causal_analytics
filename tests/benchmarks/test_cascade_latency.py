@@ -280,6 +280,75 @@ def test_synthetic_graph_loads() -> None:
     assert len(root_edges) >= 5, f"Expected >=5 root edges, got {len(root_edges)}"
 
 
+def _compute_bfs_depth_histogram(edges: List[_SyntheticEdge]) -> List[int]:
+    """Compute the BFS-depth histogram from ('causal_path','cp-root').
+
+    Returns a list whose i-th element is the count of reachable nodes at
+    depth ``i``. Trailing zero buckets are trimmed so the list length
+    equals ``max_depth + 1`` (so a 5-hop graph has length 6).
+    """
+    from collections import defaultdict, deque
+
+    adj: Dict[Tuple[str, str], List[Tuple[str, str]]] = defaultdict(list)
+    for edge in edges:
+        adj[(edge.source_type, edge.source_id)].append((edge.target_type, edge.target_id))
+
+    seen: Dict[Tuple[str, str], int] = {("causal_path", "cp-root"): 0}
+    queue: deque[Tuple[str, str]] = deque([("causal_path", "cp-root")])
+    while queue:
+        cur = queue.popleft()
+        d = seen[cur]
+        for nxt in adj.get(cur, []):
+            if nxt not in seen:
+                seen[nxt] = d + 1
+                queue.append(nxt)
+    if not seen:
+        return []
+    max_depth = max(seen.values())
+    histogram = [0] * (max_depth + 1)
+    for depth in seen.values():
+        histogram[depth] += 1
+    return histogram
+
+
+def test_synthetic_graph_topology_invariant() -> None:
+    """Pin the synthetic graph's BFS-depth distribution.
+
+    Codex iter-2 L1: the `result.visited == 1000` runtime guard catches
+    silent BFS truncation but does NOT pin the 5-hop topology itself.
+    A future regenerated graph with 1000 reachable nodes but root-to-deep
+    shortcuts could collapse max depth back to 3 (the iter-0 bug shape)
+    while the runtime guard still passes. This smoke test pins the
+    depth-histogram so any topology drift surfaces loudly at the
+    smoke-test layer regardless of whether the latency benchmark itself
+    runs.
+
+    Expected histogram per ``scripts/benchmarks/gen_synthetic_graph.py``
+    (post iter-1 adjacent-layer-only extras): ``[1, 10, 50, 200, 500,
+    239]``. If you change ``_LAYER_SIZES`` in the generator, update this
+    expected value to match.
+    """
+    edges = _load_synthetic_graph(_GRAPH_FILE)
+    histogram = _compute_bfs_depth_histogram(edges)
+    _EXPECTED_HISTOGRAM = [1, 10, 50, 200, 500, 239]
+    assert histogram == _EXPECTED_HISTOGRAM, (
+        f"BFS depth histogram from cp-root drifted: expected "
+        f"{_EXPECTED_HISTOGRAM}, got {histogram}. "
+        "Either the generator drifted (regenerate via "
+        "scripts/benchmarks/gen_synthetic_graph.py) or the JSONL was "
+        "edited by hand. The latency benchmark depends on the 5-hop "
+        "topology being preserved."
+    )
+    # Defense-in-depth: also assert max_depth == 5 explicitly so a
+    # future change that adds a 7th layer is caught by a separate-named
+    # assertion (better diagnostic than just the histogram-mismatch
+    # message).
+    assert len(histogram) - 1 == 5, (
+        f"Synthetic graph max BFS depth from cp-root is "
+        f"{len(histogram) - 1}, expected 5 (issue #391 box-1 '5-hop')."
+    )
+
+
 def test_baseline_file_present_and_well_formed() -> None:
     """Performance baseline JSON must parse + carry required keys + tolerances."""
     baseline = _load_baseline()
