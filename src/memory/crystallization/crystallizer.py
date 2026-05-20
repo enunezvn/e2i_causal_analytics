@@ -43,6 +43,7 @@ from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple
 
 from src.data.kg.types import LLMCrystalNarrativeAudit
 from src.memory.services.factories import get_supabase_client
+from src.mlops.lifecycle_monitoring import record_provenance_write
 
 logger = logging.getLogger(__name__)
 
@@ -485,6 +486,23 @@ class Crystallizer:
                 edges_added = len(edge_rows)
             except Exception as exc:
                 logger.warning(f"crystallizer: edge insert partially failed: {exc}")
+
+        # #391 monitoring box 1.b + 2.c (count_by_brand): emit Opik
+        # trace + MLflow brand-tagged crystal-count counter on every
+        # successful crystallization. ``source_count`` is the
+        # member-count for the group (what the database column stores
+        # as ``source_count``). ``edges_added`` is the number of
+        # insight_edges rows actually written — useful for tracing
+        # partial-failure shapes. Best-effort: helper swallows its
+        # own exceptions, so a broken Opik/MLflow backend doesn't
+        # gate crystallization.
+        record_provenance_write(
+            insight_id=str(insight_id),
+            source_count=len(members),
+            brand=brand,
+            edges_added=edges_added,
+        )
+
         return insight_id, edges_added
 
 

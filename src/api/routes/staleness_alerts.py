@@ -86,6 +86,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from src.api.dependencies.auth import require_auth
 from src.memory.services.factories import get_redis_client
+from src.mlops.lifecycle_monitoring import record_alert_latency
 from src.tasks.sentinel_actions import ALERTS_CHANNEL
 
 logger = logging.getLogger(__name__)
@@ -242,6 +243,13 @@ class AlertBridge:
                             ALERTS_CHANNEL,
                         )
                         continue
+                    # #391 monitoring box 3: record publish→receive
+                    # latency BEFORE the brand-filter so cross-brand
+                    # alerts also contribute to the delivery-latency
+                    # histogram. Best-effort; helper swallows its own
+                    # exceptions (missing/malformed publish_at,
+                    # broken MLflow backend).
+                    record_alert_latency(payload)
                     # Per-brand filter at the bridge layer. Multi-brand
                     # subscription is out of scope (issue #390 V1).
                     if not self._matches_brand(payload):

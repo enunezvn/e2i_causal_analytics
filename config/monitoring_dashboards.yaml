@@ -1,0 +1,185 @@
+# E2I Memory-Lifecycle Monitoring — Dashboard Manifest
+# =====================================================
+# Source of truth for the metric→consumer wiring for the issue #391
+# monitoring slice. Each entry pins (a) the metric NAME emitted by
+# src/mlops/lifecycle_monitoring.py, (b) the downstream dashboard
+# consumer that visualizes it, and (c) the operational use-case the
+# panel answers.
+#
+# Codex iter-0 H1 closure: this file IS the consumer-dependency-trace.
+# Without it, the metric names are "emitted but not wired". The
+# lifecycle_state below is `advisory` (per
+# src/lifecycle/gate_lifecycle.py / scripts/check_lifecycle_state.py
+# substring matcher — the file contains "threshold" tokens in panel
+# titles, so the guard requires a lifecycle_state declaration).
+#
+# Updating this file
+# ------------------
+# 1. Add a NEW metric name to the lifecycle_monitoring module's
+#    `METRIC_*` constants.
+# 2. Add a corresponding entry below with the panel title +
+#    use-case + alert thresholds.
+# 3. Update the dashboards in the operator's Grafana / MLflow UI to
+#    consume the new metric. (Out of scope for the V1 patch landing
+#    this file; tracked under the post-merge "wire actual Grafana
+#    panel" follow-up.)
+#
+# Note on lifecycle_state
+# -----------------------
+# This is an `advisory` observability config — it documents intended
+# dashboard wiring. It does NOT gate any feature drop / pipeline halt /
+# promotion deny. See src/lifecycle/gate_lifecycle.py for the full
+# vocabulary.
+
+lifecycle_state: advisory
+
+# ============================================================================
+# Box 1 + 2 — Cascade observables
+# ============================================================================
+
+cascade_metrics:
+  - metric: e2i.cascade.frequency
+    type: counter
+    emitted_by: src.memory.lifecycle.invalidator.cascade_invalidate
+    emitted_via: src.mlops.lifecycle_monitoring.record_cascade_complete
+    tags: [brand]
+    panel_title: "Cascade frequency by brand"
+    use_case: >-
+      How often each brand's provenance DAG is invalidated. Spike
+      detection on a single brand indicates an upstream model retrain
+      / overturned causal path; a flat zero indicates either a quiet
+      brand OR a broken cascade pipeline.
+    alert_threshold:
+      warn_above_per_hour: 50    # operator-tunable; tracks per-brand
+      page_above_per_hour: 500   # crisis-level
+      page_below_per_24h: 0      # silence detection — all-day-zero is suspicious for an active brand
+
+  - metric: e2i.cascade.propagation_depth
+    type: histogram
+    emitted_by: src.memory.lifecycle.invalidator.cascade_invalidate
+    emitted_via: src.mlops.lifecycle_monitoring.record_cascade_complete
+    tags: [brand]
+    panel_title: "Cascade propagation depth distribution (per brand)"
+    use_case: >-
+      How far each cascade propagates downstream. Codex iter-0 M3
+      closure: this is "hops past source" (==0 for cascades that
+      had no downstream edges). Tail movement (p99 climbing) signals
+      provenance DAG depth growth, which has compounding I/O cost.
+    alert_threshold:
+      warn_p99_above_hops: 8
+      page_p99_above_hops: 14    # approaches max_depth=16 safety bound
+
+# ============================================================================
+# Box 1 + 2 — Consolidation observables
+# ============================================================================
+
+consolidation_metrics:
+  - metric: e2i.consolidation.promotion_rate
+    type: gauge
+    emitted_by: src.memory.lifecycle.consolidator.Consolidator.run
+    emitted_via: src.mlops.lifecycle_monitoring.record_consolidation_sweep
+    tags: [brand]
+    formula: "promotions_to_semantic / max(causal_paths_examined, 1)"
+    panel_title: "Semantic promotion rate by brand"
+    use_case: >-
+      Fraction of candidate causal_paths that promoted to semantic
+      tier in each sweep. Sustained zero indicates either no
+      promotion-worthy paths (clean state) OR a stuck promotion
+      threshold; a sustained 1.0 indicates the threshold is too
+      lax. Codex iter-0 M1 closure: per-brand entries from
+      result.by_brand fanout — multi-brand sweeps emit ONE metric
+      PER BRAND instead of an _all_ bucket.
+    alert_threshold:
+      warn_below_per_week: 0.01  # < 1% promotion rate sustained = stuck pipeline
+      warn_above_per_week: 0.80  # > 80% sustained = threshold too lax
+
+# ============================================================================
+# Box 1 + 2 — Crystallization observables
+# ============================================================================
+
+crystallization_metrics:
+  - metric: e2i.crystal.count_by_brand
+    type: counter
+    emitted_by: src.memory.crystallization.crystallizer.Crystallizer._crystallize_group
+    emitted_via: src.mlops.lifecycle_monitoring.record_provenance_write
+    tags: [brand]
+    panel_title: "Executive insight (crystal) production rate by brand"
+    use_case: >-
+      How many executive_insights are crystallized per brand per
+      time-bucket. The per-brand chart pins divergence — a brand
+      that stops producing crystals while others continue is a
+      strong signal of broken episodic memory ingestion for that
+      brand.
+    alert_threshold:
+      page_below_per_24h: 1      # an active brand with zero crystals in a day is broken
+
+# ============================================================================
+# Box 3 — Redis pub/sub alert delivery observables
+# ============================================================================
+
+alert_delivery_metrics:
+  - metric: e2i.sentinel.alert_publish_count
+    type: counter
+    emitted_by: src.tasks.sentinel_actions.publish_alert
+    emitted_via: src.mlops.lifecycle_monitoring.record_alert_published
+    tags: [brand]
+    panel_title: "Alert publish count by brand"
+    use_case: >-
+      Codex iter-0 H2 closure helper — paired with the
+      delivery-latency metric below, this lets the dashboard
+      distinguish 'no subscribers connected' (publish > 0,
+      latency_samples == 0) from 'alert never published'
+      (both == 0).
+    alert_threshold:
+      page_below_per_24h: 0      # a long-quiet brand may be expected; tune per-brand
+
+  - metric: e2i.sentinel.alert_delivery_latency_ms
+    type: histogram
+    emitted_by: src.api.routes.staleness_alerts.AlertBridge._subscribe_and_pump
+    emitted_via: src.mlops.lifecycle_monitoring.record_alert_latency
+    tags: [brand]
+    panel_title: "Sentinel alert delivery latency (publish→receive) by brand"
+    use_case: >-
+      End-to-end latency from sentinel handler publish to SSE
+      consumer receipt. Codex iter-0 H2 closure: dedup via
+      alert_id keeps the metric bounded to at-most-one sample
+      per (publisher process, alert_id) per consumer process.
+      Latency below 100ms is healthy; tails above 1s indicate
+      either Redis backpressure OR SSE bridge backpressure.
+    alert_threshold:
+      warn_p99_above_ms: 500
+      page_p99_above_ms: 2000
+    # Companion guard — see comparing-against-publish-count:
+    # dashboard rule: if publish_count > 0 AND latency_samples == 0
+    # over a 1h window, page (subscriber pipeline broken).
+
+# ============================================================================
+# Box 1 — Opik trace span name registry
+# ============================================================================
+# Opik spans are emitted alongside the MLflow metrics above. Span
+# names land in the Opik trace tree where each trace has its
+# payload + tags. Dashboard consumers are Opik UI (search by
+# span name + brand tag).
+
+opik_trace_spans:
+  - span_name: e2i.staleness.cascade
+    emitted_by: src.memory.lifecycle.invalidator.cascade_invalidate
+    payload_fields: [brand, depth, edges_visited, duration_ms, invalidated_by_type]
+    consumer: Opik UI — filter by span name; per-brand search via brand tag
+
+  - span_name: e2i.crystallization.provenance_write
+    emitted_by: src.memory.crystallization.crystallizer.Crystallizer._crystallize_group
+    payload_fields: [insight_id, source_count, brand, edges_added]
+    consumer: Opik UI — drill from insight_id to source trace
+
+  - span_name: e2i.consolidation.sweep
+    emitted_by: src.memory.lifecycle.consolidator.Consolidator.run
+    payload_fields:
+      - brand
+      - dedup_collapses
+      - promotions_to_semantic
+      - promotions_to_procedural
+      - templates_extracted
+      - duration_ms
+      - causal_paths_examined
+    consumer: Opik UI — sweep traces grouped by brand

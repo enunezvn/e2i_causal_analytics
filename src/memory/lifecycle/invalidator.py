@@ -19,11 +19,13 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Set, Tuple
 
 from src.memory.services.factories import get_redis_client, get_supabase_client
+from src.mlops.lifecycle_monitoring import record_cascade_complete
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +99,12 @@ async def cascade_invalidate(
         scope_brand=scope_brand,
         reason=reason,
     )
+    # Track BFS depth + edges visited for the #391 monitoring slice
+    # (Opik trace + MLflow metric). Counted at the end so a partial
+    # cascade (errors mid-traversal) still emits SOMETHING — the
+    # values reflect what actually happened, not the optimistic plan.
+    cascade_started_monotonic = time.monotonic()
+    edges_visited_count = 0
 
     client = get_supabase_client()
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -131,6 +139,12 @@ async def cascade_invalidate(
                 continue
 
             for edge in edges:
+                # Count every edge inspected (#391 monitoring: edges_visited
+                # observable). Counted BEFORE the brand-scope filter so a
+                # cross-brand-skipped edge still shows up in the "edges I
+                # had to look at" tally — that's what the dashboard cares
+                # about for I/O cost analysis.
+                edges_visited_count += 1
                 edge_brand = edge.get("brand")
                 target_type = edge.get("target_type")
                 target_id = edge.get("target_id")
@@ -165,6 +179,34 @@ async def cascade_invalidate(
 
     if publish_signal:
         await _publish_invalidation_signal(result)
+
+    # #391 monitoring box 1.a + 2.a + 2.b: emit Opik trace + MLflow
+    # cascade-frequency counter + propagation-depth gauge. Called at
+    # the end of cascade execution. Best-effort by design — any
+    # exception inside record_cascade_complete is swallowed there, so
+    # the cascade's return value is not influenced by the
+    # observability path. See [[feedback-codex-audits-within-existing-
+    # signature-not-design]] — instrumentation runs AT the boundary
+    # of the existing function, leaving the function signature + raises
+    # contract unchanged.
+    #
+    # Codex iter-0 M3 closure: ``depth`` (the loop counter) counts
+    # frontier-sweeps and is INCREMENTED after each sweep, including
+    # the root-only sweep. So a cascade with no downstream edges
+    # finishes with ``depth==1`` even though it propagated ZERO hops
+    # past the source. The observable we WANT in the dashboard is
+    # "hops past source" (==0 when no downstream), so subtract one
+    # with a floor of 0. The internal ``depth`` variable's role
+    # against ``max_depth`` is unchanged.
+    propagation_depth = max(0, depth - 1)
+    duration_ms = (time.monotonic() - cascade_started_monotonic) * 1000.0
+    record_cascade_complete(
+        brand=scope_brand,
+        depth=propagation_depth,
+        edges_visited=edges_visited_count,
+        duration_ms=duration_ms,
+        invalidated_by_type=dict(result.invalidated_by_type),
+    )
 
     logger.info(
         f"cascade_invalidate({source_type}:{source_id}, brand={scope_brand}) "
