@@ -89,6 +89,7 @@ from src.api.routes.rag import router as rag_router
 from src.api.routes.resource_optimizer import router as resource_optimizer_router
 from src.api.routes.segments import router as segments_router
 from src.api.routes.sentinels import router as sentinels_router
+from src.api.routes.staleness_alerts import router as staleness_alerts_router
 
 # Import MLOps connectors
 from src.feature_store.feast_client import FeastClient
@@ -1003,6 +1004,10 @@ app.include_router(sentinels_router, prefix="/api")
 # Executive insights — crystallized cross-agent narratives (/api/executive-insights/*)
 # JIT provenance verification middleware (registered below) intercepts GETs.
 app.include_router(executive_insights_router, prefix="/api")
+
+# Staleness alerts SSE bridge — Redis pub/sub → CopilotKit (/api/alerts/stream)
+# Subscribes to the ``e2i:alerts`` channel populated by sentinel actions.
+app.include_router(staleness_alerts_router, prefix="/api")
 
 # Prometheus metrics endpoint (/metrics) - no /api prefix per convention
 app.include_router(metrics_router)
