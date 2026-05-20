@@ -88,21 +88,49 @@ class TestIsPublicPath:
         assert _is_public_path("POST", "/api/auth/refresh") is True
 
     # =========================================================================
-    # CopilotKit endpoints — all public (SDK needs POST for agent discovery)
+    # CopilotKit endpoints — narrowed by #399:
+    #   - Base + /info: ``*``-method public for SDK discovery; the
+    #     ``copilotkit_custom_handler`` distinguishes discovery POSTs
+    #     (empty / {} / {"method":"info"} / {"action":"getInfo"}) from
+    #     execution POSTs (agent/run, action/run, ...) and requires JWT
+    #     for the latter (see src/api/routes/copilotkit.py:2596-2611 +
+    #     2701-2715).
+    #   - /status: GET-only public — the static router serves GET-only
+    #     at /status; POST/PUT/DELETE/OPTIONS would otherwise fall
+    #     through to the dynamic catch-all → SDK fallback delegate.
     # =========================================================================
 
     def test_copilotkit_root_is_public(self):
-        """Test /api/copilotkit (root) is public (all methods)."""
+        """Test /api/copilotkit (root) is public (all methods).
+
+        SDK discovery may POST to base with empty / {} / discovery-shaped
+        bodies; the in-handler check at
+        ``src/api/routes/copilotkit.py:2701`` gates execution-shaped POSTs.
+        """
         assert _is_public_path("POST", "/api/copilotkit") is True
         assert _is_public_path("GET", "/api/copilotkit") is True
 
-    def test_copilotkit_status_is_public(self):
-        """Test /api/copilotkit/status is public (all methods)."""
+    def test_copilotkit_status_is_public_get_only(self):
+        """Test /api/copilotkit/status is GET-only public (#399 iter-2).
+
+        Static router serves GET only; POST/PUT/DELETE fall to dynamic
+        catch-all → SDK fallback which would not have auth — so the
+        allowlist is method-restricted.
+        """
         assert _is_public_path("GET", "/api/copilotkit/status") is True
-        assert _is_public_path("POST", "/api/copilotkit/status") is True
+        # Non-GET methods now require auth at the middleware (codex
+        # iter-1 H1 closure for #399).
+        assert _is_public_path("POST", "/api/copilotkit/status") is False
+        assert _is_public_path("PUT", "/api/copilotkit/status") is False
+        assert _is_public_path("DELETE", "/api/copilotkit/status") is False
 
     def test_copilotkit_info_is_public(self):
-        """Test /api/copilotkit/info is public (all methods)."""
+        """Test /api/copilotkit/info is public (all methods).
+
+        SDK discovery may POST to /info with discovery-shaped bodies;
+        in-handler check at ``src/api/routes/copilotkit.py:2701`` gates
+        execution-shaped POSTs.
+        """
         assert _is_public_path("GET", "/api/copilotkit/info") is True
         assert _is_public_path("POST", "/api/copilotkit/info") is True
 
