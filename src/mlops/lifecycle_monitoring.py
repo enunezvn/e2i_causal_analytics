@@ -77,8 +77,25 @@ logger = logging.getLogger(__name__)
 # executor so the producer call returns immediately (sub-microsecond).
 # Single thread (not pool) keeps metric ordering deterministic — MLflow
 # accepts unordered writes but per-metric ordering helps with debugging.
-# Daemon thread so it doesn't block process shutdown; atexit hook
-# attempts a brief drain.
+#
+# Shutdown semantics (codex iter-1 L1 closure — the comments here are
+# the authoritative description of what happens on shutdown):
+#
+# * ``ThreadPoolExecutor`` worker threads created by the stdlib are
+#   ``daemon=False``. That means they BLOCK process exit until the
+#   in-flight + queued work drains. We don't override this because the
+#   ``atexit`` hook below explicitly calls ``shutdown(wait=True)``
+#   which drains the queue with bounded latency under normal exit.
+# * ``atexit`` does NOT fire on ``SIGKILL`` (or any other unblockable
+#   signal). On hard kill, in-flight + queued metrics are LOST. We
+#   accept this — losing observability data on a hard kill is
+#   preferable to delaying the kill.
+# * Under normal ``sys.exit`` / ``SIGTERM``, ``atexit`` runs the
+#   drain. The 2-second timeout is a comment-level note, NOT enforced
+#   in the executor's shutdown call (``ThreadPoolExecutor.shutdown``
+#   has no timeout parameter pre-3.13). A new ``record_*`` call after
+#   the executor has been shut down catches ``RuntimeError`` and
+#   no-ops silently (see ``_emit_mlflow_metric_raw``).
 #
 # Tests substitute ``_emit_mlflow_metric`` (the mid-level shim) so they
 # never reach the executor. Production callers go through the executor
@@ -91,10 +108,12 @@ _MLFLOW_EXECUTOR_LOCK = Lock()
 def _get_mlflow_executor() -> ThreadPoolExecutor:
     """Lazy-init the background MLflow emitter thread.
 
-    Idempotent / thread-safe via the module-level lock. Daemon thread
-    so it doesn't block process shutdown — the atexit hook attempts a
-    brief drain but doesn't promise full completion (we accept losing
-    in-flight metrics on shutdown rather than hanging the process).
+    Idempotent / thread-safe via the module-level lock. Workers are
+    ``daemon=False`` (stdlib default for ``ThreadPoolExecutor``); the
+    ``atexit`` hook below calls ``shutdown(wait=True)`` to drain
+    queued metrics at normal process exit. ``SIGKILL`` and similar
+    unblockable signals bypass ``atexit`` and lose in-flight metrics
+    — this is documented as the trade-off (codex iter-1 L1 closure).
     """
     global _MLFLOW_EXECUTOR
     if _MLFLOW_EXECUTOR is not None:
@@ -105,18 +124,24 @@ def _get_mlflow_executor() -> ThreadPoolExecutor:
         _MLFLOW_EXECUTOR = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="e2i-mlflow-monitor"
         )
-        # atexit drain — best effort. timeout=2.0s caps shutdown delay.
-        atexit.register(_drain_mlflow_executor, 2.0)
+        # atexit drain — runs on normal exit (sys.exit, SIGTERM) but
+        # NOT on SIGKILL. Drains all queued work via shutdown(wait=True).
+        atexit.register(_drain_mlflow_executor)
         return _MLFLOW_EXECUTOR
 
 
-def _drain_mlflow_executor(timeout_s: float = 2.0) -> None:
-    """Best-effort drain of any in-flight MLflow emissions at shutdown.
+def _drain_mlflow_executor() -> None:
+    """Drain any in-flight MLflow emissions at normal process exit.
 
-    Called via :func:`atexit`. ``wait=True`` with ``cancel_futures=True``
-    drains queued work up to the executor's existing capacity but
-    refuses NEW submissions — so any post-shutdown ``record_*`` call
-    silently no-ops.
+    Called via :func:`atexit`. ``shutdown(wait=True)`` blocks until
+    every queued submission completes — UNBOUNDED IN TIME but bounded
+    in volume by the size of the queue at shutdown moment. New
+    submissions after this fires raise ``RuntimeError`` which the
+    submit-side narrow catch swallows (silent no-op).
+
+    SIGKILL bypass: this hook does NOT run on SIGKILL or similar
+    unblockable signals — in-flight metrics are lost in that path.
+    Documented as the explicit trade-off (codex iter-1 L1 closure).
     """
     global _MLFLOW_EXECUTOR
     executor = _MLFLOW_EXECUTOR
@@ -510,11 +535,21 @@ def record_consolidation_sweep(
 # Mitigation: per-process LRU of recently-seen ``alert_id`` values. When
 # a subscriber sees an alert it has already recorded latency for, the
 # sample is suppressed. This makes the consumer-side metric "FIRST
-# subscriber to record this alert wins" — at-most-one sample per
-# (publisher process, alert_id) per consumer process. Combined with the
-# publisher-side ``METRIC_ALERT_PUBLISH_COUNT`` counter, the dashboard
-# can detect the "no subscribers" case as ``publish_count > 0 AND
-# latency_samples == 0``.
+# subscriber WITHIN THIS PROCESS to record this alert wins" —
+# at-most-one sample per (consumer process, alert_id). Combined with
+# the publisher-side ``METRIC_ALERT_PUBLISH_COUNT`` counter, the
+# dashboard can detect the "no subscribers" case as ``publish_count > 0
+# AND latency_samples == 0``.
+#
+# Scope caveat (codex iter-1 L2 closure): dedup is PROCESS-LOCAL only.
+# In a multi-worker uvicorn / Gunicorn deployment where N worker
+# processes each host SSE subscribers, the SAME ``alert_id`` may emit
+# up to N samples globally (one per process). Dashboards should treat
+# the latency metric as "bounded per (consumer process, alert_id)" —
+# NOT exactly-once globally. Global exactly-once would require an
+# external coordination layer (e.g., a Redis SETNX claim on the
+# alert_id) which is V2 follow-up if the metric noise becomes
+# operationally significant.
 #
 # LRU bound (1024 entries) keeps the dedup set bounded under sustained
 # alert volume; oldest entries are evicted FIFO.
