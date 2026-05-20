@@ -322,8 +322,8 @@ def pin_in_process_broker(redis_url: str) -> Iterator[None]:
     cached Redis singleton both pointed at this test's broker URL,
     creating a hard-to-trace ordering dependency. (Codex iter-3 M2.)
 
-    Connection-pool invalidation (iter-5 CI fix)
-    --------------------------------------------
+    Connection-pool invalidation (iter-5/iter-6 CI fix)
+    ---------------------------------------------------
     Setting ``celery_app.conf.broker_url`` and
     ``celery_app.conf.result_backend`` updates the Celery configuration,
     but Celery caches the AMQP producer pool and the result-backend
@@ -333,11 +333,31 @@ def pin_in_process_broker(redis_url: str) -> Iterator[None]:
     symptom is ``RuntimeError: Retry limit exceeded while trying to
     reconnect to the Celery redis result store backend``.
 
-    Fix: call ``celery_app.close()`` after rebinding conf — this drops
-    the AMQP producer pool and forces a fresh lazy init against the
-    new URL. We also invalidate the cached result-backend object via
-    ``__dict__.pop("backend", None)`` because ``backend`` is a cached
-    descriptor property on the Celery app.
+    Iter-5 first attempt used ``__dict__.pop("backend", None)`` which
+    codex iter-6 correctly identified as a no-op: ``Celery.backend`` is
+    a non-cached ``@property`` that backs into ``self._backend``, NOT
+    into ``__dict__``. Similarly ``celery_app.close()`` only sets
+    ``self._pool = None`` — the AMQP wrapper at ``celery_app.amqp`` is
+    a ``kombu.utils.objects.cached_property`` that caches into
+    ``__dict__["amqp"]``, and ``amqp._producer_pool`` independently
+    caches the producer pool. (Verified empirically against Celery 5.6.2:
+    ``Celery.backend.fget`` reads ``self._backend``; ``Celery.amqp``
+    is a kombu cached_property; ``AMQP.producer_pool`` caches into
+    ``self._producer_pool``.)
+
+    Correct invalidation surface (iter-6):
+      * ``celery_app._backend = None`` — forces the next ``celery_app.
+        backend`` access to call ``_get_backend()`` against the new
+        ``result_backend`` URL.
+      * ``celery_app.__dict__.pop("amqp", None)`` — drops the kombu
+        cached_property entry so the next ``celery_app.amqp`` access
+        rebuilds the AMQP wrapper from scratch (which then also
+        re-initialises ``_producer_pool=None``).
+      * ``celery_app.close()`` — still useful: sets ``self._pool = None``
+        so the connection pool used by ``connection_for_write`` rebuilds.
+
+    Symmetric calls fire in teardown so the RESTORED config also gets
+    fresh lazy-init.
 
     Environment vars are kept in scope by the caller's ``monkeypatch``
     fixture, which auto-restores on test teardown — only the live config
@@ -351,21 +371,37 @@ def pin_in_process_broker(redis_url: str) -> Iterator[None]:
     prev_result_backend = celery_app.conf.result_backend
     prev_redis_client = svc_factories._redis_client  # type: ignore[attr-defined]
 
+    def _invalidate_celery_caches() -> None:
+        """Drop the three cached objects that ignore conf rebinds.
+
+        Order matters: ``close()`` runs FIRST because some Celery
+        internals read ``self._backend.thread_safe`` and similar
+        attributes during shutdown; nulling ``_backend`` BEFORE
+        ``close()`` would crash with AttributeError. We null the
+        cache attributes AFTER ``close()`` returns so the next lazy
+        re-init starts from a clean slate.
+        """
+        # close() drops the connection pool (``self._pool``) used by
+        # connection_for_write. Must run BEFORE we null _backend
+        # because close() inspects backend attributes on shutdown.
+        try:
+            celery_app.close()
+        except Exception:
+            # close() can raise if no pool was open; harmless.
+            pass
+        # Now safe to null the backend cache so the next
+        # ``celery_app.backend`` access rebuilds against the new URL.
+        celery_app._backend = None  # type: ignore[attr-defined]
+        # AMQP wrapper is a kombu cached_property — caches into __dict__.
+        # Dropping the key forces a full rebuild including a fresh
+        # ``_producer_pool=None`` initial state.
+        celery_app.__dict__.pop("amqp", None)
+
     # Apply test pin.
     celery_app.conf.broker_url = redis_url
     celery_app.conf.result_backend = redis_url
     svc_factories._redis_client = None  # type: ignore[attr-defined]
-
-    # Drop cached AMQP producer pool + cached backend object so the next
-    # ``send_task`` call rebuilds them against the new URL.
-    try:
-        celery_app.close()
-    except Exception:
-        # ``close()`` may raise if there was no open pool; harmless.
-        pass
-    # ``Celery.backend`` is a cached @property — pop it from __dict__ so
-    # the next access re-creates it from the new ``result_backend``.
-    celery_app.__dict__.pop("backend", None)
+    _invalidate_celery_caches()
 
     try:
         yield
@@ -375,13 +411,9 @@ def pin_in_process_broker(redis_url: str) -> Iterator[None]:
         # remainder of the xdist worker's tests.
         celery_app.conf.broker_url = prev_broker_url
         celery_app.conf.result_backend = prev_result_backend
-        # Drop the test-URL pool/backend so the next test sees a clean
+        # Drop the test-URL caches so subsequent tests see a clean
         # lazy-init against the restored config.
-        try:
-            celery_app.close()
-        except Exception:
-            pass
-        celery_app.__dict__.pop("backend", None)
+        _invalidate_celery_caches()
 
         # Close any redis client the test created against the test URL
         # before restoring the previous singleton, so we do not leak
