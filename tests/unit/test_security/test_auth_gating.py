@@ -379,7 +379,10 @@ def test_copilotkit_probe_paths_pinned_in_public_paths() -> None:
     }
     expected_exact = {
         ("*", "/api/copilotkit"),
-        ("*", "/api/copilotkit/status"),
+        # #399 iter-2: /status is GET-only public (the static router
+        # has GET-only handler; POST falls through to the dynamic
+        # catch-all which now requires auth at the middleware).
+        ("GET", "/api/copilotkit/status"),
         ("*", "/api/copilotkit/info"),
     }
     missing_exact = expected_exact - copilotkit_exact_entries
@@ -512,6 +515,11 @@ def test_copilotkit_probe_paths_remain_public() -> None:
     assert _is_public_path("POST", "/api/copilotkit") is True
     assert _is_public_path("GET", "/api/copilotkit/status") is True
     assert _is_public_path("GET", "/api/copilotkit/info") is True
+    # #399 iter-2: POST /status is NOT public anymore (it would
+    # otherwise fall through to the dynamic catch-all → SDK fallback).
+    # /status's static GET-only handler does NOT serve POST, so POSTing
+    # there is an attempt to reach SDK code that should require auth.
+    assert _is_public_path("POST", "/api/copilotkit/status") is False
 
 
 def test_copilotkit_dynamic_routes_require_auth() -> None:
@@ -551,6 +559,16 @@ def test_copilotkit_dynamic_routes_require_auth() -> None:
     # explicit allowlist must require auth):
     assert _is_public_path("GET", "/api/copilotkit/some/unknown/path") is False
     assert _is_public_path("POST", "/api/copilotkit/v2/agent/bar") is False
+
+    # #399 iter-2 H1 closure: POST /api/copilotkit/status. The static
+    # router serves GET-only at /status (no POST handler), so a POST
+    # would fall through to the dynamic catch-all and reach SDK code
+    # that should require auth. Codex iter-1 H1 found this gap;
+    # method-restricting the allowlist entry to GET catches it at the
+    # middleware before any handler dispatch.
+    assert _is_public_path("POST", "/api/copilotkit/status") is False
+    assert _is_public_path("PUT", "/api/copilotkit/status") is False
+    assert _is_public_path("DELETE", "/api/copilotkit/status") is False
 
 
 def _build_mock_request_with_headers(headers: dict[str, str]) -> object:
@@ -707,3 +725,159 @@ def test_copilotkit_public_path_patterns_does_not_contain_catchall() -> None:
         f"regex (e.g. to only /api/copilotkit/(status|info|health)) or "
         f"remove it entirely and rely on the explicit PUBLIC_PATHS entries."
     )
+
+
+# ---------------------------------------------------------------------------
+# Handler-dispatch end-to-end tests (#399 codex iter-1 M-finding closure)
+# ---------------------------------------------------------------------------
+
+
+def _build_copilotkit_app(monkeypatch: pytest.MonkeyPatch) -> "FastAPI":  # type: ignore[name-defined]  # noqa: F821
+    """Build a FastAPI app with the dynamic catch-all CopilotKit routes
+    attached but the SDK creator stubbed.
+
+    ``create_copilotkit_sdk()`` (in ``src/api/routes/copilotkit.py``)
+    instantiates a real SDK with network/secret dependencies; we mock
+    it so the handler dispatch path is exercised without those.
+    """
+    from unittest.mock import MagicMock
+
+    from fastapi import FastAPI
+
+    from src.api.routes import copilotkit as copilotkit_module
+
+    # Mock SDK + agents list. ``copilotkit_custom_handler`` calls
+    # ``sdk.agents(sdk_context) if callable(sdk.agents) else sdk.agents``
+    # and iterates results when matching agent_name. For the auth-gating
+    # tests we never reach the agent lookup (auth check fires first), so
+    # an empty list suffices.
+    mock_sdk = MagicMock()
+    mock_sdk.agents = []
+    mock_sdk.actions = []
+    monkeypatch.setattr(copilotkit_module, "create_copilotkit_sdk", lambda: mock_sdk)
+    # ``transform_info_response`` is called for discovery requests; we
+    # mock to return a deterministic, JSON-serializable response so
+    # discovery tests can assert against the shape.
+    monkeypatch.setattr(
+        copilotkit_module,
+        "transform_info_response",
+        lambda sdk: {"agents": {}, "actions": [], "version": "test"},
+    )
+
+    app = FastAPI()
+    copilotkit_module.add_copilotkit_routes(app, prefix="/api/copilotkit")
+    return app
+
+
+def test_handler_post_with_execution_body_returns_401_without_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end: POST /api/copilotkit (or /info) with execution body
+    returns 401 when no Authorization header is present.
+
+    Closes codex iter-1 M-finding: the unit tests on
+    ``_require_auth_for_copilotkit_execution`` exercise the helper but
+    not the handler dispatch. This test routes through the real
+    ``copilotkit_custom_handler`` via FastAPI TestClient and asserts
+    the auth response shape.
+    """
+    from fastapi.testclient import TestClient
+
+    from src.api.routes import copilotkit as copilotkit_module
+
+    # Force TESTING_MODE off so the real JWT branch runs.
+    monkeypatch.setattr(copilotkit_module, "TESTING_MODE", False)
+
+    app = _build_copilotkit_app(monkeypatch)
+    client = TestClient(app)
+
+    # Execution body on base path → 401.
+    resp = client.post(
+        "/api/copilotkit",
+        json={"method": "agent/run", "params": {"agentId": "test"}, "messages": []},
+    )
+    assert resp.status_code == 401, (
+        f"POST /api/copilotkit with execution body must require auth "
+        f"(codex iter-0 H1). Got status={resp.status_code}, body={resp.text!r}"
+    )
+    body = resp.json()
+    assert "Authentication required" in body.get("error", ""), (
+        f"401 response must explicitly say auth required. Got: {body!r}"
+    )
+
+    # Same shape on /info path.
+    resp_info = client.post(
+        "/api/copilotkit/info",
+        json={"method": "agent/run", "params": {"agentId": "test"}, "messages": []},
+    )
+    assert resp_info.status_code == 401, (
+        f"POST /api/copilotkit/info with execution body must require auth "
+        f"(codex iter-0 H2). Got status={resp_info.status_code}, body={resp_info.text!r}"
+    )
+
+
+def test_handler_post_with_discovery_body_returns_200_without_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end: POST /api/copilotkit (or /info) with discovery body
+    (empty / ``{}`` / ``{"method":"info"}``) returns 200 WITHOUT auth.
+
+    The middleware-public allowlist preserves SDK bootstrap behavior:
+    the CopilotKit React provider can mount and discover available
+    agents before an access token is available.
+    """
+    from fastapi.testclient import TestClient
+
+    from src.api.routes import copilotkit as copilotkit_module
+
+    # TESTING_MODE off so we exercise the real branch logic — discovery
+    # short-circuits BEFORE the auth check, so we still get 200.
+    monkeypatch.setattr(copilotkit_module, "TESTING_MODE", False)
+
+    app = _build_copilotkit_app(monkeypatch)
+    client = TestClient(app)
+
+    # Empty {} body → discovery.
+    resp_empty = client.post("/api/copilotkit", json={})
+    assert resp_empty.status_code == 200, (
+        f"POST /api/copilotkit with empty body must serve discovery without auth. "
+        f"Got status={resp_empty.status_code}, body={resp_empty.text!r}"
+    )
+
+    # {"method": "info"} body → discovery.
+    resp_method_info = client.post("/api/copilotkit/info", json={"method": "info"})
+    assert resp_method_info.status_code == 200, (
+        f"POST /api/copilotkit/info with method=info body must serve discovery. "
+        f"Got status={resp_method_info.status_code}, body={resp_method_info.text!r}"
+    )
+
+    # {"action": "getInfo"} body → discovery.
+    resp_action_getinfo = client.post("/api/copilotkit", json={"action": "getInfo"})
+    assert resp_action_getinfo.status_code == 200, (
+        f"POST /api/copilotkit with action=getInfo body must serve discovery. "
+        f"Got status={resp_action_getinfo.status_code}, body={resp_action_getinfo.text!r}"
+    )
+
+
+def test_handler_get_info_returns_200_without_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end: GET /api/copilotkit/info returns 200 without auth
+    (the primary SDK discovery handshake).
+    """
+    from fastapi.testclient import TestClient
+
+    from src.api.routes import copilotkit as copilotkit_module
+
+    monkeypatch.setattr(copilotkit_module, "TESTING_MODE", False)
+
+    app = _build_copilotkit_app(monkeypatch)
+    client = TestClient(app)
+
+    resp = client.get("/api/copilotkit/info")
+    assert resp.status_code == 200, (
+        f"GET /api/copilotkit/info must serve discovery without auth. "
+        f"Got status={resp.status_code}, body={resp.text!r}"
+    )
+    body = resp.json()
+    assert "version" in body, f"Discovery response must include version. Got: {body!r}"
