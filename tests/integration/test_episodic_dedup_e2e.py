@@ -502,9 +502,7 @@ def test_consolidator_deduplicate_episodic_against_real_db(
         # (RAGAS nest_asyncio pollution chain — see GH #220 / #218 / #215).
         loop = asyncio.new_event_loop()
         try:
-            loop.run_until_complete(
-                consolidator.deduplicate_episodic(brand=brand, region=None)
-            )
+            loop.run_until_complete(consolidator.deduplicate_episodic(brand=brand, region=None))
         finally:
             loop.close()
 
@@ -674,9 +672,7 @@ def test_consolidator_merges_late_arrival_against_real_db(
         # Explicit-loop pattern per integration-test asyncio.run guard.
         loop = asyncio.new_event_loop()
         try:
-            loop.run_until_complete(
-                consolidator.deduplicate_episodic(brand=brand, region=None)
-            )
+            loop.run_until_complete(consolidator.deduplicate_episodic(brand=brand, region=None))
         finally:
             loop.close()
 
@@ -721,9 +717,7 @@ def test_consolidator_merges_late_arrival_against_real_db(
         # Explicit-loop pattern per integration-test asyncio.run guard.
         loop = asyncio.new_event_loop()
         try:
-            loop.run_until_complete(
-                consolidator.deduplicate_episodic(brand=brand, region=None)
-            )
+            loop.run_until_complete(consolidator.deduplicate_episodic(brand=brand, region=None))
         finally:
             loop.close()
 
