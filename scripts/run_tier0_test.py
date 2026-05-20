@@ -4507,7 +4507,7 @@ def _to_jsonable(value: Any) -> Any:
     return str(value)
 
 
-_FEATURE_MANIFEST_SOURCES: tuple[str, ...] = ("csu", "optum")
+_FEATURE_MANIFEST_SOURCES: tuple[str, ...] = ("csu", "optum", "synthetic")
 
 
 def _autodetect_manifest_source(data_dir: str | None) -> set[str]:
@@ -7091,16 +7091,18 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--feature-manifest-source",
         type=str,
-        choices=("csu", "optum"),
+        choices=("csu", "optum", "synthetic"),
         default=None,
         help=(
             "Opt this run into a cohort-specific feature manifest so Layer 5 "
             "(adaptive_validity_check) consults the matching FeatureContract "
             "registry for layer='1' verdicts. When omitted the value is "
             "auto-detected from --data-dir ('data/rwd/csu' → 'csu', "
-            "'data/rwd/optum' → 'optum'); pass explicitly to override the "
-            "auto-detection. Synthetic runs (no --data-dir) leave this unset, "
-            "preserving the cross-cohort no-false-positive default."
+            "'data/rwd/optum' → 'optum', 'data/synthetic' → 'synthetic'); "
+            "pass explicitly to override the auto-detection. When neither "
+            "an explicit choice nor a recognizable --data-dir path segment "
+            "is provided, the value stays unset, preserving the cross-cohort "
+            "no-false-positive default."
         ),
     )
     parser.add_argument(

@@ -173,7 +173,7 @@ EXPECTED_TIER0_CLI_DESCRIPTORS: Dict[str, Dict[str, Any]] = {
     },
     "--feature-manifest-source": {
         "default": None,
-        "choices": ["csu", "optum"],
+        "choices": ["csu", "optum", "synthetic"],
         "nargs": None,
         "type_name": "str",
         "action": "_StoreAction",
