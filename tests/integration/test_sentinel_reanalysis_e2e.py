@@ -78,9 +78,23 @@ def _redis_reachable(url: str) -> bool:
         return False
 
 
-if not os.environ.get("REDIS_URL") and not _redis_reachable(_DEFAULT_REDIS_URL):
+# Skip-guard broker resolution MUST match the ``redis_url`` fixture so the
+# guard does not let collection proceed against a broker the test will
+# never actually reach. (Codex iter-3 M1.)
+#
+# Resolution order — IDENTICAL to ``redis_url`` fixture (do not drift):
+#   1. ``E2I_TEST_REDIS_URL`` — fixture-explicit escape hatch.
+#   2. ``_DEFAULT_REDIS_URL`` (``redis://localhost:6379``).
+#
+# Note: ``REDIS_URL`` is intentionally NOT consulted here. The fixture
+# does not consult it either (see fixture docstring). Keying the guard
+# off ``REDIS_URL`` would let collection proceed even when the actual
+# test target (localhost:6379) is unreachable.
+_skip_target_url = os.environ.get("E2I_TEST_REDIS_URL") or _DEFAULT_REDIS_URL
+if not _redis_reachable(_skip_target_url):
     pytest.skip(
-        "requires REDIS_URL or reachable redis://localhost:6379",
+        f"requires reachable Redis at {_skip_target_url} "
+        "(set E2I_TEST_REDIS_URL or start redis on localhost:6379)",
         allow_module_level=True,
     )
 
@@ -288,6 +302,65 @@ async def pubsub_listener(redis_url: str) -> AsyncIterator[Any]:
 
 
 @pytest.fixture
+def pin_in_process_broker(redis_url: str) -> Iterator[None]:
+    """
+    Pin the in-process ``celery_app`` config + ``get_redis_client`` cache
+    to the SAME broker URL the worker subprocess is configured against,
+    with explicit teardown restoration.
+
+    Without this fixture's restoration step, the direct mutations of
+    ``celery_app.conf.broker_url`` / ``celery_app.conf.result_backend``
+    and ``svc_factories._redis_client`` would leak past this test —
+    later tests on the same xdist worker would inherit a Celery app and
+    cached Redis singleton both pointed at this test's broker URL,
+    creating a hard-to-trace ordering dependency. (Codex iter-3 M2.)
+
+    Environment vars are kept in scope by the caller's ``monkeypatch``
+    fixture, which auto-restores on test teardown — only the live config
+    object + the lazy redis singleton need explicit save/restore here.
+    """
+    from src.memory.services import factories as svc_factories
+    from src.workers.celery_app import celery_app
+
+    # Snapshot previous values so we can restore on teardown.
+    prev_broker_url = celery_app.conf.broker_url
+    prev_result_backend = celery_app.conf.result_backend
+    prev_redis_client = svc_factories._redis_client  # type: ignore[attr-defined]
+
+    # Apply test pin.
+    celery_app.conf.broker_url = redis_url
+    celery_app.conf.result_backend = redis_url
+    svc_factories._redis_client = None  # type: ignore[attr-defined]
+
+    try:
+        yield
+    finally:
+        # Restore previous Celery config. Failure here is fatal — we do
+        # NOT swallow because a silent restore-fail would taint the
+        # remainder of the xdist worker's tests.
+        celery_app.conf.broker_url = prev_broker_url
+        celery_app.conf.result_backend = prev_result_backend
+
+        # Close any redis client the test created against the test URL
+        # before restoring the previous singleton, so we do not leak
+        # connections to the test broker.
+        leaked = svc_factories._redis_client  # type: ignore[attr-defined]
+        if leaked is not None and leaked is not prev_redis_client:
+            try:
+                # The cached client is ``redis.asyncio.Redis``; ``aclose``
+                # is the canonical shutdown. We run it on a fresh loop
+                # because pytest-asyncio may have torn down the test loop
+                # by the time this teardown fires.
+                asyncio.run(leaked.aclose())
+            except Exception:
+                # Best-effort: a connection-close failure must not mask
+                # the test result. We still restore the previous client
+                # below.
+                pass
+        svc_factories._redis_client = prev_redis_client  # type: ignore[attr-defined]
+
+
+@pytest.fixture
 def stale_finding() -> Dict[str, Any]:
     """
     Realistic stale-finding fixture matching the shape
@@ -320,12 +393,24 @@ async def _poll_for_message(
     pubsub: Any,
     *,
     timeout: float,
+    match: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Poll the pub/sub subscriber for a real message up to ``timeout`` seconds.
 
-    Returns the parsed JSON payload on success, or None on timeout. Filters
-    out subscribe-confirmation messages (type=="subscribe"/"psubscribe").
+    Returns the parsed JSON payload on the FIRST message matching every
+    key/value in ``match`` (or the first parseable payload when ``match``
+    is None), or None on timeout. Filters out subscribe-confirmation
+    messages (type=="subscribe"/"psubscribe") and skips messages with
+    malformed payloads or that fail the match filter.
+
+    The match filter (Codex iter-3 L1) lets the test ignore concurrent
+    publishers on the same brand channel — e.g., a parallel sentinel
+    dispatcher or a dev script — by pinning on this test's uuid-suffixed
+    ``finding_id``. Without it, the helper would return the FIRST
+    parseable payload and a concurrent publisher would cause a spurious
+    assertion failure instead of being ignored while the test waits for
+    its OWN reanalysis signal.
     """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -342,10 +427,15 @@ async def _poll_for_message(
         if isinstance(data, bytes):
             data = data.decode("utf-8")
         try:
-            return dict(json.loads(data))
+            payload = dict(json.loads(data))
         except (TypeError, ValueError):
             # Malformed payload — keep polling; caller's assert will surface.
             continue
+        if match is not None and not all(payload.get(k) == v for k, v in match.items()):
+            # Not OUR message — keep polling. A concurrent publisher on the
+            # same brand channel does NOT fail the test.
+            continue
+        return payload
     return None
 
 
@@ -359,6 +449,7 @@ async def test_notify_and_queue_reanalysis_publishes_reanalysis_signal_e2e(
     pubsub_listener: Any,
     stale_finding: Dict[str, Any],
     redis_url: str,
+    pin_in_process_broker: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
@@ -379,34 +470,31 @@ async def test_notify_and_queue_reanalysis_publishes_reanalysis_signal_e2e(
     REDIS_URL / CELERY_BROKER_URL environment to point both the in-process
     ``notify_and_queue_reanalysis`` AND the worker subprocess at the SAME
     real broker, which is precisely how production wires them.
+
+    Mutable-state isolation
+    -----------------------
+    The ``pin_in_process_broker`` fixture (above) saves the live
+    ``celery_app.conf`` + ``svc_factories._redis_client`` BEFORE this
+    test runs and restores them on teardown — so this test cannot leak
+    a test-broker-pinned Celery config to later tests on the same xdist
+    worker. The ``monkeypatch.setenv`` calls below cover the env-var
+    side of the same contract.
     """
-    # ----- 0. Pin the in-process Celery app + redis-client factory to the
-    # SAME broker URL the worker subprocess is configured against.
+    # ----- 0. Re-set the env vars so the lazy redis-client factory picks
+    # up the test URL on next call. The Celery config + redis singleton
+    # have already been re-pinned by the ``pin_in_process_broker`` fixture
+    # (which saves+restores them around this test). Env vars are restored
+    # by ``monkeypatch`` on teardown.
     #
     # ``tests/conftest.py:51`` runs ``load_dotenv(override=True)`` which
     # rebinds REDIS_URL/CELERY_BROKER_URL to the .env values at module
     # import. By the time this test runs, ``os.environ["REDIS_URL"]`` is
     # the .env value (e.g. ``redis://:changeme@localhost:6382``) and NOT
-    # what the fixture's ``redis_url`` says. We forcibly re-set those env
-    # keys here so the lazy redis-client factory picks up the test URL,
-    # AND we rebind the celery_app.conf object directly so the in-process
-    # ``send_task`` lands on the same broker the worker subprocess is
-    # consuming. Without both rebinds, the test would silently call
-    # ``send_task`` against the wrong broker and the assertion would
-    # time out.
+    # what the fixture's ``redis_url`` says. Forcibly re-set those env
+    # keys here so any code path that re-reads them lands on the test URL.
     monkeypatch.setenv("REDIS_URL", redis_url)
     monkeypatch.setenv("CELERY_BROKER_URL", redis_url)
     monkeypatch.setenv("CELERY_RESULT_BACKEND", redis_url)
-    from src.workers.celery_app import celery_app
-
-    celery_app.conf.broker_url = redis_url
-    celery_app.conf.result_backend = redis_url
-
-    # Reset the cached redis singleton so the action's lazy ``get_redis_client``
-    # constructs a new client against the test URL on next call.
-    from src.memory.services import factories as svc_factories
-
-    svc_factories._redis_client = None  # type: ignore[attr-defined]
 
     # ----- 1. Subscribe to the brand-scoped channel BEFORE triggering.
     brand = str(stale_finding["brand"])
@@ -437,21 +525,30 @@ async def test_notify_and_queue_reanalysis_publishes_reanalysis_signal_e2e(
     assert result["queued_for_reanalysis"] == 1, result
     assert result["stale_findings_count"] == 1, result
 
-    # ----- 3. Poll the subscriber for the published signal. Bounded
-    # timeout: worker boot is in the fixture, so we only wait for task
-    # dispatch + execute + publish — typically <2s, generous cap at 15s.
-    payload = await _poll_for_message(pubsub_listener, timeout=15.0)
-
-    assert payload is not None, (
-        "No reanalysis_requested signal received on channel "
-        f"{channel!r} within 15s. The Celery worker either did not "
-        "execute reanalyze_finding or did not publish the signal."
+    # ----- 3. Poll the subscriber for the SPECIFIC signal carrying this
+    # test's finding_id. The match filter ignores any concurrent publisher
+    # on the same brand channel (Codex iter-3 L1) — only OUR uuid-suffixed
+    # finding_id satisfies the match. Bounded 15s timeout covers worker
+    # dispatch + execute + publish; typical wall time is <2s.
+    expected_finding_id = stale_finding["finding_id"]
+    payload = await _poll_for_message(
+        pubsub_listener,
+        timeout=15.0,
+        match={
+            "type": "reanalysis_requested",
+            "finding_id": expected_finding_id,
+        },
     )
 
-    # ----- 4. Assert payload shape: the worker's publish must carry
-    # the per-finding metadata the downstream orchestrator subscribes for.
-    assert payload["type"] == "reanalysis_requested", payload
-    assert payload["finding_id"] == stale_finding["finding_id"], payload
+    assert payload is not None, (
+        f"No reanalysis_requested signal with finding_id={expected_finding_id!r} "
+        f"received on channel {channel!r} within 15s. The Celery worker "
+        "either did not execute reanalyze_finding or did not publish the signal."
+    )
+
+    # ----- 4. Assert remaining payload shape. ``type`` and ``finding_id``
+    # are already pinned by the match filter; verify the remaining fields
+    # the downstream orchestrator subscribes for.
     assert payload["brand"] == brand, payload
     assert payload["triggered_by"] == "sentinel:staleness", payload
     assert "requested_at" in payload, payload
