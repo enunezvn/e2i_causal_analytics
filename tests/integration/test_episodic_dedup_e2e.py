@@ -496,7 +496,17 @@ def test_consolidator_deduplicate_episodic_against_real_db(
         return_value=fake,
     ):
         consolidator = Consolidator()
-        asyncio.run(consolidator.deduplicate_episodic(brand=brand, region=None))
+        # Explicit-loop pattern: tests/integration/ forbids bare
+        # ``asyncio.run`` per the project-wide CI guard at
+        # ``tests/integration/test_no_bare_asyncio_run_in_integration_tests.py``
+        # (RAGAS nest_asyncio pollution chain — see GH #220 / #218 / #215).
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(
+                consolidator.deduplicate_episodic(brand=brand, region=None)
+            )
+        finally:
+            loop.close()
 
     # Verify the DB state.
     with db_conn.cursor() as cur:
@@ -661,7 +671,14 @@ def test_consolidator_merges_late_arrival_against_real_db(
         return_value=fake,
     ):
         consolidator = Consolidator()
-        asyncio.run(consolidator.deduplicate_episodic(brand=brand, region=None))
+        # Explicit-loop pattern per integration-test asyncio.run guard.
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(
+                consolidator.deduplicate_episodic(brand=brand, region=None)
+            )
+        finally:
+            loop.close()
 
     # Phase-1 sanity: canonical stamped with counter=3.
     with db_conn.cursor() as cur:
@@ -701,7 +718,14 @@ def test_consolidator_merges_late_arrival_against_real_db(
         return_value=fake,
     ):
         consolidator = Consolidator()
-        asyncio.run(consolidator.deduplicate_episodic(brand=brand, region=None))
+        # Explicit-loop pattern per integration-test asyncio.run guard.
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(
+                consolidator.deduplicate_episodic(brand=brand, region=None)
+            )
+        finally:
+            loop.close()
 
     # Phase-2 verification: still 1 row, counter incremented to 4.
     with db_conn.cursor() as cur:
