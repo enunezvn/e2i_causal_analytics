@@ -429,10 +429,14 @@ pipelines pick this up via the existing trigger surface.
 ### `notify_and_queue_reanalysis`
 
 Fires on `staleness_threshold` sentinels. Publishes a `staleness_alert`
-for the top-5 most-stale findings (sorted by `staleness_score` — currently
-1.0 binary) AND enqueues a `reanalyze_finding` Celery task per finding
-(#378). Broker outage on the per-finding enqueue is best-effort: the
-Redis alert publication still goes out.
+carrying the FULL stale-findings list (sorted by `staleness_score` —
+currently 1.0 binary) AND enqueues a `reanalyze_finding` Celery task
+for the top-5 most-stale findings (`_REANALYSIS_CAP = 5`,
+`src/tasks/sentinel_actions.py:144`). The top-5 cap applies ONLY to the
+per-finding Celery enqueue + log lines, not the SSE alert payload
+(see §4 for the on-the-wire shape). Broker outage on the per-finding
+enqueue is best-effort: the Redis alert publication still goes out
+regardless.
 
 This is the **single-fire-with-list** path: the dispatcher calls this
 handler exactly once per dispatcher tick with the full matches list

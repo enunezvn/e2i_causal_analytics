@@ -845,8 +845,9 @@ an empty list with a logged warning.
 ### 5.5 End-to-end signal flow
 
 A typical cascade triggered by a sentinel (BACKEND steps; frontend
-consumer is TBD — the SSE bridge is shipped but no frontend consumer
-exists in the current repo as of commit `40f27fd6`):
+consumer is TBD — the SSE bridge is shipped at
+`src/api/routes/staleness_alerts.py` but no frontend consumer exists in
+the current repo):
 
 ```
 1. Celery beat fires sentinel_dispatcher (every 5 minutes)
