@@ -71,3 +71,125 @@ gap_analyzer:
     max_recommendations_per_gap: 5
     include_trend_analysis: true
     include_peer_comparison: true
+
+  # ===========================================================================
+  # Memory-graph awareness (staleness + provenance)
+  # ===========================================================================
+  #
+  # The gap analyzer consumes findings from episodic_memories +
+  # executive_insights (crystallized cross-agent narratives) when ranking
+  # opportunities. Both surfaces carry lifecycle + provenance fields that
+  # MUST be honored to avoid surfacing stale ROI estimates to operators.
+  #
+  # Source-of-truth references:
+  #   - src/memory/lifecycle/consolidator.py:176-233 (Consolidator.run)
+  #   - src/memory/crystallization/crystallizer.py:102-117 (Crystallizer)
+  #   - database/memory/021_insight_lifecycle.sql (invalidated_at columns)
+  #   - database/memory/025_crystaldigest_schema_completion.sql (lineage fields)
+  #
+  # Refs: issue #391 (post-implementation checklist § Documentation box 2 —
+  # "Add staleness/provenance to agent system prompts so agents understand
+  # the graph has these fields").
+  # ===========================================================================
+  memory_graph_awareness:
+    description: "Lifecycle + provenance fields the gap analyzer MUST honor"
+
+    staleness_fields:
+      invalidated_at:
+        type: timestamptz
+        semantics: |
+          Set by the cascade-invalidator when an upstream ancestor is
+          overturned. A row with invalidated_at IS NOT NULL MUST be
+          EXCLUDED from gap-opportunity ranking — its ROI estimate may
+          be based on stale assumptions. The portfolio-summary endpoint
+          enforces this filter at the SQL layer
+          (src/api/routes/executive_insights.py:220 — .is_("invalidated_at", "null")).
+        tables_consumed:
+          - executive_insights
+          - episodic_memories
+          - causal_paths
+        sql_filter_template: "WHERE invalidated_at IS NULL"
+
+      staleness_score:
+        type: float
+        semantics: |
+          PAYLOAD-ONLY field surfaced via the staleness_alert SSE bridge
+          (src/api/routes/staleness_alerts.py). Per Decision 3 = KEEP
+          BINARY (plan §"DECISIONS ADOPTED" 2026-05-19), staleness is
+          boolean: staleness_score=1.0 means invalidated_at IS NOT NULL.
+          The gap analyzer SHOULD NOT compute weighted ROI using
+          staleness_score as a graded factor; it is binary by design.
+
+    provenance_fields:
+      provenance_chain_id:
+        type: text
+        semantics: |
+          Deterministic 32-char SHA-256 hash over the BFS-resolved
+          ancestor set. Two opportunities with the same
+          provenance_chain_id derive from identical evidence — gap
+          analyzer should DEDUPE them in ROI rankings (avoid
+          double-counting the same underlying finding under two
+          opportunities).
+        source: src/memory/crystallization/crystallizer.py:594-600
+
+      provenance_chain:
+        type: text[]
+        semantics: |
+          OPERATOR-FACING TERM for the BFS-resolved ancestor list. When
+          presenting an ROI opportunity to the operator, the gap
+          analyzer SHOULD surface the contributing causal_path_id(s)
+          and episodic memory_id(s) so the operator can JIT-verify the
+          claim via the insight_edges DAG.
+
+      provenance_depth:
+        type: integer
+        semantics: |
+          Hop count from this opportunity to the deepest ancestor.
+          provenance_depth=1 means direct episodic evidence;
+          provenance_depth>=2 means causal_path traversal. Higher depth
+          = more indirect chain. Gap analyzer should weight HIGHER
+          confidence for shallower chains.
+        source: src/memory/crystallization/crystallizer.py:602-605
+
+      consolidation_tier:
+        type: enum
+        values: [working, episodic, semantic, procedural]
+        semantics: |
+          "Ripeness" of the underlying finding. Gap analyzer should
+          ONLY rank opportunities backed by semantic or procedural
+          tier crystals — episodic-tier crystals have not yet been
+          confirmed (>=3 replications) and may be artifacts of a
+          single agent run.
+        recommended_filter: "consolidation_tier IN ('semantic', 'procedural')"
+
+    deduplication_fields:
+      dedup_counter:
+        type: integer
+        default: 1
+        semantics: |
+          Count of underlying events represented by the canonical row
+          after dedup (PR #388). When the gap analyzer computes
+          "replication count" for confidence_adjustment, it should use
+          SUM(dedup_counter) — undeduped raw COUNT(*) would inflate
+          the confidence and bias ROI projections upward.
+
+    agent_behavior_rules:
+      - id: rule_1_exclude_invalidated
+        condition: "When ranking opportunities from executive_insights"
+        action: "Filter invalidated_at IS NULL at the query layer; never present invalidated opportunities as live"
+
+      - id: rule_2_dedupe_by_provenance
+        condition: "When two opportunities share provenance_chain_id"
+        action: "Treat as ONE opportunity; pick the higher-tier representative or merge ROI projections"
+
+      - id: rule_3_tier_gating
+        condition: "When the operator asks for actionable opportunities"
+        action: "Only surface consolidation_tier IN ('semantic', 'procedural') by default; expose episodic via opt-in flag"
+
+      - id: rule_4_surface_provenance_in_rationale
+        condition: "When the ROI projection is presented"
+        action: "Include the contributing provenance_chain ancestors so the operator can verify the upstream evidence"
+
+      - id: rule_5_brand_strictness
+        condition: "ALWAYS"
+        action: "Brand is the tenant boundary; NEVER aggregate ROI across brands without explicit ADMIN-level override"
