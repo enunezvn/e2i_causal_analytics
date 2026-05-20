@@ -10,6 +10,7 @@ Covers:
 - create_audit_chain_service factory
 """
 
+import dataclasses
 import hashlib
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
@@ -76,6 +77,8 @@ class TestRefutationResults:
         assert results.random_common_cause is None
         assert results.data_subset is None
         assert results.unobserved_confound is None
+        # Issue #368: bootstrap field included alongside the 4 contract tests.
+        assert results.bootstrap is None
 
     def test_all_passed_when_all_true(self):
         """Test all_passed returns True when all executed tests pass."""
@@ -84,6 +87,7 @@ class TestRefutationResults:
             random_common_cause=True,
             data_subset=True,
             unobserved_confound=True,
+            bootstrap=True,
         )
         assert results.all_passed is True
 
@@ -92,7 +96,7 @@ class TestRefutationResults:
         results = RefutationResults(
             placebo_treatment=True,
             random_common_cause=True,
-            # data_subset and unobserved_confound are None (not executed)
+            # data_subset, unobserved_confound, bootstrap are None (not executed)
         )
         assert results.all_passed is True
 
@@ -104,6 +108,28 @@ class TestRefutationResults:
             data_subset=True,
         )
         assert results.all_passed is False
+
+    def test_all_passed_when_bootstrap_false_only_executed(self):
+        """Test all_passed returns False when only bootstrap executed and failed.
+
+        Issue #368: bootstrap participates in ``all_passed`` because it's the only
+        test that runs in degraded DoWhy mode (causal_model None) — when it's the
+        only executed signal, its pass/fail status must NOT be masked by
+        ``all_passed`` (otherwise tamper-evident logging loses the only refutation
+        that ran).
+        """
+        results = RefutationResults(bootstrap=False)
+        assert results.all_passed is False
+
+    def test_all_passed_when_only_bootstrap_executed_true(self):
+        """Bootstrap alone executing and passing yields all_passed=True.
+
+        Issue #368: degraded-mode round-trip — ensures the dataclass treats
+        bootstrap as an executed-test signal (not ignored) when other tests
+        are None (not executed).
+        """
+        results = RefutationResults(bootstrap=True)
+        assert results.all_passed is True
 
     def test_all_passed_when_none_executed(self):
         """Test all_passed returns False when no tests executed."""
@@ -117,14 +143,57 @@ class TestRefutationResults:
             random_common_cause=False,
             data_subset=None,
             unobserved_confound=True,
+            bootstrap=True,
         )
         expected = {
             "placebo_treatment": True,
             "random_common_cause": False,
             "data_subset": None,
             "unobserved_confound": True,
+            "bootstrap": True,
         }
         assert results.to_dict() == expected
+
+    def test_field_set_matches_legacy_individual_tests_contract(self):
+        """Regression pin (Issue #368): dataclass field names match the legacy
+        ``individual_tests`` key set emitted by
+        ``RefutationSuite.to_legacy_format()`` — placebo_treatment,
+        random_common_cause, data_subset, unobserved_common_cause, bootstrap
+        (5 tests). The dataclass uses ``unobserved_confound`` for the
+        sensitivity_e_value test (consistent with the
+        ``unobserved_common_cause`` → ``unobserved_confound`` rename in
+        graph.py and audit_chain_mixin.py wrap sites).
+
+        If a future refactor adds/removes test types in
+        ``to_legacy_format()``, this test pins the shape so the silent-drop
+        regression (5 keys → 4 fields) cannot recur unnoticed.
+        """
+        field_names = {f.name for f in dataclasses.fields(RefutationResults)}
+        expected = {
+            "placebo_treatment",
+            "random_common_cause",
+            "data_subset",
+            "unobserved_confound",
+            "bootstrap",
+        }
+        assert field_names == expected, (
+            f"RefutationResults field set drifted from to_legacy_format() "
+            f"individual_tests keys. Got {field_names}, expected {expected}. "
+            f"If you added/removed a test type, update both surfaces "
+            f"(src/utils/audit_chain.py:RefutationResults + "
+            f"src/causal_engine/refutation_runner.py:to_legacy_format)."
+        )
+
+    def test_field_count_is_five(self):
+        """Regression pin (Issue #368): exactly 5 fields.
+
+        Pre-#368: 4 fields (bootstrap silently dropped on conversion from
+        ``to_legacy_format()`` 5-key dict). Post-fix: 5 fields. If this
+        count changes, either (a) ``to_legacy_format()`` was extended and
+        a 6th field is needed here, or (b) a field was removed and
+        downstream serialization assumptions need re-validation.
+        """
+        assert len(dataclasses.fields(RefutationResults)) == 5
 
 
 # =============================================================================
@@ -477,11 +546,15 @@ class TestAuditChainService:
             auto_commit=False,
         )
 
+        # Issue #368: bootstrap is part of the to_dict() shape — defaults to None
+        # when not set explicitly. add_entry calls refutation_results.to_dict()
+        # so the persisted dict must include the bootstrap key.
         assert entry.refutation_results == {
             "placebo_treatment": True,
             "random_common_cause": True,
             "data_subset": None,
             "unobserved_confound": None,
+            "bootstrap": None,
         }
 
     # -------------------------------------------------------------------------

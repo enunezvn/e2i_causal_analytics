@@ -400,6 +400,11 @@ def audited_traced_node(
                                     unobserved_confound=individual.get(
                                         "unobserved_common_cause", {}
                                     ).get("passed"),
+                                    # Issue #368: bootstrap is the only refutation that
+                                    # runs in degraded DoWhy mode (causal_model None).
+                                    # Without this kwarg it was silently dropped from
+                                    # the audit chain entry persisted by add_entry().
+                                    bootstrap=individual.get("bootstrap", {}).get("passed"),
                                 )
 
                             # Extract confidence from estimation
