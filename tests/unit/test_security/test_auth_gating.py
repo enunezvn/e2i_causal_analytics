@@ -375,26 +375,47 @@ def test_copilotkit_auth_gap_pinned_for_issue_399() -> None:
         _is_public_path,
     )
 
-    # Surface 1: exact-match entry in PUBLIC_PATHS.
-    copilotkit_exact_entries = [
+    # Surface 1: pin the EXACT entries in PUBLIC_PATHS the docstring
+    # names. Codex iter-3 LOW-1 closure: the prior shape used
+    # "at least one entry starts with /api/copilotkit", which is
+    # strictly weaker than the docstring's enumeration. A future PR
+    # that removes ``/api/copilotkit/status`` (say) while leaving
+    # ``/api/copilotkit`` would silently pass that weaker pin; this
+    # explicit superset assertion catches the partial removal.
+    copilotkit_exact_entries = {
         (method, path)
         for method, path in PUBLIC_PATHS
         if path == "/api/copilotkit" or path.startswith("/api/copilotkit/")
-    ]
-    assert copilotkit_exact_entries, (
-        "Expected at least one /api/copilotkit entry in PUBLIC_PATHS — "
-        "the iter-2 H2 audit identified one. If this is empty, the gap "
-        "may already be closed and the pin should be flipped (see #399)."
+    }
+    expected_exact = {
+        ("*", "/api/copilotkit"),
+        ("*", "/api/copilotkit/status"),
+        ("*", "/api/copilotkit/info"),
+    }
+    missing_exact = expected_exact - copilotkit_exact_entries
+    assert not missing_exact, (
+        f"Expected the three pinned /api/copilotkit entries in PUBLIC_PATHS "
+        f"(see docstring); missing: {missing_exact!r}. Current copilotkit "
+        f"entries: {copilotkit_exact_entries!r}. If this is intentional, flip "
+        f"the pin per the docstring's 3-step recipe (see #399)."
     )
 
-    # Surface 2: catch-all pattern in PUBLIC_PATH_PATTERNS.
-    pattern_in_public_patterns = any(
-        "/api/copilotkit" in pattern for _method, pattern in PUBLIC_PATH_PATTERNS
-    )
-    assert pattern_in_public_patterns is True, (
-        "Expected a /api/copilotkit catch-all pattern in PUBLIC_PATH_PATTERNS. "
-        "If this is False, the dynamic-route bypass may already be closed and "
-        "this regression pin should be flipped (see #399)."
+    # Surface 2: pin the EXACT catch-all regex in PUBLIC_PATH_PATTERNS.
+    # Codex iter-3 LOW-1: substring-only check could pass even if the
+    # regex were narrowed (e.g. to ``/api/copilotkit/status``-only).
+    # Asserting the literal regex string the docstring names catches that.
+    EXPECTED_CATCHALL_REGEX = r"^/api/copilotkit(/.*)?$"
+    catchall_entries = [
+        (method, pattern)
+        for method, pattern in PUBLIC_PATH_PATTERNS
+        if pattern == EXPECTED_CATCHALL_REGEX
+    ]
+    assert catchall_entries, (
+        f"Expected the literal catch-all pattern {EXPECTED_CATCHALL_REGEX!r} in "
+        f"PUBLIC_PATH_PATTERNS (see docstring). Current PUBLIC_PATH_PATTERNS "
+        f"entries: {PUBLIC_PATH_PATTERNS!r}. If the dynamic-route bypass has "
+        f"been narrowed or removed, flip the pin per the docstring's "
+        f"3-step recipe (see #399)."
     )
 
     # Surface 3: the _is_public_path matcher actually returns True for
@@ -406,9 +427,11 @@ def test_copilotkit_auth_gap_pinned_for_issue_399() -> None:
 
 
 def test_copilotkit_static_routes_present_in_auth_test_app() -> None:
-    """Codex iter-2 M2 closure: enumerate the static-CopilotKit routes
-    that DO appear on the test app's router set and document the
-    dynamic-route bypass cross-reference.
+    """Codex iter-2 M2 closure (iter-3 LOW-2 strengthened):
+    pin the minimum expected set of static CopilotKit routes so partial
+    removals (e.g. dropping ``/chat/stream`` while leaving ``/status``)
+    fail loud — the prior shape asserted only non-empty, which silently
+    allowed partial regressions.
 
     The ``_build_app`` helper above includes the three protected
     routers (``executive_insights``, ``audit``, ``staleness_alerts``).
@@ -417,11 +440,14 @@ def test_copilotkit_static_routes_present_in_auth_test_app() -> None:
     ``add_copilotkit_routes(app, prefix="/api/copilotkit")`` at
     ``src/api/main.py:997-1000``.
 
-    The static portion (``copilotkit_router``) is a small set of
-    discovery / status routes. Per the codex iter-2 M2 fix shape we
-    enumerate those routes here so the auth-gating test app's
-    coverage is documented and any silent route addition is flagged
-    by the static-route enumeration test.
+    The static portion (``copilotkit_router``) is the discovery / status
+    / chat / feedback / analytics set declared in
+    ``src/api/routes/copilotkit.py``. Per the codex iter-2 M2 fix shape
+    (strengthened by iter-3 LOW-2) we enumerate the EXPECTED MINIMUM
+    set here so a removal or rename trips the assertion. New static
+    routes added later are NOT flagged (we use a subset check, not
+    equality) — that's intentional: the regression-pin role is to
+    catch removals, not lock the surface.
 
     The DYNAMIC catch-all routes registered by
     ``add_copilotkit_routes`` are NOT covered here — they are pinned
@@ -438,16 +464,41 @@ def test_copilotkit_static_routes_present_in_auth_test_app() -> None:
     app.include_router(copilotkit_router, prefix="/api")
 
     paths = {r.path for r in _api_routes(app) if r.path.startswith("/api/copilotkit")}
-    # Expected static routes from src/api/routes/copilotkit.py — these
-    # are discovery / status endpoints. The path set is pinned so a
-    # silent addition shows up here.
-    assert paths, (
-        "Expected the static CopilotKit router to expose at least one "
-        "/api/copilotkit path. If empty, the static router was removed "
-        "and this enumeration must be updated alongside the change."
+    # Pin the EXPECTED minimum set of static routes (codex iter-3 LOW-2
+    # closure: the prior shape only asserted ``paths`` was non-empty,
+    # which silently allowed partial removals — e.g. removing
+    # ``/chat/stream`` while keeping ``/status`` would still pass.
+    # The pinned superset below ensures all currently-known static
+    # routes survive a refactor; new additions are flagged by the
+    # equality check at the end if the operator wants to add them).
+    expected_minimum_static = {
+        "/api/copilotkit/status",
+        "/api/copilotkit/chat/stream",
+        "/api/copilotkit/chat",
+        "/api/copilotkit/feedback",
+        "/api/copilotkit/feedback/stats",
+        "/api/copilotkit/analytics/usage",
+        "/api/copilotkit/analytics/agents",
+        "/api/copilotkit/analytics/errors",
+    }
+    missing = expected_minimum_static - paths
+    assert not missing, (
+        f"Expected static CopilotKit routes are missing from the test app: "
+        f"{missing!r}. Found paths: {sorted(paths)!r}. If a route was "
+        f"removed intentionally, update this pin alongside the change."
     )
     # Document that we are explicitly NOT covering dynamic-route auth
-    # here — that surface is pinned for tracking-issue #399.
-    # (No assertion on path-set CONTENT — the path set is implementation
-    # detail of the copilotkit_router itself; the existence assertion
-    # above is the regression pin.)
+    # here — that surface is pinned in
+    # ``test_copilotkit_auth_gap_pinned_for_issue_399`` above + tracked in
+    # issue #399. The dynamic routes registered by
+    # ``add_copilotkit_routes(app, prefix="/api/copilotkit")`` at
+    # ``src/api/main.py:1000`` are NOT present in this app's route set
+    # (we did not call ``add_copilotkit_routes`` here) — confirm absence:
+    dynamic_route_paths = {p for p in paths if "{path:path}" in p}
+    assert dynamic_route_paths == set(), (
+        "This test app intentionally excludes dynamic CopilotKit catch-all "
+        "routes (registered via add_copilotkit_routes). Their auth state is "
+        f"pinned separately in test_copilotkit_auth_gap_pinned_for_issue_399 "
+        f"and tracked in #399. Found unexpected dynamic routes: "
+        f"{dynamic_route_paths!r}."
+    )
