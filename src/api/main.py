@@ -483,6 +483,10 @@ openapi_tags = [
         "name": "Executive Insights",
         "description": "Crystallized cross-agent narratives for leadership. JIT provenance verification returns 410 Gone when any source artifact has been overturned.",
     },
+    {
+        "name": "Alerts",
+        "description": "Real-time SSE stream of sentinel-detected staleness alerts. Per-brand filter at the subscriber layer; drop-oldest backpressure at MAX_QUEUE_DEPTH=100.",
+    },
 ]
 
 # =============================================================================
