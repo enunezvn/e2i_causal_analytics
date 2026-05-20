@@ -322,9 +322,26 @@ def pin_in_process_broker(redis_url: str) -> Iterator[None]:
     cached Redis singleton both pointed at this test's broker URL,
     creating a hard-to-trace ordering dependency. (Codex iter-3 M2.)
 
+    Connection-pool invalidation (iter-5 CI fix)
+    --------------------------------------------
+    Setting ``celery_app.conf.broker_url`` and
+    ``celery_app.conf.result_backend`` updates the Celery configuration,
+    but Celery caches the AMQP producer pool and the result-backend
+    object lazily at first use. Once cached, those objects ignore later
+    config rebinds and keep retrying against the old URL — which on CI
+    is the unreachable ``redis://localhost:6382`` default. The visible
+    symptom is ``RuntimeError: Retry limit exceeded while trying to
+    reconnect to the Celery redis result store backend``.
+
+    Fix: call ``celery_app.close()`` after rebinding conf — this drops
+    the AMQP producer pool and forces a fresh lazy init against the
+    new URL. We also invalidate the cached result-backend object via
+    ``__dict__.pop("backend", None)`` because ``backend`` is a cached
+    descriptor property on the Celery app.
+
     Environment vars are kept in scope by the caller's ``monkeypatch``
     fixture, which auto-restores on test teardown — only the live config
-    object + the lazy redis singleton need explicit save/restore here.
+    object + the lazy singletons need explicit save/restore here.
     """
     from src.memory.services import factories as svc_factories
     from src.workers.celery_app import celery_app
@@ -339,6 +356,17 @@ def pin_in_process_broker(redis_url: str) -> Iterator[None]:
     celery_app.conf.result_backend = redis_url
     svc_factories._redis_client = None  # type: ignore[attr-defined]
 
+    # Drop cached AMQP producer pool + cached backend object so the next
+    # ``send_task`` call rebuilds them against the new URL.
+    try:
+        celery_app.close()
+    except Exception:
+        # ``close()`` may raise if there was no open pool; harmless.
+        pass
+    # ``Celery.backend`` is a cached @property — pop it from __dict__ so
+    # the next access re-creates it from the new ``result_backend``.
+    celery_app.__dict__.pop("backend", None)
+
     try:
         yield
     finally:
@@ -347,18 +375,29 @@ def pin_in_process_broker(redis_url: str) -> Iterator[None]:
         # remainder of the xdist worker's tests.
         celery_app.conf.broker_url = prev_broker_url
         celery_app.conf.result_backend = prev_result_backend
+        # Drop the test-URL pool/backend so the next test sees a clean
+        # lazy-init against the restored config.
+        try:
+            celery_app.close()
+        except Exception:
+            pass
+        celery_app.__dict__.pop("backend", None)
 
         # Close any redis client the test created against the test URL
         # before restoring the previous singleton, so we do not leak
-        # connections to the test broker.
+        # connections to the test broker. Use the explicit-loop pattern
+        # (PR #217 commit a321b64f) rather than bare ``asyncio.run`` —
+        # the project's ``tests/integration/test_no_bare_asyncio_run_in_
+        # integration_tests.py`` enforces this against the RAGAS
+        # nest_asyncio pollution chain (issue #220 / #218 / #215).
         leaked = svc_factories._redis_client  # type: ignore[attr-defined]
         if leaked is not None and leaked is not prev_redis_client:
             try:
-                # The cached client is ``redis.asyncio.Redis``; ``aclose``
-                # is the canonical shutdown. We run it on a fresh loop
-                # because pytest-asyncio may have torn down the test loop
-                # by the time this teardown fires.
-                asyncio.run(leaked.aclose())
+                loop = asyncio.new_event_loop()
+                try:
+                    loop.run_until_complete(leaked.aclose())
+                finally:
+                    loop.close()
             except Exception:
                 # Best-effort: a connection-close failure must not mask
                 # the test result. We still restore the previous client
