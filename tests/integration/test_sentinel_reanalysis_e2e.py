@@ -335,26 +335,31 @@ def pin_in_process_broker(redis_url: str) -> Iterator[None]:
 
     Iter-5 first attempt used ``__dict__.pop("backend", None)`` which
     codex iter-6 correctly identified as a no-op: ``Celery.backend`` is
-    a non-cached ``@property`` that backs into ``self._backend``, NOT
-    into ``__dict__``. Similarly ``celery_app.close()`` only sets
-    ``self._pool = None`` — the AMQP wrapper at ``celery_app.amqp`` is
-    a ``kombu.utils.objects.cached_property`` that caches into
+    a ``@property`` whose GETTER reads ``self._backend`` (which is
+    ITSELF a property at ``celery/app/base.py:1430-1438`` backed by
+    ``_backend_cache`` and ``_local.backend``). Similarly
+    ``celery_app.close()`` only sets ``self._pool = None`` — the AMQP
+    wrapper at ``celery_app.amqp`` is a
+    ``kombu.utils.objects.cached_property`` that caches into
     ``__dict__["amqp"]``, and ``amqp._producer_pool`` independently
-    caches the producer pool. (Verified empirically against Celery 5.6.2:
-    ``Celery.backend.fget`` reads ``self._backend``; ``Celery.amqp``
-    is a kombu cached_property; ``AMQP.producer_pool`` caches into
-    ``self._producer_pool``.)
+    caches the producer pool.
 
-    Correct invalidation surface (iter-6):
-      * ``celery_app._backend = None`` — forces the next ``celery_app.
-        backend`` access to call ``_get_backend()`` against the new
-        ``result_backend`` URL.
-      * ``celery_app.__dict__.pop("amqp", None)`` — drops the kombu
-        cached_property entry so the next ``celery_app.amqp`` access
-        rebuilds the AMQP wrapper from scratch (which then also
-        re-initialises ``_producer_pool=None``).
-      * ``celery_app.close()`` — still useful: sets ``self._pool = None``
-        so the connection pool used by ``connection_for_write`` rebuilds.
+    Iter-6 second attempt set ``celery_app._backend = None`` directly.
+    But ``_backend`` is itself a property WITH A SETTER (line 1440)
+    that does ``if backend.thread_safe: self._backend_cache = backend``,
+    so setting ``None`` crashes with
+    ``AttributeError: NoneType has no attribute thread_safe``.
+
+    Correct invalidation surface (verified empirically against Celery
+    5.6.2 via ``inspect.getsource``):
+      * Clear ``celery_app._backend_cache`` AND ``celery_app._local.
+        backend`` directly (NOT through the property setter). These are
+        the two storage attributes the getter consults.
+      * Pop ``celery_app.__dict__["amqp"]`` to drop the kombu
+        cached_property entry — next ``.amqp`` access rebuilds the AMQP
+        wrapper from scratch with a fresh ``_producer_pool=None``.
+      * ``celery_app.close()`` to null ``self._pool`` (the connection
+        pool used by ``connection_for_write``).
 
     Symmetric calls fire in teardown so the RESTORED config also gets
     fresh lazy-init.
@@ -372,30 +377,52 @@ def pin_in_process_broker(redis_url: str) -> Iterator[None]:
     prev_redis_client = svc_factories._redis_client  # type: ignore[attr-defined]
 
     def _invalidate_celery_caches() -> None:
-        """Drop the three cached objects that ignore conf rebinds.
+        """Drop the cached Celery objects that ignore conf rebinds.
 
-        Order matters: ``close()`` runs FIRST because some Celery
-        internals read ``self._backend.thread_safe`` and similar
-        attributes during shutdown; nulling ``_backend`` BEFORE
-        ``close()`` would crash with AttributeError. We null the
-        cache attributes AFTER ``close()`` returns so the next lazy
-        re-init starts from a clean slate.
+        Cache surfaces in Celery 5.6.2 (verified empirically via
+        ``inspect.getsource``):
+
+        * ``celery_app._backend`` is a ``@property`` with a SETTER
+          (``celery/app/base.py:1440``) that reads ``backend.thread_safe``
+          on its argument. Setting ``celery_app._backend = None`` crashes
+          with ``AttributeError: NoneType has no attribute thread_safe``.
+          The getter at line 1430 reads ``self._backend_cache or
+          getattr(self._local, "backend", None)`` — so the storage
+          attributes are ``_backend_cache`` (thread-safe backends) and
+          ``_local.backend`` (non-thread-safe). Both must be cleared
+          directly (NOT through the property setter).
+
+        * ``celery_app.amqp`` is a ``kombu.utils.objects.cached_property``
+          that caches into ``celery_app.__dict__["amqp"]``. Popping the
+          key forces a rebuild on next access, which transitively resets
+          the AMQP producer pool (``AMQP.__init__`` sets
+          ``self._producer_pool = None``).
+
+        * ``celery_app.close()`` nulls ``self._pool`` (the connection
+          pool used by ``connection_for_write``).
+
+        Order does NOT matter between the three: each surface is
+        independent.
         """
-        # close() drops the connection pool (``self._pool``) used by
-        # connection_for_write. Must run BEFORE we null _backend
-        # because close() inspects backend attributes on shutdown.
+        # Backend cache — bypass the property setter (which would crash
+        # on None.thread_safe) and clear both storage attributes
+        # directly. The getter then returns None and the next access to
+        # ``celery_app.backend`` calls ``_get_backend()`` against the
+        # new ``result_backend`` URL.
+        celery_app._backend_cache = None  # type: ignore[attr-defined]
+        if hasattr(celery_app._local, "backend"):  # type: ignore[attr-defined]
+            try:
+                del celery_app._local.backend  # type: ignore[attr-defined]
+            except AttributeError:
+                pass
+        # AMQP wrapper — kombu cached_property in __dict__.
+        celery_app.__dict__.pop("amqp", None)
+        # Connection pool — handled by Celery.close().
         try:
             celery_app.close()
         except Exception:
             # close() can raise if no pool was open; harmless.
             pass
-        # Now safe to null the backend cache so the next
-        # ``celery_app.backend`` access rebuilds against the new URL.
-        celery_app._backend = None  # type: ignore[attr-defined]
-        # AMQP wrapper is a kombu cached_property — caches into __dict__.
-        # Dropping the key forces a full rebuild including a fresh
-        # ``_producer_pool=None`` initial state.
-        celery_app.__dict__.pop("amqp", None)
 
     # Apply test pin.
     celery_app.conf.broker_url = redis_url
