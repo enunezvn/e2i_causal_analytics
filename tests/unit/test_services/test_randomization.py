@@ -381,11 +381,15 @@ class TestStratifiedRandomization:
             at ``|z| = 20/7.0711 = 2.8284`` is ``2*Phi(-2.83) ~= 0.0047`` =
             ``0.47%`` per stratum / ``0.93%`` per run — this is what the original
             #370 issue body cited; it overstates the true tail by ~30%.
-          - Empirically: 2/200 = 1.0% pre-fix locally, within sampling variance
-            (95% CI on N=200 Bernoulli with p=0.0073 spans ``[0.0%, 2.6%]``),
-            consistent with the exact binomial. The observed PR #366 failure
-            ``north_counts["control"] = 79`` falls one count below the lower
-            bound, exactly the tail-event shape this analysis predicts.
+          - Empirically: 2/200 = 1.0% pre-fix locally. Under true p=0.007257
+            and N=200, the exact 95% central prediction interval for observed
+            failures is ``[0, 4]`` (P(X<=4)=0.984), so the observed 2 is well
+            inside the regime the theory predicts. The complementary Wilson 95%
+            CI on the observed proportion 2/200 is ``[0.27%, 3.57%]`` and
+            contains the theoretical 0.7257% — also consistent. The observed
+            PR #366 failure ``north_counts["control"] = 79`` falls one count
+            below the lower bound, exactly the tail-event shape this analysis
+            predicts.
 
         Why the current assertion is deterministic
         ------------------------------------------
