@@ -18,15 +18,21 @@ test proves they actually wire together against a real broker.
 
 Skip semantics
 --------------
-* ``REDIS_URL`` must be set OR a Redis instance must answer at
-  ``redis://localhost:6379``. Otherwise the test skips at module import.
-* The test is marked ``integration`` and is excluded from the default unit
-  suite.
+* A Redis instance must answer at ``E2I_TEST_REDIS_URL`` (or the default
+  ``redis://localhost:6379`` if that env var is unset). Otherwise the
+  test skips at module import.
+* ``REDIS_URL`` is intentionally NOT consulted — the project conftest
+  loads ``.env`` with ``override=True`` (tests/conftest.py:51), which
+  silently rebinds ``REDIS_URL`` to the dev value (port 6382). The
+  ``E2I_TEST_REDIS_URL`` key is a fixture-explicit escape hatch that
+  ``.env`` does not set.
+* The test is marked ``integration`` and is excluded from the default
+  unit suite.
 
 Run locally::
 
     docker run -d -p 6379:6379 redis:7-alpine
-    REDIS_URL=redis://localhost:6379 \
+    E2I_TEST_REDIS_URL=redis://localhost:6379 \
         pytest tests/integration/test_sentinel_reanalysis_e2e.py -v
 """
 
@@ -48,15 +54,16 @@ import pytest
 # MODULE-LEVEL SKIP GUARD
 # ---------------------------------------------------------------------------
 #
-# The test requires a reachable Redis on REDIS_URL (or the default
-# localhost:6379). We check at module import so collection skips cleanly
-# in environments without a broker.
+# Resolution order (identical to the ``redis_url`` fixture — do not drift):
+#   1. ``E2I_TEST_REDIS_URL`` — fixture-explicit escape hatch. The .env
+#      file does not set this key, so the conftest's
+#      ``load_dotenv(override=True)`` cannot silently rebind it.
+#   2. ``_DEFAULT_REDIS_URL`` (``redis://localhost:6379``).
+#
+# We check at module import so collection skips cleanly in environments
+# without a broker.
 
 _DEFAULT_REDIS_URL = "redis://localhost:6379"
-
-
-def _redis_url() -> str:
-    return os.environ.get("REDIS_URL") or _DEFAULT_REDIS_URL
 
 
 def _redis_reachable(url: str) -> bool:
