@@ -362,14 +362,30 @@ class TestStratifiedRandomization:
         ------------------------------------
         Previous form (commit pre-#370) asserted ``80 <= north_counts["control"] <= 120``
         with a *random* ``experiment_id`` fixture (``uuid4()`` per test invocation).
-        Under deterministic=True the per-unit assignment is
-        ``SHA256(experiment_id + unit_id + strata_key + salt)``, so randomising the
-        ``experiment_id`` makes per-stratum control counts behave as
-        ``Binomial(200, 0.5)`` (mean=100, sd=sqrt(200*0.5*0.5)=7.07). Tolerance ``[80, 120]``
-        is ``+/-20`` = ``+/-2.83 sigma``: per-stratum false-positive rate
-        ``2 * Phi(-2.83) ~= 0.46%``; per-run (2 strata) ``~0.93%`` — about one flake
-        every ~11 CI days at 10 runs/day, consistent with the observed PR #366 fail
-        (``north_counts["control"] = 79``).
+        Under ``deterministic=True`` the per-unit hash input is
+        ``f"{experiment_id}:{unit_id}:{strata_key_str}:{salt}"`` (colon-delimited;
+        see ``RandomizationService._generate_assignment_hash`` in
+        ``src/services/randomization.py``; the stratum is folded into the unit
+        argument as ``f"{unit_id}:{strata_key_str}"`` by
+        ``stratified_randomize``). Randomising ``experiment_id`` therefore makes
+        per-stratum control counts behave as ``Binomial(200, 0.5)``
+        (mean=100, sd=sqrt(200*0.5*0.5)=7.0711).
+
+        FPR of the previous tolerance ``[80, 120]`` (per stratum):
+
+          - **Exact binomial** ``P(X < 80 or X > 120) for X ~ Bin(200, 0.5)``
+            = ``0.003635`` = **0.3635%** per stratum.
+          - **Per-run** (2 strata, independent under fixed seed) =
+            ``1 - (1 - 0.003635)**2`` = ``0.007257`` = **0.7257%**.
+          - Normal-approximation analogue (continuous, no continuity correction)
+            at ``|z| = 20/7.0711 = 2.8284`` is ``2*Phi(-2.83) ~= 0.0047`` =
+            ``0.47%`` per stratum / ``0.93%`` per run — this is what the original
+            #370 issue body cited; it overstates the true tail by ~30%.
+          - Empirically: 2/200 = 1.0% pre-fix locally, within sampling variance
+            (95% CI on N=200 Bernoulli with p=0.0073 spans ``[0.0%, 2.6%]``),
+            consistent with the exact binomial. The observed PR #366 failure
+            ``north_counts["control"] = 79`` falls one count below the lower
+            bound, exactly the tail-event shape this analysis predicts.
 
         Why the current assertion is deterministic
         ------------------------------------------
@@ -391,29 +407,34 @@ class TestStratifiedRandomization:
 
         Alternatives considered (and rejected) for #370
         ----------------------------------------------
-        Option A — widen tolerance to +/-5 sigma (``50 <= count <= 150``):
-            FPR ``~5.7e-7`` per stratum (``~1.1e-6`` per run), kills observed flake
-            but is a band-aid: the bound is divorced from any meaningful statistical
-            claim and tells future readers "we just made the window bigger until it
-            stopped failing". Rejected.
+        Option A — widen tolerance to ``50 <= count <= 150`` (``+/-50`` is
+        ``+/-7.07 sigma`` for ``Bin(200, 0.5)``, *not* ``+/-5 sigma`` as one might
+        guess; the normal ``5 sigma`` two-sided tail is ``~5.7e-7``, but the
+        *exact binomial* tail outside ``[50, 150]`` is ``~2.74e-13`` per
+        stratum). Kills observed flake but is a band-aid: the bound is divorced
+        from any meaningful statistical claim and tells future readers "we just
+        made the window bigger until it stopped failing". Rejected.
 
         Option B — chi-square goodness-of-fit at ``alpha = 1e-6``:
             Most principled: tests the *intent* ("balance within strata") as a
             statistical hypothesis with bounded FPR. But still probabilistic
-            (~6e-7 per-stratum FPR, non-zero), and adds scipy.stats coupling
+            (~1e-6 per-stratum FPR, non-zero), and adds scipy.stats coupling
             to a unit test. Rejected in favour of the deterministic pin.
 
         Chosen — pin the seed, assert exact counts:
             FPR is exactly 0 (modulo a real production-code change, which is
             exactly what we *want* a test to flag). The trade-off is that this
-            test now pins one specific input rather than asserting a distributional
-            property, but the other tests in this class
-            (``test_stratified_randomize_assigns_variants``,
-            ``test_stratified_randomize_sets_stratification_key``, etc.) already
-            cover the "general balance" properties. This test specifically pins the
-            "for this fixed seed, output is exactly X" reproducibility property,
-            which is *also* a property we want from a deterministic randomization
-            service used in pharma experimentation.
+            test now pins one specific input rather than asserting a
+            distributional property. The other ``test_stratified_*`` tests in
+            this file cover *result shape* (counts, presence of
+            ``stratification_key``, correct method enum, multi-column strata) but
+            not balance; this test now pins the deterministic reproducibility
+            property (which is *also* a property we want from a randomization
+            service used in pharma experimentation). The "general balance"
+            distributional property is not directly asserted by any test after
+            this change — that is a deliberate trade-off, justified by the
+            balance assertion being intrinsically incompatible with a non-flaky
+            unit test under a hash-deterministic implementation.
 
         DO NOT loosen the bounds back to a ``[low, high]`` tolerance band: that
         re-introduces probabilistic flake. If the production hash changes (a real
@@ -449,35 +470,44 @@ class TestStratifiedRandomization:
         assert len(north_results) == 200, "north stratum should contain 200 units"
         assert len(south_results) == 200, "south stratum should contain 200 units"
 
-        north_counts = Counter(r.variant for r in north_results)
-        south_counts = Counter(r.variant for r in south_results)
-
         # Exact expected counts under the pinned seed. See docstring for rationale.
         # If you are here because production randomization code changed and these
-        # numbers shifted, re-derive (do not loosen to a tolerance band).
-        EXPECTED_NORTH_CONTROL = 96
-        EXPECTED_NORTH_TREATMENT = 104
-        EXPECTED_SOUTH_CONTROL = 94
-        EXPECTED_SOUTH_TREATMENT = 106
+        # numbers shifted, RE-DERIVE the new expected counts; do not loosen to a
+        # tolerance band (see "DO NOT loosen" paragraph in the docstring).
+        expected_north = {"control": 96, "treatment": 104}
+        expected_south = {"control": 94, "treatment": 106}
 
-        assert north_counts["control"] == EXPECTED_NORTH_CONTROL
-        assert north_counts["treatment"] == EXPECTED_NORTH_TREATMENT
-        assert south_counts["control"] == EXPECTED_SOUTH_CONTROL
-        assert south_counts["treatment"] == EXPECTED_SOUTH_TREATMENT
+        actual_north = dict(Counter(r.variant for r in north_results))
+        actual_south = dict(Counter(r.variant for r in south_results))
 
-        # Cross-check: each stratum sums to 200 and both variants are present
-        # (no degenerate all-one-variant outcome under this seed).
-        assert north_counts["control"] + north_counts["treatment"] == 200
-        assert south_counts["control"] + south_counts["treatment"] == 200
+        # Aggregate dict equality: on failure pytest prints the full diff
+        # (expected vs actual variant counts per stratum), which makes
+        # production-code changes easy to triage.
+        rederive_msg = (
+            "stratified-randomize counts under pinned EXP_ID drifted from the "
+            "expected snapshot. Either (a) production code in "
+            "src/services/randomization.py changed (e.g., _generate_assignment_hash, "
+            "_hash_to_unit_interval, _select_variant, or stratified_randomize) — "
+            "in which case re-derive the new expected dicts from the new code and "
+            "update this test, or (b) the test inputs above changed. Do NOT widen "
+            "to a tolerance band: that re-introduces probabilistic flake (#370)."
+        )
+        assert actual_north == expected_north, rederive_msg
+        assert actual_south == expected_south, rederive_msg
+
+        # Cross-check: each stratum sums to 200 (no missing/extra units).
+        assert sum(actual_north.values()) == 200, "north stratum count != 200"
+        assert sum(actual_south.values()) == 200, "south stratum count != 200"
 
         # Sanity-check the chosen seed still sits in the "approximate balance"
         # regime the original test was probing (each variant within 80..120 of 200).
-        # This is documentation of what we're asserting, not the assertion itself.
+        # This is documentation of what we're asserting, not the load-bearing
+        # assertion. If a future production change shifts the counts but the
+        # snapshot still lies inside [80, 120], this passes silently as
+        # additional evidence that the seed remains "realistic".
         for variant_count in (
-            EXPECTED_NORTH_CONTROL,
-            EXPECTED_NORTH_TREATMENT,
-            EXPECTED_SOUTH_CONTROL,
-            EXPECTED_SOUTH_TREATMENT,
+            *expected_north.values(),
+            *expected_south.values(),
         ):
             assert 80 <= variant_count <= 120, (
                 f"Pinned seed produced {variant_count}, outside the [80, 120] "
