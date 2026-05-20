@@ -32,6 +32,7 @@ fixture below.
 
 from __future__ import annotations
 
+import os
 from typing import List, Set
 
 import pytest
@@ -329,59 +330,49 @@ def test_unauthenticated_post_crystallize_returns_401(
 
 
 # ---------------------------------------------------------------------------
-# CopilotKit auth-gap pin (codex iter-2 H2 closure — issue #399)
+# CopilotKit allowlist regression pin (#399 closure — was: auth-gap pin)
 # ---------------------------------------------------------------------------
 
 
-def test_copilotkit_auth_gap_pinned_for_issue_399() -> None:
-    """REGRESSION PIN — CopilotKit dynamic endpoints currently BYPASS the
-    JWTAuthMiddleware via two surfaces in
-    ``src.api.middleware.auth_middleware``:
+def test_copilotkit_probe_paths_pinned_in_public_paths() -> None:
+    """REGRESSION PIN — CopilotKit SDK-probe surface MUST remain in
+    ``PUBLIC_PATHS`` so the React provider can bootstrap without an
+    authenticated session.
 
-    1. ``PUBLIC_PATHS`` includes the exact entries ``("*", "/api/copilotkit")``,
-       ``("*", "/api/copilotkit/status")``, ``("*", "/api/copilotkit/info")``.
-    2. ``PUBLIC_PATH_PATTERNS`` includes the catch-all
-       ``("*", r"^/api/copilotkit(/.*)?$")``.
+    This test replaces the prior ``test_copilotkit_auth_gap_pinned_for_issue_399``
+    pin (which asserted the CURRENT-broken state pre-fix). #399 closed
+    by removing the ``^/api/copilotkit(/.*)?$`` catch-all from
+    ``PUBLIC_PATH_PATTERNS``; the three explicit allowlist entries
+    survived because they're load-bearing for SDK initialization:
 
-    Codex iter-2 H2 found this gap during PR #398 review. The gap is
-    PRE-EXISTING (not introduced by #391) and per issue #391 box 2
-    wording (verbatim: "Add authentication to crystal/provenance API
-    endpoints — verify ``/api/executive-insights/*``") it is
-    out-of-scope for the security slice. A separate tracking issue
-    (#399) has been filed.
+    * ``/api/copilotkit`` — base handler (root of the SDK runtime;
+      registered at ``src/api/routes/copilotkit.py:2822`` via
+      ``add_copilotkit_routes`` as ``copilotkit_handler_base``).
+    * ``/api/copilotkit/status`` — health endpoint served by the
+      static router (``@router.get("/status")`` at
+      ``src/api/routes/copilotkit.py:2860``; no auth in the function
+      signature, so its public-ness lives entirely in the middleware
+      allowlist).
+    * ``/api/copilotkit/info`` — discovery endpoint that returns
+      available agents + actions; called by the CopilotKit React SDK
+      at provider mount time before an access token may be available.
 
-    This test PINS the CURRENT (unauthenticated) state so:
-    * Future PRs that accidentally widen the bypass surface fail loud.
-    * The fix for #399 will FLIP this assertion (delete the negation,
-      assert auth IS required), making the migration mechanical and
-      auditable.
+    If a future PR REMOVES one of these three entries, SDK
+    initialization will silently start requiring auth and the chat UI
+    will fail to bootstrap for unauthenticated users (e.g. on the
+    public landing page if it exposes CopilotKit). This test catches
+    that regression.
 
-    Flip recipe (when #399 is fixed):
-      1. Edit ``PUBLIC_PATHS`` + ``PUBLIC_PATH_PATTERNS`` in
-         ``src/api/middleware/auth_middleware.py`` to remove or scope
-         the CopilotKit entries.
-      2. Edit ``add_copilotkit_routes`` in
-         ``src/api/routes/copilotkit.py`` to attach
-         ``dependencies=[Depends(require_auth)]`` (or similar).
-      3. Rename this test to ``test_copilotkit_routes_require_auth``
-         and flip the assertion below — change
-         ``assert pattern_in_public_patterns is True``
-         to
-         ``assert pattern_in_public_patterns is False``.
+    Counterpart to ``test_copilotkit_dynamic_routes_require_auth``
+    below, which asserts the inverse: every NON-probe sub-path
+    requires auth.
     """
-    from src.api.middleware.auth_middleware import (
-        PUBLIC_PATH_PATTERNS,
-        PUBLIC_PATHS,
-        _is_public_path,
-    )
+    from src.api.middleware.auth_middleware import PUBLIC_PATHS
 
-    # Surface 1: pin the EXACT entries in PUBLIC_PATHS the docstring
-    # names. Codex iter-3 LOW-1 closure: the prior shape used
-    # "at least one entry starts with /api/copilotkit", which is
-    # strictly weaker than the docstring's enumeration. A future PR
-    # that removes ``/api/copilotkit/status`` (say) while leaving
-    # ``/api/copilotkit`` would silently pass that weaker pin; this
-    # explicit superset assertion catches the partial removal.
+    # Pin the EXACT three SDK-probe entries (mirror of the pre-#399
+    # pin's expected_exact, but now asserting these are the ONLY
+    # CopilotKit entries in PUBLIC_PATHS — i.e. the allowlist does not
+    # creep wider over time).
     copilotkit_exact_entries = {
         (method, path)
         for method, path in PUBLIC_PATHS
@@ -389,41 +380,31 @@ def test_copilotkit_auth_gap_pinned_for_issue_399() -> None:
     }
     expected_exact = {
         ("*", "/api/copilotkit"),
-        ("*", "/api/copilotkit/status"),
+        # #399 iter-2: /status is GET-only public (the static router
+        # has GET-only handler; POST falls through to the dynamic
+        # catch-all which now requires auth at the middleware).
+        ("GET", "/api/copilotkit/status"),
         ("*", "/api/copilotkit/info"),
     }
     missing_exact = expected_exact - copilotkit_exact_entries
     assert not missing_exact, (
-        f"Expected the three pinned /api/copilotkit entries in PUBLIC_PATHS "
-        f"(see docstring); missing: {missing_exact!r}. Current copilotkit "
-        f"entries: {copilotkit_exact_entries!r}. If this is intentional, flip "
-        f"the pin per the docstring's 3-step recipe (see #399)."
+        f"Expected the three pinned /api/copilotkit SDK-probe entries in "
+        f"PUBLIC_PATHS (see docstring); missing: {missing_exact!r}. Current "
+        f"copilotkit entries: {copilotkit_exact_entries!r}. If a probe surface "
+        f"was removed intentionally, update this pin alongside the change."
     )
-
-    # Surface 2: pin the EXACT catch-all regex in PUBLIC_PATH_PATTERNS.
-    # Codex iter-3 LOW-1: substring-only check could pass even if the
-    # regex were narrowed (e.g. to ``/api/copilotkit/status``-only).
-    # Asserting the literal regex string the docstring names catches that.
-    EXPECTED_CATCHALL_REGEX = r"^/api/copilotkit(/.*)?$"
-    catchall_entries = [
-        (method, pattern)
-        for method, pattern in PUBLIC_PATH_PATTERNS
-        if pattern == EXPECTED_CATCHALL_REGEX
-    ]
-    assert catchall_entries, (
-        f"Expected the literal catch-all pattern {EXPECTED_CATCHALL_REGEX!r} in "
-        f"PUBLIC_PATH_PATTERNS (see docstring). Current PUBLIC_PATH_PATTERNS "
-        f"entries: {PUBLIC_PATH_PATTERNS!r}. If the dynamic-route bypass has "
-        f"been narrowed or removed, flip the pin per the docstring's "
-        f"3-step recipe (see #399)."
+    # Stricter: ALSO assert no UNEXPECTED CopilotKit entries crept in.
+    # Allowlist creep is the inverse failure mode of the prior #399 gap
+    # and equally dangerous: a future PR that adds
+    # ``("*", "/api/copilotkit/agent")`` would silently re-open the
+    # dynamic-route bypass.
+    extra_exact = copilotkit_exact_entries - expected_exact
+    assert not extra_exact, (
+        f"Unexpected CopilotKit entries in PUBLIC_PATHS: {extra_exact!r}. "
+        f"The #399 closure narrowed the public surface to exactly the three "
+        f"SDK-probe entries listed above. If a new public probe is genuinely "
+        f"needed, update both this test and the docstring rationale."
     )
-
-    # Surface 3: the _is_public_path matcher actually returns True for
-    # arbitrary subpaths under /api/copilotkit (proving the bypass is
-    # active end-to-end, not just declared in lookup tables).
-    assert _is_public_path("POST", "/api/copilotkit/agents/execute") is True
-    assert _is_public_path("GET", "/api/copilotkit/agent/foo/state") is True
-    assert _is_public_path("POST", "/api/copilotkit/action/anything") is True
 
 
 def test_copilotkit_static_routes_present_in_auth_test_app() -> None:
@@ -451,8 +432,9 @@ def test_copilotkit_static_routes_present_in_auth_test_app() -> None:
 
     The DYNAMIC catch-all routes registered by
     ``add_copilotkit_routes`` are NOT covered here — they are pinned
-    in ``test_copilotkit_auth_gap_pinned_for_issue_399`` above + tracked
-    in tracking issue #399.
+    by ``test_copilotkit_dynamic_routes_require_auth`` below. #399 was
+    closed by removing the catch-all regex from
+    ``PUBLIC_PATH_PATTERNS`` so any unknown sub-path now requires JWT.
     """
     from src.api.routes.copilotkit import router as copilotkit_router
 
@@ -488,9 +470,9 @@ def test_copilotkit_static_routes_present_in_auth_test_app() -> None:
         f"removed intentionally, update this pin alongside the change."
     )
     # Document that we are explicitly NOT covering dynamic-route auth
-    # here — that surface is pinned in
-    # ``test_copilotkit_auth_gap_pinned_for_issue_399`` above + tracked in
-    # issue #399. The dynamic routes registered by
+    # here — that surface is pinned by
+    # ``test_copilotkit_dynamic_routes_require_auth`` below (#399 closure).
+    # The dynamic routes registered by
     # ``add_copilotkit_routes(app, prefix="/api/copilotkit")`` at
     # ``src/api/main.py:1000`` are NOT present in this app's route set
     # (we did not call ``add_copilotkit_routes`` here) — confirm absence:
@@ -498,7 +480,450 @@ def test_copilotkit_static_routes_present_in_auth_test_app() -> None:
     assert dynamic_route_paths == set(), (
         "This test app intentionally excludes dynamic CopilotKit catch-all "
         "routes (registered via add_copilotkit_routes). Their auth state is "
-        f"pinned separately in test_copilotkit_auth_gap_pinned_for_issue_399 "
+        f"pinned separately in test_copilotkit_dynamic_routes_require_auth "
         f"and tracked in #399. Found unexpected dynamic routes: "
         f"{dynamic_route_paths!r}."
     )
+
+
+# ---------------------------------------------------------------------------
+# CopilotKit allowlist positive controls (#399 closure)
+# ---------------------------------------------------------------------------
+
+
+def test_copilotkit_probe_paths_remain_public() -> None:
+    """ALLOWLIST: the three SDK-discovery surfaces stay public so the
+    CopilotKit React provider can bootstrap without an authenticated
+    session.
+
+    These three exact paths are SDK protocol probes:
+      * ``/api/copilotkit`` — base handler (root of the SDK runtime)
+      * ``/api/copilotkit/status`` — health endpoint served by the
+        static router (operation_id=get_copilotkit_status at
+        ``src/api/routes/copilotkit.py:2860``); no auth in the function
+        signature, so its public-ness lives entirely in the middleware
+        allowlist.
+      * ``/api/copilotkit/info`` — discovery endpoint that returns
+        available agents + actions; the CopilotKit React SDK calls this
+        at provider mount time.
+
+    The fix for #399 narrows the public surface to JUST these three,
+    dropping the catch-all regex that previously allowed every sub-path.
+    """
+    from src.api.middleware.auth_middleware import _is_public_path
+
+    assert _is_public_path("GET", "/api/copilotkit") is True
+    assert _is_public_path("POST", "/api/copilotkit") is True
+    assert _is_public_path("GET", "/api/copilotkit/status") is True
+    assert _is_public_path("GET", "/api/copilotkit/info") is True
+    # #399 iter-2: POST /status is NOT public anymore (it would
+    # otherwise fall through to the dynamic catch-all → SDK fallback).
+    # /status's static GET-only handler does NOT serve POST, so POSTing
+    # there is an attempt to reach SDK code that should require auth.
+    assert _is_public_path("POST", "/api/copilotkit/status") is False
+
+
+def test_copilotkit_dynamic_routes_require_auth() -> None:
+    """ALLOWLIST: SDK execution endpoints require JWT auth.
+
+    Closes #399. The CopilotKit SDK runtime exposes several
+    execution-side paths via the dynamic catch-all registered at
+    ``src/api/routes/copilotkit.py:2832``:
+
+      * ``/api/copilotkit/agent/{name}`` — execute named agent
+      * ``/api/copilotkit/agent/{name}/state`` — get agent state
+      * ``/api/copilotkit/action/{name}`` — execute named action
+      * ``/api/copilotkit/agents/execute`` — v1 batch agent execute
+      * ``/api/copilotkit/actions/execute`` — v1 batch action execute
+
+    These paths handle ACTUAL DATA FLOW (LLM invocation, action
+    side-effects, agent state mutations) — they MUST require an
+    authenticated caller. The fix for #399 removes the catch-all regex
+    ``^/api/copilotkit(/.*)?$`` from ``PUBLIC_PATH_PATTERNS`` so these
+    paths fall through to the default JWT-required branch.
+
+    The frontend already sends ``Authorization: Bearer ${accessToken}``
+    on every CopilotKit SDK call via the ``<CopilotKit headers={...}>``
+    pattern at ``frontend/src/providers/E2ICopilotProvider.tsx:456-468``,
+    so authenticated users see no change.
+    """
+    from src.api.middleware.auth_middleware import _is_public_path
+
+    # Execution endpoints — all must require auth (NOT public).
+    assert _is_public_path("POST", "/api/copilotkit/agents/execute") is False
+    assert _is_public_path("POST", "/api/copilotkit/actions/execute") is False
+    assert _is_public_path("POST", "/api/copilotkit/agent/foo") is False
+    assert _is_public_path("GET", "/api/copilotkit/agent/foo/state") is False
+    assert _is_public_path("POST", "/api/copilotkit/action/anything") is False
+
+    # Catch-all subpath patterns (smoke check — anything not in the
+    # explicit allowlist must require auth):
+    assert _is_public_path("GET", "/api/copilotkit/some/unknown/path") is False
+    assert _is_public_path("POST", "/api/copilotkit/v2/agent/bar") is False
+
+    # #399 iter-2 H1 closure: POST /api/copilotkit/status. The static
+    # router serves GET-only at /status (no POST handler), so a POST
+    # would fall through to the dynamic catch-all and reach SDK code
+    # that should require auth. Codex iter-1 H1 found this gap;
+    # method-restricting the allowlist entry to GET catches it at the
+    # middleware before any handler dispatch.
+    assert _is_public_path("POST", "/api/copilotkit/status") is False
+    assert _is_public_path("PUT", "/api/copilotkit/status") is False
+    assert _is_public_path("DELETE", "/api/copilotkit/status") is False
+
+
+def _build_mock_request_with_headers(headers: dict[str, str]) -> object:
+    """Build a Mock request stub for unit testing the auth helper.
+
+    Hand-crafted Starlette Request scopes are fragile (workers crash on
+    incomplete scope dicts under xdist parallelism). A Mock with the
+    fields the helper actually reads — ``headers`` (dict-like .get) +
+    ``state`` (attribute-settable namespace) — is sufficient for the
+    helper's contract and stable across pytest-xdist workers.
+    """
+    from unittest.mock import MagicMock
+
+    request = MagicMock()
+    request.headers = headers
+    # Allow ``request.state.user = ...`` attribute assignment.
+    request.state = MagicMock()
+    return request
+
+
+def test_copilotkit_execution_post_to_public_path_requires_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ALLOWLIST defense-in-depth: even on the middleware-public
+    ``/api/copilotkit`` + ``/info`` paths, POST bodies that route to
+    execution (``agent/run``, ``action/run``, ``agent/connect``, SDK
+    fallback) must require a JWT.
+
+    Codex iter-0 H1+H2 closure: the CopilotKit JSON-RPC protocol mixes
+    discovery and execution under the same paths via the request body's
+    ``method`` field. Path-based allowlist alone CANNOT distinguish the
+    two — only the body can. The ``copilotkit_custom_handler``
+    inspects the body at
+    ``src/api/routes/copilotkit.py:2590-2624`` to detect discovery
+    requests; this test pins that execution-shaped bodies hit the new
+    in-handler auth check
+    (``_require_auth_for_copilotkit_execution``) and produce 401 when
+    no Bearer token is present.
+
+    Production note: TESTING_MODE bypasses this check (mirrors
+    ``require_auth``). The test forces TESTING_MODE off so the real
+    JWT path runs.
+    """
+    from src.api.routes import copilotkit as copilotkit_module
+
+    # Force TESTING_MODE off so the real JWT branch runs.
+    monkeypatch.setattr(copilotkit_module, "TESTING_MODE", False)
+
+    request = _build_mock_request_with_headers({})
+
+    import asyncio
+
+    from src.api.dependencies.auth import AuthError
+
+    loop = asyncio.new_event_loop()
+    try:
+        with pytest.raises(AuthError):
+            loop.run_until_complete(
+                copilotkit_module._require_auth_for_copilotkit_execution(request)  # type: ignore[arg-type]
+            )
+    finally:
+        loop.close()
+
+
+def test_copilotkit_execution_helper_rejects_malformed_authorization_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Malformed Authorization header (missing 'Bearer' prefix, wrong
+    parts count, etc.) is rejected by the in-handler auth check."""
+    from src.api.routes import copilotkit as copilotkit_module
+
+    monkeypatch.setattr(copilotkit_module, "TESTING_MODE", False)
+
+    from src.api.dependencies.auth import AuthError
+
+    # Wrong scheme.
+    request_wrong_scheme = _build_mock_request_with_headers({"Authorization": "Basic xyz"})
+    # Single-part (no token).
+    request_single_part = _build_mock_request_with_headers({"Authorization": "Bearer"})
+    # Three-part (extra junk).
+    request_three_part = _build_mock_request_with_headers({"Authorization": "Bearer abc extra"})
+
+    import asyncio
+
+    for req in (request_wrong_scheme, request_single_part, request_three_part):
+        loop = asyncio.new_event_loop()
+        try:
+            with pytest.raises(AuthError):
+                loop.run_until_complete(
+                    copilotkit_module._require_auth_for_copilotkit_execution(req)  # type: ignore[arg-type]
+                )
+        finally:
+            loop.close()
+
+
+def test_copilotkit_execution_helper_passes_in_testing_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ALLOWLIST: when ``E2I_TESTING_MODE=1``, the in-handler auth
+    helper short-circuits to the TEST_USER mock (mirrors
+    ``require_auth``'s testing-mode branch at
+    ``src/api/dependencies/auth.py:304-306``). This keeps integration
+    tests + e2e flows working without real JWT issuance.
+    """
+    from src.api.routes import copilotkit as copilotkit_module
+
+    monkeypatch.setattr(copilotkit_module, "TESTING_MODE", True)
+
+    request = _build_mock_request_with_headers({})
+
+    import asyncio
+
+    loop = asyncio.new_event_loop()
+    try:
+        user = loop.run_until_complete(
+            copilotkit_module._require_auth_for_copilotkit_execution(request)  # type: ignore[arg-type]
+        )
+    finally:
+        loop.close()
+
+    # TEST_USER is the fixture-shape mock returned by require_auth in
+    # testing mode.
+    assert isinstance(user, dict)
+    assert user.get("id") or user.get("user_id") or user.get("sub")
+
+
+def test_copilotkit_public_path_patterns_does_not_contain_catchall() -> None:
+    """ALLOWLIST: the catch-all regex ``^/api/copilotkit(/.*)?$`` MUST
+    NOT appear in ``PUBLIC_PATH_PATTERNS``.
+
+    This is the literal counterpart to the pre-#399 pin
+    ``test_copilotkit_auth_gap_pinned_for_issue_399``: the gap was that
+    the catch-all regex existed; the fix is its removal. A future PR
+    that re-adds the catch-all (broad regex starting with
+    ``^/api/copilotkit``) will trip this assertion.
+
+    Narrowed regexes scoped to specific SDK probes (e.g. matching only
+    ``/api/copilotkit/status``) are acceptable — we assert against the
+    SPECIFIC broad shape, not against any regex mentioning copilotkit.
+    """
+    from src.api.middleware.auth_middleware import PUBLIC_PATH_PATTERNS
+
+    FORBIDDEN_CATCHALL_REGEX = r"^/api/copilotkit(/.*)?$"
+    matching = [
+        (method, pattern)
+        for method, pattern in PUBLIC_PATH_PATTERNS
+        if pattern == FORBIDDEN_CATCHALL_REGEX
+    ]
+    assert not matching, (
+        f"#399 closure broken: the pre-fix catch-all pattern "
+        f"{FORBIDDEN_CATCHALL_REGEX!r} reappeared in PUBLIC_PATH_PATTERNS. "
+        f"This is the dynamic-route auth bypass that #399 fixed. Current "
+        f"PUBLIC_PATH_PATTERNS: {PUBLIC_PATH_PATTERNS!r}. Either narrow the "
+        f"regex (e.g. to only /api/copilotkit/(status|info|health)) or "
+        f"remove it entirely and rely on the explicit PUBLIC_PATHS entries."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Handler-dispatch end-to-end tests (#399 codex iter-1 M-finding closure)
+#
+# What's heavy here: building a FastAPI app via ``add_copilotkit_routes``
+# and routing requests through it via TestClient. That triggers SDK
+# initialization, request marshalling, ASGI middleware traversal, and
+# the handler's full body-read + body-parse + branch-dispatch path
+# end-to-end. Combined with the (already-loaded-at-collection-time)
+# CopilotKit + LangChain + Anthropic + LangGraph module graph, the
+# cumulative per-worker memory footprint can push xdist workers over
+# the OOM threshold when running alongside other test files.
+#
+# Same shape as the SSE e2e in PR #394 (see memory file
+# ``feat_393_394_388_390_parallel_close_20260520``).
+#
+# Note on import cost: the unit-level helper tests above
+# (``test_copilotkit_execution_post_to_public_path_*``) DO import
+# ``src.api.routes.copilotkit`` to reach ``_require_auth_for_copilotkit_execution``,
+# so they ALSO incur the module-import cost at collection time. That
+# import cost alone is NOT what crashes workers — every test in this
+# file shares it. The marginal cost that pushes workers over the edge
+# is the TestClient EXECUTION (full ASGI request lifecycle on top of
+# the already-loaded module graph). Skipping just the 3 TestClient
+# tests on CI is sufficient; the helper tests stay always-on because
+# they don't add the execution-time pressure.
+#
+# Solution: ``@_SKIP_COPILOTKIT_E2E_ON_CI`` gates ONLY the 3 TestClient
+# tests on ``CI=true and not E2I_RUN_COPILOTKIT_E2E``. Local
+# pre-release verification can opt in via the env override.
+# ---------------------------------------------------------------------------
+
+_SKIP_COPILOTKIT_E2E_ON_CI = pytest.mark.skipif(
+    os.environ.get("CI") == "true" and not os.environ.get("E2I_RUN_COPILOTKIT_E2E"),
+    reason=(
+        "CopilotKit TestClient handler-dispatch adds full ASGI request "
+        "lifecycle on top of the already-loaded CopilotKit/LangChain/"
+        "Anthropic/LangGraph module graph; cumulative xdist worker "
+        "memory has triggered OOM crashes alongside other test files. "
+        "Helper tests above (which only invoke the auth helper directly) "
+        "stay always-on because they don't add the execution-time "
+        "pressure — the module imports they share are already paid at "
+        "collection time. Set E2I_RUN_COPILOTKIT_E2E=1 to opt into the "
+        "TestClient tests locally for pre-release verification."
+    ),
+)
+
+
+def _build_copilotkit_app(monkeypatch: pytest.MonkeyPatch) -> "FastAPI":  # type: ignore[name-defined]  # noqa: F821
+    """Build a FastAPI app with the dynamic catch-all CopilotKit routes
+    attached but the SDK creator stubbed.
+
+    ``create_copilotkit_sdk()`` (in ``src/api/routes/copilotkit.py``)
+    instantiates a real SDK with network/secret dependencies; we mock
+    it so the handler dispatch path is exercised without those.
+    """
+    from unittest.mock import MagicMock
+
+    from fastapi import FastAPI
+
+    from src.api.routes import copilotkit as copilotkit_module
+
+    # Mock SDK + agents list. ``copilotkit_custom_handler`` calls
+    # ``sdk.agents(sdk_context) if callable(sdk.agents) else sdk.agents``
+    # and iterates results when matching agent_name. For the auth-gating
+    # tests we never reach the agent lookup (auth check fires first), so
+    # an empty list suffices.
+    mock_sdk = MagicMock()
+    mock_sdk.agents = []
+    mock_sdk.actions = []
+    monkeypatch.setattr(copilotkit_module, "create_copilotkit_sdk", lambda: mock_sdk)
+    # ``transform_info_response`` is called for discovery requests; we
+    # mock to return a deterministic, JSON-serializable response so
+    # discovery tests can assert against the shape.
+    monkeypatch.setattr(
+        copilotkit_module,
+        "transform_info_response",
+        lambda sdk: {"agents": {}, "actions": [], "version": "test"},
+    )
+
+    app = FastAPI()
+    copilotkit_module.add_copilotkit_routes(app, prefix="/api/copilotkit")
+    return app
+
+
+@_SKIP_COPILOTKIT_E2E_ON_CI
+def test_handler_post_with_execution_body_returns_401_without_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end: POST /api/copilotkit (or /info) with execution body
+    returns 401 when no Authorization header is present.
+
+    Closes codex iter-1 M-finding: the unit tests on
+    ``_require_auth_for_copilotkit_execution`` exercise the helper but
+    not the handler dispatch. This test routes through the real
+    ``copilotkit_custom_handler`` via FastAPI TestClient and asserts
+    the auth response shape.
+    """
+    from fastapi.testclient import TestClient
+
+    from src.api.routes import copilotkit as copilotkit_module
+
+    # Force TESTING_MODE off so the real JWT branch runs.
+    monkeypatch.setattr(copilotkit_module, "TESTING_MODE", False)
+
+    app = _build_copilotkit_app(monkeypatch)
+    client = TestClient(app)
+
+    # Execution body on base path → 401.
+    resp = client.post(
+        "/api/copilotkit",
+        json={"method": "agent/run", "params": {"agentId": "test"}, "messages": []},
+    )
+    assert resp.status_code == 401, (
+        f"POST /api/copilotkit with execution body must require auth "
+        f"(codex iter-0 H1). Got status={resp.status_code}, body={resp.text!r}"
+    )
+    body = resp.json()
+    assert "Authentication required" in body.get("error", ""), (
+        f"401 response must explicitly say auth required. Got: {body!r}"
+    )
+
+    # Same shape on /info path.
+    resp_info = client.post(
+        "/api/copilotkit/info",
+        json={"method": "agent/run", "params": {"agentId": "test"}, "messages": []},
+    )
+    assert resp_info.status_code == 401, (
+        f"POST /api/copilotkit/info with execution body must require auth "
+        f"(codex iter-0 H2). Got status={resp_info.status_code}, body={resp_info.text!r}"
+    )
+
+
+@_SKIP_COPILOTKIT_E2E_ON_CI
+def test_handler_post_with_discovery_body_returns_200_without_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end: POST /api/copilotkit (or /info) with discovery body
+    (empty / ``{}`` / ``{"method":"info"}``) returns 200 WITHOUT auth.
+
+    The middleware-public allowlist preserves SDK bootstrap behavior:
+    the CopilotKit React provider can mount and discover available
+    agents before an access token is available.
+    """
+    from fastapi.testclient import TestClient
+
+    from src.api.routes import copilotkit as copilotkit_module
+
+    # TESTING_MODE off so we exercise the real branch logic — discovery
+    # short-circuits BEFORE the auth check, so we still get 200.
+    monkeypatch.setattr(copilotkit_module, "TESTING_MODE", False)
+
+    app = _build_copilotkit_app(monkeypatch)
+    client = TestClient(app)
+
+    # Empty {} body → discovery.
+    resp_empty = client.post("/api/copilotkit", json={})
+    assert resp_empty.status_code == 200, (
+        f"POST /api/copilotkit with empty body must serve discovery without auth. "
+        f"Got status={resp_empty.status_code}, body={resp_empty.text!r}"
+    )
+
+    # {"method": "info"} body → discovery.
+    resp_method_info = client.post("/api/copilotkit/info", json={"method": "info"})
+    assert resp_method_info.status_code == 200, (
+        f"POST /api/copilotkit/info with method=info body must serve discovery. "
+        f"Got status={resp_method_info.status_code}, body={resp_method_info.text!r}"
+    )
+
+    # {"action": "getInfo"} body → discovery.
+    resp_action_getinfo = client.post("/api/copilotkit", json={"action": "getInfo"})
+    assert resp_action_getinfo.status_code == 200, (
+        f"POST /api/copilotkit with action=getInfo body must serve discovery. "
+        f"Got status={resp_action_getinfo.status_code}, body={resp_action_getinfo.text!r}"
+    )
+
+
+@_SKIP_COPILOTKIT_E2E_ON_CI
+def test_handler_get_info_returns_200_without_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end: GET /api/copilotkit/info returns 200 without auth
+    (the primary SDK discovery handshake).
+    """
+    from fastapi.testclient import TestClient
+
+    from src.api.routes import copilotkit as copilotkit_module
+
+    monkeypatch.setattr(copilotkit_module, "TESTING_MODE", False)
+
+    app = _build_copilotkit_app(monkeypatch)
+    client = TestClient(app)
+
+    resp = client.get("/api/copilotkit/info")
+    assert resp.status_code == 200, (
+        f"GET /api/copilotkit/info must serve discovery without auth. "
+        f"Got status={resp.status_code}, body={resp.text!r}"
+    )
+    body = resp.json()
+    assert "version" in body, f"Discovery response must include version. Got: {body!r}"

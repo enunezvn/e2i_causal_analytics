@@ -84,10 +84,25 @@ PUBLIC_PATHS: List[Tuple[str, str]] = [
     ("GET", "/api/monitoring/alerts"),
     # Analytics dashboard - public for dashboard widgets
     ("GET", "/api/analytics/dashboard"),
-    # CopilotKit - all methods public (SDK needs POST for agent discovery/runtime)
-    # Chat/feedback/analytics on separate router paths have their own auth deps
+    # CopilotKit SDK probes — #399 iter-2 closure: ``/status`` is the
+    # static GET-only health endpoint (no POST handler in the static
+    # router); the dynamic catch-all otherwise picks up POST /status
+    # and routes to the SDK fallback. Method-restricting to GET here
+    # forces POST /api/copilotkit/status to require auth at the
+    # middleware (matches the in-handler check for base + /info).
+    #
+    # ``/api/copilotkit`` (base) and ``/info`` remain ``*`` because the
+    # SDK may POST with empty body / ``{}`` / ``{"method":"info"}`` /
+    # ``{"action":"getInfo"}`` for discovery; the in-handler auth check
+    # at ``src/api/routes/copilotkit.py:2596-2611`` distinguishes those
+    # discovery POSTs from execution POSTs (agent/run, agent/connect,
+    # action/run, SDK fallback) and gates only the latter.
+    #
+    # Chat/feedback/analytics under ``/api/copilotkit/*`` on the static
+    # router have their own ``Depends(require_viewer)`` declared at the
+    # route level — not affected by middleware allowlist changes here.
     ("*", "/api/copilotkit"),
-    ("*", "/api/copilotkit/status"),
+    ("GET", "/api/copilotkit/status"),
     ("*", "/api/copilotkit/info"),
 ]
 
@@ -95,8 +110,17 @@ PUBLIC_PATHS: List[Tuple[str, str]] = [
 PUBLIC_PATH_PATTERNS: List[Tuple[str, str]] = [
     # KPI metadata by ID is public
     ("GET", r"^/api/kpis/[^/]+/metadata$"),
-    # CopilotKit - all sub-paths public (SDK protocol uses dynamic paths)
-    ("*", r"^/api/copilotkit(/.*)?$"),
+    # CopilotKit: #399 closure — the prior ``^/api/copilotkit(/.*)?$``
+    # catch-all is REMOVED. The three explicit SDK-probe surfaces stay
+    # public via ``PUBLIC_PATHS`` above (``/api/copilotkit``,
+    # ``/api/copilotkit/status``, ``/api/copilotkit/info``); every other
+    # CopilotKit sub-path (``/agent/{name}``, ``/action/{name}``,
+    # ``/agents/execute``, ``/actions/execute``, ...) now falls through
+    # to the default JWT-required branch. The frontend's CopilotKit
+    # provider already sends ``Authorization: Bearer ${accessToken}`` on
+    # every SDK call when an access token is present (see
+    # ``frontend/src/providers/E2ICopilotProvider.tsx:456-468``), so
+    # authenticated users observe no behavior change.
 ]
 
 
