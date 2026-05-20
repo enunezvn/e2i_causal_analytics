@@ -303,6 +303,10 @@ class Crystallizer:
         derived = _derive_crystal_digest_fields(brand=brand, members=members)
 
         # --- Compose the 2 narrative-prose fields (LLM-flagged) ---
+        # ``audit`` is captured for later persistence to
+        # ``crystal_narrative_audits`` (#391 box 4). On the flag-off path
+        # it remains None — only the LLM path produces an audit row.
+        audit: Any = None
         if _llm_narratives_enabled():
             audit = await _invoke_llm_narrator(
                 brand=brand,
