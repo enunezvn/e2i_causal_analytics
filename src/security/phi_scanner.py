@@ -28,8 +28,27 @@ Patterns (per #391 brief)
 * ``ssn``: ``\\b\\d{3}-\\d{2}-\\d{4}\\b``
 * ``us_phone``: ``\\(\\d{3}\\)\\s*\\d{3}-\\d{4}`` OR ``\\b\\d{3}-\\d{3}-\\d{4}\\b``
 * ``dob``: ``\\b(0[1-9]|1[0-2])/(0[1-9]|[12]\\d|3[01])/(19|20)\\d{2}\\b``
-* ``email``: ``\\b[\\w.+-]+@[\\w-]+\\.[\\w.-]+\\b``
+* ``email``: ``\\b[\\w.+-]+@[\\w-]+\\.[\\w.-]+\\b`` (patient-context-scoped — see below)
 * ``mrn``: ``\\b(?:MRN|Medical Record Number)\\s*[:#]?\\s*\\d{6,12}\\b``
+
+Email patient-context scoping (codex iter-2 M3)
+-----------------------------------------------
+The email regex matches `local@domain.tld`. Without scoping it would
+flag every email-shaped string in a narrative — operational addresses
+(`support@example.com`, `noreply@internal`), author signatures, doc
+links. That produces false-positive deploy blocks: the audit harness
+exits non-zero on any match, so a single ops email in a narrative kills
+the whole pre-deploy gate.
+
+The codex iter-2 M3 fix scopes email matches to a "patient context
+window": an email only emits a ``PhiMatch`` if a patient-shape token
+(``patient``, ``mrn``, ``dob``, ``subject``, ``name``, ``ssn``) appears
+within :data:`_EMAIL_PATIENT_CONTEXT_WINDOW` characters BEFORE or AFTER
+the match span. This is a deterministic heuristic — same input, same
+verdict. The window value (default 30) is small enough to be a meaningful
+locality constraint (the patient-shape token has to be in the same
+clause / sentence as the email) and large enough to tolerate normal
+prose ("Patient John alice@example.com").
 """
 
 from __future__ import annotations
@@ -56,6 +75,64 @@ class PhiMatch:
     match: str
     start: int
     end: int
+
+
+# ---------------------------------------------------------------------------
+# Email patient-context scoping (codex iter-2 M3 closure)
+# ---------------------------------------------------------------------------
+# Window (in characters) on either side of a candidate email match. If
+# any of the patient-shape tokens below appear within this window, the
+# match is emitted as a ``email`` PhiMatch. Otherwise it is suppressed
+# (operational / non-patient email).
+_EMAIL_PATIENT_CONTEXT_WINDOW = 30
+
+# Patient-shape tokens that promote a generic email match to a patient
+# email. Matched case-INSENSITIVE in the surrounding window. The set is
+# small + audit-reviewable; expand only when a real false negative
+# surfaces.
+_PATIENT_CONTEXT_TOKENS = frozenset(
+    {
+        "patient",
+        "mrn",
+        "dob",
+        "subject",  # clinical-trial vocabulary for an enrolled person
+        "name",  # "Patient name: ..." or "Name: ..."
+        "ssn",
+    }
+)
+
+
+def _in_patient_context(text: str, match_start: int, match_end: int) -> bool:
+    """Return True iff a patient-shape token appears within
+    :data:`_EMAIL_PATIENT_CONTEXT_WINDOW` characters BEFORE or AFTER
+    the ``[match_start:match_end]`` span.
+
+    Deterministic: same input + span → same verdict. No state, no
+    randomness, no order-dependence. The window is fixed at module
+    scope.
+
+    Edge cases:
+    * If the window extends past either end of ``text``, only the
+      in-bounds portion is checked (no IndexError).
+    * Case-insensitive — ``Patient``, ``patient``, ``PATIENT`` all
+      qualify.
+    * Whole-word matching: ``namespace`` does NOT activate ``name``.
+      We surround tokens with non-alphanumeric boundaries to avoid
+      false positives on prose like ``namespace`` / ``patiently``.
+    """
+    if not text:
+        return False
+    win_start = max(0, match_start - _EMAIL_PATIENT_CONTEXT_WINDOW)
+    win_end = min(len(text), match_end + _EMAIL_PATIENT_CONTEXT_WINDOW)
+    window = text[win_start:win_end].lower()
+    # Whole-word check: scan for each token surrounded by non-word
+    # boundaries. ``re.search(r"\bpatient\b", window)`` is the canonical
+    # form; we precompile per-call (cheap — _PATIENT_CONTEXT_TOKENS is
+    # 6 items) for clarity.
+    for token in _PATIENT_CONTEXT_TOKENS:
+        if re.search(rf"\b{re.escape(token)}\b", window):
+            return True
+    return False
 
 
 # Order matters for documentation and report stability, NOT for correctness:
@@ -114,6 +191,15 @@ def scan_text(text: str) -> List[PhiMatch]:
     * Unicode whitespace and non-ASCII characters in the input do NOT
       crash; they simply don't match any of the ASCII-anchored regexes.
 
+    Email patient-context scoping (codex iter-2 M3):
+    * ``email`` candidates are only emitted as ``PhiMatch`` if a
+      patient-shape token (``patient``, ``mrn``, ``dob``, ``subject``,
+      ``name``, ``ssn``) appears within
+      :data:`_EMAIL_PATIENT_CONTEXT_WINDOW` chars before/after the
+      match span. Otherwise the email is treated as operational and
+      suppressed. This prevents the audit harness from blocking
+      deploys on every ``support@example.com`` in a narrative.
+
     Args:
         text: The body to scan. Typically a crystal ``key_finding`` or
             an LLM input prompt.
@@ -126,6 +212,13 @@ def scan_text(text: str) -> List[PhiMatch]:
     matches: List[PhiMatch] = []
     for pattern_name, pattern in _PATTERNS:
         for m in pattern.finditer(text):
+            # Email-only: suppress matches outside the patient context
+            # window. Other patterns (SSN, phone, DOB, MRN) emit on
+            # any hit because they're already context-bounded by their
+            # own regex (MRN requires the label, SSN requires the
+            # exact dash shape, etc.).
+            if pattern_name == "email" and not _in_patient_context(text, m.start(), m.end()):
+                continue
             matches.append(
                 PhiMatch(
                     pattern_name=pattern_name,

@@ -383,3 +383,174 @@ def test_slim_app_includes_all_routers_from_src_api_main() -> None:
     assert missing == [], (
         "Drift detected between src/api/main.py and _build_full_app: " + "; ".join(missing)
     )
+
+
+# ---------------------------------------------------------------------------
+# AST-based ``include_router(..., prefix=...)`` drift pin
+# (codex iter-2 M1 closure)
+# ---------------------------------------------------------------------------
+
+
+def _parse_include_router_calls(main_src: str) -> List[dict]:
+    """Parse ``src/api/main.py`` via :mod:`ast` and extract every
+    ``app.include_router(<name>_router, prefix=...)`` call.
+
+    Returns a list of ``{"router_name": str, "prefix": Optional[str]}``
+    records. ``prefix`` is ``None`` when the call omitted the kwarg —
+    those routers carry their own ``APIRouter(prefix=...)`` declaration.
+
+    Why AST (not regex):
+    The codex iter-2 M1 finding asks for prefix-drift detection. A regex
+    that captures ``prefix="/api"`` ANYWHERE on the line silently fails
+    on multi-line ``include_router`` calls and on prefix values that
+    aren't string literals (rare but possible — e.g.
+    ``prefix=API_PREFIX``). An ``ast.parse`` walk is the
+    canonical way to extract keyword args robustly.
+    """
+    import ast
+
+    tree = ast.parse(main_src)
+    calls: List[dict] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        # Match ``something.include_router(...)`` calls. The receiver
+        # name (e.g. ``app``) is not checked here — we match by method
+        # name only, which is the pattern src/api/main.py uses
+        # consistently.
+        if not isinstance(node.func, ast.Attribute):
+            continue
+        if node.func.attr != "include_router":
+            continue
+        if not node.args:
+            continue
+        router_arg = node.args[0]
+        # First positional argument: expect ``<name>_router``.
+        router_name: str = ""
+        if isinstance(router_arg, ast.Name):
+            router_name = router_arg.id
+        else:
+            # Skip non-Name forms (we don't expect them in src/api/main.py).
+            continue
+        # Extract prefix= kwarg if present and string-literal.
+        prefix_value: str = ""
+        prefix_present: bool = False
+        for kw in node.keywords:
+            if kw.arg == "prefix":
+                prefix_present = True
+                if isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+                    prefix_value = kw.value.value
+                else:
+                    # Non-literal prefix (e.g. variable / f-string) —
+                    # record presence but leave value empty so the
+                    # caller can decide.
+                    prefix_value = "<non-literal>"
+                break
+        calls.append(
+            {
+                "router_name": router_name,
+                "prefix": prefix_value if prefix_present else None,
+            }
+        )
+    return calls
+
+
+def test_include_router_prefixes_match_expected_drift_table() -> None:
+    """Codex iter-2 M1 closure: parse the AST of ``src/api/main.py`` for
+    every ``include_router(...)`` call and assert that each call's
+    ``prefix=`` kwarg matches the expected value in the drift table
+    below.
+
+    A prefix change (e.g. ``prefix="/api"`` → ``prefix="/api/v2"``)
+    would previously pass silently because the prior
+    ``test_slim_app_includes_all_routers_from_src_api_main`` only
+    checks substring membership in the slim-app route set, not the
+    explicit prefix value used at ``include_router`` time.
+
+    Failure mode: prefix drift now raises an explicit AssertionError
+    naming the changed router + its old vs new prefix.
+
+    Robustness notes:
+    * Routers that omit ``prefix=`` (because the prefix is baked into
+      ``APIRouter(prefix=...)`` itself) are EXPECTED to have
+      ``prefix=None`` in the drift table — they're recorded with an
+      explicit ``None`` value, so adding a prefix to one of them later
+      also trips the assertion.
+    * Non-literal prefix values (e.g. ``prefix=API_PREFIX``) record as
+      the string ``"<non-literal>"`` — if production ever moves to a
+      computed prefix, this drift table will catch it on the first run
+      and the operator can choose whether to accept that change.
+    """
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[3]
+    main_src = (repo_root / "src" / "api" / "main.py").read_text()
+    calls = _parse_include_router_calls(main_src)
+
+    # Expected (router_name, prefix) tuples. ``None`` = the call omitted
+    # the prefix kwarg (router's own APIRouter(prefix=...) is the source
+    # of truth). Sourced directly from src/api/main.py — when a future
+    # router is added or a prefix is changed, update BOTH src/api/main.py
+    # AND this expected table; the assertion below will name the drift.
+    expected_prefixes: dict = {
+        "explain_router": "/api",
+        "memory_router": "/api",
+        "cognitive_router": "/api",
+        "graph_router": "/api",
+        # rag_router declares its own prefix=/api/rag in APIRouter()
+        "rag_router": None,
+        "monitoring_router": "/api",
+        "experiments_router": "/api",
+        "gaps_router": "/api",
+        "segments_router": "/api",
+        "resource_optimizer_router": "/api",
+        "feedback_router": "/api",
+        "health_score_router": "/api",
+        "digital_twin_router": "/api",
+        # predictions_router declares its own prefix=/api/models
+        "predictions_router": None,
+        # kpi_router declares its own prefix=/api/kpis
+        "kpi_router": None,
+        "causal_router": "/api",
+        "audit_router": "/api",
+        "analytics_router": "/api",
+        "copilotkit_router": "/api",
+        "agents_router": "/api",
+        "sentinels_router": "/api",
+        "executive_insights_router": "/api",
+        "staleness_alerts_router": "/api",
+        # metrics_router declares its own prefix (or no prefix needed)
+        "metrics_router": None,
+    }
+
+    drift: List[str] = []
+    for call in calls:
+        name = call["router_name"]
+        actual = call["prefix"]
+        if name not in expected_prefixes:
+            drift.append(
+                f"router {name!r} called by include_router(...) is NOT in the "
+                f"expected_prefixes drift table — update both src/api/main.py "
+                f"and this test."
+            )
+            continue
+        expected = expected_prefixes[name]
+        if actual != expected:
+            drift.append(f"router {name!r}: expected prefix={expected!r}, got prefix={actual!r}")
+
+    # Also check the inverse direction — every router in the expected
+    # table must appear in src/api/main.py (catches accidental removals).
+    seen_names = {c["router_name"] for c in calls}
+    for expected_name in expected_prefixes:
+        if expected_name not in seen_names:
+            drift.append(
+                f"router {expected_name!r} is in the expected_prefixes drift "
+                f"table but NOT called by any include_router(...) in "
+                f"src/api/main.py — was it removed? Update both."
+            )
+
+    assert drift == [], (
+        "include_router(...) prefix drift detected in src/api/main.py — codex "
+        "iter-2 M1 closure: prefix changes must now be acknowledged by "
+        "updating the expected_prefixes table. Drift:\n  - " + "\n  - ".join(drift)
+    )

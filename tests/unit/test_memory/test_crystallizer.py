@@ -87,6 +87,11 @@ class FakeSupabase:
             "episodic_memories": [],
             "executive_insights": [],
             "insight_edges": [],
+            # #391 box 4 codex iter-2 H1: persistence target for
+            # LLMCrystalNarrativeAudit. The crystallizer now writes one
+            # row here per LLM-narrated crystal so the PHI scanner has
+            # ``input_prompt`` to audit.
+            "crystal_narrative_audits": [],
         }
 
     def table(self, name: str) -> _FakeQuery:
@@ -631,6 +636,11 @@ async def test_crystallize_calls_llm_narrator_when_flag_on(fake_supabase, monkey
 
     # Stub narrator: replace the module-level factory so the crystallizer
     # gets a deterministic audit without a network call.
+    # Codex iter-2 L2 closure: ``input_prompt`` MUST be non-empty in the
+    # stub so the H1 persistence path has a meaningful value to assert
+    # against (an empty string is itself a meaningful "we did NOT send
+    # anything" audit signal — different from "stub did not populate the
+    # field at all"; the explicit non-empty value pins the round-trip).
     stub_audit = LLMCrystalNarrativeAudit(
         narrator_model="claude-haiku-4-5-20251001",
         key_finding="Stub finding: Northeast region shows a +0.42 ATE.",
@@ -640,6 +650,7 @@ async def test_crystallize_calls_llm_narrator_when_flag_on(fake_supabase, monkey
         input_tokens=800,
         output_tokens=200,
         cost_usd=0.0018,
+        input_prompt="Audit this Kisqali crystal: ATE=+0.42, CI=[0.30,0.55]",
     )
 
     # Codex iter-1 H1: _invoke_llm_narrator is now async, so the stub
@@ -667,6 +678,130 @@ async def test_crystallize_calls_llm_narrator_when_flag_on(fake_supabase, monkey
     # The stubbed narrator's outputs land on the row.
     assert insight["limitations"] == "Stub limitation: small pre-period (n=120)."
     assert insight["recommended_next_analysis"] == "Stub: replicate on Q3 cohort."
+
+    # Codex iter-2 H1 closure: assert the audit row landed in
+    # crystal_narrative_audits with input_prompt populated. The PHI
+    # scanner reads input_prompt via SQL JOIN — without persistence here
+    # it would find NULL for all real crystals (the iter-2 H1 bug shape).
+    audits = fake_supabase.rows["crystal_narrative_audits"]
+    assert len(audits) == 1, (
+        f"Expected 1 row in crystal_narrative_audits after LLM-path crystallization; "
+        f"got {len(audits)}. This is the codex iter-2 H1 closure pin."
+    )
+    audit_row = audits[0]
+    assert audit_row["insight_id"] == insight["insight_id"]
+    assert audit_row["narrator_model"] == "claude-haiku-4-5-20251001"
+    assert audit_row["key_finding"] == "Stub finding: Northeast region shows a +0.42 ATE."
+    assert audit_row["limitations"] == "Stub limitation: small pre-period (n=120)."
+    assert audit_row["recommended_next"] == "Stub: replicate on Q3 cohort."
+    assert audit_row["input_prompt"] == ("Audit this Kisqali crystal: ATE=+0.42, CI=[0.30,0.55]")
+    assert audit_row["input_tokens"] == 800
+    assert audit_row["output_tokens"] == 200
+    assert audit_row["cost_usd"] == pytest.approx(0.0018)
+
+
+@pytest.mark.asyncio
+async def test_crystallize_audit_persistence_failure_does_not_break_crystallization(
+    fake_supabase, monkeypatch
+):
+    """Codex iter-2 H1 narrow-catch semantics: audit-table insertion is
+    BEST-EFFORT. A failure on the ``crystal_narrative_audits`` insert
+    MUST NOT propagate up — the crystal itself is still valid,
+    insight_edges still get inserted, and the run completes with
+    insights_created=1.
+
+    The audit row is a sidecar for offline PHI auditing — its absence
+    for a single crystal is preferable to failing the entire
+    crystallization pipeline. This pin asserts the narrow-catch +
+    log-warning shape and acts as a regression catch if a future PR
+    widens the audit insert's failure mode to fatal.
+    """
+    monkeypatch.setenv("E2I_CRYSTAL_LLM_NARRATIVES_ENABLED", "1")
+
+    from src.data.kg.types import LLMCrystalNarrativeAudit
+
+    stub_audit = LLMCrystalNarrativeAudit(
+        narrator_model="claude-haiku-4-5-20251001",
+        key_finding="Stub finding.",
+        limitations="Stub limitation.",
+        recommended_next_analysis="Stub recommendation.",
+        input_prompt="Stub prompt.",
+    )
+
+    async def stub_narrator(*args, **kwargs):
+        return stub_audit
+
+    monkeypatch.setattr(
+        "src.memory.crystallization.crystallizer._invoke_llm_narrator",
+        stub_narrator,
+    )
+
+    # Wrap the FakeSupabase to make the audit-table insert raise but
+    # leave executive_insights / insight_edges working normally.
+    original_table = fake_supabase.table
+
+    def _failing_table(name: str):
+        query = original_table(name)
+        if name == "crystal_narrative_audits":
+            original_execute = query.execute
+
+            def _boom_execute():
+                if query._mode == "insert":
+                    raise RuntimeError("audit insert failed (simulated DB outage)")
+                return original_execute()
+
+            query.execute = _boom_execute  # type: ignore[method-assign]
+        return query
+
+    monkeypatch.setattr(fake_supabase, "table", _failing_table)
+
+    _seed_episodic_with_causal_content(
+        fake_supabase,
+        brand="Kisqali",
+        causal_path_id="cp1",
+        agents=["causal_impact", "gap_analyzer"],
+    )
+    result = await Crystallizer().run_for_brand("Kisqali")
+
+    # Best-effort: the crystal IS created even though the audit row
+    # failed to persist.
+    assert result.insights_created == 1, (
+        "audit-table insert failure must NOT prevent the crystal from "
+        "being created — audit is sidecar telemetry, not gating"
+    )
+    assert result.errors == [], (
+        "audit-table insert failure must NOT surface as a per-group "
+        "error (narrow log-warning catch shape, not fatal)"
+    )
+    # The executive_insight DID land.
+    assert len(fake_supabase.rows["executive_insights"]) == 1
+    # The audit row DID NOT land (insert was simulated as failed).
+    assert fake_supabase.rows["crystal_narrative_audits"] == []
+
+
+@pytest.mark.asyncio
+async def test_crystallize_audit_persistence_skipped_when_flag_off(fake_supabase, monkeypatch):
+    """Codex iter-2 H1 negative pin: when the LLM flag is OFF, no audit
+    row should land in ``crystal_narrative_audits`` because no LLM
+    narrator ran (and there's no ``LLMCrystalNarrativeAudit`` to
+    persist).
+
+    Pins the ``if audit is not None`` guard at the persistence site.
+    """
+    monkeypatch.delenv("E2I_CRYSTAL_LLM_NARRATIVES_ENABLED", raising=False)
+
+    _seed_episodic_with_causal_content(
+        fake_supabase,
+        brand="Kisqali",
+        causal_path_id="cp1",
+        agents=["causal_impact", "gap_analyzer"],
+    )
+    result = await Crystallizer().run_for_brand("Kisqali")
+    assert result.insights_created == 1
+    assert fake_supabase.rows["crystal_narrative_audits"] == [], (
+        "no crystal_narrative_audits row should land on the flag-off "
+        "(deterministic-narrative) path — no LLM audit object was produced"
+    )
 
 
 @pytest.mark.asyncio

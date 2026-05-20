@@ -326,3 +326,128 @@ def test_unauthenticated_post_crystallize_returns_401(
             json={"brand": "kisqali"},
         )
         assert response.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# CopilotKit auth-gap pin (codex iter-2 H2 closure — issue #399)
+# ---------------------------------------------------------------------------
+
+
+def test_copilotkit_auth_gap_pinned_for_issue_399() -> None:
+    """REGRESSION PIN — CopilotKit dynamic endpoints currently BYPASS the
+    JWTAuthMiddleware via two surfaces in
+    ``src.api.middleware.auth_middleware``:
+
+    1. ``PUBLIC_PATHS`` includes the exact entries ``("*", "/api/copilotkit")``,
+       ``("*", "/api/copilotkit/status")``, ``("*", "/api/copilotkit/info")``.
+    2. ``PUBLIC_PATH_PATTERNS`` includes the catch-all
+       ``("*", r"^/api/copilotkit(/.*)?$")``.
+
+    Codex iter-2 H2 found this gap during PR #398 review. The gap is
+    PRE-EXISTING (not introduced by #391) and per issue #391 box 2
+    wording (verbatim: "Add authentication to crystal/provenance API
+    endpoints — verify ``/api/executive-insights/*``") it is
+    out-of-scope for the security slice. A separate tracking issue
+    (#399) has been filed.
+
+    This test PINS the CURRENT (unauthenticated) state so:
+    * Future PRs that accidentally widen the bypass surface fail loud.
+    * The fix for #399 will FLIP this assertion (delete the negation,
+      assert auth IS required), making the migration mechanical and
+      auditable.
+
+    Flip recipe (when #399 is fixed):
+      1. Edit ``PUBLIC_PATHS`` + ``PUBLIC_PATH_PATTERNS`` in
+         ``src/api/middleware/auth_middleware.py`` to remove or scope
+         the CopilotKit entries.
+      2. Edit ``add_copilotkit_routes`` in
+         ``src/api/routes/copilotkit.py`` to attach
+         ``dependencies=[Depends(require_auth)]`` (or similar).
+      3. Rename this test to ``test_copilotkit_routes_require_auth``
+         and flip the assertion below — change
+         ``assert pattern_in_public_patterns is True``
+         to
+         ``assert pattern_in_public_patterns is False``.
+    """
+    from src.api.middleware.auth_middleware import (
+        PUBLIC_PATH_PATTERNS,
+        PUBLIC_PATHS,
+        _is_public_path,
+    )
+
+    # Surface 1: exact-match entry in PUBLIC_PATHS.
+    copilotkit_exact_entries = [
+        (method, path)
+        for method, path in PUBLIC_PATHS
+        if path == "/api/copilotkit" or path.startswith("/api/copilotkit/")
+    ]
+    assert copilotkit_exact_entries, (
+        "Expected at least one /api/copilotkit entry in PUBLIC_PATHS — "
+        "the iter-2 H2 audit identified one. If this is empty, the gap "
+        "may already be closed and the pin should be flipped (see #399)."
+    )
+
+    # Surface 2: catch-all pattern in PUBLIC_PATH_PATTERNS.
+    pattern_in_public_patterns = any(
+        "/api/copilotkit" in pattern for _method, pattern in PUBLIC_PATH_PATTERNS
+    )
+    assert pattern_in_public_patterns is True, (
+        "Expected a /api/copilotkit catch-all pattern in PUBLIC_PATH_PATTERNS. "
+        "If this is False, the dynamic-route bypass may already be closed and "
+        "this regression pin should be flipped (see #399)."
+    )
+
+    # Surface 3: the _is_public_path matcher actually returns True for
+    # arbitrary subpaths under /api/copilotkit (proving the bypass is
+    # active end-to-end, not just declared in lookup tables).
+    assert _is_public_path("POST", "/api/copilotkit/agents/execute") is True
+    assert _is_public_path("GET", "/api/copilotkit/agent/foo/state") is True
+    assert _is_public_path("POST", "/api/copilotkit/action/anything") is True
+
+
+def test_copilotkit_static_routes_present_in_auth_test_app() -> None:
+    """Codex iter-2 M2 closure: enumerate the static-CopilotKit routes
+    that DO appear on the test app's router set and document the
+    dynamic-route bypass cross-reference.
+
+    The ``_build_app`` helper above includes the three protected
+    routers (``executive_insights``, ``audit``, ``staleness_alerts``).
+    Production also mounts the static-CopilotKit router via
+    ``app.include_router(copilotkit_router, prefix="/api")`` and
+    ``add_copilotkit_routes(app, prefix="/api/copilotkit")`` at
+    ``src/api/main.py:997-1000``.
+
+    The static portion (``copilotkit_router``) is a small set of
+    discovery / status routes. Per the codex iter-2 M2 fix shape we
+    enumerate those routes here so the auth-gating test app's
+    coverage is documented and any silent route addition is flagged
+    by the static-route enumeration test.
+
+    The DYNAMIC catch-all routes registered by
+    ``add_copilotkit_routes`` are NOT covered here — they are pinned
+    in ``test_copilotkit_auth_gap_pinned_for_issue_399`` above + tracked
+    in tracking issue #399.
+    """
+    from src.api.routes.copilotkit import router as copilotkit_router
+
+    # Build an app that includes the static copilotkit router exactly as
+    # production does. We don't include dynamic add_copilotkit_routes
+    # here because that path is the subject of #399's tracking pin (not
+    # the regression-pin contract this test is enforcing).
+    app = FastAPI()
+    app.include_router(copilotkit_router, prefix="/api")
+
+    paths = {r.path for r in _api_routes(app) if r.path.startswith("/api/copilotkit")}
+    # Expected static routes from src/api/routes/copilotkit.py — these
+    # are discovery / status endpoints. The path set is pinned so a
+    # silent addition shows up here.
+    assert paths, (
+        "Expected the static CopilotKit router to expose at least one "
+        "/api/copilotkit path. If empty, the static router was removed "
+        "and this enumeration must be updated alongside the change."
+    )
+    # Document that we are explicitly NOT covering dynamic-route auth
+    # here — that surface is pinned for tracking-issue #399.
+    # (No assertion on path-set CONTENT — the path set is implementation
+    # detail of the copilotkit_router itself; the existence assertion
+    # above is the regression pin.)

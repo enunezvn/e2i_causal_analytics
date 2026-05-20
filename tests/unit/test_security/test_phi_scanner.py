@@ -152,17 +152,34 @@ class TestDOB:
 
 
 class TestEmail:
-    def test_email_positive(self) -> None:
-        """Standard email format is detected."""
-        matches = scan_text("contact alice@example.com please")
+    """Email scanning with patient-context scoping (codex iter-2 M3).
+
+    Email is the ONLY pattern that is context-scoped: a generic email
+    (no patient-shape token within 30 chars) is suppressed because
+    operational addresses (``support@example.com``, ``noreply@…``)
+    appearing in narrative prose should NOT trigger the audit harness's
+    non-zero exit. A patient-shape token (``patient``, ``mrn``, ``dob``,
+    ``subject``, ``name``, ``ssn``) within :data:`_EMAIL_PATIENT_CONTEXT_WINDOW`
+    chars promotes the candidate to a PHI match.
+    """
+
+    def test_email_positive_with_patient_context(self) -> None:
+        """Email near a ``patient`` token IS detected as PHI."""
+        matches = scan_text("Patient contact: alice@example.com please")
         names = [m.pattern_name for m in matches]
         assert "email" in names
         email_hit = next(m for m in matches if m.pattern_name == "email")
         assert email_hit.match == "alice@example.com"
 
-    def test_email_positive_with_plus(self) -> None:
-        """Email with ``+`` tag is detected."""
-        matches = scan_text("alias jane+filter@org.example.com active")
+    def test_email_positive_with_plus_and_patient_context(self) -> None:
+        """Email with ``+`` tag near a patient token is detected."""
+        matches = scan_text("Subject alias jane+filter@org.example.com active")
+        names = [m.pattern_name for m in matches]
+        assert "email" in names
+
+    def test_email_positive_with_mrn_context(self) -> None:
+        """Email near an ``MRN`` token IS detected as PHI (alt patient token)."""
+        matches = scan_text("MRN 123456 contact bob@hospital.example")
         names = [m.pattern_name for m in matches]
         assert "email" in names
 
@@ -171,6 +188,66 @@ class TestEmail:
         matches = scan_text("url alice.example.com here")
         names = [m.pattern_name for m in matches]
         assert "email" not in names
+
+    def test_email_negative_no_patient_context(self) -> None:
+        """Codex iter-2 M3: a generic operational email with NO
+        patient-shape token in the surrounding window is NOT flagged.
+
+        Pins the scoped behavior — without the M3 fix this would match
+        and produce a false-positive deploy block on every doc/ops email
+        in a narrative.
+        """
+        matches = scan_text("For support contact ops-team@example.com")
+        names = [m.pattern_name for m in matches]
+        assert "email" not in names, (
+            "Generic operational email with no patient-shape token in the "
+            "surrounding window MUST NOT be flagged as PHI (codex iter-2 M3)."
+        )
+
+    def test_email_negative_distant_patient_token(self) -> None:
+        """A patient-shape token FAR away (beyond the 30-char window)
+        does NOT promote the email to PHI.
+
+        The window is locality-bounded — random sentence drift should
+        not flip the verdict.
+        """
+        # Pad the gap with ~80 chars between the token and the email.
+        matches = scan_text(
+            "Patient cohort enrolled in study group. "
+            "Several years of follow-up data captured here too. "
+            "Send invoices to billing@example.com"
+        )
+        names = [m.pattern_name for m in matches]
+        assert "email" not in names
+
+    def test_email_negative_patient_substring_does_not_match_namespace(self) -> None:
+        """Whole-word patient-shape matching: ``patiently`` does NOT
+        activate the ``patient`` token, and ``namespace`` does NOT
+        activate the ``name`` token.
+
+        Without whole-word boundaries the heuristic would over-match on
+        prose like ``namespace-config@example.com``.
+        """
+        matches = scan_text("Server namespace logs sent to support@example.com")
+        names = [m.pattern_name for m in matches]
+        assert "email" not in names
+
+    def test_email_positive_with_name_label_context(self) -> None:
+        """``Name: …@…`` triggers — clinical-report shape."""
+        matches = scan_text("Name: John Doe contact john@hospital.example")
+        names = [m.pattern_name for m in matches]
+        assert "email" in names
+
+    def test_email_positive_when_token_appears_AFTER_email(self) -> None:
+        """The patient-context window covers BOTH before and after.
+
+        Some clinical records put the label after the value
+        (``alice@hospital.example (patient)``). The scanner must catch
+        both orderings.
+        """
+        matches = scan_text("alice@hospital.example (patient name on file)")
+        names = [m.pattern_name for m in matches]
+        assert "email" in names
 
 
 # ---------------------------------------------------------------------------
