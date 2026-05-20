@@ -386,6 +386,11 @@ class ConsolidationResult:
     # Dedup metrics (#388): episodic rows examined / collapsed.
     episodic_dedup_examined: int = 0
     episodic_dedup_collapsed: int = 0
+    # Procedural-template metrics (#389): templates extracted from
+    # clustered episodic memories in this pass. Reported in addition
+    # to ``promoted_to_procedural`` (counter-threshold path); both
+    # paths can fire in the same pass.
+    procedural_templates_extracted: int = 0
     errors: List[str] = field(default_factory=list)
     # iter-2 new-H1: typed set of brands whose dedup left an
     # unrevertable inconsistent state (original mutation failed AND
@@ -452,7 +457,18 @@ class Consolidator:
                counts. Runs first because semantic-promotion's
                confirmation-count threshold reads SUM(dedup_counter).
             2. ``_promote_to_semantic`` — stamps causal_paths consolidated.
-            3. ``_promote_to_procedural`` — graduates procedural memories.
+            3. ``_promote_to_procedural`` — graduates procedural memories
+               via counter-threshold (the legacy path).
+            4. ``extract_procedural_templates`` — emits one template
+               per clustered episodic memories (#389 cluster-then-extract
+               path). Runs LAST because it reads ``episodic_memories``
+               in its already-deduplicated state.
+
+        Iter-1 codex H1 fix: step 4 was previously a public method on
+        Consolidator but not wired into ``run()``, so scheduled Celery
+        passes would never emit templates. Now wired with the same
+        try/except envelope as the other phases; failures record an
+        error and do NOT short-circuit the rest of the pipeline.
         """
         result = ConsolidationResult()
         try:
@@ -470,11 +486,18 @@ class Consolidator:
         except Exception as exc:
             logger.exception("consolidator: procedural promotion failed")
             result.errors.append(f"procedural: {exc}")
+        try:
+            n_templates = await self.extract_procedural_templates(brand=brand)
+            result.procedural_templates_extracted += n_templates
+        except Exception as exc:
+            logger.exception("consolidator: procedural-template extraction failed")
+            result.errors.append(f"procedural-template: {exc}")
         result.finished_at = datetime.now(timezone.utc)
         logger.info(
             f"consolidator finished promoted_semantic={result.promoted_to_semantic} "
             f"promoted_procedural={result.promoted_to_procedural} "
             f"dedup_collapsed={result.episodic_dedup_collapsed} "
+            f"procedural_templates_extracted={result.procedural_templates_extracted} "
             f"errors={len(result.errors)}"
         )
         return result
@@ -922,6 +945,46 @@ class Consolidator:
             return False
         return "constraint" in msg or "index" in msg
 
+    @staticmethod
+    def _is_unique_violation_or_postgrest_23505(exc: BaseException) -> bool:
+        """Detect a DB partial-unique-index violation across BOTH the
+        psycopg/UniqueViolation shape AND the postgrest/APIError-with-
+        SQLSTATE-23505 shape.
+
+        Background (iter-1 codex M1 fix): the procedural-template
+        writer goes through ``supabase-py``, which surfaces Postgres
+        errors as ``postgrest.exceptions.APIError`` — class name does
+        NOT contain "UniqueViolation". The pre-existing
+        :meth:`_is_unique_violation` was designed for the dedup path
+        which uses psycopg directly, so its class-name signal misses
+        postgrest. This new helper is the WIDENED variant — used by
+        the procedural-template insert path only.
+
+        Path 1 (psycopg/test-stub): delegates to
+        :meth:`_is_unique_violation` (class name + message both
+        match).
+
+        Path 2 (postgrest APIError):
+          * Class name contains ``"APIError"`` (case-insensitive).
+          * Object exposes ``code == "23505"`` (PostgreSQL SQLSTATE
+            for unique_violation per https://www.postgresql.org/docs/
+            current/errcodes-appendix.html).
+
+        Both signals required for path 2 → no false positives from
+        unrelated PostgREST errors (foreign-key violations,
+        permission errors, etc.) that also surface as APIError.
+        """
+        # Path 1: psycopg/UniqueViolation shape (delegate to existing).
+        if Consolidator._is_unique_violation(exc):
+            return True
+
+        # Path 2: postgrest APIError with SQLSTATE 23505.
+        cls_name = type(exc).__name__.lower()
+        if "apierror" not in cls_name:
+            return False
+        code = getattr(exc, "code", None)
+        return str(code) == "23505"
+
     def _stamp_dedup_signature(
         self,
         client: Any,
@@ -1195,8 +1258,18 @@ class Consolidator:
         * **Clustering basis**: exact-match key-tuples ``(brand,
           event_type, event_subtype, sorted(action_keys))``. NOT
           embedding similarity (V2 follow-up).
-        * **Threshold**: clusters with N rows < ``PROCEDURAL_TEMPLATE_
-          MIN_CLUSTER_SIZE`` (default 3) are skipped.
+        * **Threshold**: clusters with effective size <
+          ``PROCEDURAL_TEMPLATE_MIN_CLUSTER_SIZE`` (default 3) are
+          skipped. Iter-1 codex H1 fix: effective size is
+          ``SUM(dedup_counter)`` across the cluster's rows (NOT row
+          count) — mirrors the ``_promote_to_semantic`` threshold
+          logic. Required because ``deduplicate_episodic`` runs FIRST
+          in ``Consolidator.run()`` and collapses multiple
+          observations into a single canonical row with a
+          ``dedup_counter`` recording how many underlying events the
+          canonical represents. Without this, 3 identical-key
+          observations would collapse to 1 row and never meet the
+          cluster threshold downstream.
         * **Confidence**: mean pairwise Jaccard cohesion over
           ``action_keys`` sets (deterministic, in [0..1]). When the
           LLM flag is on AND the SDK call succeeds, multiplied by an
@@ -1219,8 +1292,12 @@ class Consolidator:
         # (for action_keys) + memory_id (for derived_from_episodic_ids).
         # occurred_at is included only for stable per-cluster ordering
         # of derived_from_episodic_ids.
+        # ``dedup_counter`` is read so the cluster-size threshold can
+        # use SUM(dedup_counter) (iter-1 codex H1 fix). Falls back to
+        # 1 when missing (back-compat with rows from before migration
+        # 026 or test fixtures that don't seed the column).
         query = client.table("episodic_memories").select(
-            "memory_id, brand, event_type, event_subtype, raw_content, occurred_at"
+            "memory_id, brand, event_type, event_subtype, raw_content, occurred_at, dedup_counter"
         )
         if brand:
             query = query.eq("brand", brand)
@@ -1275,7 +1352,16 @@ class Consolidator:
         llm_enabled = _llm_extraction_enabled()
 
         for (g_brand, g_event_type, g_event_subtype, g_sorted_keys), members in groups.items():
-            if len(members) < PROCEDURAL_TEMPLATE_MIN_CLUSTER_SIZE:
+            # Iter-1 codex H1 fix: use SUM(dedup_counter) for cluster
+            # sizing, not raw row count. ``deduplicate_episodic`` runs
+            # before this method in ``run()`` and collapses identical
+            # observations into a single canonical row with
+            # ``dedup_counter`` recording the underlying count. A
+            # cluster of 3 observations that share the same dedup
+            # signature collapses to 1 row with dedup_counter=3 — that
+            # should STILL trigger template extraction.
+            effective_cluster_size = sum(int(m.get("dedup_counter") or 1) for m in members)
+            if effective_cluster_size < PROCEDURAL_TEMPLATE_MIN_CLUSTER_SIZE:
                 continue
 
             # Symbolic-cohesion confidence — ALWAYS computed first.
@@ -1331,13 +1417,28 @@ class Consolidator:
             action_key_sets: List[Set[str]] = [{str(k) for k in m["action_keys"]} for m in members]
             shared_action_keys = sorted(set.intersection(*action_key_sets))
 
-            # variables = sorted (union − intersection) of OTHER
-            # raw_content keys across the cluster's members, EXCLUDING
-            # the cluster basis key ("action_keys") itself. These are
-            # the per-instance placeholder fields the template would
-            # bind when materialized.
+            # variables = per-instance differing keys across the
+            # cluster's raw_content. A key is a "variable" if EITHER
+            # (a) it appears in some rows but not others (presence
+            # variance — e.g. only m1 carries "region"), OR (b) it
+            # appears in ALL rows but with DIFFERENT values across
+            # rows (value variance — e.g. every row has "hcp_id" but
+            # each row's hcp_id is distinct). Iter-1 fix: codex iter-0
+            # H2 — the original formula missed case (b) and the
+            # ProceduralTemplate docstring's own example (hcp_id /
+            # region / cohort) explicitly listed value-variance keys.
+            #
+            # The cluster basis key ("action_keys") is excluded — it
+            # is captured separately as shared_action_keys.
             raw_key_union: Set[str] = set()
             raw_key_intersection: Optional[Set[str]] = None
+            # Track distinct values per key for value-variance
+            # detection. Use a hashable repr (JSON-serialise + sort
+            # at the boundary) because raw_content values may be
+            # nested dicts/lists which are not directly hashable.
+            import json as _value_repr_json
+
+            values_per_key: Dict[str, Set[str]] = defaultdict(set)
             for m in members:
                 raw_content = m.get("raw_content") or {}
                 keys = set(raw_content.keys()) - {"action_keys"}
@@ -1345,7 +1446,24 @@ class Consolidator:
                 raw_key_intersection = (
                     keys if raw_key_intersection is None else (raw_key_intersection & keys)
                 )
-            variables = sorted(raw_key_union - (raw_key_intersection or set()))
+                for k in keys:
+                    try:
+                        repr_val = _value_repr_json.dumps(
+                            raw_content[k], sort_keys=True, default=str
+                        )
+                    except (TypeError, ValueError):
+                        # Defensive: defer to str() repr if the value
+                        # isn't JSON-serialisable. The repr is for
+                        # set-membership only, never persisted, so a
+                        # lossy fallback is acceptable.
+                        repr_val = str(raw_content[k])
+                    values_per_key[k].add(repr_val)
+
+            presence_variant = raw_key_union - (raw_key_intersection or set())
+            value_variant = {
+                k for k in (raw_key_intersection or set()) if len(values_per_key[k]) > 1
+            }
+            variables = sorted(presence_variant | value_variant)
 
             # derived_from_episodic_ids: stable sort by occurred_at +
             # memory_id (matches the dedup canonical-pick rule for
@@ -1409,7 +1527,14 @@ class Consolidator:
                 # is the EXPECTED shape on re-extraction (V1 has no
                 # revision logic). Swallow as no-op; other exception
                 # shapes propagate to the caller's error log.
-                if self._is_unique_violation(exc):
+                #
+                # Iter-1 codex M1 fix: use the widened helper that
+                # ALSO accepts postgrest.APIError with SQLSTATE 23505
+                # (supabase-py surfaces unique-violations through this
+                # class, NOT through psycopg's UniqueViolation). The
+                # dedup path is unchanged because it doesn't go
+                # through supabase-py.
+                if self._is_unique_violation_or_postgrest_23505(exc):
                     logger.info(
                         f"consolidator: procedural template already exists "
                         f"(brand={g_brand}, sig={signature[:24]}...) — "
