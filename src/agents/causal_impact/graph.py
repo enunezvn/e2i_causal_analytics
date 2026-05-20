@@ -163,6 +163,12 @@ def traced_node(node_name: str) -> Callable[[F], F]:
                                 unobserved_confound=individual.get(
                                     "unobserved_common_cause", {}
                                 ).get("passed"),
+                                # Issue #368: bootstrap is the only refutation that runs
+                                # in degraded DoWhy mode (causal_model None). Without
+                                # this kwarg it was silently dropped from the audit
+                                # chain, leaving tamper-evident logging blind to the
+                                # only test that actually executed.
+                                bootstrap=individual.get("bootstrap", {}).get("passed"),
                             )
                     elif node_name == "sensitivity":
                         sens = result.get("sensitivity_analysis", {})

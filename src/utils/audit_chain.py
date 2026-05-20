@@ -47,21 +47,44 @@ class AgentTier(Enum):
 
 @dataclass
 class RefutationResults:
-    """Results from DoWhy refutation tests"""
+    """Results from DoWhy refutation tests.
+
+    Mirrors the 5 ``individual_tests`` keys emitted by
+    :py:meth:`src.causal_engine.refutation_runner.RefutationSuite.to_legacy_format`:
+
+    - ``placebo_treatment`` (critical contract test)
+    - ``random_common_cause`` (critical contract test)
+    - ``data_subset`` (contract test)
+    - ``unobserved_confound`` (maps from ``sensitivity_e_value`` / contract
+      key ``unobserved_common_cause``)
+    - ``bootstrap`` (non-critical; the only test that runs in degraded
+      DoWhy mode when ``causal_model`` is None — see Issue #368)
+
+    Issue #368: pre-fix the dataclass declared only 4 fields and the
+    ``bootstrap`` key from ``to_legacy_format()`` was silently dropped on
+    wrap (graph.py + audit_chain_mixin.py). Tamper-evident logging had no
+    record of the only refutation test that actually ran in degraded mode.
+    """
 
     placebo_treatment: Optional[bool] = None
     random_common_cause: Optional[bool] = None
     data_subset: Optional[bool] = None
     unobserved_confound: Optional[bool] = None
+    bootstrap: Optional[bool] = None
 
     @property
     def all_passed(self) -> bool:
-        """Check if all executed tests passed"""
+        """Check if all executed tests passed.
+
+        ``bootstrap`` participates here so that degraded-mode bootstrap-only
+        signals are NOT silently treated as "no tests ran" (Issue #368).
+        """
         tests = [
             self.placebo_treatment,
             self.random_common_cause,
             self.data_subset,
             self.unobserved_confound,
+            self.bootstrap,
         ]
         executed = [t for t in tests if t is not None]
         return all(executed) if executed else False
@@ -72,6 +95,7 @@ class RefutationResults:
             "random_common_cause": self.random_common_cause,
             "data_subset": self.data_subset,
             "unobserved_confound": self.unobserved_confound,
+            "bootstrap": self.bootstrap,
         }
 
 

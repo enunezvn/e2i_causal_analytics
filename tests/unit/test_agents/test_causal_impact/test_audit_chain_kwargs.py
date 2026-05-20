@@ -225,12 +225,82 @@ async def test_traced_node_refutation_wraps_dict_in_refutation_results_dataclass
 
 
 @pytest.mark.asyncio
+async def test_traced_node_refutation_wraps_bootstrap_test_in_dataclass(
+    mock_audit_service, mock_opik, base_state
+):
+    """Issue #368 regression: ``individual_tests["bootstrap"]["passed"]`` must
+    round-trip into the ``RefutationResults`` dataclass as ``bootstrap``.
+
+    Pre-#368: ``RefutationSuite.to_legacy_format()`` emits 5 ``individual_tests``
+    keys (placebo_treatment, random_common_cause, data_subset,
+    unobserved_common_cause, bootstrap), but the receiving dataclass only
+    declared 4 fields — bootstrap was silently dropped at the
+    ``RefutationResults(...)`` call site in ``graph.py:155-166``. Bootstrap
+    is the only refutation that runs in degraded DoWhy mode (causal_model
+    None) — dropping it left tamper-evident logging with no record of the
+    only test that actually ran.
+
+    Post-#368: a 5th ``bootstrap`` field exists and the wrap site forwards
+    ``individual.get("bootstrap", {}).get("passed")`` into it.
+    """
+
+    @traced_node("refutation")
+    async def _node(state):
+        return {
+            "status": "ok",
+            "current_phase": "done",
+            "refutation_results": {
+                "tests_passed": 4,
+                "tests_failed": 1,
+                "total_tests": 5,
+                "overall_robust": False,
+                "gate_decision": "BLOCK",
+                "individual_tests": {
+                    "placebo_treatment": {"passed": True},
+                    "random_common_cause": {"passed": True},
+                    "data_subset": {"passed": True},
+                    "unobserved_common_cause": {"passed": False},
+                    "bootstrap": {"passed": True},
+                },
+            },
+        }
+
+    await _node(base_state)
+
+    kwargs = mock_audit_service.add_entry.call_args.kwargs
+    assert "refutation_results" in kwargs
+    rr = kwargs["refutation_results"]
+    assert isinstance(rr, RefutationResults), (
+        f"refutation_results must be a RefutationResults dataclass. Got {type(rr).__name__}={rr!r}"
+    )
+    assert rr.placebo_treatment is True
+    assert rr.random_common_cause is True
+    assert rr.data_subset is True
+    assert rr.unobserved_confound is False
+    # Issue #368: bootstrap key from individual_tests must populate the
+    # dataclass field — pre-fix, this would be silently dropped.
+    assert rr.bootstrap is True, (
+        f"Issue #368: bootstrap field was silently dropped (got rr.bootstrap="
+        f"{rr.bootstrap!r}). The to_legacy_format() dict has a 'bootstrap' "
+        f"key, but the wrap site in graph.py:155-166 did not forward it to "
+        f"the dataclass. Add bootstrap=individual.get('bootstrap', {{}}).get('passed')."
+    )
+    # Round-trip via to_dict() must preserve bootstrap (this is what
+    # AuditChainService.add_entry persists to the database).
+    persisted = rr.to_dict()
+    assert "bootstrap" in persisted, (
+        f"Issue #368: to_dict() must include bootstrap key. Got keys={sorted(persisted)}."
+    )
+    assert persisted["bootstrap"] is True
+
+
+@pytest.mark.asyncio
 async def test_traced_node_refutation_empty_ref_leaves_refutation_results_none(
     mock_audit_service, mock_opik, base_state
 ):
     """When the refutation node fails early (no ``individual_tests`` in
     state), we leave ``refutation_results=None`` instead of constructing
-    ``RefutationResults(None, None, None, None)``. This preserves the
+    ``RefutationResults(None, None, None, None, None)``. This preserves the
     semantic difference between "no refutation ran" and "all tests
     returned null" in the audit chain.
 
@@ -252,7 +322,7 @@ async def test_traced_node_refutation_empty_ref_leaves_refutation_results_none(
     assert "refutation_results" in kwargs
     assert kwargs["refutation_results"] is None, (
         "Empty refutation result must propagate as None — "
-        "not RefutationResults(None,None,None,None). "
+        "not RefutationResults(None,None,None,None,None). "
         f"Got {kwargs['refutation_results']!r}"
     )
 
