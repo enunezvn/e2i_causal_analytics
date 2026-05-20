@@ -510,6 +510,18 @@ class PlanExecutor:
             # (codex audit PR #367 INVARIANT 8 — preserve caller's dict identity).
             resolved_inputs = {**resolved_inputs, "confounders": autopop_confounders}
 
+        # S14 (issue #360): propagate ``experiment_id`` from the context
+        # carrier into tool kwargs when the tool's schema declares the
+        # parameter AND the caller did NOT supply an explicit value. This
+        # mirrors the confounders auto-pop pattern above. Explicit caller
+        # value always wins (C1 trust-gate parity — key presence, not
+        # truthiness, is the explicit-caller signal).
+        autopop_experiment_id = self._maybe_autopopulate_experiment_id(
+            step, resolved_inputs, context
+        )
+        if autopop_experiment_id is not None:
+            resolved_inputs = {**resolved_inputs, "experiment_id": autopop_experiment_id}
+
         tool_input = ToolInput(
             tool_name=step.tool_name, parameters=resolved_inputs, context=context
         )
@@ -841,6 +853,49 @@ class PlanExecutor:
             f"tool '{step.tool_name}' from experiment_id={experiment_id!r}"
         )
         return confounder_features
+
+    def _maybe_autopopulate_experiment_id(
+        self,
+        step: ExecutionStep,
+        resolved_inputs: Dict[str, Any],
+        context: Dict[str, Any],
+    ) -> Optional[str]:
+        """Propagate ``experiment_id`` from context into tool kwargs.
+
+        Issue #360 (S14). Mirrors the
+        ``_maybe_autopopulate_confounders`` triple-gate pattern:
+
+        1. ``context["experiment_id"]`` is a non-empty string.
+        2. The tool's schema declares an ``experiment_id`` parameter
+           (we don't inject a kwarg the tool can't accept).
+        3. The caller did NOT supply an explicit value in the
+           resolved inputs. Key presence — not truthiness — is the
+           explicit-caller signal (C1 trust-gate parity with the
+           confounders hook). An explicit ``experiment_id=None`` is
+           still a caller decision and must NOT be overridden.
+
+        Returns the value to inject, or ``None`` to skip auto-pop
+        entirely.
+        """
+        # Gate 1: experiment_id present in context (S14)
+        experiment_id = context.get("experiment_id")
+        if not isinstance(experiment_id, str) or not experiment_id:
+            return None
+
+        # Gate 2: tool schema declares an ``experiment_id`` parameter
+        schema = self.registry.get_schema(step.tool_name)
+        if schema is None:
+            return None
+        param_names = {p.name for p in schema.input_parameters}
+        if "experiment_id" not in param_names:
+            return None
+
+        # Gate 3: caller did not supply explicit experiment_id.
+        if "experiment_id" in resolved_inputs:
+            return None
+
+        logger.debug(f"Auto-populated experiment_id={experiment_id!r} for tool '{step.tool_name}'")
+        return experiment_id
 
     def get_tool_stats(self) -> Dict[str, Dict[str, Any]]:
         """
