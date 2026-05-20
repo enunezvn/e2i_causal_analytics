@@ -29,6 +29,10 @@ class _Query:
         self.store = store
         self.table_name = table
         self.filters: Dict[str, Any] = {}
+        # Tracks ``.is_(col, "null")`` filters as col -> True so the
+        # eq-based predicate dispatcher can short-circuit to
+        # ``r.get(col) is None``. Mirrors PostgREST ``is.null`` semantics.
+        self.is_null_filters: Dict[str, bool] = {}
 
     def select(self, *_args: Any, **_kwargs: Any) -> "_Query":
         return self
@@ -36,6 +40,18 @@ class _Query:
     def eq(self, col: str, val: Any) -> "_Query":
         self.filters[col] = val
         return self
+
+    def is_(self, col: str, val: Any) -> "_Query":
+        # supabase-py / PostgREST treat the literal string ``"null"`` as
+        # IS NULL. Only that form is supported here; anything else would
+        # be a silent test-only divergence from production semantics.
+        if isinstance(val, str) and val.lower() == "null":
+            self.is_null_filters[col] = True
+            return self
+        raise NotImplementedError(
+            f"_FakeSupabase.is_({col!r}, {val!r}): only is_(col, 'null') "
+            f"is supported in this test fake."
+        )
 
     def order(self, *_args: Any, **_kwargs: Any) -> "_Query":
         return self
@@ -47,6 +63,8 @@ class _Query:
         rows = list(self.store.rows.get(self.table_name, []))
         for col, want in self.filters.items():
             rows = [r for r in rows if r.get(col) == want]
+        for col in self.is_null_filters:
+            rows = [r for r in rows if r.get(col) is None]
         m = MagicMock()
         m.data = rows
         return m
@@ -97,6 +115,7 @@ def _seed_insight(
     crystallized_at: datetime,
     effect_size: Optional[float] = None,
     recall: bool = False,
+    invalidated_at: Optional[datetime] = None,
 ) -> None:
     db.rows["executive_insights"].append(
         {
@@ -110,6 +129,7 @@ def _seed_insight(
             "source_count": 3,
             "effect_size": effect_size,
             "recall": recall,
+            "invalidated_at": invalidated_at.isoformat() if invalidated_at else None,
             "key_metrics": {"causal_path_id": "cp-1"},
         }
     )
@@ -204,6 +224,49 @@ def test_portfolio_summary_excludes_recalled_insights(
     by_brand = {b["brand"]: b for b in body["by_brand"]}
     k = by_brand["kisqali"]
     assert k["insight_count"] == 1
+    assert k["average_effect_size"] == pytest.approx(0.40)
+
+
+def test_portfolio_summary_excludes_invalidated_insights(
+    client: TestClient, fake_supabase: _FakeSupabase
+):
+    """invalidated_at IS NOT NULL rows MUST NOT contribute to the
+    portfolio summary (issue #385). The docstring at
+    ``src/api/routes/executive_insights.py`` for
+    ``get_portfolio_summary`` claims it aggregates across non-recalled,
+    non-invalidated crystals — that contract was previously broken
+    because only ``.eq("recall", False)`` was applied.
+
+    This test pins the corrected contract: a row with ``recall=False``
+    AND ``invalidated_at`` set (the silent-cascade case from the JIT
+    verifier middleware) must be excluded from count + mean + latest.
+    """
+    now = datetime.now(timezone.utc)
+    _seed_insight(
+        fake_supabase,
+        insight_id="i-active",
+        brand="kisqali",
+        crystallized_at=now,
+        effect_size=0.40,
+        recall=False,
+        invalidated_at=None,
+    )
+    _seed_insight(
+        fake_supabase,
+        insight_id="i-invalidated",
+        brand="kisqali",
+        crystallized_at=now,
+        effect_size=999.0,  # would explode the mean if not filtered
+        recall=False,
+        invalidated_at=now - timedelta(hours=1),
+    )
+
+    response = client.get("/api/executive-insights/portfolio-summary")
+    body = response.json()
+    by_brand = {b["brand"]: b for b in body["by_brand"]}
+    k = by_brand["kisqali"]
+    assert k["insight_count"] == 1
+    assert k["effect_size_sample_count"] == 1
     assert k["average_effect_size"] == pytest.approx(0.40)
 
 
