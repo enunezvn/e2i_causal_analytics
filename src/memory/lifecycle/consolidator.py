@@ -36,7 +36,7 @@ import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional, Set
 
 from src.memory.services.factories import get_supabase_client
 
@@ -124,7 +124,25 @@ def _compute_dedup_signature(row: Mapping[str, Any]) -> Optional[str]:
 
 @dataclass
 class ConsolidationResult:
-    """Summary of one consolidator run."""
+    """Summary of one consolidator run.
+
+    ``errors`` policy (iter-2 M2 documentation): the consolidator's
+    dedup path is best-effort and offers read-your-writes consistency
+    only WITHIN a single ``deduplicate_episodic`` call. Across
+    concurrent passes against the same brand, the compensating-rollback
+    pattern is externally non-atomic (a concurrent reader can observe
+    the intermediate bumped counter before the revert runs). A future
+    PR may wrap each per-group sequence in a real DB transaction; the
+    application-level pattern here is the fallback that works for the
+    FakeSupabase used in unit tests AND for any client that doesn't
+    expose transactional semantics.
+
+    Unrevertable errors (iter-2 new-H1): when BOTH the original
+    mutation AND its compensating revert fail, the brand is added to
+    ``brands_with_dedup_errors`` so downstream promotion phases can
+    short-circuit instead of double-counting on the inconsistent
+    counter.
+    """
 
     promoted_to_semantic: int = 0
     promoted_to_procedural: int = 0
@@ -134,6 +152,11 @@ class ConsolidationResult:
     episodic_dedup_examined: int = 0
     episodic_dedup_collapsed: int = 0
     errors: List[str] = field(default_factory=list)
+    # iter-2 new-H1: typed set of brands whose dedup left an
+    # unrevertable inconsistent state (original mutation failed AND
+    # compensating revert also failed). _promote_to_semantic short-
+    # circuits for these brands. Revertable failures stay clean.
+    brands_with_dedup_errors: Set[str] = field(default_factory=set)
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     finished_at: Optional[datetime] = None
     by_brand: Dict[str, Dict[str, int]] = field(default_factory=dict)
@@ -141,6 +164,13 @@ class ConsolidationResult:
     def record(self, brand: str, kind: str) -> None:
         bucket = self.by_brand.setdefault(brand, {})
         bucket[kind] = bucket.get(kind, 0) + 1
+
+    def mark_brand_dedup_error(self, brand: Optional[str]) -> None:
+        """Mark a brand as having an unrevertable dedup error.
+        Downstream promotion phases skip this brand to avoid
+        double-counting on the inconsistent counter."""
+        if brand:
+            self.brands_with_dedup_errors.add(brand)
 
 
 class Consolidator:
@@ -240,6 +270,35 @@ class Consolidator:
         new row is merged INTO that canonical rather than stamped as
         a new duplicate-canonical (which would hit the DB
         partial-unique-index UniqueViolation).
+
+        Same-pass race recovery (iter-2 new-M1): if a concurrent
+        consolidator wins the race to stamp a canonical between our
+        SELECT (no canonical found) and our UPDATE (stamp), the DB
+        partial-unique-index rejects our stamp with UniqueViolation.
+        The stamp handler re-queries the canonical and merges the
+        loser into it in the SAME pass via ``_recover_unique_violation``
+        — does not leave the loser unstamped for the next run.
+
+        Unrevertable-error contract (iter-2 new-H1): when BOTH the
+        original mutation AND its compensating revert fail, the brand
+        is added to ``result.brands_with_dedup_errors``. The
+        downstream ``_promote_to_semantic`` short-circuits for any
+        brand in that set to avoid double-counting on the
+        inconsistent counter.
+
+        Known limitation (iter-2 M2, accepted for this PR — see
+        ``ConsolidationResult.errors`` policy in the dataclass
+        docstring): the compensating-rollback is externally non-atomic
+        across separate client calls. A concurrent consolidator pass
+        can observe the intermediate bumped counter before the revert
+        runs against the same brand. Closing this requires wrapping
+        each per-group sequence in a real DB transaction, which only
+        works against real Postgres (not the FakeSupabase used in unit
+        tests). Filed as a forward-looking follow-up for the next
+        sub-issue under #388. Production safety: even with the race,
+        each consolidator pass eventually converges on a consistent
+        state because the candidate filter and the canonical-lookup
+        are idempotent across passes.
 
         Args:
             brand: optional scope. If None, sweeps all brands.
@@ -368,7 +427,9 @@ class Consolidator:
         # Multi-row vs singleton stamp behavior. For a singleton with no
         # existing canonical, we just stamp the row's signature (counter
         # stays at its current value); no duplicates to delete, so no
-        # atomicity concern.
+        # atomicity concern. The stamp may still race with a concurrent
+        # winner — _stamp_dedup_signature handles that via
+        # _recover_unique_violation (iter-2 new-M1).
         if not duplicates:
             self._stamp_dedup_signature(
                 client=client,
@@ -376,6 +437,8 @@ class Consolidator:
                 signature=signature,
                 counter=canonical_pre_counter,
                 result=result,
+                brand=group_brand,
+                duplicates=[],
             )
             return
 
@@ -385,15 +448,24 @@ class Consolidator:
         # we synthesize the same outcome with explicit compensating
         # writes so the contract holds for any client (including the
         # FakeSupabase used in unit tests).
-        stamped = self._stamp_dedup_signature(
+        #
+        # The stamp helper may dispatch to ``_recover_unique_violation``
+        # if a concurrent winner stamped first (iter-2 new-M1 path) —
+        # in that case the loser is already merged into the existing
+        # canonical and we skip the rest of this fresh-stamp path.
+        stamped, recovered_via_merge = self._stamp_dedup_signature(
             client=client,
             memory_id=canonical["memory_id"],
             signature=signature,
             counter=merged_counter,
             result=result,
+            brand=group_brand,
+            duplicates=duplicates,
         )
         if not stamped:
             return  # stamp failure already recorded; no deletes to roll back
+        if recovered_via_merge:
+            return  # loser was merged into a concurrent winner; nothing left to do
 
         delete_ok = self._delete_duplicates(
             client=client,
@@ -403,8 +475,9 @@ class Consolidator:
         if not delete_ok:
             # Compensate: revert the canonical's stamp to its pre-state
             # so the next run can retry the whole group cleanly. Best
-            # effort — if the revert itself fails, log + record but
-            # don't crash the consolidator.
+            # effort — if the revert itself fails, log + record AND
+            # mark the brand as unrevertable so promotion skips it
+            # (iter-2 new-H1).
             try:
                 client.table("episodic_memories").update(
                     {"dedup_signature": None, "dedup_counter": canonical_pre_counter}
@@ -415,6 +488,7 @@ class Consolidator:
                     f"{canonical['memory_id']}: {exc}"
                 )
                 result.errors.append(f"dedup revert {canonical['memory_id']}: {exc}")
+                result.mark_brand_dedup_error(group_brand)
             return
 
         collapsed_n = len(duplicates)
@@ -500,7 +574,9 @@ class Consolidator:
 
         # Then delete the incoming rows. On failure, revert the counter
         # so we don't end up with the canonical bumped + duplicates
-        # still alive (double-counting in promotion).
+        # still alive (double-counting in promotion). On revert failure,
+        # mark the brand as unrevertable so promotion skips it (iter-2
+        # new-H1).
         delete_ok = self._delete_duplicates(
             client=client,
             memory_ids=[r["memory_id"] for r in incoming],
@@ -517,6 +593,7 @@ class Consolidator:
                     f"for {canonical_id}: {exc}"
                 )
                 result.errors.append(f"dedup merge revert {canonical_id}: {exc}")
+                result.mark_brand_dedup_error(group_brand)
             return
 
         result.episodic_dedup_collapsed += len(incoming)
@@ -566,6 +643,18 @@ class Consolidator:
             result.errors.append(f"dedup batch delete: {exc}")
             return False
 
+    @staticmethod
+    def _is_unique_violation(exc: BaseException) -> bool:
+        """Detect a DB partial-unique-index violation by class-name +
+        message shape. We use shape-matching rather than ``isinstance``
+        because the unit-test ``FakeSupabase`` raises a stand-in error
+        (``_UniqueViolationStub``); production raises
+        ``psycopg.errors.UniqueViolation``. Both surface a 'unique'
+        token in the class name or the message — match either."""
+        cls_name = type(exc).__name__.lower()
+        msg = str(exc).lower()
+        return "unique" in cls_name or "unique" in msg
+
     def _stamp_dedup_signature(
         self,
         client: Any,
@@ -573,18 +662,123 @@ class Consolidator:
         signature: str,
         counter: int,
         result: ConsolidationResult,
-    ) -> bool:
+        brand: Optional[str] = None,
+        duplicates: Optional[List[Dict[str, Any]]] = None,
+    ) -> tuple[bool, bool]:
         """UPDATE one episodic_memories row to set dedup_signature +
-        dedup_counter. Returns True on success."""
+        dedup_counter.
+
+        Returns ``(stamped, recovered_via_merge)``:
+
+        * ``(True, False)`` — stamp succeeded; caller proceeds with
+          its normal post-stamp work (e.g. deleting duplicates).
+        * ``(True, True)`` — stamp hit a UniqueViolation from a
+          concurrent winner AND we successfully recovered by merging
+          the loser (this row + ``duplicates``) into the existing
+          canonical (iter-2 new-M1 same-pass recovery path). Caller
+          MUST skip post-stamp work because the recovery already
+          handled it.
+        * ``(False, False)`` — stamp failed for a non-recoverable
+          reason; caller skips post-stamp work and the error is
+          recorded.
+
+        ``brand`` + ``duplicates`` are passed through so the recovery
+        path can re-key the canonical lookup and merge the loser's
+        siblings together.
+        """
         try:
             client.table("episodic_memories").update(
                 {"dedup_signature": signature, "dedup_counter": counter}
             ).eq("memory_id", memory_id).execute()
-            return True
+            return (True, False)
         except Exception as exc:
+            if self._is_unique_violation(exc):
+                # iter-2 new-M1: a concurrent consolidator stamped the
+                # canonical between our SELECT (no canonical found) and
+                # our UPDATE. Re-query + merge in the same pass.
+                recovered = self._recover_unique_violation(
+                    client=client,
+                    brand=brand,
+                    signature=signature,
+                    loser_memory_id=memory_id,
+                    loser_counter=counter,
+                    duplicates=duplicates or [],
+                    result=result,
+                )
+                if recovered:
+                    return (True, True)
             logger.warning(f"consolidator: dedup stamp failed for {memory_id}: {exc}")
             result.errors.append(f"dedup stamp {memory_id}: {exc}")
+            return (False, False)
+
+    def _recover_unique_violation(
+        self,
+        client: Any,
+        brand: Optional[str],
+        signature: str,
+        loser_memory_id: str,
+        loser_counter: int,
+        duplicates: List[Dict[str, Any]],
+        result: ConsolidationResult,
+    ) -> bool:
+        """Iter-2 new-M1: recover from a concurrent-winner race.
+
+        Called from ``_stamp_dedup_signature`` when the stamp UPDATE
+        raises a unique-violation-shaped exception. Re-queries the
+        canonical (the winner has just stamped) and merges the loser
+        + any siblings (``duplicates``) into it.
+
+        Returns True iff recovery succeeded. False means the
+        unique-violation could not be reconciled (canonical re-lookup
+        empty, or merge itself failed) — caller falls back to
+        recording the failure in ``result.errors``.
+        """
+        existing = self._find_canonical_for_signature(
+            client=client, brand=brand, signature=signature
+        )
+        if existing is None:
+            # Re-query empty after a UniqueViolation means a different
+            # bug shape — record it as unrevertable for the brand so
+            # promotion skips this brand.
+            logger.warning(
+                f"consolidator: UniqueViolation recovery failed — re-query "
+                f"returned no canonical for brand={brand}, sig={signature[:24]}..."
+            )
+            result.errors.append(
+                f"dedup recovery {loser_memory_id}: re-query empty after UniqueViolation"
+            )
+            result.mark_brand_dedup_error(brand)
             return False
+
+        # Build the synthetic incoming list (loser + siblings) so the
+        # existing merge path can run. The loser carries the counter
+        # value that the failed-stamp UPDATE was trying to set.
+        incoming: List[Dict[str, Any]] = [
+            {"memory_id": loser_memory_id, "dedup_counter": loser_counter}
+        ]
+        for d in duplicates:
+            incoming.append(
+                {
+                    "memory_id": d["memory_id"],
+                    "dedup_counter": int(d.get("dedup_counter") or 1),
+                }
+            )
+
+        # Capture pre-merge state so we can measure success.
+        pre_errors = list(result.errors)
+        self._merge_into_existing_canonical(
+            client=client,
+            group_brand=brand,
+            signature=signature,
+            existing_canonical=existing,
+            incoming=incoming,
+            result=result,
+        )
+        # Merge records its own per-row errors; if NEW ones were
+        # appended above pre_errors, we treat as partial-failure for
+        # this recovery. The brand-error marking inside
+        # _merge_into_existing_canonical handles unrevertable cases.
+        return len(result.errors) == len(pre_errors)
 
     # ---------------------------------------------------------- semantic tier
 
@@ -597,7 +791,22 @@ class Consolidator:
         as the "confirmation count" — these come from independent
         cognitive cycles, so seeing the same path several times is a
         strong signal of robustness.
+
+        Iter-2 new-H1: brands flagged in
+        ``result.brands_with_dedup_errors`` are SKIPPED to avoid
+        double-counting on a bumped-but-unreverted ``dedup_counter``.
+        When ``brand`` is supplied AND flagged, the whole call
+        short-circuits at entry; when ``brand`` is None (sweep mode),
+        per-candidate paths are filtered out.
         """
+        # Brand-scoped run with the scope already flagged: short-circuit
+        # at entry. Record a skip-message so the caller sees why.
+        if brand and brand in result.brands_with_dedup_errors:
+            msg = f"skip-promotion-for-{brand}-due-to-dedup-error"
+            logger.warning(f"consolidator: {msg}")
+            result.errors.append(msg)
+            return
+
         client = get_supabase_client()
 
         # Pull candidate causal_paths: not yet consolidated, not overturned.
@@ -618,6 +827,14 @@ class Consolidator:
                 continue
             # An overturned path never gets consolidated.
             if path.get("validation_status") == "overturned":
+                continue
+            # iter-2 new-H1: skip paths whose brand had an unreverted
+            # dedup error. Record once per brand to avoid spam.
+            if path_brand and path_brand in result.brands_with_dedup_errors:
+                msg = f"skip-promotion-for-{path_brand}-due-to-dedup-error"
+                if msg not in result.errors:
+                    logger.warning(f"consolidator: {msg}")
+                    result.errors.append(msg)
                 continue
 
             # Count effective episodic confirmations of this path. After

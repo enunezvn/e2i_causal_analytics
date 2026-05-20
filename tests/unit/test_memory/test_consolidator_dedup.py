@@ -555,3 +555,327 @@ async def test_dedup_atomicity_on_delete_failure(
     assert any("delete" in e.lower() for e in result.errors), (
         f"per-group failure must surface in result.errors; got {result.errors!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# iter-2 follow-ups: brand-skip on unreverted error (new-H1),
+# same-pass concurrent-winner recovery (new-M1),
+# post-statement failure atomicity (L1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_promote_to_semantic_skips_brand_with_unreverted_dedup_error(
+    fake_supabase: FakeSupabase,
+) -> None:
+    """If a group's compensating revert ITSELF fails, the canonical is
+    left bumped while duplicates survive. Promotion's SUM(dedup_counter)
+    would then double-count. Iter-2 fix: promotion must SKIP that brand.
+
+    Contract:
+        * ``ConsolidationResult.brands_with_dedup_errors`` is a Set[str]
+          (typed, not implied via parsing ``errors``). Brand is added
+          when BOTH the original mutation failed AND the compensating
+          revert failed (revertable failures stay clean).
+        * ``_promote_to_semantic`` short-circuits before its SUM query
+          for any brand in that set, AND records a skip-message in
+          ``errors``.
+    """
+    # Seed a causal_path that WOULD be promotable if SUM(dedup_counter)
+    # were trusted.
+    fake_supabase.rows["causal_paths"].append(
+        {
+            "path_id": "cp-unrev",
+            "brand": "Kisqali",
+            "validation_status": "confirmed",
+            "confirmation_count": 1,
+            "consolidated_at": None,
+        }
+    )
+    # Seed 3 identical-key rows under the causal path.
+    for i in range(3):
+        fake_supabase.rows["episodic_memories"].append(
+            {
+                "memory_id": f"m{i}",
+                "brand": "Kisqali",
+                "region": "northeast",
+                "event_type": "ANALYSIS_COMPLETED",
+                "event_subtype": "ate_estimation",
+                "causal_path_id": "cp-unrev",
+                "agent_name": "estimator",
+                "description": "d",
+                "occurred_at": f"2026-05-20T0{i}:00:00Z",
+                "dedup_signature": None,
+                "dedup_counter": 1,
+            }
+        )
+
+    # Patch the FakeSupabase so BOTH the delete AND the compensating
+    # revert UPDATE raise. The revert UPDATE is identifiable as one
+    # that sets ``dedup_signature`` to None (i.e. NULLing the
+    # stamp) — that's how the production code spells the revert.
+    consolidator = Consolidator()
+    original_table = fake_supabase.table
+
+    def boom_table(name: str) -> _FakeQuery:
+        q = original_table(name)
+        original_update = q.update
+
+        def failing_delete() -> _FakeQuery:
+            raise RuntimeError("simulated delete failure")
+
+        def maybe_failing_update(payload: Dict[str, Any]) -> _FakeQuery:
+            # The compensating revert sets dedup_signature back to None.
+            # That's how we identify it (vs the initial stamp UPDATE which
+            # sets dedup_signature to a v1:... string). Raise on revert.
+            if "dedup_signature" in payload and payload.get("dedup_signature") is None:
+                raise RuntimeError("simulated revert failure (unrevertable)")
+            return original_update(payload)
+
+        if name == "episodic_memories":
+            q.delete = failing_delete  # type: ignore[method-assign]
+            q.update = maybe_failing_update  # type: ignore[method-assign]
+        return q
+
+    fake_supabase.table = boom_table  # type: ignore[method-assign]
+
+    result = await consolidator.run(brand="Kisqali")
+
+    # Brand-skip contract: Kisqali must be in brands_with_dedup_errors.
+    assert "Kisqali" in result.brands_with_dedup_errors, (
+        f"Kisqali should be marked as unreverted; got {result.brands_with_dedup_errors!r}"
+    )
+    # And a skip-message must surface in errors.
+    assert any("skip-promotion" in e.lower() for e in result.errors), (
+        f"promotion-skip message must surface in errors; got {result.errors!r}"
+    )
+    # And, critically, _promote_to_semantic must NOT have stamped the
+    # causal path with the (over-counted) effective count.
+    cp = fake_supabase.rows["causal_paths"][0]
+    assert cp["consolidated_at"] is None, (
+        "promotion fired despite unreverted dedup error — double-count risk"
+    )
+    assert result.promoted_to_semantic == 0
+
+
+@pytest.mark.asyncio
+async def test_dedup_recovers_same_pass_when_concurrent_winner_stamped_first(
+    fake_supabase: FakeSupabase,
+) -> None:
+    """A concurrent consolidator pass can win the race to stamp a
+    canonical between our SELECT (no canonical found) and our UPDATE
+    (stamp). The partial-unique-index rejects our stamp with
+    UniqueViolation. Iter-2 fix: re-query the canonical and merge into
+    it in the SAME ``deduplicate_episodic`` call — don't leave the
+    loser unstamped for the next run.
+    """
+    # Pre-seed a "concurrent-winner" canonical row that ALREADY has the
+    # signature stamped. The signature must match what
+    # _compute_dedup_signature would yield for the loser row below.
+    loser_row_data = {
+        "brand": "Kisqali",
+        "event_type": "ANALYSIS_COMPLETED",
+        "event_subtype": "ate_estimation",
+        "causal_path_id": "cp-race",
+        "agent_name": "estimator",
+        "description": "d",
+    }
+    expected_sig = _compute_dedup_signature(loser_row_data)
+    assert expected_sig is not None
+
+    fake_supabase.rows["episodic_memories"].append(
+        {
+            "memory_id": "m-winner",
+            "brand": "Kisqali",
+            "region": "northeast",
+            **loser_row_data,
+            "occurred_at": "2026-05-20T00:00:00Z",
+            "dedup_signature": expected_sig,
+            "dedup_counter": 1,
+        }
+    )
+    # The "loser" row arrives — still unstamped. The candidate filter
+    # in deduplicate_episodic only picks up signature-IS-NULL rows.
+    fake_supabase.rows["episodic_memories"].append(
+        {
+            "memory_id": "m-loser",
+            "brand": "Kisqali",
+            "region": "northeast",
+            **loser_row_data,
+            "occurred_at": "2026-05-20T01:00:00Z",
+            "dedup_signature": None,
+            "dedup_counter": 1,
+        }
+    )
+
+    # Patch the FakeSupabase so the FIRST canonical-lookup returns
+    # empty (forcing the fresh-stamp path), then the UPDATE stamp
+    # raises a unique-violation-shaped error. The handler must
+    # re-query, find the pre-existing canonical, and merge.
+    consolidator = Consolidator()
+    original_table = fake_supabase.table
+    lookup_calls = {"n": 0}
+    stamp_attempts = {"n": 0}
+
+    class _UniqueViolationStub(Exception):
+        """Stand-in for psycopg.errors.UniqueViolation that the
+        consolidator catches by class-name shape; the production code
+        recognizes any exception with 'unique' in its message and
+        re-queries."""
+
+        pass
+
+    def boom_table(name: str) -> _FakeQuery:
+        q = original_table(name)
+        original_select = q.select
+        original_update = q.update
+
+        def select_skipping_winner(cols: str, count: Optional[str] = None) -> _FakeQuery:
+            # The canonical-lookup call uses the EXACT column string
+            # "memory_id, brand, dedup_signature, dedup_counter, occurred_at"
+            # (no event_type/event_subtype/causal_path_id) — distinguish
+            # it from the main candidate-rows select which includes
+            # those. The first canonical-lookup must return empty so the
+            # fresh-stamp path runs; the second (re-query after stamp's
+            # UniqueViolation) returns the winner normally.
+            res = original_select(cols, count)
+            is_canonical_lookup = (
+                "event_type" not in cols and "memory_id" in cols and "dedup_signature" in cols
+            )
+            if is_canonical_lookup and lookup_calls["n"] == 0:
+                original_execute = res.execute
+                lookup_calls["n"] += 1
+
+                def empty_execute() -> Any:
+                    real = original_execute()
+                    real.data = []
+                    return real
+
+                res.execute = empty_execute  # type: ignore[method-assign]
+            elif is_canonical_lookup:
+                lookup_calls["n"] += 1
+            return res
+
+        def failing_first_stamp(payload: Dict[str, Any]) -> _FakeQuery:
+            # The stamp UPDATE sets dedup_signature to a v1:... value.
+            if (
+                payload.get("dedup_signature")
+                and str(payload["dedup_signature"]).startswith("v1:")
+                and stamp_attempts["n"] == 0
+            ):
+                stamp_attempts["n"] += 1
+                # Mimic a UniqueViolation surfaced on the stamp.
+                raise _UniqueViolationStub("duplicate key value violates unique constraint")
+            return original_update(payload)
+
+        if name == "episodic_memories":
+            q.select = select_skipping_winner  # type: ignore[method-assign]
+            q.update = failing_first_stamp  # type: ignore[method-assign]
+        return q
+
+    fake_supabase.table = boom_table  # type: ignore[method-assign]
+
+    result = await consolidator.deduplicate_episodic(brand="Kisqali", region=None)
+
+    # Same-pass recovery: the loser must be MERGED into the winner.
+    # End state: 1 row (the winner), counter = 1 (winner) + 1 (loser) = 2,
+    # signature unchanged.
+    rows = fake_supabase.rows["episodic_memories"]
+    assert len(rows) == 1, (
+        f"expected loser merged into winner in same pass, got {len(rows)} rows: {rows!r}"
+    )
+    assert rows[0]["memory_id"] == "m-winner", "winner canonical must survive"
+    assert rows[0]["dedup_counter"] == 2, (
+        f"loser must be merged into winner's counter; got {rows[0]['dedup_counter']}"
+    )
+    # No unrevertable errors recorded (the stamp failure was recovered).
+    assert "Kisqali" not in result.brands_with_dedup_errors
+
+
+@pytest.mark.asyncio
+async def test_dedup_atomicity_on_post_statement_failure(
+    fake_supabase: FakeSupabase,
+) -> None:
+    """Real-DB partial-failure: the DELETE statement REACHES the DB and
+    mutates the underlying store, then the response fails (network drop,
+    connection reset). Iter-2 L1: the revert must fire and the fake's
+    post-mutation state must be restored back to pre-mutation.
+
+    This is the deeper-than-iter-1 atomicity test — iter-1's atomicity
+    test patched .delete() to raise BEFORE mutating; this one mutates
+    THEN raises on the response."""
+    for i in range(3):
+        fake_supabase.rows["episodic_memories"].append(
+            {
+                "memory_id": f"m{i}",
+                "brand": "Kisqali",
+                "region": "northeast",
+                "event_type": "ANALYSIS_COMPLETED",
+                "event_subtype": "ate_estimation",
+                "causal_path_id": "cp-postfail",
+                "agent_name": "estimator",
+                "description": "d",
+                "occurred_at": f"2026-05-20T0{i}:00:00Z",
+                "dedup_signature": None,
+                "dedup_counter": 1,
+            }
+        )
+
+    consolidator = Consolidator()
+    original_table = fake_supabase.table
+    delete_executes = {"n": 0}
+
+    def boom_table(name: str) -> _FakeQuery:
+        q = original_table(name)
+        original_delete = q.delete
+
+        def post_statement_delete() -> _FakeQuery:
+            # Run the real delete chain (so the fake mutates), but wrap
+            # execute() to raise AFTER the mutation has been applied.
+            res = original_delete()
+            original_execute = res.execute
+
+            def execute_then_raise() -> Any:
+                # Apply the real mutation first, then raise on the response.
+                if name == "episodic_memories":
+                    delete_executes["n"] += 1
+                    original_execute()  # mutate the underlying store
+                    raise RuntimeError("simulated post-statement failure")
+                return original_execute()
+
+            res.execute = execute_then_raise  # type: ignore[method-assign]
+            return res
+
+        if name == "episodic_memories":
+            q.delete = post_statement_delete  # type: ignore[method-assign]
+        return q
+
+    fake_supabase.table = boom_table  # type: ignore[method-assign]
+
+    result = await consolidator.deduplicate_episodic(brand="Kisqali", region=None)
+
+    # The DELETE statement reached the store and removed the
+    # duplicates BEFORE the .execute() raised. The compensating
+    # revert MUST then have nulled the canonical's signature so
+    # subsequent runs can retry the group cleanly.
+    rows = fake_supabase.rows["episodic_memories"]
+    # The canonical (m0) survived; the duplicates (m1, m2) were
+    # deleted by the post-statement-success-then-fail. The revert
+    # cannot bring them back — the contract is "canonical reverted
+    # to pre-stamp state so the next run can re-examine". So we
+    # expect 1 row remaining (the canonical), with dedup_signature
+    # = None (reverted) and dedup_counter = 1 (pre-stamp).
+    canonical_rows = [r for r in rows if r["dedup_signature"] is None]
+    assert len(canonical_rows) >= 1, (
+        f"reverted canonical must exist with signature=None; rows={rows!r}"
+    )
+    # And the error must surface in result.errors (delete + revert recorded).
+    assert any("delete" in e.lower() for e in result.errors), (
+        f"post-statement failure must surface; got {result.errors!r}"
+    )
+    # The canonical's counter must NOT have been left bumped to merged
+    # value (= 3); it should be back at pre-stamp value (= 1).
+    for r in canonical_rows:
+        assert r.get("dedup_counter") == 1, (
+            f"canonical counter must revert to pre-stamp value=1, got {r.get('dedup_counter')}"
+        )
