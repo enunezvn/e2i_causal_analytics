@@ -1,0 +1,56 @@
+{
+  "_schema_version": 1,
+  "_description": "Performance baseline for issue #391 PERFORMANCE slice (4 boxes: cascade BFS / HybridRetriever / BM25 rebuild / Postgres slow log). Initial values seeded as placeholders under the 'first-run blesses' strategy — see PR body. The harness compares current p50/p95 wall-clock against these baselines and fails on regression beyond documented tolerance bands. Real production targets are listed in `_target_*` fields for reference; baseline `mean_ms` values start at 0.0 because synthetic graph / corpus shapes need not match production. When tightening the baseline (after first non-zero run lands), update this file in the same PR; do NOT loosen tolerances to mask a regression.",
+  "_baseline_strategy": "placeholder-first-run-blesses",
+  "_seeded_on": "2026-05-20",
+  "_seeded_by_issue": 391,
+  "_seeded_in_pr_branch": "feat/391-checklist-performance",
+  "cascade_5hop_bfs": {
+    "_target_ms": 500.0,
+    "_target_rationale": "Issue #391 PERFORMANCE box 1: '< 500ms for 5-hop BFS'. Synthetic graph shape may not match production graph; tolerance band is relative to blessed baseline, not the absolute target.",
+    "_observed_on_dev_box_2026_05_20": "5 runs over ~5000-edge synthetic DAG produced median ~1010ms. The synthetic in-memory _FakeSupabaseGraph traverses ~1000 reachable nodes per cascade so absolute numbers reflect Python-side BFS overhead, NOT real Supabase round-trips. The 500ms absolute target remains the documentation anchor for an eventual real-Postgres measurement.",
+    "mean_ms": 0.0,
+    "tolerance_pct": 10.0,
+    "tolerance_abs_ms": 100.0,
+    "_tolerance_rationale": "10% relative OR 100ms absolute (whichever wider). Relative band catches drift; absolute band prevents noise on near-zero baselines. Pattern mirrors issue #377 placeholder-first-run baseline."
+  },
+  "hybrid_retriever_search_p50": {
+    "_target_ms": 200.0,
+    "_target_rationale": "Issue #391 PERFORMANCE box 2: '< 200ms for fused search'. Live retriever in CI skips when SUPABASE_URL/OPENAI_API_KEY absent; baseline is blessed on the first environment that has both.",
+    "_observed_on_dev_box_2026_05_20": "36-query run against live Supabase (no sk-* OPENAI key — dense stream degraded gracefully to []) produced p50~336ms. NOT representative of full retriever; placeholder remains 0.0 until first run with both Supabase + OpenAI present.",
+    "mean_ms": 0.0,
+    "tolerance_pct": 20.0,
+    "tolerance_abs_ms": 50.0,
+    "_tolerance_rationale": "20% relative OR 50ms absolute. Wider band than cascade because network round-trips dominate; absolute band protects against jitter."
+  },
+  "hybrid_retriever_search_p95": {
+    "_target_ms": 500.0,
+    "_target_rationale": "Tail-latency budget: p95 should not exceed 2.5x the p50 target (200ms). 500ms is a conservative tail-latency ceiling for a 3-stream fused search.",
+    "_observed_on_dev_box_2026_05_20": "36-query run against live Supabase (no sk-* OPENAI key — dense stream degraded gracefully to []) produced p95~1041ms. NOT representative of full retriever; placeholder remains 0.0.",
+    "mean_ms": 0.0,
+    "tolerance_pct": 25.0,
+    "tolerance_abs_ms": 100.0,
+    "_tolerance_rationale": "25% relative OR 100ms absolute. p95 is noisier than p50 — wider tolerance is appropriate."
+  },
+  "bm25_build_1k": {
+    "_observed_on_dev_box_2026_05_20": "3 runs at N=1000 produced median ~55ms (raw timings ~54-57ms).",
+    "mean_ms": 0.0,
+    "tolerance_pct": 20.0,
+    "tolerance_abs_ms": 50.0,
+    "_tolerance_rationale": "Build time for 1000-doc corpus via the reference Python BM25 implementation. Tolerance: 20% relative OR 50ms absolute. Corpus repeats from synthetic_corpus.jsonl to fill the slice."
+  },
+  "bm25_build_5k": {
+    "_observed_on_dev_box_2026_05_20": "3 runs at N=5000 produced median ~283ms (raw timings ~266-350ms).",
+    "mean_ms": 0.0,
+    "tolerance_pct": 20.0,
+    "tolerance_abs_ms": 100.0,
+    "_tolerance_rationale": "Build time for 5000-doc corpus; same tolerance shape as 1k slice, wider absolute floor because total work is ~5x."
+  },
+  "bm25_build_10k": {
+    "_observed_on_dev_box_2026_05_20": "3 runs at N=10000 produced median ~539ms (raw timings ~514-586ms).",
+    "mean_ms": 0.0,
+    "tolerance_pct": 20.0,
+    "tolerance_abs_ms": 200.0,
+    "_tolerance_rationale": "Build time for 10000-doc corpus; same tolerance shape, wider absolute floor because total work is ~10x."
+  }
+}

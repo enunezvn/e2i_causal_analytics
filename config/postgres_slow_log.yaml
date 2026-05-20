@@ -1,0 +1,45 @@
+# Postgres slow-query log GUCs — issue #391 PERFORMANCE box 4.
+# Companion to `config/postgres_slow_log.md` (operator-facing instructions).
+#
+# IaC-shaped declaration of the GUC values. Consumed by:
+#   - operators applying to self-hosted Postgres via `ALTER SYSTEM` (see the
+#     `postgres_slow_log.md` step-by-step).
+#   - the Supabase Management API curl command in the markdown (same
+#     values, JSON shape).
+#
+# Lifecycle:
+#   - lifecycle_state: advisory
+#     This file is gate-SHAPED (contains the keyword `threshold` in the
+#     `log_min_duration_statement_threshold_ms` key). Per
+#     `scripts/check_lifecycle_state.py`'s substring matcher, top-level
+#     `lifecycle_state` declaration is required. Slow-log is an OBSERVABILITY
+#     surface (emit signals to a log destination), not a gate (does not
+#     drop features / halt the pipeline / deny promotions), so `advisory`
+#     is the correct lifecycle state per `src/lifecycle/gate_lifecycle.py`.
+#
+# Change-management: see the "Re-baseline & change-management" section of
+# `postgres_slow_log.md`.
+lifecycle_state: advisory
+
+# Threshold for the slow-query log. Issue #391 box 4 target: queries
+# slower than 100ms are logged. The GUC name in Postgres is
+# `log_min_duration_statement`; we keep our local key as
+# `log_min_duration_statement_threshold_ms` because the unit must be
+# explicit (Postgres accepts `'100ms'` as a duration, OR `100` as
+# milliseconds when set via the Supabase Management API — see the README
+# in `postgres_slow_log.md`).
+log_min_duration_statement_threshold_ms: 100
+
+# Supporting GUCs (see `postgres_slow_log.md` for rationale per row).
+log_statement: 'none'
+log_duration: false
+log_line_prefix: '%t [%p] %u@%d/%a '
+log_lock_waits: true
+track_io_timing: true
+
+# Owner + on-call digest cadence. Slow-log enforcement is OPERATIONAL,
+# not code-tested. The PR (issue #391 PERFORMANCE) installs the config;
+# the on-call rotation is responsible for the weekly review cadence.
+review_cadence: weekly
+review_owner: oncall-rotation
+issue_ref: 391
