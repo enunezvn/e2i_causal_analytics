@@ -347,6 +347,30 @@ celery_app.conf.beat_schedule = {
         "schedule": 300.0,  # 5 minutes
         "options": {"queue": "quick"},
     },
+    # Crystallization (#376 Phase 4): aggregate cross-agent findings into
+    # executive_insights every 6 hours on the analytics queue.
+    #
+    # Schedule semantics (codex iter-1 M3 honest-doc update):
+    # This entry uses Celery beat's relative-interval form
+    # (``schedule: 21600.0``) which runs every 6 hours measured from
+    # the BEAT SCHEDULER start, NOT from a fixed wall-clock time. The
+    # implementation does NOT enforce any offset relative to the daily
+    # ``insight-lifecycle-consolidate`` entry; the two tasks run
+    # independently and their phase relationship depends on beat
+    # restart timing.
+    #
+    # The plan §Phase 4 line 141 specced a "30 min after
+    # consolidation" offset; that framing is NOT a load-bearing
+    # operational contract. If a fixed wall-clock offset becomes a
+    # real ops requirement (e.g. CI runs prove a race condition
+    # against the consolidator), replace this entry with a
+    # ``celery.schedules.crontab`` form — but absent a demonstrated
+    # need, the relative-interval form is simpler and idempotent.
+    "crystallization-portfolio": {
+        "task": "src.tasks.crystallization_tasks.crystallize_portfolio",
+        "schedule": 21600.0,  # 6 hours (no strict offset to consolidator)
+        "options": {"queue": "analytics"},
+    },
 }
 
 # =============================================================================

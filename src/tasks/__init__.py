@@ -35,6 +35,13 @@ from src.tasks.ab_testing_tasks import (
     srm_detection_sweep,
 )
 
+# Crystallization subsystem (#376 Phase 4): importing the module fires the
+# @celery_app.task decorator so the portfolio task is discoverable by the
+# Celery worker. Without this line, the worker boot would NOT see
+# ``crystallize_portfolio`` and beat-driven dispatches would dead-letter.
+# Memory: [[feat-375-phase3-hardening-close-20260519]].
+from src.tasks.crystallization_tasks import crystallize_portfolio
+
 # Drift Monitoring Tasks (Phase 14)
 from src.tasks.drift_monitoring_tasks import (
     check_all_production_models,
@@ -114,4 +121,6 @@ __all__ = [
     "consolidate_insights",
     "sentinel_dispatcher",
     "reanalyze_finding",
+    # Crystallization subsystem (#376 Phase 4)
+    "crystallize_portfolio",
 ]
