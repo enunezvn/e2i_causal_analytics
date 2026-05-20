@@ -879,3 +879,190 @@ async def test_dedup_atomicity_on_post_statement_failure(
         assert r.get("dedup_counter") == 1, (
             f"canonical counter must revert to pre-stamp value=1, got {r.get('dedup_counter')}"
         )
+
+
+# ---------------------------------------------------------------------------
+# iter-3 follow-ups: multi-row recovery counter correctness (new-NEW-H1)
+# + _is_unique_violation false-positive rejection (new-NEW-M2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_recover_unique_violation_multi_row_counter_correctness(
+    fake_supabase: FakeSupabase,
+) -> None:
+    """Iter-3 new-NEW-H1: when a multi-row group hits UniqueViolation on
+    its stamp UPDATE, the recovery path must add EXACTLY ``SUM(group
+    counters)`` to the existing canonical — not the canonical's own
+    counter PLUS the merged_counter (which would double-count).
+
+    Iter-2 bug: ``_stamp_dedup_signature`` was called with
+    ``counter=merged_counter`` (e.g. 3 for a 3-row group of singletons).
+    The IntegrityError handler passed that 3 to
+    ``_recover_unique_violation`` as ``loser_counter``, which then
+    landed in the incoming list as the loser's own counter. Plus the
+    siblings each contributed their own counter (1 each). Total:
+    ``existing(1) + loser(3) + R2(1) + R3(1) = 6``. Expected
+    ``existing(1) + sum(group) = 1 + 3 = 4``.
+
+    Iter-3 fix: drop the redundant ``loser_counter`` param and read
+    each row's OWN counter from its dict in the incoming list.
+    """
+    # Pre-seed the "winner" canonical with counter=1 + matching sig.
+    winner_row_fields = {
+        "brand": "Kisqali",
+        "event_type": "ANALYSIS_COMPLETED",
+        "event_subtype": "ate_estimation",
+        "causal_path_id": "cp-multi",
+        "agent_name": "estimator",
+        "description": "d",
+    }
+    expected_sig = _compute_dedup_signature(winner_row_fields)
+    assert expected_sig is not None
+    fake_supabase.rows["episodic_memories"].append(
+        {
+            "memory_id": "m-winner",
+            "region": "northeast",
+            **winner_row_fields,
+            "occurred_at": "2026-05-20T00:00:00Z",
+            "dedup_signature": expected_sig,
+            "dedup_counter": 1,
+        }
+    )
+    # Seed 3 unstamped duplicates of the same key — loser group R1/R2/R3.
+    for i in range(3):
+        fake_supabase.rows["episodic_memories"].append(
+            {
+                "memory_id": f"m-loser{i}",
+                "region": "northeast",
+                **winner_row_fields,
+                "occurred_at": f"2026-05-20T0{i + 1}:00:00Z",
+                "dedup_signature": None,
+                "dedup_counter": 1,
+            }
+        )
+
+    # Patch select to make the FIRST canonical-lookup empty (forcing the
+    # fresh-stamp path), then patch update to raise UniqueViolation on
+    # the first stamp attempt (the 3-row group's stamp). Subsequent
+    # canonical-lookups + update calls go through normally so the
+    # recovery path can re-query and merge.
+    consolidator = Consolidator()
+    original_table = fake_supabase.table
+    lookup_calls = {"n": 0}
+    stamp_attempts = {"n": 0}
+
+    class _UniqueViolationStub(Exception):
+        pass
+
+    def boom_table(name: str) -> _FakeQuery:
+        q = original_table(name)
+        original_select = q.select
+        original_update = q.update
+
+        def select_skipping_winner(cols: str, count: Optional[str] = None) -> _FakeQuery:
+            res = original_select(cols, count)
+            is_canonical_lookup = (
+                "event_type" not in cols and "memory_id" in cols and "dedup_signature" in cols
+            )
+            if is_canonical_lookup and lookup_calls["n"] == 0:
+                original_execute = res.execute
+                lookup_calls["n"] += 1
+
+                def empty_execute() -> Any:
+                    real = original_execute()
+                    real.data = []
+                    return real
+
+                res.execute = empty_execute  # type: ignore[method-assign]
+            elif is_canonical_lookup:
+                lookup_calls["n"] += 1
+            return res
+
+        def first_stamp_violates(payload: Dict[str, Any]) -> _FakeQuery:
+            if (
+                payload.get("dedup_signature")
+                and str(payload["dedup_signature"]).startswith("v1:")
+                and stamp_attempts["n"] == 0
+            ):
+                stamp_attempts["n"] += 1
+                raise _UniqueViolationStub("duplicate key value violates unique constraint")
+            return original_update(payload)
+
+        if name == "episodic_memories":
+            q.select = select_skipping_winner  # type: ignore[method-assign]
+            q.update = first_stamp_violates  # type: ignore[method-assign]
+        return q
+
+    fake_supabase.table = boom_table  # type: ignore[method-assign]
+
+    await consolidator.deduplicate_episodic(brand="Kisqali", region=None)
+
+    # End state: 1 row (the winner), counter = 1 (existing) + 3 (the
+    # three losers, each contributing 1) = 4. NOT 6.
+    rows = fake_supabase.rows["episodic_memories"]
+    assert len(rows) == 1, f"expected all losers merged into winner, got {len(rows)} rows: {rows!r}"
+    assert rows[0]["memory_id"] == "m-winner"
+    assert rows[0]["dedup_counter"] == 4, (
+        f"counter must be 1+3=4 (existing + sum(group)), got {rows[0]['dedup_counter']} "
+        f"— inflation bug if 6, off-by-something if other"
+    )
+    assert rows[0]["dedup_signature"] == expected_sig
+
+
+def test_is_unique_violation_rejects_non_constraint_exceptions_with_unique_in_message() -> None:
+    """Iter-3 new-NEW-M2: ``_is_unique_violation`` must NOT return True
+    for non-DB-constraint exceptions that happen to mention "unique" in
+    their class name or message. The iter-2 matcher was too broad — any
+    custom exception with "unique" anywhere was routed through the
+    recovery path, suppressing semantic promotion via the brand-error
+    mark.
+
+    Iter-3 tightens the matcher to require BOTH class-name signal
+    ("UniqueViolation" substring) AND message signal ("unique" + a
+    DB-constraint token like "constraint" or "index").
+    """
+    from src.memory.lifecycle.consolidator import Consolidator
+
+    # Class name carries "Unique" but not "Violation" → REJECT.
+    class UniqueIDError(Exception):
+        pass
+
+    assert not Consolidator._is_unique_violation(UniqueIDError("something")), (
+        "class with 'Unique' but no 'Violation' must NOT be treated as UniqueViolation"
+    )
+
+    # Bare Exception with "unique" in message → REJECT (no class match).
+    assert not Consolidator._is_unique_violation(Exception("unique connection error")), (
+        "bare Exception with 'unique' in message but no class-name match must be REJECTED"
+    )
+
+    # Class name has "Violation" but message lacks "unique" / "constraint" / "index" → REJECT.
+    class CustomViolation(Exception):
+        pass
+
+    assert not Consolidator._is_unique_violation(CustomViolation("not really")), (
+        "Violation class without unique/constraint/index in message must NOT match"
+    )
+
+    # Even broader negative: class has 'unique' but no 'Violation' →
+    # REJECT. (e.g., a non-DB unique-id-generator error)
+    class UniqueGenError(Exception):
+        pass
+
+    assert not Consolidator._is_unique_violation(UniqueGenError("collision in id")), (
+        "class with 'unique' but no 'Violation' must NOT match"
+    )
+
+    # POSITIVE: the test stub used in iter-2 tests must STILL match.
+    class _UniqueViolationStub(Exception):
+        pass
+
+    assert Consolidator._is_unique_violation(
+        _UniqueViolationStub("duplicate key value violates unique constraint")
+    ), "real-shape UniqueViolation (class + message both signal) must match"
+
+    # POSITIVE: the alternative message wording with 'unique index' also matches.
+    assert Consolidator._is_unique_violation(
+        _UniqueViolationStub("duplicate key value violates unique index uix_episodic")
+    ), "'unique index' phrasing must also match (real Postgres uses either wording)"

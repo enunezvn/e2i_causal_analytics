@@ -438,7 +438,8 @@ class Consolidator:
                 counter=canonical_pre_counter,
                 result=result,
                 brand=group_brand,
-                duplicates=[],
+                loser_row=canonical,
+                siblings=[],
             )
             return
 
@@ -460,7 +461,8 @@ class Consolidator:
             counter=merged_counter,
             result=result,
             brand=group_brand,
-            duplicates=duplicates,
+            loser_row=canonical,
+            siblings=duplicates,
         )
         if not stamped:
             return  # stamp failure already recorded; no deletes to roll back
@@ -645,15 +647,33 @@ class Consolidator:
 
     @staticmethod
     def _is_unique_violation(exc: BaseException) -> bool:
-        """Detect a DB partial-unique-index violation by class-name +
-        message shape. We use shape-matching rather than ``isinstance``
-        because the unit-test ``FakeSupabase`` raises a stand-in error
-        (``_UniqueViolationStub``); production raises
-        ``psycopg.errors.UniqueViolation``. Both surface a 'unique'
-        token in the class name or the message — match either."""
+        """Detect a DB partial-unique-index violation by REQUIRING BOTH
+        class-name AND message signals (iter-3 new-NEW-M2 tightening).
+
+        Class-name signal: substring ``"UniqueViolation"`` (case-
+        insensitive). Matches both production ``psycopg.errors.
+        UniqueViolation`` and the unit-test stand-in
+        ``_UniqueViolationStub``. Rejects unrelated exception classes
+        that happen to mention "unique" (e.g. ``UniqueIDError``,
+        ``UniqueGenError``).
+
+        Message signal: ``"unique"`` AND one of ``"constraint"`` /
+        ``"index"``. Real Postgres unique violations always say
+        "duplicate key value violates unique constraint X" or
+        "duplicate key value violates unique index Y" — both tokens
+        present. Rejects exceptions with class-name match but
+        unrelated wording (e.g. ``CustomViolation("not really")``).
+
+        Both signals required → no false positives from broad token
+        match.
+        """
         cls_name = type(exc).__name__.lower()
+        if "uniqueviolation" not in cls_name:
+            return False
         msg = str(exc).lower()
-        return "unique" in cls_name or "unique" in msg
+        if "unique" not in msg:
+            return False
+        return "constraint" in msg or "index" in msg
 
     def _stamp_dedup_signature(
         self,
@@ -663,7 +683,8 @@ class Consolidator:
         counter: int,
         result: ConsolidationResult,
         brand: Optional[str] = None,
-        duplicates: Optional[List[Dict[str, Any]]] = None,
+        loser_row: Optional[Dict[str, Any]] = None,
+        siblings: Optional[List[Dict[str, Any]]] = None,
     ) -> tuple[bool, bool]:
         """UPDATE one episodic_memories row to set dedup_signature +
         dedup_counter.
@@ -674,17 +695,22 @@ class Consolidator:
           its normal post-stamp work (e.g. deleting duplicates).
         * ``(True, True)`` — stamp hit a UniqueViolation from a
           concurrent winner AND we successfully recovered by merging
-          the loser (this row + ``duplicates``) into the existing
-          canonical (iter-2 new-M1 same-pass recovery path). Caller
-          MUST skip post-stamp work because the recovery already
-          handled it.
+          the loser (``loser_row``) + its ``siblings`` into the
+          existing canonical (iter-2 new-M1 same-pass recovery path).
+          Caller MUST skip post-stamp work because the recovery
+          already handled it.
         * ``(False, False)`` — stamp failed for a non-recoverable
           reason; caller skips post-stamp work and the error is
           recorded.
 
-        ``brand`` + ``duplicates`` are passed through so the recovery
-        path can re-key the canonical lookup and merge the loser's
-        siblings together.
+        ``loser_row`` (iter-3 new-NEW-H1 fix) carries the canonical
+        row dict whose stamp UPDATE failed. The recovery path reads
+        ITS OWN counter — NOT the ``counter`` parameter (which is the
+        merged_counter the caller WANTED to stamp). Using the row's
+        own counter avoids double-counting in
+        ``_merge_into_existing_canonical`` (which sums incoming
+        counters; the siblings already contribute their own).
+        ``siblings`` are the rest of the multi-row group.
         """
         try:
             client.table("episodic_memories").update(
@@ -696,13 +722,16 @@ class Consolidator:
                 # iter-2 new-M1: a concurrent consolidator stamped the
                 # canonical between our SELECT (no canonical found) and
                 # our UPDATE. Re-query + merge in the same pass.
+                # iter-3 new-NEW-H1: pass loser_row directly so the
+                # recovery reads the loser's OWN counter, not
+                # merged_counter (which already includes siblings).
                 recovered = self._recover_unique_violation(
                     client=client,
                     brand=brand,
                     signature=signature,
+                    loser_row=loser_row,
                     loser_memory_id=memory_id,
-                    loser_counter=counter,
-                    duplicates=duplicates or [],
+                    siblings=siblings or [],
                     result=result,
                 )
                 if recovered:
@@ -717,16 +746,25 @@ class Consolidator:
         brand: Optional[str],
         signature: str,
         loser_memory_id: str,
-        loser_counter: int,
-        duplicates: List[Dict[str, Any]],
+        siblings: List[Dict[str, Any]],
         result: ConsolidationResult,
+        loser_row: Optional[Dict[str, Any]] = None,
     ) -> bool:
-        """Iter-2 new-M1: recover from a concurrent-winner race.
+        """Iter-2 new-M1 + iter-3 new-NEW-H1: recover from a
+        concurrent-winner race WITHOUT double-counting.
 
         Called from ``_stamp_dedup_signature`` when the stamp UPDATE
         raises a unique-violation-shaped exception. Re-queries the
         canonical (the winner has just stamped) and merges the loser
-        + any siblings (``duplicates``) into it.
+        (``loser_row`` carrying its OWN ``dedup_counter``) + any
+        ``siblings`` into the existing canonical.
+
+        Critical iter-3 invariant: the incoming list contains each
+        row's OWN ``dedup_counter`` — never the merged_counter the
+        failed-stamp UPDATE was trying to set. The merge-helper sums
+        incoming counters, so passing merged_counter for the loser
+        would inflate by ``sum(siblings.counter)`` (the bug closed
+        in iter-3 new-NEW-H1).
 
         Returns True iff recovery succeeded. False means the
         unique-violation could not be reconciled (canonical re-lookup
@@ -750,17 +788,19 @@ class Consolidator:
             result.mark_brand_dedup_error(brand)
             return False
 
-        # Build the synthetic incoming list (loser + siblings) so the
-        # existing merge path can run. The loser carries the counter
-        # value that the failed-stamp UPDATE was trying to set.
+        # Build the synthetic incoming list: loser + siblings, each
+        # carrying their OWN dedup_counter (iter-3 new-NEW-H1). When
+        # loser_row is supplied, read its own counter; otherwise
+        # default to 1 (the row was an unstamped fresh candidate).
+        loser_own_counter = int(loser_row.get("dedup_counter") or 1) if loser_row is not None else 1
         incoming: List[Dict[str, Any]] = [
-            {"memory_id": loser_memory_id, "dedup_counter": loser_counter}
+            {"memory_id": loser_memory_id, "dedup_counter": loser_own_counter}
         ]
-        for d in duplicates:
+        for s in siblings:
             incoming.append(
                 {
-                    "memory_id": d["memory_id"],
-                    "dedup_counter": int(d.get("dedup_counter") or 1),
+                    "memory_id": s["memory_id"],
+                    "dedup_counter": int(s.get("dedup_counter") or 1),
                 }
             )
 
