@@ -646,9 +646,12 @@ def test_portfolio_summary_invalidated_at_currently_leaks_pinned_for_issue_385(
     k = by_brand[brand]
 
     # TODO(#385): when the route filter is fixed, these assertions
-    # need to flip to ``insight_count == 1`` and ``average_effect_size
-    # == 0.40``. Currently the invalidated row leaks in — pin the
-    # contaminated state so a partial fix is caught.
+    # need to flip to:
+    #   * ``insight_count == 1`` (just the active row)
+    #   * ``effect_size_sample_count == 1`` (just the active numeric)
+    #   * ``average_effect_size == 0.40`` (just the active row's effect)
+    # Currently the invalidated row leaks in — pin the contaminated
+    # state so a partial fix is caught.
     assert k["insight_count"] == 2, (
         f"Expected current (#385) leak shape: invalidated row included "
         f"in count. Got insight_count={k['insight_count']} (if 1, the "
