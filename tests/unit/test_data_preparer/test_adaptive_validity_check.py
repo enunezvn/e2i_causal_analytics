@@ -717,6 +717,141 @@ def test_unknown_manifest_source_falls_through_to_layer_3():
         )
 
 
+# --- Issue #356: _resolve_manifest_features synthetic-key coverage ----------
+
+
+def test_resolve_manifest_features_csu_returns_non_empty_list():
+    """Regression: ``_resolve_manifest_features("csu")`` returns the
+    full CSU FeatureContract registry as a list.
+
+    Pre-existing behaviour; this test pins it so issue #356's "add
+    synthetic" change cannot silently regress the csu/optum branches.
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _resolve_manifest_features,
+    )
+    from src.data.feature_contract import FeatureContract
+    from src.data.manifests import CSU_FEATURES
+
+    result = _resolve_manifest_features("csu")
+    assert result is not None
+    assert isinstance(result, list)
+    assert len(result) == len(CSU_FEATURES)
+    for contract in result:
+        assert isinstance(contract, FeatureContract)
+
+
+def test_resolve_manifest_features_optum_returns_non_empty_list():
+    """Regression: ``_resolve_manifest_features("optum")`` returns the
+    full Optum FeatureContract registry as a list.
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _resolve_manifest_features,
+    )
+    from src.data.feature_contract import FeatureContract
+    from src.data.manifests import OPTUM_FEATURES
+
+    result = _resolve_manifest_features("optum")
+    assert result is not None
+    assert isinstance(result, list)
+    assert len(result) == len(OPTUM_FEATURES)
+    for contract in result:
+        assert isinstance(contract, FeatureContract)
+
+
+def test_resolve_manifest_features_synthetic_returns_non_empty_list():
+    """Issue #356: ``_resolve_manifest_features("synthetic")`` MUST return
+    a list of FeatureContract entries — not ``None``.
+
+    Before the fix this returned ``None`` because ``"synthetic"`` was
+    missing from the resolver dict, even though the synthetic manifest is
+    a registered first-class data source (see
+    ``src.data.manifests.MANIFEST_SOURCES``). Callers (KG cache
+    validation, role-attribution derivation) treated the ``None`` return
+    as "bypass / unknown source" rather than the real manifest registry,
+    silently dropping Layer 1 fingerprint validation and contract-keyed
+    role attribution for synthetic runs (which is the third major regime
+    in the codebase per ``data/synthetic/`` and the README).
+
+    Acceptance per issue #356:
+      * Returns a ``list`` (possibly empty, but not ``None``).
+      * Every entry is a ``FeatureContract``.
+      * The list matches ``SYNTHETIC_FEATURES`` registry membership
+        (so the resolver stays in lockstep with the manifest module).
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _resolve_manifest_features,
+    )
+    from src.data.feature_contract import FeatureContract
+    from src.data.manifests import SYNTHETIC_FEATURES
+
+    result = _resolve_manifest_features("synthetic")
+    # Issue #356 acceptance criterion: returns a list, not None.
+    assert result is not None, (
+        "_resolve_manifest_features('synthetic') returned None — this is "
+        "the issue #356 bug. The resolver dict is missing the 'synthetic' "
+        "key. Synthetic is a registered MANIFEST_SOURCES regime; the "
+        "resolver must include it so callers (KG cache validation, "
+        "role-attribution derivation) get a real registry instead of "
+        "the legacy-bypass fallback."
+    )
+    assert isinstance(result, list)
+    # Lockstep with the manifest module: the resolver list must match the
+    # SYNTHETIC_FEATURES dict's value set. If a future PR adds a contract
+    # to ``synthetic_feature_manifest.py`` it MUST also be reachable via
+    # this resolver — otherwise the two diverge and Layer 5 silently
+    # under-validates the new feature.
+    assert len(result) == len(SYNTHETIC_FEATURES)
+    by_name = {c.name for c in result}
+    assert by_name == set(SYNTHETIC_FEATURES.keys())
+    for contract in result:
+        assert isinstance(contract, FeatureContract)
+
+
+def test_resolve_manifest_features_unknown_still_returns_none():
+    """Regression: an unknown manifest source (typo, future cohort) still
+    returns ``None`` so the caller falls through to the legacy "trusted
+    upstream" branch with a warning. This pins the only-csu/optum/synthetic
+    contract — adding ``"synthetic"`` to the resolver must NOT make it
+    permissive for arbitrary strings.
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _resolve_manifest_features,
+    )
+
+    assert _resolve_manifest_features("future_indication") is None
+    assert _resolve_manifest_features("") is None
+    # Trailing whitespace / case typos must NOT pattern-match either.
+    assert _resolve_manifest_features("Synthetic") is None
+    assert _resolve_manifest_features("synthetic ") is None
+
+
+def test_resolve_manifest_features_lockstep_with_manifest_sources_registry():
+    """The resolver dict in ``adaptive_validity_check`` must cover every
+    key in ``src.data.manifests.MANIFEST_SOURCES``. Drift in either
+    direction (a manifest registered but not resolvable, or a resolvable
+    key with no manifest) breaks the Layer 1 / Layer 5 contract.
+
+    Drift-detection guard: future PRs that add a new cohort manifest
+    (e.g., Phase-5 cohort onboarding) must also update this resolver, or
+    this test trips with a clear "lockstep broken" message.
+    """
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _resolve_manifest_features,
+    )
+    from src.data.manifests import MANIFEST_SOURCES
+
+    for source in MANIFEST_SOURCES.keys():
+        result = _resolve_manifest_features(source)
+        assert result is not None, (
+            f"manifest source {source!r} is in MANIFEST_SOURCES but "
+            f"_resolve_manifest_features returned None — the resolver "
+            f"and the manifest registry have drifted. Add {source!r} to "
+            f"the registries dict in _resolve_manifest_features."
+        )
+        assert isinstance(result, list)
+
+
 # =============================================================================
 # Phase 2.9 Stage 1 — EnsembleVoter wiring (2026-05-08)
 # =============================================================================

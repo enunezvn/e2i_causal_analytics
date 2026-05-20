@@ -106,6 +106,7 @@ from src.data.manifests import (
     CSU_FORBIDDEN_AS_FEATURES,
     OPTUM_FEATURES,
     OPTUM_FORBIDDEN_AS_FEATURES,
+    SYNTHETIC_FEATURES,
     SYNTHETIC_FORBIDDEN_AS_FEATURES,
     lookup_feature_contract,
 )
@@ -1877,7 +1878,7 @@ def _load_kg_cache(scope_spec: dict[str, Any]) -> Optional[dict[str, list["KGEdg
                 "skipped for this run, cache treated as 'trusted upstream'. "
                 "Verify the manifest source string if this was unexpected.",
                 manifest_source,
-                ("csu", "optum"),
+                ("csu", "optum", "synthetic"),
             )
         else:
             # Critical writer/reader symmetry: the cache builder at
@@ -1952,8 +1953,8 @@ def _coerce_target_codes_for_fingerprint(raw: Any) -> list[tuple[str, str]]:
 def _resolve_manifest_features(
     manifest_source: str,
 ) -> Optional[list["FeatureContract"]]:
-    """Resolve a manifest source string ("csu", "optum", ...) to its
-    FeatureContract registry list.
+    """Resolve a manifest source string ("csu", "optum", "synthetic")
+    to its FeatureContract registry list.
 
     Returns ``None`` when ``manifest_source`` is unknown so the caller
     can bypass fingerprint validation (legacy compatibility for runs
@@ -1961,10 +1962,24 @@ def _resolve_manifest_features(
     ``MANIFEST_SOURCES``). Cache-staleness in that case is impossible
     to detect from this surface; the caller treats the cache as
     "trusted upstream".
+
+    Issue #356: ``"synthetic"`` is a registered first-class data source
+    in ``src.data.manifests.MANIFEST_SOURCES`` (the v5 Gate C2 engineering
+    CI manifest that declares ``borderline_genuine_feature``). Earlier
+    versions of this resolver omitted the synthetic branch, so synthetic
+    runs silently fell through to the legacy "unknown source" fallback —
+    bypassing Layer 1 fingerprint validation and producing empty
+    role-attribution dicts in ``_derive_role_attributions_safely``. The
+    resolver dict must stay in lockstep with ``MANIFEST_SOURCES`` (see
+    the ``test_resolve_manifest_features_lockstep_with_manifest_sources_registry``
+    drift guard). ``SYNTHETIC_FEATURES`` is a ``dict[str, FeatureContract]``
+    (unlike CSU/Optum's ``list[FeatureContract]``); we materialize its
+    values into a list to match the resolver's declared return shape.
     """
     registries: dict[str, list[FeatureContract]] = {
         "csu": list(CSU_FEATURES),
         "optum": list(OPTUM_FEATURES),
+        "synthetic": list(SYNTHETIC_FEATURES.values()),
     }
     return registries.get(manifest_source)
 
