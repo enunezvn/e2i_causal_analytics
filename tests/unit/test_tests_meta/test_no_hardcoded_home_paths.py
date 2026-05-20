@@ -105,9 +105,7 @@ def _ast_scan_file(path: Path) -> List[str]:
                         f"developer path {arg.value!r}"
                     )
             for kw in node.keywords:
-                if isinstance(kw.value, ast.Constant) and _is_forbidden_string(
-                    kw.value.value
-                ):
+                if isinstance(kw.value, ast.Constant) and _is_forbidden_string(kw.value.value):
                     findings.append(
                         f"{path}:{node.lineno}: keyword argument {kw.arg!r} "
                         f"is a hard-coded developer path {kw.value.value!r}"
@@ -126,9 +124,7 @@ def _substring_scan_file(path: Path) -> List[str]:
 
     for lineno, line in enumerate(lines, start=1):
         if _QUOTED_PREFIX_RE.search(line):
-            findings.append(
-                f"{path}:{lineno}: quoted forbidden prefix in line: {line.strip()!r}"
-            )
+            findings.append(f"{path}:{lineno}: quoted forbidden prefix in line: {line.strip()!r}")
     return findings
 
 
@@ -153,8 +149,7 @@ def test_tests_dir_contains_no_hardcoded_home_paths_ast() -> None:
     assert not findings, (
         "Hard-coded developer/user absolute paths detected in tests/ — "
         "derive the repo root via Path(__file__).resolve().parents[N] instead "
-        "(see issue #410 for rationale). Findings:\n  - "
-        + "\n  - ".join(findings)
+        "(see issue #410 for rationale). Findings:\n  - " + "\n  - ".join(findings)
     )
 
 
@@ -174,6 +169,5 @@ def test_tests_dir_contains_no_hardcoded_home_paths_substring() -> None:
     assert not findings, (
         "Quoted developer/user absolute-path prefixes detected in tests/ — "
         "derive the repo root via Path(__file__).resolve().parents[N] instead "
-        "(see issue #410 for rationale). Findings:\n  - "
-        + "\n  - ".join(findings)
+        "(see issue #410 for rationale). Findings:\n  - " + "\n  - ".join(findings)
     )
