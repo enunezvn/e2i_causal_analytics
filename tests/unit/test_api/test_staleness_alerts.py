@@ -520,8 +520,12 @@ async def test_alerts_stream_exits_cleanly_when_subscriber_task_fails() -> None:
         subscriber task's exit.
       * ``bridge._subscriber_task.done()`` is True AND
         ``.exception()`` returns the simulated ``ConnectionError``
-        (i.e. the failure surfaces to the lifecycle owner — not
-        silently swallowed at task level).
+        — i.e. the failure is exposed to test-level introspection
+        and future observability hooks rather than being silently
+        swallowed at task level. The SSE :meth:`stream` path itself
+        does NOT inspect ``task.exception()``; it exits on
+        ``task.done()`` regardless of exception state (see
+        ``staleness_alerts.py::_subscribe_and_pump`` docstring NOTE).
     """
     from redis.exceptions import ConnectionError as RedisConnectionError
 
@@ -564,15 +568,18 @@ async def test_alerts_stream_exits_cleanly_when_subscriber_task_fails() -> None:
             await gen.aclose()
 
     # The subscriber task MUST be done AND its exception MUST be the
-    # simulated ConnectionError, NOT silently swallowed — that's how
-    # the lifecycle owner learns the broker was down.
+    # simulated ConnectionError, NOT silently swallowed at task level —
+    # the re-raise contract makes the failure introspectable via
+    # ``task.exception()`` for tests + future observability hooks. The
+    # SSE stream loop itself does NOT branch on this; it exits on
+    # ``task.done()`` regardless.
     task = bridge._subscriber_task  # type: ignore[attr-defined]
     assert task is not None
     assert task.done(), "subscriber task must be done after stream exit"
     exc = task.exception()
     assert isinstance(exc, RedisConnectionError), (
         f"subscriber task exception MUST surface the simulated "
-        f"RedisConnectionError so the SSE-bridge lifecycle owner can "
-        f"distinguish 'broker outage' from 'no events to send'; got: "
-        f"{exc!r}"
+        f"RedisConnectionError on task.exception() so tests + "
+        f"observability hooks can distinguish 'broker outage' from "
+        f"'no events to send'; got: {exc!r}"
     )

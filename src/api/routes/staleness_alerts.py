@@ -169,16 +169,26 @@ class AlertBridge:
         would leave the connection parked forever (until the client
         eventually times out).
 
-        Exception propagation (codex iter-1 H1)
-        ---------------------------------------
+        Exception propagation (codex iter-1 H1, iter-2 doc trim)
+        --------------------------------------------------------
         Unexpected exceptions from the factory, ``pubsub.subscribe()``,
-        or the ``listen()`` loop are LOGGED here, then RE-RAISED so
-        ``task.exception()`` carries them. The lifecycle owner (the
-        ``stream()`` generator's ``finally`` block) can distinguish
-        "subscriber finished cleanly" from "subscriber crashed with
-        ConnectionError" via that surface. ``asyncio.CancelledError``
-        is re-raised unchanged so the task is marked cancelled rather
-        than failed.
+        or the ``listen()`` loop are LOGGED here, then RE-RAISED so the
+        exception surfaces on ``task.exception()``.
+        ``asyncio.CancelledError`` is re-raised unchanged so the task
+        is marked cancelled rather than failed.
+
+        NOTE: The SSE :meth:`stream` path itself does NOT inspect
+        ``task.exception()`` — it exits cleanly on ``task.done()``
+        regardless of exception state. The re-raise contract is purely
+        for testability + external observability: unit tests assert
+        that a simulated broker outage surfaces via
+        ``bridge._subscriber_task.exception()``, and future
+        observability hooks (e.g. error-tracking sidecars that
+        introspect completed tasks) get the failure for free. Runtime
+        branching on the exception type inside the stream loop is
+        intentionally out of scope for V1 — would require its own
+        design + test (e.g. emitting a final ``event: error`` SSE
+        frame before close).
         """
         try:
             try:
@@ -243,8 +253,9 @@ class AlertBridge:
                 raise
             except Exception:
                 # An unexpected error in the listen loop. Log + re-raise
-                # so the SSE generator can surface the failure to the
-                # lifecycle owner.
+                # so the exception is exposed via ``task.exception()`` for
+                # tests and observability hooks; the stream loop itself
+                # does NOT inspect it (exits on ``task.done()`` regardless).
                 logger.exception(
                     f"staleness-alerts bridge: subscriber loop failed for brand={self.brand}"
                 )
