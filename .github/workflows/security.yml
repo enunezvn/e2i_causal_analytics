@@ -205,6 +205,7 @@ jobs:
             --ignore-vuln GHSA-fh64-r2vc-xvhr `# mlflow 3.7.0 fix in 3.11.1 — bundle with mlflow upgrade ticket` \
             --ignore-vuln GHSA-65h7-c7c4-mghx `# mlflow 3.7.0 (CVE-2026-2393; SSRF in _create_webhook()); fix in 3.9.0 — bundle with mlflow upgrade ticket #362. Auth in front of MLflow mitigates today.` \
             --ignore-vuln GHSA-42h5-h8qh-vv9v `# mlflow 3.7.0 (CVE-2026-2614; arbitrary file read in _create_model_version()); fix in 3.10.0 — bundle with mlflow upgrade ticket #362. Auth in front of MLflow mitigates today.` \
+            --ignore-vuln GHSA-rvhj-8chj-8v3c `# mlflow 3.7.0 (CVE-2026-0596; command injection via enable_mlserver=True model_uri); fix in 3.9.0 — bundle with mlflow upgrade ticket #362. We don't run model serving with enable_mlserver=True.` \
             --ignore-vuln GHSA-95ww-475f-pr4f `# ragas 0.4.1 has no upstream fix as of 2026-04` \
             --ignore-vuln GHSA-69w3-r845-3855 `# transformers 4.57.3 fix only in 5.0.0rc3 (refuse rc); revisit when 5.0 GA lands` \
             --ignore-vuln GHSA-8mp2-v27r-99xp `# mistune 3.1.4 (CVE-2026-33079; LINK_TITLE_RE ReDoS); transitive dep, no upstream fix as of 2026-05` \
