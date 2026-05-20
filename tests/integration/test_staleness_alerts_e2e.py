@@ -176,6 +176,7 @@ def _wait_for_port(host: str, port: int, *, timeout: float = 10.0) -> bool:
 def test_e2i_alerts_publish_reaches_sse_subscriber(
     reset_redis_factory: None,
     redis_url: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Real Redis publish on ``e2i:alerts`` → SSE bridge → SSE client
     receives the event within 5 seconds of publishing.
@@ -199,8 +200,12 @@ def test_e2i_alerts_publish_reaches_sse_subscriber(
     deadlock. A real uvicorn HTTP server is the only way to exercise
     the streaming wire format end-to-end.
 
-    Auth: bypassed via ``E2I_TESTING_MODE=1`` (set defensively here in
-    case the test runs in isolation without the parent conftest).
+    Auth: bypassed via ``E2I_TESTING_MODE=1`` (codex iter-1 M1: we now
+    set this via ``monkeypatch.setenv`` + ``monkeypatch.setattr`` so
+    pytest's monkeypatch fixture AUTOMATICALLY restores both surfaces
+    at test teardown; without this restore, later tests running in
+    the same process would inherit testing-mode auth bypass and
+    silently false-positive).
     """
     import threading
     import time
@@ -208,19 +213,18 @@ def test_e2i_alerts_publish_reaches_sse_subscriber(
     import httpx
     import redis  # sync client for publishing
     import uvicorn
-
-    # Defensive: enable testing-mode auth bypass so the SSE route lets
-    # the request through without a real Supabase JWT.
-    os.environ["E2I_TESTING_MODE"] = "1"
-
     from fastapi import FastAPI
 
     from src.api.dependencies import auth as auth_module
     from src.api.routes.staleness_alerts import router
 
-    # The auth module reads TESTING_MODE at import; flip explicitly so
-    # this test is robust to import order.
-    auth_module.TESTING_MODE = True
+    # Codex iter-1 M1: monkeypatch BOTH surfaces (env var + module flag)
+    # so pytest auto-restores them at teardown. The auth module reads
+    # TESTING_MODE once at import; later tests in the same process
+    # would otherwise see the leaked True value and silently bypass
+    # authentication.
+    monkeypatch.setenv("E2I_TESTING_MODE", "1")
+    monkeypatch.setattr(auth_module, "TESTING_MODE", True)
 
     app = FastAPI()
     app.include_router(router, prefix="/api")

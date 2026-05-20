@@ -157,70 +157,107 @@ class AlertBridge:
         """Open the pubsub subscription and pump matching alerts into
         the per-connection queue. Runs as the background task.
 
-        On any unexpected error this logs and returns — the SSE
-        generator will then drain whatever it had buffered and exit
-        cleanly.
+        Liveness contract (codex iter-1 H1)
+        -----------------------------------
+        ON EVERY EXIT — success, exception, OR cancellation — the
+        ``finally`` clause sets :attr:`self._item_ready` so the SSE
+        generator's blocking ``await self._item_ready.wait()`` returns
+        immediately and the generator can re-check
+        ``self._subscriber_task.done()`` and exit. Without this
+        guarantee, a factory-raise / subscribe-raise / listen-loop-
+        raise that happened AFTER the generator entered the wait
+        would leave the connection parked forever (until the client
+        eventually times out).
+
+        Exception propagation (codex iter-1 H1)
+        ---------------------------------------
+        Unexpected exceptions from the factory, ``pubsub.subscribe()``,
+        or the ``listen()`` loop are LOGGED here, then RE-RAISED so
+        ``task.exception()`` carries them. The lifecycle owner (the
+        ``stream()`` generator's ``finally`` block) can distinguish
+        "subscriber finished cleanly" from "subscriber crashed with
+        ConnectionError" via that surface. ``asyncio.CancelledError``
+        is re-raised unchanged so the task is marked cancelled rather
+        than failed.
         """
         try:
-            client = await self._redis_factory()
-        except Exception:
-            logger.exception(
-                "staleness-alerts bridge: redis client factory failed; subscriber task exiting"
-            )
-            return
+            try:
+                client = await self._redis_factory()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # Log + re-raise so the task carries the exception.
+                # The finally on the outer try wakes the generator.
+                logger.exception(
+                    "staleness-alerts bridge: redis client factory failed; subscriber task exiting"
+                )
+                raise
 
-        try:
-            self._pubsub = client.pubsub()
-            await self._pubsub.subscribe(ALERTS_CHANNEL)
-        except Exception:
-            logger.exception(
-                f"staleness-alerts bridge: failed to subscribe to "
-                f"{ALERTS_CHANNEL}; subscriber task exiting"
-            )
-            return
+            try:
+                self._pubsub = client.pubsub()
+                await self._pubsub.subscribe(ALERTS_CHANNEL)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception(
+                    f"staleness-alerts bridge: failed to subscribe to "
+                    f"{ALERTS_CHANNEL}; subscriber task exiting"
+                )
+                raise
 
-        try:
-            async for raw_msg in self._pubsub.listen():
-                if self._closed:
-                    return
-                if raw_msg is None:
-                    # End-of-stream sentinel from a fake (or a real
-                    # pubsub that was closed beneath us).
-                    return
-                # Only forward real channel messages, not subscribe-
-                # confirmation control frames.
-                if raw_msg.get("type") != "message":
-                    continue
-                channel = raw_msg.get("channel")
-                if channel != ALERTS_CHANNEL:
-                    continue
-                raw_data = raw_msg.get("data")
-                if raw_data is None:
-                    continue
-                try:
-                    payload = json.loads(raw_data)
-                except (TypeError, ValueError):
-                    logger.warning(
-                        "staleness-alerts bridge: skipping non-JSON alert payload on channel=%s",
-                        ALERTS_CHANNEL,
-                    )
-                    continue
-                # Per-brand filter at the bridge layer. Multi-brand
-                # subscription is out of scope (issue #390 V1).
-                if not self._matches_brand(payload):
-                    continue
-                self._enqueue_with_backpressure(payload)
-        except asyncio.CancelledError:
-            # Normal disconnect path — re-raise so the task is properly
-            # marked cancelled and the lifecycle owner can await us.
-            raise
-        except Exception:
-            # An unexpected error in the subscriber loop MUST NOT crash
-            # the SSE generator silently. Log and exit; the consumer
-            # will drain remaining queued events and close.
-            logger.exception(
-                f"staleness-alerts bridge: subscriber loop failed for brand={self.brand}"
-            )
+            try:
+                async for raw_msg in self._pubsub.listen():
+                    if self._closed:
+                        return
+                    if raw_msg is None:
+                        # End-of-stream sentinel from a fake (or a real
+                        # pubsub that was closed beneath us).
+                        return
+                    # Only forward real channel messages, not subscribe-
+                    # confirmation control frames.
+                    if raw_msg.get("type") != "message":
+                        continue
+                    channel = raw_msg.get("channel")
+                    if channel != ALERTS_CHANNEL:
+                        continue
+                    raw_data = raw_msg.get("data")
+                    if raw_data is None:
+                        continue
+                    try:
+                        payload = json.loads(raw_data)
+                    except (TypeError, ValueError):
+                        logger.warning(
+                            "staleness-alerts bridge: skipping non-JSON "
+                            "alert payload on channel=%s",
+                            ALERTS_CHANNEL,
+                        )
+                        continue
+                    # Per-brand filter at the bridge layer. Multi-brand
+                    # subscription is out of scope (issue #390 V1).
+                    if not self._matches_brand(payload):
+                        continue
+                    self._enqueue_with_backpressure(payload)
+            except asyncio.CancelledError:
+                # Normal disconnect path — re-raise so the task is properly
+                # marked cancelled and the lifecycle owner can await us.
+                raise
+            except Exception:
+                # An unexpected error in the listen loop. Log + re-raise
+                # so the SSE generator can surface the failure to the
+                # lifecycle owner.
+                logger.exception(
+                    f"staleness-alerts bridge: subscriber loop failed for brand={self.brand}"
+                )
+                raise
+        finally:
+            # Codex iter-1 H1: wake the SSE generator ON EVERY EXIT
+            # (success, exception, cancellation). The generator's
+            # ``while True`` loop re-checks ``self._subscriber_task.done()``
+            # after waking and returns cleanly. Without this finally
+            # clause, a subscriber failure that happened AFTER the
+            # generator entered ``await self._item_ready.wait()`` would
+            # leave the connection hung indefinitely.
+            self._item_ready.set()
 
     def _matches_brand(self, payload: Dict[str, Any]) -> bool:
         """True if the alert payload is in scope for this connection's

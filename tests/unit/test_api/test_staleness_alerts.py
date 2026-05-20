@@ -4,8 +4,9 @@ The bridge subscribes to the Redis pub/sub channel ``e2i:alerts`` and
 forwards alerts to connected CopilotKit clients via Server-Sent Events
 at ``GET /api/alerts/stream``.
 
-The five tests below pin the load-bearing behaviors stated in issue
-#390's acceptance criteria:
+The seven tests below pin the load-bearing behaviors stated in issue
+#390's acceptance criteria + the iter-1 codex review additions
+(H1 subscriber-failure liveness + L1 "all"-brand match):
 
 * ``test_alerts_stream_requires_auth``                — 401 without bearer
 * ``test_alerts_stream_yields_published_alert``       — single-brand alert
@@ -17,6 +18,12 @@ The five tests below pin the load-bearing behaviors stated in issue
                                                         drops other-brand
                                                         alerts at the
                                                         bridge layer
+* ``test_alerts_stream_matches_when_payload_brands_contains_all``
+                                                      — L1 (codex iter-1):
+                                                        cross-brand alerts
+                                                        with ``brands: ["all"]``
+                                                        reach every brand
+                                                        subscriber
 * ``test_alerts_stream_drops_oldest_under_backpressure``
                                                       — depth >100 → oldest
                                                         events dropped +
@@ -28,6 +35,21 @@ The five tests below pin the load-bearing behaviors stated in issue
                                                         task; Redis pubsub
                                                         ``aclose()`` invoked
                                                         on teardown
+* ``test_alerts_stream_exits_cleanly_when_subscriber_task_fails``
+                                                      — H1 (codex iter-1):
+                                                        subscriber-task
+                                                        failure (factory
+                                                        raise, subscribe
+                                                        raise, or listen
+                                                        loop raise) MUST
+                                                        wake the SSE
+                                                        generator within
+                                                        ~1s so the open
+                                                        connection drains
+                                                        + closes
+                                                        deterministically
+                                                        (not hangs to
+                                                        client timeout)
 
 The Redis pub/sub subscription is injected via a fake-pubsub fixture so
 the test never opens a real Redis connection. The integration test at
@@ -410,4 +432,147 @@ async def test_alerts_stream_handles_subscriber_disconnect_cleanly() -> None:
     assert task.done(), (
         "Subscriber background task MUST be cancelled / completed when "
         "the SSE generator is closed; instead it is still pending."
+    )
+
+
+# ===========================================================================
+# Test 6 (L1 — codex iter-1): "all" brand-filter branch coverage
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_alerts_stream_matches_when_payload_brands_contains_all() -> None:
+    """A subscriber on ``brand=e2i`` MUST receive an alert published
+    with ``brands: ["all"]`` (no ``"e2i"`` token in the list). This
+    pins the cross-brand convention mirrored from
+    :mod:`src.memory.lifecycle.invalidator` — broadcast alerts reach
+    every brand subscriber.
+
+    Without this test, the ``"all" in brands`` branch in
+    :meth:`AlertBridge._matches_brand` is uncovered and could regress
+    silently (e.g. a refactor that tightened the check to
+    ``self.brand in brands`` only).
+    """
+    from src.api.routes import staleness_alerts as mod
+
+    fake_redis = _FakeRedis()
+
+    async def _factory() -> _FakeRedis:
+        return fake_redis  # type: ignore[return-value]
+
+    bridge = mod.AlertBridge(brand="e2i", redis_factory=_factory)
+    gen = bridge.stream()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    # Payload's brands list deliberately OMITS "e2i" — only "all". The
+    # subscriber should still receive it under the cross-brand rule.
+    cross_brand_payload = {
+        "type": "staleness_alert",
+        "sentinel_id": "s-all",
+        "brands": ["all"],
+        "findings": [],
+    }
+    await fake_redis.pubsub_instance.inject(cross_brand_payload)
+
+    events = await _collect_events(gen, expected=1, timeout=2.0)
+
+    assert len(events) == 1
+    body = events[0]
+    assert body["event"] == "alert"
+    assert json.loads(body["data"]) == cross_brand_payload
+
+
+# ===========================================================================
+# Test 7 (H1 — codex iter-1): subscriber-task failure does NOT hang the
+# SSE generator. Closure must complete within ~1 second of the
+# subscriber task exiting (success, exception, OR cancellation).
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_alerts_stream_exits_cleanly_when_subscriber_task_fails() -> None:
+    """If the subscriber task exits early (e.g. ``redis.from_url``
+    raised, ``pubsub.subscribe()`` raised, or the ``listen()`` loop
+    raised an unexpected error), the SSE generator MUST observe the
+    task completion and exit promptly — NOT hang waiting on
+    ``self._item_ready`` forever.
+
+    Before the iter-1 fix (codex H1) the stream loop only checked
+    ``self._subscriber_task.done()`` BEFORE blocking on
+    ``self._item_ready.wait()``; a subscriber failure that occurred
+    AFTER that check would leave the generator parked indefinitely.
+    The fix is to wake the event on task exit (Pattern A —
+    ``finally: self._item_ready.set()`` inside the subscriber, OR
+    Pattern B — ``task.add_done_callback(lambda t: self._item_ready.set())``
+    at task creation), so the generator's ``while True`` immediately
+    re-checks ``.done()`` and returns.
+
+    Failure simulation: the injected ``redis_factory`` raises
+    ``redis.exceptions.ConnectionError`` — this is the canonical
+    "broker unreachable" failure shape. The subscriber's first action
+    is ``await self._redis_factory()``, so the failure surfaces at
+    the earliest possible point.
+
+    Acceptance:
+      * SSE generator's iteration MUST raise ``StopAsyncIteration``
+        (or equivalent end-of-stream signal) within 1s of the
+        subscriber task's exit.
+      * ``bridge._subscriber_task.done()`` is True AND
+        ``.exception()`` returns the simulated ``ConnectionError``
+        (i.e. the failure surfaces to the lifecycle owner — not
+        silently swallowed at task level).
+    """
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    from src.api.routes import staleness_alerts as mod
+
+    async def _failing_factory() -> Any:
+        # Mimic the broker-unreachable shape from redis-py. The
+        # subscriber task awaits this and the exception escapes its
+        # first try/except branch.
+        raise RedisConnectionError("simulated broker outage")
+
+    bridge = mod.AlertBridge(brand="e2i", redis_factory=_failing_factory)
+    gen = bridge.stream()
+
+    # Drive the generator. With the H1 fix, the next() should raise
+    # StopAsyncIteration (or return cleanly) within 1s; without the
+    # fix it hangs on self._item_ready.wait() forever and the
+    # asyncio.wait_for below raises TimeoutError.
+    closed_cleanly = False
+    try:
+        await asyncio.wait_for(gen.__anext__(), timeout=1.0)
+        # If we got here, the generator yielded something it shouldn't
+        # have — fail loudly.
+        pytest.fail(
+            "Generator yielded an event despite the subscriber task "
+            "failing immediately. Expected end-of-stream (StopAsyncIteration)."
+        )
+    except StopAsyncIteration:
+        closed_cleanly = True
+    except asyncio.TimeoutError:
+        # Cleanup so we don't leak a hung generator.
+        await gen.aclose()
+        pytest.fail(
+            "SSE generator hung waiting for a subscriber task that "
+            "had already failed. The bridge MUST wake the generator "
+            "on subscriber-task exit (codex H1 fix)."
+        )
+    finally:
+        if not closed_cleanly:
+            await gen.aclose()
+
+    # The subscriber task MUST be done AND its exception MUST be the
+    # simulated ConnectionError, NOT silently swallowed — that's how
+    # the lifecycle owner learns the broker was down.
+    task = bridge._subscriber_task  # type: ignore[attr-defined]
+    assert task is not None
+    assert task.done(), "subscriber task must be done after stream exit"
+    exc = task.exception()
+    assert isinstance(exc, RedisConnectionError), (
+        f"subscriber task exception MUST surface the simulated "
+        f"RedisConnectionError so the SSE-bridge lifecycle owner can "
+        f"distinguish 'broker outage' from 'no events to send'; got: "
+        f"{exc!r}"
     )
