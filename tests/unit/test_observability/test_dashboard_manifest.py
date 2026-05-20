@@ -86,6 +86,7 @@ def test_all_lifecycle_monitoring_metric_constants_appear_in_manifest() -> None:
         lm.METRIC_CRYSTAL_COUNT_BY_BRAND,
         lm.METRIC_ALERT_DELIVERY_LATENCY_MS,
         lm.METRIC_ALERT_PUBLISH_COUNT,
+        lm.METRIC_ALERT_DEDUP_REDIS_UNAVAILABLE,
     }
     assert producer_constants <= manifest_metrics, (
         f"metric constants not in manifest: {sorted(producer_constants - manifest_metrics)}"
