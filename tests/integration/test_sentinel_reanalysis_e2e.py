@@ -91,6 +91,11 @@ pytestmark = [
     # Worker subprocess + sleep-based polling — keep tests on one xdist worker
     # to avoid parallel Redis-channel cross-talk.
     pytest.mark.xdist_group(name="sentinel_reanalysis_e2e"),
+    # The default per-test timeout in pyproject.toml is 30s. This test spins
+    # up a Celery worker subprocess (~10-15s boot), then dispatches a task and
+    # polls the pub/sub channel for up to 15s. 30s is too tight; lift to 90s
+    # to give worker boot + dispatch + execute + publish full headroom.
+    pytest.mark.timeout(90),
 ]
 
 
@@ -213,19 +218,27 @@ def celery_worker_subprocess(
             break
 
     if not ready:
-        # Pull any remaining buffered output for diagnostics.
+        # Tear the worker down FIRST so the diagnostic read below sees
+        # EOF instead of blocking on a still-running process. Calling
+        # ``proc.stdout.read()`` on a live process is a guaranteed
+        # deadlock — that's what bit iter-1 when the timeout fired
+        # mid-fixture-setup (pyproject.toml ``timeout=30`` default;
+        # iter-2 lifts the per-test timeout to 90s and orders the
+        # teardown-before-read correctly here so the diagnostic surfaces
+        # in the failure message).
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5.0)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5.0)
+        # Now safe to drain remaining buffered output for the failure trace.
         try:
             extra = proc.stdout.read() or ""
         except Exception:
             extra = ""
         stdout_lines.append(extra)
-        # Tear the worker down before failing.
-        proc.terminate()
-        try:
-            proc.wait(timeout=5.0)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait(timeout=5.0)
         pytest.fail(
             "Celery worker subprocess did not reach 'ready.' state within 30s. "
             f"Last stdout lines:\n{''.join(stdout_lines[-30:])}"
