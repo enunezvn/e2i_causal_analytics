@@ -994,27 +994,111 @@ async def test_run_does_not_double_extract_on_second_pass(
 
 
 @pytest.mark.asyncio
-async def test_run_records_extraction_failure_without_short_circuiting(
+async def test_run_records_non_unique_insert_failure_on_result_errors(
     fake_supabase: FakeSupabase,
 ):
-    """If procedural-template extraction raises, the rest of
-    ``Consolidator.run()`` still completes and the error is recorded.
-    Mirrors the existing try/except envelope for dedup/semantic/
-    procedural phases."""
-    # No clusters → 0 templates expected. We verify the run-envelope by
-    # injecting a failing client_factory + flag-on path, then asserting
-    # the error CHARACTERISTIC (TypeError from broken factory)
-    # propagates only INSIDE extract_procedural_templates' caller —
-    # i.e. surfaces as a recorded error string, not an uncaught
-    # exception out of run().
+    """Iter-2 codex M1 fix: when the procedural-template insert fails
+    with a NON-unique-violation exception (e.g. PostgREST APIError
+    with SQLSTATE 23503 = foreign-key-violation, 42P01 = undefined-
+    table, etc.), the error MUST appear on
+    ``ConsolidationResult.errors`` so the consolidator's run summary
+    surfaces it.
 
-    def _broken_factory(api_key: str):
-        raise RuntimeError("broken factory")
+    Test exercises the failure path by injecting a FakeSupabase that
+    raises a non-unique APIError-shaped exception on insert into
+    ``procedural_templates``. The cluster must be valid (N≥3 seeded
+    rows that survive dedup → effective_cluster_size≥3) so the
+    insert is actually attempted."""
 
-    consolidator = Consolidator(anthropic_client_factory=_broken_factory)
-    # No data → extract_procedural_templates returns 0 cleanly because
-    # the broken factory is never invoked (no clusters, no LLM
-    # invocation). The wiring envelope is exercised regardless.
-    result = await consolidator.run(brand="Kisqali")
-    # Healthy run: no templates produced and no errors propagated.
+    # Build a FakeSupabase subclass that raises a postgrest-style
+    # APIError with SQLSTATE 23503 (foreign-key-violation) — NOT the
+    # 23505 unique-violation idempotency case.
+    class _FailingFakeSupabase(FakeSupabase):
+        class _FailingQuery(_FakeQuery):
+            def execute(self):  # type: ignore[override]
+                if self._mode == "insert" and self.table_name == "procedural_templates":
+
+                    class _APIError(Exception):
+                        def __init__(self) -> None:
+                            super().__init__("foreign-key-violation")
+                            self.code = "23503"
+
+                    _APIError.__name__ = "APIError"
+                    raise _APIError()
+                return super().execute()
+
+        def table(self, name: str) -> "_FakeQuery":  # type: ignore[override]
+            return _FailingFakeSupabase._FailingQuery(self, name)
+
+    failing_supabase = _FailingFakeSupabase()
+    # Seed a 3-row cluster where the rows have DIFFERENT causal_path_ids
+    # so dedup leaves them distinct AND template-extraction sees them
+    # as a single cluster (same action_keys + brand + event_type +
+    # event_subtype). Without distinct dedup signatures the rows
+    # collapse to 1 row with dedup_counter=3 — that ALSO trips the
+    # threshold but covers a different code path; the multi-row form
+    # exercises the insert-failure code path more directly.
+    for i in range(3):
+        failing_supabase.rows["episodic_memories"].append(
+            {
+                "memory_id": f"m{i}",
+                "brand": "Kisqali",
+                "event_type": "agent_action",
+                "event_subtype": "x",
+                "causal_path_id": f"cp-{i}",  # distinct → dedup leaves alone
+                "raw_content": {"action_keys": ["a", "b"]},
+                "occurred_at": f"2026-05-2{i}T00:00:00+00:00",
+            }
+        )
+
+    with patch(
+        "src.memory.lifecycle.consolidator.get_supabase_client",
+        return_value=failing_supabase,
+    ):
+        consolidator = Consolidator()
+        result = await consolidator.run(brand="Kisqali")
+
+    # Wiring envelope: run() completes without raising.
     assert result.procedural_templates_extracted == 0
+    # The non-unique APIError MUST appear on result.errors
+    # (iter-2 codex M1 contract).
+    assert any("procedural-template insert" in err for err in result.errors), (
+        f"expected procedural-template insert error in result.errors; got {result.errors!r}"
+    )
+    assert any("foreign-key-violation" in err for err in result.errors), (
+        f"expected the original exception message preserved; got {result.errors!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_does_not_record_unique_violation_on_result_errors(
+    fake_supabase: FakeSupabase,
+):
+    """Idempotency contract: a unique-violation on re-extraction is
+    EXPECTED and must NOT appear on ``ConsolidationResult.errors`` —
+    only non-idempotent failures do (iter-2 codex M1 contract)."""
+    for i in range(3):
+        fake_supabase.rows["episodic_memories"].append(
+            {
+                "memory_id": f"m{i}",
+                "brand": "Kisqali",
+                "event_type": "agent_action",
+                "event_subtype": "x",
+                "causal_path_id": f"cp-{i}",
+                "raw_content": {"action_keys": ["a", "b"]},
+                "occurred_at": f"2026-05-2{i}T00:00:00+00:00",
+            }
+        )
+    consolidator = Consolidator()
+    r1 = await consolidator.run(brand="Kisqali")
+    r2 = await consolidator.run(brand="Kisqali")
+    assert r1.procedural_templates_extracted == 1
+    assert r2.procedural_templates_extracted == 0
+    # No procedural-template errors on either run — unique-violation
+    # is the idempotency contract, not an error.
+    assert not any("procedural-template insert" in err for err in r1.errors), (
+        f"first run should be clean; got {r1.errors!r}"
+    )
+    assert not any("procedural-template insert" in err for err in r2.errors), (
+        f"second run should be silent on idempotent re-insert; got {r2.errors!r}"
+    )

@@ -487,7 +487,10 @@ class Consolidator:
             logger.exception("consolidator: procedural promotion failed")
             result.errors.append(f"procedural: {exc}")
         try:
-            n_templates = await self.extract_procedural_templates(brand=brand)
+            # Iter-2 codex M1 fix: thread ``result`` through so non-
+            # idempotent insert failures surface on
+            # ``result.errors`` instead of being silently logged.
+            n_templates = await self.extract_procedural_templates(brand=brand, result=result)
             result.procedural_templates_extracted += n_templates
         except Exception as exc:
             logger.exception("consolidator: procedural-template extraction failed")
@@ -1250,6 +1253,8 @@ class Consolidator:
     async def extract_procedural_templates(
         self,
         brand: Optional[str] = None,
+        *,
+        result: Optional[ConsolidationResult] = None,
     ) -> int:
         """Extract procedural templates from clustered episodic memories.
 
@@ -1284,6 +1289,16 @@ class Consolidator:
 
         Returns the count of templates ACTUALLY inserted (excludes
         skipped + idempotent re-extraction).
+
+        Iter-2 codex M1 fix: when ``result`` is supplied, non-
+        idempotent insert failures (e.g. PostgREST APIError with
+        SQLSTATE 23503 = foreign-key-violation, 42P01 = undefined-
+        table, permission errors) are recorded as
+        ``result.errors`` entries so they surface in the
+        consolidator's run summary instead of being silently
+        logged. Idempotent (unique-violation) skips remain silent
+        because they are expected on re-extraction. The legacy
+        callers that pass no ``result`` are unaffected.
         """
         client = get_supabase_client()
 
@@ -1518,7 +1533,8 @@ class Consolidator:
                 logger.info(
                     f"consolidator: extracted procedural template "
                     f"(brand={g_brand}, sig={signature[:24]}..., "
-                    f"n={len(members)}, "
+                    f"effective_cluster_size={effective_cluster_size}, "
+                    f"row_count={len(members)}, "
                     f"confidence={effective_confidence:.3f}, "
                     f"method={extraction_method})"
                 )
@@ -1526,7 +1542,9 @@ class Consolidator:
                 # Idempotency: DB partial-unique-index UniqueViolation
                 # is the EXPECTED shape on re-extraction (V1 has no
                 # revision logic). Swallow as no-op; other exception
-                # shapes propagate to the caller's error log.
+                # shapes are RECORDED on result.errors (iter-2 codex M1
+                # fix) so they surface in the consolidator's run
+                # summary instead of being silently logged.
                 #
                 # Iter-1 codex M1 fix: use the widened helper that
                 # ALSO accepts postgrest.APIError with SQLSTATE 23505
@@ -1545,6 +1563,11 @@ class Consolidator:
                         f"consolidator: procedural template insert failed "
                         f"(brand={g_brand}, sig={signature[:24]}...): {exc}"
                     )
+                    if result is not None:
+                        result.errors.append(
+                            f"procedural-template insert "
+                            f"(brand={g_brand}, sig={signature[:24]}...): {exc}"
+                        )
 
         return templates_inserted
 
