@@ -316,7 +316,7 @@ The crystallization trigger requires the OPERATOR role
 
 JWT format: Bearer token issued by Supabase Auth. The middleware stack
 validates against Supabase at
-`src/api/middleware/jwt_auth.py`. See `docs/ARCHITECTURE.md §5.2` for
+`src/api/middleware/jwt_auth.py`. See `docs/ARCHITECTURE.md §6.2` for
 the full JWT flow.
 
 RBAC roles (in increasing privilege):
@@ -550,14 +550,35 @@ The portfolio summary endpoint explicitly excludes invalidated rows
 
 ### Cascade-invalidation flow
 
-1. A sentinel (e.g. `sentinel_staleness_alert`) fires.
-2. `notify_and_queue_reanalysis` publishes a `staleness_alert` payload
-   to `e2i:alerts` AND enqueues `reanalyze_finding` Celery tasks (#378).
-3. The reanalysis emits a `reanalysis:e2i:{brand}` Redis signal.
-4. Downstream invalidator processes set `invalidated_at` on affected
-   `executive_insights` rows.
-5. CopilotKit SSE subscribers receive the `staleness_alert` and
-   invalidate their local cache.
+Sentinels DETECT staleness; the invalidator WRITES it. The sentinel fires
+AFTER rows have already been marked `invalidated_at IS NOT NULL` upstream
+by `src/memory/lifecycle/invalidator.py::cascade_invalidate`, which is
+itself triggered by ancestor-overturn events (e.g. a `causal_path` is
+recalled, the cascade walks the `insight_edges` DAG, stamping
+`invalidated_at` on downstream artifacts).
+
+Flow:
+
+1. Upstream cascade (`src/memory/lifecycle/invalidator.py`) sets
+   `invalidated_at` on affected `executive_insights` rows when an
+   ancestor is overturned.
+2. The next dispatcher tick runs `sentinel_staleness_alert` (cooldown
+   permitting): the `invalidation_count` pattern enumerates rows where
+   `invalidated_at IS NOT NULL`
+   (`src/memory/sentinels/registry.py:387-438`).
+3. `notify_and_queue_reanalysis`
+   (`src/tasks/sentinel_actions.py:150-302`) publishes a
+   `staleness_alert` payload (full findings list) to `e2i:alerts`.
+4. The handler ALSO enqueues up to 5 `reanalyze_finding` Celery tasks
+   (`_REANALYSIS_CAP = 5`, `src/tasks/sentinel_actions.py:144`); each
+   task publishes a `reanalysis_requested` event on
+   `reanalysis:e2i:{brand}` for downstream orchestrator consumers
+   (`src/tasks/insight_lifecycle_tasks.py:171-236`).
+5. Any client subscribed to `GET /api/alerts/stream?brand=<brand>`
+   receives the `staleness_alert` event via the SSE bridge and can
+   invalidate its local cache for affected `insight_id`s. (Frontend
+   consumer wiring is TBD — the SSE bridge is shipped and ready;
+   see the JavaScript snippet in §7.)
 
 ### Decision 3 = KEEP BINARY
 
@@ -583,4 +604,4 @@ the full reversal checklist.
   - `database/memory/021_insight_lifecycle.sql` — base 13 fields + `invalidated_at`
   - `database/memory/025_crystaldigest_schema_completion.sql` — 15 new fields
 - Plan: `.claude/plans/e2i_memory_subsystems_implementation_plan.md` (Phase 4)
-- Related ADRs: `docs/ARCHITECTURE.md §7 ADR-003 (Tri-Memory Architecture)`
+- Related ADRs: `docs/ARCHITECTURE.md §8 ADR-003 (Tri-Memory Architecture)`

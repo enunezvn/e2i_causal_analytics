@@ -700,7 +700,7 @@ graph TB
     REG -->|evaluates against| EI
     REG -->|fires| ACT
     ACT -->|publishes| ALR
-    ALR -->|SSE bridge| CR
+    ALR -.->|SSE bridge<br/>(staleness_alerts.py)| FE[CopilotKit Frontend<br/>consumer TBD]
     EI -->|fused signals| HR
 ```
 
@@ -844,21 +844,39 @@ an empty list with a logged warning.
 
 ### 5.5 End-to-end signal flow
 
-A typical cascade triggered by a sentinel:
+A typical cascade triggered by a sentinel (BACKEND steps; frontend
+consumer is TBD — the SSE bridge is shipped but no frontend consumer
+exists in the current repo as of commit `40f27fd6`):
 
 ```
 1. Celery beat fires sentinel_dispatcher (every 5 minutes)
-2. Registry evaluates enabled sentinels
-3. sentinel_staleness_alert matches: invalidation_count > 0 on executive_insights
-4. Dispatcher checks cooldown (360 minutes for staleness alert); passes
-5. Action handler notify_and_queue_reanalysis enqueued via Celery
-6. Handler publishes {type: "staleness_alert", brands: [...], findings: [...]}
-   to e2i:alerts Redis channel
-7. Per-finding reanalyze_finding Celery task enqueued (#378)
-8. CopilotKit SSE subscriber receives the staleness_alert event
-9. Frontend invalidates local cache for affected insight_ids
-10. User sees fresh data on next render
+2. Dispatcher checks cooldown gate (e.g. 360 min for staleness alert);
+   cooled-down sentinels are SKIPPED before evaluation
+3. Registry evaluates remaining enabled sentinels
+4. sentinel_staleness_alert matches: invalidation_count enumerates rows
+   on executive_insights where invalidated_at IS NOT NULL
+5. Dispatcher dispatch_agent → bus event + Celery enqueue of
+   notify_and_queue_reanalysis (single-fire-with-list semantics)
+6. Handler publishes {type: "staleness_alert", brands: [...],
+   findings: [...]} to e2i:alerts Redis pub/sub channel (full findings
+   list; top-5 cap is internal to the handler's per-finding enqueue)
+7. Handler enqueues up to 5 reanalyze_finding Celery tasks (#378), one
+   per top-stale finding
+8. reanalyze_finding publishes a reanalysis_requested event on the
+   brand-scoped reanalysis:e2i:{brand} Redis channel — downstream
+   orchestrator consumers subscribe here (consumer surface still moving
+   under #237 / #373 follow-ups)
+9. Any authenticated client subscribed to GET /api/alerts/stream?brand=
+   receives the staleness_alert event via the SSE bridge
+   (src/api/routes/staleness_alerts.py)
 ```
+
+Sentinels MATCH rows where `invalidated_at IS NOT NULL` — they do NOT
+set the column. The invalidator (`src/memory/lifecycle/invalidator.py`)
+is the writer; it is invoked separately by upstream cascade paths (e.g.
+ancestor overturn events). The staleness sentinel detects the
+already-invalidated state and surfaces it to operators + queues
+reanalysis.
 
 ---
 

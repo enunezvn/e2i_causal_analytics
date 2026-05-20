@@ -281,13 +281,17 @@ every subscriber.
       "invalidated_at": "<iso>",
       "staleness_score": 1.0
     },
-    ...   // top-5 most-stale
+    ...
   ]
 }
 ```
 
-The handler caps to top-5 internally
-(`src/tasks/sentinel_actions.py` — `notify_and_queue_reanalysis`).
+The `findings` array contains the FULL stale-findings list as received by
+the handler — see
+`src/tasks/sentinel_actions.py:197-202`. The top-5 cap (`_REANALYSIS_CAP =
+5`, `src/tasks/sentinel_actions.py:144`) only applies INTERNALLY for the
+per-finding `reanalyze_finding` Celery enqueue and log lines, not the
+alert payload itself.
 
 #### `cohort_drift`
 
@@ -296,10 +300,13 @@ The handler caps to top-5 internally
   "type": "cohort_drift",
   "sentinel_id": "<uuid>",
   "brands": ["<brand>"],
-  "cohort_id": "<cohort id from condition>",
-  "drift_score": <float>
+  "drift_data": {...}
 }
 ```
+
+`drift_data` is whatever `trigger_data.get("drift_data", trigger_data)`
+resolves to at `src/tasks/sentinel_actions.py:320-326` — typically the
+full dispatcher `trigger_data` dict (sentinel match + action input).
 
 #### `full_consolidation_run`
 
@@ -308,9 +315,14 @@ The handler caps to top-5 internally
   "type": "full_consolidation_run",
   "sentinel_id": "<uuid>",
   "brands": ["all"],
-  "consolidation_result": {...}
+  "promoted_to_semantic": <int>,
+  "promoted_to_procedural": <int>,
+  "errors": [...]
 }
 ```
+
+Top-level fields are flattened from the consolidator result (see
+`src/tasks/sentinel_actions.py:380-388`).
 
 #### `sentinel_notify` (action type `notify`)
 
@@ -645,9 +657,12 @@ psql -c "UPDATE sentinels SET cooldown_minutes = 1440
          WHERE name = 'High staleness alert';"
 ```
 
-Effect: sentinel still evaluates on every dispatcher tick but won't fire
-the action again until the cooldown elapses. Preserves visibility on
-sentinel logs.
+Effect: sentinel is SKIPPED at the dispatcher's pre-evaluation cooldown
+gate (`src/memory/sentinels/registry.py:487-498`) until the cooldown
+elapses. The dispatcher emits an INFO log line per skip
+(`sentinel <id> in cooldown (cooldown_minutes=..., last_fired_at=...);
+skipping`) — operators see the silencing in logs without action-handler
+side effects.
 
 ### Option 2 — Disable a single sentinel
 
@@ -670,22 +685,34 @@ In `config/sentinels.yaml`:
     active: false   # <-- flip to false
 ```
 
-Effect: at the next API restart, the loader skips this entry. The
-existing DB row is NOT modified (you may want to also DB-disable it as
-Option 2 above for immediate effect). Use this when the silencing should
-survive a fresh deploy.
+```bash
+# Also apply Option 2 to the existing DB row — REQUIRED.
+psql -c "UPDATE sentinels SET enabled = false WHERE name = 'High staleness alert';"
+```
+
+Effect: the YAML flag prevents future startup REGISTRATIONS from
+re-enabling the row, but the loader does NOT modify already-registered DB
+rows on subsequent boots (the existing row would keep firing if `enabled
+= true`). Combine with Option 2 to actually stop firing now AND keep the
+silence after redeploy.
 
 ### Option 4 — Stop the dispatcher entirely (nuclear)
 
 ```bash
-# In the docker-compose Celery beat container
-celery -A src.workers.celery_app control disable_events
-# OR stop the scheduler container
+# Stop the Celery beat / scheduler container. This halts ALL periodic
+# tasks (not just sentinel_dispatcher). Disabling `celery control
+# disable_events` is unrelated — that only stops event MONITORING, not
+# beat scheduling or task execution.
 docker compose stop scheduler
 ```
 
-Effect: NO sentinels run. Reserved for true emergencies — the dispatcher
-isn't the only beat task and you may starve other downstream pipelines.
+Effect: NO sentinels run, and the API restart will not re-enable them
+until the scheduler container is started again. Reserved for true
+emergencies — `sentinel_dispatcher` shares the beat schedule with many
+other periodic tasks (see `docs/ARCHITECTURE.md §3.5 Celery Beat
+Schedule`), so this option starves drift monitoring, cache cleanup,
+feedback loops, etc. Prefer Option 1 or 2 unless those have been
+exhausted.
 
 ### After silencing — verify
 
@@ -715,8 +742,11 @@ with the silencing rationale, who acked, and the un-silence plan.
    ```
 
    If `elapsed < cooldown_minutes`, the sentinel is intentionally
-   skipping. Logs at INFO level confirm: `sentinel <id> in cooldown
-   (cooldown_minutes=..., last_fired_at=...); skipping`
+   skipping. The dispatcher checks `_is_in_cooldown` BEFORE
+   `evaluate_sentinel` (`src/memory/sentinels/registry.py:487-498`),
+   so cooled-down rows do not even reach evaluation. Logs at INFO level
+   confirm: `sentinel <id> in cooldown (cooldown_minutes=...,
+   last_fired_at=...); skipping`
    (`src/memory/sentinels/registry.py:491-495`).
 
 3. Did `evaluate_sentinel` actually return matches?
