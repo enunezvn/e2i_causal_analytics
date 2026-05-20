@@ -731,28 +731,46 @@ def test_copilotkit_public_path_patterns_does_not_contain_catchall() -> None:
 # ---------------------------------------------------------------------------
 # Handler-dispatch end-to-end tests (#399 codex iter-1 M-finding closure)
 #
-# These tests instantiate ``add_copilotkit_routes`` which transitively
-# loads the full CopilotKit SDK module + LangChain + Anthropic SDK +
-# LangGraph imports — heavy enough that running alongside other test
-# files under xdist parallelism can OOM-crash worker processes (the
-# same shape as the SSE e2e in PR #394; see memory file
+# What's heavy here: building a FastAPI app via ``add_copilotkit_routes``
+# and routing requests through it via TestClient. That triggers SDK
+# initialization, request marshalling, ASGI middleware traversal, and
+# the handler's full body-read + body-parse + branch-dispatch path
+# end-to-end. Combined with the (already-loaded-at-collection-time)
+# CopilotKit + LangChain + Anthropic + LangGraph module graph, the
+# cumulative per-worker memory footprint can push xdist workers over
+# the OOM threshold when running alongside other test files.
+#
+# Same shape as the SSE e2e in PR #394 (see memory file
 # ``feat_393_394_388_390_parallel_close_20260520``).
 #
-# Solution: skip-on-CI with an explicit ``E2I_RUN_COPILOTKIT_E2E=1``
-# env override for local pre-release verification. The unit-level
-# helper tests above (``test_copilotkit_execution_post_to_public_path_*``)
-# still exercise the auth logic without loading the full SDK graph.
+# Note on import cost: the unit-level helper tests above
+# (``test_copilotkit_execution_post_to_public_path_*``) DO import
+# ``src.api.routes.copilotkit`` to reach ``_require_auth_for_copilotkit_execution``,
+# so they ALSO incur the module-import cost at collection time. That
+# import cost alone is NOT what crashes workers — every test in this
+# file shares it. The marginal cost that pushes workers over the edge
+# is the TestClient EXECUTION (full ASGI request lifecycle on top of
+# the already-loaded module graph). Skipping just the 3 TestClient
+# tests on CI is sufficient; the helper tests stay always-on because
+# they don't add the execution-time pressure.
+#
+# Solution: ``@_SKIP_COPILOTKIT_E2E_ON_CI`` gates ONLY the 3 TestClient
+# tests on ``CI=true and not E2I_RUN_COPILOTKIT_E2E``. Local
+# pre-release verification can opt in via the env override.
 # ---------------------------------------------------------------------------
 
 _SKIP_COPILOTKIT_E2E_ON_CI = pytest.mark.skipif(
     os.environ.get("CI") == "true" and not os.environ.get("E2I_RUN_COPILOTKIT_E2E"),
     reason=(
-        "CopilotKit handler-dispatch tests load the full SDK module graph "
-        "(LangChain + Anthropic + LangGraph) and have triggered xdist "
-        "worker OOM crashes when running alongside other test files. "
-        "Set E2I_RUN_COPILOTKIT_E2E=1 to opt in locally for pre-release "
-        "verification; the unit-level helper tests above cover the auth "
-        "logic without the heavy import graph."
+        "CopilotKit TestClient handler-dispatch adds full ASGI request "
+        "lifecycle on top of the already-loaded CopilotKit/LangChain/"
+        "Anthropic/LangGraph module graph; cumulative xdist worker "
+        "memory has triggered OOM crashes alongside other test files. "
+        "Helper tests above (which only invoke the auth helper directly) "
+        "stay always-on because they don't add the execution-time "
+        "pressure — the module imports they share are already paid at "
+        "collection time. Set E2I_RUN_COPILOTKIT_E2E=1 to opt into the "
+        "TestClient tests locally for pre-release verification."
     ),
 )
 
