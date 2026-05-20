@@ -217,6 +217,7 @@ async def get_portfolio_summary(
         client.table("executive_insights")
         .select("brand, crystallized_at, effect_size")
         .eq("recall", False)
+        .is_("invalidated_at", "null")
         .execute()
         .data
     ) or []

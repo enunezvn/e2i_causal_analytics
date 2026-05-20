@@ -568,48 +568,36 @@ def test_portfolio_summary_excludes_recalled_rows_from_real_db(
 
 
 @pytest.mark.integration
-def test_portfolio_summary_invalidated_at_currently_leaks_pinned_for_issue_385(
+def test_portfolio_summary_excludes_invalidated_rows(
     db_conn: psycopg.Connection,
     brand_namespace: str,
     test_client: Any,
 ) -> None:
-    """REGRESSION-PIN: invalidated_at-set rows currently LEAK into the
-    portfolio summary aggregation. See issue #385 for the fix tracking.
-
-    This test was added in response to codex iter-0 MED on PR #376 e2e
-    work (audit on branch ``test/376-e2e-llm-narrator-portfolio``):
-
-        ``/portfolio-summary`` claims to aggregate non-recalled,
-        non-invalidated crystals, but the route only filters
-        ``.eq("recall", False)``. The new e2e covers recalled rows
-        but never seeds a recall=false, invalidated_at IS NOT NULL
-        row, so an invalidated but unrecalled insight would leak
-        into the portfolio summary today.
+    """``/portfolio-summary`` MUST exclude rows where ``invalidated_at``
+    IS NOT NULL — even when ``recall = false`` (issue #385 fix).
 
     The route docstring at
-    ``src/api/routes/executive_insights.py:204`` claims:
+    ``src/api/routes/executive_insights.py`` for
+    ``get_portfolio_summary`` promises:
 
         "Aggregates across all non-recalled, non-invalidated crystals."
 
-    But the SELECT at ``:217`` is only ``.eq("recall", False)`` — there
-    is no ``invalidated_at IS NULL`` filter. A row with ``recall=False``
-    AND ``invalidated_at IS NOT NULL`` (the silent-cascade case from
-    the ``InsightVerifierMiddleware``) currently:
-      * INCREMENTS ``insight_count``
-      * POLLUTES ``average_effect_size`` (if numeric)
-      * UPDATES ``latest_crystallized_at`` (if newer)
+    Before the #385 fix the SELECT only applied ``.eq("recall", False)``
+    so a row with ``recall=False`` AND ``invalidated_at IS NOT NULL``
+    (the silent-cascade case from the ``InsightVerifierMiddleware``,
+    migration ``021_insight_lifecycle.sql``) would:
+      * INCREMENT ``insight_count``
+      * POLLUTE ``average_effect_size`` (if numeric)
+      * UPDATE ``latest_crystallized_at`` (if newer)
 
-    This test PINS the CURRENT (incorrect-per-docstring) behavior so
-    the gap is explicit. When #385 is fixed (filter applied), the
-    assertion shape below will fail — that is the desired falsifiable
-    signal. The test author of the #385 fix should:
-      1. Flip the assertions to "outlier does NOT leak"
-      2. Remove this ``# TODO(#385)`` comment block
-      3. Rename to ``test_portfolio_summary_excludes_invalidated_rows``
+    This test seeds exactly that contamination case end-to-end against
+    a real Postgres DB and asserts the invalidated row is excluded from
+    count + mean + sample count.
 
-    Until then, this test prevents an accidental partial fix (e.g. a
-    SELECT change that accidentally filters out invalidated rows but
-    breaks something else) from going unnoticed.
+    Historical note: this test previously pinned the LEAK behavior
+    (see git history for ``test_portfolio_summary_invalidated_at_currently_leaks_pinned_for_issue_385``)
+    so that a partial fix could not pass silently; on the #385 fix the
+    assertions were flipped to assert the corrected contract.
     """
     brand = brand_namespace + "kisqali"
     now = datetime.now(timezone.utc)
@@ -620,13 +608,14 @@ def test_portfolio_summary_invalidated_at_currently_leaks_pinned_for_issue_385(
         crystallized_at=now,
         effect_size=0.40,
         recall=False,
-        invalidated_at=None,  # ACTIVE row
+        invalidated_at=None,  # ACTIVE row — must contribute
     )
     # The contamination case: invalidated_at IS NOT NULL but recall=False.
-    # An outlier effect_size that would be visibly wrong if it leaks into
-    # the mean. Distinct causal_path so the partial-unique-index does not
-    # block this insert (the index is partial on invalidated_at IS NULL,
-    # so this row is exempt — see 021_insight_lifecycle.sql:219-226).
+    # An outlier effect_size that would be visibly wrong if it leaked
+    # into the mean. Distinct causal_path so the partial-unique-index
+    # on ``executive_insights`` does not block this insert (the index
+    # is partial on invalidated_at IS NULL, so this row is exempt —
+    # see 021_insight_lifecycle.sql:219-226).
     _seed_full_row(
         db_conn,
         insight_id=str(uuid.uuid4()),
@@ -645,28 +634,20 @@ def test_portfolio_summary_invalidated_at_currently_leaks_pinned_for_issue_385(
     by_brand = {b["brand"]: b for b in body["by_brand"]}
     k = by_brand[brand]
 
-    # TODO(#385): when the route filter is fixed, these assertions
-    # need to flip to:
-    #   * ``insight_count == 1`` (just the active row)
-    #   * ``effect_size_sample_count == 1`` (just the active numeric)
-    #   * ``average_effect_size == 0.40`` (just the active row's effect)
-    # Currently the invalidated row leaks in — pin the contaminated
-    # state so a partial fix is caught.
-    assert k["insight_count"] == 2, (
-        f"Expected current (#385) leak shape: invalidated row included "
-        f"in count. Got insight_count={k['insight_count']} (if 1, the "
-        f"#385 filter may have already been added — flip this test's "
-        f"assertions per the docblock)."
+    assert k["insight_count"] == 1, (
+        f"Invalidated row must NOT contribute to insight_count. Got "
+        f"insight_count={k['insight_count']} (if 2, the #385 filter "
+        f"regressed — invalidated row leaks into the portfolio summary)."
     )
-    assert k["effect_size_sample_count"] == 2, (
-        f"Expected invalidated row's numeric effect_size to contribute. "
+    assert k["effect_size_sample_count"] == 1, (
+        f"Invalidated row must NOT contribute to effect_size_sample_count. "
         f"Got effect_size_sample_count={k['effect_size_sample_count']}"
     )
-    # mean(0.40, 999.0) = 499.7 — the contaminated mean.
-    assert k["average_effect_size"] == pytest.approx(499.7), (
-        f"Expected contaminated mean (#385): mean(0.40, 999.0) = 499.7. "
-        f"Got average_effect_size={k['average_effect_size']!r}. If this "
-        f"is now ~0.40, the #385 filter has been added — flip this test."
+    assert k["average_effect_size"] == pytest.approx(0.40), (
+        f"Invalidated row must NOT pollute the mean. Expected 0.40 "
+        f"(just the active row); got "
+        f"average_effect_size={k['average_effect_size']!r} (if ~499, the "
+        f"invalidated row's effect_size=999.0 is leaking through)."
     )
 
 
