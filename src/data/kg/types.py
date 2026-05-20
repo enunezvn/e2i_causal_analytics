@@ -468,6 +468,13 @@ class LLMCrystalNarrativeAudit:
     input_tokens: Optional[int] = None
     output_tokens: Optional[int] = None
     cost_usd: Optional[float] = None
+    # Full prompt text sent to the LLM (#391 security box 4): added so
+    # the offline PHI scanner (``scripts/audit_phi_in_crystal_narratives``)
+    # can audit BOTH the LLM's input AND output for PHI/PII leaks. Empty
+    # string when the audit is not captured (flag-off path, exception
+    # path, legacy callers). The crystallizer populates this from the
+    # composed prompt at ``_build_narrator_prompt``.
+    input_prompt: str = ""
 
 
 @dataclass(frozen=True)

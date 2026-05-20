@@ -180,3 +180,47 @@ def test_main_output_is_valid_json_with_required_keys() -> None:
     serialized = json.dumps(report)
     re_parsed = json.loads(serialized)
     assert {"records_scanned", "phi_match_count", "findings"}.issubset(set(re_parsed.keys()))
+
+
+def test_main_exits_two_when_no_db_url(monkeypatch, capsys) -> None:
+    """No ``db_url`` and no DB env vars → exit 2 with structured JSON error.
+
+    Closes codex iter-0 M1 — pins the "no config / DB-unreachable" branch
+    to a distinct exit code so operators can tell config errors from
+    PHI-present (rc=1) and clean (rc=0).
+    """
+    monkeypatch.delenv("TEST_POSTGRES_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    module = _load_audit_module()
+    rc = module.main(db_url=None, brand=None, records=None)
+    assert rc == 2
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["error"] == "no_db_url"
+
+
+def test_main_exits_two_when_db_unreachable(monkeypatch, capsys) -> None:
+    """Codex iter-0 M1: when ``_load_records_from_postgres`` raises (DB
+    unreachable / wrong DSN / network failure / auth fail), ``main()``
+    MUST normalize to exit code 2 and emit structured JSON naming the
+    exception class.
+
+    Without this normalization the harness would exit with a Python
+    traceback to stderr — breaking the documented CLI exit-code
+    contract (rc=0 clean, rc=1 PHI present, rc=2 config / DB error).
+    """
+    module = _load_audit_module()
+
+    def _raise_unreachable(_url, brand=None) -> None:
+        # Mirror a typical psycopg.OperationalError shape — a generic
+        # Exception is enough for the broad CLI catch to fire.
+        raise ConnectionRefusedError("connection refused: no route to db")
+
+    monkeypatch.setattr(module, "_load_records_from_postgres", _raise_unreachable)
+    rc = module.main(db_url="postgres://invalid", brand=None, records=None)
+    assert rc == 2
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["error"] == "db_unreachable"
+    assert payload["exception_class"] == "ConnectionRefusedError"
+    assert "connection refused" in payload["message"].lower()

@@ -209,7 +209,32 @@ def main(
                 file=sys.stdout,
             )
             return 2
-        records = _load_records_from_postgres(url, brand=brand)
+        try:
+            records = _load_records_from_postgres(url, brand=brand)
+        except Exception as exc:  # codex iter-0 M1: normalize DB-unreachable to rc=2.
+            # Catch broadly here on purpose. The audit harness is the
+            # OUTERMOST CLI layer; a DB outage, auth failure, bad URL,
+            # network timeout, or psycopg.OperationalError all map to
+            # the same operator-facing outcome: "could not fetch
+            # records — re-run when the DB is reachable" (exit 2). A
+            # narrow catch list would leak novel transport-error
+            # classes (e.g. psycopg.errors.* subclasses) as crash dumps
+            # to operators / CI, breaking the documented exit-code
+            # contract. Programming errors (TypeError in our own code)
+            # also exit 2, but the JSON output names the exception
+            # class so operators can triage. This is a deliberate
+            # broad-catch boundary at the CLI shell layer.
+            print(
+                json.dumps(
+                    {
+                        "error": "db_unreachable",
+                        "exception_class": type(exc).__name__,
+                        "message": str(exc),
+                    }
+                ),
+                file=sys.stdout,
+            )
+            return 2
 
     report = audit_records(records)
     print(json.dumps(report, indent=2, sort_keys=True))

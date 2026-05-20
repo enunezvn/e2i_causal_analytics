@@ -1,11 +1,14 @@
 -- ============================================================================
--- E2I Provenance Append-Only Enforcement
+-- E2I Provenance Append-Only Enforcement + LLM Prompt Audit Sink
 -- Migration: 028_provenance_append_only.sql
--- Purpose: Block UPDATE / DELETE on provenance records to satisfy the
---          tamper-evidence contract (#391 security box 1).
+-- Purpose: (#391 security box 1) Block UPDATE / DELETE on provenance records
+--          to satisfy the tamper-evidence contract.
+--          (#391 security box 4) Add ``crystal_narrative_audits`` table so
+--          the offline PHI scanner can audit LLM INPUT prompts (not just
+--          outputs) for PHI/PII leaks.
 --
--- Background
--- ----------
+-- Background — Box 1
+-- ------------------
 -- Two surfaces carry provenance:
 --   (a) ``audit_chain_entries`` (migration 011) — hash-linked audit trail.
 --       The hash chain ALREADY makes any post-hoc mutation detectable, but
@@ -20,9 +23,20 @@
 --       partial-unique-index at 021:219-226 enforces uniqueness for
 --       active rows only, so a fresh row can be inserted in its place).
 --
+-- Background — Box 4
+-- ------------------
+-- The crystallizer's ``LLMCrystalNarrativeAudit`` dataclass captures the
+-- LLM OUTPUT (key_finding / limitations / recommended_next) + telemetry.
+-- For the PHI audit harness to verify NO PHI leaks via the LLM path, we
+-- also need the INPUT prompt persisted (otherwise the auditor can only
+-- see what the LLM said, not what was asked). This migration adds the
+-- ``crystal_narrative_audits`` table — one row per executive insight,
+-- foreign-keyed via ``insight_id``. The PHI scanner script reads this
+-- table's ``input_prompt`` column.
+--
 -- Scope
 -- -----
--- This migration installs TWO triggers:
+-- This migration installs TWO triggers + ONE table:
 --
 --   1. ``trg_audit_chain_entries_append_only`` on ``audit_chain_entries``:
 --      BEFORE UPDATE OR DELETE — UNCONDITIONALLY rejects.
@@ -35,17 +49,24 @@
 --      mutable (recall/recall_reason updates flow through the normal
 --      lifecycle write path). Only invalidated rows are frozen.
 --
+--   3. ``crystal_narrative_audits`` TABLE — persists the
+--      :class:`LLMCrystalNarrativeAudit` payload, including the
+--      ``input_prompt`` column the PHI scanner audits. One row per
+--      ``insight_id`` (FK to executive_insights).
+--
 -- Idempotency
 -- -----------
--- DROP TRIGGER IF EXISTS + CREATE TRIGGER + CREATE OR REPLACE FUNCTION
--- make this safe to re-apply. Idempotency is verified by
--- ``tests/integration/test_028_provenance_append_only_migration.py``.
+-- DROP TRIGGER IF EXISTS + CREATE TRIGGER + CREATE OR REPLACE FUNCTION +
+-- CREATE TABLE IF NOT EXISTS make this safe to re-apply. Idempotency is
+-- verified by ``tests/integration/test_028_provenance_append_only_migration.py``.
 --
 -- Reversibility
 -- -------------
--- ``DROP TRIGGER … ON …; DROP FUNCTION …;`` reverses the migration. The
--- triggers DO NOT touch row data — only block writes — so removing them
--- restores the prior write surface without data loss.
+-- ``DROP TRIGGER … ON …; DROP FUNCTION …; DROP TABLE crystal_narrative_audits;``
+-- reverses the migration. The triggers DO NOT touch row data — only block
+-- writes — so removing them restores the prior write surface without data
+-- loss. Dropping the audit table loses captured prompts (acceptable —
+-- audit retention is an operator concern, not a forward-compat one).
 -- ============================================================================
 
 BEGIN;
@@ -114,5 +135,49 @@ CREATE TRIGGER trg_executive_insights_invalidation_set_once
     BEFORE UPDATE OR DELETE ON executive_insights
     FOR EACH ROW
     EXECUTE FUNCTION prevent_change_invalidated_executive_insight();
+
+-- ----------------------------------------------------------------------------
+-- Table: crystal_narrative_audits (#391 security box 4)
+-- ----------------------------------------------------------------------------
+-- Persists the LLMCrystalNarrativeAudit dataclass for offline PHI auditing.
+-- One row per crystal (insight_id FK to executive_insights). The
+-- ``input_prompt`` column is the FULL prompt sent to the LLM narrator —
+-- the PHI scanner audit harness reads it via psycopg.
+--
+-- Cascade-delete: when the parent executive_insights row is removed (only
+-- possible for ACTIVE rows per the trigger above — invalidated rows are
+-- frozen), the audit row is removed too. This keeps the audit table from
+-- accumulating orphan rows in dev / test workflows. Production retention
+-- is operator-controlled via a separate scheduled job (not part of #391).
+-- ----------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS crystal_narrative_audits (
+    audit_id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    insight_id        UUID NOT NULL UNIQUE
+                          REFERENCES executive_insights(insight_id)
+                          ON DELETE CASCADE,
+    narrator_model    VARCHAR(100) NOT NULL,
+    -- LLM-generated output prose (audit copy of executive_insights cols).
+    key_finding       TEXT NOT NULL DEFAULT '',
+    limitations       TEXT NOT NULL DEFAULT '',
+    recommended_next  TEXT NOT NULL DEFAULT '',
+    -- The full prompt text sent to the LLM (#391 box 4). NOT NULL with
+    -- empty default so flag-off / exception-path audits still persist
+    -- with input_prompt='' (the empty string itself is a meaningful
+    -- audit signal: "we did NOT send anything").
+    input_prompt      TEXT NOT NULL DEFAULT '',
+    -- Telemetry (mirrors LLMCrystalNarrativeAudit telemetry fields).
+    latency_ms        DOUBLE PRECISION,
+    input_tokens      INTEGER,
+    output_tokens     INTEGER,
+    cost_usd          DOUBLE PRECISION,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_crystal_narrative_audits_insight_id
+    ON crystal_narrative_audits(insight_id);
+
+COMMENT ON TABLE crystal_narrative_audits IS
+'Per-crystal LLM narrator audit payload. Captures the full input_prompt (#391 security box 4) so the offline PHI scanner harness can audit LLM inputs as well as outputs for PHI/PII leaks.';
 
 COMMIT;

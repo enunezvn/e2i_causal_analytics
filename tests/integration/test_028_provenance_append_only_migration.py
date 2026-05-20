@@ -146,6 +146,33 @@ def test_migration_targets_only_documented_tables() -> None:
     )
 
 
+def test_migration_creates_crystal_narrative_audits_table() -> None:
+    """Codex iter-0 M2 closure: migration 028 also creates the
+    ``crystal_narrative_audits`` table so the offline PHI scanner
+    has a real DB surface to read ``input_prompt`` from. The audit
+    harness script SQL JOIN against this table is currently illusory
+    without it.
+    """
+    content = MIGRATION_PATH.read_text().lower()
+    assert "create table if not exists crystal_narrative_audits" in content, (
+        "Migration 028 must create the crystal_narrative_audits table "
+        "(see #391 box 4 + codex iter-0 M2)."
+    )
+    # The input_prompt column is the load-bearing PHI-audit surface.
+    assert "input_prompt" in content, (
+        "crystal_narrative_audits MUST have an input_prompt column — "
+        "this is the LLM-input audit surface for #391 box 4."
+    )
+    # FK to executive_insights with cascade keeps audit rows in sync
+    # with the parent. References must NOT be removed.
+    assert "references executive_insights(insight_id)" in content, (
+        "crystal_narrative_audits must FK insight_id to executive_insights"
+    )
+    assert "on delete cascade" in content, (
+        "crystal_narrative_audits FK must cascade-delete with parent (orphan rows are unwanted)."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Integration tests (real Postgres, gated)
 # ---------------------------------------------------------------------------

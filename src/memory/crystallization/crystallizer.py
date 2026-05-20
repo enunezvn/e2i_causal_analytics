@@ -840,6 +840,9 @@ async def _invoke_llm_narrator(
         return LLMCrystalNarrativeAudit(
             narrator_model=DEFAULT_NARRATOR_MODEL,
             latency_ms=(time.monotonic() - started) * 1000.0,
+            # Still capture the input prompt on the failure path so the
+            # PHI scanner can audit even the no-output case (#391 box 4).
+            input_prompt=prompt,
         )
     latency_ms = (time.monotonic() - started) * 1000.0
 
@@ -871,6 +874,10 @@ async def _invoke_llm_narrator(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         cost_usd=cost_usd,
+        # #391 security box 4: capture the FULL prompt so the offline
+        # PHI scanner can audit LLM inputs (not just outputs) for PHI
+        # leaks. This is the input side of the audit harness contract.
+        input_prompt=prompt,
     )
 
 
