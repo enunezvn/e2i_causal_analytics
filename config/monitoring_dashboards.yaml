@@ -136,22 +136,43 @@ alert_delivery_metrics:
   - metric: e2i.sentinel.alert_delivery_latency_ms
     type: histogram
     emitted_by: src.api.routes.staleness_alerts.AlertBridge._subscribe_and_pump
-    emitted_via: src.mlops.lifecycle_monitoring.record_alert_latency
+    emitted_via: src.mlops.lifecycle_monitoring.record_alert_latency_cluster
     tags: [brand]
     panel_title: "Sentinel alert delivery latency (publish→receive) by brand"
     use_case: >-
       End-to-end latency from sentinel handler publish to SSE
-      consumer receipt. Codex iter-0 H2 closure: dedup via
-      alert_id keeps the metric bounded to at-most-one sample
-      per (publisher process, alert_id) per consumer process.
-      Latency below 100ms is healthy; tails above 1s indicate
-      either Redis backpressure OR SSE bridge backpressure.
+      consumer receipt. Issue #404 closure: dedup via alert_id
+      uses cluster-wide Redis SETNX so multi-worker / multi-pod
+      deployments emit at-most-one sample per alert_id globally
+      (not per-process as before). Latency below 100ms is healthy;
+      tails above 1s indicate either Redis backpressure OR SSE
+      bridge backpressure.
     alert_threshold:
       warn_p99_above_ms: 500
       page_p99_above_ms: 2000
     # Companion guard — see comparing-against-publish-count:
     # dashboard rule: if publish_count > 0 AND latency_samples == 0
     # over a 1h window, page (subscriber pipeline broken).
+
+  - metric: e2i.sentinel.dedup_redis_unavailable_total
+    type: counter
+    emitted_by: src.api.routes.staleness_alerts.AlertBridge._subscribe_and_pump
+    emitted_via: src.mlops.lifecycle_monitoring.record_alert_latency_cluster
+    tags: []
+    panel_title: "Alert dedup Redis-unavailable fallback rate"
+    use_case: >-
+      Issue #404 closure: increments each time the cluster-wide
+      Redis SETNX dedup at the SSE alert-latency emission site
+      fails (transport error) and falls back to per-process LRU.
+      Under healthy Redis this counter stays flat (zero). A
+      sustained non-zero rate signals Redis transport degradation
+      AND the latency-sample density has drifted from
+      cluster-wide-at-most-once back to per-process-at-most-once
+      semantics (dashboards should treat latency_samples as
+      multi-counted under that condition).
+    alert_threshold:
+      warn_above_per_5m: 0       # any fallback is degraded mode
+      page_above_per_5m: 10      # sustained Redis failure
 
 # ============================================================================
 # Box 1 — Opik trace span name registry

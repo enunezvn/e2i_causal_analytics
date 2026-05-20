@@ -59,7 +59,17 @@ import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
-from typing import Any, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional
+
+# Redis transport-error classes for the cluster-wide dedup catch tuple
+# (#404). ``redis.exceptions.ConnectionError`` and ``TimeoutError`` do
+# NOT inherit from the builtin ``ConnectionError`` / ``TimeoutError``
+# (they inherit from ``redis.exceptions.RedisError -> Exception``).
+# Without the aliased imports below, a bare redis-py call from inside
+# our catch site would escape a builtin-only catch tuple. Forward-
+# referenced from `[[feedback-feat-378-reanalysis-enqueue-close]]`.
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 logger = logging.getLogger(__name__)
 
@@ -196,6 +206,13 @@ METRIC_ALERT_DELIVERY_LATENCY_MS = "e2i.sentinel.alert_delivery_latency_ms"
 # samples == 0) from "no alerts ever published". Brand-tagged so the
 # per-brand publish/receive ratio is observable.
 METRIC_ALERT_PUBLISH_COUNT = "e2i.sentinel.alert_publish_count"
+# Issue #404 closure: counter incremented every time the cluster-wide
+# Redis SETNX dedup falls back to per-process LRU because Redis is
+# unavailable (transport error). Operators watch this metric to detect
+# degraded-mode dedup — when Redis is healthy this counter stays flat.
+# Not brand-tagged: the degradation signal is environmental, not
+# per-brand.
+METRIC_ALERT_DEDUP_REDIS_UNAVAILABLE = "e2i.sentinel.dedup_redis_unavailable_total"
 
 
 # ---------------------------------------------------------------------
@@ -541,15 +558,29 @@ def record_consolidation_sweep(
 # dashboard can detect the "no subscribers" case as ``publish_count > 0
 # AND latency_samples == 0``.
 #
-# Scope caveat (codex iter-1 L2 closure): dedup is PROCESS-LOCAL only.
-# In a multi-worker uvicorn / Gunicorn deployment where N worker
-# processes each host SSE subscribers, the SAME ``alert_id`` may emit
-# up to N samples globally (one per process). Dashboards should treat
-# the latency metric as "bounded per (consumer process, alert_id)" —
-# NOT exactly-once globally. Global exactly-once would require an
-# external coordination layer (e.g., a Redis SETNX claim on the
-# alert_id) which is V2 follow-up if the metric noise becomes
-# operationally significant.
+# Scope caveats — TWO dedup layers (#404 closure):
+#
+# 1. **Cluster-wide via Redis SETNX** (preferred; see
+#    :func:`record_alert_latency_cluster`). First worker to claim
+#    ``e2i:metric:alert_id:<uuid>`` via ``SET ... NX EX <ttl>`` emits
+#    the latency sample; subsequent workers across the cluster see
+#    SETNX refuse and skip emission. This yields global
+#    at-most-once-per-alert_id semantics in multi-worker uvicorn /
+#    multi-pod K8s deployments. Adds one Redis RTT to the
+#    alert-receive path.
+#
+# 2. **Per-process LRU fallback** (this surface). When Redis is
+#    unavailable (transport error caught at the SETNX call), the
+#    cluster helper falls back to the LRU below so the latency metric
+#    keeps flowing in degraded mode — bounded at-most-once per
+#    (process, alert_id) globally. A counter
+#    ``METRIC_ALERT_DEDUP_REDIS_UNAVAILABLE`` increments on every
+#    fallback so operators can detect the degraded state.
+#
+# The legacy sync :func:`record_alert_latency` uses ONLY the LRU
+# (no Redis call) and is retained for back-compat with sync callers /
+# the historical test surface. New code should call the async
+# :func:`record_alert_latency_cluster`.
 #
 # LRU bound (1024 entries) keeps the dedup set bounded under sustained
 # alert volume; oldest entries are evicted FIFO.
@@ -557,6 +588,126 @@ def record_consolidation_sweep(
 _ALERT_LATENCY_DEDUP_MAX = 1024
 _ALERT_LATENCY_RECENT_IDS: list[str] = []
 _ALERT_LATENCY_RECENT_LOCK = Lock()
+
+# Cluster-wide dedup constants (#404 closure).
+#
+# Key namespace: ``e2i:metric:alert_id:<uuid_hex>``. Matches the issue
+# body's proposed key shape; bytes-namespaced under ``e2i:`` so the
+# dedup keys cannot collide with any other Redis usage in the cluster.
+_ALERT_LATENCY_DEDUP_KEY_PREFIX = "e2i:metric:alert_id:"
+
+# TTL in seconds for the SETNX claim. Rationale:
+#
+# * Typical alert SSE consumer round-trip is sub-second under normal
+#   pubsub conditions; the dedup window only needs to cover the burst
+#   of N subscribers all receiving the same publish within a few ms.
+# * 60 seconds is generous enough to absorb GC pauses, network blips,
+#   and slow subscribers reconnecting after a brief disconnect.
+# * 60 seconds is short enough that an ``alert_id`` collision after
+#   the TTL elapsed is functionally a brand-new alert — even though
+#   ``alert_id`` is a uuid4 hex (collision probability astronomically
+#   low; cf. ``src.tasks.sentinel_actions.publish_alert``), the TTL
+#   gives a hard ceiling on key-set growth.
+# * Configurable via ``E2I_ALERT_DEDUP_TTL_SEC`` env var for ops
+#   deployment tuning. Default: 60s.
+_ALERT_LATENCY_DEDUP_TTL_SEC = int(os.environ.get("E2I_ALERT_DEDUP_TTL_SEC", "60"))
+
+# Type alias for the redis-client factory the cluster dedup helper
+# uses. The default is a thin wrapper around the canonical
+# ``get_redis_client`` factory; tests inject an async stand-in.
+_RedisFactory = Callable[[], Awaitable[Any]]
+
+
+async def _default_redis_factory_for_dedup() -> Any:
+    """Async wrapper around the sync :func:`get_redis_client` cache.
+
+    Imports the factory lazily so a broken Redis client wiring does
+    not crash this module's import. Mirrors the ``_default_redis_factory``
+    pattern in :mod:`src.api.routes.staleness_alerts`.
+    """
+    from src.memory.services.factories import get_redis_client
+
+    return get_redis_client()
+
+
+async def _try_claim_alert_id_via_redis(
+    alert_id: str,
+    *,
+    redis_factory: Optional[_RedisFactory] = None,
+) -> Optional[bool]:
+    """Cluster-wide ``alert_id`` claim via Redis ``SET ... NX EX <ttl>``.
+
+    Returns:
+        True  — claim succeeded; this worker WON the race and MUST emit.
+        False — claim refused (key already existed); caller MUST skip.
+        None  — Redis unavailable (transport error); caller falls back
+                to per-process LRU.
+
+    Transport-error catch tuple — pinned by tests in
+    ``test_cluster_wide_alert_dedup.py``. Each class is here for a
+    distinct reason:
+
+    * builtin ``ConnectionError`` — generic transport failure that can
+      escape redis-py normalization in some configurations.
+    * ``redis.exceptions.ConnectionError`` (aliased
+      ``RedisConnectionError``) — redis-py's own transport class which
+      does NOT inherit from builtin ``ConnectionError`` (it inherits
+      from ``redis.exceptions.RedisError -> Exception``). Without this
+      alias a bare redis-py raise would escape a builtin-only catch.
+    * builtin ``TimeoutError`` — socket-level timeout.
+    * ``redis.exceptions.TimeoutError`` (aliased ``RedisTimeoutError``)
+      — redis-py's timeout class which inherits from
+      ``redis.exceptions.ConnectionError -> RedisError -> Exception``,
+      so it does NOT match builtin ``TimeoutError`` either.
+
+    Programming errors (TypeError, AttributeError, ValueError) PROPAGATE
+    — they signal a shape mismatch that should surface in error
+    tracking, NOT a transport blip.
+
+    Sanitized log: only ``alert_id`` (a uuid4 hex) is interpolated —
+    NEVER the payload (which can contain finding-level PHI). Mirrors
+    the publish-side sanitization in
+    :func:`src.tasks.sentinel_actions.publish_alert`.
+    """
+    factory: _RedisFactory = redis_factory or _default_redis_factory_for_dedup
+
+    try:
+        client = await factory()
+    except (
+        ConnectionError,
+        RedisConnectionError,
+        TimeoutError,
+        RedisTimeoutError,
+    ):
+        logger.warning(
+            "lifecycle_monitoring: redis client factory failed for "
+            "alert_id=%s; falling back to per-process LRU dedup",
+            alert_id,
+        )
+        _emit_mlflow_metric(METRIC_ALERT_DEDUP_REDIS_UNAVAILABLE, 1.0, None)
+        return None
+
+    key = f"{_ALERT_LATENCY_DEDUP_KEY_PREFIX}{alert_id}"
+    try:
+        # ``SET key value NX EX ttl_sec`` — atomic claim + TTL.
+        # redis-py returns True on success (key did not exist), None
+        # when the key already existed (NX refused). Defensive bool()
+        # coerces non-redis-py fakes that return "OK" etc.
+        ok = await client.set(key, "1", nx=True, ex=_ALERT_LATENCY_DEDUP_TTL_SEC)
+    except (
+        ConnectionError,
+        RedisConnectionError,
+        TimeoutError,
+        RedisTimeoutError,
+    ):
+        logger.warning(
+            "lifecycle_monitoring: redis SETNX failed for alert_id=%s; "
+            "falling back to per-process LRU dedup",
+            alert_id,
+        )
+        _emit_mlflow_metric(METRIC_ALERT_DEDUP_REDIS_UNAVAILABLE, 1.0, None)
+        return None
+    return bool(ok)
 
 
 def _mark_alert_recorded(alert_id: str) -> bool:
@@ -695,7 +846,84 @@ def record_alert_latency(payload: Dict[str, Any]) -> None:
     _emit_mlflow_metric(METRIC_ALERT_DELIVERY_LATENCY_MS, delta_ms, tags or None)
 
 
+async def record_alert_latency_cluster(
+    payload: Dict[str, Any],
+    *,
+    redis_factory: Optional[_RedisFactory] = None,
+) -> None:
+    """Record the publish→receive latency with **cluster-wide** dedup.
+
+    Issue #404 closure. Replaces the per-process LRU dedup at the
+    SSE-consumer call site with a Redis ``SET NX EX`` claim so that
+    under multi-worker uvicorn / multi-pod K8s, the SAME ``alert_id``
+    observed by N workers produces ONE metric sample globally (not N).
+
+    Dedup precedence — most-bounded first:
+
+    1. ``alert_id`` present + Redis SETNX succeeds → first worker WINS,
+       emits the latency sample. Subsequent workers' SETNX returns
+       falsy → skip emission. Cluster-wide at-most-once.
+    2. ``alert_id`` present + Redis transport error → fall back to the
+       legacy per-process LRU (:func:`_mark_alert_recorded`). The
+       ``METRIC_ALERT_DEDUP_REDIS_UNAVAILABLE`` counter is incremented
+       once per fallback so the dashboard surfaces the degraded mode.
+       Bounded at-most-once-per-process under Redis-down conditions.
+    3. ``alert_id`` missing (back-compat with payloads from before
+       stamping landed) → no dedup, emit every observation. Redis is
+       NOT consulted (no wasted round-trip on legacy payloads).
+
+    Defensive paths match the legacy sync :func:`record_alert_latency`:
+
+    * ``publish_at`` missing → skip emission silently.
+    * ``publish_at`` non-numeric / bool → skip emission silently.
+    * ``publish_at > now`` (clock skew) → clamp delta to 0.0.
+
+    Programming errors (TypeError, AttributeError) inside the Redis
+    SETNX call PROPAGATE so shape mismatches surface in error tracking.
+
+    Args:
+        payload: The deserialized alert payload (must contain
+            ``publish_at`` to emit; ``alert_id`` to dedup).
+        redis_factory: Optional async factory returning an
+            ``redis.asyncio.Redis`` client. Defaults to
+            :func:`_default_redis_factory_for_dedup` which uses the
+            canonical :func:`src.memory.services.factories.get_redis_client`
+            singleton. Tests inject a fake.
+    """
+    publish_at = payload.get("publish_at")
+    if publish_at is None:
+        return
+    if not isinstance(publish_at, (int, float)) or isinstance(publish_at, bool):
+        return
+
+    alert_id = payload.get("alert_id")
+    if isinstance(alert_id, str) and alert_id:
+        # Try cluster-wide claim first. Three outcomes:
+        # * True  — this worker won the race; emit below.
+        # * False — another worker already claimed; skip emission.
+        # * None  — Redis unavailable; fall back to per-process LRU.
+        claim_result = await _try_claim_alert_id_via_redis(alert_id, redis_factory=redis_factory)
+        if claim_result is False:
+            return
+        if claim_result is None:
+            # Redis fallback path: rely on per-process LRU.
+            if not _mark_alert_recorded(alert_id):
+                return
+        # claim_result is True → fall through to emit (no LRU check
+        # needed; cluster-wide claim is sufficient).
+    # alert_id missing → no dedup, fall through to emit.
+
+    now_ms = time.time() * 1000.0
+    delta_ms = float(now_ms) - float(publish_at)
+    if delta_ms < 0:
+        delta_ms = 0.0
+
+    tags = _coerce_brand_tags(payload)
+    _emit_mlflow_metric(METRIC_ALERT_DELIVERY_LATENCY_MS, delta_ms, tags or None)
+
+
 __all__ = [
+    "METRIC_ALERT_DEDUP_REDIS_UNAVAILABLE",
     "METRIC_ALERT_DELIVERY_LATENCY_MS",
     "METRIC_ALERT_PUBLISH_COUNT",
     "METRIC_CASCADE_FREQUENCY",
@@ -706,6 +934,7 @@ __all__ = [
     "SPAN_CONSOLIDATION_SWEEP",
     "SPAN_PROVENANCE_WRITE",
     "record_alert_latency",
+    "record_alert_latency_cluster",
     "record_alert_published",
     "record_cascade_complete",
     "record_consolidation_sweep",
