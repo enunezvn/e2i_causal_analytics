@@ -50,6 +50,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from typing import Any, Dict, Final, List, Optional
 
 from kombu.exceptions import OperationalError as KombuOperationalError
@@ -75,11 +76,31 @@ async def publish_alert(payload: Dict[str, Any]) -> None:
     Best-effort publish ``payload`` (JSON-serialized) to ``ALERTS_CHANNEL``.
 
     On Redis failure: log + swallow. Caller's main side-effect must continue.
+
+    Stamps ``payload['publish_at']`` with an integer epoch-ms timestamp
+    BEFORE serialization. The consumer side (the SSE bridge in
+    :mod:`src.api.routes.staleness_alerts`) reads this field to compute
+    the publish→receive delivery latency via
+    :func:`src.mlops.lifecycle_monitoring.record_alert_latency` (#391
+    monitoring slice, box 3). The field is added in-place so the
+    serialized JSON on Redis carries it; back-compat with payloads
+    that already include ``publish_at`` is preserved (only stamps when
+    absent).
     """
     # Lazy import: avoid hardening the action module's import-time dependency
     # on the Redis client factory (which itself does an import-time
     # ``redis.from_url``). Lets unit tests patch the factory cleanly.
     from src.memory.services.factories import get_redis_client
+
+    # Stamp publish_at if not already present. Idempotent — re-publication
+    # of an already-stamped payload preserves the original timestamp so
+    # downstream latency math reflects the FIRST publish, not the retry.
+    if "publish_at" not in payload:
+        # int(time.time() * 1000) yields milliseconds-since-epoch matching
+        # the consumer's ``time.time() * 1000`` in
+        # ``lifecycle_monitoring.record_alert_latency`` so delta math is
+        # symmetric.
+        payload["publish_at"] = int(time.time() * 1000)
 
     try:
         redis = get_redis_client()

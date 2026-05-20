@@ -55,6 +55,7 @@ from typing import (
 from pydantic import BaseModel, Field, field_validator
 
 from src.memory.services.factories import get_supabase_client
+from src.mlops.lifecycle_monitoring import record_consolidation_sweep
 
 logger = logging.getLogger(__name__)
 
@@ -471,6 +472,9 @@ class Consolidator:
         error and do NOT short-circuit the rest of the pipeline.
         """
         result = ConsolidationResult()
+        # Monotonic clock for the #391 monitoring duration metric. Wall
+        # clock would be subject to system-time adjustments mid-run.
+        sweep_started_monotonic = time.monotonic()
         try:
             await self.deduplicate_episodic(brand=brand, region=None, result=result)
         except Exception as exc:
@@ -496,6 +500,24 @@ class Consolidator:
             logger.exception("consolidator: procedural-template extraction failed")
             result.errors.append(f"procedural-template: {exc}")
         result.finished_at = datetime.now(timezone.utc)
+
+        # #391 monitoring box 1.c + 2.b (promotion_rate): emit Opik
+        # trace + MLflow promotion-rate gauge for the entire sweep.
+        # Brand naming: when ``brand`` is None (whole-portfolio sweep)
+        # we tag with the literal ``_all_`` token so per-brand
+        # dashboards have a stable bucket for unscoped sweeps.
+        # Best-effort by design — helper swallows its own exceptions.
+        sweep_duration_ms = (time.monotonic() - sweep_started_monotonic) * 1000.0
+        record_consolidation_sweep(
+            brand=brand or "_all_",
+            dedup_collapses=result.episodic_dedup_collapsed,
+            promotions_to_semantic=result.promoted_to_semantic,
+            promotions_to_procedural=result.promoted_to_procedural,
+            templates_extracted=result.procedural_templates_extracted,
+            duration_ms=sweep_duration_ms,
+            causal_paths_examined=result.causal_paths_examined,
+        )
+
         logger.info(
             f"consolidator finished promoted_semantic={result.promoted_to_semantic} "
             f"promoted_procedural={result.promoted_to_procedural} "
