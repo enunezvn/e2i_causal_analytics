@@ -27,6 +27,7 @@ from packaging.version import Version
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ROOT_REQS = REPO_ROOT / "requirements.txt"
+DEV_REQS = REPO_ROOT / "requirements-dev.txt"
 SECURITY_YML = REPO_ROOT / ".github" / "workflows" / "security.yml"
 
 # Each mlflow package in requirements.txt must satisfy this specifier post-#362.
@@ -76,10 +77,10 @@ _IGNORE_LINE_RE = re.compile(
 )
 
 
-def _read_mlflow_constraints() -> dict[str, str]:
-    text = ROOT_REQS.read_text()
+def _read_mlflow_constraints(path: Path = ROOT_REQS) -> dict[str, str]:
+    text = path.read_text()
     matches = _PKG_LINE_RE.findall(text)
-    assert matches, "no mlflow requirement lines found in requirements.txt"
+    assert matches, f"no mlflow requirement lines found in {path.name}"
     return {name: spec.strip() for name, spec in matches}
 
 
@@ -125,6 +126,23 @@ def test_mlflow_packages_use_lockstep_specifier() -> None:
         f"mlflow / mlflow-skinny / mlflow-tracing specifiers diverged: "
         f"{constraints!r}; they must move in lockstep."
     )
+
+
+def test_mlflow_dev_requirements_match_root_pin() -> None:
+    """``requirements-dev.txt`` mlflow pins must match ``requirements.txt``.
+
+    Same forcing-function shape as ``test_bentoml_requirements_exact_pin.py``:
+    range/exact pins in one file but not the other create silent version
+    skew on dev-vs-prod rebuilds. Pre-#362 both files agreed on ``==3.7.0``;
+    this test ensures #362 bumps BOTH together.
+    """
+    root = _read_mlflow_constraints(ROOT_REQS)
+    dev = _read_mlflow_constraints(DEV_REQS)
+    for pkg in ("mlflow", "mlflow-skinny", "mlflow-tracing"):
+        assert root.get(pkg) == dev.get(pkg), (
+            f"{pkg} pin drift between requirements.txt and requirements-dev.txt: "
+            f"root={root.get(pkg)!r} vs dev={dev.get(pkg)!r}; both must agree."
+        )
 
 
 _PKG_LEAD_RE = re.compile(r"^\s*#\s*(mlflow|mistune)\s+\d", re.IGNORECASE)
