@@ -513,3 +513,203 @@ def test_consolidator_deduplicate_episodic_against_real_db(
     sig, counter = rows[0][1], rows[0][2]
     assert sig is not None and sig.startswith("v1:primary:")
     assert counter == 3
+
+
+def test_consolidator_merges_late_arrival_against_real_db(
+    db_conn: "psycopg.Connection", brand_namespace: str
+) -> None:
+    """Iter-1 H1 e2e: after a canonical is stamped, a late-arrival row
+    with the same key fields MUST be merged into the existing canonical
+    via the application's pre-check path — NOT stamped as a duplicate-
+    canonical (which would hit the DB partial-unique-index UniqueViolation).
+
+    This is the integration-test counterpart to the unit test
+    ``test_dedup_collapses_late_inserted_duplicate_after_canonical_stamped``.
+    Exercises the REAL partial-unique-index against the real Postgres
+    table — proves that the application path successfully avoids the
+    DB-level conflict by pre-checking and merging.
+    """
+    import asyncio
+    from typing import Any, Dict, List, Optional, Tuple
+    from unittest.mock import patch
+
+    from src.memory.lifecycle.consolidator import Consolidator
+
+    brand = brand_namespace + "kis-late"
+
+    # Phase 1: seed + run dedup on 3 identical rows.
+    with db_conn.cursor() as cur:
+        for i in range(3):
+            cur.execute(
+                """
+                INSERT INTO episodic_memories
+                    (event_type, event_subtype, description, brand,
+                     causal_path_id, agent_name, occurred_at)
+                VALUES (%s, %s, %s, %s, %s, %s, NOW() + (%s || ' seconds')::interval)
+                """,
+                (
+                    "ANALYSIS_COMPLETED",
+                    "ate_estimation",
+                    f"row {i}",
+                    brand,
+                    "cp-late-388",
+                    "estimator",
+                    str(i),
+                ),
+            )
+    db_conn.commit()
+
+    # Reuse the shim from the previous test — defined inline to keep the
+    # tests self-contained (each test owns its own shim instance so
+    # there's no cross-test state).
+    class _Shim:
+        def __init__(self, conn: "psycopg.Connection", table: str) -> None:
+            self._conn = conn
+            self._table = table
+            self._mode: Optional[str] = None
+            self._select_cols = "*"
+            self._eq_filters: List[Tuple[str, Any]] = []
+            self._is_null_cols: List[str] = []
+            self._update_payload: Dict[str, Any] = {}
+            self._in_filter: Optional[Tuple[str, List[Any]]] = None
+
+        def select(self, cols: str, count: Optional[str] = None) -> "_Shim":
+            self._mode = "select"
+            self._select_cols = cols
+            return self
+
+        def update(self, payload: Dict[str, Any]) -> "_Shim":
+            self._mode = "update"
+            self._update_payload = payload
+            return self
+
+        def delete(self) -> "_Shim":
+            self._mode = "delete"
+            return self
+
+        def eq(self, col: str, val: Any) -> "_Shim":
+            self._eq_filters.append((col, val))
+            return self
+
+        def is_(self, col: str, val: Any) -> "_Shim":
+            self._is_null_cols.append(col)
+            return self
+
+        def in_(self, col: str, vals: List[Any]) -> "_Shim":
+            self._in_filter = (col, list(vals))
+            return self
+
+        def execute(self) -> Any:
+            where_parts: List[str] = []
+            params: List[Any] = []
+            for col, val in self._eq_filters:
+                where_parts.append(f"{col} = %s")
+                params.append(val)
+            for col in self._is_null_cols:
+                where_parts.append(f"{col} IS NULL")
+            if self._in_filter is not None:
+                col, vals = self._in_filter
+                placeholders = ",".join(["%s"] * len(vals))
+                where_parts.append(f"{col} IN ({placeholders})")
+                params.extend(vals)
+            where_sql = " WHERE " + " AND ".join(where_parts) if where_parts else ""
+
+            class _Result:
+                def __init__(self, data: List[Dict[str, Any]]) -> None:
+                    self.data = data
+                    self.count: Optional[int] = None
+
+            if self._mode == "select":
+                sql = f"SELECT {self._select_cols} FROM {self._table}{where_sql}"
+                with self._conn.cursor() as cur:
+                    cur.execute(sql, params)
+                    col_names = [d[0] for d in cur.description] if cur.description else []
+                    rows = [dict(zip(col_names, r, strict=True)) for r in cur.fetchall()]
+                for r in rows:
+                    if "memory_id" in r and r["memory_id"] is not None:
+                        r["memory_id"] = str(r["memory_id"])
+                    if "occurred_at" in r and r["occurred_at"] is not None:
+                        r["occurred_at"] = str(r["occurred_at"])
+                return _Result(rows)
+            if self._mode == "update":
+                set_parts = ", ".join(f"{k} = %s" for k in self._update_payload.keys())
+                set_params = list(self._update_payload.values())
+                sql = f"UPDATE {self._table} SET {set_parts}{where_sql}"
+                with self._conn.cursor() as cur:
+                    cur.execute(sql, set_params + params)
+                self._conn.commit()
+                return _Result([])
+            if self._mode == "delete":
+                sql = f"DELETE FROM {self._table}{where_sql}"
+                with self._conn.cursor() as cur:
+                    cur.execute(sql, params)
+                self._conn.commit()
+                return _Result([])
+            return _Result([])
+
+    class _Client:
+        def __init__(self, conn: "psycopg.Connection") -> None:
+            self._conn = conn
+
+        def table(self, name: str) -> "_Shim":
+            return _Shim(self._conn, name)
+
+    fake = _Client(db_conn)
+
+    with patch(
+        "src.memory.lifecycle.consolidator.get_supabase_client",
+        return_value=fake,
+    ):
+        consolidator = Consolidator()
+        asyncio.run(consolidator.deduplicate_episodic(brand=brand, region=None))
+
+    # Phase-1 sanity: canonical stamped with counter=3.
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT dedup_signature, dedup_counter FROM episodic_memories WHERE brand = %s",
+            (brand,),
+        )
+        rows = cur.fetchall()
+    assert len(rows) == 1
+    assert rows[0][0] is not None
+    assert rows[0][1] == 3
+    canonical_sig_phase1 = rows[0][0]
+
+    # Phase 2: insert a 4th identical row simulating a late arrival.
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO episodic_memories
+                (event_type, event_subtype, description, brand,
+                 causal_path_id, agent_name, occurred_at)
+            VALUES (%s, %s, %s, %s, %s, %s, NOW() + INTERVAL '5 seconds')
+            """,
+            (
+                "ANALYSIS_COMPLETED",
+                "ate_estimation",
+                "late row",
+                brand,
+                "cp-late-388",
+                "estimator",
+            ),
+        )
+    db_conn.commit()
+
+    # Phase 3: re-run dedup. Must merge late row into existing canonical.
+    with patch(
+        "src.memory.lifecycle.consolidator.get_supabase_client",
+        return_value=fake,
+    ):
+        consolidator = Consolidator()
+        asyncio.run(consolidator.deduplicate_episodic(brand=brand, region=None))
+
+    # Phase-2 verification: still 1 row, counter incremented to 4.
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT dedup_signature, dedup_counter FROM episodic_memories WHERE brand = %s",
+            (brand,),
+        )
+        rows = cur.fetchall()
+    assert len(rows) == 1, f"expected merge into existing canonical, got {len(rows)} rows"
+    assert rows[0][0] == canonical_sig_phase1
+    assert rows[0][1] == 4

@@ -218,23 +218,28 @@ class Consolidator:
           ``_compute_dedup_signature`` (pure helper). Rows lacking the
           required fields are skipped (signature is ``None``).
         * Rows are grouped by ``(brand, signature)``. For each group of
-          N >= 2 rows, the oldest row (lowest ``occurred_at``) is
-          chosen as canonical; its ``dedup_signature`` is stamped and
-          its ``dedup_counter`` is incremented by ``SUM(dedup_counter)``
-          of the duplicates (so re-running on already-deduped data is a
-          monotonic-counter no-op, not a re-merge).
+          N >= 1 rows, ``_dedup_group`` decides whether to merge into
+          an existing canonical (pre-check by SELECT on (brand,
+          signature)) or to pick a local canonical and stamp it.
         * Non-canonical duplicate rows are DELETED. The canonical row's
           incremented counter preserves the audit trail of how many
           underlying events were collapsed.
-        * Singletons (group of 1) get their dedup_signature stamped so
-          subsequent runs do not re-examine them and the DB
-          partial-unique-index (brand, dedup_signature) covers future
-          inserts.
+        * Per-group atomicity: each group's (stamp + delete) sequence is
+          compensating-rolled-back on partial failure, so a delete-fail
+          never leaves the counter bumped while duplicates survive
+          (which would inflate ``SUM(dedup_counter)`` for promotion).
 
         Brand-boundary: signatures embed ``brand``; groups are keyed
         on ``(brand, signature)``, so cross-brand collapse is
         structurally impossible. Defense in depth via the DB index
-        which is per (brand, dedup_signature).
+        which is per (COALESCE(brand,''), dedup_signature).
+
+        Late-arrival contract (iter-1 H1 fix): when a candidate row's
+        ``(brand, signature)`` matches a row that's ALREADY stamped
+        (i.e. previously-deduped canonical from an earlier run), the
+        new row is merged INTO that canonical rather than stamped as
+        a new duplicate-canonical (which would hit the DB
+        partial-unique-index UniqueViolation).
 
         Args:
             brand: optional scope. If None, sweeps all brands.
@@ -273,10 +278,9 @@ class Consolidator:
             return result
 
         # Group rows by (brand, signature). Brand is included in the key
-        # explicitly so a None-brand fallback row (signature == None) cannot
-        # ever collide with a real-brand row. Rows where signature is None
-        # are bucketed into a noop group keyed by their memory_id (singleton
-        # group) so they pass through untouched.
+        # explicitly so a None-brand fallback row cannot ever collide
+        # with a real-brand row. Rows where signature is None are
+        # collected separately (cannot be safely deduped).
         groups: Dict[tuple, List[Dict[str, Any]]] = defaultdict(list)
         unkeyed: List[Dict[str, Any]] = []
         for row in rows:
@@ -287,78 +291,12 @@ class Consolidator:
             groups[(row.get("brand"), sig)].append(row)
 
         for (group_brand, signature), group in groups.items():
-            if len(group) == 1:
-                # Singleton: stamp the signature so future inserts hit the
-                # DB partial-unique-index, but no counter increment.
-                solo = group[0]
-                self._stamp_dedup_signature(
-                    client=client,
-                    memory_id=solo["memory_id"],
-                    signature=signature,
-                    counter=int(solo.get("dedup_counter") or 1),
-                    result=result,
-                )
-                continue
-
-            # Multi-row group: pick canonical (oldest by occurred_at —
-            # falls back to memory_id for tie-break determinism).
-            group_sorted = sorted(
-                group,
-                key=lambda r: (
-                    r.get("occurred_at") or "",
-                    str(r.get("memory_id") or ""),
-                ),
-            )
-            canonical = group_sorted[0]
-            duplicates = group_sorted[1:]
-            merged_counter = sum(int(r.get("dedup_counter") or 1) for r in group_sorted)
-
-            # Stamp canonical with signature + merged counter.
-            stamped = self._stamp_dedup_signature(
+            self._dedup_group(
                 client=client,
-                memory_id=canonical["memory_id"],
+                group_brand=group_brand,
                 signature=signature,
-                counter=merged_counter,
+                group=group,
                 result=result,
-            )
-            if not stamped:
-                # If the stamp failed, skip deletion to preserve evidence.
-                continue
-
-            # Delete duplicates by memory_id. Use a single in_() if possible;
-            # otherwise per-row delete. Per-row is robust against client
-            # shims that don't implement in_().
-            duplicate_ids = [d["memory_id"] for d in duplicates]
-            try:
-                # Try batch delete first.
-                client.table("episodic_memories").delete().in_("memory_id", duplicate_ids).execute()
-            except (AttributeError, TypeError):
-                # Shim doesn't support in_() — fall back to per-row delete.
-                for dup_id in duplicate_ids:
-                    try:
-                        client.table("episodic_memories").delete().eq("memory_id", dup_id).execute()
-                    except Exception as exc:
-                        logger.warning(f"consolidator: dedup delete failed for {dup_id}: {exc}")
-                        result.errors.append(f"dedup delete {dup_id}: {exc}")
-            except Exception as exc:
-                logger.warning(f"consolidator: dedup batch delete failed: {exc}")
-                result.errors.append(f"dedup batch delete: {exc}")
-                # Fall back to per-row deletion as a safety net.
-                for dup_id in duplicate_ids:
-                    try:
-                        client.table("episodic_memories").delete().eq("memory_id", dup_id).execute()
-                    except Exception as exc2:
-                        logger.warning(f"consolidator: dedup delete failed for {dup_id}: {exc2}")
-                        result.errors.append(f"dedup delete {dup_id}: {exc2}")
-
-            collapsed_n = len(duplicates)
-            result.episodic_dedup_collapsed += collapsed_n
-            result.record(group_brand or "_unknown", "dedup_collapsed")
-            logger.info(
-                f"consolidator: deduped {collapsed_n + 1} episodic rows "
-                f"(brand={group_brand}, sig={signature[:24]}..., "
-                f"canonical={canonical['memory_id']}, "
-                f"merged_counter={merged_counter})"
             )
 
         # Unkeyed rows: nothing to do — they lack a safe dedup signature.
@@ -369,6 +307,264 @@ class Consolidator:
             )
 
         return result
+
+    # ----------------------------------------- per-group dedup helpers
+
+    def _dedup_group(
+        self,
+        client: Any,
+        group_brand: Optional[str],
+        signature: str,
+        group: List[Dict[str, Any]],
+        result: ConsolidationResult,
+    ) -> None:
+        """Process one (brand, signature) group of un-stamped rows.
+
+        Two paths:
+
+        1. **Existing-canonical merge** (H1 fix path): SELECT for a
+           previously-stamped canonical with the same (brand,
+           signature). If one exists, MERGE the new group into it —
+           increment ITS counter by SUM(group counters), then DELETE
+           the new group's rows. Never stamps a second row with the
+           same signature (which would hit the DB partial-unique-index).
+
+        2. **Fresh-canonical stamp** (multi-row OR singleton with no
+           existing canonical): pick the oldest row in the group as
+           canonical, stamp it with the signature + merged counter,
+           then DELETE the rest. Compensating-rollback on failure
+           (M1 fix path) keeps counter/deletes in sync.
+        """
+        # Path 1: probe for an already-stamped canonical with this
+        # (brand, signature). The DB partial-unique-index guarantees at
+        # most one such row.
+        existing_canonical = self._find_canonical_for_signature(
+            client=client, brand=group_brand, signature=signature
+        )
+        if existing_canonical is not None:
+            self._merge_into_existing_canonical(
+                client=client,
+                group_brand=group_brand,
+                signature=signature,
+                existing_canonical=existing_canonical,
+                incoming=group,
+                result=result,
+            )
+            return
+
+        # Path 2: no existing canonical. Stamp the oldest in the group.
+        group_sorted = sorted(
+            group,
+            key=lambda r: (
+                r.get("occurred_at") or "",
+                str(r.get("memory_id") or ""),
+            ),
+        )
+        canonical = group_sorted[0]
+        duplicates = group_sorted[1:]
+        merged_counter = sum(int(r.get("dedup_counter") or 1) for r in group_sorted)
+        canonical_pre_counter = int(canonical.get("dedup_counter") or 1)
+
+        # Multi-row vs singleton stamp behavior. For a singleton with no
+        # existing canonical, we just stamp the row's signature (counter
+        # stays at its current value); no duplicates to delete, so no
+        # atomicity concern.
+        if not duplicates:
+            self._stamp_dedup_signature(
+                client=client,
+                memory_id=canonical["memory_id"],
+                signature=signature,
+                counter=canonical_pre_counter,
+                result=result,
+            )
+            return
+
+        # Multi-row: STAMP first, then DELETE. On DELETE failure, REVERT
+        # the stamp so the group's counter + deletes stay in sync. Real
+        # DB has SAVEPOINT semantics that would give us this for free;
+        # we synthesize the same outcome with explicit compensating
+        # writes so the contract holds for any client (including the
+        # FakeSupabase used in unit tests).
+        stamped = self._stamp_dedup_signature(
+            client=client,
+            memory_id=canonical["memory_id"],
+            signature=signature,
+            counter=merged_counter,
+            result=result,
+        )
+        if not stamped:
+            return  # stamp failure already recorded; no deletes to roll back
+
+        delete_ok = self._delete_duplicates(
+            client=client,
+            memory_ids=[d["memory_id"] for d in duplicates],
+            result=result,
+        )
+        if not delete_ok:
+            # Compensate: revert the canonical's stamp to its pre-state
+            # so the next run can retry the whole group cleanly. Best
+            # effort — if the revert itself fails, log + record but
+            # don't crash the consolidator.
+            try:
+                client.table("episodic_memories").update(
+                    {"dedup_signature": None, "dedup_counter": canonical_pre_counter}
+                ).eq("memory_id", canonical["memory_id"]).execute()
+            except Exception as exc:
+                logger.warning(
+                    f"consolidator: dedup compensating revert failed for "
+                    f"{canonical['memory_id']}: {exc}"
+                )
+                result.errors.append(f"dedup revert {canonical['memory_id']}: {exc}")
+            return
+
+        collapsed_n = len(duplicates)
+        result.episodic_dedup_collapsed += collapsed_n
+        result.record(group_brand or "_unknown", "dedup_collapsed")
+        logger.info(
+            f"consolidator: deduped {collapsed_n + 1} episodic rows "
+            f"(brand={group_brand}, sig={signature[:24]}..., "
+            f"canonical={canonical['memory_id']}, "
+            f"merged_counter={merged_counter})"
+        )
+
+    def _find_canonical_for_signature(
+        self, client: Any, brand: Optional[str], signature: str
+    ) -> Optional[Dict[str, Any]]:
+        """SELECT the (single) row already stamped with this (brand,
+        signature). DB partial-unique-index guarantees at most one.
+
+        Returns None if none exists OR if the lookup fails (defensive:
+        a transient lookup failure should not be silently treated as
+        "no canonical exists" because the caller would then double-
+        stamp). Caller treats None as "no canonical" — for the
+        defensive case a follow-up run will pick up the leftover
+        candidates and retry.
+        """
+        try:
+            query = client.table("episodic_memories").select(
+                "memory_id, brand, dedup_signature, dedup_counter, occurred_at"
+            )
+            if brand is not None:
+                query = query.eq("brand", brand)
+            else:
+                # None-brand case (rare in production but possible per the
+                # nullable column on episodic_memories). The DB index uses
+                # COALESCE(brand, '') so the application layer must match.
+                query = query.is_("brand", "null")
+            query = query.eq("dedup_signature", signature)
+            data = (query.execute().data) or []
+        except Exception as exc:
+            logger.warning(
+                f"consolidator: canonical lookup failed for sig={signature[:24]}...: {exc}"
+            )
+            return None
+        if not data:
+            return None
+        # DB index guarantees at most one; defensively return the first.
+        first: Dict[str, Any] = data[0]
+        return first
+
+    def _merge_into_existing_canonical(
+        self,
+        client: Any,
+        group_brand: Optional[str],
+        signature: str,
+        existing_canonical: Dict[str, Any],
+        incoming: List[Dict[str, Any]],
+        result: ConsolidationResult,
+    ) -> None:
+        """Merge incoming un-stamped rows INTO an already-stamped
+        canonical row. Increment canonical's counter by SUM(incoming
+        counters); DELETE the incoming rows. On delete failure, revert
+        the canonical's counter to its pre-merge state so the group's
+        counter + deletes stay in sync (M1 atomicity fix path)."""
+        if not incoming:
+            return
+
+        canonical_id = existing_canonical["memory_id"]
+        canonical_pre_counter = int(existing_canonical.get("dedup_counter") or 1)
+        incoming_total = sum(int(r.get("dedup_counter") or 1) for r in incoming)
+        new_counter = canonical_pre_counter + incoming_total
+
+        # Bump canonical counter first.
+        try:
+            client.table("episodic_memories").update({"dedup_counter": new_counter}).eq(
+                "memory_id", canonical_id
+            ).execute()
+        except Exception as exc:
+            logger.warning(
+                f"consolidator: dedup merge counter-bump failed for {canonical_id}: {exc}"
+            )
+            result.errors.append(f"dedup merge bump {canonical_id}: {exc}")
+            return
+
+        # Then delete the incoming rows. On failure, revert the counter
+        # so we don't end up with the canonical bumped + duplicates
+        # still alive (double-counting in promotion).
+        delete_ok = self._delete_duplicates(
+            client=client,
+            memory_ids=[r["memory_id"] for r in incoming],
+            result=result,
+        )
+        if not delete_ok:
+            try:
+                client.table("episodic_memories").update(
+                    {"dedup_counter": canonical_pre_counter}
+                ).eq("memory_id", canonical_id).execute()
+            except Exception as exc:
+                logger.warning(
+                    f"consolidator: dedup merge compensating revert failed "
+                    f"for {canonical_id}: {exc}"
+                )
+                result.errors.append(f"dedup merge revert {canonical_id}: {exc}")
+            return
+
+        result.episodic_dedup_collapsed += len(incoming)
+        result.record(group_brand or "_unknown", "dedup_collapsed")
+        logger.info(
+            f"consolidator: merged {len(incoming)} late-arrival rows into "
+            f"canonical {canonical_id} (brand={group_brand}, "
+            f"sig={signature[:24]}..., new_counter={new_counter})"
+        )
+
+    def _delete_duplicates(
+        self,
+        client: Any,
+        memory_ids: List[Any],
+        result: ConsolidationResult,
+    ) -> bool:
+        """Delete duplicate rows by memory_id. Returns True iff ALL
+        deletions succeeded — caller uses this to drive compensating
+        rollback on partial failure.
+
+        Tries batch-delete via ``in_()`` first (one round-trip; atomic
+        on real Postgres). Falls back to per-row delete only if the
+        client shim doesn't implement ``in_()``. Per-row failures count
+        as group-failure to preserve the atomicity contract — even if
+        SOME duplicates were deleted, the caller will revert the
+        canonical's stamp, which means the next run will retry the
+        group cleanly (the still-deleted rows just won't reappear).
+        """
+        if not memory_ids:
+            return True
+        try:
+            client.table("episodic_memories").delete().in_("memory_id", memory_ids).execute()
+            return True
+        except (AttributeError, TypeError):
+            # Shim doesn't support in_() — fall back to per-row delete.
+            all_ok = True
+            for dup_id in memory_ids:
+                try:
+                    client.table("episodic_memories").delete().eq("memory_id", dup_id).execute()
+                except Exception as exc:
+                    logger.warning(f"consolidator: dedup delete failed for {dup_id}: {exc}")
+                    result.errors.append(f"dedup delete {dup_id}: {exc}")
+                    all_ok = False
+            return all_ok
+        except Exception as exc:
+            logger.warning(f"consolidator: dedup batch delete failed: {exc}")
+            result.errors.append(f"dedup batch delete: {exc}")
+            return False
 
     def _stamp_dedup_signature(
         self,

@@ -392,3 +392,166 @@ async def test_promotion_threshold_respects_deduplicated_counts(
     assert cp["consolidated_at"] is not None
     # Honors the effective (deduplicated-count-aware) confirmation count.
     assert cp["confirmation_count"] == 5
+
+
+# ---------------------------------------------------------------------------
+# iter-1 follow-ups: late-insert merge contract (H1) + per-group atomicity (M1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dedup_collapses_late_inserted_duplicate_after_canonical_stamped(
+    fake_supabase: FakeSupabase,
+) -> None:
+    """A duplicate that arrives AFTER the canonical has been stamped MUST
+    be merged into the existing canonical (not silently stamped — that
+    would fail the partial-unique-index) and DELETED.
+
+    Iter-0 bug: the singleton path stamped a new row with sig_X without
+    checking whether sig_X was already on a canonical row. In a real DB
+    the second UPDATE would hit a UniqueViolation; in this fake-DB
+    harness it would silently produce two rows with the same signature
+    (because the fake has no unique-index enforcement), inflating the
+    promotion count via SUM(dedup_counter).
+
+    Iter-1 fix (Option B): pre-check by SELECT (brand, sig) before
+    stamping. If a canonical already exists for that (brand, sig),
+    increment ITS counter by the new row's counter and DELETE the new
+    row instead of stamping it.
+    """
+    # Phase 1: seed 3 identical rows.
+    for i in range(3):
+        fake_supabase.rows["episodic_memories"].append(
+            {
+                "memory_id": f"m{i}",
+                "brand": "Kisqali",
+                "region": "northeast",
+                "event_type": "ANALYSIS_COMPLETED",
+                "event_subtype": "ate_estimation",
+                "causal_path_id": "cp-late-merge",
+                "agent_name": "estimator",
+                "description": "d",
+                "occurred_at": f"2026-05-20T0{i}:00:00Z",
+                "dedup_signature": None,
+                "dedup_counter": 1,
+            }
+        )
+    consolidator = Consolidator()
+    await consolidator.deduplicate_episodic(brand="Kisqali", region=None)
+    # Sanity check phase-1 result.
+    rows_after_run1 = fake_supabase.rows["episodic_memories"]
+    assert len(rows_after_run1) == 1
+    canonical_row = rows_after_run1[0]
+    assert canonical_row["dedup_counter"] == 3
+    assert canonical_row["dedup_signature"] is not None
+    canonical_sig = canonical_row["dedup_signature"]
+
+    # Phase 2: insert a 4th identical row simulating a late arrival.
+    fake_supabase.rows["episodic_memories"].append(
+        {
+            "memory_id": "m-late",
+            "brand": "Kisqali",
+            "region": "northeast",
+            "event_type": "ANALYSIS_COMPLETED",
+            "event_subtype": "ate_estimation",
+            "causal_path_id": "cp-late-merge",
+            "agent_name": "estimator",
+            "description": "d",
+            "occurred_at": "2026-05-20T05:00:00Z",
+            "dedup_signature": None,
+            "dedup_counter": 1,
+        }
+    )
+
+    # Phase 3: re-run dedup. The late row should be merged into the
+    # existing canonical, NOT stamped as a duplicate-canonical with the
+    # same sig (which would fail the DB partial-unique-index).
+    await consolidator.deduplicate_episodic(brand="Kisqali", region=None)
+    rows_after_run2 = fake_supabase.rows["episodic_memories"]
+    assert len(rows_after_run2) == 1, (
+        f"expected exactly 1 row (canonical merged with late), "
+        f"got {len(rows_after_run2)} — late row was not merged correctly"
+    )
+    assert rows_after_run2[0]["dedup_counter"] == 4
+    # Only the original canonical's signature remains.
+    assert rows_after_run2[0]["dedup_signature"] == canonical_sig
+    # The late row was DELETED, not stamped — only one row carries sig.
+    sigs = [r["dedup_signature"] for r in rows_after_run2]
+    assert sigs.count(canonical_sig) == 1
+
+
+@pytest.mark.asyncio
+async def test_dedup_atomicity_on_delete_failure(
+    fake_supabase: FakeSupabase,
+) -> None:
+    """If the duplicate-DELETE step fails mid-group, the canonical's
+    counter MUST NOT be left bumped — otherwise promotion's
+    SUM(dedup_counter) double-counts (the canonical bumped + the
+    surviving duplicate's old counter).
+
+    Iter-0 bug: counter increment + delete were not atomic; a delete
+    failure stranded an inconsistent state.
+
+    Iter-1 fix: wrap each group's (stamp + delete) in a transactional
+    boundary. On any per-group failure, ROLL BACK so the group's
+    counter/deletes stay in sync. Record the error in
+    ``ConsolidationResult.errors``.
+    """
+    # Seed 3 identical rows.
+    for i in range(3):
+        fake_supabase.rows["episodic_memories"].append(
+            {
+                "memory_id": f"m{i}",
+                "brand": "Kisqali",
+                "region": "northeast",
+                "event_type": "ANALYSIS_COMPLETED",
+                "event_subtype": "ate_estimation",
+                "causal_path_id": "cp-atomic",
+                "agent_name": "estimator",
+                "description": "d",
+                "occurred_at": f"2026-05-20T0{i}:00:00Z",
+                "dedup_signature": None,
+                "dedup_counter": 1,
+            }
+        )
+
+    # Patch the consolidator's delete-step entry-point so it raises.
+    # We patch the FakeSupabase's table().delete() chain by wrapping the
+    # `delete` method on _FakeQuery to raise.
+    consolidator = Consolidator()
+
+    original_table = fake_supabase.table
+    delete_calls = {"n": 0}
+
+    def boom_table(name: str) -> _FakeQuery:
+        q = original_table(name)
+        original_delete = q.delete
+
+        def failing_delete() -> _FakeQuery:
+            if name == "episodic_memories":
+                delete_calls["n"] += 1
+                # Raise on the FIRST delete attempt for episodic memory rows.
+                raise RuntimeError("simulated delete failure")
+            return original_delete()
+
+        q.delete = failing_delete  # type: ignore[method-assign]
+        return q
+
+    fake_supabase.table = boom_table  # type: ignore[method-assign]
+
+    result = await consolidator.deduplicate_episodic(brand="Kisqali", region=None)
+
+    # Rollback contract: 3 rows still present, canonical counter
+    # UNCHANGED, no row carries a stamped signature.
+    rows = fake_supabase.rows["episodic_memories"]
+    assert len(rows) == 3, f"expected all 3 rows preserved on delete failure, got {len(rows)}"
+    assert all(r["dedup_counter"] == 1 for r in rows), (
+        "canonical counter was bumped despite delete failure — non-atomic collapse"
+    )
+    assert all(r["dedup_signature"] is None for r in rows), (
+        "signature was stamped despite delete failure — non-atomic collapse"
+    )
+    # The error must surface on ConsolidationResult.
+    assert any("delete" in e.lower() for e in result.errors), (
+        f"per-group failure must surface in result.errors; got {result.errors!r}"
+    )
