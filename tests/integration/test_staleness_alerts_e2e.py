@@ -248,7 +248,11 @@ def test_e2i_alerts_publish_reaches_sse_subscriber(
         port=port,
         log_level="warning",
         access_log=False,
-        lifespan="on",
+        # ``lifespan="off"`` — the test's FastAPI app has no lifespan
+        # handlers; explicitly disabling avoids uvicorn's lifespan-
+        # startup phase entirely. Empirically this shaved several
+        # seconds off CI cold-boot.
+        lifespan="off",
     )
     server = uvicorn.Server(config)
     server_thread = threading.Thread(
@@ -256,12 +260,15 @@ def test_e2i_alerts_publish_reaches_sse_subscriber(
     )
     server_thread.start()
     try:
-        # 30s headroom — CI runners are slower than dev laptops for the
-        # full FastAPI app boot (Sentry init + OpenTelemetry init +
-        # MLflow + Opik + the 18-agent router-import graph). Empirically
-        # local boot is ~2s; CI was observed at 10-15s under load.
-        assert _wait_for_port("127.0.0.1", port, timeout=30.0), (
-            "uvicorn server did not start within 30s"
+        # 60s headroom — this is the last test in the integration
+        # suite; cumulative xdist worker load (memory pressure +
+        # CPU contention from the parallel pytest workers + heavy
+        # transitive imports via ``src.api.routes.staleness_alerts``
+        # → ``src.api.main``) slows uvicorn boot on CI runners.
+        # 30s was insufficient empirically (2 consecutive failures).
+        # Local boot is ~2s; CI worst-case observed at ~40s.
+        assert _wait_for_port("127.0.0.1", port, timeout=60.0), (
+            "uvicorn server did not start within 60s"
         )
 
         # -------- background publisher --------
