@@ -19,19 +19,24 @@ the index from the migration).
 
 This e2e test plugs that gap:
 
-1. Applies migration 025 to the test DB so the 15 new columns exist
+1. Bootstraps a minimal ``executive_insights`` table (the 13-column
+   shape from ``021_insight_lifecycle.sql`` lines 180-199 — sliced
+   out of the full 021 migration so this test has no upstream-table
+   dependency on ``causal_paths`` / ``episodic_memories`` / etc that
+   021 also ALTERs).
+2. Applies migration 025 to the test DB so the 15 new columns exist
    (idempotent — re-applies cleanly on a DB that already has the
    migration).
-2. Seeds rows into ``executive_insights`` via psycopg, with ALL 15
+3. Seeds rows into ``executive_insights`` via psycopg, with ALL 15
    new fields populated for at least one row.
-3. Hits ``GET /api/executive-insights/portfolio-summary`` against the
+4. Hits ``GET /api/executive-insights/portfolio-summary`` against the
    real FastAPI app with the supabase factory shimmed to a psycopg-
    backed adapter pointed at the SAME DB connection (NOT a mock —
    the shim issues real SQL against the real DB).
-4. Hits ``GET /api/executive-insights/{insight_id}`` via the same
+5. Hits ``GET /api/executive-insights/{insight_id}`` via the same
    real-DB path and confirms all 15 new fields round-trip through
    the Pydantic response model.
-5. Pins the route-ordering contract: ``/portfolio-summary`` resolves
+6. Pins the route-ordering contract: ``/portfolio-summary`` resolves
    to 200, NOT to 404-from-uuid-parse-fail (which would happen if
    the dynamic ``/{insight_id}`` route came first and tried to
    parse ``"portfolio-summary"`` as a UUID).
@@ -85,12 +90,59 @@ pytestmark = pytest.mark.skipif(
 )
 
 # ----------------------------------------------------------------------------
-# Migration apply (021 base + 025 schema completion)
+# Migration apply (executive_insights base + 025 schema completion)
 # ----------------------------------------------------------------------------
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-MIGRATION_021 = REPO_ROOT / "database" / "memory" / "021_insight_lifecycle.sql"
 MIGRATION_025 = REPO_ROOT / "database" / "memory" / "025_crystaldigest_schema_completion.sql"
+
+# Minimal bootstrap of the ``executive_insights`` table. The full 021
+# migration ALTERs upstream tables (causal_paths, episodic_memories,
+# triggers, ml_predictions) we do NOT need for this test's scope; the
+# portfolio-summary + get-one routes only touch executive_insights.
+# Sliced from 021_insight_lifecycle.sql lines 180-199 (CREATE TABLE +
+# the brand/recall/crystallized_at index). pgcrypto is enabled so
+# ``gen_random_uuid()`` resolves on a fresh DB.
+_BOOTSTRAP_EXECUTIVE_INSIGHTS_SQL = """
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+CREATE TABLE IF NOT EXISTS executive_insights (
+    insight_id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    title                   VARCHAR(500) NOT NULL,
+    narrative               TEXT NOT NULL,
+    brand                   VARCHAR(50) NOT NULL,
+    region                  VARCHAR(20),
+    kpi                     VARCHAR(100),
+    time_window_start       TIMESTAMPTZ,
+    time_window_end         TIMESTAMPTZ,
+    key_metrics             JSONB NOT NULL DEFAULT '{}',
+    recall                  BOOLEAN NOT NULL DEFAULT FALSE,
+    recall_reason           TEXT,
+    recall_at               TIMESTAMPTZ,
+    crystallized_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    crystallized_by_cycle_id UUID,
+    crystallized_by_user_id VARCHAR(100),
+    invalidated_at          TIMESTAMPTZ,
+    invalidation_reason     TEXT,
+    source_count            INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_executive_insights_brand_recall
+    ON executive_insights(brand, recall, crystallized_at DESC);
+"""
+
+
+def _exec_sql_via_psql(url: str, sql: str, *, label: str) -> None:
+    """Pipe a SQL string to psql. Used for the bootstrap step."""
+    result = subprocess.run(
+        ["psql", url, "-v", "ON_ERROR_STOP=1"],
+        input=sql,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"{label} failed:\nstderr={result.stderr}\nstdout={result.stdout}"
+    )
 
 
 def _apply_migration(url: str, migration_path: Path) -> None:
@@ -108,13 +160,17 @@ def _apply_migration(url: str, migration_path: Path) -> None:
 
 @pytest.fixture(scope="module")
 def db_with_migrations() -> str:
-    """Apply 021 then 025 to the test DB; return the URL.
+    """Bootstrap ``executive_insights`` (sliced from 021) then apply 025.
 
-    Module-scoped so the migration apply runs once per test file (the
-    migrations are idempotent so this is safe but expensive to repeat).
+    Module-scoped so the bootstrap + migration apply runs once per test
+    file (both are idempotent so this is safe but expensive to repeat).
     """
     assert _TEST_DB_URL is not None  # pytestmark guarantees
-    _apply_migration(_TEST_DB_URL, MIGRATION_021)
+    _exec_sql_via_psql(
+        _TEST_DB_URL,
+        _BOOTSTRAP_EXECUTIVE_INSIGHTS_SQL,
+        label="executive_insights bootstrap",
+    )
     _apply_migration(_TEST_DB_URL, MIGRATION_025)
     return _TEST_DB_URL
 
