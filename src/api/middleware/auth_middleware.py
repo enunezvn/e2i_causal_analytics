@@ -95,8 +95,17 @@ PUBLIC_PATHS: List[Tuple[str, str]] = [
 PUBLIC_PATH_PATTERNS: List[Tuple[str, str]] = [
     # KPI metadata by ID is public
     ("GET", r"^/api/kpis/[^/]+/metadata$"),
-    # CopilotKit - all sub-paths public (SDK protocol uses dynamic paths)
-    ("*", r"^/api/copilotkit(/.*)?$"),
+    # CopilotKit: #399 closure — the prior ``^/api/copilotkit(/.*)?$``
+    # catch-all is REMOVED. The three explicit SDK-probe surfaces stay
+    # public via ``PUBLIC_PATHS`` above (``/api/copilotkit``,
+    # ``/api/copilotkit/status``, ``/api/copilotkit/info``); every other
+    # CopilotKit sub-path (``/agent/{name}``, ``/action/{name}``,
+    # ``/agents/execute``, ``/actions/execute``, ...) now falls through
+    # to the default JWT-required branch. The frontend's CopilotKit
+    # provider already sends ``Authorization: Bearer ${accessToken}`` on
+    # every SDK call when an access token is present (see
+    # ``frontend/src/providers/E2ICopilotProvider.tsx:456-468``), so
+    # authenticated users observe no behavior change.
 ]
 
 
