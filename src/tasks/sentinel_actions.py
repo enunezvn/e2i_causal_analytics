@@ -51,6 +51,7 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 from typing import Any, Dict, Final, List, Optional
 
 from kombu.exceptions import OperationalError as KombuOperationalError
@@ -77,20 +78,33 @@ async def publish_alert(payload: Dict[str, Any]) -> None:
 
     On Redis failure: log + swallow. Caller's main side-effect must continue.
 
-    Stamps ``payload['publish_at']`` with an integer epoch-ms timestamp
-    BEFORE serialization. The consumer side (the SSE bridge in
-    :mod:`src.api.routes.staleness_alerts`) reads this field to compute
-    the publish→receive delivery latency via
+    Stamps ``payload['publish_at']`` (epoch-ms) and ``payload['alert_id']``
+    (UUID4 hex) BEFORE serialization. The consumer side (the SSE bridge
+    in :mod:`src.api.routes.staleness_alerts`) reads ``publish_at`` to
+    compute the publish→receive delivery latency via
     :func:`src.mlops.lifecycle_monitoring.record_alert_latency` (#391
-    monitoring slice, box 3). The field is added in-place so the
-    serialized JSON on Redis carries it; back-compat with payloads
-    that already include ``publish_at`` is preserved (only stamps when
-    absent).
+    monitoring slice, box 3). The ``alert_id`` field is used by the
+    consumer-side LRU dedup to bound the latency-metric to at-most-one
+    sample per (publisher process, alert) per consumer process
+    (codex iter-0 H2 closure). Both fields are added in-place; back-
+    compat with payloads that already include them is preserved (only
+    stamps when absent).
+
+    Emits the publish-side counter ``e2i.sentinel.alert_publish_count``
+    (one per publish event, brand-tagged) via
+    :func:`src.mlops.lifecycle_monitoring.record_alert_published`.
+    Combined with the consumer-side latency-sample density this lets
+    the dashboard detect "no subscribers connected" as
+    ``publish_count > 0 AND latency_samples == 0`` (codex iter-0 H2
+    closure).
     """
-    # Lazy import: avoid hardening the action module's import-time dependency
-    # on the Redis client factory (which itself does an import-time
-    # ``redis.from_url``). Lets unit tests patch the factory cleanly.
+    # Lazy imports: avoid hardening the action module's import-time
+    # dependency on the Redis client factory (which itself does an
+    # import-time ``redis.from_url``). Lifecycle-monitoring import is
+    # also lazy so a broken observability stack cannot crash this
+    # action handler's module load.
     from src.memory.services.factories import get_redis_client
+    from src.mlops.lifecycle_monitoring import record_alert_published
 
     # Stamp publish_at if not already present. Idempotent — re-publication
     # of an already-stamped payload preserves the original timestamp so
@@ -101,6 +115,18 @@ async def publish_alert(payload: Dict[str, Any]) -> None:
         # ``lifecycle_monitoring.record_alert_latency`` so delta math is
         # symmetric.
         payload["publish_at"] = int(time.time() * 1000)
+
+    # Stamp alert_id for consumer-side dedup. Idempotent same as
+    # publish_at — re-publishing an alert preserves its identity so the
+    # consumer sees ONE sample regardless of how many subscribers
+    # connect.
+    if "alert_id" not in payload:
+        payload["alert_id"] = uuid.uuid4().hex
+
+    # Publish-side counter. Best-effort by design — helper swallows
+    # exceptions. Emitted BEFORE the Redis publish so a broker outage
+    # doesn't suppress the publish-attempt observable.
+    record_alert_published(payload)
 
     try:
         redis = get_redis_client()

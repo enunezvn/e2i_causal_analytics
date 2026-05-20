@@ -53,12 +53,79 @@ contract.
 
 from __future__ import annotations
 
+import atexit
 import logging
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------
+# Background MLflow executor (codex iter-0 M2 closure).
+# ---------------------------------------------------------------------
+# MLflow's ``start_run`` + ``log_metric`` + ``set_tags`` are SYNCHRONOUS
+# and may block on network I/O against the tracking server. Calling
+# them inline from async producer paths (the SSE bridge subscriber loop
+# / Celery-async consolidator+crystallizer) would block the event loop
+# for the duration of the round-trip.
+#
+# Solution: dispatch every MLflow emission through a small single-thread
+# executor so the producer call returns immediately (sub-microsecond).
+# Single thread (not pool) keeps metric ordering deterministic — MLflow
+# accepts unordered writes but per-metric ordering helps with debugging.
+# Daemon thread so it doesn't block process shutdown; atexit hook
+# attempts a brief drain.
+#
+# Tests substitute ``_emit_mlflow_metric`` (the mid-level shim) so they
+# never reach the executor. Production callers go through the executor
+# transparently.
+
+_MLFLOW_EXECUTOR: Optional[ThreadPoolExecutor] = None
+_MLFLOW_EXECUTOR_LOCK = Lock()
+
+
+def _get_mlflow_executor() -> ThreadPoolExecutor:
+    """Lazy-init the background MLflow emitter thread.
+
+    Idempotent / thread-safe via the module-level lock. Daemon thread
+    so it doesn't block process shutdown — the atexit hook attempts a
+    brief drain but doesn't promise full completion (we accept losing
+    in-flight metrics on shutdown rather than hanging the process).
+    """
+    global _MLFLOW_EXECUTOR
+    if _MLFLOW_EXECUTOR is not None:
+        return _MLFLOW_EXECUTOR
+    with _MLFLOW_EXECUTOR_LOCK:
+        if _MLFLOW_EXECUTOR is not None:
+            return _MLFLOW_EXECUTOR
+        _MLFLOW_EXECUTOR = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="e2i-mlflow-monitor"
+        )
+        # atexit drain — best effort. timeout=2.0s caps shutdown delay.
+        atexit.register(_drain_mlflow_executor, 2.0)
+        return _MLFLOW_EXECUTOR
+
+
+def _drain_mlflow_executor(timeout_s: float = 2.0) -> None:
+    """Best-effort drain of any in-flight MLflow emissions at shutdown.
+
+    Called via :func:`atexit`. ``wait=True`` with ``cancel_futures=True``
+    drains queued work up to the executor's existing capacity but
+    refuses NEW submissions — so any post-shutdown ``record_*`` call
+    silently no-ops.
+    """
+    global _MLFLOW_EXECUTOR
+    executor = _MLFLOW_EXECUTOR
+    if executor is None:
+        return
+    try:
+        executor.shutdown(wait=True, cancel_futures=False)
+    except Exception:  # pragma: no cover — defensive on shutdown
+        logger.debug("lifecycle_monitoring: mlflow executor drain failed", exc_info=True)
 
 
 # ---------------------------------------------------------------------
@@ -99,6 +166,11 @@ METRIC_CASCADE_PROPAGATION_DEPTH = "e2i.cascade.propagation_depth"
 METRIC_CONSOLIDATION_PROMOTION_RATE = "e2i.consolidation.promotion_rate"
 METRIC_CRYSTAL_COUNT_BY_BRAND = "e2i.crystal.count_by_brand"
 METRIC_ALERT_DELIVERY_LATENCY_MS = "e2i.sentinel.alert_delivery_latency_ms"
+# Codex iter-0 H2 closure: publish-side counter so dashboards can
+# distinguish "no subscribers connected" (publish_count > 0, latency
+# samples == 0) from "no alerts ever published". Brand-tagged so the
+# per-brand publish/receive ratio is observable.
+METRIC_ALERT_PUBLISH_COUNT = "e2i.sentinel.alert_publish_count"
 
 
 # ---------------------------------------------------------------------
@@ -169,15 +241,17 @@ def _emit_opik_trace_raw(span_name: str, payload: Dict[str, Any]) -> None:
         logger.debug("lifecycle_monitoring: opik trace emission failed", exc_info=True)
 
 
-def _emit_mlflow_metric_raw(
+def _mlflow_emit_inner(
     metric_name: str,
     value: float,
     tags: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """Forward a metric to MLflow via the singleton connector.
+    """Inner SYNCHRONOUS MLflow emission — runs on the background
+    executor thread, never on the caller's thread.
 
-    Failures here are wrapped by :func:`_emit_mlflow_metric`. Tests
-    patch this function to simulate backend failures.
+    Failures here are caught and logged at debug level so the executor
+    keeps draining its queue. Tests don't reach this function (they
+    patch ``_emit_mlflow_metric``).
     """
     from src.mlops.mlflow_connector import get_mlflow_connector
 
@@ -185,25 +259,15 @@ def _emit_mlflow_metric_raw(
     if not connector.enabled:
         return
 
-    # MLflow log_metric requires an active run; we don't want to
-    # pollute the active-run state of the caller's training pipeline.
-    # Instead, we use the connector's lower-level ``_mlflow`` reference
-    # to start a transient run if there's no active one.
-    #
-    # In practice, monitoring metrics are emitted from Celery beat
-    # tasks (cascade / consolidator / crystallizer) where no MLflow
-    # run is active. We open a short-lived "monitoring" run scoped to
-    # this event, log the metric + tags, then end the run. This costs
-    # ~10ms per event but avoids contaminating other runs' metrics.
     mlflow_module = getattr(connector, "_mlflow", None)
     if mlflow_module is None:
         return
 
     try:
         # Use ``with mlflow.start_run`` to ensure cleanup even on error.
-        # The ``nested=True`` flag means we don't crash if a run is
-        # already active (e.g., during a training pipeline that
-        # incidentally triggers a consolidation).
+        # ``nested=True`` keeps us from crashing if a run is already
+        # active (e.g., a training pipeline that incidentally triggers
+        # a consolidation).
         run_name_prefix = os.environ.get("E2I_MONITORING_RUN_PREFIX", "monitoring")
         with mlflow_module.start_run(
             run_name=f"{run_name_prefix}.{metric_name}",
@@ -220,6 +284,46 @@ def _emit_mlflow_metric_raw(
         # repeated failures; we just don't want a single metric
         # emission to crash the producer.
         logger.debug("lifecycle_monitoring: mlflow metric emission failed", exc_info=True)
+
+
+def _emit_mlflow_metric_raw(
+    metric_name: str,
+    value: float,
+    tags: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Dispatch a metric emission to the background MLflow executor.
+
+    Codex iter-0 M2 closure: MLflow ``start_run`` + ``log_metric`` are
+    SYNCHRONOUS and may block on tracking-server I/O. Calling them
+    inline from the SSE bridge / Celery-async paths would block the
+    event loop. Solution: submit to a single-thread executor so the
+    caller returns sub-microsecond.
+
+    The executor itself is lazily created on first submit. ``submit``
+    raises ``RuntimeError`` if the executor was shut down (atexit
+    drain); we swallow that so post-shutdown calls no-op.
+
+    Failures here are wrapped by :func:`_emit_mlflow_metric`. Tests
+    patch ``_emit_mlflow_metric`` (the public boundary) — they never
+    reach this function, so the executor stays uninstantiated in unit
+    tests.
+    """
+    try:
+        executor = _get_mlflow_executor()
+        # ``submit`` queues the work and returns instantly. The Future
+        # is intentionally discarded — fire-and-forget; producer
+        # doesn't care about completion.
+        executor.submit(_mlflow_emit_inner, metric_name, value, tags)
+    except RuntimeError:
+        # Executor was shut down (e.g., process is exiting). Drop the
+        # metric silently — better than raising into the producer.
+        logger.debug(
+            "lifecycle_monitoring: mlflow executor refused submission "
+            "(likely shutting down); metric %s dropped",
+            metric_name,
+        )
+    except Exception:
+        logger.debug("lifecycle_monitoring: mlflow executor dispatch failed", exc_info=True)
 
 
 # ---------------------------------------------------------------------
@@ -394,6 +498,107 @@ def record_consolidation_sweep(
     _emit_mlflow_metric(METRIC_CONSOLIDATION_PROMOTION_RATE, rate, {"brand": brand})
 
 
+# ---------------------------------------------------------------------
+# LRU dedup for the alert-latency metric (codex iter-0 H2 closure).
+# ---------------------------------------------------------------------
+# The SSE consumer's ``AlertBridge`` runs ONE bridge per HTTP connection.
+# Without dedup, a single Redis publish to ``e2i:alerts`` produces N
+# latency samples (one per connected client) and ZERO samples when no
+# client is connected. Both shapes are misleading for a "Redis pub/sub
+# delivery latency" dashboard.
+#
+# Mitigation: per-process LRU of recently-seen ``alert_id`` values. When
+# a subscriber sees an alert it has already recorded latency for, the
+# sample is suppressed. This makes the consumer-side metric "FIRST
+# subscriber to record this alert wins" — at-most-one sample per
+# (publisher process, alert_id) per consumer process. Combined with the
+# publisher-side ``METRIC_ALERT_PUBLISH_COUNT`` counter, the dashboard
+# can detect the "no subscribers" case as ``publish_count > 0 AND
+# latency_samples == 0``.
+#
+# LRU bound (1024 entries) keeps the dedup set bounded under sustained
+# alert volume; oldest entries are evicted FIFO.
+
+_ALERT_LATENCY_DEDUP_MAX = 1024
+_ALERT_LATENCY_RECENT_IDS: list[str] = []
+_ALERT_LATENCY_RECENT_LOCK = Lock()
+
+
+def _mark_alert_recorded(alert_id: str) -> bool:
+    """Idempotency check for the consumer-side latency metric.
+
+    Returns True iff this is the FIRST time the current process has
+    seen the alert_id. Subsequent invocations within the LRU window
+    return False so the caller skips emission.
+
+    Thread-safe via the module-level lock. The LRU is a list rather
+    than an OrderedDict to keep the dependency surface narrow.
+    """
+    with _ALERT_LATENCY_RECENT_LOCK:
+        if alert_id in _ALERT_LATENCY_RECENT_IDS:
+            return False
+        _ALERT_LATENCY_RECENT_IDS.append(alert_id)
+        # Cap at the configured ceiling — drop oldest on overflow.
+        while len(_ALERT_LATENCY_RECENT_IDS) > _ALERT_LATENCY_DEDUP_MAX:
+            _ALERT_LATENCY_RECENT_IDS.pop(0)
+        return True
+
+
+def _reset_alert_latency_dedup() -> None:
+    """Test helper: clear the LRU between tests so per-test alert_id
+    reuse doesn't accidentally suppress emission."""
+    with _ALERT_LATENCY_RECENT_LOCK:
+        _ALERT_LATENCY_RECENT_IDS.clear()
+
+
+def _coerce_brand_tags(payload: Dict[str, Any]) -> Dict[str, str]:
+    """Codex iter-0 M1 closure: extract a brand tag from the payload's
+    ``brands`` field with the explicit "first non-empty token" rule,
+    OR fall back to the literal ``"_multi_"`` when the list has 2+
+    distinct brands.
+
+    Rationale: dashboards need a stable bucket label per per-brand
+    line. A multi-brand alert ought NOT inflate one brand's latency
+    line at the expense of the others. The ``_multi_`` bucket lets
+    the operator see (a) per-brand single-target alerts (kisqali /
+    remibrutinib / fabhalta lines) AND (b) cross-brand bundles
+    (``_multi_`` line) as distinct trajectories.
+
+    Empty / missing brands → returns empty dict (no brand tag).
+    """
+    brands = payload.get("brands")
+    if not isinstance(brands, list) or not brands:
+        return {}
+    normalized = [b for b in brands if isinstance(b, str) and b.strip()]
+    if not normalized:
+        return {}
+    # ``"all"`` is the convention for cross-brand alerts; treat it as a
+    # distinct dashboard bucket (the operator may want to see the
+    # cross-brand line separately from the per-brand lines).
+    distinct = sorted(set(normalized))
+    if len(distinct) == 1:
+        return {"brand": distinct[0]}
+    if "all" in distinct:
+        return {"brand": "all"}
+    return {"brand": "_multi_"}
+
+
+def record_alert_published(payload: Dict[str, Any]) -> None:
+    """Record one alert publish event (codex iter-0 H2 closure helper).
+
+    Emits ``METRIC_ALERT_PUBLISH_COUNT`` at the publisher side so the
+    dashboard can detect "no subscribers connected" by comparing
+    publish_count against subscriber-side latency-sample density.
+
+    Brand tag policy: same as :func:`record_alert_latency` —
+    ``_coerce_brand_tags`` returns ``brand="all"`` for cross-brand,
+    ``brand="_multi_"`` for two-or-more-distinct-brands bundles,
+    single brand for single-brand alerts.
+    """
+    tags = _coerce_brand_tags(payload)
+    _emit_mlflow_metric(METRIC_ALERT_PUBLISH_COUNT, 1.0, tags or None)
+
+
 def record_alert_latency(payload: Dict[str, Any]) -> None:
     """Record the publish→receive latency of one Redis pub/sub alert.
 
@@ -401,9 +606,20 @@ def record_alert_latency(payload: Dict[str, Any]) -> None:
     stamped at the publisher) and emits the delta against the current
     wall clock as ``e2i.sentinel.alert_delivery_latency_ms`` to MLflow.
 
-    Tag policy: when payload carries ``brands`` (a list), tag the
-    FIRST brand. Multi-brand fanout is V2 follow-up (would require
-    one metric emission per brand to chart per-brand divergence).
+    Codex iter-0 H2 closure: when ``payload['alert_id']`` is present,
+    use it to dedup recordings inside this consumer process — only the
+    FIRST observation of an alert in the LRU window emits a metric.
+    This bounds the consumer-side metric to "at most one sample per
+    (publisher process, alert_id) per consumer process". Combined
+    with the publish-side :func:`record_alert_published` counter, the
+    dashboard distinguishes "no subscribers connected" (publish > 0,
+    latency_samples = 0) from "alert never published" (both = 0).
+
+    Codex iter-0 M1 closure: brand tag uses
+    :func:`_coerce_brand_tags` so multi-brand alerts emit with
+    ``brand="_multi_"`` (or ``brand="all"`` for cross-brand
+    convention) rather than inflating only the first brand's
+    dashboard line.
 
     Defensive paths:
 
@@ -412,6 +628,9 @@ def record_alert_latency(payload: Dict[str, Any]) -> None:
     * ``publish_at`` non-numeric → skip emission silently.
     * ``publish_at > now`` (clock skew) → clamp delta to 0.0 (don't
       poison dashboards with negative latencies).
+    * ``alert_id`` present + previously seen in LRU → skip emission
+      (dedup; subsequent SSE clients receiving the same publish do
+      NOT re-emit the sample).
     """
     publish_at = payload.get("publish_at")
     if publish_at is None:
@@ -420,6 +639,16 @@ def record_alert_latency(payload: Dict[str, Any]) -> None:
         # Reject non-numeric types (including bool, which is an int
         # subclass but semantically a flag).
         return
+
+    # Dedup gate: when alert_id is present + we've already recorded
+    # latency for this alert in the current process, skip emission.
+    # Missing alert_id (back-compat) → no dedup, always emit (legacy
+    # behavior preserved).
+    alert_id = payload.get("alert_id")
+    if isinstance(alert_id, str) and alert_id:
+        if not _mark_alert_recorded(alert_id):
+            return
+
     now_ms = time.time() * 1000.0
     delta_ms = float(now_ms) - float(publish_at)
     if delta_ms < 0:
@@ -427,22 +656,13 @@ def record_alert_latency(payload: Dict[str, Any]) -> None:
         # explicit at the call site (no silent loss of information).
         delta_ms = 0.0
 
-    # Brand tag — first brand in the list, if any.
-    brand_tag: Optional[str] = None
-    brands = payload.get("brands")
-    if isinstance(brands, list) and brands:
-        first = brands[0]
-        if isinstance(first, str) and first:
-            brand_tag = first
-
-    tags: Dict[str, Any] = {}
-    if brand_tag is not None:
-        tags["brand"] = brand_tag
+    tags = _coerce_brand_tags(payload)
     _emit_mlflow_metric(METRIC_ALERT_DELIVERY_LATENCY_MS, delta_ms, tags or None)
 
 
 __all__ = [
     "METRIC_ALERT_DELIVERY_LATENCY_MS",
+    "METRIC_ALERT_PUBLISH_COUNT",
     "METRIC_CASCADE_FREQUENCY",
     "METRIC_CASCADE_PROPAGATION_DEPTH",
     "METRIC_CONSOLIDATION_PROMOTION_RATE",
@@ -451,6 +671,7 @@ __all__ = [
     "SPAN_CONSOLIDATION_SWEEP",
     "SPAN_PROVENANCE_WRITE",
     "record_alert_latency",
+    "record_alert_published",
     "record_cascade_complete",
     "record_consolidation_sweep",
     "record_provenance_write",

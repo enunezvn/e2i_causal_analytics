@@ -502,21 +502,59 @@ class Consolidator:
         result.finished_at = datetime.now(timezone.utc)
 
         # #391 monitoring box 1.c + 2.b (promotion_rate): emit Opik
-        # trace + MLflow promotion-rate gauge for the entire sweep.
-        # Brand naming: when ``brand`` is None (whole-portfolio sweep)
-        # we tag with the literal ``_all_`` token so per-brand
-        # dashboards have a stable bucket for unscoped sweeps.
-        # Best-effort by design — helper swallows its own exceptions.
+        # trace + MLflow promotion-rate gauge for the sweep.
+        #
+        # Codex iter-0 M1 closure: when ``brand`` is None (whole-
+        # portfolio sweep) we EMIT ONE METRIC PER BRAND actually
+        # touched (from ``result.by_brand``) instead of collapsing
+        # everything into an ``_all_`` bucket that would obscure
+        # cross-brand divergence. The Opik trace still emits ONCE
+        # (full-sweep observable) tagged with ``_all_``.
+        #
+        # When ``brand`` is set (single-brand sweep), we just emit one
+        # metric tagged with that brand. Best-effort by design —
+        # helper swallows its own exceptions.
         sweep_duration_ms = (time.monotonic() - sweep_started_monotonic) * 1000.0
-        record_consolidation_sweep(
-            brand=brand or "_all_",
-            dedup_collapses=result.episodic_dedup_collapsed,
-            promotions_to_semantic=result.promoted_to_semantic,
-            promotions_to_procedural=result.promoted_to_procedural,
-            templates_extracted=result.procedural_templates_extracted,
-            duration_ms=sweep_duration_ms,
-            causal_paths_examined=result.causal_paths_examined,
-        )
+        if brand is None:
+            # Per-brand fanout — emit one entry per brand touched.
+            # Without the fanout the brand=None case would land in a
+            # single ``_all_`` MLflow bucket and downstream dashboards
+            # would lose per-brand promotion-rate signal.
+            #
+            # Per-brand denominators: result.causal_paths_examined is
+            # the TOTAL across all brands; we don't have a per-brand
+            # split here. The compromise is to attribute the SAME
+            # global denominator to each brand's emission so the
+            # ratio is comparable across brands (each brand sees the
+            # same "what fraction of all sweep candidates got
+            # promoted in MY brand" perspective). Per-brand
+            # denominators would require deeper plumbing through
+            # _promote_to_semantic — filed as a forward enhancement.
+            touched_brands = list(result.by_brand.keys()) or ["_all_"]
+            for b in touched_brands:
+                bucket = result.by_brand.get(b, {})
+                record_consolidation_sweep(
+                    brand=b,
+                    dedup_collapses=int(bucket.get("dedup_collapsed", 0)),
+                    promotions_to_semantic=int(bucket.get("semantic", 0)),
+                    promotions_to_procedural=int(bucket.get("procedural", 0)),
+                    templates_extracted=result.procedural_templates_extracted
+                    if b == touched_brands[0]
+                    else 0,
+                    duration_ms=sweep_duration_ms,
+                    causal_paths_examined=result.causal_paths_examined,
+                )
+        else:
+            # Single-brand sweep: just emit one metric for the brand.
+            record_consolidation_sweep(
+                brand=brand,
+                dedup_collapses=result.episodic_dedup_collapsed,
+                promotions_to_semantic=result.promoted_to_semantic,
+                promotions_to_procedural=result.promoted_to_procedural,
+                templates_extracted=result.procedural_templates_extracted,
+                duration_ms=sweep_duration_ms,
+                causal_paths_examined=result.causal_paths_examined,
+            )
 
         logger.info(
             f"consolidator finished promoted_semantic={result.promoted_to_semantic} "
