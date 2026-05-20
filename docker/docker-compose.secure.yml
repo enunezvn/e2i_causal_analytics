@@ -288,8 +288,11 @@ services:
   # ===========================================================================
   # TIER 2: MLOPS SERVICES (Monitoring Network)
   # ===========================================================================
+  # MLflow - pinned to v3.10.1 in lockstep with requirements.txt mlflow line
+  # (#362). The 3.10.x line resolves the 10 GHSAs dropped from .github/
+  # workflows/security.yml in PR #412.
   mlflow:
-    image: ghcr.io/mlflow/mlflow:v3.1.0
+    image: ghcr.io/mlflow/mlflow:v3.10.1
     container_name: e2i-mlflow
     restart: unless-stopped
     expose:

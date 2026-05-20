@@ -28,7 +28,16 @@ from packaging.version import Version
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ROOT_REQS = REPO_ROOT / "requirements.txt"
 DEV_REQS = REPO_ROOT / "requirements-dev.txt"
+PYPROJECT = REPO_ROOT / "pyproject.toml"
 SECURITY_YML = REPO_ROOT / ".github" / "workflows" / "security.yml"
+MLFLOW_DOCKERFILE = REPO_ROOT / "docker" / "mlflow" / "Dockerfile"
+DOCKER_COMPOSE = REPO_ROOT / "docker" / "docker-compose.yml"
+DOCKER_COMPOSE_SECURE = REPO_ROOT / "docker" / "docker-compose.secure.yml"
+ARCHITECTURE_MD = REPO_ROOT / "docs" / "ARCHITECTURE.md"
+
+# Target docker image tag for the mlflow service. Pinned in lockstep with
+# requirements.txt mlflow line (#362). 3.10.1 is the latest 3.10.x patch.
+MLFLOW_DOCKER_IMAGE_TAG = "v3.10.1"
 
 # Each mlflow package in requirements.txt must satisfy this specifier post-#362.
 MLFLOW_REQUIRED_SPEC = SpecifierSet(">=3.10.0,<3.11.0")
@@ -63,9 +72,7 @@ EXPECTED_MISTUNE_IGNORES: frozenset[str] = frozenset(
 )
 
 # Exact set we expect to find when grepping mlflow|mistune lines in security.yml.
-EXPECTED_TOTAL_IGNORES: frozenset[str] = (
-    EXPECTED_MLFLOW_IGNORES | EXPECTED_MISTUNE_IGNORES
-)
+EXPECTED_TOTAL_IGNORES: frozenset[str] = EXPECTED_MLFLOW_IGNORES | EXPECTED_MISTUNE_IGNORES
 
 _PKG_LINE_RE = re.compile(
     r"^\s*(mlflow|mlflow-skinny|mlflow-tracing)\s*([<>=!~][^#\n\r]*)\s*$",
@@ -104,8 +111,7 @@ def test_mlflow_packages_pinned_to_required_spec() -> None:
             f"vulnerable 3.7.0 — #362 requires bumping past CVE-2026-2614."
         )
         assert Version("3.10.0") in spec and Version("3.10.1") in spec, (
-            f"{pkg} spec {constraints[pkg]!r} does not include the target "
-            f"3.10.x line."
+            f"{pkg} spec {constraints[pkg]!r} does not include the target 3.10.x line."
         )
         # The cap also matters — refusing 3.11.x release candidates per #362.
         assert Version("3.11.0") not in spec, (
@@ -142,6 +148,119 @@ def test_mlflow_dev_requirements_match_root_pin() -> None:
         assert root.get(pkg) == dev.get(pkg), (
             f"{pkg} pin drift between requirements.txt and requirements-dev.txt: "
             f"root={root.get(pkg)!r} vs dev={dev.get(pkg)!r}; both must agree."
+        )
+
+
+_PYPROJECT_MLFLOW_RE = re.compile(r'"mlflow\s*([<>=!~][^"]*?)"', re.MULTILINE)
+
+
+def test_pyproject_mlflow_dependency_in_required_spec() -> None:
+    """``pyproject.toml [project.dependencies]`` mlflow line must also satisfy
+    ``>=3.10.0,<3.11.0`` — otherwise ``pip install .`` ignores requirements.txt
+    and may resolve an unaudited older mlflow.
+
+    Codex iter-2 H3 finding (pre-fix the line was ``mlflow>=2.16.0`` which
+    silently allowed installs outside the audited range).
+    """
+    text = PYPROJECT.read_text()
+    matches = _PYPROJECT_MLFLOW_RE.findall(text)
+    assert matches, (
+        "no mlflow entry in pyproject.toml [project.dependencies]; "
+        "the previous bound (mlflow>=2.16.0) must have been removed accidentally."
+    )
+    for raw_spec in matches:
+        spec = SpecifierSet(raw_spec.strip())
+        assert Version("3.7.0") not in spec, (
+            f"pyproject.toml mlflow spec {raw_spec!r} still admits the pre-#362 "
+            f"3.7.0 — bump to >=3.10.0,<3.11.0 in lockstep with requirements.txt."
+        )
+        assert Version("2.16.0") not in spec, (
+            f"pyproject.toml mlflow spec {raw_spec!r} still admits mlflow 2.x "
+            f"(the pre-#362 floor was 2.16.0); bump to >=3.10.0,<3.11.0."
+        )
+        assert Version("3.10.1") in spec, (
+            f"pyproject.toml mlflow spec {raw_spec!r} excludes the target "
+            f"3.10.1; align with requirements.txt."
+        )
+
+
+def test_mlflow_dockerfile_pins_match_required_spec() -> None:
+    """``docker/mlflow/Dockerfile`` must install an mlflow within
+    ``>=3.10.0,<3.11.0`` (lockstep with requirements.txt).
+
+    Codex iter-2 H1 finding (pre-fix the Dockerfile pinned ``mlflow==2.9.2``,
+    so the MLflow server container could run an unaudited older version
+    while the Python clients had been bumped).
+    """
+    text = MLFLOW_DOCKERFILE.read_text()
+    # The Dockerfile installs mlflow via a quoted pip arg; accept both quoted
+    # and unquoted forms.
+    line_re = re.compile(
+        r"['\"]?\s*mlflow\s*([<>=!~][^\s'\"]+(?:\s*,\s*[<>=!~][^\s'\"]+)*)\s*['\"]?",
+        re.MULTILINE,
+    )
+    matches = line_re.findall(text)
+    assert matches, (
+        "no mlflow pip-install line found in docker/mlflow/Dockerfile; "
+        "the install RUN block may have been edited out."
+    )
+    found_valid = False
+    for raw_spec in matches:
+        try:
+            spec = SpecifierSet(raw_spec.strip())
+        except Exception:  # noqa: BLE001 — packaging.specifiers raises subclasses
+            continue
+        if Version("3.10.1") in spec and Version("3.7.0") not in spec:
+            found_valid = True
+            break
+    assert found_valid, (
+        f"docker/mlflow/Dockerfile does not install mlflow within "
+        f"the required >=3.10.0,<3.11.0 range. Found specs: {matches!r}."
+    )
+
+
+def _grep_compose_mlflow_image(path: Path) -> list[str]:
+    """Return all `ghcr.io/mlflow/mlflow:vX.Y.Z` tags declared in a compose
+    YAML file."""
+    text = path.read_text()
+    return re.findall(r"ghcr\.io/mlflow/mlflow:(v[\d.]+(?:rc\d+)?)", text)
+
+
+def test_docker_compose_mlflow_image_tag_locked_to_required_spec() -> None:
+    """Both ``docker-compose.yml`` and ``docker-compose.secure.yml`` must
+    pin the mlflow service image to the lockstep tag (``v3.10.1``).
+
+    Codex iter-2 H2 finding (pre-fix both compose files used
+    ``v3.1.0`` — an unrelated older 3.1.x line that's outside the audited
+    >=3.10.0,<3.11.0 spec window).
+    """
+    for compose_path in (DOCKER_COMPOSE, DOCKER_COMPOSE_SECURE):
+        tags = _grep_compose_mlflow_image(compose_path)
+        assert tags, (
+            f"no ghcr.io/mlflow/mlflow:vX.Y.Z image tag found in "
+            f"{compose_path.name}; the mlflow service may have been removed."
+        )
+        for tag in tags:
+            assert tag == MLFLOW_DOCKER_IMAGE_TAG, (
+                f"{compose_path.name} pins mlflow image {tag!r} but expected "
+                f"{MLFLOW_DOCKER_IMAGE_TAG!r} (lockstep with requirements.txt #362)."
+            )
+
+
+def test_architecture_doc_mlflow_image_tag_matches() -> None:
+    """``docs/ARCHITECTURE.md`` mlflow image tag must agree with the compose
+    files. Stale doc tags mislead reviewers about what's deployed.
+    """
+    text = ARCHITECTURE_MD.read_text()
+    tags = re.findall(r"ghcr\.io/mlflow/mlflow:(v[\d.]+(?:rc\d+)?)", text)
+    assert tags, (
+        "no mlflow image tag found in docs/ARCHITECTURE.md; the MLOps "
+        "container table may have been restructured."
+    )
+    for tag in tags:
+        assert tag == MLFLOW_DOCKER_IMAGE_TAG, (
+            f"docs/ARCHITECTURE.md references stale mlflow image {tag!r}; "
+            f"expected {MLFLOW_DOCKER_IMAGE_TAG!r} (matches compose files)."
         )
 
 
