@@ -319,6 +319,8 @@ def _seed_full_row(
     effect_size: Optional[float] = 0.42,
     recall: bool = False,
     causal_path_id: Optional[str] = None,
+    invalidated_at: Optional[datetime] = None,
+    invalidation_reason: Optional[str] = None,
 ) -> None:
     """INSERT one row with all 15 new fields populated. Returns no value;
     the caller pulls the row back via SELECT."""
@@ -332,6 +334,7 @@ def _seed_full_row(
             INSERT INTO executive_insights (
                 insight_id, title, narrative, brand, region, kpi,
                 crystallized_at, recall, source_count, key_metrics,
+                invalidated_at, invalidation_reason,
                 -- analytical 8
                 effect_size, effect_ci_lower, effect_ci_upper, effect_direction,
                 cohort_size, confounders_controlled,
@@ -344,6 +347,7 @@ def _seed_full_row(
             ) VALUES (
                 %s, %s, %s, %s, %s, %s,
                 %s, %s, %s, %s::jsonb,
+                %s, %s,
                 %s, %s, %s, %s,
                 %s, %s,
                 %s, %s,
@@ -363,6 +367,8 @@ def _seed_full_row(
                 recall,
                 3,
                 f'{{"causal_path_id": "{causal_path_id}"}}',
+                invalidated_at,
+                invalidation_reason,
                 # analytical 8
                 effect_size,
                 0.30 if effect_size is not None else None,
@@ -558,6 +564,106 @@ def test_portfolio_summary_excludes_recalled_rows_from_real_db(
         f"Recalled row leaked into mean: average_effect_size="
         f"{k['average_effect_size']!r} (expected 0.40 if recall filter "
         f"works; ~499 if it doesn't)"
+    )
+
+
+@pytest.mark.integration
+def test_portfolio_summary_invalidated_at_currently_leaks_pinned_for_issue_385(
+    db_conn: psycopg.Connection,
+    brand_namespace: str,
+    test_client: Any,
+) -> None:
+    """REGRESSION-PIN: invalidated_at-set rows currently LEAK into the
+    portfolio summary aggregation. See issue #385 for the fix tracking.
+
+    This test was added in response to codex iter-0 MED on PR #376 e2e
+    work (audit on branch ``test/376-e2e-llm-narrator-portfolio``):
+
+        ``/portfolio-summary`` claims to aggregate non-recalled,
+        non-invalidated crystals, but the route only filters
+        ``.eq("recall", False)``. The new e2e covers recalled rows
+        but never seeds a recall=false, invalidated_at IS NOT NULL
+        row, so an invalidated but unrecalled insight would leak
+        into the portfolio summary today.
+
+    The route docstring at
+    ``src/api/routes/executive_insights.py:204`` claims:
+
+        "Aggregates across all non-recalled, non-invalidated crystals."
+
+    But the SELECT at ``:217`` is only ``.eq("recall", False)`` — there
+    is no ``invalidated_at IS NULL`` filter. A row with ``recall=False``
+    AND ``invalidated_at IS NOT NULL`` (the silent-cascade case from
+    the ``InsightVerifierMiddleware``) currently:
+      * INCREMENTS ``insight_count``
+      * POLLUTES ``average_effect_size`` (if numeric)
+      * UPDATES ``latest_crystallized_at`` (if newer)
+
+    This test PINS the CURRENT (incorrect-per-docstring) behavior so
+    the gap is explicit. When #385 is fixed (filter applied), the
+    assertion shape below will fail — that is the desired falsifiable
+    signal. The test author of the #385 fix should:
+      1. Flip the assertions to "outlier does NOT leak"
+      2. Remove this ``# TODO(#385)`` comment block
+      3. Rename to ``test_portfolio_summary_excludes_invalidated_rows``
+
+    Until then, this test prevents an accidental partial fix (e.g. a
+    SELECT change that accidentally filters out invalidated rows but
+    breaks something else) from going unnoticed.
+    """
+    brand = brand_namespace + "kisqali"
+    now = datetime.now(timezone.utc)
+    _seed_full_row(
+        db_conn,
+        insight_id=str(uuid.uuid4()),
+        brand=brand,
+        crystallized_at=now,
+        effect_size=0.40,
+        recall=False,
+        invalidated_at=None,  # ACTIVE row
+    )
+    # The contamination case: invalidated_at IS NOT NULL but recall=False.
+    # An outlier effect_size that would be visibly wrong if it leaks into
+    # the mean. Distinct causal_path so the partial-unique-index does not
+    # block this insert (the index is partial on invalidated_at IS NULL,
+    # so this row is exempt — see 021_insight_lifecycle.sql:219-226).
+    _seed_full_row(
+        db_conn,
+        insight_id=str(uuid.uuid4()),
+        brand=brand,
+        crystallized_at=now,
+        effect_size=999.0,
+        recall=False,
+        invalidated_at=now - timedelta(hours=1),
+        invalidation_reason="jit_verifier_ancestor_overturned",
+        causal_path_id=f"cp-invalidated-{uuid.uuid4().hex[:8]}",
+    )
+
+    response = test_client.get("/api/executive-insights/portfolio-summary")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    by_brand = {b["brand"]: b for b in body["by_brand"]}
+    k = by_brand[brand]
+
+    # TODO(#385): when the route filter is fixed, these assertions
+    # need to flip to ``insight_count == 1`` and ``average_effect_size
+    # == 0.40``. Currently the invalidated row leaks in — pin the
+    # contaminated state so a partial fix is caught.
+    assert k["insight_count"] == 2, (
+        f"Expected current (#385) leak shape: invalidated row included "
+        f"in count. Got insight_count={k['insight_count']} (if 1, the "
+        f"#385 filter may have already been added — flip this test's "
+        f"assertions per the docblock)."
+    )
+    assert k["effect_size_sample_count"] == 2, (
+        f"Expected invalidated row's numeric effect_size to contribute. "
+        f"Got effect_size_sample_count={k['effect_size_sample_count']}"
+    )
+    # mean(0.40, 999.0) = 499.7 — the contaminated mean.
+    assert k["average_effect_size"] == pytest.approx(499.7), (
+        f"Expected contaminated mean (#385): mean(0.40, 999.0) = 499.7. "
+        f"Got average_effect_size={k['average_effect_size']!r}. If this "
+        f"is now ~0.40, the #385 filter has been added — flip this test."
     )
 
 
