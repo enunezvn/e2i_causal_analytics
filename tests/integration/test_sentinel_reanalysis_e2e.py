@@ -394,9 +394,9 @@ def pin_in_process_broker(redis_url: str) -> Iterator[None]:
 
         * ``celery_app.amqp`` is a ``kombu.utils.objects.cached_property``
           that caches into ``celery_app.__dict__["amqp"]``. Popping the
-          key forces a rebuild on next access, which transitively resets
-          the AMQP producer pool (``AMQP.__init__`` sets
-          ``self._producer_pool = None``).
+          key forces a rebuild on next access; the fresh ``AMQP``
+          instance starts with no cached producer pool (the class-level
+          ``_producer_pool = None`` attribute is the initial state).
 
         * ``celery_app.close()`` nulls ``self._pool`` (the connection
           pool used by ``connection_for_write``).
