@@ -41,6 +41,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple
 
+from src.data.kg.types import LLMCrystalNarrativeAudit
 from src.memory.services.factories import get_supabase_client
 
 logger = logging.getLogger(__name__)
@@ -303,6 +304,14 @@ class Crystallizer:
         derived = _derive_crystal_digest_fields(brand=brand, members=members)
 
         # --- Compose the 2 narrative-prose fields (LLM-flagged) ---
+        # ``audit`` is captured for persistence to
+        # ``crystal_narrative_audits`` (#391 box 4 — codex iter-2 H1
+        # closure). On the flag-off path it remains None — only the LLM
+        # path produces an audit row. The codex L1 tighten replaces the
+        # legacy ``Any`` annotation with ``Optional[LLMCrystalNarrativeAudit]``
+        # so downstream ``.limitations`` / ``.key_finding`` accesses go
+        # through mypy.
+        audit: Optional[LLMCrystalNarrativeAudit] = None
         if _llm_narratives_enabled():
             audit = await _invoke_llm_narrator(
                 brand=brand,
@@ -385,6 +394,56 @@ class Crystallizer:
         if not rows:
             raise RuntimeError("executive_insight insert returned no rows")
         insight_id = rows[0]["insight_id"]
+
+        # --- Persist crystal_narrative_audits (#391 box 4, codex iter-2 H1) ---
+        # The PHI audit harness reads ``cna.input_prompt`` from this table
+        # via the SQL JOIN at
+        # ``scripts/audit_phi_in_crystal_narratives.py:_load_records_from_postgres``.
+        # Without persistence here, every real crystal lands with NULL
+        # ``audit_input_prompt`` and the PHI scanner cannot audit LLM
+        # INPUTS (only LLM outputs via ``key_finding`` / ``narrative``).
+        #
+        # Persistence is BEST-EFFORT (audit-only telemetry, NOT
+        # crystallization-gating): a narrow ``except Exception`` here
+        # logs a warning + lets the crystallization continue. The audit
+        # row is a sidecar for PHI auditing — losing it for one crystal
+        # is preferable to failing the whole pipeline. Migration 028's
+        # ``ON DELETE CASCADE`` keeps orphan rows out, and the
+        # ``UNIQUE(insight_id)`` constraint there makes the path
+        # idempotent across retries.
+        if audit is not None:
+            try:
+                client.table("crystal_narrative_audits").insert(
+                    {
+                        "insight_id": str(insight_id),
+                        "narrator_model": audit.narrator_model,
+                        "key_finding": audit.key_finding or "",
+                        "limitations": audit.limitations or "",
+                        "recommended_next": audit.recommended_next_analysis or "",
+                        "input_prompt": audit.input_prompt or "",
+                        "latency_ms": audit.latency_ms,
+                        "input_tokens": audit.input_tokens,
+                        "output_tokens": audit.output_tokens,
+                        "cost_usd": audit.cost_usd,
+                    }
+                ).execute()
+            except Exception as exc:
+                # Narrow LOG-warning-on-failure shape (NOT crystallization-
+                # gating). The audit row is for offline PHI auditing; its
+                # absence does not invalidate the crystal, so we must not
+                # break the per-group try/except envelope in
+                # ``run_for_brand`` (which would mark the whole group as
+                # failed). Surface enough context for the audit harness to
+                # alert on persistent failures via a separate ops query
+                # (``SELECT COUNT(*) FROM executive_insights ei LEFT JOIN
+                # crystal_narrative_audits cna ON cna.insight_id =
+                # ei.insight_id WHERE cna.insight_id IS NULL AND
+                # ei.created_at > ...``).
+                logger.warning(
+                    "crystal_narrative_audits insert failed for insight_id=%s: %s",
+                    insight_id,
+                    exc,
+                )
 
         # Insert insight_edges rows: one per source (episodic_memory) AND
         # one per distinct causal_path mentioned (so JIT verify can follow
@@ -764,8 +823,10 @@ async def _invoke_llm_narrator(
     (TypeError/AttributeError/KeyError) propagate per the codex-rescue
     H2 / #378-iter-0-M1 narrow-catch contract.
     """
-    # Lazy imports so a flag-off module load does not pay for these.
-    from src.data.kg.types import LLMCrystalNarrativeAudit
+    # ``LLMCrystalNarrativeAudit`` is imported at module top (#391 box 4
+    # codex iter-2 L1 closure: the lazy-load form here would defeat the
+    # ``Optional[LLMCrystalNarrativeAudit]`` annotation introduced by the
+    # same closure on the call-site).
 
     # We carry the imported module under a separate name (``anthropic_module``)
     # so mypy does not type ``anthropic`` as ``Module`` and then reject the
@@ -840,6 +901,9 @@ async def _invoke_llm_narrator(
         return LLMCrystalNarrativeAudit(
             narrator_model=DEFAULT_NARRATOR_MODEL,
             latency_ms=(time.monotonic() - started) * 1000.0,
+            # Still capture the input prompt on the failure path so the
+            # PHI scanner can audit even the no-output case (#391 box 4).
+            input_prompt=prompt,
         )
     latency_ms = (time.monotonic() - started) * 1000.0
 
@@ -871,6 +935,10 @@ async def _invoke_llm_narrator(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         cost_usd=cost_usd,
+        # #391 security box 4: capture the FULL prompt so the offline
+        # PHI scanner can audit LLM inputs (not just outputs) for PHI
+        # leaks. This is the input side of the audit harness contract.
+        input_prompt=prompt,
     )
 
 
