@@ -101,26 +101,53 @@ pytestmark = [
 
 @pytest.fixture(scope="module")
 def redis_url() -> str:
-    """The Redis URL the worker + this test process both use."""
-    return _redis_url()
+    """
+    The Redis URL the worker + this test process both use.
+
+    Precedence is FIXTURE-EXPLICIT — we do NOT trust ``os.environ`` for
+    this value at fixture-setup time because ``tests/conftest.py:51``
+    runs ``load_dotenv(override=True)`` at module import, which silently
+    rebinds any ``REDIS_URL`` the test runner inherited to the dev value
+    (``redis://:changeme@localhost:6382``). Reading the env here would
+    therefore make the test connect to whatever the developer's ``.env``
+    happens to say, NOT what this test pins.
+
+    Resolution order:
+      1. ``E2I_TEST_REDIS_URL`` env var — explicit test-broker pin that
+         the conftest's ``load_dotenv`` does NOT override (the .env does
+         not set this key).
+      2. Module-level ``_DEFAULT_REDIS_URL`` (``redis://localhost:6379``).
+    """
+    return os.environ.get("E2I_TEST_REDIS_URL") or _DEFAULT_REDIS_URL
 
 
 @pytest.fixture(scope="module")
 def broker_env(redis_url: str) -> Dict[str, str]:
     """
-    Environment for the Celery worker subprocess pinned to the real broker.
+    Environment for the Celery worker subprocess pinned to the test broker.
 
     The worker boots the SAME ``src.workers.celery_app:celery_app`` the
     sentinel action handler uses; we override only the broker URLs so this
     test never depends on a separately-configured port 6382 dev broker.
+
+    We start from ``os.environ.copy()`` so the worker inherits Python path,
+    PYTHONUNBUFFERED, etc., but then unconditionally REBIND the three
+    broker-related keys to ``redis_url``. Without this rebind the worker
+    inherits the ``.env``-loaded broker URL (port 6382 in this repo),
+    which silently desynchronises the worker's consume target from the
+    test process's send_task target.
     """
     env = os.environ.copy()
     env["CELERY_BROKER_URL"] = redis_url
     env["CELERY_RESULT_BACKEND"] = redis_url
     env["REDIS_URL"] = redis_url
-    # Force a clean import path: the worker discovers tasks via
-    # ``src.workers.celery_app.autodiscover_tasks([...])`` which already
-    # includes ``src.tasks`` (where reanalyze_finding lives).
+    # Defensive: if the worker subprocess also imports tests/conftest.py
+    # (it should not, but pytest plugins occasionally route through it),
+    # the override=True load_dotenv would re-rebind these. Drop the
+    # PYTEST_* identifiers so the worker boots cleanly as a Celery
+    # process, not a pytest subprocess.
+    env.pop("PYTEST_CURRENT_TEST", None)
+    env.pop("PYTEST_VERSION", None)
     return env
 
 
@@ -340,20 +367,30 @@ async def test_notify_and_queue_reanalysis_publishes_reanalysis_signal_e2e(
     ``notify_and_queue_reanalysis`` AND the worker subprocess at the SAME
     real broker, which is precisely how production wires them.
     """
-    # ----- 0. Reset the redis-client factory singleton so the in-process
-    # notify_and_queue_reanalysis sees the test REDIS_URL.
+    # ----- 0. Pin the in-process Celery app + redis-client factory to the
+    # SAME broker URL the worker subprocess is configured against.
+    #
+    # ``tests/conftest.py:51`` runs ``load_dotenv(override=True)`` which
+    # rebinds REDIS_URL/CELERY_BROKER_URL to the .env values at module
+    # import. By the time this test runs, ``os.environ["REDIS_URL"]`` is
+    # the .env value (e.g. ``redis://:changeme@localhost:6382``) and NOT
+    # what the fixture's ``redis_url`` says. We forcibly re-set those env
+    # keys here so the lazy redis-client factory picks up the test URL,
+    # AND we rebind the celery_app.conf object directly so the in-process
+    # ``send_task`` lands on the same broker the worker subprocess is
+    # consuming. Without both rebinds, the test would silently call
+    # ``send_task`` against the wrong broker and the assertion would
+    # time out.
     monkeypatch.setenv("REDIS_URL", redis_url)
     monkeypatch.setenv("CELERY_BROKER_URL", redis_url)
     monkeypatch.setenv("CELERY_RESULT_BACKEND", redis_url)
-    # Reload celery_app module-level config so the broker URL applies.
-    # (celery reads CELERY_BROKER_URL at module import; rebind on the live
-    # app object — this is the in-process path, NOT the worker.)
     from src.workers.celery_app import celery_app
 
     celery_app.conf.broker_url = redis_url
     celery_app.conf.result_backend = redis_url
 
-    # Reset the cached redis singleton so the action picks up REDIS_URL.
+    # Reset the cached redis singleton so the action's lazy ``get_redis_client``
+    # constructs a new client against the test URL on next call.
     from src.memory.services import factories as svc_factories
 
     svc_factories._redis_client = None  # type: ignore[attr-defined]
