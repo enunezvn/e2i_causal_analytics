@@ -26,6 +26,7 @@ def _make_estimation_data(
     confounder_cols: list = None,
     n: int = 300,
     seed: int = 42,
+    true_ate: float = 0.5,
 ) -> pd.DataFrame:
     """Build a small synthetic DataFrame suitable for DoWhy CausalModel rebuild.
 
@@ -33,13 +34,23 @@ def _make_estimation_data(
     ``state['outcome_var']``, and every entry of ``state['confounders']``
     so the agent's reconstruction step succeeds. This replaces the
     deleted silent-mock fallback path in the refutation node.
+
+    Iter-6 codex H-iter5-1 (#416): the data-generating ATE coefficient is
+    parameterized so test fixtures can match the EstimationResult.ate value
+    they declare. The refutation node now verifies reconstructed ATE matches
+    reported ATE within tolerance, so the data MUST produce a similar effect.
     """
     if confounder_cols is None:
         confounder_cols = ["geographic_region"]
     rng = np.random.default_rng(seed)
     columns: dict = {col: rng.normal(0, 1, n) for col in confounder_cols}
     treatment = rng.binomial(1, 0.5, n).astype(float)
-    outcome = 0.4 * treatment + sum(0.1 * columns[c] for c in confounder_cols) + rng.normal(0, 1, n)
+    # Use small noise so the small-sample estimate stays near ``true_ate``.
+    outcome = (
+        true_ate * treatment
+        + sum(0.1 * columns[c] for c in confounder_cols)
+        + rng.normal(0, 0.3, n)
+    )
     columns[treatment_col] = treatment
     columns[outcome_col] = outcome
     return pd.DataFrame(columns)
@@ -78,7 +89,7 @@ class TestRefutationNode:
             "confounders": ["geographic_region"],
             "data_source": "synthetic",
             "estimation_result": self._create_test_estimation(ate=ate),
-            "estimation_data": _make_estimation_data(),
+            "estimation_data": _make_estimation_data(true_ate=ate),
             "status": "pending",
             "errors": [],
             "warnings": [],
@@ -103,7 +114,7 @@ class TestRefutationNode:
             "confounders": ["geographic_region"],
             "data_source": "synthetic",
             "estimation_result": self._create_test_estimation(),
-            "estimation_data": _make_estimation_data(),
+            "estimation_data": _make_estimation_data(true_ate=0.5),
             "status": "pending",
         }
 
@@ -112,7 +123,15 @@ class TestRefutationNode:
         assert "refutation_results" in result
         ref = result["refutation_results"]
 
-        assert ref["total_tests"] == 5  # 5 refutation tests (updated from 4)
+        # Iter-6 codex H-iter5-2/3 (#416): data_subset + bootstrap now mark
+        # SKIPPED when DoWhy doesn't expose ``subset_effects`` /
+        # ``bootstrap_estimates`` (real DoWhy 0.10+ behavior on our fixture).
+        # ``total_tests`` excludes SKIPPED per the existing contract, so
+        # the count is 3-5 depending on DoWhy version. ``individual_tests``
+        # always carries all 5 entries (including SKIPPED).
+        assert ref["total_tests"] in (3, 4, 5), (
+            f"Expected 3-5 non-skipped tests, got {ref['total_tests']}"
+        )
         assert len(ref["individual_tests"]) == 5
         assert result["current_phase"] in ["analyzing_sensitivity", "failed"]
 
@@ -331,7 +350,7 @@ class TestRefutationNodeWithRepository:
             "confounders": ["geographic_region"],
             "data_source": "synthetic",
             "estimation_result": self._create_test_estimation(ate=ate),
-            "estimation_data": _make_estimation_data(),
+            "estimation_data": _make_estimation_data(true_ate=ate),
             "status": "pending",
             "errors": [],
             "warnings": [],
@@ -421,7 +440,7 @@ class TestRefutationPassCriteria:
             "confounders": ["geographic_region"],
             "data_source": "synthetic",
             "estimation_result": self._create_test_estimation(),
-            "estimation_data": _make_estimation_data(),
+            "estimation_data": _make_estimation_data(true_ate=0.5),
             "status": "pending",
             "errors": [],
             "warnings": [],
@@ -476,7 +495,7 @@ class TestRefutationWithDifferentEffectSizes:
             "confounders": ["geographic_region"],
             "data_source": "synthetic",
             "estimation_result": self._create_test_estimation(ate=ate),
-            "estimation_data": _make_estimation_data(),
+            "estimation_data": _make_estimation_data(true_ate=ate),
             "status": "pending",
             "errors": [],
             "warnings": [],
@@ -492,7 +511,9 @@ class TestRefutationWithDifferentEffectSizes:
         result = await node.execute(state)
 
         assert "refutation_results" in result
-        assert result["refutation_results"]["total_tests"] == 5
+        # Iter-6: total_tests excludes SKIPPED (data_subset + bootstrap may
+        # skip when DoWhy doesn't expose per-subset effects).
+        assert result["refutation_results"]["total_tests"] in (3, 4, 5)
 
     @pytest.mark.asyncio
     async def test_large_effect_refutation(self):
@@ -557,7 +578,7 @@ class TestStandaloneFunction:
             "confounders": ["geographic_region"],
             "data_source": "synthetic",
             "estimation_result": self._create_test_estimation(),
-            "estimation_data": _make_estimation_data(),
+            "estimation_data": _make_estimation_data(true_ate=0.5),
             "status": "pending",
             "errors": [],
             "warnings": [],

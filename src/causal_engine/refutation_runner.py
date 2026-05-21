@@ -901,17 +901,39 @@ class RefutationRunner:
                 refuted_effect = float(refutation.new_effect)
                 # Iter-2 codex H4: p_value must come from real refuter output.
                 p_value = _require_p_value(refutation, "data_subset", original_effect)
-                # Calculate CI coverage. Prefer raw subset_effects when the
-                # refuter exposes them (stub/older DoWhy variants); otherwise
-                # fall back to a single-point check (is the aggregated
-                # subset effect within original CI?). This is a real signal
-                # — not a hardcoded mock — because we use the actual refuter
-                # output, not a seeded random value.
+                # Iter-6 codex H-iter5-2: the data_subset test answers
+                # "is the effect consistent across data subsets?". That is
+                # a DISTRIBUTIONAL question requiring per-subset effects.
+                # DoWhy >= 0.10 does not expose ``subset_effects`` in
+                # refutation_result by default; collapsing the question to
+                # "is the single aggregated mean within original CI?" is a
+                # silent substitution, not the same answer. Mark the test
+                # SKIPPED when raw subset effects are unavailable instead
+                # of fabricating a coverage signal.
                 subset_effects = refutation.refutation_result.get("subset_effects", [])
-                if subset_effects:
-                    ci_coverage = self._calculate_ci_coverage(subset_effects, original_ci)
-                else:
-                    ci_coverage = 1.0 if original_ci[0] <= refuted_effect <= original_ci[1] else 0.0
+                if not subset_effects:
+                    execution_time = (time.time() - start_time) * 1000
+                    return RefutationResult(
+                        test_name=test_name,
+                        status=RefutationStatus.SKIPPED,
+                        original_effect=original_effect,
+                        refuted_effect=refuted_effect,
+                        p_value=p_value,
+                        delta_percent=0.0,
+                        details={
+                            "message": (
+                                "Data-subset distributional check skipped: "
+                                "DoWhy refutation_result did not expose 'subset_effects'. "
+                                "Single-point coverage would not answer the consistency "
+                                "question. Mark SKIPPED rather than fabricate."
+                            ),
+                            "ci_coverage_available": False,
+                            "subset_fraction": self.config["data_subset"]["subset_fraction"],
+                            "num_subsets": self.config["data_subset"]["num_subsets"],
+                        },
+                        execution_time_ms=execution_time,
+                    )
+                ci_coverage = self._calculate_ci_coverage(subset_effects, original_ci)
             except RefutationError:
                 raise
             except Exception as e:
@@ -1001,27 +1023,43 @@ class RefutationRunner:
                 # DoWhy's BootstrapRefuter exposes the bootstrapped mean via
                 # ``new_effect`` and ``p_value`` via ``refutation_result``.
                 # Older / stub variants may also expose ``bootstrap_estimates``.
-                # Iter-2 codex H4: when DoWhy does NOT expose
-                # ``bootstrap_estimates`` we MUST NOT fabricate a CI from
-                # ``original_ci`` — that's the placeholder evidence pattern
-                # we're closing. Use the delta in new_effect vs original_effect
-                # as the real stability signal (no CI ratio when raw estimates
-                # absent).
+                # Iter-6 codex H-iter5-3: the bootstrap test answers
+                # "what is the variance / stability of the effect under
+                # resampling?". That is a DISTRIBUTIONAL question requiring
+                # per-bootstrap effects. When DoWhy does not expose
+                # ``bootstrap_estimates``, delta-based stability against
+                # original_ci is a different question (point-in-interval
+                # check, not variance). Mark SKIPPED rather than substitute.
                 bootstrap_effects = refutation.refutation_result.get("bootstrap_estimates", [])
-                bootstrap_ci_available = bool(bootstrap_effects)
-                if bootstrap_effects:
-                    refuted_effect = float(np.mean(bootstrap_effects))
-                    bootstrap_ci = (
-                        float(np.percentile(bootstrap_effects, 2.5)),
-                        float(np.percentile(bootstrap_effects, 97.5)),
-                    )
-                else:
-                    refuted_effect = float(refutation.new_effect)
-                    # Sentinel CI marks "not computed" so downstream stability
-                    # check switches to delta-based scoring (see below).
-                    bootstrap_ci = (float("nan"), float("nan"))
                 # Iter-2 codex H4: p_value must come from real refuter output.
                 p_value = _require_p_value(refutation, "bootstrap", original_effect)
+                if not bootstrap_effects:
+                    refuted_effect = float(refutation.new_effect)
+                    execution_time = (time.time() - start_time) * 1000
+                    return RefutationResult(
+                        test_name=test_name,
+                        status=RefutationStatus.SKIPPED,
+                        original_effect=original_effect,
+                        refuted_effect=refuted_effect,
+                        p_value=p_value,
+                        delta_percent=0.0,
+                        details={
+                            "message": (
+                                "Bootstrap variance check skipped: "
+                                "DoWhy refutation_result did not expose 'bootstrap_estimates'. "
+                                "Delta-vs-original-CI would not answer the variance "
+                                "question. Mark SKIPPED rather than fabricate."
+                            ),
+                            "bootstrap_ci_available": False,
+                            "num_bootstraps": self.config["bootstrap"]["num_bootstraps"],
+                        },
+                        execution_time_ms=execution_time,
+                    )
+                refuted_effect = float(np.mean(bootstrap_effects))
+                bootstrap_ci = (
+                    float(np.percentile(bootstrap_effects, 2.5)),
+                    float(np.percentile(bootstrap_effects, 97.5)),
+                )
             except RefutationError:
                 raise
             except Exception as e:
@@ -1048,49 +1086,25 @@ class RefutationRunner:
                 },
             )
 
+        # Iter-6 codex H-iter5-3: by this point ``bootstrap_ci_available`` is
+        # guaranteed True (the ``not bootstrap_effects`` branch above returned
+        # SKIPPED early). We compute CI ratio from real bootstrap percentiles.
         delta_percent = (
             abs(refuted_effect - original_effect) / max(abs(original_effect), 1e-10) * 100
         )
-
-        # Calculate CI ratio when bootstrap CI is available; otherwise fall
-        # back to a delta-based stability check on the bootstrap mean vs the
-        # reported ATE. Codex iter-2 H4: we no longer fabricate a CI from
-        # ``original_ci`` when DoWhy does not expose ``bootstrap_estimates``.
         original_ci_width = original_ci[1] - original_ci[0]
-        if bootstrap_ci_available:
-            bootstrap_ci_width = bootstrap_ci[1] - bootstrap_ci[0]
-            ci_ratio = bootstrap_ci_width / max(original_ci_width, 1e-10)
+        bootstrap_ci_width = bootstrap_ci[1] - bootstrap_ci[0]
+        ci_ratio = bootstrap_ci_width / max(original_ci_width, 1e-10)
 
-            if ci_ratio <= self.thresholds["bootstrap_ci_ratio"]["pass"]:
-                status = RefutationStatus.PASSED
-                message = f"Effect stable across {self.config['bootstrap']['num_bootstraps']} bootstrap samples"
-            elif ci_ratio <= self.thresholds["bootstrap_ci_ratio"]["warning"]:
-                status = RefutationStatus.WARNING
-                message = "Bootstrap CI moderately wider than original"
-            else:
-                status = RefutationStatus.FAILED
-                message = "WARNING: High variance in bootstrap estimates"
+        if ci_ratio <= self.thresholds["bootstrap_ci_ratio"]["pass"]:
+            status = RefutationStatus.PASSED
+            message = f"Effect stable across {self.config['bootstrap']['num_bootstraps']} bootstrap samples"
+        elif ci_ratio <= self.thresholds["bootstrap_ci_ratio"]["warning"]:
+            status = RefutationStatus.WARNING
+            message = "Bootstrap CI moderately wider than original"
         else:
-            # Delta-based stability scoring when raw bootstrap estimates are
-            # not exposed. Reuse the same percentage thresholds the
-            # random-common-cause test applies — if the bootstrap mean stays
-            # within the original CI, treat as stable.
-            ci_ratio = float("nan")
-            inside_ci = original_ci[0] <= refuted_effect <= original_ci[1]
-            if inside_ci and delta_percent <= 20.0:
-                status = RefutationStatus.PASSED
-                message = (
-                    f"Bootstrap mean stays within original CI "
-                    f"(delta={delta_percent:.1f}%, n={self.config['bootstrap']['num_bootstraps']})"
-                )
-            elif inside_ci and delta_percent <= 30.0:
-                status = RefutationStatus.WARNING
-                message = f"Bootstrap mean within CI but delta is elevated ({delta_percent:.1f}%)"
-            else:
-                status = RefutationStatus.FAILED
-                message = (
-                    f"Bootstrap mean outside original CI or delta > 30% ({delta_percent:.1f}%)"
-                )
+            status = RefutationStatus.FAILED
+            message = "WARNING: High variance in bootstrap estimates"
 
         execution_time = (time.time() - start_time) * 1000
 
@@ -1105,7 +1119,7 @@ class RefutationRunner:
                 "message": message,
                 "bootstrap_ci": bootstrap_ci,
                 "ci_ratio": ci_ratio,
-                "bootstrap_ci_available": bootstrap_ci_available,
+                "bootstrap_ci_available": True,
                 "num_bootstraps": self.config["bootstrap"]["num_bootstraps"],
             },
             execution_time_ms=execution_time,

@@ -93,6 +93,17 @@ def _resolve_dowhy_method(estimation_result: Dict[str, Any]) -> str:
     return method
 
 
+# Iter-6 codex H-iter5-1: tolerance for reconstructed-vs-reported ATE.
+# DoWhy will re-fit the model with default EconML parameters, which may
+# differ from the energy-score wrapper's tuned hyperparameters. Without
+# a tolerance check we'd be refuting a DIFFERENT estimate than the one
+# reported to chat. The tolerance is relative (20% of |reported_ate|) +
+# additive (0.1) — the additive floor avoids spurious failures on
+# near-zero ATEs where relative tolerance is unstable.
+_DOWHY_RECONSTRUCTION_REL_TOL = 0.20
+_DOWHY_RECONSTRUCTION_ABS_TOL = 0.10
+
+
 def _reconstruct_dowhy_artifacts(
     *,
     data: Any,
@@ -234,6 +245,56 @@ def _reconstruct_dowhy_artifacts(
             },
             original_error=exc,
         ) from exc
+
+    # Iter-6 codex H-iter5-1 (#416): verify the reconstructed estimate's ATE
+    # matches the reported ATE within tolerance. DoWhy re-fits with default
+    # EconML hyperparameters which may not match the energy-score wrapper's
+    # tuned settings; if the reconstructed estimate diverges too far from
+    # the reported one, refuters would silently critique a DIFFERENT model
+    # than the one whose ATE is on screen.
+    reported_ate_raw = estimation_result.get("ate")
+    if reported_ate_raw is None:
+        raise RefutationError(
+            "Refutation analysis unavailable for this query, retry without refutation. "
+            "EstimationResult is missing 'ate'; cannot verify reconstructed estimate "
+            "matches the reported one.",
+            details={"reason": "missing_reported_ate"},
+        )
+    try:
+        reported_ate = float(reported_ate_raw)
+        reconstructed_ate = float(getattr(estimate, "value", None) or estimate.value)
+    except (TypeError, ValueError, AttributeError) as ate_exc:
+        raise RefutationError(
+            "Refutation analysis unavailable for this query, retry without refutation. "
+            f"Reported or reconstructed ATE is non-numeric: "
+            f"reported={reported_ate_raw!r}.",
+            details={
+                "reason": "ate_mismatch_non_numeric",
+                "reported_ate": repr(reported_ate_raw),
+            },
+            original_error=ate_exc,
+        ) from ate_exc
+
+    tolerance = max(
+        abs(reported_ate) * _DOWHY_RECONSTRUCTION_REL_TOL,
+        _DOWHY_RECONSTRUCTION_ABS_TOL,
+    )
+    if abs(reconstructed_ate - reported_ate) > tolerance:
+        raise RefutationError(
+            "Refutation analysis unavailable for this query, retry without refutation. "
+            f"Reconstructed DoWhy estimate (ATE={reconstructed_ate:.4f}) diverges from "
+            f"reported ATE ({reported_ate:.4f}) beyond tolerance ({tolerance:.4f}). "
+            "Refuting a different estimate than the one on screen would be silent-wrong.",
+            details={
+                "reason": "reconstructed_ate_mismatch",
+                "reported_ate": reported_ate,
+                "reconstructed_ate": reconstructed_ate,
+                "tolerance": tolerance,
+                "dowhy_method": dowhy_method,
+                "rel_tolerance": _DOWHY_RECONSTRUCTION_REL_TOL,
+                "abs_tolerance": _DOWHY_RECONSTRUCTION_ABS_TOL,
+            },
+        )
 
     return model, identified_estimand, estimate
 
