@@ -339,13 +339,42 @@ class RefutationNode:
                         "ate_ci_upper": ate_ci_upper,
                     },
                 )
-            if ate_ci_lower > ate_ci_upper:
+            if ate_ci_lower >= ate_ci_upper:
+                # Iter-5 codex H-iter4-2 (#416): reject zero-width AND
+                # out-of-order CIs. A successful estimator emitting
+                # (0.0, 0.0) or (0.1, 0.1) passes the previous strict-greater
+                # check but is functionally a degenerate (no-uncertainty) CI;
+                # downstream data_subset / bootstrap scoring treats this as
+                # "always covered" which is silent-wrong evidence.
                 raise RefutationError(
                     "Refutation analysis unavailable for this query, retry without refutation. "
-                    f"EstimationResult CI bounds are out of order: "
-                    f"ate_ci_lower={ate_ci_lower} > ate_ci_upper={ate_ci_upper}.",
+                    f"EstimationResult CI bounds are degenerate or out of order: "
+                    f"ate_ci_lower={ate_ci_lower} >= ate_ci_upper={ate_ci_upper}.",
                     details={
-                        "reason": "ci_bounds_out_of_order",
+                        "reason": "ci_bounds_degenerate_or_out_of_order",
+                        "ate_ci_lower": ate_ci_lower,
+                        "ate_ci_upper": ate_ci_upper,
+                    },
+                )
+            # Iter-5 codex H-iter4-2 (#416): refuse to refute an ATE that
+            # lies outside its own reported CI — internally inconsistent.
+            try:
+                _ate_float = float(original_ate)
+            except (TypeError, ValueError) as ate_exc:
+                raise RefutationError(
+                    "Refutation analysis unavailable for this query, retry without refutation. "
+                    f"EstimationResult.ate is non-numeric: {original_ate!r}.",
+                    details={"reason": "non_numeric_ate", "ate_raw": repr(original_ate)},
+                    original_error=ate_exc,
+                ) from ate_exc
+            if not (ate_ci_lower <= _ate_float <= ate_ci_upper):
+                raise RefutationError(
+                    "Refutation analysis unavailable for this query, retry without refutation. "
+                    f"EstimationResult ATE={_ate_float} is outside its own CI "
+                    f"[{ate_ci_lower}, {ate_ci_upper}].",
+                    details={
+                        "reason": "ate_outside_ci",
+                        "ate": _ate_float,
                         "ate_ci_lower": ate_ci_lower,
                         "ate_ci_upper": ate_ci_upper,
                     },

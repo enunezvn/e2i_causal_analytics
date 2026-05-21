@@ -1325,39 +1325,40 @@ class RefutationRunner:
 def run_refutation_suite(
     original_effect: float,
     original_ci: Tuple[float, float],
-    *,
-    causal_model: Any,
-    identified_estimand: Any,
-    estimate: Any,
     treatment: Optional[str] = None,
     outcome: Optional[str] = None,
     brand: Optional[str] = None,
     config: Optional[Dict[str, Dict[str, Any]]] = None,
+    *,
+    causal_model: Optional[Any] = None,
+    identified_estimand: Optional[Any] = None,
+    estimate: Optional[Any] = None,
     data: Optional[Any] = None,
     estimate_id: Optional[str] = None,
 ) -> RefutationSuite:
     """Convenience function to run refutation suite.
 
-    Iter-2 codex H5 (#416): the previous signature did NOT accept the DoWhy
-    model artifacts (``causal_model`` / ``identified_estimand`` / ``estimate``),
-    which meant after F-014 every call to ``run_refutation_suite`` raised
-    ``RefutationError`` because ``run_all_tests`` requires a real
-    ``CausalModel``. The function is now keyword-only for the model artifacts,
-    so external callers (non-agent code paths) can pass through their own
-    DoWhy model rather than being forced to invoke the agent's refutation
-    node. This keeps a usable public contract instead of codifying an
-    always-failing API.
+    Iter-4 codex H3 (#416): the keyword-only model artifacts are OPTIONAL
+    in the signature (preserving the iter-0 positional contract for
+    ``original_effect`` / ``original_ci`` / ``treatment`` / ``outcome`` /
+    ``brand`` / ``config``) — but they are FUNCTIONALLY REQUIRED. If any of
+    ``causal_model`` / ``identified_estimand`` / ``estimate`` is None, this
+    function fail-closes with ``RefutationError`` (not ``TypeError``). This
+    preserves call compatibility (legacy callers still bind their args
+    correctly) while still rejecting the silent-mock dispatch that F-014
+    closed.
 
     Args:
         original_effect: ATE to validate
         original_ci: Confidence interval
-        causal_model: DoWhy CausalModel instance (REQUIRED — see F-014 fix)
-        identified_estimand: DoWhy identified estimand (REQUIRED)
-        estimate: DoWhy estimate object (REQUIRED)
         treatment: Treatment variable name (logging only)
         outcome: Outcome variable name (logging only)
         brand: Brand context (logging only)
         config: Custom test configuration
+        causal_model: DoWhy CausalModel instance (REQUIRED at runtime).
+            None raises RefutationError, not TypeError.
+        identified_estimand: DoWhy identified estimand (REQUIRED at runtime).
+        estimate: DoWhy estimate object (REQUIRED at runtime).
         data: DataFrame used for the estimate (passed to refuters)
         estimate_id: Estimate ID for persistence
 
@@ -1365,9 +1366,24 @@ def run_refutation_suite(
         RefutationSuite with results
 
     Raises:
-        RefutationError: when refuters fail or a per-test placeholder would
-            otherwise be required (per the fail-closed contract).
+        RefutationError: when any model artifact is missing, or when
+            refuters fail / a per-test placeholder would be required.
     """
+    if causal_model is None or identified_estimand is None or estimate is None:
+        raise RefutationError(
+            "Refutation analysis unavailable for this query, retry without refutation. "
+            "run_refutation_suite requires a real DoWhy CausalModel + identified_estimand "
+            "+ estimate; F-014 closed the silent-mock fallback that previously dispatched "
+            "to _mock_* paths when these were None.",
+            details={
+                "reason": "missing_model_artifacts",
+                "has_causal_model": causal_model is not None,
+                "has_identified_estimand": identified_estimand is not None,
+                "has_estimate": estimate is not None,
+                "treatment": treatment,
+                "outcome": outcome,
+            },
+        )
     runner = RefutationRunner(config=config)
     return runner.run_all_tests(
         original_effect=original_effect,

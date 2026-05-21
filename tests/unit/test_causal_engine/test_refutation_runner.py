@@ -903,13 +903,15 @@ class TestConvenienceFunctions:
         assert isinstance(suite, RefutationSuite)
         assert suite.treatment_variable == "test_treatment"
 
-    def test_run_refutation_suite_missing_model_args_typeerror(self):
-        """The keyword-only signature means callers that forget to pass the
-        DoWhy model artifacts get a clear TypeError at call site, not a
-        silent ``RefutationError`` from the first refuter.
+    def test_run_refutation_suite_missing_model_args_refutation_error(self):
+        """Iter-4 codex H3 (#416): legacy positional signature is preserved,
+        so callers that don't pass model artifacts get a clear
+        ``RefutationError`` (NOT ``TypeError``) instead of crashing on a
+        keyword-only signature change. This keeps the iter-0 public contract
+        usable while still rejecting the silent-mock dispatch.
         """
-        with pytest.raises(TypeError):
-            run_refutation_suite(  # type: ignore[call-arg]
+        with pytest.raises(RefutationError):
+            run_refutation_suite(
                 original_effect=0.15,
                 original_ci=(0.10, 0.20),
                 treatment="test_treatment",

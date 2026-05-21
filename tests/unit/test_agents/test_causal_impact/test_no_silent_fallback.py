@@ -496,6 +496,149 @@ class TestF006FailClosed:
         )
 
     @pytest.mark.asyncio
+    async def test_f006_estimation_fails_closed_on_zero_ate_std(self):
+        """F-006 iter-5 (#417, codex iter-4 H1): estimation must fail-closed
+        when selected estimator returns success=True with ate_std == 0.0
+        (or NaN / non-finite). The iter-4 fix only rejected None ate_std,
+        but a 0.0 / NaN ate_std produces z_score=inf and is functionally
+        unusable uncertainty.
+        """
+        from unittest.mock import MagicMock
+
+        node = EstimationNode()
+
+        from src.causal_engine.energy_score import (
+            EstimatorResult,
+            EstimatorType,
+            SelectionResult,
+            SelectionStrategy,
+        )
+
+        partial_result = EstimatorResult(
+            estimator_type=EstimatorType.OLS,
+            success=True,
+            ate=0.25,
+            ate_std=0.0,  # zero — unusable
+            ate_ci_lower=0.20,
+            ate_ci_upper=0.30,
+            energy_score_result=None,
+        )
+        fake_selection = SelectionResult(
+            selected=partial_result,
+            selection_strategy=SelectionStrategy.BEST_ENERGY_SCORE,
+            all_results=[partial_result],
+            selection_reason="Only OLS succeeded",
+            total_time_ms=10.0,
+            energy_scores={"ols": 0.0},
+            energy_score_gap=0.0,
+        )
+        graph: CausalGraph = {
+            "nodes": ["hcp_engagement_level", "patient_conversion_rate", "geographic_region"],
+            "edges": [
+                ("geographic_region", "hcp_engagement_level"),
+                ("geographic_region", "patient_conversion_rate"),
+                ("hcp_engagement_level", "patient_conversion_rate"),
+            ],
+            "treatment_nodes": ["hcp_engagement_level"],
+            "outcome_nodes": ["patient_conversion_rate"],
+            "adjustment_sets": [["geographic_region"]],
+            "dag_dot": "...",
+            "confidence": 0.85,
+        }
+        state: CausalImpactState = {
+            "query": "test query",
+            "query_id": "test-f006-zero-ate-std",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
+            "causal_graph": graph,
+            "status": "pending",
+            "errors": [],
+            "warnings": [],
+        }
+        fake_selector = MagicMock()
+        fake_selector.select.return_value = fake_selection
+        with patch.object(node, "_get_estimator_selector", return_value=fake_selector):
+            result = await node.execute(state)
+
+        assert result.get("status") == "failed", (
+            "F-006 regression iter-5: ate_std=0.0 did NOT cause fail-closed. "
+            "Estimation emitted classification with unusable uncertainty."
+        )
+
+    @pytest.mark.asyncio
+    async def test_f006_estimation_fails_closed_on_degenerate_ci(self):
+        """F-006 iter-5 (#417, codex iter-4 H2): estimation must fail-closed
+        when CI bounds are degenerate (ate_ci_lower == ate_ci_upper) on a
+        successful EstimatorResult. Zero-width CI propagates as silent-wrong
+        evidence into refutation scoring.
+        """
+        from unittest.mock import MagicMock
+
+        node = EstimationNode()
+
+        from src.causal_engine.energy_score import (
+            EstimatorResult,
+            EstimatorType,
+            SelectionResult,
+            SelectionStrategy,
+        )
+
+        partial_result = EstimatorResult(
+            estimator_type=EstimatorType.OLS,
+            success=True,
+            ate=0.25,
+            ate_std=0.05,
+            ate_ci_lower=0.25,  # degenerate (zero-width)
+            ate_ci_upper=0.25,
+            energy_score_result=None,
+        )
+        fake_selection = SelectionResult(
+            selected=partial_result,
+            selection_strategy=SelectionStrategy.BEST_ENERGY_SCORE,
+            all_results=[partial_result],
+            selection_reason="Only OLS succeeded",
+            total_time_ms=10.0,
+            energy_scores={"ols": 0.0},
+            energy_score_gap=0.0,
+        )
+        graph: CausalGraph = {
+            "nodes": ["hcp_engagement_level", "patient_conversion_rate", "geographic_region"],
+            "edges": [
+                ("geographic_region", "hcp_engagement_level"),
+                ("geographic_region", "patient_conversion_rate"),
+                ("hcp_engagement_level", "patient_conversion_rate"),
+            ],
+            "treatment_nodes": ["hcp_engagement_level"],
+            "outcome_nodes": ["patient_conversion_rate"],
+            "adjustment_sets": [["geographic_region"]],
+            "dag_dot": "...",
+            "confidence": 0.85,
+        }
+        state: CausalImpactState = {
+            "query": "test query",
+            "query_id": "test-f006-degenerate-ci",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
+            "causal_graph": graph,
+            "status": "pending",
+            "errors": [],
+            "warnings": [],
+        }
+        fake_selector = MagicMock()
+        fake_selector.select.return_value = fake_selection
+        with patch.object(node, "_get_estimator_selector", return_value=fake_selector):
+            result = await node.execute(state)
+
+        assert result.get("status") == "failed", (
+            "F-006 regression iter-5: degenerate CI (ate_ci_lower == ate_ci_upper) "
+            "did NOT cause fail-closed."
+        )
+
+    @pytest.mark.asyncio
     async def test_f014_ci_bounds_required_for_refutation(self):
         """F-014 iter-3 (#416, codex iter-2 H1): refutation must fail-closed
         when EstimationResult is missing ate_ci_lower / ate_ci_upper.

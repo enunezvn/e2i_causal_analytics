@@ -303,33 +303,14 @@ class EstimationNode:
                         }
                     )
 
-        # Iter-3 codex H2 (#417): compute the p-value from the estimator's
-        # actual uncertainty model (two-sided z-test on ate / ate_std).
-        # Previously the code emitted hardcoded ``0.001`` or ``0.15`` based
-        # on the ``abs(ate) > 1.96 * ate_std`` boundary — that's classification
-        # not backed by a real computation. Downstream code treats
-        # ``p_value < 0.05`` as real evidence; emitting hardcoded sentinels
-        # is placeholder evidence per the anti-mocking directive.
-        from scipy import stats as _scipy_stats
+        # Iter-4 codex H-iter3-1 + iter-5 codex H-iter4-1 (#417): CI bounds +
+        # standard_error must come from the estimator AND be usable. If they
+        # are None/missing/non-finite/non-positive/zero-width/inconsistent
+        # on a successful EstimatorResult, fail-closed rather than emitting
+        # a degenerate result that propagates as silent-wrong evidence into
+        # refutation's data_subset / bootstrap scoring.
+        import math as _math
 
-        if selected.ate is not None and selected.ate_std and selected.ate_std > 0:
-            z_score = abs(float(selected.ate)) / float(selected.ate_std)
-            # Two-sided p-value from standard normal: 2 * (1 - Phi(|z|))
-            p_value_real = float(2.0 * (1.0 - _scipy_stats.norm.cdf(z_score)))
-            statistical_significance_real = p_value_real < 0.05
-        else:
-            # Estimator did not produce a usable standard error: declare
-            # significance unknowable rather than fabricating one.
-            p_value_real = float("nan")
-            statistical_significance_real = False
-
-        # Iter-4 codex H-iter3-1 (#417): CI bounds + standard_error must come
-        # from the estimator. If they're None/missing on a successful
-        # EstimatorResult, fail-closed rather than materializing 0.0 — that
-        # 0.0 would propagate into refutation's data_subset / bootstrap
-        # scoring (which the iter-3 refutation guards check for finiteness
-        # but NOT for zero-degenerate width). Same silent-evidence class
-        # as iter-1 H4 / iter-2 H1.
         if selected.ate_ci_lower is None or selected.ate_ci_upper is None:
             raise EstimationError(
                 "Selected estimator produced an ATE without confidence interval bounds; "
@@ -344,6 +325,48 @@ class EstimationNode:
                     "ate_std": selected.ate_std,
                 },
             )
+        ate_ci_lower_f = float(selected.ate_ci_lower)
+        ate_ci_upper_f = float(selected.ate_ci_upper)
+        if not (_math.isfinite(ate_ci_lower_f) and _math.isfinite(ate_ci_upper_f)):
+            raise EstimationError(
+                "Selected estimator produced non-finite CI bounds; "
+                f"ate_ci_lower={ate_ci_lower_f}, ate_ci_upper={ate_ci_upper_f}.",
+                details={
+                    "reason": "non_finite_ci_bounds_on_success",
+                    "selected_estimator": selected.estimator_type.value,
+                    "ate_ci_lower": ate_ci_lower_f,
+                    "ate_ci_upper": ate_ci_upper_f,
+                },
+            )
+        if ate_ci_lower_f >= ate_ci_upper_f:
+            raise EstimationError(
+                "Selected estimator produced degenerate / out-of-order CI bounds; "
+                f"ate_ci_lower={ate_ci_lower_f} >= ate_ci_upper={ate_ci_upper_f}. "
+                "Zero-width or inverted CI propagates as silent-wrong evidence "
+                "into refutation scoring (data_subset / bootstrap).",
+                details={
+                    "reason": "degenerate_ci_bounds_on_success",
+                    "selected_estimator": selected.estimator_type.value,
+                    "ate_ci_lower": ate_ci_lower_f,
+                    "ate_ci_upper": ate_ci_upper_f,
+                },
+            )
+        # Sanity: the reported ATE must lie within the reported CI. If not,
+        # the estimator's outputs are internally inconsistent.
+        ate_f = float(selected.ate)
+        if not (ate_ci_lower_f <= ate_f <= ate_ci_upper_f):
+            raise EstimationError(
+                "Selected estimator produced an ATE outside its own confidence interval; "
+                f"ate={ate_f}, ci=[{ate_ci_lower_f}, {ate_ci_upper_f}].",
+                details={
+                    "reason": "ate_outside_ci_on_success",
+                    "selected_estimator": selected.estimator_type.value,
+                    "ate": ate_f,
+                    "ate_ci_lower": ate_ci_lower_f,
+                    "ate_ci_upper": ate_ci_upper_f,
+                },
+            )
+
         if selected.ate_std is None:
             raise EstimationError(
                 "Selected estimator produced an ATE without a standard error; "
@@ -355,14 +378,39 @@ class EstimationNode:
                     "ate": selected.ate,
                 },
             )
+        ate_std_f = float(selected.ate_std)
+        if not _math.isfinite(ate_std_f) or ate_std_f <= 0.0:
+            raise EstimationError(
+                f"Selected estimator returned unusable standard error: ate_std={ate_std_f}. "
+                "Refusing to emit p_value=NaN with statistical_significance=False which "
+                "would be a classification without usable uncertainty.",
+                details={
+                    "reason": "non_positive_or_non_finite_standard_error",
+                    "selected_estimator": selected.estimator_type.value,
+                    "ate_std": ate_std_f,
+                    "ate": ate_f,
+                },
+            )
+
+        # Iter-3 codex H2 (#417) + iter-5 H-iter4-1: compute the p-value from
+        # the estimator's actual uncertainty model (two-sided z-test on
+        # ate / ate_std). By this point ate_std has been guarded above to be
+        # > 0 and finite, so we can compute unconditionally instead of
+        # emitting a NaN-with-False placeholder.
+        from scipy import stats as _scipy_stats
+
+        z_score = abs(ate_f) / ate_std_f
+        # Two-sided p-value from standard normal: 2 * (1 - Phi(|z|))
+        p_value_real = float(2.0 * (1.0 - _scipy_stats.norm.cdf(z_score)))
+        statistical_significance_real = p_value_real < 0.05
 
         result: EstimationResult = {
             "method": method_name,
-            "ate": float(selected.ate),  # safe: success + non-None guarded above
-            "ate_ci_lower": float(selected.ate_ci_lower),
-            "ate_ci_upper": float(selected.ate_ci_upper),
-            "standard_error": float(selected.ate_std),
-            "effect_size": self._classify_effect_size(selected.ate or 0.0),
+            "ate": ate_f,
+            "ate_ci_lower": ate_ci_lower_f,
+            "ate_ci_upper": ate_ci_upper_f,
+            "standard_error": ate_std_f,
+            "effect_size": self._classify_effect_size(ate_f),
             "statistical_significance": statistical_significance_real,
             "p_value": p_value_real,
             "sample_size": len(data),
