@@ -1,5 +1,130 @@
 # E2I Causal Analytics - Claude Code Instructions
 
+## REASON BEFORE RULES (HIGHEST PRIORITY — 2026-05-21, user-pinned)
+
+> **ABOVE ALL ELSE: REASON. DO NOT FOLLOW ARBITRARY RULES.**
+
+Every rule in this file (and in memory) was written in response to a specific incident. The rules capture lessons but cannot anticipate every situation. Your obligation is to **understand WHY a rule exists** before applying it — and to set the rule aside (with explicit reasoning shown to the user) when the case in front of you doesn't match.
+
+### The reasoning step BEFORE any classification, recommendation, or action
+
+Answer in order:
+
+1. **What is this code trying to do?** (intent — `git log`, PR body, linked issues, surrounding comments, conversations)
+2. **Why does it exist in its current shape?** (scaffolded placeholder, copy-paste error, deprecated, feature-flag-gated, vestigial)
+3. **Is it causing harm right now?** (user-visible? plausible-wrong values that look real? security gap?)
+4. **What does the user actually want?** (their stated goal, not your inferred goal from rule-matching)
+5. **Only then**: classify, recommend, act — and explain your reasoning, not just your conclusion.
+
+Skipping steps 1–4 and jumping to step 5 is "lazy programming." A grep is a snapshot of *now*. Product intent lives in PRs, issues, conversations, and the user's head — not in `grep -rn`.
+
+### When a rule conflicts with reasoning
+
+If a rule says "DELETE on zero consumers" but you discover the code is a scaffolded placeholder for functionality the user requested, **the rule does not fit this case**. Stop. Tell the user what you found and why the rule doesn't apply. Propose a path that solves the actual problem.
+
+### Incident that forced this directive
+
+After the plan-354 LABEL-vs-DELETE incident (2026-05-21), I wrote an anti-mocking rule saying "no consumer == DELETE candidate, LABEL forbidden" and dispatched a census agent under this rule. The user stopped me: *"if the mock exists it is because I requested the functionality, why would we delete it? I think we are making decisions without thinking — why can you not add a reasoning step to your work?"*
+
+I had been pattern-matching on the previous incident (which was correctly diagnosed as LABEL-when-DELETE-warranted), not reasoning about each case. The anti-mocking rule captured a real lesson but I generalized it into a blanket policy that conflated four very different reasons a mock can legitimately exist:
+
+- **Scaffolded placeholder** — user requested the functionality, real implementation is in flight or blocked
+- **Roadmap stake** — endpoint is documented in product roadmap; integration is planned
+- **Feature flag / dev path** — intentionally non-production, never reachable in prod traffic
+- **Vestigial / copy-paste error** — actually dead
+
+Only the last is unambiguously DELETE. The others require different responses, and rule-following without intent investigation conflates them.
+
+Memory: [[feedback-reason-before-rules-20260521]].
+
+---
+
+## Anti-Mocking & Verification Discipline (SUBORDINATE to REASON-BEFORE-RULES)
+
+This section captures specific lessons from plan-354. It does NOT override the requirement to investigate intent first.
+
+### The actual rule
+
+> **DATA-DRIVEN EVIDENCE-BASED CODING, NOT LAZY PROGRAMMING.**
+> NO silent mocks in production code paths returning plausible-but-fake values.
+> NO patching around stubs without first understanding why the stub exists.
+> NO theoretical assumptions about consumer needs — investigate what the user actually requested.
+
+A mock is **not bad** per se. A mock that returns plausible-wrong values silently in a user-facing or production-reachable path IS bad. A mock clearly marked as a scaffolded placeholder, intent-documented, not reachable in prod traffic, awaiting real implementation — is a normal product-development pattern.
+
+### Required investigation BEFORE classifying any mock
+
+**Step 1 — Intent investigation:**
+
+```bash
+# When was it added, in what PR, by whom?
+git log --diff-filter=A --follow <file_path> | head -20
+
+# What did the PR body say about intent?
+gh pr view <pr_number> --json title,body
+
+# Are there open issues / roadmap items referencing it?
+gh issue list --search "<symbol_name>"
+
+# Any inline comments / docstrings about future work?
+grep -B2 -A5 "<placeholder_pattern>" <file>
+```
+
+**Step 2 — Harm assessment:**
+
+- Is the mock currently reachable in production traffic? (check router wiring, auth gates, feature flags)
+- Are returned values plausible enough to be mistaken for real? (e.g., `ate=0.12` looks like pharma uplift)
+- Is it user-visible? (chat UI, exported reports, dashboards)
+
+**Step 3 — Consumer check:**
+
+```bash
+grep -rn "<symbol_or_endpoint>" src/ --include="*.py" | grep -v "<file_under_review>"
+grep -rn "<endpoint>" frontend/src/ --include="*.ts" --include="*.tsx" | grep -v "/generated/"
+grep -rn "<endpoint>" --include="*.py" --include="*.yaml" --include="*.yml" --include="*.sh"
+```
+
+**Step 4 — THEN classify, with intent + harm in hand:**
+
+- **HARMFUL-NOW** → user-facing or plausible-wrong values → immediate REWIRE, or gate behind flag with intent-documented stub
+- **REWIRE** → functionality requested + real implementation feasible now
+- **KEEP-AS-INTENTIONAL-PLACEHOLDER** → functionality requested + real implementation blocked + mock is non-harmful (clearly-fake values, behind flag, internal-only) + intent documented inline
+- **DELETE** → no recoverable intent (vestigial, copy-paste error, no requested functionality)
+
+"LABEL" (adding `mock_data: True` schema field or disclaimer to keep silently-fake values reachable) is rejected — but that rejection follows from the harm-assessment + intent-investigation, not from a blanket prohibition. The plan-354 case WAS LABEL-when-DELETE-warranted. Another mock might be KEEP-AS-INTENTIONAL-PLACEHOLDER.
+
+### Codex audit briefs MUST invite design pushback
+
+Every codex iter-N brief MUST include this paragraph verbatim:
+
+> If a recommendation solves a labeling problem instead of a functional problem, flag it as HIGH finding. If a recommendation preserves code without investigating intent (PR history, linked issues, user-requested functionality), flag it as HIGH finding. If a recommendation deletes code without verifying intent, flag it as HIGH finding. Audit the question being asked, not just the answer given.
+
+### Detection signals — patterns to INVESTIGATE (not auto-act on)
+
+When you encounter these in production code, STOP and investigate intent — do not classify on pattern-match alone:
+
+- `# Placeholder` / `# Mock` / `# Stub` / `# TODO: real` comments
+- `random.uniform(...)` / `np.random.seed(42)` in production paths
+- Hardcoded numeric returns matching plausible production values (`ate=0.12`, `confidence=0.85`, `p_value=0.001`)
+- Functions returning structured results with all-default or all-zero fields
+- "Placeholder implementation - actual X would go here" docstrings
+
+**Action**: investigate intent + harm, classify per the 4-way framework above, recommend with reasoning shown.
+
+### Recommendation form
+
+Every recommendation must answer:
+
+> "What is this code trying to do, why does it exist in this shape, is it causing harm, and what should we do about it?"
+
+Skipping any of those is rule-following without reasoning.
+
+### Verify before reporting plan results
+
+When summarizing a plan agent's output, the dispatcher MUST verify the plan's central claims (intent investigation, harm assessment, consumer counts) BEFORE passing the summary up. A codex-ACCEPT plan is not authoritative until claims are independently verified.
+
+---
+
 ## Git & GitHub
 
 ### Corporate Proxy Bypass (REQUIRED)
