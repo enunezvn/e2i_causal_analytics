@@ -46,7 +46,7 @@ dependencies = [
     "scipy>=1.13.0",
 
     # MLOps Stack (7 Tools)
-    "mlflow>=2.16.0",              # Experiment tracking
+    "mlflow>=3.10.0,<3.11.0",      # Experiment tracking — lockstep with requirements.txt (#362)
     "opik>=0.2.0",                 # LLM/Agent observability
     # ``feast`` is NOT installable into this project's venv. Every feast
     # release (0.43..0.63) pins ``tenacity<9``, which is unsatisfiable

@@ -193,25 +193,16 @@ jobs:
             --ignore-vuln GHSA-3936-cmfr-pm3m `# black 25.12.0 -> 26.3.1 major bump; coordinate with ruff/format CI baseline` \
             --ignore-vuln GHSA-w8v5-vhqr-4h9v `# diskcache 5.6.3 has no upstream fix as of 2026-04` \
             --ignore-vuln GHSA-gg5m-55jj-8m5g `# graphiti-core 0.24.3 -> 0.28.2 multi-minor; depends on memory backend test pass` \
-            --ignore-vuln GHSA-xch3-2f9x-wh9f `# mlflow 3.7.0 fix only in 3.8.0rc0 (refuse rc); see mlflow 3.11.x upgrade ticket` \
-            --ignore-vuln GHSA-gq3w-7jj3-x7gr `# mlflow 3.7.0 same — fix only in 3.8.0rc0` \
-            --ignore-vuln GHSA-q2r8-vmq7-fpx2 `# mlflow 3.7.0 same — fix only in 3.8.0rc0` \
-            --ignore-vuln GHSA-fhff-qmm8-h2fp `# mlflow 3.7.0 fix only in 3.9.0rc0` \
-            --ignore-vuln GHSA-g6pg-52vf-843h `# mlflow 3.7.0 has no upstream fix as of 2026-04` \
-            --ignore-vuln GHSA-vhcx-3pq2-4fvc `# mlflow 3.7.0 fix only in 3.9.0rc0` \
-            --ignore-vuln GHSA-r23q-823p-vmf7 `# mlflow 3.7.0 fix in 3.8.1 — bundle with mlflow upgrade ticket` \
-            --ignore-vuln GHSA-7qhf-v65m-g5f3 `# mlflow 3.7.0 has no upstream fix as of 2026-04` \
-            --ignore-vuln GHSA-46r5-x6jq-v8g6 `# mlflow 3.7.0 has no upstream fix as of 2026-04` \
-            --ignore-vuln GHSA-fh64-r2vc-xvhr `# mlflow 3.7.0 fix in 3.11.1 — bundle with mlflow upgrade ticket` \
-            --ignore-vuln GHSA-65h7-c7c4-mghx `# mlflow 3.7.0 (CVE-2026-2393; SSRF in _create_webhook()); fix in 3.9.0 — bundle with mlflow upgrade ticket #362. Auth in front of MLflow mitigates today.` \
-            --ignore-vuln GHSA-42h5-h8qh-vv9v `# mlflow 3.7.0 (CVE-2026-2614; arbitrary file read in _create_model_version()); fix in 3.10.0 — bundle with mlflow upgrade ticket #362. Auth in front of MLflow mitigates today.` \
-            --ignore-vuln GHSA-rvhj-8chj-8v3c `# mlflow 3.7.0 (CVE-2026-0596; command injection via enable_mlserver=True model_uri); fix in 3.9.0 — bundle with mlflow upgrade ticket #362. We don't run model serving with enable_mlserver=True.` \
+            `# === mlflow >=3.10.0,<3.11.0 (post-#362 upgrade): 10 prior 3.7.0 GHSAs resolved by the 3.10.x bump (xch3, gq3w, q2r8, fhff, g6pg, vhcx, r23q, 65h7, 42h5, rvhj) and dropped from this allowlist. The 3 entries below are the post-upgrade residual: 2 advisories whose upstream fix is only in 3.11.0rc0 (refuse rc) + 1 with no upstream fix. ===` \
+            --ignore-vuln GHSA-46r5-x6jq-v8g6 `# mlflow 3.10.1 (PYSEC-2026-94 / CVE-2026-33866; auth bypass on AJAX artifact-download endpoint); fix only in 3.11.0rc0 (refuse rc line). Mitigated — auth in front of MLflow + experiment-level RBAC enforced upstream.` \
+            --ignore-vuln GHSA-fh64-r2vc-xvhr `# mlflow 3.10.1 (PYSEC-2026-93 / CVE-2026-33865; Stored XSS via unsafe YAML MLmodel parsing in web UI); fix only in 3.11.0rc0 (refuse rc line). Mitigated — only operators upload MLmodel artifacts; web UI is not exposed to untrusted users.` \
+            --ignore-vuln GHSA-7qhf-v65m-g5f3 `# mlflow 3.10.1 (CVE-2026-0545; /ajax-api/3.0/jobs/* unauth bypass when basic-auth+job execution enabled); no upstream fix as of 2026-05. Mitigated — MLFLOW_SERVER_ENABLE_JOB_EXECUTION is unset in our deployment, so /jobs/* endpoints are not active.` \
             --ignore-vuln GHSA-95ww-475f-pr4f `# ragas 0.4.1 has no upstream fix as of 2026-04` \
             --ignore-vuln GHSA-69w3-r845-3855 `# transformers 4.57.3 fix only in 5.0.0rc3 (refuse rc); revisit when 5.0 GA lands` \
             --ignore-vuln GHSA-8mp2-v27r-99xp `# mistune 3.1.4 (CVE-2026-33079; LINK_TITLE_RE ReDoS); transitive dep, no upstream fix as of 2026-05` \
             --ignore-vuln GHSA-8g87-j6q8-g93x `# mistune 3.1.4 (CVE-2026-44708; math-plugin XSS via unescaped dollar-sign math markup); transitive dep via mlflow notebook tooling, no upstream fix as of 2026-05. We don't render user-supplied markdown with the math plugin enabled.` \
             --ignore-vuln GHSA-58cw-g322-p94v `# mistune 3.1.4 (CVE-2026-44896; render_figure() concatenates figclass/figwidth into HTML without escaping); transitive dep, no upstream fix as of 2026-05. We don't render user-supplied markdown directives.` \
-            --ignore-vuln GHSA-v87v-83h2-53w7 `# mistune 3.1.4 (CVE-2026-44897; HTMLRenderer.heading() concatenates id attribute into HTML without escaping); transitive dep via mlflow notebook tooling, fix in 3.2.1 — bundle with mlflow upgrade ticket. We don't render user-supplied markdown headings.` \
+            --ignore-vuln GHSA-v87v-83h2-53w7 `# mistune 3.1.4 (CVE-2026-44897; HTMLRenderer.heading() concatenates id attribute into HTML without escaping); transitive dep via mlflow notebook tooling, fix in mistune 3.2.1 — held pending separate mistune-upgrade pass (mlflow 3.10.x does not bump mistune). We don't render user-supplied markdown headings.` \
             `# === 2026-05-20 CVE-drop batch (24 packages, 41 vulns; surfaced after fresh CVE-database refresh). All have stable upstream fixes available; this batch is a HOLD pending the quarterly dep-bump PR (see DEPENDENCY_AUDIT.md). Each entry below carries pkg-current-version + fix-version + mitigation note. ===` \
             --ignore-vuln GHSA-g48c-2wqr-h844 `# langgraph 1.0.5 (CVE-2026-28277; msgpack-encoded checkpoints reconstruct Python objects during deserialization); fix in 1.0.10. Mitigated by Supabase/Redis-only persistence — no untrusted checkpoint stores.` \
             --ignore-vuln GHSA-mhr3-j7m5-c7c9 `# langgraph-checkpoint 3.0.1 (CVE-2026-27794; RCE via cache backend); fix in 4.0.0 (major). Mitigated — no cache backends enabled in our LangGraph configs.` \

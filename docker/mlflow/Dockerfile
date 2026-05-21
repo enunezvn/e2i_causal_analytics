@@ -28,8 +28,11 @@ RUN useradd -m -u 1000 mlflow && \
 WORKDIR /mlflow
 
 # Install MLflow and dependencies
+# Pinned in lockstep with requirements.txt mlflow line (#362). The
+# >=3.10.0,<3.11.0 spec resolves the 10 GHSAs dropped from
+# .github/workflows/security.yml in PR #412.
 RUN pip install --no-cache-dir \
-    mlflow==2.9.2 \
+    'mlflow>=3.10.0,<3.11.0' \
     psycopg2-binary==2.9.9 \
     boto3==1.34.14 \
     google-cloud-storage==2.14.0 \
