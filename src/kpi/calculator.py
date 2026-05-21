@@ -349,20 +349,17 @@ class KPICalculator:
         (e.g., `covered_patients / reference_patients`). The honest place for
         that logic is the per-workstream calculators in `src/kpi/calculators/`
         (e.g., `DataQualityCalculator._calc_source_coverage_patients` runs the
-        actual joined SQL). Those calculators are auto-registered in
-        `__init__` when `auto_register_workstream_calculators=True` (default),
-        so this fallback is hit only when:
+        actual joined SQL). Callers register those via the existing
+        `register_calculator(workstream, instance)` API after auditing the
+        specific calculator (see #439 / F-007-PhaseB for the hardening work).
 
-        - The caller passed `auto_register_workstream_calculators=False`
-          (typically tests).
-        - A new workstream was added without a calculator.
-
-        Rather than guess a generic "first numeric / first numeric" formula
-        that mis-evaluates real KPIs (covered/reference is NOT row[0]/row[0]
-        across two unrelated tables), this method raises
+        This fallback is hit when no workstream calculator is registered for
+        the KPI's workstream. Rather than guess a generic "first numeric /
+        first numeric" formula that mis-evaluates real KPIs (covered/reference
+        is NOT row[0]/row[0] across two unrelated tables), this method raises
         `NotImplementedError` — surfaced via `KPIResult.error` by the caller.
-        Silent fallback to `None` would re-introduce the same placeholder
-        pattern this PR is retiring.
+        Silent fallback to `None` (or any fabricated default like 0.0) would
+        re-introduce the placeholder pattern this PR is retiring.
 
         Args:
             kpi: KPI metadata with table/column info
