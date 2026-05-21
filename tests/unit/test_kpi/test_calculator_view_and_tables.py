@@ -311,3 +311,54 @@ class TestNoPlaceholderInCalculator:
             assert marker not in source, (
                 f"Detected re-introduction of placeholder comment {marker!r}. See #421 / F-007."
             )
+
+
+class TestRpcFailureSurfacesAsKpiError:
+    """Production-path test: RPC/Supabase failures surface as `KPIResult.error`.
+
+    Codex iter-2 HIGH #1: prior `DataQualityCalculator._execute_query` caught
+    all exceptions and returned None, which `_calc_source_coverage_patients`
+    translated into `0.0`. Result: a Supabase RPC failure was indistinguishable
+    from "0% coverage" on the user dashboard.
+
+    After iter-2 fix: `_execute_query` propagates exceptions. The outer
+    `DataQualityCalculator.calculate` catches and emits `KPIResult(error=...)`.
+    This test pins that contract end-to-end through the auto-registered path.
+    """
+
+    def test_rpc_failure_populates_kpi_error_not_silent_zero(self) -> None:
+        """When the Supabase RPC raises, `KPIResult.error` must contain a real
+        message; `value` must be None (NOT silently 0.0).
+        """
+        from src.kpi.calculators.data_quality import DataQualityCalculator
+
+        class _RpcFailingClient:
+            """Stub that raises whenever `.rpc(...)` is called."""
+
+            def rpc(self, fn: str, params: Dict[str, Any]) -> Any:
+                raise RuntimeError("Supabase RPC connection refused")
+
+        calc = DataQualityCalculator(db_client=_RpcFailingClient())
+        kpi = KPIMetadata(
+            id="WS1-DQ-001",
+            name="Source Coverage - Patients",
+            definition="",
+            formula="",
+            calculation_type=CalculationType.DERIVED,
+            workstream=Workstream.WS1_DATA_QUALITY,
+            threshold=KPIThreshold(target=0.85, warning=0.70, critical=0.50),
+        )
+        result: KPIResult = calc.calculate(kpi, context={})
+
+        assert result.value is None, (
+            f"Supabase RPC failure must NOT silently return a fabricated value. "
+            f"Got value={result.value!r}, error={result.error!r}"
+        )
+        assert result.error is not None, (
+            "KPIResult.error must be populated on RPC failure (codex iter-2 HIGH #1)"
+        )
+        assert (
+            "connection refused" in result.error.lower()
+            or "rpc" in result.error.lower()
+            or "supabase" in result.error.lower()
+        ), f"Expected RPC failure mention in error, got: {result.error!r}"
