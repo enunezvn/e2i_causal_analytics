@@ -137,6 +137,18 @@ endpoints:
         assert "mock_model" in config.endpoints
         assert config.endpoints["mock_model"].client_type == "mock"
 
+    @pytest.mark.parametrize("value", ["development", "dev", "test", "testing", "local"])
+    def test_full_allowlist_matrix(self, value):
+        """Codex iter-2 M2: pin full _KNOWN_DEV_ENVIRONMENTS matrix to
+        prevent silent drift in this site relative to agent_import_guard
+        and cate_estimator.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            prod_path = self._write_configs(Path(tmp))
+            with patch.dict("os.environ", {"ENVIRONMENT": value}, clear=False):
+                config = ModelEndpointsConfig.from_yaml(str(prod_path))
+        assert "mock_model" in config.endpoints
+
     def test_dev_yaml_skipped_in_production(self):
         """ENVIRONMENT=production → dev_model_endpoints.yaml NOT merged.
 
@@ -242,3 +254,25 @@ class TestFactoryRequiresExplicitEndpoint:
         factory = ModelClientFactory(config)
         client = await factory.get_client("ok_model")
         assert client is not None
+
+    @pytest.mark.asyncio
+    async def test_get_clients_re_raises_undeclared_value_error(self):
+        """Codex iter-2 M1: get_clients() must NOT swallow ValueError from
+        an undeclared model_id at the batch entry point. Previously the
+        broad except suppressed the fail-loud signal we just installed
+        in get_client().
+        """
+        config = ModelEndpointsConfig(
+            endpoints={
+                "ok_model": ModelEndpointConfig(
+                    model_id="ok_model",
+                    endpoint_url="http://localhost:3000/ok_model",
+                    client_type="mock",
+                    default_prediction=0.5,
+                )
+            },
+        )
+        factory = ModelClientFactory(config)
+        # Asking for one good + one undeclared should still fail loud.
+        with pytest.raises(ValueError):
+            await factory.get_clients(["ok_model", "undeclared_model"])

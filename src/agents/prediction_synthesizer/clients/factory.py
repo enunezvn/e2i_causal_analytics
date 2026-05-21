@@ -359,16 +359,31 @@ class ModelClientFactory:
     async def get_clients(self, model_ids: List[str]) -> Dict[str, ModelClient]:
         """Get or create multiple model clients.
 
+        F-012 (#430, codex iter-2 M1): the prior ``except Exception`` here
+        suppressed undeclared-model ValueErrors raised by ``get_client``,
+        making the new "explicit endpoint required" contract non-fatal
+        at the batch entry point. We now preserve ValueError (the
+        "no endpoint declaration" signal) while continuing to tolerate
+        transient runtime failures from real-client initialization.
+
         Args:
             model_ids: List of model identifiers
 
         Returns:
             Dictionary mapping model_id to client
+
+        Raises:
+            ValueError: If any requested model has no endpoint declaration
+                or is disabled. The caller should fix the planner/config
+                before retrying.
         """
         clients = {}
         for model_id in model_ids:
             try:
                 clients[model_id] = await self.get_client(model_id)
+            except ValueError:
+                # Re-raise undeclared / disabled model errors — never silent.
+                raise
             except Exception as e:
                 logger.warning(f"Failed to create client for {model_id}: {e}")
         return clients

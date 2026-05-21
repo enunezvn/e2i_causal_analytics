@@ -28,6 +28,9 @@ from src.agents.heterogeneous_optimizer.nodes.cate_estimator import (
 from src.agents.heterogeneous_optimizer.nodes.hierarchical_analyzer import (
     HierarchicalAnalyzerNode,
 )
+from src.agents.heterogeneous_optimizer.nodes.uplift_analyzer import (
+    UpliftAnalyzerNode,
+)
 
 
 class TestMockConnectorPolicy:
@@ -59,6 +62,17 @@ class TestMockConnectorPolicy:
     def test_development_default_allows(self):
         env = {"ENVIRONMENT": "development"}
         with patch.dict("os.environ", env, clear=False):
+            import os as _os
+
+            _os.environ.pop("E2I_ALLOW_MOCK_CONNECTOR", None)
+            assert _mock_connector_allowed() is True
+
+    @pytest.mark.parametrize("value", ["development", "dev", "test", "testing", "local"])
+    def test_full_allowlist_matrix(self, value):
+        """Codex iter-2 M2: pin full _KNOWN_DEV_ENVIRONMENTS matrix to
+        prevent silent drift in this site relative to agent_import_guard.
+        """
+        with patch.dict("os.environ", {"ENVIRONMENT": value}, clear=False):
             import os as _os
 
             _os.environ.pop("E2I_ALLOW_MOCK_CONNECTOR", None)
@@ -201,6 +215,59 @@ class TestHierarchicalAnalyzerFailClosed:
     async def test_raises_when_environment_unset(self):
         """Codex iter-1 H1/H3: unset ENVIRONMENT must fail closed here too."""
         node = HierarchicalAnalyzerNode()
+        with patch.dict("os.environ", {}, clear=False):
+            import os as _os
+
+            _os.environ.pop("ENVIRONMENT", None)
+            _os.environ.pop("E2I_ALLOW_MOCK_CONNECTOR", None)
+            with pytest.raises(RuntimeError):
+                await node._get_data(self._state())
+
+
+class TestUpliftAnalyzerFailClosed:
+    """Codex iter-2 H1: UpliftAnalyzerNode previously had the SAME silent
+    `_generate_mock_data` fallback as hierarchical_analyzer. The node is
+    exported in __init__.py and is reachable if wired into the graph or
+    invoked directly. Same env-gate applied.
+    """
+
+    def _state(self):
+        return {
+            "treatment_var": "T",
+            "outcome_var": "Y",
+            "effect_modifiers": ["x1"],
+            "segment_vars": ["region"],
+            "data_source": "synthetic",
+            "filters": None,
+        }
+
+    @pytest.mark.asyncio
+    async def test_raises_when_no_connector_and_mock_forbidden(self):
+        node = UpliftAnalyzerNode()
+        with patch.dict(
+            "os.environ",
+            {"E2I_ALLOW_MOCK_CONNECTOR": "0"},
+            clear=False,
+        ):
+            with pytest.raises(RuntimeError) as exc_info:
+                await node._get_data(self._state())
+            assert "synthetic-data fallback is disabled" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_returns_mock_data_when_explicitly_allowed(self):
+        node = UpliftAnalyzerNode()
+        with patch.dict(
+            "os.environ",
+            {"E2I_ALLOW_MOCK_CONNECTOR": "1"},
+            clear=False,
+        ):
+            df = await node._get_data(self._state())
+        assert isinstance(df, pd.DataFrame)
+        assert len(df) > 0
+
+    @pytest.mark.asyncio
+    async def test_raises_when_environment_unset(self):
+        node = UpliftAnalyzerNode()
         with patch.dict("os.environ", {}, clear=False):
             import os as _os
 
