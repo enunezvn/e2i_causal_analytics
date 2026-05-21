@@ -124,6 +124,37 @@ class TestRunCausalAnalysisFailClosed:
         assert result["results"]["average_treatment_effect"] == 0.184
         assert result["results"]["p_value"] == 0.012
 
+    @pytest.mark.asyncio
+    async def test_orchestrator_partial_success_no_numeric_fabrication(self):
+        """When orchestrator returns response_text but NO causal_results / ate / p_value,
+        results MUST be None — NOT a dict of 0.0 placeholders.
+
+        F-001 iter-1 HIGH-2: previous code fell through to
+        ``{"average_treatment_effect": result.get("ate", 0.0), ...}`` which
+        emitted a fully-typed numeric dict from missing fields. p_value=0.0 is
+        especially misleading (it reads as 'extremely significant').
+        """
+        mock_orch = AsyncMock()
+        # response_text present, but no causal_results, ate, ci, p_value, significant
+        mock_orch.run = AsyncMock(
+            return_value={
+                "response_text": "Qualitative analysis with no numeric estimate available.",
+            }
+        )
+        with patch("src.api.routes.copilotkit._get_orchestrator", return_value=mock_orch):
+            result = await run_causal_analysis(
+                intervention="HCP Engagement",
+                target_kpi="TRx Volume",
+                brand="Remibrutinib",
+            )
+        # Interpretation passes through
+        assert result.get("data_source") == "orchestrator"
+        assert "Qualitative analysis" in result.get("interpretation", "")
+        # Results section MUST be None (no fabricated zero defaults)
+        assert result.get("results") is None, (
+            f"Partial-success response must omit fabricated numerics, got: {result.get('results')}"
+        )
+
 
 # =============================================================================
 # F-001: Dev-mode flag uses pinned-zero placeholder, not random.uniform

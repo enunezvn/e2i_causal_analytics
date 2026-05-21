@@ -1,6 +1,6 @@
 """
 Tests for F-005: /causal/pipeline/{sequential,parallel,validate} must not
-fabricate effects with random.uniform.
+fabricate effects with random.uniform OR synthetic-data-backed real estimators.
 
 Background:
     Prior to F-005, the three endpoints constructed PipelineStageResult with
@@ -8,11 +8,17 @@ Background:
     etc. The endpoints sit behind `require_analyst` auth and were reachable from
     chat-driven flows, surfacing fake-but-plausible "library agreement scores".
 
+    The first iteration of the fix moved the RNG out but left a synthetic
+    seeded dataset feeding the real energy-score estimator. Codex iter-1
+    flagged that as a labeling fabrication (HIGH-1): the response numbers
+    are real estimates of a synthetic dataset, but consumers cannot tell
+    they came from synthetic data. The fix is to fail-closed in the default
+    (non-demo) path entirely.
+
 These tests assert the fail-closed contract:
-    - Default (no `demo_mode=True`) path must NOT use random.uniform — it either
-      delegates to a real estimator or returns HTTPException(503).
-    - Explicit `demo_mode=True` returns an `is_demo: true` envelope with
-      clearly-pinned (zero) values, never RNG.
+    - Default (no `demo_mode=True`) path MUST return HTTPException(503).
+    - Explicit `demo_mode=True` returns clearly-labeled pinned-zero values.
+    - Source-pin tests cover all helpers, not just the top-level handlers.
 
 Reference: GitHub issue #419.
 """
@@ -32,11 +38,13 @@ from src.api.routes import causal as causal_module
 
 class TestNoRandomUniformInCausalPipelineSource:
     """
-    Regression pin: ensure the production pipeline handlers contain no
+    Regression pin: ensure the pipeline handlers AND helpers contain no
     random.uniform() calls in their bodies.
 
-    This static-source check prevents future re-introduction of fabrication
-    primitives in /causal/pipeline/{sequential,parallel,validate}.
+    Coverage extended to helpers (per F-005 iter-1 MEDIUM-1): a future
+    re-introduction of random.uniform inside _build_synthetic_pipeline_data
+    or _demo_stage_placeholder would otherwise bypass the static pins on
+    just the top-level handlers.
     """
 
     def test_execute_sequential_pipeline_has_no_random_uniform(self):
@@ -61,6 +69,30 @@ class TestNoRandomUniformInCausalPipelineSource:
         assert "random.uniform" not in source, (
             "F-005 regression: random.uniform reintroduced in run_cross_validation"
         )
+
+    def test_build_synthetic_pipeline_data_has_no_random_uniform(self):
+        """Synthetic-data helper must use numpy seeded RNG, not random.uniform."""
+        source = inspect.getsource(causal_module._build_synthetic_pipeline_data)
+        assert "random.uniform" not in source, (
+            "F-005 regression: random.uniform reintroduced in _build_synthetic_pipeline_data"
+        )
+
+    def test_demo_stage_placeholder_has_no_random_uniform(self):
+        """Demo placeholder helper must emit pinned zeros, not RNG."""
+        source = inspect.getsource(causal_module._demo_stage_placeholder)
+        assert "random.uniform" not in source, (
+            "F-005 regression: random.uniform reintroduced in _demo_stage_placeholder"
+        )
+
+    def test_run_sequential_pipeline_endpoint_has_no_random_uniform(self):
+        """Sequential endpoint handler must not contain random.uniform."""
+        source = inspect.getsource(causal_module.run_sequential_pipeline)
+        assert "random.uniform" not in source
+
+    def test_run_parallel_pipeline_endpoint_has_no_random_uniform(self):
+        """Parallel endpoint handler must not contain random.uniform."""
+        source = inspect.getsource(causal_module.run_parallel_pipeline)
+        assert "random.uniform" not in source
 
 
 # =============================================================================
@@ -106,23 +138,17 @@ def cross_validation_request():
     }
 
 
-class TestSequentialPipelineDefaultPathNoFabrication:
-    """The default-path (no demo_mode) must NOT silently fabricate effects."""
+class TestSequentialPipelineDefaultPath503:
+    """Default-path /pipeline/sequential MUST fail-closed with 503."""
 
-    def test_sequential_default_path_emits_no_fabricated_pharma_range_effects(
-        self, sequential_pipeline_request
-    ):
-        """
-        With no demo_mode flag, the endpoint must either:
-            - Return a real estimator output (effect from real estimator), OR
-            - Return HTTPException(503)/error envelope.
+    def test_sequential_default_path_returns_503(self, sequential_pipeline_request):
+        """No demo_mode → 503.
 
-        It must NOT return arbitrary RNG values in the pharma uplift range
-        (0.10-0.20 centered at 0.15) with plausible CI/p_value shapes.
-
-        We accept any successful response that includes is_demo=False OR
-        non-200 status, AND assert that the effects (if returned) do not
-        match the legacy RNG signature.
+        The structured error response goes through src.api.main's global handler
+        which wraps HTTPException(503) in DependencyError. The original detail
+        is only surfaced in debug mode via `original_error`. The structural
+        guarantee tested here is the 503 status — the detail is verified by
+        the source-pin test on the _NO_REAL_DATA_BACKEND_DETAIL constant.
         """
         from fastapi.testclient import TestClient
 
@@ -133,24 +159,49 @@ class TestSequentialPipelineDefaultPathNoFabrication:
             "/api/causal/pipeline/sequential",
             json=sequential_pipeline_request,
         )
-        # Acceptable shapes: 200 with real estimator results, OR 503/500 error
-        assert response.status_code in (200, 500, 503), (
-            f"Unexpected status: {response.status_code}, body={response.text[:500]}"
+        assert response.status_code == 503, (
+            f"Default path must fail-closed with 503, got {response.status_code}: "
+            f"{response.text[:500]}"
         )
-        if response.status_code == 200:
-            data = response.json()
-            # Default-path success must label its provenance honestly
-            # Either is_demo absent/false OR labeled as real estimator output
-            # The pin: effects must NOT be `0.15 + uniform(-0.05, 0.05)` shape.
-            # We can't deterministically check randomness post-hoc, but we CAN
-            # require that the handler claimed real-mode (is_demo absent or False).
-            assert data.get("is_demo") is not True, (
-                "Default-path response claims is_demo=true — endpoint silently "
-                "returned fabricated values; require explicit demo_mode=true"
-            )
 
-    def test_sequential_with_demo_mode_returns_is_demo_envelope(self, sequential_pipeline_request):
-        """When `demo_mode=true` request param is set, response must label is_demo=true."""
+    def test_no_real_data_backend_constant_explains_intent(self):
+        """Source-level pin: the 503 detail constant must explicitly explain why."""
+        from src.api.routes.causal import _NO_REAL_DATA_BACKEND_DETAIL
+
+        detail_lower = _NO_REAL_DATA_BACKEND_DETAIL.lower()
+        assert "real data" in detail_lower, (
+            f"Constant must mention 'real data', got: {_NO_REAL_DATA_BACKEND_DETAIL}"
+        )
+        assert "demo_mode" in detail_lower, (
+            f"Constant must mention 'demo_mode' (escape hatch), got: {_NO_REAL_DATA_BACKEND_DETAIL}"
+        )
+
+    def test_sequential_async_default_path_still_503(self, sequential_pipeline_request):
+        """async_mode=true must also fail-closed when demo_mode is absent.
+
+        The endpoint creates a pending response then schedules background work
+        — but the background work itself will fail-closed. The endpoint should
+        either reject up-front OR schedule and let the cached result reflect
+        the failure. We accept both shapes (200 pending OR 503 up-front).
+        """
+        from fastapi.testclient import TestClient
+
+        from src.api.main import app
+
+        client = TestClient(app)
+        response = client.post(
+            "/api/causal/pipeline/sequential?async_mode=true",
+            json=sequential_pipeline_request,
+        )
+        # Acceptable shapes: 200 pending OR 503 up-front
+        assert response.status_code in (200, 503)
+
+
+class TestSequentialPipelineDemoMode:
+    """With demo_mode=true, response must label is_demo=true at every level."""
+
+    def test_sequential_demo_mode_returns_pinned_zeros(self, sequential_pipeline_request):
+        """demo_mode=true → 200 with stage_results[*].additional_results.is_demo=true."""
         from fastapi.testclient import TestClient
 
         from src.api.main import app
@@ -160,25 +211,31 @@ class TestSequentialPipelineDefaultPathNoFabrication:
             "/api/causal/pipeline/sequential?demo_mode=true",
             json=sequential_pipeline_request,
         )
-        # Demo mode is OPTIONAL — accept either a 200 with is_demo or a
-        # 400/422 if the schema doesn't support it (then we depend purely
-        # on the source-pin tests above). The structural requirement is:
-        # if demo_mode is plumbed at all, it must label the response.
-        if response.status_code == 200:
-            data = response.json()
-            # The handler MAY accept demo_mode and label, or MAY return real
-            # results regardless. Either is acceptable; the prohibited shape
-            # is "response without is_demo and yet using random.uniform".
-            assert "pipeline_id" in data
+        assert response.status_code == 200, (
+            f"demo_mode=true must succeed, got {response.status_code}: {response.text[:300]}"
+        )
+        data = response.json()
+        assert "pipeline_id" in data
+        # Every stage must be labeled is_demo=true
+        for stage in data.get("stage_results", []):
+            assert stage.get("additional_results", {}).get("is_demo") is True, (
+                f"Stage {stage} missing is_demo=true label"
+            )
+            assert stage.get("effect_estimate") == 0.0, (
+                "Demo stage must have pinned-zero effect_estimate"
+            )
+        # Warning must explicitly call out demo_mode
+        warnings = data.get("warnings", [])
+        assert any("demo_mode" in w.lower() or "is_demo" in w.lower() for w in warnings), (
+            f"Demo response must include demo_mode warning, got: {warnings}"
+        )
 
 
-class TestParallelPipelineDefaultPathNoFabrication:
-    """The default-path parallel pipeline must NOT silently fabricate effects."""
+class TestParallelPipelineDefaultPath503:
+    """Default-path /pipeline/parallel MUST fail-closed with 503."""
 
-    def test_parallel_default_path_emits_no_fabricated_pharma_range_effects(
-        self, parallel_pipeline_request
-    ):
-        """Default-path parallel must either return real results or error."""
+    def test_parallel_default_path_returns_503(self, parallel_pipeline_request):
+        """No demo_mode → 503."""
         from fastapi.testclient import TestClient
 
         from src.api.main import app
@@ -188,22 +245,43 @@ class TestParallelPipelineDefaultPathNoFabrication:
             "/api/causal/pipeline/parallel",
             json=parallel_pipeline_request,
         )
-        assert response.status_code in (200, 500, 503)
-        if response.status_code == 200:
-            data = response.json()
-            assert data.get("is_demo") is not True, (
-                "Default-path response claims is_demo=true — endpoint silently "
-                "returned fabricated values; require explicit demo_mode=true"
+        assert response.status_code == 503, (
+            f"Default path must fail-closed with 503, got {response.status_code}"
+        )
+
+
+class TestParallelPipelineDemoMode:
+    """With demo_mode=true, parallel pipeline must label is_demo=true."""
+
+    def test_parallel_demo_mode_returns_is_demo(self, parallel_pipeline_request):
+        """demo_mode=true → 200 with library_results[*].is_demo=true."""
+        from fastapi.testclient import TestClient
+
+        from src.api.main import app
+
+        client = TestClient(app)
+        response = client.post(
+            "/api/causal/pipeline/parallel?demo_mode=true",
+            json=parallel_pipeline_request,
+        )
+        assert response.status_code == 200
+        data = response.json()
+        # Every library result must be labeled is_demo=true
+        for lib_name, lib_result in data.get("library_results", {}).items():
+            assert lib_result.get("is_demo") is True, (
+                f"Library {lib_name} missing is_demo=true label: {lib_result}"
             )
+            assert lib_result.get("effect_estimate") == 0.0
+        # Warning must explicitly call out demo_mode
+        warnings = data.get("warnings", [])
+        assert any("demo_mode" in w.lower() or "is_demo" in w.lower() for w in warnings)
 
 
-class TestCrossValidationDefaultPathNoFabrication:
-    """The default-path /validate must NOT silently fabricate effects."""
+class TestCrossValidationDefaultPath503:
+    """Default-path /validate MUST fail-closed with 503."""
 
-    def test_cross_validation_default_path_emits_no_fabricated_effects(
-        self, cross_validation_request
-    ):
-        """Default-path cross-validation must either return real results or error."""
+    def test_cross_validation_default_path_returns_503(self, cross_validation_request):
+        """No demo_mode → 503."""
         from fastapi.testclient import TestClient
 
         from src.api.main import app
@@ -213,10 +291,41 @@ class TestCrossValidationDefaultPathNoFabrication:
             "/api/causal/validate",
             json=cross_validation_request,
         )
-        assert response.status_code in (200, 500, 503)
-        if response.status_code == 200:
-            data = response.json()
-            assert data.get("is_demo") is not True, (
-                "Default-path response claims is_demo=true — endpoint silently "
-                "returned fabricated values; require explicit demo_mode=true"
-            )
+        assert response.status_code == 503, (
+            f"Default path must fail-closed with 503, got {response.status_code}"
+        )
+
+
+class TestCrossValidationDemoMode:
+    """With demo_mode=true, /validate must label is_demo=true in recommendations.
+
+    CrossValidationResponse has no is_demo field — codex iter-1 HIGH-3
+    requires the demo label to be machine-readable. We encode it as the
+    first item in the recommendations array with the literal token
+    "is_demo=true:".
+    """
+
+    def test_cross_validation_demo_mode_labels_is_demo_in_recommendations(
+        self, cross_validation_request
+    ):
+        """demo_mode=true → 200 with first recommendation containing 'is_demo=true'."""
+        from fastapi.testclient import TestClient
+
+        from src.api.main import app
+
+        client = TestClient(app)
+        response = client.post(
+            "/api/causal/validate?demo_mode=true",
+            json=cross_validation_request,
+        )
+        assert response.status_code == 200
+        data = response.json()
+        recommendations = data.get("recommendations", [])
+        assert recommendations, "Demo response must include recommendations"
+        # The first recommendation must contain the is_demo=true machine-readable label
+        assert "is_demo=true" in recommendations[0].lower(), (
+            f"First recommendation must include 'is_demo=true' label, got: {recommendations}"
+        )
+        # Effect values must be pinned zeros
+        assert data["primary_effect"] == 0.0
+        assert data["validation_effect"] == 0.0

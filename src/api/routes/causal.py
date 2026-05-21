@@ -635,6 +635,14 @@ async def _run_sequential_pipeline_task(
         ).model_dump()
 
 
+_NO_REAL_DATA_BACKEND_DETAIL = (
+    "Causal pipeline endpoints have no real data backend wired. "
+    "There is no production data source returning treatment/outcome columns by name. "
+    "Pass demo_mode=true to get a clearly-labeled pinned-zero placeholder for UI demos, "
+    "or wire real data and re-issue the request."
+)
+
+
 def _build_synthetic_pipeline_data(
     treatment_var: str,
     outcome_var: str,
@@ -642,14 +650,17 @@ def _build_synthetic_pipeline_data(
     n: int = 500,
     seed: int = 42,
 ):
-    """Build a seeded synthetic dataset for pipeline endpoints.
+    """Build a seeded synthetic dataset for demo_mode=True pipeline flows.
 
     Returns (treatment ndarray, outcome ndarray, covariates DataFrame).
     Uses the same seed/shape pattern as ``_execute_hierarchical_analysis``
     so behavior is consistent across the causal API surface. The dataset is
-    deterministic (seeded) — it is NOT a substitute for real data, but it
-    enables a real estimator path to run end-to-end without fabricating the
-    effect.
+    deterministic (seeded) — it is NOT a substitute for real data and is
+    intentionally NOT used in the default (non-demo) production code path.
+
+    Callers MUST surface ``is_demo=true`` in any response that draws on this
+    function so consumers cannot mistake synthetic-data outputs for real
+    estimates. See F-005 audit iter-1 HIGH-1.
     """
     import numpy as np
     import pandas as pd
@@ -662,64 +673,13 @@ def _build_synthetic_pipeline_data(
     cov_cols = covariates if covariates else ["x_default"]
     X = pd.DataFrame({col: rng.standard_normal(n).astype(np.float64) for col in cov_cols})
 
-    # Inject a true heterogeneous treatment effect tied to the first covariate.
+    # Inject a known heterogeneous treatment effect tied to the first covariate.
+    # This is FOR DEMO ONLY (demo_mode=True path); the production code path
+    # must never reach this function.
     true_effect = 5.0 + X[cov_cols[0]].values * 3.0
     outcome[treatment == 1] += true_effect[treatment == 1]
 
     return treatment, outcome, X
-
-
-def _estimate_via_energy_score(
-    treatment_var: str,
-    outcome_var: str,
-    covariates: List[str],
-    timeout_seconds: int = 60,
-):
-    """Call the real energy-score estimator selector.
-
-    Raises HTTPException(503) if estimator libraries are unavailable or all
-    estimators failed. This is the fail-closed entry point used by the
-    pipeline endpoints (F-005 fix).
-
-    Returns the selected ``EstimatorResult`` along with the synthetic data
-    sample size so the caller can populate response envelopes.
-    """
-    try:
-        from src.causal_engine.energy_score import select_best_estimator
-    except ImportError as e:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Causal estimator library is unavailable; cannot execute pipeline. "
-                f"Original error: {e}"
-            ),
-        ) from e
-
-    treatment, outcome, X = _build_synthetic_pipeline_data(
-        treatment_var=treatment_var,
-        outcome_var=outcome_var,
-        covariates=covariates,
-    )
-
-    try:
-        selection = select_best_estimator(treatment=treatment, outcome=outcome, covariates=X)
-    except Exception as e:
-        # Real estimators raised — surface as 503 (service unavailable) rather
-        # than fabricate a result.
-        logger.error(f"Energy-score estimator selection failed: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=503,
-            detail=f"Causal estimator failed during selection: {type(e).__name__}: {e}",
-        ) from e
-
-    if not selection.selected.success:
-        # All estimators reported failure — fail closed.
-        msg = (
-            selection.selected.error_message or "All estimators failed; no causal effect available."
-        )
-        raise HTTPException(status_code=503, detail=msg)
-
-    return selection, len(treatment)
 
 
 def _demo_stage_placeholder(
@@ -760,136 +720,47 @@ async def _execute_sequential_pipeline(
 ) -> SequentialPipelineResponse:
     """Execute sequential pipeline stages.
 
-    Default path runs real energy-score estimator selection per stage. With
-    ``demo_mode=True``, returns pinned-zero placeholder stage results (clearly
-    labeled with ``is_demo=true``) for UI demonstrations.
+    Default path fails closed with HTTPException(503): there is no real data
+    backend wired into the multi-library pipeline endpoints, so any "real"
+    response would have to draw on synthetic data, which is a labeling
+    fabrication. With ``demo_mode=True``, returns pinned-zero placeholder
+    stage results clearly labeled with ``is_demo=true`` for UI demonstrations.
+
+    See F-005 audit iter-1 HIGH-1: the prior code fell through to a synthetic
+    dataset + energy-score estimator in the default path, which preserved the
+    functional fabrication problem.
     """
+    if not demo_mode:
+        raise HTTPException(status_code=503, detail=_NO_REAL_DATA_BACKEND_DETAIL)
+
     start_time = time.time()
     stage_results: List[PipelineStageResult] = []
     effect_estimates: List[float] = []
-    warnings: List[str] = []
-
-    # Real path: compute once via the energy-score selector, then attribute
-    # the same selected effect to each stage. This avoids running expensive
-    # estimators per-library while still emitting a real estimate (and never
-    # fabricating a per-stage RNG effect).
-    selection = None
-    n_samples = 0
-    if not demo_mode:
-        try:
-            selection, n_samples = await asyncio.wait_for(
-                asyncio.to_thread(
-                    _estimate_via_energy_score,
-                    request.treatment_var,
-                    request.outcome_var,
-                    request.covariates,
-                ),
-                timeout=max(
-                    30,
-                    sum(s.timeout_seconds for s in request.stages),
-                ),
-            )
-        except HTTPException:
-            raise
-        except asyncio.TimeoutError as e:
-            raise HTTPException(
-                status_code=408,
-                detail="Sequential pipeline timed out during estimator selection",
-            ) from e
+    warnings: List[str] = [
+        "demo_mode=true: results are pinned-zero placeholders with is_demo=true; "
+        "do NOT use for decisions.",
+    ]
 
     for i, stage_config in enumerate(request.stages, 1):
         stage_start = time.time()
-
-        if demo_mode:
-            stage_result = _demo_stage_placeholder(
-                stage_number=i,
-                library=stage_config.library.value,
-                estimator=stage_config.estimator,
-                latency_ms=int((time.time() - stage_start) * 1000),
-            )
-            effect_estimates.append(0.0)
-            stage_results.append(stage_result)
-            continue
-
-        # Real path: each stage reflects the selected real estimator output.
-        # (selection guaranteed non-None here by the early-raise above.)
-        assert selection is not None
-        selected = selection.selected
-        ate = float(selected.ate) if selected.ate is not None else 0.0
-        ci_lower = float(selected.ate_ci_lower) if selected.ate_ci_lower is not None else ate
-        ci_upper = float(selected.ate_ci_upper) if selected.ate_ci_upper is not None else ate
-
-        stage_result = PipelineStageResult(
+        stage_result = _demo_stage_placeholder(
             stage_number=i,
             library=stage_config.library.value,
-            estimator=stage_config.estimator or selected.estimator_type.value,
-            status=AnalysisStatus.COMPLETED,
-            effect_estimate=ate,
-            ci_lower=ci_lower,
-            ci_upper=ci_upper,
-            # p_value is not provided by the energy-score selector. Surface
-            # None rather than fabricate one.
-            p_value=None,
-            additional_results={
-                "n_samples": n_samples,
-                "method": stage_config.estimator or selected.estimator_type.value,
-                "energy_score": (
-                    float(selected.energy_score)
-                    if selected.energy_score is not None and selected.energy_score != float("inf")
-                    else None
-                ),
-                "selection_reason": selection.selection_reason,
-            },
+            estimator=stage_config.estimator,
             latency_ms=int((time.time() - stage_start) * 1000),
-            error=None,
         )
-        effect_estimates.append(ate)
-
+        effect_estimates.append(0.0)
         stage_results.append(stage_result)
 
-    # Compute consensus
-    consensus_effect = None
-    consensus_ci_lower = None
-    consensus_ci_upper = None
-    agreement_score = None
-    variance = None
-
-    if effect_estimates:
-        import statistics
-
-        consensus_effect = statistics.mean(effect_estimates)
-        if len(effect_estimates) > 1:
-            variance = statistics.variance(effect_estimates)
-            std = statistics.stdev(effect_estimates)
-            consensus_ci_lower = consensus_effect - 1.96 * std
-            consensus_ci_upper = consensus_effect + 1.96 * std
-            # Agreement score based on coefficient of variation
-            cv = std / abs(consensus_effect) if consensus_effect != 0 else 1
-            agreement_score = max(0, 1 - cv)
-        else:
-            # Single-stage case: prefer the selected estimator's CI when
-            # available rather than a hard-coded +/-0.05 placeholder.
-            if not demo_mode and selection is not None:
-                sel = selection.selected
-                consensus_ci_lower = (
-                    float(sel.ate_ci_lower) if sel.ate_ci_lower is not None else consensus_effect
-                )
-                consensus_ci_upper = (
-                    float(sel.ate_ci_upper) if sel.ate_ci_upper is not None else consensus_effect
-                )
-            else:
-                consensus_ci_lower = consensus_effect
-                consensus_ci_upper = consensus_effect
-            agreement_score = 1.0
+    # Demo consensus is zero by construction (all stages return 0.0).
+    consensus_effect = 0.0
+    consensus_ci_lower = 0.0
+    consensus_ci_upper = 0.0
+    agreement_score = 1.0
+    variance = 0.0
 
     total_latency_ms = int((time.time() - start_time) * 1000)
     stages_completed = len([r for r in stage_results if r.status == AnalysisStatus.COMPLETED])
-
-    if demo_mode:
-        warnings.append(
-            "demo_mode=true: results are pinned-zero placeholders with is_demo=true; "
-            "do NOT use for decisions."
-        )
 
     return SequentialPipelineResponse(
         pipeline_id=pipeline_id,
@@ -952,6 +823,10 @@ async def run_parallel_pipeline(
             "demo_mode": demo_mode,
         },
     )
+
+    if not demo_mode:
+        # Default path has no real data backend; fail-closed (F-005 iter-1 HIGH-1).
+        raise HTTPException(status_code=503, detail=_NO_REAL_DATA_BACKEND_DETAIL)
 
     try:
         # Run all libraries in parallel
@@ -1050,52 +925,26 @@ async def _run_library_analysis(
 ) -> Dict[str, Any]:
     """Run analysis for a single library.
 
-    Default path delegates to the real energy-score estimator selector.
-    With ``demo_mode=True`` returns a pinned-zero placeholder labeled
-    ``is_demo=true``. Never returns RNG values (F-005 fix).
-    """
-    if demo_mode:
-        return {
-            "library": library.value,
-            "estimator": request.estimators.get(library.value) if request.estimators else None,
-            "effect_estimate": 0.0,
-            "ci_lower": 0.0,
-            "ci_upper": 0.0,
-            "p_value": 1.0,
-            "n_samples": 0,
-            "is_demo": True,
-        }
+    Default path fails closed with HTTPException(503): there is no real data
+    backend wired into the parallel pipeline. With ``demo_mode=True`` returns
+    a pinned-zero placeholder labeled ``is_demo=true``. Never returns RNG
+    values (F-005 fix).
 
-    selection, n_samples = await asyncio.to_thread(
-        _estimate_via_energy_score,
-        request.treatment_var,
-        request.outcome_var,
-        request.covariates,
-    )
-    selected = selection.selected
-    ate = float(selected.ate) if selected.ate is not None else 0.0
-    ci_lower = float(selected.ate_ci_lower) if selected.ate_ci_lower is not None else ate
-    ci_upper = float(selected.ate_ci_upper) if selected.ate_ci_upper is not None else ate
+    See F-005 audit iter-1 HIGH-1: synthetic-data + real-estimator in the
+    default path is a labeling fabrication, not a functional fix.
+    """
+    if not demo_mode:
+        raise HTTPException(status_code=503, detail=_NO_REAL_DATA_BACKEND_DETAIL)
 
     return {
         "library": library.value,
-        "estimator": (
-            request.estimators.get(library.value)
-            if request.estimators
-            else selected.estimator_type.value
-        ),
-        "effect_estimate": ate,
-        "ci_lower": ci_lower,
-        "ci_upper": ci_upper,
-        # p_value is not produced by the energy-score selector — surface None.
-        "p_value": None,
-        "n_samples": n_samples,
-        "energy_score": (
-            float(selected.energy_score)
-            if selected.energy_score is not None and selected.energy_score != float("inf")
-            else None
-        ),
-        "selection_reason": selection.selection_reason,
+        "estimator": request.estimators.get(library.value) if request.estimators else None,
+        "effect_estimate": 0.0,
+        "ci_lower": 0.0,
+        "ci_upper": 0.0,
+        "p_value": 1.0,
+        "n_samples": 0,
+        "is_demo": True,
     }
 
 
@@ -1171,103 +1020,52 @@ async def run_cross_validation(
         },
     )
 
-    try:
-        if demo_mode:
-            # Pinned-zero placeholder labeled is_demo=true.
-            primary_effect = 0.0
-            validation_effect = 0.0
-            primary_ci = (0.0, 0.0)
-            validation_ci = (0.0, 0.0)
-        else:
-            # Real path: run the energy-score estimator once. We surface the
-            # same selected estimator as both primary and validation effects
-            # (matching estimates by construction), so any cross-library
-            # disagreement must come from actually running multiple
-            # estimators — which is a real future enhancement, not a fake one.
-            # If estimators are unavailable, _estimate_via_energy_score raises
-            # HTTPException(503) which propagates to the client.
-            selection, _ = await asyncio.to_thread(
-                _estimate_via_energy_score,
-                request.treatment_var,
-                request.outcome_var,
-                request.covariates,
-            )
-            selected = selection.selected
-            ate = float(selected.ate) if selected.ate is not None else 0.0
-            ci_lower = float(selected.ate_ci_lower) if selected.ate_ci_lower is not None else ate
-            ci_upper = float(selected.ate_ci_upper) if selected.ate_ci_upper is not None else ate
-            primary_effect = ate
-            validation_effect = ate
-            primary_ci = (ci_lower, ci_upper)
-            validation_ci = (ci_lower, ci_upper)
+    if not demo_mode:
+        # Default path has no real data backend; fail-closed (F-005 iter-1 HIGH-1).
+        raise HTTPException(status_code=503, detail=_NO_REAL_DATA_BACKEND_DETAIL)
 
-        # Compute agreement metrics on the (possibly-equal) effects.
-        effect_difference = abs(primary_effect - validation_effect)
-        relative_difference = (
-            effect_difference / abs(primary_effect) if primary_effect != 0 else 0.0
-        )
+    # demo_mode=True: pinned-zero placeholder. Agreement is trivially perfect
+    # because both libraries return the same zero, which we label explicitly.
+    primary_effect = 0.0
+    validation_effect = 0.0
+    primary_ci = (0.0, 0.0)
+    validation_ci = (0.0, 0.0)
+    effect_difference = 0.0
+    relative_difference = 0.0
+    ci_overlap_ratio = 1.0
+    agreement_score = 1.0
+    validation_passed = agreement_score >= request.agreement_threshold
 
-        # CI overlap
-        overlap_start = max(primary_ci[0], validation_ci[0])
-        overlap_end = min(primary_ci[1], validation_ci[1])
-        if overlap_start < overlap_end:
-            overlap_width = overlap_end - overlap_start
-            total_width = max(primary_ci[1], validation_ci[1]) - min(
-                primary_ci[0], validation_ci[0]
-            )
-            ci_overlap_ratio = overlap_width / total_width if total_width > 0 else 1.0
-        elif primary_ci == validation_ci:
-            ci_overlap_ratio = 1.0
-        else:
-            ci_overlap_ratio = 0.0
+    latency_ms = int((time.time() - start_time) * 1000)
 
-        # Overall agreement score
-        agreement_score = (1 - relative_difference) * ci_overlap_ratio
-        validation_passed = agreement_score >= request.agreement_threshold
+    # Surface the is_demo=true label as the FIRST recommendation so consumers
+    # cannot miss it (CrossValidationResponse schema has no is_demo field, so
+    # we encode the label in recommendations per F-005 iter-1 HIGH-3).
+    recommendations: List[str] = [
+        "is_demo=true: results are pinned-zero placeholders; do NOT use for decisions.",
+    ]
 
-        latency_ms = int((time.time() - start_time) * 1000)
+    response = CrossValidationResponse(
+        validation_id=validation_id,
+        primary_library=request.primary_library.value,
+        validation_library=request.validation_library.value,
+        primary_effect=primary_effect,
+        primary_ci=list(primary_ci),
+        validation_effect=validation_effect,
+        validation_ci=list(validation_ci),
+        effect_difference=effect_difference,
+        relative_difference=relative_difference,
+        ci_overlap_ratio=ci_overlap_ratio,
+        agreement_score=agreement_score,
+        validation_passed=validation_passed,
+        agreement_threshold=request.agreement_threshold,
+        latency_ms=latency_ms,
+        created_at=datetime.now(timezone.utc),
+        recommendations=recommendations,
+    )
 
-        recommendations: List[str] = []
-        if demo_mode:
-            recommendations.append(
-                "demo_mode=true: results are pinned-zero placeholders; do NOT use for decisions."
-            )
-        elif not validation_passed:
-            recommendations.append(
-                "Consider investigating sources of disagreement between libraries"
-            )
-            if ci_overlap_ratio < 0.5:
-                recommendations.append("CI overlap is low - check model specifications")
-        else:
-            recommendations.append("Results validated successfully across libraries")
-
-        response = CrossValidationResponse(
-            validation_id=validation_id,
-            primary_library=request.primary_library.value,
-            validation_library=request.validation_library.value,
-            primary_effect=primary_effect,
-            primary_ci=list(primary_ci),
-            validation_effect=validation_effect,
-            validation_ci=list(validation_ci),
-            effect_difference=effect_difference,
-            relative_difference=relative_difference,
-            ci_overlap_ratio=ci_overlap_ratio,
-            agreement_score=agreement_score,
-            validation_passed=validation_passed,
-            agreement_threshold=request.agreement_threshold,
-            latency_ms=latency_ms,
-            created_at=datetime.now(timezone.utc),
-            recommendations=recommendations,
-        )
-
-        _validation_cache[validation_id] = response
-        return response
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Cross-validation failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+    _validation_cache[validation_id] = response
+    return response
 
 
 # =============================================================================

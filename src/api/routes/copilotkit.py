@@ -1441,19 +1441,31 @@ async def run_causal_analysis(
                 }
             )
 
-            # Extract causal results if available
+            # Extract causal results if available. Three cases:
+            #   1) Orchestrator returned explicit causal_results dict → pass through.
+            #   2) Orchestrator returned ate/ci/p_value top-level → build dict from real fields.
+            #   3) Orchestrator returned response_text only → return interpretation
+            #      with results=None (F-001 iter-1 HIGH-2: no fabricated zero defaults).
             if result and result.get("response_text"):
+                causal_results = result.get("causal_results")
+                if causal_results is None:
+                    # Look for top-level real fields; only build dict if at
+                    # least one numeric field is actually present.
+                    has_real_fields = any(
+                        result.get(k) is not None for k in ("ate", "ci", "p_value", "significant")
+                    )
+                    if has_real_fields:
+                        causal_results = {
+                            "average_treatment_effect": result.get("ate"),
+                            "confidence_interval": result.get("ci"),
+                            "p_value": result.get("p_value"),
+                            "statistical_significance": result.get("significant"),
+                        }
+                    # else: causal_results stays None — interpretation-only response.
+
                 return {
                     **common_context,
-                    "results": result.get(
-                        "causal_results",
-                        {
-                            "average_treatment_effect": result.get("ate", 0.0),
-                            "confidence_interval": result.get("ci", [0.0, 0.0]),
-                            "p_value": result.get("p_value", 0.0),
-                            "statistical_significance": result.get("significant", False),
-                        },
-                    ),
+                    "results": causal_results,
                     "interpretation": result.get("response_text", ""),
                     "data_source": "orchestrator",
                     "agents_used": result.get("agents_dispatched", []),
