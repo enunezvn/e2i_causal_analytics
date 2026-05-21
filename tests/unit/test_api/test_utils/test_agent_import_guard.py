@@ -73,16 +73,16 @@ class TestShouldFailClosedOnImportError:
     def test_misspelled_environment_fails_closed(self):
         """Codex iter-1 H1: misspelled ENVIRONMENT fails closed."""
         with patch.dict(
-            "os.environ", {"ENVIRONMENT": "prodution"}, clear=False  # typo
+            "os.environ",
+            {"ENVIRONMENT": "prodution"},
+            clear=False,  # typo
         ):
             import os as _os
 
             _os.environ.pop("E2I_REQUIRE_AGENT_IMPORT", None)
             assert should_fail_closed_on_import_error() is True
 
-    @pytest.mark.parametrize(
-        "value", ["development", "dev", "test", "testing", "local"]
-    )
+    @pytest.mark.parametrize("value", ["development", "dev", "test", "testing", "local"])
     def test_known_dev_environments_allow_mock(self, value):
         """Only explicit known dev/test values allow mock-fallback."""
         with patch.dict("os.environ", {"ENVIRONMENT": value}, clear=False):
