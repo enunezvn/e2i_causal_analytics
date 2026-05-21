@@ -358,6 +358,10 @@ async def run_optimization(
         result.optimization_id = optimization_id
         _optimizations_store[optimization_id] = result
         return result
+    except HTTPException:
+        # F-010-backend (#429, codex iter-1 M1): preserve 503 from
+        # agent-import guard.
+        raise
     except Exception as e:
         logger.error(f"Optimization failed: {e}")
         response.status = OptimizationStatus.FAILED

@@ -19,6 +19,9 @@ from ..state import CATEResult, HeterogeneousOptimizerState
 logger = logging.getLogger(__name__)
 
 
+_KNOWN_DEV_ENVIRONMENTS = {"development", "dev", "test", "testing", "local"}
+
+
 def _mock_connector_allowed() -> bool:
     """Return True iff MockDataConnector fallback is permitted.
 
@@ -27,19 +30,22 @@ def _mock_connector_allowed() -> bool:
     real connector failed to initialize. Downstream consumers had no signal
     that they were receiving synthetic ``np.random.seed(42)`` data.
 
-    Policy:
+    Policy (closed-by-default — codex iter-1 H1 fix):
 
     * ``E2I_ALLOW_MOCK_CONNECTOR=1`` (truthy) → mock allowed.
     * ``E2I_ALLOW_MOCK_CONNECTOR=0`` (falsy) → mock forbidden.
-    * Unset → fall back on ``ENVIRONMENT``: production forbids mock,
-      anything else allows mock (offline-dev preserved).
+    * Unset → only an EXPLICIT dev ``ENVIRONMENT`` value
+      (``development``/``dev``/``test``/``testing``/``local``) permits the
+      mock connector. Unset/misspelled/``production``/anything else =>
+      raise RuntimeError. Missing metadata MUST NOT enable fabricated data.
     """
     raw = os.environ.get("E2I_ALLOW_MOCK_CONNECTOR", "").strip().lower()
     if raw in {"1", "true", "yes", "on"}:
         return True
     if raw in {"0", "false", "no", "off"}:
         return False
-    return os.environ.get("ENVIRONMENT", "development").strip().lower() != "production"
+    env = os.environ.get("ENVIRONMENT", "").strip().lower()
+    return env in _KNOWN_DEV_ENVIRONMENTS
 
 
 def _get_default_data_connector():

@@ -355,6 +355,10 @@ async def run_health_check(
 
         return result
 
+    except HTTPException:
+        # F-010-backend (#429, codex iter-1 M1): preserve 503 from
+        # agent-import guard.
+        raise
     except Exception as e:
         logger.error(f"Health check failed: {e}")
         raise HTTPException(status_code=500, detail=f"Health check failed: {e}")

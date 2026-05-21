@@ -372,6 +372,10 @@ async def run_segment_analysis(
         result.analysis_id = analysis_id
         _analyses_store[analysis_id] = result
         return result
+    except HTTPException:
+        # F-010-backend (#429, codex iter-1 M1): preserve 503 from
+        # agent-import guard.
+        raise
     except Exception as e:
         logger.error(f"Segment analysis failed: {e}")
         response.status = AnalysisStatus.FAILED

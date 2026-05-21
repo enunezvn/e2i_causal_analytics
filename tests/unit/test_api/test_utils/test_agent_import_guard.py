@@ -56,12 +56,38 @@ class TestShouldFailClosedOnImportError:
             _os.environ.pop("E2I_REQUIRE_AGENT_IMPORT", None)
             assert should_fail_closed_on_import_error() is False
 
-    def test_unset_environment_defaults_to_dev_behavior(self):
-        """Unset ENVIRONMENT defaults to development → mock allowed."""
+    def test_unset_environment_fails_closed(self):
+        """Codex iter-1 H1: Unset ENVIRONMENT must fail closed.
+
+        Missing deployment metadata MUST NOT silently enable fabricated
+        data. A misconfigured production deploy missing
+        ``ENVIRONMENT=production`` should not get mock responses.
+        """
         with patch.dict("os.environ", {}, clear=False):
             import os as _os
 
             _os.environ.pop("ENVIRONMENT", None)
+            _os.environ.pop("E2I_REQUIRE_AGENT_IMPORT", None)
+            assert should_fail_closed_on_import_error() is True
+
+    def test_misspelled_environment_fails_closed(self):
+        """Codex iter-1 H1: misspelled ENVIRONMENT fails closed."""
+        with patch.dict(
+            "os.environ", {"ENVIRONMENT": "prodution"}, clear=False  # typo
+        ):
+            import os as _os
+
+            _os.environ.pop("E2I_REQUIRE_AGENT_IMPORT", None)
+            assert should_fail_closed_on_import_error() is True
+
+    @pytest.mark.parametrize(
+        "value", ["development", "dev", "test", "testing", "local"]
+    )
+    def test_known_dev_environments_allow_mock(self, value):
+        """Only explicit known dev/test values allow mock-fallback."""
+        with patch.dict("os.environ", {"ENVIRONMENT": value}, clear=False):
+            import os as _os
+
             _os.environ.pop("E2I_REQUIRE_AGENT_IMPORT", None)
             assert should_fail_closed_on_import_error() is False
 

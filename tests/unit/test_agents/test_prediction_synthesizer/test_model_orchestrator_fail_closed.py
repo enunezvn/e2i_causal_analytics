@@ -19,7 +19,11 @@ from unittest.mock import patch
 
 import pytest
 
-from src.agents.prediction_synthesizer.clients.factory import ModelEndpointsConfig
+from src.agents.prediction_synthesizer.clients.factory import (
+    ModelClientFactory,
+    ModelEndpointConfig,
+    ModelEndpointsConfig,
+)
 from src.agents.prediction_synthesizer.nodes.model_orchestrator import (
     ModelOrchestratorNode,
 )
@@ -148,18 +152,30 @@ endpoints:
         assert "churn_model" in config.endpoints
         assert "mock_model" not in config.endpoints
 
-    def test_dev_yaml_loaded_when_environment_unset(self):
-        """ENVIRONMENT unset defaults to development → dev yaml IS merged."""
+    def test_dev_yaml_skipped_when_environment_unset(self):
+        """Codex iter-1 H1: ENVIRONMENT unset MUST NOT merge dev yaml.
+
+        Missing deployment metadata must not silently enable mock clients
+        in what is potentially a production environment.
+        """
         with tempfile.TemporaryDirectory() as tmp:
             prod_path = self._write_configs(Path(tmp))
-            # Remove ENVIRONMENT to test default behavior
             with patch.dict("os.environ", {}, clear=False):
                 import os as _os
 
                 _os.environ.pop("ENVIRONMENT", None)
                 config = ModelEndpointsConfig.from_yaml(str(prod_path))
 
-        assert "mock_model" in config.endpoints
+        assert "churn_model" in config.endpoints
+        assert "mock_model" not in config.endpoints
+
+    def test_dev_yaml_skipped_when_environment_misspelled(self):
+        """Codex iter-1 H1: misspelled ENVIRONMENT does NOT merge dev yaml."""
+        with tempfile.TemporaryDirectory() as tmp:
+            prod_path = self._write_configs(Path(tmp))
+            with patch.dict("os.environ", {"ENVIRONMENT": "develoment"}, clear=False):  # typo
+                config = ModelEndpointsConfig.from_yaml(str(prod_path))
+        assert "mock_model" not in config.endpoints
 
     def test_dev_yaml_missing_is_safe(self):
         """When dev_model_endpoints.yaml absent in dev, loader still succeeds."""
@@ -181,3 +197,48 @@ endpoints:
 
         assert "churn_model" in config.endpoints
         assert "mock_model" not in config.endpoints
+
+
+class TestFactoryRequiresExplicitEndpoint:
+    """Codex iter-1 H2: factory.get_client must NOT synthesize an HTTP URL
+    for undeclared model_ids. Previously, asking for an unknown model_id
+    silently constructed ``HTTPModelClient(endpoint_url=base/model_id)``
+    — defeating the F-012 config split because removing ``mock_model``
+    from the prod yaml didn't actually prevent that name from being
+    served.
+    """
+
+    @pytest.mark.asyncio
+    async def test_raises_on_undeclared_model_id(self):
+        config = ModelEndpointsConfig(
+            endpoints={
+                "churn_model": ModelEndpointConfig(
+                    model_id="churn_model",
+                    endpoint_url="http://localhost:3000/churn_model",
+                    client_type="http",
+                )
+            },
+        )
+        factory = ModelClientFactory(config)
+
+        with pytest.raises(ValueError) as exc_info:
+            await factory.get_client("mock_model")
+        assert "no endpoint declaration" in str(exc_info.value).lower()
+        assert "mock_model" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_returns_client_for_declared_model(self):
+        """Declared model still works."""
+        config = ModelEndpointsConfig(
+            endpoints={
+                "ok_model": ModelEndpointConfig(
+                    model_id="ok_model",
+                    endpoint_url="http://localhost:3000/ok_model",
+                    client_type="mock",
+                    default_prediction=0.5,
+                )
+            },
+        )
+        factory = ModelClientFactory(config)
+        client = await factory.get_client("ok_model")
+        assert client is not None

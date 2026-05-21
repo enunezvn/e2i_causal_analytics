@@ -135,6 +135,12 @@ class MockModelClient:
 # Default base URL constant
 DEFAULT_BASE_URL = os.environ.get("BENTOML_SERVICE_URL", "http://localhost:3000")
 
+# F-012 (#430, codex iter-1 H1): explicit allowlist of dev/test ENVIRONMENT
+# values. Anything outside this set — unset, misspelled, "production",
+# "staging" — skips dev YAML merge AND forbids the implicit-HTTP fallback
+# at the factory boundary.
+_KNOWN_DEV_ENVIRONMENTS = {"development", "dev", "test", "testing", "local"}
+
 
 @dataclass
 class ModelEndpointConfig:
@@ -199,9 +205,11 @@ class ModelEndpointsConfig:
                 default_confidence=model_config.get("default_confidence", 0.8),
             )
 
-        # F-012: merge dev-only endpoints when not in production.
-        environment = os.environ.get("ENVIRONMENT", "development").strip().lower()
-        if environment != "production":
+        # F-012 (#430, codex iter-1 H1): merge dev-only endpoints ONLY when
+        # ENVIRONMENT is an EXPLICIT dev value. Unset/misspelled/production
+        # all skip the merge — missing metadata must not enable mock clients.
+        environment = os.environ.get("ENVIRONMENT", "").strip().lower()
+        if environment in _KNOWN_DEV_ENVIRONMENTS:
             dev_path = config_path.with_name("dev_model_endpoints.yaml")
             if dev_path.exists():
                 with open(dev_path) as f:
@@ -225,7 +233,10 @@ class ModelEndpointsConfig:
                     environment,
                 )
         else:
-            logger.debug("Skipping dev_model_endpoints.yaml load (ENVIRONMENT=production)")
+            logger.debug(
+                "Skipping dev_model_endpoints.yaml load (ENVIRONMENT=%r is not dev)",
+                environment,
+            )
 
         return cls(
             default_base_url=base_url,
@@ -298,37 +309,42 @@ class ModelClientFactory:
         # Get endpoint config
         endpoint_config = self.config.endpoints.get(model_id)
 
-        if endpoint_config and not endpoint_config.enabled:
+        # F-012 (#430, codex iter-1 H2): require an explicit endpoint
+        # declaration. Previously, an unknown ``model_id`` would silently
+        # construct an HTTPModelClient pointing at
+        # ``{default_base_url}/{model_id}`` — so removing ``mock_model``
+        # from the prod yaml didn't actually fail-closed at this boundary.
+        # Now any undeclared model raises ValueError immediately.
+        if endpoint_config is None:
+            raise ValueError(
+                f"Model '{model_id}' has no endpoint declaration in "
+                "config/model_endpoints.yaml. Add an explicit entry "
+                "(client_type + url) to make this model available."
+            )
+
+        if not endpoint_config.enabled:
             raise ValueError(f"Model '{model_id}' is disabled")
 
         # Create client based on type
         client: Union[MockModelClient, HTTPModelClient]
-        if endpoint_config and endpoint_config.client_type == "mock":
+        if endpoint_config.client_type == "mock":
             client = MockModelClient(
                 model_id=model_id,
                 default_prediction=endpoint_config.default_prediction,
                 default_confidence=endpoint_config.default_confidence,
             )
         else:
-            # Default to HTTP client
-            endpoint_url = (
-                endpoint_config.endpoint_url
-                if endpoint_config
-                else f"{self.config.default_base_url}/{model_id}"
-            )
-
+            # HTTP client uses the explicitly declared endpoint URL.
             http_config = HTTPModelClientConfig(
                 model_id=model_id,
-                endpoint_url=endpoint_url,
-                timeout=endpoint_config.timeout if endpoint_config else self.config.default_timeout,
-                max_retries=endpoint_config.max_retries
-                if endpoint_config
-                else self.config.default_max_retries,
+                endpoint_url=endpoint_config.endpoint_url,
+                timeout=endpoint_config.timeout,
+                max_retries=endpoint_config.max_retries,
             )
 
             client = HTTPModelClient(
                 model_id=model_id,
-                endpoint_url=endpoint_url,
+                endpoint_url=endpoint_config.endpoint_url,
                 config=http_config,
             )
 

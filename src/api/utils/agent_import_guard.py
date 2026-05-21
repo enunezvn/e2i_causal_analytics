@@ -64,14 +64,24 @@ def _env_truthy(value: Optional[str]) -> Optional[bool]:
     return None
 
 
+_KNOWN_DEV_ENVIRONMENTS = {"development", "dev", "test", "testing", "local"}
+
+
 def should_fail_closed_on_import_error() -> bool:
     """Decide whether a route should fail-closed on agent ImportError.
 
-    Decision order:
+    Decision order (closed-by-default — codex iter-1 H1 fix):
+
     1. ``E2I_REQUIRE_AGENT_IMPORT`` (explicit override): truthy → True,
        falsy → False.
-    2. ``ENVIRONMENT`` (deployment context): ``production`` → True,
-       anything else → False.
+    2. ``ENVIRONMENT`` (deployment context): only an EXPLICIT
+       ``development``/``dev``/``test``/``testing``/``local`` value permits
+       mock-fallback. Any other value — including unset, misspelled,
+       ``production``, ``staging``, or empty — fails closed.
+
+    Rationale: missing deployment metadata MUST NOT silently enable
+    fabricated data. The old default (unset → development → allow-mock)
+    let a misconfigured production deploy serve mock responses.
 
     Returns
     -------
@@ -83,7 +93,8 @@ def should_fail_closed_on_import_error() -> bool:
     explicit = _env_truthy(os.environ.get("E2I_REQUIRE_AGENT_IMPORT"))
     if explicit is not None:
         return explicit
-    return os.environ.get("ENVIRONMENT", "development").strip().lower() == "production"
+    env = os.environ.get("ENVIRONMENT", "").strip().lower()
+    return env not in _KNOWN_DEV_ENVIRONMENTS
 
 
 def raise_503_for_import_error(

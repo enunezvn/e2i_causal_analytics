@@ -203,14 +203,19 @@ class TestModelClientFactory:
         await factory.close_all()
 
     @pytest.mark.asyncio
-    async def test_get_unknown_model(self, factory):
-        """Test getting unknown model creates HTTP client with defaults."""
-        with patch.object(HTTPModelClient, "initialize", new_callable=AsyncMock):
-            client = await factory.get_client("unknown_model")
+    async def test_get_unknown_model_raises(self, factory):
+        """Codex iter-1 H2 (F-012 #430): undeclared model_id raises ValueError.
 
-            assert isinstance(client, HTTPModelClient)
-            assert client.model_id == "unknown_model"
-            assert "unknown_model" in client.endpoint_url
+        Previously the factory silently synthesized
+        ``HTTPModelClient(endpoint_url=base_url/unknown_model)``. That
+        defeated the F-012 config split because removing ``mock_model``
+        from the prod yaml didn't actually prevent that name from being
+        served. The factory now requires an explicit endpoint declaration.
+        """
+        with pytest.raises(ValueError) as exc_info:
+            await factory.get_client("unknown_model")
+        assert "no endpoint declaration" in str(exc_info.value).lower()
+        assert "unknown_model" in str(exc_info.value)
 
         await factory.close_all()
 

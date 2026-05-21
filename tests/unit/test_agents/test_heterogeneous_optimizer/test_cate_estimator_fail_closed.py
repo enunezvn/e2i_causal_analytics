@@ -12,16 +12,21 @@ These tests pin the new policy:
 * Supabase env unset + ``E2I_ALLOW_MOCK_CONNECTOR=1`` → mock returned (dev mode).
 * Supabase env unset + ENVIRONMENT=development → mock returned (default dev).
 * Supabase env unset + ``E2I_ALLOW_MOCK_CONNECTOR=0`` → RuntimeError even in dev.
+* Codex iter-1 H3: HierarchicalAnalyzerNode silent mock data path also fails closed.
 """
 
 from unittest.mock import patch
 
+import pandas as pd
 import pytest
 
 from src.agents.heterogeneous_optimizer.connectors import MockDataConnector
 from src.agents.heterogeneous_optimizer.nodes.cate_estimator import (
     _get_default_data_connector,
     _mock_connector_allowed,
+)
+from src.agents.heterogeneous_optimizer.nodes.hierarchical_analyzer import (
+    HierarchicalAnalyzerNode,
 )
 
 
@@ -59,13 +64,22 @@ class TestMockConnectorPolicy:
             _os.environ.pop("E2I_ALLOW_MOCK_CONNECTOR", None)
             assert _mock_connector_allowed() is True
 
-    def test_unset_environment_allows(self):
+    def test_unset_environment_denies(self):
+        """Codex iter-1 H1: unset ENVIRONMENT must NOT enable mock fallback."""
         with patch.dict("os.environ", {}, clear=False):
             import os as _os
 
             _os.environ.pop("ENVIRONMENT", None)
             _os.environ.pop("E2I_ALLOW_MOCK_CONNECTOR", None)
-            assert _mock_connector_allowed() is True
+            assert _mock_connector_allowed() is False
+
+    def test_misspelled_environment_denies(self):
+        """Misspelled ENVIRONMENT (not in dev allowlist) → mock forbidden."""
+        with patch.dict("os.environ", {"ENVIRONMENT": "dvelopment"}, clear=False):  # typo
+            import os as _os
+
+            _os.environ.pop("E2I_ALLOW_MOCK_CONNECTOR", None)
+            assert _mock_connector_allowed() is False
 
 
 class TestGetDefaultDataConnectorFailClosed:
@@ -136,3 +150,61 @@ class TestGetDefaultDataConnectorFailClosed:
             _os.environ.pop("E2I_ALLOW_MOCK_CONNECTOR", None)
             connector = _get_default_data_connector()
             assert isinstance(connector, MockDataConnector)
+
+
+class TestHierarchicalAnalyzerFailClosed:
+    """Codex iter-1 H3: HierarchicalAnalyzerNode also previously fell
+    silently through to ``_generate_mock_data`` whenever no
+    ``data_connector`` was attached and no ``tier0_data`` was in state.
+    These tests pin the new env-gated fail-closed contract.
+    """
+
+    def _state(self):
+        return {
+            "treatment_var": "T",
+            "outcome_var": "Y",
+            "effect_modifiers": ["x1"],
+            "segment_vars": ["region"],
+            "data_source": "synthetic",
+            "filters": None,
+            "tier0_data": None,
+        }
+
+    @pytest.mark.asyncio
+    async def test_raises_when_no_connector_and_mock_forbidden(self):
+        """No connector + no tier0_data + mock forbidden → RuntimeError."""
+        node = HierarchicalAnalyzerNode()
+        # explicitly forbid mock
+        with patch.dict(
+            "os.environ",
+            {"E2I_ALLOW_MOCK_CONNECTOR": "0"},
+            clear=False,
+        ):
+            with pytest.raises(RuntimeError) as exc_info:
+                await node._get_data(self._state())
+            assert "synthetic-data fallback is disabled" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_returns_mock_data_when_explicitly_allowed(self):
+        """Mock-allowed env returns mock DataFrame."""
+        node = HierarchicalAnalyzerNode()
+        with patch.dict(
+            "os.environ",
+            {"E2I_ALLOW_MOCK_CONNECTOR": "1"},
+            clear=False,
+        ):
+            df = await node._get_data(self._state())
+        assert isinstance(df, pd.DataFrame)
+        assert len(df) > 0
+
+    @pytest.mark.asyncio
+    async def test_raises_when_environment_unset(self):
+        """Codex iter-1 H1/H3: unset ENVIRONMENT must fail closed here too."""
+        node = HierarchicalAnalyzerNode()
+        with patch.dict("os.environ", {}, clear=False):
+            import os as _os
+
+            _os.environ.pop("ENVIRONMENT", None)
+            _os.environ.pop("E2I_ALLOW_MOCK_CONNECTOR", None)
+            with pytest.raises(RuntimeError):
+                await node._get_data(self._state())

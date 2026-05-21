@@ -230,7 +230,8 @@ class HierarchicalAnalyzerNode:
         Data source priority:
         1. tier0_data passthrough (from tier0 testing framework)
         2. Data connector (Supabase)
-        3. Mock data for development/testing
+        3. Mock data (only when explicitly opted-in via E2I_ALLOW_MOCK_CONNECTOR
+           or ENVIRONMENT in {development/dev/test/testing/local}).
         """
         required_columns = (
             [state["treatment_var"], state["outcome_var"]]
@@ -266,7 +267,30 @@ class HierarchicalAnalyzerNode:
                 filters=state.get("filters"),
             )
 
-        # Priority 3: Generate mock data for development/testing
+        # Priority 3 (F-013 / codex iter-1 H3): synthetic data is gated by
+        # the same policy as cate_estimator's MockDataConnector — missing
+        # data must NOT silently fabricate. Import the shared decision
+        # function lazily to avoid a hard dependency cycle.
+        from src.agents.heterogeneous_optimizer.nodes.cate_estimator import (
+            _mock_connector_allowed,
+        )
+
+        if not _mock_connector_allowed():
+            raise RuntimeError(
+                "HierarchicalAnalyzerNode has no tier0_data and no "
+                "data_connector, and synthetic-data fallback is disabled "
+                "(E2I_ALLOW_MOCK_CONNECTOR=1 or ENVIRONMENT in "
+                "{development,dev,test,testing,local} required for mock). "
+                "Provide a real data_connector or set the env-gate "
+                "explicitly for offline development."
+            )
+
+        logger.warning(
+            "Using synthetic mock data (E2I_ALLOW_MOCK_CONNECTOR/ENVIRONMENT "
+            "dev opt-in active) — DO NOT use this output for any production "
+            "decision.",
+            extra={"node": "hierarchical_analyzer", "data_source": "mock"},
+        )
         return self._generate_mock_data(state)
 
     def _generate_mock_data(self, state: HeterogeneousOptimizerState) -> pd.DataFrame:

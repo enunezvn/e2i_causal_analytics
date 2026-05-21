@@ -33,6 +33,51 @@ def _mock_allowed_env():
 
 
 # =============================================================================
+# Codex iter-1 M1: public route preserves 503 (does not mask as 500)
+# =============================================================================
+
+
+class TestRoutePreserves503:
+    """Public route wrappers must NOT mask the 503 raised by ``_execute_*``
+    helpers as a 500.
+    """
+
+    @pytest.mark.asyncio
+    async def test_public_gap_route_preserves_503(self):
+        """run_gap_analysis bubbles up the 503 (not 500) when helper fails."""
+        from fastapi import BackgroundTasks
+
+        from src.api.routes.gaps import (
+            GapType,
+            RunGapAnalysisRequest,
+            run_gap_analysis,
+        )
+
+        request = RunGapAnalysisRequest(
+            query="Q",
+            brand="kisqali",
+            metrics=["trx"],
+            segments=["region"],
+            gap_type=GapType.ALL,
+        )
+        user = {"user_id": "u", "role": "analyst"}
+        with patch.dict("os.environ", _fail_closed_env(), clear=False):
+            with patch(
+                "src.agents.gap_analyzer.graph.create_gap_analyzer_graph",
+                side_effect=ImportError("module missing"),
+            ):
+                with pytest.raises(HTTPException) as exc_info:
+                    await run_gap_analysis(
+                        request,
+                        BackgroundTasks(),
+                        async_mode=False,
+                        user=user,
+                    )
+                # Must remain 503 — not collapsed to 500
+                assert exc_info.value.status_code == 503
+
+
+# =============================================================================
 # gaps.py
 # =============================================================================
 

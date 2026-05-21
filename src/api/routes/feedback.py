@@ -446,6 +446,10 @@ async def run_learning_cycle(
         result.batch_id = batch_id
         _learning_store[batch_id] = result
         return result
+    except HTTPException:
+        # F-010-backend (#429, codex iter-1 M1): preserve 503 from
+        # agent-import guard.
+        raise
     except Exception as e:
         logger.error(f"Learning cycle failed: {e}")
         response.status = LearningStatus.FAILED

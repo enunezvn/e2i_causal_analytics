@@ -352,6 +352,11 @@ async def run_gap_analysis(
         result.analysis_id = analysis_id
         _analyses_store[analysis_id] = result
         return result
+    except HTTPException:
+        # F-010-backend (#429, codex iter-1 M1): preserve the 503
+        # raised by the agent-import guard inside _execute_gap_analysis
+        # instead of masking it as a 500.
+        raise
     except Exception as e:
         logger.error(f"Gap analysis failed: {e}")
         response.status = AnalysisStatus.FAILED
