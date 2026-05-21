@@ -38,7 +38,9 @@ class TestFeedbackLearnerTrainingSignal:
         assert signal.patterns_detected == 0
         assert signal.recommendations_generated == 0
         assert signal.updates_applied == 0
-        assert signal.pattern_accuracy == 0.0
+        # F-015 (#424): pattern_accuracy default is None (no measurement),
+        # not 0.0 — 0.0 would be a fabricated quality anchor.
+        assert signal.pattern_accuracy is None
         assert signal.rubric_weighted_score is None
         assert signal.created_at  # Should have a timestamp
 

@@ -78,6 +78,28 @@ class KPICalculator:
             cache: KPI cache (creates new instance if None)
             router: Causal library router (creates new if None)
             db_connection: Database connection for SQL-based calculations
+
+        F-007 NOTE (#421): the per-workstream calculators in
+        `src/kpi/calculators/` are intentionally NOT auto-registered here.
+        Auto-registration was reverted in codex iter-3 audit because 5 of the
+        6 calculators still contain hardcoded `0.0`/`0.5`/`1.0` numeric
+        defaults that swallow Supabase/MLflow failures (e.g.,
+        `ModelPerformanceCalculator` returns `ROC-AUC=0.5` when MLflow is
+        unreachable). Wiring them up here would make those latent
+        placeholders user-visible.
+
+        The hardening of those calculators is tracked in #439
+        (F-007-PhaseB). Once each calculator has been audited and either (a)
+        propagates errors via `KPIResult.error` or (b) returns honest "no
+        data" (None + error) instead of fabricated numbers, auto-registration
+        can be re-introduced in a follow-up PR.
+
+        Until then: callers can register specific calculators via
+        `register_calculator(workstream, instance)` (the existing API), and
+        unregistered workstreams fall through to `_default_calculate` →
+        `_calculate_from_view` (real Supabase query for view-backed KPIs) or
+        `_calculate_from_tables` (raises `NotImplementedError`, surfaced via
+        `KPIResult.error`). No silent placeholder zeros.
         """
         self._registry = registry or get_registry()
         self._cache = cache or KPICache()
@@ -274,35 +296,173 @@ class KPICalculator:
     def _calculate_from_view(
         self, kpi: KPIMetadata, context: dict[str, Any]
     ) -> tuple[float | None, dict[str, Any]]:
-        """Calculate KPI from a database view.
+        """Calculate KPI from a database view via Supabase.
+
+        F-007 (issue #421): replaces the prior `return None` placeholder with a
+        real Supabase query. The view name on the KPI metadata is queried via
+        the PostgREST `client.table(view_name).select(...).execute()` chain;
+        the first row's first numeric column is returned as the scalar value.
 
         Args:
             kpi: KPI metadata with view name
-            context: Calculation context
+            context: Calculation context (unused in this minimal delegator;
+                workstream-specific calculators registered via
+                `register_calculator` apply context-aware queries).
 
         Returns:
-            Tuple of (value, metadata)
+            Tuple of (value, metadata) where `value` is the scalar drawn from
+            the view's first row.
+
+        Raises:
+            RuntimeError: if `kpi.view` is unset, or the view returns no rows,
+                or no numeric column is found in the first row. Caller
+                (`_default_calculate`) catches and surfaces via
+                `KPIResult.error` — no silent fallback to `None`.
         """
-        # This is a placeholder - actual implementation will use Supabase client
-        # Will be implemented when integrating with database
-        logger.debug(f"Calculating {kpi.id} from view {kpi.view}")
-        return None, {"source": "view", "view_name": kpi.view}
+        view_name = kpi.view
+        if not view_name:
+            raise RuntimeError(f"KPI {kpi.id} has no `view` configured for view-based calculation")
+
+        logger.debug(f"Calculating {kpi.id} from view {view_name}")
+        rows = self._query_view_rows(view_name)
+        if not rows:
+            raise RuntimeError(f"View {view_name!r} returned no rows for KPI {kpi.id}")
+
+        value = self._first_numeric_from_row(rows[0])
+        if value is None:
+            raise RuntimeError(
+                f"View {view_name!r} returned a row with no numeric column "
+                f"for KPI {kpi.id}: {rows[0]!r}"
+            )
+        return float(value), {
+            "source": "view",
+            "view_name": view_name,
+            "row_count": len(rows),
+        }
 
     def _calculate_from_tables(
         self, kpi: KPIMetadata, context: dict[str, Any]
     ) -> tuple[float | None, dict[str, Any]]:
-        """Calculate KPI from database tables.
+        """Default fallback for table-derived KPIs without a registered calculator.
+
+        F-007 (issue #421): table-derived KPIs require formula evaluation
+        (e.g., `covered_patients / reference_patients`). The honest place for
+        that logic is the per-workstream calculators in `src/kpi/calculators/`
+        (e.g., `DataQualityCalculator._calc_source_coverage_patients` runs the
+        actual joined SQL). Callers register those via the existing
+        `register_calculator(workstream, instance)` API after auditing the
+        specific calculator (see #439 / F-007-PhaseB for the hardening work).
+
+        This fallback is hit when no workstream calculator is registered for
+        the KPI's workstream. Rather than guess a generic "first numeric /
+        first numeric" formula that mis-evaluates real KPIs (covered/reference
+        is NOT row[0]/row[0] across two unrelated tables), this method raises
+        `NotImplementedError` — surfaced via `KPIResult.error` by the caller.
+        Silent fallback to `None` (or any fabricated default like 0.0) would
+        re-introduce the placeholder pattern this PR is retiring.
 
         Args:
             kpi: KPI metadata with table/column info
             context: Calculation context
 
         Returns:
-            Tuple of (value, metadata)
+            Never returns — always raises.
+
+        Raises:
+            NotImplementedError: always. Register a per-workstream calculator
+                or, for the immediate fix, surface the KPI via a Supabase view
+                (`_calculate_from_view`).
         """
-        # Placeholder - will be implemented for derived KPIs
-        logger.debug(f"Calculating {kpi.id} from tables {kpi.tables}")
-        return None, {"source": "tables", "tables": kpi.tables}
+        raise NotImplementedError(
+            f"Table-derived KPI {kpi.id} ({kpi.workstream}) has no registered "
+            f"workstream calculator. Generic table-formula evaluation is not "
+            f"implemented (see #421); register a per-workstream calculator in "
+            f"`src/kpi/calculators/` or surface the KPI via a Supabase view."
+        )
+
+    def _query_view_rows(self, table_or_view_name: str) -> list[dict[str, Any]]:
+        """Query a Supabase view or table and return rows as dicts.
+
+        Uses the PostgREST chain `client.table(name).select('*').execute()`.
+
+        Args:
+            table_or_view_name: Name of the view or table to query.
+
+        Returns:
+            List of row dicts. Empty list if the source has no rows.
+
+        Raises:
+            RuntimeError: if no DB client is configured.
+            Exception: if the underlying client raises (network, auth,
+                missing-view, etc.) — propagated so the caller surfaces
+                via `KPIResult.error`. No silent fallback to None.
+        """
+        if self._db is None:
+            raise RuntimeError(
+                f"No Supabase client configured; cannot query {table_or_view_name!r}"
+            )
+        response = self._db.table(table_or_view_name).select("*").limit(1).execute()
+        data = getattr(response, "data", None)
+        if data is None:
+            return []
+        return list(data)
+
+    @staticmethod
+    def _first_numeric_from_row(row: dict[str, Any]) -> float | None:
+        """Return the canonical numeric value in a row dict, or None.
+
+        Prefers canonical KPI column names in order: `value`, `kpi_value`,
+        `score`, `rate`, `lift`, `match_rate`. Falls back to the first
+        non-identifier numeric column only when no canonical name is present
+        AND exactly one numeric column exists (to avoid ambiguous picks like
+        "row has 3 numerics — which is the KPI?").
+
+        F-007 (#421): the prior fallback ("first numeric of anything") was a
+        wrong-but-passing heuristic for KPI views with multiple aggregate
+        columns. The stricter rule: if a view has multiple numeric columns
+        and none match a canonical name, return None — surfaced as an error
+        rather than guessing.
+        """
+        if not row:
+            return None
+
+        # Tier 1: canonical KPI scalar column names.
+        canonical_keys = (
+            "value",
+            "kpi_value",
+            "score",
+            "lift_score",
+            "lift",
+            "match_rate",
+            "rate",
+            "pass_rate",
+            "consistency_rate",
+            "median_ttr_days",
+            "median_lag_days",
+        )
+        for canonical in canonical_keys:
+            if canonical in row:
+                candidate = row[canonical]
+                if isinstance(candidate, bool):
+                    continue
+                if isinstance(candidate, (int, float)):
+                    return float(candidate)
+
+        # Tier 2: non-identifier numeric column — only if exactly one exists.
+        skip_substrings = ("id", "created_at", "updated_at", "timestamp", "uuid")
+        numeric_candidates: list[float] = []
+        for key, value in row.items():
+            lower_key = key.lower()
+            if any(skip in lower_key for skip in skip_substrings):
+                continue
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, (int, float)):
+                numeric_candidates.append(float(value))
+        if len(numeric_candidates) == 1:
+            return numeric_candidates[0]
+        # Ambiguous (multiple numerics, no canonical) → caller must surface error.
+        return None
 
     def _get_cache_ttl(self, kpi: KPIMetadata) -> int:
         """Determine cache TTL based on KPI frequency.

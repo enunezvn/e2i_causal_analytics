@@ -248,21 +248,49 @@ class DataQualityCalculator(KPICalculatorBase):
         return 0.0
 
     def _execute_query(self, query: str, params: list[Any]) -> list[dict[str, Any]] | None:
-        """Execute a SQL query and return results.
+        """Execute a SQL query via Supabase RPC and return rows.
+
+        F-007 iter-2 (#421): the prior implementation caught all exceptions
+        and returned `None`, which callers translated into `0.0` (e.g.,
+        `_calc_source_coverage_patients` line 129 returns `0.0` when result is
+        None). That cascaded user-visible "0%" KPI values from silent Supabase
+        failures — RPC unreachable, missing function, auth error all looked
+        identical to "no rows", which looked identical to "perfectly zero".
+
+        Now: exceptions propagate. The outer `DataQualityCalculator.calculate`
+        (line 86-104) catches them and emits `KPIResult(value=None,
+        error=str(e))` — the user sees a real error message instead of a
+        fabricated zero.
+
+        An empty result set (`response.data == []`) is still returned as
+        `[]` — that's the legitimate "no rows" case the caller can handle
+        with its own logic (e.g., "0 covered patients / 100 reference =
+        0.0%" is correct; "RPC failed" should NOT silently become "0.0%").
 
         Args:
             query: SQL query string with $1, $2, etc. placeholders.
             params: Query parameters.
 
         Returns:
-            List of result rows as dictionaries, or None on error.
+            List of result rows as dictionaries (possibly empty).
+
+        Raises:
+            RuntimeError: if no Supabase client is configured.
+            Exception: any exception raised by `self.db_client.rpc(...)`
+                propagates up to the calling KPI helper, which propagates to
+                `calculate()`'s outer try/except — surfacing as
+                `KPIResult.error`.
         """
-        try:
-            # Use raw SQL execution via Supabase RPC or direct connection
-            # This is a simplified implementation - actual implementation
-            # would depend on the specific database client
-            response = self.db_client.rpc("execute_sql", {"query": query}).execute()
-            return response.data  # type: ignore[no-any-return]
-        except Exception:
-            # Fall back to mock data for testing
-            return None
+        if self.db_client is None:
+            raise RuntimeError(
+                "DataQualityCalculator has no Supabase client; cannot execute KPI query"
+            )
+        # NOTE: this calculator delegates to `rpc("execute_sql", ...)`. The
+        # broader codebase pattern uses `client.table(name).select(...)`.
+        # That divergence is tracked separately; this minimal fix only
+        # closes the silent-failure path.
+        response = self.db_client.rpc("execute_sql", {"query": query}).execute()
+        data = getattr(response, "data", None)
+        if data is None:
+            return []
+        return list(data)
