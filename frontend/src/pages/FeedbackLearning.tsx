@@ -44,6 +44,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { WarningBanner } from '@/components/ui/WarningBanner';
 import {
   useFeedbackHealth,
   usePatterns,
@@ -114,74 +115,6 @@ const SEVERITY_ORDER: Record<PatternSeverity, number> = {
 
 
 // =============================================================================
-// SAMPLE DATA
-// =============================================================================
-
-const SAMPLE_PATTERNS: PatternItem[] = [
-  {
-    pattern_id: 'pat-001',
-    pattern_type: 'performance_degradation',
-    severity: PatternSeverity.HIGH,
-    description: 'Causal Impact agent showing increased latency during peak hours',
-    agent_name: 'causal_impact',
-    occurrences: 15,
-    first_seen: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
-    last_seen: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
-  },
-  {
-    pattern_id: 'pat-002',
-    pattern_type: 'low_confidence',
-    severity: PatternSeverity.MEDIUM,
-    description: 'Gap Analyzer producing below-threshold confidence scores for Remibrutinib queries',
-    agent_name: 'gap_analyzer',
-    occurrences: 8,
-    first_seen: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
-    last_seen: new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString(),
-  },
-  {
-    pattern_id: 'pat-003',
-    pattern_type: 'positive_feedback',
-    severity: PatternSeverity.LOW,
-    description: 'Explainer receiving consistent high ratings for clarity',
-    agent_name: 'explainer',
-    occurrences: 42,
-    first_seen: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString(),
-    last_seen: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
-  },
-];
-
-const SAMPLE_UPDATES: UpdateItem[] = [
-  {
-    update_id: 'upd-001',
-    update_type: UpdateType.PROMPT_REFINEMENT,
-    status: UpdateStatus.PROPOSED,
-    description: 'Refine causal impact explanation template for better clarity',
-    agent_name: 'causal_impact',
-    confidence_score: 0.85,
-    created_at: new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString(),
-  },
-  {
-    update_id: 'upd-002',
-    update_type: UpdateType.PARAMETER_TUNING,
-    status: UpdateStatus.APPLIED,
-    description: 'Increase priority of DoWhy estimator for propensity-based queries',
-    agent_name: 'gap_analyzer',
-    confidence_score: 0.92,
-    created_at: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
-    applied_at: new Date(Date.now() - 20 * 60 * 60 * 1000).toISOString(),
-  },
-  {
-    update_id: 'upd-003',
-    update_type: UpdateType.RULE_MODIFICATION,
-    status: UpdateStatus.APPROVED,
-    description: 'Lower confidence threshold for Fabhalta brand queries based on feedback',
-    agent_name: 'orchestrator',
-    confidence_score: 0.78,
-    created_at: new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString(),
-  },
-];
-
-// =============================================================================
 // HELPER FUNCTIONS
 // =============================================================================
 
@@ -245,6 +178,10 @@ function getUpdateStatusBadgeVariant(status: UpdateStatus): 'default' | 'seconda
 function FeedbackLearning() {
   const [activeTab, setActiveTab] = useState('overview');
   const [isRefreshing, setIsRefreshing] = useState(false);
+  // F-010: hold the latest learning-cycle warnings so we can surface them
+  // to the user as a yellow banner. The mutation hook itself doesn't keep
+  // a long-lived response cache, so we mirror it into local state here.
+  const [cycleWarnings, setCycleWarnings] = useState<string[]>([]);
 
   // Fetch feedback health
   const {
@@ -271,9 +208,11 @@ function FeedbackLearning() {
   const { mutate: applyUpdate, isPending: isApplying } = useApplyUpdate();
   const { mutate: rollbackUpdate, isPending: isRollingBack } = useRollbackUpdate();
 
-  // Use API data or fall back to samples (cast to local types for UI compatibility)
-  const patterns: PatternItem[] = (patternsData?.patterns ?? SAMPLE_PATTERNS) as PatternItem[];
-  const updates: UpdateItem[] = (updatesData?.updates ?? SAMPLE_UPDATES) as UpdateItem[];
+  // F-002 fix: no fabricated `SAMPLE_PATTERNS`/`SAMPLE_UPDATES` fallback.
+  // Data comes strictly from API; the page renders empty states when the
+  // API has no patterns / updates yet.
+  const patterns: PatternItem[] = (patternsData?.patterns ?? []) as PatternItem[];
+  const updates: UpdateItem[] = (updatesData?.updates ?? []) as UpdateItem[];
 
   // Calculate stats
   const stats = useMemo(() => {
@@ -330,10 +269,12 @@ function FeedbackLearning() {
     setIsRefreshing(false);
   }, [refetchHealth, refetchPatterns, refetchUpdates]);
 
-  // Run learning cycle
+  // Run learning cycle — capture API warnings so the page surfaces them
+  // (F-010-frontend).
   const handleRunCycle = useCallback(() => {
     runQuickCycle(undefined, {
-      onSuccess: () => {
+      onSuccess: (data) => {
+        setCycleWarnings(data?.warnings ?? []);
         handleRefresh();
       },
     });
@@ -388,6 +329,16 @@ function FeedbackLearning() {
           </Button>
         </div>
       </div>
+
+      {/* API-reported warnings from the most recent learning cycle (F-010). */}
+      {cycleWarnings.length > 0 && (
+        <div className="mb-6">
+          <WarningBanner
+            messages={cycleWarnings}
+            title="Learning cycle warnings"
+          />
+        </div>
+      )}
 
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-6 gap-4 mb-6">

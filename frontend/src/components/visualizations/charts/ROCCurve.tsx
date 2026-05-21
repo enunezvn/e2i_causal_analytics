@@ -66,41 +66,6 @@ export interface ROCCurveProps {
 }
 
 // =============================================================================
-// SAMPLE DATA
-// =============================================================================
-
-function generateSampleROC(): ROCPoint[] {
-  const points: ROCPoint[] = [{ fpr: 0, tpr: 0, threshold: 1 }];
-
-  // Generate a curve that's better than random
-  for (let i = 1; i <= 20; i++) {
-    const fpr = i / 20;
-    // TPR should be above the diagonal for a good model
-    const tpr = Math.min(1, fpr + 0.3 + (Math.random() * 0.2 - 0.1));
-    points.push({ fpr, tpr, threshold: 1 - i / 20 });
-  }
-
-  points.push({ fpr: 1, tpr: 1, threshold: 0 });
-  return points;
-}
-
-const SAMPLE_CURVES: ROCCurveData[] = [
-  {
-    name: 'Churn Model v2',
-    points: generateSampleROC(),
-    color: 'hsl(var(--chart-1))',
-  },
-  {
-    name: 'Churn Model v1',
-    points: generateSampleROC().map((p) => ({
-      ...p,
-      tpr: Math.max(p.fpr, p.tpr - 0.15),
-    })),
-    color: 'hsl(var(--chart-2))',
-  },
-];
-
-// =============================================================================
 // HELPER FUNCTIONS
 // =============================================================================
 
@@ -141,7 +106,7 @@ function calculateAUC(points: ROCPoint[]): number {
 export const ROCCurve = React.forwardRef<HTMLDivElement, ROCCurveProps>(
   (
     {
-      curves: propCurves,
+      curves,
       height = 400,
       showDiagonal = true,
       showAUC = true,
@@ -152,22 +117,25 @@ export const ROCCurve = React.forwardRef<HTMLDivElement, ROCCurveProps>(
     },
     ref
   ) => {
-    // Use provided data or sample
-    const curves = propCurves ?? SAMPLE_CURVES;
+    // `curves` is REQUIRED per ROCCurveProps; callers must supply real ROC
+    // points. The component never fabricates fallback data (see F-004).
+    // Defensive guard for runtime callers who pass `undefined` despite the
+    // type signature — falls through to the empty-state branch below.
+    const safeCurves: ROCCurveData[] = curves ?? [];
 
     // Calculate AUC for each curve
     const curvesWithAUC = useMemo(() => {
-      return curves.map((curve) => ({
+      return safeCurves.map((curve) => ({
         ...curve,
         auc: curve.auc ?? calculateAUC(curve.points),
       }));
-    }, [curves]);
+    }, [safeCurves]);
 
     // Prepare chart data - merge all curves into single data array
     const chartData = useMemo(() => {
       // Get all unique FPR values
       const allFPRs = new Set<number>();
-      curves.forEach((curve) => {
+      safeCurves.forEach((curve) => {
         curve.points.forEach((p) => allFPRs.add(p.fpr));
       });
 
@@ -178,7 +146,7 @@ export const ROCCurve = React.forwardRef<HTMLDivElement, ROCCurveProps>(
       return sortedFPRs.map((fpr) => {
         const point: Record<string, number> = { fpr };
 
-        curves.forEach((curve) => {
+        safeCurves.forEach((curve) => {
           // Find closest point for this curve
           const exactPoint = curve.points.find((p) => p.fpr === fpr);
           if (exactPoint) {
@@ -202,7 +170,7 @@ export const ROCCurve = React.forwardRef<HTMLDivElement, ROCCurveProps>(
 
         return point;
       });
-    }, [curves]);
+    }, [safeCurves]);
 
     // Custom tooltip
     const CustomTooltip = ({
@@ -248,18 +216,26 @@ export const ROCCurve = React.forwardRef<HTMLDivElement, ROCCurveProps>(
       );
     }
 
-    // Empty state
-    if (curves.length === 0) {
+    // Empty state — no curves provided
+    if (safeCurves.length === 0) {
       return (
         <div
           ref={ref}
+          data-testid="roc-curve-empty"
           className={cn(
-            'flex items-center justify-center text-[var(--color-muted-foreground)]',
+            'flex flex-col items-center justify-center gap-1 rounded-lg border border-dashed',
+            'border-[var(--color-border)] bg-[var(--color-muted)]/30',
+            'text-[var(--color-muted-foreground)]',
             className
           )}
           style={{ height }}
         >
-          No ROC curve data available
+          <span className="text-base font-medium">
+            No ROC data
+          </span>
+          <span className="text-xs">
+            Provide a non-empty `curves` prop to render this chart.
+          </span>
         </div>
       );
     }

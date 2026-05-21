@@ -15,6 +15,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Progress } from '@/components/ui/progress';
+import { EmptyState } from '@/components/ui/EmptyState';
 import { useE2ICopilot } from '@/providers/E2ICopilotProvider';
 import { TierOverview, type AgentTier } from '@/components/visualizations/agents/AgentTierBadge';
 import { AgentStatusPanel } from '@/components/chat/AgentStatusPanel';
@@ -75,64 +76,14 @@ interface OrchestrationStats {
 }
 
 // =============================================================================
-// SAMPLE DATA
+// DEFAULTS
 // =============================================================================
+// F-002 fix: SAMPLE_ACTIVITIES formerly inlined here has been DELETED.
+// Activities source from a future API endpoint; in the meantime the page
+// renders an explicit empty state. No fabricated values reachable from
+// production rendering paths.
 
-const SAMPLE_ACTIVITIES: AgentActivity[] = [
-  {
-    id: 'act-1',
-    agentId: 'orchestrator',
-    agentName: 'Orchestrator',
-    tier: 1,
-    action: 'Routed query to Causal Impact agent',
-    timestamp: new Date(Date.now() - 2 * 60000).toISOString(),
-    duration: 145,
-    status: 'completed',
-    details: 'Query: "What drove Remibrutinib growth in Q4?"',
-  },
-  {
-    id: 'act-2',
-    agentId: 'causal-impact',
-    agentName: 'Causal Impact',
-    tier: 2,
-    action: 'Traced causal chain for HCP engagement → TRx',
-    timestamp: new Date(Date.now() - 5 * 60000).toISOString(),
-    duration: 3200,
-    status: 'completed',
-    details: 'Found 3 significant causal paths with ATE = 0.23',
-  },
-  {
-    id: 'act-3',
-    agentId: 'drift-monitor',
-    agentName: 'Drift Monitor',
-    tier: 3,
-    action: 'Data drift check scheduled',
-    timestamp: new Date(Date.now() - 8 * 60000).toISOString(),
-    status: 'in_progress',
-    details: 'Checking conversion_model features',
-  },
-  {
-    id: 'act-4',
-    agentId: 'explainer',
-    agentName: 'Explainer',
-    tier: 5,
-    action: 'Generated SHAP narrative for prediction',
-    timestamp: new Date(Date.now() - 12 * 60000).toISOString(),
-    duration: 890,
-    status: 'completed',
-    details: 'Patient journey explanation with 5 key factors',
-  },
-  {
-    id: 'act-5',
-    agentId: 'gap-analyzer',
-    agentName: 'Gap Analyzer',
-    tier: 2,
-    action: 'ROI opportunity detection',
-    timestamp: new Date(Date.now() - 15 * 60000).toISOString(),
-    status: 'failed',
-    details: 'Timeout waiting for feature store response',
-  },
-];
+const ACTIVITIES: AgentActivity[] = [];
 
 const TIER_METRICS: TierMetrics[] = [
   { tier: 0, name: 'ML Foundation', activeAgents: 6, totalAgents: 8, avgResponseTime: 450, successRate: 98.5, tasksCompleted: 234 },
@@ -442,11 +393,18 @@ export default function AgentOrchestration() {
               </div>
             </CardHeader>
             <CardContent>
-              <div className="space-y-1">
-                {SAMPLE_ACTIVITIES.slice(0, 3).map((activity) => (
-                  <ActivityItem key={activity.id} activity={activity} />
-                ))}
-              </div>
+              {ACTIVITIES.length === 0 ? (
+                <EmptyState
+                  title="No recent activity"
+                  description="Agent activity feed will appear here once the activity endpoint is wired."
+                />
+              ) : (
+                <div className="space-y-1">
+                  {ACTIVITIES.slice(0, 3).map((activity) => (
+                    <ActivityItem key={activity.id} activity={activity} />
+                  ))}
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -471,11 +429,18 @@ export default function AgentOrchestration() {
               </div>
             </CardHeader>
             <CardContent>
-              <div className="space-y-1">
-                {SAMPLE_ACTIVITIES.map((activity) => (
-                  <ActivityItem key={activity.id} activity={activity} />
-                ))}
-              </div>
+              {ACTIVITIES.length === 0 ? (
+                <EmptyState
+                  title="No activity to display"
+                  description="Once the activity feed endpoint is wired, agent actions will stream here in real time."
+                />
+              ) : (
+                <div className="space-y-1">
+                  {ACTIVITIES.map((activity) => (
+                    <ActivityItem key={activity.id} activity={activity} />
+                  ))}
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>

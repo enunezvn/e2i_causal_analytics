@@ -322,11 +322,21 @@ describe('ROCCurve', () => {
     expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
   });
 
-  it('renders with sample data when no curves provided', () => {
+  it('renders empty state instead of fabricated curve when no curves provided (F-004)', () => {
+    // Regression guard: ROCCurve must NEVER fabricate synthetic ROC points
+    // when consumers omit the `curves` prop. Empty state is required.
     const { container } = render(
       <ROCCurve curves={undefined as unknown as ROCCurveData[]} />
     );
-    expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
+    expect(screen.getByTestId('roc-curve-empty')).toBeInTheDocument();
+    expect(screen.getByText('No ROC data')).toBeInTheDocument();
+    expect(
+      screen.getByText(/Provide a non-empty `curves` prop/),
+    ).toBeInTheDocument();
+    // No recharts container rendered
+    expect(
+      container.querySelector('.recharts-responsive-container'),
+    ).not.toBeInTheDocument();
   });
 
   it('shows loading skeleton when isLoading', () => {
@@ -334,9 +344,10 @@ describe('ROCCurve', () => {
     expect(container.querySelector('.animate-pulse')).toBeInTheDocument();
   });
 
-  it('shows empty state when no curves', () => {
+  it('shows empty state when curves is empty array', () => {
     render(<ROCCurve curves={[]} />);
-    expect(screen.getByText('No ROC curve data available')).toBeInTheDocument();
+    expect(screen.getByTestId('roc-curve-empty')).toBeInTheDocument();
+    expect(screen.getByText('No ROC data')).toBeInTheDocument();
   });
 
   it('displays curve names in legend', () => {

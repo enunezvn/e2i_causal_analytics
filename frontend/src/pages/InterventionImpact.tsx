@@ -48,6 +48,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { cn } from '@/lib/utils';
+import { EmptyState } from '@/components/ui/EmptyState';
 import { KPICard } from '@/components/visualizations';
 import { SimulationPanel, ScenarioResults, RecommendationCards } from '@/components/digital-twin';
 import { useRunSimulation } from '@/hooks/api/use-digital-twin';
@@ -151,103 +152,15 @@ const INTERVENTIONS: Intervention[] = [
   },
 ];
 
-// Generate causal impact data
-const generateImpactData = (interventionStart: Date): ImpactData[] => {
-  const data: ImpactData[] = [];
-  const startDate = new Date(interventionStart);
-  startDate.setDate(startDate.getDate() - 30); // 30 days before intervention
+// F-002 fix: SAMPLE_* analysis results formerly inlined here have been
+// DELETED. The impact / treatment-effect / segment surfaces source from
+// API hooks; absence renders empty states. No fabricated values reachable
+// from production rendering paths.
 
-  for (let i = 0; i < 90; i++) {
-    const date = new Date(startDate);
-    date.setDate(startDate.getDate() + i);
-
-    const isPostIntervention = i >= 30;
-    const baseValue = 1000 + i * 0.5 + Math.sin(i / 7) * 20;
-    const interventionEffect = isPostIntervention ? 80 + (i - 30) * 0.5 : 0;
-    const noise = (Math.random() - 0.5) * 40;
-
-    const actual = baseValue + interventionEffect + noise;
-    const counterfactual = baseValue + noise * 0.8;
-    const uncertainty = 25 + (isPostIntervention ? (i - 30) * 0.3 : 0);
-
-    data.push({
-      date: date.toISOString().split('T')[0],
-      actual: Math.round(actual),
-      counterfactual: Math.round(counterfactual),
-      upperBound: Math.round(counterfactual + uncertainty),
-      lowerBound: Math.round(counterfactual - uncertainty),
-    });
-  }
-
-  return data;
-};
-
-const SAMPLE_IMPACT_DATA = generateImpactData(new Date('2024-01-15'));
-
-const SAMPLE_TREATMENT_EFFECTS: TreatmentEffect[] = [
-  {
-    id: 'te-001',
-    intervention: 'Q1 2024 HCP Engagement Campaign',
-    metric: 'TRx Volume',
-    ate: 85.3,
-    ci: [62.1, 108.5],
-    pValue: 0.0012,
-    isSignificant: true,
-    sampleSize: 1250,
-    effectSize: 'large',
-  },
-  {
-    id: 'te-002',
-    intervention: 'Q1 2024 HCP Engagement Campaign',
-    metric: 'NRx Volume',
-    ate: 24.7,
-    ci: [18.2, 31.2],
-    pValue: 0.0034,
-    isSignificant: true,
-    sampleSize: 1250,
-    effectSize: 'medium',
-  },
-  {
-    id: 'te-003',
-    intervention: 'Digital Rep Training Program',
-    metric: 'Conversion Rate',
-    ate: 3.2,
-    ci: [1.8, 4.6],
-    pValue: 0.0078,
-    isSignificant: true,
-    sampleSize: 450,
-    effectSize: 'medium',
-  },
-  {
-    id: 'te-004',
-    intervention: 'Digital Rep Training Program',
-    metric: 'HCP Satisfaction',
-    ate: 0.8,
-    ci: [-0.2, 1.8],
-    pValue: 0.1245,
-    isSignificant: false,
-    sampleSize: 450,
-    effectSize: 'small',
-  },
-];
-
-const SAMPLE_BEFORE_AFTER: BeforeAfterComparison[] = [
-  { metric: 'TRx Volume', beforeMean: 1024, afterMean: 1109, change: 85, changePercent: 8.3, isPositive: true },
-  { metric: 'NRx Volume', beforeMean: 312, afterMean: 337, change: 25, changePercent: 8.0, isPositive: true },
-  { metric: 'Market Share', beforeMean: 23.4, afterMean: 24.8, change: 1.4, changePercent: 6.0, isPositive: true },
-  { metric: 'HCP Reach', beforeMean: 856, afterMean: 912, change: 56, changePercent: 6.5, isPositive: true },
-  { metric: 'Cost per TRx', beforeMean: 42.5, afterMean: 38.2, change: -4.3, changePercent: -10.1, isPositive: true },
-];
-
-const SAMPLE_SEGMENT_EFFECTS: SegmentEffect[] = [
-  { segment: 'High-Volume HCPs', sampleSize: 245, effect: 112.5, ci: [78.3, 146.7], isSignificant: true },
-  { segment: 'Medium-Volume HCPs', sampleSize: 520, effect: 78.2, ci: [52.1, 104.3], isSignificant: true },
-  { segment: 'Low-Volume HCPs', sampleSize: 485, effect: 45.8, ci: [18.9, 72.7], isSignificant: true },
-  { segment: 'Northeast Region', sampleSize: 380, effect: 95.3, ci: [68.2, 122.4], isSignificant: true },
-  { segment: 'Southeast Region', sampleSize: 350, effect: 72.1, ci: [42.5, 101.7], isSignificant: true },
-  { segment: 'Midwest Region', sampleSize: 290, effect: 68.4, ci: [35.2, 101.6], isSignificant: true },
-  { segment: 'West Region', sampleSize: 230, effect: 52.6, ci: [12.8, 92.4], isSignificant: true },
-];
+const IMPACT_DATA: ImpactData[] = [];
+const TREATMENT_EFFECTS: TreatmentEffect[] = [];
+const BEFORE_AFTER: BeforeAfterComparison[] = [];
+const SEGMENT_EFFECTS: SegmentEffect[] = [];
 
 // =============================================================================
 // HELPER FUNCTIONS
@@ -329,24 +242,31 @@ function InterventionImpact() {
     [selectedIntervention]
   );
 
-  // Calculate summary metrics
+  // Calculate summary metrics — returns null when no analysis data is loaded
+  // (F-002: don't fabricate "0% lift" displays from empty data).
   const summaryMetrics = useMemo(() => {
-    const impactData = SAMPLE_IMPACT_DATA;
-    const postInterventionData = impactData.slice(30);
+    if (IMPACT_DATA.length === 0 || TREATMENT_EFFECTS.length === 0) {
+      return null;
+    }
+    const postInterventionData = IMPACT_DATA.slice(30);
+    if (postInterventionData.length === 0) return null;
 
     const avgActual = postInterventionData.reduce((a, b) => a + b.actual, 0) / postInterventionData.length;
     const avgCounterfactual = postInterventionData.reduce((a, b) => a + b.counterfactual, 0) / postInterventionData.length;
     const cumulativeEffect = postInterventionData.reduce((a, b) => a + (b.actual - b.counterfactual), 0);
 
-    const significantEffects = SAMPLE_TREATMENT_EFFECTS.filter((e) => e.isSignificant).length;
-    const totalEffects = SAMPLE_TREATMENT_EFFECTS.length;
+    const significantEffects = TREATMENT_EFFECTS.filter((e) => e.isSignificant).length;
+    const totalEffects = TREATMENT_EFFECTS.length;
+    const avgATE = significantEffects > 0
+      ? TREATMENT_EFFECTS.filter((e) => e.isSignificant).reduce((a, b) => a + b.ate, 0) / significantEffects
+      : 0;
 
     return {
-      avgLift: ((avgActual - avgCounterfactual) / avgCounterfactual) * 100,
+      avgLift: avgCounterfactual !== 0 ? ((avgActual - avgCounterfactual) / avgCounterfactual) * 100 : 0,
       cumulativeEffect,
       significantEffects,
       totalEffects,
-      avgATE: SAMPLE_TREATMENT_EFFECTS.filter((e) => e.isSignificant).reduce((a, b) => a + b.ate, 0) / significantEffects,
+      avgATE,
     };
   }, []);
 
@@ -401,10 +321,10 @@ function InterventionImpact() {
   const handleExport = () => {
     const exportData = {
       intervention: currentIntervention,
-      impactData: SAMPLE_IMPACT_DATA,
-      treatmentEffects: SAMPLE_TREATMENT_EFFECTS,
-      beforeAfter: SAMPLE_BEFORE_AFTER,
-      segmentEffects: SAMPLE_SEGMENT_EFFECTS,
+      impactData: IMPACT_DATA,
+      treatmentEffects: TREATMENT_EFFECTS,
+      beforeAfter: BEFORE_AFTER,
+      segmentEffects: SEGMENT_EFFECTS,
     };
     const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -510,51 +430,62 @@ function InterventionImpact() {
                 </span>
               </div>
             </div>
-            <div className="flex items-center gap-4">
-              <div className="text-center">
-                <p className="text-2xl font-bold text-emerald-600">
-                  +{summaryMetrics.avgLift.toFixed(1)}%
-                </p>
-                <p className="text-xs text-muted-foreground">Avg. Lift</p>
+            {summaryMetrics && (
+              <div className="flex items-center gap-4">
+                <div className="text-center">
+                  <p className="text-2xl font-bold text-emerald-600">
+                    +{summaryMetrics.avgLift.toFixed(1)}%
+                  </p>
+                  <p className="text-xs text-muted-foreground">Avg. Lift</p>
+                </div>
+                <div className="text-center">
+                  <p className="text-2xl font-bold">
+                    {summaryMetrics.cumulativeEffect.toLocaleString()}
+                  </p>
+                  <p className="text-xs text-muted-foreground">Cumulative Effect</p>
+                </div>
               </div>
-              <div className="text-center">
-                <p className="text-2xl font-bold">
-                  {summaryMetrics.cumulativeEffect.toLocaleString()}
-                </p>
-                <p className="text-xs text-muted-foreground">Cumulative Effect</p>
-              </div>
-            </div>
+            )}
           </div>
         </CardContent>
       </Card>
 
       {/* KPI Summary */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <KPICard
-          title="Average Treatment Effect"
-          value={`+${summaryMetrics.avgATE.toFixed(1)}`}
-          status="healthy"
-          description="Across significant outcomes"
-        />
-        <KPICard
-          title="Significant Effects"
-          value={`${summaryMetrics.significantEffects}/${summaryMetrics.totalEffects}`}
-          status={summaryMetrics.significantEffects > summaryMetrics.totalEffects / 2 ? 'healthy' : 'warning'}
-          description="p < 0.05"
-        />
-        <KPICard
-          title="Cumulative Impact"
-          value={`+${(summaryMetrics.cumulativeEffect / 1000).toFixed(1)}K`}
-          status="healthy"
-          description="Total incremental units"
-        />
-        <KPICard
-          title="ROI Estimate"
-          value="3.2x"
-          status="healthy"
-          description="Return on investment"
-        />
-      </div>
+      {summaryMetrics ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+          <KPICard
+            title="Average Treatment Effect"
+            value={`+${summaryMetrics.avgATE.toFixed(1)}`}
+            status="healthy"
+            description="Across significant outcomes"
+          />
+          <KPICard
+            title="Significant Effects"
+            value={`${summaryMetrics.significantEffects}/${summaryMetrics.totalEffects}`}
+            status={summaryMetrics.significantEffects > summaryMetrics.totalEffects / 2 ? 'healthy' : 'warning'}
+            description="p < 0.05"
+          />
+          <KPICard
+            title="Cumulative Impact"
+            value={`+${(summaryMetrics.cumulativeEffect / 1000).toFixed(1)}K`}
+            status="healthy"
+            description="Total incremental units"
+          />
+          <KPICard
+            title="ROI Estimate"
+            value="N/A"
+            status="warning"
+            description="API endpoint not yet wired"
+          />
+        </div>
+      ) : (
+        <div className="mb-8">
+          <EmptyState
+            title="No analysis data for this intervention"
+            description="Run an analysis to populate KPI summary, treatment effects, and counterfactual comparisons."
+          />
+        </div>
+      )}
 
       {/* Main Content Tabs */}
       <Tabs defaultValue="causal" className="space-y-6">
@@ -583,134 +514,151 @@ function InterventionImpact() {
 
         {/* Causal Impact Tab */}
         <TabsContent value="causal" className="space-y-6">
-          <Card>
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <div>
-                  <CardTitle>Causal Impact Analysis</CardTitle>
-                  <CardDescription>
-                    Comparison of actual outcomes vs. counterfactual (what would have happened without intervention)
-                  </CardDescription>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="flex items-center gap-1">
-                    <div className="w-3 h-3 rounded-full bg-blue-500" />
-                    <span className="text-xs">Actual</span>
+          {IMPACT_DATA.length === 0 ? (
+            <EmptyState
+              title="No causal impact data available"
+              description="Counterfactual analysis requires API-sourced time-series. Run an analysis to populate this tab."
+            />
+          ) : (
+            <>
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle>Causal Impact Analysis</CardTitle>
+                      <CardDescription>
+                        Comparison of actual outcomes vs. counterfactual (what would have happened without intervention)
+                      </CardDescription>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1">
+                        <div className="w-3 h-3 rounded-full bg-blue-500" />
+                        <span className="text-xs">Actual</span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <div className="w-3 h-3 rounded-full bg-slate-400" />
+                        <span className="text-xs">Counterfactual</span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <div className="w-3 h-1 bg-slate-300" />
+                        <span className="text-xs">95% CI</span>
+                      </div>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-1">
-                    <div className="w-3 h-3 rounded-full bg-slate-400" />
-                    <span className="text-xs">Counterfactual</span>
+                </CardHeader>
+                <CardContent>
+                  <ResponsiveContainer width="100%" height={400}>
+                    <ComposedChart data={IMPACT_DATA} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+                      <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
+                      <XAxis
+                        dataKey="date"
+                        tickFormatter={formatDate}
+                        fontSize={12}
+                        tickLine={false}
+                      />
+                      <YAxis fontSize={12} tickLine={false} axisLine={false} />
+                      <Tooltip content={<ImpactTooltip />} />
+                      <Legend />
+
+                      {/* Confidence interval area */}
+                      <Area
+                        type="monotone"
+                        dataKey="upperBound"
+                        stroke="none"
+                        fill="hsl(var(--muted))"
+                        fillOpacity={0.5}
+                        name="Upper CI"
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="lowerBound"
+                        stroke="none"
+                        fill="white"
+                        fillOpacity={1}
+                        name="Lower CI"
+                      />
+
+                      {/* Counterfactual line */}
+                      <Line
+                        type="monotone"
+                        dataKey="counterfactual"
+                        stroke="hsl(var(--muted-foreground))"
+                        strokeWidth={2}
+                        strokeDasharray="5 5"
+                        dot={false}
+                        name="Counterfactual"
+                      />
+
+                      {/* Actual line */}
+                      <Line
+                        type="monotone"
+                        dataKey="actual"
+                        stroke="hsl(var(--chart-1))"
+                        strokeWidth={2}
+                        dot={false}
+                        name="Actual"
+                      />
+
+                      {/* Intervention start line — only when enough data points exist */}
+                      {IMPACT_DATA.length > 30 && (
+                        <ReferenceLine
+                          x={IMPACT_DATA[30].date}
+                          stroke="hsl(var(--destructive))"
+                          strokeDasharray="3 3"
+                          label={{ value: 'Intervention Start', position: 'top', fontSize: 10, fill: 'hsl(var(--destructive))' }}
+                        />
+                      )}
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </CardContent>
+              </Card>
+
+              {/* Impact Interpretation */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Info className="h-5 w-5" />
+                    Impact Interpretation
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <div className="space-y-2">
+                      <h4 className="font-medium text-emerald-600">Positive Impact Detected</h4>
+                      <p className="text-sm text-muted-foreground">
+                        The intervention shows a statistically significant positive effect. The actual outcomes
+                        consistently exceed the counterfactual prediction, with the gap widening over time.
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <h4 className="font-medium">Confidence Level: 95%</h4>
+                      <p className="text-sm text-muted-foreground">
+                        The shaded area represents the 95% confidence interval for the counterfactual.
+                        Since actual values fall above this range, we can be confident the effect is real.
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <h4 className="font-medium">Methodology: CausalImpact</h4>
+                      <p className="text-sm text-muted-foreground">
+                        Using Bayesian structural time-series model to estimate what would have happened
+                        without the intervention, controlling for trends and seasonality.
+                      </p>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-1">
-                    <div className="w-3 h-1 bg-slate-300" />
-                    <span className="text-xs">95% CI</span>
-                  </div>
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <ResponsiveContainer width="100%" height={400}>
-                <ComposedChart data={SAMPLE_IMPACT_DATA} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-                  <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
-                  <XAxis
-                    dataKey="date"
-                    tickFormatter={formatDate}
-                    fontSize={12}
-                    tickLine={false}
-                  />
-                  <YAxis fontSize={12} tickLine={false} axisLine={false} />
-                  <Tooltip content={<ImpactTooltip />} />
-                  <Legend />
-
-                  {/* Confidence interval area */}
-                  <Area
-                    type="monotone"
-                    dataKey="upperBound"
-                    stroke="none"
-                    fill="hsl(var(--muted))"
-                    fillOpacity={0.5}
-                    name="Upper CI"
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="lowerBound"
-                    stroke="none"
-                    fill="white"
-                    fillOpacity={1}
-                    name="Lower CI"
-                  />
-
-                  {/* Counterfactual line */}
-                  <Line
-                    type="monotone"
-                    dataKey="counterfactual"
-                    stroke="hsl(var(--muted-foreground))"
-                    strokeWidth={2}
-                    strokeDasharray="5 5"
-                    dot={false}
-                    name="Counterfactual"
-                  />
-
-                  {/* Actual line */}
-                  <Line
-                    type="monotone"
-                    dataKey="actual"
-                    stroke="hsl(var(--chart-1))"
-                    strokeWidth={2}
-                    dot={false}
-                    name="Actual"
-                  />
-
-                  {/* Intervention start line */}
-                  <ReferenceLine
-                    x={SAMPLE_IMPACT_DATA[30].date}
-                    stroke="hsl(var(--destructive))"
-                    strokeDasharray="3 3"
-                    label={{ value: 'Intervention Start', position: 'top', fontSize: 10, fill: 'hsl(var(--destructive))' }}
-                  />
-                </ComposedChart>
-              </ResponsiveContainer>
-            </CardContent>
-          </Card>
-
-          {/* Impact Interpretation */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Info className="h-5 w-5" />
-                Impact Interpretation
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div className="space-y-2">
-                  <h4 className="font-medium text-emerald-600">Positive Impact Detected</h4>
-                  <p className="text-sm text-muted-foreground">
-                    The intervention shows a statistically significant positive effect. The actual outcomes
-                    consistently exceed the counterfactual prediction, with the gap widening over time.
-                  </p>
-                </div>
-                <div className="space-y-2">
-                  <h4 className="font-medium">Confidence Level: 95%</h4>
-                  <p className="text-sm text-muted-foreground">
-                    The shaded area represents the 95% confidence interval for the counterfactual.
-                    Since actual values fall above this range, we can be confident the effect is real.
-                  </p>
-                </div>
-                <div className="space-y-2">
-                  <h4 className="font-medium">Methodology: CausalImpact</h4>
-                  <p className="text-sm text-muted-foreground">
-                    Using Bayesian structural time-series model to estimate what would have happened
-                    without the intervention, controlling for trends and seasonality.
-                  </p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+                </CardContent>
+              </Card>
+            </>
+          )}
         </TabsContent>
 
         {/* Before/After Tab */}
         <TabsContent value="beforeafter" className="space-y-6">
+          {BEFORE_AFTER.length === 0 ? (
+            <EmptyState
+              title="No before/after data available"
+              description="Pre- and post-intervention metric snapshots will appear once an analysis is run."
+            />
+          ) : (<>
           <Card>
             <CardHeader>
               <CardTitle>Before/After Comparison</CardTitle>
@@ -721,7 +669,7 @@ function InterventionImpact() {
             <CardContent>
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart
-                  data={SAMPLE_BEFORE_AFTER}
+                  data={BEFORE_AFTER}
                   layout="vertical"
                   margin={{ top: 5, right: 30, left: 100, bottom: 5 }}
                 >
@@ -756,7 +704,7 @@ function InterventionImpact() {
                     </tr>
                   </thead>
                   <tbody>
-                    {SAMPLE_BEFORE_AFTER.map((comparison) => (
+                    {BEFORE_AFTER.map((comparison) => (
                       <tr key={comparison.metric} className="border-b border-border hover:bg-muted/50">
                         <td className="py-3 px-4 font-medium">{comparison.metric}</td>
                         <td className="py-3 px-4 text-right text-muted-foreground">
@@ -791,10 +739,17 @@ function InterventionImpact() {
               </div>
             </CardContent>
           </Card>
+          </>)}
         </TabsContent>
 
         {/* Treatment Effects Tab */}
         <TabsContent value="effects" className="space-y-6">
+          {TREATMENT_EFFECTS.length === 0 ? (
+            <EmptyState
+              title="No treatment effect estimates available"
+              description="ATE, CI, p-value, and effect size will appear here once an analysis is run."
+            />
+          ) : (
           <Card>
             <CardHeader>
               <CardTitle>Treatment Effect Estimates</CardTitle>
@@ -804,7 +759,7 @@ function InterventionImpact() {
             </CardHeader>
             <CardContent>
               <div className="space-y-6">
-                {SAMPLE_TREATMENT_EFFECTS.map((effect) => (
+                {TREATMENT_EFFECTS.map((effect) => (
                   <div
                     key={effect.id}
                     className={cn(
@@ -899,10 +854,17 @@ function InterventionImpact() {
               </div>
             </CardContent>
           </Card>
+          )}
         </TabsContent>
 
         {/* Segment Analysis Tab */}
         <TabsContent value="segments" className="space-y-6">
+          {SEGMENT_EFFECTS.length === 0 ? (
+            <EmptyState
+              title="No segment heterogeneity data available"
+              description="Heterogeneous treatment effects by segment will appear here once an analysis is run."
+            />
+          ) : (<>
           <Card>
             <CardHeader>
               <CardTitle>Heterogeneous Treatment Effects</CardTitle>
@@ -913,7 +875,7 @@ function InterventionImpact() {
             <CardContent>
               <ResponsiveContainer width="100%" height={350}>
                 <BarChart
-                  data={SAMPLE_SEGMENT_EFFECTS}
+                  data={SEGMENT_EFFECTS}
                   layout="vertical"
                   margin={{ top: 5, right: 30, left: 120, bottom: 5 }}
                 >
@@ -935,7 +897,7 @@ function InterventionImpact() {
 
           {/* Segment Details */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {SAMPLE_SEGMENT_EFFECTS.map((segment) => (
+            {SEGMENT_EFFECTS.map((segment) => (
               <Card key={segment.segment}>
                 <CardContent className="pt-4">
                   <div className="flex items-center justify-between mb-2">
@@ -960,7 +922,7 @@ function InterventionImpact() {
                       <span className="font-medium">{segment.sampleSize}</span>
                     </div>
                     <Progress
-                      value={(segment.effect / Math.max(...SAMPLE_SEGMENT_EFFECTS.map(s => s.effect))) * 100}
+                      value={(segment.effect / Math.max(...SEGMENT_EFFECTS.map(s => s.effect))) * 100}
                       className="h-2"
                     />
                   </div>
@@ -1000,6 +962,7 @@ function InterventionImpact() {
               </div>
             </CardContent>
           </Card>
+          </>)}
         </TabsContent>
 
         {/* Digital Twin Tab */}

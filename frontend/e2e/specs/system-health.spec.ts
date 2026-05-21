@@ -179,19 +179,24 @@ test.describe('System Health Page', () => {
       expect(hasStatus).toBeTruthy()
     })
 
-    test('should show API Gateway service', async () => {
+    // F-002: SAMPLE_SERVICES data was deleted from production paths.
+    // The page now renders an empty state when no API service-status
+    // endpoint is wired, so the individual service-name assertions
+    // below are no longer applicable. Once the API hook exists, this
+    // block should re-assert on the real service names.
+    test.skip('should show API Gateway service (skipped post F-002)', async () => {
       await expect(healthPage.apiGatewayService).toBeVisible()
     })
 
-    test('should show PostgreSQL service', async () => {
+    test.skip('should show PostgreSQL service (skipped post F-002)', async () => {
       await expect(healthPage.postgresService).toBeVisible()
     })
 
-    test('should show Redis Cache service', async () => {
+    test.skip('should show Redis Cache service (skipped post F-002)', async () => {
       await expect(healthPage.redisService).toBeVisible()
     })
 
-    test('should show FalkorDB service', async () => {
+    test.skip('should show FalkorDB service (skipped post F-002)', async () => {
       await expect(healthPage.falkordbService).toBeVisible()
     })
   })
@@ -202,7 +207,8 @@ test.describe('System Health Page', () => {
       expect(hasModels).toBeTruthy()
     })
 
-    test('should show Propensity Model', async () => {
+    // F-002: SAMPLE_MODELS data was deleted from production paths.
+    test.skip('should show Propensity Model (skipped post F-002)', async () => {
       await expect(healthPage.propensityModel).toBeVisible()
     })
   })

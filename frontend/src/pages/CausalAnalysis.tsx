@@ -19,8 +19,6 @@ import {
   Tooltip,
   Legend,
   ResponsiveContainer,
-  LineChart,
-  Line,
   ErrorBar,
   Cell,
 } from 'recharts';
@@ -30,6 +28,7 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { EmptyState } from '@/components/ui/EmptyState';
 import {
   Select,
   SelectContent,
@@ -62,92 +61,14 @@ import {
 } from 'lucide-react';
 
 // =============================================================================
-// SAMPLE DATA
+// DEFAULTS
 // =============================================================================
+// F-002 fix: this page no longer ships fabricated SAMPLE_* analysis results.
+// API hook results are surfaced when available; otherwise the page renders
+// explicit empty states. The list of supported estimators below is a
+// configuration constant (display-only metadata), NOT analysis output.
 
-const SAMPLE_HIERARCHICAL_RESULT = {
-  analysis_id: 'ha_kisqali_rep_visits_001',
-  status: CausalAnalysisStatus.COMPLETED,
-  overall_ate: 0.245,
-  overall_ci_lower: 0.182,
-  overall_ci_upper: 0.308,
-  segment_heterogeneity: 42.5,
-  n_segments_analyzed: 4,
-  segmentation_method: 'quantile',
-  estimator_type: 'causal_forest',
-  latency_ms: 3420,
-  created_at: new Date().toISOString(),
-  segment_results: [
-    {
-      segment_id: 1,
-      segment_name: 'High Uplift',
-      n_samples: 2500,
-      uplift_range: [0.35, 0.50] as [number, number],
-      cate_mean: 0.42,
-      cate_std: 0.08,
-      cate_ci_lower: 0.36,
-      cate_ci_upper: 0.48,
-      success: true,
-    },
-    {
-      segment_id: 2,
-      segment_name: 'Medium-High Uplift',
-      n_samples: 3200,
-      uplift_range: [0.20, 0.35] as [number, number],
-      cate_mean: 0.28,
-      cate_std: 0.06,
-      cate_ci_lower: 0.22,
-      cate_ci_upper: 0.34,
-      success: true,
-    },
-    {
-      segment_id: 3,
-      segment_name: 'Medium-Low Uplift',
-      n_samples: 2800,
-      uplift_range: [0.05, 0.20] as [number, number],
-      cate_mean: 0.12,
-      cate_std: 0.05,
-      cate_ci_lower: 0.07,
-      cate_ci_upper: 0.17,
-      success: true,
-    },
-    {
-      segment_id: 4,
-      segment_name: 'Low Uplift',
-      n_samples: 1500,
-      uplift_range: [-0.05, 0.05] as [number, number],
-      cate_mean: 0.02,
-      cate_std: 0.04,
-      cate_ci_lower: -0.02,
-      cate_ci_upper: 0.06,
-      success: true,
-    },
-  ],
-  nested_ci: {
-    aggregate_ate: 0.245,
-    aggregate_ci_lower: 0.182,
-    aggregate_ci_upper: 0.308,
-    aggregate_std: 0.032,
-    confidence_level: 0.95,
-    aggregation_method: 'variance_weighted',
-    segment_contributions: { '1': 0.35, '2': 0.32, '3': 0.22, '4': 0.11 } as Record<string, number>,
-    i_squared: 42.5,
-    tau_squared: 0.008,
-    n_segments_included: 4,
-    total_sample_size: 10000,
-  },
-  warnings: [],
-  errors: [],
-};
-
-const SAMPLE_LIBRARY_COMPARISON = [
-  { library: 'DoWhy', effect: 0.238, ci_lower: 0.18, ci_upper: 0.30, latency: 850 },
-  { library: 'EconML', effect: 0.252, ci_lower: 0.19, ci_upper: 0.31, latency: 1200 },
-  { library: 'CausalML', effect: 0.241, ci_lower: 0.17, ci_upper: 0.32, latency: 1450 },
-  { library: 'NetworkX', effect: null, ci_lower: null, ci_upper: null, latency: 320, note: 'Graph structure only' },
-];
-
-const SAMPLE_ESTIMATORS = [
+const SUPPORTED_ESTIMATORS = [
   { name: 'Causal Forest', library: 'econml', type: 'CATE', supports_ci: true, supports_hte: true },
   { name: 'Linear DML', library: 'econml', type: 'CATE', supports_ci: true, supports_hte: true },
   { name: 'X-Learner', library: 'econml', type: 'Meta-learner', supports_ci: true, supports_hte: true },
@@ -156,30 +77,20 @@ const SAMPLE_ESTIMATORS = [
   { name: 'Instrumental Variable', library: 'dowhy', type: 'Identification', supports_ci: true, supports_hte: false },
 ];
 
-const SAMPLE_HEALTH = {
-  status: 'healthy',
+const DEFAULT_HEALTH = {
+  status: 'unknown',
   libraries_available: {
-    dowhy: true,
-    econml: true,
-    causalml: true,
-    networkx: true,
+    dowhy: false,
+    econml: false,
+    causalml: false,
+    networkx: false,
   },
-  estimators_loaded: 15,
-  pipeline_orchestrator_ready: true,
-  hierarchical_analyzer_ready: true,
-  analysis_count_24h: 47,
-  average_latency_ms: 2850,
+  estimators_loaded: 0,
+  pipeline_orchestrator_ready: false,
+  hierarchical_analyzer_ready: false,
+  analysis_count_24h: 0,
+  average_latency_ms: null as number | null,
 };
-
-const SAMPLE_ANALYSIS_HISTORY = [
-  { date: '2026-01-14', count: 8, avg_ate: 0.22 },
-  { date: '2026-01-15', count: 12, avg_ate: 0.25 },
-  { date: '2026-01-16', count: 6, avg_ate: 0.21 },
-  { date: '2026-01-17', count: 9, avg_ate: 0.24 },
-  { date: '2026-01-18', count: 15, avg_ate: 0.28 },
-  { date: '2026-01-19', count: 11, avg_ate: 0.26 },
-  { date: '2026-01-20', count: 7, avg_ate: 0.23 },
-];
 
 // =============================================================================
 // CONSTANTS
@@ -219,13 +130,13 @@ function getStatusBadge(status: CausalAnalysisStatus) {
   );
 }
 
-function formatEffect(effect: number | null, decimals: number = 3): string {
-  if (effect === null) return 'N/A';
+function formatEffect(effect: number | null | undefined, decimals: number = 3): string {
+  if (effect === null || effect === undefined) return 'N/A';
   return effect.toFixed(decimals);
 }
 
-function formatCI(lower: number | null, upper: number | null): string {
-  if (lower === null || upper === null) return 'N/A';
+function formatCI(lower: number | null | undefined, upper: number | null | undefined): string {
+  if (lower === null || lower === undefined || upper === null || upper === undefined) return 'N/A';
   return `[${lower.toFixed(3)}, ${upper.toFixed(3)}]`;
 }
 
@@ -243,10 +154,20 @@ export default function CausalAnalysis() {
   const { data: healthData } = useCausalHealth();
   const runAnalysisMutation = useRunHierarchicalAnalysis();
 
-  // Use API data or fallback to sample
-  const health = healthData || SAMPLE_HEALTH;
-  const hierarchicalResult = SAMPLE_HIERARCHICAL_RESULT;
-  const libraryComparison = SAMPLE_LIBRARY_COMPARISON;
+  // Use API data or fall back to neutral defaults (no fabricated SAMPLE_).
+  const health = healthData ?? DEFAULT_HEALTH;
+  // Hierarchical result + library comparison come ONLY from API. When the
+  // mutation has not run (or has not yet returned), these are `undefined`
+  // and the render path below surfaces explicit empty states.
+  const hierarchicalResult = runAnalysisMutation.data;
+  const libraryComparison: Array<{
+    library: string;
+    effect: number | null;
+    ci_lower: number | null;
+    ci_upper: number | null;
+    latency: number;
+    note?: string;
+  }> = []; // F-002: no longer fabricated; surfaced via API when available
 
   // Calculate overview metrics
   const overviewMetrics = useMemo(() => {
@@ -263,8 +184,9 @@ export default function CausalAnalysis() {
     };
   }, [health]);
 
-  // Segment chart data
+  // Segment chart data — empty when no analysis has been run yet
   const segmentChartData = useMemo(() => {
+    if (!hierarchicalResult) return [];
     return hierarchicalResult.segment_results.map((seg) => ({
       name: seg.segment_name,
       cate: seg.cate_mean ?? 0,
@@ -450,184 +372,201 @@ export default function CausalAnalysis() {
             </CardContent>
           </Card>
 
-          {/* Analysis Results Summary */}
-          <div className="grid md:grid-cols-3 gap-6">
-            <Card>
-              <CardHeader>
-                <CardTitle>Overall ATE</CardTitle>
-                <CardDescription>Average Treatment Effect</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="text-center">
-                  <div className="text-4xl font-bold text-primary">
-                    {formatEffect(hierarchicalResult.overall_ate)}
-                  </div>
-                  <div className="text-sm text-muted-foreground mt-2">
-                    95% CI: {formatCI(hierarchicalResult.overall_ci_lower, hierarchicalResult.overall_ci_upper)}
-                  </div>
-                  <div className="mt-4">
-                    {getStatusBadge(hierarchicalResult.status)}
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
+          {/* Analysis Results — empty state when no analysis run yet (F-002) */}
+          {!hierarchicalResult ? (
+            <EmptyState
+              title="No hierarchical CATE analysis available"
+              description="Configure parameters above and click Run Analysis to estimate segment-level treatment effects."
+            />
+          ) : (
+            <>
+              {/* Analysis Results Summary */}
+              <div className="grid md:grid-cols-3 gap-6">
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Overall ATE</CardTitle>
+                    <CardDescription>Average Treatment Effect</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-center">
+                      <div className="text-4xl font-bold text-primary">
+                        {formatEffect(hierarchicalResult.overall_ate)}
+                      </div>
+                      <div className="text-sm text-muted-foreground mt-2">
+                        95% CI: {formatCI(hierarchicalResult.overall_ci_lower, hierarchicalResult.overall_ci_upper)}
+                      </div>
+                      <div className="mt-4">
+                        {getStatusBadge(hierarchicalResult.status)}
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
 
-            <Card>
-              <CardHeader>
-                <CardTitle>Heterogeneity (I²)</CardTitle>
-                <CardDescription>Between-segment variance</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="text-center">
-                  <div className={`text-4xl font-bold ${
-                    (hierarchicalResult.segment_heterogeneity ?? 0) > 50
-                      ? 'text-yellow-600'
-                      : 'text-green-600'
-                  }`}>
-                    {hierarchicalResult.segment_heterogeneity?.toFixed(1)}%
-                  </div>
-                  <div className="text-sm text-muted-foreground mt-2">
-                    {(hierarchicalResult.segment_heterogeneity ?? 0) > 50
-                      ? 'Substantial heterogeneity'
-                      : 'Moderate heterogeneity'}
-                  </div>
-                  <div className="mt-4 text-xs text-muted-foreground">
-                    τ² = {hierarchicalResult.nested_ci?.tau_squared?.toFixed(4)}
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Heterogeneity (I²)</CardTitle>
+                    <CardDescription>Between-segment variance</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-center">
+                      <div className={`text-4xl font-bold ${
+                        (hierarchicalResult.segment_heterogeneity ?? 0) > 50
+                          ? 'text-yellow-600'
+                          : 'text-green-600'
+                      }`}>
+                        {hierarchicalResult.segment_heterogeneity?.toFixed(1)}%
+                      </div>
+                      <div className="text-sm text-muted-foreground mt-2">
+                        {(hierarchicalResult.segment_heterogeneity ?? 0) > 50
+                          ? 'Substantial heterogeneity'
+                          : 'Moderate heterogeneity'}
+                      </div>
+                      <div className="mt-4 text-xs text-muted-foreground">
+                        τ² = {hierarchicalResult.nested_ci?.tau_squared?.toFixed(4)}
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
 
-            <Card>
-              <CardHeader>
-                <CardTitle>Analysis Details</CardTitle>
-                <CardDescription>Configuration used</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Segments:</span>
-                    <span className="font-medium">{hierarchicalResult.n_segments_analyzed}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Method:</span>
-                    <span className="font-medium capitalize">{hierarchicalResult.segmentation_method}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Estimator:</span>
-                    <span className="font-medium capitalize">{hierarchicalResult.estimator_type.replace('_', ' ')}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Total Samples:</span>
-                    <span className="font-medium">{hierarchicalResult.nested_ci?.total_sample_size.toLocaleString()}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Latency:</span>
-                    <span className="font-medium">{(hierarchicalResult.latency_ms / 1000).toFixed(1)}s</span>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Segment-Level Results */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Segment-Level CATE Estimates</CardTitle>
-              <CardDescription>
-                Conditional Average Treatment Effects by uplift segment with 95% confidence intervals
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <ResponsiveContainer width="100%" height={350}>
-                <BarChart data={segmentChartData} layout="vertical">
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis type="number" domain={[-0.1, 0.6]} />
-                  <YAxis dataKey="name" type="category" width={120} />
-                  <Tooltip
-                    formatter={(value) => typeof value === 'number' ? value.toFixed(3) : value}
-                    content={({ active, payload }) => {
-                      if (active && payload && payload.length) {
-                        const data = payload[0].payload;
-                        return (
-                          <div className="bg-background border rounded-lg p-3 shadow-lg">
-                            <p className="font-semibold">{data.name}</p>
-                            <p>CATE: {data.cate.toFixed(3)}</p>
-                            <p>95% CI: [{data.ci_lower.toFixed(3)}, {data.ci_upper.toFixed(3)}]</p>
-                            <p>Samples: {data.samples.toLocaleString()}</p>
-                          </div>
-                        );
-                      }
-                      return null;
-                    }}
-                  />
-                  <Legend />
-                  <Bar dataKey="cate" fill={COLORS.primary} name="CATE">
-                    {segmentChartData.map((entry, index) => (
-                      <Cell
-                        key={`cell-${index}`}
-                        fill={entry.cate > 0.2 ? COLORS.success : entry.cate > 0.1 ? COLORS.primary : COLORS.warning}
-                      />
-                    ))}
-                    <ErrorBar dataKey="errorY" width={4} strokeWidth={2} stroke="#333" />
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </CardContent>
-          </Card>
-
-          {/* Segment Details Table */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Segment Details</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b">
-                      <th className="text-left py-2 px-4">Segment</th>
-                      <th className="text-left py-2 px-4">Samples</th>
-                      <th className="text-left py-2 px-4">Uplift Range</th>
-                      <th className="text-left py-2 px-4">CATE</th>
-                      <th className="text-left py-2 px-4">95% CI</th>
-                      <th className="text-left py-2 px-4">Contribution</th>
-                      <th className="text-left py-2 px-4">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {hierarchicalResult.segment_results.map((seg) => (
-                      <tr key={seg.segment_id} className="border-b hover:bg-muted/50">
-                        <td className="py-2 px-4 font-medium">{seg.segment_name}</td>
-                        <td className="py-2 px-4">{seg.n_samples.toLocaleString()}</td>
-                        <td className="py-2 px-4 font-mono text-xs">
-                          [{seg.uplift_range[0].toFixed(2)}, {seg.uplift_range[1].toFixed(2)}]
-                        </td>
-                        <td className="py-2 px-4 font-semibold">{formatEffect(seg.cate_mean)}</td>
-                        <td className="py-2 px-4 font-mono text-xs">
-                          {formatCI(seg.cate_ci_lower ?? null, seg.cate_ci_upper ?? null)}
-                        </td>
-                        <td className="py-2 px-4">
-                          {((hierarchicalResult.nested_ci?.segment_contributions[String(seg.segment_id)] ?? 0) * 100).toFixed(0)}%
-                        </td>
-                        <td className="py-2 px-4">
-                          {seg.success ? (
-                            <CheckCircle className="h-4 w-4 text-green-500" />
-                          ) : (
-                            <AlertTriangle className="h-4 w-4 text-red-500" />
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Analysis Details</CardTitle>
+                    <CardDescription>Configuration used</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-2 text-sm">
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Segments:</span>
+                        <span className="font-medium">{hierarchicalResult.n_segments_analyzed}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Method:</span>
+                        <span className="font-medium capitalize">{hierarchicalResult.segmentation_method}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Estimator:</span>
+                        <span className="font-medium capitalize">{hierarchicalResult.estimator_type.replace('_', ' ')}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Total Samples:</span>
+                        <span className="font-medium">{hierarchicalResult.nested_ci?.total_sample_size.toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Latency:</span>
+                        <span className="font-medium">{(hierarchicalResult.latency_ms / 1000).toFixed(1)}s</span>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
               </div>
-            </CardContent>
-          </Card>
+
+              {/* Segment-Level Results */}
+              <Card>
+                <CardHeader>
+                  <CardTitle>Segment-Level CATE Estimates</CardTitle>
+                  <CardDescription>
+                    Conditional Average Treatment Effects by uplift segment with 95% confidence intervals
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <ResponsiveContainer width="100%" height={350}>
+                    <BarChart data={segmentChartData} layout="vertical">
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis type="number" domain={[-0.1, 0.6]} />
+                      <YAxis dataKey="name" type="category" width={120} />
+                      <Tooltip
+                        formatter={(value) => typeof value === 'number' ? value.toFixed(3) : value}
+                        content={({ active, payload }) => {
+                          if (active && payload && payload.length) {
+                            const data = payload[0].payload;
+                            return (
+                              <div className="bg-background border rounded-lg p-3 shadow-lg">
+                                <p className="font-semibold">{data.name}</p>
+                                <p>CATE: {data.cate.toFixed(3)}</p>
+                                <p>95% CI: [{data.ci_lower.toFixed(3)}, {data.ci_upper.toFixed(3)}]</p>
+                                <p>Samples: {data.samples.toLocaleString()}</p>
+                              </div>
+                            );
+                          }
+                          return null;
+                        }}
+                      />
+                      <Legend />
+                      <Bar dataKey="cate" fill={COLORS.primary} name="CATE">
+                        {segmentChartData.map((entry, index) => (
+                          <Cell
+                            key={`cell-${index}`}
+                            fill={entry.cate > 0.2 ? COLORS.success : entry.cate > 0.1 ? COLORS.primary : COLORS.warning}
+                          />
+                        ))}
+                        <ErrorBar dataKey="errorY" width={4} strokeWidth={2} stroke="#333" />
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </CardContent>
+              </Card>
+
+              {/* Segment Details Table */}
+              <Card>
+                <CardHeader>
+                  <CardTitle>Segment Details</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b">
+                          <th className="text-left py-2 px-4">Segment</th>
+                          <th className="text-left py-2 px-4">Samples</th>
+                          <th className="text-left py-2 px-4">Uplift Range</th>
+                          <th className="text-left py-2 px-4">CATE</th>
+                          <th className="text-left py-2 px-4">95% CI</th>
+                          <th className="text-left py-2 px-4">Contribution</th>
+                          <th className="text-left py-2 px-4">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {hierarchicalResult.segment_results.map((seg) => (
+                          <tr key={seg.segment_id} className="border-b hover:bg-muted/50">
+                            <td className="py-2 px-4 font-medium">{seg.segment_name}</td>
+                            <td className="py-2 px-4">{seg.n_samples.toLocaleString()}</td>
+                            <td className="py-2 px-4 font-mono text-xs">
+                              [{seg.uplift_range[0].toFixed(2)}, {seg.uplift_range[1].toFixed(2)}]
+                            </td>
+                            <td className="py-2 px-4 font-semibold">{formatEffect(seg.cate_mean)}</td>
+                            <td className="py-2 px-4 font-mono text-xs">
+                              {formatCI(seg.cate_ci_lower ?? null, seg.cate_ci_upper ?? null)}
+                            </td>
+                            <td className="py-2 px-4">
+                              {((hierarchicalResult.nested_ci?.segment_contributions[String(seg.segment_id)] ?? 0) * 100).toFixed(0)}%
+                            </td>
+                            <td className="py-2 px-4">
+                              {seg.success ? (
+                                <CheckCircle className="h-4 w-4 text-green-500" />
+                              ) : (
+                                <AlertTriangle className="h-4 w-4 text-red-500" />
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </CardContent>
+              </Card>
+            </>
+          )}
         </TabsContent>
 
         {/* Library Comparison Tab */}
         <TabsContent value="libraries" className="space-y-6">
+          {libraryComparison.length === 0 ? (
+            <EmptyState
+              title="No library comparison available"
+              description="Run a causal analysis to compare effect estimates across DoWhy, EconML, and CausalML."
+            />
+          ) : (
+          <>
           <div className="grid md:grid-cols-2 gap-6">
             {/* Effect Comparison Chart */}
             <Card>
@@ -723,6 +662,8 @@ export default function CausalAnalysis() {
               </div>
             </CardContent>
           </Card>
+          </>
+          )}
         </TabsContent>
 
         {/* Estimators Tab */}
@@ -742,7 +683,7 @@ export default function CausalAnalysis() {
           </div>
 
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {SAMPLE_ESTIMATORS.filter(
+            {SUPPORTED_ESTIMATORS.filter(
               (e) => selectedLibrary === 'all' || e.library === selectedLibrary
             ).map((estimator) => (
               <Card key={estimator.name} className="hover:shadow-md transition-shadow">
@@ -791,32 +732,11 @@ export default function CausalAnalysis() {
               <CardDescription>Daily analysis count and average treatment effect</CardDescription>
             </CardHeader>
             <CardContent>
-              <ResponsiveContainer width="100%" height={300}>
-                <LineChart data={SAMPLE_ANALYSIS_HISTORY}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="date" />
-                  <YAxis yAxisId="left" />
-                  <YAxis yAxisId="right" orientation="right" domain={[0, 0.4]} />
-                  <Tooltip />
-                  <Legend />
-                  <Line
-                    yAxisId="left"
-                    type="monotone"
-                    dataKey="count"
-                    stroke={COLORS.primary}
-                    strokeWidth={2}
-                    name="Analysis Count"
-                  />
-                  <Line
-                    yAxisId="right"
-                    type="monotone"
-                    dataKey="avg_ate"
-                    stroke={COLORS.secondary}
-                    strokeWidth={2}
-                    name="Avg ATE"
-                  />
-                </LineChart>
-              </ResponsiveContainer>
+              {/* F-002: history requires an API endpoint not yet wired; show empty state. */}
+              <EmptyState
+                title="Analysis history not yet available"
+                description="Run analyses and the daily count + average ATE will appear here once the history endpoint is wired."
+              />
             </CardContent>
           </Card>
         </TabsContent>
