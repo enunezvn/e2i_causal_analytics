@@ -301,8 +301,7 @@ def test_architecture_doc_mlflow_image_tag_matches() -> None:
     # (defends against future doc restructures that drop the C4 mention
     # while leaving the table — or vice-versa).
     assert image_tags, (
-        "no ghcr.io/mlflow/mlflow:vX.Y.Z image tag found in "
-        "docs/ARCHITECTURE.md container table."
+        "no ghcr.io/mlflow/mlflow:vX.Y.Z image tag found in docs/ARCHITECTURE.md container table."
     )
     for tag in all_tags:
         assert tag == MLFLOW_DOCKER_IMAGE_TAG, (
