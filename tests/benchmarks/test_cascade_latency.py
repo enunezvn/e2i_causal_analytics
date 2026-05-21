@@ -9,7 +9,7 @@ Box 1 of issue #391 PERFORMANCE slice: benchmark
 **Tolerance band** (codified in
 ``tests/benchmarks/baselines/performance.json``; re-stated here so the
 test docstring carries the same numbers as the JSON, per codex iter-0 L1):
-- 10% relative OR 100ms absolute (whichever wider).
+- 10% relative OR 50ms absolute (whichever wider).
 Relative-vs-absolute policy is `max(rel, abs)` — see ``_within_tolerance``
 for the rationale; absolute band protects against noise on near-zero
 baselines, relative band catches real drift at large baselines.
@@ -19,13 +19,13 @@ baselines, relative band catches real drift at large baselines.
 this benchmark exercises the binary cascade shape — every reachable row
 gets ``invalidated_at`` set in one BFS pass.
 
-**Baseline strategy (placeholder-first-run-blesses, per PR #379 +
-[[feat-377-phase2-benchmark-close-20260519]])**: synthetic graph topology
-may not match the real production DAG, so the FIRST run on a given
-environment BLESSES the measured value as the baseline (re-write
-``tests/benchmarks/baselines/performance.json`` in that PR). Subsequent
-runs compare against the blessed value within the documented tolerance
-band (10% relative OR 100ms absolute, whichever wider).
+**Baseline strategy (ci-blessed-median, per issue #403)**: the baseline
+was blessed from 3 CI workflow_dispatch runs on the
+``feat/403-perf-baseline-rebless`` branch (see
+``_blessed_from_ci_runs`` in the baseline JSON); med-of-meds across the
+3 runs = 357.23ms, stdev across runs = 1.51%. The tolerance band was
+narrowed from the pre-#403 placeholder defaults to honestly reflect the
+observed CI variance.
 
 **Why we don't measure against the < 500ms absolute target**: the synthetic
 graph here is a microbenchmark of the BFS topology — it uses an in-memory
@@ -454,10 +454,15 @@ def test_cascade_5hop_bfs_latency_against_baseline() -> None:
     tolerance band.
 
     **Re-blessing the baseline**: if the measurement legitimately shifts
-    (e.g., after a BFS refactor), update
+    (e.g., after a BFS refactor), trigger ≥3 workflow_dispatch runs of
+    ``.github/workflows/benchmarks.yml`` on the rebless branch, download
+    the ``performance-benchmark-results`` artifact from each, take the
+    median-of-medians across runs, and update
     ``tests/benchmarks/baselines/performance.json`` in the same PR with
-    the new ``mean_ms`` value. Do NOT loosen tolerances to mask a
-    regression.
+    the new ``mean_ms`` value + refreshed ``_ci_observation`` +
+    ``_blessed_from_ci_runs`` list. Do NOT loosen tolerances to mask a
+    regression — observed stdev should drive the band, not arbitrary
+    safety factors (issue #403 methodology).
     """
     edges = _load_synthetic_graph(_GRAPH_FILE)
     baseline = _load_baseline()
@@ -509,10 +514,13 @@ def test_cascade_5hop_bfs_latency_against_baseline() -> None:
         p95_ms=p95_ms,
     )
 
-    # Placeholder-first-run policy: when baseline is 0.0, we PASS the
-    # benchmark unconditionally and emit a re-bless reminder. This is
-    # consistent with `tests/benchmarks/baselines/retrieval_quality.json`
-    # at the same baseline (per [[feat-377-phase2-benchmark-close-20260519]]).
+    # Placeholder-first-run policy retained as a guard: if baseline is
+    # 0.0 (e.g., revert to pre-#403 state, or new box that hasn't been
+    # blessed yet), PASS unconditionally and emit a re-bless reminder.
+    # Post-#403 this path is NOT expected to fire for cascade_5hop_bfs;
+    # the meta-test at tests/unit/test_benchmarks_meta/
+    # test_baseline_no_placeholder.py pins mean_ms > 0.0 in the default
+    # unit-test sweep so a silent revert surfaces loudly.
     if baseline_ms == 0.0:
         return
 

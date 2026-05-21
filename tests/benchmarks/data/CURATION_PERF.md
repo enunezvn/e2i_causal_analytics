@@ -69,10 +69,18 @@ any layer-k node goes through exactly k edges, k=1..5. The benchmark
 sanity-check asserts `result.visited == 1000` (the full reachable set) so
 any silent BFS truncation at any layer surfaces loudly.
 
-This is a synthetic-baseline benchmark per the placeholder-first-run policy:
-real production graph topology may not match this synthetic shape and the
-first run on a given environment BLESSES its measured baseline. Subsequent
-runs compare against the blessed value with the documented tolerance band.
+This is a synthetic-baseline benchmark. Real production graph topology may
+not match this synthetic shape, so the baseline is blessed from CI runs on
+the ubuntu-latest runner (not from absolute targets). Per issue #403, the
+baseline is now CI-blessed-median (3 workflow_dispatch runs on
+``feat/403-perf-baseline-rebless``; see ``_blessed_from_ci_runs`` in
+``tests/benchmarks/baselines/performance.json``); subsequent runs compare
+against the blessed value with the documented tolerance band. Re-bless
+methodology: trigger ≥3 workflow_dispatch runs on a rebless branch,
+download the ``performance-benchmark-results`` artifact from each
+(contains ``measurements.json`` with per-run timings + computed medians),
+take the median-of-medians, refresh ``_ci_observation`` +
+``_blessed_from_ci_runs`` in the baseline JSON.
 
 ## `synthetic_corpus.jsonl` schema
 

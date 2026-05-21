@@ -183,6 +183,7 @@ jobs:
             tests/unit/test_memory/ \
             tests/unit/test_database/ \
             tests/unit/test_scripts/ \
+            tests/unit/test_benchmarks_meta/ \
             tests/unit/api/ \
             tests/unit/security/ \
             tests/unit/observability/ \

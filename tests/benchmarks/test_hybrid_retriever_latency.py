@@ -23,12 +23,16 @@ baselines.
 ``tests/benchmarks/data/retrieval_queries.jsonl`` and the labeled-query
 loader from ``tests/benchmarks/_loader.py``.
 
-**Baseline strategy (placeholder-first-run-blesses, per PR #379 +
-[[feat-377-phase2-benchmark-close-20260519]])**: the first run on a given
-environment BLESSES the measured p50/p95 as the baseline (re-write
-``tests/benchmarks/baselines/performance.json`` in that PR). Subsequent
-runs compare against the blessed value within the documented tolerance
-bands.
+**Baseline strategy (placeholder-first-run-blesses, retained for the
+hybrid p50/p95 baselines only — per issue #403)**: the sibling cascade +
+bm25 baselines are CI-blessed-median, but the hybrid retriever cannot
+be re-blessed from CI because the live retriever skips when
+``SUPABASE_URL`` / ``SUPABASE_KEY`` / ``OPENAI_API_KEY`` are absent. The
+first CI run that has all three secrets BLESSES the measured p50/p95 as
+the baseline (re-write ``tests/benchmarks/baselines/performance.json``
+in that PR; see the existing ``_placeholder_rationale`` entries on the
+hybrid baselines for the follow-up tracker). Subsequent runs compare
+against the blessed value within the documented tolerance bands.
 
 **Skip semantics**:
 * Skips with ``requires_supabase`` if the SERVICES_AVAILABLE['supabase']

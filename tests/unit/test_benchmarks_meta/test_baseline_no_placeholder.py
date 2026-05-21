@@ -66,7 +66,8 @@ _PLACEHOLDER_BREADCRUMB_PREFIXES = ("_observed_on_dev_box_", "_seeded_")
 def _load_baseline() -> Dict[str, Any]:
     assert _BASELINE_FILE.exists(), f"baseline file missing: {_BASELINE_FILE}"
     with _BASELINE_FILE.open("r", encoding="utf-8") as fh:
-        return json.load(fh)
+        loaded: Dict[str, Any] = json.load(fh)
+    return loaded
 
 
 def test_top_level_strategy_is_ci_blessed() -> None:
