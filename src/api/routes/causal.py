@@ -643,45 +643,6 @@ _NO_REAL_DATA_BACKEND_DETAIL = (
 )
 
 
-def _build_synthetic_pipeline_data(
-    treatment_var: str,
-    outcome_var: str,
-    covariates: List[str],
-    n: int = 500,
-    seed: int = 42,
-):
-    """Build a seeded synthetic dataset for demo_mode=True pipeline flows.
-
-    Returns (treatment ndarray, outcome ndarray, covariates DataFrame).
-    Uses the same seed/shape pattern as ``_execute_hierarchical_analysis``
-    so behavior is consistent across the causal API surface. The dataset is
-    deterministic (seeded) — it is NOT a substitute for real data and is
-    intentionally NOT used in the default (non-demo) production code path.
-
-    Callers MUST surface ``is_demo=true`` in any response that draws on this
-    function so consumers cannot mistake synthetic-data outputs for real
-    estimates. See F-005 audit iter-1 HIGH-1.
-    """
-    import numpy as np
-    import pandas as pd
-
-    rng = np.random.default_rng(seed)
-    treatment = rng.binomial(1, 0.5, n)
-    outcome = rng.normal(100, 20, n).astype(np.float64)
-
-    # Ensure at least one covariate column so the estimator has something to fit.
-    cov_cols = covariates if covariates else ["x_default"]
-    X = pd.DataFrame({col: rng.standard_normal(n).astype(np.float64) for col in cov_cols})
-
-    # Inject a known heterogeneous treatment effect tied to the first covariate.
-    # This is FOR DEMO ONLY (demo_mode=True path); the production code path
-    # must never reach this function.
-    true_effect = 5.0 + X[cov_cols[0]].values * 3.0
-    outcome[treatment == 1] += true_effect[treatment == 1]
-
-    return treatment, outcome, X
-
-
 def _demo_stage_placeholder(
     *,
     stage_number: int,

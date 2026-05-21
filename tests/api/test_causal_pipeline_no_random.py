@@ -42,10 +42,22 @@ class TestNoRandomUniformInCausalPipelineSource:
     random.uniform() calls in their bodies.
 
     Coverage extended to helpers (per F-005 iter-1 MEDIUM-1): a future
-    re-introduction of random.uniform inside _build_synthetic_pipeline_data
-    or _demo_stage_placeholder would otherwise bypass the static pins on
-    just the top-level handlers.
+    re-introduction of random.uniform inside _demo_stage_placeholder would
+    otherwise bypass the static pins on just the top-level handlers.
+
+    NOTE: _build_synthetic_pipeline_data was DELETED in iter-3 per F-005
+    iter-2 codex HIGH-1 (dead-code-with-zero-production-consumers footgun).
+    DELETE > LABEL per [[feedback-no-mocking-no-patching]].
     """
+
+    def test_no_synthetic_pipeline_data_helper(self):
+        """_build_synthetic_pipeline_data must remain DELETED (no resurrection)."""
+        assert not hasattr(causal_module, "_build_synthetic_pipeline_data"), (
+            "F-005 regression: _build_synthetic_pipeline_data has been resurrected. "
+            "It was a synthetic-data helper with zero production consumers — deleted "
+            "in iter-3 because LABEL-style preservation of dead-code is a footgun "
+            "(see [[feedback-no-mocking-no-patching]])."
+        )
 
     def test_execute_sequential_pipeline_has_no_random_uniform(self):
         """_execute_sequential_pipeline must not contain random.uniform."""
@@ -68,13 +80,6 @@ class TestNoRandomUniformInCausalPipelineSource:
         source = inspect.getsource(causal_module.run_cross_validation)
         assert "random.uniform" not in source, (
             "F-005 regression: random.uniform reintroduced in run_cross_validation"
-        )
-
-    def test_build_synthetic_pipeline_data_has_no_random_uniform(self):
-        """Synthetic-data helper must use numpy seeded RNG, not random.uniform."""
-        source = inspect.getsource(causal_module._build_synthetic_pipeline_data)
-        assert "random.uniform" not in source, (
-            "F-005 regression: random.uniform reintroduced in _build_synthetic_pipeline_data"
         )
 
     def test_demo_stage_placeholder_has_no_random_uniform(self):
