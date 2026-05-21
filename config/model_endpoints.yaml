@@ -3,11 +3,13 @@
 # This file configures HTTP model endpoints consumed by prediction_synthesizer.
 #
 # F-012 (#430): mock_model was removed from this file and moved to
-# config/dev_model_endpoints.yaml. In production (ENVIRONMENT=production)
-# only this file is loaded; selecting a model_id not declared here raises
-# ValueError at orchestration time instead of silently returning fabricated
-# predictions. Set ENVIRONMENT=development (or unset) and ensure
-# config/dev_model_endpoints.yaml is present to use mock clients.
+# config/dev_model_endpoints.yaml. The dev YAML is merged ONLY when
+# ENVIRONMENT is one of {development, dev, test, testing, local} —
+# unset, misspelled, "production", or any other value skips the merge.
+# Selecting a model_id not declared in any loaded file raises
+# ValueError at orchestration time instead of silently returning
+# fabricated predictions. Set ENVIRONMENT explicitly to one of the
+# allowed dev values to enable config/dev_model_endpoints.yaml.
 
 # Default settings for all endpoints
 default_base_url: ${BENTOML_SERVICE_URL:-http://localhost:3000}

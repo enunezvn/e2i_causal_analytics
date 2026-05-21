@@ -169,12 +169,14 @@ class ModelEndpointsConfig:
     def from_yaml(cls, path: str) -> "ModelEndpointsConfig":
         """Load configuration from YAML file.
 
-        F-012 (#430): In non-production environments (``ENVIRONMENT`` unset,
-        ``development``, ``dev``, or ``test``) this method also merges
-        ``config/dev_model_endpoints.yaml`` (if present and adjacent to the
-        primary config file) so dev-only ``mock_model`` entries become
-        available. In production the dev file is never loaded — selecting
-        a non-existent model id raises ValueError downstream.
+        F-012 (#430): When ``ENVIRONMENT`` is explicitly set to one of
+        ``{development, dev, test, testing, local}`` this method also
+        merges ``config/dev_model_endpoints.yaml`` (if present and
+        adjacent to the primary config file) so dev-only ``mock_model``
+        entries become available. Any other ENVIRONMENT value
+        — including UNSET, misspelled, ``production`` — skips the merge.
+        Selecting a non-existent model id then raises ValueError
+        downstream.
 
         Args:
             path: Path to YAML configuration file
