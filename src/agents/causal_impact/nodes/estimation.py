@@ -323,12 +323,45 @@ class EstimationNode:
             p_value_real = float("nan")
             statistical_significance_real = False
 
+        # Iter-4 codex H-iter3-1 (#417): CI bounds + standard_error must come
+        # from the estimator. If they're None/missing on a successful
+        # EstimatorResult, fail-closed rather than materializing 0.0 — that
+        # 0.0 would propagate into refutation's data_subset / bootstrap
+        # scoring (which the iter-3 refutation guards check for finiteness
+        # but NOT for zero-degenerate width). Same silent-evidence class
+        # as iter-1 H4 / iter-2 H1.
+        if selected.ate_ci_lower is None or selected.ate_ci_upper is None:
+            raise EstimationError(
+                "Selected estimator produced an ATE without confidence interval bounds; "
+                "refusing to materialize ate_ci=(0.0, 0.0) which would propagate as "
+                "silent-wrong evidence into refutation scoring.",
+                details={
+                    "reason": "missing_ci_bounds_on_success",
+                    "selected_estimator": selected.estimator_type.value,
+                    "has_ate_ci_lower": selected.ate_ci_lower is not None,
+                    "has_ate_ci_upper": selected.ate_ci_upper is not None,
+                    "ate": selected.ate,
+                    "ate_std": selected.ate_std,
+                },
+            )
+        if selected.ate_std is None:
+            raise EstimationError(
+                "Selected estimator produced an ATE without a standard error; "
+                "refusing to materialize ate_se=0.0 which would skip uncertainty "
+                "downstream.",
+                details={
+                    "reason": "missing_standard_error_on_success",
+                    "selected_estimator": selected.estimator_type.value,
+                    "ate": selected.ate,
+                },
+            )
+
         result: EstimationResult = {
             "method": method_name,
-            "ate": float(selected.ate) if selected.ate is not None else 0.0,
-            "ate_ci_lower": float(selected.ate_ci_lower) if selected.ate_ci_lower else 0.0,
-            "ate_ci_upper": float(selected.ate_ci_upper) if selected.ate_ci_upper else 0.0,
-            "standard_error": float(selected.ate_std) if selected.ate_std else 0.0,
+            "ate": float(selected.ate),  # safe: success + non-None guarded above
+            "ate_ci_lower": float(selected.ate_ci_lower),
+            "ate_ci_upper": float(selected.ate_ci_upper),
+            "standard_error": float(selected.ate_std),
             "effect_size": self._classify_effect_size(selected.ate or 0.0),
             "statistical_significance": statistical_significance_real,
             "p_value": p_value_real,
