@@ -26,9 +26,26 @@ cheap structural-equivalence proof; cycle-17 may extend with a heavier
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 from typing import Any, Dict, FrozenSet, Set
 
 import pytest
+
+# Repo root derived from this file's location so the helpers below can
+# ``import scripts.run_tier0_test`` correctly regardless of whether the
+# test is run from the main repo, a git worktree, or CI.
+#
+# Layout: ``tests/integration/test_tier0_single_mode_snapshot.py``
+#   parents[0] -> tests/integration/
+#   parents[1] -> tests/
+#   parents[2] -> <repo root>
+#
+# Tracks issue #410: prior to this change the helpers contained a
+# hard-coded developer home-directory string inside ``sys.path.insert``
+# which silently imported the MAIN repo's copy of
+# ``scripts/run_tier0_test`` when the test ran inside a git worktree,
+# producing false-negative descriptor-drift failures.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # Frozen CLI argument expectations for ``scripts/run_tier0_test._build_parser``.
 # Cycle-17 IMPORTANT-2 hardening: snapshot ALSO covers per-flag
@@ -229,7 +246,7 @@ EXPECTED_TIER0_CLI_DESCRIPTORS: Dict[str, Dict[str, Any]] = {
 
 def _collect_parser_options() -> Set[str]:
     """Import ``_build_parser`` and return the set of CLI option strings."""
-    sys.path.insert(0, "/home/enunez/Projects/e2i_causal_analytics")
+    sys.path.insert(0, str(_REPO_ROOT))
     from scripts.run_tier0_test import _build_parser
 
     parser = _build_parser()
@@ -242,7 +259,7 @@ def _collect_parser_options() -> Set[str]:
 
 def _collect_parser_descriptors() -> Dict[str, Dict[str, Any]]:
     """Return a dict of {primary-option-string: action-descriptor} for non-help actions."""
-    sys.path.insert(0, "/home/enunez/Projects/e2i_causal_analytics")
+    sys.path.insert(0, str(_REPO_ROOT))
     from scripts.run_tier0_test import _build_parser
 
     parser = _build_parser()
