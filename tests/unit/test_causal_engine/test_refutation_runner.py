@@ -16,7 +16,6 @@ returns deterministic refutation results, or (b) assert that calling
 """
 
 from types import SimpleNamespace
-from unittest.mock import patch
 
 import pytest
 
@@ -31,7 +30,6 @@ from src.causal_engine.refutation_runner import (
     is_estimate_valid,
     run_refutation_suite,
 )
-
 
 # ============================================================================
 # CAUSAL MODEL STUBS (replace deleted _mock_* methods)
@@ -885,15 +883,33 @@ class TestRunAllTests:
 class TestConvenienceFunctions:
     """Tests for convenience functions."""
 
-    def test_run_refutation_suite_fails_closed_without_model(self):
-        """F-014 (#416): run_refutation_suite convenience function does not
-        accept a CausalModel kwarg, so it now always fails-closed (the
-        underlying ``run_all_tests`` raises ``RefutationError`` when
-        ``causal_model is None``). Callers must build a model and call
-        ``RefutationRunner.run_all_tests`` directly, or use the agent path.
+    def test_run_refutation_suite_with_model(self):
+        """F-014 iter-2 (#416, codex H5): run_refutation_suite accepts model
+        artifacts as keyword-only args, so external callers can use it with
+        their own DoWhy model. Previously the signature did not accept
+        ``causal_model`` / ``identified_estimand`` / ``estimate`` which made
+        every call fail-closed — that codified a broken public API. Now the
+        function is functionally usable.
         """
-        with pytest.raises(RefutationError):
-            run_refutation_suite(
+        suite = run_refutation_suite(
+            original_effect=0.15,
+            original_ci=(0.10, 0.20),
+            causal_model=_full_stub_causal_model(),
+            identified_estimand=object(),
+            estimate=object(),
+            treatment="test_treatment",
+            outcome="test_outcome",
+        )
+        assert isinstance(suite, RefutationSuite)
+        assert suite.treatment_variable == "test_treatment"
+
+    def test_run_refutation_suite_missing_model_args_typeerror(self):
+        """The keyword-only signature means callers that forget to pass the
+        DoWhy model artifacts get a clear TypeError at call site, not a
+        silent ``RefutationError`` from the first refuter.
+        """
+        with pytest.raises(TypeError):
+            run_refutation_suite(  # type: ignore[call-arg]
                 original_effect=0.15,
                 original_ci=(0.10, 0.20),
                 treatment="test_treatment",

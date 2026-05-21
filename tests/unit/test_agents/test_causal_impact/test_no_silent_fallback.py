@@ -263,6 +263,179 @@ class TestF006FailClosed:
         )
 
     @pytest.mark.asyncio
+    async def test_f006_get_data_fails_closed_without_data_source_opt_in(self):
+        """F-006 iter-2 (#417, codex H2): _get_data() must fail-closed when
+        no real data is in data_cache AND data_source is not 'synthetic'.
+
+        The previous unconditional synthetic-data fallback was a silent-wrong
+        path — real estimators produced polished causal answers over
+        fabricated HCP/conversion data. Production callers that omit
+        data_source must now fail-closed.
+        """
+        node = EstimationNode()
+
+        graph: CausalGraph = {
+            "nodes": ["hcp_engagement_level", "patient_conversion_rate", "geographic_region"],
+            "edges": [
+                ("geographic_region", "hcp_engagement_level"),
+                ("geographic_region", "patient_conversion_rate"),
+                ("hcp_engagement_level", "patient_conversion_rate"),
+            ],
+            "treatment_nodes": ["hcp_engagement_level"],
+            "outcome_nodes": ["patient_conversion_rate"],
+            "adjustment_sets": [["geographic_region"]],
+            "dag_dot": "...",
+            "confidence": 0.85,
+        }
+        state: CausalImpactState = {
+            "query": "test query",
+            "query_id": "test-f006-get-data-no-optin",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            # Deliberately omit data_source — production caller forgot to
+            # provide real data AND did not opt in to synthetic.
+            "causal_graph": graph,
+            "status": "pending",
+            "errors": [],
+            "warnings": [],
+        }
+
+        result = await node.execute(state)
+
+        assert result.get("status") == "failed", (
+            "F-006 regression: missing data_source did NOT cause fail-closed. "
+            "Production caller was silently served synthetic data."
+        )
+        error_msg = result.get("error_message", "").lower()
+        # Either "estimat" (from EstimationError wrapping) or "data" (raw)
+        assert "estimat" in error_msg or "data" in error_msg, (
+            f"F-006 regression: unexpected error message: "
+            f"{result.get('error_message')!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_f006_get_data_allows_explicit_synthetic_opt_in(self):
+        """F-006 iter-2 (#417): when data_source='synthetic' is explicit,
+        the synthetic-data path is allowed (preserves test fixtures).
+        """
+        node = EstimationNode()
+
+        graph: CausalGraph = {
+            "nodes": ["hcp_engagement_level", "patient_conversion_rate", "geographic_region"],
+            "edges": [
+                ("geographic_region", "hcp_engagement_level"),
+                ("geographic_region", "patient_conversion_rate"),
+                ("hcp_engagement_level", "patient_conversion_rate"),
+            ],
+            "treatment_nodes": ["hcp_engagement_level"],
+            "outcome_nodes": ["patient_conversion_rate"],
+            "adjustment_sets": [["geographic_region"]],
+            "dag_dot": "...",
+            "confidence": 0.85,
+        }
+        state: CausalImpactState = {
+            "query": "test query",
+            "query_id": "test-f006-get-data-synthetic-optin",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",  # explicit opt-in
+            "causal_graph": graph,
+            "status": "pending",
+            "errors": [],
+            "warnings": [],
+        }
+
+        result = await node.execute(state)
+
+        # Should NOT fail-closed when opt-in is explicit.
+        assert result.get("status") != "failed" or "data_source" not in result.get(
+            "error_message", ""
+        ).lower(), (
+            "F-006 regression: explicit data_source='synthetic' opt-in was "
+            "still rejected. The synthetic path must remain available for "
+            "test fixtures and developer workflows."
+        )
+
+    @pytest.mark.asyncio
+    async def test_f006_all_estimators_fail_fails_closed(self):
+        """F-006 iter-2 (#417, codex H1): when EstimatorSelector returns a
+        success=False EstimatorResult (all configured estimators failed),
+        the node MUST raise EstimationError instead of emitting ate=0.0
+        / ate_se=0.0 / energy_score=0.0 silent-wrong defaults.
+        """
+        from unittest.mock import MagicMock
+
+        node = EstimationNode()
+
+        # Build a fake SelectionResult where the selected estimator failed.
+        from src.causal_engine.energy_score import (
+            EstimatorResult,
+            EstimatorType,
+            SelectionResult,
+            SelectionStrategy,
+        )
+
+        failed_result = EstimatorResult(
+            estimator_type=EstimatorType.OLS,
+            success=False,
+            error_message="forced all-estimators-fail for codex H1 pin",
+            error_type="RuntimeError",
+        )
+        fake_selection = SelectionResult(
+            selected=failed_result,
+            selection_strategy=SelectionStrategy.BEST_ENERGY_SCORE,
+            all_results=[failed_result],
+            selection_reason="All estimators failed",
+            total_time_ms=10.0,
+            energy_scores={},
+            energy_score_gap=0.0,
+        )
+
+        graph: CausalGraph = {
+            "nodes": ["hcp_engagement_level", "patient_conversion_rate", "geographic_region"],
+            "edges": [
+                ("geographic_region", "hcp_engagement_level"),
+                ("geographic_region", "patient_conversion_rate"),
+                ("hcp_engagement_level", "patient_conversion_rate"),
+            ],
+            "treatment_nodes": ["hcp_engagement_level"],
+            "outcome_nodes": ["patient_conversion_rate"],
+            "adjustment_sets": [["geographic_region"]],
+            "dag_dot": "...",
+            "confidence": 0.85,
+        }
+        state: CausalImpactState = {
+            "query": "test query",
+            "query_id": "test-f006-all-fail",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
+            "causal_graph": graph,
+            "status": "pending",
+            "errors": [],
+            "warnings": [],
+        }
+
+        # Inject a fake selector that returns the all-failed SelectionResult.
+        fake_selector = MagicMock()
+        fake_selector.select.return_value = fake_selection
+        with patch.object(node, "_get_estimator_selector", return_value=fake_selector):
+            result = await node.execute(state)
+
+        assert result.get("status") == "failed", (
+            "F-006 regression iter-2: all-estimators-fail did NOT trigger "
+            "fail-closed. The node returned a silent-wrong ate=0.0."
+        )
+        error_msg = result.get("error_message", "").lower()
+        assert "estimat" in error_msg and ("fail" in error_msg or "0.0" in error_msg), (
+            f"F-006 regression iter-2: error message does not indicate "
+            f"all-estimators-fail: {result.get('error_message')!r}"
+        )
+
+    @pytest.mark.asyncio
     async def test_f006_estimation_error_type_is_structured(self):
         """F-006 RED pin: EstimationError must be importable and structured."""
         from src.causal_engine import EstimationError as ImportedEstimationError

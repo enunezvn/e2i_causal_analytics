@@ -45,6 +45,57 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _require_p_value(refutation: Any, test_name: str, original_effect: float) -> float:
+    """Extract ``p_value`` from a DoWhy refutation result without silent defaulting.
+
+    Codex iter-2 H4 (#416): the previous ``refutation.refutation_result.get(
+    "p_value", 0.5)`` pattern silently inserted ``0.5`` (which passes the
+    placebo threshold) when the refuter did not expose a p-value. This is a
+    placeholder evidence value, exactly the kind of silent-wrong this PR is
+    closing. Fail-closed instead.
+
+    Raises:
+        RefutationError: if ``p_value`` is missing or non-finite.
+    """
+    pv = refutation.refutation_result.get("p_value") if refutation.refutation_result else None
+    if pv is None:
+        raise RefutationError(
+            "Refutation analysis unavailable for this query, retry without refutation. "
+            f"DoWhy {test_name} refuter did not return a p_value; refusing to "
+            "substitute a placeholder (e.g., 0.5).",
+            details={
+                "test_name": test_name,
+                "original_effect": original_effect,
+                "reason": "missing_p_value",
+            },
+        )
+    try:
+        pv_float = float(pv)
+    except (TypeError, ValueError) as exc:
+        raise RefutationError(
+            "Refutation analysis unavailable for this query, retry without refutation. "
+            f"DoWhy {test_name} refuter returned non-numeric p_value: {pv!r}.",
+            details={
+                "test_name": test_name,
+                "original_effect": original_effect,
+                "reason": "non_numeric_p_value",
+                "p_value_raw": repr(pv),
+            },
+            original_error=exc,
+        ) from exc
+    if not np.isfinite(pv_float):
+        raise RefutationError(
+            "Refutation analysis unavailable for this query, retry without refutation. "
+            f"DoWhy {test_name} refuter returned non-finite p_value: {pv_float}.",
+            details={
+                "test_name": test_name,
+                "original_effect": original_effect,
+                "reason": "non_finite_p_value",
+            },
+        )
+    return pv_float
+
+
 # ============================================================================
 # ENUMS (aligned with database/ml/010_causal_validation_tables.sql)
 # ============================================================================
@@ -657,7 +708,11 @@ class RefutationRunner:
                     num_simulations=self.config["placebo_treatment"]["num_simulations"],
                 )
                 refuted_effect = float(refutation.new_effect)
-                p_value = float(refutation.refutation_result.get("p_value", 0.5))
+                # Iter-2 codex H4: p_value must come from real refuter output;
+                # no silent default that would auto-pass the placebo threshold.
+                p_value = _require_p_value(refutation, "placebo_treatment", original_effect)
+            except RefutationError:
+                raise  # re-raise structured errors as-is
             except Exception as e:
                 # F-014 fail-closed: no silent mock fallback. Caller (agent
                 # refutation node) catches RefutationError and surfaces to chat.
@@ -754,7 +809,10 @@ class RefutationRunner:
                     ],
                 )
                 refuted_effect = float(refutation.new_effect)
-                p_value = float(refutation.refutation_result.get("p_value", 0.5))
+                # Iter-2 codex H4: p_value must come from real refuter output.
+                p_value = _require_p_value(refutation, "random_common_cause", original_effect)
+            except RefutationError:
+                raise
             except Exception as e:
                 # F-014 fail-closed: no silent mock fallback.
                 raise RefutationError(
@@ -841,7 +899,8 @@ class RefutationRunner:
                     num_simulations=self.config["data_subset"]["num_subsets"],
                 )
                 refuted_effect = float(refutation.new_effect)
-                p_value = float(refutation.refutation_result.get("p_value", 0.5))
+                # Iter-2 codex H4: p_value must come from real refuter output.
+                p_value = _require_p_value(refutation, "data_subset", original_effect)
                 # Calculate CI coverage. Prefer raw subset_effects when the
                 # refuter exposes them (stub/older DoWhy variants); otherwise
                 # fall back to a single-point check (is the aggregated
@@ -853,6 +912,8 @@ class RefutationRunner:
                     ci_coverage = self._calculate_ci_coverage(subset_effects, original_ci)
                 else:
                     ci_coverage = 1.0 if original_ci[0] <= refuted_effect <= original_ci[1] else 0.0
+            except RefutationError:
+                raise
             except Exception as e:
                 # F-014 fail-closed: no silent mock fallback.
                 raise RefutationError(
@@ -939,13 +1000,15 @@ class RefutationRunner:
                 )
                 # DoWhy's BootstrapRefuter exposes the bootstrapped mean via
                 # ``new_effect`` and ``p_value`` via ``refutation_result``.
-                # If a stub or older DoWhy variant exposes the raw
-                # ``bootstrap_estimates`` list, prefer that for richer CI
-                # computation. Otherwise approximate the CI from
-                # ``original_ci`` (a +/-1 SD width around new_effect ≈ original
-                # CI width). This keeps the test deterministic without
-                # silently substituting mock values.
+                # Older / stub variants may also expose ``bootstrap_estimates``.
+                # Iter-2 codex H4: when DoWhy does NOT expose
+                # ``bootstrap_estimates`` we MUST NOT fabricate a CI from
+                # ``original_ci`` — that's the placeholder evidence pattern
+                # we're closing. Use the delta in new_effect vs original_effect
+                # as the real stability signal (no CI ratio when raw estimates
+                # absent).
                 bootstrap_effects = refutation.refutation_result.get("bootstrap_estimates", [])
+                bootstrap_ci_available = bool(bootstrap_effects)
                 if bootstrap_effects:
                     refuted_effect = float(np.mean(bootstrap_effects))
                     bootstrap_ci = (
@@ -954,17 +1017,13 @@ class RefutationRunner:
                     )
                 else:
                     refuted_effect = float(refutation.new_effect)
-                    # Bootstrap CI half-width matches original CI half-width
-                    # when explicit estimates are not exposed; this records
-                    # ci_ratio=1.0 which is a "warning" (CI not improving but
-                    # not catastrophically widening either). Real DoWhy
-                    # bootstrap exposes only mean+p_value in some versions.
-                    half_width = (original_ci[1] - original_ci[0]) / 2.0
-                    bootstrap_ci = (
-                        refuted_effect - half_width,
-                        refuted_effect + half_width,
-                    )
-                p_value = float(refutation.refutation_result.get("p_value", 0.8))
+                    # Sentinel CI marks "not computed" so downstream stability
+                    # check switches to delta-based scoring (see below).
+                    bootstrap_ci = (float("nan"), float("nan"))
+                # Iter-2 codex H4: p_value must come from real refuter output.
+                p_value = _require_p_value(refutation, "bootstrap", original_effect)
+            except RefutationError:
+                raise
             except Exception as e:
                 # F-014 fail-closed: no silent mock fallback.
                 raise RefutationError(
@@ -993,21 +1052,45 @@ class RefutationRunner:
             abs(refuted_effect - original_effect) / max(abs(original_effect), 1e-10) * 100
         )
 
-        # Calculate CI ratio (bootstrap CI width / original CI width)
+        # Calculate CI ratio when bootstrap CI is available; otherwise fall
+        # back to a delta-based stability check on the bootstrap mean vs the
+        # reported ATE. Codex iter-2 H4: we no longer fabricate a CI from
+        # ``original_ci`` when DoWhy does not expose ``bootstrap_estimates``.
         original_ci_width = original_ci[1] - original_ci[0]
-        bootstrap_ci_width = bootstrap_ci[1] - bootstrap_ci[0]
-        ci_ratio = bootstrap_ci_width / max(original_ci_width, 1e-10)
+        if bootstrap_ci_available:
+            bootstrap_ci_width = bootstrap_ci[1] - bootstrap_ci[0]
+            ci_ratio = bootstrap_ci_width / max(original_ci_width, 1e-10)
 
-        # Determine status based on CI ratio
-        if ci_ratio <= self.thresholds["bootstrap_ci_ratio"]["pass"]:
-            status = RefutationStatus.PASSED
-            message = f"Effect stable across {self.config['bootstrap']['num_bootstraps']} bootstrap samples"
-        elif ci_ratio <= self.thresholds["bootstrap_ci_ratio"]["warning"]:
-            status = RefutationStatus.WARNING
-            message = "Bootstrap CI moderately wider than original"
+            if ci_ratio <= self.thresholds["bootstrap_ci_ratio"]["pass"]:
+                status = RefutationStatus.PASSED
+                message = f"Effect stable across {self.config['bootstrap']['num_bootstraps']} bootstrap samples"
+            elif ci_ratio <= self.thresholds["bootstrap_ci_ratio"]["warning"]:
+                status = RefutationStatus.WARNING
+                message = "Bootstrap CI moderately wider than original"
+            else:
+                status = RefutationStatus.FAILED
+                message = "WARNING: High variance in bootstrap estimates"
         else:
-            status = RefutationStatus.FAILED
-            message = "WARNING: High variance in bootstrap estimates"
+            # Delta-based stability scoring when raw bootstrap estimates are
+            # not exposed. Reuse the same percentage thresholds the
+            # random-common-cause test applies — if the bootstrap mean stays
+            # within the original CI, treat as stable.
+            ci_ratio = float("nan")
+            inside_ci = original_ci[0] <= refuted_effect <= original_ci[1]
+            if inside_ci and delta_percent <= 20.0:
+                status = RefutationStatus.PASSED
+                message = (
+                    f"Bootstrap mean stays within original CI "
+                    f"(delta={delta_percent:.1f}%, n={self.config['bootstrap']['num_bootstraps']})"
+                )
+            elif inside_ci and delta_percent <= 30.0:
+                status = RefutationStatus.WARNING
+                message = f"Bootstrap mean within CI but delta is elevated ({delta_percent:.1f}%)"
+            else:
+                status = RefutationStatus.FAILED
+                message = (
+                    f"Bootstrap mean outside original CI or delta > 30% ({delta_percent:.1f}%)"
+                )
 
         execution_time = (time.time() - start_time) * 1000
 
@@ -1022,6 +1105,7 @@ class RefutationRunner:
                 "message": message,
                 "bootstrap_ci": bootstrap_ci,
                 "ci_ratio": ci_ratio,
+                "bootstrap_ci_available": bootstrap_ci_available,
                 "num_bootstraps": self.config["bootstrap"]["num_bootstraps"],
             },
             execution_time_ms=execution_time,
@@ -1241,31 +1325,61 @@ class RefutationRunner:
 def run_refutation_suite(
     original_effect: float,
     original_ci: Tuple[float, float],
+    *,
+    causal_model: Any,
+    identified_estimand: Any,
+    estimate: Any,
     treatment: Optional[str] = None,
     outcome: Optional[str] = None,
     brand: Optional[str] = None,
     config: Optional[Dict[str, Dict[str, Any]]] = None,
+    data: Optional[Any] = None,
+    estimate_id: Optional[str] = None,
 ) -> RefutationSuite:
     """Convenience function to run refutation suite.
+
+    Iter-2 codex H5 (#416): the previous signature did NOT accept the DoWhy
+    model artifacts (``causal_model`` / ``identified_estimand`` / ``estimate``),
+    which meant after F-014 every call to ``run_refutation_suite`` raised
+    ``RefutationError`` because ``run_all_tests`` requires a real
+    ``CausalModel``. The function is now keyword-only for the model artifacts,
+    so external callers (non-agent code paths) can pass through their own
+    DoWhy model rather than being forced to invoke the agent's refutation
+    node. This keeps a usable public contract instead of codifying an
+    always-failing API.
 
     Args:
         original_effect: ATE to validate
         original_ci: Confidence interval
-        treatment: Treatment variable name
-        outcome: Outcome variable name
-        brand: Brand context
+        causal_model: DoWhy CausalModel instance (REQUIRED — see F-014 fix)
+        identified_estimand: DoWhy identified estimand (REQUIRED)
+        estimate: DoWhy estimate object (REQUIRED)
+        treatment: Treatment variable name (logging only)
+        outcome: Outcome variable name (logging only)
+        brand: Brand context (logging only)
         config: Custom test configuration
+        data: DataFrame used for the estimate (passed to refuters)
+        estimate_id: Estimate ID for persistence
 
     Returns:
         RefutationSuite with results
+
+    Raises:
+        RefutationError: when refuters fail or a per-test placeholder would
+            otherwise be required (per the fail-closed contract).
     """
     runner = RefutationRunner(config=config)
     return runner.run_all_tests(
         original_effect=original_effect,
         original_ci=original_ci,
+        causal_model=causal_model,
+        identified_estimand=identified_estimand,
+        estimate=estimate,
         treatment=treatment,
         outcome=outcome,
         brand=brand,
+        data=data,
+        estimate_id=estimate_id,
     )
 
 

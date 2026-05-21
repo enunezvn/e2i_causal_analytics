@@ -205,6 +205,41 @@ class EstimationNode:
 
         # Convert SelectionResult to EstimationResult
         selected = selection_result.selected
+
+        # F-006 fix iter-2 (#417, codex H1): EstimatorSelector returns a
+        # success=False EstimatorResult when ALL configured estimators fail
+        # (see ``EstimatorSelector._select_best_energy`` in
+        # ``src/causal_engine/energy_score/estimator_selector.py``). Without
+        # this check we would silently emit ``ate=0.0``, ``ate_ci=(0.0, 0.0)``,
+        # ``ate_se=0.0``, ``energy_score=0.0`` — a NEW silent-wrong path that
+        # replaces the deleted corrcoef mocks. Fail-closed instead.
+        if not selected.success or selected.ate is None:
+            failed_estimators = [
+                {
+                    "estimator": r.estimator_type.value,
+                    "error": r.error_message,
+                    "error_type": r.error_type,
+                }
+                for r in selection_result.all_results
+                if not r.success
+            ]
+            raise EstimationError(
+                "All configured estimators failed; refusing to report ate=0.0 silent-wrong. "
+                f"Selected estimator '{selected.estimator_type.value}' returned "
+                f"success={selected.success}, ate={selected.ate}.",
+                details={
+                    "selected_estimator": selected.estimator_type.value,
+                    "selected_success": selected.success,
+                    "selected_ate": selected.ate,
+                    "n_estimators_attempted": len(selection_result.all_results),
+                    "n_succeeded": sum(1 for r in selection_result.all_results if r.success),
+                    "failed_estimators": failed_estimators,
+                    "explicit_method": explicit_method,
+                    "treatment": treatment,
+                    "outcome": outcome,
+                },
+            )
+
         energy_score = selected.energy_score
         quality_tier = self._get_quality_tier(energy_score)
 
@@ -515,21 +550,59 @@ class EstimationNode:
     def _get_data(self, state: CausalImpactState) -> pd.DataFrame:
         """Get data for estimation.
 
-        For now, generates synthetic data. In production, would query
-        from repositories.
+        F-006 fix iter-2 (#417, codex H2): the previous unconditional
+        synthetic-data fallback was a silent-wrong path — real estimators
+        would produce polished causal answers over fabricated HCP/conversion
+        data, then refutation tests ran against the same fake frame.
+
+        Resolution order:
+        1. ``state['data_cache']['estimation_data']`` (real data passthrough
+           from upstream nodes / repositories).
+        2. ``state['data_source'] == 'synthetic'`` → seeded synthetic data
+           for tests + developer fixtures. The synthetic path is now
+           OPT-IN via explicit ``data_source='synthetic'`` rather than the
+           default; production callers that omit ``data_source`` fail-closed.
+        3. Otherwise, raise ``EstimationError``.
 
         Args:
-            state: Workflow state with potential data_cache
+            state: Workflow state with potential data_cache + data_source
 
         Returns:
             DataFrame with treatment, outcome, and covariates
+
+        Raises:
+            EstimationError: when no real data and ``data_source`` is not
+                explicitly set to ``"synthetic"`` (fail-closed; no silent
+                fabrication for production calls).
         """
-        # Check cache first
+        # Check cache first (real data passthrough)
         data_cache = state.get("data_cache", {})
         if "estimation_data" in data_cache:
             return data_cache["estimation_data"]
 
-        # Generate synthetic data for testing
+        # Synthetic path is opt-in via explicit data_source flag.
+        # This preserves the testing/dev workflow that relies on
+        # ``data_source='synthetic'`` while making the production default
+        # fail-closed (no silent fabrication).
+        data_source = state.get("data_source")
+        if data_source != "synthetic":
+            raise EstimationError(
+                "Estimation requires data; no estimation_data in data_cache and "
+                "data_source != 'synthetic'. Provide real data via "
+                "state['data_cache']['estimation_data'] or explicitly set "
+                "state['data_source'] = 'synthetic' for testing fixtures.",
+                details={
+                    "reason": "no_real_data_no_synthetic_optin",
+                    "data_source": data_source,
+                    "has_data_cache_key": "estimation_data" in data_cache,
+                },
+            )
+
+        # Generate synthetic data for testing (data_source='synthetic' opt-in).
+        # TODO(#354 follow-up): replace this branch with a real repository
+        # query when the data-loading surface is built out. See memory
+        # ``issue_354_stub_vs_real_estimators_20260521.md`` for the broader
+        # silent-fallback trapdoor inventory.
         np.random.seed(42)
         n = 1000
 

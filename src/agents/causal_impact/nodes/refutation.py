@@ -40,12 +40,65 @@ from src.repositories.causal_validation import CausalValidationRepository
 logger = logging.getLogger(__name__)
 
 
+# Map agent EstimationResult.method values (and selected_estimator type-values)
+# to DoWhy backdoor method_name. Iter-2 codex H3: the refutation rebuild MUST
+# use the SAME estimator that produced the reported ATE — otherwise refuters
+# critique a linear_regression estimate while the chat UI displays a
+# CausalForestDML one.
+_SELECTOR_TO_DOWHY_METHOD = {
+    # Energy-score selector estimator_type.value
+    "causal_forest": "backdoor.econml.dml.CausalForestDML",
+    "linear_dml": "backdoor.econml.dml.LinearDML",
+    "drlearner": "backdoor.econml.dr.DRLearner",
+    "ols": "backdoor.linear_regression",
+    # EstimationResult.method (legacy + new labels)
+    "CausalForestDML": "backdoor.econml.dml.CausalForestDML",
+    "LinearDML": "backdoor.econml.dml.LinearDML",
+    "linear_regression": "backdoor.linear_regression",
+    "propensity_score_weighting": "backdoor.propensity_score_weighting",
+}
+
+
+def _resolve_dowhy_method(estimation_result: Dict[str, Any]) -> str:
+    """Resolve the DoWhy method_name to refute against.
+
+    Prefers the energy-score-selected estimator (selected_estimator field
+    when present, from the EnergyScoreSelector) and falls back to the
+    legacy ``method`` label. Unknown labels raise RefutationError instead
+    of silently defaulting to linear_regression (which would refute a
+    DIFFERENT estimate than the one reported — codex iter-2 H3).
+    """
+    candidate = estimation_result.get("selected_estimator") or estimation_result.get("method")
+    if not candidate:
+        raise RefutationError(
+            "Refutation analysis unavailable for this query, retry without refutation. "
+            "EstimationResult is missing both 'selected_estimator' and 'method' "
+            "fields; cannot determine which DoWhy estimator to refute.",
+            details={"reason": "missing_estimator_label"},
+        )
+    method = _SELECTOR_TO_DOWHY_METHOD.get(candidate)
+    if method is None:
+        raise RefutationError(
+            "Refutation analysis unavailable for this query, retry without refutation. "
+            f"Unknown estimator label '{candidate}' has no DoWhy method mapping. "
+            "Refusing to silently default to backdoor.linear_regression which "
+            "would refute a different estimate than the one reported.",
+            details={
+                "reason": "unmapped_estimator_label",
+                "estimator_label": candidate,
+                "known_labels": sorted(_SELECTOR_TO_DOWHY_METHOD.keys()),
+            },
+        )
+    return method
+
+
 def _reconstruct_dowhy_artifacts(
     *,
     data: Any,
     treatment: str,
     outcome: str,
     common_causes: List[str],
+    estimation_result: Dict[str, Any],
 ) -> Tuple[Any, Any, Any]:
     """Reconstruct DoWhy CausalModel, identified_estimand, and estimate.
 
@@ -54,15 +107,25 @@ def _reconstruct_dowhy_artifacts(
     we re-build the model in-place using the same DAG inputs (treatment,
     outcome, common_causes) and the persisted data passthrough.
 
+    Codex iter-2 H3 (#416): the rebuilt estimate uses the SAME estimator
+    method that produced the reported ATE (resolved via
+    ``_resolve_dowhy_method``). Earlier iter-1 used a hardcoded
+    ``backdoor.linear_regression`` which meant refuters critiqued a
+    different estimate than the one reported to chat — silent-wrong.
+
     This is NOT a mock — it constructs a real DoWhy CausalModel which runs
     real refutation methods (placebo_treatment_refuter, random_common_cause,
-    data_subset_refuter, bootstrap_refuter) against real EconML estimators.
+    data_subset_refuter, bootstrap_refuter) against real EconML estimators
+    matching the reported method.
 
     Args:
         data: pandas DataFrame with treatment, outcome, and common-cause columns
         treatment: treatment variable name
         outcome: outcome variable name
         common_causes: list of confounder column names
+        estimation_result: EstimationResult dict carrying ``selected_estimator``
+            (preferred) or ``method`` (fallback) — used to resolve which
+            DoWhy estimator backend to instantiate.
 
     Returns:
         Tuple of (causal_model, identified_estimand, estimate)
@@ -138,6 +201,9 @@ def _reconstruct_dowhy_artifacts(
             original_error=ie,
         ) from ie
 
+    # Resolve the DoWhy method matching the reported estimator (codex H3).
+    dowhy_method = _resolve_dowhy_method(estimation_result)
+
     try:
         model = CausalModel(
             data=data,
@@ -146,21 +212,21 @@ def _reconstruct_dowhy_artifacts(
             common_causes=common_causes,
         )
         identified_estimand = model.identify_effect(proceed_when_unidentifiable=True)
-        # Use backdoor.linear_regression as the lightweight estimator for the
-        # refutation run. Real estimation (with energy-score-selected estimator)
-        # has already happened in EstimationNode; this rebuild only provides
-        # the DoWhy object graph for refutation method dispatch.
+        # Build the estimate using the SAME method that produced the reported
+        # ATE (resolved above). Refuters now critique the actual reported
+        # estimate, not a separately-fitted linear regression.
         estimate = model.estimate_effect(
             identified_estimand,
-            method_name="backdoor.linear_regression",
+            method_name=dowhy_method,
             test_significance=False,
         )
     except Exception as exc:  # noqa: BLE001 — fail-closed wrapper
         raise RefutationError(
             "Refutation analysis unavailable for this query, retry without refutation. "
-            f"DoWhy CausalModel reconstruction failed: {exc}",
+            f"DoWhy CausalModel reconstruction failed for method={dowhy_method!r}: {exc}",
             details={
                 "reason": "dowhy_reconstruction_failed",
+                "dowhy_method": dowhy_method,
                 "treatment": treatment,
                 "outcome": outcome,
                 "common_causes": common_causes,
@@ -250,6 +316,9 @@ class RefutationNode:
             # F-014 fix (#416): reconstruct CausalModel from estimation_data
             # so refutation runs REAL DoWhy refuters (placebo, random_common_cause,
             # data_subset, bootstrap) — NOT the deleted ``_mock_*`` paths.
+            # Iter-2 (codex H3): rebuild uses the SAME estimator (resolved
+            # from estimation_result.selected_estimator / .method) that
+            # produced the reported ATE — not a hardcoded linear regression.
             # Fail-closed: ``RefutationError`` propagates to caller's except block.
             common_causes = cast(
                 List[str],
@@ -260,6 +329,7 @@ class RefutationNode:
                 treatment=treatment,
                 outcome=outcome,
                 common_causes=common_causes,
+                estimation_result=cast(Dict[str, Any], estimation_result),
             )
 
             # Run all refutation tests
