@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import BackgroundTasks
+from fastapi import BackgroundTasks, HTTPException
 
 # Import route functions and models
 from src.api.routes.segments import (
@@ -616,8 +616,11 @@ async def test_execute_segment_analysis_with_agent(sample_request, mock_agent_re
 
 
 @pytest.mark.asyncio
-async def test_execute_segment_analysis_falls_back_to_mock(sample_request):
-    """Test _execute_segment_analysis falls back to mock when agent unavailable."""
+async def test_execute_segment_analysis_falls_back_to_mock_when_explicitly_allowed(
+    sample_request, monkeypatch
+):
+    """Mock-fallback is gated on E2I_REQUIRE_AGENT_IMPORT=0 (closed-by-default policy)."""
+    monkeypatch.setenv("E2I_REQUIRE_AGENT_IMPORT", "0")
     with patch(
         "src.agents.heterogeneous_optimizer.graph.create_heterogeneous_optimizer_graph",
         side_effect=ImportError,
@@ -626,6 +629,20 @@ async def test_execute_segment_analysis_falls_back_to_mock(sample_request):
 
         assert result.status == AnalysisStatus.COMPLETED
         assert "mock data" in result.warnings[0].lower()
+
+
+@pytest.mark.asyncio
+async def test_execute_segment_analysis_raises_503_when_mock_disabled(sample_request, monkeypatch):
+    """Closed-by-default: ImportError must raise 503 when mock-fallback is disabled."""
+    monkeypatch.setenv("E2I_REQUIRE_AGENT_IMPORT", "1")
+    with patch(
+        "src.agents.heterogeneous_optimizer.graph.create_heterogeneous_optimizer_graph",
+        side_effect=ImportError,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await _execute_segment_analysis(sample_request)
+        assert exc_info.value.status_code == 503
+        assert exc_info.value.detail["error"] == "agent_unavailable"
 
 
 @pytest.mark.asyncio

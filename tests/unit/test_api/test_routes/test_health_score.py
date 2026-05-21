@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 # Import route functions and models
 from src.api.routes.health_score import (
@@ -622,13 +623,33 @@ async def test_execute_health_check_quick_mode(mock_agent_result):
 
 
 @pytest.mark.asyncio
-async def test_execute_health_check_falls_back_to_mock():
-    """Test _execute_health_check falls back to mock when agent unavailable."""
+async def test_execute_health_check_falls_back_to_mock_when_explicitly_allowed(monkeypatch):
+    """Mock-fallback is gated on E2I_REQUIRE_AGENT_IMPORT=0 or ENVIRONMENT in dev set.
+
+    Closed-by-default policy means CI default (env unset) raises 503 on
+    ImportError. This test pins the explicit dev opt-in path still works.
+    """
+    monkeypatch.setenv("E2I_REQUIRE_AGENT_IMPORT", "0")
     with patch("src.agents.health_score.HealthScoreAgent", side_effect=ImportError):
         result = await _execute_health_check(CheckScope.FULL)
 
         assert result.overall_health_score > 0
         assert result.warnings[0] == "Using mock data - Health Score agent not available"
+
+
+@pytest.mark.asyncio
+async def test_execute_health_check_raises_503_when_mock_disabled(monkeypatch):
+    """Closed-by-default: ImportError must raise 503 when mock-fallback is disabled.
+
+    Pin the new fail-closed behavior (codex iter-1 H1 fix) — unset/misspelled
+    ENVIRONMENT must NOT silently enable fabricated data.
+    """
+    monkeypatch.setenv("E2I_REQUIRE_AGENT_IMPORT", "1")
+    with patch("src.agents.health_score.HealthScoreAgent", side_effect=ImportError):
+        with pytest.raises(HTTPException) as exc_info:
+            await _execute_health_check(CheckScope.FULL)
+        assert exc_info.value.status_code == 503
+        assert exc_info.value.detail["error"] == "agent_unavailable"
 
 
 @pytest.mark.asyncio
