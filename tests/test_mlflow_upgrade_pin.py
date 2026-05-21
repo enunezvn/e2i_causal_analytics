@@ -160,7 +160,9 @@ def test_pyproject_mlflow_dependency_in_required_spec() -> None:
     and may resolve an unaudited older mlflow.
 
     Codex iter-2 H3 finding (pre-fix the line was ``mlflow>=2.16.0`` which
-    silently allowed installs outside the audited range).
+    silently allowed installs outside the audited range). Iter-3 M finding
+    tightened the assertion to also exclude 3.11.0 (otherwise the test
+    would accept the open-ended ``mlflow>=3.10.0`` without the upper cap).
     """
     text = PYPROJECT.read_text()
     matches = _PYPROJECT_MLFLOW_RE.findall(text)
@@ -182,21 +184,34 @@ def test_pyproject_mlflow_dependency_in_required_spec() -> None:
             f"pyproject.toml mlflow spec {raw_spec!r} excludes the target "
             f"3.10.1; align with requirements.txt."
         )
+        # Same upper cap as requirements.txt — refusing 3.11.x rc line.
+        assert Version("3.11.0") not in spec, (
+            f"pyproject.toml mlflow spec {raw_spec!r} admits 3.11.x without "
+            f"the lockstep upper cap; align with requirements.txt's "
+            f">=3.10.0,<3.11.0 (open-ended >= alone would let pip resolve "
+            f"3.11.x which we refuse per #362)."
+        )
 
 
 def test_mlflow_dockerfile_pins_match_required_spec() -> None:
-    """``docker/mlflow/Dockerfile`` must install an mlflow within
-    ``>=3.10.0,<3.11.0`` (lockstep with requirements.txt).
+    """``docker/mlflow/Dockerfile`` must install mlflow within
+    ``>=3.10.0,<3.11.0`` (lockstep with requirements.txt). EXACTLY ONE
+    mlflow pip arg must be present, and it must satisfy the policy spec
+    (in particular, refusing 3.7.0 + 3.11.0).
 
-    Codex iter-2 H1 finding (pre-fix the Dockerfile pinned ``mlflow==2.9.2``,
-    so the MLflow server container could run an unaudited older version
-    while the Python clients had been bumped).
+    Codex iter-2 H1 finding (pre-fix the Dockerfile pinned ``mlflow==2.9.2``).
+    Iter-3 M finding tightened the assertion to require ALL matched specs
+    are in-policy + exactly one mlflow arg (previously the test passed if
+    ANY one matched, so a stale ``mlflow==2.9.2`` line co-existing with the
+    new ``mlflow>=3.10.0,<3.11.0`` would have falsely passed).
     """
     text = MLFLOW_DOCKERFILE.read_text()
     # The Dockerfile installs mlflow via a quoted pip arg; accept both quoted
-    # and unquoted forms.
+    # and unquoted forms. The match captures the version specifier ONLY when
+    # preceded by the literal package name ``mlflow`` (not ``mlflow-skinny``
+    # or ``mlflow-tracing``).
     line_re = re.compile(
-        r"['\"]?\s*mlflow\s*([<>=!~][^\s'\"]+(?:\s*,\s*[<>=!~][^\s'\"]+)*)\s*['\"]?",
+        r"(?<![\w-])mlflow\s*([<>=!~][^\s'\"]+(?:\s*,\s*[<>=!~][^\s'\"]+)*)",
         re.MULTILINE,
     )
     matches = line_re.findall(text)
@@ -204,18 +219,33 @@ def test_mlflow_dockerfile_pins_match_required_spec() -> None:
         "no mlflow pip-install line found in docker/mlflow/Dockerfile; "
         "the install RUN block may have been edited out."
     )
-    found_valid = False
-    for raw_spec in matches:
-        try:
-            spec = SpecifierSet(raw_spec.strip())
-        except Exception:  # noqa: BLE001 — packaging.specifiers raises subclasses
-            continue
-        if Version("3.10.1") in spec and Version("3.7.0") not in spec:
-            found_valid = True
-            break
-    assert found_valid, (
-        f"docker/mlflow/Dockerfile does not install mlflow within "
-        f"the required >=3.10.0,<3.11.0 range. Found specs: {matches!r}."
+    # iter-3 fix: require EXACTLY ONE mlflow arg so a stale 2.9.2 line
+    # co-existing with the new spec doesn't false-pass.
+    assert len(matches) == 1, (
+        f"docker/mlflow/Dockerfile has {len(matches)} mlflow pip args "
+        f"({matches!r}); expected exactly 1. Multiple specs risk install-time "
+        f"order-dependent resolution + cause silent skew."
+    )
+    raw_spec = matches[0].strip()
+    spec = SpecifierSet(raw_spec)
+    assert Version("3.10.1") in spec, (
+        f"docker/mlflow/Dockerfile mlflow spec {raw_spec!r} excludes the "
+        f"target 3.10.1; align with requirements.txt."
+    )
+    assert Version("3.7.0") not in spec, (
+        f"docker/mlflow/Dockerfile mlflow spec {raw_spec!r} still admits "
+        f"the pre-#362 vulnerable 3.7.0."
+    )
+    # Same upper cap as requirements.txt — refusing 3.11.x rc line.
+    assert Version("3.11.0") not in spec, (
+        f"docker/mlflow/Dockerfile mlflow spec {raw_spec!r} admits 3.11.x "
+        f"without the lockstep upper cap; align with requirements.txt's "
+        f">=3.10.0,<3.11.0 (open-ended >= alone allows 3.11.x)."
+    )
+    # And 2.x must be excluded (catches pre-fix 2.9.2 + 2.16.0 regressions).
+    assert Version("2.16.0") not in spec, (
+        f"docker/mlflow/Dockerfile mlflow spec {raw_spec!r} still admits "
+        f"mlflow 2.x; bump to >=3.10.0,<3.11.0."
     )
 
 
@@ -250,17 +280,36 @@ def test_docker_compose_mlflow_image_tag_locked_to_required_spec() -> None:
 def test_architecture_doc_mlflow_image_tag_matches() -> None:
     """``docs/ARCHITECTURE.md`` mlflow image tag must agree with the compose
     files. Stale doc tags mislead reviewers about what's deployed.
+
+    Catches BOTH the ``ghcr.io/mlflow/mlflow:vX.Y.Z`` image string AND the
+    plaintext ``MLflow vX.Y.Z`` mentions (e.g. in C4 diagram Container
+    annotations). Iter-3 L finding caught a stale ``MLflow v3.1.0`` plaintext
+    mention in the C4 diagram that the image-tag-only regex missed.
     """
     text = ARCHITECTURE_MD.read_text()
-    tags = re.findall(r"ghcr\.io/mlflow/mlflow:(v[\d.]+(?:rc\d+)?)", text)
-    assert tags, (
-        "no mlflow image tag found in docs/ARCHITECTURE.md; the MLOps "
-        "container table may have been restructured."
+    image_tags = re.findall(r"ghcr\.io/mlflow/mlflow:(v[\d.]+(?:rc\d+)?)", text)
+    # Plaintext mentions like ``"MLflow", "MLflow v3.10.1"`` in C4 diagrams.
+    # Match case-insensitively but capture the version suffix only.
+    plain_tags = re.findall(r"MLflow\s+(v[\d.]+(?:rc\d+)?)", text)
+    all_tags = image_tags + plain_tags
+    assert all_tags, (
+        "no mlflow image tag or plaintext version mention found in "
+        "docs/ARCHITECTURE.md; the MLOps container table + C4 diagram "
+        "may have been restructured."
     )
-    for tag in tags:
+    # Require BOTH image-tag occurrence AND at least one plaintext mention
+    # (defends against future doc restructures that drop the C4 mention
+    # while leaving the table — or vice-versa).
+    assert image_tags, (
+        "no ghcr.io/mlflow/mlflow:vX.Y.Z image tag found in "
+        "docs/ARCHITECTURE.md container table."
+    )
+    for tag in all_tags:
         assert tag == MLFLOW_DOCKER_IMAGE_TAG, (
-            f"docs/ARCHITECTURE.md references stale mlflow image {tag!r}; "
-            f"expected {MLFLOW_DOCKER_IMAGE_TAG!r} (matches compose files)."
+            f"docs/ARCHITECTURE.md references stale mlflow version {tag!r}; "
+            f"expected {MLFLOW_DOCKER_IMAGE_TAG!r} (matches compose files). "
+            f"Both ghcr.io image tags and ``MLflow vX.Y.Z`` C4 mentions are "
+            f"enforced — check both sites."
         )
 
 
