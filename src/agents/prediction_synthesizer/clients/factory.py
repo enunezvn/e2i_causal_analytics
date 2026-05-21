@@ -359,33 +359,31 @@ class ModelClientFactory:
     async def get_clients(self, model_ids: List[str]) -> Dict[str, ModelClient]:
         """Get or create multiple model clients.
 
-        F-012 (#430, codex iter-2 M1): the prior ``except Exception`` here
-        suppressed undeclared-model ValueErrors raised by ``get_client``,
-        making the new "explicit endpoint required" contract non-fatal
-        at the batch entry point. We now preserve ValueError (the
-        "no endpoint declaration" signal) while continuing to tolerate
-        transient runtime failures from real-client initialization.
+        F-012 (#430, codex iter-2 M1 + iter-3 H4): undeclared models AND
+        declared-model init failures now both propagate to the caller.
+        The previous broad ``except Exception`` was a backward-compat shim
+        — it would silently drop a failed declared model and return a
+        partial dict, masking real misconfiguration. Per the no-silent-
+        fabrication directive, the caller (planner or scheduler) sees the
+        error and decides whether to retry, fail the whole job, or
+        proceed without that model.
 
         Args:
             model_ids: List of model identifiers
 
         Returns:
-            Dictionary mapping model_id to client
+            Dictionary mapping model_id to client (always complete on
+            success; partial dicts are never returned).
 
         Raises:
             ValueError: If any requested model has no endpoint declaration
-                or is disabled. The caller should fix the planner/config
-                before retrying.
+                or is disabled.
+            Exception: Any client-init error (network, auth, etc.) from
+                ``get_client`` is propagated unchanged.
         """
         clients = {}
         for model_id in model_ids:
-            try:
-                clients[model_id] = await self.get_client(model_id)
-            except ValueError:
-                # Re-raise undeclared / disabled model errors — never silent.
-                raise
-            except Exception as e:
-                logger.warning(f"Failed to create client for {model_id}: {e}")
+            clients[model_id] = await self.get_client(model_id)
         return clients
 
     async def close_all(self) -> None:

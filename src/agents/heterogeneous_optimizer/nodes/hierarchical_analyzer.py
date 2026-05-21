@@ -207,6 +207,11 @@ class HierarchicalAnalyzerNode:
             return {
                 "warnings": [f"Hierarchical analysis skipped - missing dependency: {e}"],
             }
+        except RuntimeError:
+            # F-013 (codex iter-3 H1): preserve the synthetic-data
+            # fail-closed signal from _get_data() instead of downgrading
+            # to a soft warning.
+            raise
         except Exception as e:
             logger.error(
                 "Hierarchical analysis failed",

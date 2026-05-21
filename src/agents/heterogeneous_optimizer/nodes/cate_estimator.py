@@ -74,9 +74,9 @@ def _get_default_data_connector():
                 raise RuntimeError(
                     "Failed to initialize Supabase data connector and "
                     "MockDataConnector fallback is disabled "
-                    "(E2I_ALLOW_MOCK_CONNECTOR=1 or ENVIRONMENT!=production "
-                    "required for mock fallback). "
-                    f"Original error: {e}"
+                    "(E2I_ALLOW_MOCK_CONNECTOR=1 or ENVIRONMENT in "
+                    "{development,dev,test,testing,local} required for mock "
+                    f"fallback). Original error: {e}"
                 ) from e
 
     # Supabase env vars absent OR real connector init failed under
@@ -89,7 +89,8 @@ def _get_default_data_connector():
         )
         raise RuntimeError(
             "MockDataConnector fallback is disabled "
-            "(E2I_ALLOW_MOCK_CONNECTOR=1 or ENVIRONMENT!=production required). "
+            "(E2I_ALLOW_MOCK_CONNECTOR=1 or ENVIRONMENT in "
+            "{development,dev,test,testing,local} required). "
             "Configure Supabase credentials (SUPABASE_URL and "
             "SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY) to enable the "
             f"real data connector. Current env: {env_summary}."

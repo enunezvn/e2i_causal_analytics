@@ -177,6 +177,13 @@ class UpliftAnalyzerNode:
             return {
                 "warnings": ["CausalML not installed - uplift analysis skipped"],
             }
+        except RuntimeError:
+            # F-013 (codex iter-3 H1): the synthetic-data fail-closed
+            # signal from _get_data() must not be downgraded to a soft
+            # warning. Re-raise so the graph status reflects the explicit
+            # configuration error rather than continuing with CATE-only
+            # output.
+            raise
         except Exception as e:
             logger.error(
                 "Uplift analysis failed",
