@@ -6,14 +6,21 @@ Tests cover:
 - RefutationResult
 - RefutationSuite
 - Individual refutation tests (placebo, random_common_cause, data_subset, bootstrap, sensitivity)
-- Mock implementations
+- Fail-closed semantics for DoWhy-unavailable / causal_model=None
 - Scoring and gate decisions
+
+F-014 fix (#416): The previous ``_mock_*`` mock paths have been deleted.
+Tests that previously patched them now (a) provide a stub CausalModel that
+returns deterministic refutation results, or (b) assert that calling
+``_run_*_test`` with ``causal_model=None`` raises ``RefutationError``.
 """
 
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
+from src.causal_engine.errors import RefutationError
 from src.causal_engine.refutation_runner import (
     GateDecision,
     RefutationResult,
@@ -24,6 +31,37 @@ from src.causal_engine.refutation_runner import (
     is_estimate_valid,
     run_refutation_suite,
 )
+
+
+# ============================================================================
+# CAUSAL MODEL STUBS (replace deleted _mock_* methods)
+# These produce deterministic refutation values to keep the existing pass/fail
+# assertions stable, but go through the real `causal_model.refute_estimate`
+# API surface — i.e., the code path that production now exercises.
+# ============================================================================
+
+
+def _make_refutation_result(new_effect: float, p_value: float, **extra) -> SimpleNamespace:
+    """Construct a stub object shaped like DoWhy's refutation result."""
+    rr: dict = {"p_value": p_value}
+    rr.update(extra)
+    return SimpleNamespace(new_effect=new_effect, refutation_result=rr)
+
+
+def _make_stub_causal_model(refutation_results_by_method: dict) -> SimpleNamespace:
+    """Construct a stub object shaped like DoWhy's CausalModel.
+
+    Only ``refute_estimate(estimand, estimate, method_name=..., **kwargs)`` is
+    implemented; it returns the canned result for ``method_name``.
+    """
+
+    def refute_estimate(*_args, method_name: str, **_kwargs):  # noqa: ANN001
+        if method_name not in refutation_results_by_method:
+            raise KeyError(f"stub did not register method_name={method_name!r}")
+        return refutation_results_by_method[method_name]
+
+    return SimpleNamespace(refute_estimate=refute_estimate)
+
 
 # ============================================================================
 # FIXTURES
@@ -320,52 +358,52 @@ class TestRefutationRunnerInit:
 class TestPlaceboTest:
     """Tests for placebo treatment refutation test."""
 
-    def test_run_placebo_test_mock(self, runner):
-        """Test running placebo test with mock DoWhy."""
-        result = runner._run_placebo_test(
-            original_effect=0.15,
-            causal_model=None,
-            identified_estimand=None,
-            estimate=None,
-            use_dowhy=False,
-        )
-
-        assert result.test_name == RefutationTestType.PLACEBO_TREATMENT
-        assert result.status in [
-            RefutationStatus.PASSED,
-            RefutationStatus.WARNING,
-            RefutationStatus.FAILED,
-        ]
-        assert result.original_effect == 0.15
-        assert result.p_value is not None
+    def test_run_placebo_test_no_model_fails_closed(self, runner):
+        """F-014 (#416): placebo test with causal_model=None must raise RefutationError,
+        not silently dispatch to a mock path.
+        """
+        with pytest.raises(RefutationError) as exc_info:
+            runner._run_placebo_test(
+                original_effect=0.15,
+                causal_model=None,
+                identified_estimand=None,
+                estimate=None,
+                use_dowhy=False,
+            )
+        assert "placebo" in exc_info.value.details.get("test_name", "").lower()
+        assert "unavailable" in str(exc_info.value).lower()
 
     def test_run_placebo_test_passed(self, runner):
-        """Test placebo test that passes."""
-        with patch.object(runner, "_mock_placebo_test", return_value=(0.01, 0.85)):
-            result = runner._run_placebo_test(
-                original_effect=0.15,
-                causal_model=None,
-                identified_estimand=None,
-                estimate=None,
-                use_dowhy=False,
-            )
+        """Test placebo test that passes (via stub CausalModel)."""
+        stub_model = _make_stub_causal_model(
+            {"placebo_treatment_refuter": _make_refutation_result(new_effect=0.01, p_value=0.85)}
+        )
+        result = runner._run_placebo_test(
+            original_effect=0.15,
+            causal_model=stub_model,
+            identified_estimand=object(),
+            estimate=object(),
+            use_dowhy=True,
+        )
 
-            assert result.status == RefutationStatus.PASSED
-            assert "no significant effect" in result.details["message"].lower()
+        assert result.status == RefutationStatus.PASSED
+        assert "no significant effect" in result.details["message"].lower()
 
     def test_run_placebo_test_failed(self, runner):
-        """Test placebo test that fails."""
-        with patch.object(runner, "_mock_placebo_test", return_value=(0.12, 0.02)):
-            result = runner._run_placebo_test(
-                original_effect=0.15,
-                causal_model=None,
-                identified_estimand=None,
-                estimate=None,
-                use_dowhy=False,
-            )
+        """Test placebo test that fails (via stub CausalModel)."""
+        stub_model = _make_stub_causal_model(
+            {"placebo_treatment_refuter": _make_refutation_result(new_effect=0.12, p_value=0.02)}
+        )
+        result = runner._run_placebo_test(
+            original_effect=0.15,
+            causal_model=stub_model,
+            identified_estimand=object(),
+            estimate=object(),
+            use_dowhy=True,
+        )
 
-            assert result.status == RefutationStatus.FAILED
-            assert "warning" in result.details["message"].lower()
+        assert result.status == RefutationStatus.FAILED
+        assert "warning" in result.details["message"].lower()
 
 
 # ============================================================================
@@ -376,50 +414,50 @@ class TestPlaceboTest:
 class TestRandomCommonCauseTest:
     """Tests for random common cause refutation test."""
 
-    def test_run_random_common_cause_test_mock(self, runner):
-        """Test running random common cause test with mock."""
-        result = runner._run_random_common_cause_test(
-            original_effect=0.15,
-            causal_model=None,
-            identified_estimand=None,
-            estimate=None,
-            use_dowhy=False,
-        )
-
-        assert result.test_name == RefutationTestType.RANDOM_COMMON_CAUSE
-        assert result.status in [
-            RefutationStatus.PASSED,
-            RefutationStatus.WARNING,
-            RefutationStatus.FAILED,
-        ]
-        assert result.delta_percent >= 0
+    def test_run_random_common_cause_test_no_model_fails_closed(self, runner):
+        """F-014 (#416): random_common_cause test with causal_model=None must
+        raise RefutationError, not silently dispatch to a mock path.
+        """
+        with pytest.raises(RefutationError) as exc_info:
+            runner._run_random_common_cause_test(
+                original_effect=0.15,
+                causal_model=None,
+                identified_estimand=None,
+                estimate=None,
+                use_dowhy=False,
+            )
+        assert exc_info.value.details.get("test_name") == "random_common_cause"
 
     def test_run_random_common_cause_test_passed(self, runner):
-        """Test random common cause test that passes."""
-        with patch.object(runner, "_mock_random_common_cause_test", return_value=(0.14, 0.70)):
-            result = runner._run_random_common_cause_test(
-                original_effect=0.15,
-                causal_model=None,
-                identified_estimand=None,
-                estimate=None,
-                use_dowhy=False,
-            )
+        """Test random common cause test that passes (via stub CausalModel)."""
+        stub_model = _make_stub_causal_model(
+            {"random_common_cause": _make_refutation_result(new_effect=0.14, p_value=0.70)}
+        )
+        result = runner._run_random_common_cause_test(
+            original_effect=0.15,
+            causal_model=stub_model,
+            identified_estimand=object(),
+            estimate=object(),
+            use_dowhy=True,
+        )
 
-            assert result.status == RefutationStatus.PASSED
+        assert result.status == RefutationStatus.PASSED
 
     def test_run_random_common_cause_test_failed(self, runner):
-        """Test random common cause test that fails."""
-        with patch.object(runner, "_mock_random_common_cause_test", return_value=(0.05, 0.60)):
-            result = runner._run_random_common_cause_test(
-                original_effect=0.15,
-                causal_model=None,
-                identified_estimand=None,
-                estimate=None,
-                use_dowhy=False,
-            )
+        """Test random common cause test that fails (via stub CausalModel)."""
+        stub_model = _make_stub_causal_model(
+            {"random_common_cause": _make_refutation_result(new_effect=0.05, p_value=0.60)}
+        )
+        result = runner._run_random_common_cause_test(
+            original_effect=0.15,
+            causal_model=stub_model,
+            identified_estimand=object(),
+            estimate=object(),
+            use_dowhy=True,
+        )
 
-            # Large delta should trigger warning or failure
-            assert result.status in [RefutationStatus.WARNING, RefutationStatus.FAILED]
+        # Large delta should trigger warning or failure
+        assert result.status in [RefutationStatus.WARNING, RefutationStatus.FAILED]
 
 
 # ============================================================================
@@ -430,29 +468,12 @@ class TestRandomCommonCauseTest:
 class TestDataSubsetTest:
     """Tests for data subset refutation test."""
 
-    def test_run_data_subset_test_mock(self, runner):
-        """Test running data subset test with mock."""
-        result = runner._run_data_subset_test(
-            original_effect=0.15,
-            original_ci=(0.10, 0.20),
-            causal_model=None,
-            identified_estimand=None,
-            estimate=None,
-            use_dowhy=False,
-        )
-
-        assert result.test_name == RefutationTestType.DATA_SUBSET
-        assert result.status in [
-            RefutationStatus.PASSED,
-            RefutationStatus.WARNING,
-            RefutationStatus.FAILED,
-        ]
-        assert "ci_coverage" in result.details
-
-    def test_run_data_subset_test_passed(self, runner):
-        """Test data subset test that passes."""
-        with patch.object(runner, "_mock_data_subset_test", return_value=(0.15, 0.75, 0.85)):
-            result = runner._run_data_subset_test(
+    def test_run_data_subset_test_no_model_fails_closed(self, runner):
+        """F-014 (#416): data_subset test with causal_model=None must raise
+        RefutationError, not silently dispatch to a mock path.
+        """
+        with pytest.raises(RefutationError) as exc_info:
+            runner._run_data_subset_test(
                 original_effect=0.15,
                 original_ci=(0.10, 0.20),
                 causal_model=None,
@@ -460,8 +481,30 @@ class TestDataSubsetTest:
                 estimate=None,
                 use_dowhy=False,
             )
+        assert exc_info.value.details.get("test_name") == "data_subset"
 
-            assert result.status == RefutationStatus.PASSED
+    def test_run_data_subset_test_passed(self, runner):
+        """Test data subset test that passes (via stub CausalModel)."""
+        # subset_effects span keeps within original_ci so CI coverage is 1.0 (pass).
+        stub_model = _make_stub_causal_model(
+            {
+                "data_subset_refuter": _make_refutation_result(
+                    new_effect=0.15,
+                    p_value=0.75,
+                    subset_effects=[0.13, 0.14, 0.15, 0.16, 0.17],
+                )
+            }
+        )
+        result = runner._run_data_subset_test(
+            original_effect=0.15,
+            original_ci=(0.10, 0.20),
+            causal_model=stub_model,
+            identified_estimand=object(),
+            estimate=object(),
+            use_dowhy=True,
+        )
+
+        assert result.status == RefutationStatus.PASSED
 
 
 # ============================================================================
@@ -472,35 +515,12 @@ class TestDataSubsetTest:
 class TestBootstrapTest:
     """Tests for bootstrap refutation test."""
 
-    def test_run_bootstrap_test_mock(self, runner):
-        """Test running bootstrap test with mock."""
-        result = runner._run_bootstrap_test(
-            original_effect=0.15,
-            original_ci=(0.10, 0.20),
-            causal_model=None,
-            identified_estimand=None,
-            estimate=None,
-            use_dowhy=False,
-        )
-
-        assert result.test_name == RefutationTestType.BOOTSTRAP
-        assert result.status in [
-            RefutationStatus.PASSED,
-            RefutationStatus.WARNING,
-            RefutationStatus.FAILED,
-        ]
-        assert "bootstrap_ci" in result.details
-
-    def test_run_bootstrap_test_passed(self, runner):
-        """Test bootstrap test that passes."""
-        # Bootstrap CI must be <= 50% wider than original to pass
-        # original_ci width = 0.20 - 0.10 = 0.10
-        # bootstrap_ci width must be <= 0.05 (50% of 0.10)
-        # So bootstrap_ci = (0.125, 0.175) gives width = 0.05, ci_ratio = 0.5
-        with patch.object(
-            runner, "_mock_bootstrap_test", return_value=(0.15, (0.125, 0.175), 0.85)
-        ):
-            result = runner._run_bootstrap_test(
+    def test_run_bootstrap_test_no_model_fails_closed(self, runner):
+        """F-014 (#416): bootstrap test with causal_model=None must raise
+        RefutationError, not silently dispatch to a mock path.
+        """
+        with pytest.raises(RefutationError) as exc_info:
+            runner._run_bootstrap_test(
                 original_effect=0.15,
                 original_ci=(0.10, 0.20),
                 causal_model=None,
@@ -508,8 +528,37 @@ class TestBootstrapTest:
                 estimate=None,
                 use_dowhy=False,
             )
+        assert exc_info.value.details.get("test_name") == "bootstrap"
 
-            assert result.status == RefutationStatus.PASSED
+    def test_run_bootstrap_test_passed(self, runner):
+        """Test bootstrap test that passes (via stub CausalModel).
+
+        Bootstrap CI must be <= 50% wider than original to pass.
+        - original_ci width = 0.20 - 0.10 = 0.10
+        - bootstrap_ci width must be <= 0.05 (50% of 0.10)
+        - Bootstrap effects centered at 0.15 with width 0.05 → ratio = 0.5.
+        """
+        # Provide bootstrap_estimates whose mean ≈ 0.15 and whose 2.5/97.5
+        # percentiles fall around (0.125, 0.175).
+        stub_model = _make_stub_causal_model(
+            {
+                "bootstrap_refuter": _make_refutation_result(
+                    new_effect=0.15,
+                    p_value=0.85,
+                    bootstrap_estimates=[0.125, 0.13, 0.14, 0.15, 0.16, 0.17, 0.175],
+                )
+            }
+        )
+        result = runner._run_bootstrap_test(
+            original_effect=0.15,
+            original_ci=(0.10, 0.20),
+            causal_model=stub_model,
+            identified_estimand=object(),
+            estimate=object(),
+            use_dowhy=True,
+        )
+
+        assert result.status == RefutationStatus.PASSED
 
 
 # ============================================================================
@@ -561,37 +610,41 @@ class TestSensitivityTest:
 # ============================================================================
 
 
-class TestMockImplementations:
-    """Tests for mock refutation implementations."""
+class TestMockImplementationsDeleted:
+    """F-014 (#416): assert the legacy ``_mock_*`` methods are gone.
 
-    def test_mock_placebo_test(self, runner):
-        """Test mock placebo test."""
-        placebo_effect, p_value = runner._mock_placebo_test(0.15)
+    These pins make a future re-introduction of any silent-fallback mock
+    method a CI failure (per ``CLAUDE.md`` §"CRITICAL — Anti-Mocking &
+    Verification Discipline" and memory ``feedback-no-mocking-no-patching``).
+    """
 
-        assert abs(placebo_effect) < 0.1  # Should be near zero
-        assert 0 < p_value < 1
+    def test_mock_placebo_test_method_deleted(self, runner):
+        """``_mock_placebo_test`` must NOT exist on the runner."""
+        assert not hasattr(runner, "_mock_placebo_test"), (
+            "F-014 regression: _mock_placebo_test re-introduced. "
+            "Use real DoWhy CausalModel or fail-closed with RefutationError."
+        )
 
-    def test_mock_random_common_cause_test(self, runner):
-        """Test mock random common cause test."""
-        refuted_effect, p_value = runner._mock_random_common_cause_test(0.15)
+    def test_mock_random_common_cause_test_method_deleted(self, runner):
+        """``_mock_random_common_cause_test`` must NOT exist on the runner."""
+        assert not hasattr(runner, "_mock_random_common_cause_test"), (
+            "F-014 regression: _mock_random_common_cause_test re-introduced. "
+            "Use real DoWhy CausalModel or fail-closed with RefutationError."
+        )
 
-        assert abs(refuted_effect - 0.15) < 0.1  # Should be close to original
-        assert 0 < p_value < 1
+    def test_mock_data_subset_test_method_deleted(self, runner):
+        """``_mock_data_subset_test`` must NOT exist on the runner."""
+        assert not hasattr(runner, "_mock_data_subset_test"), (
+            "F-014 regression: _mock_data_subset_test re-introduced. "
+            "Use real DoWhy CausalModel or fail-closed with RefutationError."
+        )
 
-    def test_mock_data_subset_test(self, runner):
-        """Test mock data subset test."""
-        refuted_effect, p_value, ci_coverage = runner._mock_data_subset_test(0.15, (0.10, 0.20))
-
-        assert abs(refuted_effect - 0.15) < 0.1
-        assert 0 < p_value < 1
-        assert 0 <= ci_coverage <= 1
-
-    def test_mock_bootstrap_test(self, runner):
-        """Test mock bootstrap test."""
-        refuted_effect, bootstrap_ci, p_value = runner._mock_bootstrap_test(0.15)
-
-        assert bootstrap_ci[0] < refuted_effect < bootstrap_ci[1]
-        assert 0 < p_value < 1
+    def test_mock_bootstrap_test_method_deleted(self, runner):
+        """``_mock_bootstrap_test`` must NOT exist on the runner."""
+        assert not hasattr(runner, "_mock_bootstrap_test"), (
+            "F-014 regression: _mock_bootstrap_test re-introduced. "
+            "Use real DoWhy CausalModel or fail-closed with RefutationError."
+        )
 
 
 # ============================================================================
@@ -725,14 +778,43 @@ class TestGateDecision:
 # ============================================================================
 
 
+def _full_stub_causal_model() -> "SimpleNamespace":  # noqa: UP037
+    """Build a stub CausalModel that returns canned results for all 4 refuters."""
+    return _make_stub_causal_model(
+        {
+            "placebo_treatment_refuter": _make_refutation_result(new_effect=0.01, p_value=0.85),
+            "random_common_cause": _make_refutation_result(new_effect=0.14, p_value=0.70),
+            "data_subset_refuter": _make_refutation_result(
+                new_effect=0.15,
+                p_value=0.75,
+                subset_effects=[0.13, 0.14, 0.15, 0.16, 0.17],
+            ),
+            "bootstrap_refuter": _make_refutation_result(
+                new_effect=0.15,
+                p_value=0.85,
+                bootstrap_estimates=[0.125, 0.13, 0.14, 0.15, 0.16, 0.17, 0.175],
+            ),
+        }
+    )
+
+
 class TestRunAllTests:
-    """Tests for run_all_tests method."""
+    """Tests for run_all_tests method.
+
+    F-014 (#416): These tests now provide a stub CausalModel because
+    ``run_all_tests`` no longer silently dispatches to mock paths when the
+    model is missing. The stub keeps the test assertions stable while
+    exercising the real ``causal_model.refute_estimate`` API.
+    """
 
     def test_run_all_tests_basic(self, runner):
-        """Test running all refutation tests."""
+        """Test running all refutation tests with stub CausalModel."""
         suite = runner.run_all_tests(
             original_effect=0.15,
             original_ci=(0.10, 0.20),
+            causal_model=_full_stub_causal_model(),
+            identified_estimand=object(),
+            estimate=object(),
         )
 
         assert isinstance(suite, RefutationSuite)
@@ -744,7 +826,7 @@ class TestRunAllTests:
         ]
 
     def test_run_all_tests_with_disabled_tests(self):
-        """Test running with some tests disabled."""
+        """Test running with some tests disabled (with stub CausalModel)."""
         config = {
             "placebo_treatment": {"enabled": False},
             "random_common_cause": {"enabled": True},
@@ -754,6 +836,9 @@ class TestRunAllTests:
         suite = runner.run_all_tests(
             original_effect=0.15,
             original_ci=(0.10, 0.20),
+            causal_model=_full_stub_causal_model(),
+            identified_estimand=object(),
+            estimate=object(),
         )
 
         # Should not include placebo test
@@ -761,10 +846,13 @@ class TestRunAllTests:
         assert RefutationTestType.PLACEBO_TREATMENT not in test_names
 
     def test_run_all_tests_with_metadata(self, runner):
-        """Test running tests with full metadata."""
+        """Test running tests with full metadata (with stub CausalModel)."""
         suite = runner.run_all_tests(
             original_effect=0.15,
             original_ci=(0.10, 0.20),
+            causal_model=_full_stub_causal_model(),
+            identified_estimand=object(),
+            estimate=object(),
             treatment="hcp_engagement",
             outcome="conversion_rate",
             brand="Kisqali",
@@ -776,6 +864,18 @@ class TestRunAllTests:
         assert suite.brand == "Kisqali"
         assert suite.estimate_id == "est-123"
 
+    def test_run_all_tests_without_causal_model_fails_closed(self, runner):
+        """F-014 (#416): run_all_tests without a CausalModel must fail-closed.
+
+        The first enabled test (placebo by default) raises RefutationError;
+        no mock fallback exists.
+        """
+        with pytest.raises(RefutationError):
+            runner.run_all_tests(
+                original_effect=0.15,
+                original_ci=(0.10, 0.20),
+            )
+
 
 # ============================================================================
 # CONVENIENCE FUNCTION TESTS
@@ -785,17 +885,20 @@ class TestRunAllTests:
 class TestConvenienceFunctions:
     """Tests for convenience functions."""
 
-    def test_run_refutation_suite(self):
-        """Test run_refutation_suite convenience function."""
-        suite = run_refutation_suite(
-            original_effect=0.15,
-            original_ci=(0.10, 0.20),
-            treatment="test_treatment",
-            outcome="test_outcome",
-        )
-
-        assert isinstance(suite, RefutationSuite)
-        assert suite.treatment_variable == "test_treatment"
+    def test_run_refutation_suite_fails_closed_without_model(self):
+        """F-014 (#416): run_refutation_suite convenience function does not
+        accept a CausalModel kwarg, so it now always fails-closed (the
+        underlying ``run_all_tests`` raises ``RefutationError`` when
+        ``causal_model is None``). Callers must build a model and call
+        ``RefutationRunner.run_all_tests`` directly, or use the agent path.
+        """
+        with pytest.raises(RefutationError):
+            run_refutation_suite(
+                original_effect=0.15,
+                original_ci=(0.10, 0.20),
+                treatment="test_treatment",
+                outcome="test_outcome",
+            )
 
     def test_is_estimate_valid_proceed(self):
         """Test is_estimate_valid with proceed decision."""

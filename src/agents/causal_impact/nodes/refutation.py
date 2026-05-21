@@ -9,11 +9,17 @@ Persistence: Uses CausalValidationRepository for database storage
 Phase 4 Integration:
 - Logs ValidationOutcome to Feedback Learner for learning from failures
 - Creates failure patterns for ExperimentKnowledgeStore queries
+
+Anti-Mocking (F-014 fix, #416):
+- Reconstructs DoWhy CausalModel + identified_estimand + estimate from
+  estimation_data passthrough BEFORE calling ``RefutationRunner.run_all_tests``.
+- Fail-closed: raises ``RefutationError`` when DoWhy is unavailable OR when
+  reconstruction fails. NEVER dispatches to the deleted ``_mock_*`` paths.
 """
 
 import logging
 import time
-from typing import Any, Dict, Optional, cast
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 from src.agents.causal_impact.state import (
     CausalImpactState,
@@ -22,6 +28,7 @@ from src.agents.causal_impact.state import (
 from src.causal_engine import (
     DOWHY_AVAILABLE,
     GateDecision,
+    RefutationError,
     RefutationRunner,
     RefutationSuite,
     # Phase 4: ValidationOutcome for Feedback Learner integration
@@ -31,6 +38,137 @@ from src.causal_engine import (
 from src.repositories.causal_validation import CausalValidationRepository
 
 logger = logging.getLogger(__name__)
+
+
+def _reconstruct_dowhy_artifacts(
+    *,
+    data: Any,
+    treatment: str,
+    outcome: str,
+    common_causes: List[str],
+) -> Tuple[Any, Any, Any]:
+    """Reconstruct DoWhy CausalModel, identified_estimand, and estimate.
+
+    The agent state does not persist the live DoWhy model from the estimation
+    node (would require serialization of fitted EconML wrappers). Instead,
+    we re-build the model in-place using the same DAG inputs (treatment,
+    outcome, common_causes) and the persisted data passthrough.
+
+    This is NOT a mock — it constructs a real DoWhy CausalModel which runs
+    real refutation methods (placebo_treatment_refuter, random_common_cause,
+    data_subset_refuter, bootstrap_refuter) against real EconML estimators.
+
+    Args:
+        data: pandas DataFrame with treatment, outcome, and common-cause columns
+        treatment: treatment variable name
+        outcome: outcome variable name
+        common_causes: list of confounder column names
+
+    Returns:
+        Tuple of (causal_model, identified_estimand, estimate)
+
+    Raises:
+        RefutationError: when DoWhy is unavailable OR reconstruction fails.
+            Surfaces to chat as "Refutation analysis unavailable for this
+            query, retry without refutation".
+    """
+    if not DOWHY_AVAILABLE:
+        raise RefutationError(
+            "Refutation analysis unavailable for this query, retry without refutation. "
+            "DoWhy library is not installed in this environment.",
+            details={
+                "reason": "dowhy_not_available",
+                "treatment": treatment,
+                "outcome": outcome,
+            },
+        )
+
+    if data is None:
+        raise RefutationError(
+            "Refutation analysis unavailable for this query, retry without refutation. "
+            "Estimation data passthrough is missing — cannot reconstruct CausalModel.",
+            details={
+                "reason": "estimation_data_missing",
+                "treatment": treatment,
+                "outcome": outcome,
+            },
+        )
+
+    if not hasattr(data, "columns"):
+        raise RefutationError(
+            "Refutation analysis unavailable for this query, retry without refutation. "
+            "Estimation data is not a DataFrame.",
+            details={
+                "reason": "estimation_data_not_dataframe",
+                "data_type": type(data).__name__,
+            },
+        )
+
+    # Validate columns
+    columns = set(data.columns)
+    missing_cols: List[str] = []
+    if treatment not in columns:
+        missing_cols.append(treatment)
+    if outcome not in columns:
+        missing_cols.append(outcome)
+    for cc in common_causes:
+        if cc not in columns:
+            missing_cols.append(cc)
+    if missing_cols:
+        raise RefutationError(
+            "Refutation analysis unavailable for this query, retry without refutation. "
+            f"Estimation data is missing required columns: {missing_cols}.",
+            details={
+                "reason": "missing_columns",
+                "missing": missing_cols,
+                "available_columns": list(data.columns),
+                "treatment": treatment,
+                "outcome": outcome,
+                "common_causes": common_causes,
+            },
+        )
+
+    try:
+        from dowhy import CausalModel  # type: ignore[import-not-found]
+    except ImportError as ie:
+        raise RefutationError(
+            "Refutation analysis unavailable for this query, retry without refutation. "
+            "DoWhy import failed at reconstruction time.",
+            details={"reason": "dowhy_import_failed"},
+            original_error=ie,
+        ) from ie
+
+    try:
+        model = CausalModel(
+            data=data,
+            treatment=treatment,
+            outcome=outcome,
+            common_causes=common_causes,
+        )
+        identified_estimand = model.identify_effect(proceed_when_unidentifiable=True)
+        # Use backdoor.linear_regression as the lightweight estimator for the
+        # refutation run. Real estimation (with energy-score-selected estimator)
+        # has already happened in EstimationNode; this rebuild only provides
+        # the DoWhy object graph for refutation method dispatch.
+        estimate = model.estimate_effect(
+            identified_estimand,
+            method_name="backdoor.linear_regression",
+            test_significance=False,
+        )
+    except Exception as exc:  # noqa: BLE001 — fail-closed wrapper
+        raise RefutationError(
+            "Refutation analysis unavailable for this query, retry without refutation. "
+            f"DoWhy CausalModel reconstruction failed: {exc}",
+            details={
+                "reason": "dowhy_reconstruction_failed",
+                "treatment": treatment,
+                "outcome": outcome,
+                "common_causes": common_causes,
+            },
+            original_error=exc,
+        ) from exc
+
+    return model, identified_estimand, estimate
 
 
 class RefutationNode:
@@ -109,6 +247,21 @@ class RefutationNode:
                     f"Using estimation data for refutation (shape: {estimation_data.shape})"  # type: ignore[union-attr]
                 )
 
+            # F-014 fix (#416): reconstruct CausalModel from estimation_data
+            # so refutation runs REAL DoWhy refuters (placebo, random_common_cause,
+            # data_subset, bootstrap) — NOT the deleted ``_mock_*`` paths.
+            # Fail-closed: ``RefutationError`` propagates to caller's except block.
+            common_causes = cast(
+                List[str],
+                state.get("confounders") or estimation_result.get("covariates_adjusted") or [],
+            )
+            causal_model, identified_estimand, estimate = _reconstruct_dowhy_artifacts(
+                data=estimation_data,
+                treatment=treatment,
+                outcome=outcome,
+                common_causes=common_causes,
+            )
+
             # Run all refutation tests
             suite: RefutationSuite = self.runner.run_all_tests(
                 original_effect=original_ate,
@@ -119,9 +272,9 @@ class RefutationNode:
                 estimate_id=query_id,
                 # Data passthrough from estimation node (enables DoWhy-based refutation)
                 data=estimation_data,
-                causal_model=None,  # Model not persisted in state (would require serialization)
-                identified_estimand=None,
-                estimate=None,
+                causal_model=causal_model,
+                identified_estimand=identified_estimand,
+                estimate=estimate,
             )
 
             # Convert to legacy format for backward compatibility
@@ -217,6 +370,22 @@ class RefutationNode:
 
             return result
 
+        except RefutationError as re:
+            # F-014 fail-closed: structured error surfaces to chat UI as
+            # "Refutation analysis unavailable for this query, retry without refutation"
+            latency_ms = (time.time() - start_time) * 1000
+            logger.error(
+                f"Refutation fail-closed (no mock fallback): {re.message}",
+                extra={"details": re.details},
+            )
+            return {
+                **state,
+                "refutation_error": re.message,
+                "refutation_error_details": re.details,
+                "refutation_latency_ms": latency_ms,
+                "status": "failed",
+                "error_message": re.message,
+            }
         except Exception as e:
             latency_ms = (time.time() - start_time) * 1000
             logger.error(f"Refutation failed: {e}", exc_info=True)

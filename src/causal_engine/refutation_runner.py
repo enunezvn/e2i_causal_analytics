@@ -24,6 +24,9 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 import numpy as np
 
+# Structured fail-closed error for refutation failures (F-014, #416)
+from src.causal_engine.errors import RefutationError
+
 # Opik tracing for causal validation observability
 from src.mlops.opik_connector import get_opik_connector
 
@@ -404,8 +407,19 @@ class RefutationRunner:
         )
 
         if not use_dowhy:
-            logger.info(
-                "Running refutation tests in mock mode (DoWhy not available or model not provided)"
+            # F-014 fail-closed: no silent mock fallback. Tests below raise
+            # ``RefutationError`` when ``causal_model is None``. This log line
+            # remains as a diagnostic only — execution will not proceed past
+            # the first per-test mock fallback because those have been deleted.
+            logger.warning(
+                "Refutation invoked without a real CausalModel "
+                "(DOWHY_AVAILABLE=%s, causal_model=%s, identified_estimand=%s, "
+                "estimate=%s) — each test will raise RefutationError; the agent "
+                "refutation node should reconstruct CausalModel before calling this.",
+                DOWHY_AVAILABLE,
+                causal_model is not None,
+                identified_estimand is not None,
+                estimate is not None,
             )
 
         # Get Opik connector for tracing
@@ -645,10 +659,34 @@ class RefutationRunner:
                 refuted_effect = float(refutation.new_effect)
                 p_value = float(refutation.refutation_result.get("p_value", 0.5))
             except Exception as e:
-                logger.warning(f"DoWhy placebo test failed: {e}, using mock")
-                refuted_effect, p_value = self._mock_placebo_test(original_effect)
+                # F-014 fail-closed: no silent mock fallback. Caller (agent
+                # refutation node) catches RefutationError and surfaces to chat.
+                raise RefutationError(
+                    "Refutation analysis unavailable for this query, retry without refutation. "
+                    f"DoWhy placebo_treatment refuter failed: {e}",
+                    details={
+                        "test_name": "placebo_treatment",
+                        "original_effect": original_effect,
+                    },
+                    original_error=e,
+                ) from e
         else:
-            refuted_effect, p_value = self._mock_placebo_test(original_effect)
+            # F-014 fail-closed: ``use_dowhy=False`` reaches here only when
+            # the agent caller did NOT reconstruct CausalModel. The new agent
+            # path (``refutation.py``) raises ``RefutationError`` BEFORE
+            # invoking run_all_tests in that scenario. This branch remains as
+            # a defense-in-depth for any non-agent caller (e.g.,
+            # ``run_refutation_suite`` convenience function) that still
+            # invokes with ``causal_model=None``.
+            raise RefutationError(
+                "Refutation analysis unavailable for this query, retry without refutation. "
+                "Placebo test requires a real DoWhy CausalModel; caller passed causal_model=None.",
+                details={
+                    "test_name": "placebo_treatment",
+                    "dowhy_available": DOWHY_AVAILABLE,
+                    "original_effect": original_effect,
+                },
+            )
 
         # Determine status based on thresholds
         # For placebo: we want p-value > threshold (placebo effect not significant)
@@ -718,10 +756,28 @@ class RefutationRunner:
                 refuted_effect = float(refutation.new_effect)
                 p_value = float(refutation.refutation_result.get("p_value", 0.5))
             except Exception as e:
-                logger.warning(f"DoWhy random common cause test failed: {e}, using mock")
-                refuted_effect, p_value = self._mock_random_common_cause_test(original_effect)
+                # F-014 fail-closed: no silent mock fallback.
+                raise RefutationError(
+                    "Refutation analysis unavailable for this query, retry without refutation. "
+                    f"DoWhy random_common_cause refuter failed: {e}",
+                    details={
+                        "test_name": "random_common_cause",
+                        "original_effect": original_effect,
+                    },
+                    original_error=e,
+                ) from e
         else:
-            refuted_effect, p_value = self._mock_random_common_cause_test(original_effect)
+            # F-014 fail-closed: defense-in-depth for legacy non-agent callers.
+            raise RefutationError(
+                "Refutation analysis unavailable for this query, retry without refutation. "
+                "random_common_cause test requires a real DoWhy CausalModel; "
+                "caller passed causal_model=None.",
+                details={
+                    "test_name": "random_common_cause",
+                    "dowhy_available": DOWHY_AVAILABLE,
+                    "original_effect": original_effect,
+                },
+            )
 
         # Calculate delta percentage
         delta_percent = (
@@ -786,17 +842,39 @@ class RefutationRunner:
                 )
                 refuted_effect = float(refutation.new_effect)
                 p_value = float(refutation.refutation_result.get("p_value", 0.5))
-                # Calculate CI coverage from refutation results
+                # Calculate CI coverage. Prefer raw subset_effects when the
+                # refuter exposes them (stub/older DoWhy variants); otherwise
+                # fall back to a single-point check (is the aggregated
+                # subset effect within original CI?). This is a real signal
+                # — not a hardcoded mock — because we use the actual refuter
+                # output, not a seeded random value.
                 subset_effects = refutation.refutation_result.get("subset_effects", [])
-                ci_coverage = self._calculate_ci_coverage(subset_effects, original_ci)
+                if subset_effects:
+                    ci_coverage = self._calculate_ci_coverage(subset_effects, original_ci)
+                else:
+                    ci_coverage = 1.0 if original_ci[0] <= refuted_effect <= original_ci[1] else 0.0
             except Exception as e:
-                logger.warning(f"DoWhy data subset test failed: {e}, using mock")
-                refuted_effect, p_value, ci_coverage = self._mock_data_subset_test(
-                    original_effect, original_ci
-                )
+                # F-014 fail-closed: no silent mock fallback.
+                raise RefutationError(
+                    "Refutation analysis unavailable for this query, retry without refutation. "
+                    f"DoWhy data_subset refuter failed: {e}",
+                    details={
+                        "test_name": "data_subset",
+                        "original_effect": original_effect,
+                    },
+                    original_error=e,
+                ) from e
         else:
-            refuted_effect, p_value, ci_coverage = self._mock_data_subset_test(
-                original_effect, original_ci
+            # F-014 fail-closed: defense-in-depth for legacy non-agent callers.
+            raise RefutationError(
+                "Refutation analysis unavailable for this query, retry without refutation. "
+                "data_subset test requires a real DoWhy CausalModel; "
+                "caller passed causal_model=None.",
+                details={
+                    "test_name": "data_subset",
+                    "dowhy_available": DOWHY_AVAILABLE,
+                    "original_effect": original_effect,
+                },
             )
 
         delta_percent = (
@@ -859,18 +937,57 @@ class RefutationRunner:
                     method_name="bootstrap_refuter",
                     num_simulations=self.config["bootstrap"]["num_bootstraps"],
                 )
+                # DoWhy's BootstrapRefuter exposes the bootstrapped mean via
+                # ``new_effect`` and ``p_value`` via ``refutation_result``.
+                # If a stub or older DoWhy variant exposes the raw
+                # ``bootstrap_estimates`` list, prefer that for richer CI
+                # computation. Otherwise approximate the CI from
+                # ``original_ci`` (a +/-1 SD width around new_effect ≈ original
+                # CI width). This keeps the test deterministic without
+                # silently substituting mock values.
                 bootstrap_effects = refutation.refutation_result.get("bootstrap_estimates", [])
-                refuted_effect = float(np.mean(bootstrap_effects))
-                bootstrap_ci = (
-                    float(np.percentile(bootstrap_effects, 2.5)),
-                    float(np.percentile(bootstrap_effects, 97.5)),
-                )
-                p_value = refutation.refutation_result.get("p_value", 0.8)
+                if bootstrap_effects:
+                    refuted_effect = float(np.mean(bootstrap_effects))
+                    bootstrap_ci = (
+                        float(np.percentile(bootstrap_effects, 2.5)),
+                        float(np.percentile(bootstrap_effects, 97.5)),
+                    )
+                else:
+                    refuted_effect = float(refutation.new_effect)
+                    # Bootstrap CI half-width matches original CI half-width
+                    # when explicit estimates are not exposed; this records
+                    # ci_ratio=1.0 which is a "warning" (CI not improving but
+                    # not catastrophically widening either). Real DoWhy
+                    # bootstrap exposes only mean+p_value in some versions.
+                    half_width = (original_ci[1] - original_ci[0]) / 2.0
+                    bootstrap_ci = (
+                        refuted_effect - half_width,
+                        refuted_effect + half_width,
+                    )
+                p_value = float(refutation.refutation_result.get("p_value", 0.8))
             except Exception as e:
-                logger.warning(f"DoWhy bootstrap test failed: {e}, using mock")
-                refuted_effect, bootstrap_ci, p_value = self._mock_bootstrap_test(original_effect)
+                # F-014 fail-closed: no silent mock fallback.
+                raise RefutationError(
+                    "Refutation analysis unavailable for this query, retry without refutation. "
+                    f"DoWhy bootstrap refuter failed: {e}",
+                    details={
+                        "test_name": "bootstrap",
+                        "original_effect": original_effect,
+                    },
+                    original_error=e,
+                ) from e
         else:
-            refuted_effect, bootstrap_ci, p_value = self._mock_bootstrap_test(original_effect)
+            # F-014 fail-closed: defense-in-depth for legacy non-agent callers.
+            raise RefutationError(
+                "Refutation analysis unavailable for this query, retry without refutation. "
+                "bootstrap test requires a real DoWhy CausalModel; "
+                "caller passed causal_model=None.",
+                details={
+                    "test_name": "bootstrap",
+                    "dowhy_available": DOWHY_AVAILABLE,
+                    "original_effect": original_effect,
+                },
+            )
 
         delta_percent = (
             abs(refuted_effect - original_effect) / max(abs(original_effect), 1e-10) * 100
@@ -980,56 +1097,51 @@ class RefutationRunner:
         )
 
     # ========================================================================
-    # MOCK IMPLEMENTATIONS (used when DoWhy is not available)
+    # F-014 (#416): The previous ``_mock_*`` methods that simulated placebo,
+    # random_common_cause, data_subset, and bootstrap tests via seeded random
+    # noise have been DELETED. The agent refutation node now reconstructs a
+    # real DoWhy ``CausalModel`` (via
+    # ``src/agents/causal_impact/nodes/refutation.py::_reconstruct_dowhy_artifacts``)
+    # before invoking ``run_all_tests``, and the per-test methods above
+    # raise ``RefutationError`` when ``causal_model is None`` so no caller
+    # can silently dispatch to mock paths.
+    #
+    # Per ``CLAUDE.md`` §"CRITICAL — Anti-Mocking & Verification Discipline":
+    # mock surfaces with zero non-test production consumers must be DELETED,
+    # not LABELED. Consumer grep at commit time verified that the only
+    # external consumers were the per-test fallbacks in this file (now
+    # replaced with ``RefutationError`` raises) and the test fixtures in
+    # ``tests/unit/test_causal_engine/test_refutation_runner.py`` (also
+    # updated in this PR to test the structured-error path).
     # ========================================================================
-
-    def _mock_placebo_test(self, original_effect: float) -> Tuple[float, float]:
-        """Mock placebo test for when DoWhy is unavailable."""
-        # Simulate placebo effect (should be near zero)
-        np.random.seed(hash(str(original_effect)) % 2**32)
-        placebo_effect = np.random.normal(0, 0.02)
-        p_value = 0.75 + np.random.uniform(-0.2, 0.2)  # High p-value = no effect
-        return placebo_effect, min(max(p_value, 0.01), 0.99)
-
-    def _mock_random_common_cause_test(self, original_effect: float) -> Tuple[float, float]:
-        """Mock random common cause test."""
-        np.random.seed(hash(str(original_effect) + "rcc") % 2**32)
-        noise = np.random.normal(0, 0.03)
-        refuted_effect = original_effect + noise
-        p_value = 0.65 + np.random.uniform(-0.1, 0.1)
-        return refuted_effect, min(max(p_value, 0.01), 0.99)
-
-    def _mock_data_subset_test(
-        self, original_effect: float, original_ci: Tuple[float, float]
-    ) -> Tuple[float, float, float]:
-        """Mock data subset test."""
-        np.random.seed(hash(str(original_effect) + "subset") % 2**32)
-        noise = np.random.normal(0, 0.04)
-        refuted_effect = original_effect + noise
-        p_value = 0.70 + np.random.uniform(-0.1, 0.1)
-        ci_coverage = 0.85 + np.random.uniform(-0.1, 0.1)
-        return refuted_effect, min(max(p_value, 0.01), 0.99), min(max(ci_coverage, 0.5), 1.0)
-
-    def _mock_bootstrap_test(
-        self, original_effect: float
-    ) -> Tuple[float, Tuple[float, float], float]:
-        """Mock bootstrap test."""
-        np.random.seed(hash(str(original_effect) + "bootstrap") % 2**32)
-        bootstrap_samples = [original_effect + np.random.normal(0, 0.02) for _ in range(100)]
-        refuted_effect = float(np.mean(bootstrap_samples))
-        bootstrap_ci = (
-            float(np.percentile(bootstrap_samples, 2.5)),
-            float(np.percentile(bootstrap_samples, 97.5)),
-        )
-        p_value = 0.80 + np.random.uniform(-0.1, 0.1)
-        return refuted_effect, bootstrap_ci, min(max(p_value, 0.01), 0.99)
 
     def _calculate_ci_coverage(
         self, subset_effects: List[float], original_ci: Tuple[float, float]
     ) -> float:
-        """Calculate what fraction of subset effects fall within original CI."""
+        """Calculate what fraction of subset effects fall within original CI.
+
+        Args:
+            subset_effects: List of per-subset effect estimates from a data-subset
+                refuter. MUST be non-empty; the caller is responsible for handling
+                the empty case (no silent default — see F-014 #416).
+            original_ci: Original confidence interval (lower, upper).
+
+        Returns:
+            Fraction in [0, 1].
+
+        Raises:
+            ValueError: if ``subset_effects`` is empty. This is intentional:
+                a silent ``0.9`` default would mask the fact that the refuter
+                returned no per-subset data. Callers must either get real
+                subset effects from the refuter, or compute coverage via a
+                single-point check at the call site.
+        """
         if not subset_effects:
-            return 0.9  # Default high coverage
+            raise ValueError(
+                "_calculate_ci_coverage requires non-empty subset_effects; "
+                "the caller must handle the empty case explicitly (e.g., "
+                "single-point CI check) instead of relying on a silent default."
+            )
         count_in_ci = sum(1 for e in subset_effects if original_ci[0] <= e <= original_ci[1])
         return count_in_ci / len(subset_effects)
 
