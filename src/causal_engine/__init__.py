@@ -41,6 +41,14 @@ from .energy_score import (
     create_tracker,
     select_best_estimator,
 )
+
+# Structured error types for fail-closed estimation/refutation
+# See #416 (F-014), #417 (F-006), and CLAUDE.md §Anti-Mocking directive
+from .errors import (
+    CausalEngineError,
+    EstimationError,
+    RefutationError,
+)
 from .expert_review_gate import (
     ExpertReviewGate,
     ReviewGateDecision,
@@ -87,6 +95,10 @@ from .validation_outcome_store import (
 )
 
 __all__ = [
+    # Structured error types
+    "CausalEngineError",
+    "EstimationError",
+    "RefutationError",
     # ENUMs
     "RefutationStatus",
     "GateDecision",

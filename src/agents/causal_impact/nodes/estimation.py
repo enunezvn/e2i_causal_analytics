@@ -6,6 +6,20 @@ V4.2 Enhancement: Energy Score-based Estimator Selection
 - Replaces single-method estimation with multi-estimator evaluation
 - Selects estimator with lowest energy score (best quality)
 - Backward compatible: explicit method parameter uses legacy path
+
+F-006 fix (#417): Legacy ``_estimate_*`` methods that previously returned
+``np.corrcoef``-based mock ATE values have been REPLACED with thin
+delegators to the energy-score selector. On energy-score failure (or any
+estimator failure), this module now FAIL-CLOSES by raising
+``EstimationError`` instead of silently returning a fake correlation-based
+result.
+
+TODO(#354 follow-up): ``_get_data()`` still contains a synthetic-data
+trapdoor (``np.random.seed(42)`` + hardcoded HCP/conversion-rate fixtures
+at lines ~390-425). Documented in memory ``issue_354_stub_vs_real_estimators_20260521.md``
+as one of the 4 silent-fallback trapdoors. Deferred to a future PR per
+F-006 brief; we kept it in-place because rewiring data loading is outside
+the F-006/F-014 scope.
 """
 
 import logging
@@ -19,11 +33,16 @@ from src.agents.causal_impact.state import CausalImpactState, EstimationResult
 
 # V4.2: Energy Score imports
 from src.causal_engine.energy_score import (
+    EstimatorConfig,
     EstimatorSelector,
     EstimatorSelectorConfig,
+    EstimatorType,
     SelectionResult,
     SelectionStrategy,
 )
+
+# F-006 fix (#417): structured fail-closed error for legacy method dispatch
+from src.causal_engine.errors import EstimationError
 
 logger = logging.getLogger(__name__)
 
@@ -70,16 +89,27 @@ class EstimationNode:
     def _get_estimator_selector(
         self,
         strategy: SelectionStrategy = SelectionStrategy.BEST_ENERGY_SCORE,
+        restrict_to: Optional[EstimatorType] = None,
     ) -> EstimatorSelector:
         """Get or create EstimatorSelector.
 
         Args:
             strategy: Selection strategy to use
+            restrict_to: If set, the selector evaluates ONLY this estimator
+                (legacy ``parameters.method`` compatibility for F-006 #417).
+                Otherwise the default chain (CausalForest, LinearDML,
+                DRLearner, OLS) is evaluated.
 
         Returns:
             Configured EstimatorSelector instance
         """
-        config = EstimatorSelectorConfig(strategy=strategy)
+        if restrict_to is not None:
+            config = EstimatorSelectorConfig(
+                strategy=strategy,
+                estimators=[EstimatorConfig(restrict_to, priority=1)],
+            )
+        else:
+            config = EstimatorSelectorConfig(strategy=strategy)
         return EstimatorSelector(config)
 
     def _select_estimator_with_energy_score(
@@ -89,10 +119,15 @@ class EstimationNode:
         outcome: str,
         adjustment_set: List[str],
         strategy: str = "best_energy",
+        explicit_method: Optional[str] = None,
     ) -> tuple[EstimationResult, Dict[str, Any], float]:
         """Select best estimator using energy score.
 
         V4.2 Enhancement: Multi-estimator evaluation and selection.
+
+        F-006 fix (#417): when ``explicit_method`` is set, the selector is
+        constrained to that estimator only (matching the legacy single-method
+        contract). Otherwise, all configured estimators are evaluated.
 
         Args:
             data: DataFrame with treatment, outcome, and covariates
@@ -100,6 +135,7 @@ class EstimationNode:
             outcome: Outcome variable name
             adjustment_set: List of adjustment variables
             strategy: Selection strategy (first_success, best_energy, ensemble)
+            explicit_method: If set, run only this estimator (legacy compat).
 
         Returns:
             Tuple of (EstimationResult, selection_result_dict, latency_ms)
@@ -137,8 +173,22 @@ class EstimationNode:
         else:
             treatment_binary = treatment_col.astype(int)
 
-        # Create selector and run selection
-        selector = self._get_estimator_selector(selection_strategy)
+        # F-006 (#417): when the caller specifies an explicit legacy method,
+        # restrict the selector to that single estimator so the result
+        # actually reflects the requested method (not whichever the
+        # energy-score chain prefers).
+        method_to_type = {
+            "CausalForestDML": EstimatorType.CAUSAL_FOREST,
+            "causal_forest": EstimatorType.CAUSAL_FOREST,
+            "LinearDML": EstimatorType.LINEAR_DML,
+            "linear_dml": EstimatorType.LINEAR_DML,
+            "linear_regression": EstimatorType.OLS,
+            "ols": EstimatorType.OLS,
+            "drlearner": EstimatorType.DRLEARNER,
+            "propensity_score_weighting": EstimatorType.DRLEARNER,
+        }
+        restrict_to = method_to_type.get(explicit_method) if explicit_method else None
+        selector = self._get_estimator_selector(selection_strategy, restrict_to=restrict_to)
 
         try:
             selection_result: SelectionResult = selector.select(
@@ -155,6 +205,41 @@ class EstimationNode:
 
         # Convert SelectionResult to EstimationResult
         selected = selection_result.selected
+
+        # F-006 fix iter-2 (#417, codex H1): EstimatorSelector returns a
+        # success=False EstimatorResult when ALL configured estimators fail
+        # (see ``EstimatorSelector._select_best_energy`` in
+        # ``src/causal_engine/energy_score/estimator_selector.py``). Without
+        # this check we would silently emit ``ate=0.0``, ``ate_ci=(0.0, 0.0)``,
+        # ``ate_se=0.0``, ``energy_score=0.0`` — a NEW silent-wrong path that
+        # replaces the deleted corrcoef mocks. Fail-closed instead.
+        if not selected.success or selected.ate is None:
+            failed_estimators = [
+                {
+                    "estimator": r.estimator_type.value,
+                    "error": r.error_message,
+                    "error_type": r.error_type,
+                }
+                for r in selection_result.all_results
+                if not r.success
+            ]
+            raise EstimationError(
+                "All configured estimators failed; refusing to report ate=0.0 silent-wrong. "
+                f"Selected estimator '{selected.estimator_type.value}' returned "
+                f"success={selected.success}, ate={selected.ate}.",
+                details={
+                    "selected_estimator": selected.estimator_type.value,
+                    "selected_success": selected.success,
+                    "selected_ate": selected.ate,
+                    "n_estimators_attempted": len(selection_result.all_results),
+                    "n_succeeded": sum(1 for r in selection_result.all_results if r.success),
+                    "failed_estimators": failed_estimators,
+                    "explicit_method": explicit_method,
+                    "treatment": treatment,
+                    "outcome": outcome,
+                },
+            )
+
         energy_score = selected.energy_score
         quality_tier = self._get_quality_tier(energy_score)
 
@@ -181,22 +266,157 @@ class EstimationNode:
             MethodType, estimator_to_method.get(selected.estimator_type.value, "CausalForestDML")
         )
 
+        # CausalForestDML produces real CATE estimates per data point → emits
+        # heterogeneity-aware segments. Other estimators (LinearDML, DRLearner,
+        # OLS) produce a single ATE without per-segment CATE. Map this via
+        # ``selected.cate`` non-None + ``estimator_type == CAUSAL_FOREST``.
+        is_causal_forest = selected.estimator_type.value in ("causal_forest", "CausalForestDML")
+        heterogeneity_detected = bool(is_causal_forest and selected.cate is not None)
+
+        # Build CATE segments from real CATE estimates when available.
+        cate_segments: List[Dict[str, Any]] = []
+        if heterogeneity_detected and selected.cate is not None:
+            cate_arr = np.asarray(selected.cate, dtype=float)
+            # Split into high/low halves by CATE magnitude to mirror the
+            # legacy two-segment shape; uses REAL CATE means per half (not
+            # the deleted hardcoded ate * 1.2 / 0.8 mock multipliers).
+            if cate_arr.size >= 2:
+                threshold = float(np.median(cate_arr))
+                high_mask = cate_arr >= threshold
+                low_mask = ~high_mask
+                if high_mask.any():
+                    cate_segments.append(
+                        {
+                            "segment": "High CATE",
+                            "cate": float(np.mean(cate_arr[high_mask])),
+                            "size": int(high_mask.sum()),
+                            "description": "Records with CATE at or above median",
+                        }
+                    )
+                if low_mask.any():
+                    cate_segments.append(
+                        {
+                            "segment": "Low CATE",
+                            "cate": float(np.mean(cate_arr[low_mask])),
+                            "size": int(low_mask.sum()),
+                            "description": "Records with CATE below median",
+                        }
+                    )
+
+        # Iter-4 codex H-iter3-1 + iter-5 codex H-iter4-1 (#417): CI bounds +
+        # standard_error must come from the estimator AND be usable. If they
+        # are None/missing/non-finite/non-positive/zero-width/inconsistent
+        # on a successful EstimatorResult, fail-closed rather than emitting
+        # a degenerate result that propagates as silent-wrong evidence into
+        # refutation's data_subset / bootstrap scoring.
+        import math as _math
+
+        if selected.ate_ci_lower is None or selected.ate_ci_upper is None:
+            raise EstimationError(
+                "Selected estimator produced an ATE without confidence interval bounds; "
+                "refusing to materialize ate_ci=(0.0, 0.0) which would propagate as "
+                "silent-wrong evidence into refutation scoring.",
+                details={
+                    "reason": "missing_ci_bounds_on_success",
+                    "selected_estimator": selected.estimator_type.value,
+                    "has_ate_ci_lower": selected.ate_ci_lower is not None,
+                    "has_ate_ci_upper": selected.ate_ci_upper is not None,
+                    "ate": selected.ate,
+                    "ate_std": selected.ate_std,
+                },
+            )
+        ate_ci_lower_f = float(selected.ate_ci_lower)
+        ate_ci_upper_f = float(selected.ate_ci_upper)
+        if not (_math.isfinite(ate_ci_lower_f) and _math.isfinite(ate_ci_upper_f)):
+            raise EstimationError(
+                "Selected estimator produced non-finite CI bounds; "
+                f"ate_ci_lower={ate_ci_lower_f}, ate_ci_upper={ate_ci_upper_f}.",
+                details={
+                    "reason": "non_finite_ci_bounds_on_success",
+                    "selected_estimator": selected.estimator_type.value,
+                    "ate_ci_lower": ate_ci_lower_f,
+                    "ate_ci_upper": ate_ci_upper_f,
+                },
+            )
+        if ate_ci_lower_f >= ate_ci_upper_f:
+            raise EstimationError(
+                "Selected estimator produced degenerate / out-of-order CI bounds; "
+                f"ate_ci_lower={ate_ci_lower_f} >= ate_ci_upper={ate_ci_upper_f}. "
+                "Zero-width or inverted CI propagates as silent-wrong evidence "
+                "into refutation scoring (data_subset / bootstrap).",
+                details={
+                    "reason": "degenerate_ci_bounds_on_success",
+                    "selected_estimator": selected.estimator_type.value,
+                    "ate_ci_lower": ate_ci_lower_f,
+                    "ate_ci_upper": ate_ci_upper_f,
+                },
+            )
+        # Sanity: the reported ATE must lie within the reported CI. If not,
+        # the estimator's outputs are internally inconsistent.
+        ate_f = float(selected.ate)
+        if not (ate_ci_lower_f <= ate_f <= ate_ci_upper_f):
+            raise EstimationError(
+                "Selected estimator produced an ATE outside its own confidence interval; "
+                f"ate={ate_f}, ci=[{ate_ci_lower_f}, {ate_ci_upper_f}].",
+                details={
+                    "reason": "ate_outside_ci_on_success",
+                    "selected_estimator": selected.estimator_type.value,
+                    "ate": ate_f,
+                    "ate_ci_lower": ate_ci_lower_f,
+                    "ate_ci_upper": ate_ci_upper_f,
+                },
+            )
+
+        if selected.ate_std is None:
+            raise EstimationError(
+                "Selected estimator produced an ATE without a standard error; "
+                "refusing to materialize ate_se=0.0 which would skip uncertainty "
+                "downstream.",
+                details={
+                    "reason": "missing_standard_error_on_success",
+                    "selected_estimator": selected.estimator_type.value,
+                    "ate": selected.ate,
+                },
+            )
+        ate_std_f = float(selected.ate_std)
+        if not _math.isfinite(ate_std_f) or ate_std_f <= 0.0:
+            raise EstimationError(
+                f"Selected estimator returned unusable standard error: ate_std={ate_std_f}. "
+                "Refusing to emit p_value=NaN with statistical_significance=False which "
+                "would be a classification without usable uncertainty.",
+                details={
+                    "reason": "non_positive_or_non_finite_standard_error",
+                    "selected_estimator": selected.estimator_type.value,
+                    "ate_std": ate_std_f,
+                    "ate": ate_f,
+                },
+            )
+
+        # Iter-3 codex H2 (#417) + iter-5 H-iter4-1: compute the p-value from
+        # the estimator's actual uncertainty model (two-sided z-test on
+        # ate / ate_std). By this point ate_std has been guarded above to be
+        # > 0 and finite, so we can compute unconditionally instead of
+        # emitting a NaN-with-False placeholder.
+        from scipy import stats as _scipy_stats
+
+        z_score = abs(ate_f) / ate_std_f
+        # Two-sided p-value from standard normal: 2 * (1 - Phi(|z|))
+        p_value_real = float(2.0 * (1.0 - _scipy_stats.norm.cdf(z_score)))
+        statistical_significance_real = p_value_real < 0.05
+
         result: EstimationResult = {
             "method": method_name,
-            "ate": float(selected.ate) if selected.ate is not None else 0.0,
-            "ate_ci_lower": float(selected.ate_ci_lower) if selected.ate_ci_lower else 0.0,
-            "ate_ci_upper": float(selected.ate_ci_upper) if selected.ate_ci_upper else 0.0,
-            "standard_error": float(selected.ate_std) if selected.ate_std else 0.0,
-            "effect_size": self._classify_effect_size(selected.ate or 0.0),
-            "statistical_significance": bool(
-                selected.ate and selected.ate_std and abs(selected.ate) > 1.96 * selected.ate_std
-            ),
-            "p_value": 0.001
-            if (selected.ate and selected.ate_std and abs(selected.ate) > 1.96 * selected.ate_std)
-            else 0.15,
+            "ate": ate_f,
+            "ate_ci_lower": ate_ci_lower_f,
+            "ate_ci_upper": ate_ci_upper_f,
+            "standard_error": ate_std_f,
+            "effect_size": self._classify_effect_size(ate_f),
+            "statistical_significance": statistical_significance_real,
+            "p_value": p_value_real,
             "sample_size": len(data),
             "covariates_adjusted": covariate_cols,
-            "heterogeneity_detected": False,
+            "heterogeneity_detected": heterogeneity_detected,
+            "cate_segments": cate_segments,
             # V4.2: Energy score fields
             "selection_strategy": cast(
                 Literal["first_success", "best_energy", "ensemble"], strategy
@@ -295,56 +515,82 @@ class EstimationNode:
             # Energy score path: enabled by default, disabled if explicit method or use_energy_score=False
             use_energy_score_path = use_energy_score and not explicit_method
 
-            if use_energy_score_path:
-                # V4.2: Energy score-based selection
-                logger.info(f"Using energy score selection with strategy: {selection_strategy}")
-                try:
-                    result, selection_dict, energy_latency_ms = (
-                        self._select_estimator_with_energy_score(
-                            data, treatment, outcome, adjustment_set, selection_strategy
-                        )
+            # F-006 fix (#417): single REAL estimation path. Whether the
+            # caller asked for energy-score selection OR for an explicit
+            # legacy method, both paths funnel through
+            # ``_select_estimator_with_energy_score``. On failure we raise
+            # ``EstimationError`` (caught below) — NEVER silently fall back
+            # to the deleted ``np.corrcoef``-based ``_estimate_*`` mocks.
+
+            # Validate explicit method name (preserves the legacy contract
+            # that ``parameters.method`` must be a known estimator label).
+            _VALID_EXPLICIT_METHODS = {
+                "CausalForestDML",
+                "LinearDML",
+                "linear_regression",
+                "propensity_score_weighting",
+                "causal_forest",
+                "linear_dml",
+                "drlearner",
+                "ols",
+            }
+            if explicit_method and explicit_method not in _VALID_EXPLICIT_METHODS:
+                raise ValueError(f"Unknown estimation method: {explicit_method}")
+
+            logger.info(
+                "Using energy score selection (path=%s, explicit_method=%s, strategy=%s)",
+                "energy_score" if use_energy_score_path else "legacy_delegated",
+                explicit_method,
+                selection_strategy,
+            )
+            try:
+                result, selection_dict, energy_latency_ms = (
+                    self._select_estimator_with_energy_score(
+                        data,
+                        treatment,
+                        outcome,
+                        adjustment_set,
+                        selection_strategy,
+                        explicit_method=explicit_method,
                     )
-                    latency_ms = (time.time() - start_time) * 1000
-
-                    return {
-                        **state,
-                        "estimation_result": result,
-                        "estimation_latency_ms": latency_ms,
-                        "current_phase": "refuting",
-                        "status": "computing",
-                        # V4.2: Energy score state fields
-                        "energy_score_enabled": True,
-                        "selection_strategy": selection_strategy,
-                        "estimator_selection_result": selection_dict,
-                        "energy_score_latency_ms": energy_latency_ms,
-                        "best_energy_score": result.get("energy_score"),
-                        "energy_score_quality_tier": result.get("energy_score_data", {}).get(
-                            "quality_tier", "unreliable"
-                        ),
-                        # Passthrough data for refutation node
-                        "estimation_data": data,
-                    }
-                except Exception as e:
-                    # Fall back to legacy if energy score fails
-                    logger.warning(f"Energy score selection failed: {e}, using legacy path")
-                    use_energy_score_path = False
-
-            # Legacy path: single method estimation
-            method = explicit_method or "CausalForestDML"
-            logger.info(f"Using legacy estimation with method: {method}")
-
-            if method == "CausalForestDML":
-                result = self._estimate_causal_forest(data, treatment, outcome, adjustment_set)
-            elif method == "LinearDML":
-                result = self._estimate_linear_dml(data, treatment, outcome, adjustment_set)
-            elif method == "linear_regression":
-                result = self._estimate_linear_regression(data, treatment, outcome, adjustment_set)
-            elif method == "propensity_score_weighting":
-                result = self._estimate_propensity_weighting(
-                    data, treatment, outcome, adjustment_set
                 )
-            else:
-                raise ValueError(f"Unknown estimation method: {method}")
+            except Exception as e:
+                # F-006 fail-closed: re-raise as EstimationError so the caller
+                # sees a structured failure, not a silently-wrong corrcoef ATE.
+                # Caught by the outer ``except`` below and surfaced as
+                # status=failed + error_message.
+                raise EstimationError(
+                    f"Energy-score estimator selection failed for method="
+                    f"{explicit_method or selection_strategy!r}; refusing silent fallback.",
+                    details={
+                        "explicit_method": explicit_method,
+                        "selection_strategy": selection_strategy,
+                        "treatment": treatment,
+                        "outcome": outcome,
+                        "adjustment_set": adjustment_set,
+                    },
+                    original_error=e,
+                ) from e
+
+            # When the caller specified an explicit legacy method, override
+            # the ``method`` field in the result so downstream code (chat UI,
+            # database persistence) still sees the requested method name.
+            if explicit_method:
+                # Preserve the explicit method label while keeping the real
+                # underlying ATE / CI / SE from the energy-score selector.
+                result["method"] = cast(
+                    Literal[
+                        "CausalForestDML",
+                        "LinearDML",
+                        "linear_regression",
+                        "propensity_score_weighting",
+                        "causal_forest",
+                        "linear_dml",
+                        "drlearner",
+                        "ols",
+                    ],
+                    explicit_method,
+                )
 
             latency_ms = (time.time() - start_time) * 1000
 
@@ -354,11 +600,37 @@ class EstimationNode:
                 "estimation_latency_ms": latency_ms,
                 "current_phase": "refuting",
                 "status": "computing",
-                "energy_score_enabled": False,
+                # V4.2: Energy score state fields
+                "energy_score_enabled": use_energy_score_path,
+                "selection_strategy": selection_strategy,
+                "estimator_selection_result": selection_dict,
+                "energy_score_latency_ms": energy_latency_ms,
+                "best_energy_score": result.get("energy_score"),
+                "energy_score_quality_tier": result.get("energy_score_data", {}).get(
+                    "quality_tier", "unreliable"
+                ),
                 # Passthrough data for refutation node
                 "estimation_data": data,
             }
 
+        except EstimationError as ee:
+            # F-006 fail-closed: structured estimation error → chat UI surfaces
+            # as "Service unavailable, retry" rather than silent-wrong corrcoef.
+            latency_ms = (time.time() - start_time) * 1000
+            logger.error(
+                f"Estimation fail-closed (no mock fallback): {ee.message}",
+                extra={"details": ee.details},
+            )
+            errors = [{"phase": "estimation", "message": ee.message, "details": ee.details}]
+            return {
+                **state,
+                "estimation_error": ee.message,
+                "estimation_error_details": ee.details,
+                "estimation_latency_ms": latency_ms,
+                "status": "failed",
+                "error_message": f"Estimation failed: {ee.message}",
+                "errors": errors,
+            }
         except Exception as e:
             latency_ms = (time.time() - start_time) * 1000
             # Contract: accumulate errors using operator.add
@@ -375,21 +647,59 @@ class EstimationNode:
     def _get_data(self, state: CausalImpactState) -> pd.DataFrame:
         """Get data for estimation.
 
-        For now, generates synthetic data. In production, would query
-        from repositories.
+        F-006 fix iter-2 (#417, codex H2): the previous unconditional
+        synthetic-data fallback was a silent-wrong path — real estimators
+        would produce polished causal answers over fabricated HCP/conversion
+        data, then refutation tests ran against the same fake frame.
+
+        Resolution order:
+        1. ``state['data_cache']['estimation_data']`` (real data passthrough
+           from upstream nodes / repositories).
+        2. ``state['data_source'] == 'synthetic'`` → seeded synthetic data
+           for tests + developer fixtures. The synthetic path is now
+           OPT-IN via explicit ``data_source='synthetic'`` rather than the
+           default; production callers that omit ``data_source`` fail-closed.
+        3. Otherwise, raise ``EstimationError``.
 
         Args:
-            state: Workflow state with potential data_cache
+            state: Workflow state with potential data_cache + data_source
 
         Returns:
             DataFrame with treatment, outcome, and covariates
+
+        Raises:
+            EstimationError: when no real data and ``data_source`` is not
+                explicitly set to ``"synthetic"`` (fail-closed; no silent
+                fabrication for production calls).
         """
-        # Check cache first
+        # Check cache first (real data passthrough)
         data_cache = state.get("data_cache", {})
         if "estimation_data" in data_cache:
             return data_cache["estimation_data"]
 
-        # Generate synthetic data for testing
+        # Synthetic path is opt-in via explicit data_source flag.
+        # This preserves the testing/dev workflow that relies on
+        # ``data_source='synthetic'`` while making the production default
+        # fail-closed (no silent fabrication).
+        data_source = state.get("data_source")
+        if data_source != "synthetic":
+            raise EstimationError(
+                "Estimation requires data; no estimation_data in data_cache and "
+                "data_source != 'synthetic'. Provide real data via "
+                "state['data_cache']['estimation_data'] or explicitly set "
+                "state['data_source'] = 'synthetic' for testing fixtures.",
+                details={
+                    "reason": "no_real_data_no_synthetic_optin",
+                    "data_source": data_source,
+                    "has_data_cache_key": "estimation_data" in data_cache,
+                },
+            )
+
+        # Generate synthetic data for testing (data_source='synthetic' opt-in).
+        # TODO(#354 follow-up): replace this branch with a real repository
+        # query when the data-loading surface is built out. See memory
+        # ``issue_354_stub_vs_real_estimators_20260521.md`` for the broader
+        # silent-fallback trapdoor inventory.
         np.random.seed(42)
         n = 1000
 
@@ -425,156 +735,27 @@ class EstimationNode:
 
         return data
 
-    def _estimate_causal_forest(
-        self,
-        data: pd.DataFrame,
-        treatment: str,
-        outcome: str,
-        adjustment_set: List[str],
-    ) -> EstimationResult:
-        """Estimate using Causal Forest DML (heterogeneous effects).
-
-        Mock implementation - in production would use econml.CausalForestDML
-        """
-        # Mock ATE calculation
-        treatment_col = data.get(treatment, data.iloc[:, 0])
-        outcome_col = data.get(outcome, data.iloc[:, 1])
-
-        # Simple correlation-based mock
-        ate = np.corrcoef(treatment_col, outcome_col)[0, 1] * np.std(outcome_col)
-        ate_se = 0.05  # Mock standard error
-
-        # Mock CATE by segments
-        cate_segments = [
-            {
-                "segment": "High Engagement",
-                "cate": ate * 1.2,
-                "size": 300,
-                "description": "HCPs with high engagement",
-            },
-            {
-                "segment": "Low Engagement",
-                "cate": ate * 0.8,
-                "size": 700,
-                "description": "HCPs with low engagement",
-            },
-        ]
-
-        result: EstimationResult = {
-            "method": "CausalForestDML",
-            "ate": float(ate),
-            "ate_ci_lower": float(ate - 1.96 * ate_se),
-            "ate_ci_upper": float(ate + 1.96 * ate_se),
-            "standard_error": float(ate_se),
-            "cate_segments": cate_segments,
-            "effect_size": self._classify_effect_size(ate),
-            "statistical_significance": bool(abs(ate) > 1.96 * ate_se),
-            "p_value": 0.001 if abs(ate) > 1.96 * ate_se else 0.15,
-            "sample_size": len(data),
-            "covariates_adjusted": adjustment_set,
-            "heterogeneity_detected": True,
-        }
-
-        return result
-
-    def _estimate_linear_dml(
-        self,
-        data: pd.DataFrame,
-        treatment: str,
-        outcome: str,
-        adjustment_set: List[str],
-    ) -> EstimationResult:
-        """Estimate using Linear DML.
-
-        Mock implementation - in production would use econml.LinearDML
-        """
-        treatment_col = data.get(treatment, data.iloc[:, 0])
-        outcome_col = data.get(outcome, data.iloc[:, 1])
-
-        ate = np.corrcoef(treatment_col, outcome_col)[0, 1] * np.std(outcome_col)
-        ate_se = 0.06
-
-        result: EstimationResult = {
-            "method": "LinearDML",
-            "ate": float(ate),
-            "ate_ci_lower": float(ate - 1.96 * ate_se),
-            "ate_ci_upper": float(ate + 1.96 * ate_se),
-            "standard_error": float(ate_se),
-            "effect_size": self._classify_effect_size(ate),
-            "statistical_significance": bool(abs(ate) > 1.96 * ate_se),
-            "p_value": 0.002 if abs(ate) > 1.96 * ate_se else 0.20,
-            "sample_size": len(data),
-            "covariates_adjusted": adjustment_set,
-            "heterogeneity_detected": False,
-        }
-
-        return result
-
-    def _estimate_linear_regression(
-        self,
-        data: pd.DataFrame,
-        treatment: str,
-        outcome: str,
-        adjustment_set: List[str],
-    ) -> EstimationResult:
-        """Estimate using simple linear regression.
-
-        Mock implementation - in production would use statsmodels or sklearn
-        """
-        treatment_col = data.get(treatment, data.iloc[:, 0])
-        outcome_col = data.get(outcome, data.iloc[:, 1])
-
-        ate = np.corrcoef(treatment_col, outcome_col)[0, 1] * np.std(outcome_col)
-        ate_se = 0.07
-
-        result: EstimationResult = {
-            "method": "linear_regression",
-            "ate": float(ate),
-            "ate_ci_lower": float(ate - 1.96 * ate_se),
-            "ate_ci_upper": float(ate + 1.96 * ate_se),
-            "standard_error": float(ate_se),
-            "effect_size": self._classify_effect_size(ate),
-            "statistical_significance": bool(abs(ate) > 1.96 * ate_se),
-            "p_value": 0.005 if abs(ate) > 1.96 * ate_se else 0.25,
-            "sample_size": len(data),
-            "covariates_adjusted": adjustment_set,
-            "heterogeneity_detected": False,
-        }
-
-        return result
-
-    def _estimate_propensity_weighting(
-        self,
-        data: pd.DataFrame,
-        treatment: str,
-        outcome: str,
-        adjustment_set: List[str],
-    ) -> EstimationResult:
-        """Estimate using propensity score weighting.
-
-        Mock implementation - in production would use dowhy or custom implementation
-        """
-        treatment_col = data.get(treatment, data.iloc[:, 0])
-        outcome_col = data.get(outcome, data.iloc[:, 1])
-
-        ate = np.corrcoef(treatment_col, outcome_col)[0, 1] * np.std(outcome_col)
-        ate_se = 0.08
-
-        result: EstimationResult = {
-            "method": "propensity_score_weighting",
-            "ate": float(ate),
-            "ate_ci_lower": float(ate - 1.96 * ate_se),
-            "ate_ci_upper": float(ate + 1.96 * ate_se),
-            "standard_error": float(ate_se),
-            "effect_size": self._classify_effect_size(ate),
-            "statistical_significance": bool(abs(ate) > 1.96 * ate_se),
-            "p_value": 0.01 if abs(ate) > 1.96 * ate_se else 0.30,
-            "sample_size": len(data),
-            "covariates_adjusted": adjustment_set,
-            "heterogeneity_detected": False,
-        }
-
-        return result
+    # ========================================================================
+    # F-006 (#417): The legacy ``_estimate_causal_forest``,
+    # ``_estimate_linear_dml``, ``_estimate_linear_regression``, and
+    # ``_estimate_propensity_weighting`` methods that returned
+    # ``np.corrcoef(treatment, outcome) * np.std(outcome)`` plus a hardcoded
+    # ``ate_se`` value (0.05/0.06/0.07/0.08) have been DELETED.
+    #
+    # All four methods funneled into ``execute`` via the
+    # ``if method == "CausalForestDML": ...`` dispatch which was reached
+    # whenever ``parameters.use_energy_score=False`` OR
+    # ``parameters.method`` was explicitly set. ``execute`` now routes BOTH
+    # cases through ``_select_estimator_with_energy_score`` (real econml /
+    # EconML CausalForestDML / LinearDML / DRLearner / OLS) and raises
+    # ``EstimationError`` on selection failure — eliminating the
+    # silent-fallback path that returned plausible-range corrcoef ATEs.
+    #
+    # Per ``CLAUDE.md`` §"CRITICAL — Anti-Mocking & Verification Discipline":
+    # mock surfaces with zero non-test production consumers must be DELETED.
+    # Consumer grep at commit time confirmed only ``execute`` (internal
+    # dispatch, now removed) consumed these methods.
+    # ========================================================================
 
     def _classify_effect_size(self, ate: float) -> str:
         """Classify effect size as small/medium/large.
