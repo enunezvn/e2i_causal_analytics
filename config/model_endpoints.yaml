@@ -1,5 +1,13 @@
-# Model Endpoints Configuration
-# This file configures the model endpoints used by prediction_synthesizer
+# Model Endpoints Configuration (production)
+# ============================================
+# This file configures HTTP model endpoints consumed by prediction_synthesizer.
+#
+# F-012 (#430): mock_model was removed from this file and moved to
+# config/dev_model_endpoints.yaml. In production (ENVIRONMENT=production)
+# only this file is loaded; selecting a model_id not declared here raises
+# ValueError at orchestration time instead of silently returning fabricated
+# predictions. Set ENVIRONMENT=development (or unset) and ensure
+# config/dev_model_endpoints.yaml is present to use mock clients.
 
 # Default settings for all endpoints
 default_base_url: ${BENTOML_SERVICE_URL:-http://localhost:3000}
@@ -47,15 +55,3 @@ endpoints:
     timeout: 5.0
     max_retries: 3
     enabled: true
-
-  # Mock model for testing (always available)
-  mock_model:
-    client_type: mock
-    default_prediction: 0.65
-    default_confidence: 0.85
-    enabled: true
-
-# Development environment overrides
-# Uncomment to use mock clients for all models during development
-# dev_mode:
-#   use_mock_clients: true

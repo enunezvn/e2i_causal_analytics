@@ -607,7 +607,11 @@ async def _execute_gap_analysis(
         )
 
     except ImportError as e:
-        logger.warning(f"Gap Analyzer agent not available: {e}, using mock data")
+        # F-010-backend (#429): fail-closed in production unless mock-fallback
+        # is explicitly enabled (E2I_REQUIRE_AGENT_IMPORT=0 or ENVIRONMENT!=production).
+        from src.api.utils.agent_import_guard import guard_or_raise
+
+        guard_or_raise(e, agent_name="Gap Analyzer")
         return _generate_mock_response(request, start_time)
 
     except Exception as e:

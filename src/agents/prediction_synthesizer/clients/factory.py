@@ -163,6 +163,13 @@ class ModelEndpointsConfig:
     def from_yaml(cls, path: str) -> "ModelEndpointsConfig":
         """Load configuration from YAML file.
 
+        F-012 (#430): In non-production environments (``ENVIRONMENT`` unset,
+        ``development``, ``dev``, or ``test``) this method also merges
+        ``config/dev_model_endpoints.yaml`` (if present and adjacent to the
+        primary config file) so dev-only ``mock_model`` entries become
+        available. In production the dev file is never loaded — selecting
+        a non-existent model id raises ValueError downstream.
+
         Args:
             path: Path to YAML configuration file
 
@@ -191,6 +198,34 @@ class ModelEndpointsConfig:
                 default_prediction=model_config.get("default_prediction", 0.5),
                 default_confidence=model_config.get("default_confidence", 0.8),
             )
+
+        # F-012: merge dev-only endpoints when not in production.
+        environment = os.environ.get("ENVIRONMENT", "development").strip().lower()
+        if environment != "production":
+            dev_path = config_path.with_name("dev_model_endpoints.yaml")
+            if dev_path.exists():
+                with open(dev_path) as f:
+                    dev_data = yaml.safe_load(f) or {}
+                for model_id, model_config in dev_data.get("endpoints", {}).items():
+                    endpoints[model_id] = ModelEndpointConfig(
+                        model_id=model_id,
+                        endpoint_url=model_config.get("url", f"{base_url}/{model_id}"),
+                        client_type=model_config.get("client_type", "http"),
+                        timeout=model_config.get("timeout", data.get("default_timeout", 5.0)),
+                        max_retries=model_config.get(
+                            "max_retries", data.get("default_max_retries", 3)
+                        ),
+                        enabled=model_config.get("enabled", True),
+                        default_prediction=model_config.get("default_prediction", 0.5),
+                        default_confidence=model_config.get("default_confidence", 0.8),
+                    )
+                logger.info(
+                    "Loaded dev endpoints from %s (ENVIRONMENT=%s)",
+                    dev_path,
+                    environment,
+                )
+        else:
+            logger.debug("Skipping dev_model_endpoints.yaml load (ENVIRONMENT=production)")
 
         return cls(
             default_base_url=base_url,

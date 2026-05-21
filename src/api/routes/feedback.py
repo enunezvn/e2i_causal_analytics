@@ -540,11 +540,18 @@ async def process_feedback(
             by_type[item.feedback_type.value] = by_type.get(item.feedback_type.value, 0) + 1
             by_agent[item.source_agent] = by_agent.get(item.source_agent, 0) + 1
 
+        # F-008 (#428): compute positive_ratio from request.items instead of
+        # hardcoding 0.7. An item is positive if its rating is >= 4 OR the
+        # explicit user_feedback payload signals positive sentiment
+        # (e.g. {"sentiment": "positive"} / {"helpful": True} / {"positive": True}).
+        positive_count = sum(1 for item in request.items if _is_positive_feedback(item))
+        positive_ratio = positive_count / len(request.items) if len(request.items) > 0 else 0.0
+
         feedback_summary = FeedbackSummary(
             total_feedback_items=len(request.items),
             by_type=by_type,
             by_agent=by_agent,
-            positive_ratio=0.7,  # Mock for now
+            positive_ratio=positive_ratio,
             time_range_start=request.items[0].timestamp or "",
             time_range_end=request.items[-1].timestamp or "",
         )
@@ -1242,7 +1249,11 @@ async def _execute_learning_cycle(
         )
 
     except ImportError as e:
-        logger.warning(f"Feedback Learner agent not available: {e}, using mock data")
+        # F-010-backend (#429): fail-closed in production unless mock-fallback
+        # is explicitly enabled (E2I_REQUIRE_AGENT_IMPORT=0 or ENVIRONMENT!=production).
+        from src.api.utils.agent_import_guard import guard_or_raise
+
+        guard_or_raise(e, agent_name="Feedback Learner")
         return _generate_mock_learning_response(request, start_time)
 
     except Exception as e:
@@ -1316,6 +1327,56 @@ def _convert_updates(updates: List[Dict[str, Any]]) -> List[KnowledgeUpdate]:
         except Exception as e:
             logger.warning(f"Failed to convert update: {e}")
     return result
+
+
+def _is_positive_feedback(item: FeedbackItem) -> bool:
+    """Determine whether a feedback item represents positive sentiment.
+
+    A feedback item is considered positive when ANY of the following hold:
+
+    * ``user_feedback`` is a numeric rating (or dict containing ``rating``)
+      with value >= 4 on a 1-5 scale.
+    * ``user_feedback`` is a dict containing an explicit positive signal
+      (``sentiment=="positive"``, ``helpful is True``, ``positive is True``,
+      ``approved is True``).
+    * ``user_feedback`` is a string equal (case-insensitive) to a positive
+      label (``"positive"``, ``"good"``, ``"helpful"``, ``"thumbs_up"``).
+    * ``user_feedback`` is a bool True.
+
+    Returns False for any other shape (negative, neutral, malformed,
+    correction without rating, or an outcome dict without a positive
+    indicator). The function never raises on malformed input — feedback
+    payloads originate from upstream clients and may be heterogeneous.
+    """
+    payload = item.user_feedback
+
+    # Direct bool: True == positive
+    if isinstance(payload, bool):
+        return payload
+
+    # Numeric rating: >= 4 on a 1-5 scale
+    if isinstance(payload, (int, float)) and not isinstance(payload, bool):
+        return payload >= 4
+
+    # String labels
+    if isinstance(payload, str):
+        return payload.strip().lower() in {"positive", "good", "helpful", "thumbs_up"}
+
+    # Dict: inspect well-known fields
+    if isinstance(payload, dict):
+        rating = payload.get("rating")
+        if isinstance(rating, (int, float)) and not isinstance(rating, bool):
+            return rating >= 4
+        sentiment = payload.get("sentiment")
+        if isinstance(sentiment, str) and sentiment.strip().lower() == "positive":
+            return True
+        for flag_key in ("helpful", "positive", "approved", "useful"):
+            value = payload.get(flag_key)
+            if isinstance(value, bool) and value:
+                return True
+        return False
+
+    return False
 
 
 def _detect_patterns_from_items(items: List[FeedbackItem]) -> List[DetectedPattern]:

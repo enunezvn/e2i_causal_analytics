@@ -19,15 +19,44 @@ from ..state import CATEResult, HeterogeneousOptimizerState
 logger = logging.getLogger(__name__)
 
 
+def _mock_connector_allowed() -> bool:
+    """Return True iff MockDataConnector fallback is permitted.
+
+    F-013 (#431): cate_estimator previously silently fell through to
+    ``MockDataConnector`` whenever Supabase env vars were absent OR the
+    real connector failed to initialize. Downstream consumers had no signal
+    that they were receiving synthetic ``np.random.seed(42)`` data.
+
+    Policy:
+
+    * ``E2I_ALLOW_MOCK_CONNECTOR=1`` (truthy) → mock allowed.
+    * ``E2I_ALLOW_MOCK_CONNECTOR=0`` (falsy) → mock forbidden.
+    * Unset → fall back on ``ENVIRONMENT``: production forbids mock,
+      anything else allows mock (offline-dev preserved).
+    """
+    raw = os.environ.get("E2I_ALLOW_MOCK_CONNECTOR", "").strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return os.environ.get("ENVIRONMENT", "development").strip().lower() != "production"
+
+
 def _get_default_data_connector():
     """Get the default data connector based on environment.
 
-    Uses HeterogeneousOptimizerDataConnector if Supabase credentials are available,
-    otherwise falls back to MockDataConnector for development/testing.
+    Uses HeterogeneousOptimizerDataConnector when Supabase credentials are
+    available. When credentials are absent or the real connector fails to
+    initialize, the function honors ``_mock_connector_allowed()``:
+
+    * Mock allowed → return ``MockDataConnector`` (offline dev).
+    * Mock forbidden → raise ``RuntimeError`` so the caller sees an explicit
+      configuration error instead of synthetic data (F-013, issue #431).
     """
-    if os.getenv("SUPABASE_URL") and (
-        os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY")
-    ):
+    supabase_url = os.getenv("SUPABASE_URL")
+    supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY")
+
+    if supabase_url and supabase_key:
         try:
             from ..connectors import HeterogeneousOptimizerDataConnector
 
@@ -35,8 +64,32 @@ def _get_default_data_connector():
             return HeterogeneousOptimizerDataConnector()
         except Exception as e:
             logger.warning(f"Failed to initialize Supabase connector: {e}")
+            if not _mock_connector_allowed():
+                raise RuntimeError(
+                    "Failed to initialize Supabase data connector and "
+                    "MockDataConnector fallback is disabled "
+                    "(E2I_ALLOW_MOCK_CONNECTOR=1 or ENVIRONMENT!=production "
+                    "required for mock fallback). "
+                    f"Original error: {e}"
+                ) from e
 
-    # Fallback to mock connector
+    # Supabase env vars absent OR real connector init failed under
+    # mock-allowed conditions: decide whether to fall through to mock.
+    if not _mock_connector_allowed():
+        env_summary = (
+            f"SUPABASE_URL={'set' if supabase_url else 'unset'}, "
+            f"SUPABASE_*_KEY={'set' if supabase_key else 'unset'}, "
+            f"ENVIRONMENT={os.getenv('ENVIRONMENT', 'development')!r}"
+        )
+        raise RuntimeError(
+            "MockDataConnector fallback is disabled "
+            "(E2I_ALLOW_MOCK_CONNECTOR=1 or ENVIRONMENT!=production required). "
+            "Configure Supabase credentials (SUPABASE_URL and "
+            "SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY) to enable the "
+            f"real data connector. Current env: {env_summary}."
+        )
+
+    # Fallback to mock connector (explicit dev/test opt-in)
     from ..connectors import MockDataConnector
 
     logger.info("Using MockDataConnector (development/testing mode)")

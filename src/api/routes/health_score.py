@@ -712,7 +712,11 @@ async def _execute_health_check(scope: CheckScope) -> HealthScoreResponse:
         )
 
     except ImportError as e:
-        logger.warning(f"Health Score agent not available: {e}, using mock data")
+        # F-010-backend (#429): fail-closed in production unless mock-fallback
+        # is explicitly enabled (E2I_REQUIRE_AGENT_IMPORT=0 or ENVIRONMENT!=production).
+        from src.api.utils.agent_import_guard import guard_or_raise
+
+        guard_or_raise(e, agent_name="Health Score")
         return _generate_mock_health_response(scope, start_time)
 
     except Exception as e:

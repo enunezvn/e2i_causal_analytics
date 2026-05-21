@@ -1,0 +1,21 @@
+# Development-only Model Endpoints Configuration (F-012, issue #430)
+# =====================================================================
+# This file is loaded IN ADDITION TO config/model_endpoints.yaml when
+# ENVIRONMENT is unset, "development", "dev", or "test". In production
+# (ENVIRONMENT=production) this file is NOT loaded — preventing prod
+# planners from accidentally selecting a MockModelClient.
+#
+# Entries here override or add to the prod config. Use this file to
+# register mock/fixture clients for offline development without ML
+# backends.
+
+endpoints:
+  # Mock model for testing (development / test only).
+  # In production this entry is intentionally absent so that a planner
+  # naming model_id="mock_model" raises ValueError at orchestration time
+  # rather than silently returning fabricated predictions.
+  mock_model:
+    client_type: mock
+    default_prediction: 0.65
+    default_confidence: 0.85
+    enabled: true
