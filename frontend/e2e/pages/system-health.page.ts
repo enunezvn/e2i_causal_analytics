@@ -150,9 +150,14 @@ export class SystemHealthPage extends BasePage {
   }
 
   async verifyModelHealthDisplayed(): Promise<boolean> {
+    // F-002: when no API model-health data is loaded the page renders an
+    // explicit empty state instead of fabricated model cards. Treat either
+    // as "model-health section rendered correctly."
     try {
-      // Look for model names
-      await this.page.getByText('Propensity Model').first().waitFor({ state: 'visible', timeout: 5000 })
+      await this.page
+        .getByText(/Propensity Model|No model health data/)
+        .first()
+        .waitFor({ state: 'visible', timeout: 5000 })
       return true
     } catch {
       const models = ['Churn Prediction', 'Conversion Model']

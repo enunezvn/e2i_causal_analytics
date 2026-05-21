@@ -249,8 +249,14 @@ export class InterventionImpactPage extends BasePage {
   }
 
   async verifyKPISummaryDisplayed(): Promise<boolean> {
+    // F-002: KPI summary is rendered only when API analysis data is loaded;
+    // otherwise the page renders a top-level empty state. Treat either as
+    // "summary section rendered correctly."
     try {
-      await this.page.getByText('Average Treatment Effect').first().waitFor({ state: 'visible', timeout: 5000 })
+      await this.page
+        .getByText(/Average Treatment Effect|No analysis data for this intervention/)
+        .first()
+        .waitFor({ state: 'visible', timeout: 5000 })
       return true
     } catch {
       const kpis = ['Significant Effects', 'Cumulative Impact', 'ROI Estimate']
@@ -273,8 +279,15 @@ export class InterventionImpactPage extends BasePage {
   }
 
   async verifyCausalImpactDisplayed(): Promise<boolean> {
+    // F-002: when no API analysis data is loaded the page now renders
+    // an explicit empty state instead of fabricated counterfactual data.
+    // Treat either the real-data title or the empty-state copy as
+    // "tab content rendered correctly."
     try {
-      await this.page.getByText('Causal Impact Analysis').first().waitFor({ state: 'visible', timeout: 5000 })
+      await this.page
+        .getByText(/Causal Impact Analysis|No causal impact data available/)
+        .first()
+        .waitFor({ state: 'visible', timeout: 5000 })
       return true
     } catch {
       return false
@@ -283,7 +296,10 @@ export class InterventionImpactPage extends BasePage {
 
   async verifyBeforeAfterDisplayed(): Promise<boolean> {
     try {
-      await this.page.getByText('Before/After Comparison').first().waitFor({ state: 'visible', timeout: 5000 })
+      await this.page
+        .getByText(/Before\/After Comparison|No before\/after data available/)
+        .first()
+        .waitFor({ state: 'visible', timeout: 5000 })
       return true
     } catch {
       return false
@@ -292,7 +308,10 @@ export class InterventionImpactPage extends BasePage {
 
   async verifyTreatmentEffectsDisplayed(): Promise<boolean> {
     try {
-      await this.page.getByText('Treatment Effect Estimates').first().waitFor({ state: 'visible', timeout: 5000 })
+      await this.page
+        .getByText(/Treatment Effect Estimates|No treatment effect estimates available/)
+        .first()
+        .waitFor({ state: 'visible', timeout: 5000 })
       return true
     } catch {
       return false
@@ -301,7 +320,10 @@ export class InterventionImpactPage extends BasePage {
 
   async verifySegmentAnalysisDisplayed(): Promise<boolean> {
     try {
-      await this.page.getByText('Heterogeneous Treatment Effects').first().waitFor({ state: 'visible', timeout: 5000 })
+      await this.page
+        .getByText(/Heterogeneous Treatment Effects|No segment heterogeneity data available/)
+        .first()
+        .waitFor({ state: 'visible', timeout: 5000 })
       return true
     } catch {
       return false
