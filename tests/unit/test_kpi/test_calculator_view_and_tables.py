@@ -1,23 +1,28 @@
 """
 Tests for `_calculate_from_view` and `_calculate_from_tables` in
-`src/kpi/calculator.py` — F-007 fix.
+`src/kpi/calculator.py` — F-007 fix (iter-1 codex closure).
 
-Closes #421 (F-007): the prior implementation returned `(None, metadata)` for
-every view-backed or table-derived KPI, so the dashboard always showed "—".
+Closes #421 (F-007). Before this PR the calculator's view + tables fallbacks
+returned `(None, metadata)` placeholders, so the KPI dashboard always showed
+"—" because no workstream calculators were registered.
 
 After the fix:
-- `_calculate_from_view(kpi, ctx)` MUST query the named Supabase view via the
-  injected `self._db` client and return `(scalar_value, metadata)`.
-- `_calculate_from_tables(kpi, ctx)` MUST aggregate from `kpi.tables` and
-  return `(computed_value, metadata)`.
-- On query failure, errors propagate via raised exception → caller surfaces
-  via `KPIResult.error`. No silent fallback to `None`.
+- `KPICalculator.__init__` AUTO-registers the per-workstream calculators in
+  `src/kpi/calculators/`. These contain the real formulas (e.g.,
+  `DataQualityCalculator._calc_source_coverage_patients` runs joined SQL).
+  That's the real REWIRE — no more silent placeholder.
+- `_calculate_from_view` is a narrow fallback for KPIs surfaced via a
+  pre-computed Supabase view (single-scalar output). It uses canonical
+  column-name preference (`value`, `match_rate`, etc.) and refuses to guess
+  when multiple ambiguous numeric columns are present.
+- `_calculate_from_tables` raises `NotImplementedError` — generic
+  table-formula evaluation requires a workstream-specific calculator. No
+  silent "first numeric / first numeric" guess.
 """
 
 from __future__ import annotations
 
 from typing import Any, Dict, List
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -25,6 +30,7 @@ from src.kpi.calculator import KPICalculator
 from src.kpi.models import (
     CalculationType,
     KPIMetadata,
+    KPIResult,
     KPIStatus,
     KPIThreshold,
     Workstream,
@@ -32,14 +38,14 @@ from src.kpi.models import (
 
 
 class _FakeSupabaseResponse:
-    """Stub for Supabase response objects with a `.data` attribute."""
+    """Stub response object with `.data` attribute (matches Supabase API)."""
 
     def __init__(self, data: List[Dict[str, Any]] | None) -> None:
         self.data = data
 
 
 class _FakeSupabaseQuery:
-    """Stub for fluent-chain Supabase table queries."""
+    """Stub for fluent-chain `.select().limit().execute()` query."""
 
     def __init__(self, data: List[Dict[str, Any]] | None) -> None:
         self._data = data
@@ -55,11 +61,11 @@ class _FakeSupabaseQuery:
 
 
 class _FakeSupabaseClient:
-    """Stub Supabase client with a `.table(name)` method.
+    """Stub Supabase client with deterministic `.table(name)` responses.
 
-    NOT a mock — fully controlled for predictable test behavior. The
-    KPICalculator should call `self._db.table(view_name).select(...).execute()`
-    on it; we hand back canned responses.
+    Not a MagicMock — concrete behavior, predictable assertion targets. This
+    test fixture lives in test-only scope (matches existing `_FakeSupabase`
+    pattern in this codebase, e.g., test_executive_insights).
     """
 
     def __init__(self, table_responses: Dict[str, List[Dict[str, Any]] | None]) -> None:
@@ -72,7 +78,7 @@ class _FakeSupabaseClient:
 
 
 def _make_view_kpi() -> KPIMetadata:
-    """KPI backed by a Supabase view (e.g., v_kpi_cross_source_match)."""
+    """KPI backed by a Supabase view that outputs `match_rate` column."""
     return KPIMetadata(
         id="WS1-DQ-003",
         name="Cross-source Match Rate",
@@ -86,7 +92,7 @@ def _make_view_kpi() -> KPIMetadata:
 
 
 def _make_tables_kpi() -> KPIMetadata:
-    """KPI computed from raw tables (no view shortcut)."""
+    """KPI that requires multi-table formula evaluation."""
     return KPIMetadata(
         id="WS1-DQ-001",
         name="Source Coverage - Patients",
@@ -99,135 +105,199 @@ def _make_tables_kpi() -> KPIMetadata:
     )
 
 
-class TestCalculateFromView:
-    """`_calculate_from_view` MUST return a real value, not None."""
+class TestAutoRegisterWorkstreamCalculators:
+    """The REAL REWIRE: KPICalculator auto-registers per-workstream calculators.
 
-    def test_returns_scalar_from_supabase_view(self) -> None:
-        """
-        For a view-backed KPI, the calculator queries the view via the injected
-        Supabase client and returns `(scalar, metadata)` — not `(None, metadata)`.
-        """
-        # The view returns one row with a single column. The calculator should
-        # pick the first scalar value from that row.
+    Before #421 fix, the workstream calculators in `src/kpi/calculators/`
+    existed but were never registered, so every KPI fell through to the
+    placeholder fallback. The fix registers them in `__init__`.
+    """
+
+    def test_auto_register_default(self) -> None:
+        """By default, all 6 workstream calculators are auto-registered."""
+        calc = KPICalculator(db_connection=_FakeSupabaseClient({}))
+        assert Workstream.WS1_DATA_QUALITY in calc._calculators
+        assert Workstream.WS1_MODEL_PERFORMANCE in calc._calculators
+        assert Workstream.WS2_TRIGGERS in calc._calculators
+        assert Workstream.WS3_BUSINESS in calc._calculators
+        assert Workstream.BRAND_SPECIFIC in calc._calculators
+        assert Workstream.CAUSAL_METRICS in calc._calculators
+
+    def test_auto_register_can_be_disabled(self) -> None:
+        """Tests / specialized callers can opt out via the constructor flag."""
+        calc = KPICalculator(
+            db_connection=_FakeSupabaseClient({}),
+            auto_register_workstream_calculators=False,
+        )
+        assert calc._calculators == {}
+
+    def test_workstream_calculator_receives_db_client(self) -> None:
+        """Registered calculators must get the same `db_connection` as the parent."""
+        fake_client = _FakeSupabaseClient({})
+        calc = KPICalculator(db_connection=fake_client)
+        # DataQualityCalculator stores client on `._db_client` (per its API);
+        # the property returns it lazily.
+        dq_calc = calc._calculators[Workstream.WS1_DATA_QUALITY]
+        # Use the underscore-prefixed attribute to avoid the lazy fallback
+        # to `get_supabase_client()` if no client was injected.
+        assert dq_calc._db_client is fake_client  # type: ignore[attr-defined]
+
+
+class TestCalculateFromView:
+    """`_calculate_from_view` fallback: real query, no `return None`."""
+
+    def test_returns_scalar_from_canonical_column(self) -> None:
+        """When the view has a canonical column name (`match_rate`), return it."""
         fake_client = _FakeSupabaseClient(
             table_responses={
-                "v_kpi_cross_source_match": [{"value": 0.78}],
+                "v_kpi_cross_source_match": [{"match_rate": 0.78}],
             }
         )
-        calc = KPICalculator(db_connection=fake_client)
+        calc = KPICalculator(
+            db_connection=fake_client,
+            auto_register_workstream_calculators=False,
+        )
         kpi = _make_view_kpi()
 
         value, metadata = calc._calculate_from_view(kpi, context={})
 
-        assert value is not None, (
-            "View-backed KPI returned None — F-007 placeholder behavior regressed."
-        )
-        assert isinstance(value, float)
-        assert abs(value - 0.78) < 1e-9
+        assert value == pytest.approx(0.78)
         assert metadata["source"] == "view"
         assert metadata["view_name"] == "v_kpi_cross_source_match"
-        # Verify it actually queried the named view.
         assert "v_kpi_cross_source_match" in fake_client.tables_called
 
-    def test_raises_when_view_returns_empty(self) -> None:
-        """
-        An empty view response is a real error (not silent None). The
-        calculator must raise so the caller surfaces it in KPIResult.error.
-        """
-        fake_client = _FakeSupabaseClient(table_responses={"v_kpi_cross_source_match": []})
-        calc = KPICalculator(db_connection=fake_client)
-        kpi = _make_view_kpi()
+    def test_returns_scalar_from_value_column(self) -> None:
+        """`value` is a canonical column for generic KPI views."""
+        fake_client = _FakeSupabaseClient(
+            table_responses={"v_kpi_cross_source_match": [{"value": 0.91}]}
+        )
+        calc = KPICalculator(
+            db_connection=fake_client,
+            auto_register_workstream_calculators=False,
+        )
+        value, _ = calc._calculate_from_view(_make_view_kpi(), context={})
+        assert value == pytest.approx(0.91)
 
+    def test_raises_on_ambiguous_multi_numeric_row(self) -> None:
+        """If a view returns multiple numeric columns and none match a canonical
+        name, the calculator MUST raise — not silently pick one.
+
+        Codex iter-1 critique: picking the "first numeric" without context
+        mis-evaluates KPIs (e.g., row `{"a": 100, "b": 5}` could be a count
+        or a rate — guessing is harmful).
+        """
+        fake_client = _FakeSupabaseClient(
+            table_responses={
+                "v_kpi_cross_source_match": [{"numer": 850, "denom": 1000}],
+            }
+        )
+        calc = KPICalculator(
+            db_connection=fake_client,
+            auto_register_workstream_calculators=False,
+        )
+        with pytest.raises(Exception):
+            calc._calculate_from_view(_make_view_kpi(), context={})
+
+    def test_raises_when_view_returns_empty(self) -> None:
+        """Empty view response is a real error (not silent None)."""
+        fake_client = _FakeSupabaseClient(table_responses={"v_kpi_cross_source_match": []})
+        calc = KPICalculator(
+            db_connection=fake_client,
+            auto_register_workstream_calculators=False,
+        )
         with pytest.raises(Exception) as excinfo:
-            calc._calculate_from_view(kpi, context={})
-        # Error message must mention the view (so debug is fast).
+            calc._calculate_from_view(_make_view_kpi(), context={})
         assert (
             "v_kpi_cross_source_match" in str(excinfo.value)
-            or "empty" in str(excinfo.value).lower()
-            or "no" in str(excinfo.value).lower()
+            or "no rows" in str(excinfo.value).lower()
         )
 
-    def test_no_silent_fallback_to_none_on_query_failure(self) -> None:
-        """
-        If the Supabase query raises, the calculator must propagate (so
-        `_default_calculate` populates `KPIResult.error`) — NOT swallow and
-        return `None`.
-        """
+    def test_no_silent_fallback_on_query_failure(self) -> None:
+        """A network/auth error in Supabase must propagate, not return None."""
 
         class _FailingClient:
             def table(self, name: str) -> Any:
                 raise RuntimeError("Connection refused by Supabase")
 
-        calc = KPICalculator(db_connection=_FailingClient())
-        kpi = _make_view_kpi()
+        calc = KPICalculator(
+            db_connection=_FailingClient(),
+            auto_register_workstream_calculators=False,
+        )
         with pytest.raises(Exception):
-            calc._calculate_from_view(kpi, context={})
+            calc._calculate_from_view(_make_view_kpi(), context={})
 
 
-class TestCalculateFromTables:
-    """`_calculate_from_tables` MUST return a real value, not None."""
+class TestCalculateFromTablesRaisesNotImplemented:
+    """`_calculate_from_tables` raises rather than guessing a formula.
 
-    def test_returns_aggregate_from_named_tables(self) -> None:
-        """
-        For a tables-derived KPI, the calculator queries the named tables and
-        applies the formula. It must return a numeric value — not None.
+    Codex iter-1 critique: "first numeric / first numeric" across two unrelated
+    tables mis-evaluates `covered_patients / reference_patients`. The honest
+    answer is: register a workstream-specific calculator. The auto-register
+    in `__init__` is the production answer; the fallback raises so the error
+    surfaces to the user instead of being silent.
+    """
 
-        For the minimal MVP delegator, the calculator selects from the first
-        listed table and treats the first numeric column as the source. The
-        exact aggregation logic is documented in the implementation; this test
-        only pins that *some real value* is returned (not None).
-        """
-        fake_client = _FakeSupabaseClient(
-            table_responses={
-                "patient_journeys": [{"covered": 850, "total": 1000}],
-                "reference_universe": [{"total_count": 1000}],
-            }
+    def test_table_kpi_without_registered_calculator_raises(self) -> None:
+        """Direct call to the fallback raises NotImplementedError."""
+        calc = KPICalculator(
+            db_connection=_FakeSupabaseClient({}),
+            auto_register_workstream_calculators=False,
         )
-        calc = KPICalculator(db_connection=fake_client)
-        kpi = _make_tables_kpi()
-
-        value, metadata = calc._calculate_from_tables(kpi, context={})
-
-        assert value is not None, (
-            "Tables-derived KPI returned None — F-007 placeholder behavior regressed."
+        with pytest.raises(NotImplementedError) as excinfo:
+            calc._calculate_from_tables(_make_tables_kpi(), context={})
+        assert "WS1-DQ-001" in str(excinfo.value) or "workstream" in str(excinfo.value).lower()
+        # Error message must point to the proper fix:
+        assert (
+            "register a per-workstream calculator" in str(excinfo.value).lower()
+            or "calculator" in str(excinfo.value).lower()
         )
-        assert isinstance(value, float)
-        assert metadata["source"] == "tables"
-        assert metadata["tables"] == ["patient_journeys", "reference_universe"]
 
 
 class TestDefaultCalculateEndToEnd:
-    """End-to-end: `_default_calculate` → real value with status evaluated."""
+    """End-to-end: `_default_calculate` produces a real `KPIResult` with value."""
 
     def test_view_kpi_e2e_returns_kpi_result_with_value(self) -> None:
-        """
-        Top-level `_default_calculate` path: for a view-backed KPI with a real
-        client, the returned `KPIResult.value` must NOT be None.
-        """
+        """View-backed KPI through `_default_calculate` returns non-None value."""
         fake_client = _FakeSupabaseClient(
-            table_responses={
-                "v_kpi_cross_source_match": [{"match_rate": 0.82}],
-            }
+            table_responses={"v_kpi_cross_source_match": [{"match_rate": 0.82}]}
         )
-        calc = KPICalculator(db_connection=fake_client)
-        kpi = _make_view_kpi()
-
-        result = calc._default_calculate(kpi, context={})
+        calc = KPICalculator(
+            db_connection=fake_client,
+            auto_register_workstream_calculators=False,
+        )
+        result: KPIResult = calc._default_calculate(_make_view_kpi(), context={})
 
         assert result.value is not None, (
             f"KPIResult.value was None — view-backed KPI was not actually computed. Got: {result!r}"
         )
-        # Threshold target=0.75; value 0.82 -> GOOD
+        assert result.value == pytest.approx(0.82)
         assert result.status == KPIStatus.GOOD
         assert result.error is None
         assert result.metadata.get("source") == "view"
 
+    def test_table_kpi_without_calculator_surfaces_error_in_result(self) -> None:
+        """When `_calculate_from_tables` raises, the caller surfaces it in
+        `KPIResult.error` — no silent None, no NaN.
+        """
+        calc = KPICalculator(
+            db_connection=_FakeSupabaseClient({}),
+            auto_register_workstream_calculators=False,
+        )
+        result: KPIResult = calc._default_calculate(_make_tables_kpi(), context={})
+
+        assert result.value is None
+        assert result.error is not None
+        assert (
+            "workstream calculator" in result.error.lower()
+            or "table-derived" in result.error.lower()
+        )
+
 
 class TestNoPlaceholderInCalculator:
-    """Regression pin: the placeholder comment must not return."""
+    """Regression pin: the placeholder comments must not return."""
 
     def test_calculator_source_no_placeholder_marker(self) -> None:
-        """Pin the absence of the literal placeholder comment from #421."""
+        """Pin the absence of the literal placeholder comments from #421."""
         from pathlib import Path
 
         calc_path = Path(__file__).resolve().parents[3] / "src" / "kpi" / "calculator.py"

@@ -13,8 +13,6 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Dict, List
 
-import pytest
-
 from src.agents.feedback_learner.dspy_integration import FeedbackLearnerTrainingSignal
 from src.agents.feedback_learner.graph import _finalize_training_signal
 
@@ -132,16 +130,16 @@ class TestComputeRewardWithNoneAccuracy:
         With proper skip-and-redistribute behavior, the None case gets a higher
         reward (because we don't penalize for a missing measurement).
         """
-        common: Dict[str, Any] = dict(
-            batch_id="cmp",
-            feedback_count=10,
-            time_range_start="2026-01-01T00:00:00Z",
-            time_range_end="2026-01-02T00:00:00Z",
-            patterns_detected=1,
-            recommendation_actionability=0.8,
-            update_effectiveness=0.7,
-            total_latency_ms=5000.0,
-        )
+        common: Dict[str, Any] = {
+            "batch_id": "cmp",
+            "feedback_count": 10,
+            "time_range_start": "2026-01-01T00:00:00Z",
+            "time_range_end": "2026-01-02T00:00:00Z",
+            "patterns_detected": 1,
+            "recommendation_actionability": 0.8,
+            "update_effectiveness": 0.7,
+            "total_latency_ms": 5000.0,
+        }
         signal_none = FeedbackLearnerTrainingSignal(**common, pattern_accuracy=None)
         signal_zero = FeedbackLearnerTrainingSignal(**common, pattern_accuracy=0.0)
 

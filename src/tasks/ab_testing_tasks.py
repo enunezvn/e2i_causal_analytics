@@ -25,7 +25,7 @@ import logging
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import Any, Dict, List, Optional, cast
 from uuid import UUID
 
 import yaml  # type: ignore[import-untyped]
@@ -34,49 +34,20 @@ from src.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
-
-async def _load_experiment_metric_arrays(
-    experiment_id: UUID,
-    primary_metric: str,
-) -> Optional[Tuple[List[float], List[float]]]:
-    """Load per-unit control + treatment metric values for an experiment.
-
-    Returns:
-        (control_values, treatment_values) when per-unit metric observations
-        are available; or None when no centralized metric-observation source
-        exists for this experiment.
-
-    F-009 (issue #422): the prior implementation passed `[]` to
-    `compute_itt_results`/`perform_interim_analysis`, which `numpy` turned
-    into NaN-tainted means/variances and persisted to the DB. Until a
-    centralized A/B metric-observation table is wired (no such table exists
-    in `database/ml/020_ab_testing_tables.sql` today — only assignments and
-    enrollments are tracked), the honest return is `None`, and callers
-    bail with `status='insufficient_data'` rather than corrupt
-    `ab_experiment_results`.
-
-    See #422 for the F-009 spec and the discovery that no
-    `ab_experiment_metric_observations` table is defined in the schema.
-
-    Args:
-        experiment_id: The experiment UUID.
-        primary_metric: The metric name (e.g., 'conversion_rate').
-
-    Returns:
-        None when no metric data is collected for this experiment yet
-        (the legitimate "experiment just started" edge case).
-    """
-    # The schema in `database/ml/020_ab_testing_tables.sql` tracks
-    # `ab_experiment_assignments` and `ab_experiment_enrollments` but does
-    # NOT define a per-unit metric observation table. Until that table is
-    # added, return None so callers bail cleanly.
-    logger.info(
-        "No centralized metric-observation source for experiment %s "
-        "(metric=%s); bailing with insufficient_data. See #422 (F-009).",
-        experiment_id,
-        primary_metric,
-    )
-    return None
+# F-009 (issue #422): A/B metric observations have no storage table.
+# `database/ml/020_ab_testing_tables.sql` defines `ab_experiment_assignments`
+# and `ab_experiment_enrollments`, but no per-unit metric-observation table
+# exists. Until that schema lands (#422 follow-up), the interim and final
+# result tasks bail with `status='insufficient_data'` at the call site rather
+# than passing `[]` to `_compute_results` (which would persist NaN-tainted
+# `ExperimentResults`). A helper named `_load_*` would itself be a label
+# pattern — there's no path to load from, so the bail is in-line and the
+# reason string is the only honest answer.
+_AB_METRIC_SCHEMA_REASON = (
+    "No per-unit A/B metric-observation storage exists in the current schema. "
+    "See #422 (F-009): bail with insufficient_data rather than persist NaN to "
+    "ab_experiment_results."
+)
 
 
 # Configuration path
@@ -190,17 +161,21 @@ def scheduled_interim_analysis(
 
     config = load_config()
     interim_config = config.get("interim_analysis", {})
-    start_time = time.time()
+    # F-009 (#422): no `duration_ms` to record on the insufficient_data bail.
+    # `start_time = time.time()` returns when `perform_interim_analysis` lands.
 
     async def execute_analysis():
         from src.repositories.ab_experiment import ABExperimentRepository
         from src.services.enrollment import EnrollmentService
-        from src.services.interim_analysis import InterimAnalysisService
+
+        # F-009 (#422): InterimAnalysisService is no longer instantiated here
+        # because the task bails before calling perform_interim_analysis (no
+        # per-unit metric-observation storage exists). Import + instantiation
+        # is re-added at the call site when the storage schema lands.
 
         try:
             exp_repo = ABExperimentRepository()
             enrollment_service = EnrollmentService()
-            interim_service = InterimAnalysisService()
 
             # Get experiment details
             exp_uuid = UUID(experiment_id)
@@ -259,68 +234,25 @@ def scheduled_interim_analysis(
                         "previous_analyses": len(previous_analyses),
                     }
 
-            # F-009 (#422): query per-unit metric observations.
-            # Bail with structured `insufficient_data` if no metric source
-            # exists yet — passing `[]` to `perform_interim_analysis` would
-            # produce NaN-tainted means and persist them to the DB.
-            from src.services.results_analysis import ResultsAnalysisService
-
-            ResultsAnalysisService()
-
-            # `primary_metric` would come from experiment design (config).
-            # For interim analysis we currently use the experiment-wide
-            # primary metric label — kept as a placeholder string until
-            # config-driven metric naming lands.
-            primary_metric = "conversion_rate"
-            metric_arrays = await _load_experiment_metric_arrays(
-                experiment_id=exp_uuid,
-                primary_metric=primary_metric,
+            # F-009 (#422): there is no per-unit A/B metric-observation table
+            # in the current schema. Bail in-line rather than invoke a helper
+            # that would always return None (relabeling) and rather than pass
+            # `[]` to `perform_interim_analysis` (which would persist NaN to
+            # the DB). When the storage schema lands, the bail is removed and
+            # `perform_interim_analysis` is called with real per-unit values.
+            logger.warning(
+                "Skipping interim analysis for %s: %s",
+                experiment_id,
+                _AB_METRIC_SCHEMA_REASON,
             )
-            if metric_arrays is None or not metric_arrays[0] or not metric_arrays[1]:
-                logger.warning(
-                    "Skipping interim analysis for %s: no metric observations available",
-                    experiment_id,
-                )
-                return {
-                    "status": "insufficient_data",
-                    "experiment_id": experiment_id,
-                    "reason": (
-                        "No per-unit metric observations available for "
-                        f"primary_metric={primary_metric!r}. "
-                        "See #422 (F-009)."
-                    ),
-                    "information_fraction": information_fraction,
-                    "current_enrollment": current_enrollment,
-                    "target_sample_size": target_sample_size,
-                }
-
-            control_data, treatment_data = metric_arrays
-
-            # Perform interim analysis
-            result = await interim_service.perform_interim_analysis(
-                experiment_id=exp_uuid,
-                analysis_number=analysis_number,
-                metric_data={
-                    "control": control_data,
-                    "treatment": treatment_data,
-                },
-                target_sample_size=target_sample_size,
-                target_effect=0.05,  # Would come from experiment design
-            )
-
-            duration_ms = int((time.time() - start_time) * 1000)
-
             return {
-                "status": "completed",
+                "status": "insufficient_data",
                 "experiment_id": experiment_id,
-                "analysis_number": result.analysis_number,
-                "information_fraction": result.information_fraction,
-                "alpha_spent": result.alpha_spent,
-                "adjusted_alpha": result.adjusted_alpha,
-                "p_value": result.p_value,
-                "conditional_power": result.conditional_power,
-                "decision": result.decision.value,
-                "duration_ms": duration_ms,
+                "reason": _AB_METRIC_SCHEMA_REASON,
+                "information_fraction": information_fraction,
+                "current_enrollment": current_enrollment,
+                "target_sample_size": target_sample_size,
+                "analysis_number": analysis_number,
             }
 
         except Exception as e:
@@ -709,97 +641,39 @@ def compute_experiment_results(
         f"Computing {analysis_type} results for experiment {experiment_id}: task {self.request.id}"
     )
 
-    start_time = time.time()
+    # F-009 (#422): duration_ms is omitted from the insufficient_data return —
+    # there's no computation to time. When the metric-storage schema lands and
+    # `_compute_results` is restored, a `start_time = time.time()` capture and
+    # `duration_ms = int((time.time() - start_time) * 1000)` will be added back
+    # at the result assembly site.
 
     async def execute_computation():
         from src.repositories.ab_results import ABResultsRepository
         from src.services.results_analysis import ResultsAnalysisService
 
         try:
-            results_service = ResultsAnalysisService()
+            ResultsAnalysisService()
             ABResultsRepository()
-            exp_uuid = UUID(experiment_id)
+            UUID(experiment_id)  # validates uuid shape; will raise ValueError if malformed
 
-            # F-009 (#422): query per-unit metric observations.
-            # Bail with `insufficient_data` if no metric source exists yet —
-            # passing `[]` to `compute_itt_results` would produce NaN-tainted
-            # ExperimentResults and persist them to `ab_experiment_results`.
-            primary_metric = "conversion_rate"
-            metric_arrays = await _load_experiment_metric_arrays(
-                experiment_id=exp_uuid,
-                primary_metric=primary_metric,
+            # F-009 (#422): same schema gap as scheduled_interim_analysis above.
+            # Bail in-line. When the per-unit metric-observation table exists,
+            # this block is replaced by:
+            #   metric_repo = ExperimentMetricObservationRepository()
+            #   control, treatment = await metric_repo.load_arrays(
+            #       experiment_id, primary_metric_from_config
+            #   )
+            #   results = await results_service.compute_itt_results(...)
+            logger.warning(
+                "Skipping results computation for %s: %s",
+                experiment_id,
+                _AB_METRIC_SCHEMA_REASON,
             )
-            if metric_arrays is None or not metric_arrays[0] or not metric_arrays[1]:
-                logger.warning(
-                    "Skipping results computation for %s: no metric observations available",
-                    experiment_id,
-                )
-                return {
-                    "status": "insufficient_data",
-                    "experiment_id": experiment_id,
-                    "analysis_type": analysis_type,
-                    "primary_metric": primary_metric,
-                    "reason": (
-                        "No per-unit metric observations available for "
-                        f"primary_metric={primary_metric!r}. "
-                        "See #422 (F-009)."
-                    ),
-                }
-
-            control_data, treatment_data = metric_arrays
-
-            import numpy as np
-
-            control_arr = np.asarray(control_data, dtype=float)
-            treatment_arr = np.asarray(treatment_data, dtype=float)
-
-            # Compute ITT results
-            results = await results_service.compute_itt_results(
-                experiment_id=exp_uuid,
-                primary_metric=primary_metric,
-                control_data=control_arr,
-                treatment_data=treatment_arr,
-            )
-
-            # Also compute per-protocol if this is final analysis
-            per_protocol_results = None
-            if analysis_type == "final":
-                # Per-protocol requires compliance masks; for this task path we
-                # treat all units as compliant (the upstream service handles
-                # the actual mask logic when called from the API route).
-                control_mask = np.ones(len(control_arr), dtype=bool)
-                treatment_mask = np.ones(len(treatment_arr), dtype=bool)
-                per_protocol_results = await results_service.compute_per_protocol_results(
-                    experiment_id=exp_uuid,
-                    primary_metric=primary_metric,
-                    control_data=control_arr,
-                    treatment_data=treatment_arr,
-                    control_compliant_mask=control_mask,
-                    treatment_compliant_mask=treatment_mask,
-                )
-
-            duration_ms = int((time.time() - start_time) * 1000)
-
             return {
-                "status": "completed",
+                "status": "insufficient_data",
                 "experiment_id": experiment_id,
                 "analysis_type": analysis_type,
-                "primary_metric": results.primary_metric,
-                "control_mean": results.control_mean,
-                "treatment_mean": results.treatment_mean,
-                "effect_estimate": results.effect_estimate,
-                "effect_ci": [results.effect_ci_lower, results.effect_ci_upper],
-                "p_value": results.p_value,
-                "is_significant": results.is_significant,
-                "sample_size_control": results.sample_size_control,
-                "sample_size_treatment": results.sample_size_treatment,
-                "per_protocol_results": {
-                    "effect_estimate": per_protocol_results.effect_estimate,
-                    "p_value": per_protocol_results.p_value,
-                }
-                if per_protocol_results
-                else None,
-                "duration_ms": duration_ms,
+                "reason": _AB_METRIC_SCHEMA_REASON,
             }
 
         except Exception as e:

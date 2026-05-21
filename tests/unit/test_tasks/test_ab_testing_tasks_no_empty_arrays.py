@@ -1,15 +1,27 @@
 """
-Tests for `src/tasks/ab_testing_tasks.py` — F-009 fix.
+Tests for `src/tasks/ab_testing_tasks.py` — F-009 fix (iter-1 codex closure).
 
-Closes #422 (F-009): the prior implementation passed `control_data=[]` and
+Closes #422 (F-009). Before this PR the task passed `control_data=[]` and
 `treatment_data=[]` into `ResultsAnalysisService.compute_itt_results` /
 `compute_per_protocol_results`, which compute `np.mean([])` and `np.var([])`
-producing NaN; the NaN-tainted `ExperimentResults` is then persisted to
+producing NaN; the NaN-tainted `ExperimentResults` was persisted to
 `ab_experiment_results`.
 
-After the fix, when no metric data is available, the task MUST:
-- Return a structured `status='insufficient_data'` response.
-- NOT call `_compute_results` (and therefore NOT persist NaN to DB).
+After the fix:
+- The task bails in-line with `status='insufficient_data'` and `reason`
+  citing the schema gap (no per-unit A/B metric-observation storage exists).
+- It NEVER calls `compute_itt_results`/`compute_per_protocol_results`/
+  `perform_interim_analysis` from these celery task paths under the current
+  schema. When the storage schema lands (#422 follow-up), the bail is
+  removed and real arrays are passed in.
+
+Iter-1 codex feedback addressed:
+- HIGH #1: removed `_load_experiment_metric_arrays` helper that always
+  returned `None` (a relabeling pattern). The bail is now in-line with the
+  honest reason — no helper pretending to load data.
+- HIGH #2: removed `primary_metric = "conversion_rate"` hardcoded value
+  and `np.ones(...)` "all-compliant" mask placeholders. Those were dead
+  code after the bail anyway.
 """
 
 from __future__ import annotations
@@ -17,8 +29,6 @@ from __future__ import annotations
 from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
-
-import pytest
 
 # Note: imports below use string-form patch targets so the celery worker
 # config does not need to be loaded at test collection time.
@@ -84,17 +94,16 @@ class TestComputeExperimentResultsNoEmptyArrays:
         )
         assert result["experiment_id"] == exp_id
 
-    def test_does_not_emit_nan_to_db(self) -> None:
-        """
-        Even if compute_itt_results were somehow invoked, the NaN-tainted result
-        must NOT be returned as 'status=completed'. This guards the user-visible
-        contract.
+    def test_final_analysis_type_also_bails_no_compute_per_protocol(self) -> None:
+        """`analysis_type='final'` must also bail — never call
+        `compute_per_protocol_results` with empty/synthetic compliance masks.
         """
         from src.tasks.ab_testing_tasks import compute_experiment_results
 
         exp_id = str(uuid4())
         mock_service = MagicMock()
         mock_service.compute_itt_results = AsyncMock()
+        mock_service.compute_per_protocol_results = AsyncMock()
 
         with (
             patch(
@@ -108,24 +117,11 @@ class TestComputeExperimentResultsNoEmptyArrays:
         ):
             result = compute_experiment_results.run(experiment_id=exp_id, analysis_type="final")
 
-        # If we bailed early, the returned dict must not contain a completed
-        # effect estimate.
-        if result.get("status") == "completed":
-            # Defense: even if author bypassed the bail-early gate, NaN must
-            # never appear in the return dict.
-            import math
-
-            for key in (
-                "control_mean",
-                "treatment_mean",
-                "effect_estimate",
-                "p_value",
-            ):
-                val = result.get(key)
-                if val is not None:
-                    assert not (isinstance(val, float) and math.isnan(val)), (
-                        f"NaN detected in {key!r} — empty-array bug regressed."
-                    )
+        mock_service.compute_itt_results.assert_not_called()
+        mock_service.compute_per_protocol_results.assert_not_called()
+        assert result["status"] == "insufficient_data"
+        # Reason string must mention the schema gap (so users know WHY).
+        assert "schema" in result["reason"].lower() or "#422" in result["reason"]
 
 
 class TestScheduledInterimAnalysisNoEmptyArrays:
