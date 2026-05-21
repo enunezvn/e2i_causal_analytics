@@ -310,8 +310,7 @@ class TestF006FailClosed:
         error_msg = result.get("error_message", "").lower()
         # Either "estimat" (from EstimationError wrapping) or "data" (raw)
         assert "estimat" in error_msg or "data" in error_msg, (
-            f"F-006 regression: unexpected error message: "
-            f"{result.get('error_message')!r}"
+            f"F-006 regression: unexpected error message: {result.get('error_message')!r}"
         )
 
     @pytest.mark.asyncio
@@ -350,9 +349,10 @@ class TestF006FailClosed:
         result = await node.execute(state)
 
         # Should NOT fail-closed when opt-in is explicit.
-        assert result.get("status") != "failed" or "data_source" not in result.get(
-            "error_message", ""
-        ).lower(), (
+        assert (
+            result.get("status") != "failed"
+            or "data_source" not in result.get("error_message", "").lower()
+        ), (
             "F-006 regression: explicit data_source='synthetic' opt-in was "
             "still rejected. The synthetic path must remain available for "
             "test fixtures and developer workflows."
