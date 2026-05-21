@@ -70,7 +70,6 @@ class KPICalculator:
         cache: KPICache | None = None,
         router: CausalLibraryRouter | None = None,
         db_connection: Any | None = None,
-        auto_register_workstream_calculators: bool = True,
     ):
         """Initialize the KPI calculator.
 
@@ -79,14 +78,28 @@ class KPICalculator:
             cache: KPI cache (creates new instance if None)
             router: Causal library router (creates new if None)
             db_connection: Database connection for SQL-based calculations
-            auto_register_workstream_calculators: When True (default), wires up
-                the per-workstream calculators in `src/kpi/calculators/`. These
-                calculators contain the real per-KPI formulas (e.g.,
-                `DataQualityCalculator._calc_source_coverage_patients` runs the
-                actual `covered/total` SQL). Without this auto-registration,
-                every KPI falls through to `_default_calculate` and the
-                view/table fallbacks — which only know how to read a scalar
-                from a pre-computed view, not how to evaluate `kpi.formula`.
+
+        F-007 NOTE (#421): the per-workstream calculators in
+        `src/kpi/calculators/` are intentionally NOT auto-registered here.
+        Auto-registration was reverted in codex iter-3 audit because 5 of the
+        6 calculators still contain hardcoded `0.0`/`0.5`/`1.0` numeric
+        defaults that swallow Supabase/MLflow failures (e.g.,
+        `ModelPerformanceCalculator` returns `ROC-AUC=0.5` when MLflow is
+        unreachable). Wiring them up here would make those latent
+        placeholders user-visible.
+
+        The hardening of those calculators is tracked in #439
+        (F-007-PhaseB). Once each calculator has been audited and either (a)
+        propagates errors via `KPIResult.error` or (b) returns honest "no
+        data" (None + error) instead of fabricated numbers, auto-registration
+        can be re-introduced in a follow-up PR.
+
+        Until then: callers can register specific calculators via
+        `register_calculator(workstream, instance)` (the existing API), and
+        unregistered workstreams fall through to `_default_calculate` →
+        `_calculate_from_view` (real Supabase query for view-backed KPIs) or
+        `_calculate_from_tables` (raises `NotImplementedError`, surfaced via
+        `KPIResult.error`). No silent placeholder zeros.
         """
         self._registry = registry or get_registry()
         self._cache = cache or KPICache()
@@ -94,46 +107,7 @@ class KPICalculator:
         self._db = db_connection
         self._calculators: dict[Workstream, KPICalculatorBase] = {}
 
-        if auto_register_workstream_calculators:
-            self._auto_register_workstream_calculators()
-
         logger.info("KPI Calculator initialized")
-
-    def _auto_register_workstream_calculators(self) -> None:
-        """Register the per-workstream calculators shipped in src/kpi/calculators/.
-
-        F-007 (#421): these calculators encode the real per-KPI formulas
-        (e.g., `covered_patients / reference_patients` for WS1-DQ-001 via a
-        joined SQL query). Without registration, every KPI fell through to
-        the view/tables fallback in `_default_calculate`, which previously
-        returned `(None, metadata)` placeholder — the visible symptom on the
-        KPI dashboard.
-
-        Wires up:
-            WS1_DATA_QUALITY        -> DataQualityCalculator
-            WS1_MODEL_PERFORMANCE   -> ModelPerformanceCalculator
-            WS2_TRIGGERS            -> TriggerPerformanceCalculator
-            WS3_BUSINESS            -> BusinessImpactCalculator
-            BRAND_SPECIFIC          -> BrandSpecificCalculator
-            CAUSAL_METRICS          -> CausalMetricsCalculator
-        """
-        from src.kpi.calculators.brand_specific import BrandSpecificCalculator
-        from src.kpi.calculators.business_impact import BusinessImpactCalculator
-        from src.kpi.calculators.causal_metrics import CausalMetricsCalculator
-        from src.kpi.calculators.data_quality import DataQualityCalculator
-        from src.kpi.calculators.model_performance import ModelPerformanceCalculator
-        from src.kpi.calculators.trigger_performance import TriggerPerformanceCalculator
-
-        self._calculators[Workstream.WS1_DATA_QUALITY] = DataQualityCalculator(db_client=self._db)
-        self._calculators[Workstream.WS1_MODEL_PERFORMANCE] = ModelPerformanceCalculator(
-            db_client=self._db
-        )
-        self._calculators[Workstream.WS2_TRIGGERS] = TriggerPerformanceCalculator(
-            db_client=self._db
-        )
-        self._calculators[Workstream.WS3_BUSINESS] = BusinessImpactCalculator(db_client=self._db)
-        self._calculators[Workstream.BRAND_SPECIFIC] = BrandSpecificCalculator(db_client=self._db)
-        self._calculators[Workstream.CAUSAL_METRICS] = CausalMetricsCalculator(db_client=self._db)
 
     def register_calculator(self, workstream: Workstream, calculator: KPICalculatorBase) -> None:
         """Register a calculator for a workstream.

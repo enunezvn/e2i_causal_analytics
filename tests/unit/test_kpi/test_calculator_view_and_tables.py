@@ -1,23 +1,32 @@
 """
 Tests for `_calculate_from_view` and `_calculate_from_tables` in
-`src/kpi/calculator.py` — F-007 fix (iter-1 codex closure).
+`src/kpi/calculator.py` — F-007 fix (iter-3 codex closure).
 
-Closes #421 (F-007). Before this PR the calculator's view + tables fallbacks
-returned `(None, metadata)` placeholders, so the KPI dashboard always showed
-"—" because no workstream calculators were registered.
+Closes #421 (F-007 Phase A). Before this PR the calculator's view + tables
+fallbacks returned `(None, metadata)` placeholders, so the KPI dashboard
+always showed "—".
 
 After the fix:
-- `KPICalculator.__init__` AUTO-registers the per-workstream calculators in
-  `src/kpi/calculators/`. These contain the real formulas (e.g.,
-  `DataQualityCalculator._calc_source_coverage_patients` runs joined SQL).
-  That's the real REWIRE — no more silent placeholder.
-- `_calculate_from_view` is a narrow fallback for KPIs surfaced via a
-  pre-computed Supabase view (single-scalar output). It uses canonical
-  column-name preference (`value`, `match_rate`, etc.) and refuses to guess
-  when multiple ambiguous numeric columns are present.
-- `_calculate_from_tables` raises `NotImplementedError` — generic
-  table-formula evaluation requires a workstream-specific calculator. No
-  silent "first numeric / first numeric" guess.
+- `_calculate_from_view` issues a real Supabase PostgREST query and returns
+  the scalar from a canonical KPI column (`value`, `match_rate`, `score`,
+  etc.). On query failure or no rows, raises (caller surfaces error via
+  `KPIResult.error`) — NO silent fallback to `None`.
+- `_calculate_from_tables` raises `NotImplementedError` because generic
+  table-formula evaluation requires a workstream-specific calculator (those
+  live in `src/kpi/calculators/`). No "first numeric / first numeric" guess.
+- `KPICalculator.__init__` does NOT auto-register the per-workstream
+  calculators. Codex iter-3 audit identified that 5 of the 6 calculators
+  (ModelPerformance, Trigger, Business, Brand, Causal) still return
+  hardcoded `0.0`/`0.5`/`1.0` numeric defaults on Supabase/MLflow failure.
+  Auto-registering them would have made those latent placeholder zeros
+  user-visible. The hardening is tracked in #439 (F-007-PhaseB).
+- `DataQualityCalculator._execute_query` now propagates exceptions rather
+  than silently swallowing them — the user sees a real error message via
+  `KPIResult.error` instead of a fabricated 0.0.
+
+This PR closes the ORCHESTRATOR side of F-007 (Phase A). Hardening the
+per-workstream calculators (Phase B) and auto-registering them is tracked
+in #439.
 """
 
 from __future__ import annotations
@@ -105,42 +114,36 @@ def _make_tables_kpi() -> KPIMetadata:
     )
 
 
-class TestAutoRegisterWorkstreamCalculators:
-    """The REAL REWIRE: KPICalculator auto-registers per-workstream calculators.
+class TestNoAutoRegisterByDefault:
+    """Codex iter-3 closure: auto-registration was reverted in iter-3.
 
-    Before #421 fix, the workstream calculators in `src/kpi/calculators/`
-    existed but were never registered, so every KPI fell through to the
-    placeholder fallback. The fix registers them in `__init__`.
+    Auto-registering all 6 workstream calculators in `__init__` made latent
+    placeholder defaults user-visible (e.g., `ModelPerformanceCalculator`
+    returns ROC-AUC=0.5 on MLflow failure). Per codex iter-3 verdict, the
+    auto-registration was reverted; the hardening of those calculators is
+    tracked in #439 (F-007-PhaseB). Once each calculator surfaces failures
+    via `KPIResult.error` instead of fabricated numeric defaults,
+    auto-registration can be re-introduced.
+
+    Until then: `register_calculator(workstream, instance)` (the existing
+    API) is the explicit opt-in for callers that have audited the calculators
+    for their use case.
     """
 
-    def test_auto_register_default(self) -> None:
-        """By default, all 6 workstream calculators are auto-registered."""
+    def test_no_calculators_registered_by_default(self) -> None:
+        """`KPICalculator()` starts with no workstream calculators registered."""
         calc = KPICalculator(db_connection=_FakeSupabaseClient({}))
-        assert Workstream.WS1_DATA_QUALITY in calc._calculators
-        assert Workstream.WS1_MODEL_PERFORMANCE in calc._calculators
-        assert Workstream.WS2_TRIGGERS in calc._calculators
-        assert Workstream.WS3_BUSINESS in calc._calculators
-        assert Workstream.BRAND_SPECIFIC in calc._calculators
-        assert Workstream.CAUSAL_METRICS in calc._calculators
-
-    def test_auto_register_can_be_disabled(self) -> None:
-        """Tests / specialized callers can opt out via the constructor flag."""
-        calc = KPICalculator(
-            db_connection=_FakeSupabaseClient({}),
-            auto_register_workstream_calculators=False,
-        )
         assert calc._calculators == {}
 
-    def test_workstream_calculator_receives_db_client(self) -> None:
-        """Registered calculators must get the same `db_connection` as the parent."""
+    def test_callers_can_register_explicitly(self) -> None:
+        """The existing `register_calculator` API is the explicit opt-in path."""
+        from src.kpi.calculators.data_quality import DataQualityCalculator
+
         fake_client = _FakeSupabaseClient({})
         calc = KPICalculator(db_connection=fake_client)
-        # DataQualityCalculator stores client on `._db_client` (per its API);
-        # the property returns it lazily.
-        dq_calc = calc._calculators[Workstream.WS1_DATA_QUALITY]
-        # Use the underscore-prefixed attribute to avoid the lazy fallback
-        # to `get_supabase_client()` if no client was injected.
-        assert dq_calc._db_client is fake_client  # type: ignore[attr-defined]
+        dq = DataQualityCalculator(db_client=fake_client)
+        calc.register_calculator(Workstream.WS1_DATA_QUALITY, dq)
+        assert calc._calculators[Workstream.WS1_DATA_QUALITY] is dq
 
 
 class TestCalculateFromView:
@@ -155,7 +158,6 @@ class TestCalculateFromView:
         )
         calc = KPICalculator(
             db_connection=fake_client,
-            auto_register_workstream_calculators=False,
         )
         kpi = _make_view_kpi()
 
@@ -173,7 +175,6 @@ class TestCalculateFromView:
         )
         calc = KPICalculator(
             db_connection=fake_client,
-            auto_register_workstream_calculators=False,
         )
         value, _ = calc._calculate_from_view(_make_view_kpi(), context={})
         assert value == pytest.approx(0.91)
@@ -193,7 +194,6 @@ class TestCalculateFromView:
         )
         calc = KPICalculator(
             db_connection=fake_client,
-            auto_register_workstream_calculators=False,
         )
         with pytest.raises(Exception):
             calc._calculate_from_view(_make_view_kpi(), context={})
@@ -203,7 +203,6 @@ class TestCalculateFromView:
         fake_client = _FakeSupabaseClient(table_responses={"v_kpi_cross_source_match": []})
         calc = KPICalculator(
             db_connection=fake_client,
-            auto_register_workstream_calculators=False,
         )
         with pytest.raises(Exception) as excinfo:
             calc._calculate_from_view(_make_view_kpi(), context={})
@@ -221,7 +220,6 @@ class TestCalculateFromView:
 
         calc = KPICalculator(
             db_connection=_FailingClient(),
-            auto_register_workstream_calculators=False,
         )
         with pytest.raises(Exception):
             calc._calculate_from_view(_make_view_kpi(), context={})
@@ -241,7 +239,6 @@ class TestCalculateFromTablesRaisesNotImplemented:
         """Direct call to the fallback raises NotImplementedError."""
         calc = KPICalculator(
             db_connection=_FakeSupabaseClient({}),
-            auto_register_workstream_calculators=False,
         )
         with pytest.raises(NotImplementedError) as excinfo:
             calc._calculate_from_tables(_make_tables_kpi(), context={})
@@ -263,7 +260,6 @@ class TestDefaultCalculateEndToEnd:
         )
         calc = KPICalculator(
             db_connection=fake_client,
-            auto_register_workstream_calculators=False,
         )
         result: KPIResult = calc._default_calculate(_make_view_kpi(), context={})
 
@@ -281,7 +277,6 @@ class TestDefaultCalculateEndToEnd:
         """
         calc = KPICalculator(
             db_connection=_FakeSupabaseClient({}),
-            auto_register_workstream_calculators=False,
         )
         result: KPIResult = calc._default_calculate(_make_tables_kpi(), context={})
 
