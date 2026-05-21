@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Protocol
@@ -15,6 +16,20 @@ from typing import Any, Dict, List, Optional, Protocol
 from ..state import ModelPrediction, PredictionSynthesizerState
 
 logger = logging.getLogger(__name__)
+
+
+def _mock_predictions_allowed() -> bool:
+    """Return True iff ``_create_mock_prediction`` may run.
+
+    F-012 (#430): the orchestrator previously fell silently through to a
+    randomized mock prediction whenever ``clients.get(model_id)`` returned
+    None. That behavior is now gated by ``ALLOW_MOCK_MODEL`` (explicit dev
+    opt-in). In production the gate stays off and the orchestrator raises
+    ValueError so the missing-client bug surfaces immediately instead of
+    being papered over with fabricated numbers.
+    """
+    raw = os.environ.get("ALLOW_MOCK_MODEL", "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
 
 
 class ModelRegistry(Protocol):
@@ -168,7 +183,17 @@ class ModelOrchestratorNode:
 
         client = self.clients.get(model_id)
         if not client:
-            # No client - create mock prediction for testing
+            # F-012 (#430): fail-closed when a planner names a model id with
+            # no registered client. Previously this silently returned a
+            # randomized mock prediction (random.uniform(0.3, 0.8)), masking
+            # planner/config drift in production. ALLOW_MOCK_MODEL=1 restores
+            # the old behavior for explicit dev/test scenarios.
+            if not _mock_predictions_allowed():
+                raise ValueError(
+                    f"Model '{model_id}' has no registered client. "
+                    "Add an endpoint entry to config/model_endpoints.yaml or "
+                    "set ALLOW_MOCK_MODEL=1 for explicit dev/test opt-in."
+                )
             return self._create_mock_prediction(model_id, start)
 
         try:

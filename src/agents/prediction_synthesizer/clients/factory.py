@@ -135,6 +135,12 @@ class MockModelClient:
 # Default base URL constant
 DEFAULT_BASE_URL = os.environ.get("BENTOML_SERVICE_URL", "http://localhost:3000")
 
+# F-012 (#430, codex iter-1 H1): explicit allowlist of dev/test ENVIRONMENT
+# values. Anything outside this set — unset, misspelled, "production",
+# "staging" — skips dev YAML merge AND forbids the implicit-HTTP fallback
+# at the factory boundary.
+_KNOWN_DEV_ENVIRONMENTS = {"development", "dev", "test", "testing", "local"}
+
 
 @dataclass
 class ModelEndpointConfig:
@@ -163,6 +169,15 @@ class ModelEndpointsConfig:
     def from_yaml(cls, path: str) -> "ModelEndpointsConfig":
         """Load configuration from YAML file.
 
+        F-012 (#430): When ``ENVIRONMENT`` is explicitly set to one of
+        ``{development, dev, test, testing, local}`` this method also
+        merges ``config/dev_model_endpoints.yaml`` (if present and
+        adjacent to the primary config file) so dev-only ``mock_model``
+        entries become available. Any other ENVIRONMENT value
+        — including UNSET, misspelled, ``production`` — skips the merge.
+        Selecting a non-existent model id then raises ValueError
+        downstream.
+
         Args:
             path: Path to YAML configuration file
 
@@ -190,6 +205,39 @@ class ModelEndpointsConfig:
                 enabled=model_config.get("enabled", True),
                 default_prediction=model_config.get("default_prediction", 0.5),
                 default_confidence=model_config.get("default_confidence", 0.8),
+            )
+
+        # F-012 (#430, codex iter-1 H1): merge dev-only endpoints ONLY when
+        # ENVIRONMENT is an EXPLICIT dev value. Unset/misspelled/production
+        # all skip the merge — missing metadata must not enable mock clients.
+        environment = os.environ.get("ENVIRONMENT", "").strip().lower()
+        if environment in _KNOWN_DEV_ENVIRONMENTS:
+            dev_path = config_path.with_name("dev_model_endpoints.yaml")
+            if dev_path.exists():
+                with open(dev_path) as f:
+                    dev_data = yaml.safe_load(f) or {}
+                for model_id, model_config in dev_data.get("endpoints", {}).items():
+                    endpoints[model_id] = ModelEndpointConfig(
+                        model_id=model_id,
+                        endpoint_url=model_config.get("url", f"{base_url}/{model_id}"),
+                        client_type=model_config.get("client_type", "http"),
+                        timeout=model_config.get("timeout", data.get("default_timeout", 5.0)),
+                        max_retries=model_config.get(
+                            "max_retries", data.get("default_max_retries", 3)
+                        ),
+                        enabled=model_config.get("enabled", True),
+                        default_prediction=model_config.get("default_prediction", 0.5),
+                        default_confidence=model_config.get("default_confidence", 0.8),
+                    )
+                logger.info(
+                    "Loaded dev endpoints from %s (ENVIRONMENT=%s)",
+                    dev_path,
+                    environment,
+                )
+        else:
+            logger.debug(
+                "Skipping dev_model_endpoints.yaml load (ENVIRONMENT=%r is not dev)",
+                environment,
             )
 
         return cls(
@@ -263,37 +311,42 @@ class ModelClientFactory:
         # Get endpoint config
         endpoint_config = self.config.endpoints.get(model_id)
 
-        if endpoint_config and not endpoint_config.enabled:
+        # F-012 (#430, codex iter-1 H2): require an explicit endpoint
+        # declaration. Previously, an unknown ``model_id`` would silently
+        # construct an HTTPModelClient pointing at
+        # ``{default_base_url}/{model_id}`` — so removing ``mock_model``
+        # from the prod yaml didn't actually fail-closed at this boundary.
+        # Now any undeclared model raises ValueError immediately.
+        if endpoint_config is None:
+            raise ValueError(
+                f"Model '{model_id}' has no endpoint declaration in "
+                "config/model_endpoints.yaml. Add an explicit entry "
+                "(client_type + url) to make this model available."
+            )
+
+        if not endpoint_config.enabled:
             raise ValueError(f"Model '{model_id}' is disabled")
 
         # Create client based on type
         client: Union[MockModelClient, HTTPModelClient]
-        if endpoint_config and endpoint_config.client_type == "mock":
+        if endpoint_config.client_type == "mock":
             client = MockModelClient(
                 model_id=model_id,
                 default_prediction=endpoint_config.default_prediction,
                 default_confidence=endpoint_config.default_confidence,
             )
         else:
-            # Default to HTTP client
-            endpoint_url = (
-                endpoint_config.endpoint_url
-                if endpoint_config
-                else f"{self.config.default_base_url}/{model_id}"
-            )
-
+            # HTTP client uses the explicitly declared endpoint URL.
             http_config = HTTPModelClientConfig(
                 model_id=model_id,
-                endpoint_url=endpoint_url,
-                timeout=endpoint_config.timeout if endpoint_config else self.config.default_timeout,
-                max_retries=endpoint_config.max_retries
-                if endpoint_config
-                else self.config.default_max_retries,
+                endpoint_url=endpoint_config.endpoint_url,
+                timeout=endpoint_config.timeout,
+                max_retries=endpoint_config.max_retries,
             )
 
             client = HTTPModelClient(
                 model_id=model_id,
-                endpoint_url=endpoint_url,
+                endpoint_url=endpoint_config.endpoint_url,
                 config=http_config,
             )
 
@@ -308,18 +361,31 @@ class ModelClientFactory:
     async def get_clients(self, model_ids: List[str]) -> Dict[str, ModelClient]:
         """Get or create multiple model clients.
 
+        F-012 (#430, codex iter-2 M1 + iter-3 H4): undeclared models AND
+        declared-model init failures now both propagate to the caller.
+        The previous broad ``except Exception`` was a backward-compat shim
+        — it would silently drop a failed declared model and return a
+        partial dict, masking real misconfiguration. Per the no-silent-
+        fabrication directive, the caller (planner or scheduler) sees the
+        error and decides whether to retry, fail the whole job, or
+        proceed without that model.
+
         Args:
             model_ids: List of model identifiers
 
         Returns:
-            Dictionary mapping model_id to client
+            Dictionary mapping model_id to client (always complete on
+            success; partial dicts are never returned).
+
+        Raises:
+            ValueError: If any requested model has no endpoint declaration
+                or is disabled.
+            Exception: Any client-init error (network, auth, etc.) from
+                ``get_client`` is propagated unchanged.
         """
         clients = {}
         for model_id in model_ids:
-            try:
-                clients[model_id] = await self.get_client(model_id)
-            except Exception as e:
-                logger.warning(f"Failed to create client for {model_id}: {e}")
+            clients[model_id] = await self.get_client(model_id)
         return clients
 
     async def close_all(self) -> None:

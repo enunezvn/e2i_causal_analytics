@@ -358,6 +358,10 @@ async def run_optimization(
         result.optimization_id = optimization_id
         _optimizations_store[optimization_id] = result
         return result
+    except HTTPException:
+        # F-010-backend (#429, codex iter-1 M1): preserve 503 from
+        # agent-import guard.
+        raise
     except Exception as e:
         logger.error(f"Optimization failed: {e}")
         response.status = OptimizationStatus.FAILED
@@ -624,7 +628,11 @@ async def _execute_optimization(
         )
 
     except ImportError as e:
-        logger.warning(f"Resource Optimizer agent not available: {e}, using mock data")
+        # F-010-backend (#429): fail-closed in production unless mock-fallback
+        # is explicitly enabled (E2I_REQUIRE_AGENT_IMPORT=0 or ENVIRONMENT!=production).
+        from src.api.utils.agent_import_guard import guard_or_raise
+
+        guard_or_raise(e, agent_name="Resource Optimizer")
         return _generate_mock_response(request, start_time)
 
     except Exception as e:

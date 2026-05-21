@@ -352,6 +352,11 @@ async def run_gap_analysis(
         result.analysis_id = analysis_id
         _analyses_store[analysis_id] = result
         return result
+    except HTTPException:
+        # F-010-backend (#429, codex iter-1 M1): preserve the 503
+        # raised by the agent-import guard inside _execute_gap_analysis
+        # instead of masking it as a 500.
+        raise
     except Exception as e:
         logger.error(f"Gap analysis failed: {e}")
         response.status = AnalysisStatus.FAILED
@@ -607,7 +612,11 @@ async def _execute_gap_analysis(
         )
 
     except ImportError as e:
-        logger.warning(f"Gap Analyzer agent not available: {e}, using mock data")
+        # F-010-backend (#429): fail-closed in production unless mock-fallback
+        # is explicitly enabled (E2I_REQUIRE_AGENT_IMPORT=0 or ENVIRONMENT!=production).
+        from src.api.utils.agent_import_guard import guard_or_raise
+
+        guard_or_raise(e, agent_name="Gap Analyzer")
         return _generate_mock_response(request, start_time)
 
     except Exception as e:

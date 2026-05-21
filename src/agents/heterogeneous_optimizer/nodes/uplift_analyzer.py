@@ -177,6 +177,13 @@ class UpliftAnalyzerNode:
             return {
                 "warnings": ["CausalML not installed - uplift analysis skipped"],
             }
+        except RuntimeError:
+            # F-013 (codex iter-3 H1): the synthetic-data fail-closed
+            # signal from _get_data() must not be downgraded to a soft
+            # warning. Re-raise so the graph status reflects the explicit
+            # configuration error rather than continuing with CATE-only
+            # output.
+            raise
         except Exception as e:
             logger.error(
                 "Uplift analysis failed",
@@ -197,7 +204,8 @@ class UpliftAnalyzerNode:
     async def _get_data(self, state: HeterogeneousOptimizerState) -> Optional[pd.DataFrame]:
         """Get data for uplift modeling.
 
-        Uses mock data if data connector not available (same as CATE estimator).
+        Uses mock data if data connector not available AND mock fallback is
+        explicitly enabled (see ``_mock_connector_allowed``).
         """
         # Try to use data connector from state or generate mock
         if hasattr(self, "data_connector") and self.data_connector:
@@ -212,7 +220,29 @@ class UpliftAnalyzerNode:
                 filters=state.get("filters"),
             )
 
-        # Generate mock data for testing
+        # F-013 (codex iter-2 H1): mirror the cate_estimator policy here so
+        # this exported node cannot silently fabricate data if it's wired
+        # into the graph later or used directly. Import lazily to avoid a
+        # dependency cycle.
+        from src.agents.heterogeneous_optimizer.nodes.cate_estimator import (
+            _mock_connector_allowed,
+        )
+
+        if not _mock_connector_allowed():
+            raise RuntimeError(
+                "UpliftAnalyzerNode has no data_connector and synthetic-data "
+                "fallback is disabled (E2I_ALLOW_MOCK_CONNECTOR=1 or "
+                "ENVIRONMENT in {development,dev,test,testing,local} required "
+                "for mock). Attach a real data_connector or set the env-gate "
+                "explicitly for offline development."
+            )
+
+        logger.warning(
+            "Using synthetic mock data in UpliftAnalyzerNode "
+            "(E2I_ALLOW_MOCK_CONNECTOR/ENVIRONMENT dev opt-in active) — "
+            "DO NOT use this output for any production decision.",
+            extra={"node": "uplift_analyzer", "data_source": "mock"},
+        )
         return self._generate_mock_data(state)
 
     def _generate_mock_data(self, state: HeterogeneousOptimizerState) -> pd.DataFrame:

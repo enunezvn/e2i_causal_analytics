@@ -368,16 +368,30 @@ class TestExecuteGapAnalysis:
             assert response.brand == "kisqali"
 
     @pytest.mark.asyncio
-    async def test_execute_without_agent(self, sample_gap_request):
-        """Test execution falls back to mock when agent not available."""
+    async def test_execute_falls_back_to_mock_when_explicitly_allowed(
+        self, sample_gap_request, monkeypatch
+    ):
+        """Mock-fallback is gated on E2I_REQUIRE_AGENT_IMPORT=0 (closed-by-default policy)."""
+        monkeypatch.setenv("E2I_REQUIRE_AGENT_IMPORT", "0")
         with patch(
             "src.agents.gap_analyzer.graph.create_gap_analyzer_graph", side_effect=ImportError
         ):
             response = await _execute_gap_analysis(sample_gap_request)
 
-            # Should use mock response
             assert response.status == AnalysisStatus.COMPLETED
             assert len(response.warnings) > 0
+
+    @pytest.mark.asyncio
+    async def test_execute_raises_503_when_mock_disabled(self, sample_gap_request, monkeypatch):
+        """Closed-by-default: ImportError must raise 503 when mock-fallback is disabled."""
+        monkeypatch.setenv("E2I_REQUIRE_AGENT_IMPORT", "1")
+        with patch(
+            "src.agents.gap_analyzer.graph.create_gap_analyzer_graph", side_effect=ImportError
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await _execute_gap_analysis(sample_gap_request)
+            assert exc_info.value.status_code == 503
+            assert exc_info.value.detail["error"] == "agent_unavailable"
 
 
 class TestEdgeCases:
