@@ -129,7 +129,13 @@ class FeedbackLearnerTrainingSignal:
     updates_applied: int = 0
 
     # === Quality Metrics ===
-    pattern_accuracy: float = 0.0  # Validated by human review
+    # F-015 (issue #424): pattern_accuracy is Optional[float] = None when no
+    # ground-truth pattern-validation labels are available. Computing this
+    # honestly requires labeled validation data (see #426 / F-015-PhaseB).
+    # `compute_reward()` skips the term and redistributes its weight when None,
+    # rather than anchoring on a fabricated default. Treat `0.0` as "validated
+    # poorly" (real signal), and `None` as "no measurement" (skip).
+    pattern_accuracy: Optional[float] = None
     recommendation_actionability: float = 0.0  # Percentage implemented
     update_effectiveness: float = 0.0  # Downstream metric improvement
 
@@ -163,17 +169,22 @@ class FeedbackLearnerTrainingSignal:
         Compute reward score for MIPROv2 optimization.
 
         Weighting (with rubric):
-        - pattern_accuracy: 0.20 (finding real patterns)
+        - pattern_accuracy: 0.20 (finding real patterns; skipped if None)
         - recommendation_actionability: 0.20 (practical recommendations)
         - update_effectiveness: 0.20 (updates that work)
         - rubric_quality: 0.20 (AI-as-judge rubric score)
         - efficiency: 0.10 (latency vs. feedback processed)
         - coverage: 0.10 (patterns per feedback item)
 
+        F-015 (issue #424): if `pattern_accuracy` is None (no ground-truth
+        labels available), the term is skipped and its weight is redistributed
+        proportionally across the remaining present terms — rather than
+        substituted with 0.0 (which would penalize an unmeasurable property).
+
         Returns:
             Float reward in range [0.0, 1.0]
         """
-        # Adjust weights based on whether rubric evaluation is available
+        # Base weights — adjusted below based on which signals are present.
         if self.rubric_weighted_score is not None:
             weights = {
                 "pattern_accuracy": 0.20,
@@ -191,9 +202,6 @@ class FeedbackLearnerTrainingSignal:
                 "efficiency": 0.15,
                 "coverage": 0.10,
             }
-
-        # Pattern accuracy (0-1)
-        accuracy_score = min(1.0, self.pattern_accuracy)
 
         # Recommendation actionability (0-1)
         actionability_score = min(1.0, self.recommendation_actionability)
@@ -226,18 +234,25 @@ class FeedbackLearnerTrainingSignal:
         else:
             rubric_score = 0.0
 
-        # Weighted sum
-        reward = (
-            weights["pattern_accuracy"] * accuracy_score
-            + weights["recommendation_actionability"] * actionability_score
-            + weights["update_effectiveness"] * effectiveness_score
-            + weights["efficiency"] * efficiency_score
-            + weights["coverage"] * coverage_score
-        )
-
-        # Add rubric score if available
+        # Build the (weight, score) list, omitting unmeasured terms.
+        # Pattern accuracy is omitted entirely when None (F-015).
+        weight_score_pairs: list[tuple[float, float]] = [
+            (weights["recommendation_actionability"], actionability_score),
+            (weights["update_effectiveness"], effectiveness_score),
+            (weights["efficiency"], efficiency_score),
+            (weights["coverage"], coverage_score),
+        ]
+        if self.pattern_accuracy is not None:
+            accuracy_score = min(1.0, max(0.0, self.pattern_accuracy))
+            weight_score_pairs.append((weights["pattern_accuracy"], accuracy_score))
         if self.rubric_weighted_score is not None and "rubric_quality" in weights:
-            reward += weights["rubric_quality"] * rubric_score
+            weight_score_pairs.append((weights["rubric_quality"], rubric_score))
+
+        # Redistribute by normalizing present weights to sum to 1.0.
+        total_weight = sum(w for w, _ in weight_score_pairs)
+        if total_weight <= 0:
+            return 0.0
+        reward = sum(w * s for w, s in weight_score_pairs) / total_weight
 
         return round(reward, 4)
 

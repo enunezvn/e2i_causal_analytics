@@ -242,8 +242,15 @@ async def _finalize_training_signal(state: FeedbackLearnerState) -> FeedbackLear
     applied_updates = state.get("applied_updates") or []
     feedback_items = state.get("feedback_items") or []
 
-    # Calculate metrics for training signal
-    pattern_accuracy = 0.85 if patterns else 0.0  # Placeholder - would be validated
+    # Calculate metrics for training signal.
+    #
+    # F-015 (issue #424): `pattern_accuracy` requires ground-truth-validated
+    # pattern labels to be computed honestly. The labeling infrastructure does
+    # not yet exist (see #426 / F-015-PhaseB). Until it lands, propagate `None`
+    # so downstream consumers (`compute_reward`, MIPROv2 optimization) skip the
+    # accuracy term rather than anchor on a fabricated value. Setting this to a
+    # constant like 0.85 would silently bias the self-improvement loop.
+    pattern_accuracy: float | None = None
     recommendation_actionability = min(len(recommendations) / 5.0, 1.0) if recommendations else 0.0
     update_effectiveness = len(applied_updates) / max(len(state.get("proposed_updates") or []), 1)
     min(1.0, 5000 / max(state.get("total_latency_ms", 1), 1))  # Target < 5s
@@ -314,7 +321,9 @@ async def _error_handler_node(state: FeedbackLearnerState) -> FeedbackLearnerSta
         patterns_detected=0,
         recommendations_generated=0,
         updates_applied=0,
-        pattern_accuracy=0.0,
+        # F-015 (issue #424): use None for "no measurement", not fabricated 0.0.
+        # See dspy_integration.FeedbackLearnerTrainingSignal.pattern_accuracy.
+        pattern_accuracy=None,
         recommendation_actionability=0.0,
         update_effectiveness=0.0,
         collection_latency_ms=state.get("collection_latency_ms", 0),
