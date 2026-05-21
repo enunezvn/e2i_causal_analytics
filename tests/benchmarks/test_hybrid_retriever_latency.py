@@ -226,11 +226,16 @@ def test_hybrid_retriever_latency_against_baseline() -> None:
     )
 
     # Persist measurements to test-results/measurements-*.json so a
-    # CI-artifact-driven re-bless flow (issue #403) could extract the
-    # raw numbers when this test eventually runs end-to-end (it currently
-    # skips in CI without SUPABASE_URL + SUPABASE_KEY + OPENAI_API_KEY).
-    # We emit two records — one per box — so the artifact shape matches
-    # the cascade + bm25 benchmarks.
+    # CI-artifact-driven re-bless flow (issue #403 / follow-up GH #414)
+    # can extract the raw numbers when this test eventually runs end-to-
+    # end (it currently skips in CI without SUPABASE_URL + SUPABASE_KEY
+    # + OPENAI_API_KEY).
+    #
+    # Codex iter-2 M2 closure: emit TWO records with distinct
+    # `statistic` + `value_ms` so the p95 box's primary scalar IS p95
+    # (not p50). Both records share the same raw `runs[]` (per-query
+    # timings) because the box-split is over WHICH percentile is the
+    # primary scalar for the baseline, not over WHICH queries.
     from tests.benchmarks._measurements_writer import write_measurements
 
     write_measurements(
@@ -239,6 +244,8 @@ def test_hybrid_retriever_latency_against_baseline() -> None:
         runs=timings_ms,
         median_ms=p50_ms,
         p95_ms=p95_ms,
+        statistic="p50",
+        value_ms=p50_ms,
     )
     write_measurements(
         box="hybrid_retriever_search_p95",
@@ -246,6 +253,8 @@ def test_hybrid_retriever_latency_against_baseline() -> None:
         runs=timings_ms,
         median_ms=p50_ms,
         p95_ms=p95_ms,
+        statistic="p95",
+        value_ms=p95_ms,
     )
 
     # Placeholder-first-run policy: when EITHER baseline is 0.0, we pass

@@ -24,15 +24,27 @@ File shape per box::
     {
       "box": "cascade_5hop_bfs",
       "test": "test_cascade_5hop_bfs_latency_against_baseline",
-      "runs": [<list of float timings_ms>],
-      "median_ms": <float>,
-      "p95_ms": <float | None>,
+      "statistic": "median",                  # which scalar `value_ms` represents
+      "value_ms": <float>,                    # the primary scalar for THIS box
+      "runs": [<list of float timings_ms>],   # raw per-iteration timings
+      "median_ms": <float>,                   # convenience: median of `runs`
+      "p95_ms": <float | None>,               # convenience: p95 of `runs`
       "ci_run_id": "<env GITHUB_RUN_ID, or empty>",
       "ci_run_attempt": "<env GITHUB_RUN_ATTEMPT, or empty>",
       "ci_sha": "<env GITHUB_SHA, or empty>",
       "ci_ref": "<env GITHUB_REF, or empty>",
       "emitted_at": "<ISO-8601 UTC timestamp>"
     }
+
+``statistic`` + ``value_ms`` are the consumer-friendly contract: the
+re-bless script reads ``value_ms`` and uses ``statistic`` to label it.
+``median_ms`` + ``p95_ms`` are retained as convenience aggregates over
+``runs`` so the file remains self-describing (a consumer that wants to
+re-derive any percentile can do so from ``runs[]`` alone). For a box
+where the scalar IS the median, ``statistic="median"`` and
+``value_ms == median_ms``; for a box where the scalar is the p95,
+``statistic="p95"`` and ``value_ms == p95_ms`` — the two scalars are
+NOT swapped silently (codex iter-2 M2 closure).
 
 The combined ``measurements.json`` file is a JSON array of the per-box
 records, appended in-process so a single ``scripts/run_benchmarks.sh``
@@ -79,9 +91,33 @@ def write_measurements(
     runs: Sequence[float],
     median_ms: float,
     p95_ms: Optional[float] = None,
+    statistic: str = "median",
+    value_ms: Optional[float] = None,
     extra: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Persist a per-box measurement record to disk.
+
+    Args:
+        box: stable identifier for the baseline this box re-blesses
+            (e.g. ``"cascade_5hop_bfs"``, ``"hybrid_retriever_search_p95"``).
+        test: pytest test ID (including parametrization), useful for
+            tracing back to the source test from a failure investigation.
+        runs: raw per-iteration timings in ms; the consumer can re-derive
+            any percentile from this list.
+        median_ms: median of ``runs`` (convenience aggregate).
+        p95_ms: p95 of ``runs`` (convenience aggregate, ``None`` if not
+            computed by the caller).
+        statistic: which scalar ``value_ms`` represents — "median" or
+            "p95" are the conventional values. The re-bless script
+            uses (box, statistic, value_ms) as its primary tuple.
+        value_ms: the primary scalar for THIS box. If ``None``, defaults
+            to ``median_ms`` (the common case). For a box whose scalar
+            is the p95 (e.g. ``hybrid_retriever_search_p95``), pass
+            ``statistic="p95", value_ms=p95_ms`` so the artifact
+            honestly labels its primary scalar (codex iter-2 M2 closure
+            — prevents silent p50-as-p95 mis-attribution).
+        extra: optional per-box metadata (e.g. ``slice_n`` for BM25
+            parametrized runs).
 
     Writes TWO files:
       1. ``test-results/measurements-<box>.json`` (single-record file —
@@ -95,9 +131,12 @@ def write_measurements(
     measurements emission failure must not mask the underlying benchmark
     result or break test isolation.
     """
+    primary_scalar = float(value_ms) if value_ms is not None else float(median_ms)
     record: Dict[str, Any] = {
         "box": box,
         "test": test,
+        "statistic": statistic,
+        "value_ms": primary_scalar,
         "runs": [float(t) for t in runs],
         "median_ms": float(median_ms),
         "p95_ms": float(p95_ms) if p95_ms is not None else None,

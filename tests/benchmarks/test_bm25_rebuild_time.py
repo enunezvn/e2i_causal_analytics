@@ -373,6 +373,8 @@ def test_bm25_rebuild_time_against_baseline(slice_n: int, baseline_key: str) -> 
         runs=timings,
         median_ms=median_ms,
         p95_ms=None,
+        statistic="median",
+        value_ms=median_ms,
         extra={"slice_n": slice_n},
     )
 

@@ -512,6 +512,8 @@ def test_cascade_5hop_bfs_latency_against_baseline() -> None:
         runs=timings,
         median_ms=median_ms,
         p95_ms=p95_ms,
+        statistic="median",
+        value_ms=median_ms,
     )
 
     # Placeholder-first-run policy retained as a guard: if baseline is
