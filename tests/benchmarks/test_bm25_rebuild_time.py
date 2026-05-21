@@ -352,6 +352,21 @@ def test_bm25_rebuild_time_against_baseline(slice_n: int, baseline_key: str) -> 
         flush=True,
     )
 
+    # Persist measurements to test-results/measurements-*.json so the
+    # CI-artifact-driven re-bless flow (issue #403) can extract the raw
+    # numbers without parsing stderr from run logs. Stderr print above is
+    # kept for human readability of CI step output.
+    from tests.benchmarks._measurements_writer import write_measurements
+
+    write_measurements(
+        box=baseline_key,
+        test=f"test_bm25_rebuild_time_against_baseline[{slice_n}-{baseline_key}]",
+        runs=timings,
+        median_ms=median_ms,
+        p95_ms=None,
+        extra={"slice_n": slice_n},
+    )
+
     if baseline_ms == 0.0:
         return
 

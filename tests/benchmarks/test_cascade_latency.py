@@ -495,6 +495,20 @@ def test_cascade_5hop_bfs_latency_against_baseline() -> None:
         flush=True,
     )
 
+    # Persist measurements to test-results/measurements-*.json so the
+    # CI-artifact-driven re-bless flow (issue #403) can extract the raw
+    # numbers without parsing stderr from run logs. Stderr print above is
+    # kept for human readability of CI step output.
+    from tests.benchmarks._measurements_writer import write_measurements
+
+    write_measurements(
+        box="cascade_5hop_bfs",
+        test="test_cascade_5hop_bfs_latency_against_baseline",
+        runs=timings,
+        median_ms=median_ms,
+        p95_ms=p95_ms,
+    )
+
     # Placeholder-first-run policy: when baseline is 0.0, we PASS the
     # benchmark unconditionally and emit a re-bless reminder. This is
     # consistent with `tests/benchmarks/baselines/retrieval_quality.json`

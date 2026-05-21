@@ -221,6 +221,29 @@ def test_hybrid_retriever_latency_against_baseline() -> None:
         flush=True,
     )
 
+    # Persist measurements to test-results/measurements-*.json so a
+    # CI-artifact-driven re-bless flow (issue #403) could extract the
+    # raw numbers when this test eventually runs end-to-end (it currently
+    # skips in CI without SUPABASE_URL + SUPABASE_KEY + OPENAI_API_KEY).
+    # We emit two records — one per box — so the artifact shape matches
+    # the cascade + bm25 benchmarks.
+    from tests.benchmarks._measurements_writer import write_measurements
+
+    write_measurements(
+        box="hybrid_retriever_search_p50",
+        test="test_hybrid_retriever_latency_against_baseline",
+        runs=timings_ms,
+        median_ms=p50_ms,
+        p95_ms=p95_ms,
+    )
+    write_measurements(
+        box="hybrid_retriever_search_p95",
+        test="test_hybrid_retriever_latency_against_baseline",
+        runs=timings_ms,
+        median_ms=p50_ms,
+        p95_ms=p95_ms,
+    )
+
     # Placeholder-first-run policy: when EITHER baseline is 0.0, we pass
     # unconditionally and emit a re-bless reminder. Mirrors PR #379.
     if p50_baseline == 0.0 or p95_baseline == 0.0:
