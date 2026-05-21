@@ -279,10 +279,25 @@ class TestLibraryRouting:
 class TestSequentialPipeline:
     """Tests for sequential pipeline execution."""
 
-    def test_run_sequential_pipeline_sync(self, client, sequential_pipeline_request):
-        """Test synchronous sequential pipeline."""
+    def test_run_sequential_pipeline_raises_503_in_default_mode(
+        self, client, sequential_pipeline_request
+    ):
+        """Default (no demo_mode) fails closed with 503 — no fabricated effects.
+
+        Pins the F-005 fail-closed semantics: chat users + LLMs that hit the
+        endpoint without demo_mode get a structured 503, NOT random.uniform-
+        shaped fabricated stats with statistical_significance=True.
+        """
         response = client.post(
             "/causal/pipeline/sequential",
+            json=sequential_pipeline_request,
+        )
+        assert response.status_code == 503
+
+    def test_run_sequential_pipeline_sync_with_demo_mode(self, client, sequential_pipeline_request):
+        """demo_mode=true returns pinned-zero placeholders + is_demo warning."""
+        response = client.post(
+            "/causal/pipeline/sequential?demo_mode=true",
             json=sequential_pipeline_request,
         )
 
@@ -290,26 +305,27 @@ class TestSequentialPipeline:
         data = response.json()
         assert "pipeline_id" in data
         assert data["status"] in ["completed", "in_progress", "pending"]
-        # SequentialPipelineResponse has stages_completed and stages_total
         assert "stages_completed" in data
         assert "stages_total" in data
 
-    def test_run_sequential_pipeline_async(self, client, sequential_pipeline_request):
-        """Test asynchronous sequential pipeline."""
+    def test_run_sequential_pipeline_async_with_demo_mode(
+        self, client, sequential_pipeline_request
+    ):
+        """Async + demo_mode returns 200 with pending status."""
         response = client.post(
-            "/causal/pipeline/sequential?async_mode=true",
+            "/causal/pipeline/sequential?async_mode=true&demo_mode=true",
             json=sequential_pipeline_request,
         )
 
-        # API returns 200 with status=pending for async mode
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "pending"
         assert "pipeline_id" in data
 
-    def test_sequential_pipeline_stage_order(self, client, sequential_pipeline_request):
-        """Test that pipeline respects stage order."""
-        # Override stages with different order
+    def test_sequential_pipeline_stage_order_with_demo_mode(
+        self, client, sequential_pipeline_request
+    ):
+        """Pipeline respects stage order when run in demo_mode."""
         sequential_pipeline_request["stages"] = [
             {"library": "networkx", "estimator": "causal_graph", "parameters": {}},
             {"library": "dowhy", "estimator": "propensity_score_matching", "parameters": {}},
@@ -317,13 +333,12 @@ class TestSequentialPipeline:
         ]
 
         response = client.post(
-            "/causal/pipeline/sequential",
+            "/causal/pipeline/sequential?demo_mode=true",
             json=sequential_pipeline_request,
         )
 
         assert response.status_code == 200
         data = response.json()
-        # Verify stages_total matches our input
         assert data["stages_total"] == 3
 
 
@@ -335,10 +350,20 @@ class TestSequentialPipeline:
 class TestParallelPipeline:
     """Tests for parallel pipeline execution."""
 
-    def test_run_parallel_pipeline_sync(self, client, parallel_pipeline_request):
-        """Test synchronous parallel pipeline."""
+    def test_run_parallel_pipeline_raises_503_in_default_mode(
+        self, client, parallel_pipeline_request
+    ):
+        """Default (no demo_mode) fails closed with 503."""
         response = client.post(
             "/causal/pipeline/parallel",
+            json=parallel_pipeline_request,
+        )
+        assert response.status_code == 503
+
+    def test_run_parallel_pipeline_sync_with_demo_mode(self, client, parallel_pipeline_request):
+        """demo_mode=true returns pinned-zero placeholders."""
+        response = client.post(
+            "/causal/pipeline/parallel?demo_mode=true",
             json=parallel_pipeline_request,
         )
 
@@ -346,28 +371,26 @@ class TestParallelPipeline:
         data = response.json()
         assert "pipeline_id" in data
         assert data["status"] in ["completed", "in_progress", "pending"]
-        # ParallelPipelineResponse has libraries_succeeded and libraries_failed
         assert "libraries_succeeded" in data
         assert "libraries_failed" in data
 
-    def test_run_parallel_pipeline_async(self, client, parallel_pipeline_request):
-        """Test asynchronous parallel pipeline."""
+    def test_run_parallel_pipeline_async_with_demo_mode(self, client, parallel_pipeline_request):
+        """Async + demo_mode returns 200."""
         response = client.post(
-            "/causal/pipeline/parallel?async_mode=true",
+            "/causal/pipeline/parallel?async_mode=true&demo_mode=true",
             json=parallel_pipeline_request,
         )
 
-        # API returns 200 - may be pending or completed if execution is fast
         assert response.status_code == 200
         data = response.json()
         assert data["status"] in ["pending", "completed", "in_progress"]
         assert "pipeline_id" in data
 
     def test_get_pipeline_status_success(self, client, sequential_pipeline_request):
-        """Test retrieving pipeline status."""
-        # First create a pipeline
+        """Test retrieving pipeline status (uses demo_mode for setup)."""
+        # First create a pipeline in demo_mode (default path is 503)
         create_response = client.post(
-            "/causal/pipeline/sequential",
+            "/causal/pipeline/sequential?demo_mode=true",
             json=sequential_pipeline_request,
         )
         pipeline_id = create_response.json()["pipeline_id"]
@@ -395,10 +418,20 @@ class TestParallelPipeline:
 class TestCrossValidation:
     """Tests for cross-library validation."""
 
-    def test_run_cross_validation(self, client, cross_validation_request):
-        """Test cross-library validation."""
+    def test_run_cross_validation_raises_503_in_default_mode(
+        self, client, cross_validation_request
+    ):
+        """Default (no demo_mode) fails closed with 503."""
         response = client.post(
             "/causal/validate",
+            json=cross_validation_request,
+        )
+        assert response.status_code == 503
+
+    def test_run_cross_validation_with_demo_mode(self, client, cross_validation_request):
+        """demo_mode=true returns pinned-zero validation result."""
+        response = client.post(
+            "/causal/validate?demo_mode=true",
             json=cross_validation_request,
         )
 
@@ -409,12 +442,14 @@ class TestCrossValidation:
         assert "validation_library" in data
         assert "agreement_score" in data
 
-    def test_cross_validation_agreement_threshold(self, client, cross_validation_request):
-        """Test cross-validation with custom agreement threshold."""
+    def test_cross_validation_agreement_threshold_with_demo_mode(
+        self, client, cross_validation_request
+    ):
+        """Custom agreement threshold honored under demo_mode."""
         cross_validation_request["agreement_threshold"] = 0.90
 
         response = client.post(
-            "/causal/validate",
+            "/causal/validate?demo_mode=true",
             json=cross_validation_request,
         )
 
@@ -422,13 +457,13 @@ class TestCrossValidation:
         data = response.json()
         assert data["agreement_threshold"] == 0.90
 
-    def test_cross_validation_libraries(self, client, cross_validation_request):
-        """Test cross-validation with different library pairs."""
+    def test_cross_validation_libraries_with_demo_mode(self, client, cross_validation_request):
+        """Cross-validation with different library pairs (demo_mode)."""
         cross_validation_request["primary_library"] = "dowhy"
         cross_validation_request["validation_library"] = "econml"
 
         response = client.post(
-            "/causal/validate",
+            "/causal/validate?demo_mode=true",
             json=cross_validation_request,
         )
 
@@ -646,10 +681,10 @@ class TestResponseFormats:
         assert "routing_confidence" in data
         assert "routing_rationale" in data
 
-    def test_pipeline_response_format(self, client, sequential_pipeline_request):
-        """Test pipeline response format."""
+    def test_pipeline_response_format_with_demo_mode(self, client, sequential_pipeline_request):
+        """Pipeline response format (demo_mode — default 503 is pinned in TestSequentialPipeline)."""
         response = client.post(
-            "/causal/pipeline/sequential",
+            "/causal/pipeline/sequential?demo_mode=true",
             json=sequential_pipeline_request,
         )
 
@@ -663,10 +698,10 @@ class TestResponseFormats:
         assert "stages_total" in data
         assert "stage_results" in data
 
-    def test_validation_response_format(self, client, cross_validation_request):
-        """Test cross-validation response format."""
+    def test_validation_response_format_with_demo_mode(self, client, cross_validation_request):
+        """Cross-validation response format (demo_mode — default 503 is pinned in TestCrossValidation)."""
         response = client.post(
-            "/causal/validate",
+            "/causal/validate?demo_mode=true",
             json=cross_validation_request,
         )
 
