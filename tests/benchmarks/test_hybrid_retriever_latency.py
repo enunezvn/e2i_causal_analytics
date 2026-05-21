@@ -23,12 +23,16 @@ baselines.
 ``tests/benchmarks/data/retrieval_queries.jsonl`` and the labeled-query
 loader from ``tests/benchmarks/_loader.py``.
 
-**Baseline strategy (placeholder-first-run-blesses, per PR #379 +
-[[feat-377-phase2-benchmark-close-20260519]])**: the first run on a given
-environment BLESSES the measured p50/p95 as the baseline (re-write
-``tests/benchmarks/baselines/performance.json`` in that PR). Subsequent
-runs compare against the blessed value within the documented tolerance
-bands.
+**Baseline strategy (placeholder-first-run-blesses, retained for the
+hybrid p50/p95 baselines only — per issue #403)**: the sibling cascade +
+bm25 baselines are CI-blessed-median, but the hybrid retriever cannot
+be re-blessed from CI because the live retriever skips when
+``SUPABASE_URL`` / ``SUPABASE_KEY`` / ``OPENAI_API_KEY`` are absent. The
+first CI run that has all three secrets BLESSES the measured p50/p95 as
+the baseline (re-write ``tests/benchmarks/baselines/performance.json``
+in that PR; see the existing ``_placeholder_rationale`` entries on the
+hybrid baselines for the follow-up tracker). Subsequent runs compare
+against the blessed value within the documented tolerance bands.
 
 **Skip semantics**:
 * Skips with ``requires_supabase`` if the SERVICES_AVAILABLE['supabase']
@@ -219,6 +223,38 @@ def test_hybrid_retriever_latency_against_baseline() -> None:
         ),
         file=sys.stderr,
         flush=True,
+    )
+
+    # Persist measurements to test-results/measurements-*.json so a
+    # CI-artifact-driven re-bless flow (issue #403 / follow-up GH #414)
+    # can extract the raw numbers when this test eventually runs end-to-
+    # end (it currently skips in CI without SUPABASE_URL + SUPABASE_KEY
+    # + OPENAI_API_KEY).
+    #
+    # Codex iter-2 M2 closure: emit TWO records with distinct
+    # `statistic` + `value_ms` so the p95 box's primary scalar IS p95
+    # (not p50). Both records share the same raw `runs[]` (per-query
+    # timings) because the box-split is over WHICH percentile is the
+    # primary scalar for the baseline, not over WHICH queries.
+    from tests.benchmarks._measurements_writer import write_measurements
+
+    write_measurements(
+        box="hybrid_retriever_search_p50",
+        test="test_hybrid_retriever_latency_against_baseline",
+        runs=timings_ms,
+        median_ms=p50_ms,
+        p95_ms=p95_ms,
+        statistic="p50",
+        value_ms=p50_ms,
+    )
+    write_measurements(
+        box="hybrid_retriever_search_p95",
+        test="test_hybrid_retriever_latency_against_baseline",
+        runs=timings_ms,
+        median_ms=p50_ms,
+        p95_ms=p95_ms,
+        statistic="p95",
+        value_ms=p95_ms,
     )
 
     # Placeholder-first-run policy: when EITHER baseline is 0.0, we pass

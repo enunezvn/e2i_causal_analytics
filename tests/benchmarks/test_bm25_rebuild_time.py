@@ -9,12 +9,15 @@ growth is a curve, not a step function (per issue #391, Box 3 statement
 **Tolerance bands** (codified in
 ``tests/benchmarks/baselines/performance.json``; re-stated here so the
 test docstring carries the same numbers as the JSON, per codex iter-0 L1):
-- bm25_build_1k: 20% relative OR 50ms absolute (whichever wider).
-- bm25_build_5k: 20% relative OR 100ms absolute (whichever wider).
-- bm25_build_10k: 20% relative OR 200ms absolute (whichever wider).
+- bm25_build_1k:  10% relative OR 20ms absolute (whichever wider).
+- bm25_build_5k:  10% relative OR 30ms absolute (whichever wider).
+- bm25_build_10k: 10% relative OR 50ms absolute (whichever wider).
 Absolute floors widen with N because total work is ~5x / ~10x the 1k
 slice. Relative-vs-absolute policy is `max(rel, abs)` — see
-``_within_tolerance`` for rationale.
+``_within_tolerance`` for rationale. Bands were narrowed from the pre-
+#403 placeholder defaults (20% rel; 50/100/200ms abs) to honestly
+reflect observed CI variance (per-run-median stdev ~1.4-1.9% across
+3 workflow_dispatch runs).
 
 **Reference implementation**: a pure-Python BM25 indexer
 (``_build_reference_bm25``) that:
@@ -31,12 +34,14 @@ Supabase; once a real-Postgres benchmark surface lands (e.g., via
 ``REINDEX TABLE triggers``), it can be added as a parallel test that
 skips on ``requires_supabase``.
 
-**Baseline strategy (placeholder-first-run-blesses, per PR #379 +
-[[feat-377-phase2-benchmark-close-20260519]])**: the first run on a given
-environment BLESSES the measured median build time at each slice
-(re-write ``tests/benchmarks/baselines/performance.json`` in that PR).
-Subsequent runs compare against the blessed value within the documented
-tolerance band.
+**Baseline strategy (ci-blessed-median, per issue #403)**: the
+baselines for all three slices were blessed from 3 CI
+workflow_dispatch runs on ``feat/403-perf-baseline-rebless`` (see
+``_blessed_from_ci_runs`` in the baseline JSON); med-of-meds across
+the 3 runs = 21.07/111.10/222.14ms (1k/5k/10k), stdev across runs
+1.4–1.9%. To re-bless: trigger ≥3 workflow_dispatch runs on the
+rebless branch, download artifacts, take median-of-medians per slice,
+update the baseline JSON + ``_blessed_from_ci_runs`` list.
 
 **Why a curve not a point**: a single-point measurement masks
 super-linear scaling — if the index-build complexity drifted from
@@ -316,10 +321,14 @@ def test_bm25_rebuild_time_against_baseline(slice_n: int, baseline_key: str) -> 
     tolerance band.
 
     **Re-blessing the baseline**: if the measurement legitimately shifts
-    (e.g., after a tokenizer refactor), update
+    (e.g., after a tokenizer refactor), trigger ≥3 workflow_dispatch
+    runs of ``.github/workflows/benchmarks.yml`` on the rebless branch,
+    download artifacts, take median-of-medians per slice, update
     ``tests/benchmarks/baselines/performance.json`` in the same PR with
-    the new ``mean_ms`` at each slice. Do NOT loosen tolerances to mask a
-    regression at any slice.
+    the new ``mean_ms`` + refreshed ``_ci_observation`` +
+    ``_blessed_from_ci_runs`` list. Do NOT loosen tolerances to mask a
+    regression at any slice — observed stdev should drive the band, not
+    arbitrary safety factors (issue #403 methodology).
     """
     corpus = _load_synthetic_corpus(_CORPUS_FILE)
     slice_corpus = _slice_corpus(corpus, slice_n)
@@ -352,6 +361,29 @@ def test_bm25_rebuild_time_against_baseline(slice_n: int, baseline_key: str) -> 
         flush=True,
     )
 
+    # Persist measurements to test-results/measurements-*.json so the
+    # CI-artifact-driven re-bless flow (issue #403) can extract the raw
+    # numbers without parsing stderr from run logs. Stderr print above is
+    # kept for human readability of CI step output.
+    from tests.benchmarks._measurements_writer import write_measurements
+
+    write_measurements(
+        box=baseline_key,
+        test=f"test_bm25_rebuild_time_against_baseline[{slice_n}-{baseline_key}]",
+        runs=timings,
+        median_ms=median_ms,
+        p95_ms=None,
+        statistic="median",
+        value_ms=median_ms,
+        extra={"slice_n": slice_n},
+    )
+
+    # Post-#403 the bm25_build_* baselines are CI-blessed (non-zero); the
+    # placeholder branch below is a safety guard for a hypothetical revert
+    # to placeholder mode. The meta-test at tests/unit/
+    # test_benchmarks_meta/test_baseline_no_placeholder.py pins mean_ms
+    # > 0.0 in the default unit-test sweep so a silent revert surfaces
+    # loudly.
     if baseline_ms == 0.0:
         return
 
