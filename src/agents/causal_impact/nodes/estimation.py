@@ -303,6 +303,26 @@ class EstimationNode:
                         }
                     )
 
+        # Iter-3 codex H2 (#417): compute the p-value from the estimator's
+        # actual uncertainty model (two-sided z-test on ate / ate_std).
+        # Previously the code emitted hardcoded ``0.001`` or ``0.15`` based
+        # on the ``abs(ate) > 1.96 * ate_std`` boundary — that's classification
+        # not backed by a real computation. Downstream code treats
+        # ``p_value < 0.05`` as real evidence; emitting hardcoded sentinels
+        # is placeholder evidence per the anti-mocking directive.
+        from scipy import stats as _scipy_stats
+
+        if selected.ate is not None and selected.ate_std and selected.ate_std > 0:
+            z_score = abs(float(selected.ate)) / float(selected.ate_std)
+            # Two-sided p-value from standard normal: 2 * (1 - Phi(|z|))
+            p_value_real = float(2.0 * (1.0 - _scipy_stats.norm.cdf(z_score)))
+            statistical_significance_real = p_value_real < 0.05
+        else:
+            # Estimator did not produce a usable standard error: declare
+            # significance unknowable rather than fabricating one.
+            p_value_real = float("nan")
+            statistical_significance_real = False
+
         result: EstimationResult = {
             "method": method_name,
             "ate": float(selected.ate) if selected.ate is not None else 0.0,
@@ -310,12 +330,8 @@ class EstimationNode:
             "ate_ci_upper": float(selected.ate_ci_upper) if selected.ate_ci_upper else 0.0,
             "standard_error": float(selected.ate_std) if selected.ate_std else 0.0,
             "effect_size": self._classify_effect_size(selected.ate or 0.0),
-            "statistical_significance": bool(
-                selected.ate and selected.ate_std and abs(selected.ate) > 1.96 * selected.ate_std
-            ),
-            "p_value": 0.001
-            if (selected.ate and selected.ate_std and abs(selected.ate) > 1.96 * selected.ate_std)
-            else 0.15,
+            "statistical_significance": statistical_significance_real,
+            "p_value": p_value_real,
             "sample_size": len(data),
             "covariates_adjusted": covariate_cols,
             "heterogeneity_detected": heterogeneity_detected,

@@ -18,6 +18,7 @@ Anti-Mocking (F-014 fix, #416):
 """
 
 import logging
+import math
 import time
 from typing import Any, Dict, List, Optional, Tuple, cast
 
@@ -289,9 +290,66 @@ class RefutationNode:
             if not estimation_result:
                 raise ValueError("Estimation result not found in state")
 
+            # Iter-3 codex H1 (#416): the previous default of
+            # ``original_ate +/- 0.1`` when ate_ci_lower / ate_ci_upper were
+            # missing fabricated uncertainty that fed directly into data_subset
+            # and bootstrap pass/review/block scoring — same silent-evidence
+            # class as iter-1 H4. Now we require both bounds present, numeric,
+            # finite, and ordered. Anything else fail-closes via
+            # ``RefutationError`` (caught below and surfaced to chat).
             original_ate = estimation_result["ate"]
-            ate_ci_lower = estimation_result.get("ate_ci_lower", original_ate - 0.1)
-            ate_ci_upper = estimation_result.get("ate_ci_upper", original_ate + 0.1)
+            ate_ci_lower_raw = estimation_result.get("ate_ci_lower")
+            ate_ci_upper_raw = estimation_result.get("ate_ci_upper")
+            if ate_ci_lower_raw is None or ate_ci_upper_raw is None:
+                raise RefutationError(
+                    "Refutation analysis unavailable for this query, retry without refutation. "
+                    "EstimationResult is missing ate_ci_lower / ate_ci_upper; refusing to "
+                    "fabricate a +/- 0.1 default CI which would feed silent-wrong evidence "
+                    "into data_subset and bootstrap scoring.",
+                    details={
+                        "reason": "missing_ci_bounds",
+                        "has_ate_ci_lower": ate_ci_lower_raw is not None,
+                        "has_ate_ci_upper": ate_ci_upper_raw is not None,
+                        "ate": original_ate,
+                    },
+                )
+            try:
+                ate_ci_lower = float(ate_ci_lower_raw)
+                ate_ci_upper = float(ate_ci_upper_raw)
+            except (TypeError, ValueError) as ci_exc:
+                raise RefutationError(
+                    "Refutation analysis unavailable for this query, retry without refutation. "
+                    "EstimationResult CI bounds are non-numeric: "
+                    f"ate_ci_lower={ate_ci_lower_raw!r}, ate_ci_upper={ate_ci_upper_raw!r}.",
+                    details={
+                        "reason": "non_numeric_ci_bounds",
+                        "ate_ci_lower": repr(ate_ci_lower_raw),
+                        "ate_ci_upper": repr(ate_ci_upper_raw),
+                    },
+                    original_error=ci_exc,
+                ) from ci_exc
+            if not (math.isfinite(ate_ci_lower) and math.isfinite(ate_ci_upper)):
+                raise RefutationError(
+                    "Refutation analysis unavailable for this query, retry without refutation. "
+                    f"EstimationResult CI bounds are non-finite: "
+                    f"ate_ci_lower={ate_ci_lower}, ate_ci_upper={ate_ci_upper}.",
+                    details={
+                        "reason": "non_finite_ci_bounds",
+                        "ate_ci_lower": ate_ci_lower,
+                        "ate_ci_upper": ate_ci_upper,
+                    },
+                )
+            if ate_ci_lower > ate_ci_upper:
+                raise RefutationError(
+                    "Refutation analysis unavailable for this query, retry without refutation. "
+                    f"EstimationResult CI bounds are out of order: "
+                    f"ate_ci_lower={ate_ci_lower} > ate_ci_upper={ate_ci_upper}.",
+                    details={
+                        "reason": "ci_bounds_out_of_order",
+                        "ate_ci_lower": ate_ci_lower,
+                        "ate_ci_upper": ate_ci_upper,
+                    },
+                )
             original_ci = (ate_ci_lower, ate_ci_upper)
 
             # Get context for logging

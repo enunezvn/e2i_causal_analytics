@@ -359,6 +359,112 @@ class TestF006FailClosed:
         )
 
     @pytest.mark.asyncio
+    async def test_f006_p_value_is_computed_not_hardcoded(self):
+        """F-006 iter-3 (#417, codex iter-2 H2): p_value must come from a
+        real two-sided z-test on (ate, ate_std), not the hardcoded
+        ``0.001 if abs(ate) > 1.96 * ate_std else 0.15`` sentinel pair.
+
+        Anti-mocking: hardcoded p-values are placeholder evidence; downstream
+        code treats p_value < 0.05 as a real statistical signal.
+        """
+        node = EstimationNode()
+        graph: CausalGraph = {
+            "nodes": ["hcp_engagement_level", "patient_conversion_rate", "geographic_region"],
+            "edges": [
+                ("geographic_region", "hcp_engagement_level"),
+                ("geographic_region", "patient_conversion_rate"),
+                ("hcp_engagement_level", "patient_conversion_rate"),
+            ],
+            "treatment_nodes": ["hcp_engagement_level"],
+            "outcome_nodes": ["patient_conversion_rate"],
+            "adjustment_sets": [["geographic_region"]],
+            "dag_dot": "...",
+            "confidence": 0.85,
+        }
+        state: CausalImpactState = {
+            "query": "test query",
+            "query_id": "test-f006-p-value-real",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
+            "causal_graph": graph,
+            "parameters": {"method": "CausalForestDML"},
+            "status": "pending",
+            "errors": [],
+            "warnings": [],
+        }
+        result = await node.execute(state)
+        if result.get("status") == "failed":
+            return  # fail-closed path acceptable
+        est = result["estimation_result"]
+        p_value = est.get("p_value")
+        # Sentinel pair: 0.001 or 0.15 was the previous hardcoded value pair.
+        # A real z-test produces a continuous p-value, so it should NOT be
+        # exactly one of those two sentinels for non-trivial data.
+        assert p_value != 0.001 and p_value != 0.15, (
+            f"F-006 regression iter-3: p_value={p_value!r} is one of the "
+            "hardcoded sentinels (0.001, 0.15) — must be computed from real "
+            "estimator uncertainty (z-test on ate / ate_std)."
+        )
+
+    @pytest.mark.asyncio
+    async def test_f014_ci_bounds_required_for_refutation(self):
+        """F-014 iter-3 (#416, codex iter-2 H1): refutation must fail-closed
+        when EstimationResult is missing ate_ci_lower / ate_ci_upper.
+
+        The previous default of ``original_ate +/- 0.1`` fabricated
+        uncertainty that fed directly into data_subset and bootstrap
+        pass/review/block scoring. Same silent-evidence class as the iter-1
+        H4 finding on placebo p_value defaults.
+        """
+        node = RefutationNode()
+
+        import numpy as np
+        import pandas as pd
+
+        np.random.seed(123)
+        n = 100
+        data = pd.DataFrame(
+            {
+                "hcp_engagement_level": np.random.normal(0, 1, n),
+                "patient_conversion_rate": np.random.normal(0, 1, n),
+                "geographic_region": np.random.randint(0, 2, n).astype(float),
+            }
+        )
+
+        # EstimationResult deliberately missing CI bounds
+        estimation_result_no_ci = {
+            "method": "CausalForestDML",
+            "ate": 0.25,
+            "effect_size": "medium",
+            "statistical_significance": True,
+            "p_value": 0.01,
+            "sample_size": n,
+            "covariates_adjusted": ["geographic_region"],
+            "heterogeneity_detected": False,
+        }
+
+        state: CausalImpactState = {
+            "query": "test",
+            "query_id": "test-f014-no-ci",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "confounders": ["geographic_region"],
+            "data_source": "synthetic",
+            "estimation_result": estimation_result_no_ci,  # type: ignore[typeddict-item]
+            "estimation_data": data,
+            "status": "pending",
+        }
+        result = await node.execute(state)
+        assert result.get("refutation_error") is not None or result.get("status") == "failed", (
+            "F-014 regression iter-3: missing ate_ci_lower/ate_ci_upper did "
+            "NOT cause fail-closed. Refutation silently fabricated a +/- 0.1 "
+            "CI which feeds invented evidence into data_subset and bootstrap "
+            "scoring."
+        )
+
+    @pytest.mark.asyncio
     async def test_f006_all_estimators_fail_fails_closed(self):
         """F-006 iter-2 (#417, codex H1): when EstimatorSelector returns a
         success=False EstimatorResult (all configured estimators failed),
