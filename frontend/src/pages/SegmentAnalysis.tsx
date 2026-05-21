@@ -39,6 +39,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { KPICard } from '@/components/visualizations';
 import { QueryErrorState } from '@/components/ui/query-error-state';
 import { WarningBanner } from '@/components/ui/WarningBanner';
+import { EmptyState } from '@/components/ui/EmptyState';
 import {
   useSegmentHealth,
   useRunSegmentAnalysis,
@@ -46,231 +47,12 @@ import {
 } from '@/hooks/api';
 import { useQueryErrorToast, useMutationError } from '@/hooks/use-query-error';
 import type {
-  SegmentAnalysisResponse,
   CATEResult,
   SegmentProfile,
   PolicyRecommendation,
   UpliftMetrics,
 } from '@/types/segments';
 
-// =============================================================================
-// SAMPLE DATA FOR DEVELOPMENT
-// =============================================================================
-
-const sampleAnalysisResult: SegmentAnalysisResponse = {
-  analysis_id: 'seg_xyz789',
-  status: 'completed' as never,
-  question_type: 'effect_heterogeneity' as never,
-  cate_by_segment: {
-    region: [
-      {
-        segment_name: 'region',
-        segment_value: 'Northeast',
-        cate_estimate: 0.45,
-        cate_ci_lower: 0.32,
-        cate_ci_upper: 0.58,
-        sample_size: 1250,
-        statistical_significance: true,
-      },
-      {
-        segment_name: 'region',
-        segment_value: 'Southeast',
-        cate_estimate: 0.22,
-        cate_ci_lower: 0.08,
-        cate_ci_upper: 0.36,
-        sample_size: 980,
-        statistical_significance: true,
-      },
-      {
-        segment_name: 'region',
-        segment_value: 'Midwest',
-        cate_estimate: 0.35,
-        cate_ci_lower: 0.21,
-        cate_ci_upper: 0.49,
-        sample_size: 1100,
-        statistical_significance: true,
-      },
-      {
-        segment_name: 'region',
-        segment_value: 'West',
-        cate_estimate: 0.15,
-        cate_ci_lower: -0.02,
-        cate_ci_upper: 0.32,
-        sample_size: 850,
-        statistical_significance: false,
-      },
-    ],
-    specialty: [
-      {
-        segment_name: 'specialty',
-        segment_value: 'Cardiology',
-        cate_estimate: 0.52,
-        cate_ci_lower: 0.38,
-        cate_ci_upper: 0.66,
-        sample_size: 620,
-        statistical_significance: true,
-      },
-      {
-        segment_name: 'specialty',
-        segment_value: 'Oncology',
-        cate_estimate: 0.48,
-        cate_ci_lower: 0.33,
-        cate_ci_upper: 0.63,
-        sample_size: 540,
-        statistical_significance: true,
-      },
-      {
-        segment_name: 'specialty',
-        segment_value: 'Primary Care',
-        cate_estimate: 0.18,
-        cate_ci_lower: 0.05,
-        cate_ci_upper: 0.31,
-        sample_size: 1800,
-        statistical_significance: true,
-      },
-      {
-        segment_name: 'specialty',
-        segment_value: 'Dermatology',
-        cate_estimate: 0.08,
-        cate_ci_lower: -0.08,
-        cate_ci_upper: 0.24,
-        sample_size: 420,
-        statistical_significance: false,
-      },
-    ],
-  },
-  overall_ate: 0.28,
-  heterogeneity_score: 0.72,
-  feature_importance: {
-    specialty: 0.35,
-    region: 0.22,
-    practice_size: 0.18,
-    years_experience: 0.12,
-    patient_volume: 0.08,
-    digital_engagement: 0.05,
-  },
-  uplift_metrics: {
-    overall_auuc: 0.68,
-    overall_qini: 0.42,
-    targeting_efficiency: 0.75,
-    model_type_used: 'causal_forest',
-  },
-  high_responders: [
-    {
-      segment_id: 'seg_001',
-      responder_type: 'high' as never,
-      cate_estimate: 0.58,
-      defining_features: [
-        { specialty: 'Cardiology' },
-        { region: 'Northeast' },
-        { practice_size: 'large' },
-      ],
-      size: 245,
-      size_percentage: 5.8,
-      recommendation: 'Increase rep visit frequency to 2x per month',
-    },
-    {
-      segment_id: 'seg_002',
-      responder_type: 'high' as never,
-      cate_estimate: 0.52,
-      defining_features: [
-        { specialty: 'Oncology' },
-        { digital_engagement: 'high' },
-      ],
-      size: 180,
-      size_percentage: 4.3,
-      recommendation: 'Combine rep visits with digital outreach',
-    },
-    {
-      segment_id: 'seg_003',
-      responder_type: 'high' as never,
-      cate_estimate: 0.47,
-      defining_features: [
-        { region: 'Midwest' },
-        { years_experience: '10+' },
-      ],
-      size: 320,
-      size_percentage: 7.6,
-      recommendation: 'Focus on peer-reviewed clinical data',
-    },
-  ],
-  low_responders: [
-    {
-      segment_id: 'seg_010',
-      responder_type: 'low' as never,
-      cate_estimate: 0.05,
-      defining_features: [
-        { specialty: 'Dermatology' },
-        { digital_engagement: 'low' },
-      ],
-      size: 150,
-      size_percentage: 3.6,
-      recommendation: 'Reduce visit frequency, focus on digital channels',
-    },
-    {
-      segment_id: 'seg_011',
-      responder_type: 'low' as never,
-      cate_estimate: 0.08,
-      defining_features: [
-        { region: 'West' },
-        { practice_size: 'small' },
-      ],
-      size: 280,
-      size_percentage: 6.7,
-      recommendation: 'Shift resources to higher-response segments',
-    },
-  ],
-  policy_recommendations: [
-    {
-      segment: 'Cardiology - Northeast',
-      current_treatment_rate: 0.45,
-      recommended_treatment_rate: 0.75,
-      expected_incremental_outcome: 125,
-      confidence: 0.92,
-    },
-    {
-      segment: 'Oncology - High Digital',
-      current_treatment_rate: 0.38,
-      recommended_treatment_rate: 0.65,
-      expected_incremental_outcome: 98,
-      confidence: 0.88,
-    },
-    {
-      segment: 'Primary Care - Midwest',
-      current_treatment_rate: 0.55,
-      recommended_treatment_rate: 0.50,
-      expected_incremental_outcome: -15,
-      confidence: 0.85,
-    },
-    {
-      segment: 'Dermatology - All',
-      current_treatment_rate: 0.40,
-      recommended_treatment_rate: 0.20,
-      expected_incremental_outcome: -45,
-      confidence: 0.78,
-    },
-  ],
-  expected_total_lift: 163,
-  optimal_allocation_summary:
-    'Optimal targeting suggests reallocating 20% of resources from low-response segments (Dermatology, West/Small) to high-response segments (Cardiology-Northeast, Oncology-Digital) for an expected 163 incremental TRx lift.',
-  executive_summary:
-    'Analysis reveals significant treatment effect heterogeneity (score: 0.72) across segments. Cardiology and Oncology specialists show 2-3x higher response to rep visits compared to Primary Care. Geographic effects are secondary to specialty, with Northeast showing strongest response. Recommend targeted reallocation of sales effort.',
-  key_insights: [
-    'Cardiology specialists in Northeast show highest CATE (0.52-0.58)',
-    'Digital engagement amplifies treatment effect in Oncology segment',
-    'Dermatology segment shows minimal response - consider resource reallocation',
-    'Specialty is the strongest predictor of treatment response (35% importance)',
-  ],
-  libraries_used: ['econml', 'causalml'],
-  library_agreement_score: 0.89,
-  validation_passed: true,
-  estimation_latency_ms: 2500,
-  analysis_latency_ms: 1800,
-  total_latency_ms: 4500,
-  timestamp: new Date().toISOString(),
-  warnings: [],
-  confidence: 0.87,
-};
 
 // =============================================================================
 // CHART COLORS
@@ -553,13 +335,10 @@ export default function SegmentAnalysis() {
   useQueryErrorToast(healthError, { context: 'loading segment health' });
   useQueryErrorToast(policiesError, { context: 'loading policies' });
 
-  // Use API mutation result when available; otherwise fall back to the
-  // built-in example dataset. The sample data is documented as "DEV"
-  // demo content via the section banner below. (F-010-frontend ensures
-  // the API-reported `warnings[]` is rendered to the user regardless of
-  // which branch supplied `analysisResult`.)
-  const analysisResult = runAnalysis.data ?? sampleAnalysisResult;
-  const apiWarnings = runAnalysis.data?.warnings ?? [];
+  // F-002 fix: only render real API results. No fabricated
+  // `sampleAnalysisResult` fallback. F-010 surfaces API-reported warnings.
+  const analysisResult = runAnalysis.data;
+  const apiWarnings = analysisResult?.warnings ?? [];
 
   // Health status
   const isHealthy =
@@ -579,8 +358,11 @@ export default function SegmentAnalysis() {
     });
   };
 
-  // Handle export - creates JSON/CSV with segment data for CRM integration
+  // Handle export - creates JSON/CSV with segment data for CRM integration.
+  // No-op when there's no analysis result (export button is disabled in that
+  // state); guard defensively in case it's still clicked.
   const handleExport = () => {
+    if (!analysisResult) return;
     const report = {
       generatedAt: new Date().toISOString(),
       treatment: selectedTreatment,
@@ -636,7 +418,7 @@ export default function SegmentAnalysis() {
           {healthData?.analyses_24h !== undefined && (
             <Badge variant="outline">{healthData.analyses_24h} analyses today</Badge>
           )}
-          <Button variant="outline" onClick={handleExport}>
+          <Button variant="outline" onClick={handleExport} disabled={!analysisResult}>
             <Download className="h-4 w-4 mr-2" />
             Export
           </Button>
@@ -656,34 +438,36 @@ export default function SegmentAnalysis() {
         size="sm"
       />
 
-      {/* KPI Summary */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-        <KPICard
-          title="Overall ATE"
-          value={analysisResult.overall_ate?.toFixed(3) || 'N/A'}
-          description="Average Treatment Effect"
-        />
-        <KPICard
-          title="Heterogeneity"
-          value={`${((analysisResult.heterogeneity_score || 0) * 100).toFixed(0)}%`}
-          description="Effect variation across segments"
-        />
-        <KPICard
-          title="High Responders"
-          value={analysisResult.high_responders.length.toString()}
-          description="segments identified"
-        />
-        <KPICard
-          title="Expected Lift"
-          value={`+${analysisResult.expected_total_lift}`}
-          description="from optimal targeting"
-        />
-        <KPICard
-          title="Confidence"
-          value={`${(analysisResult.confidence * 100).toFixed(0)}%`}
-          description="analysis reliability"
-        />
-      </div>
+      {/* KPI Summary — rendered only when a real analysis result is loaded (F-002). */}
+      {analysisResult && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+          <KPICard
+            title="Overall ATE"
+            value={analysisResult.overall_ate?.toFixed(3) || 'N/A'}
+            description="Average Treatment Effect"
+          />
+          <KPICard
+            title="Heterogeneity"
+            value={`${((analysisResult.heterogeneity_score || 0) * 100).toFixed(0)}%`}
+            description="Effect variation across segments"
+          />
+          <KPICard
+            title="High Responders"
+            value={analysisResult.high_responders.length.toString()}
+            description="segments identified"
+          />
+          <KPICard
+            title="Expected Lift"
+            value={`+${analysisResult.expected_total_lift}`}
+            description="from optimal targeting"
+          />
+          <KPICard
+            title="Confidence"
+            value={`${(analysisResult.confidence * 100).toFixed(0)}%`}
+            description="analysis reliability"
+          />
+        </div>
+      )}
 
       {/* Configuration Panel */}
       <Card>
@@ -743,7 +527,14 @@ export default function SegmentAnalysis() {
         </CardContent>
       </Card>
 
-      {/* Main Content Tabs */}
+      {/* Main Content Tabs — only rendered when API has returned a result.
+          When `analysisResult` is undefined, show empty state below. */}
+      {!analysisResult ? (
+        <EmptyState
+          title="No segment analysis available"
+          description="Configure parameters above and click Run Analysis to estimate CATE by segment, identify responders, and surface policy recommendations."
+        />
+      ) : (
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="grid w-full grid-cols-5">
           <TabsTrigger value="cate">CATE by Segment</TabsTrigger>
@@ -1010,6 +801,7 @@ export default function SegmentAnalysis() {
           </Card>
         </TabsContent>
       </Tabs>
+      )}
     </div>
   );
 }

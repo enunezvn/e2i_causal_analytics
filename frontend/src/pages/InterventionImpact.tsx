@@ -153,10 +153,9 @@ const INTERVENTIONS: Intervention[] = [
 ];
 
 // F-002 fix: SAMPLE_* analysis results formerly inlined here have been
-// removed from production paths. The impact / treatment-effect / segment
-// surfaces source from API hooks; absence renders empty states. Fixture
-// data has been moved to `src/pages/__fixtures__/interventionImpact.ts`
-// (test/Storybook only).
+// DELETED. The impact / treatment-effect / segment surfaces source from
+// API hooks; absence renders empty states. No fabricated values reachable
+// from production rendering paths.
 
 const IMPACT_DATA: ImpactData[] = [];
 const TREATMENT_EFFECTS: TreatmentEffect[] = [];

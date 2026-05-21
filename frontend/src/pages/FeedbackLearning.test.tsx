@@ -48,6 +48,42 @@ function createWrapper() {
   );
 }
 
+describe('FeedbackLearning — F-002 empty state', () => {
+  it('does not render fabricated SAMPLE_PATTERNS / SAMPLE_UPDATES when API empty', () => {
+    (useFeedbackHealth as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { agent_available: true, cycles_24h: 0 },
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+    (usePatterns as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { patterns: [] },
+      isLoading: false,
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+    (useKnowledgeUpdates as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { updates: [] },
+      isLoading: false,
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+    (useQuickLearningCycle as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: vi.fn(),
+      isPending: false,
+    });
+    (useApplyUpdate as ReturnType<typeof vi.fn>).mockReturnValue({ mutate: vi.fn(), isPending: false });
+    (useRollbackUpdate as ReturnType<typeof vi.fn>).mockReturnValue({ mutate: vi.fn(), isPending: false });
+
+    render(<FeedbackLearning />, { wrapper: createWrapper() });
+
+    // Former SAMPLE_PATTERNS descriptions must not appear in DOM.
+    expect(
+      screen.queryByText(/Causal Impact agent showing increased latency during peak hours/),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Refine causal impact explanation template/),
+    ).not.toBeInTheDocument();
+  });
+
+});
+
 describe('FeedbackLearning — warnings rendering (F-010-frontend)', () => {
   beforeEach(() => {
     vi.clearAllMocks();

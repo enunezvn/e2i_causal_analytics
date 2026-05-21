@@ -49,6 +49,36 @@ function createWrapper() {
   );
 }
 
+describe('SegmentAnalysis — F-002 empty state + F-010 warnings', () => {
+  it('renders empty state when no analysis result (F-002)', () => {
+    (useSegmentHealth as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { agent_available: true, econml_available: true, causalml_available: true, analyses_24h: 0 },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+      isRefetching: false,
+    });
+    (usePolicies as ReturnType<typeof vi.fn>).mockReturnValue({ data: { policies: [] }, error: null });
+    (useRunSegmentAnalysis as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      mutate: vi.fn(),
+      isPending: false,
+      error: null,
+    });
+
+    render(<SegmentAnalysis />, { wrapper: createWrapper() });
+
+    expect(
+      screen.getByText(/No segment analysis available/),
+    ).toBeInTheDocument();
+    // Former sampleAnalysisResult values must not be in the DOM.
+    expect(screen.queryByText('Cardiology')).not.toBeInTheDocument();
+    expect(screen.queryByText('Northeast')).not.toBeInTheDocument();
+    expect(screen.queryByText('0.28')).not.toBeInTheDocument();
+  });
+
+});
+
 describe('SegmentAnalysis — warnings rendering (F-010-frontend)', () => {
   beforeEach(() => {
     vi.clearAllMocks();

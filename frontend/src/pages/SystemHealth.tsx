@@ -86,10 +86,10 @@ interface ModelHealth {
 // =============================================================================
 // CONSTANTS
 // =============================================================================
-// F-002 fix: SAMPLE_* fixtures formerly inlined here have been moved to
-// `src/pages/__fixtures__/systemHealth.ts` so they cannot be reached from
-// production rendering paths. The page now surfaces API data only; when
-// the API hasn't returned, the section renders empty states.
+// F-002 fix: SAMPLE_* fixtures formerly inlined here have been DELETED.
+// The page surfaces API data only; when the API hasn't returned, the
+// section renders empty states. No fabricated values reachable from
+// production rendering paths.
 
 // Grade color mapping
 const GRADE_COLORS: Record<HealthGrade | string, string> = {

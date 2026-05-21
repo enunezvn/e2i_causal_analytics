@@ -42,6 +42,36 @@ function createWrapper() {
   );
 }
 
+describe('GapAnalysis — F-002 empty state', () => {
+  it('renders empty state when no opportunities loaded (F-002)', () => {
+    (useOpportunities as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { opportunities: [], total_addressable_value: 0, quick_wins_count: 0, strategic_bets_count: 0 },
+      isLoading: false,
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+    (useGapHealth as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { agent_available: true, analyses_24h: 0 },
+      isLoading: false,
+    });
+    (useRunGapAnalysis as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      mutate: vi.fn(),
+      isPending: false,
+      error: null,
+    });
+
+    render(<GapAnalysis />, { wrapper: createWrapper() });
+
+    expect(
+      screen.getByText(/No gap opportunities available/),
+    ).toBeInTheDocument();
+    // Former SAMPLE_OPPORTUNITIES strings must not appear.
+    expect(screen.queryByText(/Add 2 field reps/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Northeast/)).not.toBeInTheDocument();
+  });
+
+});
+
 describe('GapAnalysis — warnings rendering (F-010-frontend)', () => {
   beforeEach(() => {
     vi.clearAllMocks();

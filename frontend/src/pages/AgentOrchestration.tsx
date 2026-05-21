@@ -78,11 +78,10 @@ interface OrchestrationStats {
 // =============================================================================
 // DEFAULTS
 // =============================================================================
-// F-002 fix: ACTIVITIES formerly inlined here has been removed
-// from production rendering. Activities source from a future API endpoint;
-// in the meantime the page renders an explicit empty state. Fixture data
-// has been moved to `src/pages/__fixtures__/agentOrchestration.ts` for
-// test and Storybook use.
+// F-002 fix: SAMPLE_ACTIVITIES formerly inlined here has been DELETED.
+// Activities source from a future API endpoint; in the meantime the page
+// renders an explicit empty state. No fabricated values reachable from
+// production rendering paths.
 
 const ACTIVITIES: AgentActivity[] = [];
 

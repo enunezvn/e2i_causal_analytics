@@ -51,15 +51,12 @@ import {
 } from '@/components/ui/select';
 import { KPICard, StatusBadge } from '@/components/visualizations';
 import { WarningBanner } from '@/components/ui/WarningBanner';
+import { EmptyState } from '@/components/ui/EmptyState';
 import {
   useOpportunities,
   useGapHealth,
   useRunGapAnalysis,
 } from '@/hooks/api';
-import type {
-  PrioritizedOpportunity,
-  ImplementationDifficulty,
-} from '@/types/gaps';
 
 // =============================================================================
 // CONSTANTS
@@ -110,154 +107,6 @@ function getDifficultyBadge(difficulty: string) {
     </Badge>
   );
 }
-
-// =============================================================================
-// SAMPLE DATA (fallback when API unavailable)
-// =============================================================================
-
-const SAMPLE_OPPORTUNITIES: PrioritizedOpportunity[] = [
-  {
-    rank: 1,
-    gap: {
-      gap_id: 'gap_001',
-      metric: 'TRx',
-      segment: 'region',
-      segment_value: 'Northeast',
-      current_value: 4200,
-      target_value: 5500,
-      gap_size: 1300,
-      gap_percentage: 23.6,
-      gap_type: 'vs_target',
-    },
-    roi_estimate: {
-      gap_id: 'gap_001',
-      estimated_revenue_impact: 2500000,
-      estimated_cost_to_close: 350000,
-      expected_roi: 7.1,
-      risk_adjusted_roi: 5.2,
-      payback_period_months: 4,
-      attribution_level: 'high',
-      attribution_rate: 0.85,
-      confidence: 0.92,
-    },
-    recommended_action: 'Increase rep coverage in underperforming territories',
-    implementation_difficulty: 'low' as ImplementationDifficulty,
-    time_to_impact: '2-3 months',
-  },
-  {
-    rank: 2,
-    gap: {
-      gap_id: 'gap_002',
-      metric: 'Market Share',
-      segment: 'specialty',
-      segment_value: 'Oncology',
-      current_value: 18.5,
-      target_value: 25.0,
-      gap_size: 6.5,
-      gap_percentage: 26.0,
-      gap_type: 'vs_benchmark',
-    },
-    roi_estimate: {
-      gap_id: 'gap_002',
-      estimated_revenue_impact: 4200000,
-      estimated_cost_to_close: 850000,
-      expected_roi: 4.9,
-      risk_adjusted_roi: 3.8,
-      payback_period_months: 6,
-      attribution_level: 'medium',
-      attribution_rate: 0.72,
-      confidence: 0.85,
-    },
-    recommended_action: 'Launch targeted speaker program for key oncologists',
-    implementation_difficulty: 'medium' as ImplementationDifficulty,
-    time_to_impact: '4-6 months',
-  },
-  {
-    rank: 3,
-    gap: {
-      gap_id: 'gap_003',
-      metric: 'NRx',
-      segment: 'account_type',
-      segment_value: 'Academic Medical Centers',
-      current_value: 890,
-      target_value: 1400,
-      gap_size: 510,
-      gap_percentage: 36.4,
-      gap_type: 'vs_potential',
-    },
-    roi_estimate: {
-      gap_id: 'gap_003',
-      estimated_revenue_impact: 1800000,
-      estimated_cost_to_close: 420000,
-      expected_roi: 4.3,
-      risk_adjusted_roi: 3.2,
-      payback_period_months: 5,
-      attribution_level: 'medium',
-      attribution_rate: 0.68,
-      confidence: 0.78,
-    },
-    recommended_action: 'Establish medical liaison partnerships at top AMCs',
-    implementation_difficulty: 'medium' as ImplementationDifficulty,
-    time_to_impact: '3-5 months',
-  },
-  {
-    rank: 4,
-    gap: {
-      gap_id: 'gap_004',
-      metric: 'Conversion Rate',
-      segment: 'channel',
-      segment_value: 'Digital',
-      current_value: 12.3,
-      target_value: 18.0,
-      gap_size: 5.7,
-      gap_percentage: 31.7,
-      gap_type: 'vs_benchmark',
-    },
-    roi_estimate: {
-      gap_id: 'gap_004',
-      estimated_revenue_impact: 3100000,
-      estimated_cost_to_close: 1200000,
-      expected_roi: 2.6,
-      risk_adjusted_roi: 2.1,
-      payback_period_months: 9,
-      attribution_level: 'low',
-      attribution_rate: 0.55,
-      confidence: 0.72,
-    },
-    recommended_action: 'Implement AI-powered HCP engagement platform',
-    implementation_difficulty: 'high' as ImplementationDifficulty,
-    time_to_impact: '6-9 months',
-  },
-  {
-    rank: 5,
-    gap: {
-      gap_id: 'gap_005',
-      metric: 'TRx',
-      segment: 'region',
-      segment_value: 'West',
-      current_value: 3800,
-      target_value: 4800,
-      gap_size: 1000,
-      gap_percentage: 20.8,
-      gap_type: 'vs_target',
-    },
-    roi_estimate: {
-      gap_id: 'gap_005',
-      estimated_revenue_impact: 1950000,
-      estimated_cost_to_close: 280000,
-      expected_roi: 7.0,
-      risk_adjusted_roi: 5.4,
-      payback_period_months: 3,
-      attribution_level: 'high',
-      attribution_rate: 0.88,
-      confidence: 0.91,
-    },
-    recommended_action: 'Add 2 field reps to high-potential territories',
-    implementation_difficulty: 'low' as ImplementationDifficulty,
-    time_to_impact: '1-2 months',
-  },
-];
-
 // =============================================================================
 // COMPONENT
 // =============================================================================
@@ -276,11 +125,12 @@ function GapAnalysis() {
   const { data: healthData, isLoading: _healthLoading } = useGapHealth();
   const runGapAnalysisMutation = useRunGapAnalysis();
 
-  // Use sample data as fallback
-  const opportunities = opportunitiesData?.opportunities || SAMPLE_OPPORTUNITIES;
-  const totalAddressableValue = opportunitiesData?.total_addressable_value || 13550000;
-  const quickWinsCount = opportunitiesData?.quick_wins_count || 2;
-  const strategicBetsCount = opportunitiesData?.strategic_bets_count || 1;
+  // F-002 fix: no fabricated `SAMPLE_OPPORTUNITIES` fallback. Data comes
+  // strictly from API; absence renders empty state below.
+  const opportunities = opportunitiesData?.opportunities ?? [];
+  const totalAddressableValue = opportunitiesData?.total_addressable_value ?? 0;
+  const quickWinsCount = opportunitiesData?.quick_wins_count ?? 0;
+  const strategicBetsCount = opportunitiesData?.strategic_bets_count ?? 0;
 
   // F-010: surface backend-reported warnings from the analysis mutation
   // (the opportunities-list endpoint does not currently return warnings —
@@ -508,7 +358,13 @@ function GapAnalysis() {
         />
       </div>
 
-      {/* Tabs */}
+      {/* Tabs — only show when opportunities are loaded (F-002). */}
+      {opportunities.length === 0 && !opportunitiesLoading ? (
+        <EmptyState
+          title="No gap opportunities available"
+          description="Click Run Analysis to identify ROI-prioritized performance gaps for the selected brand."
+        />
+      ) : (
       <Tabs defaultValue="opportunities" className="space-y-4">
         <TabsList>
           <TabsTrigger value="opportunities" className="flex items-center gap-2">
@@ -763,6 +619,7 @@ function GapAnalysis() {
           </Card>
         </TabsContent>
       </Tabs>
+      )}
     </div>
   );
 }
