@@ -14,9 +14,6 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
 import {
   Server,
-  Database,
-  HardDrive,
-  Cpu,
   Activity,
   RefreshCw,
   AlertCircle,
@@ -55,11 +52,11 @@ import {
 import { AlertStatus } from '@/types/monitoring';
 import type { AlertItem } from '@/types/monitoring';
 import { HealthGrade } from '@/types/health-score';
-import type { AgentHealth, PipelineHealth as PipelineHealthType } from '@/types/health-score';
-import { PipelineStatus } from '@/types/health-score';
+import type { AgentHealth } from '@/types/health-score';
 import { AlertList } from '@/components/visualizations/dashboard/AlertCard';
 import { StatusBadge, StatusDot } from '@/components/visualizations/dashboard/StatusBadge';
 import { ProgressRing } from '@/components/visualizations/dashboard/ProgressRing';
+import { EmptyState } from '@/components/ui/EmptyState';
 import type { AlertSeverity } from '@/components/visualizations/dashboard/AlertCard';
 import type { StatusType } from '@/components/visualizations/dashboard/StatusBadge';
 
@@ -87,49 +84,12 @@ interface ModelHealth {
 }
 
 // =============================================================================
-// SAMPLE DATA
+// CONSTANTS
 // =============================================================================
-
-const SAMPLE_SERVICES: ServiceStatus[] = [
-  { name: 'API Gateway', status: 'healthy', latencyMs: 45, lastCheck: new Date(), icon: Server },
-  { name: 'PostgreSQL', status: 'healthy', latencyMs: 12, lastCheck: new Date(), icon: Database },
-  { name: 'Redis Cache', status: 'healthy', latencyMs: 3, lastCheck: new Date(), icon: HardDrive },
-  { name: 'FalkorDB', status: 'healthy', latencyMs: 28, lastCheck: new Date(), icon: Activity },
-  { name: 'BentoML', status: 'healthy', latencyMs: 156, lastCheck: new Date(), icon: Cpu },
-];
-
-const SAMPLE_MODELS: ModelHealth[] = [
-  {
-    modelId: 'propensity_v2.1.0',
-    name: 'Propensity Model',
-    healthScore: 92,
-    status: 'healthy',
-    driftScore: 0.15,
-    activeAlerts: 0,
-    lastRetrained: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
-    performanceTrend: 'stable',
-  },
-  {
-    modelId: 'churn_v1.5.2',
-    name: 'Churn Prediction',
-    healthScore: 78,
-    status: 'warning',
-    driftScore: 0.42,
-    activeAlerts: 2,
-    lastRetrained: new Date(Date.now() - 21 * 24 * 60 * 60 * 1000),
-    performanceTrend: 'degrading',
-  },
-  {
-    modelId: 'conversion_v3.0.1',
-    name: 'Conversion Model',
-    healthScore: 88,
-    status: 'healthy',
-    driftScore: 0.22,
-    activeAlerts: 1,
-    lastRetrained: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000),
-    performanceTrend: 'improving',
-  },
-];
+// F-002 fix: SAMPLE_* fixtures formerly inlined here have been moved to
+// `src/pages/__fixtures__/systemHealth.ts` so they cannot be reached from
+// production rendering paths. The page now surfaces API data only; when
+// the API hasn't returned, the section renders empty states.
 
 // Grade color mapping
 const GRADE_COLORS: Record<HealthGrade | string, string> = {
@@ -148,41 +108,6 @@ const TIER_NAMES: Record<number, string> = {
   4: 'ML Predictions',
   5: 'Learning',
 };
-
-// Sample history data for fallback
-const SAMPLE_HISTORY = [
-  { timestamp: new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString(), overall_health_score: 85, health_grade: 'B' },
-  { timestamp: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(), overall_health_score: 82, health_grade: 'B' },
-  { timestamp: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString(), overall_health_score: 88, health_grade: 'B' },
-  { timestamp: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(), overall_health_score: 91, health_grade: 'A' },
-  { timestamp: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(), overall_health_score: 89, health_grade: 'B' },
-  { timestamp: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString(), overall_health_score: 92, health_grade: 'A' },
-  { timestamp: new Date().toISOString(), overall_health_score: 94, health_grade: 'A' },
-];
-
-// Sample agent health data
-const SAMPLE_AGENT_HEALTH: AgentHealth[] = [
-  { agent_name: 'Orchestrator', tier: 1, available: true, avg_latency_ms: 120, success_rate: 0.98, invocations_24h: 245 },
-  { agent_name: 'ToolComposer', tier: 1, available: true, avg_latency_ms: 85, success_rate: 0.99, invocations_24h: 180 },
-  { agent_name: 'CausalImpact', tier: 2, available: true, avg_latency_ms: 450, success_rate: 0.95, invocations_24h: 67 },
-  { agent_name: 'GapAnalyzer', tier: 2, available: true, avg_latency_ms: 320, success_rate: 0.97, invocations_24h: 89 },
-  { agent_name: 'HeterogeneousOptimizer', tier: 2, available: true, avg_latency_ms: 380, success_rate: 0.94, invocations_24h: 45 },
-  { agent_name: 'DriftMonitor', tier: 3, available: true, avg_latency_ms: 200, success_rate: 0.99, invocations_24h: 156 },
-  { agent_name: 'ExperimentDesigner', tier: 3, available: true, avg_latency_ms: 280, success_rate: 0.96, invocations_24h: 34 },
-  { agent_name: 'HealthScore', tier: 3, available: true, avg_latency_ms: 150, success_rate: 0.99, invocations_24h: 312 },
-  { agent_name: 'PredictionSynthesizer', tier: 4, available: true, avg_latency_ms: 520, success_rate: 0.97, invocations_24h: 23 },
-  { agent_name: 'ResourceOptimizer', tier: 4, available: true, avg_latency_ms: 410, success_rate: 0.95, invocations_24h: 56 },
-  { agent_name: 'Explainer', tier: 5, available: true, avg_latency_ms: 680, success_rate: 0.93, invocations_24h: 112 },
-  { agent_name: 'FeedbackLearner', tier: 5, available: true, avg_latency_ms: 340, success_rate: 0.97, invocations_24h: 78 },
-];
-
-// Sample pipeline health data
-const SAMPLE_PIPELINE_HEALTH: PipelineHealthType[] = [
-  { pipeline_name: 'TRx Data Ingestion', last_run: new Date().toISOString(), last_success: new Date().toISOString(), rows_processed: 125000, freshness_hours: 2.5, status: PipelineStatus.HEALTHY },
-  { pipeline_name: 'Feature Store Sync', last_run: new Date().toISOString(), last_success: new Date().toISOString(), rows_processed: 45000, freshness_hours: 1.2, status: PipelineStatus.HEALTHY },
-  { pipeline_name: 'Model Retraining', last_run: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(), last_success: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(), rows_processed: 8500, freshness_hours: 24, status: PipelineStatus.STALE },
-  { pipeline_name: 'Causal Graph Update', last_run: new Date().toISOString(), last_success: new Date().toISOString(), rows_processed: 12000, freshness_hours: 4.5, status: PipelineStatus.HEALTHY },
-];
 
 // =============================================================================
 // HELPER FUNCTIONS
@@ -268,16 +193,18 @@ function SystemHealth() {
   const { data: pipelineHealthData } = usePipelineHealth({ refetchInterval: 60000 });
   const { data: healthHistoryData } = useHealthHistory(20, { refetchInterval: 120000 });
 
-  // In production, fetch from API. Using sample data for now.
-  const services = SAMPLE_SERVICES;
-  const models = SAMPLE_MODELS;
+  // F-002 fix: services + models surfaces have no API hook yet, so the page
+  // renders explicit empty states (NOT fabricated SAMPLE_ data). Once the
+  // service-status / model-health endpoints exist, wire them here.
+  const services: ServiceStatus[] = [];
+  const models: ModelHealth[] = [];
 
-  // Use API data or fallback to samples
-  const healthScore = quickHealthData?.overall_health_score ?? 92;
-  const healthGrade = quickHealthData?.health_grade ?? HealthGrade.A;
-  const agents = agentHealthData?.agents ?? SAMPLE_AGENT_HEALTH;
-  const pipelines = pipelineHealthData?.pipelines ?? SAMPLE_PIPELINE_HEALTH;
-  const healthHistory = healthHistoryData?.checks ?? SAMPLE_HISTORY;
+  // Use API data when present; otherwise render empty/neutral values.
+  const healthScore = quickHealthData?.overall_health_score ?? null;
+  const healthGrade = quickHealthData?.health_grade ?? null;
+  const agents = agentHealthData?.agents ?? [];
+  const pipelines = pipelineHealthData?.pipelines ?? [];
+  const healthHistory = healthHistoryData?.checks ?? [];
   const healthTrend = healthHistoryData?.trend ?? 'stable';
 
   // Group agents by tier
@@ -333,7 +260,9 @@ function SystemHealth() {
   const healthStats = useMemo(() => {
     const healthyServices = services.filter(s => s.status === 'healthy').length;
     const totalServices = services.length;
-    const avgLatency = services.reduce((sum, s) => sum + (s.latencyMs || 0), 0) / services.length;
+    const avgLatency = totalServices > 0
+      ? services.reduce((sum, s) => sum + (s.latencyMs || 0), 0) / totalServices
+      : 0;
 
     const healthyModels = models.filter(m => m.status === 'healthy').length;
     const warningModels = models.filter(m => m.status === 'warning').length;
@@ -342,7 +271,7 @@ function SystemHealth() {
     return {
       healthyServices,
       totalServices,
-      serviceHealth: (healthyServices / totalServices) * 100,
+      serviceHealth: totalServices > 0 ? (healthyServices / totalServices) * 100 : 0,
       avgLatency: Math.round(avgLatency),
       healthyModels,
       warningModels,
@@ -402,18 +331,28 @@ function SystemHealth() {
             <CardDescription>Overall Health</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="flex items-center gap-4">
-              <div className="text-4xl font-bold">{healthScore}</div>
-              <div className={`px-3 py-1 rounded-lg border text-xl font-bold ${GRADE_COLORS[healthGrade] || GRADE_COLORS[HealthGrade.C]}`}>
-                {healthGrade}
-              </div>
-            </div>
-            <div className="flex items-center gap-1 mt-2 text-sm text-[var(--color-muted-foreground)]">
-              {healthTrend === 'improving' && <TrendingUp className="h-4 w-4 text-emerald-500" />}
-              {healthTrend === 'declining' && <TrendingDown className="h-4 w-4 text-rose-500" />}
-              {healthTrend === 'stable' && <Minus className="h-4 w-4 text-slate-500" />}
-              {healthTrend.charAt(0).toUpperCase() + healthTrend.slice(1)}
-            </div>
+            {healthScore === null ? (
+              <p className="text-sm text-[var(--color-muted-foreground)]">
+                Awaiting health check…
+              </p>
+            ) : (
+              <>
+                <div className="flex items-center gap-4">
+                  <div className="text-4xl font-bold">{healthScore}</div>
+                  {healthGrade !== null && (
+                    <div className={`px-3 py-1 rounded-lg border text-xl font-bold ${GRADE_COLORS[healthGrade] || GRADE_COLORS[HealthGrade.C]}`}>
+                      {healthGrade}
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-center gap-1 mt-2 text-sm text-[var(--color-muted-foreground)]">
+                  {healthTrend === 'improving' && <TrendingUp className="h-4 w-4 text-emerald-500" />}
+                  {healthTrend === 'declining' && <TrendingDown className="h-4 w-4 text-rose-500" />}
+                  {healthTrend === 'stable' && <Minus className="h-4 w-4 text-slate-500" />}
+                  {healthTrend.charAt(0).toUpperCase() + healthTrend.slice(1)}
+                </div>
+              </>
+            )}
           </CardContent>
         </Card>
 
@@ -565,7 +504,13 @@ function SystemHealth() {
                 <CardDescription>Infrastructure components</CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
-                {services.map((service) => {
+                {services.length === 0 ? (
+                  <EmptyState
+                    title="No service status available"
+                    description="Service status endpoint is not yet wired. Status will appear here once available."
+                  />
+                ) : (
+                services.map((service) => {
                   const Icon = service.icon;
                   return (
                     <div
@@ -588,7 +533,7 @@ function SystemHealth() {
                       <StatusBadge status={mapHealthToStatus(service.status)} size="sm" />
                     </div>
                   );
-                })}
+                }))}
               </CardContent>
             </Card>
 
@@ -602,6 +547,12 @@ function SystemHealth() {
                 <CardDescription>ML model performance and drift status</CardDescription>
               </CardHeader>
               <CardContent>
+                {models.length === 0 ? (
+                  <EmptyState
+                    title="No model health data"
+                    description="Model health endpoint is not yet wired. Drift and trend will appear here once available."
+                  />
+                ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                   {models.map((model) => (
                     <div
@@ -648,6 +599,7 @@ function SystemHealth() {
                     </div>
                   ))}
                 </div>
+                )}
               </CardContent>
             </Card>
           </div>

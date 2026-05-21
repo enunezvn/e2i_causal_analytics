@@ -50,6 +50,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { KPICard, StatusBadge } from '@/components/visualizations';
+import { WarningBanner } from '@/components/ui/WarningBanner';
 import {
   useOpportunities,
   useGapHealth,
@@ -281,6 +282,11 @@ function GapAnalysis() {
   const quickWinsCount = opportunitiesData?.quick_wins_count || 2;
   const strategicBetsCount = opportunitiesData?.strategic_bets_count || 1;
 
+  // F-010: surface backend-reported warnings from the analysis mutation
+  // (the opportunities-list endpoint does not currently return warnings —
+  // only the analysis-run endpoint does).
+  const apiWarnings = runGapAnalysisMutation.data?.warnings ?? [];
+
   // Calculate metrics
   const metrics = useMemo(() => {
     const totalGaps = opportunities.length;
@@ -420,6 +426,14 @@ function GapAnalysis() {
           </Button>
         </div>
       </div>
+
+      {/* API-reported warnings (F-010) — surfaced prominently so users
+          see when the backend fell through to mock or degraded mode. */}
+      {apiWarnings.length > 0 && (
+        <div className="mb-6">
+          <WarningBanner messages={apiWarnings} />
+        </div>
+      )}
 
       {/* Service Health Banner */}
       {healthData && (

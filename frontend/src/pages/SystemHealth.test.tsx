@@ -94,38 +94,39 @@ describe('SystemHealth', () => {
     expect(screen.getByText(/Comprehensive system monitoring with health scores/)).toBeInTheDocument();
   });
 
-  it('displays service status section with 5 services', () => {
+  it('renders empty state for services when no API data (F-002)', () => {
     render(<SystemHealth />, { wrapper: createWrapper() });
 
     expect(screen.getByText('Service Status')).toBeInTheDocument();
-    expect(screen.getByText('API Gateway')).toBeInTheDocument();
-    expect(screen.getByText('PostgreSQL')).toBeInTheDocument();
-    expect(screen.getByText('Redis Cache')).toBeInTheDocument();
-    expect(screen.getByText('FalkorDB')).toBeInTheDocument();
-    expect(screen.getByText('BentoML')).toBeInTheDocument();
+    // F-002: services no longer fabricated. Empty state surfaced instead.
+    expect(
+      screen.getByText(/No service status available/),
+    ).toBeInTheDocument();
+    // Verify the former fabricated service names are NOT in the DOM.
+    expect(screen.queryByText('API Gateway')).not.toBeInTheDocument();
+    expect(screen.queryByText('PostgreSQL')).not.toBeInTheDocument();
+    expect(screen.queryByText('BentoML')).not.toBeInTheDocument();
   });
 
-  it('displays model health section with 3 models', () => {
+  it('renders empty state for model health when no API data (F-002)', () => {
     render(<SystemHealth />, { wrapper: createWrapper() });
 
     // "Model Health" appears in both overview card and section title
     const modelHealthTexts = screen.getAllByText('Model Health');
     expect(modelHealthTexts.length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('Propensity Model')).toBeInTheDocument();
-    expect(screen.getByText('Churn Prediction')).toBeInTheDocument();
-    expect(screen.getByText('Conversion Model')).toBeInTheDocument();
+    // F-002: models no longer fabricated.
+    expect(screen.getByText(/No model health data/)).toBeInTheDocument();
+    expect(screen.queryByText('Propensity Model')).not.toBeInTheDocument();
+    expect(screen.queryByText('Churn Prediction')).not.toBeInTheDocument();
+    expect(screen.queryByText('Conversion Model')).not.toBeInTheDocument();
   });
 
-  it('displays overview stat cards', () => {
+  it('displays overview stat cards with neutral defaults (F-002)', () => {
     render(<SystemHealth />, { wrapper: createWrapper() });
 
-    // Services card - shows X/Y format
+    // Services card - shows 0/0 when no API data
     expect(screen.getByText('Services')).toBeInTheDocument();
-    expect(screen.getByText('5/5')).toBeInTheDocument();
-
-    // Models card - shows X / Y format with sample data (2 healthy out of 3)
-    expect(screen.getByText('Models')).toBeInTheDocument();
-    expect(screen.getByText('2 / 3')).toBeInTheDocument();
+    expect(screen.getByText('0/0')).toBeInTheDocument();
 
     // Active Alerts card - appears in both overview and alerts tab
     const activeAlertsTexts = screen.getAllByText('Active Alerts');
@@ -207,39 +208,10 @@ describe('SystemHealth', () => {
     expect(screen.getByText('Service Status')).toBeInTheDocument();
   });
 
-  it('displays model performance trends', () => {
-    render(<SystemHealth />, { wrapper: createWrapper() });
-
-    // Check for trend indicators
-    expect(screen.getByText('stable')).toBeInTheDocument();
-    expect(screen.getByText('degrading')).toBeInTheDocument();
-    expect(screen.getByText('improving')).toBeInTheDocument();
-  });
-
-  it('shows drift scores for models', () => {
-    render(<SystemHealth />, { wrapper: createWrapper() });
-
-    // Drift label should be present for each model
-    const driftLabels = screen.getAllByText('Drift');
-    expect(driftLabels.length).toBe(3);
-  });
-
-  it('displays model health scores via ProgressRing', () => {
-    const { container } = render(<SystemHealth />, { wrapper: createWrapper() });
-
-    // Should have ProgressRing components with SVG circles
-    const progressRings = container.querySelectorAll('svg circle');
-    expect(progressRings.length).toBeGreaterThan(0);
-  });
-
-  it('shows infrastructure latency for services', () => {
-    render(<SystemHealth />, { wrapper: createWrapper() });
-
-    // Check for latency values (in ms format)
-    expect(screen.getByText('45ms')).toBeInTheDocument();
-    expect(screen.getByText('12ms')).toBeInTheDocument();
-    expect(screen.getByText('3ms')).toBeInTheDocument();
-  });
+  // F-002: removed assertions on fabricated SAMPLE_MODELS performance
+  // trends, drift scores, and SAMPLE_SERVICES latency values. The page
+  // now renders empty states for these sections when no API data is
+  // available, so these tests no longer have a meaningful target.
 
   it('displays empty alerts message when no active alerts', () => {
     (useAlerts as ReturnType<typeof vi.fn>).mockReturnValue({

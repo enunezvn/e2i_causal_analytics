@@ -44,6 +44,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { WarningBanner } from '@/components/ui/WarningBanner';
 import {
   useFeedbackHealth,
   usePatterns,
@@ -245,6 +246,10 @@ function getUpdateStatusBadgeVariant(status: UpdateStatus): 'default' | 'seconda
 function FeedbackLearning() {
   const [activeTab, setActiveTab] = useState('overview');
   const [isRefreshing, setIsRefreshing] = useState(false);
+  // F-010: hold the latest learning-cycle warnings so we can surface them
+  // to the user as a yellow banner. The mutation hook itself doesn't keep
+  // a long-lived response cache, so we mirror it into local state here.
+  const [cycleWarnings, setCycleWarnings] = useState<string[]>([]);
 
   // Fetch feedback health
   const {
@@ -330,10 +335,12 @@ function FeedbackLearning() {
     setIsRefreshing(false);
   }, [refetchHealth, refetchPatterns, refetchUpdates]);
 
-  // Run learning cycle
+  // Run learning cycle — capture API warnings so the page surfaces them
+  // (F-010-frontend).
   const handleRunCycle = useCallback(() => {
     runQuickCycle(undefined, {
-      onSuccess: () => {
+      onSuccess: (data) => {
+        setCycleWarnings(data?.warnings ?? []);
         handleRefresh();
       },
     });
@@ -388,6 +395,16 @@ function FeedbackLearning() {
           </Button>
         </div>
       </div>
+
+      {/* API-reported warnings from the most recent learning cycle (F-010). */}
+      {cycleWarnings.length > 0 && (
+        <div className="mb-6">
+          <WarningBanner
+            messages={cycleWarnings}
+            title="Learning cycle warnings"
+          />
+        </div>
+      )}
 
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-6 gap-4 mb-6">

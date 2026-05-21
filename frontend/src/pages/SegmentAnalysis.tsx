@@ -38,6 +38,7 @@ import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { KPICard } from '@/components/visualizations';
 import { QueryErrorState } from '@/components/ui/query-error-state';
+import { WarningBanner } from '@/components/ui/WarningBanner';
 import {
   useSegmentHealth,
   useRunSegmentAnalysis,
@@ -552,8 +553,13 @@ export default function SegmentAnalysis() {
   useQueryErrorToast(healthError, { context: 'loading segment health' });
   useQueryErrorToast(policiesError, { context: 'loading policies' });
 
-  // Use sample data for now (API may not be available)
-  const analysisResult = sampleAnalysisResult;
+  // Use API mutation result when available; otherwise fall back to the
+  // built-in example dataset. The sample data is documented as "DEV"
+  // demo content via the section banner below. (F-010-frontend ensures
+  // the API-reported `warnings[]` is rendered to the user regardless of
+  // which branch supplied `analysisResult`.)
+  const analysisResult = runAnalysis.data ?? sampleAnalysisResult;
+  const apiWarnings = runAnalysis.data?.warnings ?? [];
 
   // Health status
   const isHealthy =
@@ -636,6 +642,10 @@ export default function SegmentAnalysis() {
           </Button>
         </div>
       </div>
+
+      {/* API-reported warnings — surfaced prominently so users see when
+          the backend falls through to mock or degraded mode (F-010). */}
+      <WarningBanner messages={apiWarnings} />
 
       {/* Error States */}
       <QueryErrorState
