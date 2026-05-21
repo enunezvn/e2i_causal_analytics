@@ -2,13 +2,27 @@
 
 This module provides the base orchestrator for coordinating multi-library
 causal analysis pipelines per the Data Architecture & Integration documentation.
+
+The per-library executor classes (`LibraryExecutor` ABC, `NetworkXExecutor`,
+`DoWhyExecutor`, `EconMLExecutor`, `CausalMLExecutor`) live in the sibling
+``executors/`` package as of phase C-1 of GH #354. They are re-exported here
+for backward compatibility — existing call sites and tests that imported them
+from ``src.causal_engine.pipeline.orchestrator`` continue to work without
+modification. New code should prefer the canonical paths under
+``src.causal_engine.pipeline.executors``.
 """
 
 import logging
-import time
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, Optional, cast
 
+from .executors import (
+    CausalMLExecutor,
+    DoWhyExecutor,
+    EconMLExecutor,
+    LibraryExecutor,
+    NetworkXExecutor,
+)
 from .router import CausalLibrary, LibraryRouter, RoutingDecision
 from .state import (
     LibraryExecutionResult,
@@ -21,304 +35,17 @@ from .state import (
 
 logger = logging.getLogger(__name__)
 
-
-class LibraryExecutor(ABC):
-    """Abstract base class for library-specific executors."""
-
-    @property
-    @abstractmethod
-    def library(self) -> CausalLibrary:
-        """Return the library this executor handles."""
-        pass
-
-    @abstractmethod
-    async def execute(
-        self,
-        state: PipelineState,
-        config: PipelineConfig,
-    ) -> LibraryExecutionResult:
-        """Execute the library's analysis and return results.
-
-        Args:
-            state: Current pipeline state with input data
-            config: Pipeline configuration
-
-        Returns:
-            LibraryExecutionResult with success/failure and result data
-        """
-        pass
-
-    @abstractmethod
-    def validate_input(self, state: PipelineState) -> tuple[bool, str]:
-        """Validate that input state has required fields for this library.
-
-        Args:
-            state: Current pipeline state
-
-        Returns:
-            Tuple of (is_valid, error_message)
-        """
-        pass
-
-
-class NetworkXExecutor(LibraryExecutor):
-    """Executor for NetworkX graph analysis."""
-
-    @property
-    def library(self) -> CausalLibrary:
-        return CausalLibrary.NETWORKX
-
-    async def execute(
-        self,
-        state: PipelineState,
-        config: PipelineConfig,
-    ) -> LibraryExecutionResult:
-        """Execute NetworkX graph construction and analysis."""
-        start_time = time.time()
-        try:
-            # Placeholder implementation - actual graph analysis would go here
-            # In production, this would:
-            # 1. Build causal DAG from confounders/effect_modifiers
-            # 2. Calculate centrality metrics
-            # 3. Identify causal paths
-            nodes: List[Any] = []
-            edges: List[Dict[str, Any]] = []
-            result: Dict[str, Any] = {
-                "nodes": nodes,
-                "edges": edges,
-                "centrality": {},
-                "paths": [],
-            }
-
-            confounders = state.get("confounders")
-            if confounders:
-                nodes = list(confounders)
-                result["nodes"] = nodes
-            if state.get("treatment_var") and state.get("outcome_var"):
-                edges.append({"from": state["treatment_var"], "to": state["outcome_var"]})
-                nodes.extend([state["treatment_var"], state["outcome_var"]])
-                result["nodes"] = list(set(nodes))
-
-            latency_ms = int((time.time() - start_time) * 1000)
-            return LibraryExecutionResult(
-                library="networkx",
-                success=True,
-                latency_ms=latency_ms,
-                result=result,
-                error=None,
-                confidence=0.8,
-                warnings=[],
-            )
-        except Exception as e:
-            latency_ms = int((time.time() - start_time) * 1000)
-            logger.error(f"NetworkX execution failed: {e}")
-            return LibraryExecutionResult(
-                library="networkx",
-                success=False,
-                latency_ms=latency_ms,
-                result=None,
-                error=str(e),
-                confidence=0.0,
-                warnings=[],
-            )
-
-    def validate_input(self, state: PipelineState) -> tuple[bool, str]:
-        """Validate input for NetworkX analysis."""
-        if not state.get("treatment_var") and not state.get("confounders"):
-            return False, "NetworkX requires treatment_var or confounders"
-        return True, ""
-
-
-class DoWhyExecutor(LibraryExecutor):
-    """Executor for DoWhy causal inference."""
-
-    @property
-    def library(self) -> CausalLibrary:
-        return CausalLibrary.DOWHY
-
-    async def execute(
-        self,
-        state: PipelineState,
-        config: PipelineConfig,
-    ) -> LibraryExecutionResult:
-        """Execute DoWhy causal identification and estimation."""
-        start_time = time.time()
-        try:
-            # Placeholder implementation - actual DoWhy analysis would go here
-            # In production, this would:
-            # 1. Build causal model from graph structure
-            # 2. Identify causal effect
-            # 3. Estimate effect
-            # 4. Run refutation tests
-            result = {
-                "identified_estimand": "backdoor",
-                "causal_effect": 0.0,
-                "confidence_interval": [0.0, 0.0],
-                "refutation_results": {},
-            }
-
-            # Use graph from NetworkX if available
-            if state.get("causal_graph"):
-                result["graph_source"] = "networkx"
-
-            latency_ms = int((time.time() - start_time) * 1000)
-            return LibraryExecutionResult(
-                library="dowhy",
-                success=True,
-                latency_ms=latency_ms,
-                result=result,
-                error=None,
-                confidence=0.85,
-                warnings=[],
-            )
-        except Exception as e:
-            latency_ms = int((time.time() - start_time) * 1000)
-            logger.error(f"DoWhy execution failed: {e}")
-            return LibraryExecutionResult(
-                library="dowhy",
-                success=False,
-                latency_ms=latency_ms,
-                result=None,
-                error=str(e),
-                confidence=0.0,
-                warnings=[],
-            )
-
-    def validate_input(self, state: PipelineState) -> tuple[bool, str]:
-        """Validate input for DoWhy analysis."""
-        if not state.get("treatment_var"):
-            return False, "DoWhy requires treatment_var"
-        if not state.get("outcome_var"):
-            return False, "DoWhy requires outcome_var"
-        return True, ""
-
-
-class EconMLExecutor(LibraryExecutor):
-    """Executor for EconML heterogeneous treatment effects."""
-
-    @property
-    def library(self) -> CausalLibrary:
-        return CausalLibrary.ECONML
-
-    async def execute(
-        self,
-        state: PipelineState,
-        config: PipelineConfig,
-    ) -> LibraryExecutionResult:
-        """Execute EconML CATE estimation."""
-        start_time = time.time()
-        try:
-            # Placeholder implementation - actual EconML analysis would go here
-            # In production, this would:
-            # 1. Select appropriate CATE estimator (DML, CausalForest, etc.)
-            # 2. Fit model with treatment/outcome/confounders
-            # 3. Estimate heterogeneous effects by segment
-            result = {
-                "estimator": "CausalForestDML",
-                "ate": 0.0,
-                "cate_by_segment": {},
-                "heterogeneity_score": 0.0,
-            }
-
-            # Use validated effect from DoWhy if available
-            if state.get("causal_effect") is not None:
-                result["ate"] = state["causal_effect"]
-
-            latency_ms = int((time.time() - start_time) * 1000)
-            return LibraryExecutionResult(
-                library="econml",
-                success=True,
-                latency_ms=latency_ms,
-                result=result,
-                error=None,
-                confidence=0.82,
-                warnings=[],
-            )
-        except Exception as e:
-            latency_ms = int((time.time() - start_time) * 1000)
-            logger.error(f"EconML execution failed: {e}")
-            return LibraryExecutionResult(
-                library="econml",
-                success=False,
-                latency_ms=latency_ms,
-                result=None,
-                error=str(e),
-                confidence=0.0,
-                warnings=[],
-            )
-
-    def validate_input(self, state: PipelineState) -> tuple[bool, str]:
-        """Validate input for EconML analysis."""
-        if not state.get("treatment_var"):
-            return False, "EconML requires treatment_var"
-        if not state.get("outcome_var"):
-            return False, "EconML requires outcome_var"
-        return True, ""
-
-
-class CausalMLExecutor(LibraryExecutor):
-    """Executor for CausalML uplift modeling."""
-
-    @property
-    def library(self) -> CausalLibrary:
-        return CausalLibrary.CAUSALML
-
-    async def execute(
-        self,
-        state: PipelineState,
-        config: PipelineConfig,
-    ) -> LibraryExecutionResult:
-        """Execute CausalML uplift modeling."""
-        start_time = time.time()
-        try:
-            # Placeholder implementation - actual CausalML analysis would go here
-            # In production, this would:
-            # 1. Select uplift model (Random Forest, XGBoost, etc.)
-            # 2. Train on treatment/outcome data
-            # 3. Calculate uplift scores per segment
-            # 4. Generate targeting recommendations
-            result = {
-                "model": "UpliftRandomForest",
-                "auuc": 0.0,
-                "qini": 0.0,
-                "uplift_by_segment": {},
-                "targeting_recommendations": [],
-            }
-
-            # Use CATE from EconML if available for comparison
-            if state.get("cate_by_segment"):
-                result["econml_comparison"] = "available"
-
-            latency_ms = int((time.time() - start_time) * 1000)
-            return LibraryExecutionResult(
-                library="causalml",
-                success=True,
-                latency_ms=latency_ms,
-                result=result,
-                error=None,
-                confidence=0.78,
-                warnings=[],
-            )
-        except Exception as e:
-            latency_ms = int((time.time() - start_time) * 1000)
-            logger.error(f"CausalML execution failed: {e}")
-            return LibraryExecutionResult(
-                library="causalml",
-                success=False,
-                latency_ms=latency_ms,
-                result=None,
-                error=str(e),
-                confidence=0.0,
-                warnings=[],
-            )
-
-    def validate_input(self, state: PipelineState) -> tuple[bool, str]:
-        """Validate input for CausalML analysis."""
-        if not state.get("treatment_var"):
-            return False, "CausalML requires treatment_var"
-        if not state.get("outcome_var"):
-            return False, "CausalML requires outcome_var"
-        return True, ""
+# Re-export executor classes for backward compatibility with callers that
+# import them from this module (e.g. tests/unit/test_causal_engine/test_pipeline/
+# test_orchestrator.py and any external callers).
+__all__ = [
+    "LibraryExecutor",
+    "NetworkXExecutor",
+    "DoWhyExecutor",
+    "EconMLExecutor",
+    "CausalMLExecutor",
+    "PipelineOrchestrator",
+]
 
 
 class PipelineOrchestrator(ABC):
