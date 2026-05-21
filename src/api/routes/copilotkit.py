@@ -1395,7 +1395,15 @@ async def run_causal_analysis(
     """
     Run a causal impact analysis.
 
-    Attempts to use the orchestrator for real causal analysis, falls back to simulated results.
+    Delegates to the orchestrator for real causal analysis. If the orchestrator
+    is unavailable, raises, or returns an empty response, this function
+    fail-closes with a structured error envelope rather than fabricating
+    statistics. See GitHub issue #418 for context on the prior RNG-fallback bug.
+
+    A dev-mode placeholder path is available behind
+    ``E2I_ENABLE_SIMULATED_FALLBACK=1`` (defaults OFF). When enabled it returns
+    pinned zeros with ``data_source="dev_mock"`` — it never returns RNG values,
+    so even in dev mode the response is unambiguous about its provenance.
 
     Args:
         intervention: Type of intervention (e.g., "HCP Engagement", "Marketing Campaign")
@@ -1403,13 +1411,21 @@ async def run_causal_analysis(
         brand: Brand to analyze
 
     Returns:
-        Dictionary with causal analysis results
+        Dictionary with causal analysis results. On failure, returns an error
+        envelope ``{"success": False, "error": ..., "data_source": "unavailable", ...}``
+        suitable for CopilotKit chat surfaces to render to the user.
     """
     logger.info(f"[CopilotKit] Running causal analysis: {intervention} -> {target_kpi} for {brand}")
 
+    common_context = {
+        "intervention": intervention,
+        "target_kpi": target_kpi,
+        "brand": brand,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
     # Try to run through orchestrator for real causal analysis
     orchestrator = _get_orchestrator()
-    data_source = "orchestrator"
 
     if orchestrator:
         try:
@@ -1425,50 +1441,79 @@ async def run_causal_analysis(
                 }
             )
 
-            # Extract causal results if available
+            # Extract causal results if available. Three cases:
+            #   1) Orchestrator returned explicit causal_results dict → pass through.
+            #   2) Orchestrator returned ate/ci/p_value top-level → build dict from real fields.
+            #   3) Orchestrator returned response_text only → return interpretation
+            #      with results=None (F-001 iter-1 HIGH-2: no fabricated zero defaults).
             if result and result.get("response_text"):
+                causal_results = result.get("causal_results")
+                if causal_results is None:
+                    # Look for top-level real fields; only build dict if at
+                    # least one numeric field is actually present.
+                    has_real_fields = any(
+                        result.get(k) is not None for k in ("ate", "ci", "p_value", "significant")
+                    )
+                    if has_real_fields:
+                        causal_results = {
+                            "average_treatment_effect": result.get("ate"),
+                            "confidence_interval": result.get("ci"),
+                            "p_value": result.get("p_value"),
+                            "statistical_significance": result.get("significant"),
+                        }
+                    # else: causal_results stays None — interpretation-only response.
+
                 return {
-                    "intervention": intervention,
-                    "target_kpi": target_kpi,
-                    "brand": brand,
-                    "results": result.get(
-                        "causal_results",
-                        {
-                            "average_treatment_effect": result.get("ate", 0.0),
-                            "confidence_interval": result.get("ci", [0.0, 0.0]),
-                            "p_value": result.get("p_value", 0.0),
-                            "statistical_significance": result.get("significant", False),
-                        },
-                    ),
+                    **common_context,
+                    "results": causal_results,
                     "interpretation": result.get("response_text", ""),
-                    "data_source": data_source,
+                    "data_source": "orchestrator",
                     "agents_used": result.get("agents_dispatched", []),
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
                 }
 
-        except Exception as e:
-            logger.warning(f"Orchestrator causal analysis failed: {e}")
+            upstream_error = "Causal orchestrator returned an empty response (no response_text)"
+            logger.warning(f"[CopilotKit] {upstream_error}")
+        except Exception as e:  # noqa: BLE001 — broad catch is intentional; details surfaced below
+            upstream_error = f"Causal orchestrator failed: {type(e).__name__}: {e}"
+            logger.warning(f"[CopilotKit] {upstream_error}")
+    else:
+        upstream_error = "Causal orchestrator is not initialized"
+        logger.warning(f"[CopilotKit] {upstream_error}")
 
-    # Fallback to simulated results
-    import random
+    # Optional dev-mode placeholder path (default OFF). Returns pinned zeros
+    # with explicit data_source="dev_mock" so callers cannot confuse it for
+    # real data. NEVER call RNG primitives here (would re-introduce F-001).
+    if os.getenv("E2I_ENABLE_SIMULATED_FALLBACK", "0").lower() in ("1", "true", "yes"):
+        logger.warning(
+            "[CopilotKit] E2I_ENABLE_SIMULATED_FALLBACK enabled — returning dev_mock placeholder"
+        )
+        return {
+            **common_context,
+            "success": True,
+            "results": {
+                "average_treatment_effect": 0.0,
+                "confidence_interval": [0.0, 0.0],
+                "p_value": 0.0,
+                "statistical_significance": False,
+                "sample_size": 0,
+            },
+            "interpretation": (
+                "Dev-mode placeholder response. Real causal analysis is unavailable; "
+                "these values are pinned zeros and must not be used for decisions."
+            ),
+            "data_source": "dev_mock",
+            "upstream_error": upstream_error,
+        }
 
-    data_source = "simulated"
-    ate = random.uniform(0.05, 0.25)
-
+    # Default path: fail closed with a structured error envelope.
     return {
-        "intervention": intervention,
-        "target_kpi": target_kpi,
-        "brand": brand,
-        "results": {
-            "average_treatment_effect": round(ate, 3),
-            "confidence_interval": [round(ate - 0.05, 3), round(ate + 0.05, 3)],
-            "p_value": round(random.uniform(0.001, 0.05), 4),
-            "statistical_significance": True,
-            "sample_size": random.randint(500, 2000),
-        },
-        "interpretation": f"The {intervention} shows a statistically significant positive effect on {target_kpi}, with an estimated {round(ate * 100, 1)}% lift.",
-        "data_source": data_source,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        **common_context,
+        "success": False,
+        "error": (
+            "Causal analysis service is currently unavailable. Please try again later "
+            f"({upstream_error})."
+        ),
+        "data_source": "unavailable",
     }
 
 

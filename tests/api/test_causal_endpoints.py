@@ -385,12 +385,16 @@ class TestCausalHealthCheck:
 
 
 class TestCrossValidation:
-    """Tests for POST /causal/validate."""
+    """Tests for POST /causal/validate.
+
+    Per F-005 iter-1 HIGH-1: default path now fails-closed with 503; demo_mode=true
+    is required to exercise the placeholder code path.
+    """
 
     def test_cross_validation_success(self, cross_validation_request):
-        """Should run cross-library validation."""
+        """Should run cross-library validation (demo_mode=true)."""
         response = client.post(
-            "/api/causal/validate",
+            "/api/causal/validate?demo_mode=true",
             json=cross_validation_request,
         )
 
@@ -406,10 +410,10 @@ class TestCrossValidation:
         assert "recommendations" in data
 
     def test_cross_validation_agreement_threshold(self, cross_validation_request):
-        """Should check against agreement threshold."""
+        """Should check against agreement threshold (demo_mode=true)."""
         cross_validation_request["agreement_threshold"] = 0.9
         response = client.post(
-            "/api/causal/validate",
+            "/api/causal/validate?demo_mode=true",
             json=cross_validation_request,
         )
 
@@ -424,12 +428,16 @@ class TestCrossValidation:
 
 
 class TestSequentialPipeline:
-    """Tests for POST /causal/pipeline/sequential."""
+    """Tests for POST /causal/pipeline/sequential.
+
+    Per F-005 iter-1 HIGH-1: default path now fails-closed with 503; demo_mode=true
+    is required to exercise the placeholder code path.
+    """
 
     def test_sequential_pipeline_sync_success(self, sequential_pipeline_request):
-        """Should run sequential pipeline synchronously."""
+        """Should run sequential pipeline synchronously (demo_mode=true)."""
         response = client.post(
-            "/api/causal/pipeline/sequential",
+            "/api/causal/pipeline/sequential?demo_mode=true",
             json=sequential_pipeline_request,
         )
 
@@ -442,10 +450,10 @@ class TestSequentialPipeline:
         assert "consensus_effect" in data
 
     def test_sequential_pipeline_async_mode(self, sequential_pipeline_request):
-        """Should return pending status in async mode."""
+        """Should return pending status in async mode (demo_mode=true)."""
         response = client.post(
             "/api/causal/pipeline/sequential",
-            params={"async_mode": "true"},
+            params={"async_mode": "true", "demo_mode": "true"},
             json=sequential_pipeline_request,
         )
 
@@ -455,9 +463,9 @@ class TestSequentialPipeline:
         assert "pipeline_id" in data
 
     def test_sequential_pipeline_computes_consensus(self, sequential_pipeline_request):
-        """Should compute consensus effect from stages."""
+        """Should compute consensus effect from stages (demo_mode=true)."""
         response = client.post(
-            "/api/causal/pipeline/sequential",
+            "/api/causal/pipeline/sequential?demo_mode=true",
             json=sequential_pipeline_request,
         )
 
@@ -469,12 +477,16 @@ class TestSequentialPipeline:
 
 
 class TestParallelPipeline:
-    """Tests for POST /causal/pipeline/parallel."""
+    """Tests for POST /causal/pipeline/parallel.
+
+    Per F-005 iter-1 HIGH-1: default path now fails-closed with 503; demo_mode=true
+    is required to exercise the placeholder code path.
+    """
 
     def test_parallel_pipeline_success(self, parallel_pipeline_request):
-        """Should run parallel pipeline across libraries."""
+        """Should run parallel pipeline across libraries (demo_mode=true)."""
         response = client.post(
-            "/api/causal/pipeline/parallel",
+            "/api/causal/pipeline/parallel?demo_mode=true",
             json=parallel_pipeline_request,
         )
 
@@ -487,9 +499,9 @@ class TestParallelPipeline:
         assert "consensus_effect" in data
 
     def test_parallel_pipeline_consensus(self, parallel_pipeline_request):
-        """Should compute consensus from parallel results."""
+        """Should compute consensus from parallel results (demo_mode=true)."""
         response = client.post(
-            "/api/causal/pipeline/parallel",
+            "/api/causal/pipeline/parallel?demo_mode=true",
             json=parallel_pipeline_request,
         )
 
@@ -500,11 +512,11 @@ class TestParallelPipeline:
             assert data["consensus_method"] == "variance_weighted"
 
     def test_parallel_pipeline_with_timeout(self, parallel_pipeline_request):
-        """Should respect timeout configuration."""
+        """Should respect timeout configuration (demo_mode=true)."""
         # Note: timeout_seconds must be >= 30 per schema constraint
         parallel_pipeline_request["timeout_seconds"] = 30
         response = client.post(
-            "/api/causal/pipeline/parallel",
+            "/api/causal/pipeline/parallel?demo_mode=true",
             json=parallel_pipeline_request,
         )
 
@@ -516,11 +528,11 @@ class TestGetPipelineStatus:
     """Tests for GET /causal/pipeline/{pipeline_id}."""
 
     def test_get_pipeline_status_success(self, sequential_pipeline_request):
-        """Should return pipeline status from cache."""
+        """Should return pipeline status from cache (demo_mode=true to seed)."""
         # First create a pipeline to populate the cache
         response = client.post(
             "/api/causal/pipeline/sequential",
-            params={"async_mode": "true"},
+            params={"async_mode": "true", "demo_mode": "true"},
             json=sequential_pipeline_request,
         )
         pipeline_id = response.json()["pipeline_id"]
