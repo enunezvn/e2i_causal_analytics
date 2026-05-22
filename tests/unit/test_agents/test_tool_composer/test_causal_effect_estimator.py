@@ -124,7 +124,7 @@ class TestCausalEffectEstimatorRealWiring:
         """
         df = _build_real_dataframe()
         with patch(
-            "src.agents.tool_composer.tool_registrations.SequentialPipeline"
+            "src.agents.tool_composer.tool_registrations._DataAwareSequentialPipeline"
         ) as mock_pipeline_cls:
             mock_instance = mock_pipeline_cls.return_value
             mock_instance.execute = AsyncMock(
@@ -151,24 +151,24 @@ class TestCausalEffectEstimatorRealWiring:
             assert input_data.get("treatment_var") == "treatment"
             assert input_data.get("outcome_var") == "outcome"
             assert input_data.get("confounders") == ["confounder_a"]
-            # The DataFrame must be conveyed through state in a slot the
-            # data_resolver / Wave-1 executors find. Either via
-            # filters["estimation_data"] / filters["dataframe"] or via a
-            # top-level data_cache override. We accept any of the canonical
-            # paths the data_resolver supports.
+            # The DataFrame must be conveyed through state in slots that BOTH
+            # filter-reading executors find. Codex iter-0 HIGH closed:
+            # DoWhy reads `filters['estimation_data']`; CausalML reads
+            # `filters['dataframe']`. Both MUST be populated to the same df
+            # so each executor finds it under its canonical key (without
+            # this, EconML's separate `state['data_cache']` read is handled
+            # by the `_DataAwareSequentialPipeline` subclass — see
+            # `test_data_cache_seeded_for_econml_path` below).
             filters_dict = input_data.get("filters") or {}
-            # Truthiness check on a DataFrame raises (ambiguous truth value);
-            # explicit None-checks per key are the correct narrowing pattern.
-            df_seen: Optional[Any] = None
-            for key in ("estimation_data", "dataframe", "data"):
-                candidate = filters_dict.get(key)
-                if candidate is not None:
-                    df_seen = candidate
-                    break
-            assert df_seen is df, (
-                "The tool MUST route the caller's DataFrame into a "
-                "data_resolver-compatible slot of PipelineInput.filters; "
-                f"got filters keys={list(filters_dict.keys())!r}"
+            assert filters_dict.get("estimation_data") is df, (
+                "PipelineInput.filters['estimation_data'] must hold the "
+                "caller's DataFrame for DoWhy executor (executors/dowhy.py "
+                f"reads this key). Got keys={list(filters_dict.keys())!r}."
+            )
+            assert filters_dict.get("dataframe") is df, (
+                "PipelineInput.filters['dataframe'] must hold the caller's "
+                "DataFrame for CausalML executor (executors/causalml.py reads "
+                f"this key). Got keys={list(filters_dict.keys())!r}."
             )
 
             # The returned EffectEstimate's ATE matches the pipeline's
@@ -176,6 +176,68 @@ class TestCausalEffectEstimatorRealWiring:
             assert isinstance(result, EffectEstimate)
             assert result.ate == pytest.approx(0.42)
             assert result.method == "backdoor.linear_regression"
+
+    def test_data_cache_seeded_for_econml_path(self) -> None:
+        """The `_DataAwareSequentialPipeline` subclass MUST seed
+        `state['data_cache']['estimation_data']` so EconML's data read at
+        `executors/econml.py:156` (`state.get('data_cache')`) finds the
+        caller-supplied DataFrame.
+
+        Codex iter-0 HIGH closed: without this seeding, EconML always fails
+        closed and the consensus drops to a 3-library run (DoWhy + CausalML +
+        NetworkX-symbolic) instead of the C-6 4-library aggregation that C-7
+        is meant to unlock. The orchestrator's `_create_initial_state` only
+        copies `input_data['filters']` into state — `data_cache` is NOT a
+        field on PipelineInput, so we override `_create_initial_state` in the
+        subclass to attach it post-construction.
+        """
+        from src.agents.tool_composer.tool_registrations import (
+            _DataAwareSequentialPipeline,
+        )
+        from src.causal_engine.pipeline.router import (
+            CausalLibrary,
+            QuestionType,
+            RoutingDecision,
+        )
+
+        df = _build_real_dataframe()
+        pipeline = _DataAwareSequentialPipeline(dataframe=df)
+
+        # Construct a minimal PipelineInput + RoutingDecision (the inputs
+        # `_create_initial_state` expects).
+        pipeline_input: Dict[str, Any] = {
+            "query": "test",
+            "treatment_var": "treatment",
+            "outcome_var": "outcome",
+            "confounders": ["confounder_a"],
+            "effect_modifiers": None,
+            "data_source": "test",
+            "filters": {"estimation_data": df, "dataframe": df},
+        }
+        routing = RoutingDecision(
+            question_type=QuestionType.CAUSAL_RELATIONSHIP,
+            primary_library=CausalLibrary.DOWHY,
+            secondary_libraries=[CausalLibrary.ECONML, CausalLibrary.CAUSALML],
+            recommended_mode="sequential",
+            confidence=0.9,
+            rationale="test",
+        )
+
+        state = pipeline._create_initial_state(pipeline_input, routing)  # type: ignore[arg-type]
+
+        # The subclass MUST have attached data_cache so EconML's
+        # `state.get('data_cache')` finds the DataFrame.
+        data_cache = state.get("data_cache")  # type: ignore[call-overload]
+        assert isinstance(data_cache, dict), (
+            "_DataAwareSequentialPipeline must seed state['data_cache'] so "
+            "EconML's read path (executors/econml.py:156) finds the DataFrame; "
+            f"got data_cache={data_cache!r}"
+        )
+        assert data_cache.get("estimation_data") is df, (
+            "state['data_cache']['estimation_data'] must hold the caller's "
+            "DataFrame (the canonical key EconML reads). Got "
+            f"data_cache keys={list(data_cache.keys())!r}"
+        )
 
     def test_returned_ate_comes_from_consensus_effect_not_hardcoded(self) -> None:
         """Returned `EffectEstimate.ate` MUST equal `PipelineOutput.consensus_effect`.
@@ -189,7 +251,7 @@ class TestCausalEffectEstimatorRealWiring:
         df = _build_real_dataframe()
         for synthetic_pipeline_effect in [-0.5, 0.0, 0.07, 1.234, 5.0]:
             with patch(
-                "src.agents.tool_composer.tool_registrations.SequentialPipeline"
+                "src.agents.tool_composer.tool_registrations._DataAwareSequentialPipeline"
             ) as mock_pipeline_cls:
                 mock_instance = mock_pipeline_cls.return_value
                 mock_instance.execute = AsyncMock(
@@ -226,7 +288,7 @@ class TestCausalEffectEstimatorRealWiring:
         """
         df = _build_real_dataframe()
         with patch(
-            "src.agents.tool_composer.tool_registrations.SequentialPipeline"
+            "src.agents.tool_composer.tool_registrations._DataAwareSequentialPipeline"
         ) as mock_pipeline_cls:
             mock_instance = mock_pipeline_cls.return_value
             mock_instance.execute = AsyncMock(
@@ -292,7 +354,7 @@ class TestCausalEffectEstimatorFailClosed:
 
         df = _build_real_dataframe()
         with patch(
-            "src.agents.tool_composer.tool_registrations.SequentialPipeline"
+            "src.agents.tool_composer.tool_registrations._DataAwareSequentialPipeline"
         ) as mock_pipeline_cls:
             mock_instance = mock_pipeline_cls.return_value
             mock_instance.execute = AsyncMock(
@@ -313,7 +375,7 @@ class TestCausalEffectEstimatorFailClosed:
         """Pipeline returns status='failed' ⇒ raise (never return placeholder)."""
         df = _build_real_dataframe()
         with patch(
-            "src.agents.tool_composer.tool_registrations.SequentialPipeline"
+            "src.agents.tool_composer.tool_registrations._DataAwareSequentialPipeline"
         ) as mock_pipeline_cls:
             mock_instance = mock_pipeline_cls.return_value
             mock_instance.execute = AsyncMock(
@@ -342,7 +404,7 @@ class TestCausalEffectEstimatorFailClosed:
         """
         df = _build_real_dataframe()
         with patch(
-            "src.agents.tool_composer.tool_registrations.SequentialPipeline"
+            "src.agents.tool_composer.tool_registrations._DataAwareSequentialPipeline"
         ) as mock_pipeline_cls:
             mock_instance = mock_pipeline_cls.return_value
             mock_instance.execute = AsyncMock(
@@ -371,7 +433,7 @@ class TestCausalEffectEstimatorFailClosed:
         df = _build_real_dataframe()
         for bad_value in [float("nan"), float("inf"), float("-inf")]:
             with patch(
-                "src.agents.tool_composer.tool_registrations.SequentialPipeline"
+                "src.agents.tool_composer.tool_registrations._DataAwareSequentialPipeline"
             ) as mock_pipeline_cls:
                 mock_instance = mock_pipeline_cls.return_value
                 mock_instance.execute = AsyncMock(
@@ -409,8 +471,16 @@ class TestCausalEffectEstimatorAntiMocking:
         return path.read_text()
 
     def test_source_does_not_hardcode_ate_012(self) -> None:
-        """Executable code inside `causal_effect_estimator` MUST NOT contain
-        the historical `ate=0.12` placeholder.
+        """Executable code in the tool's call graph MUST NOT contain the
+        historical `ate=0.12` placeholder.
+
+        Scope (codex iter-0 LOW expansion): scans `causal_effect_estimator`
+        AND all of its module-level helpers reachable from the tool body
+        (`_extract_dataframe_from_kwargs`, `_run_pipeline_sync`,
+        `_derive_ci_and_p_value`, `_derive_p_value_from_confidence`, and the
+        `_DataAwareSequentialPipeline` subclass). The original AST guard only
+        scanned the public function — codex flagged that a regression could
+        hide in a helper. We now check the entire call graph in the module.
 
         Uses AST parsing to scan ONLY executable code (excludes docstrings),
         so a docstring that legitimately documents "we replaced ate=0.12 with
@@ -423,25 +493,21 @@ class TestCausalEffectEstimatorAntiMocking:
         src = self._read_source()
         tree = ast.parse(src)
 
-        # Find the `causal_effect_estimator` FunctionDef.
-        target_func: Optional[ast.FunctionDef] = None
-        for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef) and node.name == "causal_effect_estimator":
-                target_func = node
-                break
-        assert target_func is not None, "Could not locate causal_effect_estimator function"
-
-        # Drop the docstring before scanning -- otherwise our own docstring
-        # would falsely match. The docstring is an Expr at body[0] with a
-        # Constant string value.
-        body_nodes: List[ast.stmt] = list(target_func.body)
-        if (
-            body_nodes
-            and isinstance(body_nodes[0], ast.Expr)
-            and isinstance(body_nodes[0].value, ast.Constant)
-            and isinstance(body_nodes[0].value.value, str)
-        ):
-            body_nodes = body_nodes[1:]
+        # The tool's call graph: the entry point plus every module-level
+        # helper it directly invokes. If a future refactor adds another
+        # helper, add it here too (the test failure message tells you the
+        # specific function that contained the offender, so the next dev
+        # knows where to look).
+        in_scope_functions = {
+            "causal_effect_estimator",
+            "_extract_dataframe_from_kwargs",
+            "_run_pipeline_sync",
+            "_derive_ci_and_p_value",
+            "_derive_p_value_from_confidence",
+        }
+        in_scope_classes = {
+            "_DataAwareSequentialPipeline",
+        }
 
         # Forbidden (keyword_name, value) pairs.
         forbidden_pairs = {
@@ -453,18 +519,42 @@ class TestCausalEffectEstimatorAntiMocking:
         }
 
         offenders: List[str] = []
-        for stmt in body_nodes:
-            for sub in ast.walk(stmt):
-                if isinstance(sub, ast.keyword) and isinstance(sub.value, ast.Constant):
-                    key = sub.arg
-                    val = sub.value.value
-                    if (key, val) in forbidden_pairs:
-                        offenders.append(f"{key}={val!r}")
+
+        def _scan_function_body(func_node: ast.FunctionDef) -> None:
+            body_nodes: List[ast.stmt] = list(func_node.body)
+            # Drop the docstring so the function's own docstring doesn't
+            # falsely match. A docstring is an Expr at body[0] holding a
+            # Constant string value.
+            if (
+                body_nodes
+                and isinstance(body_nodes[0], ast.Expr)
+                and isinstance(body_nodes[0].value, ast.Constant)
+                and isinstance(body_nodes[0].value.value, str)
+            ):
+                body_nodes = body_nodes[1:]
+            for stmt in body_nodes:
+                for sub in ast.walk(stmt):
+                    if isinstance(sub, ast.keyword) and isinstance(sub.value, ast.Constant):
+                        key = sub.arg
+                        val = sub.value.value
+                        if (key, val) in forbidden_pairs:
+                            offenders.append(f"{func_node.name}: {key}={val!r}")
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name in in_scope_functions:
+                _scan_function_body(node)
+            elif isinstance(node, ast.ClassDef) and node.name in in_scope_classes:
+                # Scan every method body inside the class (covers __init__
+                # plus overrides like _create_initial_state).
+                for sub_node in node.body:
+                    if isinstance(sub_node, ast.FunctionDef):
+                        _scan_function_body(sub_node)
 
         assert not offenders, (
-            f"causal_effect_estimator EXECUTABLE CODE contains historical "
-            f"hardcoded placeholder values: {offenders}. Per C-7 these must "
-            f"be derived from SequentialPipeline outputs, not hardcoded."
+            f"causal_effect_estimator call graph contains historical "
+            f"hardcoded placeholder values in executable code: {offenders}. "
+            f"Per C-7 these must be derived from SequentialPipeline outputs, "
+            f"not hardcoded."
         )
 
     def test_source_does_not_use_random_seeding(self) -> None:
