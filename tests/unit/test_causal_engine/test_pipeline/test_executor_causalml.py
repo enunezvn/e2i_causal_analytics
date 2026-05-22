@@ -29,7 +29,7 @@ Forbidden patterns this test file pins against (Wave-3 pattern #3 / R2):
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -37,7 +37,6 @@ import pytest
 
 from src.causal_engine.pipeline.executors.causalml import (
     CausalMLExecutor,
-    ExecutorDataUnavailable,
 )
 from src.causal_engine.pipeline.router import CausalLibrary
 from src.causal_engine.pipeline.state import (
@@ -45,7 +44,6 @@ from src.causal_engine.pipeline.state import (
     PipelineStage,
     PipelineState,
 )
-
 
 # =============================================================================
 # Fixtures
@@ -347,22 +345,30 @@ class TestCausalMLExecutorSourceCodeIsFabricationFree:
             / "causalml.py"
         ).read_text()
 
-    def test_no_random_uniform(self):
+    def test_no_random_uniform_call(self):
+        """No call-site invocation of `random.uniform(...)` (synthetic-data fabrication).
+
+        Checks for the literal call pattern `random.uniform(` — docstring
+        references that mention the forbidden pattern by name (to explain
+        the contract) are explicitly allowed.
+        """
         src = self._executor_source()
-        assert "random.uniform" not in src, (
-            "FORBIDDEN: random.uniform in executor body (synthetic-data fabrication)"
+        assert "random.uniform(" not in src, (
+            "FORBIDDEN: random.uniform() call in executor body (synthetic-data fabrication)"
         )
 
-    def test_no_np_random_seed(self):
+    def test_no_np_random_seed_call(self):
+        """No call-site invocation of `np.random.seed(...)` (silent-fabrication trap)."""
         src = self._executor_source()
-        assert "np.random.seed" not in src, (
-            "FORBIDDEN: np.random.seed in executor body (silent-fabrication trap)"
+        assert "np.random.seed(" not in src, (
+            "FORBIDDEN: np.random.seed() call in executor body (silent-fabrication trap)"
         )
 
-    def test_no_np_random_default_rng(self):
+    def test_no_np_random_default_rng_call(self):
+        """No call-site invocation of `np.random.default_rng(...)` (synthetic-data fallback)."""
         src = self._executor_source()
-        assert "np.random.default_rng" not in src, (
-            "FORBIDDEN: np.random.default_rng in executor body (synthetic-data fallback)"
+        assert "np.random.default_rng(" not in src, (
+            "FORBIDDEN: np.random.default_rng() call in executor body (synthetic-data fallback)"
         )
 
     def test_no_placeholder_marker_comment(self):

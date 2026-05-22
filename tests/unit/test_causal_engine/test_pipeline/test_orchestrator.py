@@ -587,26 +587,24 @@ class TestCausalMLExecutor:
         assert result["latency_ms"] >= 0
 
     @pytest.mark.asyncio
-    async def test_execute_handles_exception(self, minimal_pipeline_state, minimal_pipeline_config):
-        """Test execute handles exceptions gracefully."""
+    async def test_execute_handles_unexpected_exception(
+        self, minimal_pipeline_state, minimal_pipeline_config
+    ):
+        """Test execute handles unexpected exceptions gracefully (not data-unavailable).
+
+        Pre-C-4 version of this test patched `time.time` to raise on the second
+        call, exercising the catch-all `except Exception` branch of the stub
+        body. Post-C-4, the catch-all branch still exists for unexpected
+        failures (e.g. an uplift backend bug), distinct from the
+        ExecutorDataUnavailable fail-closed path. To exercise it deterministically
+        without depending on the order of time.time() calls, we patch the data
+        extractor itself to raise a non-ExecutorDataUnavailable exception.
+        """
         executor = CausalMLExecutor()
 
-        # Create a call counter that raises on second call (inside try block)
-        call_count = {"n": 0}
-
-        def time_side_effect():
-            call_count["n"] += 1
-            if call_count["n"] == 2:
-                raise ValueError("CausalML error")
-            return 100.0
-
-        # Patch target moved from pipeline.orchestrator.time to
-        # pipeline.executors.causalml.time as part of the C-1 split of orchestrator.py
-        # into per-executor files. Class body is byte-identical; only `time` lives
-        # in a different module now (the one where CausalMLExecutor.execute runs).
         with patch(
-            "src.causal_engine.pipeline.executors.causalml.time.time",
-            side_effect=time_side_effect,
+            "src.causal_engine.pipeline.executors.causalml._extract_uplift_inputs_from_state",
+            side_effect=ValueError("CausalML error"),
         ):
             result = await executor.execute(minimal_pipeline_state, minimal_pipeline_config)
 
