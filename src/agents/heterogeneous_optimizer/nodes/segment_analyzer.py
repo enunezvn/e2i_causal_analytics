@@ -46,13 +46,14 @@ class SegmentAnalyzerNode:
             return state
 
         # #437 fail-close: if upstream cate_estimator did NOT set status=failed
-        # but produced no CATE fields (both overall_ate AND cate_by_segment
-        # absent), downstream MUST fail-close rather than synthesize a
-        # successful-looking response with neutral defaults. A legitimate honest
-        # zero ATE (overall_ate == 0.0) is distinct from absence (None).
-        if state.get("overall_ate") is None and state.get("cate_by_segment") is None:
+        # but produced no overall_ate, downstream MUST fail-close rather than
+        # synthesize a successful-looking response. Heterogeneity analysis is
+        # undefined without a baseline ATE; an empty/populated cate_by_segment
+        # does not redeem a missing ATE. Honest zero (overall_ate == 0.0) is
+        # distinct from absence (None) and remains supported.
+        if state.get("overall_ate") is None:
             logger.error(
-                "Fail-closed: upstream cate_estimator produced no CATE fields",
+                "Fail-closed: upstream cate_estimator produced no overall_ate",
                 extra={"node": "segment_analyzer"},
             )
             return {
@@ -61,10 +62,9 @@ class SegmentAnalyzerNode:
                     {
                         "node": "segment_analyzer",
                         "error": (
-                            "upstream cate_estimator produced no CATE fields "
-                            "(overall_ate=None, cate_by_segment=None) without "
-                            "setting status=failed; refusing to synthesize "
-                            "neutral output"
+                            "upstream cate_estimator produced overall_ate=None "
+                            "without setting status=failed; refusing to "
+                            "synthesize heterogeneity analysis without baseline ATE"
                         ),
                     }
                 ],

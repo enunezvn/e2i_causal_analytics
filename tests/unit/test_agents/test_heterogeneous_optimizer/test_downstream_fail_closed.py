@@ -220,6 +220,40 @@ def _state_row3_missing() -> HeterogeneousOptimizerState:
     return state
 
 
+def _state_row5_ate_absent_segments_present() -> HeterogeneousOptimizerState:
+    """Row 5: overall_ate is None but cate_by_segment has populated segments.
+
+    Codex iter-0 MEDIUM: previously untested branch of the V-A1/V-A2 matrix.
+    Without a baseline ATE, heterogeneity analysis / policy scoring / executive
+    summary are undefined — cate_by_segment alone does not redeem missing ATE.
+    Must fail-close to prevent the helpers' historical `or 0` conflation from
+    silently treating absent ATE as a legitimate zero baseline.
+    """
+    state = _base_state()
+    state["status"] = "analyzing"  # NOT "failed"; upstream silently swallowed ATE
+    state["overall_ate"] = None
+    state["cate_by_segment"] = {
+        "seg": [
+            _cate_result("seg", "v1", 0.12),
+            _cate_result("seg", "v2", -0.05),
+        ]
+    }
+    # Pre-populate downstream-only inputs so policy_learner / profile_generator
+    # would have everything they need EXCEPT the missing overall_ate. This
+    # isolates the test to the ATE-absence branch.
+    state["high_responders"] = []
+    state["low_responders"] = []
+    state["segment_comparison"] = {
+        "overall_ate": 0.0,
+        "high_responder_avg_cate": 0.12,
+        "low_responder_avg_cate": -0.05,
+        "effect_ratio": 1.0,
+        "high_responder_count": 1,
+        "low_responder_count": 1,
+    }
+    return state
+
+
 def _state_row4_partial() -> HeterogeneousOptimizerState:
     """Row 4: real float ATE but empty cate_by_segment dict.
 
@@ -320,9 +354,34 @@ class TestSegmentAnalyzerFailClosed:
             "segment" in (w or "").lower() or "cate" in (w or "").lower() for w in warnings
         ), f"Expected warning about empty cate_by_segment; got {warnings!r}"
 
+    @pytest.mark.asyncio
+    async def test_row5_ate_absent_segments_present_fails_closed(self):
+        """Row 5: overall_ate=None + populated cate_by_segment → MUST fail-close.
+
+        Previously untested matrix branch (codex iter-0 MEDIUM). The historical
+        ``state.get("overall_ate") or 0`` conflation would have silently treated
+        missing ATE as 0.0 here, producing a "successful" heterogeneity report.
+        """
+        node = SegmentAnalyzerNode()
+        state = _state_row5_ate_absent_segments_present()
+
+        result = await node.execute(state)
+
+        assert result["status"] == "failed", (
+            "Must fail-close when overall_ate is None even if cate_by_segment "
+            "is populated; baseline ATE is required for heterogeneity analysis"
+        )
+        # Must not synthesize responders from segments-without-ATE.
+        assert not result.get("high_responders"), (
+            "LABEL-disguised-as-REWIRE: still produced responders without baseline ATE"
+        )
+        assert not result.get("low_responders"), (
+            "LABEL-disguised-as-REWIRE: still produced responders without baseline ATE"
+        )
+
 
 # ---------------------------------------------------------------------------
-# PolicyLearnerNode disambiguation (rows 1-4)
+# PolicyLearnerNode disambiguation (rows 1-5)
 # ---------------------------------------------------------------------------
 
 
@@ -381,9 +440,24 @@ class TestPolicyLearnerFailClosed:
             "segment" in (w or "").lower() or "cate" in (w or "").lower() for w in warnings
         ), f"Expected warning about empty cate_by_segment; got {warnings!r}"
 
+    @pytest.mark.asyncio
+    async def test_row5_ate_absent_segments_present_fails_closed(self):
+        """Row 5 (codex iter-0 MEDIUM): policy scoring requires baseline ATE."""
+        node = PolicyLearnerNode()
+        state = _state_row5_ate_absent_segments_present()
+
+        result = await node.execute(state)
+
+        assert result["status"] == "failed", (
+            "PolicyLearner must fail-close when overall_ate=None even with "
+            "populated cate_by_segment; lift estimates require baseline ATE"
+        )
+        recs = result.get("policy_recommendations")
+        assert not recs, "LABEL-disguised-as-REWIRE: produced recommendations without baseline ATE"
+
 
 # ---------------------------------------------------------------------------
-# ProfileGeneratorNode disambiguation (rows 1-4)
+# ProfileGeneratorNode disambiguation (rows 1-5)
 # ---------------------------------------------------------------------------
 
 
@@ -452,3 +526,22 @@ class TestProfileGeneratorFailClosed:
         assert any(
             "segment" in (w or "").lower() or "cate" in (w or "").lower() for w in warnings
         ), f"Expected warning about empty cate_by_segment; got {warnings!r}"
+
+    @pytest.mark.asyncio
+    async def test_row5_ate_absent_segments_present_fails_closed(self):
+        """Row 5 (codex iter-0 MEDIUM): user-visible content requires baseline ATE."""
+        node = ProfileGeneratorNode()
+        state = _state_row5_ate_absent_segments_present()
+
+        result = await node.execute(state)
+
+        assert result["status"] == "failed", (
+            "ProfileGenerator must fail-close when overall_ate=None even with "
+            "populated cate_by_segment; executive summary requires baseline ATE"
+        )
+        assert not result.get("executive_summary"), (
+            "LABEL-disguised-as-REWIRE: produced executive_summary without baseline ATE"
+        )
+        assert not result.get("strategic_interpretation"), (
+            "LABEL-disguised-as-REWIRE: produced strategic_interpretation without baseline ATE"
+        )

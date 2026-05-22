@@ -43,14 +43,14 @@ class PolicyLearnerNode:
             return state
 
         # #437 fail-close: upstream cate_estimator did NOT set status=failed
-        # but produced no CATE fields (overall_ate AND cate_by_segment both
-        # absent). Refuse to synthesize policy recommendations from nothing;
-        # the silent-default ``or 0.0`` previously hid this failure mode.
-        # A legitimate honest zero (``overall_ate == 0.0``) is distinct from
-        # absence (``None``) and remains supported by the populated-zero path.
-        if state.get("overall_ate") is None and state.get("cate_by_segment") is None:
+        # but produced no overall_ate. Policy recommendations are scored against
+        # the baseline ATE; without it the silent-default ``or 0.0`` previously
+        # produced zero-lift "neutral" recommendations indistinguishable from a
+        # legitimate honest zero. Honest zero (``overall_ate == 0.0``) is
+        # distinct from absence (``None``) and remains supported.
+        if state.get("overall_ate") is None:
             logger.error(
-                "Fail-closed: upstream cate_estimator produced no CATE fields",
+                "Fail-closed: upstream cate_estimator produced no overall_ate",
                 extra={"node": "policy_learner"},
             )
             return {
@@ -59,10 +59,9 @@ class PolicyLearnerNode:
                     {
                         "node": "policy_learner",
                         "error": (
-                            "upstream cate_estimator produced no CATE fields "
-                            "(overall_ate=None, cate_by_segment=None) without "
-                            "setting status=failed; refusing to synthesize "
-                            "neutral recommendations"
+                            "upstream cate_estimator produced overall_ate=None "
+                            "without setting status=failed; refusing to "
+                            "synthesize policy recommendations without baseline ATE"
                         ),
                     }
                 ],
