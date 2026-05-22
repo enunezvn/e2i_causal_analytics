@@ -11,6 +11,25 @@ Implements calculators for model performance metrics:
 - SHAP Coverage
 - Fairness Gap
 - Feature Drift (PSI)
+
+Unavailability discipline (#439, F-007-PhaseB)
+----------------------------------------------
+This calculator does NOT return plausible-fake defaults (0.0 / 0.5 / 1.0 /
+0.25 / 0.1) when MLflow is unreachable, the model is missing, the metric
+is absent, or a query fails. Every `_calc_*` method propagates an
+explicit `KPIResult(value=None, error="<reason>")` shape so that the
+existing `_evaluate_status:120-121` fail-close primitive routes the
+result through `KPIStatus.UNKNOWN`. Downstream consumers (dashboards,
+alerts) can then distinguish "MLflow unreachable" from "model is random",
+and "no rows in window" from "SHAP coverage is 0%".
+
+Unavailability reasons:
+  - mlflow_client_unavailable    (no MLflow client wired in)
+  - model_not_found:<name>       (registry returned no versions)
+  - metric_not_found:<metric>    (run exists but metric key absent)
+  - mlflow_exception:<Class>:<msg>  (any other MLflow-side failure)
+  - db_query_failed:<reason>     (SQL execution raised)
+  - db_query_returned_empty[:<note>]  (no rows / NULL value)
 """
 
 from typing import Any
@@ -72,7 +91,8 @@ class ModelPerformanceCalculator(KPICalculatorBase):
             context: Optional context with model_name, model_version, etc.
 
         Returns:
-            KPIResult with calculated value and status.
+            KPIResult with calculated value and status. On unavailability,
+            `value=None`, `error=<reason>`, `status=KPIStatus.UNKNOWN`.
         """
         context = context or {}
 
@@ -97,7 +117,7 @@ class ModelPerformanceCalculator(KPICalculatorBase):
             )
 
         try:
-            value = calc_func(context)
+            value, error = calc_func(context)
             # Determine if lower is better
             lower_is_better = kpi.id in {"WS1-MP-005", "WS1-MP-008", "WS1-MP-009"}
             status = self._evaluate_status(kpi, value, lower_is_better)
@@ -105,6 +125,7 @@ class ModelPerformanceCalculator(KPICalculatorBase):
                 kpi_id=kpi.id,
                 value=value,
                 status=status,
+                error=error,
                 metadata={"context": context, "lower_is_better": lower_is_better},
             )
         except Exception as e:
@@ -116,66 +137,71 @@ class ModelPerformanceCalculator(KPICalculatorBase):
     def _evaluate_status(
         self, kpi: KPIMetadata, value: float | None, lower_is_better: bool = False
     ) -> KPIStatus:
-        """Evaluate KPI value against thresholds."""
+        """Evaluate KPI value against thresholds.
+
+        The `value is None -> UNKNOWN` branch is the load-bearing fail-close
+        primitive for #439. Every `_calc_*` method that hits unavailability
+        returns `value=None` so that this method routes the result through
+        `KPIStatus.UNKNOWN` instead of fabricating GOOD/WARNING/CRITICAL
+        from a plausible default.
+        """
         if value is None or kpi.threshold is None:
             return KPIStatus.UNKNOWN
         return kpi.threshold.evaluate(value, lower_is_better=lower_is_better)
 
-    def _calc_roc_auc(self, context: dict[str, Any]) -> float:
+    # ------------------------------------------------------------------ MLflow-backed metrics
+
+    def _calc_roc_auc(self, context: dict[str, Any]) -> tuple[float | None, str | None]:
         """Calculate WS1-MP-001: ROC-AUC.
 
-        Retrieves latest ROC-AUC from MLflow or model_metrics table.
+        Retrieves latest ROC-AUC from MLflow.
         """
         model_name = context.get("model_name", "default_model")
-        return self._get_metric_from_mlflow(model_name, "roc_auc", default=0.5)
+        return self._get_metric_from_mlflow(model_name, "roc_auc")
 
-    def _calc_pr_auc(self, context: dict[str, Any]) -> float:
-        """Calculate WS1-MP-002: PR-AUC.
-
-        Precision-Recall Area Under Curve.
-        """
+    def _calc_pr_auc(self, context: dict[str, Any]) -> tuple[float | None, str | None]:
+        """Calculate WS1-MP-002: PR-AUC."""
         model_name = context.get("model_name", "default_model")
-        return self._get_metric_from_mlflow(model_name, "pr_auc", default=0.5)
+        return self._get_metric_from_mlflow(model_name, "pr_auc")
 
-    def _calc_f1_score(self, context: dict[str, Any]) -> float:
-        """Calculate WS1-MP-003: F1 Score.
-
-        Harmonic mean of precision and recall.
-        """
+    def _calc_f1_score(self, context: dict[str, Any]) -> tuple[float | None, str | None]:
+        """Calculate WS1-MP-003: F1 Score."""
         model_name = context.get("model_name", "default_model")
-        return self._get_metric_from_mlflow(model_name, "f1_score", default=0.0)
+        return self._get_metric_from_mlflow(model_name, "f1_score")
 
-    def _calc_recall_at_k(self, context: dict[str, Any]) -> float:
-        """Calculate WS1-MP-004: Recall@Top-K.
-
-        Recall among top K predictions (default K=100).
-        """
+    def _calc_recall_at_k(self, context: dict[str, Any]) -> tuple[float | None, str | None]:
+        """Calculate WS1-MP-004: Recall@Top-K."""
         model_name = context.get("model_name", "default_model")
         k = context.get("k", 100)
         metric_name = f"recall_at_{k}"
-        return self._get_metric_from_mlflow(model_name, metric_name, default=0.0)
+        return self._get_metric_from_mlflow(model_name, metric_name)
 
-    def _calc_brier_score(self, context: dict[str, Any]) -> float:
-        """Calculate WS1-MP-005: Brier Score.
-
-        Mean squared error of probabilistic predictions.
-        Lower is better (0 = perfect calibration).
-        """
+    def _calc_brier_score(self, context: dict[str, Any]) -> tuple[float | None, str | None]:
+        """Calculate WS1-MP-005: Brier Score (lower is better)."""
         model_name = context.get("model_name", "default_model")
-        return self._get_metric_from_mlflow(model_name, "brier_score", default=0.25)
+        return self._get_metric_from_mlflow(model_name, "brier_score")
 
-    def _calc_calibration_slope(self, context: dict[str, Any]) -> float:
-        """Calculate WS1-MP-006: Calibration Slope.
-
-        Slope of reliability diagram (1.0 = perfectly calibrated).
-        """
+    def _calc_calibration_slope(self, context: dict[str, Any]) -> tuple[float | None, str | None]:
+        """Calculate WS1-MP-006: Calibration Slope."""
         model_name = context.get("model_name", "default_model")
-        return self._get_metric_from_mlflow(model_name, "calibration_slope", default=1.0)
+        return self._get_metric_from_mlflow(model_name, "calibration_slope")
 
-    def _calc_shap_coverage(self, context: dict[str, Any]) -> float:
+    def _calc_fairness_gap(self, context: dict[str, Any]) -> tuple[float | None, str | None]:
+        """Calculate WS1-MP-008: Fairness Gap (lower is better)."""
+        model_name = context.get("model_name", "default_model")
+        return self._get_metric_from_mlflow(model_name, "fairness_gap")
+
+    # ------------------------------------------------------------------ SQL-backed / hybrid metrics
+
+    def _calc_shap_coverage(self, context: dict[str, Any]) -> tuple[float | None, str | None]:
         """Calculate WS1-MP-007: SHAP Coverage.
 
         Percentage of predictions with SHAP explanations generated.
+        Source is SQL only. Unavailability reasons:
+          - db_query_failed: `_execute_query` returned None (exception raised
+            during execution).
+          - db_query_returned_empty: query returned no rows OR `coverage` was
+            NULL (zero-denominator window).
         """
         query = """
             SELECT
@@ -184,80 +210,117 @@ class ModelPerformanceCalculator(KPICalculatorBase):
             FROM predictions p
             WHERE p.created_at >= NOW() - INTERVAL '30 days'
         """
-        result = self._execute_query(query, [])
-        if result and result[0]["coverage"] is not None:
-            return float(result[0]["coverage"])
-        return 0.0
+        result, db_error = self._execute_query(query, [])
+        if db_error is not None:
+            return None, f"db_query_failed:{db_error}"
+        # `_execute_query` succeeded but may have returned [] or a row with
+        # NULL coverage.
+        if not result:
+            return None, "db_query_returned_empty:no_rows_in_window"
+        coverage = result[0].get("coverage")
+        if coverage is None:
+            return None, "db_query_returned_empty:null_coverage"
+        return float(coverage), None
 
-    def _calc_fairness_gap(self, context: dict[str, Any]) -> float:
-        """Calculate WS1-MP-008: Fairness Gap (ΔRecall).
+    def _calc_feature_drift(self, context: dict[str, Any]) -> tuple[float | None, str | None]:
+        """Calculate WS1-MP-009: Feature Drift (PSI, lower is better).
 
-        Max difference in recall across protected groups.
-        Lower is better (0 = perfectly fair).
+        Two legs: SQL primary (drift monitoring table) + MLflow fallback.
+        Returns the SQL value if it succeeds with a real (non-NULL) PSI.
+        Otherwise consults MLflow. If both legs fail-close, returns
+        `value=None` with a combined error.
         """
         model_name = context.get("model_name", "default_model")
-        return self._get_metric_from_mlflow(model_name, "fairness_gap", default=0.1)
 
-    def _calc_feature_drift(self, context: dict[str, Any]) -> float:
-        """Calculate WS1-MP-009: Feature Drift (PSI).
-
-        Population Stability Index for feature distribution drift.
-        Lower is better (< 0.1 = stable, 0.1-0.25 = moderate, > 0.25 = significant).
-        """
-        model_name = context.get("model_name", "default_model")
-
-        # Query drift monitoring table
         query = """
             SELECT AVG(psi_value) as avg_psi
             FROM feature_drift_metrics
             WHERE model_name = $1
             AND measured_at >= NOW() - INTERVAL '7 days'
         """
-        result = self._execute_query(query, [model_name])
-        if result and result[0]["avg_psi"] is not None:
-            return float(result[0]["avg_psi"])
+        sql_result, sql_error = self._execute_query(query, [model_name])
 
-        # Fall back to MLflow metric
-        return self._get_metric_from_mlflow(model_name, "feature_drift_psi", default=0.0)
+        # First leg: SQL succeeded with a real PSI.
+        if sql_result:
+            avg_psi = sql_result[0].get("avg_psi")
+            if avg_psi is not None:
+                return float(avg_psi), None
+            sql_leg_error = "db_query_returned_empty:null_avg_psi"
+        elif sql_error is not None:
+            sql_leg_error = f"db_query_failed:{sql_error}"
+        else:
+            sql_leg_error = "db_query_returned_empty:no_rows_in_window"
+
+        # Second leg: MLflow fallback. If it returns a real value, the SQL
+        # leg's silence is acceptable (no rows yet in the table is not a
+        # KPI failure as long as MLflow has the metric).
+        mlflow_value, mlflow_error = self._get_metric_from_mlflow(model_name, "feature_drift_psi")
+        if mlflow_value is not None:
+            return mlflow_value, None
+
+        # Both legs failed: surface combined unavailability honestly.
+        combined_error = (
+            f"feature_drift_psi unavailable: sql_leg={sql_leg_error}; mlflow_leg={mlflow_error}"
+        )
+        return None, combined_error
+
+    # ------------------------------------------------------------------ infra
 
     def _get_metric_from_mlflow(
-        self, model_name: str, metric_name: str, default: float = 0.0
-    ) -> float:
+        self, model_name: str, metric_name: str
+    ) -> tuple[float | None, str | None]:
         """Get a metric value from MLflow for the latest model version.
 
-        Args:
-            model_name: Name of the registered model.
-            metric_name: Name of the metric to retrieve.
-            default: Default value if metric not found.
-
         Returns:
-            The metric value or default.
+            A `(value, error)` tuple. Exactly one of the two is non-None:
+              - `(<float>, None)` on success.
+              - `(None, "mlflow_client_unavailable")` when no MLflow client
+                is wired in (e.g., mlflow not installed in this environment).
+              - `(None, "model_not_found:<name>")` when the registry has no
+                versions for the model.
+              - `(None, "metric_not_found:<metric>")` when the latest run
+                does not have the requested metric key.
+              - `(None, "mlflow_exception:<ExceptionClass>:<msg[:200]>")`
+                on any other MLflow-side failure.
+
+        This method NEVER returns a plausible-fake default like 0.5 or 1.0
+        when the metric is unavailable — that was the #439 anti-pattern.
         """
         if self.mlflow_client is None:
-            return default
+            return None, "mlflow_client_unavailable"
 
         try:
-            # Get latest production version
             versions = self.mlflow_client.get_latest_versions(
                 model_name, stages=["Production", "Staging", "None"]
             )
             if not versions:
-                return default
+                return None, f"model_not_found:{model_name}"
 
-            # Get run metrics
             run_id = versions[0].run_id
             run = self.mlflow_client.get_run(run_id)
-            return float(run.data.metrics.get(metric_name, default))
-        except Exception:
-            return default
+            metrics = run.data.metrics
+            if metric_name not in metrics:
+                return None, f"metric_not_found:{metric_name}"
+            return float(metrics[metric_name]), None
+        except Exception as e:
+            msg = str(e)[:200]
+            return None, f"mlflow_exception:{type(e).__name__}:{msg}"
 
-    def _execute_query(self, query: str, params: list[Any]) -> list[dict[str, Any]] | None:
-        """Execute a SQL query and return results."""
+    def _execute_query(
+        self, query: str, params: list[Any]
+    ) -> tuple[list[dict[str, Any]] | None, str | None]:
+        """Execute a SQL query and return `(rows, error)`.
+
+        Exactly one of the two is non-None:
+          - `(<rows>, None)` on success (rows may be `[]`).
+          - `(None, "<ExceptionClass>:<msg[:200]>")` on any execution failure.
+        """
         try:
             response = self.db_client.rpc("execute_sql", {"query": query}).execute()
-            return response.data  # type: ignore[no-any-return]
-        except Exception:
-            return None
+            return response.data, None  # type: ignore[no-any-return]
+        except Exception as e:
+            msg = str(e)[:200]
+            return None, f"{type(e).__name__}:{msg}"
 
 
 def calculate_psi(expected: np.ndarray, actual: np.ndarray, bins: int = 10) -> float:
