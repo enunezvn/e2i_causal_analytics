@@ -37,6 +37,7 @@ import pytest
 
 from src.causal_engine.pipeline.executors.causalml import (
     CausalMLExecutor,
+    _resolve_control_name,
 )
 from src.causal_engine.pipeline.router import CausalLibrary
 from src.causal_engine.pipeline.state import (
@@ -155,9 +156,14 @@ def _make_real_uplift_data(
     is the standard pattern, and the C-1 design-pushback paragraph protects
     against the FORBIDDEN inversion (seed inside the executor body).
 
-    Treatment effect is heterogeneous: positive in `segment=high`, zero in
-    `segment=low`. The real CausalML model should recover a positive ATE
-    and non-trivial ATT/ATC.
+    Treatment effect is heterogeneous: positive in `region=high_income`,
+    zero in `region=low_income`. The real CausalML model should recover a
+    positive ATE and non-trivial ATT/ATC.
+
+    Columns: marketing_spend (treatment), sales (outcome), age, income,
+    region (str), age_group (str). The string columns match the default
+    confounders in `_make_pipeline_state` so the executor's column-validation
+    gate (codex iter-1 HIGH-2) does not trip on unrelated tests.
     """
     rng = np.random.default_rng(seed)
     treatment = rng.integers(0, 2, size=n)
@@ -170,15 +176,56 @@ def _make_real_uplift_data(
     noise = rng.normal(0.0, 0.05, size=n)
     p_y = np.clip(base_p + treat_effect + noise, 0.01, 0.99)
     y = (rng.random(size=n) < p_y).astype(int)
+    # Numeric encodings for string-like confounders so the CausalML tree
+    # ensemble doesn't reject non-numeric features. The categorical
+    # interpretation is preserved by the column names.
+    region_idx = (above_median > 0).astype(int)  # 0/1
+    age_group_idx = (age > 50).astype(int)  # 0/1
     df = pd.DataFrame(
         {
             "marketing_spend": treatment,
             "sales": y,
             "age": age,
             "income": income,
+            "region": region_idx,
+            "age_group": age_group_idx,
         }
     )
     return {"dataframe": df}
+
+
+# =============================================================================
+# Helper: control_name resolution (codex iter-1 closes HIGH-1)
+# =============================================================================
+
+
+class TestResolveControlName:
+    """`_resolve_control_name` picks the right control label for `UpliftConfig`.
+
+    Closes codex iter-0 HIGH-1: `UpliftConfig.control_name` defaults to
+    `"control"`, which breaks against binary 0/1 treatments (the common case).
+    The helper must pick the lexicographically smallest stringified unique
+    treatment value so CausalML's `UpliftRandomForestClassifier` can find the
+    control group.
+    """
+
+    def test_binary_numeric_treatment_picks_zero(self):
+        treatment = np.array([0, 1, 0, 1, 1, 0])
+        assert _resolve_control_name(treatment) == "0"
+
+    def test_explicit_control_treat_labels_picks_control(self):
+        treatment = np.array(["treat", "control", "treat", "control"])
+        # "control" < "treat" lexicographically.
+        assert _resolve_control_name(treatment) == "control"
+
+    def test_multi_arm_picks_first_lexicographic(self):
+        treatment = np.array(["B", "A", "C", "A", "B"])
+        assert _resolve_control_name(treatment) == "A"
+
+    def test_single_unique_value_does_not_crash(self):
+        treatment = np.array([1, 1, 1])
+        # No control group present, but helper must still return a string.
+        assert _resolve_control_name(treatment) == "1"
 
 
 # =============================================================================
@@ -318,6 +365,66 @@ class TestCausalMLExecutorFailsClosedWhenDataUnavailable:
         # Confidence is 0.0 on failure (not the old 0.78 placeholder).
         assert result["confidence"] != 0.78
 
+    @pytest.mark.asyncio
+    async def test_execute_fails_closed_when_declared_confounder_column_missing(self):
+        """Closes codex iter-0 HIGH-2: when the caller declares confounders
+        that ARE NOT present in `filters["dataframe"]`, executor must raise
+        ExecutorDataUnavailable rather than silently fitting on the remaining
+        columns (which would be "all-default on missing input" — Wave-3
+        pattern #4).
+        """
+        executor = CausalMLExecutor()
+        df = pd.DataFrame(
+            {
+                "marketing_spend": [0, 1, 0, 1, 0, 1] * 20,
+                "sales": [0, 1, 0, 1, 0, 1] * 20,
+                "age": [25.0, 35.0, 45.0, 55.0, 30.0, 40.0] * 20,
+                # Note: `income`, `nps_score` are listed in confounders below
+                # but NOT present in this DataFrame.
+            }
+        )
+        state = _make_pipeline_state(
+            filters={"dataframe": df},
+            confounders=["age", "income", "nps_score"],
+        )
+        config = _make_pipeline_config()
+
+        result = await executor.execute(state, config)
+
+        assert result["success"] is False
+        assert result["error"] is not None
+        # Error message must name the missing declared columns to make
+        # diagnosis trivial.
+        assert "income" in result["error"]
+        assert "nps_score" in result["error"]
+        assert result["result"] is None
+
+    @pytest.mark.asyncio
+    async def test_execute_fails_closed_when_declared_effect_modifier_missing(self):
+        """Same fail-closed for effect_modifiers (codex iter-0 HIGH-2)."""
+        executor = CausalMLExecutor()
+        df = pd.DataFrame(
+            {
+                "marketing_spend": [0, 1, 0, 1] * 25,
+                "sales": [0, 1, 0, 1] * 25,
+                "age": [25.0, 35.0, 45.0, 55.0] * 25,
+            }
+        )
+        state = _make_pipeline_state(
+            filters={"dataframe": df},
+            confounders=["age"],
+        )
+        # Add an effect_modifier that's missing from the DataFrame.
+        state["effect_modifiers"] = ["channel"]
+        config = _make_pipeline_config()
+
+        result = await executor.execute(state, config)
+
+        assert result["success"] is False
+        assert result["error"] is not None
+        assert "channel" in result["error"]
+        assert result["result"] is None
+
 
 # =============================================================================
 # Source-code anti-mocking guards (R2)
@@ -386,15 +493,52 @@ class TestCausalMLExecutorSourceCodeIsFabricationFree:
         )
 
     def test_executor_imports_real_uplift_module(self):
-        """The executor MUST import the production uplift wrappers."""
+        """The executor MUST import the production uplift wrappers as Python imports.
+
+        Closes codex iter-0 MEDIUM: the prior loose check (any string match
+        on `UpliftRandomForest`/`UpliftGradientBoosting`/`UpliftTree`)
+        would have been satisfied by a docstring alone. We use Python's
+        AST to parse the executor source and confirm there is at least
+        one real ``from src.causal_engine.uplift import ...`` (top-level
+        or nested inside a function body for lazy import) that imports
+        one of the production wrappers. This guarantees the executor
+        actually CALLS the real uplift module rather than just naming
+        it in a docstring.
+        """
+        import ast
+
         src = self._executor_source()
-        # Either direct or lazy import is acceptable; we just want one of the
-        # production class names to appear in the source.
-        assert (
-            "UpliftRandomForest" in src
-            or "UpliftGradientBoosting" in src
-            or "UpliftTree" in src
-        ), "Executor must reference at least one production uplift wrapper"
+        tree = ast.parse(src)
+
+        production_wrappers = {
+            "UpliftRandomForest",
+            "UpliftTree",
+            "UpliftGradientBoosting",
+        }
+        found_real_import = False
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            module = node.module or ""
+            # Allow both `src.causal_engine.uplift` and the relative form
+            # (`..uplift` from within `pipeline.executors`); the latter is
+            # not how the production-wired uplift_analyzer reaches it, but
+            # accepting it keeps the rule tied to behavior, not pathing.
+            if module not in {
+                "src.causal_engine.uplift",
+                "causal_engine.uplift",
+            } and not module.endswith(".uplift"):
+                continue
+            imported_names = {alias.name for alias in node.names}
+            if imported_names & production_wrappers:
+                found_real_import = True
+                break
+
+        assert found_real_import, (
+            "Executor must contain a real Python import of at least one of "
+            f"{sorted(production_wrappers)} from src.causal_engine.uplift "
+            "(docstring references alone are insufficient)."
+        )
 
 
 # =============================================================================
@@ -409,6 +553,29 @@ class TestCausalMLExecutorRealLibraryWiring:
     on the synthetic-but-real dataset used here. We feed REAL data (from the test
     fixture, not from inside the executor) through the production wrapper.
     """
+
+    @pytest.mark.asyncio
+    @pytest.mark.slow
+    async def test_execute_resolves_control_name_from_binary_treatment(self):
+        """Closes codex iter-0 HIGH-1: with binary 0/1 treatments the
+        resolved `control_name` must be `"0"` (the lexicographically smallest
+        stringified unique value). UpliftConfig default `"control"` would
+        NOT match and the real-library success path would fail closed.
+        """
+        executor = CausalMLExecutor()
+        filters = _make_real_uplift_data(n=300, seed=31)
+        state = _make_pipeline_state(filters=filters)
+        config = _make_pipeline_config()
+
+        result = await executor.execute(state, config)
+
+        assert result["success"] is True, (
+            f"Expected success after control_name resolution; "
+            f"got error: {result.get('error')}"
+        )
+        assert result["result"]["control_name"] == "0"
+        # And the treatment_groups should include "0" (the control).
+        assert "0" in result["result"]["treatment_groups"]
 
     @pytest.mark.asyncio
     @pytest.mark.slow
@@ -537,7 +704,11 @@ class TestCausalMLExecutorExceptionHandling:
     async def test_execute_handles_uplift_model_exception(self):
         executor = CausalMLExecutor()
         filters = _make_real_uplift_data(n=200, seed=29)
-        state = _make_pipeline_state(filters=filters)
+        # Use confounders that match the real-data fixture columns to avoid
+        # tripping the HIGH-2 declared-column fail-closed gate (added in
+        # iter-1). The point of this test is to exercise the uplift-model
+        # exception path, not the column-validation path.
+        state = _make_pipeline_state(filters=filters, confounders=["age", "income"])
         config = _make_pipeline_config()
 
         # Patch the uplift wrapper to raise; verify executor returns success=False

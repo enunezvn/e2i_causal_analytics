@@ -134,17 +134,41 @@ def _extract_uplift_inputs_from_state(
     # "everything except treatment and outcome." This is NOT a synthesis
     # decision — it's a column-selection one over the real DataFrame the
     # caller handed in.
+    #
+    # Per CLAUDE.md fail-closed discipline (closing codex iter-0 HIGH-2):
+    # when the caller declares confounders / effect_modifiers but those
+    # column names are NOT present in the DataFrame, we MUST raise
+    # ``ExecutorDataUnavailable`` rather than silently fitting on whatever
+    # columns happen to remain. Silently dropping declared columns would
+    # be an "all-default on missing input" substitution that fits a model
+    # on an unintended feature set.
     declared_features: List[str] = []
     for key in ("confounders", "effect_modifiers"):
         vals = state.get(key)
         if vals:
             declared_features.extend(vals)
-    feature_names: List[str] = []
-    for col in declared_features:
-        if col in df.columns and col not in (treatment_var, outcome_var):
-            feature_names.append(col)
-    if not feature_names:
+
+    feature_names: List[str]
+    if declared_features:
+        missing_declared = [
+            col
+            for col in declared_features
+            if col not in df.columns and col not in (treatment_var, outcome_var)
+        ]
+        if missing_declared:
+            raise ExecutorDataUnavailable(
+                f"CausalMLExecutor: declared feature columns missing from "
+                f"input DataFrame: {missing_declared} "
+                f"(available columns: {list(df.columns)})."
+            )
+        # Preserve declared order; exclude any name that happens to coincide
+        # with the treatment/outcome column.
+        feature_names = [
+            col for col in declared_features if col not in (treatment_var, outcome_var)
+        ]
+    else:
         feature_names = [c for c in df.columns if c not in (treatment_var, outcome_var)]
+
     if not feature_names:
         raise ExecutorDataUnavailable(
             "CausalMLExecutor: no feature columns available "
@@ -160,18 +184,59 @@ def _extract_uplift_inputs_from_state(
     return X_df, treatment_arr, y_arr, feature_names, treatment_groups
 
 
+def _resolve_control_name(treatment_arr: Any) -> str:
+    """Pick the control label that ``UpliftConfig.control_name`` must reference.
+
+    CausalML's ``UpliftRandomForestClassifier`` requires the configured
+    ``control_name`` to match one of the (stringified) treatment values
+    present in the data. ``UpliftConfig.control_name`` defaults to
+    ``"control"``, which breaks against binary 0/1 treatments (the
+    common case) — the wrapper would stringify treatments to ``"0"``/``"1"``,
+    find no group named ``"control"``, and either raise or silently
+    return malformed results.
+
+    Production code at ``hierarchical/analyzer.py:392`` hardcodes
+    ``control_name="0"`` because its caller always supplies numeric
+    binary treatments. Here we generalize: pick the lexicographically
+    smallest stringified unique treatment value as the control group.
+    For binary 0/1 this picks ``"0"``; for {"control", "treat"} it
+    picks ``"control"``; for {"A", "B", "C"} it picks ``"A"``.
+
+    Closes codex iter-0 HIGH-1.
+    """
+    import numpy as np
+
+    unique_values = sorted({str(v) for v in np.unique(treatment_arr)})
+    if not unique_values:
+        # Empty data is caught earlier in _extract_uplift_inputs_from_state;
+        # defensive fallback for completeness.
+        return "control"
+    return unique_values[0]
+
+
 def _fit_uplift_model(
     X_df: Any,
     treatment_arr: Any,
     y_arr: Any,
     random_state: int,
+    control_name: str,
 ) -> Tuple[Any, str]:
     """Fit the production uplift model and return ``(UpliftResult, model_id)``.
 
     Mirrors the pattern at ``agents/heterogeneous_optimizer/nodes/
-    uplift_analyzer.py:358-383`` (the ``_fit_uplift_rf`` path): build an
-    ``UpliftConfig`` with a sample-size-aware ``min_samples_leaf``, then call
+    uplift_analyzer.py:358-383`` (the ``_fit_uplift_rf`` path) and
+    ``hierarchical/analyzer.py:390-403``: build an ``UpliftConfig`` with a
+    sample-size-aware ``min_samples_leaf`` and a ``control_name`` resolved
+    from the actual treatment values (codex iter-0 HIGH-1), then call
     ``UpliftRandomForest(config).estimate(X, treatment, y)``.
+
+    Args:
+        X_df: feature DataFrame (already column-validated).
+        treatment_arr: treatment assignment array (already validated).
+        y_arr: outcome array (cast to float).
+        random_state: deterministic seed for tree-split randomization.
+        control_name: stringified label of the control group; must match
+            one of the unique stringified values in ``treatment_arr``.
 
     Returns:
         Tuple of (UpliftResult, model identifier string used in result dict).
@@ -191,6 +256,7 @@ def _fit_uplift_model(
         max_depth=5,
         # Match the production pattern: floor at 10, scale with sample size.
         min_samples_leaf=max(10, n // 50),
+        control_name=control_name,
         random_state=random_state,
     )
     model = UpliftRandomForest(config)
@@ -352,16 +418,26 @@ class CausalMLExecutor(LibraryExecutor):
                 treatment_groups,
             ) = _extract_uplift_inputs_from_state(state)
 
-            # Deterministic random_state: drawn from a stable config field so
-            # repeated calls against the same state produce repeatable fits.
-            # NOT a seeded synthetic-data injection — `random_state` is passed
-            # to the real CausalML tree-splitting algorithm, which uses it for
-            # tree-construction randomization only. Real data still flows in
-            # from `state["filters"]["dataframe"]`.
+            # Deterministic random_state: stable value so repeated calls
+            # against the same state produce repeatable fits. NOT a seeded
+            # synthetic-data injection — `random_state` is passed to the
+            # real CausalML tree-splitting algorithm, which uses it for
+            # tree-construction randomization only. Real data still flows
+            # in from `state["filters"]["dataframe"]`.
             random_state = 42
 
+            # Resolve control_name from observed treatment labels (closes
+            # codex iter-0 HIGH-1: UpliftConfig default "control" breaks
+            # against binary 0/1 treatments). Mirrors hierarchical/analyzer.py:392
+            # which hardcodes control_name="0" for its numeric-binary case.
+            control_name = _resolve_control_name(treatment_arr)
+
             upl_result, model_id = _fit_uplift_model(
-                X_df, treatment_arr, y_arr, random_state=random_state
+                X_df,
+                treatment_arr,
+                y_arr,
+                random_state=random_state,
+                control_name=control_name,
             )
 
             uplift_scores = upl_result.uplift_scores
@@ -397,6 +473,7 @@ class CausalMLExecutor(LibraryExecutor):
                 "feature_names": feature_names,
                 "n_samples": int(len(X_df)),
                 "treatment_groups": treatment_groups,
+                "control_name": control_name,
             }
 
             # When EconML produced upstream CATE estimates, propagate the
