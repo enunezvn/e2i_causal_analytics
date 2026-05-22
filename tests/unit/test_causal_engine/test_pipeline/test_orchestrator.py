@@ -536,7 +536,23 @@ class TestEconMLExecutor:
 
 
 class TestCausalMLExecutor:
-    """Tests for CausalMLExecutor class."""
+    """Tests for CausalMLExecutor class.
+
+    NOTE: phase C-4 of GH #354 (2026-05-22) rewired `CausalMLExecutor.execute()`
+    to call the real CausalML library via `src.causal_engine.uplift.*`. The
+    pre-C-4 behavior — returning `auuc=0.0, qini=0.0, confidence=0.78` with
+    `success=True` regardless of input — was a SCAFFOLDED PLACEHOLDER and is
+    no longer the contract. Post-C-4:
+
+    * When `state["filters"]["dataframe"]` is missing or unusable, the executor
+      fails closed (`success=False, result=None, confidence=0.0`) — no synthetic
+      data fallback. Tests that previously pinned the placeholder all-zero
+      success path are updated here to assert the fail-closed semantics.
+    * Real-library success-path assertions (auuc/qini/ate finite, model in known
+      set) live in `tests/unit/test_causal_engine/test_pipeline/test_executor_causalml.py`
+      and are marked `slow` because fitting a real CausalML model on the test
+      fixture takes seconds.
+    """
 
     def test_library_property(self):
         """Test library property returns CAUSALML."""
@@ -544,36 +560,31 @@ class TestCausalMLExecutor:
         assert executor.library == CausalLibrary.CAUSALML
 
     @pytest.mark.asyncio
-    async def test_execute_success(self, minimal_pipeline_state, minimal_pipeline_config):
-        """Test execute returns successful result."""
+    async def test_execute_fails_closed_without_dataframe(
+        self, minimal_pipeline_state, minimal_pipeline_config
+    ):
+        """Post-C-4: without `filters["dataframe"]`, executor fails closed.
+
+        Replaces the pre-C-4 `test_execute_success` which pinned the stub's
+        all-zero success path (`auuc=0.0, qini=0.0, confidence=0.78`). The
+        minimal_pipeline_state fixture has `filters=None`, so the executor
+        must NOT fall back to synthetic data — it must return success=False.
+        """
         executor = CausalMLExecutor()
 
         result = await executor.execute(minimal_pipeline_state, minimal_pipeline_config)
 
         assert result["library"] == "causalml"
-        assert result["success"] is True
+        # Was: success=True (stub silently returned zeros).
+        # Now: success=False, fail-closed on missing data.
+        assert result["success"] is False
+        assert result["error"] is not None
+        assert "data" in (result["error"] or "").lower()
+        assert result["result"] is None
+        # Was: confidence=0.78 (hardcoded stub).
+        # Now: confidence=0.0 on failure.
+        assert result["confidence"] == 0.0
         assert result["latency_ms"] >= 0
-        assert result["error"] is None
-        assert result["confidence"] == 0.78
-        assert "model" in result["result"]
-        assert "auuc" in result["result"]
-        assert "qini" in result["result"]
-        assert "uplift_by_segment" in result["result"]
-        assert "targeting_recommendations" in result["result"]
-
-    @pytest.mark.asyncio
-    async def test_execute_notes_econml_comparison(
-        self, minimal_pipeline_state, minimal_pipeline_config
-    ):
-        """Test execute notes when CATE from EconML is available."""
-        executor = CausalMLExecutor()
-        state = minimal_pipeline_state.copy()
-        state["cate_by_segment"] = {"segment_A": 0.12, "segment_B": 0.08}
-
-        result = await executor.execute(state, minimal_pipeline_config)
-
-        assert result["success"] is True
-        assert result["result"]["econml_comparison"] == "available"
 
     @pytest.mark.asyncio
     async def test_execute_handles_exception(self, minimal_pipeline_state, minimal_pipeline_config):
@@ -1066,11 +1077,26 @@ class TestOrchestratorIntegration:
         assert body.get("ate") != 0.25
 
     @pytest.mark.asyncio
-    async def test_causalml_sees_econml_cate(self, minimal_pipeline_state, minimal_pipeline_config):
-        """Test that CausalML notes CATE from EconML."""
+    async def test_causalml_fails_closed_without_data_even_with_econml_state(
+        self, minimal_pipeline_state, minimal_pipeline_config
+    ):
+        """Test that CausalML fails closed when no DataFrame is supplied, even
+        when an EconML result has populated `cate_by_segment` upstream.
+
+        Replaces pre-C-4 `test_causalml_sees_econml_cate` which pinned the
+        stub's "EconML state is sufficient to produce uplift result" behavior
+        (set `econml_comparison: "available"` and returned success=True with
+        all-zero uplift fields). Post-C-4, EconML state does NOT substitute
+        for real uplift modeling — without the DataFrame, executor fails
+        closed regardless of upstream state.
+
+        Cross-executor state propagation that DEPENDS on real uplift output
+        (e.g., uplift_scores informing C-6's consensus aggregator) is covered
+        by the `slow`-marked tests in test_executor_causalml.py.
+        """
         orchestrator = ConcreteOrchestrator()
 
-        # Simulate EconML result
+        # Simulate EconML result populating cate_by_segment.
         econml_result: LibraryExecutionResult = {
             "library": "econml",
             "success": True,
@@ -1084,15 +1110,15 @@ class TestOrchestratorIntegration:
             "confidence": 0.82,
             "warnings": [],
         }
-
         state = orchestrator._update_state_with_result(
             minimal_pipeline_state, CausalLibrary.ECONML, econml_result
         )
 
-        # Execute CausalML
+        # Execute CausalML — should fail closed because no DataFrame.
         causalml_executor = CausalMLExecutor()
         cml_result = await causalml_executor.execute(state, minimal_pipeline_config)
 
-        # CausalML should note EconML comparison is available
-        assert cml_result["success"] is True
-        assert cml_result["result"]["econml_comparison"] == "available"
+        # Post-C-4: fail closed; no silent substitution from EconML state.
+        assert cml_result["success"] is False
+        assert cml_result["result"] is None
+        assert cml_result["error"] is not None
