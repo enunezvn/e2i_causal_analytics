@@ -388,12 +388,11 @@ def test_mlflow_connector_search_runs_signature_pagination_compat() -> None:
     """
     import inspect
 
-    import pytest
-
-    mlflow = pytest.importorskip(
-        "mlflow",
-        reason="mlflow not installed in this env; signature-compat drift-guard runs on CI where mlflow 3.11.x is pinned.",
-    )
+    # Codex iter-0 F-002: hard import (not importorskip) — the V-D11 drift-guard
+    # MUST fail closed when mlflow is missing, not silently skip. mlflow is a
+    # required dependency per pyproject.toml; absence is a real failure, not an
+    # optional dev-env case.
+    import mlflow
 
     sig = inspect.signature(mlflow.search_runs)
     required_kwargs = {"experiment_ids", "filter_string", "order_by", "max_results"}
