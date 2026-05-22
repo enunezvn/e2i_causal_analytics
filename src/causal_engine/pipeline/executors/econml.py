@@ -288,12 +288,27 @@ class EconMLExecutor(LibraryExecutor):
             else:
                 treatment_binary = treatment_col.astype(int)
 
-            # Covariates: the explicit confounder list when present, else all
-            # non-(treatment, outcome) columns. NEVER an empty DataFrame --
-            # EconML estimators degenerate without covariates; we fail-closed
-            # in that case.
-            covariate_cols = [c for c in confounders if c in df.columns]
-            if not covariate_cols:
+            # Covariates: when the routed state names confounders explicitly,
+            # they MUST all exist in the data -- otherwise we would silently
+            # run EconML on a DIFFERENT adjustment set than the router
+            # requested (codex iter-1 MEDIUM). When no confounders are named,
+            # fall back to all non-(treatment, outcome) columns. NEVER an
+            # empty DataFrame -- EconML estimators degenerate without
+            # covariates; we fail-closed in that case.
+            if confounders:
+                missing_confounders = [c for c in confounders if c not in df.columns]
+                if missing_confounders:
+                    return _failure(
+                        error=(
+                            "EconML executor: confounder columns missing from "
+                            f"data_cache.estimation_data: {missing_confounders}. "
+                            f"data columns={list(df.columns)}. Refusing to "
+                            "silently substitute a different adjustment set."
+                        ),
+                        start_time=start_time,
+                    )
+                covariate_cols = list(confounders)
+            else:
                 covariate_cols = [
                     c for c in df.columns if c not in (treatment_var, outcome_var)
                 ]
@@ -301,7 +316,7 @@ class EconMLExecutor(LibraryExecutor):
                 return _failure(
                     error=(
                         "EconML executor: no covariate columns available "
-                        "(neither confounders nor non-treatment/outcome "
+                        "(no confounders named and no non-treatment/outcome "
                         "columns). EconML estimators require covariates."
                     ),
                     start_time=start_time,
@@ -409,17 +424,54 @@ class EconMLExecutor(LibraryExecutor):
                     start_time=start_time,
                 )
 
-            # ---- Step 7: pack real outputs into LibraryExecutionResult.result ----
+            # ---- Step 7: enforce energy_score finiteness (codex iter-1 MEDIUM) ----
+            #
+            # EstimatorSelector.EstimatorResult.energy_score returns
+            # ``float("inf")`` when no energy_score was computed, and a real
+            # estimator can produce NaN under degenerate inputs. Both must
+            # fail-closed: emitting non-finite energy_score taints downstream
+            # quality_tier / confidence (NaN breaks Python min/max comparison
+            # semantics yielding confidence=1.0 silently) and is not JSON-safe.
+            energy_score_raw = float(selected.energy_score)
+            if not math.isfinite(energy_score_raw):
+                return _failure(
+                    error=(
+                        f"EconML: selected estimator produced a non-finite "
+                        f"energy_score ({energy_score_raw}). Refusing to "
+                        "emit non-JSON-safe NaN/Inf into the result payload "
+                        "and refusing to silently materialize confidence=1.0 "
+                        "from NaN min/max semantics."
+                    ),
+                    start_time=start_time,
+                )
+
+            # ---- Step 8: pack real outputs into LibraryExecutionResult.result ----
             cate_arr: Optional[np.ndarray] = None
             if selected.cate is not None:
                 cate_arr = np.asarray(selected.cate, dtype=float)
             cate_segments = _build_cate_segments(cate_arr) if cate_arr is not None else {}
             het_score = _heterogeneity_score(cate_arr)
-            energy_score_f = float(selected.energy_score)
+            energy_score_f = energy_score_raw  # already finiteness-checked
 
             successful_results = [
                 r for r in (selection_result.all_results or []) if r.success
             ]
+
+            # Sanitize the per-library energy_scores dict for the result
+            # payload -- swap any non-finite peer scores for None so JSON
+            # serialization downstream stays safe. (The SELECTED estimator's
+            # energy_score is already finiteness-guarded above.)
+            sanitized_scores: dict[str, Optional[float]] = {}
+            for name, score in (selection_result.energy_scores or {}).items():
+                try:
+                    sf = float(score)
+                except (TypeError, ValueError):
+                    sanitized_scores[name] = None
+                    continue
+                sanitized_scores[name] = sf if math.isfinite(sf) else None
+
+            gap_raw = float(selection_result.energy_score_gap)
+            gap_f = gap_raw if math.isfinite(gap_raw) else 0.0
 
             result: dict[str, Any] = {
                 "estimator": selected.estimator_type.value,
@@ -433,8 +485,8 @@ class EconMLExecutor(LibraryExecutor):
                 "quality_tier": _quality_tier(energy_score_f),
                 "selection_strategy": selection_result.selection_strategy.value,
                 "selection_reason": selection_result.selection_reason,
-                "energy_scores": dict(selection_result.energy_scores or {}),
-                "energy_score_gap": float(selection_result.energy_score_gap),
+                "energy_scores": sanitized_scores,
+                "energy_score_gap": gap_f,
                 "n_estimators_evaluated": len(selection_result.all_results or []),
                 "n_estimators_succeeded": len(successful_results),
             }
@@ -442,7 +494,8 @@ class EconMLExecutor(LibraryExecutor):
             latency_ms = int((time.time() - start_time) * 1000)
             # Confidence reflects the selector's quality assessment, NOT a
             # hardcoded 0.82. Map energy_score (lower better) to a confidence
-            # in [0, 1] via 1 - clip(energy_score, 0, 1).
+            # in [0, 1] via 1 - clip(energy_score, 0, 1). energy_score_f is
+            # finite (guarded above), so min/max are well-defined here.
             confidence = max(0.0, min(1.0, 1.0 - energy_score_f))
 
             return LibraryExecutionResult(

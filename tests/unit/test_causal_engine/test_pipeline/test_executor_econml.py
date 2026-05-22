@@ -25,6 +25,7 @@ Forbidden patterns (HIGH finding on detection per CLAUDE.md anti-mocking):
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any, Optional
 from unittest.mock import MagicMock
 
@@ -171,12 +172,17 @@ def _good_estimator_result(
     ate_ci_upper: float = 0.20,
     cate: Any = _CATE_SENTINEL,
     estimator_type: EstimatorType = EstimatorType.CAUSAL_FOREST,
+    energy_score: float = 0.3,
 ) -> EstimatorResult:
     """Build a successful EstimatorResult satisfying every fail-closed guard.
 
     Use a sentinel for ``cate`` so callers can explicitly pass ``cate=None``
     (LinearDML / DRLearner / OLS shape) vs. omit it (CausalForestDML shape
     with a default per-record CATE array).
+
+    Attaches a duck-typed ``energy_score_result`` so ``EstimatorResult``'s
+    ``energy_score`` property returns a finite value (not the default +inf
+    that triggers the executor's finiteness guard).
     """
     if cate is _CATE_SENTINEL:
         cate_value = np.array([0.12, 0.14, 0.16, 0.18], dtype=float)
@@ -191,6 +197,10 @@ def _good_estimator_result(
         ate_ci_lower=ate_ci_lower,
         ate_ci_upper=ate_ci_upper,
     )
+    # SimpleNamespace duck-types EnergyScoreResult sufficiently for the
+    # ``EstimatorResult.energy_score`` property (which only reads
+    # ``.energy_score``).
+    er.energy_score_result = SimpleNamespace(energy_score=energy_score)  # type: ignore[assignment]
     return er
 
 
@@ -435,6 +445,200 @@ class TestEconMLExecutorFailsClosedOnSelectorFailure:
         )
 
         assert result["success"] is False
+
+    @pytest.mark.asyncio
+    async def test_fails_closed_when_energy_score_nan(self):
+        """Codex iter-1 MEDIUM: non-finite energy_score must fail-closed
+        rather than silently emit confidence=1.0 (NaN min/max semantics) and
+        non-JSON-safe NaN/Inf into the result payload.
+        """
+        er = _good_estimator_result()
+        # Force energy_score_result to carry a NaN energy_score. We use a
+        # SimpleNamespace as a duck-typed EnergyScoreResult to avoid coupling
+        # this test to the full EnergyScoreResult schema (it has many
+        # mandatory metadata fields).
+        from types import SimpleNamespace
+
+        er.energy_score_result = SimpleNamespace(energy_score=float("nan"))  # type: ignore[assignment]
+        sel = _FakeSelector(_selection_result(er))
+        result = await EconMLExecutor(selector=sel).execute(
+            _state_with_data(), _base_config()
+        )
+
+        assert result["success"] is False
+        assert "energy_score" in result["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_fails_closed_when_energy_score_infinite(self):
+        """Default EstimatorResult.energy_score is +inf when no energy score
+        was computed (estimator_selector.py:108). Must fail-closed: an
+        unevaluated estimator cannot produce a trustworthy quality_tier /
+        confidence.
+        """
+        er = _good_estimator_result()
+        er.energy_score_result = None  # property returns float("inf")
+        sel = _FakeSelector(_selection_result(er))
+        result = await EconMLExecutor(selector=sel).execute(
+            _state_with_data(), _base_config()
+        )
+
+        assert result["success"] is False
+
+
+# =============================================================================
+# Fail-closed when routed confounders are missing from the DataFrame
+# =============================================================================
+
+
+class TestEconMLExecutorConfounderValidation:
+    """Codex iter-1 MEDIUM: when the routed state names confounders that are
+    NOT present in the DataFrame, the executor MUST fail-closed -- not
+    silently substitute a different adjustment set.
+    """
+
+    @pytest.mark.asyncio
+    async def test_fails_closed_when_confounder_missing(self):
+        er = _good_estimator_result()
+        sel = _FakeSelector(_selection_result(er))
+        state = _state_with_data()
+        # state has confounders ['region', 'season']; df has 'region' but not
+        # 'climate_zone'. Make one of the named confounders missing.
+        state["confounders"] = ["region", "climate_zone"]
+        result = await EconMLExecutor(selector=sel).execute(state, _base_config())
+
+        assert result["success"] is False
+        assert "climate_zone" in result["error"]
+        # Selector MUST NOT have been called (we fail before reaching it).
+        assert sel.calls == 0
+
+    @pytest.mark.asyncio
+    async def test_fails_closed_when_all_confounders_missing(self):
+        er = _good_estimator_result()
+        sel = _FakeSelector(_selection_result(er))
+        state = _state_with_data()
+        # All named confounders absent from df -- pre-fix code would silently
+        # fall back to all non-(treatment, outcome) columns; new code
+        # fail-closes.
+        state["confounders"] = ["foo", "bar"]
+        result = await EconMLExecutor(selector=sel).execute(state, _base_config())
+
+        assert result["success"] is False
+        assert "foo" in result["error"] and "bar" in result["error"]
+        assert sel.calls == 0
+
+    @pytest.mark.asyncio
+    async def test_happy_path_when_all_confounders_present(self):
+        """All named confounders ARE in df -> selector is called with only
+        the named confounder subset (NOT all columns).
+        """
+        captured = {}
+
+        class _CapturingSelector:
+            def __init__(self, selection: SelectionResult):
+                self._selection = selection
+
+            def select(self, treatment, outcome, covariates, **kwargs):
+                captured["covariate_cols"] = list(covariates.columns)
+                return self._selection
+
+        er = _good_estimator_result()
+        sel = _CapturingSelector(_selection_result(er))
+        state = _state_with_data()
+        state["confounders"] = ["region"]  # subset; 'season' deliberately omitted
+        result = await EconMLExecutor(selector=sel).execute(state, _base_config())
+
+        assert result["success"] is True
+        assert captured["covariate_cols"] == ["region"]
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_non_treatment_outcome_when_no_confounders_named(self):
+        """When state has no confounders (None or []), the executor falls
+        back to all columns that aren't treatment or outcome. This is the
+        documented intent path -- NOT the silent-substitution one.
+        """
+        captured = {}
+
+        class _CapturingSelector:
+            def __init__(self, selection: SelectionResult):
+                self._selection = selection
+
+            def select(self, treatment, outcome, covariates, **kwargs):
+                captured["covariate_cols"] = list(covariates.columns)
+                return self._selection
+
+        er = _good_estimator_result()
+        sel = _CapturingSelector(_selection_result(er))
+        state = _state_with_data()
+        state["confounders"] = None  # no routed adjustment set
+        result = await EconMLExecutor(selector=sel).execute(state, _base_config())
+
+        assert result["success"] is True
+        # df has columns [marketing_spend, sales, region, season]; with
+        # treatment='marketing_spend' and outcome='sales', the fallback gives
+        # [region, season].
+        assert captured["covariate_cols"] == ["region", "season"]
+
+
+# =============================================================================
+# Energy-score sanitization of peer-estimator scores in the result payload
+# =============================================================================
+
+
+class TestEconMLExecutorEnergyScoreSanitization:
+    """Codex iter-1 MEDIUM (companion): even when the SELECTED estimator's
+    energy_score is finite, the per-library ``energy_scores`` dict in the
+    result payload may carry NaN / Inf from peer estimators that failed
+    energy-score computation. Those must be sanitized to None for JSON safety.
+    """
+
+    @pytest.mark.asyncio
+    async def test_peer_nan_energy_scores_sanitized_to_none(self):
+        er = _good_estimator_result()
+        sel = _FakeSelector(
+            SelectionResult(
+                selected=er,
+                selection_strategy=SelectionStrategy.BEST_ENERGY_SCORE,
+                all_results=[er],
+                selection_reason="test",
+                total_time_ms=10.0,
+                energy_scores={
+                    er.estimator_type.value: 0.3,
+                    "linear_dml": float("nan"),
+                    "drlearner": float("inf"),
+                },
+                energy_score_gap=0.05,
+            )
+        )
+        result = await EconMLExecutor(selector=sel).execute(
+            _state_with_data(), _base_config()
+        )
+
+        assert result["success"] is True
+        scores = result["result"]["energy_scores"]
+        assert scores[er.estimator_type.value] == pytest.approx(0.3)
+        assert scores["linear_dml"] is None
+        assert scores["drlearner"] is None
+
+    @pytest.mark.asyncio
+    async def test_non_finite_energy_score_gap_zeroed(self):
+        er = _good_estimator_result()
+        sel = _FakeSelector(
+            SelectionResult(
+                selected=er,
+                selection_strategy=SelectionStrategy.BEST_ENERGY_SCORE,
+                all_results=[er],
+                selection_reason="test",
+                total_time_ms=10.0,
+                energy_scores={er.estimator_type.value: 0.3},
+                energy_score_gap=float("nan"),  # only one estimator -> no gap
+            )
+        )
+        result = await EconMLExecutor(selector=sel).execute(
+            _state_with_data(), _base_config()
+        )
+
+        assert result["success"] is True
+        assert result["result"]["energy_score_gap"] == 0.0
 
 
 # =============================================================================
