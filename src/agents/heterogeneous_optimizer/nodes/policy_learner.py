@@ -42,11 +42,50 @@ class PolicyLearnerNode:
             logger.warning("Skipping policy learning - previous node failed")
             return state
 
+        # #437 fail-close: upstream cate_estimator did NOT set status=failed
+        # but produced no CATE fields (overall_ate AND cate_by_segment both
+        # absent). Refuse to synthesize policy recommendations from nothing;
+        # the silent-default ``or 0.0`` previously hid this failure mode.
+        # A legitimate honest zero (``overall_ate == 0.0``) is distinct from
+        # absence (``None``) and remains supported by the populated-zero path.
+        if state.get("overall_ate") is None and state.get("cate_by_segment") is None:
+            logger.error(
+                "Fail-closed: upstream cate_estimator produced no CATE fields",
+                extra={"node": "policy_learner"},
+            )
+            return {
+                **state,
+                "errors": [
+                    {
+                        "node": "policy_learner",
+                        "error": (
+                            "upstream cate_estimator produced no CATE fields "
+                            "(overall_ate=None, cate_by_segment=None) without "
+                            "setting status=failed; refusing to synthesize "
+                            "neutral recommendations"
+                        ),
+                    }
+                ],
+                "status": "failed",
+            }
+
         try:
-            cate_by_segment = state.get("cate_by_segment") or {}
+            cate_by_segment_raw = state.get("cate_by_segment")
+            cate_by_segment = cate_by_segment_raw if cate_by_segment_raw is not None else {}
             high_responders = state.get("high_responders") or []
             low_responders = state.get("low_responders") or []
-            ate: float = state.get("overall_ate") or 0.0
+            raw_ate = state.get("overall_ate")
+            ate: float = float(raw_ate) if raw_ate is not None else 0.0
+
+            # #437 row 4: explicit warning on partial data (real ATE but empty
+            # cate_by_segment) so consumers see SKIPPED-not-substituted.
+            partial_data_warning: str | None = None
+            if not cate_by_segment:
+                partial_data_warning = (
+                    "cate_by_segment is empty; policy recommendations cannot "
+                    "be derived per-segment and total expected lift will be 0"
+                )
+                logger.warning(partial_data_warning, extra={"node": "policy_learner"})
 
             # Generate policy recommendations
             recommendations = []
@@ -98,7 +137,7 @@ class PolicyLearnerNode:
                 },
             )
 
-            return {
+            output: Dict[str, Any] = {
                 **state,
                 "policy_recommendations": recommendations[:20],  # Top 20
                 "expected_total_lift": total_lift,
@@ -106,6 +145,10 @@ class PolicyLearnerNode:
                 "total_latency_ms": total_time,
                 "status": "completed",
             }
+            if partial_data_warning is not None:
+                existing_warnings = state.get("warnings") or []
+                output["warnings"] = [*existing_warnings, partial_data_warning]
+            return output  # type: ignore[return-value]
 
         except Exception as e:
             logger.error(

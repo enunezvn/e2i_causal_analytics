@@ -36,6 +36,47 @@ class ProfileGeneratorNode:
             logger.warning("Skipping profile generation - previous node failed")
             return state
 
+        # #437 fail-close: upstream cate_estimator did NOT set status=failed
+        # but produced no CATE fields (overall_ate AND cate_by_segment both
+        # absent). Refuse to synthesize an executive summary / interpretation
+        # from nothing; the silent-default ``or 0`` previously hid this
+        # failure mode and produced user-visible neutral content from a
+        # broken pipeline. Honest zero (``overall_ate == 0.0``) is distinct
+        # from absence (``None``) and the populated-zero path remains active.
+        if state.get("overall_ate") is None and state.get("cate_by_segment") is None:
+            logger.error(
+                "Fail-closed: upstream cate_estimator produced no CATE fields",
+                extra={"node": "profile_generator"},
+            )
+            return cast(
+                HeterogeneousOptimizerState,
+                {
+                    **state,
+                    "errors": [
+                        {
+                            "node": "profile_generator",
+                            "error": (
+                                "upstream cate_estimator produced no CATE fields "
+                                "(overall_ate=None, cate_by_segment=None) without "
+                                "setting status=failed; refusing to synthesize "
+                                "executive summary or strategic interpretation"
+                            ),
+                        }
+                    ],
+                    "status": "failed",
+                },
+            )
+
+        # #437 row 4: explicit warning on partial data (real ATE but empty
+        # cate_by_segment dict) — SKIPPED-not-substituted.
+        partial_data_warning: str | None = None
+        if not (state.get("cate_by_segment") or {}):
+            partial_data_warning = (
+                "cate_by_segment is empty; CATE plot data and segment grid "
+                "data will reflect zero segments"
+            )
+            logger.warning(partial_data_warning, extra={"node": "profile_generator"})
+
         try:
             # Generate CATE plot data
             cate_plot_data = self._generate_cate_plot_data(state)
@@ -72,18 +113,19 @@ class ProfileGeneratorNode:
                 generation_time=generation_time,
             )
 
-            return cast(
-                HeterogeneousOptimizerState,
-                {
-                    **state,
-                    "cate_plot_data": cate_plot_data,
-                    "segment_grid_data": segment_grid_data,
-                    "executive_summary": executive_summary,
-                    "key_insights": key_insights,
-                    "strategic_interpretation": strategic_interpretation,
-                    "status": "completed",
-                },
-            )
+            output: Dict[str, Any] = {
+                **state,
+                "cate_plot_data": cate_plot_data,
+                "segment_grid_data": segment_grid_data,
+                "executive_summary": executive_summary,
+                "key_insights": key_insights,
+                "strategic_interpretation": strategic_interpretation,
+                "status": "completed",
+            }
+            if partial_data_warning is not None:
+                existing_warnings = state.get("warnings") or []
+                output["warnings"] = [*existing_warnings, partial_data_warning]
+            return cast(HeterogeneousOptimizerState, output)
 
         except Exception as e:
             logger.error(

@@ -45,10 +45,59 @@ class SegmentAnalyzerNode:
             logger.warning("Skipping segment analysis - previous node failed")
             return state
 
+        # #437 fail-close: if upstream cate_estimator did NOT set status=failed
+        # but produced no CATE fields (both overall_ate AND cate_by_segment
+        # absent), downstream MUST fail-close rather than synthesize a
+        # successful-looking response with neutral defaults. A legitimate honest
+        # zero ATE (overall_ate == 0.0) is distinct from absence (None).
+        if state.get("overall_ate") is None and state.get("cate_by_segment") is None:
+            logger.error(
+                "Fail-closed: upstream cate_estimator produced no CATE fields",
+                extra={"node": "segment_analyzer"},
+            )
+            return {
+                **state,
+                "errors": [
+                    {
+                        "node": "segment_analyzer",
+                        "error": (
+                            "upstream cate_estimator produced no CATE fields "
+                            "(overall_ate=None, cate_by_segment=None) without "
+                            "setting status=failed; refusing to synthesize "
+                            "neutral output"
+                        ),
+                    }
+                ],
+                "status": "failed",
+            }
+
         try:
-            ate: float = state.get("overall_ate") or 0.0
-            cate_by_segment = state.get("cate_by_segment") or {}
+            raw_ate = state.get("overall_ate")
+            # Past the fail-close gate above, ``overall_ate`` is guaranteed to
+            # be present (a real float, including legitimate 0.0). ``or 0.0``
+            # would silently turn a legitimate 0.0 into 0.0 — same outcome —
+            # but using an explicit ``is None`` guard keeps the semantic of
+            # "honest zero is allowed" load-bearing.
+            ate: float = float(raw_ate) if raw_ate is not None else 0.0
+            cate_by_segment_raw = state.get("cate_by_segment")
+            cate_by_segment: Dict[str, List[CATEResult]] = (
+                cate_by_segment_raw if cate_by_segment_raw is not None else {}
+            )
             top_count = state.get("top_segments_count", 10)
+
+            # #437 row 4: real ATE but empty cate_by_segment is an honest
+            # partial-data case. Emit an explicit warning rather than silently
+            # treating absence as "no heterogeneity."
+            partial_data_warning: Optional[str] = None
+            if not cate_by_segment:
+                partial_data_warning = (
+                    "cate_by_segment is empty; heterogeneity analysis will "
+                    "report zero responder segments and heterogeneity_score=0"
+                )
+                logger.warning(
+                    partial_data_warning,
+                    extra={"node": "segment_analyzer"},
+                )
 
             # Flatten all segment results
             all_segments = []
@@ -125,6 +174,14 @@ class SegmentAnalyzerNode:
                 "analysis_latency_ms": analysis_time,
                 "status": "optimizing",
             }
+
+            # #437 row 4: surface the partial-data warning in the standard
+            # ``warnings`` channel. LangGraph reduces ``warnings`` with
+            # ``operator.add``; in unit tests called directly on the node,
+            # the returned dict carries the warning as a single-element list.
+            if partial_data_warning is not None:
+                existing_warnings = state.get("warnings") or []
+                output_state["warnings"] = [*existing_warnings, partial_data_warning]
 
             # V4.4: Add DAG validation results if available
             if dag_validated_segments is not None:
