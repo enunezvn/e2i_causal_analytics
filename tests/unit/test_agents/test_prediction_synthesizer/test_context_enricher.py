@@ -191,7 +191,15 @@ class TestContextEnricherErrorHandling:
 
     @pytest.mark.asyncio
     async def test_store_error_graceful(self, state_with_ensemble):
-        """Test graceful handling of store errors."""
+        """Test graceful handling of store errors.
+
+        Updated for #438: previously this test pinned the silent-default
+        `historical_accuracy=0.0` value, but that's now LABEL-disguised-
+        as-REWIRE. With 3 context_store deps failing (similar / accuracy /
+        trend) but feature_store=None (returns {} non-exception) and
+        online_features (returns {} non-exception), aggregate is 3-of-5
+        failures -> status='degraded'. Sentinel values: None (not 0.0).
+        """
 
         class FailingStore:
             async def find_similar(self, *args, **kwargs):
@@ -207,16 +215,33 @@ class TestContextEnricherErrorHandling:
 
         result = await node.execute(state_with_ensemble)
 
-        # Should complete despite errors (non-fatal)
-        assert result["status"] == "completed"
+        # 3-of-5 failures -> aggregate gate flips to 'degraded' (still
+        # non-fatal: caller's request was served with honest availability flags)
+        assert result["status"] == "degraded"
         context = result["prediction_context"]
-        # Fallbacks should be used
+        # Sentinel-shaped failure values (NOT plausible-real fabrication)
         assert context["similar_cases"] == []
-        assert context["historical_accuracy"] == 0.0
+        assert context["similar_cases_available"] is False
+        assert context["historical_accuracy"] is None
+        assert context["historical_accuracy_available"] is False
+        assert context["trend_direction"] is None
+        assert context["trend_direction_available"] is False
+        # Per-field + aggregate warnings present
+        warnings = result.get("warnings", []) or []
+        assert any("similar_cases unavailable" in w for w in warnings)
+        assert any("historical_accuracy unavailable" in w for w in warnings)
+        assert any("trend_direction unavailable" in w for w in warnings)
+        assert any("context_enrichment_degraded" in w for w in warnings)
 
     @pytest.mark.asyncio
     async def test_partial_store_failure(self, state_with_ensemble):
-        """Test handling of partial store failures."""
+        """Test handling of partial store failures.
+
+        Updated for #438: previously this test pinned the silent-default
+        `historical_accuracy=0.0`. With only the accuracy dep failing (1-of-5),
+        aggregate gate stays 'completed' but the sentinel value is None
+        (NOT 0.0) and availability flag is False.
+        """
 
         class PartialFailStore:
             async def find_similar(self, *args, **kwargs):
@@ -232,12 +257,18 @@ class TestContextEnricherErrorHandling:
 
         result = await node.execute(state_with_ensemble)
 
+        # 1-of-5 failures -> status='completed' (under degraded threshold)
         assert result["status"] == "completed"
         context = result["prediction_context"]
-        # Working parts should be populated
+        # Working parts populated and marked available
         assert len(context["similar_cases"]) == 1
-        # Failed parts should have fallbacks
-        assert context["historical_accuracy"] == 0.0
+        assert context["similar_cases_available"] is True
+        # Failed part uses SENTINEL None (not plausible-real 0.0)
+        assert context["historical_accuracy"] is None
+        assert context["historical_accuracy_available"] is False
+        warnings = result.get("warnings", []) or []
+        assert any("historical_accuracy unavailable" in w for w in warnings)
+        assert any("RuntimeError" in w for w in warnings)
 
 
 class TestFeatureImportanceAggregation:

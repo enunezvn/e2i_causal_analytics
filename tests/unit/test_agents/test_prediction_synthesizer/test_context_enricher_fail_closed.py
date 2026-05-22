@@ -31,7 +31,6 @@ from src.agents.prediction_synthesizer.nodes.context_enricher import (
     ContextEnricherNode,
 )
 
-
 # ============================================================================
 # Helpers: stores with selective failure surfaces
 # ============================================================================
@@ -56,15 +55,23 @@ class SelectivelyFailingContextStore:
         self.similar_fails = similar_fails
         self.accuracy_fails = accuracy_fails
         self.history_fails = history_fails
-        self.similar_data = similar_data if similar_data is not None else [
-            {"entity_id": "hcp_100", "prediction": 0.65, "outcome": 1},
-        ]
+        self.similar_data = (
+            similar_data
+            if similar_data is not None
+            else [
+                {"entity_id": "hcp_100", "prediction": 0.65, "outcome": 1},
+            ]
+        )
         self.accuracy_value = accuracy_value
-        self.history_data = history_data if history_data is not None else [
-            {"prediction": 0.40, "timestamp": "2024-01-01"},
-            {"prediction": 0.50, "timestamp": "2024-02-01"},
-            {"prediction": 0.60, "timestamp": "2024-03-01"},
-        ]
+        self.history_data = (
+            history_data
+            if history_data is not None
+            else [
+                {"prediction": 0.40, "timestamp": "2024-01-01"},
+                {"prediction": 0.50, "timestamp": "2024-02-01"},
+                {"prediction": 0.60, "timestamp": "2024-03-01"},
+            ]
+        )
 
     async def find_similar(
         self, entity_type: str, features: Dict[str, Any], limit: int
@@ -98,13 +105,21 @@ class SelectivelyFailingFeatureStore:
     ) -> None:
         self.importance_fails = importance_fails
         self.online_fails = online_fails
-        self.importance_data = importance_data if importance_data is not None else {
-            "call_frequency": 0.25,
-            "prescription_count": 0.20,
-        }
-        self.online_data = online_data if online_data is not None else {
-            "call_frequency": 25.0,
-        }
+        self.importance_data = (
+            importance_data
+            if importance_data is not None
+            else {
+                "call_frequency": 0.25,
+                "prescription_count": 0.20,
+            }
+        )
+        self.online_data = (
+            online_data
+            if online_data is not None
+            else {
+                "call_frequency": 25.0,
+            }
+        )
 
     async def get_importance(self, model_id: str) -> Dict[str, float]:
         if self.importance_fails:
@@ -181,15 +196,11 @@ class TestAllSuccess:
     """Disambiguation row 1: All 5 dependencies returned data successfully."""
 
     @pytest.mark.asyncio
-    async def test_all_dependencies_succeed_marks_all_available(
-        self, state_for_enrichment
-    ) -> None:
+    async def test_all_dependencies_succeed_marks_all_available(self, state_for_enrichment) -> None:
         ctx_store = SelectivelyFailingContextStore()
         feat_store = SelectivelyFailingFeatureStore()
 
-        node = ContextEnricherNode(
-            context_store=ctx_store, feature_store=feat_store
-        )
+        node = ContextEnricherNode(context_store=ctx_store, feature_store=feat_store)
         result = await node.execute(state_for_enrichment)
 
         assert result["status"] == "completed"
@@ -234,9 +245,7 @@ class TestSingleDependencyFails:
         ctx_store = SelectivelyFailingContextStore(similar_fails=True)
         feat_store = SelectivelyFailingFeatureStore()
 
-        node = ContextEnricherNode(
-            context_store=ctx_store, feature_store=feat_store
-        )
+        node = ContextEnricherNode(context_store=ctx_store, feature_store=feat_store)
         result = await node.execute(state_for_enrichment)
 
         assert result["status"] == "completed"
@@ -250,9 +259,7 @@ class TestSingleDependencyFails:
         assert context["trend_direction_available"] is True
         # Per-field warning naming the dep + exception class
         warnings = result.get("warnings", []) or []
-        named = [
-            w for w in warnings if "similar_cases" in w and "unavailable" in w
-        ]
+        named = [w for w in warnings if "similar_cases" in w and "unavailable" in w]
         assert named, f"expected similar_cases unavailable warning, got: {warnings}"
         assert any("RuntimeError" in w for w in named)
 
@@ -261,6 +268,7 @@ class TestSingleDependencyFails:
         self, state_for_enrichment
     ) -> None:
         ctx_store = SelectivelyFailingContextStore()
+
         # importance_fails surfaces via individual_predictions iteration -> empty
         # but to model an actual gather failure we mock the feature_store's
         # get_importance to raise; the node's _get_feature_importance currently
@@ -298,10 +306,7 @@ class TestSingleDependencyFails:
         assert context["feature_importance"] == {}
         assert context["feature_importance_available"] is False
         warnings = result.get("warnings", []) or []
-        named = [
-            w for w in warnings
-            if "feature_importance" in w and "unavailable" in w
-        ]
+        named = [w for w in warnings if "feature_importance" in w and "unavailable" in w]
         assert named, f"expected feature_importance unavailable warning: {warnings}"
         assert any("RuntimeError" in w for w in named)
 
@@ -312,9 +317,7 @@ class TestSingleDependencyFails:
         ctx_store = SelectivelyFailingContextStore(accuracy_fails=True)
         feat_store = SelectivelyFailingFeatureStore()
 
-        node = ContextEnricherNode(
-            context_store=ctx_store, feature_store=feat_store
-        )
+        node = ContextEnricherNode(context_store=ctx_store, feature_store=feat_store)
         result = await node.execute(state_for_enrichment)
 
         assert result["status"] == "completed"
@@ -323,23 +326,16 @@ class TestSingleDependencyFails:
         assert context["historical_accuracy"] is None
         assert context["historical_accuracy_available"] is False
         warnings = result.get("warnings", []) or []
-        named = [
-            w for w in warnings
-            if "historical_accuracy" in w and "unavailable" in w
-        ]
+        named = [w for w in warnings if "historical_accuracy" in w and "unavailable" in w]
         assert named, f"expected historical_accuracy warning: {warnings}"
         assert any("ConnectionError" in w for w in named)
 
     @pytest.mark.asyncio
-    async def test_trend_direction_failure_uses_sentinel_none(
-        self, state_for_enrichment
-    ) -> None:
+    async def test_trend_direction_failure_uses_sentinel_none(self, state_for_enrichment) -> None:
         ctx_store = SelectivelyFailingContextStore(history_fails=True)
         feat_store = SelectivelyFailingFeatureStore()
 
-        node = ContextEnricherNode(
-            context_store=ctx_store, feature_store=feat_store
-        )
+        node = ContextEnricherNode(context_store=ctx_store, feature_store=feat_store)
         result = await node.execute(state_for_enrichment)
 
         assert result["status"] == "completed"
@@ -348,10 +344,7 @@ class TestSingleDependencyFails:
         assert context["trend_direction"] is None
         assert context["trend_direction_available"] is False
         warnings = result.get("warnings", []) or []
-        named = [
-            w for w in warnings
-            if "trend_direction" in w and "unavailable" in w
-        ]
+        named = [w for w in warnings if "trend_direction" in w and "unavailable" in w]
         assert named, f"expected trend_direction warning: {warnings}"
         assert any("ValueError" in w for w in named)
 
@@ -382,10 +375,7 @@ class TestSingleDependencyFails:
         context = result["prediction_context"]
         assert context["online_features_available"] is False
         warnings = result.get("warnings", []) or []
-        named = [
-            w for w in warnings
-            if "online_features" in w and "unavailable" in w
-        ]
+        named = [w for w in warnings if "online_features" in w and "unavailable" in w]
         assert named, f"expected online_features warning: {warnings}"
         assert any("TimeoutError" in w for w in named)
 
@@ -410,9 +400,7 @@ class TestAggregateDegraded:
         )
         feat_store = SelectivelyFailingFeatureStore()
 
-        node = ContextEnricherNode(
-            context_store=ctx_store, feature_store=feat_store
-        )
+        node = ContextEnricherNode(context_store=ctx_store, feature_store=feat_store)
         result = await node.execute(state_for_enrichment)
 
         assert result["status"] == "degraded"
@@ -444,9 +432,7 @@ class TestAllFiveFail:
     status='failed' with top-level error."""
 
     @pytest.mark.asyncio
-    async def test_all_five_failures_flips_status_to_failed(
-        self, state_for_enrichment
-    ) -> None:
+    async def test_all_five_failures_flips_status_to_failed(self, state_for_enrichment) -> None:
         ctx_store = SelectivelyFailingContextStore(
             similar_fails=True,
             accuracy_fails=True,
@@ -457,9 +443,7 @@ class TestAllFiveFail:
             async def get_importance(self, model_id: str) -> Dict[str, float]:
                 raise RuntimeError("fully down")
 
-        node = ContextEnricherNode(
-            context_store=ctx_store, feature_store=TotalFailFStore()
-        )
+        node = ContextEnricherNode(context_store=ctx_store, feature_store=TotalFailFStore())
 
         async def raising_importance(state):  # type: ignore[no-untyped-def]
             raise RuntimeError("importance dep down")
@@ -475,12 +459,10 @@ class TestAllFiveFail:
         assert result["status"] == "failed"
         # Top-level error code
         errors = result.get("errors", []) or []
-        codes = [
-            e.get("code") if isinstance(e, dict) else e for e in errors
-        ]
-        assert any(
-            c == "context_enrichment_total_failure" for c in codes
-        ), f"expected total-failure error code, got errors: {errors}"
+        codes = [e.get("code") if isinstance(e, dict) else e for e in errors]
+        assert any(c == "context_enrichment_total_failure" for c in codes), (
+            f"expected total-failure error code, got errors: {errors}"
+        )
         context = result["prediction_context"]
         assert context is not None
         # All 5 unavailable; values all sentinel
@@ -513,16 +495,12 @@ class TestIncludeContextFalseEarlyReturn:
         ctx_store = MagicMock()
         ctx_store.find_similar = AsyncMock(side_effect=RuntimeError("would fail"))
         ctx_store.get_accuracy = AsyncMock(side_effect=RuntimeError("would fail"))
-        ctx_store.get_prediction_history = AsyncMock(
-            side_effect=RuntimeError("would fail")
-        )
+        ctx_store.get_prediction_history = AsyncMock(side_effect=RuntimeError("would fail"))
 
         feat_store = MagicMock()
         feat_store.get_importance = AsyncMock(side_effect=RuntimeError("would fail"))
 
-        node = ContextEnricherNode(
-            context_store=ctx_store, feature_store=feat_store
-        )
+        node = ContextEnricherNode(context_store=ctx_store, feature_store=feat_store)
         result = await node.execute(state_for_enrichment)
 
         # Early-return contract: status completed, no prediction_context populated
@@ -534,6 +512,4 @@ class TestIncludeContextFalseEarlyReturn:
         feat_store.get_importance.assert_not_called()
         # No new availability flags should leak into the early-return path
         # (the early return uses the existing schema fields only)
-        assert "prediction_context" not in result or result.get(
-            "prediction_context"
-        ) is None
+        assert "prediction_context" not in result or result.get("prediction_context") is None
