@@ -25,7 +25,7 @@ Forbidden patterns (HIGH finding on detection per CLAUDE.md anti-mocking):
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -45,7 +45,6 @@ from src.causal_engine.pipeline.state import (
     PipelineStage,
     PipelineState,
 )
-
 
 # =============================================================================
 # Helpers
@@ -161,23 +160,33 @@ def _state_with_data(df: Optional[pd.DataFrame] = None, **overrides) -> Pipeline
     return state
 
 
+_CATE_SENTINEL = object()
+
+
 def _good_estimator_result(
     *,
     ate: float = 0.15,
     ate_std: float = 0.02,
     ate_ci_lower: float = 0.10,
     ate_ci_upper: float = 0.20,
-    cate: Optional[np.ndarray] = None,
+    cate: Any = _CATE_SENTINEL,
     estimator_type: EstimatorType = EstimatorType.CAUSAL_FOREST,
 ) -> EstimatorResult:
-    """Build a successful EstimatorResult satisfying every fail-closed guard."""
-    if cate is None:
-        cate = np.array([0.12, 0.14, 0.16, 0.18], dtype=float)
+    """Build a successful EstimatorResult satisfying every fail-closed guard.
+
+    Use a sentinel for ``cate`` so callers can explicitly pass ``cate=None``
+    (LinearDML / DRLearner / OLS shape) vs. omit it (CausalForestDML shape
+    with a default per-record CATE array).
+    """
+    if cate is _CATE_SENTINEL:
+        cate_value = np.array([0.12, 0.14, 0.16, 0.18], dtype=float)
+    else:
+        cate_value = cate  # may be None (LinearDML shape) or an array
     er = EstimatorResult(
         estimator_type=estimator_type,
         success=True,
         ate=ate,
-        cate=cate,
+        cate=cate_value,
         ate_std=ate_std,
         ate_ci_lower=ate_ci_lower,
         ate_ci_upper=ate_ci_upper,
