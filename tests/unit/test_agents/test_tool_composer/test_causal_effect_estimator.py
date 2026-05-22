@@ -62,9 +62,7 @@ from src.agents.tool_composer.tool_registrations import (
 # ============================================================================
 
 
-def _build_real_dataframe(
-    *, n: int = 400, true_ate: float = 1.5, seed: int = 13
-) -> pd.DataFrame:
+def _build_real_dataframe(*, n: int = 400, true_ate: float = 1.5, seed: int = 13) -> pd.DataFrame:
     """Build a DataFrame with a known causal effect for asserting pipeline ATE recovery.
 
     FIXTURE assembled inside the TEST (not the tool body) — the anti-pattern is
@@ -75,12 +73,8 @@ def _build_real_dataframe(
     rng = np.random.default_rng(seed)
     confounder_a = rng.normal(0.0, 1.0, n)
     treatment = 0.5 * confounder_a + rng.normal(0.0, 1.0, n)
-    outcome = (
-        true_ate * treatment + 0.7 * confounder_a + rng.normal(0.0, 1.0, n)
-    )
-    return pd.DataFrame(
-        {"treatment": treatment, "outcome": outcome, "confounder_a": confounder_a}
-    )
+    outcome = true_ate * treatment + 0.7 * confounder_a + rng.normal(0.0, 1.0, n)
+    return pd.DataFrame({"treatment": treatment, "outcome": outcome, "confounder_a": confounder_a})
 
 
 def _build_pipeline_output(
@@ -152,11 +146,7 @@ class TestCausalEffectEstimatorRealWiring:
             # treatment / outcome / confounders / data_source.
             call_args = mock_instance.execute.call_args
             assert call_args is not None, "execute() must be called with arguments"
-            input_data = (
-                call_args.args[0]
-                if call_args.args
-                else call_args.kwargs.get("input_data")
-            )
+            input_data = call_args.args[0] if call_args.args else call_args.kwargs.get("input_data")
             assert isinstance(input_data, dict)
             assert input_data.get("treatment_var") == "treatment"
             assert input_data.get("outcome_var") == "outcome"
@@ -167,15 +157,18 @@ class TestCausalEffectEstimatorRealWiring:
             # top-level data_cache override. We accept any of the canonical
             # paths the data_resolver supports.
             filters_dict = input_data.get("filters") or {}
-            df_seen = (
-                filters_dict.get("estimation_data")
-                or filters_dict.get("dataframe")
-                or filters_dict.get("data")
-            )
+            # Truthiness check on a DataFrame raises (ambiguous truth value);
+            # explicit None-checks per key are the correct narrowing pattern.
+            df_seen: Optional[Any] = None
+            for key in ("estimation_data", "dataframe", "data"):
+                candidate = filters_dict.get(key)
+                if candidate is not None:
+                    df_seen = candidate
+                    break
             assert df_seen is df, (
                 "The tool MUST route the caller's DataFrame into a "
                 "data_resolver-compatible slot of PipelineInput.filters; "
-                f"got filters={filters_dict!r}"
+                f"got filters keys={list(filters_dict.keys())!r}"
             )
 
             # The returned EffectEstimate's ATE matches the pipeline's
@@ -237,9 +230,7 @@ class TestCausalEffectEstimatorRealWiring:
         ) as mock_pipeline_cls:
             mock_instance = mock_pipeline_cls.return_value
             mock_instance.execute = AsyncMock(
-                return_value=_build_pipeline_output(
-                    consensus_effect=2.5, consensus_confidence=0.95
-                )
+                return_value=_build_pipeline_output(consensus_effect=2.5, consensus_confidence=0.95)
             )
             result = causal_effect_estimator(
                 treatment="treatment",
@@ -287,13 +278,8 @@ class TestCausalEffectEstimatorFailClosed:
         # The error message must mention the missing data — operators must be
         # able to read the message and know what to fix.
         message = str(exc_info.value).lower()
-        assert (
-            "data" in message
-            or "dataframe" in message
-            or "estimation" in message
-        ), (
-            f"Fail-closed error message must mention the missing data; got "
-            f"{exc_info.value!r}"
+        assert "data" in message or "dataframe" in message or "estimation" in message, (
+            f"Fail-closed error message must mention the missing data; got {exc_info.value!r}"
         )
 
     def test_fail_closed_when_pipeline_raises_executor_data_unavailable(self) -> None:
@@ -375,11 +361,7 @@ class TestCausalEffectEstimatorFailClosed:
                     data=df,
                 )
             message = str(exc_info.value).lower()
-            assert (
-                "consensus" in message
-                or "effect" in message
-                or "available" in message
-            ), (
+            assert "consensus" in message or "effect" in message or "available" in message, (
                 "Fail-closed error must mention the missing consensus_effect; "
                 f"got {exc_info.value!r}"
             )
@@ -418,35 +400,71 @@ class TestCausalEffectEstimatorAntiMocking:
     """
 
     def _read_source(self) -> str:
-        path = Path(inspect.getsourcefile(causal_effect_estimator) or "")
+        # The @composable_tool decorator wraps the function; `getsourcefile`
+        # on the wrapper returns the decorator's file (`tool_registry/registry.py`).
+        # Unwrap via `__wrapped__` (the canonical functools.wraps attribute) to
+        # find the real definition file.
+        target = getattr(causal_effect_estimator, "__wrapped__", causal_effect_estimator)
+        path = Path(inspect.getsourcefile(target) or "")
         return path.read_text()
 
     def test_source_does_not_hardcode_ate_012(self) -> None:
-        """The source MUST NOT contain the historical `ate=0.12` placeholder."""
+        """Executable code inside `causal_effect_estimator` MUST NOT contain
+        the historical `ate=0.12` placeholder.
+
+        Uses AST parsing to scan ONLY executable code (excludes docstrings),
+        so a docstring that legitimately documents "we replaced ate=0.12 with
+        SequentialPipeline" doesn't trigger a false positive. The forbidden
+        patterns surface as `keyword=Constant` AST nodes; we scan for the
+        specific (keyword_arg, value) pairs.
+        """
+        import ast
+
         src = self._read_source()
-        # We restrict to the causal_effect_estimator function body (between
-        # its `def` and the next `@composable_tool` decorator) so other
-        # tools in the file (e.g. cate_analyzer) keep their freedom to use
-        # any number.
-        pattern = re.compile(
-            r"^def causal_effect_estimator\(.*?(?=^@composable_tool|^def\s|\Z)",
-            re.MULTILINE | re.DOTALL,
-        )
-        m = pattern.search(src)
-        assert m is not None, "Could not locate causal_effect_estimator function body"
-        body = m.group(0)
-        forbidden_constants = [
-            "ate=0.12",
-            "ci_lower=0.08",
-            "ci_upper=0.16",
-            "p_value=0.001",
-            "n_samples=10000",
-        ]
-        offenders = [c for c in forbidden_constants if c in body]
+        tree = ast.parse(src)
+
+        # Find the `causal_effect_estimator` FunctionDef.
+        target_func: Optional[ast.FunctionDef] = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "causal_effect_estimator":
+                target_func = node
+                break
+        assert target_func is not None, "Could not locate causal_effect_estimator function"
+
+        # Drop the docstring before scanning -- otherwise our own docstring
+        # would falsely match. The docstring is an Expr at body[0] with a
+        # Constant string value.
+        body_nodes: List[ast.stmt] = list(target_func.body)
+        if (
+            body_nodes
+            and isinstance(body_nodes[0], ast.Expr)
+            and isinstance(body_nodes[0].value, ast.Constant)
+            and isinstance(body_nodes[0].value.value, str)
+        ):
+            body_nodes = body_nodes[1:]
+
+        # Forbidden (keyword_name, value) pairs.
+        forbidden_pairs = {
+            ("ate", 0.12),
+            ("ci_lower", 0.08),
+            ("ci_upper", 0.16),
+            ("p_value", 0.001),
+            ("n_samples", 10000),
+        }
+
+        offenders: List[str] = []
+        for stmt in body_nodes:
+            for sub in ast.walk(stmt):
+                if isinstance(sub, ast.keyword) and isinstance(sub.value, ast.Constant):
+                    key = sub.arg
+                    val = sub.value.value
+                    if (key, val) in forbidden_pairs:
+                        offenders.append(f"{key}={val!r}")
+
         assert not offenders, (
-            f"causal_effect_estimator function body contains historical "
+            f"causal_effect_estimator EXECUTABLE CODE contains historical "
             f"hardcoded placeholder values: {offenders}. Per C-7 these must "
-            f"be replaced with values derived from SequentialPipeline."
+            f"be derived from SequentialPipeline outputs, not hardcoded."
         )
 
     def test_source_does_not_use_random_seeding(self) -> None:
