@@ -95,8 +95,7 @@ def _extract_uplift_inputs_from_state(
     df = filters.get("dataframe")
     if df is None:
         raise ExecutorDataUnavailable(
-            "CausalMLExecutor: no real data available — "
-            "`state['filters']['dataframe']` is missing."
+            "CausalMLExecutor: no real data available — `state['filters']['dataframe']` is missing."
         )
     if not isinstance(df, pd.DataFrame):
         raise ExecutorDataUnavailable(
@@ -104,29 +103,21 @@ def _extract_uplift_inputs_from_state(
             f"pandas DataFrame; got {type(df).__name__}."
         )
     if len(df) == 0:
-        raise ExecutorDataUnavailable(
-            "CausalMLExecutor: input DataFrame is empty (0 rows)."
-        )
+        raise ExecutorDataUnavailable("CausalMLExecutor: input DataFrame is empty (0 rows).")
 
     treatment_var = state.get("treatment_var")
     outcome_var = state.get("outcome_var")
     if not treatment_var:
-        raise ExecutorDataUnavailable(
-            "CausalMLExecutor: state['treatment_var'] is required."
-        )
+        raise ExecutorDataUnavailable("CausalMLExecutor: state['treatment_var'] is required.")
     if not outcome_var:
-        raise ExecutorDataUnavailable(
-            "CausalMLExecutor: state['outcome_var'] is required."
-        )
+        raise ExecutorDataUnavailable("CausalMLExecutor: state['outcome_var'] is required.")
     if treatment_var not in df.columns:
         raise ExecutorDataUnavailable(
-            f"CausalMLExecutor: treatment column '{treatment_var}' "
-            f"missing from input DataFrame."
+            f"CausalMLExecutor: treatment column '{treatment_var}' missing from input DataFrame."
         )
     if outcome_var not in df.columns:
         raise ExecutorDataUnavailable(
-            f"CausalMLExecutor: outcome column '{outcome_var}' "
-            f"missing from input DataFrame."
+            f"CausalMLExecutor: outcome column '{outcome_var}' missing from input DataFrame."
         )
 
     # Feature columns = explicit confounders + effect_modifiers, intersected
@@ -453,9 +444,7 @@ class CausalMLExecutor(LibraryExecutor):
                 logger.warning(
                     "CausalMLExecutor: uplift metrics computation failed: %s", metric_err
                 )
-                warnings.append(
-                    f"Uplift metrics unavailable (auuc/qini): {metric_err}"
-                )
+                warnings.append(f"Uplift metrics unavailable (auuc/qini): {metric_err}")
                 metrics = {"auuc": None, "qini": None}
 
             result_payload: Dict[str, Any] = {

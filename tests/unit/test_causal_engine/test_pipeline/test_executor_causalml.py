@@ -336,9 +336,7 @@ class TestCausalMLExecutorFailsClosedWhenDataUnavailable:
     @pytest.mark.asyncio
     async def test_execute_fails_closed_when_dataframe_is_empty(self):
         executor = CausalMLExecutor()
-        empty_df = pd.DataFrame(
-            {"marketing_spend": [], "sales": [], "age": [], "income": []}
-        )
+        empty_df = pd.DataFrame({"marketing_spend": [], "sales": [], "age": [], "income": []})
         state = _make_pipeline_state(filters={"dataframe": empty_df})
         config = _make_pipeline_config()
 
@@ -577,8 +575,7 @@ class TestCausalMLExecutorRealLibraryWiring:
         result = await executor.execute(state, config)
 
         assert result["success"] is True, (
-            f"Expected success after control_name resolution; "
-            f"got error: {result.get('error')}"
+            f"Expected success after control_name resolution; got error: {result.get('error')}"
         )
         assert result["result"]["control_name"] == "0"
         # Non-control arms from real UpliftResult; control "0" is EXCLUDED.
