@@ -573,6 +573,36 @@ class TestNetworkXFailClosed:
         assert result["error"] is not None
         assert result["confidence"] == 0.0
 
+    @pytest.mark.asyncio
+    async def test_non_string_treatment_var_fails_closed(self):
+        """`treatment_var=42` raises rather than being silently passed to nx.add_node().
+
+        Addresses codex iter-3 MEDIUM: networkx accepts any hashable node,
+        so treatment_var=42 would silently build an integer-node graph and
+        return success=True. PipelineState types it as Optional[str], so
+        non-string non-None must fail closed.
+        """
+        executor = NetworkXExecutor()
+        state = _state(treatment_var=42, outcome_var="Y", confounders=["C1"])  # type: ignore[arg-type]
+
+        result = await executor.execute(state, _minimal_config())
+
+        assert result["success"] is False
+        assert result["error"] is not None
+        assert result["confidence"] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_non_string_outcome_var_fails_closed(self):
+        """`outcome_var=[1,2]` raises rather than being silently passed to nx.add_node()."""
+        executor = NetworkXExecutor()
+        state = _state(treatment_var="T", outcome_var=[1, 2], confounders=["C1"])  # type: ignore[arg-type]
+
+        result = await executor.execute(state, _minimal_config())
+
+        assert result["success"] is False
+        assert result["error"] is not None
+        assert result["confidence"] == 0.0
+
 
 # =============================================================================
 # Existing contract preservation (R1 — ABC, library property, validate_input)

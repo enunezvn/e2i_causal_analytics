@@ -76,8 +76,8 @@ class NetworkXExecutor(LibraryExecutor):
         """
         start_time = time.time()
         try:
-            treatment = state.get("treatment_var")
-            outcome = state.get("outcome_var")
+            treatment = self._coerce_optional_str(state.get("treatment_var"), "treatment_var")
+            outcome = self._coerce_optional_str(state.get("outcome_var"), "outcome_var")
             confounders = self._coerce_str_list(state.get("confounders"))
             effect_modifiers = self._coerce_str_list(state.get("effect_modifiers"))
             upstream_graph = state.get("causal_graph")
@@ -173,6 +173,31 @@ class NetworkXExecutor(LibraryExecutor):
     # ------------------------------------------------------------------ #
     # Graph construction
     # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _coerce_optional_str(value: Any, field_name: str) -> Optional[str]:
+        """Coerce a state field expected to be ``Optional[str]``.
+
+        ``PipelineState`` types ``treatment_var`` and ``outcome_var`` as
+        ``Optional[str]``. None passes through; a real string passes
+        through; anything else (int, bool, list, dict, etc.) raises
+        ``TypeError`` so we fail closed on malformed input.
+
+        Addresses codex iter-3 MEDIUM: previously, ``treatment_var=42``
+        could be silently passed to ``graph.add_node(42)`` (networkx
+        accepts hashable nodes) and the executor would return success=True
+        with integer nodes — violating the TypedDict contract and the
+        downstream consumer expectation that nodes are string variable
+        names.
+        """
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise TypeError(
+                f"state[{field_name!r}] must be a string or None, "
+                f"got {type(value).__name__}: {value!r}"
+            )
+        return value
 
     @staticmethod
     def _coerce_str_list(value: Any) -> List[str]:
