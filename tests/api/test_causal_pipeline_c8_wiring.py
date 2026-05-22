@@ -198,7 +198,8 @@ class TestSequentialDefaultModeFailsClosed:
 
     The fail-close is no longer a hardcoded short-circuit — it's the honest
     outcome of having every wired executor return success=False because no
-    DataFrame is resolvable from state.
+    DataFrame is resolvable from state (plus the data-required guard so
+    NetworkX's symbolic success cannot mask a missing effect estimate).
     """
 
     def test_sequential_default_no_data_returns_503(self, sequential_pipeline_request):
@@ -209,6 +210,30 @@ class TestSequentialDefaultModeFailsClosed:
         )
         assert response.status_code == 503, (
             f"Default path without resolvable data must fail-closed with 503, "
+            f"got {response.status_code}: {response.text[:300]}"
+        )
+
+    def test_sequential_networkx_plus_dowhy_no_data_still_returns_503(self):
+        """NetworkX succeeds symbolically; DoWhy needs data → 503 (codex iter-2 HIGH).
+
+        Per codex iter-2: a request that includes a data-required library
+        (DoWhy/EconML/CausalML) but supplies no data should fail-close even
+        when NetworkX succeeds. Otherwise NetworkX's symbolic graph-analysis
+        success would mask the missing effect estimate the user asked for.
+        """
+        request_body = {
+            "stages": [
+                {"library": "networkx", "estimator": None},
+                {"library": "dowhy", "estimator": "propensity_score_matching"},
+            ],
+            "treatment_var": "promotion",
+            "outcome_var": "trx",
+            "covariates": ["age"],
+            "stop_on_failure": False,
+        }
+        response = client.post("/api/causal/pipeline/sequential", json=request_body)
+        assert response.status_code == 503, (
+            f"NetworkX + DoWhy without data must fail-close (DoWhy data-required); "
             f"got {response.status_code}: {response.text[:300]}"
         )
 
@@ -224,6 +249,22 @@ class TestParallelDefaultModeFailsClosed:
         )
         assert response.status_code == 503, (
             f"Default path without resolvable data must fail-closed with 503, "
+            f"got {response.status_code}: {response.text[:300]}"
+        )
+
+    def test_parallel_networkx_plus_econml_no_data_still_returns_503(self):
+        """NetworkX succeeds symbolically; EconML needs data → 503 (codex iter-2 HIGH)."""
+        request_body = {
+            "libraries": ["networkx", "econml"],
+            "treatment_var": "promotion",
+            "outcome_var": "trx",
+            "covariates": ["age"],
+            "consensus_method": "variance_weighted",
+            "timeout_seconds": 30,
+        }
+        response = client.post("/api/causal/pipeline/parallel", json=request_body)
+        assert response.status_code == 503, (
+            f"NetworkX + EconML without data must fail-close (EconML data-required); "
             f"got {response.status_code}: {response.text[:300]}"
         )
 

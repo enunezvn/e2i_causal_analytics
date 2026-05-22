@@ -665,6 +665,15 @@ _NO_RESOLVABLE_DATA_DETAIL = (
     "clearly-labeled pinned-zero placeholder used in UI demos."
 )
 
+# Libraries that REQUIRE a DataFrame to produce a real causal estimate.
+# NetworkX is excluded because it is a symbolic-input graph executor (see
+# C-5 design spike) — it can succeed with only variable names and an
+# upstream `state['causal_graph']`. If a request includes any of these
+# data-required libraries AND none of them succeed, we fail-close even
+# when NetworkX succeeded, because the pipeline did not answer the
+# causal-effect question the user asked.
+_DATA_REQUIRED_LIBRARIES: frozenset[str] = frozenset({"dowhy", "econml", "causalml"})
+
 
 # =============================================================================
 # #354 C-8: real-pipeline wiring helpers
@@ -926,10 +935,8 @@ def _sequential_output_to_response(
     }
     successful_libraries = [lib for lib in libraries_used if lib not in failed_libraries]
 
-    if not successful_libraries:
-        # Pipeline ran but every executor returned success=False (typically
-        # because no DataFrame was resolvable from state). Honest fail-close.
-        raise HTTPException(status_code=503, detail=_NO_RESOLVABLE_DATA_DETAIL)
+    requested_libraries = [stage.library.value for stage in request.stages]
+    _enforce_data_required_fail_close(requested_libraries, successful_libraries)
 
     error_by_library: Dict[str, str] = {
         str(err.get("library")): str(err.get("error") or "")
@@ -993,10 +1000,8 @@ def _parallel_output_to_response(
     }
     successful_libraries = [lib for lib in libraries_used if lib not in error_by_library]
 
-    if not successful_libraries:
-        # Honest fail-close — every requested library failed (e.g. no
-        # DataFrame resolvable from state). 503 reflects reality.
-        raise HTTPException(status_code=503, detail=_NO_RESOLVABLE_DATA_DETAIL)
+    requested_libraries = [lib.value for lib in request.libraries]
+    _enforce_data_required_fail_close(requested_libraries, successful_libraries)
 
     library_results: Dict[str, Dict[str, Any]] = {}
     succeeded: List[str] = []
@@ -1042,6 +1047,50 @@ def _derive_response_status(stages_completed: int, stages_total: int) -> Analysi
     if stages_completed == stages_total:
         return AnalysisStatus.COMPLETED
     return AnalysisStatus.FAILED
+
+
+def _enforce_data_required_fail_close(
+    requested_libraries: List[str],
+    successful_libraries: List[str],
+) -> None:
+    """Fail-close with 503 when no library produced an answer to the question asked.
+
+    Two fail-close conditions, both honest signals of "pipeline did not answer":
+
+    1. **No library succeeded** — every executor returned success=False
+       (typically because no DataFrame was resolvable from state).
+    2. **Only symbolic-input libraries succeeded** when an effect question
+       was asked — i.e. the request named at least one of
+       ``_DATA_REQUIRED_LIBRARIES`` (dowhy/econml/causalml — the libraries
+       that produce causal effect estimates) AND none of them succeeded.
+       NetworkX alone cannot answer "what is the causal effect?" — it
+       answers "what is the graph structure?". Returning 200 with only
+       NetworkX in this case would be a labeling problem (succeeded =
+       True; answered effect question = False).
+
+    NetworkX-only requests (``request.stages = [networkx]`` or
+    ``request.libraries = [networkx]``) intentionally bypass this fail-
+    close — a graph-only question is a valid use case and NetworkX is
+    the canonical answer.
+
+    Raises:
+        HTTPException(503): with ``_NO_RESOLVABLE_DATA_DETAIL`` body.
+    """
+    if not successful_libraries:
+        raise HTTPException(status_code=503, detail=_NO_RESOLVABLE_DATA_DETAIL)
+
+    requested_data_required = {
+        lib for lib in requested_libraries if lib in _DATA_REQUIRED_LIBRARIES
+    }
+    if requested_data_required:
+        successful_data_required = {
+            lib for lib in successful_libraries if lib in _DATA_REQUIRED_LIBRARIES
+        }
+        if not successful_data_required:
+            # User asked for at least one effect-estimating library, none
+            # succeeded. NetworkX's symbolic success doesn't answer the
+            # effect question — fail-close.
+            raise HTTPException(status_code=503, detail=_NO_RESOLVABLE_DATA_DETAIL)
 
 
 def _build_stage_result_from_output(
