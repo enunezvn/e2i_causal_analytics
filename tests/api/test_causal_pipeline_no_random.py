@@ -144,16 +144,27 @@ def cross_validation_request():
 
 
 class TestSequentialPipelineDefaultPath503:
-    """Default-path /pipeline/sequential MUST fail-closed with 503."""
+    """Default-path /pipeline/sequential MUST fail-closed with 503.
+
+    Post-#354 C-8 reasoning (2026-05-22): the 503 is no longer a hardcoded
+    short-circuit. The endpoint now invokes the wired SequentialPipeline
+    (C-1..C-6); when no DataFrame is resolvable from request filters, every
+    wired executor fails-closed (refuses to fabricate synthetic data), and
+    the response builder honestly reports 503 with _NO_RESOLVABLE_DATA_DETAIL.
+    The behavioral invariant — "no real data → 503" — is preserved.
+    """
 
     def test_sequential_default_path_returns_503(self, sequential_pipeline_request):
-        """No demo_mode → 503.
+        """No demo_mode + no inline DataFrame → 503.
 
         The structured error response goes through src.api.main's global handler
         which wraps HTTPException(503) in DependencyError. The original detail
         is only surfaced in debug mode via `original_error`. The structural
         guarantee tested here is the 503 status — the detail is verified by
         the source-pin test on the _NO_REAL_DATA_BACKEND_DETAIL constant.
+
+        Post-C-8: the 503 reflects the wired pipeline's honest fail-close
+        after invoking every executor and receiving success=False from each.
         """
         from fastapi.testclient import TestClient
 
@@ -237,10 +248,16 @@ class TestSequentialPipelineDemoMode:
 
 
 class TestParallelPipelineDefaultPath503:
-    """Default-path /pipeline/parallel MUST fail-closed with 503."""
+    """Default-path /pipeline/parallel MUST fail-closed with 503.
+
+    Post-#354 C-8 reasoning (2026-05-22): same as the sequential class
+    docstring — the endpoint now invokes the wired ParallelPipeline; the
+    503 is the pipeline's honest fail-close when no DataFrame is resolvable
+    from request filters.
+    """
 
     def test_parallel_default_path_returns_503(self, parallel_pipeline_request):
-        """No demo_mode → 503."""
+        """No demo_mode + no inline DataFrame → 503 (post-C-8 honest fail-close)."""
         from fastapi.testclient import TestClient
 
         from src.api.main import app

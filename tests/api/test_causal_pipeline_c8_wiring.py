@@ -90,9 +90,7 @@ class TestSequentialEndpointWiresRealPipeline:
             "from src.causal_engine.pipeline.sequential import" in source
             or "from src.causal_engine.pipeline import SequentialPipeline" in source
             or "import SequentialPipeline" in source
-        ), (
-            "C-8 regression: SequentialPipeline import missing from causal route module"
-        )
+        ), "C-8 regression: SequentialPipeline import missing from causal route module"
 
     def test_execute_sequential_pipeline_calls_real_pipeline_execute(self):
         """_execute_sequential_pipeline body MUST call SequentialPipeline.execute().
@@ -126,9 +124,7 @@ class TestParallelEndpointWiresRealPipeline:
             "from src.causal_engine.pipeline.parallel import" in source
             or "from src.causal_engine.pipeline import ParallelPipeline" in source
             or "import ParallelPipeline" in source
-        ), (
-            "C-8 regression: ParallelPipeline import missing from causal route module"
-        )
+        ), "C-8 regression: ParallelPipeline import missing from causal route module"
 
     def test_run_parallel_pipeline_calls_real_pipeline_execute(self):
         """run_parallel_pipeline body MUST call ParallelPipeline.execute()."""
@@ -156,9 +152,7 @@ class TestDemoModeContractPreserved:
     the demo_mode=true branch.
     """
 
-    def test_sequential_demo_mode_still_returns_pinned_zeros(
-        self, sequential_pipeline_request
-    ):
+    def test_sequential_demo_mode_still_returns_pinned_zeros(self, sequential_pipeline_request):
         """demo_mode=true → 200 + every stage labeled is_demo=true + effect=0.0."""
         response = client.post(
             "/api/causal/pipeline/sequential?demo_mode=true",
@@ -177,9 +171,7 @@ class TestDemoModeContractPreserved:
         warnings = data.get("warnings", [])
         assert any("demo_mode" in w.lower() or "is_demo" in w.lower() for w in warnings)
 
-    def test_parallel_demo_mode_still_returns_is_demo_labels(
-        self, parallel_pipeline_request
-    ):
+    def test_parallel_demo_mode_still_returns_is_demo_labels(self, parallel_pipeline_request):
         """demo_mode=true → 200 + every library result labeled is_demo=true."""
         response = client.post(
             "/api/causal/pipeline/parallel?demo_mode=true",
@@ -255,9 +247,7 @@ def _make_small_estimation_dataframe(n: int = 200, seed: int = 7) -> pd.DataFram
     age = rng.normal(55, 12, n)
     region = rng.integers(0, 3, n).astype(float)
     promotion = (
-        0.2 * (age > 50).astype(float)
-        + 0.3 * (region == 1).astype(float)
-        + rng.normal(0, 0.3, n)
+        0.2 * (age > 50).astype(float) + 0.3 * (region == 1).astype(float) + rng.normal(0, 0.3, n)
     )
     trx = (
         0.5 * promotion
@@ -265,12 +255,14 @@ def _make_small_estimation_dataframe(n: int = 200, seed: int = 7) -> pd.DataFram
         + 0.2 * (region == 0).astype(float)
         + rng.normal(0, 0.4, n)
     )
-    return pd.DataFrame({
-        "promotion": promotion,
-        "trx": trx,
-        "age": age,
-        "region": region,
-    })
+    return pd.DataFrame(
+        {
+            "promotion": promotion,
+            "trx": trx,
+            "age": age,
+            "region": region,
+        }
+    )
 
 
 class TestSequentialPipelineRealExecutionWithInlineData:
@@ -281,9 +273,7 @@ class TestSequentialPipelineRealExecutionWithInlineData:
     `state["data_cache"]["estimation_data"]` contract used by other causal nodes.
     """
 
-    def test_sequential_runs_real_pipeline_when_data_provided(
-        self, sequential_pipeline_request
-    ):
+    def test_sequential_runs_real_pipeline_when_data_provided(self, sequential_pipeline_request):
         """Pipeline runs end-to-end when filters.estimation_data_records carries data.
 
         Note: pandas.DataFrame is not JSON-serializable; the API accepts records
@@ -325,9 +315,7 @@ class TestSequentialPipelineRealExecutionWithInlineData:
 class TestParallelPipelineRealExecutionWithInlineData:
     """When the caller supplies a DataFrame, the wired parallel pipeline runs."""
 
-    def test_parallel_runs_real_pipeline_when_data_provided(
-        self, parallel_pipeline_request
-    ):
+    def test_parallel_runs_real_pipeline_when_data_provided(self, parallel_pipeline_request):
         """Parallel pipeline runs end-to-end when filters.estimation_data_records is provided."""
         df = _make_small_estimation_dataframe()
         parallel_pipeline_request["filters"] = {

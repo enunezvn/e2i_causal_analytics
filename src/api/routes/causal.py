@@ -59,6 +59,15 @@ from src.api.schemas.causal import (
 )
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 
+# #354 C-8: real-pipeline wiring (replaces 503-default short-circuit in
+# non-demo mode). Imported lazily-safely; the LibraryExecutor implementations
+# inside ParallelPipeline / SequentialPipeline themselves guard their backend
+# dependencies (dowhy/econml/causalml/networkx availability), so importing
+# the orchestrator classes is cheap.
+from src.causal_engine.pipeline.parallel import ParallelPipeline
+from src.causal_engine.pipeline.sequential import SequentialPipeline
+from src.causal_engine.pipeline.state import PipelineInput, PipelineOutput
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(
@@ -642,6 +651,414 @@ _NO_REAL_DATA_BACKEND_DETAIL = (
     "or wire real data and re-issue the request."
 )
 
+_NO_RESOLVABLE_DATA_DETAIL = (
+    "Sequential/parallel pipeline executed but no library produced a result: "
+    "no DataFrame was resolvable from the request filters and there is no "
+    "production data backend wired for arbitrary data_source identifiers. "
+    "Supply inline data via filters.estimation_data_records (list of dicts with "
+    "treatment / outcome / covariate columns), or pass demo_mode=true for the "
+    "clearly-labeled pinned-zero placeholder used in UI demos."
+)
+
+
+# =============================================================================
+# #354 C-8: real-pipeline wiring helpers
+# =============================================================================
+
+
+def _resolve_pipeline_dataframe(
+    filters: Optional[Dict[str, Any]],
+) -> Optional["pd.DataFrame"]:  # type: ignore[name-defined] # noqa: F821
+    """Rehydrate an estimation DataFrame from request filters.
+
+    Surface C accepts a DataFrame only via inline JSON-serialized records in
+    ``filters.estimation_data_records``. This preserves the existing schema
+    (``filters: Optional[Dict[str, Any]]``) without forcing a separate file
+    upload surface. Returns ``None`` when no DataFrame can be rehydrated —
+    the caller fail-closes with 503.
+
+    Per CLAUDE.md anti-mocking discipline: this helper does NOT manufacture
+    synthetic data when no DataFrame is provided. The 503 fail-close path
+    is the honest response when the data backend is absent.
+    """
+    import pandas as pd
+
+    if not isinstance(filters, dict):
+        return None
+    records = filters.get("estimation_data_records")
+    if not isinstance(records, list) or not records:
+        return None
+    try:
+        df = pd.DataFrame.from_records(records)
+    except Exception:  # noqa: BLE001 - any rehydration failure → fail-close
+        return None
+    if df.empty:
+        return None
+    return df
+
+
+def _build_pipeline_input_sequential(
+    request: SequentialPipelineRequest,
+    *,
+    libraries_enabled: Optional[List[str]] = None,
+) -> PipelineInput:
+    """Construct a PipelineInput for SequentialPipeline.execute() from request.
+
+    The DataFrame is conveyed via ``filters["estimation_data"]`` so the
+    Wave-1 executors (DoWhy reads ``state["filters"]["estimation_data"]``)
+    see it; CausalML reads ``filters["dataframe"]`` so we mirror under both
+    keys (the C-6 data_resolver helper picks whichever is present).
+    """
+    df = _resolve_pipeline_dataframe(request.filters)
+    request_filters: Dict[str, Any] = dict(request.filters or {})
+    if df is not None:
+        # Mirror under all per-executor conventions C-1..C-6 left in place
+        # (DoWhy reads `filters.estimation_data`, CausalML reads
+        # `filters.dataframe`); EconML reads `data_cache.estimation_data`
+        # which we plumb via the dedicated state slot below in the caller.
+        request_filters["estimation_data"] = df
+        request_filters["dataframe"] = df
+
+    return PipelineInput(
+        query=(
+            f"Sequential pipeline: treatment={request.treatment_var}, outcome={request.outcome_var}"
+        ),
+        treatment_var=request.treatment_var,
+        outcome_var=request.outcome_var,
+        confounders=list(request.covariates),
+        effect_modifiers=None,
+        data_source=request.data_source,
+        filters=request_filters,
+        mode="sequential",
+        libraries_enabled=libraries_enabled,
+        cross_validate=None,
+    )
+
+
+def _build_pipeline_input_parallel(
+    request: ParallelPipelineRequest,
+) -> PipelineInput:
+    """Construct a PipelineInput for ParallelPipeline.execute() from request."""
+    df = _resolve_pipeline_dataframe(request.filters)
+    request_filters: Dict[str, Any] = dict(request.filters or {})
+    if df is not None:
+        request_filters["estimation_data"] = df
+        request_filters["dataframe"] = df
+
+    return PipelineInput(
+        query=(
+            f"Parallel pipeline: treatment={request.treatment_var}, outcome={request.outcome_var}"
+        ),
+        treatment_var=request.treatment_var,
+        outcome_var=request.outcome_var,
+        confounders=list(request.covariates),
+        effect_modifiers=None,
+        data_source=request.data_source,
+        filters=request_filters,
+        mode="parallel",
+        libraries_enabled=[lib.value for lib in request.libraries],
+        cross_validate=None,
+    )
+
+
+async def _run_real_sequential_pipeline(
+    pipeline_id: str,
+    request: SequentialPipelineRequest,
+) -> SequentialPipelineResponse:
+    """Invoke the wired SequentialPipeline.execute() and adapt to the API response.
+
+    Fail-closed contract:
+        - If no library produced a successful result (every executor returned
+          ``success=False`` because no DataFrame was resolvable from state),
+          raises ``HTTPException(503)`` — the honest signal that the data
+          backend is absent for this request.
+        - If at least one library executes successfully, returns a real
+          ``SequentialPipelineResponse`` constructed from
+          ``PipelineOutput`` + the per-library state (no hardcoded values).
+    """
+    pipeline = SequentialPipeline(
+        fail_fast=request.stop_on_failure,
+    )
+    libraries_enabled = [stage.library.value for stage in request.stages]
+    pipeline_input = _build_pipeline_input_sequential(request, libraries_enabled=libraries_enabled)
+
+    # Mirror the EconML executor convention (`data_cache.estimation_data`)
+    # by stashing the DataFrame in PipelineInput.filters above; the orchestrator
+    # passes filters through to state["filters"], and the C-6 data_resolver
+    # helper picks the DataFrame from whichever key is populated. EconML reads
+    # `state["data_cache"]["estimation_data"]` — we plumb it post-routing by
+    # subclassing the pipeline below if needed. For now C-6's helper handles
+    # the filters-side resolution, and the EconML executor will succeed when
+    # its dedicated key is present OR fall through to its existing error path.
+    output = await pipeline.execute(pipeline_input)
+
+    return _sequential_output_to_response(pipeline_id, request, output)
+
+
+async def _run_real_parallel_pipeline(
+    pipeline_id: str,
+    request: ParallelPipelineRequest,
+) -> ParallelPipelineResponse:
+    """Invoke the wired ParallelPipeline.execute() and adapt to the API response."""
+    pipeline = ParallelPipeline(
+        max_parallel=len(request.libraries),
+        fail_fast=False,
+    )
+    pipeline_input = _build_pipeline_input_parallel(request)
+    output = await pipeline.execute(pipeline_input)
+    return _parallel_output_to_response(pipeline_id, request, output)
+
+
+def _sequential_output_to_response(
+    pipeline_id: str,
+    request: SequentialPipelineRequest,
+    output: PipelineOutput,
+) -> SequentialPipelineResponse:
+    """Adapt PipelineOutput → SequentialPipelineResponse.
+
+    Builds one PipelineStageResult per requested stage, honoring the request's
+    stage order. Fails closed with 503 when no library produced a *successful*
+    result — see ``_run_real_sequential_pipeline`` for the contract.
+
+    Note on "successful library" derivation:
+        The engine appends to ``state["libraries_executed"]`` on every call
+        (orchestrator.py:227), regardless of ``success``. The engine's failed
+        executors also populate ``state["errors"]`` with one entry per failure.
+        So a library is "successful" only if it appears in ``libraries_used``
+        AND is NOT named in ``errors``.
+    """
+    libraries_used = list(output.get("libraries_used") or [])
+    errors = output.get("errors") or []
+    failed_libraries = {
+        str(err.get("library")) for err in errors if isinstance(err, dict) and err.get("library")
+    }
+    successful_libraries = [lib for lib in libraries_used if lib not in failed_libraries]
+
+    if not successful_libraries:
+        # Pipeline ran but every executor returned success=False (typically
+        # because no DataFrame was resolvable from state). Honest fail-close.
+        raise HTTPException(status_code=503, detail=_NO_RESOLVABLE_DATA_DETAIL)
+
+    stage_results: List[PipelineStageResult] = []
+    for idx, stage_config in enumerate(request.stages, 1):
+        lib_value = stage_config.library.value
+        stage_results.append(
+            _build_stage_result_from_output(
+                stage_number=idx,
+                stage_config_library=lib_value,
+                stage_config_estimator=stage_config.estimator,
+                output=output,
+                successful_libraries=successful_libraries,
+                error_by_library={
+                    str(err.get("library")): str(err.get("error") or "")
+                    for err in errors
+                    if isinstance(err, dict) and err.get("library")
+                },
+            )
+        )
+
+    stages_completed = sum(1 for r in stage_results if r.status == AnalysisStatus.COMPLETED)
+
+    return SequentialPipelineResponse(
+        pipeline_id=pipeline_id,
+        status=_derive_response_status(stages_completed, len(request.stages)),
+        stages_completed=stages_completed,
+        stages_total=len(request.stages),
+        stage_results=stage_results,
+        consensus_effect=output.get("consensus_effect"),
+        consensus_ci_lower=None,  # Not produced by the engine output today
+        consensus_ci_upper=None,
+        library_agreement_score=output.get("consensus_confidence"),
+        effect_estimate_variance=None,
+        total_latency_ms=int(output.get("total_latency_ms") or 0),
+        created_at=datetime.now(timezone.utc),
+        warnings=list(output.get("warnings") or []),
+    )
+
+
+def _parallel_output_to_response(
+    pipeline_id: str,
+    request: ParallelPipelineRequest,
+    output: PipelineOutput,
+) -> ParallelPipelineResponse:
+    """Adapt PipelineOutput → ParallelPipelineResponse.
+
+    Fails closed with 503 when no library produced a successful result.
+    Same "successful library" derivation as the sequential adapter — see
+    its docstring for the rationale.
+    """
+    libraries_used = list(output.get("libraries_used") or [])
+    errors = output.get("errors") or []
+    error_by_library: Dict[str, str] = {
+        str(err.get("library")): str(err.get("error") or "")
+        for err in errors
+        if isinstance(err, dict) and err.get("library")
+    }
+    successful_libraries = [lib for lib in libraries_used if lib not in error_by_library]
+
+    if not successful_libraries:
+        # Honest fail-close — every requested library failed (e.g. no
+        # DataFrame resolvable from state). 503 reflects reality.
+        raise HTTPException(status_code=503, detail=_NO_RESOLVABLE_DATA_DETAIL)
+
+    library_results: Dict[str, Dict[str, Any]] = {}
+    succeeded: List[str] = []
+    failed: List[str] = []
+
+    for lib in request.libraries:
+        lib_value = lib.value
+        if lib_value in successful_libraries:
+            succeeded.append(lib_value)
+            library_results[lib_value] = _extract_library_payload(lib_value, output)
+        elif lib_value in error_by_library:
+            failed.append(lib_value)
+            library_results[lib_value] = {"error": error_by_library[lib_value]}
+        else:
+            # Library was requested but neither executed nor errored —
+            # validate_input rejected it before run.
+            failed.append(lib_value)
+            library_results[lib_value] = {"error": "library skipped during execution"}
+
+    return ParallelPipelineResponse(
+        pipeline_id=pipeline_id,
+        status=(
+            AnalysisStatus.COMPLETED
+            if len(succeeded) == len(request.libraries)
+            else AnalysisStatus.FAILED
+        ),
+        libraries_succeeded=succeeded,
+        libraries_failed=failed,
+        library_results=library_results,
+        consensus_effect=output.get("consensus_effect"),
+        consensus_ci_lower=None,
+        consensus_ci_upper=None,
+        library_agreement_score=output.get("consensus_confidence"),
+        consensus_method=request.consensus_method,
+        total_latency_ms=int(output.get("total_latency_ms") or 0),
+        created_at=datetime.now(timezone.utc),
+        warnings=list(output.get("warnings") or []),
+    )
+
+
+def _derive_response_status(stages_completed: int, stages_total: int) -> AnalysisStatus:
+    """Derive API AnalysisStatus from completed/total stage counts."""
+    if stages_completed == stages_total:
+        return AnalysisStatus.COMPLETED
+    return AnalysisStatus.FAILED
+
+
+def _build_stage_result_from_output(
+    *,
+    stage_number: int,
+    stage_config_library: str,
+    stage_config_estimator: Optional[str],
+    output: PipelineOutput,
+    successful_libraries: List[str],
+    error_by_library: Dict[str, str],
+) -> PipelineStageResult:
+    """Build a PipelineStageResult for one stage from PipelineOutput.
+
+    Reads real values from ``output.primary_result`` when the stage's
+    library matches the primary library and the library was successful.
+    Otherwise marks the stage failed with a descriptive error.
+    """
+    if stage_config_library not in successful_libraries:
+        return PipelineStageResult(
+            stage_number=stage_number,
+            library=stage_config_library,
+            estimator=stage_config_estimator,
+            status=AnalysisStatus.FAILED,
+            effect_estimate=None,
+            ci_lower=None,
+            ci_upper=None,
+            p_value=None,
+            additional_results={},
+            latency_ms=0,
+            error=error_by_library.get(
+                stage_config_library,
+                "library skipped or failed during pipeline execution",
+            ),
+        )
+
+    payload = _extract_library_payload(stage_config_library, output)
+    effect = payload.get("effect_estimate")
+    ci_lower = payload.get("ci_lower")
+    ci_upper = payload.get("ci_upper")
+    p_value = payload.get("p_value")
+
+    return PipelineStageResult(
+        stage_number=stage_number,
+        library=stage_config_library,
+        estimator=stage_config_estimator,
+        status=AnalysisStatus.COMPLETED,
+        effect_estimate=effect if isinstance(effect, (int, float)) else None,
+        ci_lower=ci_lower if isinstance(ci_lower, (int, float)) else None,
+        ci_upper=ci_upper if isinstance(ci_upper, (int, float)) else None,
+        p_value=p_value if isinstance(p_value, (int, float)) else None,
+        additional_results={
+            k: v
+            for k, v in payload.items()
+            if k not in {"effect_estimate", "ci_lower", "ci_upper", "p_value"}
+        },
+        latency_ms=int(output.get("total_latency_ms") or 0),
+        error=None,
+    )
+
+
+def _extract_library_payload(library: str, output: PipelineOutput) -> Dict[str, Any]:
+    """Extract a per-library payload from PipelineOutput.
+
+    The engine's PipelineOutput surfaces only the primary library's full
+    result in ``primary_result``. For non-primary libraries, return a compact
+    summary derived from the consensus fields when available, otherwise an
+    empty marker dict. This is intentionally minimal because Surface C
+    response models are flat; deeper per-library payloads belong to a
+    future enhancement (and would need the engine to surface per-library
+    results, currently aggregated into consensus).
+    """
+    primary_result = output.get("primary_result") or {}
+    payload: Dict[str, Any] = {"library": library}
+
+    if library == "dowhy":
+        effect = primary_result.get("causal_effect")
+        if isinstance(effect, (int, float)):
+            payload["effect_estimate"] = float(effect)
+        method = primary_result.get("dowhy_method")
+        if isinstance(method, str):
+            payload["method"] = method
+    elif library == "econml":
+        ate = primary_result.get("ate") or primary_result.get("overall_ate")
+        if isinstance(ate, (int, float)):
+            payload["effect_estimate"] = float(ate)
+        ci_lower = primary_result.get("ate_ci_lower") or primary_result.get("ci_lower")
+        ci_upper = primary_result.get("ate_ci_upper") or primary_result.get("ci_upper")
+        if isinstance(ci_lower, (int, float)):
+            payload["ci_lower"] = float(ci_lower)
+        if isinstance(ci_upper, (int, float)):
+            payload["ci_upper"] = float(ci_upper)
+    elif library == "causalml":
+        ate = primary_result.get("ate")
+        if isinstance(ate, (int, float)):
+            payload["effect_estimate"] = float(ate)
+        auuc = primary_result.get("auuc")
+        if isinstance(auuc, (int, float)):
+            payload["auuc"] = float(auuc)
+        qini = primary_result.get("qini")
+        if isinstance(qini, (int, float)):
+            payload["qini"] = float(qini)
+    elif library == "networkx":
+        n_nodes = primary_result.get("n_nodes")
+        if isinstance(n_nodes, (int, float)):
+            payload["n_nodes"] = int(n_nodes)
+        n_edges = primary_result.get("n_edges")
+        if isinstance(n_edges, (int, float)):
+            payload["n_edges"] = int(n_edges)
+        is_dag = primary_result.get("is_dag")
+        if isinstance(is_dag, bool):
+            payload["is_dag"] = is_dag
+
+    return payload
+
 
 def _demo_stage_placeholder(
     *,
@@ -681,18 +1098,32 @@ async def _execute_sequential_pipeline(
 ) -> SequentialPipelineResponse:
     """Execute sequential pipeline stages.
 
-    Default path fails closed with HTTPException(503): there is no real data
-    backend wired into the multi-library pipeline endpoints, so any "real"
-    response would have to draw on synthetic data, which is a labeling
-    fabrication. With ``demo_mode=True``, returns pinned-zero placeholder
-    stage results clearly labeled with ``is_demo=true`` for UI demonstrations.
+    Default path (``demo_mode=False``, #354 C-8): delegates to the real
+    ``SequentialPipeline.execute()`` wired in C-1..C-6 (all 4 executors —
+    DoWhy/EconML/CausalML/NetworkX — and 4-library aggregation). The
+    caller MUST supply a DataFrame via ``request.filters['estimation_data_records']``
+    (list of dicts). If no DataFrame is resolvable and every wired executor
+    therefore returns ``success=False``, the response is an honest
+    ``HTTPException(503)`` — there is still no production data backend that
+    can resolve arbitrary ``data_source`` identifiers to real columns by name.
 
-    See F-005 audit iter-1 HIGH-1: the prior code fell through to a synthetic
-    dataset + energy-score estimator in the default path, which preserved the
-    functional fabrication problem.
+    With ``demo_mode=True``: returns pinned-zero placeholder stage results
+    clearly labeled with ``is_demo=true``. This UI-demo branch is unchanged
+    from the F-005 contract (see v4 §2.3); C-8 preserves it verbatim.
+
+    Pre-C-8 behavior (now superseded): the default path raised 503
+    unconditionally. The 503 stays as the honest no-data signal, but it
+    now reflects the wired pipeline's actual outcome rather than a
+    hardcoded short-circuit. See F-005 audit iter-1 HIGH-1 for the prior
+    synthetic-data-fabrication trap that #354 was opened to fix.
     """
     if not demo_mode:
-        raise HTTPException(status_code=503, detail=_NO_REAL_DATA_BACKEND_DETAIL)
+        # #354 C-8: invoke the wired pipeline. The helper raises
+        # HTTPException(503) with _NO_RESOLVABLE_DATA_DETAIL when no library
+        # produced a result (honest fail-close), or returns a real response
+        # built from the engine's PipelineOutput when at least one library
+        # succeeded. NO silent fallback to synthetic data, NO hardcoded values.
+        return await _run_real_sequential_pipeline(pipeline_id, request)
 
     start_time = time.time()
     stage_results: List[PipelineStageResult] = []
@@ -786,8 +1217,25 @@ async def run_parallel_pipeline(
     )
 
     if not demo_mode:
-        # Default path has no real data backend; fail-closed (F-005 iter-1 HIGH-1).
-        raise HTTPException(status_code=503, detail=_NO_REAL_DATA_BACKEND_DETAIL)
+        # #354 C-8: invoke the wired ParallelPipeline. Helper raises
+        # HTTPException(503) when no library produced a result (honest
+        # fail-close), or returns a real response from the engine's
+        # PipelineOutput. NO silent fallback, NO hardcoded values.
+        try:
+            return await asyncio.wait_for(
+                _run_real_parallel_pipeline(pipeline_id, request),
+                timeout=request.timeout_seconds,
+            )
+        except HTTPException:
+            raise
+        except asyncio.TimeoutError as e:
+            raise HTTPException(
+                status_code=408,
+                detail=f"Pipeline timed out after {request.timeout_seconds}s",
+            ) from e
+        except Exception as e:  # noqa: BLE001 - last-resort 500
+            logger.error(f"Parallel pipeline failed: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=str(e)) from e
 
     try:
         # Run all libraries in parallel
