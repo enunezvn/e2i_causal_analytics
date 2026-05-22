@@ -278,6 +278,7 @@ jobs:
             --ignore-vuln PYSEC-2025-197 `# torch 2.9.1 (CVE-2025-3136; torch.cuda.memory.cache); no upstream fix. Mitigated — affected CUDA cache code path not exercised.` \
             --ignore-vuln PYSEC-2025-189 `# torch 2.9.1 (CVE-2025-2148; torch.ops manipulation 2.6.0+cu124); no upstream fix. Mitigated — torch.ops not invoked on user-controlled tensors.` \
             --ignore-vuln PYSEC-2025-190 `# torch 2.9.1 (CVE-2025-2149; nnq_Sigmoid quantization 2.6.0+cu124); no upstream fix. Mitigated — quantized model path not exercised.` \
+            --ignore-vuln GHSA-86qp-5c8j-p5mr `# starlette 0.50.0 (PYSEC-2026-161; Host header injection allows path-prepending in URL reconstruction → auth bypass when auth depends on reconstructed URL path); fix in starlette 1.0.1, surfaced in pip-audit 2026-05-22 CVE-DB refresh. Mitigated — Nginx normalizes Host headers upstream (same pattern as aiohttp Host CVEs above); FastAPI route matching uses the actual request path (not reconstructed URL), and auth/RBAC is enforced via dependency injection on resolved routes rather than reconstructed URL strings. Follow-up tracker: starlette 1.0.1 dep-bump (requires FastAPI compat verification).` \
             || true  # Don't fail CI, just report
 
       - name: Check for known vulnerabilities
