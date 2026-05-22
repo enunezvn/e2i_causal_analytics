@@ -373,9 +373,7 @@ class TestEconMLExecutorFailsClosedOnSelectorFailure:
         er = _good_estimator_result()
         er.ate_ci_lower = None
         sel = _FakeSelector(_selection_result(er))
-        result = await EconMLExecutor(selector=sel).execute(
-            _state_with_data(), _base_config()
-        )
+        result = await EconMLExecutor(selector=sel).execute(_state_with_data(), _base_config())
 
         assert result["success"] is False
         assert "ci" in result["error"].lower() or "confidence" in result["error"].lower()
@@ -385,9 +383,7 @@ class TestEconMLExecutorFailsClosedOnSelectorFailure:
         er = _good_estimator_result()
         er.ate_ci_lower = float("-inf")
         sel = _FakeSelector(_selection_result(er))
-        result = await EconMLExecutor(selector=sel).execute(
-            _state_with_data(), _base_config()
-        )
+        result = await EconMLExecutor(selector=sel).execute(_state_with_data(), _base_config())
 
         assert result["success"] is False
 
@@ -397,9 +393,7 @@ class TestEconMLExecutorFailsClosedOnSelectorFailure:
         er.ate_ci_lower = 0.20
         er.ate_ci_upper = 0.20  # zero-width
         sel = _FakeSelector(_selection_result(er))
-        result = await EconMLExecutor(selector=sel).execute(
-            _state_with_data(), _base_config()
-        )
+        result = await EconMLExecutor(selector=sel).execute(_state_with_data(), _base_config())
 
         assert result["success"] is False
 
@@ -407,9 +401,7 @@ class TestEconMLExecutorFailsClosedOnSelectorFailure:
     async def test_fails_closed_when_ate_outside_ci(self):
         er = _good_estimator_result(ate=0.5, ate_ci_lower=0.10, ate_ci_upper=0.20)
         sel = _FakeSelector(_selection_result(er))
-        result = await EconMLExecutor(selector=sel).execute(
-            _state_with_data(), _base_config()
-        )
+        result = await EconMLExecutor(selector=sel).execute(_state_with_data(), _base_config())
 
         assert result["success"] is False
 
@@ -418,9 +410,7 @@ class TestEconMLExecutorFailsClosedOnSelectorFailure:
         er = _good_estimator_result()
         er.ate_std = None
         sel = _FakeSelector(_selection_result(er))
-        result = await EconMLExecutor(selector=sel).execute(
-            _state_with_data(), _base_config()
-        )
+        result = await EconMLExecutor(selector=sel).execute(_state_with_data(), _base_config())
 
         assert result["success"] is False
 
@@ -429,9 +419,7 @@ class TestEconMLExecutorFailsClosedOnSelectorFailure:
         er = _good_estimator_result()
         er.ate_std = 0.0
         sel = _FakeSelector(_selection_result(er))
-        result = await EconMLExecutor(selector=sel).execute(
-            _state_with_data(), _base_config()
-        )
+        result = await EconMLExecutor(selector=sel).execute(_state_with_data(), _base_config())
 
         assert result["success"] is False
 
@@ -440,9 +428,7 @@ class TestEconMLExecutorFailsClosedOnSelectorFailure:
         er = _good_estimator_result()
         er.ate_std = float("nan")
         sel = _FakeSelector(_selection_result(er))
-        result = await EconMLExecutor(selector=sel).execute(
-            _state_with_data(), _base_config()
-        )
+        result = await EconMLExecutor(selector=sel).execute(_state_with_data(), _base_config())
 
         assert result["success"] is False
 
@@ -461,9 +447,7 @@ class TestEconMLExecutorFailsClosedOnSelectorFailure:
 
         er.energy_score_result = SimpleNamespace(energy_score=float("nan"))  # type: ignore[assignment]
         sel = _FakeSelector(_selection_result(er))
-        result = await EconMLExecutor(selector=sel).execute(
-            _state_with_data(), _base_config()
-        )
+        result = await EconMLExecutor(selector=sel).execute(_state_with_data(), _base_config())
 
         assert result["success"] is False
         assert "energy_score" in result["error"].lower()
@@ -478,9 +462,7 @@ class TestEconMLExecutorFailsClosedOnSelectorFailure:
         er = _good_estimator_result()
         er.energy_score_result = None  # property returns float("inf")
         sel = _FakeSelector(_selection_result(er))
-        result = await EconMLExecutor(selector=sel).execute(
-            _state_with_data(), _base_config()
-        )
+        result = await EconMLExecutor(selector=sel).execute(_state_with_data(), _base_config())
 
         assert result["success"] is False
 
@@ -609,9 +591,7 @@ class TestEconMLExecutorEnergyScoreSanitization:
                 energy_score_gap=0.05,
             )
         )
-        result = await EconMLExecutor(selector=sel).execute(
-            _state_with_data(), _base_config()
-        )
+        result = await EconMLExecutor(selector=sel).execute(_state_with_data(), _base_config())
 
         assert result["success"] is True
         scores = result["result"]["energy_scores"]
@@ -633,9 +613,7 @@ class TestEconMLExecutorEnergyScoreSanitization:
                 energy_score_gap=float("nan"),  # only one estimator -> no gap
             )
         )
-        result = await EconMLExecutor(selector=sel).execute(
-            _state_with_data(), _base_config()
-        )
+        result = await EconMLExecutor(selector=sel).execute(_state_with_data(), _base_config())
 
         assert result["success"] is True
         assert result["result"]["energy_score_gap"] == 0.0
@@ -712,13 +690,9 @@ class TestEconMLExecutorHappyPath:
         ``heterogeneity_score=0.0`` — NEVER fabricate ``ate * 1.2 / 0.8``
         synthetic segments.
         """
-        er = _good_estimator_result(
-            ate=0.10, cate=None, estimator_type=EstimatorType.LINEAR_DML
-        )
+        er = _good_estimator_result(ate=0.10, cate=None, estimator_type=EstimatorType.LINEAR_DML)
         sel = _FakeSelector(_selection_result(er))
-        result = await EconMLExecutor(selector=sel).execute(
-            _state_with_data(), _base_config()
-        )
+        result = await EconMLExecutor(selector=sel).execute(_state_with_data(), _base_config())
 
         assert result["success"] is True
         assert result["result"]["cate_by_segment"] == {}
@@ -729,9 +703,7 @@ class TestEconMLExecutorHappyPath:
     async def test_latency_ms_is_nonzero_and_int(self):
         er = _good_estimator_result()
         sel = _FakeSelector(_selection_result(er))
-        result = await EconMLExecutor(selector=sel).execute(
-            _state_with_data(), _base_config()
-        )
+        result = await EconMLExecutor(selector=sel).execute(_state_with_data(), _base_config())
         assert result["success"] is True
         assert isinstance(result["latency_ms"], int)
         assert result["latency_ms"] >= 0
@@ -757,9 +729,7 @@ class TestEconMLExecutorHappyPath:
         er = _good_estimator_result()
         sel = _CapturingSelector(_selection_result(er))
         df = _real_data_frame()
-        result = await EconMLExecutor(selector=sel).execute(
-            _state_with_data(df=df), _base_config()
-        )
+        result = await EconMLExecutor(selector=sel).execute(_state_with_data(df=df), _base_config())
 
         assert result["success"] is True
         # Treatment column extracted from named `treatment_var` (binary).

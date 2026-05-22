@@ -282,9 +282,7 @@ class EconMLExecutor(LibraryExecutor):
             # continuous treatment, but the EstimatorSelector chain expects a
             # binary treatment for energy-score evaluation.
             if not np.array_equal(treatment_col, treatment_col.astype(int)):
-                treatment_binary = (
-                    treatment_col > np.median(treatment_col)
-                ).astype(int)
+                treatment_binary = (treatment_col > np.median(treatment_col)).astype(int)
             else:
                 treatment_binary = treatment_col.astype(int)
 
@@ -309,9 +307,7 @@ class EconMLExecutor(LibraryExecutor):
                     )
                 covariate_cols = list(confounders)
             else:
-                covariate_cols = [
-                    c for c in df.columns if c not in (treatment_var, outcome_var)
-                ]
+                covariate_cols = [c for c in df.columns if c not in (treatment_var, outcome_var)]
             if not covariate_cols:
                 return _failure(
                     error=(
@@ -382,8 +378,7 @@ class EconMLExecutor(LibraryExecutor):
             if not (math.isfinite(ate_lower_f) and math.isfinite(ate_upper_f)):
                 return _failure(
                     error=(
-                        f"EconML: non-finite CI bounds "
-                        f"(lower={ate_lower_f}, upper={ate_upper_f})."
+                        f"EconML: non-finite CI bounds (lower={ate_lower_f}, upper={ate_upper_f})."
                     ),
                     start_time=start_time,
                 )
@@ -418,9 +413,7 @@ class EconMLExecutor(LibraryExecutor):
             ate_std_f = float(ate_std)
             if not math.isfinite(ate_std_f) or ate_std_f <= 0.0:
                 return _failure(
-                    error=(
-                        f"EconML: unusable standard error (ate_std={ate_std_f})."
-                    ),
+                    error=(f"EconML: unusable standard error (ate_std={ate_std_f})."),
                     start_time=start_time,
                 )
 
@@ -453,9 +446,7 @@ class EconMLExecutor(LibraryExecutor):
             het_score = _heterogeneity_score(cate_arr)
             energy_score_f = energy_score_raw  # already finiteness-checked
 
-            successful_results = [
-                r for r in (selection_result.all_results or []) if r.success
-            ]
+            successful_results = [r for r in (selection_result.all_results or []) if r.success]
 
             # Sanitize the per-library energy_scores dict for the result
             # payload -- swap any non-finite peer scores for None so JSON
