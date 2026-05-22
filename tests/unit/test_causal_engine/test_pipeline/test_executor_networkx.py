@@ -344,6 +344,95 @@ class TestNetworkXUpstreamGraphInheritance:
         assert ("T", "Y") in edge_set
         assert result["result"]["graph_source"] == "upstream_state"
 
+    @pytest.mark.asyncio
+    async def test_cyclic_upstream_graph_yields_confidence_zero_with_cycles_and_warning(self):
+        """Cyclic upstream causal_graph: is_dag=False, cycles populated, confidence=0.0, warning emitted.
+
+        Addresses codex iter-0 LOW finding: the executor calls nx.simple_cycles,
+        but no regression test exercised the `not is_dag => cycles populated`
+        contract from the design spike.
+        """
+        executor = NetworkXExecutor()
+        upstream = {
+            "nodes": ["T", "Y", "Z"],
+            "edges": [
+                {"from": "T", "to": "Y"},
+                {"from": "Y", "to": "Z"},
+                {"from": "Z", "to": "T"},  # closes the cycle T -> Y -> Z -> T
+            ],
+        }
+        state = _state(treatment_var="T", outcome_var="Y", causal_graph=upstream)
+
+        result = await executor.execute(state, _minimal_config())
+
+        assert result["success"] is True
+        assert result["result"]["is_dag"] is False
+        # Per spike §2.1: cycles list is populated when not a DAG
+        assert len(result["result"]["cycles"]) >= 1
+        # Confidence MUST be 0.0 when not a DAG (no half-measures)
+        assert result["confidence"] == 0.0
+        # Warning must surface the cyclicity so downstream sees it
+        assert any("cycle" in w.lower() for w in result["warnings"])
+
+    @pytest.mark.asyncio
+    async def test_malformed_upstream_node_fails_closed(self):
+        """Non-string node in upstream causal_graph raises (defense-in-depth).
+
+        Addresses codex iter-0 MEDIUM finding: the previous code silently
+        filtered non-string nodes and could return success=True with a
+        partial graph downstream consumers might trust.
+        """
+        executor = NetworkXExecutor()
+        upstream = {
+            "nodes": ["T", 42, "Y"],  # non-string node
+            "edges": [{"from": "T", "to": "Y"}],
+        }
+        state = _state(treatment_var="T", outcome_var="Y", causal_graph=upstream)
+
+        result = await executor.execute(state, _minimal_config())
+
+        assert result["success"] is False
+        assert result["error"] is not None
+        assert "string" in result["error"].lower()
+        assert result["confidence"] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_malformed_upstream_edge_fails_closed(self):
+        """Edge missing 'from'/'to' or with non-string endpoints raises.
+
+        Companion to the node test: covers the second silent-filter branch
+        flagged by codex iter-0 MEDIUM.
+        """
+        executor = NetworkXExecutor()
+        upstream = {
+            "nodes": ["T", "Y"],
+            "edges": [{"src": "T", "dst": "Y"}],  # wrong keys
+        }
+        state = _state(treatment_var="T", outcome_var="Y", causal_graph=upstream)
+
+        result = await executor.execute(state, _minimal_config())
+
+        assert result["success"] is False
+        assert result["error"] is not None
+        assert result["confidence"] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_malformed_upstream_nodes_not_a_list_fails_closed(self):
+        """Upstream `nodes` of wrong type (e.g. dict) raises rather than silently empty."""
+        executor = NetworkXExecutor()
+        upstream = {
+            "nodes": {"a": "T", "b": "Y"},  # dict instead of list
+            "edges": [{"from": "T", "to": "Y"}],
+        }
+        state = _state(treatment_var="T", outcome_var="Y", causal_graph=upstream)
+
+        result = await executor.execute(state, _minimal_config())
+
+        assert result["success"] is False
+        assert result["error"] is not None
+        assert "list" in result["error"].lower()
+        assert result["confidence"] == 0.0
+
 
 # =============================================================================
 # Real networkx.DiGraph used (not hand-rolled dict)

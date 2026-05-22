@@ -246,28 +246,64 @@ class NetworkXExecutor(LibraryExecutor):
 
         Upstream contributors may include a discovery-layer node (running
         causal-learn against real data outside the pipeline) or an
-        agent-built DAG. We accept their node/edge lists verbatim and add
+        agent-built DAG. We accept their node/edge lists strictly and add
         any treatment/outcome/confounder/effect-modifier nodes that aren't
         already present.
 
         Treats the upstream graph as the source of truth for structure;
         does NOT re-derive symbolic edges (avoids edge duplication that
         would create spurious cycles).
+
+        Fail-closed: malformed upstream data raises ``TypeError`` /
+        ``ValueError`` so the caller's ``except Exception`` branch returns
+        ``success=False`` rather than silently producing a partial graph
+        that downstream consumers might trust as complete (codex iter-0
+        MEDIUM finding).
         """
         graph: nx.DiGraph = nx.DiGraph()
-        upstream_nodes = upstream_graph.get("nodes") or []
-        upstream_edges = upstream_graph.get("edges") or []
+        upstream_nodes = upstream_graph.get("nodes")
+        upstream_edges = upstream_graph.get("edges")
 
-        for node in upstream_nodes:
-            if isinstance(node, str):
-                graph.add_node(node)
+        # Strict validation: an upstream graph that supplies non-list
+        # `nodes` or `edges` is malformed; refuse silently-partial outputs.
+        if upstream_nodes is not None and not isinstance(upstream_nodes, list):
+            raise TypeError(
+                "upstream causal_graph['nodes'] must be a list of strings, "
+                f"got {type(upstream_nodes).__name__}"
+            )
+        if upstream_edges is not None and not isinstance(upstream_edges, list):
+            raise TypeError(
+                "upstream causal_graph['edges'] must be a list of "
+                f"{{from, to}} dicts, got {type(upstream_edges).__name__}"
+            )
 
-        for edge in upstream_edges:
-            if isinstance(edge, dict) and "from" in edge and "to" in edge:
-                src = edge["from"]
-                tgt = edge["to"]
-                if isinstance(src, str) and isinstance(tgt, str):
-                    graph.add_edge(src, tgt)
+        for i, node in enumerate(upstream_nodes or []):
+            if not isinstance(node, str):
+                raise TypeError(
+                    "upstream causal_graph['nodes'] must contain strings; "
+                    f"found {type(node).__name__} at index {i}: {node!r}"
+                )
+            graph.add_node(node)
+
+        for i, edge in enumerate(upstream_edges or []):
+            if not isinstance(edge, dict):
+                raise TypeError(
+                    "upstream causal_graph['edges'] must contain dicts; "
+                    f"found {type(edge).__name__} at index {i}: {edge!r}"
+                )
+            if "from" not in edge or "to" not in edge:
+                raise ValueError(
+                    "upstream causal_graph edge must have 'from' and 'to' keys; "
+                    f"found {edge!r} at index {i}"
+                )
+            src = edge["from"]
+            tgt = edge["to"]
+            if not isinstance(src, str) or not isinstance(tgt, str):
+                raise TypeError(
+                    "upstream causal_graph edge 'from' and 'to' must be strings; "
+                    f"found from={src!r} to={tgt!r} at index {i}"
+                )
+            graph.add_edge(src, tgt)
 
         for var in (treatment, outcome):
             if var and var not in graph:
