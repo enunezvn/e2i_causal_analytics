@@ -21,11 +21,14 @@ re-introduce dead piping without the CI failing first.
 What this test does NOT pin
 ---------------------------
 This test does NOT forbid all role-aware code in ``causal_engine``
-forever. If a future PR wires a real consumer (e.g., the engine-layer
-adjustment-set policy work blocked on #354), the new code MUST also
-update or replace this test with one that pins the new wiring's
-actual contract. The point is to fail loudly on accidental re-add,
-not to prevent intentional future work.
+forever. If a future PR wires a real consumer in
+``refutation_runner.py`` from a new engine-layer policy plan
+(the predecessor engine-layer adjustment-set policy lift was
+permanently REJECTED in plan v2 — see
+``.claude/plans/237_engine_role_consumption_v2.md``), the new code
+MUST also update or replace this test with one that pins the new
+wiring's actual contract. The point is to fail loudly on accidental
+re-add, not to prevent intentional future work.
 """
 
 from __future__ import annotations
