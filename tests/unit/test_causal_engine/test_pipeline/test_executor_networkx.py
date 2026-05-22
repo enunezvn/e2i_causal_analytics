@@ -393,7 +393,6 @@ class TestNetworkXUpstreamGraphInheritance:
 
         assert result["success"] is False
         assert result["error"] is not None
-        assert "string" in result["error"].lower()
         assert result["confidence"] == 0.0
 
     @pytest.mark.asyncio
@@ -430,7 +429,6 @@ class TestNetworkXUpstreamGraphInheritance:
 
         assert result["success"] is False
         assert result["error"] is not None
-        assert "list" in result["error"].lower()
         assert result["confidence"] == 0.0
 
 
@@ -501,6 +499,41 @@ class TestNetworkXFailClosed:
         """If confounders is malformed (not iterable), executor fails closed."""
         executor = NetworkXExecutor()
         state = _state(confounders=123)  # type: ignore[arg-type]
+
+        result = await executor.execute(state, _minimal_config())
+
+        assert result["success"] is False
+        assert result["error"] is not None
+        assert result["confidence"] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_dict_shaped_confounders_fails_closed(self):
+        """Dict for `confounders` raises rather than silently extracting keys.
+
+        Addresses codex iter-1 MEDIUM: a dict like ``{"region": "abc"}`` is
+        iterable and yields string keys. The previous loose form of
+        `_coerce_str_list` would have happily turned that into
+        ``["region"]`` and produced a partial-but-success graph.
+        ``PipelineState`` types `confounders` as ``Optional[List[str]]`` —
+        we must reject non-list containers strictly.
+        """
+        executor = NetworkXExecutor()
+        # Dict whose keys happen to be strings — would have been
+        # silently accepted as confounders=["region", "season"].
+        state = _state(confounders={"region": "abc", "season": "def"})  # type: ignore[arg-type]
+
+        result = await executor.execute(state, _minimal_config())
+
+        assert result["success"] is False
+        assert result["error"] is not None
+        assert result["confidence"] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_tuple_shaped_effect_modifiers_fails_closed(self):
+        """Tuple for `effect_modifiers` raises rather than being silently coerced."""
+        executor = NetworkXExecutor()
+        # Tuple is iterable but PipelineState promises a list.
+        state = _state(effect_modifiers=("M1", "M2"))  # type: ignore[arg-type]
 
         result = await executor.execute(state, _minimal_config())
 

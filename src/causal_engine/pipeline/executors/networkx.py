@@ -32,7 +32,7 @@ R1 contract preservation: ``LibraryExecutor`` ABC (``library``, ``execute``,
 
 import logging
 import time
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import networkx as nx
 
@@ -165,19 +165,22 @@ class NetworkXExecutor(LibraryExecutor):
     def _coerce_str_list(value: Any) -> List[str]:
         """Coerce a state field expected to be a list-of-strings.
 
-        Empty list / None -> []. Non-iterable or non-string-element raises so
-        we fail closed on malformed input (matches placeholder's prior
-        exception path for ``confounders=123``).
+        ``PipelineState`` types ``confounders`` and ``effect_modifiers`` as
+        ``Optional[List[str]]``. Empty list / None -> ``[]``. Anything else
+        (bare string, dict, int, tuple, set, etc.) raises ``TypeError`` so
+        we fail closed on malformed input. This avoids the silent-acceptance
+        trap codex iter-1 MEDIUM flagged: a dict like ``{"bad": "C"}`` is
+        iterable and yields string keys, which the previous loose form
+        would have happily turned into a one-element ``["bad"]`` confounder
+        list — silently producing a partial-but-success graph.
         """
         if value is None:
             return []
-        if isinstance(value, str):
+        # Strict: must be a list (the type the TypedDict promises). Reject
+        # bare strings, dicts, tuples, sets, generators, etc.
+        if not isinstance(value, list):
             raise TypeError(
-                f"expected list of strings, got bare string: {value!r}"
-            )
-        if not isinstance(value, Iterable):
-            raise TypeError(
-                f"expected iterable, got {type(value).__name__}"
+                f"expected list of strings, got {type(value).__name__}: {value!r}"
             )
         result: List[str] = []
         for item in value:
