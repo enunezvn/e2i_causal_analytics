@@ -1,8 +1,17 @@
 """
 E2I Prediction Synthesizer Agent - Context Enricher Node
-Version: 4.3
+Version: 4.4
 Purpose: Enrich prediction with context for interpretation
 Feast Integration: Online feature retrieval for real-time predictions
+
+#438 fail-closed semantics (F-012-followup from PR #433 codex iter-3 H3):
+- Per-field availability flags expose which of 5 dependencies returned data
+- Per-field warnings name the failed dependency + exception class
+- Aggregate gate: 0-2 fails -> completed, 3-5 -> degraded, all-5 -> failed
+- include_context=False early-return preserved (caller opt-out)
+- return_exceptions=True primitive preserved (non-fatal aggregation)
+- Sentinel-on-failure values are non-plausible (None / [] / {}) so downstream
+  consumers cannot confuse "no signal" with "real zero" / "real stable"
 """
 
 from __future__ import annotations
@@ -15,6 +24,26 @@ from typing import Any, Dict, List, Optional, Protocol
 from ..state import PredictionContext, PredictionSynthesizerState
 
 logger = logging.getLogger(__name__)
+
+# Aggregate-gate thresholds (#438 disambiguation matrix)
+_NUM_DEPS = 5  # similar / importance / accuracy / trend / online
+_DEGRADED_FAIL_THRESHOLD = 3  # >= 3 failures -> status="degraded"
+
+
+class StoreNotConfigured(RuntimeError):
+    """Raised by helpers when the underlying store is not configured.
+
+    #438: distinguishes "no store -> unavailable" from "store returned honest
+    empty" so the availability flag and per-field warning can faithfully
+    expose the absent dependency rather than fabricating a plausible-real
+    default ([] / {} / 0.0 / "stable").
+    """
+
+
+class AllModelsImportanceFailed(RuntimeError):
+    """Raised by _get_feature_importance when every individual model's
+    importance lookup raised. Propagates to asyncio.gather so the aggregate
+    gate counts the dependency as failed (#438 codex iter-0 HIGH-1)."""
 
 
 class ContextStore(Protocol):
@@ -62,6 +91,15 @@ class FeatureStore(Protocol):
     ) -> Dict[str, Any]:
         """Check feature freshness (optional - Feast integration)"""
         ...
+
+
+def _format_unavailable_warning(field: str, exc: BaseException) -> str:
+    """Format a per-field unavailability warning.
+
+    Output shape (#438): "<field> unavailable: <ExceptionClass>: <message>"
+    """
+    exc_cls = type(exc).__name__
+    return f"{field} unavailable: {exc_cls}: {exc}"
 
 
 class ContextEnricherNode:
@@ -115,9 +153,13 @@ class ContextEnricherNode:
             }
 
         try:
-            warnings = []
+            warnings: List[str] = []
 
-            # Fetch context elements in parallel (including online features)
+            # Fetch context elements in parallel (including online features).
+            # return_exceptions=True is the primitive that makes this aggregation
+            # non-fatal; per-dep failures are detected per-field below and
+            # converted to availability=False + per-field warning, rather than
+            # silently swapped to plausible-real defaults (#438).
             tasks = [
                 self._get_similar_cases(state),
                 self._get_feature_importance(state),
@@ -129,37 +171,107 @@ class ContextEnricherNode:
             results = await asyncio.gather(*tasks, return_exceptions=True)
             similar, importance, accuracy, trend, online_features_result = results
 
-            # Process online features result
-            online_features = {}
+            # Per-field disambiguation:
+            # - Returned a non-Exception value -> available=True, populated
+            # - Returned an Exception -> available=False, sentinel value,
+            #   per-field warning naming the dependency + exception class.
+            # Sentinel-on-failure values must be NON-plausible so downstream
+            # consumers cannot confuse them with honest-real values:
+            #   similar_cases   -> []     (already-honest empty container)
+            #   feature_importance -> {}  (already-honest empty container)
+            #   historical_accuracy -> None  (sentinel: NOT 0.0 which is plausible)
+            #   trend_direction -> None    (sentinel: NOT "stable" which is plausible)
+            #   online_features -> {} + online_features_available=False
+            similar_available = not isinstance(similar, BaseException)
+            importance_available = not isinstance(importance, BaseException)
+            accuracy_available = not isinstance(accuracy, BaseException)
+            trend_available = not isinstance(trend, BaseException)
+            online_features_available = not isinstance(online_features_result, BaseException)
+
+            if not similar_available:
+                warnings.append(
+                    _format_unavailable_warning("similar_cases", similar)  # type: ignore[arg-type]
+                )
+            if not importance_available:
+                warnings.append(
+                    _format_unavailable_warning(
+                        "feature_importance",
+                        importance,  # type: ignore[arg-type]
+                    )
+                )
+            if not accuracy_available:
+                warnings.append(
+                    _format_unavailable_warning(
+                        "historical_accuracy",
+                        accuracy,  # type: ignore[arg-type]
+                    )
+                )
+            if not trend_available:
+                warnings.append(
+                    _format_unavailable_warning("trend_direction", trend)  # type: ignore[arg-type]
+                )
+            if not online_features_available:
+                warnings.append(
+                    _format_unavailable_warning(
+                        "online_features",
+                        online_features_result,  # type: ignore[arg-type]
+                    )
+                )
+
+            # Resolve online-features payload only on success
+            online_features: Dict[str, Any] = {}
             feast_freshness = None
-            if isinstance(online_features_result, dict):
+            if online_features_available and isinstance(online_features_result, dict):
                 online_features = online_features_result.get("features", {})
                 feast_freshness = online_features_result.get("freshness")
                 if freshness_warnings := online_features_result.get("warnings", []):
                     warnings.extend(freshness_warnings)
 
-            context = PredictionContext(
-                similar_cases=(
-                    similar  # type: ignore[typeddict-item]
-                    if not isinstance(similar, (Exception, BaseException))
-                    else []
-                ),
-                feature_importance=(
-                    importance  # type: ignore[typeddict-item]
-                    if not isinstance(importance, (Exception, BaseException))
-                    else {}
-                ),
-                historical_accuracy=(
-                    accuracy  # type: ignore[typeddict-item]
-                    if not isinstance(accuracy, (Exception, BaseException))
-                    else 0.0
-                ),
-                trend_direction=(
-                    trend  # type: ignore[typeddict-item]
-                    if not isinstance(trend, (Exception, BaseException))
-                    else "stable"
-                ),
+            context: PredictionContext = {
+                "similar_cases": similar if similar_available else [],  # type: ignore[typeddict-item]
+                "feature_importance": importance if importance_available else {},  # type: ignore[typeddict-item]
+                # Sentinel None on failure (NOT 0.0 / NOT "stable")
+                "historical_accuracy": accuracy if accuracy_available else None,  # type: ignore[typeddict-item]
+                "trend_direction": trend if trend_available else None,  # type: ignore[typeddict-item]
+                "similar_cases_available": similar_available,
+                "feature_importance_available": importance_available,
+                "historical_accuracy_available": accuracy_available,
+                "trend_direction_available": trend_available,
+                "online_features_available": online_features_available,
+            }
+
+            # Aggregate gate (#438 disambiguation): count of failed deps
+            failed_deps = sum(
+                1
+                for ok in (
+                    similar_available,
+                    importance_available,
+                    accuracy_available,
+                    trend_available,
+                    online_features_available,
+                )
+                if not ok
             )
+
+            if failed_deps == _NUM_DEPS:
+                # All 5 failed AND include_context=True -> contract broken
+                status_value = "failed"
+                errors_addition = [
+                    {
+                        "code": "context_enrichment_total_failure",
+                        "message": (
+                            "All 5 context-enrichment dependencies failed; "
+                            "no enrichment signal recoverable."
+                        ),
+                    }
+                ]
+            elif failed_deps >= _DEGRADED_FAIL_THRESHOLD:
+                status_value = "degraded"
+                warnings.append(f"context_enrichment_degraded: {failed_deps}/5 dependencies failed")
+                errors_addition = []
+            else:
+                status_value = "completed"
+                errors_addition = []
 
             context_time = int((time.time() - start_time) * 1000)
             total_time = (
@@ -168,22 +280,24 @@ class ContextEnricherNode:
                 + context_time
             )
 
-            # Merge online features with input features
+            # Merge online features with input features (only if available)
             merged_features = {**state.get("features", {}), **online_features}
 
             logger.info(
                 f"Context enrichment complete: "
                 f"similar_cases={len(context['similar_cases'])}, "
                 f"online_features={len(online_features)}, "
+                f"deps_failed={failed_deps}/5, "
+                f"status={status_value}, "
                 f"duration={context_time}ms"
             )
 
-            result_state = {
+            result_state: Dict[str, Any] = {
                 **state,
                 "prediction_context": context,
                 "features": merged_features,
                 "total_latency_ms": total_time,
-                "status": "completed",
+                "status": status_value,
             }
 
             # Add Feast metadata if available
@@ -193,10 +307,18 @@ class ContextEnricherNode:
                 result_state["feast_freshness"] = feast_freshness
             if warnings:
                 result_state["warnings"] = warnings
+            if errors_addition:
+                existing_errors = state.get("errors", []) or []
+                result_state["errors"] = list(existing_errors) + errors_addition
 
             return result_state  # type: ignore[return-value]
 
         except Exception as e:
+            # Catastrophic failure inside the enricher itself (NOT a per-dep
+            # failure - those are handled above via return_exceptions=True).
+            # Preserve the non-fatal contract here: status='completed' with a
+            # warning. A per-dep failure that surfaced as an exception above
+            # would not reach this branch.
             logger.warning(f"Context enrichment failed: {e}")
             total_time = state.get("orchestration_latency_ms", 0) + state.get(
                 "ensemble_latency_ms", 0
@@ -209,9 +331,15 @@ class ContextEnricherNode:
             }
 
     async def _get_similar_cases(self, state: PredictionSynthesizerState) -> List[Dict[str, Any]]:
-        """Find similar historical cases."""
+        """Find similar historical cases.
+
+        #438: when no context_store is configured the helper raises
+        StoreNotConfigured so the availability flag flips to False and the
+        per-field warning surfaces "no store" rather than fabricating a
+        plausible-real empty list as honest data.
+        """
         if not self.context_store:
-            return []
+            raise StoreNotConfigured("similar_cases: no context_store configured")
 
         return await self.context_store.find_similar(
             entity_type=state.get("entity_type", ""),
@@ -220,33 +348,65 @@ class ContextEnricherNode:
         )
 
     async def _get_feature_importance(self, state: PredictionSynthesizerState) -> Dict[str, float]:
-        """Get feature importance for prediction."""
+        """Get feature importance for prediction.
+
+        #438 codex iter-0 HIGH-1: per-model exceptions were silently swallowed
+        and an empty dict returned regardless. That hid feature_store failures
+        from the aggregate gate. Now:
+
+        - If no feature_store is configured -> StoreNotConfigured raised.
+        - If no predictions provided -> honest empty {} (no models to query).
+        - If every per-model get_importance() raised -> AllModelsImportanceFailed
+          raised so asyncio.gather sees the exception and the availability flag
+          flips to False with a named warning.
+        - If at least one model returned -> the aggregation succeeds (partial
+          per-model failures stay logged but don't sink the dep, which
+          preserves the pre-#438 "non-fatal per-model" intent).
+        """
         if not self.feature_store:
+            raise StoreNotConfigured("feature_importance: no feature_store configured")
+
+        predictions = state.get("individual_predictions") or []
+        if not predictions:
             return {}
 
         # Aggregate importance across models
         importances: Dict[str, float] = {}
-        predictions = state.get("individual_predictions") or []
+        last_exception: Optional[BaseException] = None
+        succeeded = 0
 
         for pred in predictions:
             try:
                 model_importance = await self.feature_store.get_importance(pred["model_id"])
+                succeeded += 1
                 for feature, importance in model_importance.items():
                     if feature in importances:
                         importances[feature] = (importances[feature] + importance) / 2
                     else:
                         importances[feature] = importance
             except Exception as e:
+                last_exception = e
                 logger.debug(f"Failed to get importance for {pred['model_id']}: {e}")
+
+        # If ALL models failed, propagate so the aggregate gate counts this
+        # dependency as failed (#438 codex iter-0 HIGH-1).
+        if succeeded == 0 and last_exception is not None:
+            raise AllModelsImportanceFailed(
+                f"all {len(predictions)} models' get_importance() raised; "
+                f"last error: {type(last_exception).__name__}: {last_exception}"
+            ) from last_exception
 
         # Return top 10 features
         sorted_features = sorted(importances.items(), key=lambda x: x[1], reverse=True)
         return dict(sorted_features[:10])
 
     async def _get_historical_accuracy(self, state: PredictionSynthesizerState) -> float:
-        """Get historical accuracy for this prediction type."""
+        """Get historical accuracy for this prediction type.
+
+        #438: no store -> StoreNotConfigured (not silent 0.0 fabrication).
+        """
         if not self.context_store:
-            return 0.0
+            raise StoreNotConfigured("historical_accuracy: no context_store configured")
 
         return await self.context_store.get_accuracy(
             prediction_target=state.get("prediction_target", ""),
@@ -254,9 +414,14 @@ class ContextEnricherNode:
         )
 
     async def _get_trend(self, state: PredictionSynthesizerState) -> str:
-        """Determine trend direction."""
+        """Determine trend direction.
+
+        #438: no store -> StoreNotConfigured (not silent "stable" fabrication).
+        Honest-empty history (real store, no rows) still returns "stable" as
+        intended domain logic; that's matrix row 3 (empty-but-valid).
+        """
         if not self.context_store:
-            return "stable"
+            raise StoreNotConfigured("trend_direction: no context_store configured")
 
         history = await self.context_store.get_prediction_history(
             entity_id=state.get("entity_id", ""),
@@ -287,6 +452,19 @@ class ContextEnricherNode:
         feature freshness. This enables using the latest feature values
         for predictions rather than potentially stale input features.
 
+        #438 codex iter-0 HIGH-2: previously the entire body was wrapped in a
+        broad try/except that swallowed Feast failures and returned an empty
+        dict with a freeform warning. That made the per-field availability
+        flag falsely True even when get_online_features raised. The fix is:
+        let the Feast exception propagate so asyncio.gather sees it; the
+        availability flag flips to False and a per-field warning naming the
+        dependency + exception class surfaces. The opt-out branches (feature
+        flag, no store, no entity_id) still return honest-empty - those are
+        not failures.
+
+        Note: freshness check warnings remain in result["warnings"] for the
+        caller to merge. Stale features != failed Feast call.
+
         Args:
             state: Current prediction state with entity_id
 
@@ -294,50 +472,57 @@ class ContextEnricherNode:
             Dictionary with:
                 - features: Dict of online feature values
                 - freshness: Freshness check result (if available)
-                - warnings: List of any warnings (e.g., stale features)
+                - warnings: List of any freshness warnings (stale features)
+
+        Raises:
+            Exception: Any exception raised by feature_store.get_online_features
+                or feature_store.check_feature_freshness propagates to caller
+                (asyncio.gather catches via return_exceptions=True).
         """
+        # enable_online_features=False is an explicit opt-out: honest-empty,
+        # available=True (caller chose to disable Feast). Different from
+        # "no feature_store configured" or "no entity_id" which are absent-
+        # dependency cases -> StoreNotConfigured / unavailable.
         if not self.enable_online_features:
             return {"features": {}, "freshness": None, "warnings": []}
 
         if not self.feature_store:
-            return {"features": {}, "freshness": None, "warnings": []}
+            raise StoreNotConfigured("online_features: no feature_store configured")
 
         entity_id = state.get("entity_id")
         if not entity_id:
+            # No entity_id: cannot fetch features. Honest-empty (caller-state
+            # gap, not a Feast/feature_store failure).
             return {"features": {}, "freshness": None, "warnings": []}
 
         result: Dict[str, Any] = {"features": {}, "freshness": None, "warnings": []}
 
-        try:
-            # Check if feature_store supports online features (Feast)
-            if hasattr(self.feature_store, "get_online_features"):
-                features = await self.feature_store.get_online_features(
-                    entity_id=entity_id,
-                    feature_refs=None,  # Get all features from default view
+        # Check if feature_store supports online features (Feast)
+        # Any exception raised here PROPAGATES (#438 codex iter-0 HIGH-2).
+        if hasattr(self.feature_store, "get_online_features"):
+            features = await self.feature_store.get_online_features(
+                entity_id=entity_id,
+                feature_refs=None,  # Get all features from default view
+            )
+            result["features"] = features if features else {}
+            logger.debug(f"Retrieved {len(result['features'])} online features")
+
+        # Check feature freshness if supported - exceptions also propagate.
+        if hasattr(self.feature_store, "check_feature_freshness"):
+            freshness = await self.feature_store.check_feature_freshness(
+                entity_id=entity_id,
+                max_staleness_hours=self.max_staleness_hours,
+            )
+            result["freshness"] = freshness
+
+            # Add warning if features are stale (NOT a failure - stale-warning
+            # is honest data about successful-but-out-of-date features)
+            if freshness and not freshness.get("fresh", True):
+                stale_features = freshness.get("stale_features", [])
+                warnings_list: list[Any] = result["warnings"]
+                warnings_list.append(
+                    f"Stale features detected: {', '.join(stale_features[:5])}"
+                    + (f" (+{len(stale_features) - 5} more)" if len(stale_features) > 5 else "")
                 )
-                result["features"] = features if features else {}
-                logger.debug(f"Retrieved {len(result['features'])} online features")
-
-            # Check feature freshness if supported
-            if hasattr(self.feature_store, "check_feature_freshness"):
-                freshness = await self.feature_store.check_feature_freshness(
-                    entity_id=entity_id,
-                    max_staleness_hours=self.max_staleness_hours,
-                )
-                result["freshness"] = freshness
-
-                # Add warning if features are stale
-                if freshness and not freshness.get("fresh", True):
-                    stale_features = freshness.get("stale_features", [])
-                    warnings_list: list[Any] = result["warnings"]
-                    warnings_list.append(
-                        f"Stale features detected: {', '.join(stale_features[:5])}"
-                        + (f" (+{len(stale_features) - 5} more)" if len(stale_features) > 5 else "")
-                    )
-
-        except Exception as e:
-            logger.debug(f"Online feature retrieval failed for {entity_id}: {e}")
-            warnings_list2: list[Any] = result["warnings"]
-            warnings_list2.append(f"Online feature retrieval failed: {str(e)}")
 
         return result
