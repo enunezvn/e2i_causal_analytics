@@ -1068,10 +1068,14 @@ def _enforce_data_required_fail_close(
        NetworkX in this case would be a labeling problem (succeeded =
        True; answered effect question = False).
 
-    NetworkX-only requests (``request.stages = [networkx]`` or
-    ``request.libraries = [networkx]``) intentionally bypass this fail-
-    close — a graph-only question is a valid use case and NetworkX is
-    the canonical answer.
+    All-symbolic requested sets intentionally bypass this fail-close —
+    a graph-only question is a valid use case and NetworkX is the
+    canonical answer. (Note: today the request schemas enforce
+    ``min_length=2`` on ``stages`` / ``libraries`` (see
+    ``api/schemas/causal.py``), so a literal NetworkX-only API request
+    would be rejected by Pydantic validation before reaching this
+    helper. The bypass still matters for any future schema relaxation
+    and for the symbolic-only path inside this helper.)
 
     Raises:
         HTTPException(503): with ``_NO_RESOLVABLE_DATA_DETAIL`` body.
