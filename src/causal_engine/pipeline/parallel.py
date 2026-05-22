@@ -15,6 +15,11 @@ from .orchestrator import (
     PipelineOrchestrator,
 )
 from .router import LibraryRouter
+from .sequential import (
+    _apply_consensus,
+    _apply_pairwise_agreement,
+    _collect_ate_estimates,
+)
 from .state import (
     LibraryExecutionResult,
     PipelineInput,
@@ -275,9 +280,30 @@ class ParallelPipeline(PipelineOrchestrator):
         return results
 
     def _aggregate_parallel_results(self, state: PipelineState) -> PipelineState:
-        """Aggregate results from parallel execution.
+        """Aggregate results from parallel execution (4-library consensus +
+        uplift channel + structural-quality modulation).
 
-        Uses confidence-weighted consensus for effect estimates.
+        Delegates the cross-library reconciliation logic to the shared
+        helpers in ``sequential.py``:
+
+        - ``_collect_ate_estimates(state)`` returns one (library, effect,
+          confidence) triple per library that produced a finite effect
+          AND has a valid (numeric, in [0, 1], finite) confidence.
+          CausalML's ``ate`` (from ``uplift_summary``) is included
+          alongside DoWhy + EconML. CausalML's auuc/qini stay in the
+          separate uplift channel (``state["uplift_summary"]``) and are
+          NEVER averaged into ``consensus_effect``.
+        - ``_apply_consensus(state, effects)`` writes ``consensus_effect``
+          (confidence-weighted average) and ``consensus_confidence``
+          (mean confidence, modulated by NetworkX structural quality
+          when ``state["graph_quality"]`` is populated).
+        - ``_apply_pairwise_agreement(state, effects)`` writes
+          ``state["library_agreement"]`` with all pairwise combinations
+          (not just ``dowhy_econml``).
+
+        The pre-C-6 hardcoded ``0.8`` fallback at lines 291-300 is REMOVED:
+        a library with a missing/None/non-finite confidence is EXCLUDED
+        from consensus rather than silently defaulted.
 
         Args:
             state: Pipeline state with all library results
@@ -285,91 +311,19 @@ class ParallelPipeline(PipelineOrchestrator):
         Returns:
             Updated state with aggregated results
         """
-        # Collect effect estimates with confidence
-        effect_estimates: List[Tuple[str, float, float]] = []  # (library, effect, conf)
+        # Use the shared helpers (defined in sequential.py) so sequential
+        # and parallel pipelines apply identical consensus logic.
+        effects = _collect_ate_estimates(state)
 
-        if state["dowhy_result"] and state["dowhy_result"]["success"]:
-            if state["causal_effect"] is not None:
-                effect_estimates.append(
-                    ("dowhy", state["causal_effect"], state["dowhy_result"]["confidence"])
-                )
-
-        if state["econml_result"] and state["econml_result"]["success"]:
-            if state["overall_ate"] is not None:
-                effect_estimates.append(
-                    ("econml", state["overall_ate"], state["econml_result"]["confidence"])
-                )
-
-        # Calculate consensus
-        if effect_estimates:
-            state = self._calculate_consensus(state, effect_estimates)
-
-        # Calculate library agreement
-        state = self._calculate_agreement(state, effect_estimates)
+        if effects:
+            _apply_consensus(state, effects)
+            _apply_pairwise_agreement(state, effects)
 
         # Generate summary
         state["executive_summary"] = self._generate_parallel_summary(state)
         state["key_insights"] = self._generate_parallel_insights(state)
         state["recommended_actions"] = self._generate_parallel_recommendations(state)
 
-        return state
-
-    def _calculate_consensus(
-        self,
-        state: PipelineState,
-        estimates: List[Tuple[str, float, float]],
-    ) -> PipelineState:
-        """Calculate confidence-weighted consensus effect.
-
-        Args:
-            state: Current pipeline state
-            estimates: List of (library, effect, confidence)
-
-        Returns:
-            Updated state with consensus values
-        """
-        if not estimates:
-            return state
-
-        # Confidence-weighted average
-        total_weight = sum(conf for _, _, conf in estimates)
-        if total_weight > 0:
-            weighted_sum = sum(effect * conf for _, effect, conf in estimates)
-            state["consensus_effect"] = weighted_sum / total_weight
-
-            # Average confidence as consensus confidence
-            state["consensus_confidence"] = total_weight / len(estimates)
-
-        return state
-
-    def _calculate_agreement(
-        self,
-        state: PipelineState,
-        estimates: List[Tuple[str, float, float]],
-    ) -> PipelineState:
-        """Calculate pairwise library agreement.
-
-        Args:
-            state: Current pipeline state
-            estimates: List of (library, effect, confidence)
-
-        Returns:
-            Updated state with agreement metrics
-        """
-        if len(estimates) < 2:
-            return state
-
-        agreement: Dict[str, float] = {}
-
-        for i, (lib1, effect1, _) in enumerate(estimates):
-            for lib2, effect2, _ in estimates[i + 1 :]:
-                pair_name = f"{lib1}_{lib2}"
-                # Agreement = 1 - normalized difference
-                max_abs = max(abs(effect1), abs(effect2), 0.001)
-                diff = abs(effect1 - effect2) / max_abs
-                agreement[pair_name] = max(0.0, 1.0 - diff)
-
-        state["library_agreement"] = agreement
         return state
 
     def _generate_parallel_summary(self, state: PipelineState) -> str:

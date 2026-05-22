@@ -6,7 +6,7 @@ in sequential, parallel, and hierarchical pipeline flows.
 
 import operator
 from enum import Enum
-from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
+from typing import Annotated, Any, Dict, List, Literal, NotRequired, Optional, TypedDict
 
 
 class PipelineStage(str, Enum):
@@ -119,6 +119,37 @@ class PipelineState(TypedDict):
     consensus_effect: Optional[float]  # Weighted consensus effect
     consensus_confidence: Optional[float]  # Agreement-based confidence
     library_agreement: Optional[Dict[str, float]]  # Pairwise agreement
+
+    # === C-6 EXTRACTED CHANNELS (added phase C-6 of GH #354) ===
+    # All three are NotRequired[Optional[...]] so callers that
+    # constructed PipelineState as a strict total TypedDict (e.g. the
+    # round-trip fixtures in `tests/.../test_state.py:251`) remain
+    # type-valid without listing these new keys. This makes the C-6
+    # extension fully additive at the static-typing level (closes the
+    # codex iter-0 MEDIUM: `Optional[...]` alone does NOT make a key
+    # optional in a `total=True` TypedDict — `NotRequired` does).
+    #
+    # NetworkX structural-quality summary (extracted from networkx_result):
+    # {n_nodes, n_edges, is_dag, has_treatment_outcome_path,
+    #  structural_quality (0..1), n_cycles}.
+    # Distinct from `graph_metrics` (centrality only) and `causal_graph`
+    # (full payload); this channel feeds the consensus-confidence
+    # modulator without forcing downstream consumers to dig through the
+    # full NetworkX result.
+    graph_quality: NotRequired[Optional[Dict[str, Any]]]
+
+    # CausalML uplift-channel summary (extracted from causalml_result):
+    # {auuc, qini, ate, ate_ci_lower, ate_ci_upper, n_samples,
+    #  treatment_groups, control_name}. Carried SEPARATELY from
+    # `consensus_effect` because uplift answers a different question
+    # (population-targeting quality, not effect magnitude).
+    uplift_summary: NotRequired[Optional[Dict[str, Any]]]
+
+    # Per-library metric-type bookkeeping for the aggregator:
+    # {"dowhy": "ate", "econml": "ate", "causalml": "ate"}. Lets the
+    # aggregator distinguish ATE-track contributions from uplift-track
+    # contributions when future executors emit non-ATE metrics.
+    library_metric_types: NotRequired[Optional[Dict[str, str]]]
 
     # Hierarchical results (nested analysis)
     nested_cate: Optional[Dict[str, Any]]  # CATE within uplift segments

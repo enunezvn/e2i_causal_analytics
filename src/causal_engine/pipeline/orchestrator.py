@@ -140,6 +140,10 @@ class PipelineOrchestrator(ABC):
             consensus_effect=None,
             consensus_confidence=None,
             library_agreement=None,
+            # C-6 extracted channels (NetworkX graph quality, CausalML uplift)
+            graph_quality=None,
+            uplift_summary=None,
+            library_metric_types=None,
             nested_cate=None,
             segment_confidence_intervals=None,
             executive_summary=None,
@@ -163,34 +167,61 @@ class PipelineOrchestrator(ABC):
         library: CausalLibrary,
         result: LibraryExecutionResult,
     ) -> PipelineState:
-        """Update state with library execution result."""
+        """Update state with library execution result.
+
+        Phase C-6 extension (GH #354): in addition to the per-library
+        backward-compatible state fields, populates two new top-level
+        channels (``state["graph_quality"]`` and ``state["uplift_summary"]``)
+        from the rich post-Wave-1 result payloads, and records each
+        library's metric type in ``state["library_metric_types"]`` so the
+        downstream consensus aggregator can distinguish ATE-track
+        contributions from uplift-track contributions.
+        """
         # Update library-specific result
         if library == CausalLibrary.NETWORKX:
             state["networkx_result"] = result
             if result["success"] and result["result"]:
                 state["causal_graph"] = result["result"]
                 state["graph_metrics"] = result["result"].get("centrality", {})
+                # C-6: extract structural-quality channel for the
+                # consensus-confidence modulator. Read explicit fields
+                # rather than relying on truthiness — codex iter-N
+                # anti-pattern is to treat None / 0 / False as "skipped"
+                # when the executor explicitly emitted them as data.
+                self._extract_graph_quality(state, result["result"])
         elif library == CausalLibrary.DOWHY:
             state["dowhy_result"] = result
             if result["success"] and result["result"]:
                 state["causal_effect"] = result["result"].get("causal_effect")
                 state["refutation_results"] = result["result"].get("refutation_results")
                 state["identification_method"] = result["result"].get("identified_estimand")
+                # C-6: register DoWhy's metric type for the aggregator.
+                self._record_metric_type(state, "dowhy", "ate")
         elif library == CausalLibrary.ECONML:
             state["econml_result"] = result
             if result["success"] and result["result"]:
                 state["cate_by_segment"] = result["result"].get("cate_by_segment")
                 state["overall_ate"] = result["result"].get("ate")
                 state["heterogeneity_score"] = result["result"].get("heterogeneity_score")
+                self._record_metric_type(state, "econml", "ate")
         elif library == CausalLibrary.CAUSALML:
             state["causalml_result"] = result
             if result["success"] and result["result"]:
-                state["uplift_scores"] = result["result"].get("uplift_by_segment")
+                # C-6: read the post-C-4 key `uplift_scores_summary`
+                # (the pre-C-4 `uplift_by_segment` is gone from the
+                # post-Wave-1 result payload; reading the legacy key
+                # silently dropped real data on the floor).
+                state["uplift_scores"] = result["result"].get("uplift_scores_summary")
                 state["auuc"] = result["result"].get("auuc")
                 state["qini"] = result["result"].get("qini")
                 state["targeting_recommendations"] = result["result"].get(
                     "targeting_recommendations"
                 )
+                # C-6: extract uplift-channel summary distinct from ATE
+                # consensus, and register CausalML's ate-track metric.
+                self._extract_uplift_summary(state, result["result"])
+                if result["result"].get("ate") is not None:
+                    self._record_metric_type(state, "causalml", "ate")
 
         # Update metadata
         state["libraries_executed"].append(library.value)
@@ -203,6 +234,84 @@ class PipelineOrchestrator(ABC):
             state["warnings"].extend(result["warnings"])
 
         return state
+
+    @staticmethod
+    def _extract_graph_quality(state: PipelineState, payload: Dict[str, Any]) -> None:
+        """Populate ``state["graph_quality"]`` from a NetworkX result payload.
+
+        The post-C-5 NetworkX executor emits ``n_nodes``, ``n_edges``,
+        ``is_dag``, ``has_treatment_outcome_path``, and ``cycles`` in its
+        result. C-6 funnels these into a compact ``graph_quality`` dict
+        that includes a derived ``structural_quality`` score:
+
+        - 1.0 when DAG + treatment->outcome path + n_nodes >= 3
+        - 0.5 when DAG but path missing OR n_nodes < 3
+        - 0.0 when not a DAG (cycles present)
+
+        Mirrors the NetworkX executor's confidence-derivation logic (see
+        ``executors/networkx.py::_compute_confidence``) so this aggregator
+        sees the same signal.
+        """
+        is_dag = bool(payload.get("is_dag", False))
+        has_path = bool(payload.get("has_treatment_outcome_path", False))
+        n_nodes = int(payload.get("n_nodes", 0) or 0)
+        n_edges = int(payload.get("n_edges", 0) or 0)
+        cycles = payload.get("cycles") or []
+        n_cycles = len(cycles) if isinstance(cycles, list) else 0
+
+        if not is_dag:
+            structural_quality = 0.0
+        elif has_path and n_nodes >= 3:
+            structural_quality = 1.0
+        else:
+            structural_quality = 0.5
+
+        state["graph_quality"] = {
+            "n_nodes": n_nodes,
+            "n_edges": n_edges,
+            "is_dag": is_dag,
+            "has_treatment_outcome_path": has_path,
+            "structural_quality": structural_quality,
+            "n_cycles": n_cycles,
+        }
+
+    @staticmethod
+    def _extract_uplift_summary(state: PipelineState, payload: Dict[str, Any]) -> None:
+        """Populate ``state["uplift_summary"]`` from a CausalML result payload.
+
+        Pulls the load-bearing uplift-quality fields the aggregator and
+        downstream consumers need without forcing them to dig through the
+        full executor result. ``auuc``/``qini`` may legitimately be
+        ``None`` when the metrics-helper raised post-fit (per the
+        CausalML executor's documented warning path) — propagate ``None``
+        rather than substituting a zero.
+        """
+        state["uplift_summary"] = {
+            "auuc": payload.get("auuc"),
+            "qini": payload.get("qini"),
+            "ate": payload.get("ate"),
+            "ate_ci_lower": payload.get("ate_ci_lower"),
+            "ate_ci_upper": payload.get("ate_ci_upper"),
+            "n_samples": payload.get("n_samples"),
+            "treatment_groups": payload.get("treatment_groups"),
+            "control_name": payload.get("control_name"),
+            "model": payload.get("model"),
+        }
+
+    @staticmethod
+    def _record_metric_type(state: PipelineState, library_name: str, metric_type: str) -> None:
+        """Record a library's metric type for the aggregator.
+
+        Each library contributes either to the ATE-track (DoWhy, EconML,
+        CausalML's population ATE) or to a non-ATE-track (future
+        executors may report different metric types). The aggregator
+        reads this dict to know which libraries' effects to combine.
+        """
+        existing = state.get("library_metric_types")
+        if not isinstance(existing, dict):
+            existing = {}
+        existing[library_name] = metric_type
+        state["library_metric_types"] = existing
 
     def _create_output(self, state: PipelineState) -> PipelineOutput:
         """Create output from final state."""
