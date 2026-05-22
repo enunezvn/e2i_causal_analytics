@@ -472,7 +472,16 @@ class CausalMLExecutor(LibraryExecutor):
                 "feature_importances": upl_result.feature_importances,
                 "feature_names": feature_names,
                 "n_samples": int(len(X_df)),
-                "treatment_groups": treatment_groups,
+                # `treatment_groups` carries the non-control treatment arms
+                # from the real UpliftResult (BaseUpliftModel.fit excludes
+                # config.control_name from `_treatment_groups`). For binary
+                # 0/1 with control "0" this is `["1"]`. Iter-1 mistakenly
+                # used the raw pre-fit labels here; closes codex iter-1
+                # MEDIUM.
+                "treatment_groups": upl_result.treatment_groups,
+                # The pre-fit observed unique treatment labels (incl. control)
+                # remain available for callers that need them.
+                "observed_treatment_groups": treatment_groups,
                 "control_name": control_name,
             }
 

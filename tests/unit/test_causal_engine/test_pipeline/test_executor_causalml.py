@@ -557,10 +557,17 @@ class TestCausalMLExecutorRealLibraryWiring:
     @pytest.mark.asyncio
     @pytest.mark.slow
     async def test_execute_resolves_control_name_from_binary_treatment(self):
-        """Closes codex iter-0 HIGH-1: with binary 0/1 treatments the
-        resolved `control_name` must be `"0"` (the lexicographically smallest
-        stringified unique value). UpliftConfig default `"control"` would
-        NOT match and the real-library success path would fail closed.
+        """Closes codex iter-0 HIGH-1 + iter-1 MEDIUM:
+
+        - With binary 0/1 treatments the resolved `control_name` must be `"0"`
+          (the lexicographically smallest stringified unique value). UpliftConfig
+          default `"control"` would NOT match and the real-library success path
+          would fail closed.
+        - The `treatment_groups` field in the result payload carries the real
+          `UpliftResult.treatment_groups` (the non-control arms, excluding the
+          configured control_name). For binary 0/1 with control "0" this is
+          `["1"]`. The pre-fit raw observed labels live in
+          `observed_treatment_groups`.
         """
         executor = CausalMLExecutor()
         filters = _make_real_uplift_data(n=300, seed=31)
@@ -574,8 +581,11 @@ class TestCausalMLExecutorRealLibraryWiring:
             f"got error: {result.get('error')}"
         )
         assert result["result"]["control_name"] == "0"
-        # And the treatment_groups should include "0" (the control).
-        assert "0" in result["result"]["treatment_groups"]
+        # Non-control arms from real UpliftResult; control "0" is EXCLUDED.
+        assert result["result"]["treatment_groups"] == ["1"]
+        # Raw observed labels (incl. control) remain available for callers.
+        assert "0" in result["result"]["observed_treatment_groups"]
+        assert "1" in result["result"]["observed_treatment_groups"]
 
     @pytest.mark.asyncio
     @pytest.mark.slow
