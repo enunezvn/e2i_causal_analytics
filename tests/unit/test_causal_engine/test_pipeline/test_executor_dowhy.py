@@ -155,9 +155,7 @@ def _build_real_dataframe(*, n: int = 400, true_ate: float = 1.5, seed: int = 13
     treatment = 0.5 * confounder_a + rng.normal(0.0, 1.0, n)
     # Outcome depends linearly on treatment and confounder; ATE = true_ate
     outcome = true_ate * treatment + 0.7 * confounder_a + rng.normal(0.0, 1.0, n)
-    return pd.DataFrame(
-        {"treatment": treatment, "outcome": outcome, "confounder_a": confounder_a}
-    )
+    return pd.DataFrame({"treatment": treatment, "outcome": outcome, "confounder_a": confounder_a})
 
 
 # =============================================================================

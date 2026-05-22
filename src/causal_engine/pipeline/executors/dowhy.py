@@ -285,9 +285,7 @@ class DoWhyExecutor(LibraryExecutor):
         except Exception as exc:  # noqa: BLE001
             return _build_failure_result(
                 start_time=start_time,
-                error=(
-                    f"DoWhy estimate_effect failed for method_name={dowhy_method!r}: {exc}"
-                ),
+                error=(f"DoWhy estimate_effect failed for method_name={dowhy_method!r}: {exc}"),
             )
 
         # === Step 8: extract real numeric ATE; fail-closed on non-finite ===

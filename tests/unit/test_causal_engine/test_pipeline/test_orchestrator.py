@@ -991,9 +991,7 @@ class TestOrchestratorIntegration:
 
         # Update state with NetworkX result.
         orchestrator = ConcreteOrchestrator()
-        state = orchestrator._update_state_with_result(
-            state, CausalLibrary.NETWORKX, nx_result
-        )
+        state = orchestrator._update_state_with_result(state, CausalLibrary.NETWORKX, nx_result)
 
         # Execute DoWhy - should see the causal_graph + run the real model.
         dowhy_executor = DoWhyExecutor()
