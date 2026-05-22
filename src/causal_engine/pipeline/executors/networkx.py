@@ -82,6 +82,19 @@ class NetworkXExecutor(LibraryExecutor):
             effect_modifiers = self._coerce_str_list(state.get("effect_modifiers"))
             upstream_graph = state.get("causal_graph")
 
+            # Strict type check on upstream_graph BEFORE the truthiness
+            # branch (codex iter-2 MEDIUM): a malformed-but-falsey value
+            # like `[]` or `0` previously bypassed `_build_from_upstream`
+            # entirely and fell back to symbolic mode silently. The
+            # TypedDict types `causal_graph` as
+            # ``Optional[Dict[str, Any]]``, so anything other than dict or
+            # None is a malformed input and must fail closed.
+            if upstream_graph is not None and not isinstance(upstream_graph, dict):
+                raise TypeError(
+                    "state['causal_graph'] must be a dict or None, "
+                    f"got {type(upstream_graph).__name__}: {upstream_graph!r}"
+                )
+
             if upstream_graph:
                 graph, graph_source = self._build_from_upstream(
                     upstream_graph,

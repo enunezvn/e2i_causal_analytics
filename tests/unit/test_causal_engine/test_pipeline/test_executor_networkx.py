@@ -431,6 +431,38 @@ class TestNetworkXUpstreamGraphInheritance:
         assert result["error"] is not None
         assert result["confidence"] == 0.0
 
+    @pytest.mark.asyncio
+    async def test_malformed_causal_graph_falsey_non_dict_fails_closed(self):
+        """`causal_graph=[]` (falsey but wrong type) fails closed, not falls back to symbolic.
+
+        Addresses codex iter-2 MEDIUM: previous truthiness check
+        ``if upstream_graph:`` let falsey-but-malformed values like ``[]``
+        bypass upstream validation and silently fall back to symbolic mode
+        with success=True. ``PipelineState`` types causal_graph as
+        ``Optional[Dict[str, Any]]``, so non-dict (and non-None) is a
+        malformed input and must fail closed.
+        """
+        executor = NetworkXExecutor()
+        state = _state(treatment_var="T", outcome_var="Y", causal_graph=[])  # type: ignore[arg-type]
+
+        result = await executor.execute(state, _minimal_config())
+
+        assert result["success"] is False
+        assert result["error"] is not None
+        assert result["confidence"] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_malformed_causal_graph_truthy_non_dict_fails_closed(self):
+        """`causal_graph=42` (truthy non-dict) also fails closed (companion to iter-2 fix)."""
+        executor = NetworkXExecutor()
+        state = _state(treatment_var="T", outcome_var="Y", causal_graph=42)  # type: ignore[arg-type]
+
+        result = await executor.execute(state, _minimal_config())
+
+        assert result["success"] is False
+        assert result["error"] is not None
+        assert result["confidence"] == 0.0
+
 
 # =============================================================================
 # Real networkx.DiGraph used (not hand-rolled dict)
