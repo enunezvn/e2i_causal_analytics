@@ -270,62 +270,109 @@ class TestDoWhyExecutor:
         assert executor.library == CausalLibrary.DOWHY
 
     @pytest.mark.asyncio
-    async def test_execute_success(self, minimal_pipeline_state, minimal_pipeline_config):
-        """Test execute returns successful result."""
+    async def test_execute_fails_closed_without_dataframe(
+        self, minimal_pipeline_state, minimal_pipeline_config
+    ):
+        """Execute fails closed when no DataFrame is in state['filters'].
+
+        UPDATED in C-2 (PR for #354): the prior assertion pinned the C-1
+        placeholder body (`success=True`, `confidence=0.85`, hardcoded
+        `identified_estimand="backdoor"` / `causal_effect=0.0`). C-2 wires
+        the executor to real `dowhy.CausalModel`; without a DataFrame it
+        MUST fail-closed instead of returning placeholder values. The
+        real-DataFrame success path is asserted in `test_executor_dowhy.py`.
+        """
         executor = DoWhyExecutor()
 
         result = await executor.execute(minimal_pipeline_state, minimal_pipeline_config)
 
         assert result["library"] == "dowhy"
-        assert result["success"] is True
+        assert result["success"] is False, (
+            "Without a DataFrame in state['filters'], DoWhyExecutor must fail-closed; "
+            "the previous success-asserting test pinned C-1's placeholder body."
+        )
+        assert result["error"] is not None
+        # Result payload is None on fail-closed (no placeholder values).
+        assert result["result"] is None
+        # Confidence is zero on failure path (no fake confidence value).
+        assert result["confidence"] == 0.0
+        # Latency is still tracked.
         assert result["latency_ms"] >= 0
-        assert result["error"] is None
-        assert result["confidence"] == 0.85
-        assert "identified_estimand" in result["result"]
-        assert "causal_effect" in result["result"]
-        assert "confidence_interval" in result["result"]
-        assert "refutation_results" in result["result"]
 
     @pytest.mark.asyncio
-    async def test_execute_uses_graph_from_networkx(
+    async def test_execute_with_graph_from_networkx_still_fails_without_dataframe(
         self, minimal_pipeline_state, minimal_pipeline_config
     ):
-        """Test execute notes when causal_graph is available from NetworkX."""
+        """Even with a NetworkX `causal_graph` in state, execute still needs a DataFrame.
+
+        UPDATED in C-2 (PR for #354): the prior assertion pinned the
+        placeholder's `graph_source: "networkx"` side-effect when a graph
+        was present. Real DoWhy needs the DataFrame regardless of whether
+        an upstream NetworkX graph is available; `graph_source` is now a
+        success-path bookkeeping field, not a substitute for real data.
+        """
         executor = DoWhyExecutor()
         state = minimal_pipeline_state.copy()
         state["causal_graph"] = {"nodes": ["X", "Y"], "edges": [{"from": "X", "to": "Y"}]}
 
         result = await executor.execute(state, minimal_pipeline_config)
 
-        assert result["success"] is True
-        assert result["result"]["graph_source"] == "networkx"
+        # Still fail-closed — graph alone is insufficient; DoWhy needs the data.
+        assert result["success"] is False
+        assert result["error"] is not None
+        assert result["result"] is None
 
     @pytest.mark.asyncio
-    async def test_execute_handles_exception(self, minimal_pipeline_state, minimal_pipeline_config):
-        """Test execute handles exceptions gracefully."""
+    async def test_execute_handles_dowhy_exception(
+        self, minimal_pipeline_state, minimal_pipeline_config
+    ):
+        """Execute returns fail-closed structured error when DoWhy raises.
+
+        UPDATED in C-2 (PR for #354): the prior assertion used a
+        `time.time`-monkeypatch trick that depended on the placeholder
+        body's two-time-call shape. Real wiring uses a different code
+        path. We assert the equivalent functional invariant: when any
+        underlying DoWhy call raises during identify/estimate, the
+        executor catches it and returns `success=False` with the error
+        preserved in `result['error']` — never silently substitutes a
+        placeholder value.
+        """
         executor = DoWhyExecutor()
+        # Provide a DataFrame matching the minimal_pipeline_state fixture's
+        # treatment_var=marketing_spend, outcome_var=sales so we reach the
+        # CausalModel call path, then force CausalModel construction itself
+        # to raise by patching it module-level.
+        import pandas as pd
 
-        # Create a call counter that raises on second call (inside try block)
-        call_count = {"n": 0}
+        df = pd.DataFrame(
+            {
+                "marketing_spend": [0.0, 1.0, 0.0, 1.0],
+                "sales": [1.0, 2.0, 1.0, 2.0],
+                "region": [0, 0, 1, 1],
+            }
+        )
+        state = minimal_pipeline_state.copy()
+        state["filters"] = {"estimation_data": df}
+        # minimal_pipeline_state's confounders default to ["region", "season"];
+        # narrow to ["region"] so the present DataFrame satisfies the column
+        # check (season is intentionally absent — separate test covers the
+        # missing-column path explicitly).
+        state["confounders"] = ["region"]
 
-        def time_side_effect():
-            call_count["n"] += 1
-            if call_count["n"] == 2:
-                raise ValueError("DoWhy error")
-            return 100.0
-
-        # Patch target moved from pipeline.orchestrator.time to
-        # pipeline.executors.dowhy.time as part of the C-1 split of orchestrator.py
-        # into per-executor files. Class body is byte-identical; only `time` lives
-        # in a different module now (the one where DoWhyExecutor.execute runs).
+        # Force CausalModel to raise during construction.
         with patch(
-            "src.causal_engine.pipeline.executors.dowhy.time.time", side_effect=time_side_effect
+            "src.causal_engine.pipeline.executors.dowhy.CausalModel",
+            side_effect=ValueError("DoWhy boom"),
         ):
-            result = await executor.execute(minimal_pipeline_state, minimal_pipeline_config)
+            result = await executor.execute(state, minimal_pipeline_config)
 
         assert result["success"] is False
-        assert result["error"] == "DoWhy error"
+        assert result["error"] is not None
+        assert "DoWhy boom" in result["error"], (
+            f"Expected underlying exception preserved in error; got {result['error']!r}"
+        )
         assert result["confidence"] == 0.0
+        assert result["result"] is None
 
     def test_validate_input_success(self, minimal_pipeline_state):
         """Test validate_input passes with treatment and outcome vars."""
@@ -914,24 +961,49 @@ class TestOrchestratorIntegration:
     async def test_executor_chain_propagates_state(
         self, minimal_pipeline_state, minimal_pipeline_config
     ):
-        """Test that results from one executor can be used by another."""
-        # Execute NetworkX first
+        """Test that results from one executor can be used by another.
+
+        UPDATED in C-2 (PR for #354): the prior assertion pinned DoWhy's
+        placeholder `success=True` + `graph_source: "networkx"` stub
+        side-effect. Real DoWhy needs a DataFrame to succeed. We now
+        provide one and assert the chain produces a real causal_effect
+        from DoWhy after NetworkX populates the causal_graph.
+        """
+        import numpy as np
+        import pandas as pd
+
+        # Build a small DataFrame with a known effect so DoWhy can run.
+        rng = np.random.default_rng(7)
+        n = 200
+        region = rng.normal(0.0, 1.0, n)
+        treatment = 0.4 * region + rng.normal(0.0, 1.0, n)
+        outcome = 1.2 * treatment + 0.5 * region + rng.normal(0.0, 1.0, n)
+        df = pd.DataFrame({"marketing_spend": treatment, "sales": outcome, "region": region})
+
+        # Seed the state with the DataFrame for DoWhy.
+        state = minimal_pipeline_state.copy()
+        state["filters"] = {"estimation_data": df}
+        state["confounders"] = ["region"]
+
+        # Execute NetworkX first.
         networkx_executor = NetworkXExecutor()
-        nx_result = await networkx_executor.execute(minimal_pipeline_state, minimal_pipeline_config)
+        nx_result = await networkx_executor.execute(state, minimal_pipeline_config)
 
-        # Update state with NetworkX result
+        # Update state with NetworkX result.
         orchestrator = ConcreteOrchestrator()
-        state = orchestrator._update_state_with_result(
-            minimal_pipeline_state, CausalLibrary.NETWORKX, nx_result
-        )
+        state = orchestrator._update_state_with_result(state, CausalLibrary.NETWORKX, nx_result)
 
-        # Execute DoWhy - should see the causal_graph
+        # Execute DoWhy - should see the causal_graph + run the real model.
         dowhy_executor = DoWhyExecutor()
         dw_result = await dowhy_executor.execute(state, minimal_pipeline_config)
 
-        # DoWhy should note that graph came from NetworkX
-        assert dw_result["success"] is True
-        assert "graph_source" in dw_result["result"]
+        # Real DoWhy must succeed with a finite causal_effect; `graph_source`
+        # is still a success-path bookkeeping field.
+        assert dw_result["success"] is True, (
+            f"DoWhy should succeed with real data; got error: {dw_result['error']!r}"
+        )
+        assert isinstance(dw_result["result"]["causal_effect"], float)
+        assert np.isfinite(dw_result["result"]["causal_effect"])
         assert dw_result["result"]["graph_source"] == "networkx"
 
     @pytest.mark.asyncio
