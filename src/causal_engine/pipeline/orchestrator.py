@@ -113,6 +113,10 @@ class PipelineOrchestrator(ABC):
             effect_modifiers=input_data.get("effect_modifiers"),
             data_source=input_data["data_source"],
             filters=input_data.get("filters"),
+            # First-class DataFrame slot (#458). Propagated from
+            # `PipelineInput.estimation_data` so executors can resolve it via
+            # `resolve_estimation_dataframe()` without per-executor key drift.
+            estimation_data=input_data.get("estimation_data"),
             # Configuration
             config=config,
             # Routing

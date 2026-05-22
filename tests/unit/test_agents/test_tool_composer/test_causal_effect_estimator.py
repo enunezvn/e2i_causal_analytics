@@ -124,7 +124,7 @@ class TestCausalEffectEstimatorRealWiring:
         """
         df = _build_real_dataframe()
         with patch(
-            "src.agents.tool_composer.tool_registrations._DataAwareSequentialPipeline"
+            "src.agents.tool_composer.tool_registrations.SequentialPipeline"
         ) as mock_pipeline_cls:
             mock_instance = mock_pipeline_cls.return_value
             mock_instance.execute = AsyncMock(
@@ -151,24 +151,14 @@ class TestCausalEffectEstimatorRealWiring:
             assert input_data.get("treatment_var") == "treatment"
             assert input_data.get("outcome_var") == "outcome"
             assert input_data.get("confounders") == ["confounder_a"]
-            # The DataFrame must be conveyed through state in slots that BOTH
-            # filter-reading executors find. Codex iter-0 HIGH closed:
-            # DoWhy reads `filters['estimation_data']`; CausalML reads
-            # `filters['dataframe']`. Both MUST be populated to the same df
-            # so each executor finds it under its canonical key (without
-            # this, EconML's separate `state['data_cache']` read is handled
-            # by the `_DataAwareSequentialPipeline` subclass — see
-            # `test_data_cache_seeded_for_econml_path` below).
-            filters_dict = input_data.get("filters") or {}
-            assert filters_dict.get("estimation_data") is df, (
-                "PipelineInput.filters['estimation_data'] must hold the "
-                "caller's DataFrame for DoWhy executor (executors/dowhy.py "
-                f"reads this key). Got keys={list(filters_dict.keys())!r}."
-            )
-            assert filters_dict.get("dataframe") is df, (
-                "PipelineInput.filters['dataframe'] must hold the caller's "
-                "DataFrame for CausalML executor (executors/causalml.py reads "
-                f"this key). Got keys={list(filters_dict.keys())!r}."
+            # Post-#458: the DataFrame travels through the first-class
+            # `PipelineInput.estimation_data` field. The orchestrator copies
+            # it into `state["estimation_data"]` and every executor reads it
+            # via `resolve_estimation_dataframe(state)`.
+            assert input_data.get("estimation_data") is df, (
+                "PipelineInput.estimation_data must hold the caller's "
+                "DataFrame (the canonical first-class field after #458). "
+                f"Got input_data keys={sorted(input_data.keys())!r}."
             )
 
             # The returned EffectEstimate's ATE matches the pipeline's
@@ -177,23 +167,20 @@ class TestCausalEffectEstimatorRealWiring:
             assert result.ate == pytest.approx(0.42)
             assert result.method == "backdoor.linear_regression"
 
-    def test_data_cache_seeded_for_econml_path(self) -> None:
-        """The `_DataAwareSequentialPipeline` subclass MUST seed
-        `state['data_cache']['estimation_data']` so EconML's data read at
-        `executors/econml.py:156` (`state.get('data_cache')`) finds the
-        caller-supplied DataFrame.
+    def test_estimation_data_first_class_field_carries_dataframe(self) -> None:
+        """Post-#458: the DataFrame is conveyed via the first-class
+        ``PipelineInput.estimation_data`` field, not the legacy
+        ``state["data_cache"]`` subclass-injection hack.
 
-        Codex iter-0 HIGH closed: without this seeding, EconML always fails
-        closed and the consensus drops to a 3-library run (DoWhy + CausalML +
-        NetworkX-symbolic) instead of the C-6 4-library aggregation that C-7
-        is meant to unlock. The orchestrator's `_create_initial_state` only
-        copies `input_data['filters']` into state — `data_cache` is NOT a
-        field on PipelineInput, so we override `_create_initial_state` in the
-        subclass to attach it post-construction.
+        The orchestrator copies ``input_data["estimation_data"]`` into
+        ``state["estimation_data"]`` (see ``orchestrator._create_initial_state``)
+        so all four executors can resolve it via
+        ``resolve_estimation_dataframe(state)`` — no per-library key drift.
+        This test pins the contract end-to-end: a real orchestrator run
+        on a real ``SequentialPipeline`` reaches the state mutation site
+        with the caller's DataFrame at the first-class slot.
         """
-        from src.agents.tool_composer.tool_registrations import (
-            _DataAwareSequentialPipeline,
-        )
+        from src.causal_engine.pipeline import SequentialPipeline
         from src.causal_engine.pipeline.router import (
             CausalLibrary,
             QuestionType,
@@ -201,10 +188,8 @@ class TestCausalEffectEstimatorRealWiring:
         )
 
         df = _build_real_dataframe()
-        pipeline = _DataAwareSequentialPipeline(dataframe=df)
+        pipeline = SequentialPipeline()
 
-        # Construct a minimal PipelineInput + RoutingDecision (the inputs
-        # `_create_initial_state` expects).
         pipeline_input: Dict[str, Any] = {
             "query": "test",
             "treatment_var": "treatment",
@@ -212,7 +197,8 @@ class TestCausalEffectEstimatorRealWiring:
             "confounders": ["confounder_a"],
             "effect_modifiers": None,
             "data_source": "test",
-            "filters": {"estimation_data": df, "dataframe": df},
+            "filters": None,
+            "estimation_data": df,
         }
         routing = RoutingDecision(
             question_type=QuestionType.CAUSAL_RELATIONSHIP,
@@ -225,18 +211,10 @@ class TestCausalEffectEstimatorRealWiring:
 
         state = pipeline._create_initial_state(pipeline_input, routing)  # type: ignore[arg-type]
 
-        # The subclass MUST have attached data_cache so EconML's
-        # `state.get('data_cache')` finds the DataFrame.
-        data_cache = state.get("data_cache")  # type: ignore[call-overload]
-        assert isinstance(data_cache, dict), (
-            "_DataAwareSequentialPipeline must seed state['data_cache'] so "
-            "EconML's read path (executors/econml.py:156) finds the DataFrame; "
-            f"got data_cache={data_cache!r}"
-        )
-        assert data_cache.get("estimation_data") is df, (
-            "state['data_cache']['estimation_data'] must hold the caller's "
-            "DataFrame (the canonical key EconML reads). Got "
-            f"data_cache keys={list(data_cache.keys())!r}"
+        assert state.get("estimation_data") is df, (  # type: ignore[typeddict-item]
+            "PipelineState['estimation_data'] must hold the caller's "
+            "DataFrame after orchestrator initial-state construction "
+            "(#458 contract)."
         )
 
     def test_returned_ate_comes_from_consensus_effect_not_hardcoded(self) -> None:
@@ -251,7 +229,7 @@ class TestCausalEffectEstimatorRealWiring:
         df = _build_real_dataframe()
         for synthetic_pipeline_effect in [-0.5, 0.0, 0.07, 1.234, 5.0]:
             with patch(
-                "src.agents.tool_composer.tool_registrations._DataAwareSequentialPipeline"
+                "src.agents.tool_composer.tool_registrations.SequentialPipeline"
             ) as mock_pipeline_cls:
                 mock_instance = mock_pipeline_cls.return_value
                 mock_instance.execute = AsyncMock(
@@ -288,7 +266,7 @@ class TestCausalEffectEstimatorRealWiring:
         """
         df = _build_real_dataframe()
         with patch(
-            "src.agents.tool_composer.tool_registrations._DataAwareSequentialPipeline"
+            "src.agents.tool_composer.tool_registrations.SequentialPipeline"
         ) as mock_pipeline_cls:
             mock_instance = mock_pipeline_cls.return_value
             mock_instance.execute = AsyncMock(
@@ -354,7 +332,7 @@ class TestCausalEffectEstimatorFailClosed:
 
         df = _build_real_dataframe()
         with patch(
-            "src.agents.tool_composer.tool_registrations._DataAwareSequentialPipeline"
+            "src.agents.tool_composer.tool_registrations.SequentialPipeline"
         ) as mock_pipeline_cls:
             mock_instance = mock_pipeline_cls.return_value
             mock_instance.execute = AsyncMock(
@@ -375,7 +353,7 @@ class TestCausalEffectEstimatorFailClosed:
         """Pipeline returns status='failed' ⇒ raise (never return placeholder)."""
         df = _build_real_dataframe()
         with patch(
-            "src.agents.tool_composer.tool_registrations._DataAwareSequentialPipeline"
+            "src.agents.tool_composer.tool_registrations.SequentialPipeline"
         ) as mock_pipeline_cls:
             mock_instance = mock_pipeline_cls.return_value
             mock_instance.execute = AsyncMock(
@@ -404,7 +382,7 @@ class TestCausalEffectEstimatorFailClosed:
         """
         df = _build_real_dataframe()
         with patch(
-            "src.agents.tool_composer.tool_registrations._DataAwareSequentialPipeline"
+            "src.agents.tool_composer.tool_registrations.SequentialPipeline"
         ) as mock_pipeline_cls:
             mock_instance = mock_pipeline_cls.return_value
             mock_instance.execute = AsyncMock(
@@ -433,7 +411,7 @@ class TestCausalEffectEstimatorFailClosed:
         df = _build_real_dataframe()
         for bad_value in [float("nan"), float("inf"), float("-inf")]:
             with patch(
-                "src.agents.tool_composer.tool_registrations._DataAwareSequentialPipeline"
+                "src.agents.tool_composer.tool_registrations.SequentialPipeline"
             ) as mock_pipeline_cls:
                 mock_instance = mock_pipeline_cls.return_value
                 mock_instance.execute = AsyncMock(
@@ -497,7 +475,9 @@ class TestCausalEffectEstimatorAntiMocking:
         # helper it directly invokes. If a future refactor adds another
         # helper, add it here too (the test failure message tells you the
         # specific function that contained the offender, so the next dev
-        # knows where to look).
+        # knows where to look). Post-#458 the helper-only subclass
+        # `_DataAwareSequentialPipeline` is deleted (DataFrame travels
+        # via `PipelineInput.estimation_data` directly).
         in_scope_functions = {
             "causal_effect_estimator",
             "_extract_dataframe_from_kwargs",
@@ -505,9 +485,7 @@ class TestCausalEffectEstimatorAntiMocking:
             "_derive_ci_and_p_value",
             "_derive_p_value_from_confidence",
         }
-        in_scope_classes = {
-            "_DataAwareSequentialPipeline",
-        }
+        in_scope_classes: set[str] = set()
 
         # Forbidden (keyword_name, value) pairs.
         forbidden_pairs = {

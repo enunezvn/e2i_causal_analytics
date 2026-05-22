@@ -55,6 +55,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 import numpy as np
 
+from ..data_resolver import resolve_estimation_dataframe
 from ..router import CausalLibrary
 from ..state import LibraryExecutionResult, PipelineConfig, PipelineState
 from .base import LibraryExecutor
@@ -145,21 +146,15 @@ def _heterogeneity_score(cate: Optional[np.ndarray]) -> float:
 def _resolve_dataframe(state: PipelineState) -> Optional["pd.DataFrame"]:
     """Resolve the input DataFrame for estimation.
 
-    Uses the same key as
-    ``agents/causal_impact/nodes/estimation.py::_get_data`` so that future
-    orchestrator wiring (likely phase C-6) only needs to populate
-    ``state['data_cache']['estimation_data']`` once for all executors.
+    Thin wrapper around ``data_resolver.resolve_estimation_dataframe`` (#458).
+    The resolver prefers the first-class ``state["estimation_data"]`` slot
+    and back-compats the Wave-1 nested-dict shapes with a
+    ``DeprecationWarning`` so every executor reads through one path.
 
     Returns ``None`` if no DataFrame is available. The caller is responsible
     for fail-closing in that case -- this helper does NOT raise.
     """
-    data_cache = state.get("data_cache")  # type: ignore[call-overload]
-    if not isinstance(data_cache, dict):
-        return None
-    df = data_cache.get("estimation_data")
-    if df is None:
-        return None
-    return df
+    return resolve_estimation_dataframe(state)
 
 
 def _failure(
@@ -238,8 +233,9 @@ class EconMLExecutor(LibraryExecutor):
             if df is None:
                 return _failure(
                     error=(
-                        "EconML executor requires real data via "
-                        "state['data_cache']['estimation_data']; none found. "
+                        "EconML executor requires real data via the "
+                        "first-class estimation_data state slot (or legacy "
+                        "filters/data_cache back-compat); none found. "
                         "Refusing to fabricate ATE/CATE from synthetic or "
                         "DoWhy-leakage substitutes."
                     ),

@@ -20,8 +20,6 @@ from src.causal_engine.pipeline import (
     PipelineOutput,
     SequentialPipeline,
 )
-from src.causal_engine.pipeline.router import RoutingDecision
-from src.causal_engine.pipeline.state import PipelineState
 from src.tool_registry import (
     composable_tool,
 )
@@ -37,45 +35,10 @@ _DATAFRAME_KWARGS_KEYS: Tuple[str, ...] = (
 )
 
 
-class _DataAwareSequentialPipeline(SequentialPipeline):
-    """SequentialPipeline that seeds ``state['data_cache']['estimation_data']``.
-
-    Background: the C-1 ``PipelineState`` TypedDict + ``PipelineInput`` contract
-    have no ``data_cache`` field, but the C-3 ``EconMLExecutor`` reads
-    ``state['data_cache']['estimation_data']`` (see
-    ``executors/econml.py:156``) — and the orchestrator's
-    ``_create_initial_state`` only copies ``input_data['filters']`` into state.
-    Without seeding ``data_cache``, EconML always fail-closes with "no real
-    data available", reducing the 4-library consensus to a 3-library run
-    (DoWhy + CausalML + NetworkX-symbolic).
-
-    This subclass is the minimum-blast-radius fix: it overrides only
-    ``_create_initial_state`` to attach the caller's DataFrame under the
-    canonical ``data_cache.estimation_data`` key after the base class
-    constructs the state. Every other pipeline behavior (routing, execution
-    order, aggregation) is unchanged.
-
-    Once a future PR widens ``PipelineState`` / ``PipelineInput`` to declare
-    ``data_cache`` as a first-class field, this subclass can be deleted and
-    the tool can populate ``data_cache`` directly via ``PipelineInput``.
-    """
-
-    def __init__(self, *, dataframe: Any, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-        self._dataframe = dataframe
-
-    def _create_initial_state(
-        self,
-        input_data: PipelineInput,
-        routing_decision: RoutingDecision,
-    ) -> PipelineState:
-        state = super()._create_initial_state(input_data, routing_decision)
-        # `data_cache` is not declared on PipelineState (TypedDict locked in
-        # C-1); seed it as an arbitrary dict on the underlying dict object.
-        # The runtime contract is dict[str, Any] — the type ignore acknowledges
-        # we're writing an unknown key intentionally per the design note above.
-        state["data_cache"] = {"estimation_data": self._dataframe}  # type: ignore[typeddict-unknown-key]
-        return state
+# `_DataAwareSequentialPipeline` was deleted in #458 once `PipelineState` /
+# `PipelineInput` declared `estimation_data` as a first-class field — the
+# tool now passes the DataFrame directly via `PipelineInput.estimation_data`
+# and constructs the base `SequentialPipeline` with no subclass override.
 
 
 # ============================================================================
@@ -532,23 +495,12 @@ def causal_effect_estimator(
     query = kwargs.get("query") or (
         f"Estimate the causal effect of {treatment} on {outcome} using method={method!r}."
     )
-    # Populate `filters` AND `data_cache` so every Wave-1 executor finds
-    # the DataFrame via its existing per-executor key:
-    #   - DoWhy   (executors/dowhy.py)    reads filters['estimation_data']
-    #   - CausalML(executors/causalml.py) reads filters['dataframe']
-    #   - EconML  (executors/econml.py)   reads state['data_cache']['estimation_data']
-    #   - NetworkX (executors/networkx.py) reads symbolic state, no DataFrame needed
-    # Also matches the C-6 data_resolver priority order
-    # (data_cache.estimation_data > filters.estimation_data > filters.dataframe).
-    # `data_cache` is NOT a field on PipelineInput / PipelineState (those are
-    # locked in C-1), so we seed it via a small SequentialPipeline subclass
-    # below that overrides `_create_initial_state` to attach the DataFrame
-    # to state["data_cache"] post-construction. This is non-breaking: the
-    # subclass changes nothing else about the base pipeline.
-    pipeline_filters: Dict[str, Any] = {
-        "estimation_data": df,
-        "dataframe": df,
-    }
+    # Pass the DataFrame via the first-class `estimation_data` field (#458).
+    # The orchestrator's `_create_initial_state` copies this into
+    # `PipelineState["estimation_data"]`, and every executor reads it via
+    # `resolve_estimation_dataframe(state)`. No legacy filters/data_cache
+    # seeding required — that contract is the deprecated path, kept only
+    # for back-compat in the resolver itself.
     pipeline_input: PipelineInput = {
         "query": query,
         "treatment_var": treatment,
@@ -556,7 +508,8 @@ def causal_effect_estimator(
         "confounders": confounders or [],
         "effect_modifiers": None,
         "data_source": data_source,
-        "filters": pipeline_filters,
+        "filters": None,
+        "estimation_data": df,
         "mode": "sequential",
         "libraries_enabled": None,
         "cross_validate": None,
@@ -568,7 +521,7 @@ def causal_effect_estimator(
     # thread). For the rare case where a caller invokes this function from
     # inside a running event loop on the same thread, we fall back to
     # creating a fresh loop explicitly.
-    pipeline = _DataAwareSequentialPipeline(dataframe=df)
+    pipeline = SequentialPipeline()
     pipeline_output = _run_pipeline_sync(pipeline, pipeline_input)
 
     # --- 4. Validate the pipeline produced a usable consensus effect. ---

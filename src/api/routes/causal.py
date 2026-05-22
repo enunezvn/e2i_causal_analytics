@@ -65,7 +65,6 @@ from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 # dependencies (dowhy/econml/causalml/networkx availability), so importing
 # the orchestrator classes is cheap.
 from src.causal_engine.pipeline.parallel import ParallelPipeline
-from src.causal_engine.pipeline.router import RoutingDecision
 from src.causal_engine.pipeline.sequential import SequentialPipeline
 from src.causal_engine.pipeline.state import (
     PipelineInput,
@@ -718,20 +717,14 @@ def _build_pipeline_input_sequential(
 ) -> PipelineInput:
     """Construct a PipelineInput for SequentialPipeline.execute() from request.
 
-    The DataFrame is conveyed via ``filters["estimation_data"]`` so the
-    Wave-1 executors (DoWhy reads ``state["filters"]["estimation_data"]``)
-    see it; CausalML reads ``filters["dataframe"]`` so we mirror under both
-    keys (the C-6 data_resolver helper picks whichever is present).
+    The DataFrame is conveyed via the first-class ``PipelineInput.estimation_data``
+    field (#458). The orchestrator copies it into ``state["estimation_data"]``
+    and every executor resolves it via ``resolve_estimation_dataframe(state)``.
+    ``request.filters`` (which carries inline-record passthrough and any
+    DoWhy method override) is forwarded unchanged.
     """
     df = _resolve_pipeline_dataframe(request.filters)
     request_filters: Dict[str, Any] = dict(request.filters or {})
-    if df is not None:
-        # Mirror under all per-executor conventions C-1..C-6 left in place
-        # (DoWhy reads `filters.estimation_data`, CausalML reads
-        # `filters.dataframe`); EconML reads `data_cache.estimation_data`
-        # which we plumb via the dedicated state slot below in the caller.
-        request_filters["estimation_data"] = df
-        request_filters["dataframe"] = df
 
     return PipelineInput(
         query=(
@@ -743,6 +736,7 @@ def _build_pipeline_input_sequential(
         effect_modifiers=None,
         data_source=request.data_source,
         filters=request_filters,
+        estimation_data=df,
         mode="sequential",
         libraries_enabled=libraries_enabled,
         cross_validate=None,
@@ -755,9 +749,6 @@ def _build_pipeline_input_parallel(
     """Construct a PipelineInput for ParallelPipeline.execute() from request."""
     df = _resolve_pipeline_dataframe(request.filters)
     request_filters: Dict[str, Any] = dict(request.filters or {})
-    if df is not None:
-        request_filters["estimation_data"] = df
-        request_filters["dataframe"] = df
 
     return PipelineInput(
         query=(
@@ -769,6 +760,7 @@ def _build_pipeline_input_parallel(
         effect_modifiers=None,
         data_source=request.data_source,
         filters=request_filters,
+        estimation_data=df,
         mode="parallel",
         libraries_enabled=[lib.value for lib in request.libraries],
         cross_validate=None,
@@ -778,47 +770,26 @@ def _build_pipeline_input_parallel(
 class _SurfaceCSequentialPipeline(SequentialPipeline):
     """SequentialPipeline subclass for Surface C wiring.
 
-    Provides two C-8-specific extensions on top of the base orchestrator:
+    Provides one C-8-specific extension on top of the base orchestrator:
 
-    1. **DataFrame injection into ``state["data_cache"]``** so the EconML
-       executor can read its canonical key (``state["data_cache"]["estimation_data"]``,
-       see ``executors/econml.py``). The base ``_create_initial_state`` does
-       not populate ``data_cache`` — Wave-1 EconML expected the caller to
-       populate it directly, and the Surface C route is that caller. DoWhy /
-       CausalML read from ``filters`` (also populated by the route).
+    **Per-library result capture** (``self.last_state``). The base
+    ``execute()`` returns ``PipelineOutput`` which only carries the
+    primary library's full payload. The C-8 response builder needs every
+    executed library's payload (to populate per-library stage results /
+    library_results without dropping data) — so we capture the final
+    state in ``_create_output`` for the adapter to read.
 
-    2. **Per-library result capture** (``self.last_state``). The base
-       ``execute()`` returns ``PipelineOutput`` which only carries the
-       primary library's full payload. The C-8 response builder needs every
-       executed library's payload (to populate per-library stage results /
-       library_results without dropping data) — so we capture the final
-       state in ``_create_output`` for the adapter to read.
+    DataFrame injection into ``state["data_cache"]`` was a separate concern
+    handled by an earlier ``dataframe=`` constructor kwarg + a
+    ``_create_initial_state`` override. That mechanism is gone as of #458:
+    the DataFrame now travels through ``PipelineInput.estimation_data`` and
+    the orchestrator copies it into ``state["estimation_data"]`` itself,
+    so this subclass no longer touches initial state.
     """
 
-    def __init__(
-        self,
-        *,
-        dataframe: Optional[Any] = None,
-        fail_fast: bool = False,
-    ) -> None:
+    def __init__(self, *, fail_fast: bool = False) -> None:
         super().__init__(fail_fast=fail_fast)
-        self._injection_dataframe = dataframe
         self.last_state: Optional[PipelineState] = None
-
-    def _create_initial_state(
-        self,
-        input_data: PipelineInput,
-        routing_decision: RoutingDecision,
-    ) -> PipelineState:
-        state = super()._create_initial_state(input_data, routing_decision)
-        if self._injection_dataframe is not None:
-            # EconML executor reads state["data_cache"]["estimation_data"]
-            # (its Wave-1 contract); plumb it here so all four executors see
-            # the same DataFrame through their respective per-executor keys.
-            cast(Dict[str, Any], state)["data_cache"] = {
-                "estimation_data": self._injection_dataframe,
-            }
-        return state
 
     def _create_output(self, state: PipelineState) -> PipelineOutput:
         # Capture the final state so the adapter can read per-library results
@@ -830,30 +801,21 @@ class _SurfaceCSequentialPipeline(SequentialPipeline):
 
 
 class _SurfaceCParallelPipeline(ParallelPipeline):
-    """ParallelPipeline subclass with the same C-8 extensions as the sequential variant."""
+    """ParallelPipeline subclass that mirrors ``_SurfaceCSequentialPipeline``.
+
+    Captures ``self.last_state`` for per-library result extraction; DataFrame
+    conveyance is via ``PipelineInput.estimation_data`` (#458), not a
+    constructor kwarg.
+    """
 
     def __init__(
         self,
         *,
-        dataframe: Optional[Any] = None,
         max_parallel: int = 4,
         fail_fast: bool = False,
     ) -> None:
         super().__init__(max_parallel=max_parallel, fail_fast=fail_fast)
-        self._injection_dataframe = dataframe
         self.last_state: Optional[PipelineState] = None
-
-    def _create_initial_state(
-        self,
-        input_data: PipelineInput,
-        routing_decision: RoutingDecision,
-    ) -> PipelineState:
-        state = super()._create_initial_state(input_data, routing_decision)
-        if self._injection_dataframe is not None:
-            cast(Dict[str, Any], state)["data_cache"] = {
-                "estimation_data": self._injection_dataframe,
-            }
-        return state
 
     def _create_output(self, state: PipelineState) -> PipelineOutput:
         self.last_state = state
@@ -875,9 +837,7 @@ async def _run_real_sequential_pipeline(
           ``SequentialPipelineResponse`` constructed from per-library state
           (no hardcoded values).
     """
-    dataframe = _resolve_pipeline_dataframe(request.filters)
     pipeline = _SurfaceCSequentialPipeline(
-        dataframe=dataframe,
         fail_fast=request.stop_on_failure,
     )
     libraries_enabled = [stage.library.value for stage in request.stages]
@@ -891,9 +851,7 @@ async def _run_real_parallel_pipeline(
     request: ParallelPipelineRequest,
 ) -> ParallelPipelineResponse:
     """Invoke the wired ParallelPipeline.execute() and adapt to the API response."""
-    dataframe = _resolve_pipeline_dataframe(request.filters)
     pipeline = _SurfaceCParallelPipeline(
-        dataframe=dataframe,
         max_parallel=len(request.libraries),
         fail_fast=False,
     )

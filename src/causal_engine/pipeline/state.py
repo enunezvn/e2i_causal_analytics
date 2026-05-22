@@ -6,7 +6,20 @@ in sequential, parallel, and hierarchical pipeline flows.
 
 import operator
 from enum import Enum
-from typing import Annotated, Any, Dict, List, Literal, NotRequired, Optional, TypedDict
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    Dict,
+    List,
+    Literal,
+    NotRequired,
+    Optional,
+    TypedDict,
+)
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 
 class PipelineStage(str, Enum):
@@ -80,6 +93,19 @@ class PipelineState(TypedDict):
     effect_modifiers: Optional[List[str]]  # Effect modifiers
     data_source: str  # Data source identifier
     filters: Optional[Dict[str, Any]]  # Query filters
+
+    # === DATA (first-class DataFrame slot, #458) ===
+    # Canonical in-state DataFrame for estimation. Promoted from the Wave-1
+    # per-executor key sprawl (`state["filters"]["estimation_data"]`,
+    # `state["data_cache"]["estimation_data"]`, `state["filters"]["dataframe"]`)
+    # to a single first-class field. `resolve_estimation_dataframe()` prefers
+    # this slot and emits a `DeprecationWarning` when falling back to the
+    # legacy locations. `data_cache` remains available below for ancillary
+    # cached artifacts that are NOT the estimation DataFrame itself.
+    estimation_data: NotRequired[Optional["pd.DataFrame"]]
+    # Ancillary cached artifacts (keyed bag). Retained for back-compat; the
+    # estimation DataFrame should now travel via `estimation_data` above.
+    data_cache: NotRequired[Optional[Dict[str, Any]]]
 
     # === CONFIGURATION ===
     config: PipelineConfig
@@ -183,6 +209,11 @@ class PipelineInput(TypedDict):
     effect_modifiers: Optional[List[str]]
     data_source: str
     filters: Optional[Dict[str, Any]]
+
+    # First-class DataFrame field (#458). The orchestrator copies this into
+    # `PipelineState["estimation_data"]` so executors can resolve it via
+    # `resolve_estimation_dataframe()` without per-executor key drift.
+    estimation_data: NotRequired[Optional["pd.DataFrame"]]
 
     # Optional configuration overrides
     mode: Optional[Literal["sequential", "parallel", "validation_loop", "hierarchical"]]
