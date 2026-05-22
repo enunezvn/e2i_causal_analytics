@@ -219,9 +219,7 @@ class TestModelPerformanceCalculator:
         assert result.value == 0.35
         assert result.status == KPIStatus.CRITICAL
 
-    def test_calculate_surfaces_unavailability_when_mlflow_errors(
-        self, calculator, roc_auc_kpi
-    ):
+    def test_calculate_surfaces_unavailability_when_mlflow_errors(self, calculator, roc_auc_kpi):
         """When MLflow raises, the result must surface unavailability honestly:
         value=None, error="mlflow_exception:...", status=UNKNOWN (#439, F-007-PhaseB).
 
@@ -240,7 +238,12 @@ class TestModelPerformanceCalculator:
         assert result.status == KPIStatus.UNKNOWN
 
     def test_calculate_shap_coverage_from_db(self, calculator):
-        """Test SHAP coverage calculation from database."""
+        """Test SHAP coverage calculation from database.
+
+        `_execute_query` now returns a `(rows, error)` tuple after #439
+        (F-007-PhaseB). Successful queries return `(rows, None)`; failures
+        return `(None, "<reason>")`.
+        """
         kpi = KPIMetadata(
             id="WS1-MP-007",
             name="SHAP Coverage",
@@ -251,7 +254,7 @@ class TestModelPerformanceCalculator:
             threshold=KPIThreshold(target=0.90, warning=0.80, critical=0.50),
         )
 
-        calculator._execute_query = Mock(return_value=[{"coverage": 0.92}])
+        calculator._execute_query = Mock(return_value=([{"coverage": 0.92}], None))
 
         result = calculator.calculate(kpi)
 

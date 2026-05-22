@@ -31,7 +31,6 @@ from src.kpi.models import (
     Workstream,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fixtures: one KPIMetadata per `_calc_*` method
 # ---------------------------------------------------------------------------
@@ -186,7 +185,9 @@ def feature_drift_kpi():
 # ---------------------------------------------------------------------------
 
 
-def _stub_mlflow_returns_metric(calculator: ModelPerformanceCalculator, metric_name: str, value: float) -> None:
+def _stub_mlflow_returns_metric(
+    calculator: ModelPerformanceCalculator, metric_name: str, value: float
+) -> None:
     """Configure the mock MLflow client to return a real metric value."""
     mock_version = Mock()
     mock_version.run_id = "test-run-id"
@@ -364,7 +365,9 @@ class TestRecallAtKUnavailability:
 
     def test_model_not_found(self, calculator_with_mlflow, recall_at_k_kpi):
         _stub_mlflow_no_versions(calculator_with_mlflow)
-        result = calculator_with_mlflow.calculate(recall_at_k_kpi, {"model_name": "absent", "k": 100})
+        result = calculator_with_mlflow.calculate(
+            recall_at_k_kpi, {"model_name": "absent", "k": 100}
+        )
         assert result.value is None
         assert result.error == "model_not_found:absent"
         assert result.status == KPIStatus.UNKNOWN
@@ -437,7 +440,9 @@ class TestBrierScoreUnavailability:
 class TestCalibrationSlopeUnavailability:
     """WS1-MP-006 Calibration Slope: 5 unavailability paths."""
 
-    def test_mlflow_client_unavailable(self, calculator_no_mlflow, calibration_slope_kpi, monkeypatch):
+    def test_mlflow_client_unavailable(
+        self, calculator_no_mlflow, calibration_slope_kpi, monkeypatch
+    ):
         monkeypatch.setattr(
             ModelPerformanceCalculator, "mlflow_client", property(lambda self: None)
         )
@@ -484,11 +489,17 @@ class TestShapCoverageUnavailability:
       - Two unavailability reasons:
           * db_query_failed     (exception in query execution)
           * db_query_returned_empty (empty result list / coverage IS None)
+
+    `_execute_query` returns a `(rows, error)` tuple. The mocks below
+    follow that contract.
     """
 
     def test_db_query_failed(self, calculator_with_mlflow, shap_coverage_kpi):
-        # `_execute_query` returns None on internal exception.
-        calculator_with_mlflow._execute_query = Mock(return_value=None)
+        # `_execute_query` returns (None, "<ExceptionClass>:<msg>") on
+        # internal exception.
+        calculator_with_mlflow._execute_query = Mock(
+            return_value=(None, "OperationalError:conn refused")
+        )
         result = calculator_with_mlflow.calculate(shap_coverage_kpi)
         assert result.value is None
         assert result.error is not None
@@ -496,8 +507,8 @@ class TestShapCoverageUnavailability:
         assert result.status == KPIStatus.UNKNOWN
 
     def test_db_query_returned_empty(self, calculator_with_mlflow, shap_coverage_kpi):
-        # Returned an empty row list — no rows in `predictions` window
-        calculator_with_mlflow._execute_query = Mock(return_value=[])
+        # Empty row list — no rows in `predictions` window
+        calculator_with_mlflow._execute_query = Mock(return_value=([], None))
         result = calculator_with_mlflow.calculate(shap_coverage_kpi)
         assert result.value is None
         assert result.error is not None
@@ -506,7 +517,7 @@ class TestShapCoverageUnavailability:
 
     def test_db_query_null_coverage(self, calculator_with_mlflow, shap_coverage_kpi):
         # Row present but coverage IS NULL (NULLIF zero-denominator path)
-        calculator_with_mlflow._execute_query = Mock(return_value=[{"coverage": None}])
+        calculator_with_mlflow._execute_query = Mock(return_value=([{"coverage": None}], None))
         result = calculator_with_mlflow.calculate(shap_coverage_kpi)
         assert result.value is None
         assert result.error is not None
@@ -514,7 +525,7 @@ class TestShapCoverageUnavailability:
         assert result.status == KPIStatus.UNKNOWN
 
     def test_real_value_returned(self, calculator_with_mlflow, shap_coverage_kpi):
-        calculator_with_mlflow._execute_query = Mock(return_value=[{"coverage": 0.92}])
+        calculator_with_mlflow._execute_query = Mock(return_value=([{"coverage": 0.92}], None))
         result = calculator_with_mlflow.calculate(shap_coverage_kpi)
         assert result.value == 0.92
         assert result.error is None
@@ -569,7 +580,7 @@ class TestFeatureDriftUnavailability:
 
     def test_sql_succeeds_uses_db_value(self, calculator_with_mlflow, feature_drift_kpi):
         """If SQL returns real PSI, use it — do NOT consult MLflow."""
-        calculator_with_mlflow._execute_query = Mock(return_value=[{"avg_psi": 0.05}])
+        calculator_with_mlflow._execute_query = Mock(return_value=([{"avg_psi": 0.05}], None))
         # MLflow should not be consulted; if it were, this would mistakenly succeed
         # with the wrong value.
         calculator_with_mlflow._mlflow_client.get_latest_versions.side_effect = AssertionError(
@@ -582,7 +593,7 @@ class TestFeatureDriftUnavailability:
 
     def test_sql_empty_mlflow_succeeds(self, calculator_with_mlflow, feature_drift_kpi):
         """If SQL returns empty but MLflow has the metric, use MLflow value."""
-        calculator_with_mlflow._execute_query = Mock(return_value=[])
+        calculator_with_mlflow._execute_query = Mock(return_value=([], None))
         _stub_mlflow_returns_metric(calculator_with_mlflow, "feature_drift_psi", 0.07)
         result = calculator_with_mlflow.calculate(feature_drift_kpi, {"model_name": "test"})
         assert result.value == 0.07
@@ -591,7 +602,7 @@ class TestFeatureDriftUnavailability:
 
     def test_sql_null_mlflow_succeeds(self, calculator_with_mlflow, feature_drift_kpi):
         """SQL row with avg_psi IS NULL — fall through to MLflow leg."""
-        calculator_with_mlflow._execute_query = Mock(return_value=[{"avg_psi": None}])
+        calculator_with_mlflow._execute_query = Mock(return_value=([{"avg_psi": None}], None))
         _stub_mlflow_returns_metric(calculator_with_mlflow, "feature_drift_psi", 0.12)
         result = calculator_with_mlflow.calculate(feature_drift_kpi, {"model_name": "test"})
         assert result.value == 0.12
@@ -599,18 +610,20 @@ class TestFeatureDriftUnavailability:
         # 0.12 in lower-is-better (target=0.10, warning=0.25) -> WARNING
         assert result.status == KPIStatus.WARNING
 
-    def test_both_legs_fail_db_error_propagates(
-        self, calculator_with_mlflow, feature_drift_kpi
-    ):
-        """SQL returns None (query failed) AND MLflow has no metric — chained
-        unavailability must surface honestly."""
-        calculator_with_mlflow._execute_query = Mock(return_value=None)
+    def test_both_legs_fail_db_error_propagates(self, calculator_with_mlflow, feature_drift_kpi):
+        """SQL returns (None, error) (query failed) AND MLflow has no metric
+        — chained unavailability must surface honestly."""
+        calculator_with_mlflow._execute_query = Mock(
+            return_value=(None, "OperationalError:conn refused")
+        )
         _stub_mlflow_run_missing_metric(calculator_with_mlflow)
         result = calculator_with_mlflow.calculate(feature_drift_kpi, {"model_name": "test"})
         assert result.value is None
         assert result.error is not None
         # Must reflect that BOTH legs were unavailable
         assert "feature_drift_psi" in result.error or "db_query_failed" in result.error
+        assert "sql_leg" in result.error
+        assert "mlflow_leg" in result.error
         assert result.status == KPIStatus.UNKNOWN
 
     def test_both_legs_fail_mlflow_unavailable(
@@ -620,7 +633,7 @@ class TestFeatureDriftUnavailability:
         monkeypatch.setattr(
             ModelPerformanceCalculator, "mlflow_client", property(lambda self: None)
         )
-        calculator_no_mlflow._execute_query = Mock(return_value=[])
+        calculator_no_mlflow._execute_query = Mock(return_value=([], None))
         result = calculator_no_mlflow.calculate(feature_drift_kpi, {"model_name": "test"})
         assert result.value is None
         assert result.error is not None
@@ -628,7 +641,7 @@ class TestFeatureDriftUnavailability:
 
     def test_both_legs_fail_mlflow_exception(self, calculator_with_mlflow, feature_drift_kpi):
         """SQL empty AND MLflow raises — both legs fail-closed."""
-        calculator_with_mlflow._execute_query = Mock(return_value=[])
+        calculator_with_mlflow._execute_query = Mock(return_value=([], None))
         _stub_mlflow_raises(calculator_with_mlflow, RuntimeError("net"))
         result = calculator_with_mlflow.calculate(feature_drift_kpi, {"model_name": "test"})
         assert result.value is None
@@ -705,8 +718,6 @@ class TestEvaluateStatusUnchanged:
         status = calculator_with_mlflow._evaluate_status(kpi, 0.85, lower_is_better=False)
         assert status == KPIStatus.UNKNOWN
 
-    def test_real_value_evaluated_against_threshold(
-        self, calculator_with_mlflow, roc_auc_kpi
-    ):
+    def test_real_value_evaluated_against_threshold(self, calculator_with_mlflow, roc_auc_kpi):
         status = calculator_with_mlflow._evaluate_status(roc_auc_kpi, 0.85, lower_is_better=False)
         assert status == KPIStatus.GOOD
