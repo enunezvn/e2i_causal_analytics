@@ -32,14 +32,9 @@ import math
 from typing import Any, cast
 
 import pandas as pd
-import pytest
 
 from src.causal_engine.pipeline.data_resolver import resolve_estimation_dataframe
-from src.causal_engine.pipeline.orchestrator import (
-    DoWhyExecutor,
-    EconMLExecutor,
-    PipelineOrchestrator,
-)
+from src.causal_engine.pipeline.orchestrator import PipelineOrchestrator
 from src.causal_engine.pipeline.parallel import ParallelPipeline
 from src.causal_engine.pipeline.router import (
     CausalLibrary,
@@ -420,9 +415,7 @@ class TestATEConsensusIncludesCausalML:
         state["causal_effect"] = 0.15
         state["econml_result"] = _le_result("econml", _real_econml_payload(), confidence=0.8)
         state["overall_ate"] = 0.17
-        state["causalml_result"] = _le_result(
-            "causalml", _real_causalml_payload(), confidence=0.6
-        )
+        state["causalml_result"] = _le_result("causalml", _real_causalml_payload(), confidence=0.6)
 
         pipe = _seq_pipeline()
         updated = pipe._aggregate_results(state)
@@ -443,9 +436,7 @@ class TestATEConsensusIncludesCausalML:
         state["causal_effect"] = 0.15
         state["econml_result"] = _le_result("econml", _real_econml_payload(), confidence=0.8)
         state["overall_ate"] = 0.17
-        state["causalml_result"] = _le_result(
-            "causalml", _real_causalml_payload(), confidence=0.6
-        )
+        state["causalml_result"] = _le_result("causalml", _real_causalml_payload(), confidence=0.6)
 
         pipe = _par_pipeline()
         updated = pipe._aggregate_parallel_results(state)
@@ -463,9 +454,7 @@ class TestATEConsensusIncludesCausalML:
         state["causal_effect"] = 0.15
         state["econml_result"] = _le_result("econml", _real_econml_payload(), confidence=0.8)
         state["overall_ate"] = 0.17
-        state["causalml_result"] = _le_result(
-            "causalml", _real_causalml_payload(), confidence=0.6
-        )
+        state["causalml_result"] = _le_result("causalml", _real_causalml_payload(), confidence=0.6)
 
         pipe = _par_pipeline()
         updated = pipe._aggregate_parallel_results(state)
@@ -486,9 +475,7 @@ class TestUpliftChannelSeparateFromATE:
 
     def test_uplift_summary_is_populated_when_causalml_succeeds(self) -> None:
         state = _minimal_pipeline_state()
-        state["causalml_result"] = _le_result(
-            "causalml", _real_causalml_payload(), confidence=0.7
-        )
+        state["causalml_result"] = _le_result("causalml", _real_causalml_payload(), confidence=0.7)
         # Pre-populate via orchestrator helper.
         orchestrator = _ConcreteOrchestrator()
         state = orchestrator._update_state_with_result(
@@ -509,9 +496,7 @@ class TestUpliftChannelSeparateFromATE:
         leak into consensus_effect.
         """
         state = _minimal_pipeline_state()
-        state["causalml_result"] = _le_result(
-            "causalml", _real_causalml_payload(), confidence=0.7
-        )
+        state["causalml_result"] = _le_result("causalml", _real_causalml_payload(), confidence=0.7)
         orchestrator = _ConcreteOrchestrator()
         state = orchestrator._update_state_with_result(
             state, CausalLibrary.CAUSALML, cast(LibraryExecutionResult, state["causalml_result"])
@@ -805,9 +790,7 @@ class TestAggregationInvariants:
         state["causal_effect"] = 0.15
         state["econml_result"] = _le_result("econml", _real_econml_payload(), confidence=0.8)
         state["overall_ate"] = 0.17
-        state["causalml_result"] = _le_result(
-            "causalml", _real_causalml_payload(), confidence=0.6
-        )
+        state["causalml_result"] = _le_result("causalml", _real_causalml_payload(), confidence=0.6)
 
         pipe = _par_pipeline()
         updated = pipe._aggregate_parallel_results(state)
@@ -815,9 +798,7 @@ class TestAggregationInvariants:
         agreement = updated["library_agreement"]
         assert agreement is not None
         for pair_name, score in agreement.items():
-            assert 0.0 <= score <= 1.0, (
-                f"library_agreement[{pair_name}]={score} must be in [0,1]"
-            )
+            assert 0.0 <= score <= 1.0, f"library_agreement[{pair_name}]={score} must be in [0,1]"
 
 
 # =============================================================================
@@ -856,22 +837,53 @@ class TestNoSyntheticDataInAggregator:
         assert "np.random.seed" not in text
 
     def test_no_zero_eight_hardcoded_fallback_in_sequential(self) -> None:
-        """The pre-C-6 `else 0.8` fallback pattern is forbidden post-C-6."""
+        """The pre-C-6 `else 0.8` fallback pattern is forbidden post-C-6.
+
+        Uses AST analysis (not raw substring) so module docstrings and
+        inline comments that REFERENCE the historical anti-pattern in
+        their explanatory text don't trigger a false positive. The
+        executable form (an ``else`` clause yielding the literal
+        constant ``0.8``) is what we forbid.
+        """
+        import ast
         from pathlib import Path
 
         src = Path(__file__).parents[4] / "src/causal_engine/pipeline/sequential.py"
-        text = src.read_text(encoding="utf-8")
-        # Forbid the precise stub-shape pattern. A legitimate `0.8` may appear
-        # as a documented constant elsewhere; this guards against the specific
-        # silent-fallback shape from Wave-3 mocks-cleanup.
-        assert "else 0.8" not in text, (
-            "Wave-3 anti-mocking pattern #2 forbids the `else 0.8` "
-            "silent-fallback pattern in confidence aggregation"
+        tree = ast.parse(src.read_text(encoding="utf-8"))
+        offenders = list(_find_else_0_8_expressions(tree))
+        assert not offenders, (
+            f"Wave-3 anti-mocking pattern #2 forbids the `else 0.8` "
+            f"silent-fallback executable pattern; found at lines: {offenders}"
         )
 
     def test_no_zero_eight_hardcoded_fallback_in_parallel(self) -> None:
+        import ast
         from pathlib import Path
 
         src = Path(__file__).parents[4] / "src/causal_engine/pipeline/parallel.py"
-        text = src.read_text(encoding="utf-8")
-        assert "else 0.8" not in text
+        tree = ast.parse(src.read_text(encoding="utf-8"))
+        offenders = list(_find_else_0_8_expressions(tree))
+        assert not offenders, (
+            f"Wave-3 anti-mocking pattern #2 forbids the `else 0.8` "
+            f"silent-fallback executable pattern; found at lines: {offenders}"
+        )
+
+
+def _find_else_0_8_expressions(tree: object) -> list[int]:
+    """Walk an AST and yield line numbers of ``X if Y else 0.8`` expressions.
+
+    Catches the precise Wave-3 anti-pattern at sequential.py:181/185:
+    ``state["dowhy_result"]["confidence"] if state["dowhy_result"] else 0.8``
+    Comments / docstrings that REFERENCE the pattern in prose don't show
+    up in the AST so this guard is robust to documentation churn.
+    """
+    import ast
+
+    offenders: list[int] = []
+    for node in ast.walk(tree):  # type: ignore[arg-type]
+        if not isinstance(node, ast.IfExp):
+            continue
+        else_branch = node.orelse
+        if isinstance(else_branch, ast.Constant) and else_branch.value == 0.8:
+            offenders.append(node.lineno)
+    return offenders

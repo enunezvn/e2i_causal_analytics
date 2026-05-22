@@ -120,6 +120,29 @@ class PipelineState(TypedDict):
     consensus_confidence: Optional[float]  # Agreement-based confidence
     library_agreement: Optional[Dict[str, float]]  # Pairwise agreement
 
+    # === C-6 EXTRACTED CHANNELS (added phase C-6 of GH #354) ===
+    # NetworkX structural-quality summary (extracted from networkx_result):
+    # {n_nodes, n_edges, is_dag, has_treatment_outcome_path,
+    #  structural_quality (0..1), n_cycles}.
+    # Distinct from `graph_metrics` (centrality only) and `causal_graph`
+    # (full payload); this channel feeds the consensus-confidence
+    # modulator without forcing downstream consumers to dig through the
+    # full NetworkX result.
+    graph_quality: Optional[Dict[str, Any]]
+
+    # CausalML uplift-channel summary (extracted from causalml_result):
+    # {auuc, qini, ate, ate_ci_lower, ate_ci_upper, n_samples,
+    #  treatment_groups, control_name}. Carried SEPARATELY from
+    # `consensus_effect` because uplift answers a different question
+    # (population-targeting quality, not effect magnitude).
+    uplift_summary: Optional[Dict[str, Any]]
+
+    # Per-library metric-type bookkeeping for the aggregator:
+    # {"dowhy": "ate", "econml": "ate", "causalml": "ate"}. Lets the
+    # aggregator distinguish ATE-track contributions from uplift-track
+    # contributions when future executors emit non-ATE metrics.
+    library_metric_types: Optional[Dict[str, str]]
+
     # Hierarchical results (nested analysis)
     nested_cate: Optional[Dict[str, Any]]  # CATE within uplift segments
     segment_confidence_intervals: Optional[Dict[str, Any]]

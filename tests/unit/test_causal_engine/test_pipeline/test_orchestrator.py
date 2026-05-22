@@ -754,7 +754,12 @@ class TestPipelineOrchestrator:
         assert state["warnings"] == []
 
     def test_update_state_with_networkx_result(self, minimal_pipeline_state):
-        """Test _update_state_with_result for NetworkX."""
+        """Test _update_state_with_result for NetworkX.
+
+        Updated phase C-6: also asserts ``graph_quality`` extraction from
+        the rich post-C-5 NetworkX payload (n_nodes, n_edges, is_dag,
+        has_treatment_outcome_path, structural_quality).
+        """
         orchestrator = ConcreteOrchestrator()
         result: LibraryExecutionResult = {
             "library": "networkx",
@@ -764,6 +769,12 @@ class TestPipelineOrchestrator:
                 "nodes": ["X", "Y"],
                 "edges": [{"from": "X", "to": "Y"}],
                 "centrality": {"X": 0.5, "Y": 0.5},
+                # C-6: post-C-5 NetworkX payload also includes structural fields
+                "n_nodes": 2,
+                "n_edges": 1,
+                "is_dag": True,
+                "has_treatment_outcome_path": False,
+                "cycles": [],
             },
             "error": None,
             "confidence": 0.8,
@@ -779,6 +790,12 @@ class TestPipelineOrchestrator:
         assert updated_state["graph_metrics"] == {"X": 0.5, "Y": 0.5}
         assert "networkx" in updated_state["libraries_executed"]
         assert updated_state["stage_latencies"]["networkx"] == 100
+        # C-6: graph_quality channel populated from structural payload
+        assert updated_state["graph_quality"] is not None
+        assert updated_state["graph_quality"]["n_nodes"] == 2
+        assert updated_state["graph_quality"]["is_dag"] is True
+        # n_nodes<3 => structural_quality=0.5 even with DAG
+        assert updated_state["graph_quality"]["structural_quality"] == 0.5
 
     def test_update_state_with_dowhy_result(self, minimal_pipeline_state):
         """Test _update_state_with_result for DoWhy."""
@@ -807,6 +824,9 @@ class TestPipelineOrchestrator:
         assert updated_state["identification_method"] == "backdoor"
         assert "dowhy" in updated_state["libraries_executed"]
         assert "Some warning" in updated_state["warnings"]
+        # C-6: DoWhy registers as ATE-track contributor
+        assert updated_state["library_metric_types"] is not None
+        assert updated_state["library_metric_types"].get("dowhy") == "ate"
 
     def test_update_state_with_econml_result(self, minimal_pipeline_state):
         """Test _update_state_with_result for EconML."""
@@ -834,18 +854,46 @@ class TestPipelineOrchestrator:
         assert updated_state["cate_by_segment"] == {"A": 0.12, "B": 0.18}
         assert updated_state["heterogeneity_score"] == 0.3
         assert "econml" in updated_state["libraries_executed"]
+        # C-6: EconML registers as ATE-track contributor
+        assert updated_state["library_metric_types"] is not None
+        assert updated_state["library_metric_types"].get("econml") == "ate"
 
     def test_update_state_with_causalml_result(self, minimal_pipeline_state):
-        """Test _update_state_with_result for CausalML."""
+        """Test _update_state_with_result for CausalML.
+
+        Updated phase C-6: reads the post-C-4 key ``uplift_scores_summary``
+        (the pre-C-4 key ``uplift_by_segment`` is no longer produced by the
+        real CausalML executor — see
+        ``executors/causalml.py::_summarize_uplift_scores``). C-6 also
+        extracts an ``uplift_summary`` channel and records CausalML's
+        metric type in ``library_metric_types``.
+        """
         orchestrator = ConcreteOrchestrator()
         result: LibraryExecutionResult = {
             "library": "causalml",
             "success": True,
             "latency_ms": 250,
             "result": {
+                "model": "uplift_random_forest",
+                "ate": 0.18,
+                "ate_ci_lower": 0.10,
+                "ate_ci_upper": 0.26,
                 "auuc": 0.65,
                 "qini": 0.45,
-                "uplift_by_segment": {"high": 0.2, "low": 0.05},
+                "uplift_scores_summary": {
+                    "n": 1000,
+                    "mean": 0.18,
+                    "std": 0.30,
+                    "min": -0.5,
+                    "max": 0.75,
+                    "median": 0.18,
+                    "p10": -0.2,
+                    "p90": 0.55,
+                },
+                "n_samples": 1000,
+                "treatment_groups": ["1"],
+                "observed_treatment_groups": ["0", "1"],
+                "control_name": "0",
                 "targeting_recommendations": [{"segment": "high", "action": "target"}],
             },
             "error": None,
@@ -860,11 +908,22 @@ class TestPipelineOrchestrator:
         assert updated_state["causalml_result"] == result
         assert updated_state["auuc"] == 0.65
         assert updated_state["qini"] == 0.45
-        assert updated_state["uplift_scores"] == {"high": 0.2, "low": 0.05}
+        # Post-C-6: uplift_scores reads the post-C-4 key uplift_scores_summary
+        assert updated_state["uplift_scores"] is not None
+        assert updated_state["uplift_scores"]["mean"] == 0.18
+        assert updated_state["uplift_scores"]["n"] == 1000
         assert updated_state["targeting_recommendations"] == [
             {"segment": "high", "action": "target"}
         ]
         assert "causalml" in updated_state["libraries_executed"]
+        # C-6: uplift_summary channel must be populated
+        assert updated_state["uplift_summary"] is not None
+        assert updated_state["uplift_summary"]["auuc"] == 0.65
+        assert updated_state["uplift_summary"]["qini"] == 0.45
+        assert updated_state["uplift_summary"]["ate"] == 0.18
+        # C-6: library_metric_types records CausalML as ATE-track
+        assert updated_state["library_metric_types"] is not None
+        assert updated_state["library_metric_types"].get("causalml") == "ate"
 
     def test_update_state_with_failed_result(self, minimal_pipeline_state):
         """Test _update_state_with_result handles failed results."""
