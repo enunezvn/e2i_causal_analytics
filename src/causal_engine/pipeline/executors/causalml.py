@@ -46,6 +46,7 @@ import logging
 import time
 from typing import Any, Dict, List, Tuple
 
+from ..data_resolver import resolve_estimation_dataframe
 from ..router import CausalLibrary
 from ..state import LibraryExecutionResult, PipelineConfig, PipelineState
 from .base import LibraryExecutor
@@ -86,20 +87,16 @@ def _extract_uplift_inputs_from_state(
     # executor; uplift wrapper itself imports causalml lazily.
     import pandas as pd
 
-    filters = state.get("filters")
-    if not isinstance(filters, dict):
-        raise ExecutorDataUnavailable(
-            "CausalMLExecutor: no real data available — "
-            "`state['filters']['dataframe']` is required."
-        )
-    df = filters.get("dataframe")
+    df = resolve_estimation_dataframe(state)
     if df is None:
         raise ExecutorDataUnavailable(
-            "CausalMLExecutor: no real data available — `state['filters']['dataframe']` is missing."
+            "CausalMLExecutor: no real data available — write the DataFrame "
+            "to the first-class estimation_data state slot (legacy filters/"
+            "data_cache back-compat paths are also accepted)."
         )
     if not isinstance(df, pd.DataFrame):
         raise ExecutorDataUnavailable(
-            "CausalMLExecutor: `state['filters']['dataframe']` must be a "
+            "CausalMLExecutor: resolved estimation_data must be a "
             f"pandas DataFrame; got {type(df).__name__}."
         )
     if len(df) == 0:

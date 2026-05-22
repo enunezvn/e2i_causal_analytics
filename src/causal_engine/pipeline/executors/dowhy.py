@@ -42,6 +42,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+from ..data_resolver import resolve_estimation_dataframe
 from ..router import CausalLibrary
 from ..state import LibraryExecutionResult, PipelineConfig, PipelineState
 from .base import LibraryExecutor
@@ -61,28 +62,10 @@ except ImportError:  # pragma: no cover - exercised in environments without dowh
     CausalModel = None  # type: ignore[assignment,misc]
 
 
-# Keys this executor reads from `state["filters"]` (which is the only
-# `Dict[str, Any]` field on the locked PipelineState TypedDict — see
-# state.py:82). External callers populate this Dict with the DataFrame
-# passthrough; the executor itself never fabricates data.
-_DATA_FRAME_FILTER_KEYS = ("estimation_data", "dataframe", "data")
-
-
-def _extract_dataframe(state: PipelineState) -> Optional[Any]:
-    """Look for a DataFrame in `state['filters']` under known keys.
-
-    Returns the first object found that has a pandas-like ``.columns``
-    attribute (duck-typed to avoid forcing pandas as a hard dependency at
-    type-check time). Returns ``None`` if no DataFrame is present.
-    """
-    filters = state.get("filters") or {}
-    if not isinstance(filters, dict):
-        return None
-    for key in _DATA_FRAME_FILTER_KEYS:
-        candidate = filters.get(key)
-        if candidate is not None and hasattr(candidate, "columns"):
-            return candidate
-    return None
+# DataFrame resolution is delegated to ``data_resolver.resolve_estimation_dataframe``
+# (#458). The resolver prefers the first-class ``state["estimation_data"]``
+# slot and back-compats the Wave-1 nested-dict shapes with a
+# ``DeprecationWarning`` so per-executor key drift cannot re-appear.
 
 
 def _resolve_dowhy_method(state: PipelineState) -> str:
@@ -206,14 +189,15 @@ class DoWhyExecutor(LibraryExecutor):
         confounders: List[str] = list(state.get("confounders") or [])
 
         # === Step 3: DataFrame passthrough ===
-        data = _extract_dataframe(state)
+        data = resolve_estimation_dataframe(state)
         if data is None:
             return _build_failure_result(
                 start_time=start_time,
                 error=(
-                    "DoWhy executor requires a DataFrame in "
-                    "state['filters']['estimation_data'] (or 'dataframe'/'data'); "
-                    "no DataFrame was provided. Refusing to fabricate synthetic data."
+                    "DoWhy executor requires a DataFrame in state "
+                    "(first-class estimation_data field, or legacy filters/"
+                    "data_cache slots); no DataFrame was provided. Refusing "
+                    "to fabricate synthetic data."
                 ),
             )
 
@@ -224,7 +208,7 @@ class DoWhyExecutor(LibraryExecutor):
             return _build_failure_result(
                 start_time=start_time,
                 error=(
-                    "DoWhy executor: state['filters'] DataFrame is malformed "
+                    "DoWhy executor: resolved DataFrame is malformed "
                     f"(cannot read .columns): {col_exc}"
                 ),
             )
