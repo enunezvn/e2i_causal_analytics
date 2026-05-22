@@ -388,7 +388,12 @@ def test_mlflow_connector_search_runs_signature_pagination_compat() -> None:
     """
     import inspect
 
-    import mlflow
+    import pytest
+
+    mlflow = pytest.importorskip(
+        "mlflow",
+        reason="mlflow not installed in this env; signature-compat drift-guard runs on CI where mlflow 3.11.x is pinned.",
+    )
 
     sig = inspect.signature(mlflow.search_runs)
     required_kwargs = {"experiment_ids", "filter_string", "order_by", "max_results"}
