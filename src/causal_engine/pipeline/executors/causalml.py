@@ -136,7 +136,7 @@ def _extract_uplift_inputs_from_state(
     declared_features: List[str] = []
     for key in ("confounders", "effect_modifiers"):
         vals = state.get(key)
-        if vals:
+        if isinstance(vals, list):
             declared_features.extend(vals)
 
     feature_names: List[str]
