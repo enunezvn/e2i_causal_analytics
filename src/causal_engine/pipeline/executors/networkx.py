@@ -217,15 +217,11 @@ class NetworkXExecutor(LibraryExecutor):
         # Strict: must be a list (the type the TypedDict promises). Reject
         # bare strings, dicts, tuples, sets, generators, etc.
         if not isinstance(value, list):
-            raise TypeError(
-                f"expected list of strings, got {type(value).__name__}: {value!r}"
-            )
+            raise TypeError(f"expected list of strings, got {type(value).__name__}: {value!r}")
         result: List[str] = []
         for item in value:
             if not isinstance(item, str):
-                raise TypeError(
-                    f"expected list of strings, found {type(item).__name__}: {item!r}"
-                )
+                raise TypeError(f"expected list of strings, found {type(item).__name__}: {item!r}")
             result.append(item)
         return result
 
@@ -406,9 +402,7 @@ class NetworkXExecutor(LibraryExecutor):
             "outcome_var": outcome,
         }
 
-    def _compute_centrality(
-        self, graph: nx.DiGraph
-    ) -> Dict[str, Any]:
+    def _compute_centrality(self, graph: nx.DiGraph) -> Dict[str, Any]:
         """Compute centrality metrics.
 
         Betweenness is only computed for graphs with >=3 nodes (it is
@@ -429,12 +423,8 @@ class NetworkXExecutor(LibraryExecutor):
 
         if n > 0:
             degree = dict(nx.degree_centrality(graph))
-            in_degree = {
-                node: int(graph.in_degree(node)) for node in graph.nodes()
-            }
-            out_degree = {
-                node: int(graph.out_degree(node)) for node in graph.nodes()
-            }
+            in_degree = {node: int(graph.in_degree(node)) for node in graph.nodes()}
+            out_degree = {node: int(graph.out_degree(node)) for node in graph.nodes()}
 
         if n >= 3:
             try:
@@ -475,9 +465,7 @@ class NetworkXExecutor(LibraryExecutor):
                         )
                     ]
                     n_paths = len(treatment_to_outcome)
-                    shortest_path_length = int(
-                        nx.shortest_path_length(graph, treatment, outcome)
-                    )
+                    shortest_path_length = int(nx.shortest_path_length(graph, treatment, outcome))
             except (nx.NetworkXNoPath, nx.NodeNotFound) as e:
                 logger.debug(f"No path treatment->outcome: {e}")
 
@@ -488,9 +476,7 @@ class NetworkXExecutor(LibraryExecutor):
         }
 
     @staticmethod
-    def _compute_confidence(
-        *, n_nodes: int, is_dag: bool, has_path: bool
-    ) -> float:
+    def _compute_confidence(*, n_nodes: int, is_dag: bool, has_path: bool) -> float:
         """Derive structural confidence per design spike §2.1.
 
         - 1.0 when DAG, treatment-outcome path present, >=3 nodes
