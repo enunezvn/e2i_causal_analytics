@@ -1098,23 +1098,35 @@ Alertmanager routes to `http://api:8000/api/v1/webhooks/alertmanager` with:
 
 ---
 
-### ADR-004: EconML + CausalML + DoWhy for Causal Inference
+### ADR-004: NetworkX + DoWhy + EconML + CausalML for Causal Inference
 
-**Status**: Accepted (v3.0), Refined (v4.1)
+**Status**: Accepted (v3.0), Refined (v4.1), Pipeline-wired (v4.2 via #354 C-1..C-9)
 
-**Context**: Core platform mission requires robust causal effect estimation with heterogeneous treatment effects, refutation testing, and sensitivity analysis.
+**Context**: Core platform mission requires robust causal effect estimation with heterogeneous treatment effects, refutation testing, sensitivity analysis, and structural graph analysis.
 
-**Decision**: Use three complementary causal inference libraries:
+**Decision**: Use four complementary causal inference libraries, orchestrated through the canonical multi-library pipeline at `src/causal_engine/pipeline/`:
+- **NetworkX**: Symbolic DAG analysis (centrality, paths, structural validation) from upstream `state["causal_graph"]` + state vars
 - **DoWhy**: Causal DAG construction, refutation testing (5 tests), sensitivity analysis
-- **EconML**: CausalForestDML for CATE estimation with safe config (`min_impurity_decrease=1e-7`, `min_samples_leaf=5`)
-- **CausalML**: UpliftRandomForest as complementary estimator (`control_name="0"`, `n_reg=100`)
+- **EconML**: CausalForestDML/LinearDML/DRLearner/DMLOrthoForest for CATE estimation with safe config (`min_impurity_decrease=1e-7`, `min_samples_leaf=5`); selection via `energy_score/estimator_selector.py`
+- **CausalML**: UpliftRandomForest + meta-learners (`BaseTClassifier`/`BaseXClassifier`/`BaseSClassifier`) for uplift modeling (`control_name` lexicographically resolved per arm)
+
+**Pipeline orchestration** (post-#354):
+- Per-executor wrappers live in `src/causal_engine/pipeline/executors/{networkx,dowhy,econml,causalml}.py` — each fail-closed on missing data, no synthetic-data fabrication, no hardcoded placeholders
+- Cross-library consensus at `pipeline/sequential.py::_aggregate_results` + `pipeline/parallel.py::_aggregate_parallel_results`: DoWhy/EconML produce ATE → effect-consensus; CausalML produces uplift → separate uplift channel (semantically distinct from ATE); NetworkX structural quality modulates `consensus_confidence`. No silent `0.8` confidence default — missing confidence excludes the executor from consensus
+- Canonical DataFrame contract via `pipeline/data_resolver.py::resolve_estimation_dataframe(state)` (preserves Wave-1 executors' back-compat data keys)
+- Production entry points: tool composer `causal_effect_estimator` (Surface B) + `/causal/pipeline/{sequential,parallel}` API endpoints (Surface C)
+- `demo_mode=true` on Surface C preserves pinned-zero UI-demo contract; production path is fail-closed (503 on data unavailability is honest, not a hardcoded short-circuit)
 
 **Consequences**:
 - (+) DoWhy refutation provides causal validity guarantees
 - (+) EconML CausalForestDML handles heterogeneous effects well
-- (+) Cross-library validation increases confidence
+- (+) CausalML uplift complements ATE with per-unit treatment-effect estimation
+- (+) NetworkX structural quality penalizes ill-formed DAGs in consensus confidence
+- (+) Cross-library validation increases confidence (4-library consensus, pairwise agreement)
+- (+) Fail-closed end-to-end: no silent fabrication anywhere in the pipeline
 - (-) Must maintain consistent config across 4+ instantiation sites (grep and fix ALL)
 - (-) Treatment binarization must be identical across all nodes
+- (-) `data_resolver` is a transitional helper; Wave-1 executors retain their own data keys (`filters.estimation_data`/`data_cache.estimation_data`/`filters.dataframe`) — long-term cleanup tracked separately when PipelineState/PipelineInput add `data_cache` as first-class field
 
 ---
 
