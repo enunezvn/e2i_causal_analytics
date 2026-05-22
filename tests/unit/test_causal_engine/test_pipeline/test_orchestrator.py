@@ -365,7 +365,18 @@ class TestDoWhyExecutor:
 
 
 class TestEconMLExecutor:
-    """Tests for EconMLExecutor class."""
+    """Tests for EconMLExecutor class.
+
+    Phase C-3 (GH #354) rewired the executor body from a placeholder returning
+    hardcoded ``confidence=0.82`` / ``ate=0.0`` (and silently using
+    ``state['causal_effect']`` from DoWhy as a substitute ATE) to a real wrap of
+    ``src.causal_engine.energy_score.estimator_selector.EstimatorSelector``. The
+    happy-path + fail-closed contract details live in
+    ``test_executor_econml.py``; these tests pin only the ABC contract surface
+    + fail-closed-default behavior on the legacy ``minimal_pipeline_state``
+    fixture (which does NOT carry a ``data_cache.estimation_data``, hence the
+    executor MUST fail-closed).
+    """
 
     def test_library_property(self):
         """Test library property returns ECONML."""
@@ -373,61 +384,71 @@ class TestEconMLExecutor:
         assert executor.library == CausalLibrary.ECONML
 
     @pytest.mark.asyncio
-    async def test_execute_success(self, minimal_pipeline_state, minimal_pipeline_config):
-        """Test execute returns successful result."""
+    async def test_execute_fails_closed_without_data_backend(
+        self, minimal_pipeline_state, minimal_pipeline_config
+    ):
+        """Without ``data_cache.estimation_data`` the executor MUST fail-closed.
+
+        Pre-C-3 shape returned ``success=True`` with ``ate=0.0`` (silent
+        fabrication); post-C-3 the executor refuses to invent ATE/CATE without
+        a real DataFrame. See ``test_executor_econml.py`` for the dependency-
+        injected happy-path coverage.
+        """
         executor = EconMLExecutor()
 
         result = await executor.execute(minimal_pipeline_state, minimal_pipeline_config)
 
         assert result["library"] == "econml"
-        assert result["success"] is True
+        assert result["success"] is False
         assert result["latency_ms"] >= 0
-        assert result["error"] is None
-        assert result["confidence"] == 0.82
-        assert "estimator" in result["result"]
-        assert "ate" in result["result"]
-        assert "cate_by_segment" in result["result"]
-        assert "heterogeneity_score" in result["result"]
+        assert result["error"] is not None
+        # Confidence is 0.0 on fail-closed (NOT the legacy 0.82 placeholder).
+        assert result["confidence"] == 0.0
 
     @pytest.mark.asyncio
-    async def test_execute_uses_causal_effect_from_dowhy(
+    async def test_execute_ignores_dowhy_causal_effect_when_no_data(
         self, minimal_pipeline_state, minimal_pipeline_config
     ):
-        """Test execute uses causal_effect from DoWhy when available."""
+        """Pre-C-3 the executor copied ``state['causal_effect']`` into its own
+        ATE — silent fabrication of heterogeneity from a different stage's
+        single ATE. Post-C-3 the executor fails-closed without a real
+        DataFrame, regardless of what DoWhy wrote upstream.
+        """
         executor = EconMLExecutor()
         state = minimal_pipeline_state.copy()
-        state["causal_effect"] = 0.15
+        state["causal_effect"] = 0.15  # NOT used as ATE substitute anymore
 
         result = await executor.execute(state, minimal_pipeline_config)
 
-        assert result["success"] is True
-        assert result["result"]["ate"] == 0.15
+        # No fabrication of ate=0.15; fail-closed instead.
+        assert result["success"] is False
+        assert result["result"] is None or "ate" not in (result["result"] or {})
 
     @pytest.mark.asyncio
-    async def test_execute_handles_exception(self, minimal_pipeline_state, minimal_pipeline_config):
-        """Test execute handles exceptions gracefully."""
+    async def test_execute_handles_unexpected_exception(
+        self, minimal_pipeline_state, minimal_pipeline_config
+    ):
+        """A truly unexpected exception inside ``execute()`` MUST be caught and
+        surfaced as ``success=False`` with the message in ``error``. Replaces
+        the legacy ``time.time`` patch trick (which only worked because the
+        old body called ``time.time()`` exactly twice — the new body has a
+        different control-flow shape).
+        """
         executor = EconMLExecutor()
+        # Inject a state-extension attribute that makes the executor blow up.
+        # We use a property-accessor trick: a dict-like that raises on get.
 
-        # Create a call counter that raises on second call (inside try block)
-        call_count = {"n": 0}
+        class _ExplosiveDict(dict):
+            def get(self, key, default=None):  # type: ignore[override]
+                if key == "data_cache":
+                    raise RuntimeError("EconML error")
+                return super().get(key, default)
 
-        def time_side_effect():
-            call_count["n"] += 1
-            if call_count["n"] == 2:
-                raise ValueError("EconML error")
-            return 100.0
-
-        # Patch target moved from pipeline.orchestrator.time to
-        # pipeline.executors.econml.time as part of the C-1 split of orchestrator.py
-        # into per-executor files. Class body is byte-identical; only `time` lives
-        # in a different module now (the one where EconMLExecutor.execute runs).
-        with patch(
-            "src.causal_engine.pipeline.executors.econml.time.time", side_effect=time_side_effect
-        ):
-            result = await executor.execute(minimal_pipeline_state, minimal_pipeline_config)
+        bad_state = _ExplosiveDict(minimal_pipeline_state)
+        result = await executor.execute(bad_state, minimal_pipeline_config)  # type: ignore[arg-type]
 
         assert result["success"] is False
-        assert result["error"] == "EconML error"
+        assert "EconML error" in result["error"]
         assert result["confidence"] == 0.0
 
     def test_validate_input_success(self, minimal_pipeline_state):
@@ -935,8 +956,16 @@ class TestOrchestratorIntegration:
         assert dw_result["result"]["graph_source"] == "networkx"
 
     @pytest.mark.asyncio
-    async def test_econml_uses_dowhy_effect(self, minimal_pipeline_state, minimal_pipeline_config):
-        """Test that EconML uses causal_effect from DoWhy."""
+    async def test_econml_does_not_silently_use_dowhy_effect(
+        self, minimal_pipeline_state, minimal_pipeline_config
+    ):
+        """Phase C-3 (#354): pre-rewire shape silently copied DoWhy's
+        ``causal_effect`` into EconML's ``ate``, fabricating heterogeneity
+        from a single ATE. The new shape requires a real DataFrame in
+        ``state['data_cache']['estimation_data']`` and fail-closed otherwise.
+
+        This is a regression-guard: do NOT regress to silent DoWhy-leak shape.
+        """
         orchestrator = ConcreteOrchestrator()
 
         # Simulate DoWhy result
@@ -954,13 +983,15 @@ class TestOrchestratorIntegration:
             minimal_pipeline_state, CausalLibrary.DOWHY, dowhy_result
         )
 
-        # Execute EconML
+        # Execute EconML WITHOUT injecting data_cache. The executor must
+        # fail-closed; it must NOT use 0.25 as its ATE.
         econml_executor = EconMLExecutor()
         ecn_result = await econml_executor.execute(state, minimal_pipeline_config)
 
-        # EconML should use the causal_effect value
-        assert ecn_result["success"] is True
-        assert ecn_result["result"]["ate"] == 0.25
+        assert ecn_result["success"] is False
+        # No silent fabrication: result body MUST NOT contain ate==0.25.
+        body = ecn_result["result"] or {}
+        assert body.get("ate") != 0.25
 
     @pytest.mark.asyncio
     async def test_causalml_sees_econml_cate(self, minimal_pipeline_state, minimal_pipeline_config):
