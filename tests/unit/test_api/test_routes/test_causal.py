@@ -287,6 +287,13 @@ class TestSequentialPipeline:
         Pins the F-005 fail-closed semantics: chat users + LLMs that hit the
         endpoint without demo_mode get a structured 503, NOT random.uniform-
         shaped fabricated stats with statistical_significance=True.
+
+        Post-#354 C-8 (2026-05-22): the 503 is no longer a hardcoded
+        short-circuit. The endpoint now invokes the wired SequentialPipeline;
+        when no DataFrame is resolvable from request filters, every wired
+        executor fails-closed and the response builder honestly reports 503.
+        See tests/api/test_causal_pipeline_c8_wiring.py for the positive
+        (data-provided) tests that exercise the real-execution path.
         """
         response = client.post(
             "/causal/pipeline/sequential",
@@ -353,7 +360,14 @@ class TestParallelPipeline:
     def test_run_parallel_pipeline_raises_503_in_default_mode(
         self, client, parallel_pipeline_request
     ):
-        """Default (no demo_mode) fails closed with 503."""
+        """Default (no demo_mode) fails closed with 503.
+
+        Post-#354 C-8 (2026-05-22): the 503 now reflects the wired
+        ParallelPipeline's honest fail-close when no DataFrame is resolvable
+        from request filters, rather than a hardcoded short-circuit. See
+        tests/api/test_causal_pipeline_c8_wiring.py for the positive
+        (data-provided) tests.
+        """
         response = client.post(
             "/causal/pipeline/parallel",
             json=parallel_pipeline_request,

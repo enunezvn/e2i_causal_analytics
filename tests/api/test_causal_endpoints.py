@@ -432,6 +432,13 @@ class TestSequentialPipeline:
 
     Per F-005 iter-1 HIGH-1: default path now fails-closed with 503; demo_mode=true
     is required to exercise the placeholder code path.
+
+    Post-#354 C-8 (2026-05-22): the 503 is no longer a hardcoded short-circuit.
+    The endpoint now invokes the wired SequentialPipeline (C-1..C-6); when no
+    DataFrame is resolvable from request filters, every wired executor fails-
+    closed and the response builder honestly reports 503. The demo_mode=true
+    branch is unchanged. See tests/api/test_causal_pipeline_c8_wiring.py for
+    positive (data-provided) tests that exercise the real-execution path.
     """
 
     def test_sequential_pipeline_sync_success(self, sequential_pipeline_request):
@@ -481,6 +488,12 @@ class TestParallelPipeline:
 
     Per F-005 iter-1 HIGH-1: default path now fails-closed with 503; demo_mode=true
     is required to exercise the placeholder code path.
+
+    Post-#354 C-8 (2026-05-22): the 503 now reflects the wired ParallelPipeline's
+    honest fail-close when no DataFrame is resolvable, rather than a hardcoded
+    short-circuit. The demo_mode=true branch is unchanged. See
+    tests/api/test_causal_pipeline_c8_wiring.py for positive (data-provided)
+    tests that exercise the real-execution path.
     """
 
     def test_parallel_pipeline_success(self, parallel_pipeline_request):
