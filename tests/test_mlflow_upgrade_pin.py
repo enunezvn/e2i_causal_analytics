@@ -1,20 +1,22 @@
-"""Forcing-function tests for #362 mlflow upgrade.
+"""Forcing-function tests for #362 + #442 mlflow upgrade.
 
 Pins two post-upgrade invariants:
 
 1. ``requirements.txt`` pins ``mlflow`` / ``mlflow-skinny`` / ``mlflow-tracing``
-   to ``>=3.10.0,<3.11.0`` (the lowest line that resolves the CVE-2026-2614
-   arbitrary-file-read advisory). Pre-upgrade these were ``==3.7.0``.
+   to ``>=3.11.0,<3.12.0`` (the lowest line that resolves CVE-2026-2652 /
+   GHSA-75cm-x2w3-8mgf — unauthenticated FastAPI routes). Pre-#442 the range
+   was ``>=3.10.0,<3.11.0`` (post-#362); pre-#362 these were ``==3.7.0``.
 
 2. ``.github/workflows/security.yml`` carries an ``--ignore-vuln`` allowlist
-   that scopes precisely to the post-upgrade residual: the 3 mlflow advisories
-   still unfixed at 3.10.x and the 4 mistune transitive advisories. Asserted
+   that scopes precisely to the post-upgrade residual: the 1 mlflow advisory
+   still unfixed at 3.11.x and the 4 mistune transitive advisories. Asserted
    with ``extra_exact`` set semantics so any future drift — adding back a
    resolved entry, or removing one we still need — fails the test.
 
-These tests are RED on the pre-upgrade tree (mlflow==3.7.0 + 13 mlflow ignores)
-and GREEN once the bump + ignore-list cleanup land. The pin lives at the repo
-top level (matches ``tests/test_bentoml_requirements_exact_pin.py``).
+These tests are RED on the pre-upgrade tree (mlflow==3.10.x + 4 mlflow ignores
+including the post-#441 GHSA-75cm allowlist entry) and GREEN once the #442
+bump + ignore-list cleanup land. The pin lives at the repo top level (matches
+``tests/test_bentoml_requirements_exact_pin.py``).
 """
 
 from __future__ import annotations
@@ -36,32 +38,31 @@ DOCKER_COMPOSE_SECURE = REPO_ROOT / "docker" / "docker-compose.secure.yml"
 ARCHITECTURE_MD = REPO_ROOT / "docs" / "ARCHITECTURE.md"
 
 # Target docker image tag for the mlflow service. Pinned in lockstep with
-# requirements.txt mlflow line (#362). 3.10.1 is the latest 3.10.x patch.
-MLFLOW_DOCKER_IMAGE_TAG = "v3.10.1"
+# requirements.txt mlflow line (#442; supersedes #362). v3.11.1 is the latest
+# 3.11.x patch — mlflow project never published v3.11.0 GA (only rc0/rc1, then
+# jumped to 3.11.1 — verified via gh api /repos/mlflow/mlflow/releases 2026-05-22).
+MLFLOW_DOCKER_IMAGE_TAG = "v3.11.1"
 
-# Each mlflow package in requirements.txt must satisfy this specifier post-#362.
-MLFLOW_REQUIRED_SPEC = SpecifierSet(">=3.10.0,<3.11.0")
+# Each mlflow package in requirements.txt must satisfy this specifier post-#442.
+MLFLOW_REQUIRED_SPEC = SpecifierSet(">=3.11.0,<3.12.0")
 
 # Whitelisted MLFLOW-RELATED advisory IDs that must remain ignored AFTER the
-# upgrade. Three remain because their upstream fix is only available in
-# 3.11.0rc0 (we refuse rc lines) or has no upstream fix yet.
+# #442 upgrade. Only ONE remains because GHSA-7qhf has no upstream fix yet.
+# Three other entries (GHSA-46r5, GHSA-fh64, GHSA-75cm) were dropped in #442
+# because the 3.11.x line addresses them per V-D8 advisory data + 3.11.1
+# release notes (PR #21708 / PR #21435).
 EXPECTED_MLFLOW_IGNORES: frozenset[str] = frozenset(
     {
-        # PYSEC-2026-94 alias — auth bypass on artifact-download endpoint;
-        # fix in 3.11.0rc0 only (refuse rc).
-        "GHSA-46r5-x6jq-v8g6",
-        # PYSEC-2026-93 alias — Stored XSS via YAML MLmodel parsing;
-        # fix in 3.11.0rc0 only (refuse rc).
-        "GHSA-fh64-r2vc-xvhr",
         # CVE-2026-0545 alias — FastAPI /ajax-api/3.0/jobs/* unauth bypass
-        # when basic-auth+job execution enabled; no upstream fix.
-        # Mitigated — MLFLOW_SERVER_ENABLE_JOB_EXECUTION is unset.
+        # when basic-auth+job execution enabled. ``first_patched_version: null``
+        # confirmed via ``gh api /advisories/GHSA-7qhf-v65m-g5f3`` on 2026-05-22.
+        # Mitigated — MLFLOW_SERVER_ENABLE_JOB_EXECUTION is unset in our deployment.
         "GHSA-7qhf-v65m-g5f3",
     }
 )
 
 # Whitelisted MISTUNE advisory IDs (unchanged from pre-upgrade — mistune is a
-# transitive dep that mlflow 3.10.x does NOT bump).
+# transitive dep that mlflow 3.11.x does NOT bump).
 EXPECTED_MISTUNE_IGNORES: frozenset[str] = frozenset(
     {
         "GHSA-8mp2-v27r-99xp",  # CVE-2026-33079 — LINK_TITLE_RE ReDoS
@@ -92,10 +93,12 @@ def _read_mlflow_constraints(path: Path = ROOT_REQS) -> dict[str, str]:
 
 
 def test_mlflow_packages_pinned_to_required_spec() -> None:
-    """All three mlflow packages must satisfy ``>=3.10.0,<3.11.0``.
+    """All three mlflow packages must satisfy ``>=3.11.0,<3.12.0``.
 
-    Pre-upgrade these were ``==3.7.0``, which is why this test fails RED on
-    main. ``mlflow==3.7.0`` is not in ``>=3.10.0,<3.11.0`` per PEP 440.
+    Pre-#442 these were ``>=3.10.0,<3.11.0`` (post-#362). #442 bumps past
+    CVE-2026-2652 / GHSA-75cm-x2w3-8mgf (unauthenticated FastAPI routes,
+    fixed in 3.11.0) + CVE-2026-33866 (fixed in 3.11.1 per release notes)
+    + CVE-2026-33865 (fixed in 3.11.1).
     """
     constraints = _read_mlflow_constraints()
     for pkg in ("mlflow", "mlflow-skinny", "mlflow-tracing"):
@@ -107,16 +110,20 @@ def test_mlflow_packages_pinned_to_required_spec() -> None:
         # Sample two versions on either side of the bound to assert the spec
         # has the right SHAPE without depending on a single version probe.
         assert Version("3.7.0") not in spec, (
-            f"{pkg} spec {constraints[pkg]!r} still admits the pre-upgrade "
-            f"vulnerable 3.7.0 — #362 requires bumping past CVE-2026-2614."
+            f"{pkg} spec {constraints[pkg]!r} still admits the pre-#362 "
+            f"vulnerable 3.7.0 — #442 inherits #362's 3.7.0 floor exclusion."
         )
-        assert Version("3.10.0") in spec and Version("3.10.1") in spec, (
-            f"{pkg} spec {constraints[pkg]!r} does not include the target 3.10.x line."
+        assert Version("3.10.1") not in spec, (
+            f"{pkg} spec {constraints[pkg]!r} still admits the pre-#442 "
+            f"3.10.1 — #442 requires bumping past CVE-2026-2652 (3.11.x line)."
         )
-        # The cap also matters — refusing 3.11.x release candidates per #362.
-        assert Version("3.11.0") not in spec, (
-            f"{pkg} spec {constraints[pkg]!r} allows 3.11.x — #362 explicitly "
-            f"stays on the 3.10.x line for now (3.11.x is rc-tagged)."
+        assert Version("3.11.0") in spec and Version("3.11.1") in spec, (
+            f"{pkg} spec {constraints[pkg]!r} does not include the target 3.11.x line."
+        )
+        # The cap also matters — refusing 3.12.x line (separate tracker).
+        assert Version("3.12.0") not in spec, (
+            f"{pkg} spec {constraints[pkg]!r} allows 3.12.x — #442 explicitly "
+            f"stays on the 3.11.x line; 3.12 bump is a separate tracker."
         )
 
 
@@ -140,7 +147,8 @@ def test_mlflow_dev_requirements_match_root_pin() -> None:
     Same forcing-function shape as ``test_bentoml_requirements_exact_pin.py``:
     range/exact pins in one file but not the other create silent version
     skew on dev-vs-prod rebuilds. Pre-#362 both files agreed on ``==3.7.0``;
-    this test ensures #362 bumps BOTH together.
+    post-#362 both agreed on ``>=3.10.0,<3.11.0``; #442 bumps both to
+    ``>=3.11.0,<3.12.0`` together.
     """
     root = _read_mlflow_constraints(ROOT_REQS)
     dev = _read_mlflow_constraints(DEV_REQS)
@@ -156,13 +164,13 @@ _PYPROJECT_MLFLOW_RE = re.compile(r'"mlflow\s*([<>=!~][^"]*?)"', re.MULTILINE)
 
 def test_pyproject_mlflow_dependency_in_required_spec() -> None:
     """``pyproject.toml [project.dependencies]`` mlflow line must also satisfy
-    ``>=3.10.0,<3.11.0`` — otherwise ``pip install .`` ignores requirements.txt
+    ``>=3.11.0,<3.12.0`` — otherwise ``pip install .`` ignores requirements.txt
     and may resolve an unaudited older mlflow.
 
-    Codex iter-2 H3 finding (pre-fix the line was ``mlflow>=2.16.0`` which
-    silently allowed installs outside the audited range). Iter-3 M finding
-    tightened the assertion to also exclude 3.11.0 (otherwise the test
-    would accept the open-ended ``mlflow>=3.10.0`` without the upper cap).
+    #362 codex iter-2 H3 finding (pre-fix the line was ``mlflow>=2.16.0`` which
+    silently allowed installs outside the audited range). #362 codex iter-3 M
+    finding tightened the assertion to exclude the upper cap. #442 bumps the
+    cap from 3.11.0 to 3.12.0 in lockstep with requirements.txt.
     """
     text = PYPROJECT.read_text()
     matches = _PYPROJECT_MLFLOW_RE.findall(text)
@@ -174,36 +182,40 @@ def test_pyproject_mlflow_dependency_in_required_spec() -> None:
         spec = SpecifierSet(raw_spec.strip())
         assert Version("3.7.0") not in spec, (
             f"pyproject.toml mlflow spec {raw_spec!r} still admits the pre-#362 "
-            f"3.7.0 — bump to >=3.10.0,<3.11.0 in lockstep with requirements.txt."
+            f"3.7.0 — bump to >=3.11.0,<3.12.0 in lockstep with requirements.txt."
         )
         assert Version("2.16.0") not in spec, (
             f"pyproject.toml mlflow spec {raw_spec!r} still admits mlflow 2.x "
-            f"(the pre-#362 floor was 2.16.0); bump to >=3.10.0,<3.11.0."
+            f"(the pre-#362 floor was 2.16.0); bump to >=3.11.0,<3.12.0."
         )
-        assert Version("3.10.1") in spec, (
+        assert Version("3.10.1") not in spec, (
+            f"pyproject.toml mlflow spec {raw_spec!r} still admits the pre-#442 "
+            f"3.10.1 — #442 requires the 3.11.x line for CVE-2026-2652."
+        )
+        assert Version("3.11.1") in spec, (
             f"pyproject.toml mlflow spec {raw_spec!r} excludes the target "
-            f"3.10.1; align with requirements.txt."
+            f"3.11.1; align with requirements.txt."
         )
-        # Same upper cap as requirements.txt — refusing 3.11.x rc line.
-        assert Version("3.11.0") not in spec, (
-            f"pyproject.toml mlflow spec {raw_spec!r} admits 3.11.x without "
+        # Same upper cap as requirements.txt — refusing 3.12.x line.
+        assert Version("3.12.0") not in spec, (
+            f"pyproject.toml mlflow spec {raw_spec!r} admits 3.12.x without "
             f"the lockstep upper cap; align with requirements.txt's "
-            f">=3.10.0,<3.11.0 (open-ended >= alone would let pip resolve "
-            f"3.11.x which we refuse per #362)."
+            f">=3.11.0,<3.12.0 (open-ended >= alone would let pip resolve "
+            f"3.12.x which is a separate dep-bump tracker per #442)."
         )
 
 
 def test_mlflow_dockerfile_pins_match_required_spec() -> None:
     """``docker/mlflow/Dockerfile`` must install mlflow within
-    ``>=3.10.0,<3.11.0`` (lockstep with requirements.txt). EXACTLY ONE
+    ``>=3.11.0,<3.12.0`` (lockstep with requirements.txt). EXACTLY ONE
     mlflow pip arg must be present, and it must satisfy the policy spec
-    (in particular, refusing 3.7.0 + 3.11.0).
+    (in particular, refusing 3.7.0 + 3.10.1 + 3.12.0).
 
-    Codex iter-2 H1 finding (pre-fix the Dockerfile pinned ``mlflow==2.9.2``).
-    Iter-3 M finding tightened the assertion to require ALL matched specs
+    #362 codex iter-2 H1 finding (pre-fix the Dockerfile pinned ``mlflow==2.9.2``).
+    #362 iter-3 M finding tightened the assertion to require ALL matched specs
     are in-policy + exactly one mlflow arg (previously the test passed if
     ANY one matched, so a stale ``mlflow==2.9.2`` line co-existing with the
-    new ``mlflow>=3.10.0,<3.11.0`` would have falsely passed).
+    new spec would have falsely passed). #442 bumps the cap from 3.11.0 to 3.12.0.
     """
     text = MLFLOW_DOCKERFILE.read_text()
     # The Dockerfile installs mlflow via a quoted pip arg; accept both quoted
@@ -228,24 +240,28 @@ def test_mlflow_dockerfile_pins_match_required_spec() -> None:
     )
     raw_spec = matches[0].strip()
     spec = SpecifierSet(raw_spec)
-    assert Version("3.10.1") in spec, (
+    assert Version("3.11.1") in spec, (
         f"docker/mlflow/Dockerfile mlflow spec {raw_spec!r} excludes the "
-        f"target 3.10.1; align with requirements.txt."
+        f"target 3.11.1; align with requirements.txt."
     )
     assert Version("3.7.0") not in spec, (
         f"docker/mlflow/Dockerfile mlflow spec {raw_spec!r} still admits "
         f"the pre-#362 vulnerable 3.7.0."
     )
-    # Same upper cap as requirements.txt — refusing 3.11.x rc line.
-    assert Version("3.11.0") not in spec, (
-        f"docker/mlflow/Dockerfile mlflow spec {raw_spec!r} admits 3.11.x "
-        f"without the lockstep upper cap; align with requirements.txt's "
-        f">=3.10.0,<3.11.0 (open-ended >= alone allows 3.11.x)."
+    assert Version("3.10.1") not in spec, (
+        f"docker/mlflow/Dockerfile mlflow spec {raw_spec!r} still admits "
+        f"the pre-#442 3.10.1 — bump to >=3.11.0,<3.12.0 for CVE-2026-2652."
     )
-    # And 2.x must be excluded (catches pre-fix 2.9.2 + 2.16.0 regressions).
+    # Same upper cap as requirements.txt — refusing 3.12.x line.
+    assert Version("3.12.0") not in spec, (
+        f"docker/mlflow/Dockerfile mlflow spec {raw_spec!r} admits 3.12.x "
+        f"without the lockstep upper cap; align with requirements.txt's "
+        f">=3.11.0,<3.12.0 (open-ended >= alone allows 3.12.x)."
+    )
+    # And 2.x must be excluded (catches pre-#362 2.9.2 + 2.16.0 regressions).
     assert Version("2.16.0") not in spec, (
         f"docker/mlflow/Dockerfile mlflow spec {raw_spec!r} still admits "
-        f"mlflow 2.x; bump to >=3.10.0,<3.11.0."
+        f"mlflow 2.x; bump to >=3.11.0,<3.12.0."
     )
 
 
@@ -258,11 +274,12 @@ def _grep_compose_mlflow_image(path: Path) -> list[str]:
 
 def test_docker_compose_mlflow_image_tag_locked_to_required_spec() -> None:
     """Both ``docker-compose.yml`` and ``docker-compose.secure.yml`` must
-    pin the mlflow service image to the lockstep tag (``v3.10.1``).
+    pin the mlflow service image to the lockstep tag (``v3.11.1``).
 
-    Codex iter-2 H2 finding (pre-fix both compose files used
-    ``v3.1.0`` — an unrelated older 3.1.x line that's outside the audited
-    >=3.10.0,<3.11.0 spec window).
+    #362 codex iter-2 H2 finding (pre-fix both compose files used
+    ``v3.1.0`` — an unrelated older 3.1.x line). #442 bumps the lockstep
+    tag from v3.10.1 to v3.11.1 (note: mlflow project never published a
+    v3.11.0 GA — only rc0/rc1 — so v3.11.1 is the latest 3.11.x GA).
     """
     for compose_path in (DOCKER_COMPOSE, DOCKER_COMPOSE_SECURE):
         tags = _grep_compose_mlflow_image(compose_path)
@@ -273,7 +290,7 @@ def test_docker_compose_mlflow_image_tag_locked_to_required_spec() -> None:
         for tag in tags:
             assert tag == MLFLOW_DOCKER_IMAGE_TAG, (
                 f"{compose_path.name} pins mlflow image {tag!r} but expected "
-                f"{MLFLOW_DOCKER_IMAGE_TAG!r} (lockstep with requirements.txt #362)."
+                f"{MLFLOW_DOCKER_IMAGE_TAG!r} (lockstep with requirements.txt #442)."
             )
 
 
@@ -283,8 +300,9 @@ def test_architecture_doc_mlflow_image_tag_matches() -> None:
 
     Catches BOTH the ``ghcr.io/mlflow/mlflow:vX.Y.Z`` image string AND the
     plaintext ``MLflow vX.Y.Z`` mentions (e.g. in C4 diagram Container
-    annotations). Iter-3 L finding caught a stale ``MLflow v3.1.0`` plaintext
-    mention in the C4 diagram that the image-tag-only regex missed.
+    annotations). #362 iter-3 L finding caught a stale ``MLflow v3.1.0``
+    plaintext mention in the C4 diagram that the image-tag-only regex
+    missed. #442 retains the dual check, now expecting v3.11.1.
     """
     text = ARCHITECTURE_MD.read_text()
     image_tags = re.findall(r"ghcr\.io/mlflow/mlflow:(v[\d.]+(?:rc\d+)?)", text)
@@ -335,21 +353,22 @@ def _collect_mlflow_mistune_ignores() -> set[str]:
 
 def test_security_yml_mlflow_ignores_match_post_upgrade_set_exactly() -> None:
     """The mlflow/mistune ``--ignore-vuln`` set must equal the expected
-    post-upgrade residual EXACTLY — no extras, no missing.
+    post-#442 residual EXACTLY — no extras, no missing.
 
-    Pre-upgrade this set is the union of EXPECTED_TOTAL_IGNORES plus 10 mlflow
-    GHSAs that get resolved by the 3.10.x bump (xch3/gq3w/q2r8/fhff/g6pg/
-    vhcx/r23q/65h7/42h5/rvhj). Asserting exact-set semantics with
-    EXPECTED_TOTAL_IGNORES is the forcing function that ensures those 10 are
-    removed in the same PR as the bump.
+    Pre-#442 this set was {GHSA-46r5, GHSA-fh64, GHSA-7qhf, GHSA-75cm} ∪ 4
+    mistune. The 3.11.x bump resolves GHSA-46r5 (via release-notes PR #21708)
+    + GHSA-fh64 (advisory first_patched=3.11.1) + GHSA-75cm (advisory
+    first_patched=3.11.0). Only GHSA-7qhf remains (no upstream fix). Asserting
+    exact-set semantics is the forcing function that ensures the 3 resolved
+    entries are removed in the same PR as the bump.
     """
     actual = _collect_mlflow_mistune_ignores()
     extras = actual - EXPECTED_TOTAL_IGNORES
     missing = EXPECTED_TOTAL_IGNORES - actual
     assert not extras and not missing, (
-        f"security.yml mlflow/mistune ignore set has drifted from #362 "
+        f"security.yml mlflow/mistune ignore set has drifted from #442 "
         f"post-upgrade expectation.\n"
-        f"  extras (REMOVE — resolved by mlflow 3.10.x upgrade or stale): "
+        f"  extras (REMOVE — resolved by mlflow 3.11.x upgrade or stale): "
         f"{sorted(extras)}\n"
         f"  missing (ADD — required to keep CI green): {sorted(missing)}"
     )
@@ -357,14 +376,15 @@ def test_security_yml_mlflow_ignores_match_post_upgrade_set_exactly() -> None:
 
 def test_mlflow_connector_search_runs_signature_pagination_compat() -> None:
     """Drift-guard: confirm our connector's ``search_runs`` call site uses
-    only positional/keyword args that are stable across mlflow 3.7 → 3.10.x.
+    only positional/keyword args that are stable across mlflow 3.7 → 3.11.x.
 
     The MLflow 3.x line introduced an optional ``page_token`` to
     ``MlflowClient.search_runs``. Our connector uses the top-level
     ``mlflow.search_runs`` (returns DataFrame) and intentionally caps results
     at ``max_results=100`` via the existing kwargs. If a future bump
     silently changes argument names (e.g. ``experiment_ids`` →
-    ``experiment_id``), this test catches the drift at CI time.
+    ``experiment_id``), this test catches the drift at CI time. Verified
+    stable across the 3.10 → 3.11.x transition during #442.
     """
     import inspect
 
