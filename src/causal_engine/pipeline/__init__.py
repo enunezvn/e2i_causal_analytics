@@ -12,14 +12,14 @@ Multi-Library Synergies Architecture:
 Reference: docs/Data Architecture & Integration.html
 """
 
-from .orchestrator import (
+from .executors import (
     CausalMLExecutor,
     DoWhyExecutor,
     EconMLExecutor,
     LibraryExecutor,
     NetworkXExecutor,
-    PipelineOrchestrator,
 )
+from .orchestrator import PipelineOrchestrator
 from .parallel import (
     ParallelPipeline,
     ParallelPipelineBuilder,

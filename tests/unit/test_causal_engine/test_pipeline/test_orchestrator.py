@@ -314,8 +314,12 @@ class TestDoWhyExecutor:
                 raise ValueError("DoWhy error")
             return 100.0
 
+        # Patch target moved from pipeline.orchestrator.time to
+        # pipeline.executors.dowhy.time as part of the C-1 split of orchestrator.py
+        # into per-executor files. Class body is byte-identical; only `time` lives
+        # in a different module now (the one where DoWhyExecutor.execute runs).
         with patch(
-            "src.causal_engine.pipeline.orchestrator.time.time", side_effect=time_side_effect
+            "src.causal_engine.pipeline.executors.dowhy.time.time", side_effect=time_side_effect
         ):
             result = await executor.execute(minimal_pipeline_state, minimal_pipeline_config)
 
@@ -413,8 +417,12 @@ class TestEconMLExecutor:
                 raise ValueError("EconML error")
             return 100.0
 
+        # Patch target moved from pipeline.orchestrator.time to
+        # pipeline.executors.econml.time as part of the C-1 split of orchestrator.py
+        # into per-executor files. Class body is byte-identical; only `time` lives
+        # in a different module now (the one where EconMLExecutor.execute runs).
         with patch(
-            "src.causal_engine.pipeline.orchestrator.time.time", side_effect=time_side_effect
+            "src.causal_engine.pipeline.executors.econml.time.time", side_effect=time_side_effect
         ):
             result = await executor.execute(minimal_pipeline_state, minimal_pipeline_config)
 
@@ -513,8 +521,13 @@ class TestCausalMLExecutor:
                 raise ValueError("CausalML error")
             return 100.0
 
+        # Patch target moved from pipeline.orchestrator.time to
+        # pipeline.executors.causalml.time as part of the C-1 split of orchestrator.py
+        # into per-executor files. Class body is byte-identical; only `time` lives
+        # in a different module now (the one where CausalMLExecutor.execute runs).
         with patch(
-            "src.causal_engine.pipeline.orchestrator.time.time", side_effect=time_side_effect
+            "src.causal_engine.pipeline.executors.causalml.time.time",
+            side_effect=time_side_effect,
         ):
             result = await executor.execute(minimal_pipeline_state, minimal_pipeline_config)
 
