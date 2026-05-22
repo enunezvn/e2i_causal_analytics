@@ -264,20 +264,23 @@ class TestSingleDependencyFails:
         assert any("RuntimeError" in w for w in named)
 
     @pytest.mark.asyncio
-    async def test_feature_importance_failure_marks_unavailable_with_warning(
+    async def test_feature_importance_all_models_fail_marks_unavailable(
         self, state_for_enrichment
     ) -> None:
+        """REAL-PATH test (no helper monkeypatch).
+
+        #438 codex iter-0 HIGH-1: previously _get_feature_importance swallowed
+        per-model exceptions silently and returned an empty dict, hiding the
+        dependency failure from the aggregate gate. Now: when ALL per-model
+        get_importance() calls raise, the helper raises
+        AllModelsImportanceFailed which propagates via asyncio.gather and the
+        aggregate gate counts it as a failure.
+        """
         ctx_store = SelectivelyFailingContextStore()
 
-        # importance_fails surfaces via individual_predictions iteration -> empty
-        # but to model an actual gather failure we mock the feature_store's
-        # get_importance to raise; the node's _get_feature_importance currently
-        # catches per-call exceptions inside the loop. To model an aggregate
-        # raise we override _get_feature_importance via a feature_store that
-        # raises in a way that propagates.
         class TotalFailureFeatureStore:
             async def get_importance(self, model_id: str) -> Dict[str, float]:
-                raise RuntimeError("importance-aggregate-failed")
+                raise RuntimeError("importance-store-down")
 
             async def get_online_features(
                 self, entity_id: str, feature_refs: Optional[List[str]] = None
@@ -289,15 +292,9 @@ class TestSingleDependencyFails:
             ) -> Dict[str, Any]:
                 return {"fresh": True, "stale_features": []}
 
-        # Force the helper itself to raise via monkeypatch
         node = ContextEnricherNode(
             context_store=ctx_store, feature_store=TotalFailureFeatureStore()
         )
-
-        async def raising_get_feature_importance(state):  # type: ignore[no-untyped-def]
-            raise RuntimeError("aggregate importance error")
-
-        node._get_feature_importance = raising_get_feature_importance  # type: ignore[assignment]
 
         result = await node.execute(state_for_enrichment)
 
@@ -308,7 +305,61 @@ class TestSingleDependencyFails:
         warnings = result.get("warnings", []) or []
         named = [w for w in warnings if "feature_importance" in w and "unavailable" in w]
         assert named, f"expected feature_importance unavailable warning: {warnings}"
-        assert any("RuntimeError" in w for w in named)
+        assert any("AllModelsImportanceFailed" in w for w in named)
+
+    @pytest.mark.asyncio
+    async def test_feature_importance_partial_model_failure_stays_available(
+        self, state_for_enrichment
+    ) -> None:
+        """If at least one model's get_importance() succeeds, the dep stays
+        available. Pre-#438 the per-model except was non-fatal by design and
+        we preserve that for the partial-success case. Only when ALL models
+        fail does the dep flip to unavailable.
+        """
+        ctx_store = SelectivelyFailingContextStore()
+
+        # Configure state with 2 models; only the FIRST raises, the second
+        # returns importance. Expect feature_importance_available=True.
+        state_for_enrichment["individual_predictions"] = [
+            {
+                "model_id": "model_failing",
+                "prediction": 0.7,
+                "confidence": 0.8,
+                "latency_ms": 30,
+            },
+            {
+                "model_id": "model_ok",
+                "prediction": 0.6,
+                "confidence": 0.75,
+                "latency_ms": 40,
+            },
+        ]
+
+        class PartialFailFStore:
+            async def get_importance(self, model_id: str) -> Dict[str, float]:
+                if model_id == "model_failing":
+                    raise RuntimeError("first model importance failed")
+                return {"feat_a": 0.6}
+
+            async def get_online_features(
+                self, entity_id: str, feature_refs: Optional[List[str]] = None
+            ) -> Dict[str, Any]:
+                return {}
+
+            async def check_feature_freshness(
+                self, entity_id: str, max_staleness_hours: float = 24.0
+            ) -> Dict[str, Any]:
+                return {"fresh": True, "stale_features": []}
+
+        node = ContextEnricherNode(context_store=ctx_store, feature_store=PartialFailFStore())
+
+        result = await node.execute(state_for_enrichment)
+
+        # Partial model failure -> dep stays available (some real signal returned)
+        assert result["status"] == "completed"
+        context = result["prediction_context"]
+        assert context["feature_importance_available"] is True
+        assert "feat_a" in context["feature_importance"]
 
     @pytest.mark.asyncio
     async def test_historical_accuracy_failure_uses_sentinel_none(
@@ -352,22 +403,32 @@ class TestSingleDependencyFails:
     async def test_online_features_failure_marks_unavailable_with_warning(
         self, state_for_enrichment
     ) -> None:
+        """REAL-PATH test (no helper monkeypatch).
+
+        #438 codex iter-0 HIGH-2: previously _get_online_features wrapped the
+        entire Feast call in a broad try/except and returned an honest-empty
+        dict with a freeform warning, leaving online_features_available
+        falsely True. Now: Feast exceptions propagate to asyncio.gather and
+        the per-field availability flag flips to False with a per-field
+        warning naming the dependency + exception class.
+        """
         ctx_store = SelectivelyFailingContextStore()
 
-        # _get_online_features in the production code currently swallows its
-        # own exceptions and returns {"features":{}, "warnings":[...]}. To
-        # exercise the per-field availability flag we monkeypatch the helper
-        # to raise so the gather() result is an Exception.
-        class FStore:
+        class FailingFStore:
             async def get_importance(self, model_id: str) -> Dict[str, float]:
                 return {"f1": 0.5}
 
-        node = ContextEnricherNode(context_store=ctx_store, feature_store=FStore())
+            async def get_online_features(
+                self, entity_id: str, feature_refs: Optional[List[str]] = None
+            ) -> Dict[str, Any]:
+                raise TimeoutError("feast timeout")
 
-        async def raising_online(state):  # type: ignore[no-untyped-def]
-            raise TimeoutError("feast timeout")
+            async def check_feature_freshness(
+                self, entity_id: str, max_staleness_hours: float = 24.0
+            ) -> Dict[str, Any]:
+                return {"fresh": True, "stale_features": []}
 
-        node._get_online_features = raising_online  # type: ignore[assignment]
+        node = ContextEnricherNode(context_store=ctx_store, feature_store=FailingFStore())
 
         result = await node.execute(state_for_enrichment)
 
@@ -433,6 +494,10 @@ class TestAllFiveFail:
 
     @pytest.mark.asyncio
     async def test_all_five_failures_flips_status_to_failed(self, state_for_enrichment) -> None:
+        """REAL-PATH test (no helper monkeypatch). All 5 deps fail through
+        real code paths: context_store raises on 3 methods, feature_store
+        raises on get_importance (AllModelsImportanceFailed) and
+        get_online_features (TimeoutError)."""
         ctx_store = SelectivelyFailingContextStore(
             similar_fails=True,
             accuracy_fails=True,
@@ -441,18 +506,19 @@ class TestAllFiveFail:
 
         class TotalFailFStore:
             async def get_importance(self, model_id: str) -> Dict[str, float]:
-                raise RuntimeError("fully down")
+                raise RuntimeError("importance fully down")
+
+            async def get_online_features(
+                self, entity_id: str, feature_refs: Optional[List[str]] = None
+            ) -> Dict[str, Any]:
+                raise TimeoutError("feast fully down")
+
+            async def check_feature_freshness(
+                self, entity_id: str, max_staleness_hours: float = 24.0
+            ) -> Dict[str, Any]:
+                return {"fresh": True, "stale_features": []}
 
         node = ContextEnricherNode(context_store=ctx_store, feature_store=TotalFailFStore())
-
-        async def raising_importance(state):  # type: ignore[no-untyped-def]
-            raise RuntimeError("importance dep down")
-
-        async def raising_online(state):  # type: ignore[no-untyped-def]
-            raise RuntimeError("online dep down")
-
-        node._get_feature_importance = raising_importance  # type: ignore[assignment]
-        node._get_online_features = raising_online  # type: ignore[assignment]
 
         result = await node.execute(state_for_enrichment)
 

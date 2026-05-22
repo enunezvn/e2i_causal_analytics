@@ -30,6 +30,22 @@ _NUM_DEPS = 5  # similar / importance / accuracy / trend / online
 _DEGRADED_FAIL_THRESHOLD = 3  # >= 3 failures -> status="degraded"
 
 
+class StoreNotConfigured(RuntimeError):
+    """Raised by helpers when the underlying store is not configured.
+
+    #438: distinguishes "no store -> unavailable" from "store returned honest
+    empty" so the availability flag and per-field warning can faithfully
+    expose the absent dependency rather than fabricating a plausible-real
+    default ([] / {} / 0.0 / "stable").
+    """
+
+
+class AllModelsImportanceFailed(RuntimeError):
+    """Raised by _get_feature_importance when every individual model's
+    importance lookup raised. Propagates to asyncio.gather so the aggregate
+    gate counts the dependency as failed (#438 codex iter-0 HIGH-1)."""
+
+
 class ContextStore(Protocol):
     """Protocol for context storage"""
 
@@ -315,9 +331,15 @@ class ContextEnricherNode:
             }
 
     async def _get_similar_cases(self, state: PredictionSynthesizerState) -> List[Dict[str, Any]]:
-        """Find similar historical cases."""
+        """Find similar historical cases.
+
+        #438: when no context_store is configured the helper raises
+        StoreNotConfigured so the availability flag flips to False and the
+        per-field warning surfaces "no store" rather than fabricating a
+        plausible-real empty list as honest data.
+        """
         if not self.context_store:
-            return []
+            raise StoreNotConfigured("similar_cases: no context_store configured")
 
         return await self.context_store.find_similar(
             entity_type=state.get("entity_type", ""),
@@ -326,33 +348,65 @@ class ContextEnricherNode:
         )
 
     async def _get_feature_importance(self, state: PredictionSynthesizerState) -> Dict[str, float]:
-        """Get feature importance for prediction."""
+        """Get feature importance for prediction.
+
+        #438 codex iter-0 HIGH-1: per-model exceptions were silently swallowed
+        and an empty dict returned regardless. That hid feature_store failures
+        from the aggregate gate. Now:
+
+        - If no feature_store is configured -> StoreNotConfigured raised.
+        - If no predictions provided -> honest empty {} (no models to query).
+        - If every per-model get_importance() raised -> AllModelsImportanceFailed
+          raised so asyncio.gather sees the exception and the availability flag
+          flips to False with a named warning.
+        - If at least one model returned -> the aggregation succeeds (partial
+          per-model failures stay logged but don't sink the dep, which
+          preserves the pre-#438 "non-fatal per-model" intent).
+        """
         if not self.feature_store:
+            raise StoreNotConfigured("feature_importance: no feature_store configured")
+
+        predictions = state.get("individual_predictions") or []
+        if not predictions:
             return {}
 
         # Aggregate importance across models
         importances: Dict[str, float] = {}
-        predictions = state.get("individual_predictions") or []
+        last_exception: Optional[BaseException] = None
+        succeeded = 0
 
         for pred in predictions:
             try:
                 model_importance = await self.feature_store.get_importance(pred["model_id"])
+                succeeded += 1
                 for feature, importance in model_importance.items():
                     if feature in importances:
                         importances[feature] = (importances[feature] + importance) / 2
                     else:
                         importances[feature] = importance
             except Exception as e:
+                last_exception = e
                 logger.debug(f"Failed to get importance for {pred['model_id']}: {e}")
+
+        # If ALL models failed, propagate so the aggregate gate counts this
+        # dependency as failed (#438 codex iter-0 HIGH-1).
+        if succeeded == 0 and last_exception is not None:
+            raise AllModelsImportanceFailed(
+                f"all {len(predictions)} models' get_importance() raised; "
+                f"last error: {type(last_exception).__name__}: {last_exception}"
+            ) from last_exception
 
         # Return top 10 features
         sorted_features = sorted(importances.items(), key=lambda x: x[1], reverse=True)
         return dict(sorted_features[:10])
 
     async def _get_historical_accuracy(self, state: PredictionSynthesizerState) -> float:
-        """Get historical accuracy for this prediction type."""
+        """Get historical accuracy for this prediction type.
+
+        #438: no store -> StoreNotConfigured (not silent 0.0 fabrication).
+        """
         if not self.context_store:
-            return 0.0
+            raise StoreNotConfigured("historical_accuracy: no context_store configured")
 
         return await self.context_store.get_accuracy(
             prediction_target=state.get("prediction_target", ""),
@@ -360,9 +414,14 @@ class ContextEnricherNode:
         )
 
     async def _get_trend(self, state: PredictionSynthesizerState) -> str:
-        """Determine trend direction."""
+        """Determine trend direction.
+
+        #438: no store -> StoreNotConfigured (not silent "stable" fabrication).
+        Honest-empty history (real store, no rows) still returns "stable" as
+        intended domain logic; that's matrix row 3 (empty-but-valid).
+        """
         if not self.context_store:
-            return "stable"
+            raise StoreNotConfigured("trend_direction: no context_store configured")
 
         history = await self.context_store.get_prediction_history(
             entity_id=state.get("entity_id", ""),
@@ -393,6 +452,19 @@ class ContextEnricherNode:
         feature freshness. This enables using the latest feature values
         for predictions rather than potentially stale input features.
 
+        #438 codex iter-0 HIGH-2: previously the entire body was wrapped in a
+        broad try/except that swallowed Feast failures and returned an empty
+        dict with a freeform warning. That made the per-field availability
+        flag falsely True even when get_online_features raised. The fix is:
+        let the Feast exception propagate so asyncio.gather sees it; the
+        availability flag flips to False and a per-field warning naming the
+        dependency + exception class surfaces. The opt-out branches (feature
+        flag, no store, no entity_id) still return honest-empty - those are
+        not failures.
+
+        Note: freshness check warnings remain in result["warnings"] for the
+        caller to merge. Stale features != failed Feast call.
+
         Args:
             state: Current prediction state with entity_id
 
@@ -400,50 +472,57 @@ class ContextEnricherNode:
             Dictionary with:
                 - features: Dict of online feature values
                 - freshness: Freshness check result (if available)
-                - warnings: List of any warnings (e.g., stale features)
+                - warnings: List of any freshness warnings (stale features)
+
+        Raises:
+            Exception: Any exception raised by feature_store.get_online_features
+                or feature_store.check_feature_freshness propagates to caller
+                (asyncio.gather catches via return_exceptions=True).
         """
+        # enable_online_features=False is an explicit opt-out: honest-empty,
+        # available=True (caller chose to disable Feast). Different from
+        # "no feature_store configured" or "no entity_id" which are absent-
+        # dependency cases -> StoreNotConfigured / unavailable.
         if not self.enable_online_features:
             return {"features": {}, "freshness": None, "warnings": []}
 
         if not self.feature_store:
-            return {"features": {}, "freshness": None, "warnings": []}
+            raise StoreNotConfigured("online_features: no feature_store configured")
 
         entity_id = state.get("entity_id")
         if not entity_id:
+            # No entity_id: cannot fetch features. Honest-empty (caller-state
+            # gap, not a Feast/feature_store failure).
             return {"features": {}, "freshness": None, "warnings": []}
 
         result: Dict[str, Any] = {"features": {}, "freshness": None, "warnings": []}
 
-        try:
-            # Check if feature_store supports online features (Feast)
-            if hasattr(self.feature_store, "get_online_features"):
-                features = await self.feature_store.get_online_features(
-                    entity_id=entity_id,
-                    feature_refs=None,  # Get all features from default view
+        # Check if feature_store supports online features (Feast)
+        # Any exception raised here PROPAGATES (#438 codex iter-0 HIGH-2).
+        if hasattr(self.feature_store, "get_online_features"):
+            features = await self.feature_store.get_online_features(
+                entity_id=entity_id,
+                feature_refs=None,  # Get all features from default view
+            )
+            result["features"] = features if features else {}
+            logger.debug(f"Retrieved {len(result['features'])} online features")
+
+        # Check feature freshness if supported - exceptions also propagate.
+        if hasattr(self.feature_store, "check_feature_freshness"):
+            freshness = await self.feature_store.check_feature_freshness(
+                entity_id=entity_id,
+                max_staleness_hours=self.max_staleness_hours,
+            )
+            result["freshness"] = freshness
+
+            # Add warning if features are stale (NOT a failure - stale-warning
+            # is honest data about successful-but-out-of-date features)
+            if freshness and not freshness.get("fresh", True):
+                stale_features = freshness.get("stale_features", [])
+                warnings_list: list[Any] = result["warnings"]
+                warnings_list.append(
+                    f"Stale features detected: {', '.join(stale_features[:5])}"
+                    + (f" (+{len(stale_features) - 5} more)" if len(stale_features) > 5 else "")
                 )
-                result["features"] = features if features else {}
-                logger.debug(f"Retrieved {len(result['features'])} online features")
-
-            # Check feature freshness if supported
-            if hasattr(self.feature_store, "check_feature_freshness"):
-                freshness = await self.feature_store.check_feature_freshness(
-                    entity_id=entity_id,
-                    max_staleness_hours=self.max_staleness_hours,
-                )
-                result["freshness"] = freshness
-
-                # Add warning if features are stale
-                if freshness and not freshness.get("fresh", True):
-                    stale_features = freshness.get("stale_features", [])
-                    warnings_list: list[Any] = result["warnings"]
-                    warnings_list.append(
-                        f"Stale features detected: {', '.join(stale_features[:5])}"
-                        + (f" (+{len(stale_features) - 5} more)" if len(stale_features) > 5 else "")
-                    )
-
-        except Exception as e:
-            logger.debug(f"Online feature retrieval failed for {entity_id}: {e}")
-            warnings_list2: list[Any] = result["warnings"]
-            warnings_list2.append(f"Online feature retrieval failed: {str(e)}")
 
         return result

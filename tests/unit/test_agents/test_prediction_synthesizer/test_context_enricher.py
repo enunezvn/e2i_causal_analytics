@@ -140,17 +140,43 @@ class TestContextEnricherNode:
 
     @pytest.mark.asyncio
     async def test_enrich_without_stores(self, state_with_ensemble):
-        """Test enrichment with no stores configured."""
+        """Test enrichment with no stores configured.
+
+        Updated for #438 (codex iter-1 MEDIUM): previously pinned the silent-
+        default `0.0` / `"stable"` fabrications and `status=completed` even
+        though all 5 dependencies were absent. Per the disambiguation matrix
+        + sentinel-on-failure rule, "no store configured" surfaces via
+        StoreNotConfigured -> availability=False + sentinel value. With all
+        5 deps absent the aggregate gate flips to `status="failed"` and
+        emits context_enrichment_total_failure.
+        """
         node = ContextEnricherNode()
 
         result = await node.execute(state_with_ensemble)
 
+        # No stores anywhere -> all 5 deps unavailable -> total failure
+        assert result["status"] == "failed"
         context = result["prediction_context"]
+        assert context is not None
+        # Sentinel values (NOT plausible-real 0.0 / "stable")
         assert context["similar_cases"] == []
         assert context["feature_importance"] == {}
-        assert context["historical_accuracy"] == 0.0
-        assert context["trend_direction"] == "stable"
-        assert result["status"] == "completed"
+        assert context["historical_accuracy"] is None
+        assert context["trend_direction"] is None
+        # All availability flags False
+        assert context["similar_cases_available"] is False
+        assert context["feature_importance_available"] is False
+        assert context["historical_accuracy_available"] is False
+        assert context["trend_direction_available"] is False
+        assert context["online_features_available"] is False
+        # Total-failure error code surfaced
+        errors = result.get("errors", []) or []
+        codes = [e.get("code") if isinstance(e, dict) else e for e in errors]
+        assert "context_enrichment_total_failure" in codes
+        # Per-field unavailability warnings name StoreNotConfigured
+        warnings = result.get("warnings", []) or []
+        assert any("similar_cases unavailable" in w for w in warnings)
+        assert any("StoreNotConfigured" in w for w in warnings)
 
     @pytest.mark.asyncio
     async def test_enrich_already_failed(self, state_with_ensemble):
@@ -193,12 +219,12 @@ class TestContextEnricherErrorHandling:
     async def test_store_error_graceful(self, state_with_ensemble):
         """Test graceful handling of store errors.
 
-        Updated for #438: previously this test pinned the silent-default
-        `historical_accuracy=0.0` value, but that's now LABEL-disguised-
-        as-REWIRE. With 3 context_store deps failing (similar / accuracy /
-        trend) but feature_store=None (returns {} non-exception) and
-        online_features (returns {} non-exception), aggregate is 3-of-5
-        failures -> status='degraded'. Sentinel values: None (not 0.0).
+        Updated for #438 (codex iter-0/iter-1): previously pinned silent-
+        default `historical_accuracy=0.0` (LABEL-disguised-as-REWIRE). With
+        context_store providing all 3 raising methods AND no feature_store
+        (importance + online_features raise StoreNotConfigured), all 5 deps
+        fail -> status='failed' with context_enrichment_total_failure error.
+        Sentinel values: None / [] / {} (not 0.0 / "stable").
         """
 
         class FailingStore:
@@ -215,9 +241,8 @@ class TestContextEnricherErrorHandling:
 
         result = await node.execute(state_with_ensemble)
 
-        # 3-of-5 failures -> aggregate gate flips to 'degraded' (still
-        # non-fatal: caller's request was served with honest availability flags)
-        assert result["status"] == "degraded"
+        # 5-of-5 failures -> aggregate gate -> 'failed' + total-failure error
+        assert result["status"] == "failed"
         context = result["prediction_context"]
         # Sentinel-shaped failure values (NOT plausible-real fabrication)
         assert context["similar_cases"] == []
@@ -226,21 +251,36 @@ class TestContextEnricherErrorHandling:
         assert context["historical_accuracy_available"] is False
         assert context["trend_direction"] is None
         assert context["trend_direction_available"] is False
-        # Per-field + aggregate warnings present
+        assert context["feature_importance"] == {}
+        assert context["feature_importance_available"] is False
+        assert context["online_features_available"] is False
+        # Per-field warnings present
         warnings = result.get("warnings", []) or []
         assert any("similar_cases unavailable" in w for w in warnings)
         assert any("historical_accuracy unavailable" in w for w in warnings)
         assert any("trend_direction unavailable" in w for w in warnings)
-        assert any("context_enrichment_degraded" in w for w in warnings)
+        assert any("feature_importance unavailable" in w for w in warnings)
+        assert any("online_features unavailable" in w for w in warnings)
+        # Total-failure error code
+        errors = result.get("errors", []) or []
+        codes = [e.get("code") if isinstance(e, dict) else e for e in errors]
+        assert "context_enrichment_total_failure" in codes
 
     @pytest.mark.asyncio
     async def test_partial_store_failure(self, state_with_ensemble):
         """Test handling of partial store failures.
 
-        Updated for #438: previously this test pinned the silent-default
-        `historical_accuracy=0.0`. With only the accuracy dep failing (1-of-5),
-        aggregate gate stays 'completed' but the sentinel value is None
-        (NOT 0.0) and availability flag is False.
+        Updated for #438 (codex iter-0/iter-1): previously this test pinned
+        the silent-default `historical_accuracy=0.0`. With this PartialFailStore
+        (context_store provided, accuracy fails; NO feature_store), the
+        failures are:
+          - similar_cases:        ok (returns 1 hit)
+          - feature_importance:   FAIL (StoreNotConfigured - no feature_store)
+          - historical_accuracy:  FAIL (RuntimeError raised by store)
+          - trend_direction:      ok (history returns empty -> "stable" honest)
+          - online_features:      FAIL (StoreNotConfigured - no feature_store)
+        That's 3-of-5 -> status='degraded' (NOT 'completed'). Sentinel values
+        on the failures: None / {} (NOT 0.0).
         """
 
         class PartialFailStore:
@@ -257,18 +297,26 @@ class TestContextEnricherErrorHandling:
 
         result = await node.execute(state_with_ensemble)
 
-        # 1-of-5 failures -> status='completed' (under degraded threshold)
-        assert result["status"] == "completed"
+        # 3-of-5 failures (importance + accuracy + online_features) -> degraded
+        assert result["status"] == "degraded"
         context = result["prediction_context"]
         # Working parts populated and marked available
         assert len(context["similar_cases"]) == 1
         assert context["similar_cases_available"] is True
-        # Failed part uses SENTINEL None (not plausible-real 0.0)
+        assert context["trend_direction_available"] is True
+        # Failed parts use SENTINEL values (not plausible-real fabrications)
         assert context["historical_accuracy"] is None
         assert context["historical_accuracy_available"] is False
+        assert context["feature_importance"] == {}
+        assert context["feature_importance_available"] is False
+        assert context["online_features_available"] is False
         warnings = result.get("warnings", []) or []
         assert any("historical_accuracy unavailable" in w for w in warnings)
         assert any("RuntimeError" in w for w in warnings)
+        assert any("feature_importance unavailable" in w for w in warnings)
+        assert any("online_features unavailable" in w for w in warnings)
+        assert any("StoreNotConfigured" in w for w in warnings)
+        assert any("context_enrichment_degraded" in w for w in warnings)
 
 
 class TestFeatureImportanceAggregation:
@@ -386,7 +434,10 @@ class TestFeastOnlineFeatureIntegration:
         node = ContextEnricherNode(feature_store=mock_feast_store)
         result = await node.execute(state_with_ensemble)
 
-        assert result["status"] == "completed"
+        # No context_store -> similar/accuracy/trend deps raise StoreNotConfigured
+        # (3-of-5 fails -> 'degraded'). The feast online-features assertions
+        # remain valid (online_features dep succeeded). #438 codex iter-1.
+        assert result["status"] == "degraded"
         assert "feast_online_features" in result
         assert result["feast_online_features"]["call_frequency"] == 25.0
 
@@ -458,7 +509,13 @@ class TestFeastOnlineFeatureIntegration:
 
     @pytest.mark.asyncio
     async def test_online_features_no_entity_id(self, state_with_ensemble):
-        """Test graceful handling when no entity_id in state."""
+        """Test graceful handling when no entity_id in state.
+
+        Updated for #438: no entity_id -> _get_online_features honest-empty
+        returns (NOT a Feast failure -> available=True). No context_store ->
+        similar/accuracy/trend raise StoreNotConfigured (3-of-5 -> degraded).
+        get_online_features is correctly not called because entity_id missing.
+        """
         from unittest.mock import AsyncMock, MagicMock
 
         mock_feast_store = MagicMock()
@@ -471,8 +528,8 @@ class TestFeastOnlineFeatureIntegration:
         node = ContextEnricherNode(feature_store=mock_feast_store)
         result = await node.execute(state_with_ensemble)
 
-        # Should complete without error
-        assert result["status"] == "completed"
+        # 3-of-5 deps fail (no context_store -> similar/accuracy/trend fail)
+        assert result["status"] == "degraded"
         # Online features not called without entity
         mock_feast_store.get_online_features.assert_not_called()
 
@@ -525,7 +582,20 @@ class TestFeastOnlineFeatureIntegration:
 
     @pytest.mark.asyncio
     async def test_online_features_error_graceful(self, state_with_ensemble):
-        """Test graceful handling of online feature errors."""
+        """Test graceful handling of online feature errors.
+
+        Updated for #438 (codex iter-1 HIGH-2): previously this pinned the
+        labeling-only fix where _get_online_features caught the Feast
+        exception internally and returned an empty payload with a freeform
+        warning - making online_features_available falsely True. Now Feast
+        exceptions propagate so the availability flag flips to False with
+        a per-field warning naming the exception class.
+
+        Surface: feature_store provided (importance ok, online_features
+        raises); no context_store -> similar / accuracy / trend all raise
+        StoreNotConfigured + online_features raises = 4-of-5 fails -> status
+        flips to 'degraded' (3-5 threshold).
+        """
         from unittest.mock import AsyncMock, MagicMock
 
         mock_feast_store = MagicMock()
@@ -537,10 +607,16 @@ class TestFeastOnlineFeatureIntegration:
         node = ContextEnricherNode(feature_store=mock_feast_store)
         result = await node.execute(state_with_ensemble)
 
-        # Should still complete (non-fatal)
-        assert result["status"] == "completed"
-        # Warning should be added
-        assert any("Online feature retrieval failed" in w for w in result.get("warnings", []))
+        # 4-of-5 fails -> degraded (no context_store + online_features raises)
+        assert result["status"] == "degraded"
+        context = result["prediction_context"]
+        # online_features now correctly marked unavailable (the codex iter-1
+        # HIGH-2 finding: previously this was falsely True)
+        assert context["online_features_available"] is False
+        # Per-field unavailability warning surfaces dependency + exception
+        warnings = result.get("warnings", []) or []
+        assert any("online_features unavailable" in w for w in warnings)
+        assert any("Feast unavailable" in w for w in warnings)
 
     @pytest.mark.asyncio
     async def test_custom_staleness_hours(self, state_with_ensemble):
@@ -571,14 +647,20 @@ class TestFeastOnlineFeatureIntegration:
     async def test_feature_store_without_online_features_method(
         self, mock_feature_store, state_with_ensemble
     ):
-        """Test with feature store that doesn't support online features."""
+        """Test with feature store that doesn't support online features.
+
+        Updated for #438: feature_store without get_online_features ->
+        _get_online_features honest-empty returns (NOT a failure, hasattr
+        check short-circuits). No context_store -> similar/accuracy/trend
+        raise StoreNotConfigured (3-of-5 -> degraded).
+        """
         state_with_ensemble["entity_id"] = "hcp_123"
 
         # mock_feature_store doesn't have get_online_features
         node = ContextEnricherNode(feature_store=mock_feature_store)
         result = await node.execute(state_with_ensemble)
 
-        # Should complete normally
-        assert result["status"] == "completed"
+        # 3-of-5 deps fail (no context_store)
+        assert result["status"] == "degraded"
         # No Feast metadata
         assert "feast_online_features" not in result
