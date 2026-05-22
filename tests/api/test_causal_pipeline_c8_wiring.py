@@ -274,10 +274,15 @@ class TestSequentialPipelineRealExecutionWithInlineData:
     """
 
     def test_sequential_runs_real_pipeline_when_data_provided(self, sequential_pipeline_request):
-        """Pipeline runs end-to-end when filters.estimation_data_records carries data.
+        """Pipeline runs end-to-end and returns 200 when data is provided.
 
         Note: pandas.DataFrame is not JSON-serializable; the API accepts records
         (list-of-dicts) and the route rehydrates them into a DataFrame.
+
+        Per codex iter-1 MEDIUM: this test requires 200, not 200-or-500. A
+        500 here would mean the pipeline fails internally during real
+        execution — a real bug, not an acceptable outcome. The 503-removed
+        invariant is enforced separately via the source-level pins above.
         """
         df = _make_small_estimation_dataframe()
         sequential_pipeline_request["filters"] = {
@@ -293,30 +298,41 @@ class TestSequentialPipelineRealExecutionWithInlineData:
             "/api/causal/pipeline/sequential",
             json=sequential_pipeline_request,
         )
-        # With data provided, the pipeline should EXECUTE — not short-circuit
-        # back to 503. We accept 200 (success/partial) or 500 (real exception
-        # surfaces). NEVER 503 when data was supplied.
-        assert response.status_code in (200, 500), (
-            f"With data provided, pipeline should execute (not short-circuit). "
+        assert response.status_code == 200, (
+            f"With data provided, pipeline must execute and return 200. "
             f"Got {response.status_code}: {response.text[:500]}"
         )
-        if response.status_code == 200:
-            data = response.json()
-            assert "stage_results" in data
-            # No is_demo=true labels in non-demo mode (would indicate a silent
-            # substitution that defeats the wiring).
-            for stage in data.get("stage_results", []):
-                assert not stage.get("additional_results", {}).get("is_demo"), (
-                    "C-8 regression: non-demo response carries is_demo=true label "
-                    "(silent substitution into demo path?)"
-                )
+        data = response.json()
+        assert "stage_results" in data
+        # At least one stage must report a real effect_estimate (proof that
+        # the wired executor produced real output, not a hardcoded value).
+        stage_results = data.get("stage_results", [])
+        assert stage_results, "non-empty stage_results required"
+        completed_with_effect = [
+            s
+            for s in stage_results
+            if s.get("status") == "completed" and isinstance(s.get("effect_estimate"), (int, float))
+        ]
+        assert completed_with_effect, (
+            f"At least one stage must produce a real effect_estimate; got: {stage_results}"
+        )
+        # No is_demo=true labels in non-demo mode (would indicate a silent
+        # substitution that defeats the wiring).
+        for stage in stage_results:
+            assert not stage.get("additional_results", {}).get("is_demo"), (
+                "C-8 regression: non-demo response carries is_demo=true label "
+                "(silent substitution into demo path?)"
+            )
 
 
 class TestParallelPipelineRealExecutionWithInlineData:
     """When the caller supplies a DataFrame, the wired parallel pipeline runs."""
 
     def test_parallel_runs_real_pipeline_when_data_provided(self, parallel_pipeline_request):
-        """Parallel pipeline runs end-to-end when filters.estimation_data_records is provided."""
+        """Parallel pipeline runs end-to-end and returns 200 when data is provided.
+
+        Per codex iter-1 MEDIUM: this test requires 200, not 200-or-500.
+        """
         df = _make_small_estimation_dataframe()
         parallel_pipeline_request["filters"] = {
             "estimation_data_records": df.to_dict(orient="records"),
@@ -326,18 +342,39 @@ class TestParallelPipelineRealExecutionWithInlineData:
             "/api/causal/pipeline/parallel",
             json=parallel_pipeline_request,
         )
-        assert response.status_code in (200, 500), (
-            f"With data provided, parallel pipeline should execute (not short-circuit). "
+        assert response.status_code == 200, (
+            f"With data provided, parallel pipeline must execute and return 200. "
             f"Got {response.status_code}: {response.text[:500]}"
         )
-        if response.status_code == 200:
-            data = response.json()
-            assert "library_results" in data
-            for lib_name, lib_result in data.get("library_results", {}).items():
-                assert not lib_result.get("is_demo"), (
-                    f"C-8 regression: non-demo parallel response on {lib_name} "
-                    "carries is_demo=true (silent substitution into demo path?)"
-                )
+        data = response.json()
+        assert "library_results" in data
+        # At least one library must succeed AND surface a real effect_estimate.
+        succeeded = data.get("libraries_succeeded") or []
+        assert succeeded, (
+            f"At least one library must succeed in parallel mode; "
+            f"got succeeded={succeeded}, failed={data.get('libraries_failed')}"
+        )
+        # Validate that each "succeeded" entry has real data (not a labeling-only
+        # response). Per codex iter-1 HIGH: a non-primary successful library
+        # must NOT return just {"library": <name>} — its real payload must be
+        # surfaced via state["<lib>_result"]["result"].
+        library_results = data.get("library_results", {})
+        for lib_name in succeeded:
+            payload = library_results.get(lib_name, {})
+            assert not payload.get("is_demo"), (
+                f"C-8 regression: non-demo parallel response on {lib_name} "
+                "carries is_demo=true (silent substitution into demo path?)"
+            )
+            # A real successful library must carry SOME real data beyond
+            # just its name (effect_estimate, ate, auuc, qini, or n_nodes/n_edges
+            # for networkx). If the payload is just {"library": lib_name} the
+            # adapter dropped real data on the floor.
+            payload_keys = set(payload.keys()) - {"library", "method"}
+            assert payload_keys, (
+                f"C-8 regression: succeeded library {lib_name} has empty payload "
+                f"(only contains {set(payload.keys())}); the adapter likely read "
+                "primary_result instead of state['<lib>_result']['result']."
+            )
 
 
 # =============================================================================

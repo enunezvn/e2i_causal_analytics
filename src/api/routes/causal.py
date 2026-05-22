@@ -65,8 +65,13 @@ from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 # dependencies (dowhy/econml/causalml/networkx availability), so importing
 # the orchestrator classes is cheap.
 from src.causal_engine.pipeline.parallel import ParallelPipeline
+from src.causal_engine.pipeline.router import RoutingDecision
 from src.causal_engine.pipeline.sequential import SequentialPipeline
-from src.causal_engine.pipeline.state import PipelineInput, PipelineOutput
+from src.causal_engine.pipeline.state import (
+    PipelineInput,
+    PipelineOutput,
+    PipelineState,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -761,6 +766,91 @@ def _build_pipeline_input_parallel(
     )
 
 
+class _SurfaceCSequentialPipeline(SequentialPipeline):
+    """SequentialPipeline subclass for Surface C wiring.
+
+    Provides two C-8-specific extensions on top of the base orchestrator:
+
+    1. **DataFrame injection into ``state["data_cache"]``** so the EconML
+       executor can read its canonical key (``state["data_cache"]["estimation_data"]``,
+       see ``executors/econml.py``). The base ``_create_initial_state`` does
+       not populate ``data_cache`` — Wave-1 EconML expected the caller to
+       populate it directly, and the Surface C route is that caller. DoWhy /
+       CausalML read from ``filters`` (also populated by the route).
+
+    2. **Per-library result capture** (``self.last_state``). The base
+       ``execute()`` returns ``PipelineOutput`` which only carries the
+       primary library's full payload. The C-8 response builder needs every
+       executed library's payload (to populate per-library stage results /
+       library_results without dropping data) — so we capture the final
+       state in ``_create_output`` for the adapter to read.
+    """
+
+    def __init__(
+        self,
+        *,
+        dataframe: Optional[Any] = None,
+        fail_fast: bool = False,
+    ) -> None:
+        super().__init__(fail_fast=fail_fast)
+        self._injection_dataframe = dataframe
+        self.last_state: Optional[PipelineState] = None
+
+    def _create_initial_state(
+        self,
+        input_data: PipelineInput,
+        routing_decision: RoutingDecision,
+    ) -> PipelineState:
+        state = super()._create_initial_state(input_data, routing_decision)
+        if self._injection_dataframe is not None:
+            # EconML executor reads state["data_cache"]["estimation_data"]
+            # (its Wave-1 contract); plumb it here so all four executors see
+            # the same DataFrame through their respective per-executor keys.
+            cast(Dict[str, Any], state)["data_cache"] = {
+                "estimation_data": self._injection_dataframe,
+            }
+        return state
+
+    def _create_output(self, state: PipelineState) -> PipelineOutput:
+        # Capture the final state so the adapter can read per-library results
+        # (state["<lib>_result"]) — PipelineOutput.primary_result only carries
+        # the primary library's payload, which would drop non-primary library
+        # data from the API response.
+        self.last_state = state
+        return super()._create_output(state)
+
+
+class _SurfaceCParallelPipeline(ParallelPipeline):
+    """ParallelPipeline subclass with the same C-8 extensions as the sequential variant."""
+
+    def __init__(
+        self,
+        *,
+        dataframe: Optional[Any] = None,
+        max_parallel: int = 4,
+        fail_fast: bool = False,
+    ) -> None:
+        super().__init__(max_parallel=max_parallel, fail_fast=fail_fast)
+        self._injection_dataframe = dataframe
+        self.last_state: Optional[PipelineState] = None
+
+    def _create_initial_state(
+        self,
+        input_data: PipelineInput,
+        routing_decision: RoutingDecision,
+    ) -> PipelineState:
+        state = super()._create_initial_state(input_data, routing_decision)
+        if self._injection_dataframe is not None:
+            cast(Dict[str, Any], state)["data_cache"] = {
+                "estimation_data": self._injection_dataframe,
+            }
+        return state
+
+    def _create_output(self, state: PipelineState) -> PipelineOutput:
+        self.last_state = state
+        return super()._create_output(state)
+
+
 async def _run_real_sequential_pipeline(
     pipeline_id: str,
     request: SequentialPipelineRequest,
@@ -773,26 +863,18 @@ async def _run_real_sequential_pipeline(
           raises ``HTTPException(503)`` — the honest signal that the data
           backend is absent for this request.
         - If at least one library executes successfully, returns a real
-          ``SequentialPipelineResponse`` constructed from
-          ``PipelineOutput`` + the per-library state (no hardcoded values).
+          ``SequentialPipelineResponse`` constructed from per-library state
+          (no hardcoded values).
     """
-    pipeline = SequentialPipeline(
+    dataframe = _resolve_pipeline_dataframe(request.filters)
+    pipeline = _SurfaceCSequentialPipeline(
+        dataframe=dataframe,
         fail_fast=request.stop_on_failure,
     )
     libraries_enabled = [stage.library.value for stage in request.stages]
     pipeline_input = _build_pipeline_input_sequential(request, libraries_enabled=libraries_enabled)
-
-    # Mirror the EconML executor convention (`data_cache.estimation_data`)
-    # by stashing the DataFrame in PipelineInput.filters above; the orchestrator
-    # passes filters through to state["filters"], and the C-6 data_resolver
-    # helper picks the DataFrame from whichever key is populated. EconML reads
-    # `state["data_cache"]["estimation_data"]` — we plumb it post-routing by
-    # subclassing the pipeline below if needed. For now C-6's helper handles
-    # the filters-side resolution, and the EconML executor will succeed when
-    # its dedicated key is present OR fall through to its existing error path.
     output = await pipeline.execute(pipeline_input)
-
-    return _sequential_output_to_response(pipeline_id, request, output)
+    return _sequential_output_to_response(pipeline_id, request, output, state=pipeline.last_state)
 
 
 async def _run_real_parallel_pipeline(
@@ -800,19 +882,23 @@ async def _run_real_parallel_pipeline(
     request: ParallelPipelineRequest,
 ) -> ParallelPipelineResponse:
     """Invoke the wired ParallelPipeline.execute() and adapt to the API response."""
-    pipeline = ParallelPipeline(
+    dataframe = _resolve_pipeline_dataframe(request.filters)
+    pipeline = _SurfaceCParallelPipeline(
+        dataframe=dataframe,
         max_parallel=len(request.libraries),
         fail_fast=False,
     )
     pipeline_input = _build_pipeline_input_parallel(request)
     output = await pipeline.execute(pipeline_input)
-    return _parallel_output_to_response(pipeline_id, request, output)
+    return _parallel_output_to_response(pipeline_id, request, output, state=pipeline.last_state)
 
 
 def _sequential_output_to_response(
     pipeline_id: str,
     request: SequentialPipelineRequest,
     output: PipelineOutput,
+    *,
+    state: Optional[PipelineState] = None,
 ) -> SequentialPipelineResponse:
     """Adapt PipelineOutput → SequentialPipelineResponse.
 
@@ -826,6 +912,12 @@ def _sequential_output_to_response(
         executors also populate ``state["errors"]`` with one entry per failure.
         So a library is "successful" only if it appears in ``libraries_used``
         AND is NOT named in ``errors``.
+
+    Note on per-library payload extraction:
+        ``PipelineOutput.primary_result`` only carries the primary library's
+        full payload. For non-primary stages we read from
+        ``state["<lib>_result"]["result"]`` (via ``_extract_library_payload``)
+        so we never silently drop a successful non-primary library's data.
     """
     libraries_used = list(output.get("libraries_used") or [])
     errors = output.get("errors") or []
@@ -839,6 +931,12 @@ def _sequential_output_to_response(
         # because no DataFrame was resolvable from state). Honest fail-close.
         raise HTTPException(status_code=503, detail=_NO_RESOLVABLE_DATA_DETAIL)
 
+    error_by_library: Dict[str, str] = {
+        str(err.get("library")): str(err.get("error") or "")
+        for err in errors
+        if isinstance(err, dict) and err.get("library")
+    }
+
     stage_results: List[PipelineStageResult] = []
     for idx, stage_config in enumerate(request.stages, 1):
         lib_value = stage_config.library.value
@@ -848,12 +946,9 @@ def _sequential_output_to_response(
                 stage_config_library=lib_value,
                 stage_config_estimator=stage_config.estimator,
                 output=output,
+                state=state,
                 successful_libraries=successful_libraries,
-                error_by_library={
-                    str(err.get("library")): str(err.get("error") or "")
-                    for err in errors
-                    if isinstance(err, dict) and err.get("library")
-                },
+                error_by_library=error_by_library,
             )
         )
 
@@ -880,12 +975,14 @@ def _parallel_output_to_response(
     pipeline_id: str,
     request: ParallelPipelineRequest,
     output: PipelineOutput,
+    *,
+    state: Optional[PipelineState] = None,
 ) -> ParallelPipelineResponse:
     """Adapt PipelineOutput → ParallelPipelineResponse.
 
     Fails closed with 503 when no library produced a successful result.
-    Same "successful library" derivation as the sequential adapter — see
-    its docstring for the rationale.
+    Same "successful library" derivation and per-library payload reading
+    as the sequential adapter — see its docstring for the rationale.
     """
     libraries_used = list(output.get("libraries_used") or [])
     errors = output.get("errors") or []
@@ -909,7 +1006,7 @@ def _parallel_output_to_response(
         lib_value = lib.value
         if lib_value in successful_libraries:
             succeeded.append(lib_value)
-            library_results[lib_value] = _extract_library_payload(lib_value, output)
+            library_results[lib_value] = _extract_library_payload(lib_value, output, state=state)
         elif lib_value in error_by_library:
             failed.append(lib_value)
             library_results[lib_value] = {"error": error_by_library[lib_value]}
@@ -953,14 +1050,15 @@ def _build_stage_result_from_output(
     stage_config_library: str,
     stage_config_estimator: Optional[str],
     output: PipelineOutput,
+    state: Optional[PipelineState],
     successful_libraries: List[str],
     error_by_library: Dict[str, str],
 ) -> PipelineStageResult:
-    """Build a PipelineStageResult for one stage from PipelineOutput.
+    """Build a PipelineStageResult for one stage.
 
-    Reads real values from ``output.primary_result`` when the stage's
-    library matches the primary library and the library was successful.
-    Otherwise marks the stage failed with a descriptive error.
+    Reads real values from per-library result captured in ``state`` (so
+    non-primary library payloads are not dropped). Marks the stage FAILED
+    with the engine's descriptive error when the library did not succeed.
     """
     if stage_config_library not in successful_libraries:
         return PipelineStageResult(
@@ -980,11 +1078,12 @@ def _build_stage_result_from_output(
             ),
         )
 
-    payload = _extract_library_payload(stage_config_library, output)
+    payload = _extract_library_payload(stage_config_library, output, state=state)
     effect = payload.get("effect_estimate")
     ci_lower = payload.get("ci_lower")
     ci_upper = payload.get("ci_upper")
     p_value = payload.get("p_value")
+    stage_latency = _get_stage_latency_ms(state, stage_config_library, output)
 
     return PipelineStageResult(
         stage_number=stage_number,
@@ -1000,64 +1099,145 @@ def _build_stage_result_from_output(
             for k, v in payload.items()
             if k not in {"effect_estimate", "ci_lower", "ci_upper", "p_value"}
         },
-        latency_ms=int(output.get("total_latency_ms") or 0),
+        latency_ms=stage_latency,
         error=None,
     )
 
 
-def _extract_library_payload(library: str, output: PipelineOutput) -> Dict[str, Any]:
-    """Extract a per-library payload from PipelineOutput.
+def _get_stage_latency_ms(
+    state: Optional[PipelineState], library: str, output: PipelineOutput
+) -> int:
+    """Per-stage latency from state.stage_latencies, falling back to total."""
+    if state is not None:
+        stage_latencies = cast(Dict[str, Any], state).get("stage_latencies") or {}
+        if isinstance(stage_latencies, dict):
+            v = stage_latencies.get(library)
+            if isinstance(v, (int, float)):
+                return int(v)
+    # Fallback: total latency (still real, just less granular)
+    return int(output.get("total_latency_ms") or 0)
 
-    The engine's PipelineOutput surfaces only the primary library's full
-    result in ``primary_result``. For non-primary libraries, return a compact
-    summary derived from the consensus fields when available, otherwise an
-    empty marker dict. This is intentionally minimal because Surface C
-    response models are flat; deeper per-library payloads belong to a
-    future enhancement (and would need the engine to surface per-library
-    results, currently aggregated into consensus).
+
+def _extract_library_payload(
+    library: str,
+    output: PipelineOutput,
+    *,
+    state: Optional[PipelineState] = None,
+) -> Dict[str, Any]:
+    """Extract a per-library payload for the API response.
+
+    Resolution order:
+        1. If ``state`` is provided AND ``state["<lib>_result"]`` is a
+           success-flagged ``LibraryExecutionResult``, read its ``result``
+           dict (the canonical per-library payload from the executor).
+        2. Else if ``library`` is the primary library, fall back to
+           ``output["primary_result"]``.
+        3. Else return ``{"library": library}`` (the engine surfaced no
+           per-library payload — this is a labeling honest minimum).
+
+    Reading state first matters in parallel mode: when EconML (primary)
+    fails and DoWhy (secondary) succeeds, ``output.primary_result`` is
+    EconML's empty/error payload — reading it for DoWhy would drop the
+    real DoWhy data. The per-library state fields preserve every executor's
+    result.
     """
-    primary_result = output.get("primary_result") or {}
+    result_payload = _read_library_result_from_state(library, state)
+    if result_payload is None:
+        # Fall back to primary_result when state is unavailable (defensive
+        # path; the C-8 route always captures state).
+        primary_lib = _output_primary_library(state, output)
+        if primary_lib == library:
+            result_payload = dict(output.get("primary_result") or {})
+        else:
+            result_payload = {}
+
     payload: Dict[str, Any] = {"library": library}
 
     if library == "dowhy":
-        effect = primary_result.get("causal_effect")
+        effect = result_payload.get("causal_effect")
         if isinstance(effect, (int, float)):
             payload["effect_estimate"] = float(effect)
-        method = primary_result.get("dowhy_method")
+        method = result_payload.get("dowhy_method")
         if isinstance(method, str):
             payload["method"] = method
+        estimand = result_payload.get("identified_estimand")
+        if isinstance(estimand, str):
+            payload["identified_estimand"] = estimand
     elif library == "econml":
-        ate = primary_result.get("ate") or primary_result.get("overall_ate")
+        ate = result_payload.get("ate") or result_payload.get("overall_ate")
         if isinstance(ate, (int, float)):
             payload["effect_estimate"] = float(ate)
-        ci_lower = primary_result.get("ate_ci_lower") or primary_result.get("ci_lower")
-        ci_upper = primary_result.get("ate_ci_upper") or primary_result.get("ci_upper")
+        ci_lower = result_payload.get("ate_ci_lower") or result_payload.get("ci_lower")
+        ci_upper = result_payload.get("ate_ci_upper") or result_payload.get("ci_upper")
         if isinstance(ci_lower, (int, float)):
             payload["ci_lower"] = float(ci_lower)
         if isinstance(ci_upper, (int, float)):
             payload["ci_upper"] = float(ci_upper)
+        method = result_payload.get("econml_method") or result_payload.get("estimator")
+        if isinstance(method, str):
+            payload["method"] = method
     elif library == "causalml":
-        ate = primary_result.get("ate")
+        ate = result_payload.get("ate")
         if isinstance(ate, (int, float)):
             payload["effect_estimate"] = float(ate)
-        auuc = primary_result.get("auuc")
+        auuc = result_payload.get("auuc")
         if isinstance(auuc, (int, float)):
             payload["auuc"] = float(auuc)
-        qini = primary_result.get("qini")
+        qini = result_payload.get("qini")
         if isinstance(qini, (int, float)):
             payload["qini"] = float(qini)
     elif library == "networkx":
-        n_nodes = primary_result.get("n_nodes")
+        n_nodes = result_payload.get("n_nodes")
         if isinstance(n_nodes, (int, float)):
             payload["n_nodes"] = int(n_nodes)
-        n_edges = primary_result.get("n_edges")
+        n_edges = result_payload.get("n_edges")
         if isinstance(n_edges, (int, float)):
             payload["n_edges"] = int(n_edges)
-        is_dag = primary_result.get("is_dag")
+        is_dag = result_payload.get("is_dag")
         if isinstance(is_dag, bool):
             payload["is_dag"] = is_dag
 
     return payload
+
+
+def _read_library_result_from_state(
+    library: str, state: Optional[PipelineState]
+) -> Optional[Dict[str, Any]]:
+    """Read ``state["<lib>_result"]["result"]`` when present AND success=True.
+
+    Returns ``None`` when state is absent OR the library has no successful
+    result. Per-library state keys: ``dowhy_result``, ``econml_result``,
+    ``causalml_result``, ``networkx_result``.
+    """
+    if state is None:
+        return None
+    state_dict = cast(Dict[str, Any], state)
+    key = f"{library}_result"
+    lib_result = state_dict.get(key)
+    if not isinstance(lib_result, dict):
+        return None
+    if not lib_result.get("success"):
+        return None
+    result = lib_result.get("result")
+    if isinstance(result, dict):
+        return dict(result)
+    return None
+
+
+def _output_primary_library(
+    state: Optional[PipelineState], output: PipelineOutput
+) -> Optional[str]:
+    """Best-effort primary library lookup from state or output."""
+    if state is not None:
+        config = cast(Dict[str, Any], state).get("config") or {}
+        if isinstance(config, dict):
+            primary = config.get("primary_library")
+            if isinstance(primary, str):
+                return primary
+    libraries_used = output.get("libraries_used") or []
+    if libraries_used:
+        return libraries_used[0]
+    return None
 
 
 def _demo_stage_placeholder(
