@@ -36,6 +36,46 @@ class ProfileGeneratorNode:
             logger.warning("Skipping profile generation - previous node failed")
             return state
 
+        # #437 fail-close: upstream cate_estimator did NOT set status=failed
+        # but produced no overall_ate. Refuse to synthesize executive summary /
+        # strategic interpretation from nothing; the silent-default ``or 0``
+        # in helpers previously rendered user-visible neutral content from a
+        # broken pipeline. Honest zero (``overall_ate == 0.0``) is distinct
+        # from absence (``None``) and the populated-zero path remains active.
+        if state.get("overall_ate") is None:
+            logger.error(
+                "Fail-closed: upstream cate_estimator produced no overall_ate",
+                extra={"node": "profile_generator"},
+            )
+            return cast(
+                HeterogeneousOptimizerState,
+                {
+                    **state,
+                    "errors": [
+                        {
+                            "node": "profile_generator",
+                            "error": (
+                                "upstream cate_estimator produced overall_ate=None "
+                                "without setting status=failed; refusing to "
+                                "synthesize executive summary or strategic "
+                                "interpretation without baseline ATE"
+                            ),
+                        }
+                    ],
+                    "status": "failed",
+                },
+            )
+
+        # #437 row 4: explicit warning on partial data (real ATE but empty
+        # cate_by_segment dict) — SKIPPED-not-substituted.
+        partial_data_warning: str | None = None
+        if not (state.get("cate_by_segment") or {}):
+            partial_data_warning = (
+                "cate_by_segment is empty; CATE plot data and segment grid "
+                "data will reflect zero segments"
+            )
+            logger.warning(partial_data_warning, extra={"node": "profile_generator"})
+
         try:
             # Generate CATE plot data
             cate_plot_data = self._generate_cate_plot_data(state)
@@ -72,18 +112,19 @@ class ProfileGeneratorNode:
                 generation_time=generation_time,
             )
 
-            return cast(
-                HeterogeneousOptimizerState,
-                {
-                    **state,
-                    "cate_plot_data": cate_plot_data,
-                    "segment_grid_data": segment_grid_data,
-                    "executive_summary": executive_summary,
-                    "key_insights": key_insights,
-                    "strategic_interpretation": strategic_interpretation,
-                    "status": "completed",
-                },
-            )
+            output: Dict[str, Any] = {
+                **state,
+                "cate_plot_data": cate_plot_data,
+                "segment_grid_data": segment_grid_data,
+                "executive_summary": executive_summary,
+                "key_insights": key_insights,
+                "strategic_interpretation": strategic_interpretation,
+                "status": "completed",
+            }
+            if partial_data_warning is not None:
+                existing_warnings = state.get("warnings") or []
+                output["warnings"] = [*existing_warnings, partial_data_warning]
+            return cast(HeterogeneousOptimizerState, output)
 
         except Exception as e:
             logger.error(
@@ -107,7 +148,10 @@ class ProfileGeneratorNode:
         """
 
         cate_by_segment = state.get("cate_by_segment") or {}
-        overall_ate = state.get("overall_ate") or 0
+        # overall_ate guaranteed not-None past the __call__ fail-close gate;
+        # explicit float() preserves honest 0.0 (avoids the ``or 0`` conflation).
+        raw_ate = state.get("overall_ate")
+        overall_ate: float = float(raw_ate) if raw_ate is not None else 0.0
 
         segments: List[Dict[str, Any]] = []
 
@@ -170,7 +214,9 @@ class ProfileGeneratorNode:
     def _generate_executive_summary(self, state: HeterogeneousOptimizerState) -> str:
         """Generate executive summary of heterogeneous optimization analysis."""
 
-        overall_ate: float = state.get("overall_ate") or 0
+        # overall_ate guaranteed not-None past the __call__ fail-close gate.
+        raw_ate = state.get("overall_ate")
+        overall_ate: float = float(raw_ate) if raw_ate is not None else 0.0
         heterogeneity_score: float = state.get("heterogeneity_score") or 0
         high_responders = state.get("high_responders") or []
         low_responders = state.get("low_responders") or []
@@ -223,7 +269,9 @@ class ProfileGeneratorNode:
 
         insights = []
 
-        overall_ate: float = state.get("overall_ate") or 0
+        # overall_ate guaranteed not-None past the __call__ fail-close gate.
+        raw_ate = state.get("overall_ate")
+        overall_ate: float = float(raw_ate) if raw_ate is not None else 0.0
         heterogeneity_score: float = state.get("heterogeneity_score") or 0
         high_responders = state.get("high_responders") or []
         low_responders = state.get("low_responders") or []
@@ -297,7 +345,9 @@ class ProfileGeneratorNode:
         Translates ATE and heterogeneity data into actionable business insights.
         Required by quality gates (v4.3) - semantic validation checks this field.
         """
-        overall_ate: float = state.get("overall_ate") or 0
+        # overall_ate guaranteed not-None past the __call__ fail-close gate.
+        raw_ate = state.get("overall_ate")
+        overall_ate: float = float(raw_ate) if raw_ate is not None else 0.0
         heterogeneity_score: float = state.get("heterogeneity_score") or 0
         high_responders = state.get("high_responders") or []
         low_responders = state.get("low_responders") or []
@@ -420,9 +470,12 @@ Tactical Recommendation:
                 if r.get("statistical_significance", False)
             )
 
+            # overall_ate guaranteed not-None past the __call__ fail-close gate;
+            # explicit cast preserves honest 0.0.
+            raw_ate = state.get("overall_ate")
             collector.update_cate_estimation(
                 signal=signal,
-                overall_ate=state.get("overall_ate") or 0.0,
+                overall_ate=float(raw_ate) if raw_ate is not None else 0.0,
                 heterogeneity_score=state.get("heterogeneity_score") or 0.0,
                 cate_segments_count=total_segments,
                 significant_cate_count=significant_count,
