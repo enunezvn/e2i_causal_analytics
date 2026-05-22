@@ -17,22 +17,18 @@ These tests are RED against the placeholder body in
 after the green-phase wrap lands.
 """
 
-from typing import Any, Dict, List
 from unittest.mock import patch
 
-import pytest
-
 import networkx as nx
+import pytest
 
 from src.causal_engine.pipeline.executors.networkx import NetworkXExecutor
 from src.causal_engine.pipeline.router import CausalLibrary
 from src.causal_engine.pipeline.state import (
-    LibraryExecutionResult,
     PipelineConfig,
     PipelineStage,
     PipelineState,
 )
-
 
 # =============================================================================
 # Fixtures
