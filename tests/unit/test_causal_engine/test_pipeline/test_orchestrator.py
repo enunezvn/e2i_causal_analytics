@@ -170,7 +170,16 @@ class TestNetworkXExecutor:
     async def test_execute_success_with_treatment_and_outcome(
         self, minimal_pipeline_state, minimal_pipeline_config
     ):
-        """Test execute returns successful result with treatment and outcome vars."""
+        """Test execute returns successful result with treatment and outcome vars.
+
+        Updated in phase C-5 of GH #354: confidence is now derived from graph
+        structure (1.0 well-formed DAG with treatment-outcome path and >=3 nodes;
+        0.5 limited; 0.0 cyclic), NOT the placeholder's hardcoded 0.8.
+        See .claude/plans/354_c5_networkx_design_spike.md §2.1 for rationale.
+        With treatment=marketing_spend + outcome=sales + 2 confounders, the
+        backdoor pattern produces a 4-node DAG with shortest path length 1
+        => confidence = 1.0.
+        """
         executor = NetworkXExecutor()
 
         result = await executor.execute(minimal_pipeline_state, minimal_pipeline_config)
@@ -179,7 +188,10 @@ class TestNetworkXExecutor:
         assert result["success"] is True
         assert result["latency_ms"] >= 0
         assert result["error"] is None
-        assert result["confidence"] == 0.8
+        # C-5: structural confidence — well-formed DAG with treatment-outcome path
+        assert result["confidence"] == 1.0
+        assert result["result"]["is_dag"] is True
+        assert result["result"]["has_treatment_outcome_path"] is True
         assert "nodes" in result["result"]
         assert "edges" in result["result"]
         # Should include treatment and outcome in nodes
