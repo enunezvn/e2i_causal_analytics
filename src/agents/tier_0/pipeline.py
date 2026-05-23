@@ -681,14 +681,49 @@ class MLFoundationPipeline:
 
         # Phase 1 data-sufficiency: propagate pipeline-level overrides into
         # scope_spec.sufficiency so the sufficiency_check node sees them via
-        # the standard resolver hierarchy. We merge (not overwrite) so a
-        # caller-provided scope_spec.sufficiency wins on a per-key basis.
+        # the standard resolver hierarchy.
+        #
+        # F3 (PR #462 hotfix): two bugs were nested here:
+        #   1) Typed-shape drop. When the caller passed a typed
+        #      `SufficiencyConfig` instance (e.g. via the new
+        #      ScopeSpecSchema.sufficiency field), the old `isinstance(dict)`
+        #      branch silently overwrote it with `{}` — losing every
+        #      user-supplied override (`target_mde`, `epv_floor`, etc.).
+        #      Fix: model_dump() the typed value before merging.
+        #   2) Wrong merge policy for `force_low_power_run`. The old code
+        #      let caller-supplied scope_spec.sufficiency.force_low_power_run
+        #      shadow the pipeline-level default. For a pharma-safety flag
+        #      with a deliberate safe-by-default value (D5), the
+        #      pipeline-level value MUST win — that's the whole point of
+        #      keeping the safety knob at the orchestrator level. Other
+        #      keys (`strictness_preset`, anything user-supplied like
+        #      `target_mde` / `epv_floor`) keep the original "user-wins"
+        #      semantics — those are calibration knobs, not safety gates.
         if self.config.force_low_power_run or self.config.sufficiency_strictness_preset:
-            existing = data_prep_input["scope_spec"].get("sufficiency") or {}
-            if not isinstance(existing, dict):
+            existing_raw = data_prep_input["scope_spec"].get("sufficiency") or {}
+            if isinstance(existing_raw, dict):
+                existing: Dict[str, Any] = dict(existing_raw)
+            elif hasattr(existing_raw, "model_dump"):
+                # Typed SufficiencyConfig (or pydantic-compat object). Dump to
+                # dict so we can merge per-key without losing user fields.
+                existing = existing_raw.model_dump(exclude_none=True)
+            else:
+                # Unknown shape — fall back to empty rather than crash, but
+                # log a warning so the drift is visible.
+                logger.warning(
+                    "scope_spec.sufficiency is neither dict nor pydantic "
+                    f"model (got {type(existing_raw).__name__}); ignoring."
+                )
                 existing = {}
-            if self.config.force_low_power_run and "force_low_power_run" not in existing:
+            # force_low_power_run: pipeline-level wins. Safety-critical flag
+            # (D5 of the rollout plan); caller cannot quietly weaken the
+            # pharma-safety default via a leftover scope_spec entry.
+            if self.config.force_low_power_run:
                 existing["force_low_power_run"] = True
+            # strictness_preset: caller-supplied wins; pipeline-level only
+            # fills the gap. A user that took the trouble to set
+            # `strict` (regulatory-submission) should not be silently
+            # downgraded to `moderate` by an orchestrator default.
             if self.config.sufficiency_strictness_preset and "strictness_preset" not in existing:
                 existing["strictness_preset"] = self.config.sufficiency_strictness_preset
             data_prep_input["scope_spec"]["sufficiency"] = existing

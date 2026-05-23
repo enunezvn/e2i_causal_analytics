@@ -457,3 +457,145 @@ async def test_build_scope_cost_matrix_absent_when_unset():
     scope_spec = result["scope_spec"]
     assert "cost_matrix" in scope_spec
     assert scope_spec["cost_matrix"] is None
+
+
+# ===========================================================================
+# PR #462 hotfix F4 / D1: scope-level sufficiency.target_mde + target_mde_source
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_d1_user_override_passes_through_with_user_override_source():
+    """F4 / D1: when the caller supplies sufficiency.target_mde explicitly,
+    scope_builder must preserve it AND stamp target_mde_source='user_override'.
+    No WARN is emitted (the user knows what they want)."""
+    state = {
+        "inferred_problem_type": "binary_classification",
+        "inferred_target_variable": "y",
+        "target_outcome": "Test",
+        "brand": "Test",
+        "sufficiency": {"target_mde": 0.07, "epv_floor": 10},
+    }
+    result = await build_scope_spec(state)
+    scope_spec = result["scope_spec"]
+    assert "sufficiency" in scope_spec
+    assert scope_spec["sufficiency"]["target_mde"] == 0.07
+    assert scope_spec["sufficiency"]["target_mde_source"] == "user_override"
+    # Other user fields preserved
+    assert scope_spec["sufficiency"]["epv_floor"] == 10
+
+
+@pytest.mark.asyncio
+async def test_d1_data_driven_binary_computes_from_baseline_rate():
+    """F4 / D1: when caller pre-supplies baseline_rate at scope time
+    (binary classification), scope_builder computes target_mde from data
+    and stamps source='computed_from_data'. No WARN."""
+    state = {
+        "inferred_problem_type": "binary_classification",
+        "inferred_target_variable": "y",
+        "target_outcome": "Test",
+        "brand": "Test",
+        "baseline_rate": 0.30,
+    }
+    result = await build_scope_spec(state)
+    scope_spec = result["scope_spec"]
+    assert scope_spec["sufficiency"]["target_mde_source"] == "computed_from_data"
+    # max(0.05 floor, 0.20 * 0.30) = max(0.05, 0.06) = 0.06
+    assert abs(scope_spec["sufficiency"]["target_mde"] - 0.06) < 1e-9
+
+
+@pytest.mark.asyncio
+async def test_d1_data_driven_regression_computes_from_sigma_outcome():
+    """F4 / D1: regression path — pre-supplied sigma_outcome → continuous
+    MDE = 0.5 * sigma, source='computed_from_data'."""
+    state = {
+        "inferred_problem_type": "regression",
+        "inferred_target_variable": "y",
+        "target_outcome": "Test",
+        "brand": "Test",
+        "sigma_outcome": 4.0,
+    }
+    result = await build_scope_spec(state)
+    scope_spec = result["scope_spec"]
+    assert scope_spec["sufficiency"]["target_mde_source"] == "computed_from_data"
+    assert scope_spec["sufficiency"]["target_mde"] == 2.0  # 0.5 * 4.0
+
+
+@pytest.mark.asyncio
+async def test_d1_literature_default_emits_loud_warning(caplog):
+    """F4 / D1: when neither user override nor scope-time data signal is
+    available AND the problem_type has a literature default, scope_builder
+    falls back to literature AND emits a LOUD warning. The warning surfaces
+    in BOTH the log AND the report's target_mde_source field (per audit
+    chain need)."""
+    import logging
+
+    state = {
+        "inferred_problem_type": "binary_classification",
+        "inferred_target_variable": "y",
+        "target_outcome": "Test",
+        "brand": "Test",
+        # No baseline_rate, no user override → literature fallback.
+    }
+    with caplog.at_level(logging.WARNING):
+        result = await build_scope_spec(state)
+    scope_spec = result["scope_spec"]
+    assert scope_spec["sufficiency"]["target_mde_source"] == "literature_default"
+    # WARN fires (audit signal in BOTH the log AND the field).
+    assert any("literature default" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_d1_user_override_does_not_emit_warning(caplog):
+    """F4 / D1: user-supplied target_mde → NO warning. Avoids warning
+    fatigue (the prior implementation warned on every defaulted MDE
+    in the DataPreparer instead of differentiating)."""
+    import logging
+
+    state = {
+        "inferred_problem_type": "binary_classification",
+        "inferred_target_variable": "y",
+        "target_outcome": "Test",
+        "brand": "Test",
+        "sufficiency": {"target_mde": 0.10},
+    }
+    with caplog.at_level(logging.WARNING):
+        await build_scope_spec(state)
+    # No literature-default warning.
+    assert not any("literature default" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_d1_data_driven_does_not_emit_warning(caplog):
+    """F4 / D1: data-driven default → NO warning. The audit signal is
+    in the target_mde_source field, not a noisy log."""
+    import logging
+
+    state = {
+        "inferred_problem_type": "binary_classification",
+        "inferred_target_variable": "y",
+        "target_outcome": "Test",
+        "brand": "Test",
+        "baseline_rate": 0.30,
+    }
+    with caplog.at_level(logging.WARNING):
+        await build_scope_spec(state)
+    assert not any("literature default" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_d1_unset_for_multiclass_when_no_user_override():
+    """F4 / D1: multiclass + time_series have no literature MDE convention
+    at scope-time; scope_builder leaves `sufficiency` absent (or empty user
+    payload). The DataPreparer's runtime resolver still has its chance
+    once data is loaded."""
+    state = {
+        "inferred_problem_type": "multiclass_classification",
+        "inferred_target_variable": "y",
+        "target_outcome": "Test",
+        "brand": "Test",
+    }
+    result = await build_scope_spec(state)
+    scope_spec = result["scope_spec"]
+    # No sufficiency field at all (user provided nothing + no scope-time signal).
+    assert "sufficiency" not in scope_spec

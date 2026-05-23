@@ -3,9 +3,18 @@
 This module builds the complete ScopeSpec from business requirements.
 """
 
+import logging
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional, cast
+
+from src.utils.sufficiency_defaults import (
+    DEFAULT_MDE_BINARY_ABSOLUTE_FLOOR,
+    DEFAULT_MDE_BINARY_RELATIVE,
+    DEFAULT_MDE_CONTINUOUS_COHENS_D,
+)
+
+logger = logging.getLogger(__name__)
 
 
 def _normalise_prediction_timestamp(value: Any) -> Optional[str]:
@@ -49,6 +58,123 @@ def _normalise_prediction_timestamp(value: Any) -> Optional[str]:
         f"prediction_timestamp must be datetime, pd.Timestamp, ISO-8601 str, "
         f"or None; got {type(value).__name__}: {value!r}"
     )
+
+
+def _build_scope_sufficiency(
+    state: Dict[str, Any],
+    *,
+    problem_type: str,
+) -> Optional[Dict[str, Any]]:
+    """Build the `scope_spec.sufficiency` payload — F4 / D1 implementation.
+
+    D1 of the data-sufficiency rollout plan
+    (`docs/superpowers/plans/2026-05-22-data-sufficiency-diagnostics-rollout.md`)
+    requires `scope_spec.target_mde` to be "optional with a data-driven default
+    + LOUD WARNING when defaulted". Before this fix, scope_builder didn't set
+    `sufficiency` at all — every defaulted MDE looked identical to a user-
+    supplied one in the audit chain, and the "loud warning" only fired in
+    DataPreparer (downstream of where the decision was made) for ALL
+    data-driven defaults (warning fatigue).
+
+    Resolution hierarchy (mirrors the runtime resolver):
+
+    1. ``state['sufficiency']['target_mde']`` (user override) →
+       ``target_mde_source='user_override'``.
+    2. Data-driven default — for binary classification at scope time we know
+       ``state['baseline_rate']`` if the caller / cohort runner pre-set it;
+       for continuous we know ``state['sigma_outcome']`` if pre-set.
+       Otherwise this branch defers — the DataPreparer's resolver will
+       compute from data once train_df is loaded → ``computed_from_data``.
+    3. Literature default (`DEFAULT_MDE_*` from sufficiency_defaults) →
+       ``target_mde_source='literature_default'`` with a LOUD WARN.
+
+    We ONLY warn on case (3). Cases (1) and (2) carry their source through
+    the audit chain via `target_mde_source`; they don't need a log warning
+    because the source field IS the audit signal (no archaeology required).
+
+    For causal_inference: defer to the DataPreparer because sigma estimates
+    aren't available until the data is loaded; pass through any user override
+    only.
+
+    Returns:
+        A dict with the populated `sufficiency` fields, or None if neither
+        user override nor scope-time defaults apply. The caller writes this
+        into `scope_spec['sufficiency']`.
+    """
+    user_suff = state.get("sufficiency") or {}
+    if user_suff and not isinstance(user_suff, dict):
+        # Pydantic SufficiencyConfig — normalize to dict so we can blend
+        # without losing fields.
+        if hasattr(user_suff, "model_dump"):
+            user_suff = user_suff.model_dump(exclude_none=True)
+        else:
+            logger.warning(
+                "state['sufficiency'] has unknown type %s; ignoring.",
+                type(user_suff).__name__,
+            )
+            user_suff = {}
+
+    user_mde = user_suff.get("target_mde")
+    # User override path (1). Just stamp the source and pass through.
+    if user_mde is not None:
+        merged: Dict[str, Any] = dict(user_suff)
+        merged["target_mde_source"] = "user_override"
+        return merged
+
+    # Data-driven path (2) — only kicks in when scope-time signals exist.
+    # The runtime resolver in DataPreparer also computes this from train_df
+    # if scope-time signals are absent; we mark `computed_from_data` here
+    # only when we actually computed the value at scope-time, otherwise we
+    # leave target_mde unset and let the resolver fill in downstream.
+    if problem_type == "binary_classification":
+        baseline_rate = state.get("baseline_rate")
+        if isinstance(baseline_rate, (int, float)) and 0.0 < baseline_rate < 1.0:
+            relative_mde = DEFAULT_MDE_BINARY_RELATIVE * float(baseline_rate)
+            computed_mde = max(DEFAULT_MDE_BINARY_ABSOLUTE_FLOOR, relative_mde)
+            merged = dict(user_suff)
+            merged["target_mde"] = computed_mde
+            merged["target_mde_source"] = "computed_from_data"
+            return merged
+    elif problem_type == "regression":
+        sigma_outcome = state.get("sigma_outcome")
+        if isinstance(sigma_outcome, (int, float)) and sigma_outcome > 0:
+            computed_mde_continuous = 0.5 * float(sigma_outcome)  # Cohen medium
+            merged = dict(user_suff)
+            merged["target_mde"] = computed_mde_continuous
+            merged["target_mde_source"] = "computed_from_data"
+            return merged
+
+    # Literature default path (3) — only used when we can't compute from
+    # data AND the runtime resolver also won't be able to (no train_df).
+    # For binary/continuous we let the runtime resolver handle this so a
+    # late-arriving signal still routes through `computed_from_data`. We
+    # only set a scope-time literature default for the rare case where the
+    # caller is constructing a fully-detached scope_spec with no downstream
+    # data preparer (e.g. config-only validation). Per the rollout plan, the
+    # WARN fires here so audit logs surface "no data, no override → fell
+    # through to literature".
+    if problem_type in ("binary_classification", "causal_inference"):
+        literature_mde = DEFAULT_MDE_BINARY_ABSOLUTE_FLOOR
+    elif problem_type == "regression":
+        literature_mde = DEFAULT_MDE_CONTINUOUS_COHENS_D
+    else:
+        # multiclass / time_series — no literature MDE convention applies
+        # at scope-time. Return user_suff unchanged (may be empty).
+        return dict(user_suff) if user_suff else None
+
+    merged = dict(user_suff)
+    merged["target_mde"] = literature_mde
+    merged["target_mde_source"] = "literature_default"
+    logger.warning(
+        "scope_spec.sufficiency.target_mde not specified and no scope-time "
+        "data signal (baseline_rate / sigma_outcome) available; falling back "
+        "to literature default %.3f for problem_type=%s. Set "
+        "scope_spec.sufficiency.target_mde or pre-compute baseline_rate / "
+        "sigma_outcome to silence this warning.",
+        literature_mde,
+        problem_type,
+    )
+    return merged
 
 
 _COST_MATRIX_KEYS = ("tp", "fp", "fn", "tn")
@@ -150,6 +276,13 @@ async def build_scope_spec(state: Dict[str, Any]) -> Dict[str, Any]:
     # assigns to each confusion-matrix cell. None means "skip the metric".
     cost_matrix = _validate_cost_matrix(state.get("cost_matrix"))
 
+    # F4 / D1 (PR #462 hotfix): build scope-level `sufficiency` payload so
+    # the audit chain records the target_mde provenance at the scope
+    # boundary, not just at the DataPreparer runtime resolver. Per the
+    # rollout plan a data-driven default is preferred; user override always
+    # wins; literature fallback emits a LOUD WARN.
+    sufficiency = _build_scope_sufficiency(state, problem_type=problem_type)
+
     # Build complete ScopeSpec.
     # Naming guard (Block 1B-M6): the two ``prediction_*`` fields below are
     # NOT redundant — ``prediction_horizon_days`` is a *duration* (e.g. "30
@@ -181,6 +314,13 @@ async def build_scope_spec(state: Dict[str, Any]) -> Dict[str, Any]:
         "created_by": "scope_definer",
         "created_at": datetime.now(tz=None).isoformat(),
     }
+
+    # F4 / D1: only attach when we actually produced a payload (user override
+    # OR scope-time data signal OR literature fallback). Empty/None case
+    # leaves the field absent — the DataPreparer's runtime resolver still
+    # has a chance to compute from data once train_df is loaded.
+    if sufficiency is not None:
+        scope_spec["sufficiency"] = sufficiency
 
     return {
         "experiment_id": experiment_id,

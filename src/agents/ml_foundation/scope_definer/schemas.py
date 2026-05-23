@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 from pydantic import ConfigDict
 
 from src.agents.ml_foundation._pydantic_utils import BaseAgentSchema
+from src.utils.sufficiency_schemas import SufficiencyConfig
 
 
 class ScopeSpecSchema(BaseAgentSchema):
@@ -183,6 +184,18 @@ class ScopeSpecSchema(BaseAgentSchema):
 
     # Feast registrar (data_preparer/nodes/feast_registrar.py:90-93)
     entity_key: Optional[str] = None
+
+    # F1 (PR #462 hotfix): data-sufficiency overrides nested under
+    # `scope_spec.sufficiency`. Read by `data_preparer/nodes/sufficiency_check`
+    # and written by `pipeline.py` + `scope_builder`. Before this field was
+    # declared, `BaseAgentSchema`'s inherited `extra="ignore"` silently dropped
+    # the entire `sufficiency` payload at pydantic coercion time — every
+    # user-supplied `target_mde` / `force_low_power_run` / `epv_floor` override
+    # vanished without a trace whenever any code path ran a typed scope_spec
+    # through pydantic validation. Declaring the field as `SufficiencyConfig`
+    # routes the dict through the typed model (which carries field-level
+    # validation: `target_mde` must be in (0, 1), `epv_floor >= 1`, etc.).
+    sufficiency: Optional[SufficiencyConfig] = None
 
 
 class SuccessCriteriaSchema(BaseAgentSchema):

@@ -19,7 +19,12 @@ ProblemType = Literal[
     "time_series",
 ]
 StrictnessPreset = Literal["conservative", "moderate", "strict"]
-SufficiencyVerdict = Literal["PASS", "SOFT_FAIL", "HARD_FAIL", "INCONCLUSIVE"]
+# F11 (PR #462 hotfix): SKIPPED is a distinct, audit-visible verdict for the
+# three deliberate-skip cases the pre-flight check has (synthetic QC sample
+# via scope_spec.use_sample_data, missing train_df, unknown problem_type).
+# Before this fix all three returned an empty {} update, collapsing skip vs.
+# silent failure into the same audit signal.
+SufficiencyVerdict = Literal["PASS", "SOFT_FAIL", "HARD_FAIL", "INCONCLUSIVE", "SKIPPED"]
 ThresholdSource = Literal["user_override", "computed_from_data", "literature_default"]
 
 
@@ -36,7 +41,13 @@ class SufficiencyConfig(BaseModel):
     epv_floor: int | None = Field(default=None, ge=1)
     absolute_floor: int | None = Field(default=None, ge=1)
     observational_inflation: float | None = Field(default=None, gt=0.0)
-    target_mde: float | None = Field(default=None)
+    # F5 (PR #462 hotfix): tightened from `Field(default=None)` (which accepted
+    # NaN / negative / >=1 values silently) to the same (0, 1) open interval
+    # baseline_rate uses. The MDE is conceptually an absolute risk difference
+    # (binary) or Cohen's d (continuous) — both must be positive and less than
+    # 1 for sufficiency math to be meaningful. The resolver also rejects NaN
+    # via `math.isnan` and falls back to literature_default with a warning.
+    target_mde: float | None = Field(default=None, gt=0.0, lt=1.0)
     baseline_rate: float | None = Field(default=None, gt=0.0, lt=1.0)
     event_rate: float | None = Field(default=None, gt=0.0, le=1.0)
     power_target: float | None = Field(default=None, gt=0.0, lt=1.0)
@@ -52,6 +63,25 @@ class SufficiencyConfig(BaseModel):
 
     # Convenience preset
     strictness_preset: StrictnessPreset | None = None
+
+    # F2 (PR #462 hotfix): D5 of the rollout plan declared this flag (default
+    # False — safe-by-default for pharma regulatory contexts) and pipeline.py
+    # writes it into scope_spec.sufficiency, but the schema didn't declare it.
+    # With `extra="forbid"`, any typed caller constructing
+    # `SufficiencyConfig(force_low_power_run=True)` got a ValidationError —
+    # the override only worked when the caller wrote a raw dict. Declaring
+    # the field closes the typed-caller path. The sufficiency_check node
+    # honors this flag for causal_inference SOFT_FAIL ONLY (HARD_FAIL is
+    # non-overridable; see F8 in the hotfix brief).
+    force_low_power_run: bool = False
+
+    # F4 (PR #462 hotfix): D1 of the rollout plan requires the producer
+    # (scope_builder) to set `target_mde` AND `target_mde_source` so the audit
+    # chain can answer "did the user set this, did we compute it from data, or
+    # did we fall back to literature?" without grep archaeology. Without this
+    # field, every defaulted target_mde looked identical to a user-supplied one
+    # and the "loud warning when defaulted" requirement was unsatisfiable.
+    target_mde_source: ThresholdSource | None = None
 
 
 class ThresholdResolution(BaseModel):
@@ -98,12 +128,33 @@ class DataSufficiencyReport(BaseModel):
     # Reverse calc (Strategy A)
     detectable_mde_at_current_n: float | None = None
     detectable_mde_units: str | None = None
+    # F14 (PR #462 hotfix): for binary outcomes with very small n + small
+    # baseline_rate, the asymptotic normal-approximation MDE formula can
+    # return values larger than baseline_rate (e.g. 0.61 vs 0.05). That
+    # number is statistically nonsensical — we cannot "detect" a 0.61
+    # absolute risk difference when the baseline event rate is only 0.05.
+    # The node clamps to `min(baseline_rate, 1 - baseline_rate)` and surfaces
+    # the clamp via this flag so the report consumer can tell "honest MDE"
+    # from "clamped MDE; n is below the asymptotic-regime threshold and the
+    # actual answer is 'cannot detect anything meaningful'".
+    detectable_mde_at_n_capped: bool | None = None
 
     # Sensitivity grid (Strategy C)
     sensitivity_grid: dict[str, Any] | None = None
 
     # MDE assumption (Strategy B)
     mde_assumption_used: dict[str, Any] | None = None
+
+    # F7 (PR #462 hotfix): D5 override audit. When `force_low_power_run` flips
+    # a causal SOFT_FAIL from blocking to warning, the report previously
+    # reported the post-override verdict as if it were the genuine answer —
+    # auditors had no way to detect the bypass. These fields preserve the
+    # pre-override verdict alongside the override-applied flag so the audit
+    # chain can answer "did this run actually meet the gate, or was the gate
+    # bypassed?" The verdict_rationale field also gets a
+    # ` [OVERRIDDEN via force_low_power_run]` suffix in that branch.
+    override_applied: bool = False
+    original_verdict: SufficiencyVerdict | None = None
 
     # Learning-curve fields (populated by Phase 2 only)
     learning_curve: list[tuple[int, float, float]] | None = None

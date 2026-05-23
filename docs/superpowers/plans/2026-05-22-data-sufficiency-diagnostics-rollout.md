@@ -31,8 +31,8 @@ All magic numbers flow through `src/utils/sufficiency_resolver.resolve_*` with t
 | D2 | `PowerAnalysisNode` 500-default error fallback — replaced with explicit raise + failure flag (anti-mocking discipline) | DONE in PR #460 |
 | D3 | `_calculate_minimum_samples()` — kept as advisory `_initial_min_samples_estimate()` (rename + backward-compat alias) | DONE in PR #462 |
 | D4 | Refactor scope — extract `PowerAnalysisNode` pure methods to `power_analysis_lib`; Tier 3 thin adapter | DONE in PR #460 |
-| D5 | `force_low_power_run` default — `False` (safe-by-default; pharma regulatory context) | DONE in PR #462 |
-| D6 | Pre-flight always runs — no skip flag (cheap formula evaluation; exercises invariants) | DONE in PR #462 |
+| D5 | `force_low_power_run` default — `False` (safe-by-default; pharma regulatory context). **Scope: applies to causal_inference SOFT_FAIL ONLY; HARD_FAIL is non-overridable.** Hotfix F8 clarified semantics: HARD_FAIL means the data is structurally insufficient (n < absolute_floor; EPV < 2; zero events) and accepting a single-flag bypass is medically dangerous in pharma regulatory contexts. The flag flips a causal SOFT_FAIL from blocking→warning AND surfaces `override_applied=True` + `original_verdict='SOFT_FAIL'` on the report so regulators/auditors can detect the bypass (F7). Predictive SOFT_FAIL warns by default regardless of this flag. | DONE in PR #462 + PR #462 hotfix |
+| D6 | Pre-flight always runs — no skip flag (cheap formula evaluation; exercises invariants). **SKIPPED verdict added per hotfix F10/F11** for the three deliberate-skip cases (synthetic QC sample via `use_sample_data`, missing train_df, unknown problem_type) — each emits a SKIPPED-verdict report with a distinct rationale so audit chain consumers can tell them apart. The gate does NOT block on SKIPPED. INCONCLUSIVE (separate verdict) is reserved for the case where the diagnostic itself crashed; that path DOES block (F6). | DONE in PR #462 + PR #462 hotfix |
 
 ## PR sequence
 
@@ -69,14 +69,16 @@ Foundational utility modules + Tier 3 PowerAnalysisNode refactor. Zero behavior 
 - `src/agents/tier_0/handoff_protocols.py` — enforce the declared-but-never-checked `minimum_samples > 0` rule (latent-bug fix; classified REWIRE per CLAUDE.md REASON-BEFORE-RULES)
 - `src/agents/tier_0/pipeline.py` — `PipelineConfig.force_low_power_run` + `sufficiency_strictness_preset`; `PipelineResult.sufficiency_report`; inject pipeline-level overrides into `scope_spec.sufficiency`
 
-**Verdict semantics:**
+**Verdict semantics (post hotfix; see PR #462 hotfix brief F6-F11):**
 
 | Verdict | Trigger | Effect |
 |---|---|---|
-| HARD_FAIL | `n < absolute_floor` or `EPV < 2` | Appends to `blocking_issues` → halts at `finalize_output` |
-| SOFT_FAIL (causal) | `n < recommended_n` and not `force_low_power_run` | Blocks (regulatory safety) |
+| HARD_FAIL | `n < absolute_floor` or `EPV < 2` or zero positive events (F12) | Appends to `blocking_issues` → halts at `finalize_output`. **Non-overridable** (F8). |
+| SOFT_FAIL (causal) | `n < recommended_n` and not `force_low_power_run` | Blocks (regulatory safety). Override sets `override_applied=True` + `original_verdict='SOFT_FAIL'` on report (F7). |
 | SOFT_FAIL (predictive) | `n < recommended_n` | Appends to `power_warnings` only — proceeds |
 | PASS | `n >= recommended_n` | Report attached, no gating action |
+| SKIPPED (F10/F11) | `use_sample_data=True` OR `train_df` missing OR unknown problem_type | Report attached with distinct rationale; gate does NOT block |
+| INCONCLUSIVE (F6) | Diagnostic itself crashed (uncaught exception) | Constructs valid report + appends blocking entry + sets `qc_status='failed'` → halts |
 
 **Report contents:** verdict + verdict_rationale + resolved_thresholds (each with `source` + `citation`) + detectable_mde_at_current_n (Strategy A) + sensitivity_grid across 3 candidate MDEs (Strategy C) + mde_assumption_used (Strategy B) + human_readable_summary.
 
@@ -131,6 +133,7 @@ class SufficiencyConfig(BaseModel):
     epv_floor: int | None = None
     absolute_floor: int | None = None
     observational_inflation: float | None = None
+    # Hotfix F5: tightened to gt=0, lt=1 (was unbounded → accepted NaN/negative/>=1)
     target_mde: float | None = None
     baseline_rate: float | None = None
     event_rate: float | None = None
@@ -139,7 +142,13 @@ class SufficiencyConfig(BaseModel):
     seasonal_period: int | None = None
     cv_outcome: float | None = None
     strictness_preset: Literal["conservative", "moderate", "strict"] | None = None
-    force_low_power_run: bool | None = None
+    # Hotfix F2: was missing from the schema; typed callers got ValidationError
+    # under extra="forbid". Default False (safe-by-default; D5).
+    force_low_power_run: bool = False
+    # Hotfix F4 / D1: producer (scope_builder) stamps the source so the audit
+    # chain records target_mde provenance at the scope boundary.
+    target_mde_source: Literal["user_override", "computed_from_data",
+                               "literature_default"] | None = None
 ```
 
 Pipeline-level overrides via `PipelineConfig.force_low_power_run` and `PipelineConfig.sufficiency_strictness_preset` propagate into `scope_spec.sufficiency` at pipeline init time (per-key caller values win).

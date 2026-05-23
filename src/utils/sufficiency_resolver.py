@@ -12,6 +12,7 @@ threshold flows through this module.
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any
 
 from src.utils.sufficiency_defaults import (
@@ -265,12 +266,34 @@ def resolve_target_mde(
     """
     override = _user_override(user_config, "target_mde")
     if override is not None:
-        return ThresholdResolution(
-            name="target_mde",
-            value=float(override),
-            source="user_override",
-            citation="scope_spec.sufficiency.target_mde",
-            inputs={"outcome_type": outcome_type},
+        # F5 (PR #462 hotfix): validate the override BEFORE accepting it.
+        # `SufficiencyConfig.target_mde` now carries `gt=0, lt=1` so a typed
+        # caller's bad value fails at SufficiencyConfig construction time.
+        # But this resolver also runs on raw `user_config` dicts (the
+        # sufficiency_check node extracts via model_dump and intermediate
+        # call sites may pass dicts that never round-trip through the schema),
+        # so the resolver needs a second-line guard. We accept (0, 1) and
+        # reject NaN/inf — falling back to the standard literature default
+        # with a WARN, NOT silently passing through a corrupted value as we
+        # used to.
+        try:
+            override_float = float(override)
+        except (TypeError, ValueError):
+            override_float = math.nan
+        valid_override = math.isfinite(override_float) and 0.0 < override_float < 1.0
+        if valid_override:
+            return ThresholdResolution(
+                name="target_mde",
+                value=override_float,
+                source="user_override",
+                citation="scope_spec.sufficiency.target_mde",
+                inputs={"outcome_type": outcome_type},
+            )
+        logger.warning(
+            "scope_spec.sufficiency.target_mde=%r is invalid "
+            "(must be in (0, 1) and finite); falling back to "
+            "data-driven / literature default.",
+            override,
         )
 
     if outcome_type == "continuous":

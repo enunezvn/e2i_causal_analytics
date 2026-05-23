@@ -180,6 +180,41 @@ class TestResolveTargetMde:
         result = resolve_target_mde(user_config=None, outcome_type="time_to_event")
         assert result.source == "literature_default"
 
+    # F5 (PR #462 hotfix): invalid target_mde overrides must fall back to
+    # the data-driven / literature default with a WARN, not silently pass
+    # through. SufficiencyConfig also rejects them at construction time
+    # (see test_sufficiency_schemas.py::TestF5TargetMdeValidation), but
+    # the resolver also runs on raw dicts that may not have gone through
+    # schema validation.
+    import math as _math
+
+    import pytest
+
+    @pytest.mark.parametrize(
+        "bad_override",
+        [-0.5, -0.01, 0.0, 1.0, 1.5, 5.0, _math.nan, _math.inf, -_math.inf, "not_a_number"],
+    )
+    def test_invalid_override_falls_back_to_default(self, bad_override):
+        result = resolve_target_mde(
+            user_config={"target_mde": bad_override},
+            outcome_type="binary",
+            baseline_rate=0.30,
+        )
+        assert result.source != "user_override", (
+            f"resolver accepted invalid override {bad_override!r} as user_override; "
+            f"expected fallback to data-driven / literature default"
+        )
+
+    def test_valid_in_bounds_override_accepted(self):
+        # 0.05 is in-bounds → user_override wins.
+        result = resolve_target_mde(
+            user_config={"target_mde": 0.05},
+            outcome_type="binary",
+            baseline_rate=0.30,
+        )
+        assert result.value == 0.05
+        assert result.source == "user_override"
+
 
 class TestResolveAlphaAndPower:
     def test_alpha_user_override(self):

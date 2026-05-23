@@ -159,3 +159,174 @@ async def test_pipeline_keeps_scope_stash_if_trainer_returns_no_success_criteria
         "Edit 7's empty-dict guard failed: scope_definer stash got clobbered "
         "by a trainer that didn't return success_criteria."
     )
+
+
+# ---------------------------------------------------------------------------
+# PR #462 hotfix F3: pipeline.py merge of pipeline-level sufficiency overrides
+# into scope_spec.sufficiency must preserve typed SufficiencyConfig user
+# fields AND let PipelineConfig.force_low_power_run win over caller value.
+# ---------------------------------------------------------------------------
+
+
+def _make_data_prep_result() -> PipelineResult:
+    """Build a PipelineResult at the DATA_PREPARATION stage with a
+    scope_spec that already carries user sufficiency overrides.
+    """
+    result = PipelineResult(
+        pipeline_run_id="pipe_test",
+        status="running",
+        current_stage=PipelineStage.DATA_PREPARATION,
+        experiment_id="exp_test",
+    )
+    return result
+
+
+@pytest.mark.asyncio
+async def test_pipeline_merge_preserves_typed_sufficiency_config_user_fields() -> None:
+    """F3: typed SufficiencyConfig user fields (target_mde, epv_floor, etc.)
+    must SURVIVE pipeline-level override merge.
+
+    Pre-fix: the merge replaced a typed SufficiencyConfig with `{}` (the
+    `isinstance(dict)` branch silently dropped it), losing every user-
+    supplied calibration knob. The fix calls model_dump() first then
+    merges per-key.
+    """
+    from src.utils.sufficiency_schemas import SufficiencyConfig
+
+    config = PipelineConfig(
+        skip_mlflow=True,
+        enable_hpo=False,
+        force_low_power_run=True,
+        sufficiency_strictness_preset="strict",
+    )
+    pipeline = MLFoundationPipeline(config=config)
+    result = _make_data_prep_result()
+    result.scope_spec = {
+        "problem_type": "causal_inference",
+        "sufficiency": SufficiencyConfig(
+            target_mde=0.05,
+            epv_floor=12,
+            absolute_floor=500,
+        ),
+    }
+
+    captured = {}
+
+    fake_dp = MagicMock()
+
+    async def _capture_input(input_data):
+        captured.update(input_data)
+        return {"qc_report": {}, "baseline_metrics": {}, "gate_passed": True}
+
+    fake_dp.run = AsyncMock(side_effect=_capture_input)
+
+    with (
+        patch.object(pipeline, "_get_agent", return_value=fake_dp),
+        patch.object(pipeline.config, "enable_feast", False),
+    ):
+        await pipeline._run_data_preparation(
+            input_data={"data_source": "test"}, result=result, obs_context=None
+        )
+
+    merged_suff = captured["scope_spec"]["sufficiency"]
+    # User fields survive (F3 bug 1: typed shape was being dropped).
+    assert merged_suff["target_mde"] == 0.05
+    assert merged_suff["epv_floor"] == 12
+    assert merged_suff["absolute_floor"] == 500
+    # PipelineConfig overrides wrote into the merged dict.
+    assert merged_suff["force_low_power_run"] is True
+    assert merged_suff["strictness_preset"] == "strict"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_force_low_power_run_wins_over_caller_value() -> None:
+    """F3: PipelineConfig.force_low_power_run is a safety-critical flag
+    (D5); the orchestrator's value MUST win over a caller-supplied
+    scope_spec.sufficiency.force_low_power_run. Pre-fix, the caller-
+    supplied value shadowed the pipeline-level default — letting any
+    scope_spec author quietly bypass the pharma-safety gate.
+    """
+    config = PipelineConfig(
+        skip_mlflow=True,
+        enable_hpo=False,
+        force_low_power_run=True,  # pipeline-level: safety knob ON
+    )
+    pipeline = MLFoundationPipeline(config=config)
+    result = _make_data_prep_result()
+    # Caller tries to override via scope_spec — must NOT succeed for the
+    # safety-critical force_low_power_run flag.
+    result.scope_spec = {
+        "problem_type": "causal_inference",
+        "sufficiency": {
+            "force_low_power_run": False,  # caller tries to override OFF
+            "target_mde": 0.05,
+        },
+    }
+
+    captured = {}
+
+    fake_dp = MagicMock()
+
+    async def _capture_input(input_data):
+        captured.update(input_data)
+        return {"qc_report": {}, "baseline_metrics": {}, "gate_passed": True}
+
+    fake_dp.run = AsyncMock(side_effect=_capture_input)
+
+    with (
+        patch.object(pipeline, "_get_agent", return_value=fake_dp),
+        patch.object(pipeline.config, "enable_feast", False),
+    ):
+        await pipeline._run_data_preparation(
+            input_data={"data_source": "test"}, result=result, obs_context=None
+        )
+
+    merged_suff = captured["scope_spec"]["sufficiency"]
+    # Pipeline-level wins for force_low_power_run (safety contract).
+    assert merged_suff["force_low_power_run"] is True
+    # Calibration knob (target_mde) is NOT overridden by pipeline.
+    assert merged_suff["target_mde"] == 0.05
+
+
+@pytest.mark.asyncio
+async def test_pipeline_strictness_preset_caller_wins() -> None:
+    """F3: strictness_preset is a calibration knob (not a safety gate);
+    a user that took the trouble to set `strict` should not be silently
+    downgraded by an orchestrator default of `moderate`.
+    """
+    config = PipelineConfig(
+        skip_mlflow=True,
+        enable_hpo=False,
+        force_low_power_run=False,
+        sufficiency_strictness_preset="moderate",  # pipeline default
+    )
+    pipeline = MLFoundationPipeline(config=config)
+    result = _make_data_prep_result()
+    result.scope_spec = {
+        "problem_type": "binary_classification",
+        "sufficiency": {"strictness_preset": "strict"},  # caller insists
+    }
+
+    captured = {}
+
+    fake_dp = MagicMock()
+
+    async def _capture_input(input_data):
+        captured.update(input_data)
+        return {"qc_report": {}, "baseline_metrics": {}, "gate_passed": True}
+
+    fake_dp.run = AsyncMock(side_effect=_capture_input)
+
+    # force_low_power_run is False and sufficiency_strictness_preset is set, so
+    # the merge block enters and we'll see the resolution.
+    with (
+        patch.object(pipeline, "_get_agent", return_value=fake_dp),
+        patch.object(pipeline.config, "enable_feast", False),
+    ):
+        await pipeline._run_data_preparation(
+            input_data={"data_source": "test"}, result=result, obs_context=None
+        )
+
+    merged_suff = captured["scope_spec"]["sufficiency"]
+    # User-supplied strictness_preset wins for a calibration knob.
+    assert merged_suff["strictness_preset"] == "strict"
