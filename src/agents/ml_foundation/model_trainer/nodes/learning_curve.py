@@ -619,7 +619,13 @@ def _empty_report(
     n_features: int,
     rationale: str,
 ) -> dict[str, Any]:
-    """Construct an INCONCLUSIVE report skeleton for early-exit branches."""
+    """Construct an INCONCLUSIVE report skeleton for early-exit branches.
+
+    R2.7: ``fit_trustworthy`` is set to ``False`` here so every branch that
+    returns via this helper has the field present and false — preserving
+    schema parity with the success-path report (which sets ``True`` only
+    when the power-law fit's R² is above the gate).
+    """
     return {
         "verdict": "INCONCLUSIVE",
         "verdict_rationale": rationale,
@@ -634,6 +640,7 @@ def _empty_report(
         "extrapolated_n_for_target": None,
         "extrapolated_n_ci": None,
         "fit_quality_r2": None,
+        "fit_trustworthy": False,
         "recommended_additional_samples": None,
         "ate_ci_width_curve": None,
         "ate_target_ci_width": None,
@@ -724,8 +731,29 @@ async def learning_curve(state: dict[str, Any]) -> dict[str, Any]:
     # causal branch tracks CI width via bootstrap on the train set only —
     # it does NOT touch ``val_data``, so requiring it here would wrongly
     # skip the causal diagnostic when no val split exists.
+    # R2.2: also require X and y to be non-None and non-empty — when an
+    # upstream node sets ``validation_data={'X': None, 'y': None}`` (a
+    # legal "no validation split" sentinel) the keys are present but the
+    # values cannot drive a predictive diagnostic. ``_coerce_X(None)``
+    # raises ``ValueError: Must pass 2-d input``, so we reject these
+    # placeholders early and route the predictive branch to its existing
+    # INCONCLUSIVE "validation_data missing" path.
     val_data = state.get("validation_data") or {}
-    have_val = isinstance(val_data, dict) and "X" in val_data and "y" in val_data
+    have_val = (
+        isinstance(val_data, dict)
+        and "X" in val_data
+        and "y" in val_data
+        and val_data["X"] is not None
+        and val_data["y"] is not None
+    )
+    if have_val:
+        # Length probe — empty arrays/frames are also unusable. ``len(None)``
+        # cannot reach here because the None branch is already filtered out.
+        try:
+            have_val = len(val_data["X"]) > 0 and len(val_data["y"]) > 0
+        except TypeError:
+            # Object lacks __len__ (unlikely but defensive); treat as missing.
+            have_val = False
 
     # F1: prefer state['X_train_preprocessed'] when present.
     X_train = _resolve_training_X(state, train_data["X"])
@@ -883,6 +911,7 @@ def _run_predictive_branch(
             ),
             "proxy_model": proxy_id,
             "diagnostic_runtime_s": runtime_s,
+            "fit_trustworthy": False,
         }
 
     if cap_hit:
@@ -903,6 +932,43 @@ def _run_predictive_branch(
             "extrapolated_n_for_target": None,
             "extrapolated_n_ci": None,
             "fit_quality_r2": None,
+            "fit_trustworthy": False,
+            "recommended_additional_samples": None,
+            "ate_ci_width_curve": None,
+            "ate_target_ci_width": None,
+            "diagnostic_runtime_s": runtime_s,
+        }
+
+    # R2.4: partial-failure case — some buckets fit, some failed, but we
+    # have fewer than _MIN_UNIQUE_BUCKETS successful points to form a
+    # learning curve. ``_fit_power_law`` would return None for <3 points
+    # and ``_slope_pvalue_last_k`` returns 1.0 for <3 points; the original
+    # code then fell through to the "saturated" HARD_FAIL branch with a
+    # wrong-cause rationale. Emit INCONCLUSIVE with the failure-count
+    # rationale instead — the user needs to know fits failed, not that
+    # the curve looks flat (the curve isn't flat; we just couldn't compute
+    # one).
+    if fit_failures > 0 and len(curve) < _MIN_UNIQUE_BUCKETS:
+        return {
+            "verdict": "INCONCLUSIVE",
+            "verdict_rationale": (
+                f"Insufficient successful buckets ({len(curve)}/{len(sizes)}) "
+                f"to fit a power law; {fit_failures} bucket fits failed. "
+                "More data (or preprocessed features) likely needed before "
+                "the diagnostic can produce a curve."
+            ),
+            "n_rows": n_rows,
+            "n_features": n_features,
+            "problem_type": problem_type,
+            "learning_curve": curve if curve else None,
+            "proxy_model": proxy_id,
+            "slope_at_max_n": None,
+            "slope_pvalue": None,
+            "power_law_fit": None,
+            "extrapolated_n_for_target": None,
+            "extrapolated_n_ci": None,
+            "fit_quality_r2": None,
+            "fit_trustworthy": False,
             "recommended_additional_samples": None,
             "ate_ci_width_curve": None,
             "ate_target_ci_width": None,
@@ -1068,50 +1134,96 @@ def _verdict_predictive(
 
 
 def _detect_outcome_type(y: pd.Series) -> str:
-    """F8: classify ``y`` as 'binary' or 'continuous'.
+    """F8 / R2.1 / R2.6: classify ``y`` as 'binary' or 'continuous'.
 
-    Two unique numeric values → binary (the causal estimand becomes a
-    risk-difference; ``resolve_target_mde`` needs ``outcome_type='binary'``
-    plus ``baseline_rate`` to compute the right MDE). Anything else →
-    treated as continuous (default DIM-on-means estimator).
+    Returns 'binary' ONLY when ``y`` is numeric AND has exactly 2 unique
+    non-null values that are integer-valued AND map to ``{0, 1}``. All other
+    cases (non-numeric, low-variance continuous like ``{0.0, 0.5}``,
+    multi-class, NaN-only) fall back to 'continuous' — the safer default
+    because ``resolve_target_mde`` with ``outcome_type='continuous'``
+    falls back to a literature MDE when ``sigma_outcome`` is unknown,
+    whereas ``outcome_type='binary'`` requires a baseline_rate that
+    cannot be computed from a non-numeric series.
+
+    R2.1: non-numeric (object/string-dtype) ``y`` is treated as 'continuous'
+    so the caller does not attempt ``y.mean()`` on strings, which raises
+    ``TypeError``.
+
+    R2.6: 2-unique continuous (e.g. ``{0.0, 0.5}``) is treated as
+    'continuous'; ``baseline_rate`` only makes sense when the outcome is a
+    Bernoulli indicator ``{0, 1}``. A low-variance continuous outcome with
+    two observed values is still a continuous estimand.
     """
     try:
-        n_unique = int(y.dropna().nunique())
+        dropped = y.dropna()
     except (AttributeError, TypeError):
         return "continuous"
-    if n_unique == 2:
+    if len(dropped) == 0:
+        return "continuous"
+    # R2.1: require numeric dtype. String/object-dtype y cannot be
+    # classified as binary because downstream baseline_rate math would
+    # crash on strings.
+    if not pd.api.types.is_numeric_dtype(dropped):
+        return "continuous"
+    try:
+        uniques = dropped.unique()
+    except (AttributeError, TypeError):
+        return "continuous"
+    if len(uniques) != 2:
+        return "continuous"
+    # R2.6: only classify as binary when the two unique values are
+    # integer-valued and equivalent to {0, 1}. Anything else (e.g.
+    # {0.0, 0.5}, {-1, 1}, {2, 5}) is treated as continuous.
+    try:
+        as_float = sorted(float(v) for v in uniques)
+    except (TypeError, ValueError):
+        return "continuous"
+    if as_float == [0.0, 1.0]:
         return "binary"
     return "continuous"
 
 
 def _normalize_treatment_series(t: pd.Series) -> Optional[pd.Series]:
-    """F9: coerce a 2-level treatment column to ``{0, 1}``; return None if not.
+    """F9 / R2.3: coerce a 2-level treatment column to ``{0, 1}``; return None if not.
 
     Accepts numeric ``{0, 1}``, boolean, or any 2-level categorical. Rejects
     anything with !=2 unique non-null values — the DIM ATE estimator assumes
     a binary intervention indicator and silently mis-coercing a 3-level
     treatment to ``{0, 1}`` would produce a misleading CI width.
+
+    R2.3: NaN treatment values are excluded from the diagnostic. A missing
+    treatment label cannot represent treatment assignment — we can't decide
+    whether the unit was treated, so it cannot contribute to the ATE
+    bootstrap. We drop NaN rows from the series before normalization and
+    return ``None`` (the causal branch then emits INCONCLUSIVE) when fewer
+    than 2 non-null rows survive. This avoids the
+    ``ValueError: cannot convert NA to integer`` in the factorize-fallback
+    ``.map(...).astype('Int64').astype(int)`` chain on a NaN-bearing column.
     """
+    # R2.3: drop NaN once and operate on the clean series throughout. The
+    # downstream numeric / map paths cannot tolerate NaN.
     series = t.dropna()
+    if len(series) < 2:
+        return None
     uniques = series.unique()
     if len(uniques) != 2:
         return None
     # Boolean → int directly preserves ordering (False=0, True=1).
     if series.dtype == bool:
-        return t.astype("Int64").astype("Int64").fillna(0).astype(int)
+        return series.astype(int)
     # Already numeric and exactly {0, 1}: pass through.
     numeric_set = {0, 1}
     try:
         as_int = series.astype(int)
         if set(as_int.unique().tolist()) == numeric_set:
-            return t.astype(int)
+            return as_int
     except (ValueError, TypeError):
         pass
     # General case: factorize, mapping the alphabetically/numerically lower
     # unique to 0 and the higher to 1. Stable across runs because we sort.
     sorted_levels = sorted(uniques.tolist(), key=lambda v: (str(type(v)), str(v)))
     mapping = {sorted_levels[0]: 0, sorted_levels[1]: 1}
-    return t.map(mapping).astype("Int64").astype(int)
+    return series.map(mapping).astype(int)
 
 
 def _run_causal_branch(
@@ -1140,6 +1252,25 @@ def _run_causal_branch(
             ),
         )
 
+    # R2.1: the DIM ATE estimator computes means on ``y_train`` — non-numeric
+    # outcomes cannot be averaged, so the bootstrap would raise downstream.
+    # Bail out cleanly with INCONCLUSIVE rather than letting numpy raise
+    # mid-loop. ``_detect_outcome_type`` already returns 'continuous' for
+    # non-numeric y, but the bootstrap path still calls ``y.mean()``; this
+    # check is the earlier of two gates.
+    if not pd.api.types.is_numeric_dtype(y_train):
+        return _empty_report(
+            problem_type=problem_type,
+            n_rows=n_rows,
+            n_features=n_features,
+            rationale=(
+                f"Outcome y_train dtype={y_train.dtype} is not numeric; the "
+                "DIM ATE bootstrap requires a numeric outcome to compute "
+                "treated/control means. Encode the outcome (e.g. binary "
+                "indicator → int) before running the causal diagnostic."
+            ),
+        )
+
     treatment_col = _resolve_treatment_column(state, X_train)
 
     if treatment_col is None:
@@ -1154,9 +1285,15 @@ def _run_causal_branch(
             ),
         )
 
-    # F9: normalize the treatment series to {0, 1} once. Reject if it
-    # doesn't have exactly 2 unique non-null values.
-    normalized_t = _normalize_treatment_series(X_train[treatment_col])
+    # F9 / R2.3: normalize the treatment series to {0, 1} once. Reject if it
+    # doesn't have exactly 2 unique non-null values. NaN treatment rows are
+    # excluded from the diagnostic — the returned series has its NaN rows
+    # dropped, so we align X_train and y_train to its index (the surviving
+    # non-NaN row positions) before any bucketization. Without this
+    # realignment ``X_train[col] = normalized_t.to_numpy()`` would raise a
+    # length-mismatch.
+    t_series_raw = X_train[treatment_col]
+    normalized_t = _normalize_treatment_series(t_series_raw)
     if normalized_t is None:
         return _empty_report(
             problem_type=problem_type,
@@ -1164,12 +1301,38 @@ def _run_causal_branch(
             n_features=n_features,
             rationale=(
                 f"Treatment column '{treatment_col}' does not have exactly 2 "
-                "unique values; causal diagnostic requires a binary "
-                "intervention indicator."
+                "unique values after dropping NaN rows; causal diagnostic "
+                "requires a binary intervention indicator."
             ),
         )
-    X_train = X_train.copy()
+    # R2.3: align X_train / y_train to the surviving (non-NaN) treatment
+    # rows. Use positional alignment via the original DataFrame's row
+    # positions corresponding to non-NaN treatment values — this is robust
+    # to whatever index labels X_train and y_train were carrying upstream.
+    non_na_positions = np.flatnonzero(t_series_raw.notna().to_numpy())
+    if len(non_na_positions) < len(t_series_raw):
+        X_train = X_train.iloc[non_na_positions].copy()
+        y_train = y_train.iloc[non_na_positions]
+    else:
+        X_train = X_train.copy()
     X_train[treatment_col] = normalized_t.to_numpy()
+    # Refresh n_rows now that NaN treatment rows are gone, so the bucket
+    # sizes and reported row counts are consistent with the data actually
+    # used by the bootstrap loop.
+    n_rows = int(len(X_train))
+    sizes = _bucket_sizes(n_rows, _DEFAULT_K_BUCKETS)
+    if len(sizes) < _MIN_UNIQUE_BUCKETS:
+        return _empty_report(
+            problem_type=problem_type,
+            n_rows=n_rows,
+            n_features=n_features,
+            rationale=(
+                "Insufficient data range for causal learning-curve diagnostic "
+                f"after dropping NaN treatment rows (n_total={n_rows}, "
+                f"k_unique={len(sizes)}); need n_total ≳ 20 for meaningful "
+                "buckets."
+            ),
+        )
 
     rng = np.random.default_rng(_SEED_OFFSET)
     ci_curve: list[tuple[int, float]] = []
@@ -1192,12 +1355,16 @@ def _run_causal_branch(
 
     runtime_s = float(time.monotonic() - t_start)
 
-    # F8: detect outcome type from y_train so resolve_target_mde sees the
-    # correct estimand. Binary causal outcomes also need ``baseline_rate``.
+    # F8 / R2.1: detect outcome type from y_train so resolve_target_mde sees
+    # the correct estimand. Binary causal outcomes also need
+    # ``baseline_rate``. ``_detect_outcome_type`` only returns 'binary' when
+    # ``y_train`` is numeric AND its two unique values are {0, 1}, so the
+    # ``baseline_rate`` math below is guaranteed to operate on a numeric
+    # series — no TypeError on object-dtype y.
     outcome_type = _detect_outcome_type(y_train)
     sufficiency_cfg = (state.get("scope_spec") or {}).get("sufficiency")
     extra_kwargs: dict[str, Any] = {}
-    if outcome_type == "binary":
+    if outcome_type == "binary" and pd.api.types.is_numeric_dtype(y_train):
         # Pre-treatment baseline rate ≈ control-arm mean. Falls back to
         # overall mean if the control mask is empty (defensive).
         try:
@@ -1207,7 +1374,17 @@ def _run_causal_branch(
             else:
                 extra_kwargs["baseline_rate"] = float(y_train.mean())
         except (KeyError, TypeError, ValueError):
-            extra_kwargs["baseline_rate"] = float(y_train.mean())
+            # R2.1: y_train.mean() can still raise on edge-case dtypes;
+            # swallow the failure and let resolve_target_mde fall back to a
+            # literature default by omitting baseline_rate.
+            try:
+                extra_kwargs["baseline_rate"] = float(y_train.mean())
+            except (TypeError, ValueError):
+                logger.debug(
+                    "baseline_rate computation failed on y_train dtype=%s; "
+                    "deferring to literature default MDE.",
+                    y_train.dtype,
+                )
     target_mde_res = resolve_target_mde(
         user_config=cast(dict[str, Any] | None, sufficiency_cfg),
         outcome_type=outcome_type,
@@ -1261,6 +1438,11 @@ def _run_causal_branch(
         "extrapolated_n_for_target": extrapolated_n,
         "extrapolated_n_ci": None,
         "fit_quality_r2": None,
+        # R2.7: schema parity — the causal branch never fits a power-law
+        # so "fit_trustworthy" is always False here. Downstream consumers
+        # should look at ``extrapolated_n_for_target`` / recommended_additional_samples
+        # to gauge confidence on this branch.
+        "fit_trustworthy": False,
         "recommended_additional_samples": recommended,
         "ate_ci_width_curve": ci_curve if ci_curve else None,
         "ate_target_ci_width": target_width,

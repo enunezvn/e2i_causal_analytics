@@ -746,3 +746,306 @@ async def test_f14_extrapolation_gated_on_fit_quality(monkeypatch: pytest.Monkey
     assert report["extrapolated_n_for_target"] is None
     assert report["extrapolated_n_ci"] is None
     assert report["fit_trustworthy"] is False
+
+
+# ---------------------------------------------------------------------------
+# Round-2 codex follow-ups (R2.1..R2.7)
+# ---------------------------------------------------------------------------
+
+
+async def test_r2_1_string_dtype_y_does_not_crash() -> None:
+    """R2.1: object/string-dtype y must NOT trigger 'binary' path.
+
+    Pre-fix: 2-unique string y returned 'binary', then ``y.to_numpy()[mask].mean()``
+    raised ``TypeError`` on strings. Post-fix: non-numeric dtype falls back
+    to 'continuous' at the type-detection level; the causal branch ALSO
+    gates on numeric y_train at entry and returns INCONCLUSIVE with a
+    rationale that points the user at the right fix (encode the outcome).
+    """
+    from src.agents.ml_foundation.model_trainer.nodes.learning_curve import (
+        _detect_outcome_type,
+        learning_curve,
+    )
+
+    # _detect_outcome_type must return 'continuous' for string dtype.
+    y_str = pd.Series(["a", "b", "a", "b", "a"], dtype=object)
+    assert _detect_outcome_type(y_str) == "continuous"
+
+    # End-to-end: causal branch with object-dtype y_train must not raise
+    # and must route to INCONCLUSIVE with a numeric-outcome rationale.
+    rng = np.random.default_rng(_SEED)
+    X_train = pd.DataFrame(
+        rng.normal(size=(_N_TRAIN, _N_FEATURES)),
+        columns=[f"f{i}" for i in range(_N_FEATURES)],
+    )
+    X_train["treatment"] = rng.integers(0, 2, size=_N_TRAIN)
+    y_train = pd.Series(
+        np.where(rng.uniform(size=_N_TRAIN) < 0.5, "yes", "no"),
+        name="y",
+        dtype=object,
+    )
+
+    state: dict[str, Any] = {
+        "success_criteria_met": False,
+        "problem_type": "causal_inference",
+        "train_data": {"X": X_train, "y": y_train, "row_count": len(X_train)},
+        "scope_spec": {
+            "problem_type": "causal_inference",
+            "sufficiency": {"target_mde": 0.3},
+        },
+    }
+    result = await learning_curve(state)
+    report = result["sufficiency_report"]
+    # No crash; clear INCONCLUSIVE rationale.
+    assert report["verdict"] == "INCONCLUSIVE"
+    rationale = report["verdict_rationale"].lower()
+    assert "numeric" in rationale or "outcome" in rationale
+
+
+async def test_r2_2_validation_data_with_none_values_routes_to_inconclusive() -> None:
+    """R2.2: validation_data={'X': None, 'y': None} must not crash.
+
+    Pre-fix: ``have_val`` was True (keys present), but ``_coerce_X(None)``
+    raised ``ValueError: Must pass 2-d input``. Post-fix: have_val also
+    checks values are non-None / non-empty, predictive branch returns
+    INCONCLUSIVE.
+    """
+    from src.agents.ml_foundation.model_trainer.nodes.learning_curve import (
+        learning_curve,
+    )
+
+    state = _make_binary_state(success_met=False)
+    # Replace validation_data with None-valued sentinel.
+    state["validation_data"] = {"X": None, "y": None}
+    result = await learning_curve(state)
+    report = result["sufficiency_report"]
+    assert report["verdict"] == "INCONCLUSIVE"
+    assert "validation_data" in report["verdict_rationale"].lower()
+
+
+async def test_r2_2_validation_data_with_empty_arrays_routes_to_inconclusive() -> None:
+    """R2.2: empty validation arrays are also unusable, not a crash."""
+    from src.agents.ml_foundation.model_trainer.nodes.learning_curve import (
+        learning_curve,
+    )
+
+    state = _make_binary_state(success_met=False)
+    state["validation_data"] = {
+        "X": pd.DataFrame(columns=[f"f{i}" for i in range(_N_FEATURES)]),
+        "y": pd.Series([], dtype=float),
+    }
+    result = await learning_curve(state)
+    report = result["sufficiency_report"]
+    assert report["verdict"] == "INCONCLUSIVE"
+
+
+async def test_r2_3_treatment_with_nan_does_not_crash() -> None:
+    """R2.3: NaN treatment values are dropped, not coerced via Int64→int.
+
+    Pre-fix: factorize fallback preserved NaN through ``.map(...).astype('Int64').astype(int)``
+    raising ``ValueError: cannot convert NA to integer``. Post-fix: NaN
+    rows are dropped before normalization; <2 surviving rows returns None.
+    """
+    from src.agents.ml_foundation.model_trainer.nodes.learning_curve import (
+        _normalize_treatment_series,
+    )
+
+    # Mixed treatment with NaN — factorize fallback would have crashed.
+    s = pd.Series(["a", np.nan, "b", "a", np.nan, "b"], dtype=object)
+    out = _normalize_treatment_series(s)
+    assert out is not None
+    assert set(out.unique().tolist()) == {0, 1}
+    # Only 4 non-NaN rows survive.
+    assert len(out) == 4
+
+    # All-NaN: returns None.
+    s_all_nan = pd.Series([np.nan, np.nan, np.nan], dtype=object)
+    assert _normalize_treatment_series(s_all_nan) is None
+
+    # Single non-NaN row: returns None (need ≥ 2 distinct after dropna).
+    s_one_real = pd.Series([np.nan, 1.0, np.nan], dtype=float)
+    assert _normalize_treatment_series(s_one_real) is None
+
+
+async def test_r2_3_causal_branch_drops_nan_treatment_rows() -> None:
+    """R2.3 end-to-end: a few NaN treatment rows are silently excluded."""
+    from src.agents.ml_foundation.model_trainer.nodes.learning_curve import (
+        learning_curve,
+    )
+
+    rng = np.random.default_rng(_SEED)
+    X_train = pd.DataFrame(
+        rng.normal(size=(_N_TRAIN, _N_FEATURES)),
+        columns=[f"f{i}" for i in range(_N_FEATURES)],
+    )
+    treatment = rng.integers(0, 2, size=_N_TRAIN).astype(float)
+    # Sprinkle 5 NaN treatment values.
+    treatment[::28] = np.nan
+    X_train["treatment"] = treatment
+    y_train = pd.Series(rng.normal(size=_N_TRAIN), name="y")
+
+    state: dict[str, Any] = {
+        "success_criteria_met": False,
+        "problem_type": "causal_inference",
+        "train_data": {"X": X_train, "y": y_train, "row_count": len(X_train)},
+        "scope_spec": {
+            "problem_type": "causal_inference",
+            "sufficiency": {"target_mde": 0.3},
+        },
+    }
+    result = await learning_curve(state)
+    report = result["sufficiency_report"]
+    # No crash; n_rows reflects rows after NaN-treatment exclusion.
+    assert report["n_rows"] < _N_TRAIN
+    assert report["n_rows"] >= _N_TRAIN - 6
+
+
+async def test_r2_4_partial_failure_emits_inconclusive_not_saturated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R2.4: 5/7 buckets fail → curve has 2 entries → must NOT report 'saturated'.
+
+    Pre-fix: with curve of 2 entries, _fit_power_law returned None,
+    _slope_pvalue_last_k returned 1.0 (len<k), all-failures branch
+    skipped (curve non-empty), fell through to 'saturated' HARD_FAIL
+    with a wrong-cause rationale. Post-fix: emit INCONCLUSIVE with a
+    bucket-failure rationale.
+    """
+    import importlib
+
+    mod = importlib.import_module("src.agents.ml_foundation.model_trainer.nodes.learning_curve")
+
+    # Succeed on the first 2 buckets, fail on the remaining 5.
+    call_count: dict[str, int] = {"i": 0}
+
+    def _two_pass_five_fail(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        call_count["i"] += 1
+        if call_count["i"] <= 2:
+            return {"score_mean": 0.70 + 0.005 * call_count["i"], "score_std": 0.0}
+        return {"score_mean": float("nan"), "score_std": float("nan")}
+
+    monkeypatch.setattr(mod, "_fit_proxy_on_bucket", _two_pass_five_fail)
+
+    state = _make_binary_state(success_met=False)
+    result = await mod.learning_curve(state)
+    report = result["sufficiency_report"]
+    assert report["verdict"] == "INCONCLUSIVE"
+    rationale = report["verdict_rationale"].lower()
+    # Rationale must reference the bucket-fit failures, NOT "saturated".
+    assert "saturated" not in rationale
+    assert "fail" in rationale or "insufficient" in rationale
+    # Curve must reflect the surviving (successful) buckets.
+    assert report["learning_curve"] is not None
+    assert len(report["learning_curve"]) == 2
+    # Fit-trustworthy is False since no fit was attempted.
+    assert report["fit_trustworthy"] is False
+
+
+async def test_r2_5_schema_accepts_new_fields() -> None:
+    """R2.5: DataSufficiencyReport(extra='forbid') must accept fit_trustworthy / outcome_type."""
+    from src.utils.sufficiency_schemas import DataSufficiencyReport
+
+    # All Phase-2 fields populated — the schema must validate without raising.
+    payload = {
+        "verdict": "SOFT_FAIL",
+        "verdict_rationale": "rising curve; ~50 more samples close gap.",
+        "n_rows": 140,
+        "n_features": 4,
+        "problem_type": "binary_classification",
+        "learning_curve": [(20, 0.70, 0.0), (60, 0.75, 0.0)],
+        "proxy_model": "lightgbm-default",
+        "fit_quality_r2": 0.95,
+        "fit_trustworthy": True,
+        "outcome_type": "binary",
+    }
+    rep = DataSufficiencyReport(**payload)
+    assert rep.fit_trustworthy is True
+    assert rep.outcome_type == "binary"
+
+
+async def test_r2_6_low_variance_continuous_classified_as_continuous() -> None:
+    """R2.6: y = {0.0, 0.5} must be 'continuous', not 'binary'.
+
+    Pre-fix: 2 uniques → 'binary' regardless of values. Post-fix: only
+    {0, 1} returns 'binary'; {0.0, 0.5} (or any other 2-value set) is
+    treated as continuous.
+    """
+    from src.agents.ml_foundation.model_trainer.nodes.learning_curve import (
+        _detect_outcome_type,
+    )
+
+    y_zero_half = pd.Series([0.0, 0.5, 0.0, 0.5, 0.5, 0.0])
+    assert _detect_outcome_type(y_zero_half) == "continuous"
+
+    # Sanity: legitimate Bernoulli {0,1} is still binary.
+    y_bernoulli = pd.Series([0, 1, 0, 1, 1, 0])
+    assert _detect_outcome_type(y_bernoulli) == "binary"
+
+    # Float-typed {0.0, 1.0} also recognized as binary.
+    y_bernoulli_float = pd.Series([0.0, 1.0, 0.0, 1.0])
+    assert _detect_outcome_type(y_bernoulli_float) == "binary"
+
+    # Non-{0,1} 2-value pair (e.g. -1/1) is continuous.
+    y_signed = pd.Series([-1.0, 1.0, -1.0, 1.0])
+    assert _detect_outcome_type(y_signed) == "continuous"
+
+    # Multi-class continuous: still continuous.
+    y_multi = pd.Series([0.0, 0.5, 1.0, 0.2, 0.8])
+    assert _detect_outcome_type(y_multi) == "continuous"
+
+
+async def test_r2_7_fit_trustworthy_set_on_all_branches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R2.7: every report path must include fit_trustworthy explicitly.
+
+    Covers: all-failures branch (line 871-style), walltime cap branch
+    (line 888-style), and the _empty_report skeleton used by early
+    short-circuits (n<4, missing val_data, treatment-column missing,
+    etc.). The schema declares fit_trustworthy as Optional but the
+    intent is to surface False on every non-success branch.
+    """
+    import importlib
+
+    mod = importlib.import_module("src.agents.ml_foundation.model_trainer.nodes.learning_curve")
+
+    # Branch A — all-failures via _fit_proxy_on_bucket returning NaN.
+    def _always_fail(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {"score_mean": float("nan"), "score_std": float("nan")}
+
+    monkeypatch.setattr(mod, "_fit_proxy_on_bucket", _always_fail)
+    state = _make_binary_state(success_met=False)
+    result_a = await mod.learning_curve(state)
+    assert result_a["sufficiency_report"]["fit_trustworthy"] is False
+
+    # Branch B — walltime cap hit.
+    import time as _time
+
+    monkeypatch.setattr(mod, "_WALLTIME_CAP_S", 0.01)
+
+    def _slow_fit(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        _time.sleep(0.05)
+        return {"score_mean": 0.70, "score_std": 0.0}
+
+    monkeypatch.setattr(mod, "_fit_proxy_on_bucket", _slow_fit)
+    result_b = await mod.learning_curve(state)
+    assert result_b["sufficiency_report"]["fit_trustworthy"] is False
+
+    # Branch C — _empty_report early exit (no validation data).
+    from src.agents.ml_foundation.model_trainer.nodes.learning_curve import (
+        learning_curve,
+    )
+
+    state_no_val: dict[str, Any] = {
+        "success_criteria_met": False,
+        "problem_type": "causal_inference",
+        "train_data": {
+            "X": pd.DataFrame({"x": list(range(50))}),  # No treatment column.
+            "y": pd.Series(range(50)),
+            "row_count": 50,
+        },
+        "scope_spec": {"problem_type": "causal_inference"},
+    }
+    result_c = await learning_curve(state_no_val)
+    # Will route to "no treatment column found" empty_report.
+    assert result_c["sufficiency_report"]["fit_trustworthy"] is False
