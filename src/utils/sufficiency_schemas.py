@@ -1,0 +1,125 @@
+"""Pydantic schemas for data-sufficiency configuration and reports.
+
+These schemas are consumed by both Tier 0 DataPreparer (pre-flight check) and
+ModelTrainer (post-training learning curve). Keeping them in src/utils/ avoids
+a circular dependency between the two agent packages.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+ProblemType = Literal[
+    "binary_classification",
+    "multiclass_classification",
+    "regression",
+    "causal_inference",
+    "time_series",
+]
+StrictnessPreset = Literal["conservative", "moderate", "strict"]
+SufficiencyVerdict = Literal["PASS", "SOFT_FAIL", "HARD_FAIL", "INCONCLUSIVE"]
+ThresholdSource = Literal["user_override", "computed_from_data", "literature_default"]
+
+
+class SufficiencyConfig(BaseModel):
+    """User-facing overrides nested in scope_spec.sufficiency.
+
+    Every field is optional. Unset fields flow through the resolution hierarchy
+    to either a computed-from-data value or a literature-grounded default.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Threshold overrides
+    epv_floor: int | None = Field(default=None, ge=1)
+    absolute_floor: int | None = Field(default=None, ge=1)
+    observational_inflation: float | None = Field(default=None, gt=0.0)
+    target_mde: float | None = Field(default=None)
+    baseline_rate: float | None = Field(default=None, gt=0.0, lt=1.0)
+    event_rate: float | None = Field(default=None, gt=0.0, le=1.0)
+    power_target: float | None = Field(default=None, gt=0.0, lt=1.0)
+    alpha: float | None = Field(default=None, gt=0.0, lt=1.0)
+
+    # Time-series specific
+    seasonal_period: int | None = Field(default=None, ge=2)
+    cv_outcome: float | None = Field(
+        default=None,
+        ge=0.0,
+        description="Coefficient of variation of outcome; inflates time-series floor",
+    )
+
+    # Convenience preset
+    strictness_preset: StrictnessPreset | None = None
+
+
+class ThresholdResolution(BaseModel):
+    """Audit-friendly record of how a single threshold value was derived."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    value: float | int
+    source: ThresholdSource
+    citation: str
+    inputs: dict[str, Any] = Field(default_factory=dict)
+
+
+class DataSufficiencyReport(BaseModel):
+    """Output of pre-flight sufficiency check and/or post-training learning curve.
+
+    Same schema is reused by Phase 1 (pre-flight) and Phase 2 (learning curve)
+    so downstream consumers see one shape. Phase 1 populates pre-flight fields;
+    Phase 2 populates learning-curve fields. Empty fields are unset, not zero.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Top-line verdict
+    verdict: SufficiencyVerdict
+    verdict_rationale: str
+
+    # Inputs from data
+    n_rows: int
+    n_features: int
+    problem_type: ProblemType
+    minority_prevalence: float | None = None
+    baseline_rate: float | None = None
+    sigma_outcome: float | None = None
+
+    # Thresholds (each with source + citation)
+    resolved_thresholds: list[ThresholdResolution] = Field(default_factory=list)
+
+    # Required n from formulas
+    required_n: int | None = None
+    required_n_rationale: str | None = None
+
+    # Reverse calc (Strategy A)
+    detectable_mde_at_current_n: float | None = None
+    detectable_mde_units: str | None = None
+
+    # Sensitivity grid (Strategy C)
+    sensitivity_grid: dict[str, Any] | None = None
+
+    # MDE assumption (Strategy B)
+    mde_assumption_used: dict[str, Any] | None = None
+
+    # Learning-curve fields (populated by Phase 2 only)
+    learning_curve: list[tuple[int, float, float]] | None = None
+    proxy_model: str | None = None
+    slope_at_max_n: float | None = None
+    slope_pvalue: float | None = None
+    power_law_fit: dict[str, float] | None = None
+    extrapolated_n_for_target: int | None = None
+    extrapolated_n_ci: tuple[int, int] | None = None
+    fit_quality_r2: float | None = None
+    recommended_additional_samples: int | None = None
+
+    # Causal-specific (populated by Phase 2 causal branch only)
+    ate_ci_width_curve: list[tuple[int, float]] | None = None
+    ate_target_ci_width: float | None = None
+
+    # Operational
+    diagnostic_runtime_s: float | None = None
+    human_readable_summary: str | None = None
