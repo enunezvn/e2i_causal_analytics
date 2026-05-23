@@ -61,11 +61,17 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from dotenv import load_dotenv
 
 # Allow `python scripts/compile_causal_role_classifier.py` without `python -m`.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+# Load .env so CLI invocations get ANTHROPIC_API_KEY without manual export.
+# Without this the script's --lm-model path fails to authenticate even when
+# the key sits in .env (conftest does this for pytest paths; CLI does not).
+load_dotenv()
 
 # dspy / classifier imports are deferred to ``compile_and_persist`` so
 # the lightweight ``preflight_candidate_check`` helper (and its tests)
