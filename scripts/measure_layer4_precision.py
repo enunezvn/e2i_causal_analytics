@@ -54,6 +54,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.data.causal_role_classifier_loader import (  # noqa: E402
     classify_feature,
+    ensure_dspy_lm_configured,
     load_compiled_classifier,
 )
 
@@ -142,6 +143,15 @@ def _evaluate_entries(
     and derivation_pseudocode are excluded by construction (plan-239 §6.4
     HARD RULE: golden-set entries must not leak into compile-set authoring).
     """
+    # Ensure DSPy has an LM configured at inference time. Plan-239 §6.8 A/B
+    # requires the classifier to actually run against the literature golden
+    # set; the loader's classify_feature returns None if no LM is configured,
+    # which would silently mark every entry as skipped_no_lm. The
+    # ensure_dspy_lm_configured() helper is provider-aware and no-ops when
+    # an LM is already configured or when no provider-matching key is in env
+    # (matches conftest dotenv path + production orchestrator behaviour).
+    ensure_dspy_lm_configured()
+
     if classifier_artifact is not None:
         classifier = load_compiled_classifier(artifact_path=classifier_artifact)
     else:
