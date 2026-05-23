@@ -254,11 +254,22 @@ def apply_role_attributions(
                 "evaluator_model": str(attr.get("evaluator_model", "")),
                 "set_index": set_idx,
                 "caveats": [
-                    # M-bias surfaces when conditioning on a collider's
-                    # ancestor; dropping the collider can re-open or
-                    # close M-paths. Track via S13 research spinoff.
-                    "Dropping a collider can introduce M-bias depending on"
-                    " upstream graph structure (S13 research)."
+                    # M-bias arises from CONDITIONING ON a collider in an
+                    # M-structure (U1->C<-U2 with U1->T, U2->Y, both U1
+                    # and U2 latent). The back-door path T<-U1->C<-U2->Y
+                    # is blocked at C by default and OPENED by conditioning
+                    # on C or any descendant of C (Pearl 2009 ch. 11;
+                    # Greenland 2003). Under STRICT this node removes C
+                    # from the adjustment set when the trust gate fires;
+                    # under ADVISORY it logs C without removing it; under
+                    # OFF it passes the caller's set through. Detection
+                    # of whether C lies on an actual M-structure is
+                    # tracked at #359 — see
+                    # .claude/research/359_m_bias_detection_research.md.
+                    "Collider attribution recorded. M-bias risk applies"
+                    " if this feature is a collider on an actual"
+                    " M-structure AND remains in the post-policy"
+                    " adjustment set (Pearl 2009 ch. 11). See #359."
                 ]
                 if causal_role == "collider"
                 else [],

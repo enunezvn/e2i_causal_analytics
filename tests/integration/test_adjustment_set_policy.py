@@ -390,3 +390,47 @@ async def test_node_wrapper_returns_state_update_with_policy_summary() -> None:
     assert "adjustment_set_hash_pre_policy" in update["causal_graph"]
     assert "policy_log" in update
     assert "policy_log_was_truncated" in update
+
+
+# --------------------------------------------------------------------------
+# Case 13: collider caveat string is direction-correct on both STRICT and
+# ADVISORY paths.
+#
+# Regression for #359. The caveat literal at adjustment_set_policy.py:256-264
+# is constructed BEFORE the policy branch, so it is emitted identically for
+# `dropped_collider` (STRICT) and `warning_collider` (ADVISORY) entries.
+# The corrected wording (memo R7 Option (b)) must:
+#   * Mention M-bias only conditionally on the feature being a collider on
+#     an actual M-structure AND remaining in the post-policy adjustment set
+#     (mode-neutral framing — accurate on both STRICT and ADVISORY entries).
+#   * NOT claim that "dropping a collider can introduce M-bias" — that was
+#     the iter-0 wording and it is causally backwards (Pearl 2009 ch. 11:
+#     M-bias is opened by conditioning on the collider or any descendant,
+#     not by removing it).
+# --------------------------------------------------------------------------
+
+
+def test_case13_collider_caveat_is_direction_correct() -> None:
+    graph = _graph([["X", "Y_conf", "C"]])
+    attrs = [_llm_attr("C", "collider", satisfied=True)]
+
+    _, strict_log, _ = apply_role_attributions(graph, attrs, policy="STRICT")
+    _, advisory_log, _ = apply_role_attributions(graph, attrs, policy="ADVISORY")
+
+    assert len(strict_log) == 1, "STRICT collider drop must emit one log entry"
+    assert len(advisory_log) == 1, "ADVISORY collider warn must emit one log entry"
+    assert strict_log[0]["kind"] == "dropped_collider"
+    assert advisory_log[0]["kind"] == "warning_collider"
+
+    for entry_label, entry in (("strict", strict_log[0]), ("advisory", advisory_log[0])):
+        caveats = entry["caveats"]
+        assert len(caveats) == 1, f"{entry_label}: expected one caveat, got {caveats}"
+        caveat = caveats[0]
+        # Positive: corrected wording mentions the conditional M-bias mechanism.
+        assert "M-bias risk applies" in caveat, (
+            f"{entry_label} caveat missing corrected wording 'M-bias risk applies': {caveat!r}"
+        )
+        # Negative-control: the old causally-backwards literal must not appear.
+        assert "Dropping a collider can introduce" not in caveat, (
+            f"{entry_label} caveat still carries direction-backwards literal: {caveat!r}"
+        )
