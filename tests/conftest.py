@@ -1069,3 +1069,82 @@ def audit_workflow_id():
     from uuid import uuid4
 
     return uuid4()
+
+
+# =============================================================================
+# CAUSAL ROLE GOLDEN SET (issue #358)
+# =============================================================================
+# Literature-derived golden evaluation set for Layer-4 causal-role classifier.
+# Per #358 acceptance: ≥30 entries per cohort × 3 cohorts (CSU/PNH/BC) =
+# ≥90 entries, each carrying feature_name + ground_truth_role + rationale +
+# provenance. Used by scripts/measure_layer4_precision.py and any unit test
+# that needs a real (vs. synthetic A1-A4) gold standard.
+
+
+@pytest.fixture(scope="session")
+def causal_role_golden_set() -> Dict:
+    """Session-scoped loader for the literature-derived golden set.
+
+    Returns the full JSON document (``{"entries": [...], "cohorts": {...}}``).
+    Loaded once per pytest session; tests that need entry-level access should
+    depend on ``causal_role_golden_set_entry`` (parametrized fixture below).
+
+    Source of truth: ``tests/fixtures/causal_role_golden_set.json``. Built
+    via the 3-cohort literature extraction under #358 (commit 64aeffd8+ in
+    PR for #358). If the file is missing the fixture raises so tests fail
+    loudly rather than silently passing.
+    """
+    import json
+    from pathlib import Path
+
+    fixture_path = Path(__file__).resolve().parent / "fixtures" / "causal_role_golden_set.json"
+    if not fixture_path.exists():
+        raise FileNotFoundError(
+            f"Causal role golden set fixture missing at {fixture_path}. "
+            "Build via the #358 PR workflow; do not run these tests against "
+            "an empty fixture."
+        )
+    return json.loads(fixture_path.read_text())
+
+
+def _golden_set_entries() -> list:
+    """Read entries at collection time for pytest parametrization.
+
+    Called during test collection (before session fixtures are evaluated),
+    so this can't use the session-scoped fixture above. Reads the JSON
+    directly. Returns empty list if the fixture file is missing (collection
+    proceeds, individual tests skip via pytest.skip in the test body).
+    """
+    import json
+    from pathlib import Path
+
+    fixture_path = Path(__file__).resolve().parent / "fixtures" / "causal_role_golden_set.json"
+    if not fixture_path.exists():
+        return []
+    try:
+        data = json.loads(fixture_path.read_text())
+        return data.get("entries", [])
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+@pytest.fixture(
+    params=_golden_set_entries(),
+    ids=lambda entry: (
+        f"{entry.get('cohort', 'unknown')}::{entry.get('feature_name', '?')}"
+        if isinstance(entry, dict)
+        else str(entry)
+    ),
+)
+def causal_role_golden_set_entry(request) -> Dict:
+    """Parametrized fixture: one test invocation per golden-set entry.
+
+    Use to write per-entry assertions (e.g., "every entry has a non-empty
+    rationale" or "every instrument-labeled entry has a verifiable PMID").
+    Skips with a clear message if the fixture file is missing.
+    """
+    if not request.param:
+        pytest.skip(
+            "Causal role golden set fixture is empty or missing. Build via the #358 PR workflow."
+        )
+    return request.param
