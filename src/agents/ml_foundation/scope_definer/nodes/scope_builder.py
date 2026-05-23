@@ -293,20 +293,49 @@ def _define_feature_categories(state: Dict[str, Any]) -> List[str]:
     ]
 
 
-def _calculate_minimum_samples(problem_type: str) -> int:
-    """Calculate minimum required samples based on problem type."""
-    # Rule of thumb: 10 samples per feature minimum
-    # Adjust by problem complexity
+def _initial_min_samples_estimate(problem_type: str) -> int:
+    """Advisory rule-of-thumb sample-size estimate by problem type.
 
+    NOTE: this is an ADVISORY value, not a gating threshold. The
+    authoritative sufficiency check lives in DataPreparer's
+    ``sufficiency_check`` node (Phase 1 of the data-sufficiency
+    diagnostics rollout), which has access to actual data
+    characteristics (n_features, minority prevalence, outcome variance)
+    that this function cannot see at scope-definition time.
+
+    These per-problem-type defaults were originally written as gating
+    thresholds but were never enforced anywhere downstream (handoff
+    protocol declared the rule but did not check it). Retained as a
+    cheap upstream hint that the operator can sanity-check the
+    minimum row count against before the data is even loaded.
+
+    Citations live in src/utils/sufficiency_defaults.py — the
+    ``sufficiency_check`` node delegates threshold resolution to
+    ``src/utils/sufficiency_resolver.py`` which carries the literature
+    references (Vergouwe 2007, Riley 2020, etc.).
+
+    Args:
+        problem_type: One of binary_classification, regression,
+            multiclass_classification, causal_inference, time_series.
+
+    Returns:
+        Advisory minimum n. Always positive (so the handoff-protocol
+        check ``minimum_samples > 0`` is satisfied).
+    """
     if problem_type == "binary_classification":
-        return 500  # Need balanced classes
+        return 500
     elif problem_type == "regression":
         return 300
     elif problem_type == "multiclass_classification":
-        return 1000  # Need samples per class
+        return 1000
     elif problem_type == "causal_inference":
-        return 1000  # Need treatment and control groups
+        return 1000
     elif problem_type == "time_series":
         return 500
 
-    return 500  # Default
+    return 500
+
+
+# Backward-compat alias for callers that haven't migrated to the new name.
+# Slated for removal once all in-tree callers and tests are updated.
+_calculate_minimum_samples = _initial_min_samples_estimate

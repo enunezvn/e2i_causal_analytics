@@ -28,6 +28,7 @@ from .nodes import (
     run_ge_validation,
     run_quality_checks,
     run_schema_validation,
+    run_sufficiency_check,
     transform_data,
 )
 from .nodes.adaptive_validity_check import _resolve_manifest_features
@@ -259,6 +260,13 @@ def create_data_preparer_graph() -> StateGraph:  # type: ignore[type-arg]
     graph.add_node("transform_data", transform_data)  # type: ignore[type-var,arg-type,call-overload]
     graph.add_node("register_features_in_feast", register_features_in_feast)  # type: ignore[type-var,arg-type,call-overload]
     graph.add_node("compute_baseline_metrics", compute_baseline_metrics)  # type: ignore[type-var,arg-type,call-overload]
+    # Phase 1 of data-sufficiency diagnostics. Sits between
+    # ``compute_baseline_metrics`` and ``kg_role_enrichment`` so it has
+    # access to baseline statistics (target_rate, feature_stats) when
+    # computing the verdict. HARD_FAIL / blocking SOFT_FAIL appends to
+    # ``blocking_issues`` which the existing QC gate at
+    # ``finalize_output`` picks up.
+    graph.add_node("sufficiency_check", run_sufficiency_check)  # type: ignore[type-var,arg-type,call-overload]
     # Phase 6 of causal-role propagation (Issue #237). Sits between
     # ``compute_baseline_metrics`` and ``finalize_output`` to reconcile
     # LLM-source role attributions against the Phase-6 FalkorDB
@@ -319,7 +327,11 @@ def create_data_preparer_graph() -> StateGraph:  # type: ignore[type-arg]
     # post-baseline avoids restructuring the leakage-remediation
     # conditional and lets the enrichment node act on the final
     # post-transform feature set.
-    graph.add_edge("compute_baseline_metrics", "kg_role_enrichment")
+    # Phase 1 data-sufficiency: inserted between
+    # ``compute_baseline_metrics`` and ``kg_role_enrichment`` so the
+    # sufficiency verdict can use baseline statistics.
+    graph.add_edge("compute_baseline_metrics", "sufficiency_check")
+    graph.add_edge("sufficiency_check", "kg_role_enrichment")
     graph.add_edge("kg_role_enrichment", "finalize_output")
 
     # Conditional edge: after finalize_output, check if QC passed

@@ -264,6 +264,12 @@ class DataPreparerAgent:
                 "leakage_added_features": final_state.get("leakage_added_features", []),
                 "leakage_remediation_reasoning": final_state.get("leakage_remediation_reasoning"),
                 "leakage_remediation_viable": final_state.get("leakage_remediation_viable"),
+                # Phase 1 data-sufficiency pre-flight (sufficiency_check
+                # node). DataSufficiencyReport.model_dump() shape; see
+                # src/utils/sufficiency_schemas.py. Carries verdict +
+                # resolved thresholds + detectable MDE + sensitivity grid.
+                "sufficiency_report": final_state.get("sufficiency_report"),
+                "power_warnings": final_state.get("power_warnings", []),
             }
 
             # Log execution time

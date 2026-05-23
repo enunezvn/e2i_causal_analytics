@@ -192,6 +192,16 @@ class DataPreparerState(BaseAgentSchema):
     remediation_steps: Optional[List[str]] = None
     blocking_issues: Optional[List[str]] = None  # If non-empty, blocks training
 
+    # Sufficiency pre-flight (Phase 1 of data-sufficiency diagnostics).
+    # ``sufficiency_report`` is the model_dump of a DataSufficiencyReport
+    # (src/utils/sufficiency_schemas.py): verdict + resolved thresholds +
+    # detectable MDE + sensitivity grid. ``power_warnings`` carries
+    # non-blocking SOFT_FAIL messages for the operator (predictive paths).
+    # The HARD_FAIL / blocking SOFT_FAIL path appends to ``blocking_issues``
+    # so the existing QC gate at ``finalize_output`` picks it up.
+    sufficiency_report: Optional[Dict[str, Any]] = None
+    power_warnings: Optional[List[str]] = None
+
     # === OUTPUT FIELDS ===
     # QC Report
     report_id: Optional[str] = None
