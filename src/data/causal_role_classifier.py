@@ -160,12 +160,29 @@ class CausalRoleClassifier(dspy.Module):
 
 
 def build_compile_set() -> list[dspy.Example]:
-    """Build the DSPy compile set: 33 curated examples covering all 6 roles.
+    """Build the DSPy compile set: 50 curated examples covering all 6 roles.
 
     Composition:
     - 21 legacy demos (cohort-only ``dataset_context``).
     - 12 Phase-4 S12 Option C paired (T, Y)-explicit demos (2026-05-19;
       see ``.claude/plans/option_c_dspy_recompile_for_s12_FINAL.md``).
+    - 17 plan-239 differentiated additions (2026-05-23; see
+      ``.claude/plans/239_miprov2_compile_set_growth.md``) splitting into
+      4 source buckets: A=6 cross-cohort PNH/BC literature-grounded,
+      B=4 adversarial / disagreement-pattern, C=4 edge-case role-boundary,
+      D=3 synthetic-DGP. All 17 use the structured derivation_pseudocode
+      shape ``source=X; derivation_inputs=[...]; aggregation=Y;
+      window_days=Z; knowable_at=...`` matching the golden-set regex, and
+      are filtered for derivation-signature distinctness against the
+      91-row literature golden set via the §3.0 semantic-neighbor table
+      + ``scripts/check_compile_golden_semantic_overlap.py`` PR-blocking
+      gate (plan-239 §4.3).
+
+    Plan-239 distribution after growth: ancestor=5, confounder=11,
+    mediator=7, descendant=10, collider=8, instrument=9 (total 50).
+    The plan §2.2 target table was aspirational (ancestor=6, mediator=8);
+    actual distribution lands 1 short of those two targets while exceeding
+    confounder/instrument targets and meeting the binding AC4 floor n>=50.
 
     Of the 18 incidents catalogued at
     ``.claude/state/leakage_compile_set_20260507.md``, 12 have been distilled
@@ -215,13 +232,17 @@ def build_compile_set() -> list[dspy.Example]:
     `insurance_product` confounder exemplar and creates contradictory
     training signal for an access/coverage variable.
 
-    Coverage by role: ancestor=2 (1 legacy + 1 Option C), confounder=6
-    (3 legacy + 3 Option C), mediator=5 (1 legacy + 4 Option C),
-    descendant=8 (8 legacy + 0 Option C), collider=6 (4 legacy + 2 Option C),
-    instrument=6 (4 legacy + 2 Option C). Total: 33.
+    Coverage by role pre-plan-239: ancestor=2, confounder=6, mediator=5,
+    descendant=8, collider=6, instrument=6 (total: 33). Post-plan-239
+    additions (#34-#50) lift to: ancestor=5, confounder=11, mediator=7,
+    descendant=10, collider=8, instrument=9 (total: 50). New (T,Y)-explicit
+    additions use ``cohort=...; treatment=...; outcome=...`` compile-set
+    shape (NOT the golden-set ``target=...; prediction_anchor=...`` shape)
+    per plan-239 §2.3 SHAPE discriminator.
 
     Source: .claude/state/leakage_compile_set_20260507.md + issue #198
-    + .claude/plans/option_c_dspy_recompile_for_s12_FINAL.md (Phase-4 S12).
+    + .claude/plans/option_c_dspy_recompile_for_s12_FINAL.md (Phase-4 S12)
+    + .claude/plans/239_miprov2_compile_set_growth.md (plan-239).
     """
     examples = [
         # Incident 1
@@ -1311,6 +1332,495 @@ def build_compile_set() -> list[dspy.Example]:
                 "pre-index by construction, the active concern is whether "
                 "to include Z in the (T_b -> Y_b) effect estimate (excludes "
                 "the mediated effect)."
+            ),
+            recommended_remediation="window",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # =====================================================================
+        # PLAN-239 — 17 new differentiated entries (#34-#50)
+        # Author: 4 parallel bucket agents (A=cross-cohort PNH/BC, B=adversarial,
+        # C=edge-case, D=synthetic-DGP). See `.claude/plans/239_miprov2_compile_set_growth.md`
+        # §3.0 semantic-neighbor table for the per-entry distinctness rationale.
+        # =====================================================================
+        # ----- Bucket A: cross-cohort PNH/BC (6 entries: #34-#39) -----
+        # Plan-239 Bucket A entry #34 — baseline_haptoglobin_pct_lln_preindex
+        dspy.Example(
+            feature_name="baseline_haptoglobin_pct_lln_preindex",
+            derivation_pseudocode=(
+                "source=LABS_HAPTOGLOBIN; derivation_inputs=['haptoglobin_mg_dl', 'hapto_lln']; "
+                "aggregation=min; window_days=90; knowable_at=preindex_30d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH claims; cohort=pnh; treatment=iptacopan_init; "
+                "outcome=ldh_normalization_180d"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Classical (T=iptacopan_init, Y=ldh_normalization_180d) confounder. "
+                "Z->T arrow: low pre-index haptoglobin (free-hemoglobin scavenger depletion) "
+                "marks severe intravascular hemolysis and drives iptacopan-vs-anti-C5 "
+                "candidacy per Brodsky 2014 (PMID 25237199; doi:10.1182/blood-2014-02-522128). "
+                "Z->Y arrow: deeper baseline hemolysis predicts post-index hemolytic-marker "
+                "normalization independently of treatment choice. why_not_duplicate: golden "
+                "neighbor baseline_ldh_x_uln_preindex uses source=LABS_HEMOLYSIS with "
+                "aggregation=mean(LDH/ULN); this entry pulls a DIFFERENT analyte (haptoglobin, "
+                "not LDH) measuring upstream hemoglobin-scavenger depletion (LDH measures "
+                "downstream cell lysis), with aggregation=min-of-haptoglobin/LLN-ratio."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Plan-239 Bucket A entry #35 — pre_index_anti_c5_persistence_days_lifetime
+        dspy.Example(
+            feature_name="pre_index_anti_c5_persistence_days_lifetime",
+            derivation_pseudocode=(
+                "source=PHARMACY_CLAIMS; derivation_inputs=['ndc_code', 'drug_class_anti_C5', 'days_supply']; "
+                "aggregation=sum; window_days=99999; knowable_at=preindex_30d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH claims; cohort=pnh; treatment=iptacopan_init; "
+                "outcome=ldh_normalization_180d"
+            ),
+            causal_role="ancestor",
+            mechanism=(
+                "Ancestor of (T=iptacopan_init, Y=ldh_normalization_180d). Lifetime cumulative "
+                "days-on-anti-C5 before iptacopan-switch reflects underlying disease chronicity "
+                "per Risitano 2020 (PMID 33347547; doi:10.1016/S2352-3026(20)30308-1) — long "
+                "historical exposure indexes entrenched chronic PNH phenotype, upstream of "
+                "both the immediate switch decision and post-index response. why_not_duplicate: "
+                "golden neighbor prior_anti_c5_inhibitor_use_flag_preindex is BINARY any-use "
+                "(aggregation=any) over 730d window, labeled CONFOUNDER (captures prior-"
+                "treatment-failure pathway); this entry is CONTINUOUS lifetime sum-of-days "
+                "(aggregation=sum, unlimited preindex window), labeled ANCESTOR (indexes "
+                "disease chronicity upstream of the immediate switch decision, not its "
+                "proximal confounder). Different role + different aggregation + different "
+                "window teaches an ancestor-vs-confounder boundary the golden set lacks."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Plan-239 Bucket A entry #36 — pnh_hemolysis_emergency_visit_days_90d_postindex
+        dspy.Example(
+            feature_name="pnh_hemolysis_emergency_visit_days_90d_postindex",
+            derivation_pseudocode=(
+                "source=ED_VISITS; derivation_inputs=['ed_visit_date', 'ed_discharge_date', 'primary_dx_icd10_D59_5']; "
+                "aggregation=sum; window_days=90; knowable_at=postindex+90d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH claims; cohort=pnh; treatment=iptacopan_init; "
+                "outcome=ldh_normalization_180d"
+            ),
+            causal_role="descendant",
+            mechanism=(
+                "Descendant of T=iptacopan_init: post-index burden of hemolysis-coded ED days. "
+                "T->V arrow: treatment efficacy modulates incident hemolytic crises that drive "
+                "ED utilization per Hill 2020 (PMID 31816102). No V->Y arrow back to LDH "
+                "normalization. Standard remediation per Hernan 2016 (PMID 27176981) is drop "
+                "from any (T,Y) effect-estimation adjustment set. why_not_duplicate: golden "
+                "neighbor pnh_related_hospitalizations_365d_postindex_count uses "
+                "source=CLAIMS_HOSPITALIZATION, agg=count of events over 365d. This entry "
+                "changes SOURCE TABLE (ED_VISITS vs HOSPITALIZATIONS), SETTING (emergency "
+                "outpatient vs inpatient), AGGREGATION (sum-of-days vs count-of-events), "
+                "and narrows WINDOW to 90d on a clinically distinct event type."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Plan-239 Bucket A entry #37 — nottingham_grade_at_diagnosis_categorical
+        dspy.Example(
+            feature_name="nottingham_grade_at_diagnosis_categorical",
+            derivation_pseudocode=(
+                "source=pathology_report_structured; derivation_inputs=['tubule_formation_score', 'nuclear_pleomorphism_score', 'mitotic_count_score']; "
+                "aggregation=mode; window_days=99999; knowable_at=preindex_30d"
+            ),
+            dataset_context=(
+                "ConcertAI Breast Cancer; cohort=bc; treatment=ribociclib_add; "
+                "outcome=pfs_event_24m"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Classical (T=ribociclib_add, Y=pfs_event_24m) confounder. Nottingham SBR "
+                "grade (composite of tubule formation + nuclear pleomorphism + mitotic count, "
+                "binned Grade 1/2/3) per Elston-Ellis 1991 (PMID 1995317) and Rakha 2019 "
+                "(PMID 27557947). Z->T: higher grade drives AI+CDK4/6 escalation over "
+                "AI-mono. Z->Y: higher grade predicts progression independently. "
+                "why_not_duplicate: golden neighbors er_percent_preindex and "
+                "ki67_index_percent_preindex are SINGLE-MARKER CONTINUOUS (most-recent assay "
+                "value). This entry is COMPOSITE CATEGORICAL grade aggregated as MODE across "
+                "diagnostic reports, with derivation_inputs that are the three SBR subscores "
+                "(not a single immunohistochemical marker)."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Plan-239 Bucket A entry #38 — prior_letrozole_duration_days_preindex
+        dspy.Example(
+            feature_name="prior_letrozole_duration_days_preindex",
+            derivation_pseudocode=(
+                "source=prescription_claims; derivation_inputs=['ndc_code', 'drug_brand_letrozole', 'days_supply']; "
+                "aggregation=sum; window_days=99999; knowable_at=preindex_30d"
+            ),
+            dataset_context=(
+                "ConcertAI Breast Cancer; cohort=bc; treatment=ribociclib_add; "
+                "outcome=pfs_event_24m"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Classical (T=ribociclib_add, Y=pfs_event_24m) confounder. Pre-index sum-"
+                "of-days letrozole exposure reflects prior endocrine-therapy intensity per "
+                "Hortobagyi 2021 MONALEESA-2 OS (PMID 33513289; doi:10.1056/NEJMoa2114663). "
+                "Z->T: longer prior AI-backbone exposure drives ribociclib add-on timing. "
+                "Z->Y: longer prior letrozole predicts secondary endocrine resistance, "
+                "depressing PFS regardless of CDK4/6 add. why_not_duplicate: golden neighbor "
+                "prior_cdk46_lines_count counts CDK4/6 LINES (prior failure-on-class). This "
+                "entry counts AROMATASE-INHIBITOR DURATION (orthogonal drug class, different "
+                "MoA: estrogen-synthesis blockade vs CDK4/6 inhibition), aggregated as "
+                "SUM-OF-DAYS not COUNT-OF-LINES — different drug class + different aggregation."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Plan-239 Bucket A entry #39 — febrile_neutropenia_episode_count_followup_180d
+        dspy.Example(
+            feature_name="febrile_neutropenia_episode_count_followup_180d",
+            derivation_pseudocode=(
+                "source=CLAIMS_DIAGNOSIS; derivation_inputs=['dx_code_icd10_D70', 'fever_dx_code_icd10_R50_9']; "
+                "aggregation=count; window_days=180; knowable_at=postindex+180d"
+            ),
+            dataset_context=(
+                "ConcertAI Breast Cancer; cohort=bc; treatment=ribociclib_add; "
+                "outcome=pfs_event_24m"
+            ),
+            causal_role="descendant",
+            mechanism=(
+                "Descendant of T=ribociclib_add. T->V: ribociclib-induced myelosuppression "
+                "drives febrile neutropenia episodes per Tripathy 2019 MONALEESA-7 safety "
+                "(PMID 31526833). CLAIMS-EVENT-BASED (ICD D70.x co-occurring with R50.9 "
+                "within 7d), not lab-value-based. No V->Y arrow back to PFS at 24m. "
+                "Remediation per Hernan 2000 (PMID 10955408) is drop from (T,Y) adjustment "
+                "set. why_not_duplicate: golden neighbor post_index_neutropenia_max_grade_90d "
+                "is LAB-VALUE-BASED (ANC graded by CTCAE) aggregated as WORST-VALUE over 90d "
+                "and labeled MEDIATOR (dose-intensity path). This entry is CLAIM-EVENT-BASED "
+                "(D70.x + R50.9 conjunction) aggregated as COUNT-OF-EPISODES over 180d, "
+                "labeled DESCENDANT — teaches the lab-vs-claim boundary within neutropenia."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # ----- Bucket B: adversarial / disagreement-pattern (4 entries: #40-#43) -----
+        # Plan-239 Bucket B entry #40 — urticaria_activity_score_180d_postindex_csu
+        dspy.Example(
+            feature_name="urticaria_activity_score_180d_postindex_csu",
+            derivation_pseudocode=(
+                "source=ehr_assessments; derivation_inputs=['uas7_score', 'assessment_date']; "
+                "aggregation=last; window_days=180; knowable_at=postindex+180d"
+            ),
+            dataset_context=(
+                "ConcertAI CSU EHR; cohort=csu; treatment=remibrutinib_init; "
+                "outcome=uas7_remission_180d"
+            ),
+            causal_role="mediator",
+            mechanism=(
+                "Targets clinical-mediator-vs-biomarker-mediator boundary: the classifier "
+                "mistakes PRO-based clinical activity scores for descendants because they "
+                "look outcome-like. This entry teaches that UAS7 (weekly-sum patient-reported "
+                "urticaria-activity score per Saini 2021, PMID 33321141) sits on the "
+                "T->M_clinical->Y mediation path between remibrutinib_init and "
+                "uas7_remission_180d, not downstream of Y. why_not_duplicate: golden mediators "
+                "delta_basophil_activation_test_cd63_pct_28_56d and "
+                "delta_anti_fcepsilon_ri_igg_titer_post_treatment_60_90d are LAB-BASED "
+                "biomarker DELTAS at sub-90d windows on `lab_results`. This entry is a "
+                "PATIENT-REPORTED CLINICAL ACTIVITY SCORE at the 180d window from "
+                "`ehr_assessments` — clinical-mediator vs biomarker-mediator. Methods anchor "
+                "PMID 10955408 (Hernan 2000 MSM)."
+            ),
+            recommended_remediation="window",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Plan-239 Bucket B entry #41 — csu_remibrutinib_global_drug_shortage_indicator_index_month_flag
+        dspy.Example(
+            feature_name="csu_remibrutinib_global_drug_shortage_indicator_index_month_flag",
+            derivation_pseudocode=(
+                "source=FDA_DRUG_SHORTAGE_FEED; derivation_inputs=['shortage_event_start_date', 'shortage_event_end_date', 'drug_name']; "
+                "aggregation=any; window_days=30; knowable_at=preindex_30d"
+            ),
+            dataset_context=(
+                "ConcertAI CSU + FDA shortage feed; cohort=csu; treatment=remibrutinib_init; "
+                "outcome=uas7_remission_180d"
+            ),
+            causal_role="instrument",
+            mechanism=(
+                "Targets natural-experiment-IV disagreement pattern: classifier under-recognizes "
+                "IVs that are not preference-based or calendar-based. This entry teaches that "
+                "EXOGENOUS SUPPLY SHOCKS (FDA-tracked drug shortage active during index month "
+                "per accessdata.fda.gov/scripts/drugshortages/) satisfy the exclusion "
+                "restriction. Z->T: shortages suppress remibrutinib initiation regardless of "
+                "patient/prescriber preference. Z->Y only through T: an exogenous shortage on "
+                "an FDA-tracked calendar has no direct biological path to CSU outcomes apart "
+                "from receipt of treatment (Fox 2018 NEJM PMID 29385611; Brookhart-Schneeweiss "
+                "preference IV review PMID 18375005). why_not_duplicate: golden CSU IVs are "
+                "calendar-time-post-approval + prescriber-first-initiation hybrids. This "
+                "REPLACEMENT uses an entirely new source table (FDA_DRUG_SHORTAGE_FEED) and a "
+                "structurally different IV family (supply-side natural experiment)."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Plan-239 Bucket B entry #42 — meningococcal_vaccination_pre_iptacopan_initiation_flag_pnh
+        dspy.Example(
+            feature_name="meningococcal_vaccination_pre_iptacopan_initiation_flag_pnh",
+            derivation_pseudocode=(
+                "source=IMMUNIZATION_REGISTRY; derivation_inputs=['cvx_code', 'administration_date']; "
+                "aggregation=any; window_days=99999; knowable_at=preindex_14d"
+            ),
+            dataset_context=(
+                "Optum + immunization registry linkage; cohort=pnh; treatment=iptacopan_init; "
+                "outcome=ldh_normalization_180d"
+            ),
+            causal_role="ancestor",
+            mechanism=(
+                "Targets ancestor-vs-confounder boundary on regulatory-mandated pre-treatment "
+                "flags. Classifier's documented pattern: calls vaccination flags 'confounder' "
+                "because vaccination correlates with prescriber care intensity. This entry "
+                "teaches that REMS-MANDATED near-constants are ANCESTORS. Iptacopan FDA label "
+                "+ complement-inhibitor REMS require meningococcal vaccination >=14d before "
+                "initiation (fda.gov/.../iptacopan-fabhalta-information). Because the flag is "
+                "regulatory-mandated for every compliant prescriber, V->T arrow is degenerate "
+                "(no variation among compliant initiators) and V has no direct path to "
+                "ldh_normalization_180d. With neither a discriminating V->T arrow nor V->Y, V "
+                "sits upstream of T as a pre-anchor protocol-compliance ancestor "
+                "(Greenland-Pearl-Robins 1999 PMID 9888278). why_not_duplicate: golden PNH "
+                "has no vaccination-status entry; nearest neighbor prior_thrombotic_event_flag "
+                "is a true confounder from DIAGNOSIS_HISTORY with different source + role."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Plan-239 Bucket B entry #43 — de_novo_metastatic_at_diagnosis_flag_bc
+        dspy.Example(
+            feature_name="de_novo_metastatic_at_diagnosis_flag_bc",
+            derivation_pseudocode=(
+                "source=pathology_staging_summary; derivation_inputs=['ajcc_stage_at_diagnosis', 'metastatic_at_diagnosis_flag']; "
+                "aggregation=binary; window_days=99999; knowable_at=preindex_30d"
+            ),
+            dataset_context=(
+                "ConcertAI Oncology BC; cohort=bc; treatment=ribociclib_add; outcome=pfs_24m"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Targets binary-disease-trajectory-vs-descendant boundary. Classifier conflates "
+                "trajectory variables with descendants because post-anchor-feeling words "
+                "('metastatic') trigger a post-treatment heuristic. This entry teaches that "
+                "STAGING-AT-DIAGNOSIS is a pre-anchor baseline confounder evaluated at the "
+                "INITIAL DIAGNOSIS event (precedes the ribociclib-add index by months to "
+                "years), not at post-index follow-up. De-novo Stage IV is categorically "
+                "distinct from recurrent Stage IV (Lobbezoo 2015 ESMO PMID 30592253) and per "
+                "NCCN 2021 (PMID 33119927) drives CDK4/6-line selection: V->T (de-novo more "
+                "likely to receive 1L CDK4/6) AND V->Y (independent progression biology). "
+                "why_not_duplicate: iter-0 candidate was a CONTINUOUS time-from-primary-dx in "
+                "the same recurrence-biology family as BC golden visceral_disease_flag. This "
+                "REPLACEMENT is a BINARY classification from new source pathology_staging_summary."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # ----- Bucket C: edge-case / role-boundary (4 entries: #44-#47) -----
+        # Plan-239 Bucket C entry #44 — on_treatment_remibrutinib_at_90d_postindex_alive_flag_csu
+        dspy.Example(
+            feature_name="on_treatment_remibrutinib_at_90d_postindex_alive_flag_csu",
+            derivation_pseudocode=(
+                "source=PHARMACY_CLAIMS_AND_ENROLLMENT; derivation_inputs=['btki_fill_date', 'btki_days_supply', 'enrollment_end_date', 'death_date']; "
+                "aggregation=conjunctive_binary; window_days=90; knowable_at=postindex+90d"
+            ),
+            dataset_context=(
+                "ConcertAI CSU; cohort=csu; treatment=remibrutinib_init; "
+                "outcome=uas7_response_at_180d"
+            ),
+            causal_role="collider",
+            mechanism=(
+                "Conjunctive binary indicator combining on-treatment status AND alive-at-d90. "
+                "DAG: T -> V <- Y where V = (on_remibrutinib_at_d90 AND alive_at_d90). Both "
+                "T->V (remibrutinib toxicity/tolerability affects on-therapy persistence and "
+                "survival to d90) and Y->V (underlying CSU severity affects survival-on-"
+                "therapy) point INTO V, making V a common-descendant collider, not a pure "
+                "descendant. Why-not-DESCENDANT: a descendant would carry only T->V; the "
+                "conjunction with alive_at_d90 introduces the second Y->V arrow. Conditioning "
+                "on V=1 opens a spurious T<-...<-Y backdoor via the collider. why_not_duplicate "
+                "(per §3.0): golden carries on-treatment-at-180d and alive-at-180d as TWO "
+                "SEPARATE univariate colliders at a different window; this entry is the "
+                "CONJUNCTION at 90d, teaching that conjunctive post-anchor flags multiply "
+                "collider-bias (Hernan 2004 PMID 15308962)."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Plan-239 Bucket C entry #45 — iptacopan_response_complete_remission_at_180d_flag_pnh
+        dspy.Example(
+            feature_name="iptacopan_response_complete_remission_at_180d_flag_pnh",
+            derivation_pseudocode=(
+                "source=LABS_COMPOSITE_REMISSION_PANEL; derivation_inputs=['ldh_value', 'ldh_uln', 'transfusion_events_60d', 'hemoglobin_g_dl']; "
+                "aggregation=conjunctive_all_three; window_days=180; knowable_at=postindex+180d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH; cohort=pnh; treatment=iptacopan_init; "
+                "outcome=transfusion_independence_12m"
+            ),
+            causal_role="collider",
+            mechanism=(
+                "Composite complete-hematologic-remission flag: conjunction of LDH normalization "
+                "AND transfusion-independence AND hemoglobin normalization at d180 post "
+                "iptacopan initiation. DAG: T -> V <- Y where V = composite_remission_flag(d180). "
+                "Both T (iptacopan C3 blockade efficacy) and Y (underlying hemolysis severity) "
+                "have arrows INTO V because remission is jointly determined by treatment effect "
+                "AND latent disease state. Why-not-MEDIATOR: a mediator would sit on the "
+                "T->M->Y directed path; here the flag is REVERSE — Y drives capability of "
+                "achieving remission INDEPENDENT of T, and T independently drives remission "
+                "probability. Both arrows point INTO V, satisfying collider definition not "
+                "mediator definition. why_not_duplicate: golden PNH colliders are PRO-based "
+                "(FACIT-fatigue) and pharmacy-persistence; this entry is LAB-DEFINED "
+                "conjunctive multi-criterion remission flag (LABS_COMPOSITE_REMISSION_PANEL) "
+                "(Hernan 2004 PMID 15308962; Risitano 2023 APPLY-PNH PMID 37354604)."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Plan-239 Bucket C entry #46 — practice_state_oncology_340b_status_flag_bc
+        dspy.Example(
+            feature_name="practice_state_oncology_340b_status_flag_bc",
+            derivation_pseudocode=(
+                "source=HRSA_340B_OPAIS_FEED; derivation_inputs=['practice_id', 'opais_registration_status', 'index_date']; "
+                "aggregation=binary; window_days=0; knowable_at=index_date"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- metastatic BC; cohort=bc; treatment=ribociclib_add; "
+                "outcome=pfs_24m"
+            ),
+            causal_role="instrument",
+            mechanism=(
+                "Practice-level 340B drug-pricing-program participation flag at index date "
+                "(HRSA OPAIS public registry). DAG: IV(340B) -> T -> Y, with NO IV->Y arrow "
+                "and NO unmeasured shared parent U->{IV,Y}. Mechanism: 340B reshapes outpatient "
+                "drug-procurement economics (eligible practices acquire ribociclib at "
+                "discounted ceiling prices), which shifts ribociclib uptake probability "
+                "independent of any individual patient's tumor biology. Exclusion restriction "
+                "holds because 340B status is determined by federal eligibility criteria "
+                "(DSH percentages, safety-net designation) orthogonal to per-patient "
+                "progression biology. Why-not-CONFOUNDER: a confounder of (T,Y) would require "
+                "arrows from the SAME node to both T and Y; 340B affects T but does NOT "
+                "directly affect Y. why_not_duplicate: golden BC IVs are calendar/preference-"
+                "based; this entry uses a structurally distinct healthcare-policy IV from a "
+                "new source table (HRSA_340B_OPAIS_FEED) (Conti 2019 JAMA PMID 31334758; "
+                "Brookhart-Schneeweiss PMID 18375005)."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Plan-239 Bucket C entry #47 — oncotype_dx_recurrence_score_pre_index_18m_window_bc
+        dspy.Example(
+            feature_name="oncotype_dx_recurrence_score_pre_index_18m_window_bc",
+            derivation_pseudocode=(
+                "source=SOMATIC_TUMOR_GENOMICS_REPORTS; derivation_inputs=['oncotype_dx_rs_value', 'rs_assay_collection_date']; "
+                "aggregation=most_recent; window_days=540; knowable_at=preindex_30d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- metastatic BC; cohort=bc; treatment=ribociclib_add; "
+                "outcome=pfs_24m"
+            ),
+            causal_role="ancestor",
+            mechanism=(
+                "Tumor-derived 21-gene Oncotype DX recurrence score (continuous 0-100) "
+                "measured on tumor tissue within 18-month preindex window. DAG: RS -> Y, with "
+                "NO RS -> T arrow in this (T=ribociclib-add) cohort framing. RS captures "
+                "latent tumor proliferation biology that predicts PFS (Y) independent of the "
+                "CDK4/6-add decision because in metastatic BC the RS is clinically used to "
+                "decide CHEMO-vs-ENDOCRINE at earlier stages, NOT to select ribociclib-add at "
+                "the metastatic line (NCCN uses ER%, PR%, visceral disease, prior endocrine "
+                "duration to select CDK4/6, not 21-gene RS). RS sits upstream of Y only, "
+                "satisfying parent-of-Y-only ancestor pattern. Why-not-CONFOUNDER: requires "
+                "both RS->T AND RS->Y; RS->T is absent in this cohort. why_not_duplicate: "
+                "golden BC ancestors are GERMLINE/FAMILY/MAMMOGRAPHIC; this entry is a "
+                "SOMATIC TUMOR GENOMIC ancestor from an entirely distinct source "
+                "(somatic tumor RT-PCR vs germline genetic testing) (Paik 2004 PMID 14760119; "
+                "Sparano 2018 TAILORx PMID 30516102)."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # ----- Bucket D: synthetic-DGP (3 entries: #48-#50) -----
+        # Plan-239 Bucket D entry #48 — synth_a1_baseline_severity_max_180d_preindex_alt_confounder
+        dspy.Example(
+            feature_name="synth_a1_baseline_severity_max_180d_preindex_alt_confounder",
+            derivation_pseudocode=(
+                "source=synthetic_dgp_a1; derivation_inputs=['Z1_baseline_severity']; "
+                "aggregation=max; window_days=180; knowable_at=preindex_180d"
+            ),
+            dataset_context=(
+                "cohort=synthetic_a1; treatment=treatment_initiated; "
+                "outcome=disease_progression_180d"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Oracle-true-by-construction confounder from "
+                "src/ml/causal_role_dgp/scenarios.py::build_scenario('A1_confounder_heavy'), "
+                "scenario_name='A1_confounder_heavy', node_name='Z1_baseline_severity', "
+                "ground_truth_role='confounder'. The A1 DAG places Z1_baseline_severity as a "
+                "common cause of treatment_initiated (T) and disease_progression_180d (Y): "
+                "sicker patients at baseline are more likely to be treated AND more likely to "
+                "progress, so omitting Z1 induces confounding bias on E[Y(1)-Y(0)] "
+                "(Greenland-Pearl-Robins PMID 9888278). This is the only oracle-true confounder "
+                "in the compile set, anchoring the prototype next to literature-grounded "
+                "confounders. why_not_duplicate (§3.0): bare synthetic-fixture feature_name "
+                "`baseline_severity_score_preindex` cannot be reused per §0/V27 — this entry "
+                "uses `synth_a1_` prefix + `_alt_confounder` suffix and `cohort=synthetic_a1` "
+                "discriminator. Provenance: DAG-methods-only (no PHI) per "
+                "Greenland-Pearl-Robins PMID 9888278 + Brookhart PMID 18375005."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Plan-239 Bucket D entry #49 — synth_a4_iv_index_provider_volume_alt_instrument
+        dspy.Example(
+            feature_name="synth_a4_iv_index_provider_volume_alt_instrument",
+            derivation_pseudocode=(
+                "source=synthetic_dgp_a4; derivation_inputs=['IV3_index_provider_volume']; "
+                "aggregation=count; window_days=365; knowable_at=preindex_180d"
+            ),
+            dataset_context=(
+                "cohort=synthetic_a4; treatment=biologic_initiation_180d; "
+                "outcome=hospitalization_180d"
+            ),
+            causal_role="instrument",
+            mechanism=(
+                "Oracle-true-by-construction instrument from "
+                "src/ml/causal_role_dgp/scenarios.py::build_scenario('A4_instrument_rich'), "
+                "scenario_name='A4_instrument_rich', node_name='IV3_index_provider_volume', "
+                "ground_truth_role='instrument'. The A4 DAG carries THREE structurally-valid "
+                "instruments (IV1 provider preference, IV2 geographic region, IV3 index-"
+                "provider volume); IV3 satisfies Brookhart-Wang IV conditions by construction "
+                "(PMID 18375005): (1) relevance — prior-year biologic volume strongly predicts "
+                "biologic_initiation_180d via prescribing capacity; (2) exclusion restriction "
+                "— no direct edge to hospitalization_180d in the DGP; (3) no unmeasured "
+                "confounding of IV3↔Y given simulated covariates. Compile set previously "
+                "lacked a multi-IV exclusion-restriction exemplar. why_not_duplicate (§3.0): "
+                "bare synthetic-fixture `index_provider_biologic_volume_prior_year` cannot be "
+                "reused per §0/V27 — `synth_a4_` prefix + `_alt_instrument` suffix + "
+                "`cohort=synthetic_a4` discriminator. Provenance: DAG-methods-only "
+                "(Brookhart PMID 18375005; Greenland-Pearl-Robins PMID 9888278)."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Plan-239 Bucket D entry #50 — synth_a2_m1_drug_concentration_alt_mediator
+        dspy.Example(
+            feature_name="synth_a2_m1_drug_concentration_alt_mediator",
+            derivation_pseudocode=(
+                "source=synthetic_dgp_a2; derivation_inputs=['M1_drug_concentration_30d']; "
+                "aggregation=mean; window_days=30; knowable_at=postindex+30d"
+            ),
+            dataset_context=(
+                "cohort=synthetic_a2; treatment=treatment_initiated; outcome=clinical_response_180d"
+            ),
+            causal_role="mediator",
+            mechanism=(
+                "Oracle-true-by-construction mediator from "
+                "src/ml/causal_role_dgp/scenarios.py::build_scenario('A2_mediator_heavy'), "
+                "scenario_name='A2_mediator_heavy', node_name='M1_drug_concentration_30d', "
+                "ground_truth_role='mediator'. A2 is engineered with three mediators along the "
+                "T->M->Y indirect-effect path; M1 (mean plasma drug concentration 30d "
+                "post-index) is the PROXIMAL pharmacologic intermediate sitting on the "
+                "directed path treatment_initiated -> M1_drug_concentration_30d -> "
+                "clinical_response_180d. Adjusting for M1 in an ATE estimand blocks the "
+                "indirect effect and induces over-adjustment bias (Hernan MSM and "
+                "total/direct-effect decomposition, PMID 10955408); correct remediation is "
+                "windowing — restrict the candidate set to pre-treatment knowable-at "
+                "covariates. Compile set lacked an oracle-true proximal pharmacologic mediator. "
+                "why_not_duplicate (§3.0): bare synthetic-fixture `plasma_drug_concentration_30d` "
+                "cannot be reused per §0/V27 — `synth_a2_` prefix + `_alt_mediator` suffix + "
+                "`cohort=synthetic_a2` discriminator. Provenance: DAG-methods-only "
+                "(Hernan MSM PMID 10955408; Greenland-Pearl-Robins PMID 9888278)."
             ),
             recommended_remediation="window",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),

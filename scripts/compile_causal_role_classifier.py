@@ -52,11 +52,13 @@ Phase 2.5 / Phase 2.9 Stage 3 unblock: see
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import random
 import sys
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -104,6 +106,45 @@ DEFAULT_MAX_BOOTSTRAPPED_DEMOS = 4
 # at cap=40 >= 33 the sample step retains all labeled demos
 # deterministically.
 DEFAULT_MAX_LABELED_DEMOS = 40
+
+# Plan-239 §5.5: --optimizer miprov2 uses a higher labeled-demo cap so the
+# 50-example compile set survives `random.sample(demos, max_labeled_demos)`
+# with headroom. Default 60 (= 50 + 10 slot headroom for future expansion).
+MIPROV2_DEFAULT_MAX_LABELED_DEMOS = 60
+
+# Plan-239 §5.2: artifact JSON keys whose values are nondeterministic
+# across runs (timestamps, cache counters, run IDs). normalize_artifact_json
+# strips these before byte-comparing two compiled artifacts for the AC2
+# reproducibility test (Tier-2).
+VOLATILE_KEY_ALLOWLIST: frozenset[str] = frozenset(
+    {
+        "compiled_at",
+        "cache_hits",
+        "cache_misses",
+        "lm_request_count",
+        "elapsed_seconds",
+        "run_id",
+    }
+)
+
+
+def normalize_artifact_json(path: Path) -> str:
+    """Plan-239 §5.2: canonical comparable string for reproducibility checks.
+
+    Drops volatile keys (timestamps, cache counters, run IDs), sorts keys,
+    normalizes whitespace. Two MIPROv2 compiles under the same fixed seed
+    should produce byte-identical normalized output.
+    """
+    obj = json.loads(Path(path).read_text())
+
+    def _strip(o: Any) -> Any:
+        if isinstance(o, dict):
+            return {k: _strip(v) for k, v in o.items() if k not in VOLATILE_KEY_ALLOWLIST}
+        if isinstance(o, list):
+            return [_strip(x) for x in o]
+        return o
+
+    return json.dumps(_strip(obj), sort_keys=True, indent=2)
 
 
 def preflight_candidate_check(
@@ -176,6 +217,77 @@ def _seed_all(seed: int) -> None:
     os.environ.setdefault("DSPY_RANDOM_SEED", str(seed))
 
 
+def _compile_with_miprov2(
+    *,
+    program: Any,
+    trainset: list[Any],
+    seed: int,
+    max_labeled_demos: int = MIPROV2_DEFAULT_MAX_LABELED_DEMOS,
+    max_bootstrapped_demos: int = DEFAULT_MAX_BOOTSTRAPPED_DEMOS,
+    auto: str = "light",
+) -> Any:
+    """Plan-239 §5.1 — compile via MIPROv2 with seed threaded into BOTH
+    constructor AND .compile() call (belt-and-suspenders).
+
+    Per §0/V15 + §0/V21 + §9.2 R7: MIPROv2 auto-splits trainset 80/20 if
+    no `valset` is passed, producing a train of 10 + val of 40 at n=50 (the
+    train shrinks because internal logic flips, but the default
+    `minibatch_size=35` would still trip on val=10). We pass `valset`
+    explicitly (40 train / 10 val) AND set `minibatch=False` so the
+    optimizer runs full-eval on the small val set.
+
+    Returns the compiled program with `metadata['dspy_version']` recorded
+    (plan-239 §5.2) for post-upgrade reproducibility debugging.
+    """
+    from dspy.teleprompt import MIPROv2
+
+    teleprompter = MIPROv2(
+        metric=_exact_match_metric,
+        seed=seed,
+        max_bootstrapped_demos=max_bootstrapped_demos,
+        max_labeled_demos=max_labeled_demos,
+        auto=auto,
+    )
+
+    # Explicit train/val split (plan-239 §5.4 R7). 80/20 floor at n=50.
+    n_total = len(trainset)
+    if n_total >= 5:
+        rng = random.Random(seed)
+        shuffled = list(trainset)
+        rng.shuffle(shuffled)
+        val_size = max(1, n_total // 5)
+        valset = shuffled[:val_size]
+        train_subset = shuffled[val_size:]
+    else:
+        # Degenerate path used by unit tests with empty/tiny trainsets;
+        # let MIPROv2 do its own thing (it will error out on n_total=0
+        # which is fine for the wiring-only test).
+        valset = None
+        train_subset = trainset
+
+    compiled = teleprompter.compile(
+        program,
+        trainset=train_subset,
+        valset=valset,
+        seed=seed,
+        minibatch=False,
+    )
+
+    # Plan-239 §5.2: record DSPy version on the artifact for post-upgrade
+    # reproducibility debugging. metadata is a dict-like attribute on
+    # dspy.Module subclasses.
+    try:
+        import dspy
+
+        existing = getattr(compiled, "metadata", None) or {}
+        existing.update({"dspy_version": dspy.__version__})
+        compiled.metadata = existing
+    except Exception as exc:  # pragma: no cover - non-critical
+        logger.warning("MIPROv2: could not record dspy_version metadata (%s)", exc)
+
+    return compiled
+
+
 def _exact_match_metric(example, prediction, _trace=None) -> bool:
     """Bootstrap metric: prediction's ``causal_role`` matches the labeled role.
 
@@ -217,6 +329,7 @@ def compile_and_persist(
     seed: int = DEFAULT_SEED,
     max_bootstrapped_demos: int = DEFAULT_MAX_BOOTSTRAPPED_DEMOS,
     max_labeled_demos: int = DEFAULT_MAX_LABELED_DEMOS,
+    optimizer: str = "bootstrap",
 ) -> Path:
     """Compile the classifier and persist the compiled program JSON.
 
@@ -280,16 +393,37 @@ def compile_and_persist(
 
     trainset = build_compile_set()
 
-    teleprompter = BootstrapFewShot(
-        metric=_exact_match_metric,
-        max_bootstrapped_demos=max_bootstrapped_demos,
-        max_labeled_demos=max_labeled_demos,
-        max_rounds=1,
-    )
+    if optimizer == "miprov2":
+        # Plan-239 AC1+AC2: MIPROv2 path. Default labeled-demos cap raised
+        # to MIPROV2_DEFAULT_MAX_LABELED_DEMOS when the caller did not
+        # explicitly override DEFAULT_MAX_LABELED_DEMOS.
+        effective_labeled = (
+            MIPROV2_DEFAULT_MAX_LABELED_DEMOS
+            if max_labeled_demos == DEFAULT_MAX_LABELED_DEMOS
+            else max_labeled_demos
+        )
+        compiled = _compile_with_miprov2(
+            program=student,
+            trainset=trainset,
+            seed=seed,
+            max_labeled_demos=effective_labeled,
+            max_bootstrapped_demos=max_bootstrapped_demos,
+        )
+    elif optimizer == "bootstrap":
+        teleprompter = BootstrapFewShot(
+            metric=_exact_match_metric,
+            max_bootstrapped_demos=max_bootstrapped_demos,
+            max_labeled_demos=max_labeled_demos,
+            max_rounds=1,
+        )
+        compiled = teleprompter.compile(student=student, trainset=trainset)
+    else:
+        raise ValueError(
+            f"Unknown --optimizer {optimizer!r}; choose 'bootstrap' or 'miprov2' (plan-239 AC1)."
+        )
 
-    compiled = teleprompter.compile(student=student, trainset=trainset)
     compiled.save(str(out_path))
-    logger.info("compile_causal_role_classifier: wrote %s", out_path)
+    logger.info("compile_causal_role_classifier: optimizer=%s wrote %s", optimizer, out_path)
     return out_path
 
 
@@ -392,6 +526,18 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "experiment)."
         ),
     )
+    parser.add_argument(
+        "--optimizer",
+        choices=("bootstrap", "miprov2"),
+        default="bootstrap",
+        help=(
+            "DSPy teleprompter to use (plan-239 AC1). `bootstrap` is "
+            "the legacy BootstrapFewShot path; `miprov2` is the MIPROv2 "
+            "path with seed threaded into both constructor and compile() "
+            "and explicit 80/20 train/val split (plan-239 §5.1-§5.4). "
+            "Default: bootstrap (preserves prior behavior on Branch B)."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -422,6 +568,7 @@ def main(argv: list[str] | None = None) -> int:
         seed=args.seed,
         max_bootstrapped_demos=args.max_bootstrapped_demos,
         max_labeled_demos=args.max_labeled_demos,
+        optimizer=args.optimizer,
     )
     return 0
 

@@ -127,14 +127,25 @@ def _evaluate_entries(
     *,
     cohort_filter: Optional[str],
     require_evaluator: bool,
+    classifier_artifact: Optional[Path] = None,
+    disagreements: Optional[list[dict[str, str]]] = None,
 ) -> dict[tuple[str, str], CohortMetrics]:
     """Run the classifier on each entry and bucket into per-cohort metrics.
 
     Returns a mapping of (cohort, gate) -> CohortMetrics. Gate is
     "gated" when require_evaluator=True (subset to satisfied=True) and
     "ungated" when False (all evaluated entries).
+
+    When ``disagreements`` is provided, appends one record per
+    classifier/ground-truth mismatch with EXACTLY the four keys
+    ``{cohort, gate, predicted_role, ground_truth_role}`` — feature_name
+    and derivation_pseudocode are excluded by construction (plan-239 §6.4
+    HARD RULE: golden-set entries must not leak into compile-set authoring).
     """
-    classifier = load_compiled_classifier()
+    if classifier_artifact is not None:
+        classifier = load_compiled_classifier(artifact_path=classifier_artifact)
+    else:
+        classifier = load_compiled_classifier()
     if classifier is None:
         logger.warning(
             "load_compiled_classifier returned None — no LM configured. "
@@ -194,6 +205,19 @@ def _evaluate_entries(
         # Track confusion matrix entries.
         truth_row = metrics.confusion.setdefault(str(ground_truth), {})
         truth_row[str(predicted)] = truth_row.get(str(predicted), 0) + 1
+
+        # Plan-239 §6.4 disagreement accumulator (4-key shape, by construction
+        # excludes feature_name + derivation_pseudocode to prevent golden-set
+        # leakage into compile-set authoring).
+        if disagreements is not None and str(predicted) != str(ground_truth):
+            disagreements.append(
+                {
+                    "cohort": str(cohort),
+                    "gate": gate_label,
+                    "predicted_role": str(predicted),
+                    "ground_truth_role": str(ground_truth),
+                }
+            )
 
         # Instrument-specific TP/FP/FN bookkeeping (the gating decision).
         if ground_truth == "instrument" and predicted == "instrument":
@@ -301,6 +325,28 @@ def main() -> int:
         help="If set, write JSON report to this path in addition to stdout.",
     )
     parser.add_argument(
+        "--classifier-artifact",
+        type=Path,
+        default=None,
+        help=(
+            "Override the compiled-classifier path (plan-239 §6.0 F1). "
+            "Defaults to artifacts/dspy/causal_role_classifier.json via "
+            "load_compiled_classifier()."
+        ),
+    )
+    parser.add_argument(
+        "--disagreements-path",
+        type=Path,
+        default=None,
+        help=(
+            "If set, write a JSON list of classifier/ground-truth "
+            "disagreements (plan-239 §6.0 F2 / §6.4). Each record contains "
+            "EXACTLY {cohort, gate, predicted_role, ground_truth_role} — "
+            "feature_name and derivation_pseudocode are excluded by "
+            "construction (HARD RULE: no golden-set leakage into compile-set)."
+        ),
+    )
+    parser.add_argument(
         "--log-level",
         default="INFO",
         help="Python logging level (default: INFO)",
@@ -323,6 +369,9 @@ def main() -> int:
 
     cohort_filter = None if args.cohort == "all" else args.cohort
     buckets: dict[tuple[str, str], CohortMetrics] = {}
+    disagreements: Optional[list[dict[str, str]]] = (
+        [] if args.disagreements_path is not None else None
+    )
 
     gates_to_run: list[bool]
     if args.evaluator_gate == "true":
@@ -338,6 +387,8 @@ def main() -> int:
                 entries,
                 cohort_filter=cohort_filter,
                 require_evaluator=gate,
+                classifier_artifact=args.classifier_artifact,
+                disagreements=disagreements,
             )
         )
 
@@ -354,6 +405,16 @@ def main() -> int:
         }
         args.report_path.write_text(json.dumps(report_doc, indent=2, sort_keys=True) + "\n")
         logger.info("wrote JSON report to %s", args.report_path)
+
+    if args.disagreements_path is not None and disagreements is not None:
+        args.disagreements_path.write_text(
+            json.dumps(disagreements, indent=2, sort_keys=True) + "\n"
+        )
+        logger.info(
+            "wrote %d disagreement records to %s (plan-239 §6.4 4-key shape)",
+            len(disagreements),
+            args.disagreements_path,
+        )
 
     # Exit code logic: 0 if ANY overall gate passes threshold (so a true
     # PASS on the gated subset is sufficient for Phase 4 acceptance);
