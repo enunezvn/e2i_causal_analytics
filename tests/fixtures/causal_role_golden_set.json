@@ -1,0 +1,1503 @@
+{
+  "cohorts": {
+    "BC_kisqali": {
+      "brand": "Kisqali (ribociclib)",
+      "cohort_name": "BC_kisqali",
+      "data_source": "ConcertAI oncology EHR+claims",
+      "indication": "HR+/HER2- breast cancer (metastatic and high-risk early-stage)",
+      "issue": "#358",
+      "moa": "CDK4/6 inhibitor",
+      "research_date": "2026-05-23",
+      "researcher": "Claude opus-4-7 (literature extraction via PubMed MCP)",
+      "target_outcome": "progression_free_survival_24m OR overall_response_rate_180d",
+      "total_entries": 30
+    },
+    "CSU_remibrutinib": {
+      "brand": "Remibrutinib (LOU064)",
+      "cohort_name": "CSU_remibrutinib",
+      "data_source": "ConcertAI CSU claims",
+      "indication": "Chronic Spontaneous Urticaria refractory to H1 antihistamines",
+      "issue": "#358",
+      "moa": "BTK inhibitor (Bruton tyrosine kinase)",
+      "research_date": "2026-05-23",
+      "researcher": "Claude opus-4-7 (literature extraction via PubMed MCP)",
+      "target_outcome": "treatment_response_UAS7_reduction_180d",
+      "total_entries": 31
+    },
+    "PNH_fabhalta": {
+      "brand": "Fabhalta (iptacopan, LNP023)",
+      "cohort_name": "PNH_fabhalta",
+      "data_source": "ConcertAI PNH/rare-disease claims + chart-abstracted hemolysis labs",
+      "indication": "Paroxysmal Nocturnal Hemoglobinuria",
+      "issue": "#358",
+      "moa": "Factor B inhibitor (alternative complement pathway, proximal)",
+      "notes": "All PMIDs verified via PubMed MCP get_article_metadata. Methods anchors: Greenland-Pearl-Robins 1999 (DAG roles), Brookhart 2006/2010 IV in pharmacoepi, Hernan 2004 structural selection / collider, Hernan-Robins 2016 target trial, VanderWeele 2016 mediation. PNH clinical anchors: Peffault de Latour 2024 APPLY-PNH NEJM (iptacopan); Lee 2019 study 301 ravulizumab; Hillmen 2021 PEGASUS pegcetacoplan; Socie 2016 / Schrezenmeier 2014 International PNH Registry; Brodsky 2014 PNH review (incl. PNH-AA overlap basis for mds_or_aa_diagnosis_history_preindex_flag ancestor); Risitano 2019 SAAWP proximal complement; Nafa 1998 PIGA. iter-1 revisions (2026-05-23): replaced two exclusion-restriction-failing instruments (distance_to_pnh_coe + facility_volume) with cleaner prescriber-level instruments (prescriber_first_iptacopan_initiation_within_first_quarter_post_approval_flag + prior_year_prescriber_anti_c5_to_iptacopan_switch_count_tertile) \u2014 both close direct Z->Y paths through transfusion management, breakthrough-hemolysis management, REMS-mandated meningococcal prophylaxis, and monitoring intensity; replaced germline_alternative_pathway_regulatory_variant_flag ancestor with mds_or_aa_diagnosis_history_preindex_flag (Brodsky 2014 PNH-AA overlap); rewrote age_at_index_years rationale as pure ancestor (effect on T,Y exhausted by downstream confounders already in fixture); replaced return_to_work descendant with hemoglobin_normalization_postindex_flag (Peffault de Latour 2024 APPLY-PNH secondary endpoint, on-discipline with LDH/hemoglobin/PNH-clone core). Mendelian randomization for PIGA is NOT instrumentable (somatic + disease-defining).",
+      "research_date": "2026-05-23",
+      "researcher": "Claude opus-4-7 (literature extraction via PubMed MCP)",
+      "target_outcome": "hemoglobin_response_>=2g/dL_180d (transfusion-independent)",
+      "total_entries": 30
+    }
+  },
+  "entries": [
+    {
+      "cohort": "BC_kisqali",
+      "dataset_context": "cohort=BC_kisqali; brand=Kisqali (ribociclib, CDK4/6 inhibitor); indication=HR+/HER2- metastatic or early-stage breast cancer; data_source=ConcertAI oncology EHR+claims; target=progression_free_survival_24m OR overall_response_rate_180d; prediction_anchor=index_date (first ribociclib dispense in combination with AI or fulvestrant)",
+      "derivation_pseudocode": "source=family_history_module; derivation_inputs=[first_degree_relative_BC_count, age_at_relative_diagnosis]; aggregation=count of first-degree relatives with HR+/HER2- breast cancer documented in family history module; window_days=all_pre_index; knowable_at=index_date",
+      "feature_name": "family_history_hr_positive_bc_count",
+      "ground_truth_role": "ancestor",
+      "provenance": {
+        "citation": "Mavaddat N, Michailidou K, Dennis J, et al. 2019. Polygenic Risk Scores for Prediction of Breast Cancer and Breast Cancer Subtypes. Am J Hum Genet 104(1):21-34. (Disease-area genetic-susceptibility evidence; DAG-theoretic ancestor definition per Greenland-Pearl-Robins 1999 PMID 9888278.)",
+        "doi": "10.1016/j.ajhg.2018.11.002",
+        "pmid": "30554720",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/30554720/"
+      },
+      "rationale": "Family history of HR+ breast cancer reflects underlying genetic susceptibility (partially captured by BRCA1/2 testing but also polygenic risk; Mavaddat 2018 PRS demonstrates that polygenic scores constructed from 313 SNPs predict ER+ vs ER- breast cancer subtypes with subtype-specific effects, confirming family history aggregates inherited risk across both monogenic and polygenic axes) that drives disease occurrence and is established prior to disease onset. Family history is upstream of diagnosis and largely unrelated to ribociclib vs comparator selection among metastatic HR+/HER2- patients; it is an ancestor node in the DAG, not a backdoor confounder.",
+      "scenario": "BC_kisqali",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "BC_kisqali",
+      "dataset_context": "cohort=BC_kisqali; brand=Kisqali (ribociclib, CDK4/6 inhibitor); indication=HR+/HER2- metastatic or early-stage breast cancer; data_source=ConcertAI oncology EHR+claims; target=progression_free_survival_24m OR overall_response_rate_180d; prediction_anchor=index_date (first ribociclib dispense in combination with AI or fulvestrant)",
+      "derivation_pseudocode": "source=germline_genetic_testing_reports; derivation_inputs=[BRCA1_pathogenic_variant, BRCA2_pathogenic_variant, test_date]; aggregation=binary indicator pathogenic/likely-pathogenic germline BRCA1 or BRCA2 variant documented at any time pre-index; window_days=all_pre_index; knowable_at=index_date",
+      "feature_name": "germline_brca12_pathogenic_flag",
+      "ground_truth_role": "ancestor",
+      "provenance": {
+        "citation": "Hortobagyi GN. 2018. Ribociclib for the first-line treatment of advanced hormone receptor-positive breast cancer: a review of subgroup analyses from the MONALEESA-2 trial. Breast Cancer Res 20(1):123.",
+        "doi": "10.1186/s13058-018-1050-7",
+        "pmid": "30340505",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/30340505/"
+      },
+      "rationale": "Germline BRCA1/2 status is an upstream genetic determinant of breast cancer risk and tumor biology established at conception; it influences treatment options (PARP inhibitors become available) and tumor aggressiveness but is exogenous to the index treatment decision and unmodifiable. It is a remote causal ancestor of both treatment selection and outcome via tumor biology and is not a direct confounder of the ribociclib-vs-comparator contrast within HR+/HER2- cohorts. Per Greenland-Pearl-Robins 1999, distinguish ancestors (root nodes) from confounders (direct common causes with arrows into both treatment and outcome).",
+      "scenario": "BC_kisqali",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "BC_kisqali",
+      "dataset_context": "cohort=BC_kisqali; brand=Kisqali (ribociclib, CDK4/6 inhibitor); indication=HR+/HER2- metastatic or early-stage breast cancer; data_source=ConcertAI oncology EHR+claims; target=progression_free_survival_24m OR overall_response_rate_180d; prediction_anchor=index_date (first ribociclib dispense in combination with AI or fulvestrant)",
+      "derivation_pseudocode": "source=screening_mammography_reports; derivation_inputs=[BI-RADS_density_category, mammogram_date]; aggregation=most recent BI-RADS breast density category (A=fatty, B=scattered, C=heterogeneously dense, D=extremely dense) pre-diagnosis; window_days=all_pre_diagnosis; knowable_at=pre-diagnosis",
+      "feature_name": "prediag_bi_rads_density_category",
+      "ground_truth_role": "ancestor",
+      "provenance": {
+        "citation": "Haas CB, Chen H, Harrison T, et al. 2024. Disentangling the relationships of body mass index and circulating sex hormone concentrations in mammographic density using Mendelian randomization. Breast Cancer Res Treat 206(2):295-305.",
+        "doi": "10.1007/s10549-024-07306-w",
+        "pmid": "38653906",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/38653906/"
+      },
+      "rationale": "Mammographic breast density is an upstream risk factor for breast cancer development causally upstream of diagnosis, established at the patient level largely by genetics + BMI per Haas 2024 Mendelian randomization (genetically-predicted BMI causally lowers dense area). It does not act directly on CDK4/6 treatment choice or PFS conditional on tumor biology at diagnosis; it is a remote ancestor of disease occurrence, not a confounder of the treatment-outcome contrast in the metastatic setting.",
+      "scenario": "BC_kisqali",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "BC_kisqali",
+      "dataset_context": "cohort=BC_kisqali; brand=Kisqali (ribociclib, CDK4/6 inhibitor); indication=HR+/HER2- metastatic or early-stage breast cancer; data_source=ConcertAI oncology EHR+claims; target=progression_free_survival_24m OR overall_response_rate_180d; prediction_anchor=index_date (first ribociclib dispense in combination with AI or fulvestrant)",
+      "derivation_pseudocode": "source=problem_list JOIN family_history_module; derivation_inputs=[ICD_codes_for_HRT_use, first_HRT_dispense_date]; aggregation=binary indicator any pre-diagnosis HRT (estrogen +/- progestin) use documented prior to breast cancer diagnosis; window_days=all_pre_diagnosis; knowable_at=pre-diagnosis",
+      "feature_name": "prediag_hrt_use_ever_flag",
+      "ground_truth_role": "ancestor",
+      "provenance": {
+        "citation": "Chlebowski RT, Anderson GL, Aragaki AK, et al. 2020. Association of Menopausal Hormone Therapy With Breast Cancer Incidence and Mortality During Long-term Follow-up of the Women's Health Initiative Randomized Clinical Trials. JAMA 324(4):369-380. (Disease-area HRT-breast-cancer causal evidence; DAG-theoretic ancestor definition per Greenland-Pearl-Robins 1999 PMID 9888278.)",
+        "doi": "10.1001/jama.2020.9482",
+        "pmid": "32721007",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/32721007/"
+      },
+      "rationale": "Pre-diagnosis hormone replacement therapy is a long-recognized risk factor for HR+ breast cancer that operates upstream of disease occurrence. Chlebowski 2020 (JAMA, 20+ year WHI follow-up) confirms that randomized CEE plus MPA is associated with statistically significantly higher breast cancer incidence (HR 1.28, 95% CI 1.13-1.45), establishing HRT as a causal driver of HR+ breast cancer onset. HRT influences tumor onset and biology (often well-differentiated, ER-rich tumors) but does not have a direct effect on the choice of CDK4/6 inhibitor brand among already-diagnosed HR+/HER2- patients in 2024+. Pure ancestor in the DAG, not a confounder of the treatment contrast per Greenland-Pearl-Robins 1999.",
+      "scenario": "BC_kisqali",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "BC_kisqali",
+      "dataset_context": "cohort=BC_kisqali; brand=Kisqali (ribociclib, CDK4/6 inhibitor); indication=HR+/HER2- metastatic or early-stage breast cancer; data_source=ConcertAI oncology EHR+claims; target=progression_free_survival_24m OR overall_response_rate_180d; prediction_anchor=index_date (first ribociclib dispense in combination with AI or fulvestrant)",
+      "derivation_pseudocode": "source=death_records JOIN encounter_history; derivation_inputs=[death_date_or_censor, index_date]; aggregation=binary indicator patient alive at 24 months post-index; window_days=24 months post; knowable_at=index_date + 24m",
+      "feature_name": "alive_at_24m_flag",
+      "ground_truth_role": "collider",
+      "provenance": {
+        "citation": "Hortobagyi GN, Stemmer SM, Burris HA, et al. 2022. Overall Survival with Ribociclib plus Letrozole in Advanced Breast Cancer. N Engl J Med 386(10):942-950. (Disease-area ribociclib OS benefit evidence; DAG-theoretic collider definition per Greenland-Pearl-Robins 1999 PMID 9888278.)",
+        "doi": "10.1056/NEJMoa2114663",
+        "pmid": "35263519",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/35263519/"
+      },
+      "rationale": "Alive-at-24m is causally affected by both the treatment (ribociclib improves OS per Hortobagyi 2022 MONALEESA-2 final OS, NEJM, demonstrating a statistically significant OS benefit with ribociclib + letrozole) AND by unmeasured frailty/comorbidity. Conditioning on alive-at-24m opens a non-causal path between treatment and outcome via these common causes, creating selection (collider-stratification) bias. This is the canonical Greenland-Pearl-Robins 1999 collider structure; analyses of PFS-among-survivors are biased.",
+      "scenario": "BC_kisqali",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "BC_kisqali",
+      "dataset_context": "cohort=BC_kisqali; brand=Kisqali (ribociclib, CDK4/6 inhibitor); indication=HR+/HER2- metastatic or early-stage breast cancer; data_source=ConcertAI oncology EHR+claims; target=progression_free_survival_24m OR overall_response_rate_180d; prediction_anchor=index_date (first ribociclib dispense in combination with AI or fulvestrant)",
+      "derivation_pseudocode": "source=enrollment JOIN claims; derivation_inputs=[continuous_enrollment_dates, index_date]; aggregation=binary indicator patient has continuous claims-data coverage for 24 months post-index (no insurance lapse, no death censoring); window_days=0..24m post; knowable_at=index_date + 24m",
+      "feature_name": "continuous_enrollment_24m_flag",
+      "ground_truth_role": "collider",
+      "provenance": {
+        "citation": "Hernan MA, Robins JM. 2016. Using Big Data to Emulate a Target Trial When a Randomized Trial Is Not Available. Am J Epidemiol 183(8):758-64.",
+        "doi": "10.1093/aje/kwv254",
+        "pmid": "26994063",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/26994063/"
+      },
+      "rationale": "Continuous follow-up at 24m is jointly affected by survival (a function of treatment) AND insurance/socioeconomic stability (an independent prognostic determinant via care access). Restricting analysis to the continuously-enrolled introduces selection bias per Hernan-Robins 2016 target trial framework, since the eligibility criterion is itself a post-randomization variable in observational analyses.",
+      "scenario": "BC_kisqali",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "BC_kisqali",
+      "dataset_context": "cohort=BC_kisqali; brand=Kisqali (ribociclib, CDK4/6 inhibitor); indication=HR+/HER2- metastatic or early-stage breast cancer; data_source=ConcertAI oncology EHR+claims; target=progression_free_survival_24m OR overall_response_rate_180d; prediction_anchor=index_date (first ribociclib dispense in combination with AI or fulvestrant)",
+      "derivation_pseudocode": "source=ctDNA_assay_reports; derivation_inputs=[ctDNA_VAF_baseline, ctDNA_VAF_followup]; aggregation=binary indicator achieved ctDNA clearance (VAF below detection) by 90-day post-index draw, given baseline ctDNA was detectable; window_days=0..120 post; knowable_at=index_date + 120",
+      "feature_name": "ctdna_clearance_90d_flag_given_baseline_positive",
+      "ground_truth_role": "collider",
+      "provenance": {
+        "citation": "Berger F, Marce M, Delaloge S, et al. 2022. Randomised, open-label, multicentric phase III trial to evaluate the safety and efficacy of palbociclib in combination with endocrine therapy, guided by ESR1 mutation monitoring: study design of PADA-1. BMJ Open 12(3):e055821.",
+        "doi": "10.1136/bmjopen-2021-055821",
+        "pmid": "35241469",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/35241469/"
+      },
+      "rationale": "Conditioning on ctDNA clearance among patients with detectable baseline ctDNA creates a selection on a common effect of both treatment-effectiveness and pre-existing tumor biology (slowly-shedding tumors clear faster regardless of treatment). The selected subset is non-exchangeable; treatment-effect estimates within strata are biased. Classic conditioning-on-collider bias per Greenland-Pearl-Robins 1999.",
+      "scenario": "BC_kisqali",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "BC_kisqali",
+      "dataset_context": "cohort=BC_kisqali; brand=Kisqali (ribociclib, CDK4/6 inhibitor); indication=HR+/HER2- metastatic or early-stage breast cancer; data_source=ConcertAI oncology EHR+claims; target=progression_free_survival_24m OR overall_response_rate_180d; prediction_anchor=index_date (first ribociclib dispense in combination with AI or fulvestrant)",
+      "derivation_pseudocode": "source=lab_results JOIN prescription_claims; derivation_inputs=[ribociclib_dose_after_first_modification, ANC_grade_when_modification_occurred]; aggregation=binary indicator dose was reduced after first Grade>=3 neutropenia event; window_days=0..180 post; knowable_at=date of dose-mod event",
+      "feature_name": "dose_reduced_after_grade3_neutropenia_flag",
+      "ground_truth_role": "collider",
+      "provenance": {
+        "citation": "Parati MC, Pedersini R, Perego G, et al. 2022. Ribociclib in the Treatment of Hormone-Receptor Positive/HER2-Negative Advanced and Early Breast Cancer: Overview of Clinical Data and Patients Selection. Breast Cancer (Dove Med Press) 14:101-111. (Disease-area ribociclib neutropenia / dose-modification evidence; DAG-theoretic collider definition per Greenland-Pearl-Robins 1999 PMID 9888278.)",
+        "doi": "10.2147/BCTT.S341857",
+        "pmid": "35440873",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/35440873/"
+      },
+      "rationale": "This is the intersection of two causal paths: treatment -> neutropenia (Parati 2022 documents ribociclib's distinctive neutropenia profile and the dose-modification protocols clinicians apply in practice) AND oncologist's management style + patient frailty -> dose-reduction. Conditioning on it opens an indirect path between treatment-arm and outcome via the oncologist-style/frailty common cause, distorting the estimated CDK4/6 effect on PFS. Classic M-structure collider per Greenland-Pearl-Robins 1999.",
+      "scenario": "BC_kisqali",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "BC_kisqali",
+      "dataset_context": "cohort=BC_kisqali; brand=Kisqali (ribociclib, CDK4/6 inhibitor); indication=HR+/HER2- metastatic or early-stage breast cancer; data_source=ConcertAI oncology EHR+claims; target=progression_free_survival_24m OR overall_response_rate_180d; prediction_anchor=index_date (first ribociclib dispense in combination with AI or fulvestrant)",
+      "derivation_pseudocode": "source=prescription_claims JOIN visit_records; derivation_inputs=[ribociclib_dispenses, last_dispense_date]; aggregation=binary indicator patient still on ribociclib at 12 months post-index (continuous dispenses, no >60d gap, no documented discontinuation); window_days=0..365 post; knowable_at=index_date + 12m",
+      "feature_name": "on_treatment_at_12m_flag",
+      "ground_truth_role": "collider",
+      "provenance": {
+        "citation": "Suissa S. 2008. Immortal time bias in pharmaco-epidemiology. Am J Epidemiol 167(4):492-9.",
+        "doi": "10.1093/aje/kwm324",
+        "pmid": "18056625",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/18056625/"
+      },
+      "rationale": "Staying-on-treatment-at-12m is caused jointly by treatment effectiveness (responders stay on longer) and treatment tolerability (frailer patients drop out earlier from toxicity). It is a common effect of treatment-response and toxicity-tolerance, both of which independently affect future PFS. Conditioning on it induces the textbook collider-stratification bias (Greenland-Pearl-Robins 1999) and is a special case of immortal-time bias per Suissa 2007/2008.",
+      "scenario": "BC_kisqali",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "BC_kisqali",
+      "dataset_context": "cohort=BC_kisqali; brand=Kisqali (ribociclib, CDK4/6 inhibitor); indication=HR+/HER2- metastatic or early-stage breast cancer; data_source=ConcertAI oncology EHR+claims; target=progression_free_survival_24m OR overall_response_rate_180d; prediction_anchor=index_date (first ribociclib dispense in combination with AI or fulvestrant)",
+      "derivation_pseudocode": "source=ehr_flowsheet; derivation_inputs=[ECOG_performance_status_value, ECOG_assessment_date]; aggregation=most recent ECOG PS recorded in 90-day pre-index window; window_days=90 prior; knowable_at=index_date",
+      "feature_name": "baseline_ecog_ps_preindex",
+      "ground_truth_role": "confounder",
+      "provenance": {
+        "citation": "O'Shaughnessy J, Petrakova K, Sonke GS, et al. 2017. Ribociclib plus letrozole versus letrozole alone in patients with de novo HR+, HER2- advanced breast cancer in the randomized MONALEESA-2 trial. Breast Cancer Res Treat 168(1):127-134. (Disease-area ECOG-prognosis evidence; DAG-theoretic backdoor confounder definition per Greenland-Pearl-Robins 1999 PMID 9888278.)",
+        "doi": "10.1007/s10549-017-4518-8",
+        "pmid": "29164421",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/29164421/"
+      },
+      "rationale": "ECOG performance status is a strong prognostic factor for PFS/OS in HR+/HER2- metastatic breast cancer (MONALEESA-2 enrolled ECOG 0-1 only, and ECOG predicts outcome within those strata per O'Shaughnessy 2017 subgroup analysis) AND directly influences both treatment-intensity decisions (oncologists may downgrade dose, choose a less-toxic combination) and outcome. This is the textbook Greenland-Pearl-Robins 1999 backdoor confounder structure: ECOG -> treatment, ECOG -> outcome.",
+      "scenario": "BC_kisqali",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "BC_kisqali",
+      "dataset_context": "cohort=BC_kisqali; brand=Kisqali (ribociclib, CDK4/6 inhibitor); indication=HR+/HER2- metastatic or early-stage breast cancer; data_source=ConcertAI oncology EHR+claims; target=progression_free_survival_24m OR overall_response_rate_180d; prediction_anchor=index_date (first ribociclib dispense in combination with AI or fulvestrant)",
+      "derivation_pseudocode": "source=pathology_report_structured; derivation_inputs=[ER_percent_value, ER_assay_date]; aggregation=most recent ER% (continuous, 0-100) from pathology in 365-day pre-index window; window_days=365 prior; knowable_at=index_date",
+      "feature_name": "er_percent_preindex",
+      "ground_truth_role": "confounder",
+      "provenance": {
+        "citation": "Hortobagyi GN. 2018. Ribociclib for the first-line treatment of advanced hormone receptor-positive breast cancer: a review of subgroup analyses from the MONALEESA-2 trial. Breast Cancer Res 20(1):123.",
+        "doi": "10.1186/s13058-018-1050-7",
+        "pmid": "30340505",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/30340505/"
+      },
+      "rationale": "ER expression intensity predicts both magnitude of endocrine sensitivity (affecting whether oncologist adds CDK4/6 vs uses endocrine monotherapy, especially in borderline 1-10% cases) AND independently predicts PFS via tumor biology. MONALEESA-2 subgroup analysis (Hortobagyi 2018) confirms ER status drives both selection and outcome. Backdoor confounding per Greenland-Pearl-Robins 1999.",
+      "scenario": "BC_kisqali",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "BC_kisqali",
+      "dataset_context": "cohort=BC_kisqali; brand=Kisqali (ribociclib, CDK4/6 inhibitor); indication=HR+/HER2- metastatic or early-stage breast cancer; data_source=ConcertAI oncology EHR+claims; target=progression_free_survival_24m OR overall_response_rate_180d; prediction_anchor=index_date (first ribociclib dispense in combination with AI or fulvestrant)",
+      "derivation_pseudocode": "source=pathology_report_structured; derivation_inputs=[Ki67_percent_value, assay_date]; aggregation=most recent Ki-67 index (continuous, 0-100) from pathology in 365-day pre-index window; window_days=365 prior; knowable_at=index_date",
+      "feature_name": "ki67_index_percent_preindex",
+      "ground_truth_role": "confounder",
+      "provenance": {
+        "citation": "Dowsett M, Nielsen TO, A'Hern R, et al. 2011. Assessment of Ki67 in breast cancer: recommendations from the International Ki67 in Breast Cancer working group. J Natl Cancer Inst 103(22):1656-64. (Disease-area Ki-67 prognostic biomarker consensus; DAG-theoretic backdoor confounder definition per Greenland-Pearl-Robins 1999 PMID 9888278.)",
+        "doi": "10.1093/jnci/djr393",
+        "pmid": "21960707",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/21960707/"
+      },
+      "rationale": "Ki-67 proliferation index is both a prognostic factor for HR+ breast cancer PFS (Dowsett 2011 IKWG consensus establishes Ki-67 as a validated breast-cancer prognostic biomarker) and a treatment-selection driver: high Ki-67 motivates CDK4/6 addition (since CDK4/6 inhibitors target the G1->S proliferation checkpoint) rather than endocrine monotherapy. This satisfies the backdoor-criterion definition of a confounder (Greenland-Pearl-Robins 1999): Ki67 -> treatment, Ki67 -> outcome.",
+      "scenario": "BC_kisqali",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "BC_kisqali",
+      "dataset_context": "cohort=BC_kisqali; brand=Kisqali (ribociclib, CDK4/6 inhibitor); indication=HR+/HER2- metastatic or early-stage breast cancer; data_source=ConcertAI oncology EHR+claims; target=progression_free_survival_24m OR overall_response_rate_180d; prediction_anchor=index_date (first ribociclib dispense in combination with AI or fulvestrant)",
+      "derivation_pseudocode": "source=prescription_claims; derivation_inputs=[CDK46_dispense_records, drug_brand]; aggregation=count distinct prior CDK4/6 lines (palbociclib, abemaciclib, prior-ribociclib) before index ribociclib dispense; window_days=all_pre_index; knowable_at=index_date",
+      "feature_name": "prior_cdk46_lines_count",
+      "ground_truth_role": "confounder",
+      "provenance": {
+        "citation": "Ogata R, Kishino E, Saitoh W, Koike Y, Kurebayashi J. 2020. Resistance to cyclin-dependent kinase (CDK) 4/6 inhibitors confers cross-resistance to other CDK inhibitors but not to chemotherapeutic agents in breast cancer cells. Breast Cancer 28(1):206-215.",
+        "doi": "10.1007/s12282-020-01150-8",
+        "pmid": "32860163",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/32860163/"
+      },
+      "rationale": "Prior CDK4/6 exposure indicates a more heavily pretreated, possibly CDK4/6-resistant tumor (Ogata 2020 shows cross-resistance among CDK4/6 inhibitors); it also drives selection toward ribociclib as a switch agent. Both arrows present (prior_lines -> current_treatment_choice AND prior_lines -> PFS via tumor biology), making it a classic Greenland-Pearl-Robins 1999 backdoor confounder.",
+      "scenario": "BC_kisqali",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "BC_kisqali",
+      "dataset_context": "cohort=BC_kisqali; brand=Kisqali (ribociclib, CDK4/6 inhibitor); indication=HR+/HER2- metastatic or early-stage breast cancer; data_source=ConcertAI oncology EHR+claims; target=progression_free_survival_24m OR overall_response_rate_180d; prediction_anchor=index_date (first ribociclib dispense in combination with AI or fulvestrant)",
+      "derivation_pseudocode": "source=imaging_reports JOIN problem_list; derivation_inputs=[metastasis_site_codes, imaging_date]; aggregation=binary indicator any visceral metastasis (liver/lung/pleura/CNS) documented in 180-day pre-index window; window_days=180 prior; knowable_at=index_date",
+      "feature_name": "visceral_disease_flag_preindex",
+      "ground_truth_role": "confounder",
+      "provenance": {
+        "citation": "Hortobagyi GN. 2018. Ribociclib for the first-line treatment of advanced hormone receptor-positive breast cancer: a review of subgroup analyses from the MONALEESA-2 trial. Breast Cancer Res 20(1):123.",
+        "doi": "10.1186/s13058-018-1050-7",
+        "pmid": "30340505",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/30340505/"
+      },
+      "rationale": "Visceral metastasis is a textbook prognostic factor in HR+/HER2- advanced breast cancer and simultaneously triggers more-aggressive treatment selection (CDK4/6 plus AI versus endocrine monotherapy, or fulvestrant backbone over AI). MONALEESA-2 subgroup analyses (Hortobagyi 2018) report differential benefit and adoption by visceral status. Classic backdoor confounder pattern (Greenland-Pearl-Robins 1999): site of metastasis -> treatment selection AND -> PFS independently.",
+      "scenario": "BC_kisqali",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "BC_kisqali",
+      "dataset_context": "cohort=BC_kisqali; brand=Kisqali (ribociclib, CDK4/6 inhibitor); indication=HR+/HER2- metastatic or early-stage breast cancer; data_source=ConcertAI oncology EHR+claims; target=progression_free_survival_24m OR overall_response_rate_180d; prediction_anchor=index_date (first ribociclib dispense in combination with AI or fulvestrant)",
+      "derivation_pseudocode": "source=GCSF_dispense_claims; derivation_inputs=[GCSF_NDC_codes, dispense_date]; aggregation=binary indicator any GCSF dispense (filgrastim/pegfilgrastim) within 0-180 post-index days; window_days=0..180 post; knowable_at=event_date",
+      "feature_name": "gcsf_dispense_within_180d_post_index_flag",
+      "ground_truth_role": "descendant",
+      "provenance": {
+        "citation": "Tripathy D, Im SA, Colleoni M, et al. 2018. Ribociclib plus endocrine therapy for premenopausal women with hormone-receptor-positive, advanced breast cancer (MONALEESA-7): a randomised phase 3 trial. Lancet Oncol 19(7):904-915.",
+        "doi": "10.1016/S1470-2045(18)30292-4",
+        "pmid": "29804902",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/29804902/"
+      },
+      "rationale": "GCSF dispensing is a reactive supportive-care intervention triggered by treatment-induced neutropenia (which is itself a mediator). GCSF therefore sits downstream of treatment via the neutropenia mediator and does not lie on the original treatment->PFS efficacy path. It is a descendant useful for identifying severe AEs but should not be adjusted for as a confounder.",
+      "scenario": "BC_kisqali",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "BC_kisqali",
+      "dataset_context": "cohort=BC_kisqali; brand=Kisqali (ribociclib, CDK4/6 inhibitor); indication=HR+/HER2- metastatic or early-stage breast cancer; data_source=ConcertAI oncology EHR+claims; target=progression_free_survival_24m OR overall_response_rate_180d; prediction_anchor=index_date (first ribociclib dispense in combination with AI or fulvestrant)",
+      "derivation_pseudocode": "source=lab_results; derivation_inputs=[ALT_value, AST_value, ALP_value, lab_date]; aggregation=binary indicator any ALT or AST > 5x ULN (Grade >=3 hepatotoxicity) in 0-180 post-index window; window_days=0..180 post; knowable_at=event_date",
+      "feature_name": "hepatotoxicity_grade3_post_index_flag",
+      "ground_truth_role": "descendant",
+      "provenance": {
+        "citation": "Parati MC, Pedersini R, Perego G, et al. 2022. Ribociclib in the Treatment of Hormone-Receptor Positive/HER2-Negative Advanced and Early Breast Cancer: Overview of Clinical Data and Patients Selection. Breast Cancer (Dove Med Press) 14:101-111.",
+        "doi": "10.2147/BCTT.S341857",
+        "pmid": "35440873",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/35440873/"
+      },
+      "rationale": "Hepatotoxicity (LFT abnormalities) is a well-characterized ribociclib AE per the MONALEESA program (Parati 2022 notes higher rates than other CDK4/6 inhibitors). It is caused by treatment exposure and metabolism through CYP3A4, but does not directly cause PFS events; it triggers dose-mods (which we model separately). Descendant of treatment, not on the efficacy mechanism path.",
+      "scenario": "BC_kisqali",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "BC_kisqali",
+      "dataset_context": "cohort=BC_kisqali; brand=Kisqali (ribociclib, CDK4/6 inhibitor); indication=HR+/HER2- metastatic or early-stage breast cancer; data_source=ConcertAI oncology EHR+claims; target=progression_free_survival_24m OR overall_response_rate_180d; prediction_anchor=index_date (first ribociclib dispense in combination with AI or fulvestrant)",
+      "derivation_pseudocode": "source=ECG_reports_or_problem_list; derivation_inputs=[QTc_value, ECG_date]; aggregation=binary indicator any QTcF > 480 ms (Grade >=2) documented in 0-180 post-index window; window_days=0..180 post; knowable_at=event_date",
+      "feature_name": "qtc_prolongation_grade2_post_index_flag",
+      "ground_truth_role": "descendant",
+      "provenance": {
+        "citation": "Parati MC, Pedersini R, Perego G, et al. 2022. Ribociclib in the Treatment of Hormone-Receptor Positive/HER2-Negative Advanced and Early Breast Cancer: Overview of Clinical Data and Patients Selection. Breast Cancer (Dove Med Press) 14:101-111.",
+        "doi": "10.2147/BCTT.S341857",
+        "pmid": "35440873",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/35440873/"
+      },
+      "rationale": "QTc prolongation is a well-documented ribociclib-specific cardiac safety signal (Parati 2022 review) downstream of CDK4/6/hERG channel interaction; it is caused by treatment but does not lie on the causal path to PFS efficacy (it triggers dose modifications which are separately modeled). In DAG terms it is a downstream descendant of treatment but not on the treatment->outcome path; conditioning on it does NOT bias the total treatment effect unless it sits on a path to outcome.",
+      "scenario": "BC_kisqali",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "BC_kisqali",
+      "dataset_context": "cohort=BC_kisqali; brand=Kisqali (ribociclib, CDK4/6 inhibitor); indication=HR+/HER2- metastatic or early-stage breast cancer; data_source=ConcertAI oncology EHR+claims; target=progression_free_survival_24m OR overall_response_rate_180d; prediction_anchor=index_date (first ribociclib dispense in combination with AI or fulvestrant)",
+      "derivation_pseudocode": "source=prescription_claims; derivation_inputs=[endocrine_backbone_at_index, endocrine_switch_dispenses_post_index]; aggregation=binary indicator any switch from AI to fulvestrant within 0-365 days post-index; window_days=0..365 post; knowable_at=event_date",
+      "feature_name": "switch_ai_to_fulvestrant_within_365d_flag",
+      "ground_truth_role": "descendant",
+      "provenance": {
+        "citation": "Neven P, Fasching PA, Chia S, et al. 2023. Updated overall survival from the MONALEESA-3 trial in postmenopausal women with HR+/HER2- advanced breast cancer receiving first-line ribociclib plus fulvestrant. Breast Cancer Res 25(1):103.",
+        "doi": "10.1186/s13058-023-01701-9",
+        "pmid": "37653397",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/37653397/"
+      },
+      "rationale": "Switching the endocrine backbone from AI to fulvestrant is a downstream clinical decision triggered by suspected progression, ESR1 emergence, or AI intolerance; it is caused by treatment history but is not on the original-treatment->24m-PFS path (it is a response TO impending failure). Descendant; analyses that adjust for it would condition on a post-baseline event downstream of treatment.",
+      "scenario": "BC_kisqali",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "BC_kisqali",
+      "dataset_context": "cohort=BC_kisqali; brand=Kisqali (ribociclib, CDK4/6 inhibitor); indication=HR+/HER2- metastatic or early-stage breast cancer; data_source=ConcertAI oncology EHR+claims; target=progression_free_survival_24m OR overall_response_rate_180d; prediction_anchor=index_date (first ribociclib dispense in combination with AI or fulvestrant)",
+      "derivation_pseudocode": "source=prescription_claims JOIN provider_npi JOIN FDA_approval_dates; derivation_inputs=[treating_oncologist_npi, oncologist_first_ribociclib_dispense_date, FDA_ribociclib_approval_date=2017-03-13]; aggregation=binary indicator that the treating oncologist initiated their first-ever ribociclib prescription within 12 months of FDA approval (2017-03-13 through 2018-03-13); window_days=physician-lifetime; knowable_at=index_date - 1",
+      "feature_name": "oncologist_first_ribociclib_initiation_within_first_year_post_fda_approval_flag",
+      "ground_truth_role": "instrument",
+      "provenance": {
+        "citation": "Brookhart MA, Wang PS, Solomon DH, Schneeweiss S. 2006. Evaluating short-term drug effects using a physician-specific prescribing preference as an instrumental variable. Epidemiology 17(3):268-75.",
+        "doi": "10.1097/01.ede.0000193606.58671.c5",
+        "pmid": "16617275",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/16617275/"
+      },
+      "rationale": "Early-adopter physician status is a Brookhart-family short-term-IV variant: oncologists who initiated ribociclib within the first year post-FDA approval (2017-03-13) have a durable higher within-physician ribociclib preference (Z->T present; analogous to Brookhart 2006's within-physician prescription persistence). Exclusion-restriction (no Z->Y bypass): early-adopter status at the physician level does NOT affect the patient's tumor biology, ECOG, staging, or NCCN-standardized supportive-care infrastructure for CDK4/6 inhibitors (palbociclib was FDA-approved in 2015, so early-adopter oncologists already had CDK4/6-class infrastructure in place \u2014 early ribociclib adoption is brand-specific, not class-specific). The plausible direct path 'early adopter -> better outcomes via general practice innovativeness' is addressable through case-mix balance audit (Rassen 2009) restricted to oncologists prescribing any CDK4/6 in the pre-2017 window. No common cause: physician adoption timing is exogenous to the index patient (the index patient was diagnosed after the adoption window). Brookhart 2010 catalogs adoption-timing instruments as a valid PPP variant.",
+      "scenario": "BC_kisqali",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "BC_kisqali",
+      "dataset_context": "cohort=BC_kisqali; brand=Kisqali (ribociclib, CDK4/6 inhibitor); indication=HR+/HER2- metastatic or early-stage breast cancer; data_source=ConcertAI oncology EHR+claims; target=progression_free_survival_24m OR overall_response_rate_180d; prediction_anchor=index_date (first ribociclib dispense in combination with AI or fulvestrant)",
+      "derivation_pseudocode": "source=prescription_claims JOIN provider_npi; derivation_inputs=[oncologist_npi, immediately_preceding_CDK46_dispense_by_same_oncologist]; aggregation=indicator (last prior CDK4/6 prescription written by treating oncologist was ribociclib vs palbociclib vs abemaciclib); window_days=lookup most-recent prior; knowable_at=index_date - 1",
+      "feature_name": "oncologist_last_cdk46_was_ribociclib_flag",
+      "ground_truth_role": "instrument",
+      "provenance": {
+        "citation": "Brookhart MA, Wang PS, Solomon DH, Schneeweiss S. 2006. Evaluating short-term drug effects using a physician-specific prescribing preference as an instrumental variable. Epidemiology 17(3):268-75.",
+        "doi": "10.1097/01.ede.0000193606.58671.c5",
+        "pmid": "16617275",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/16617275/"
+      },
+      "rationale": "Brookhart 2006 introduced the most-recent-prior-prescription-by-same-physician as an IV. Z->T present: the previous CDK4/6 brand the oncologist prescribed strongly predicts what they will prescribe next (within-physician brand stickiness is documented in CDK4/6 PPP literature). Direct-path exclusion (no Z->Y bypass): the PRIOR patient's drug choice CANNOT affect THIS patient's tumor biology, ECOG, staging, monitoring intensity, or supportive-care infrastructure \u2014 those are all set by the index patient's own clinical context and by within-class CDK4/6 NCCN pathways that are identical across the three brands. The instrument operates on the brand-selection node only, not on care-quality nodes. No common cause: the oncologist's prior choice is exogenous to the index patient's prognostic factors (the index patient was not enrolled at the time of the prior prescription, and physician case mix is balanced across PPP strata per Rassen 2009). Canonical Brookhart PPP-IV.",
+      "scenario": "BC_kisqali",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "BC_kisqali",
+      "dataset_context": "cohort=BC_kisqali; brand=Kisqali (ribociclib, CDK4/6 inhibitor); indication=HR+/HER2- metastatic or early-stage breast cancer; data_source=ConcertAI oncology EHR+claims; target=progression_free_survival_24m OR overall_response_rate_180d; prediction_anchor=index_date (first ribociclib dispense in combination with AI or fulvestrant)",
+      "derivation_pseudocode": "source=prescription_claims JOIN provider_npi; derivation_inputs=[treating_oncologist_npi, prior_cdk46_brand_for_each_HR+_HER2- patient]; aggregation=for each index patient, compute share-of-last-N-CDK46-dispenses-from-same-oncologist that were ribociclib; window_days=365 prior to index, exclude index patient; knowable_at=index_date - 1",
+      "feature_name": "oncologist_ribociclib_preference_share_prior_year",
+      "ground_truth_role": "instrument",
+      "provenance": {
+        "citation": "Brookhart MA, Rassen JA, Schneeweiss S. 2010. Instrumental variable methods in comparative safety and effectiveness research. Pharmacoepidemiol Drug Saf 19(6):537-54.",
+        "doi": "10.1002/pds.1908",
+        "pmid": "20354968",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/20354968/"
+      },
+      "rationale": "Physician prescribing preference (PPP) is the canonical pharmacoepi instrumental variable: variation in the treating oncologist's prior CDK4/6 brand mix predicts ribociclib exposure (relevance), is plausibly unrelated to the index patient's individual prognostic factors (exclusion), and there is no plausible direct effect of the oncologist's past prescribing on this patient's PFS except through treatment (independence). Brookhart 2006/2010 formalize the PPP-IV design; Rassen-Brookhart 2009 audit shows 25 PPP formulations strongly reduce covariate imbalance.",
+      "scenario": "BC_kisqali",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "BC_kisqali",
+      "dataset_context": "cohort=BC_kisqali; brand=Kisqali (ribociclib, CDK4/6 inhibitor); indication=HR+/HER2- metastatic or early-stage breast cancer; data_source=ConcertAI oncology EHR+claims; target=progression_free_survival_24m OR overall_response_rate_180d; prediction_anchor=index_date (first ribociclib dispense in combination with AI or fulvestrant)",
+      "derivation_pseudocode": "source=index_date_field; derivation_inputs=[index_date]; aggregation=binary indicator index_date in narrow window [2022-10-18 through 2023-04-18] capturing post-MONALEESA-3 final OS publication (Neven 2023) + NCCN category-1 update; analysis restricted to narrow 6-month window to satisfy interrupted-time-series local-randomization assumption; window_days=NA; knowable_at=index_date",
+      "feature_name": "post_monaleesa3_os_update_calendar_flag",
+      "ground_truth_role": "instrument",
+      "provenance": {
+        "citation": "Brookhart MA, Rassen JA, Schneeweiss S. 2010. Instrumental variable methods in comparative safety and effectiveness research. Pharmacoepidemiol Drug Saf 19(6):537-54. (IV methods anchor; clinical event documented in Neven 2023 PMID 37653397.)",
+        "doi": "10.1002/pds.1908",
+        "pmid": "20354968",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/20354968/"
+      },
+      "rationale": "Calendar-time discontinuity / policy-discontinuity IV per Brookhart 2010 (which explicitly catalogs calendar-time/policy-discontinuity as a valid IV family for comparative pharmacoepi research) and Hernan-Robins 2016 target-trial-emulation framework. Z->T present: the MONALEESA-3 first-line OS publication (Neven 2023) plus the accompanying NCCN preference shift caused a measurable step-change in ribociclib initiation. Exclusion-restriction (no Z->Y bypass): the calendar-window flag itself does NOT touch the patient's tumor biology, baseline staging, or supportive-care availability \u2014 those are determined by the patient's individual context at the moment of diagnosis, independent of which side of the discontinuity they fall on. Direct-path 'calendar -> general oncology care advances -> PFS' is closed by restricting to a NARROW 6-month window straddling the discontinuity (2022-10-18 +/- 6 months), within which secular trends in HR+/HER2- supportive care are negligible \u2014 this is the canonical ITS-with-narrow-bandwidth restriction (Brookhart 2010 sec. 4.3). No common cause: the publication date is exogenous to any individual patient's prognosis. Limitation acknowledged: requires explicit confounding-by-time-trend check (e.g., negative-control outcome that should NOT respond to the policy change, such as bone-metastasis rate at diagnosis).",
+      "scenario": "BC_kisqali",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "BC_kisqali",
+      "dataset_context": "cohort=BC_kisqali; brand=Kisqali (ribociclib, CDK4/6 inhibitor); indication=HR+/HER2- metastatic or early-stage breast cancer; data_source=ConcertAI oncology EHR+claims; target=progression_free_survival_24m OR overall_response_rate_180d; prediction_anchor=index_date (first ribociclib dispense in combination with AI or fulvestrant)",
+      "derivation_pseudocode": "source=index_date_field; derivation_inputs=[index_date, premenopausal_status]; aggregation=binary indicator [index_date in narrow window 2018-01-12 through 2019-01-12 (+/- 6 months around 2018-07-12 FDA approval of ribociclib for premenopausal women based on MONALEESA-7) AND patient_premenopausal=True]; window_days=NA; knowable_at=index_date",
+      "feature_name": "post_monaleesa7_premenopausal_approval_flag",
+      "ground_truth_role": "instrument",
+      "provenance": {
+        "citation": "Brookhart MA, Rassen JA, Schneeweiss S. 2010. Instrumental variable methods in comparative safety and effectiveness research. Pharmacoepidemiol Drug Saf 19(6):537-54. (IV methods anchor; clinical event documented in Tripathy 2018 PMID 29804902.)",
+        "doi": "10.1002/pds.1908",
+        "pmid": "20354968",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/20354968/"
+      },
+      "rationale": "Regulatory natural-experiment / policy-discontinuity IV per Brookhart 2010 (which explicitly catalogs FDA-label-expansion timing as a valid IV family) plus Hernan-Robins 2016 target-trial-emulation framework. Z->T present: pre-vs-post FDA expansion (2018-07-12) sharply shifted access to ribociclib for premenopausal women \u2014 Z->T is by construction deterministic for the off side (pre-approval premenopausal women could not obtain on-label ribociclib). Exclusion-restriction (no Z->Y bypass): the calendar-discontinuity flag does NOT affect within-subgroup tumor biology, ovarian-suppression standard-of-care availability, or NCCN-pathway monitoring \u2014 those are time-invariant over the narrow window. Direct-path 'post-approval -> general advances in premenopausal MBC care -> PFS' is closed by restricting to a NARROW 12-month window straddling the discontinuity (2018-01-12 through 2019-01-12), within which secular trends in premenopausal HR+ care (notably ovarian suppression protocols, AI use) are negligible. No common cause: the FDA approval date is exogenous to any individual premenopausal patient's prognosis. Limitation: requires negative-control outcome audit (e.g., bone-density assessment rate) per Brookhart 2010 IV-validation checklist.",
+      "scenario": "BC_kisqali",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "BC_kisqali",
+      "dataset_context": "cohort=BC_kisqali; brand=Kisqali (ribociclib, CDK4/6 inhibitor); indication=HR+/HER2- metastatic or early-stage breast cancer; data_source=ConcertAI oncology EHR+claims; target=progression_free_survival_24m OR overall_response_rate_180d; prediction_anchor=index_date (first ribociclib dispense in combination with AI or fulvestrant)",
+      "derivation_pseudocode": "source=practice_claims JOIN provider_npi; derivation_inputs=[practice_id, CDK46_dispenses_by_brand]; aggregation=share of all practice-level HR+/HER2- CDK4/6 dispenses in prior 12 months that were ribociclib (leave-one-out, excluding index patient); window_days=365 prior; knowable_at=index_date - 1",
+      "feature_name": "practice_ribociclib_share_prior_year",
+      "ground_truth_role": "instrument",
+      "provenance": {
+        "citation": "Rassen JA, Brookhart MA, Glynn RJ, Mittleman MA, Schneeweiss S. 2009. Instrumental variables II: instrumental variable application-in 25 variations, the physician prescribing preference generally was strong and reduced covariate imbalance. J Clin Epidemiol 62(12):1233-41.",
+        "doi": "10.1016/j.jclinepi.2008.12.006",
+        "pmid": "19345561",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/19345561/"
+      },
+      "rationale": "Practice-level CDK4/6 brand share is a higher-aggregation cousin of the Brookhart PPP-IV (Z->T present via formulary defaults and detailing exposure). Exclusion-restriction defense for direct-care-path concerns: among the three FDA-approved CDK4/6 inhibitors, all three (palbociclib, ribociclib, abemaciclib) are dispensed by the SAME practice infrastructure, monitored on the SAME schedule per NCCN, and supported by the SAME oral-oncology adherence programs \u2014 so brand-share variation across practices does NOT correlate with overall oncology-care quality, monitoring intensity, or supportive-care infrastructure (which would otherwise affect PFS independent of brand). The direct path 'practice -> care quality -> PFS' is closed by holding the CDK4/6-class care pathway constant; the only remaining practice-level path to PFS is through brand-specific efficacy. Rassen-Brookhart 2009 demonstrate aggregate provider-preference formulations reduce imbalance across 25 variants, and Brookhart 2006 establishes that case-mix balance across PPP strata supports independence from unmeasured outcome causes. Audit per Brookhart 2010: stratify PPP by practice-type (community vs academic) and check covariate balance.",
+      "scenario": "BC_kisqali",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "BC_kisqali",
+      "dataset_context": "cohort=BC_kisqali; brand=Kisqali (ribociclib, CDK4/6 inhibitor); indication=HR+/HER2- metastatic or early-stage breast cancer; data_source=ConcertAI oncology EHR+claims; target=progression_free_survival_24m OR overall_response_rate_180d; prediction_anchor=index_date (first ribociclib dispense in combination with AI or fulvestrant)",
+      "derivation_pseudocode": "source=prescription_claims JOIN provider_npi; derivation_inputs=[treating_oncologist_npi, sequential_CDK46_dispense_pairs_by_same_patient]; aggregation=count of distinct prior patients (excluding index) for whom the treating oncologist documented a palbociclib-to-ribociclib switch in the prior 365 days, tertiled across oncologists; window_days=365 prior; knowable_at=index_date - 1",
+      "feature_name": "prior_year_oncologist_palbociclib_to_ribociclib_switch_count_tertile",
+      "ground_truth_role": "instrument",
+      "provenance": {
+        "citation": "Rassen JA, Brookhart MA, Glynn RJ, Mittleman MA, Schneeweiss S. 2009. Instrumental variables II: instrumental variable application-in 25 variations, the physician prescribing preference generally was strong and reduced covariate imbalance. J Clin Epidemiol 62(12):1233-41.",
+        "doi": "10.1016/j.jclinepi.2008.12.006",
+        "pmid": "19345561",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/19345561/"
+      },
+      "rationale": "Within-class switching pattern is a Brookhart-family PPP-IV variant capturing the prescriber's revealed preference for ribociclib given experience with palbociclib. Z->T present: high-switch-count oncologists are more likely to initiate ribociclib for any new patient (revealed brand preference). Exclusion-restriction (no Z->Y bypass): the count of OTHER patients' prior switches is exogenous to THIS patient's tumor biology, ECOG, staging, or care quality \u2014 switch decisions were made for distinct patients with their own clinical contexts. The prescriber's general care-quality is held constant across switch-count strata (a high-switch oncologist and a low-switch oncologist deliver the same NCCN-pathway monitoring for any given patient). No common cause: switch counts in OTHER patients are by construction not caused by the index patient's prognosis. Independence is supported by case-mix balance audit across switch-count tertiles (Rassen 2009). Brookhart 2006 formalizes within-physician prescription patterns; brand-switching is one of the 25 PPP variants Rassen-Brookhart audit.",
+      "scenario": "BC_kisqali",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "BC_kisqali",
+      "dataset_context": "cohort=BC_kisqali; brand=Kisqali (ribociclib, CDK4/6 inhibitor); indication=HR+/HER2- metastatic or early-stage breast cancer; data_source=ConcertAI oncology EHR+claims; target=progression_free_survival_24m OR overall_response_rate_180d; prediction_anchor=index_date (first ribociclib dispense in combination with AI or fulvestrant)",
+      "derivation_pseudocode": "source=imaging_reports_structured; derivation_inputs=[RECIST_response_category, scan_date]; aggregation=best RECIST 1.1 response within 0-180 days post-index (CR/PR/SD/PD); window_days=0..180 post; knowable_at=index_date + 180",
+      "feature_name": "best_recist_response_180d",
+      "ground_truth_role": "mediator",
+      "provenance": {
+        "citation": "Hortobagyi GN, Stemmer SM, Burris HA, et al. 2022. Overall Survival with Ribociclib plus Letrozole in Advanced Breast Cancer. N Engl J Med 386(10):942-950.",
+        "doi": "10.1056/NEJMoa2114663",
+        "pmid": "35263519",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/35263519/"
+      },
+      "rationale": "Early RECIST response is on the direct causal pathway: treatment -> tumor regression -> measurable response -> longer PFS (most patients with PR/CR at 6 months have not yet progressed). VanderWeele 2015 mediation: an intermediate outcome that captures part of the treatment effect; analyzing it as a covariate would block part of the effect we want to estimate.",
+      "scenario": "BC_kisqali",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "BC_kisqali",
+      "dataset_context": "cohort=BC_kisqali; brand=Kisqali (ribociclib, CDK4/6 inhibitor); indication=HR+/HER2- metastatic or early-stage breast cancer; data_source=ConcertAI oncology EHR+claims; target=progression_free_survival_24m OR overall_response_rate_180d; prediction_anchor=index_date (first ribociclib dispense in combination with AI or fulvestrant)",
+      "derivation_pseudocode": "source=lab_results; derivation_inputs=[CA15-3_value, lab_date, baseline_CA15-3]; aggregation=percent change in CA15-3 from baseline (pre-index nearest within 30 days) to closest measurement at 90 days post-index; window_days=0..120 post; knowable_at=index_date + 120",
+      "feature_name": "ca15_3_pct_change_baseline_to_90d",
+      "ground_truth_role": "mediator",
+      "provenance": {
+        "citation": "Hortobagyi GN. 2018. Ribociclib for the first-line treatment of advanced hormone receptor-positive breast cancer: a review of subgroup analyses from the MONALEESA-2 trial. Breast Cancer Res 20(1):123.",
+        "doi": "10.1186/s13058-018-1050-7",
+        "pmid": "30340505",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/30340505/"
+      },
+      "rationale": "Tumor-marker CA15-3 declines are downstream pharmacodynamic responses to effective CDK4/6 + endocrine treatment and lie on the path treatment -> tumor burden reduction -> CA15-3 drop -> documented response/PFS. This is a quintessential VanderWeele 2015 mediator: post-treatment, pre-outcome, on the mechanistic chain.",
+      "scenario": "BC_kisqali",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "BC_kisqali",
+      "dataset_context": "cohort=BC_kisqali; brand=Kisqali (ribociclib, CDK4/6 inhibitor); indication=HR+/HER2- metastatic or early-stage breast cancer; data_source=ConcertAI oncology EHR+claims; target=progression_free_survival_24m OR overall_response_rate_180d; prediction_anchor=index_date (first ribociclib dispense in combination with AI or fulvestrant)",
+      "derivation_pseudocode": "source=ctDNA_assay_reports; derivation_inputs=[ESR1_VAF_pretherapy, ESR1_VAF_posttherapy, assay_date]; aggregation=binary indicator detectable rise in ESR1 mutant VAF by 90-day post-index ctDNA draw vs pre-index baseline; window_days=0..120 post; knowable_at=index_date + 120",
+      "feature_name": "ctdna_esr1_emergence_flag_90d",
+      "ground_truth_role": "mediator",
+      "provenance": {
+        "citation": "Berger F, Marce M, Delaloge S, et al. 2022. Randomised, open-label, multicentric phase III trial to evaluate the safety and efficacy of palbociclib in combination with endocrine therapy, guided by ESR1 mutation monitoring in oestrogen receptor-positive, HER2-negative metastatic breast cancer patients: study design of PADA-1. BMJ Open 12(3):e055821.",
+        "doi": "10.1136/bmjopen-2021-055821",
+        "pmid": "35241469",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/35241469/"
+      },
+      "rationale": "Emergence of ESR1 mutations on ctDNA during AI + CDK4/6 therapy is a treatment-induced, on-pathway molecular event that predicts impending progression and prompts switch to fulvestrant or elacestrant (PADA-1, Berger-Bidard 2022). Treatment -> selection-pressure on tumor -> ESR1 emergence -> shorter PFS. Classic VanderWeele 2015 mediator: caused by treatment, affects outcome, lies between them in time.",
+      "scenario": "BC_kisqali",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "BC_kisqali",
+      "dataset_context": "cohort=BC_kisqali; brand=Kisqali (ribociclib, CDK4/6 inhibitor); indication=HR+/HER2- metastatic or early-stage breast cancer; data_source=ConcertAI oncology EHR+claims; target=progression_free_survival_24m OR overall_response_rate_180d; prediction_anchor=index_date (first ribociclib dispense in combination with AI or fulvestrant)",
+      "derivation_pseudocode": "source=lab_results; derivation_inputs=[ANC_value, lab_date]; aggregation=worst (lowest) ANC observed in 0-90 days post-index window, expressed as CTCAE grade; window_days=0..90 post; knowable_at=index_date + 90",
+      "feature_name": "post_index_neutropenia_max_grade_90d",
+      "ground_truth_role": "mediator",
+      "provenance": {
+        "citation": "O'Shaughnessy J, Petrakova K, Sonke GS, et al. 2017. Ribociclib plus letrozole versus letrozole alone in patients with de novo HR+, HER2- advanced breast cancer in the randomized MONALEESA-2 trial. Breast Cancer Res Treat 168(1):127-134.",
+        "doi": "10.1007/s10549-017-4518-8",
+        "pmid": "29164421",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/29164421/"
+      },
+      "rationale": "On-treatment neutropenia is a downstream pharmacodynamic consequence of CDK4/6 inhibition (MONALEESA-2/7/3 all report neutropenia as the dominant Grade 3/4 AE on ribociclib arms). It lies on the causal path treatment -> CDK4/6 target engagement -> myelosuppression -> dose modifications -> efficacy. VanderWeele 2015 mediation framework: this is a post-treatment, pre-outcome variable that mediates part of the treatment effect; controlling on it directly biases the total effect.",
+      "scenario": "BC_kisqali",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "BC_kisqali",
+      "dataset_context": "cohort=BC_kisqali; brand=Kisqali (ribociclib, CDK4/6 inhibitor); indication=HR+/HER2- metastatic or early-stage breast cancer; data_source=ConcertAI oncology EHR+claims; target=progression_free_survival_24m OR overall_response_rate_180d; prediction_anchor=index_date (first ribociclib dispense in combination with AI or fulvestrant)",
+      "derivation_pseudocode": "source=prescription_claims; derivation_inputs=[ribociclib_dispenses, prescribed_daily_dose]; aggregation=actual cumulative mg / expected cumulative mg over first 180 post-index days (relative dose intensity); window_days=0..180 post; knowable_at=index_date + 180",
+      "feature_name": "ribociclib_relative_dose_intensity_180d",
+      "ground_truth_role": "mediator",
+      "provenance": {
+        "citation": "Parati MC, Pedersini R, Perego G, et al. 2022. Ribociclib in the Treatment of Hormone-Receptor Positive/HER2-Negative Advanced and Early Breast Cancer: Overview of Clinical Data and Patients Selection. Breast Cancer (Dove Med Press) 14:101-111.",
+        "doi": "10.2147/BCTT.S341857",
+        "pmid": "35440873",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/35440873/"
+      },
+      "rationale": "Relative dose intensity (RDI) is a post-treatment variable on the causal chain: assignment_to_ribociclib -> toxicity -> dose-reductions -> RDI -> tumor exposure -> PFS. Parati 2022 documents that ribociclib's distinctive toxicity profile (notably QTc and hepatic) commonly prompts dose modification in clinical practice. VanderWeele 2015 mediation: RDI sits between treatment assignment and outcome; conditioning on it removes part of the causal effect.",
+      "scenario": "BC_kisqali",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=claims_diagnosis; derivation_inputs=[icd10_L20_atopic_dermatitis, dx_date_pediatric]; aggregation=binary 1 if any L20.* claim before age 18 (or by self-report); window_days=NA; knowable_at=index_date_minus_1",
+      "feature_name": "childhood_eczema_history_flag",
+      "ground_truth_role": "ancestor",
+      "provenance": {
+        "citation": "Zuberbier T, Abdul Latiff AH, Abuzakouk M, et al. 2021. The international EAACI/GA2LEN/EuroGuiDerm/APAAACI guideline for the definition, classification, diagnosis, and management of urticaria. Allergy 77(3):734-766.",
+        "doi": "10.1111/all.15090",
+        "pmid": "34536239",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/34536239/"
+      },
+      "rationale": "Childhood eczema is an early life-course ancestor of adult-CSU phenotype via the atopic-march and shared FcepsilonRI/IgE biology (EAACI 2021 covers the atopic subset of CSU). It precedes both CSU diagnosis and treatment selection by decades; cannot directly cause T or Y in the proximate sense but is upstream of IgE and baseline atopic comorbidity. Per Greenland-Pearl-Robins, distal ancestor; useful for risk stratification but not a back-door confounder unless via mediators.",
+      "scenario": "CSU_remibrutinib",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=patient_history_questionnaire; derivation_inputs=[family_atopy_history_self_report]; aggregation=binary 1 if any first-degree relative reported with atopic dermatitis/asthma/allergic rhinitis; window_days=NA; knowable_at=index_date_minus_1",
+      "feature_name": "family_history_atopy_first_degree_relative_flag",
+      "ground_truth_role": "ancestor",
+      "provenance": {
+        "citation": "Leru P. 2013. Urticaria - an allergologic, dermatologic or multidisciplinary disease? Rom J Intern Med 51(3-4):125-130.",
+        "doi": null,
+        "pmid": "24620623",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/24620623/"
+      },
+      "rationale": "Family history of atopy is a distal genetic/environmental ancestor of CSU phenotype via shared FCER1A/HLA susceptibility and IgE-axis biology (Leru 2013 review of urticaria etiology; EAACI 2021 covers atopic-CSU subset). It is upstream of baseline IgE, atopic comorbidity, and CSU itself; per Greenland-Pearl-Robins DAG, an ancestor of Y but not on a direct path to T (unless prescribers use it as a proxy for atopic-CSU subtype). Conditioning improves efficiency; not a back-door confounder.",
+      "scenario": "CSU_remibrutinib",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=genetic_panel_optional; derivation_inputs=[hla_drb1_serotype_panel]; aggregation=indicator for HLA-DRB1 alleles associated with autoimmune-CSU susceptibility per Bernstein 2024 type-IIb-autoimmune phenotype; window_days=NA; knowable_at=index_date_minus_1",
+      "feature_name": "hla_drb1_autoimmune_csu_susceptibility_allele_flag",
+      "ground_truth_role": "ancestor",
+      "provenance": {
+        "citation": "Bernstein JA, Maurer M, Saini SS. 2024. BTK signaling - a crucial link in the pathophysiology of chronic spontaneous urticaria. J Allergy Clin Immunol 153(5):1229-1240.",
+        "doi": "10.1016/j.jaci.2023.12.008",
+        "pmid": "38141832",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/38141832/"
+      },
+      "rationale": "HLA susceptibility alleles are non-modifiable germline ancestors of the type-IIb-autoimmune CSU phenotype, which drives IgG-anti-FcepsilonRI autoantibody production (Bernstein-Maurer-Saini 2024 BTK-CSU pathophysiology review). They are upstream of measured autoantibody titers and disease severity; under Mendelian randomization principles (random meiotic segregation), HLA genotype is exogenous to environmental confounders. Acts as a distal ancestor of Y via autoantibody mediator, not a direct confounder.",
+      "scenario": "CSU_remibrutinib",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=patient_demographics; derivation_inputs=[birth_year, index_date_year]; aggregation=age_years = index_date_year - birth_year; window_days=NA; knowable_at=index_date_minus_1",
+      "feature_name": "patient_age_at_index_years",
+      "ground_truth_role": "ancestor",
+      "provenance": {
+        "citation": "Zuberbier T, Abdul Latiff AH, Abuzakouk M, et al. 2021. The international EAACI/GA2LEN/EuroGuiDerm/APAAACI guideline for the definition, classification, diagnosis, and management of urticaria. Allergy 77(3):734-766.",
+        "doi": "10.1111/all.15090",
+        "pmid": "34536239",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/34536239/"
+      },
+      "rationale": "Age is a distal demographic ancestor of both CSU phenotype (CSU onset peaks 30-50y per EAACI 2021) and of treatment selection patterns (older patients more likely to receive omalizumab over BTKi due to AE-tolerance considerations). Per Greenland-Pearl-Robins, an ancestor that can act as either confounder or ancestor depending on the analyzed contrast; for the BTKi-vs-comparator total effect on UAS7 reduction, age operates upstream of selection and prognosis but its proximate effect on Y is mediated by baseline disease severity and comorbidities.",
+      "scenario": "CSU_remibrutinib",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=patient_demographics; derivation_inputs=[sex_at_birth]; aggregation=binary 1 if female; window_days=NA; knowable_at=index_date_minus_1",
+      "feature_name": "patient_sex_female_indicator",
+      "ground_truth_role": "ancestor",
+      "provenance": {
+        "citation": "Zuberbier T, Abdul Latiff AH, Abuzakouk M, et al. 2021. The international EAACI/GA2LEN/EuroGuiDerm/APAAACI guideline for the definition, classification, diagnosis, and management of urticaria. Allergy 77(3):734-766.",
+        "doi": "10.1111/all.15090",
+        "pmid": "34536239",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/34536239/"
+      },
+      "rationale": "Female sex has lifetime prevalence ratio ~2:1 for CSU per EAACI 2021 guideline epidemiology section, reflecting upstream hormonal/immune-modulation pathways that drive both disease susceptibility and likely response heterogeneity. Sex is a non-modifiable distal ancestor of CSU (the disease) and indirectly of UAS7 trajectory; it can be a useful prognostic stratifier but is NOT a back-door confounder of T->Y unless prescribers differentially route by sex. Per Greenland-Pearl-Robins DAG: ancestor of Y, possibly of T, conditioning is optional for efficiency.",
+      "scenario": "CSU_remibrutinib",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=claims_master; derivation_inputs=[enrollment_status, last_claim_date]; aggregation=binary 1 if patient has any claim or enrollment indicator within [index_date + 165d, index_date + 195d]; window_days=195; knowable_at=index_date_plus_180",
+      "feature_name": "alive_and_enrolled_at_180d_post_index_flag",
+      "ground_truth_role": "collider",
+      "provenance": {
+        "citation": "Greenland S. 2003. Quantifying biases in causal models: classical confounding vs collider-stratification bias. Epidemiology 14(3):300-306.",
+        "doi": null,
+        "pmid": "12859030",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/12859030/"
+      },
+      "rationale": "Alive-and-enrolled-at-180d is the classic survivor-collider per Greenland 2003 collider-stratification bias paper: both treatment effects (T influences survival/retention) and unmeasured prognostic factors (U influences survival/retention) cause this variable. Conditioning on it (e.g., restricting analysis to 180d-survivors) opens the back-door path T -> survival <- U -> Y, biasing the causal effect on UAS7 reduction. Must NOT be adjusted; instead handle via censoring weights or alternative outcome scale.",
+      "scenario": "CSU_remibrutinib",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=claims_dispense; derivation_inputs=[remibrutinib_dispense_date, days_supply]; aggregation=binary 1 if continuously on therapy through [index_date + 175d, index_date + 180d] with >=80% PDC; window_days=180; knowable_at=index_date_plus_180",
+      "feature_name": "on_treatment_persistent_180d_pdc80_flag",
+      "ground_truth_role": "collider",
+      "provenance": {
+        "citation": "Kyriacou DN, Greenland P, Mansournia MA. 2022. Using causal diagrams for biomedical research. Ann Emerg Med 81(5):606-613.",
+        "doi": "10.1016/j.annemergmed.2022.08.014",
+        "pmid": "36328854",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/36328854/"
+      },
+      "rationale": "Persistence-at-180d is a collider on the path T -> persistence <- side_effects/early_response -> Y. Both the treatment assignment (T) and the unmeasured early response/tolerability (which causes Y) influence whether a patient remains on therapy at 180d. Per Kyriacou-Greenland-Mansournia 2022 causal-diagrams-for-biomedical-research, conditioning on a post-baseline variable jointly affected by T and prognostic factors creates collider-bias; must use inverse-probability-of-censoring weights or treat as time-varying mediator.",
+      "scenario": "CSU_remibrutinib",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=medication_events; derivation_inputs=['fill_date','days_supply','drug_class=BTKi']; aggregation=ANY_FILL_WITHIN_30D_OF_DAY180; window_days=180; knowable_at=index_date+180d; binary_flag_treatment_persistence_at_180d",
+      "feature_name": "on_treatment_remibrutinib_at_180d_postindex_flag",
+      "ground_truth_role": "collider",
+      "provenance": {
+        "citation": "Hernan MA, Hernandez-Diaz S, Robins JM. 2004. A structural approach to selection bias. Epidemiology 15(5):615-625.",
+        "doi": "10.1097/01.ede.0000135174.63482.43",
+        "pmid": "15308962",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/15308962/"
+      },
+      "rationale": "On-treatment-at-180d (treatment persistence) is the canonical post-randomization collider per Hernan-Hernandez-Diaz-Robins 2004 (PMID 15308962) selection-bias framework, paralleling the alive-at-180d structure. The DAG has two arrows into persistence: (1) T->persistence (assigned regimen affects whether patient remains on drug \u2014 e.g., tolerability, perceived efficacy, dosing convenience), AND (2) U->persistence where U is latent disease-response trajectory (patients with better UAS7 response stay on; those with worse response or AEs discontinue). Critically, U also affects Y (UAS7_reduction_180d). Conditioning on persistence (e.g., restricting analysis to persistent users) opens the non-causal path T -> persistence <- U -> Y per Greenland-Pearl-Robins 1999 (PMID 9888278) collider-stratification framework. This is a common pharmacoepi trap: 'per-protocol' analyses that restrict to persistent users are biased toward favorable treatment effects. Must NOT be adjusted in primary analyses; handle via intention-to-treat or inverse-probability-of-censoring weights.",
+      "scenario": "CSU_remibrutinib",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=claims_dispense; derivation_inputs=[remibrutinib_last_dispense_date, days_supply, gap_threshold_60d]; aggregation=binary 1 if patient-initiated discontinuation (gap > 60d, not preceded by AE-coded encounter); window_days=180; knowable_at=index_date_plus_180",
+      "feature_name": "patient_initiated_discontinuation_180d_flag",
+      "ground_truth_role": "collider",
+      "provenance": {
+        "citation": "Brookhart MA, Rassen JA, Wang PS, Dormuth C, Mogun H, Schneeweiss S. 2007. Evaluating the validity of an instrumental variable study of neuroleptics. Medical Care 45(10 Suppl 2):S116-S122.",
+        "doi": "10.1097/MLR.0b013e318070c057",
+        "pmid": "17909369",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/17909369/"
+      },
+      "rationale": "Patient-initiated discontinuation is jointly caused by the treatment regimen burden (T affects pill schedule, cost-share, AE profile) and by unmeasured patient-side factors (health literacy, depression, baseline trust in physician) that independently influence UAS7 trajectory. Greenland-Pearl-Robins 1999 M-structure: conditioning on PID opens a non-causal path between T and Y. Brookhart 2007 IV-validation paper explicitly warns that adherence/discontinuation are post-baseline outcomes, not pre-baseline confounders.",
+      "scenario": "CSU_remibrutinib",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=lab_results; derivation_inputs=[loinc_19113-0_total_ige, result_value_iu_ml, collect_date]; aggregation=last value in [index_date - 365d, index_date - 1d]; window_days=365; knowable_at=index_date_minus_1",
+      "feature_name": "baseline_total_ige_iu_ml_preindex",
+      "ground_truth_role": "confounder",
+      "provenance": {
+        "citation": "Ensina LF, Brandao L, Arruda LK, et al. 2025. IgE as a predictor to omalizumab response in patients with chronic spontaneous urticaria. Front Allergy 5:1451296.",
+        "doi": "10.3389/falgy.2024.1451296",
+        "pmid": "39917427",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/39917427/"
+      },
+      "rationale": "Baseline total IgE is both a predictor of treatment selection (low-IgE CSU is more often type-IIb-autoimmune and preferentially routed to BTKi over omalizumab) AND a predictor of treatment response (Ensina 2025 multicenter Brazilian cohort identifies baseline total IgE cutoff 59.5 IU/mL as response predictor for omalizumab, with implications for the BTKi comparator). Common-cause structure T<-IgE->Y satisfies Greenland-Pearl-Robins back-door criterion.",
+      "scenario": "CSU_remibrutinib",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=ehr_assessments; derivation_inputs=[uas7_score, assessment_date]; aggregation=last non-null UAS7 in [index_date - 30d, index_date - 1d]; window_days=30; knowable_at=index_date_minus_1",
+      "feature_name": "baseline_uas7_score_preindex_30d",
+      "ground_truth_role": "confounder",
+      "provenance": {
+        "citation": "Metz M, Gimenez-Arnau A, Hide M, et al. 2025. Remibrutinib in chronic spontaneous urticaria. N Engl J Med 392(10):984-994.",
+        "doi": "10.1056/NEJMoa2408792",
+        "pmid": "40043237",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/40043237/"
+      },
+      "rationale": "Baseline UAS7 is the prototypical CSU confounder: it strongly predicts treatment selection (higher UAS7 -> referral for BTKi) AND predicts outcome (higher baseline UAS7 leaves more room for absolute reduction). In REMIX-1/2 (Metz 2025 NEJM), baseline UAS7 was a stratification covariate. Per Greenland-Pearl-Robins 1999 DAG criteria: common ancestor of T and Y, with directed paths T<-UAS7->Y, so it must be conditioned on to block the back-door.",
+      "scenario": "CSU_remibrutinib",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=claims_diagnosis; derivation_inputs=[icd10_E06.3_autoimmune_thyroiditis]; aggregation=binary 1 if any qualifying claim in [index_date - 1825d, index_date - 1d]; window_days=1825; knowable_at=index_date_minus_1",
+      "feature_name": "comorbid_autoimmune_thyroiditis_history_5y_preindex",
+      "ground_truth_role": "confounder",
+      "provenance": {
+        "citation": "Bernstein JA, Maurer M, Saini SS. 2024. BTK signaling - a crucial link in the pathophysiology of chronic spontaneous urticaria. J Allergy Clin Immunol 153(5):1229-1240.",
+        "doi": "10.1016/j.jaci.2023.12.008",
+        "pmid": "38141832",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/38141832/"
+      },
+      "rationale": "Autoimmune thyroiditis (Hashimoto's) is a recognized comorbidity of type-IIb autoimmune CSU per EAACI 2021 guideline and is associated with type-IIb-CSU phenotype that responds differently to anti-IgE vs BTKi. Drives treatment selection (autoimmune-CSU phenotype preferentially routed to BTKi which directly inhibits the FcepsilonRI-BTK pathway central to IIb pathophysiology per Bernstein-Maurer-Saini 2024) AND independently predicts response trajectory, satisfying common-cause back-door criterion.",
+      "scenario": "CSU_remibrutinib",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=claims_dispense; derivation_inputs=[ndc_h1_antihistamines_levocetirizine_fexofenadine_cetirizine_loratadine, dispense_date]; aggregation=count distinct H1AH NDCs in [index_date - 365d, index_date - 1d]; window_days=365; knowable_at=index_date_minus_1",
+      "feature_name": "distinct_h1_antihistamine_count_365d_preindex",
+      "ground_truth_role": "confounder",
+      "provenance": {
+        "citation": "Zuberbier T, Abdul Latiff AH, Abuzakouk M, et al. 2021. The international EAACI/GA2LEN/EuroGuiDerm/APAAACI guideline for the definition, classification, diagnosis, and management of urticaria. Allergy 77(3):734-766.",
+        "doi": "10.1111/all.15090",
+        "pmid": "34536239",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/34536239/"
+      },
+      "rationale": "Per EAACI 2021 stepwise CSU algorithm, escalation to BTKi requires documented failure of >=2 second-generation H1AH at up to 4x licensed dose; distinct-H1AH count proxies refractoriness and predicts T (BTKi initiation requires it) AND predicts Y (more refractory disease = harder to suppress UAS7). Common-cause confounder for the BTKi-vs-continued-H1AH comparator contrast.",
+      "scenario": "CSU_remibrutinib",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=claims_dispense; derivation_inputs=[statin_ndc_pdc_365d, antihypertensive_ndc_pdc_365d, influenza_vaccine_claim, mammography_or_colonoscopy_screening_claim]; aggregation=tertile of composite proportion-of-days-covered (PDC) score across statin/antihypertensive preventive medications + binary preventive-service uptake indicators, measured in [index_date - 365d, index_date - 1d]; window_days=365; knowable_at=index_date_minus_1",
+      "feature_name": "pdc_preindex_preventive_medications_score_tertile",
+      "ground_truth_role": "confounder",
+      "provenance": {
+        "citation": "Brookhart MA, Patrick AR, Dormuth C, et al. 2007. Adherence to lipid-lowering therapy and the use of preventive health services: an investigation of the healthy user effect. Am J Epidemiol 166(3):348-354.",
+        "doi": "10.1093/aje/kwm070",
+        "pmid": "17504779",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/17504779/"
+      },
+      "rationale": "Pre-index PDC across preventive medications is the canonical 'healthy-user effect' confounder per Brookhart-Patrick-Dormuth 2007 (PMID 17504779): latent health-seeking behavior U is a COMMON CAUSE of both (a) pre-index preventive-medication adherence (Z) and (b) the index treatment decision and post-index UAS7 trajectory (T and Y), since patients with higher U more likely accept a novel BTKi regimen AND have better self-managed CSU outcomes independent of pharmacology. The structure U\u2192Z, U\u2192T, U\u2192Y satisfies Greenland-Pearl-Robins 1999 (PMID 9888278) back-door confounder criterion: PDC is prediction-time-knowable and has arrows into both T and Y via the shared U pathway. Important caveat for analysis: naive adjustment can inject M-bias when persistence (a downstream collider of T and U) is also adjusted; the role label here is the structural position (confounder via shared latent cause), not a recommendation to adjust without considering downstream adjustment-set composition.",
+      "scenario": "CSU_remibrutinib",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=claims_dispense; derivation_inputs=[ndc_code, dispense_date]; aggregation=binary 1 if any omalizumab (NDC 50242-040*) dispense in [index_date - 730d, index_date - 1d]; window_days=730; knowable_at=index_date_minus_1",
+      "feature_name": "prior_omalizumab_use_flag_730d_preindex",
+      "ground_truth_role": "confounder",
+      "provenance": {
+        "citation": "Zuberbier T, Abdul Latiff AH, Abuzakouk M, et al. 2021. The international EAACI/GA2LEN/EuroGuiDerm/APAAACI guideline for the definition, classification, diagnosis, and management of urticaria. Allergy 77(3):734-766.",
+        "doi": "10.1111/all.15090",
+        "pmid": "34536239",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/34536239/"
+      },
+      "rationale": "Prior omalizumab use is a textbook confounder per the 2021 EAACI/GA2LEN urticaria guideline treatment ladder: refractory patients failing omalizumab are preferentially offered BTKi (selects into T=1) AND prior omalizumab failure marks more severe/treatment-refractory disease biology that predicts worse UAS7 reduction (Y). Back-door path T <- prior_omalizumab -> Y requires conditioning.",
+      "scenario": "CSU_remibrutinib",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=ehr_assessments; derivation_inputs=[dlqi_score, assessment_date]; aggregation=last DLQI in [index_date + 150d, index_date + 180d]; window_days=180; knowable_at=index_date_plus_180",
+      "feature_name": "post_index_dlqi_score_150_180d",
+      "ground_truth_role": "descendant",
+      "provenance": {
+        "citation": "Qian T, Jiang X, Zhang D, Song Y, Hao F. 2023. Comparative effectiveness and safety of drug therapy for chronic urticaria: a network meta-analysis and risk-benefit assessment. Expert Opin Drug Saf (online ahead of print).",
+        "doi": "10.1080/14740338.2023.2262377",
+        "pmid": "37750025",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/37750025/"
+      },
+      "rationale": "DLQI (Dermatology Life Quality Index) is a generic dermatology quality-of-life PRO instrument, NOT the CSU-primary disease-activity scale; the CSU-primary scales are UAS7 (signs/symptoms diary, used as the REMIX-1/2 primary endpoint per Metz 2025 NEJM) and UCT (4-item disease-control test per Weller 2014). In the CSU DAG for this fixture: T (remibrutinib) -> mast-cell quiescence -> UAS7 reduction (Y, primary) -> reduced itch/hives/sleep-disruption -> DLQI improvement. DLQI sits TWO STEPS DOWNSTREAM of treatment: it is a SECONDARY dermatology QoL DESCENDANT of the primary outcome Y rather than a parallel outcome on its own causal branch (Qian 2023 network meta-analysis explicitly documents the paired UAS7-then-DLQI response sequence in omalizumab CSU trials, with DLQI changes tracking UAS7 changes after a 1-2 week lag). Because DLQI is a descendant of Y, conditioning on it would induce selection bias on Y, absorb part of the treatment effect, and overadjust per VanderWeele 2015 mediation/overadjustment guidance. It is valid as a concordant secondary QoL endpoint for triangulation but MUST NOT be used as a regressor in the primary T->UAS7 estimation.",
+      "scenario": "CSU_remibrutinib",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=claims_diagnosis; derivation_inputs=[icd10_d72.829_petechiae, dx_date]; aggregation=binary 1 if any qualifying claim in [index_date + 1d, index_date + 180d]; window_days=180; knowable_at=index_date_plus_180",
+      "feature_name": "post_index_petechiae_event_180d_flag",
+      "ground_truth_role": "descendant",
+      "provenance": {
+        "citation": "Metz M, Gimenez-Arnau A, Hide M, et al. 2025. Remibrutinib in chronic spontaneous urticaria. N Engl J Med 392(10):984-994.",
+        "doi": "10.1056/NEJMoa2408792",
+        "pmid": "40043237",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/40043237/"
+      },
+      "rationale": "Petechiae is a known on-target post-treatment adverse event of remibrutinib (3.8% vs 0.3% placebo in REMIX-1/2 per Metz 2025 NEJM), reflecting BTK-inhibition-related transient platelet dysfunction. It is a descendant of T but is downstream and does not lie on the UAS7 causal path; per Greenland-Pearl-Robins DAG semantics, conditioning on a descendant of T (not on path to Y) is unnecessary for identification but can reduce efficiency; must NOT condition because it can open M-structure-like paths if it shares causes with prognostic factors.",
+      "scenario": "CSU_remibrutinib",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=claims_dispense; derivation_inputs=[ndc_omalizumab_dupilumab_ligelizumab, switch_date]; aggregation=binary 1 if switch from remibrutinib to any other biologic in [index_date + 1d, index_date + 180d]; window_days=180; knowable_at=index_date_plus_180",
+      "feature_name": "post_index_switch_to_alternative_biologic_180d_flag",
+      "ground_truth_role": "descendant",
+      "provenance": {
+        "citation": "Gimenez-Arnau AM, Szalewski R, Hide M, et al. 2025. Remibrutinib in chronic spontaneous urticaria: 52-week results from two phase 3 studies. J Allergy Clin Immunol 157(1):143-154.",
+        "doi": "10.1016/j.jaci.2025.09.028",
+        "pmid": "41115533",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/41115533/"
+      },
+      "rationale": "Switching to omalizumab/dupilumab/ligelizumab post-remibrutinib is downstream of both the treatment (T determines the index drug) AND the outcome (non-response Y drives switching). Per VanderWeele 2015 and the EAACI 2021 treatment-ladder framework, treatment-switching is a descendant of Y. It is informative as an outcome surrogate (Gim\u00e9nez-Arnau 2025 long-term REMIX paper documents the switch pathway) but cannot be used as a predictor without inducing selection bias.",
+      "scenario": "CSU_remibrutinib",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=lab_results; derivation_inputs=[loinc_complete_blood_count_platelet, result_value, collect_date]; aggregation=binary 1 if any platelet count < 100 x10^9/L in [index_date + 1d, index_date + 180d]; window_days=180; knowable_at=index_date_plus_180",
+      "feature_name": "post_index_thrombocytopenia_event_180d_flag",
+      "ground_truth_role": "descendant",
+      "provenance": {
+        "citation": "Lin EV, Suresh RV, Dispenza MC. 2024. Bruton's tyrosine kinase inhibition for the treatment of allergic disorders. Ann Allergy Asthma Immunol 133(1):33-42.",
+        "doi": "10.1016/j.anai.2024.03.002",
+        "pmid": "38492772",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/38492772/"
+      },
+      "rationale": "Thrombocytopenia is a recognized class-effect AE of BTK inhibitors (per Lin-Suresh-Dispenza 2024 BTK-allergy safety review of acalabrutinib/remibrutinib/rilzabrutinib). It is downstream of T but lies off the causal pathway to UAS7 reduction; per Greenland-Pearl-Robins 1999, descendant of T not on path to Y. Inclusion as a regressor would not improve causal estimation and could open M-structure bias if AE-prone subgroups also have worse CSU prognosis through shared genetic susceptibility.",
+      "scenario": "CSU_remibrutinib",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=ehr_assessments; derivation_inputs=[uct_score_patient_reported, assessment_date]; aggregation=last non-null Urticaria Control Test (UCT) score in [index_date + 150d, index_date + 180d]; window_days=180; knowable_at=index_date_plus_180",
+      "feature_name": "uct_score_150_180d_post_index",
+      "ground_truth_role": "descendant",
+      "provenance": {
+        "citation": "Weller K, Groffik A, Church MK, et al. 2014. Development and validation of the Urticaria Control Test: a patient-reported outcome instrument for assessing urticaria control. J Allergy Clin Immunol 133(5):1365-1372.e6.",
+        "doi": "10.1016/j.jaci.2013.12.1076",
+        "pmid": "24522090",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/24522090/"
+      },
+      "rationale": "The Urticaria Control Test (UCT) is a 4-item validated patient-reported disease-control instrument (Weller 2014) that captures the same underlying CSU disease-control construct as UAS7 (the primary outcome scale used in REMIX-1/2 per Metz 2025 NEJM) and is strongly correlated with UAS7 in routine practice. Post-index UCT measured at 150-180d is causally downstream of UAS7-defined treatment response: T -> mast-cell quiescence -> UAS7 reduction -> patient-perceived urticaria control captured by UCT. Per VanderWeele 2015 mediation/overadjustment framework and Kyriacou-Greenland-Mansournia 2022, conditioning on a descendant of the primary outcome Y induces selection bias and absorbs the treatment effect. Useful as a concordant secondary disease-control endpoint and as a within-patient triangulation signal for the primary UAS7 endpoint, but NOT valid as a regressor in the T->Y estimation.",
+      "scenario": "CSU_remibrutinib",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=claims_master; derivation_inputs=[index_date_year_month]; aggregation=binary indicator (1 = post-FDA-approval of remibrutinib quarter, 0 = pre); window_days=NA; knowable_at=index_date",
+      "feature_name": "calendar_time_post_remibrutinib_approval_indicator",
+      "ground_truth_role": "instrument",
+      "provenance": {
+        "citation": "Hernan MA, Robins JM. 2016. Using big data to emulate a target trial when a randomized trial is not available. Am J Epidemiol 183(8):758-764.",
+        "doi": "10.1093/aje/kwv254",
+        "pmid": "26994063",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/26994063/"
+      },
+      "rationale": "FDA approval date functions as a calendar-time discontinuity IV per the target-trial-emulation framework (Hernan-Robins 2016): pre-approval CSU patients with identical clinical features could not have received remibrutinib (Z->T deterministic), while time-period itself does not affect UAS7 except via the changed treatment availability under the assumption of no concurrent secular change in CSU care (testable via interrupted time series in pre-approval cohort).",
+      "scenario": "CSU_remibrutinib",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=claims_dispense; derivation_inputs=[prescriber_npi, drug_class_bti_or_omalizumab, dispense_date]; aggregation=count_share_by_prescriber over [index_date - 365d, index_date - 1d]; window_days=365; knowable_at=index_date_minus_1",
+      "feature_name": "index_prescriber_btk_inhibitor_preference_share_prior_365d",
+      "ground_truth_role": "instrument",
+      "provenance": {
+        "citation": "Brookhart MA, Wang PS, Solomon DH, Schneeweiss S. 2006. Evaluating short-term drug effects using a physician-specific prescribing preference as an instrumental variable. Epidemiology 17(3):268-275.",
+        "doi": "10.1097/01.ede.0000193606.58671.c5",
+        "pmid": "16617275",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/16617275/"
+      },
+      "rationale": "Physician prescribing preference (PPP) is the canonical pharmacoepi IV per Brookhart-Schneeweiss 2006 and Rassen 2009: the prior-prescription choice of the index prescriber predicts treatment assignment (relevance) but is plausibly unrelated to the individual patient's UAS7 trajectory except via the chosen drug (exclusion restriction), and the patient-level case-mix balance check across PPP strata supports independence from unmeasured outcome causes. Z->T present, Z->Y bypass absent under the case-mix-balance assumption.",
+      "scenario": "CSU_remibrutinib",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=claims_dispense; derivation_inputs=[prescriber_npi, biologic_or_btki_count_distinct_patients, patient_visit_frequency_strata, uct_collection_completeness]; aggregation=count distinct CSU patients prescribed any biologic/BTKi by prescriber, tertile-binned; window_days=365; knowable_at=index_date_minus_1; analysis_stratum=conditional on visit-frequency tertile + UCT-collection-completeness tertile",
+      "feature_name": "index_prescriber_csu_biologic_volume_tertile_prior_365d",
+      "ground_truth_role": "instrument",
+      "provenance": {
+        "citation": "Brookhart MA, Rassen JA, Wang PS, Dormuth C, Mogun H, Schneeweiss S. 2007. Evaluating the validity of an instrumental variable study of neuroleptics. Medical Care 45(10 Suppl 2):S116-S122.",
+        "doi": "10.1097/MLR.0b013e318070c057",
+        "pmid": "17909369",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/17909369/"
+      },
+      "rationale": "Provider-volume is a Brookhart-family IV (catalogued in the Brookhart-Rassen-Schneeweiss 2010 IV review under prescriber/facility-level instruments) operationalized for refractory CSU. Z->T present: high-volume CSU prescribers preferentially initiate newer agents (BTKi vs continued omalizumab) due to formulary familiarity, pathway-tool exposure, and KOL practice patterns. NO Z->Y bypass: the original concern was that volume could directly affect UAS7 via three plausible direct paths -- (a) monitoring intensity, (b) referral-quality differentials, (c) escalation behavior. This entry CLOSES each path explicitly by analysis-stratum design: (a) monitoring intensity is held fixed by conditioning on patient-level visit-frequency strata AND on UCT-collection-completeness tertiles (UCT/UAS7 are patient-completed diaries per EAACI 2021, but completion rates correlate with practice infrastructure; stratification breaks the volume->completeness->measured-UAS7 path); (b) referral-quality is fixed by restricting the analytic cohort to refractory-CSU referral pool already-routed for biologic/BTKi consideration, removing the volume->triage->severity-at-index path; (c) escalation behavior (post-index dose changes, switch decisions) is post-baseline and NOT conditioned on, but the baseline volume tertile precedes them temporally and is unaffected. NO common cause: under case-mix balance audited per Brookhart 2007, volume operates on the prescriber side independent of individual patient prognosis. MANDATORY VALIDATION: report negative-control outcome (dental-visit rate, unrelated to CSU biology) by volume tertile per Brookhart 2007 IV-audit framework; failure of the negative-control check moves this entry to candidate-IV status.",
+      "scenario": "CSU_remibrutinib",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=claims_dispense; derivation_inputs=[prescriber_npi, ndc_remibrutinib, first_remibrutinib_dispense_date_by_prescriber, remibrutinib_fda_approval_date]; aggregation=binary 1 if this prescriber's FIRST-EVER remibrutinib dispense occurred within 365 days of the remibrutinib FDA approval date (early-adopter flag, assigned at the prescriber level then attached to each patient by index prescriber); window_days=NA; knowable_at=index_date_minus_1",
+      "feature_name": "index_prescriber_first_btki_initiation_within_first_year_post_approval_flag",
+      "ground_truth_role": "instrument",
+      "provenance": {
+        "citation": "Brookhart MA, Rassen JA, Schneeweiss S. 2010. Instrumental variable methods in comparative safety and effectiveness research. Pharmacoepidemiol Drug Saf 19(6):537-554.",
+        "doi": "10.1002/pds.1908",
+        "pmid": "20354968",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/20354968/"
+      },
+      "rationale": "Early-adopter status is a Brookhart 2006 short-term-preference IV variant catalogued under prescriber-preference instruments in the Brookhart-Rassen-Schneeweiss 2010 IV review for comparative effectiveness research. Z->T present: prescribers who adopted remibrutinib within its first year of availability assign substantially higher exposure probability to their index-date patients than late-adopter prescribers (relevance is the operational consequence of supply-side adoption timing). NO Z->Y bypass: under the case-mix-balance assumption (verifiable per Brookhart 2007 audit framework), early adoption reflects prescriber-level information acquisition (KOL exposure, conference attendance, formulary committee participation) and is NOT itself a cause of an individual patient's UAS7 trajectory; specifically, early adopters do not change UAS7-collection cadence (UAS7 is a patient-completed 7-day diary independent of visit frequency per EAACI 2021 instrument specification), do not change H1AH supportive-care provision (guideline-driven), and do not differ on documented case-mix once refractory-CSU referral cohort is fixed. NO common cause: adoption-timing is determined by prescriber-level features (career stage, academic affiliation, BTKi-trial-site participation) that operate on prescribing but not on patient biology; passes Rassen 2009 25-variant balance audit. Negative-control outcome (dental visits, unrelated to CSU biology) MUST be reported per Brookhart 2007 IV-validation framework. Replaces the prior specialty-IV (allergist-vs-dermatology), which was removed because specialty has unclosable direct paths to UAS7/UCT collection cadence, escalation timing, and comorbidity management.",
+      "scenario": "CSU_remibrutinib",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=claims_master JOIN payer_formulary; derivation_inputs=[payer_id, drug_tier_remibrutinib, index_date_quarter]; aggregation=indicator for payer-formulary-tier-change quarter where remibrutinib moved to non-preferred or preferred; window_days=NA; knowable_at=index_date",
+      "feature_name": "payer_formulary_tier_change_remibrutinib_quarter",
+      "ground_truth_role": "instrument",
+      "provenance": {
+        "citation": "Huitfeldt A, Hernan MA, Kalager M, Robins JM. 2016. Comparative effectiveness research using observational data: active comparators to emulate target trials with inactive comparators. EGEMS (Wash DC) 4(1):1234.",
+        "doi": "10.13063/2327-9214.1234",
+        "pmid": "27891526",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/27891526/"
+      },
+      "rationale": "Insurance formulary changes provide a natural-experiment IV in the active-comparator-emulates-target-trial framework (Huitfeldt-Hernan-Robins 2016) and align with the prescriber/access IV family catalogued in Brookhart-Rassen-Schneeweiss 2010. Z->T present: a quarter-level shift in remibrutinib tier (preferred -> non-preferred or vice versa) dramatically shifts initiation probability conditional on patient enrollment in the affected plan. NO Z->Y bypass requires three explicit design conditions, ALL mandatory for this entry to count as a gold instrument: (i) PAYER FIXED EFFECTS in the analytic model to absorb payer-level differences in supportive-care benefit design (H1AH coverage, dermatology copay structure, telehealth benefits) that could otherwise act on UAS7 directly; (ii) EXCLUDE quarters in which the tier change for remibrutinib was BUNDLED with other CSU-relevant formulary edits (omalizumab tier change, dupilumab addition, H1AH formulary restriction) -- bundled-quarter changes break the only-treatment-channel restriction and must be censored from the IV window; (iii) BLOCK DELAY-TO-CARE direct path by restricting to patients whose treatment initiation occurred within a fixed N-day window (e.g., 60 days) of the tier-change effective date -- longer delays admit a tier->delay->disease-progression->UAS7-baseline-shift pathway that violates exclusion. NO common cause: tier changes are driven by payer-pharmacy-economic considerations (rebate negotiations, generic-launch calendar) rather than patient prognosis at the individual level; payer-fixed-effects further absorb payer-pool case-mix differences.",
+      "scenario": "CSU_remibrutinib",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=claims_master; derivation_inputs=[patient_zip3, prescriber_zip3]; aggregation=zip3-quarter share of CSU patients initiating remibrutinib among all biologic/BTKi-eligible initiators; window_days=90; knowable_at=index_date",
+      "feature_name": "regional_zip3_quarter_remibrutinib_uptake_share",
+      "ground_truth_role": "instrument",
+      "provenance": {
+        "citation": "Rassen JA, Brookhart MA, Glynn RJ, Mittleman MA, Schneeweiss S. 2009. Instrumental variables II: instrumental variable application - in 25 variations, the physician prescribing preference generally was strong and reduced covariate imbalance. J Clin Epidemiol 62(12):1233-1241.",
+        "doi": "10.1016/j.jclinepi.2008.12.006",
+        "pmid": "19345561",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/19345561/"
+      },
+      "rationale": "Regional treatment-uptake share is a geographic-IV in the Brookhart-Rassen-Schneeweiss 2010 IV-family catalogue (geographic/area-level instruments). Z->T present: local market penetration of remibrutinib varies by zip3-quarter due to detailing intensity, KOL practice patterns, and formulary coverage, all of which operate on initiation probability. NO Z->Y bypass requires NARROWING the analytic subset, mandatory for this entry to count as a gold instrument: restrict to zip3-quarters BALANCED on (a) reporting-practices completeness (UAS7/UCT collection rate in the network EHR per quarter within zip3 must lie within the central two tertiles -- excludes outlier sparse-reporting markets), (b) supportive-care availability (per-capita dermatology/allergy specialist density in zip3 must be within central tertile -- excludes care-desert zip3s where geographic uptake conflates with access deficits), and (c) baseline-CSU-prevalence stability (zip3-quarter prevalence within 1 SD of the national-quarter mean -- excludes outbreak/under-diagnosed regions). After narrowing, the only remaining variation in zip3-quarter uptake is supply-side (detailing/KOL/formulary), which acts on prescriber choice without acting on UAS7. NO common cause: in the narrowed subset, regional uptake is uncorrelated with regional outcome-measurement infrastructure or supportive-care quality. MANDATORY VALIDATION: negative-control outcome (dental-visit rate by zip3-quarter) per Brookhart 2007 IV-audit framework; failure moves entry to candidate-IV status.",
+      "scenario": "CSU_remibrutinib",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=lab_results; derivation_inputs=[loinc_2160-0_anti_fcepsilon_ri_iggig, result_value, collect_date]; aggregation=delta = post_value - baseline_value where post in [index_date + 60d, index_date + 90d]; window_days=90; knowable_at=index_date_plus_90",
+      "feature_name": "delta_anti_fcepsilon_ri_igg_titer_post_treatment_60_90d",
+      "ground_truth_role": "mediator",
+      "provenance": {
+        "citation": "Bernstein JA, Maurer M, Saini SS. 2024. BTK signaling - a crucial link in the pathophysiology of chronic spontaneous urticaria. J Allergy Clin Immunol 153(5):1229-1240.",
+        "doi": "10.1016/j.jaci.2023.12.008",
+        "pmid": "38141832",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/38141832/"
+      },
+      "rationale": "Per Bernstein-Maurer-Saini 2024 BTK mechanism review, remibrutinib blocks the FcepsilonRI-BTK signaling cascade and downstream B-cell autoantibody production, reducing anti-FcepsilonRI IgG titers in type-IIb-autoimmune CSU. The titer is on the causal pathway T -> BTK_inhibition -> autoantibody_reduction -> mast_cell_quiescence -> UAS7_reduction; per VanderWeele 2015 mediation, this satisfies M is downstream of T and upstream of Y. Conditioning blocks the indirect effect and identifies controlled direct effect.",
+      "scenario": "CSU_remibrutinib",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=lab_results; derivation_inputs=[loinc_basophil_activation_test_cd63, result_pct, collect_date]; aggregation=delta = post - baseline where post in [index_date + 28d, index_date + 56d]; window_days=56; knowable_at=index_date_plus_56",
+      "feature_name": "delta_basophil_activation_test_cd63_pct_28_56d",
+      "ground_truth_role": "mediator",
+      "provenance": {
+        "citation": "Lin EV, Suresh RV, Dispenza MC. 2024. Bruton's tyrosine kinase inhibition for the treatment of allergic disorders. Ann Allergy Asthma Immunol 133(1):33-42.",
+        "doi": "10.1016/j.anai.2024.03.002",
+        "pmid": "38492772",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/38492772/"
+      },
+      "rationale": "BTK inhibition by remibrutinib directly suppresses FcepsilonRI-mediated basophil activation (BAT/CD63 expression) per Lin-Suresh-Dispenza 2024 BTK-allergy mechanism review and Bernstein 2024. The BAT reduction is mechanistically intermediate: T (remibrutinib) -> BTK occupancy -> reduced CD63 surface expression -> reduced histamine/cytokine release -> UAS7 reduction. Per VanderWeele 2015 natural-direct-effect framework, BAT is a post-treatment intermediate that must NOT be adjusted for total-effect estimation.",
+      "scenario": "CSU_remibrutinib",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=lab_results; derivation_inputs=[loinc_1988-5_crp, result_mg_l, collect_date]; aggregation=delta = post - baseline where post in [index_date + 60d, index_date + 120d]; window_days=120; knowable_at=index_date_plus_120",
+      "feature_name": "delta_crp_mg_l_60_120d_post_index",
+      "ground_truth_role": "mediator",
+      "provenance": {
+        "citation": "Beyaz S, Belkaya S, Oztop N. 2023. Circulating Pentraxin-3 and its association with C-reactive protein levels and disease activity in patients with chronic spontaneous urticaria. Allergol Immunopathol (Madr) 51(4):87-93.",
+        "doi": "10.15586/aei.v51i4.894",
+        "pmid": "37422784",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/37422784/"
+      },
+      "rationale": "CRP and pentraxin-3 are positively correlated with UAS7 in CSU (Beyaz 2023 showed CRP and PTX3 elevated in active CSU and correlated with disease activity), and effective treatment lowers CRP as part of the systemic-inflammation downstream of mast-cell quiescence. The post-treatment CRP delta is on the causal path T -> BTK inhibition -> mast-cell mediator release reduction -> systemic inflammation reduction -> CRP fall co-occurring with UAS7 fall. VanderWeele 2015 mediation: post-baseline intermediate of T, predictive of Y.",
+      "scenario": "CSU_remibrutinib",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=lab_results; derivation_inputs=[loinc_d_dimer_30240-1, result_ug_ml, collect_date]; aggregation=delta = post - baseline where post in [index_date + 90d, index_date + 180d]; window_days=180; knowable_at=index_date_plus_180",
+      "feature_name": "delta_d_dimer_ug_ml_90_180d_post_index",
+      "ground_truth_role": "mediator",
+      "provenance": {
+        "citation": "Beyaz S, Belkaya S, Oztop N. 2023. Circulating Pentraxin-3 and its association with C-reactive protein levels and disease activity in patients with chronic spontaneous urticaria. Allergol Immunopathol (Madr) 51(4):87-93.",
+        "doi": "10.15586/aei.v51i4.894",
+        "pmid": "37422784",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/37422784/"
+      },
+      "rationale": "D-dimer correlates with UAS7 severity in CSU (Beyaz 2023; r=0.338 with UAS7) reflecting coagulation-cascade activation downstream of mast-cell degranulation and tissue-factor exposure. Effective BTK inhibition reduces mast-cell activation, reducing tissue-factor-driven D-dimer generation. T -> BTK inhibition -> mast-cell quiescence -> D-dimer reduction is part of the causal chain to UAS7 improvement. Per VanderWeele 2015, post-baseline intermediate mediator.",
+      "scenario": "CSU_remibrutinib",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=lab_results; derivation_inputs=[loinc_il17_serum, result_pg_ml, collect_date]; aggregation=delta = post - baseline where post in [index_date + 60d, index_date + 120d]; window_days=120; knowable_at=index_date_plus_120",
+      "feature_name": "delta_serum_il17_pg_ml_60_120d_post_index",
+      "ground_truth_role": "mediator",
+      "provenance": {
+        "citation": "Chen J, Ou S, Wu W, Zou H, Li H, Zhu H. 2024. Omalizumab in chronic spontaneous urticaria: a real-world study on effectiveness, safety and predictors of treatment outcome. Clin Cosmet Investig Dermatol 17:1799-1808.",
+        "doi": "10.2147/CCID.S470160",
+        "pmid": "39132026",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/39132026/"
+      },
+      "rationale": "Chen 2024 real-world CSU/omalizumab cohort showed baseline IL-17 > 0.775 pg/mL predicted non-response and that treatment alters IL-17 trajectory in responders. For remibrutinib via BTK inhibition, downstream Th17-axis cytokine modulation is a plausible mediator: T -> BTK inhibition -> reduced B-cell/mast-cell IL-17-promoting cytokine release -> reduced cutaneous Th17 inflammation -> UAS7 fall. Post-baseline intermediate per VanderWeele 2015 mediation framework.",
+      "scenario": "CSU_remibrutinib",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "dataset_context": "cohort=PNH_fabhalta; brand=Fabhalta (iptacopan, LNP023, Factor B inhibitor); indication=Paroxysmal Nocturnal Hemoglobinuria (PNH); data_source=ConcertAI PNH/rare-disease claims + chart-abstracted hemolysis labs; target=hemoglobin_response_>=2g/dL_180d (transfusion-independent); prediction_anchor=index_date (first iptacopan dispense)",
+      "derivation_pseudocode": "source=DEMOGRAPHICS; derivation_inputs=[dob, index_date]; aggregation=int((index_date - dob).days/365.25); window_days=0; knowable_at=preindex",
+      "feature_name": "age_at_index_years",
+      "ground_truth_role": "ancestor",
+      "provenance": {
+        "citation": "Socie G, Schrezenmeier H, Muus P, et al. 2016. Changing prognosis in paroxysmal nocturnal haemoglobinuria disease subcategories: an analysis of the International PNH Registry. Intern Med J 46:1044-53.",
+        "doi": "10.1111/imj.13160",
+        "pmid": "27305361",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/27305361/"
+      },
+      "rationale": "Age at index is treated as a pure upstream ancestor in this DAG: its effect on the treatment-outcome contrast is fully channelled through downstream variables that are themselves carried as confounders or covariates in this fixture (baseline eGFR \u2014 age->renal-aging->eGFR; prior thrombotic event flag \u2014 age->cumulative-thrombosis-risk; transfusion burden \u2014 age->cumulative-anemia-history; baseline LDH \u2014 age->cumulative-hemolysis-exposure). After conditioning on those mediating confounders the age->treatment and age->outcome arrows close (no residual direct path). This follows the Greenland-Pearl-Robins 1999 ancestor definition: a node whose causal influence on T and Y is exhausted by descendants already included in the adjustment set. Socie 2016 IPNHR mortality-by-age finding is fully attributable to age-correlated comorbidity and thrombosis history captured downstream rather than to a direct biological age->hemoglobin-response arrow.",
+      "scenario": "PNH_fabhalta",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "dataset_context": "cohort=PNH_fabhalta; brand=Fabhalta (iptacopan, LNP023, Factor B inhibitor); indication=Paroxysmal Nocturnal Hemoglobinuria (PNH); data_source=ConcertAI PNH/rare-disease claims + chart-abstracted hemolysis labs; target=hemoglobin_response_>=2g/dL_180d (transfusion-independent); prediction_anchor=index_date (first iptacopan dispense)",
+      "derivation_pseudocode": "source=DIAGNOSIS_HISTORY; derivation_inputs=[icd10:D46* (MDS), D61.9 (AA), prior_to_pnh_dx_date]; aggregation=indicator(any prior MDS or aplastic-anemia dx before PNH diagnosis); window_days=3650; knowable_at=preindex",
+      "feature_name": "mds_or_aa_diagnosis_history_preindex_flag",
+      "ground_truth_role": "ancestor",
+      "provenance": {
+        "citation": "Brodsky RA. 2014. Paroxysmal nocturnal hemoglobinuria. Blood 124:2804-11.",
+        "doi": "10.1182/blood-2014-02-522128",
+        "pmid": "25237200",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/25237200/"
+      },
+      "rationale": "Prior myelodysplastic-syndrome (MDS) or aplastic-anemia (AA) diagnosis predating PNH diagnosis is an upstream ancestor in the PNH disease origin DAG: Brodsky 2014 (PMID 25237200) reviews the bone-marrow-failure-PNH overlap in which immune attack on hematopoietic stem cells provides the selection pressure under which GPI-anchor-deficient (PIGA-mutant) clones expand, generating PNH. This pre-existing bone-marrow-failure substrate is established years before the index iptacopan decision and operates on the treatment-outcome contrast only through downstream variables already captured in this fixture (PNH clone size, baseline LDH, prior anti-C5 exposure, transfusion burden), satisfying the Greenland-Pearl-Robins 1999 ancestor criterion: causal influence on T and Y exhausted by descendants in the adjustment set. Distinct from `prior_aplastic_anemia_ist_history_flag` which captures the TREATMENT-history of AA (IST exposure); this entry captures the underlying bone-marrow-failure DIAGNOSIS regardless of treatment.",
+      "scenario": "PNH_fabhalta",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "dataset_context": "cohort=PNH_fabhalta; brand=Fabhalta (iptacopan, LNP023, Factor B inhibitor); indication=Paroxysmal Nocturnal Hemoglobinuria (PNH); data_source=ConcertAI PNH/rare-disease claims + chart-abstracted hemolysis labs; target=hemoglobin_response_>=2g/dL_180d (transfusion-independent); prediction_anchor=index_date (first iptacopan dispense)",
+      "derivation_pseudocode": "source=GENOMIC_REPORT; derivation_inputs=[piga_mutation_class:large_deletion|small_duplication|point]; aggregation=mode(PIGA mutation class on PNH clone); window_days=0; knowable_at=preindex",
+      "feature_name": "piga_mutation_class_preindex",
+      "ground_truth_role": "ancestor",
+      "provenance": {
+        "citation": "Nafa K, Bessler M, Castro-Malaspina H, Jhanwar S, Luzzatto L. 1998. The spectrum of somatic mutations in the PIG-A gene in paroxysmal nocturnal hemoglobinuria includes large deletions and small duplications. Blood Cells Mol Dis 24:370-84.",
+        "doi": "10.1006/bcmd.1998.0203",
+        "pmid": "10087994",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/10087994/"
+      },
+      "rationale": "PIGA somatic mutation class is the disease-defining ancestor: it generates the GPI-anchor-deficient hematopoietic clone that fails to express CD55/CD59 and is destroyed by complement. Nafa 1998 characterized the spectrum of PIGA mutations including large deletions and small duplications. It is an ancestor of both treatment (via causing disease severity) and outcome but does NOT satisfy IV exclusion restriction because (a) PIGA is somatic not germline (no Mendelian randomization), and (b) PIGA is disease-defining so it influences the outcome through pathways other than treatment choice. Greenland-Pearl-Robins 1999 ancestor.",
+      "scenario": "PNH_fabhalta",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "dataset_context": "cohort=PNH_fabhalta; brand=Fabhalta (iptacopan, LNP023, Factor B inhibitor); indication=Paroxysmal Nocturnal Hemoglobinuria (PNH); data_source=ConcertAI PNH/rare-disease claims + chart-abstracted hemolysis labs; target=hemoglobin_response_>=2g/dL_180d (transfusion-independent); prediction_anchor=index_date (first iptacopan dispense)",
+      "derivation_pseudocode": "source=DIAGNOSIS_HISTORY; derivation_inputs=[icd10:D61*, prior IST regimen ATG|cyclosporine]; aggregation=any(prior IST-treated aplastic anemia before PNH dx); window_days=3650; knowable_at=preindex",
+      "feature_name": "prior_aplastic_anemia_ist_history_flag",
+      "ground_truth_role": "ancestor",
+      "provenance": {
+        "citation": "Brodsky RA. 2014. Paroxysmal nocturnal hemoglobinuria. Blood 124:2804-11.",
+        "doi": "10.1182/blood-2014-02-522128",
+        "pmid": "25237200",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/25237200/"
+      },
+      "rationale": "Prior aplastic anemia treated with immunosuppression (ATG, cyclosporine) is an ancestor of PNH clone expansion: AA-PNH syndrome reflects immune attack on hematopoietic stem cells that selects for GPI-deficient clones (Brodsky 2014 review). Socie 2016 IPNHR distinguishes haemolytic, AA-PNH and intermediate PNH subcategories with different prognoses. This precedes both the PNH diagnosis and any treatment selection; it is an ancestor in the Greenland-Pearl-Robins 1999 sense, not directly on the treatment-outcome path.",
+      "scenario": "PNH_fabhalta",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "dataset_context": "cohort=PNH_fabhalta; brand=Fabhalta (iptacopan, LNP023, Factor B inhibitor); indication=Paroxysmal Nocturnal Hemoglobinuria (PNH); data_source=ConcertAI PNH/rare-disease claims + chart-abstracted hemolysis labs; target=hemoglobin_response_>=2g/dL_180d (transfusion-independent); prediction_anchor=index_date (first iptacopan dispense)",
+      "derivation_pseudocode": "source=CLAIMS_ENROLLMENT; derivation_inputs=[death_date, enrollment_end_date]; aggregation=indicator(alive at day 180 postindex); window_days=180; knowable_at=t_plus_180d",
+      "feature_name": "alive_at_180d_postindex_flag",
+      "ground_truth_role": "collider",
+      "provenance": {
+        "citation": "Hernan MA, Hernandez-Diaz S, Robins JM. 2004. A structural approach to selection bias. Epidemiology 15:615-25.",
+        "doi": "10.1097/01.ede.0000135174.63482.43",
+        "pmid": "15308962",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/15308962/"
+      },
+      "rationale": "Conditioning the analysis on alive-at-180d is the canonical Hernan 2004 collider/selection-bias setup: both treatment (via avoidance of breakthrough hemolysis and thrombosis) and the outcome (hemoglobin recovery is itself protective against PNH-related death) are causes of survival. Conditioning on this common effect opens a non-causal path between treatment and outcome, biasing the estimated effect of iptacopan on hemoglobin response. This is the M-bias structure Hernan-Hernandez-Diaz-Robins 2004 use as their canonical selection-bias example.",
+      "scenario": "PNH_fabhalta",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "dataset_context": "cohort=PNH_fabhalta; brand=Fabhalta (iptacopan, LNP023, Factor B inhibitor); indication=Paroxysmal Nocturnal Hemoglobinuria (PNH); data_source=ConcertAI PNH/rare-disease claims + chart-abstracted hemolysis labs; target=hemoglobin_response_>=2g/dL_180d (transfusion-independent); prediction_anchor=index_date (first iptacopan dispense)",
+      "derivation_pseudocode": "source=CLAIMS_TRANSFUSION; derivation_inputs=[hcpcs:P9021,P9016]; aggregation=any(rbc transfusion in 0-180d postindex window); window_days=180; knowable_at=t_plus_180d",
+      "feature_name": "any_rbc_transfusion_during_followup_flag",
+      "ground_truth_role": "collider",
+      "provenance": {
+        "citation": "Hernan MA, Hernandez-Diaz S, Robins JM. 2004. A structural approach to selection bias. Epidemiology 15:615-25.",
+        "doi": "10.1097/01.ede.0000135174.63482.43",
+        "pmid": "15308962",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/15308962/"
+      },
+      "rationale": "Post-index transfusion is a classical collider relative to the iptacopan -> hemoglobin response relationship: treatment with iptacopan reduces transfusion need (via suppressed hemolysis) AND the outcome (high hemoglobin response) reduces transfusion need; a transfusion is administered precisely when hemoglobin falls below threshold. Conditioning on this common effect would open a back-door path. Hernan 2004 structural framework: 'adjustment for variables affected by prior exposure' is the canonical bias structure.",
+      "scenario": "PNH_fabhalta",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "dataset_context": "cohort=PNH_fabhalta; brand=Fabhalta (iptacopan, LNP023, Factor B inhibitor); indication=Paroxysmal Nocturnal Hemoglobinuria (PNH); data_source=ConcertAI PNH/rare-disease claims + chart-abstracted hemolysis labs; target=hemoglobin_response_>=2g/dL_180d (transfusion-independent); prediction_anchor=index_date (first iptacopan dispense)",
+      "derivation_pseudocode": "source=PRO_INSTRUMENT; derivation_inputs=[facit_fatigue_score]; aggregation=indicator(facit_fatigue_response_postindex >= MCID); window_days=180; knowable_at=t_plus_180d",
+      "feature_name": "facit_fatigue_response_180d_postindex_flag",
+      "ground_truth_role": "collider",
+      "provenance": {
+        "citation": "Risitano AM, de Castro CM, Schrezenmeier H, et al. 2025. Patient-reported improvements in paroxysmal nocturnal hemoglobinuria treated with iptacopan from 2 phase 3 studies. Blood Adv 9:1816-1826.",
+        "doi": "10.1182/bloodadvances.2024014652",
+        "pmid": "39774762",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/39774762/"
+      },
+      "rationale": "Conditioning on FACIT-Fatigue response is a collider relative to iptacopan -> hemoglobin: both treatment (via hemoglobin recovery and via direct hemolysis suppression effects on inflammation and NO biology per Hill TRIUMPH 2010) and the outcome itself (hemoglobin rise improves FACIT-Fatigue per Risitano 2025 iptacopan PRO analysis) are common causes of fatigue improvement. Conditioning would induce Hernan 2004 collider bias.",
+      "scenario": "PNH_fabhalta",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "dataset_context": "cohort=PNH_fabhalta; brand=Fabhalta (iptacopan, LNP023, Factor B inhibitor); indication=Paroxysmal Nocturnal Hemoglobinuria (PNH); data_source=ConcertAI PNH/rare-disease claims + chart-abstracted hemolysis labs; target=hemoglobin_response_>=2g/dL_180d (transfusion-independent); prediction_anchor=index_date (first iptacopan dispense)",
+      "derivation_pseudocode": "source=PHARMACY_CLAIMS; derivation_inputs=[ndc_iptacopan, last_dispense_date]; aggregation=indicator(still on iptacopan at day 180); window_days=180; knowable_at=t_plus_180d",
+      "feature_name": "iptacopan_persistence_at_180d_flag",
+      "ground_truth_role": "collider",
+      "provenance": {
+        "citation": "Hernan MA, Hernandez-Diaz S, Robins JM. 2004. A structural approach to selection bias. Epidemiology 15:615-25.",
+        "doi": "10.1097/01.ede.0000135174.63482.43",
+        "pmid": "15308962",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/15308962/"
+      },
+      "rationale": "Persistence-on-therapy at 180 days is a collider per Hernan 2004 structural framework: it is caused by both (a) treatment tolerability and lack of adverse events and (b) early hemoglobin response (responders are more likely to stay on therapy; non-responders are switched off). Conditioning the outcome model on this variable induces selection bias and overstates apparent effectiveness; the IPNHR observational structure (Socie 2016) is vulnerable to this informative-censoring pattern.",
+      "scenario": "PNH_fabhalta",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "dataset_context": "cohort=PNH_fabhalta; brand=Fabhalta (iptacopan, LNP023, Factor B inhibitor); indication=Paroxysmal Nocturnal Hemoglobinuria (PNH); data_source=ConcertAI PNH/rare-disease claims + chart-abstracted hemolysis labs; target=hemoglobin_response_>=2g/dL_180d (transfusion-independent); prediction_anchor=index_date (first iptacopan dispense)",
+      "derivation_pseudocode": "source=LABS_RENAL; derivation_inputs=[creatinine_mg_dl, age, sex, race]; aggregation=mean(CKD-EPI_eGFR over 90d preindex); window_days=90; knowable_at=preindex",
+      "feature_name": "baseline_egfr_ckd_epi_preindex",
+      "ground_truth_role": "confounder",
+      "provenance": {
+        "citation": "Gembillo G, Siligato R, Cernaro V, et al. 2020. Complement Inhibition Therapy and Dialytic Strategies in Paroxysmal Nocturnal Hemoglobinuria: The Nephrologist's Opinion. J Clin Med 9:1261.",
+        "doi": "10.3390/jcm9051261",
+        "pmid": "32357555",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/32357555/"
+      },
+      "rationale": "Baseline eGFR is a Gembillo 2020 / nephrology-PNH literature classical confounder: chronic intravascular hemolysis produces tubular iron deposition, with renal dysfunction prevalent in ~14% of IPNHR baseline cohort (Schrezenmeier 2014). It influences treatment selection (some agents are dose-adjusted, oral iptacopan is renally-considered) and the outcome (renal dysfunction limits achievable hemoglobin via reduced erythropoietin). Pre-treatment common cause per Greenland-Pearl-Robins 1999.",
+      "scenario": "PNH_fabhalta",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "dataset_context": "cohort=PNH_fabhalta; brand=Fabhalta (iptacopan, LNP023, Factor B inhibitor); indication=Paroxysmal Nocturnal Hemoglobinuria (PNH); data_source=ConcertAI PNH/rare-disease claims + chart-abstracted hemolysis labs; target=hemoglobin_response_>=2g/dL_180d (transfusion-independent); prediction_anchor=index_date (first iptacopan dispense)",
+      "derivation_pseudocode": "source=LABS_HEMOLYSIS; derivation_inputs=[ldh_value_u_per_L, ldh_uln]; aggregation=mean(LDH/ULN over 90d preindex); window_days=90; knowable_at=preindex",
+      "feature_name": "baseline_ldh_x_uln_preindex",
+      "ground_truth_role": "confounder",
+      "provenance": {
+        "citation": "Brodsky RA. 2014. Paroxysmal nocturnal hemoglobinuria. Blood 124:2804-11.",
+        "doi": "10.1182/blood-2014-02-522128",
+        "pmid": "25237200",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/25237200/"
+      },
+      "rationale": "Baseline LDH (in multiples of upper limit of normal) is the primary biomarker of intravascular hemolysis severity in PNH (Brodsky 2014 review; Lee 2019 ravulizumab 301 used LDH >=1.5x ULN as enrollment threshold). It predicts both (a) the choice of agent (more severe disease favors proximal inhibitors per Risitano SAAWP 2019) and (b) the post-index hemoglobin response (severe baseline hemolysis is harder to fully suppress). It satisfies the Greenland-Pearl-Robins 1999 confounder criterion: a common cause of treatment and outcome.",
+      "scenario": "PNH_fabhalta",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "dataset_context": "cohort=PNH_fabhalta; brand=Fabhalta (iptacopan, LNP023, Factor B inhibitor); indication=Paroxysmal Nocturnal Hemoglobinuria (PNH); data_source=ConcertAI PNH/rare-disease claims + chart-abstracted hemolysis labs; target=hemoglobin_response_>=2g/dL_180d (transfusion-independent); prediction_anchor=index_date (first iptacopan dispense)",
+      "derivation_pseudocode": "source=LABS_FLOW_CYTOMETRY; derivation_inputs=[cd55_neg_pct, cd59_neg_pct, granulocyte_gate]; aggregation=max(granulocyte_PNH_clone_pct over preindex); window_days=180; knowable_at=preindex",
+      "feature_name": "pnh_clone_size_granulocyte_pct_preindex",
+      "ground_truth_role": "confounder",
+      "provenance": {
+        "citation": "Manivannan P, Ahuja A, Pati HP. 2019. FLAER Based Assay According to Newer Guidelines Increases Sensitivity of PNH Clone Detection. Indian J Hematol Blood Transfus 36:526-534.",
+        "doi": "10.1007/s12288-019-01220-8",
+        "pmid": "32647428",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/32647428/"
+      },
+      "rationale": "PNH granulocyte clone size (% CD55-/CD59- by flow cytometry, FLAER-based per current guidelines) is the disease-burden measure that drives both treatment selection (large clones drive aggressive complement-inhibition decisions) and outcome (larger clones produce more PNH RBCs susceptible to hemolysis, affecting response trajectory). Schrezenmeier 2014 IPNHR documents median granulocyte clone 68% as baseline characteristic of the registry; common cause of treatment and outcome per Greenland-Pearl-Robins 1999.",
+      "scenario": "PNH_fabhalta",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "dataset_context": "cohort=PNH_fabhalta; brand=Fabhalta (iptacopan, LNP023, Factor B inhibitor); indication=Paroxysmal Nocturnal Hemoglobinuria (PNH); data_source=ConcertAI PNH/rare-disease claims + chart-abstracted hemolysis labs; target=hemoglobin_response_>=2g/dL_180d (transfusion-independent); prediction_anchor=index_date (first iptacopan dispense)",
+      "derivation_pseudocode": "source=PHARMACY_CLAIMS; derivation_inputs=[ndc_code, drug_class:anti_C5, days_supply]; aggregation=any(prior eculizumab or ravulizumab dispense); window_days=730; knowable_at=preindex",
+      "feature_name": "prior_anti_c5_inhibitor_use_flag_preindex",
+      "ground_truth_role": "confounder",
+      "provenance": {
+        "citation": "Peffault de Latour R, Roth A, Kulasekararaj AG, et al. 2024. Oral Iptacopan Monotherapy in Paroxysmal Nocturnal Hemoglobinuria. N Engl J Med 390:994-1008.",
+        "doi": "10.1056/NEJMoa2308695",
+        "pmid": "38477987",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/38477987/"
+      },
+      "rationale": "Prior eculizumab/ravulizumab exposure is a strong baseline characteristic that confounds the iptacopan-hemoglobin relationship: it indicates patients who have persistent extravascular hemolysis on anti-C5 (the APPLY-PNH and APPOINT-PNH iptacopan trials enrolled both naive and C5-experienced cohorts and showed different baseline hemoglobin trajectories). It causes treatment choice (switch to iptacopan) and modifies the achievable hemoglobin response. Per Greenland-Pearl-Robins 1999 it is a confounder; not a mediator because it precedes the index treatment.",
+      "scenario": "PNH_fabhalta",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "dataset_context": "cohort=PNH_fabhalta; brand=Fabhalta (iptacopan, LNP023, Factor B inhibitor); indication=Paroxysmal Nocturnal Hemoglobinuria (PNH); data_source=ConcertAI PNH/rare-disease claims + chart-abstracted hemolysis labs; target=hemoglobin_response_>=2g/dL_180d (transfusion-independent); prediction_anchor=index_date (first iptacopan dispense)",
+      "derivation_pseudocode": "source=DIAGNOSIS_HISTORY; derivation_inputs=[icd10:I82*,I26*]; aggregation=any(thrombotic_event prior to index); window_days=1825; knowable_at=preindex",
+      "feature_name": "prior_thrombotic_event_flag_preindex",
+      "ground_truth_role": "confounder",
+      "provenance": {
+        "citation": "Socie G, Schrezenmeier H, Muus P, et al. 2016. Changing prognosis in paroxysmal nocturnal haemoglobinuria disease subcategories: an analysis of the International PNH Registry. Intern Med J 46:1044-53.",
+        "doi": "10.1111/imj.13160",
+        "pmid": "27305361",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/27305361/"
+      },
+      "rationale": "Prior thrombotic event (DVT, PE, Budd-Chiari, splanchnic-vein thrombosis) is the strongest single prognostic marker in PNH per Socie 2016 International PNH Registry analysis (mortality HR substantially elevated). It influences treatment choice (aggressive complement inhibition is escalated post-thrombosis) and affects the outcome trajectory (post-thrombotic patients have higher comorbidity load affecting hemoglobin recovery). Pre-treatment common cause per Greenland-Pearl-Robins 1999.",
+      "scenario": "PNH_fabhalta",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "dataset_context": "cohort=PNH_fabhalta; brand=Fabhalta (iptacopan, LNP023, Factor B inhibitor); indication=Paroxysmal Nocturnal Hemoglobinuria (PNH); data_source=ConcertAI PNH/rare-disease claims + chart-abstracted hemolysis labs; target=hemoglobin_response_>=2g/dL_180d (transfusion-independent); prediction_anchor=index_date (first iptacopan dispense)",
+      "derivation_pseudocode": "source=CLAIMS_TRANSFUSION; derivation_inputs=[hcpcs:P9021,P9016, procedure_dt]; aggregation=sum(rbc_units over 365d preindex); window_days=365; knowable_at=preindex",
+      "feature_name": "transfusion_units_365d_preindex",
+      "ground_truth_role": "confounder",
+      "provenance": {
+        "citation": "Schubert J, Hillmen P, Roth A, et al. 2008. Eculizumab, a terminal complement inhibitor, improves anaemia in patients with paroxysmal nocturnal haemoglobinuria. Br J Haematol 142:263-72.",
+        "doi": "10.1111/j.1365-2141.2008.07183.x",
+        "pmid": "18503589",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/18503589/"
+      },
+      "rationale": "Pre-index transfusion burden (Hill TRIUMPH 2010 and Schubert SHEPHERD 2008 are foundational PNH trials that stratified on transfusion dependence) marks severity of anemia and prognosis. It drives clinician decision to escalate to proximal complement inhibition (iptacopan) and predicts the outcome (transfusion-independent hemoglobin response). Classical Greenland-Pearl-Robins 1999 confounder: pre-treatment common cause.",
+      "scenario": "PNH_fabhalta",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "dataset_context": "cohort=PNH_fabhalta; brand=Fabhalta (iptacopan, LNP023, Factor B inhibitor); indication=Paroxysmal Nocturnal Hemoglobinuria (PNH); data_source=ConcertAI PNH/rare-disease claims + chart-abstracted hemolysis labs; target=hemoglobin_response_>=2g/dL_180d (transfusion-independent); prediction_anchor=index_date (first iptacopan dispense)",
+      "derivation_pseudocode": "source=LABS_RENAL; derivation_inputs=[creatinine_mg_dl]; aggregation=delta(eGFR_d365_postindex - eGFR_preindex); window_days=365; knowable_at=t_plus_365d",
+      "feature_name": "egfr_recovery_delta_365d_postindex",
+      "ground_truth_role": "descendant",
+      "provenance": {
+        "citation": "Gembillo G, Siligato R, Cernaro V, et al. 2020. Complement Inhibition Therapy and Dialytic Strategies in Paroxysmal Nocturnal Hemoglobinuria: The Nephrologist's Opinion. J Clin Med 9:1261.",
+        "doi": "10.3390/jcm9051261",
+        "pmid": "32357555",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/32357555/"
+      },
+      "rationale": "Post-treatment eGFR change is a descendant: chronic hemolysis causes tubular iron deposition and pigment nephropathy; once hemolysis is suppressed by iptacopan, renal function can partially recover (Gembillo 2020 nephrologist opinion paper). This recovery is downstream of the treatment effect on hemoglobin and hemolysis, not on the causal path to the index hemoglobin endpoint. Greenland-Pearl-Robins 1999 descendant.",
+      "scenario": "PNH_fabhalta",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "dataset_context": "cohort=PNH_fabhalta; brand=Fabhalta (iptacopan, LNP023, Factor B inhibitor); indication=Paroxysmal Nocturnal Hemoglobinuria (PNH); data_source=ConcertAI PNH/rare-disease claims + chart-abstracted hemolysis labs; target=hemoglobin_response_>=2g/dL_180d (transfusion-independent); prediction_anchor=index_date (first iptacopan dispense)",
+      "derivation_pseudocode": "source=LABS_HEMATOLOGY; derivation_inputs=[hemoglobin_g_dl, sex]; aggregation=indicator(hemoglobin >= 12.0 g/dL (F) or >= 13.0 g/dL (M) at any measurement in days 0-365 postindex without intervening transfusion); window_days=365; knowable_at=t_plus_365d",
+      "feature_name": "hemoglobin_normalization_postindex_flag",
+      "ground_truth_role": "descendant",
+      "provenance": {
+        "citation": "Peffault de Latour R, Roth A, Kulasekararaj AG, et al. 2024. Oral Iptacopan Monotherapy in Paroxysmal Nocturnal Hemoglobinuria. N Engl J Med 390:994-1008.",
+        "doi": "10.1056/NEJMoa2308695",
+        "pmid": "38477987",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/38477987/"
+      },
+      "rationale": "Hemoglobin normalization to sex-specific lower-limit-of-normal (>=12.0 g/dL female, >=13.0 g/dL male) without transfusion support during the 365d post-index window is a hematology-disciplined descendant of the primary 180d hemoglobin-response outcome (>=2 g/dL rise): patients who hit the +2 g/dL primary endpoint frequently progress to full normalization by 12 months. Peffault de Latour 2024 APPLY-PNH NEJM reports sustained hemoglobin normalization as a pre-specified secondary endpoint of iptacopan therapy, downstream of the 180d primary endpoint. Per Greenland-Pearl-Robins 1999 this is a descendant of the primary outcome Y (Y -> normalization), useful for concordant-outcome sensitivity analysis but NOT to be adjusted for as a covariate (over-adjustment / conditioning on a descendant of Y opens spurious paths).",
+      "scenario": "PNH_fabhalta",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "dataset_context": "cohort=PNH_fabhalta; brand=Fabhalta (iptacopan, LNP023, Factor B inhibitor); indication=Paroxysmal Nocturnal Hemoglobinuria (PNH); data_source=ConcertAI PNH/rare-disease claims + chart-abstracted hemolysis labs; target=hemoglobin_response_>=2g/dL_180d (transfusion-independent); prediction_anchor=index_date (first iptacopan dispense)",
+      "derivation_pseudocode": "source=CLAIMS_HOSPITALIZATION; derivation_inputs=[admit_dt, primary_dx]; aggregation=count(PNH-related hospitalizations postindex); window_days=365; knowable_at=t_plus_365d",
+      "feature_name": "pnh_related_hospitalizations_365d_postindex_count",
+      "ground_truth_role": "descendant",
+      "provenance": {
+        "citation": "Schrezenmeier H, Muus P, Socie G, et al. 2014. Baseline characteristics and disease burden in patients in the International Paroxysmal Nocturnal Hemoglobinuria Registry. Haematologica 99:922-9.",
+        "doi": "10.3324/haematol.2013.093161",
+        "pmid": "24488565",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/24488565/"
+      },
+      "rationale": "PNH-related hospitalizations after index treatment are a descendant of both treatment effectiveness and the hemoglobin outcome (Schrezenmeier 2014 IPNHR baseline shows 23% of patients hospitalized for PNH complications). Treated successful patients have fewer hospitalizations because hemoglobin response itself prevents transfusion admissions and breakthrough events. Greenland-Pearl-Robins 1999: downstream consequence.",
+      "scenario": "PNH_fabhalta",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "dataset_context": "cohort=PNH_fabhalta; brand=Fabhalta (iptacopan, LNP023, Factor B inhibitor); indication=Paroxysmal Nocturnal Hemoglobinuria (PNH); data_source=ConcertAI PNH/rare-disease claims + chart-abstracted hemolysis labs; target=hemoglobin_response_>=2g/dL_180d (transfusion-independent); prediction_anchor=index_date (first iptacopan dispense)",
+      "derivation_pseudocode": "source=DIAGNOSIS_HISTORY; derivation_inputs=[icd10:A39*, B96.83]; aggregation=any(meningococcal infection postindex); window_days=365; knowable_at=t_plus_365d",
+      "feature_name": "post_treatment_meningococcal_infection_365d_flag",
+      "ground_truth_role": "descendant",
+      "provenance": {
+        "citation": "Jodele S, Dandoy CE, Danziger-Isakov L, et al. 2016. Terminal Complement Blockade after Hematopoietic Stem Cell Transplantation Is Safe without Meningococcal Vaccination. Biol Blood Marrow Transplant 22:1337-1340.",
+        "doi": "10.1016/j.bbmt.2016.03.032",
+        "pmid": "27060440",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/27060440/"
+      },
+      "rationale": "Meningococcal infection post-iptacopan is a treatment descendant: all approved PNH complement inhibitors (eculizumab, ravulizumab, pegcetacoplan, iptacopan) carry an FDA REMS for meningococcal risk because terminal complement blockade impairs serogroup-specific bactericidal activity (Jodele 2016 documents the REMS framework). It is a downstream consequence of complement inhibition exposure rather than on the hemoglobin causal path. Per Greenland-Pearl-Robins 1999, descendant of treatment that does not lie between treatment and target outcome.",
+      "scenario": "PNH_fabhalta",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "dataset_context": "cohort=PNH_fabhalta; brand=Fabhalta (iptacopan, LNP023, Factor B inhibitor); indication=Paroxysmal Nocturnal Hemoglobinuria (PNH); data_source=ConcertAI PNH/rare-disease claims + chart-abstracted hemolysis labs; target=hemoglobin_response_>=2g/dL_180d (transfusion-independent); prediction_anchor=index_date (first iptacopan dispense)",
+      "derivation_pseudocode": "source=DIAGNOSIS_HISTORY; derivation_inputs=[icd10:I82*,I26*,I81]; aggregation=any(new thrombotic event postindex); window_days=365; knowable_at=t_plus_365d",
+      "feature_name": "post_treatment_thrombotic_event_365d_flag",
+      "ground_truth_role": "descendant",
+      "provenance": {
+        "citation": "Hill A, Rother RP, Wang X, et al. 2010. Effect of eculizumab on haemolysis-associated nitric oxide depletion, dyspnoea, and measures of pulmonary hypertension in patients with paroxysmal nocturnal haemoglobinuria. Br J Haematol 149:414-25.",
+        "doi": "10.1111/j.1365-2141.2010.08096.x",
+        "pmid": "20230403",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/20230403/"
+      },
+      "rationale": "Post-treatment thrombotic events are a downstream consequence (descendant) of the iptacopan-hemoglobin causal pathway: complement-driven RBC lysis and free-hemoglobin-mediated NO scavenging drive PNH-associated thrombosis (Hill TRIUMPH 2010 demonstrated NO depletion mechanism); suppression of hemolysis through iptacopan reduces thrombosis incidence as a downstream effect. Per Greenland-Pearl-Robins 1999 DAG structure: descendant of both treatment and outcome, useful for sensitivity analyses but not for adjustment.",
+      "scenario": "PNH_fabhalta",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "dataset_context": "cohort=PNH_fabhalta; brand=Fabhalta (iptacopan, LNP023, Factor B inhibitor); indication=Paroxysmal Nocturnal Hemoglobinuria (PNH); data_source=ConcertAI PNH/rare-disease claims + chart-abstracted hemolysis labs; target=hemoglobin_response_>=2g/dL_180d (transfusion-independent); prediction_anchor=index_date (first iptacopan dispense)",
+      "derivation_pseudocode": "source=PAYER_FORMULARY_FEED; derivation_inputs=[payer_id, drug_id, formulary_tier, prior_auth_required, step_therapy_required]; aggregation=indicator(iptacopan_requires_step_through_anti_C5); window_days=0; knowable_at=preindex",
+      "feature_name": "payer_step_therapy_iptacopan_requirement_preindex",
+      "ground_truth_role": "instrument",
+      "provenance": {
+        "citation": "Brookhart MA, Rassen JA, Schneeweiss S. 2010. Instrumental variable methods in comparative safety and effectiveness research. Pharmacoepidemiol Drug Saf 19:537-54.",
+        "doi": "10.1002/pds.1908",
+        "pmid": "20354968",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/20354968/"
+      },
+      "rationale": "Payer-level step-therapy policies requiring eculizumab/ravulizumab failure before iptacopan coverage are a supply-side / institutional IV: they sharply affect probability of iptacopan exposure but, conditional on case-mix, do not directly affect the biological hemoglobin response. Brookhart 2010 explicitly cites formulary-and-coverage rules as a valid IV family for comparative effectiveness in pharmacoepidemiology, and the SHEPHERD/TRIUMPH-era literature documents substantial variation in PNH access across US payers.",
+      "scenario": "PNH_fabhalta",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "dataset_context": "cohort=PNH_fabhalta; brand=Fabhalta (iptacopan, LNP023, Factor B inhibitor); indication=Paroxysmal Nocturnal Hemoglobinuria (PNH); data_source=ConcertAI PNH/rare-disease claims + chart-abstracted hemolysis labs; target=hemoglobin_response_>=2g/dL_180d (transfusion-independent); prediction_anchor=index_date (first iptacopan dispense)",
+      "derivation_pseudocode": "source=INDEX_RX_DATE; derivation_inputs=[index_date]; aggregation=indicator(index_date >= 2023-12-06 FDA approval of iptacopan); window_days=0; knowable_at=preindex",
+      "feature_name": "post_iptacopan_fda_approval_calendar_indicator",
+      "ground_truth_role": "instrument",
+      "provenance": {
+        "citation": "Peffault de Latour R, Roth A, Kulasekararaj AG, et al. 2024. Oral Iptacopan Monotherapy in Paroxysmal Nocturnal Hemoglobinuria. N Engl J Med 390:994-1008.",
+        "doi": "10.1056/NEJMoa2308695",
+        "pmid": "38477987",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/38477987/"
+      },
+      "rationale": "Calendar-time discontinuity IV exploiting the December 2023 FDA approval of iptacopan: before the approval date, iptacopan was unavailable outside clinical trials, so post-approval calendar status sharply increases probability of iptacopan exposure relative to anti-C5 alternatives without (under stable secular trends in PNH severity-at-presentation, which the International PNH Registry shows are slow-moving) affecting hemoglobin response directly. This is the Brookhart 2010 'calendar-time / policy discontinuity' IV family. Exclusion restriction requires conditioning on secular trends in supportive care.",
+      "scenario": "PNH_fabhalta",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "dataset_context": "cohort=PNH_fabhalta; brand=Fabhalta (iptacopan, LNP023, Factor B inhibitor); indication=Paroxysmal Nocturnal Hemoglobinuria (PNH); data_source=ConcertAI PNH/rare-disease claims + chart-abstracted hemolysis labs; target=hemoglobin_response_>=2g/dL_180d (transfusion-independent); prediction_anchor=index_date (first iptacopan dispense)",
+      "derivation_pseudocode": "source=PROVIDER_PRESCRIBING + INDEX_RX_DATE; derivation_inputs=[npi, first_iptacopan_rx_date_by_prescriber, fda_approval_date(2023-12-06)]; aggregation=indicator(prescriber_first_iptacopan_rx within [2023-12-06, 2024-03-06]); window_days=90; knowable_at=preindex",
+      "feature_name": "prescriber_first_iptacopan_initiation_within_first_quarter_post_approval_flag",
+      "ground_truth_role": "instrument",
+      "provenance": {
+        "citation": "Peffault de Latour R, Roth A, Kulasekararaj AG, et al. 2024. Oral Iptacopan Monotherapy in Paroxysmal Nocturnal Hemoglobinuria. N Engl J Med 390:994-1008.",
+        "doi": "10.1056/NEJMoa2308695",
+        "pmid": "38477987",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/38477987/"
+      },
+      "rationale": "Calendar-anchored prescriber-adoption IV combining Brookhart-Wang 2006 short-term prescriber-preference IV with the iptacopan FDA approval discontinuity (Peffault de Latour 2024 APPLY-PNH NEJM PMID 38477987, FDA approval 2023-12-06): the indicator that the index patient's hematologist initiated their FIRST iptacopan prescription within the first 90 days after FDA approval is a strong relevance signal (Z->T present; early-adopter prescribers preferentially route incident patients to iptacopan). The instrument operates at the prescriber-adoption-timing level and DOES NOT carry the direct Z->Y bypass paths that geographic or facility-level instruments would: (a) transfusion-management protocols are guideline-driven and uniform across early- vs late-adopter prescribers (Hill TRIUMPH 2010 protocol guidance), (b) breakthrough-hemolysis-management algorithms are publication-driven (Risitano 2019 SAAWP) and shared, (c) meningococcal-infection prophylaxis is REMS-mandated and uniform, (d) hemolysis-monitoring intensity follows IPNHR Schrezenmeier 2014 baseline-and-quarterly schedule used by both prescriber strata. Crucially the instrument is timing-conditional on a SHARED FDA approval event rather than on patient-side proximity to a specialty center, so it does not encode access-to-care or diagnosis-speed direct paths. No common cause: a prescriber's calendar-quarter-of-first-iptacopan is exogenous to any individual incident patient's complement biology. Brookhart 2010 catalogs combined calendar-discontinuity-plus-prescriber instruments as the strongest pharmacoepi IV family.",
+      "scenario": "PNH_fabhalta",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "dataset_context": "cohort=PNH_fabhalta; brand=Fabhalta (iptacopan, LNP023, Factor B inhibitor); indication=Paroxysmal Nocturnal Hemoglobinuria (PNH); data_source=ConcertAI PNH/rare-disease claims + chart-abstracted hemolysis labs; target=hemoglobin_response_>=2g/dL_180d (transfusion-independent); prediction_anchor=index_date (first iptacopan dispense)",
+      "derivation_pseudocode": "source=PROVIDER_PRESCRIBING; derivation_inputs=[npi, drug_class:complement_inhibitor, rx_date]; aggregation=tertile_within_provider(share_iptacopan_vs_anti_C5_prior_2yr); window_days=730; knowable_at=preindex",
+      "feature_name": "prescriber_iptacopan_preference_tertile_preindex",
+      "ground_truth_role": "instrument",
+      "provenance": {
+        "citation": "Brookhart MA, Rassen JA, Schneeweiss S. 2010. Instrumental variable methods in comparative safety and effectiveness research. Pharmacoepidemiol Drug Saf 19:537-54.",
+        "doi": "10.1002/pds.1908",
+        "pmid": "20354968",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/20354968/"
+      },
+      "rationale": "Canonical Brookhart-Schneeweiss physician prescribing preference IV applied to PNH: the treating hematologist's recent share of iptacopan among complement-inhibitor starts strongly predicts the patient's index regimen but, conditional on measured case-mix, has no plausible direct path to the patient's 180-day hemoglobin response other than through which agent was prescribed (exclusion restriction). Brookhart 2010 catalogs prescriber preference as the most-used and best-audited IV family in pharmacoepidemiology; Rassen 2009 documents its strength across 25 settings.",
+      "scenario": "PNH_fabhalta",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "dataset_context": "cohort=PNH_fabhalta; brand=Fabhalta (iptacopan, LNP023, Factor B inhibitor); indication=Paroxysmal Nocturnal Hemoglobinuria (PNH); data_source=ConcertAI PNH/rare-disease claims + chart-abstracted hemolysis labs; target=hemoglobin_response_>=2g/dL_180d (transfusion-independent); prediction_anchor=index_date (first iptacopan dispense)",
+      "derivation_pseudocode": "source=PROVIDER_PRESCRIBING; derivation_inputs=[npi, drug_id, rx_date]; aggregation=last_rx_in_class(prior_complement_inhibitor_starts_by_provider); window_days=180; knowable_at=preindex",
+      "feature_name": "prescriber_last_complement_inhibitor_choice_preindex",
+      "ground_truth_role": "instrument",
+      "provenance": {
+        "citation": "Brookhart MA, Wang PS, Solomon DH, Schneeweiss S. 2006. Evaluating short-term drug effects using a physician-specific prescribing preference as an instrumental variable. Epidemiology 17:268-75.",
+        "doi": "10.1097/01.ede.0000193606.58671.c5",
+        "pmid": "16617275",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/16617275/"
+      },
+      "rationale": "Brookhart-Wang 2006 short-term last-prescription IV: the previous complement inhibitor that the prescribing hematologist most recently started (eculizumab vs ravulizumab vs pegcetacoplan vs iptacopan) is a strong, plausibly-exogenous predictor of the index patient's regimen. Conditional on PNH severity covariates, the prior patient's drug choice has no direct effect on the index patient's hemoglobin response (exclusion restriction), satisfying the Brookhart-Wang short-term IV framing for drugs with rapid pharmacodynamic effect such as complement inhibitors.",
+      "scenario": "PNH_fabhalta",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "dataset_context": "cohort=PNH_fabhalta; brand=Fabhalta (iptacopan, LNP023, Factor B inhibitor); indication=Paroxysmal Nocturnal Hemoglobinuria (PNH); data_source=ConcertAI PNH/rare-disease claims + chart-abstracted hemolysis labs; target=hemoglobin_response_>=2g/dL_180d (transfusion-independent); prediction_anchor=index_date (first iptacopan dispense)",
+      "derivation_pseudocode": "source=PROVIDER_PRESCRIBING; derivation_inputs=[npi, switch_event(prior_anti_c5_to_iptacopan), rx_date]; aggregation=tertile(count_of_prior_anti_c5_to_iptacopan_switches_by_prescriber over prior 365d); window_days=365; knowable_at=preindex",
+      "feature_name": "prior_year_prescriber_anti_c5_to_iptacopan_switch_count_tertile",
+      "ground_truth_role": "instrument",
+      "provenance": {
+        "citation": "Brookhart MA, Wang PS, Solomon DH, Schneeweiss S. 2006. Evaluating short-term drug effects using a physician-specific prescribing preference as an instrumental variable. Epidemiology 17:268-75.",
+        "doi": "10.1097/01.ede.0000193606.58671.c5",
+        "pmid": "16617275",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/16617275/"
+      },
+      "rationale": "Brookhart-family prescriber-switching-history IV operationalized at the within-physician switching event level rather than at facility level: the count of times the index hematologist has switched a DIFFERENT prior patient from anti-C5 (eculizumab/ravulizumab) to iptacopan in the previous 365 days is a strong relevance signal for the index patient's regimen (Z->T present; prescribers comfortable with proximal-inhibitor switching repeat the behavior). The instrument operates at the prescriber-history level and does NOT carry the direct Z->Y bypass pathways that facility-level volume would: (a) transfusion management protocols are facility-level not prior-switch-count-level, (b) breakthrough-hemolysis management is driven by current-patient observation not prior-switch tallies, (c) meningococcal infection prophylaxis is a REMS-mandated uniform protocol independent of switch tally, (d) hemolysis-monitoring intensity is guideline-driven not prior-switch-driven. The instrument also has no plausible common cause with the index patient's hemoglobin response because prior patients' switching events are exogenous to the new patient's complement biology. Brookhart 2006 introduced the within-physician prior-prescription-event family of instruments for drugs with rapid pharmacodynamic effect (complement inhibitors qualify); Brookhart 2010 catalogs the family. Exclusion restriction holds conditional on observed case-mix (baseline LDH, clone size, prior anti-C5 exposure, transfusion burden \u2014 all carried as confounders in this fixture).",
+      "scenario": "PNH_fabhalta",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "dataset_context": "cohort=PNH_fabhalta; brand=Fabhalta (iptacopan, LNP023, Factor B inhibitor); indication=Paroxysmal Nocturnal Hemoglobinuria (PNH); data_source=ConcertAI PNH/rare-disease claims + chart-abstracted hemolysis labs; target=hemoglobin_response_>=2g/dL_180d (transfusion-independent); prediction_anchor=index_date (first iptacopan dispense)",
+      "derivation_pseudocode": "source=LABS_HEMOLYSIS; derivation_inputs=[total_bilirubin_mg_dl, indirect_bilirubin_mg_dl]; aggregation=delta(bilirubin_postindex - bilirubin_preindex); window_days=90; knowable_at=t_plus_90d",
+      "feature_name": "bilirubin_delta_d90_postindex",
+      "ground_truth_role": "mediator",
+      "provenance": {
+        "citation": "Brodsky RA. 2014. Paroxysmal nocturnal hemoglobinuria. Blood 124:2804-11.",
+        "doi": "10.1182/blood-2014-02-522128",
+        "pmid": "25237200",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/25237200/"
+      },
+      "rationale": "Indirect bilirubin reduction is a downstream pharmacodynamic mediator of hemolysis suppression on iptacopan: reduced RBC destruction reduces heme catabolism, lowering indirect bilirubin, and is on the causal path from treatment to hemoglobin recovery. Brodsky 2014 review identifies bilirubin as a standard hemolysis biomarker tracked alongside LDH in PNH treatment response. VanderWeele 2016 mediator: post-treatment intermediate on the indirect-effect path.",
+      "scenario": "PNH_fabhalta",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "dataset_context": "cohort=PNH_fabhalta; brand=Fabhalta (iptacopan, LNP023, Factor B inhibitor); indication=Paroxysmal Nocturnal Hemoglobinuria (PNH); data_source=ConcertAI PNH/rare-disease claims + chart-abstracted hemolysis labs; target=hemoglobin_response_>=2g/dL_180d (transfusion-independent); prediction_anchor=index_date (first iptacopan dispense)",
+      "derivation_pseudocode": "source=CLAIMS_BREAKTHROUGH_HEMOLYSIS; derivation_inputs=[ldh_spike_event, transfusion_event]; aggregation=any(breakthrough hemolysis episode postindex); window_days=180; knowable_at=t_plus_180d",
+      "feature_name": "breakthrough_hemolysis_event_180d_postindex",
+      "ground_truth_role": "mediator",
+      "provenance": {
+        "citation": "Lee JW, Sicre de Fontbrune F, Wong Lee Lee L, et al. 2019. Ravulizumab (ALXN1210) vs eculizumab in adult patients with PNH naive to complement inhibitors: the 301 study. Blood 133:530-539.",
+        "doi": "10.1182/blood-2018-09-876136",
+        "pmid": "30510080",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/30510080/"
+      },
+      "rationale": "Breakthrough hemolysis episodes during the post-index window are a mediator: they reflect partial pharmacodynamic failure of the index agent, directly degrade hemoglobin response, and lie on the causal path from treatment to outcome. Lee 2019 ravulizumab 301 measured breakthrough hemolysis as a key secondary endpoint (4.0% ravulizumab vs 10.7% eculizumab). Per VanderWeele 2016 mediation framework, post-treatment intermediate variable mediating treatment effect on hemoglobin response.",
+      "scenario": "PNH_fabhalta",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "dataset_context": "cohort=PNH_fabhalta; brand=Fabhalta (iptacopan, LNP023, Factor B inhibitor); indication=Paroxysmal Nocturnal Hemoglobinuria (PNH); data_source=ConcertAI PNH/rare-disease claims + chart-abstracted hemolysis labs; target=hemoglobin_response_>=2g/dL_180d (transfusion-independent); prediction_anchor=index_date (first iptacopan dispense)",
+      "derivation_pseudocode": "source=LABS_FLOW_CYTOMETRY; derivation_inputs=[c3_deposition_pnh_rbc_pct]; aggregation=mean(C3_deposition_pct on PNH RBCs postindex); window_days=90; knowable_at=t_plus_90d",
+      "feature_name": "c3_deposition_pnh_rbc_pct_d90_postindex",
+      "ground_truth_role": "mediator",
+      "provenance": {
+        "citation": "Risitano AM, Marotta S, Ricci P, et al. 2019. Anti-complement Treatment for Paroxysmal Nocturnal Hemoglobinuria: Time for Proximal Complement Inhibition? A Position Paper From the SAAWP of the EBMT. Front Immunol 10:1157.",
+        "doi": "10.3389/fimmu.2019.01157",
+        "pmid": "31258525",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/31258525/"
+      },
+      "rationale": "C3 fragment deposition on PNH RBCs reduction is the mechanism-distinguishing mediator for proximal vs terminal complement inhibition: anti-C5 agents (eculizumab/ravulizumab) leave residual C3 deposition that drives extravascular hemolysis, while iptacopan (factor B) prevents the C3-convertase upstream, reducing C3 fragments on PNH RBCs (Risitano 2019 SAAWP). It is the post-treatment intermediate variable explaining iptacopan's superiority over anti-C5 on hemoglobin response per Peffault de Latour 2024 APPLY-PNH. VanderWeele 2016 mediator.",
+      "scenario": "PNH_fabhalta",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "dataset_context": "cohort=PNH_fabhalta; brand=Fabhalta (iptacopan, LNP023, Factor B inhibitor); indication=Paroxysmal Nocturnal Hemoglobinuria (PNH); data_source=ConcertAI PNH/rare-disease claims + chart-abstracted hemolysis labs; target=hemoglobin_response_>=2g/dL_180d (transfusion-independent); prediction_anchor=index_date (first iptacopan dispense)",
+      "derivation_pseudocode": "source=LABS_HEMOLYSIS; derivation_inputs=[ldh_value_u_per_L]; aggregation=mean(LDH/ULN at days 60-90 postindex); window_days=90; knowable_at=t_plus_90d",
+      "feature_name": "ldh_x_uln_d90_postindex",
+      "ground_truth_role": "mediator",
+      "provenance": {
+        "citation": "Risitano AM, Marotta S, Ricci P, et al. 2019. Anti-complement Treatment for Paroxysmal Nocturnal Hemoglobinuria: Time for Proximal Complement Inhibition? A Position Paper From the SAAWP of the EBMT. Front Immunol 10:1157.",
+        "doi": "10.3389/fimmu.2019.01157",
+        "pmid": "31258525",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/31258525/"
+      },
+      "rationale": "Post-index LDH suppression is the direct pharmacodynamic mediator between iptacopan exposure and hemoglobin response: factor B blockade halts membrane-attack-complex formation upstream of C5, suppressing intravascular hemolysis (measured by LDH) which in turn raises hemoglobin (Peffault de Latour 2024 APPLY-PNH NEJM; Risitano 2019 SAAWP position paper). This is the canonical VanderWeele 2016 mediator: exposure -> mediator -> outcome, on the causal path and post-treatment.",
+      "scenario": "PNH_fabhalta",
+      "treatment_explicit": true
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "dataset_context": "cohort=PNH_fabhalta; brand=Fabhalta (iptacopan, LNP023, Factor B inhibitor); indication=Paroxysmal Nocturnal Hemoglobinuria (PNH); data_source=ConcertAI PNH/rare-disease claims + chart-abstracted hemolysis labs; target=hemoglobin_response_>=2g/dL_180d (transfusion-independent); prediction_anchor=index_date (first iptacopan dispense)",
+      "derivation_pseudocode": "source=LABS_HEMATOLOGY; derivation_inputs=[absolute_reticulocyte_count]; aggregation=delta(retic_postindex - retic_preindex); window_days=90; knowable_at=t_plus_90d",
+      "feature_name": "reticulocyte_count_delta_d90_postindex",
+      "ground_truth_role": "mediator",
+      "provenance": {
+        "citation": "Peffault de Latour R, Roth A, Kulasekararaj AG, et al. 2024. Oral Iptacopan Monotherapy in Paroxysmal Nocturnal Hemoglobinuria. N Engl J Med 390:994-1008.",
+        "doi": "10.1056/NEJMoa2308695",
+        "pmid": "38477987",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/38477987/"
+      },
+      "rationale": "Reticulocyte count change post-iptacopan is a mediator on the causal path: complement-inhibition stops chronic hemolysis, RBCs survive longer, reticulocyte production normalizes downward as anemia resolves; this is the marrow-recovery mediator complementing the hemolysis-suppression mediator (LDH). Peffault de Latour 2024 APPLY-PNH NEJM reports reticulocyte normalization as a key secondary endpoint correlating with hemoglobin response. VanderWeele 2016 intermediate variable on indirect-effect pathway.",
+      "scenario": "PNH_fabhalta",
+      "treatment_explicit": true
+    }
+  ],
+  "fixture_kind": "literature_derived_golden_set",
+  "issue": "#358",
+  "schema_version": "1.0",
+  "total_entries": 91
+}
