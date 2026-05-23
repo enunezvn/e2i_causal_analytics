@@ -215,6 +215,139 @@ class TestResolveTargetMde:
         assert result.value == 0.05
         assert result.source == "user_override"
 
+    # ------------------------------------------------------------------
+    # R2.2: outcome-type-aware validation bounds
+    # ------------------------------------------------------------------
+    @pytest.mark.parametrize("raw_value", [1.0, 1.5, 5.0, 100.0])
+    def test_continuous_outcome_accepts_raw_effect_size_above_one(self, raw_value):
+        """R2.2: continuous-outcome MDE is a RAW EFFECT SIZE in outcome
+        units (e.g. mmol/L), NOT dimensionless Cohen's d. Values >= 1.0
+        are legitimate (sigma_outcome > 2.0). The resolver's
+        outcome-type-aware guard accepts them for continuous; only the
+        binary path rejects values >= 1.0 (where the absolute risk
+        difference contract enforces (0, 1)).
+        """
+        result = resolve_target_mde(
+            user_config={"target_mde": raw_value},
+            outcome_type="continuous",
+        )
+        assert result.value == raw_value
+        assert result.source == "user_override"
+
+    @pytest.mark.parametrize("bad_value", [-0.5, 0.0, float("nan"), float("inf")])
+    def test_continuous_outcome_still_rejects_non_positive_and_nonfinite(self, bad_value):
+        """R2.2: continuous-outcome guard only loosens the upper bound;
+        non-positive and non-finite values are still rejected (would
+        produce nonsensical sample-size formulas).
+        """
+        result = resolve_target_mde(
+            user_config={"target_mde": bad_value},
+            outcome_type="continuous",
+            sigma_outcome=1.0,
+        )
+        assert result.source != "user_override"
+
+    @pytest.mark.parametrize("bad_value", [1.0, 1.5, 5.0])
+    def test_binary_outcome_rejects_value_above_one(self, bad_value):
+        """R2.2: binary outcome MDE is absolute risk difference, must be
+        in (0, 1). Resolver re-asserts this even though schema bound was
+        widened for continuous.
+        """
+        result = resolve_target_mde(
+            user_config={"target_mde": bad_value},
+            outcome_type="binary",
+            baseline_rate=0.30,
+        )
+        assert result.source != "user_override"
+
+    def test_warning_text_is_outcome_type_aware_binary(self, caplog):
+        """R2.2: warning text must distinguish binary (0,1) vs. continuous
+        (positive+finite) bounds so the audit log explains WHY the value
+        was rejected.
+        """
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            resolve_target_mde(
+                user_config={"target_mde": 1.5},
+                outcome_type="binary",
+                baseline_rate=0.30,
+            )
+        assert any("absolute risk difference" in rec.message for rec in caplog.records), (
+            f"binary outcome warning should mention 'absolute risk difference'; got {[r.message for r in caplog.records]}"
+        )
+
+    def test_warning_text_is_outcome_type_aware_continuous(self, caplog):
+        """R2.2: continuous outcome rejection should describe the
+        positive-and-finite contract, NOT the binary (0, 1) bound.
+        """
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            resolve_target_mde(
+                user_config={"target_mde": float("nan")},
+                outcome_type="continuous",
+                sigma_outcome=1.0,
+            )
+        assert any("positive and finite" in rec.message for rec in caplog.records), (
+            f"continuous outcome warning should mention 'positive and finite'; got {[r.message for r in caplog.records]}"
+        )
+
+    # ------------------------------------------------------------------
+    # R2.3: source-preservation contract — when scope_builder pre-stamps
+    # target_mde_source, the resolver must NOT silently re-label it as
+    # user_override. The pre-stamp is the upstream provenance signal.
+    # ------------------------------------------------------------------
+    @pytest.mark.parametrize(
+        "stamped_source",
+        ["user_override", "computed_from_data", "literature_default"],
+    )
+    def test_pre_stamped_source_preserved(self, stamped_source):
+        """R2.3: when ``target_mde_source`` is set in user_config (e.g. by
+        scope_builder), the resolver must preserve it instead of always
+        overwriting with ``user_override``. This is the D1 audit-chain
+        contract — without preservation, every causal scope (post-R2.4
+        deferral) and every binary scope with pre-computed baseline_rate
+        gets a fake ``user_override`` label downstream.
+        """
+        result = resolve_target_mde(
+            user_config={
+                "target_mde": 0.05,
+                "target_mde_source": stamped_source,
+            },
+            outcome_type="binary",
+            baseline_rate=0.30,
+        )
+        assert result.value == 0.05
+        assert result.source == stamped_source
+
+    def test_no_pre_stamp_defaults_to_user_override(self):
+        """R2.3: if scope_builder didn't pre-stamp (raw dict path, no
+        upstream provenance), default to ``user_override`` — matches the
+        historical contract for direct user_config callers.
+        """
+        result = resolve_target_mde(
+            user_config={"target_mde": 0.05},  # NO target_mde_source
+            outcome_type="binary",
+            baseline_rate=0.30,
+        )
+        assert result.source == "user_override"
+
+    def test_invalid_pre_stamp_source_ignored(self):
+        """R2.3: a malformed pre-stamp (e.g. typo) must NOT propagate
+        a nonsense ThresholdSource — fall back to ``user_override`` so
+        the schema-level Literal contract stays intact.
+        """
+        result = resolve_target_mde(
+            user_config={
+                "target_mde": 0.05,
+                "target_mde_source": "some_typo_value",
+            },
+            outcome_type="binary",
+            baseline_rate=0.30,
+        )
+        assert result.source == "user_override"
+
 
 class TestResolveAlphaAndPower:
     def test_alpha_user_override(self):

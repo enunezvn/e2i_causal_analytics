@@ -239,26 +239,43 @@ async def test_pipeline_merge_preserves_typed_sufficiency_config_user_fields() -
 
 
 @pytest.mark.asyncio
-async def test_pipeline_force_low_power_run_wins_over_caller_value() -> None:
-    """F3: PipelineConfig.force_low_power_run is a safety-critical flag
-    (D5); the orchestrator's value MUST win over a caller-supplied
-    scope_spec.sufficiency.force_low_power_run. Pre-fix, the caller-
-    supplied value shadowed the pipeline-level default — letting any
-    scope_spec author quietly bypass the pharma-safety gate.
+@pytest.mark.parametrize(
+    "pipeline_force,caller_force",
+    [
+        (True, True),  # both set: pipeline wins (idempotent)
+        (True, False),  # pipeline ON, caller OFF: pipeline wins
+        (False, True),  # pipeline OFF (safe default), caller ON: pipeline wins → False
+        (False, False),  # both safe-default: pipeline wins (idempotent)
+    ],
+)
+async def test_pipeline_force_low_power_run_wins_over_caller_value(
+    pipeline_force: bool, caller_force: bool
+) -> None:
+    """F3 + R2.1: PipelineConfig.force_low_power_run is a safety-critical
+    flag (D5); the orchestrator OWNS this value. The pipeline value (whether
+    True or False) MUST appear in the merged sufficiency dict for ALL FOUR
+    combinations of (pipeline_force, caller_force) ∈ {True, False}².
+
+    Round-1 only tested (pipeline=True, caller=False). The R2.1 bug fired in
+    the (pipeline=False, caller=True) case: the merge block was guarded by
+    `if force_low_power_run or strictness_preset:` so when both pipeline
+    overrides were at their defaults, the merge never ran and a
+    caller-supplied True passed through — silently weakening the
+    pharma-safety contract. Round-2 fix removes the guard; this
+    parametrization locks the strict pipeline-wins contract across all 4
+    combinations.
     """
     config = PipelineConfig(
         skip_mlflow=True,
         enable_hpo=False,
-        force_low_power_run=True,  # pipeline-level: safety knob ON
+        force_low_power_run=pipeline_force,
     )
     pipeline = MLFoundationPipeline(config=config)
     result = _make_data_prep_result()
-    # Caller tries to override via scope_spec — must NOT succeed for the
-    # safety-critical force_low_power_run flag.
     result.scope_spec = {
         "problem_type": "causal_inference",
         "sufficiency": {
-            "force_low_power_run": False,  # caller tries to override OFF
+            "force_low_power_run": caller_force,
             "target_mde": 0.05,
         },
     }
@@ -282,10 +299,114 @@ async def test_pipeline_force_low_power_run_wins_over_caller_value() -> None:
         )
 
     merged_suff = captured["scope_spec"]["sufficiency"]
-    # Pipeline-level wins for force_low_power_run (safety contract).
-    assert merged_suff["force_low_power_run"] is True
+    # Pipeline-level wins for force_low_power_run in EVERY case.
+    assert merged_suff["force_low_power_run"] is pipeline_force, (
+        f"force_low_power_run mismatch: pipeline={pipeline_force}, "
+        f"caller={caller_force}, result={merged_suff['force_low_power_run']!r}; "
+        f"expected pipeline value ({pipeline_force}) to win."
+    )
     # Calibration knob (target_mde) is NOT overridden by pipeline.
     assert merged_suff["target_mde"] == 0.05
+
+
+@pytest.mark.asyncio
+async def test_pipeline_force_low_power_run_warn_on_downgrade_attempt(caplog) -> None:
+    """R2.1: when caller passes force_low_power_run=True but PipelineConfig
+    has the safe default (False), the override must fire a LOUD WARN so the
+    audit log records the downgrade-attempt. This is the only diagnostic
+    signal a downstream auditor has that someone tried to weaken the
+    pharma-safety gate; without it the strict pipeline-wins contract would
+    silently discard caller intent.
+    """
+    import logging
+
+    config = PipelineConfig(
+        skip_mlflow=True,
+        enable_hpo=False,
+        force_low_power_run=False,  # safe default
+    )
+    pipeline = MLFoundationPipeline(config=config)
+    result = _make_data_prep_result()
+    result.scope_spec = {
+        "problem_type": "causal_inference",
+        "sufficiency": {
+            "force_low_power_run": True,  # caller tries to bypass pharma-safety
+            "target_mde": 0.05,
+        },
+    }
+
+    captured = {}
+
+    fake_dp = MagicMock()
+
+    async def _capture_input(input_data):
+        captured.update(input_data)
+        return {"qc_report": {}, "baseline_metrics": {}, "gate_passed": True}
+
+    fake_dp.run = AsyncMock(side_effect=_capture_input)
+
+    with (
+        patch.object(pipeline, "_get_agent", return_value=fake_dp),
+        patch.object(pipeline.config, "enable_feast", False),
+        caplog.at_level(logging.WARNING),
+    ):
+        await pipeline._run_data_preparation(
+            input_data={"data_source": "test"}, result=result, obs_context=None
+        )
+
+    # Pipeline-wins: caller's True got overridden to False.
+    assert captured["scope_spec"]["sufficiency"]["force_low_power_run"] is False
+    # AND the downgrade-attempt was loud-warned.
+    assert any(
+        "overriding to False" in rec.message and "force_low_power_run" in rec.message
+        for rec in caplog.records
+    ), f"expected WARN on downgrade-attempt; got {[rec.message for rec in caplog.records]!r}"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_merge_runs_even_with_no_pipeline_overrides() -> None:
+    """R2.1: the round-1 guard
+    `if force_low_power_run or strictness_preset:` skipped the merge
+    entirely when both pipeline overrides were at defaults — letting any
+    caller-supplied scope_spec.sufficiency.force_low_power_run leak through.
+    Round-2 fix removes the guard; this test locks the new always-merge
+    contract by confirming a caller-supplied force_low_power_run=True
+    is overridden to False (the safe pipeline default) even when neither
+    pipeline override is explicitly set.
+    """
+    config = PipelineConfig(
+        skip_mlflow=True,
+        enable_hpo=False,
+        # BOTH at defaults: force_low_power_run=False, sufficiency_strictness_preset=None
+    )
+    pipeline = MLFoundationPipeline(config=config)
+    result = _make_data_prep_result()
+    result.scope_spec = {
+        "problem_type": "causal_inference",
+        "sufficiency": {"force_low_power_run": True},  # caller attempts bypass
+    }
+
+    captured = {}
+
+    fake_dp = MagicMock()
+
+    async def _capture_input(input_data):
+        captured.update(input_data)
+        return {"qc_report": {}, "baseline_metrics": {}, "gate_passed": True}
+
+    fake_dp.run = AsyncMock(side_effect=_capture_input)
+
+    with (
+        patch.object(pipeline, "_get_agent", return_value=fake_dp),
+        patch.object(pipeline.config, "enable_feast", False),
+    ):
+        await pipeline._run_data_preparation(
+            input_data={"data_source": "test"}, result=result, obs_context=None
+        )
+
+    # Even though neither pipeline override was set, the merge ran and
+    # the pipeline-wins contract was enforced.
+    assert captured["scope_spec"]["sufficiency"]["force_low_power_run"] is False
 
 
 @pytest.mark.asyncio

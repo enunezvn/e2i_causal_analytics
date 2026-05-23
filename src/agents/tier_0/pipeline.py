@@ -683,7 +683,7 @@ class MLFoundationPipeline:
         # scope_spec.sufficiency so the sufficiency_check node sees them via
         # the standard resolver hierarchy.
         #
-        # F3 (PR #462 hotfix): two bugs were nested here:
+        # F3 (PR #462 hotfix) + R2.1 (round-2): three bugs were nested here:
         #   1) Typed-shape drop. When the caller passed a typed
         #      `SufficiencyConfig` instance (e.g. via the new
         #      ScopeSpecSchema.sufficiency field), the old `isinstance(dict)`
@@ -699,34 +699,61 @@ class MLFoundationPipeline:
         #      keys (`strictness_preset`, anything user-supplied like
         #      `target_mde` / `epv_floor`) keep the original "user-wins"
         #      semantics — those are calibration knobs, not safety gates.
-        if self.config.force_low_power_run or self.config.sufficiency_strictness_preset:
-            existing_raw = data_prep_input["scope_spec"].get("sufficiency") or {}
-            if isinstance(existing_raw, dict):
-                existing: Dict[str, Any] = dict(existing_raw)
-            elif hasattr(existing_raw, "model_dump"):
-                # Typed SufficiencyConfig (or pydantic-compat object). Dump to
-                # dict so we can merge per-key without losing user fields.
-                existing = existing_raw.model_dump(exclude_none=True)
-            else:
-                # Unknown shape — fall back to empty rather than crash, but
-                # log a warning so the drift is visible.
-                logger.warning(
-                    "scope_spec.sufficiency is neither dict nor pydantic "
-                    f"model (got {type(existing_raw).__name__}); ignoring."
-                )
-                existing = {}
-            # force_low_power_run: pipeline-level wins. Safety-critical flag
-            # (D5 of the rollout plan); caller cannot quietly weaken the
-            # pharma-safety default via a leftover scope_spec entry.
-            if self.config.force_low_power_run:
-                existing["force_low_power_run"] = True
-            # strictness_preset: caller-supplied wins; pipeline-level only
-            # fills the gap. A user that took the trouble to set
-            # `strict` (regulatory-submission) should not be silently
-            # downgraded to `moderate` by an orchestrator default.
-            if self.config.sufficiency_strictness_preset and "strictness_preset" not in existing:
-                existing["strictness_preset"] = self.config.sufficiency_strictness_preset
-            data_prep_input["scope_spec"]["sufficiency"] = existing
+        #   3) R2.1: the round-1 fix guarded the merge with
+        #      `if self.config.force_low_power_run or
+        #          self.config.sufficiency_strictness_preset:` —
+        #      so when BOTH pipeline overrides were at their defaults
+        #      (False / None), the merge never ran, and a caller-supplied
+        #      `scope_spec.sufficiency.force_low_power_run=True` passed
+        #      through untouched. That defeats the very contract bug #2
+        #      was meant to enforce: the orchestrator owns
+        #      force_low_power_run unconditionally. Fix: ALWAYS enter the
+        #      merge block. Strict pipeline-wins contract for
+        #      force_low_power_run (the pipeline value, whether True or
+        #      False, is authoritative; caller scope_spec value is
+        #      discarded with a WARN on the downgrade-attempt path).
+        #      strictness_preset and other calibration knobs keep
+        #      "caller wins, pipeline fills gap" semantics.
+        existing_raw = data_prep_input["scope_spec"].get("sufficiency") or {}
+        if isinstance(existing_raw, dict):
+            existing: Dict[str, Any] = dict(existing_raw)
+        elif hasattr(existing_raw, "model_dump"):
+            # Typed SufficiencyConfig (or pydantic-compat object). Dump to
+            # dict so we can merge per-key without losing user fields.
+            existing = existing_raw.model_dump(exclude_none=True)
+        else:
+            # Unknown shape — fall back to empty rather than crash, but
+            # log a warning so the drift is visible.
+            logger.warning(
+                "scope_spec.sufficiency is neither dict nor pydantic "
+                f"model (got {type(existing_raw).__name__}); ignoring."
+            )
+            existing = {}
+        # R2.1: force_low_power_run — strict pipeline-wins, ALWAYS.
+        # The orchestrator owns this safety knob; a caller cannot widen
+        # OR narrow it via scope_spec.sufficiency. If pipeline value is
+        # False (safe default), result is False even when caller asked
+        # for True (loud-warn the downgrade-attempt for auditability).
+        # If pipeline value is True (explicit override), result is True
+        # even when caller asked for False. The pipeline value is the
+        # only authoritative source, period.
+        caller_force = existing.get("force_low_power_run")
+        if caller_force is True and self.config.force_low_power_run is False:
+            logger.warning(
+                "Caller passed scope_spec.sufficiency.force_low_power_run=True "
+                "but PipelineConfig.force_low_power_run is False (the safe "
+                "pharma-default); overriding to False per the strict "
+                "pipeline-wins contract. To enable low-power runs, set the "
+                "flag at the PipelineConfig boundary, not via scope_spec."
+            )
+        existing["force_low_power_run"] = self.config.force_low_power_run
+        # strictness_preset: caller-supplied wins; pipeline-level only
+        # fills the gap. A user that took the trouble to set
+        # `strict` (regulatory-submission) should not be silently
+        # downgraded to `moderate` by an orchestrator default.
+        if self.config.sufficiency_strictness_preset and "strictness_preset" not in existing:
+            existing["strictness_preset"] = self.config.sufficiency_strictness_preset
+        data_prep_input["scope_spec"]["sufficiency"] = existing
 
         # Execute data_preparer
         data_preparer = self._get_agent("data_preparer")

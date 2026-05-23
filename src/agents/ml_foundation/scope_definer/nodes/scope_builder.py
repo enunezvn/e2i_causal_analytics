@@ -144,6 +144,26 @@ def _build_scope_sufficiency(
             merged["target_mde_source"] = "computed_from_data"
             return merged
 
+    # Causal-inference deferral path (R2.4): the round-1 implementation
+    # contradicted its own docstring (lines 95-97: "For causal_inference:
+    # defer to the DataPreparer because sigma estimates aren't available
+    # until the data is loaded; pass through any user override only.").
+    # The fall-through path below was writing a literature_default for
+    # causal too — combined with the R2.3 resolver bug (which re-stamped
+    # any non-None target_mde as user_override) every causal scope ended
+    # up with a fake "user_override" audit chain. Round-2 fix: for
+    # causal_inference + no user override, defer to the resolver inside
+    # sufficiency_check (which has access to baseline_rate from loaded
+    # data). Set ``target_mde_source = None`` explicitly so any consumer
+    # that inspects the field sees an explicit "deferred", not a missing
+    # key that could be mistaken for "never considered". No WARN at scope
+    # time — the resolver will warn IFF the deferral still leaves
+    # ``target_mde`` defaulted after data load.
+    if problem_type == "causal_inference":
+        merged = dict(user_suff)
+        merged["target_mde_source"] = None
+        return merged if merged else None
+
     # Literature default path (3) — only used when we can't compute from
     # data AND the runtime resolver also won't be able to (no train_df).
     # For binary/continuous we let the runtime resolver handle this so a
@@ -153,7 +173,7 @@ def _build_scope_sufficiency(
     # data preparer (e.g. config-only validation). Per the rollout plan, the
     # WARN fires here so audit logs surface "no data, no override → fell
     # through to literature".
-    if problem_type in ("binary_classification", "causal_inference"):
+    if problem_type == "binary_classification":
         literature_mde = DEFAULT_MDE_BINARY_ABSOLUTE_FLOOR
     elif problem_type == "regression":
         literature_mde = DEFAULT_MDE_CONTINUOUS_COHENS_D

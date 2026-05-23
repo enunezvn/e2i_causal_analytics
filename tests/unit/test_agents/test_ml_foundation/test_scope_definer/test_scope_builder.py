@@ -599,3 +599,237 @@ async def test_d1_unset_for_multiclass_when_no_user_override():
     scope_spec = result["scope_spec"]
     # No sufficiency field at all (user provided nothing + no scope-time signal).
     assert "sufficiency" not in scope_spec
+
+
+# ===========================================================================
+# R2.4 (round-2): scope_builder must DEFER for causal_inference (no user
+# override) — round-1 fell through to the literature-default branch despite
+# the docstring saying "defer". Combined with the R2.3 resolver bug, every
+# causal scope ended up with a fake user_override audit chain.
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_r24_causal_inference_defers_when_no_user_override(caplog):
+    """R2.4: for causal_inference without a user override, scope_builder
+    must NOT write a literature_default target_mde. The DataPreparer's
+    resolver has access to baseline_rate from loaded data and is the
+    correct place to compute the data-driven default with proper source
+    attribution.
+
+    Round-1 wrote ``target_mde=0.05, target_mde_source='literature_default'``
+    AND emitted a LOUD WARN at scope-build time — contradicting the
+    docstring (lines 95-97) that explicitly said "defer to the
+    DataPreparer". Round-2 fix: no target_mde value, no scope-build
+    warning, ``target_mde_source=None`` to signal "deferred to resolver".
+    """
+    import logging
+
+    state = {
+        "inferred_problem_type": "causal_inference",
+        "inferred_target_variable": "y",
+        "target_outcome": "Test",
+        "brand": "Test",
+        # No user override, no baseline_rate / sigma — pure defer case.
+    }
+    with caplog.at_level(logging.WARNING):
+        result = await build_scope_spec(state)
+    scope_spec = result["scope_spec"]
+    # No scope-time literature_default value written.
+    if "sufficiency" in scope_spec:
+        suff = scope_spec["sufficiency"]
+        assert "target_mde" not in suff or suff.get("target_mde") is None, (
+            f"causal_inference should defer target_mde to DataPreparer; got {suff}"
+        )
+        # target_mde_source set to None (explicit defer marker), NOT literature_default.
+        assert suff.get("target_mde_source") is None, (
+            f"causal_inference should set target_mde_source=None to defer; "
+            f"got {suff.get('target_mde_source')!r}"
+        )
+    # No literature-default WARN emitted at scope-build time (the resolver
+    # will warn IFF data load also fails to provide baseline_rate).
+    assert not any(
+        "literature default" in r.message and "causal_inference" in r.message
+        for r in caplog.records
+    ), (
+        f"causal_inference defer path should not emit literature-default WARN; got {[r.message for r in caplog.records]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_r24_causal_inference_user_override_still_wins(caplog):
+    """R2.4: even on the deferral path, an explicit user override for
+    causal_inference must still pass through with ``user_override``
+    provenance. The deferral only applies when the user did NOT supply
+    one — it doesn't disable the user-override entry point.
+    """
+    import logging
+
+    state = {
+        "inferred_problem_type": "causal_inference",
+        "inferred_target_variable": "y",
+        "target_outcome": "Test",
+        "brand": "Test",
+        "sufficiency": {"target_mde": 0.08, "epv_floor": 10},
+    }
+    with caplog.at_level(logging.WARNING):
+        result = await build_scope_spec(state)
+    scope_spec = result["scope_spec"]
+    assert scope_spec["sufficiency"]["target_mde"] == 0.08
+    assert scope_spec["sufficiency"]["target_mde_source"] == "user_override"
+    assert scope_spec["sufficiency"]["epv_floor"] == 10
+    # And still no literature WARN.
+    assert not any("literature default" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_r24_causal_inference_no_user_override_no_warn(caplog):
+    """R2.4: the round-1 implementation always warned for causal at scope
+    time. The R2.4 deferral path must be silent — the resolver inside
+    sufficiency_check is responsible for the loud warning IFF the
+    deferral can't be resolved after data load.
+    """
+    import logging
+
+    state = {
+        "inferred_problem_type": "causal_inference",
+        "inferred_target_variable": "y",
+        "target_outcome": "Test",
+        "brand": "Test",
+    }
+    with caplog.at_level(logging.WARNING):
+        await build_scope_spec(state)
+    assert not any("literature default" in r.message for r in caplog.records), (
+        "scope-build should be silent on causal_inference defer path"
+    )
+
+
+# ===========================================================================
+# R2.3 (round-2): scope_builder + resolver round-trip preserves the
+# pre-stamped target_mde_source. Without R2.3, the resolver overwrites
+# scope_builder's ``computed_from_data`` / ``literature_default`` stamps
+# with ``user_override``, breaking the audit chain.
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_r23_scope_builder_resolver_roundtrip_preserves_computed_from_data():
+    """R2.3: round-trip from scope_builder (which stamps
+    ``computed_from_data`` for binary with baseline_rate at scope-time)
+    through resolver must PRESERVE that stamp — not silently re-label as
+    ``user_override``.
+    """
+    from src.utils.sufficiency_resolver import resolve_target_mde
+
+    state = {
+        "inferred_problem_type": "binary_classification",
+        "inferred_target_variable": "y",
+        "target_outcome": "Test",
+        "brand": "Test",
+        "baseline_rate": 0.30,
+    }
+    result = await build_scope_spec(state)
+    scope_spec_suff = result["scope_spec"]["sufficiency"]
+    # scope_builder stamped computed_from_data.
+    assert scope_spec_suff["target_mde_source"] == "computed_from_data"
+    # Round-trip through the resolver — stamp must survive.
+    resolution = resolve_target_mde(
+        user_config=scope_spec_suff,
+        outcome_type="binary",
+        baseline_rate=0.30,
+    )
+    assert resolution.source == "computed_from_data", (
+        f"R2.3 audit-chain break: resolver re-stamped {resolution.source!r} "
+        f"over scope_builder's 'computed_from_data'. The pre-stamp is "
+        f"the upstream provenance signal and must be preserved."
+    )
+    assert resolution.value == scope_spec_suff["target_mde"]
+
+
+@pytest.mark.asyncio
+async def test_r23_scope_builder_resolver_roundtrip_preserves_literature_default():
+    """R2.3: round-trip for the binary literature-default path (no
+    user override, no baseline_rate) — scope_builder stamps
+    ``literature_default``; resolver must preserve.
+    """
+    from src.utils.sufficiency_resolver import resolve_target_mde
+
+    state = {
+        "inferred_problem_type": "binary_classification",
+        "inferred_target_variable": "y",
+        "target_outcome": "Test",
+        "brand": "Test",
+        # No baseline_rate → literature_default path.
+    }
+    result = await build_scope_spec(state)
+    scope_spec_suff = result["scope_spec"]["sufficiency"]
+    assert scope_spec_suff["target_mde_source"] == "literature_default"
+    resolution = resolve_target_mde(
+        user_config=scope_spec_suff,
+        outcome_type="binary",
+    )
+    assert resolution.source == "literature_default"
+
+
+@pytest.mark.asyncio
+async def test_r23_user_override_stamp_is_preserved():
+    """R2.3: when scope_builder stamps user_override (because the user
+    DID supply target_mde), the resolver preserves it too. This case
+    happens to look the same as the no-pre-stamp default; the test pins
+    that the explicit ``user_override`` stamp round-trips correctly.
+    """
+    from src.utils.sufficiency_resolver import resolve_target_mde
+
+    state = {
+        "inferred_problem_type": "binary_classification",
+        "inferred_target_variable": "y",
+        "target_outcome": "Test",
+        "brand": "Test",
+        "sufficiency": {"target_mde": 0.07},
+    }
+    result = await build_scope_spec(state)
+    scope_spec_suff = result["scope_spec"]["sufficiency"]
+    assert scope_spec_suff["target_mde_source"] == "user_override"
+    resolution = resolve_target_mde(
+        user_config=scope_spec_suff,
+        outcome_type="binary",
+        baseline_rate=0.30,
+    )
+    assert resolution.source == "user_override"
+    assert resolution.value == 0.07
+
+
+# ===========================================================================
+# R2.2 (round-2): scope_builder + schema can produce continuous-outcome
+# raw effect-size MDEs above 1.0 (sigma > 2.0). Round-1's schema bound
+# (lt=1.0) silently rejected these via ScopeSpecSchema validation.
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_r22_regression_with_large_sigma_outcome_survives_schema():
+    """R2.2: when scope_builder computes ``target_mde = 0.5 * sigma_outcome``
+    for regression with ``sigma_outcome > 2.0``, the value is >= 1.0. The
+    schema bound used to be ``lt=1.0`` → ScopeSpecSchema validation
+    silently rejected the legitimate MDE. R2.2 widens to ``lt=1e6`` and
+    documents the dual semantic: binary = absolute risk difference in
+    (0, 1); continuous = raw effect size in outcome units, can be >= 1.0.
+    """
+    from src.agents.ml_foundation.scope_definer.schemas import ScopeSpecSchema
+
+    state = {
+        "inferred_problem_type": "regression",
+        "inferred_target_variable": "y",
+        "target_outcome": "Test",
+        "brand": "Test",
+        "sigma_outcome": 4.0,  # → target_mde = 2.0, was rejected pre-R2.2
+    }
+    result = await build_scope_spec(state)
+    scope_spec_dict = result["scope_spec"]
+    # scope_builder computed the value.
+    assert scope_spec_dict["sufficiency"]["target_mde"] == 2.0
+    assert scope_spec_dict["sufficiency"]["target_mde_source"] == "computed_from_data"
+    # And the resulting scope_spec round-trips through pydantic without rejection.
+    schema = ScopeSpecSchema(**scope_spec_dict)
+    assert schema.sufficiency is not None
+    assert schema.sufficiency.target_mde == 2.0

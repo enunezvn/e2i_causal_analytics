@@ -41,13 +41,32 @@ class SufficiencyConfig(BaseModel):
     epv_floor: int | None = Field(default=None, ge=1)
     absolute_floor: int | None = Field(default=None, ge=1)
     observational_inflation: float | None = Field(default=None, gt=0.0)
-    # F5 (PR #462 hotfix): tightened from `Field(default=None)` (which accepted
-    # NaN / negative / >=1 values silently) to the same (0, 1) open interval
-    # baseline_rate uses. The MDE is conceptually an absolute risk difference
-    # (binary) or Cohen's d (continuous) — both must be positive and less than
-    # 1 for sufficiency math to be meaningful. The resolver also rejects NaN
-    # via `math.isnan` and falls back to literature_default with a warning.
-    target_mde: float | None = Field(default=None, gt=0.0, lt=1.0)
+    # F5 (PR #462 hotfix) + R2.2 (round-2): the F5 round-1 fix tightened
+    # from `Field(default=None)` (which accepted NaN / negative / >=1 values
+    # silently) to `Field(default=None, gt=0.0, lt=1.0)`. That bound is
+    # CORRECT for binary outcomes (absolute risk difference is in (0, 1))
+    # but WRONG for continuous outcomes: both ``scope_builder._build_scope_sufficiency``
+    # and ``resolver.resolve_target_mde`` compute ``target_mde = 0.5 * sigma_outcome``
+    # — RAW EFFECT SIZE in outcome units, NOT dimensionless Cohen's d. For
+    # any ``sigma_outcome >= 2.0`` the value is >= 1.0 and gets rejected by
+    # the schema, silently breaking the continuous-outcome MDE path.
+    #
+    # R2.2 fix (Option B in the round-2 brief): loosen the upper bound to
+    # ``lt=1e6`` (effectively unbounded so absolute-effect-size semantics
+    # for continuous work, but still catches gross typos like ``1e9``).
+    # Per the dual semantics:
+    #   * binary outcomes: ``target_mde`` is an ABSOLUTE RISK DIFFERENCE,
+    #     should be in (0, 1). The resolver's runtime guard at
+    #     ``resolve_target_mde`` re-validates against (0, 1) for binary and
+    #     emits a WARN-and-fallback on invalid input — so the binary
+    #     contract is still enforced where it matters.
+    #   * continuous outcomes: ``target_mde`` is in OUTCOME UNITS (raw
+    #     effect-size, e.g. mean difference in mmol/L). Can legitimately
+    #     exceed 1.0 when sigma_outcome > 2.0.
+    #   * time-to-event outcomes: ``target_mde`` is a hazard ratio,
+    #     dimensionless, typically in (0.5, 2.0). The literature default
+    #     uses ``DEFAULT_MDE_HAZARD_RATIO``.
+    target_mde: float | None = Field(default=None, gt=0.0, lt=1e6)
     baseline_rate: float | None = Field(default=None, gt=0.0, lt=1.0)
     event_rate: float | None = Field(default=None, gt=0.0, le=1.0)
     power_target: float | None = Field(default=None, gt=0.0, lt=1.0)

@@ -183,11 +183,20 @@ class TestF2SufficiencyConfigForceLowPowerRun:
 
 
 class TestF5TargetMdeValidation:
-    """F5: SufficiencyConfig.target_mde must reject invalid overrides
-    (NaN, negative, >=1) at schema construction time.
+    """F5 (PR #462 hotfix round 1) + R2.2 (round 2): SufficiencyConfig.target_mde
+    must reject hard-invalid overrides (NaN, non-positive, absurdly large)
+    at schema construction time.
+
+    R2.2 dual-semantic contract: ``target_mde`` is now ``Field(gt=0.0, lt=1e6)``
+    (loosened from round-1's ``lt=1.0``) so that continuous-outcome raw
+    effect sizes — ``0.5 * sigma_outcome`` for ``sigma_outcome > 2.0`` —
+    don't get schema-rejected. The binary-outcome (0, 1) constraint is
+    re-asserted at the resolver layer (``resolve_target_mde``) which has
+    access to ``outcome_type`` and can apply the right bound.
     """
 
-    @pytest.mark.parametrize("bad_value", [-0.5, -0.01, 0.0, 1.0, 1.5, 5.0])
+    # Hard-invalid at schema layer: <= 0 or >= 1e6 (typo guard).
+    @pytest.mark.parametrize("bad_value", [-0.5, -0.01, 0.0, 1e6, 1e9])
     def test_out_of_bounds_target_mde_rejected(self, bad_value):
         with pytest.raises(ValidationError):
             SufficiencyConfig(target_mde=bad_value)
@@ -202,6 +211,19 @@ class TestF5TargetMdeValidation:
     def test_in_bounds_target_mde_accepted(self, good_value):
         cfg = SufficiencyConfig(target_mde=good_value)
         assert cfg.target_mde == good_value
+
+    # R2.2: continuous-outcome raw effect sizes — schema-accepted, but the
+    # resolver's outcome-type-aware guard rejects them for binary outcomes
+    # (covered in test_sufficiency_resolver.py).
+    @pytest.mark.parametrize("continuous_value", [1.0, 1.5, 2.0, 5.0, 100.0])
+    def test_continuous_outcome_raw_effect_size_accepted(self, continuous_value):
+        """R2.2: ``0.5 * sigma_outcome`` for sigma > 2 produces values >= 1.0
+        (raw effect size in outcome units, NOT Cohen's d). The schema must
+        accept these — the binary-shape (0, 1) constraint is enforced at the
+        resolver layer where outcome_type is known.
+        """
+        cfg = SufficiencyConfig(target_mde=continuous_value)
+        assert cfg.target_mde == continuous_value
 
 
 class TestF11SkippedVerdict:
