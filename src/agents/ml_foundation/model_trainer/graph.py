@@ -13,6 +13,7 @@ from .nodes import (
     enforce_splits,
     evaluate_model,
     fit_preprocessing,
+    learning_curve,
     load_splits,
     log_to_mlflow,
     save_checkpoint,
@@ -109,6 +110,9 @@ def create_model_trainer_graph() -> CompiledStateGraph:
           ↓
         evaluate_model (eval on train/val/test)
           ↓
+        learning_curve (PR #463 — Phase 2 data-sufficiency diagnostic;
+                        no-op if success_criteria_met=True)
+          ↓
         [Quality + leakage check?]
           ↓ POOR QUALITY (AUC<0.60 or precision<5%)
         quality_remediation (enhance regularization, max 2 attempts)
@@ -146,6 +150,10 @@ def create_model_trainer_graph() -> CompiledStateGraph:
     workflow.add_node("tune_hyperparameters", tune_hyperparameters)  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("train_model", train_model)  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("evaluate_model", evaluate_model)  # type: ignore[type-var,arg-type,call-overload]
+    # PR #463 Phase 2: post-training learning-curve diagnostic. The node
+    # itself short-circuits when ``success_criteria_met`` is True so the
+    # wiring is unconditional — keeping the graph topology simple.
+    workflow.add_node("learning_curve", learning_curve)  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("quality_remediation", diagnose_and_remediate_quality)  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("log_to_mlflow", log_to_mlflow)  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("save_checkpoint", save_checkpoint)  # type: ignore[type-var,arg-type,call-overload]
@@ -192,9 +200,13 @@ def create_model_trainer_graph() -> CompiledStateGraph:
     # Training → evaluation (always)
     workflow.add_edge("train_model", "evaluate_model")
 
-    # Evaluation → conditional (quality remediation or block on critical leakage)
+    # Evaluation → learning_curve (always; the node short-circuits internally
+    # when ``success_criteria_met`` is True so this edge is unconditional).
+    workflow.add_edge("evaluate_model", "learning_curve")
+
+    # Learning curve → conditional (quality remediation or block on critical leakage)
     workflow.add_conditional_edges(
-        "evaluate_model",
+        "learning_curve",
         _should_proceed_after_evaluation,
         {
             "quality_remediation": "quality_remediation",

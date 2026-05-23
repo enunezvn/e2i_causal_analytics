@@ -284,6 +284,20 @@ class ModelTrainerAgent:
             "repeated_mode_fold_invocation": bool(
                 input_data.get("repeated_mode_fold_invocation", False)
             ),
+            # PR #463 Phase 2: forward the scope_spec + always-run flag into
+            # graph state so the post-training ``learning_curve`` node can
+            # read ``scope_spec.success_criteria.min_auc`` / ``problem_type``
+            # / ``sufficiency`` without reaching back into the pipeline.
+            **(
+                {"scope_spec": input_data["scope_spec"]}
+                if input_data.get("scope_spec") is not None
+                else {}
+            ),
+            **(
+                {"always_run_learning_curve": bool(input_data["always_run_learning_curve"])}
+                if "always_run_learning_curve" in input_data
+                else {}
+            ),
         }
 
         # Execute LangGraph workflow with optional Opik tracing
@@ -427,6 +441,12 @@ class ModelTrainerAgent:
         test_metrics_at_optimal = final_state.get("test_metrics_at_optimal", {})
         test_metrics_at_05 = final_state.get("test_metrics_at_05", {})
 
+        # PR #463 Phase 2 — post-training learning-curve diagnostic. The
+        # ``learning_curve`` node populates this dict only when
+        # ``success_criteria_met is False``; otherwise it returns ``{}`` and
+        # the field remains None.
+        sufficiency_report = final_state.get("sufficiency_report")
+
         # Extract sample counts from shape tuples (shape is (n_samples, n_features))
         original_train_shape = final_state.get("original_train_shape")
         resampled_train_shape = final_state.get("resampled_train_shape")
@@ -555,6 +575,10 @@ class ModelTrainerAgent:
             "calibration_analysis": calibration_analysis,
             "calibrated_test_metrics": calibrated_test_metrics,
             "post_hoc_calibration": post_hoc_calibration,
+            # PR #463 Phase 2: post-training learning-curve diagnostic.
+            # None when the model met success_criteria; populated dict shaped
+            # like DataSufficiencyReport otherwise.
+            "sufficiency_report": sufficiency_report,
         }
 
         # Persist training run to database
