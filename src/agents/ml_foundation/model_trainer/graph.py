@@ -13,6 +13,7 @@ from .nodes import (
     enforce_splits,
     evaluate_model,
     fit_preprocessing,
+    learning_curve,
     load_splits,
     log_to_mlflow,
     save_checkpoint,
@@ -38,6 +39,29 @@ def _should_proceed_after_splits(state: Dict[str, Any]) -> str:
     if state.get("split_ratios_valid", False):
         return "detect_class_imbalance"
     return "end"
+
+
+def _should_run_learning_curve(state: Dict[str, Any]) -> str:
+    """F2: skip the 180s learning_curve diagnostic when it cannot help.
+
+    The diagnostic exists to answer "why didn't the model pass + how much
+    more data would close the gap." It is irrelevant when:
+
+    - ``state['error']`` is set (an upstream node failed; the downstream
+      conditional will route to END regardless of the diagnostic), or
+    - ``success_criteria_met is True`` AND no ``always_run_learning_curve``
+      override (the model passed; no gap to close).
+
+    Routing the no-op cases past ``learning_curve`` avoids the ~180s
+    walltime burn the diagnostic can take on slow proxy fits.
+    """
+    if state.get("error"):
+        return "post_evaluation"
+    if state.get("success_criteria_met") is True and not state.get(
+        "always_run_learning_curve", False
+    ):
+        return "post_evaluation"
+    return "learning_curve"
 
 
 def _should_proceed_after_evaluation(state: Dict[str, Any]) -> str:
@@ -68,6 +92,18 @@ def _should_proceed_after_evaluation(state: Dict[str, Any]) -> str:
             return "quality_remediation"
 
     return "log_to_mlflow"
+
+
+def _post_evaluation_passthrough(state: Dict[str, Any]) -> Dict[str, Any]:
+    """F2: no-op pass-through used when ``learning_curve`` is bypassed.
+
+    LangGraph requires every routed-to label to map to a real node. When
+    ``_should_run_learning_curve`` routes ``evaluate_model`` past the
+    diagnostic (error state or no gap to close), we still need a landing
+    node before the post-eval conditional. This node returns an empty patch
+    so state is preserved unchanged.
+    """
+    return {}
 
 
 def _route_after_quality_remediation(state: Dict[str, Any]) -> str:
@@ -109,6 +145,9 @@ def create_model_trainer_graph() -> CompiledStateGraph:
           ↓
         evaluate_model (eval on train/val/test)
           ↓
+        learning_curve (PR #463 — Phase 2 data-sufficiency diagnostic;
+                        no-op if success_criteria_met=True)
+          ↓
         [Quality + leakage check?]
           ↓ POOR QUALITY (AUC<0.60 or precision<5%)
         quality_remediation (enhance regularization, max 2 attempts)
@@ -146,6 +185,10 @@ def create_model_trainer_graph() -> CompiledStateGraph:
     workflow.add_node("tune_hyperparameters", tune_hyperparameters)  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("train_model", train_model)  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("evaluate_model", evaluate_model)  # type: ignore[type-var,arg-type,call-overload]
+    # PR #463 Phase 2: post-training learning-curve diagnostic. The node
+    # itself short-circuits when ``success_criteria_met`` is True so the
+    # wiring is unconditional — keeping the graph topology simple.
+    workflow.add_node("learning_curve", learning_curve)  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("quality_remediation", diagnose_and_remediate_quality)  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("log_to_mlflow", log_to_mlflow)  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("save_checkpoint", save_checkpoint)  # type: ignore[type-var,arg-type,call-overload]
@@ -192,9 +235,41 @@ def create_model_trainer_graph() -> CompiledStateGraph:
     # Training → evaluation (always)
     workflow.add_edge("train_model", "evaluate_model")
 
-    # Evaluation → conditional (quality remediation or block on critical leakage)
+    # F2: Evaluation → conditional. Route to ``learning_curve`` only when
+    # the diagnostic has something to compute (model failed AND no upstream
+    # error). On error or pass-without-override, skip straight to the
+    # post-evaluation conditional so we don't burn 180s on a doomed run.
     workflow.add_conditional_edges(
         "evaluate_model",
+        _should_run_learning_curve,
+        {
+            "learning_curve": "learning_curve",
+            # Synthetic node name: bypass routes directly to the same
+            # post-evaluation decision so behavior matches what would have
+            # happened had ``learning_curve`` returned ``{}``.
+            "post_evaluation": "post_evaluation",
+        },
+    )
+
+    # post_evaluation is a no-op pass-through node — it exists so the
+    # bypass edge has a target that itself routes via the existing
+    # ``_should_proceed_after_evaluation`` conditional. Defining it inline
+    # as a lambda is not possible (LangGraph nodes must be hashable),
+    # so we use a real function below.
+    workflow.add_node("post_evaluation", _post_evaluation_passthrough)  # type: ignore[type-var,arg-type,call-overload]
+
+    # Both learning_curve and the bypass node feed the post-eval conditional.
+    workflow.add_conditional_edges(
+        "learning_curve",
+        _should_proceed_after_evaluation,
+        {
+            "quality_remediation": "quality_remediation",
+            "log_to_mlflow": "log_to_mlflow",
+            "end": END,
+        },
+    )
+    workflow.add_conditional_edges(
+        "post_evaluation",
         _should_proceed_after_evaluation,
         {
             "quality_remediation": "quality_remediation",

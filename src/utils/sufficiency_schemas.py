@@ -114,11 +114,22 @@ class DataSufficiencyReport(BaseModel):
     extrapolated_n_for_target: int | None = None
     extrapolated_n_ci: tuple[int, int] | None = None
     fit_quality_r2: float | None = None
+    # PR #463 R2.5 / R2.7: the learning-curve node sets ``fit_trustworthy``
+    # whenever the power-law fit's R² exceeds the gate (and to ``False``
+    # explicitly on every non-success branch — walltime cap, all-failures,
+    # partial-failure). Without this field declared in the schema,
+    # ``extra="forbid"`` would reject the runtime dict produced by the node.
+    fit_trustworthy: bool | None = None
     recommended_additional_samples: int | None = None
 
     # Causal-specific (populated by Phase 2 causal branch only)
     ate_ci_width_curve: list[tuple[int, float]] | None = None
     ate_target_ci_width: float | None = None
+    # PR #463 R2.5: the causal branch of the learning-curve node infers an
+    # outcome type from ``y_train`` (binary {0,1} vs. continuous) and
+    # surfaces it so downstream consumers know which causal estimand the
+    # diagnostic used. Schema-declared here to keep ``extra="forbid"``.
+    outcome_type: Literal["binary", "continuous", "time_to_event", "unknown"] | None = None
 
     # Operational
     diagnostic_runtime_s: float | None = None

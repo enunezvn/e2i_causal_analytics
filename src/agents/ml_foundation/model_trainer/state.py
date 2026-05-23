@@ -349,6 +349,27 @@ class ModelTrainerState(BaseAgentSchema):
     success_criteria_met: Optional[bool] = None
     success_criteria_results: Optional[Dict[str, bool]] = None  # Metric -> passed/failed
 
+    # PR #463 Phase 2 — post-training learning-curve diagnostic.
+    # Populated by the ``learning_curve`` node when
+    # ``success_criteria_met is False``; remains None when the model passed
+    # (the diagnostic is a no-op). Shape matches
+    # ``src.utils.sufficiency_schemas.DataSufficiencyReport`` (dict form so
+    # it round-trips through LangGraph channels without pydantic-validation
+    # cost on every node coercion).
+    sufficiency_report: Optional[Dict[str, Any]] = None
+
+    # PR #463 Phase 2 — forwarded from ScopeDefiner via the pipeline so the
+    # ``learning_curve`` node can resolve target metrics
+    # (``scope_spec.success_criteria.min_auc``) and sufficiency overrides
+    # (``scope_spec.sufficiency.target_mde``) without round-tripping through
+    # the pipeline result.
+    scope_spec: Optional[Dict[str, Any]] = None
+
+    # PR #463 Phase 2 — opt-in flag forcing the learning-curve diagnostic to
+    # run even when ``success_criteria_met`` is True. Default None ≡ False so
+    # the node short-circuits on pass as documented in its docstring.
+    always_run_learning_curve: Optional[bool] = None
+
     # === OUTPUT FIELDS ===
     # Trained Model
     training_run_id: Optional[str] = None

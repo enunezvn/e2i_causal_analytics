@@ -5,6 +5,7 @@ from .checkpointer import list_checkpoints, load_checkpoint, save_checkpoint
 from .detect_class_imbalance import detect_class_imbalance
 from .evaluator import evaluate_model
 from .hyperparameter_tuner import tune_hyperparameters
+from .learning_curve import learning_curve
 from .mlflow_logger import log_to_mlflow
 from .model_trainer_node import train_model
 from .preprocessor import fit_preprocessing
@@ -31,6 +32,7 @@ __all__ = [
     "fit_cox",
     "fit_preprocessing",
     "fit_rsf",
+    "learning_curve",
     "load_checkpoint",
     "list_checkpoints",
     "load_splits",

@@ -58,6 +58,15 @@ class PipelineConfig:
     hpo_timeout_hours: Optional[float] = None
     early_stopping: bool = False
 
+    # PR #463 Phase 2 — opt-in flag forcing the post-training learning-curve
+    # diagnostic to run EVEN WHEN the model passes ``success_criteria_met``.
+    # Default False (cost control) — the diagnostic is a 7-bucket cheap proxy
+    # fit + power-law extrapolation that runs only on failure cases by
+    # default. Setting True flips the gate inside ``learning_curve`` so the
+    # full report is produced unconditionally; useful for offline audits or
+    # paper-replication runs.
+    always_run_learning_curve: bool = False
+
     # Model selection
     interpretability_required: bool = False
     skip_benchmarks: bool = True
@@ -123,6 +132,17 @@ class PipelineResult:
     feature_freshness: Optional[Dict[str, Any]] = None
     feature_refs_used: Optional[List[str]] = None
     feast_enabled: bool = False
+
+    # PR #463 Phase 2 — post-training learning-curve diagnostic emitted by
+    # ModelTrainer's ``learning_curve`` node. Shape:
+    # ``src.utils.sufficiency_schemas.DataSufficiencyReport``-dict. None when
+    # the model met success_criteria (the diagnostic is a no-op) AND the
+    # caller didn't set ``PipelineConfig.always_run_learning_curve``.
+    # Standalone field rather than a key on a unified ``sufficiency_report``
+    # because PR #462 (pre-flight DataPreparer sufficiency check) has not
+    # landed on main yet — when it does, this field will be merged into the
+    # unified report dict downstream of the merge.
+    training_sufficiency_report: Optional[Dict[str, Any]] = None
 
     # Metadata
     stages_completed: List[str] = field(default_factory=list)
@@ -870,6 +890,14 @@ class MLFoundationPipeline:
             # Feast feature references for reproducibility
             "feature_refs": result.feature_refs_used,
             "feast_enabled": result.feast_enabled,
+            # PR #463 Phase 2: forward the always-run flag into model_trainer
+            # state so the ``learning_curve`` node sees it regardless of the
+            # success-criteria gate. The node default is "run only on failure".
+            "always_run_learning_curve": self.config.always_run_learning_curve,
+            # Forward the scope_spec so the learning_curve node can read
+            # ``problem_type`` / ``success_criteria.min_auc`` / ``sufficiency``
+            # without having to reconstruct them from flattened state.
+            "scope_spec": result.scope_spec,
             # D1.1: thread workflow-level audit_workflow_id (see scope_input).
             "audit_workflow_id": result.audit_workflow_id,
         }
@@ -880,6 +908,13 @@ class MLFoundationPipeline:
 
         # Store outputs
         result.training_result = trainer_output
+
+        # PR #463 Phase 2: surface the learning-curve diagnostic at the
+        # pipeline-level result so downstream consumers (audit chain, UI,
+        # export) don't have to reach into ``training_result``. When the
+        # model passed success_criteria AND ``always_run_learning_curve`` is
+        # False, this stays None — consistent with the node's short-circuit.
+        result.training_sufficiency_report = trainer_output.get("sufficiency_report")
 
         # Hop 4 of 4 (adaptive_criteria_v3_followup): propagate the
         # trainer's (possibly-overlaid) success_criteria back onto
