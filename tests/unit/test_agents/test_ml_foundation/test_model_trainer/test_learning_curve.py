@@ -183,6 +183,7 @@ async def test_power_law_fit_quality() -> None:
 async def test_rising_curve_emits_recommendation() -> None:
     """When the slope at max n is significantly positive, emit a recommendation."""
     from src.agents.ml_foundation.model_trainer.nodes.learning_curve import (
+        _fit_power_law,
         _recommend_additional_samples,
     )
 
@@ -190,12 +191,20 @@ async def test_rising_curve_emits_recommendation() -> None:
     # Rising curve far below the target — extrapolation should be > current max.
     scores = 0.55 + 0.002 * ns
 
+    # F13: the recommender takes a pre-fitted dict; the caller fits.
+    fit = _fit_power_law(ns, scores)
+    assert fit is not None
+    # Force a generous R² for the gate (the linear scores will fit
+    # acceptably under a power-law with steep concavity; the test cares
+    # about the recommendation path, not the precise R²).
+    fit["r2"] = 0.99
+
     recommendation = _recommend_additional_samples(
-        ns=ns,
-        scores=scores,
+        fit=fit,
+        n_current=int(ns.max()),
         target_score=0.80,
         slope_pvalue=0.001,
-        fit_r2=0.99,
+        slope_sign=1.0,
     )
     assert recommendation is not None
     assert recommendation > 0
@@ -204,6 +213,7 @@ async def test_rising_curve_emits_recommendation() -> None:
 async def test_saturated_curve_no_recommendation() -> None:
     """A flat (saturated) curve must NOT emit a sample-count recommendation."""
     from src.agents.ml_foundation.model_trainer.nodes.learning_curve import (
+        _fit_power_law,
         _recommend_additional_samples,
     )
 
@@ -211,12 +221,14 @@ async def test_saturated_curve_no_recommendation() -> None:
     # Flat near target — slope ~0 ⇒ p-value high ⇒ no recommendation.
     scores = np.full_like(ns, 0.78)
 
+    fit = _fit_power_law(ns, scores) or {"a": 0.78, "b": 0.0, "c": 0.5, "r2": 0.10}
+
     recommendation = _recommend_additional_samples(
-        ns=ns,
-        scores=scores,
+        fit=fit,
+        n_current=int(ns.max()),
         target_score=0.80,
         slope_pvalue=0.90,
-        fit_r2=0.10,
+        slope_sign=0.0,
     )
     assert recommendation is None
 
@@ -304,3 +316,433 @@ async def test_audit_runtime_recorded() -> None:
     runtime = result["sufficiency_report"]["diagnostic_runtime_s"]
     assert runtime is not None
     assert runtime > 0.0
+
+
+# ---------------------------------------------------------------------------
+# Additional tests for the 15 codex findings (F1..F15)
+# ---------------------------------------------------------------------------
+
+
+async def test_f4_curve_fit_with_near_one_scores() -> None:
+    """F4: ``p0[0]`` must clamp to a valid bound when scores cluster near 1.0.
+
+    Pre-fix: ``p0[0] = max(0.97, 0.5) + 0.05 = 1.02`` is outside
+    ``bounds=[0,1]`` and ``curve_fit`` raises immediately.
+    """
+    from src.agents.ml_foundation.model_trainer.nodes.learning_curve import (
+        _fit_power_law,
+    )
+
+    ns = np.array([20, 40, 60, 80, 100, 120, 140], dtype=float)
+    # Max score = 0.97 — without the clamp, p0[0] = 1.02 > bound 1.0.
+    scores = 0.97 - 0.10 * np.power(ns, -0.6)
+    fit = _fit_power_law(ns, scores)
+    assert fit is not None
+    assert 0.0 <= fit["a"] <= 1.0
+    assert fit["r2"] > 0.5  # generous gate — the point is it FITS at all
+
+
+async def test_f5_unbounded_n_star_capped() -> None:
+    """F5: _invert_power_law_for_n must return None when n_star explodes."""
+    from src.agents.ml_foundation.model_trainer.nodes.learning_curve import (
+        _MAX_RECOMMENDED_N,
+        _invert_power_law_for_n,
+    )
+
+    # Pathological: c tiny + small (a - target) ⇒ huge n_star.
+    # n = ((a - target) / b) ** (-1/c)
+    # = (0.01 / 1.0) ** (-1/0.01) = 100 ** 100 = 10^200
+    fit = {"a": 0.81, "b": 1.0, "c": 0.01, "r2": 0.99}
+    result = _invert_power_law_for_n(fit, target_score=0.80)
+    assert result is None
+    # Sanity: a fit with reasonable c does return a number under the cap.
+    fit_ok = {"a": 0.90, "b": 0.5, "c": 0.5, "r2": 0.99}
+    result_ok = _invert_power_law_for_n(fit_ok, target_score=0.80)
+    assert result_ok is not None
+    assert result_ok <= _MAX_RECOMMENDED_N
+
+
+async def test_f6_decreasing_curve_no_recommendation() -> None:
+    """F6: a falling curve with significant p-value yields no recommendation.
+
+    Two-sided p-value alone cannot distinguish "still rising" from
+    "trending downward". The recommender must inspect slope sign.
+    """
+    from src.agents.ml_foundation.model_trainer.nodes.learning_curve import (
+        _recommend_additional_samples,
+    )
+
+    fit = {"a": 0.75, "b": 0.5, "c": 0.5, "r2": 0.95}
+    rec = _recommend_additional_samples(
+        fit=fit,
+        n_current=140,
+        target_score=0.80,
+        slope_pvalue=0.001,  # significant
+        slope_sign=-0.05,  # but negative
+    )
+    assert rec is None, "decreasing curve must NOT emit a sample-count recommendation"
+
+
+async def test_f6_decreasing_curve_emits_hard_fail() -> None:
+    """F6: predictive verdict for a falling curve must be HARD_FAIL."""
+    from src.agents.ml_foundation.model_trainer.nodes.learning_curve import (
+        _verdict_predictive,
+    )
+
+    verdict, rationale = _verdict_predictive(
+        recommended=None,
+        slope_pvalue=0.001,
+        slope_sign=-0.05,
+        fit={"a": 0.75, "b": 0.5, "c": 0.5, "r2": 0.95},
+        fit_r2=0.95,
+        target_score=0.80,
+    )
+    assert verdict == "HARD_FAIL"
+    assert "downward" in rationale.lower() or "trending" in rationale.lower()
+
+
+async def test_f8_causal_binary_outcome_detected() -> None:
+    """F8: causal branch infers binary outcome from 2-unique y_train.
+
+    The detected outcome_type must be surfaced in the report so downstream
+    consumers know which estimand the diagnostic used.
+    """
+    from src.agents.ml_foundation.model_trainer.nodes.learning_curve import (
+        learning_curve,
+    )
+
+    rng = np.random.default_rng(_SEED)
+    X_train = pd.DataFrame(
+        rng.normal(size=(_N_TRAIN, _N_FEATURES)),
+        columns=[f"f{i}" for i in range(_N_FEATURES)],
+    )
+    treatment = rng.integers(0, 2, size=_N_TRAIN)
+    # Binary outcome (e.g. survival flag).
+    outcome = rng.integers(0, 2, size=_N_TRAIN)
+    X_train["treatment"] = treatment
+    y_train = pd.Series(outcome, name="y")
+
+    state: dict[str, Any] = {
+        "success_criteria_met": False,
+        "problem_type": "causal_inference",
+        "train_data": {"X": X_train, "y": y_train, "row_count": len(X_train)},
+        # No validation_data — F10 covers this.
+        "scope_spec": {
+            "problem_type": "causal_inference",
+            "sufficiency": {"target_mde": 0.3},
+        },
+    }
+    result = await learning_curve(state)
+    report = result["sufficiency_report"]
+    assert report["outcome_type"] == "binary"
+
+
+async def test_f9_treatment_column_t_not_auto_resolved() -> None:
+    """F9: bare 't' is too ambiguous; must NOT auto-resolve as treatment."""
+    from src.agents.ml_foundation.model_trainer.nodes.learning_curve import (
+        _resolve_treatment_column,
+    )
+
+    X = pd.DataFrame({"t": [0, 1, 0, 1], "x1": [1.0, 2.0, 3.0, 4.0]})
+    # Scope spec does NOT declare a treatment column.
+    state: dict[str, Any] = {"scope_spec": {"problem_type": "causal_inference"}}
+    col = _resolve_treatment_column(state, X)
+    assert col is None, "'t' must not be auto-picked as the treatment column"
+
+
+async def test_f9_treatment_column_explicit_t_works() -> None:
+    """F9: explicit scope_spec.treatment_column='t' is honored."""
+    from src.agents.ml_foundation.model_trainer.nodes.learning_curve import (
+        _resolve_treatment_column,
+    )
+
+    X = pd.DataFrame({"t": [0, 1, 0, 1], "x1": [1.0, 2.0, 3.0, 4.0]})
+    state: dict[str, Any] = {
+        "scope_spec": {"problem_type": "causal_inference", "treatment_column": "t"}
+    }
+    assert _resolve_treatment_column(state, X) == "t"
+
+
+async def test_f9_normalize_treatment_rejects_three_level() -> None:
+    """F9: a 3-level treatment must be rejected (returns INCONCLUSIVE)."""
+    from src.agents.ml_foundation.model_trainer.nodes.learning_curve import (
+        _normalize_treatment_series,
+    )
+
+    s = pd.Series([0, 1, 2, 0, 1, 2])
+    assert _normalize_treatment_series(s) is None
+
+
+async def test_f9_normalize_treatment_handles_bool() -> None:
+    """F9: a boolean treatment is normalized to {0, 1}."""
+    from src.agents.ml_foundation.model_trainer.nodes.learning_curve import (
+        _normalize_treatment_series,
+    )
+
+    s = pd.Series([True, False, True, False])
+    out = _normalize_treatment_series(s)
+    assert out is not None
+    assert set(out.unique().tolist()) == {0, 1}
+
+
+async def test_f11_asymptote_below_target_emits_hard_fail() -> None:
+    """F11: trustworthy fit with asymptote < target is HARD_FAIL, not INCONCLUSIVE."""
+    from src.agents.ml_foundation.model_trainer.nodes.learning_curve import (
+        _verdict_predictive,
+    )
+
+    # Fit succeeded, R² > 0.8, but a < target_score.
+    verdict, rationale = _verdict_predictive(
+        recommended=None,
+        slope_pvalue=0.20,  # not significant
+        slope_sign=0.001,  # near zero
+        fit={"a": 0.70, "b": 0.30, "c": 0.5, "r2": 0.95},
+        fit_r2=0.95,
+        target_score=0.85,
+    )
+    assert verdict == "HARD_FAIL"
+    assert "asymptote" in rationale.lower()
+    assert "0.700" in rationale or "0.70" in rationale
+
+
+async def test_f11_no_target_emits_distinct_inconclusive() -> None:
+    """F11: no target_score → INCONCLUSIVE with a target-specific rationale."""
+    from src.agents.ml_foundation.model_trainer.nodes.learning_curve import (
+        _verdict_predictive,
+    )
+
+    verdict, rationale = _verdict_predictive(
+        recommended=None,
+        slope_pvalue=0.001,  # significant rise (but no target to compare)
+        slope_sign=0.01,
+        fit={"a": 0.90, "b": 0.30, "c": 0.5, "r2": 0.95},
+        fit_r2=0.95,
+        target_score=None,
+    )
+    assert verdict == "INCONCLUSIVE"
+    assert "target" in rationale.lower()
+
+
+async def test_f12_pydantic_success_criteria_extracted() -> None:
+    """F12: ``_extract_target_score`` must handle ``SuccessCriteriaSchema`` instances.
+
+    Pre-fix the isinstance(legacy, dict) gate dropped pydantic instances on
+    the floor — the function silently returned None even though the schema
+    carried a usable ``minimum_auc``.
+    """
+    from src.agents.ml_foundation.model_trainer.nodes.learning_curve import (
+        _extract_target_score,
+    )
+    from src.agents.ml_foundation.scope_definer.schemas import (
+        SuccessCriteriaSchema,
+    )
+
+    sc = SuccessCriteriaSchema(minimum_auc=0.85)
+    state: dict[str, Any] = {"success_criteria": sc}
+    assert _extract_target_score(state) == 0.85
+
+
+async def test_f12_bool_value_not_accepted_as_target() -> None:
+    """F12: a boolean in min_auc must NOT be coerced to 1.0."""
+    from src.agents.ml_foundation.model_trainer.nodes.learning_curve import (
+        _extract_target_score,
+    )
+
+    state: dict[str, Any] = {
+        "scope_spec": {"success_criteria": {"min_auc": True, "minimum_auc": 0.75}}
+    }
+    # The True value must be rejected; the legitimate float must be returned.
+    assert _extract_target_score(state) == 0.75
+
+
+async def test_f15_bucket_sizes_refuses_to_pad() -> None:
+    """F15: ``_bucket_sizes`` must NOT pad to k with duplicates of n_total.
+
+    Pre-fix the loop appended ``n_total`` until len(sizes)==k. Post-fix the
+    function returns however many unique buckets it found (capped at k),
+    and the caller decides whether to short-circuit on <3 unique.
+    """
+    from src.agents.ml_foundation.model_trainer.nodes.learning_curve import (
+        _bucket_sizes,
+    )
+
+    # n=4: linspace(2,4,7) rounds to {2,3,4} = 3 unique. Pre-fix would
+    # pad to 7 entries (3 originals + 4 duplicates of 4). Post-fix
+    # returns exactly the 3 unique sizes.
+    sizes = _bucket_sizes(4, k=7)
+    assert len(sizes) == len(set(sizes)), "buckets must be unique (no duplicates)"
+    assert sizes == sorted(sizes)
+
+
+async def test_f15_lt_three_buckets_emits_inconclusive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F15: when _bucket_sizes yields < 3 unique sizes, verdict is INCONCLUSIVE.
+
+    Realistically the bucket-size logic with n >= 4 always produces >= 3
+    unique buckets, so we monkeypatch ``_bucket_sizes`` to simulate the
+    pathological case (e.g. when a future caller passes k=1 or asks for a
+    degenerate range).
+    """
+    import importlib
+
+    mod = importlib.import_module("src.agents.ml_foundation.model_trainer.nodes.learning_curve")
+    # Return a single-bucket list — fewer than the minimum 3 unique sizes.
+    monkeypatch.setattr(mod, "_bucket_sizes", lambda *_a, **_k: [50])
+
+    state = _make_binary_state(success_met=False)
+    result = await mod.learning_curve(state)
+    report = result["sufficiency_report"]
+    assert report["verdict"] == "INCONCLUSIVE"
+    rationale = report["verdict_rationale"].lower()
+    # F15 rationale must mention the data-range / bucket issue.
+    assert "insufficient" in rationale or "data range" in rationale or "buckets" in rationale
+
+
+async def test_f1_failed_fits_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """F1: when a bucket's proxy fit fails, the bucket is omitted, not crashed."""
+    import importlib
+
+    mod = importlib.import_module("src.agents.ml_foundation.model_trainer.nodes.learning_curve")
+
+    # Fail every other bucket, succeed on the rest.
+    call_count: dict[str, int] = {"i": 0}
+
+    def _flaky_fit(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        call_count["i"] += 1
+        if call_count["i"] % 2 == 0:
+            return {"score_mean": float("nan"), "score_std": float("nan")}
+        return {"score_mean": 0.70 + 0.005 * call_count["i"], "score_std": 0.0}
+
+    monkeypatch.setattr(mod, "_fit_proxy_on_bucket", _flaky_fit)
+
+    state = _make_binary_state(success_met=False)
+    result = await mod.learning_curve(state)
+    report = result["sufficiency_report"]
+    # Some buckets succeeded ⇒ curve is non-empty but shorter than 7.
+    assert report["learning_curve"] is not None
+    assert 1 <= len(report["learning_curve"]) < 7
+
+
+async def test_f1_all_fits_failed_emits_inconclusive(monkeypatch: pytest.MonkeyPatch) -> None:
+    """F1: when every bucket fails, the verdict is INCONCLUSIVE with a fit-error rationale."""
+    import importlib
+
+    mod = importlib.import_module("src.agents.ml_foundation.model_trainer.nodes.learning_curve")
+
+    def _always_fail(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {"score_mean": float("nan"), "score_std": float("nan")}
+
+    monkeypatch.setattr(mod, "_fit_proxy_on_bucket", _always_fail)
+
+    state = _make_binary_state(success_met=False)
+    result = await mod.learning_curve(state)
+    report = result["sufficiency_report"]
+    assert report["verdict"] == "INCONCLUSIVE"
+    rationale = report["verdict_rationale"].lower()
+    assert "fit" in rationale or "proxy" in rationale or "fail" in rationale
+
+
+async def test_f2_error_state_short_circuits() -> None:
+    """F2: state['error'] short-circuits the diagnostic entirely."""
+    from src.agents.ml_foundation.model_trainer.nodes.learning_curve import (
+        learning_curve,
+    )
+
+    state = _make_binary_state(success_met=False)
+    state["error"] = "upstream node failed"
+    result = await learning_curve(state)
+    assert result == {}
+
+
+async def test_f2_graph_routes_around_learning_curve_on_error() -> None:
+    """F2: the graph-level conditional edge skips learning_curve when error is set."""
+    from src.agents.ml_foundation.model_trainer.graph import (
+        _should_run_learning_curve,
+    )
+
+    # No error + criteria not met ⇒ run the diagnostic.
+    assert _should_run_learning_curve({"success_criteria_met": False}) == "learning_curve"
+    # Error set ⇒ skip to post_evaluation.
+    assert (
+        _should_run_learning_curve({"success_criteria_met": False, "error": "boom"})
+        == "post_evaluation"
+    )
+    # Criteria met ⇒ skip to post_evaluation.
+    assert _should_run_learning_curve({"success_criteria_met": True}) == "post_evaluation"
+    # Criteria met + always_run override ⇒ run the diagnostic.
+    assert (
+        _should_run_learning_curve(
+            {"success_criteria_met": True, "always_run_learning_curve": True}
+        )
+        == "learning_curve"
+    )
+
+
+async def test_f3_async_wait_for_can_interrupt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """F3: ``asyncio.wait_for`` cancels a slow learning_curve coroutine.
+
+    The synchronous fit runs in ``asyncio.to_thread`` so the event loop
+    stays responsive. ``wait_for`` cancels the awaiting coroutine; the
+    underlying thread may keep running but its result is discarded.
+
+    The test uses a single short sleep per bucket and asserts that
+    ``wait_for(timeout=0.2)`` raises within ~1s — well below the 30s
+    pytest-timeout. The slow thread terminates naturally before the test
+    finishes (each sleep is bounded at 0.3s), so worker cleanup is
+    deterministic.
+    """
+    import asyncio
+    import importlib
+
+    mod = importlib.import_module("src.agents.ml_foundation.model_trainer.nodes.learning_curve")
+
+    # 0.3s per bucket — long enough that wait_for(0.2) cancels before the
+    # first bucket completes, short enough that the thread terminates
+    # well within the 30s pytest timeout.
+    def _slow_fit(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        time.sleep(0.3)
+        return {"score_mean": 0.70, "score_std": 0.0}
+
+    monkeypatch.setattr(mod, "_fit_proxy_on_bucket", _slow_fit)
+    # Bound the total walltime cap to a small value as a second-line guard
+    # in case wait_for doesn't behave as expected — the diagnostic returns
+    # INCONCLUSIVE rather than running for 180s.
+    monkeypatch.setattr(mod, "_WALLTIME_CAP_S", 0.5)
+
+    state = _make_binary_state(success_met=False)
+    t0 = time.monotonic()
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(mod.learning_curve(state), timeout=0.2)
+    elapsed_to_cancel = time.monotonic() - t0
+    # The cancellation must fire well before the 0.3 × 7 = 2.1s the full
+    # bucket loop would take (proving wait_for is interrupting, not just
+    # observing natural completion).
+    assert elapsed_to_cancel < 1.5
+
+
+async def test_f14_extrapolation_gated_on_fit_quality(monkeypatch: pytest.MonkeyPatch) -> None:
+    """F14: ``extrapolated_n_for_target`` is None when fit_r2 ≤ gate."""
+    import importlib
+
+    mod = importlib.import_module("src.agents.ml_foundation.model_trainer.nodes.learning_curve")
+
+    real_fit = mod._fit_power_law
+
+    def _bad_fit_r2(*args: Any, **kwargs: Any) -> dict[str, float] | None:
+        result = real_fit(*args, **kwargs)
+        if result is None:
+            return None
+        # Force R² below the gate so the extrapolation MUST be suppressed.
+        result["r2"] = 0.10
+        return result
+
+    monkeypatch.setattr(mod, "_fit_power_law", _bad_fit_r2)
+
+    state = _make_binary_state(success_met=False)
+    result = await mod.learning_curve(state)
+    report = result["sufficiency_report"]
+    # Gated fields must be unset (or marked untrustworthy).
+    assert report["extrapolated_n_for_target"] is None
+    assert report["extrapolated_n_ci"] is None
+    assert report["fit_trustworthy"] is False
