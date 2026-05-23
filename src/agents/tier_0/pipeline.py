@@ -67,6 +67,19 @@ class PipelineConfig:
     skip_leakage_check: bool = False
     use_sample_data: bool = False
 
+    # Data-sufficiency pre-flight (Phase 1).
+    # ``force_low_power_run`` downgrades blocking SOFT_FAIL verdicts to
+    # warnings on the causal_inference path. Safe-by-default (False) to
+    # avoid silently producing low-power effect estimates in pharma
+    # regulatory contexts. ``sufficiency_strictness_preset`` toggles
+    # ``conservative``/``moderate``/``strict`` multipliers on the
+    # EPV/regression-ratio thresholds (see sufficiency_defaults.py).
+    # When set, both flags propagate into ``scope_spec.sufficiency``
+    # so the sufficiency_check node sees them via the resolver
+    # hierarchy without a new state-injection path.
+    force_low_power_run: bool = False
+    sufficiency_strictness_preset: Optional[str] = None
+
     # Feast Feature Store
     enable_feast: bool = True
     feast_feature_refs: Optional[List[str]] = None  # Feature refs to use
@@ -100,6 +113,7 @@ class PipelineResult:
     success_criteria: Optional[Dict[str, Any]] = None
     qc_report: Optional[Dict[str, Any]] = None
     baseline_metrics: Optional[Dict[str, Any]] = None
+    sufficiency_report: Optional[Dict[str, Any]] = None  # Phase 1 pre-flight verdict
     model_candidate: Optional[Dict[str, Any]] = None
     training_result: Optional[Dict[str, Any]] = None
     shap_analysis: Optional[Dict[str, Any]] = None
@@ -645,6 +659,20 @@ class MLFoundationPipeline:
             data_prep_input["scope_spec"]["use_sample_data"] = True
             data_prep_input["scope_spec"]["sample_size"] = input_data.get("sample_size", 1000)
 
+        # Phase 1 data-sufficiency: propagate pipeline-level overrides into
+        # scope_spec.sufficiency so the sufficiency_check node sees them via
+        # the standard resolver hierarchy. We merge (not overwrite) so a
+        # caller-provided scope_spec.sufficiency wins on a per-key basis.
+        if self.config.force_low_power_run or self.config.sufficiency_strictness_preset:
+            existing = data_prep_input["scope_spec"].get("sufficiency") or {}
+            if not isinstance(existing, dict):
+                existing = {}
+            if self.config.force_low_power_run and "force_low_power_run" not in existing:
+                existing["force_low_power_run"] = True
+            if self.config.sufficiency_strictness_preset and "strictness_preset" not in existing:
+                existing["strictness_preset"] = self.config.sufficiency_strictness_preset
+            data_prep_input["scope_spec"]["sufficiency"] = existing
+
         # Execute data_preparer
         data_preparer = self._get_agent("data_preparer")
         try:
@@ -663,6 +691,10 @@ class MLFoundationPipeline:
         # Store outputs
         result.qc_report = data_output.get("qc_report", {})
         result.baseline_metrics = data_output.get("baseline_metrics", {})
+        # Phase 1 data-sufficiency: pre-flight verdict + thresholds + MDE
+        # report attached to PipelineResult for downstream consumers /
+        # audit-chain inspection.
+        result.sufficiency_report = data_output.get("sufficiency_report")
 
         # Check QC gate
         gate_passed = data_output.get("gate_passed", False)

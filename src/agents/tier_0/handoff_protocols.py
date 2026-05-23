@@ -440,6 +440,18 @@ def validate_scope_to_data_handoff(data: Dict[str, Any]) -> tuple:
         if scope_spec.get("problem_type") not in valid_problem_types:
             errors.append(f"Invalid problem_type: {scope_spec.get('problem_type')}")
 
+        # Enforce the validation rule declared at line 314: the rule was
+        # listed in SCOPE_TO_DATA_PROTOCOL.validation_rules since the
+        # contract was first authored but was never actually checked. The
+        # ScopeBuilder now produces an advisory ``minimum_samples``
+        # estimate which still must be a positive integer; values of 0,
+        # negative, or unset indicate a broken scope handoff.
+        minimum_samples = scope_spec.get("minimum_samples")
+        if minimum_samples is not None and (
+            not isinstance(minimum_samples, int) or minimum_samples <= 0
+        ):
+            errors.append(f"scope_spec.minimum_samples must be > 0 (got {minimum_samples!r})")
+
     return len(errors) == 0, errors
 
 

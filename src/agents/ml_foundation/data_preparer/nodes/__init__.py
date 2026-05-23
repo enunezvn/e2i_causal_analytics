@@ -15,6 +15,7 @@ from .qc_remediation import review_and_remediate_qc
 from .quality_checker import run_quality_checks
 from .sampling_frame_audit import audit_sampling_frame
 from .schema_validator import run_schema_validation
+from .sufficiency_check import run_sufficiency_check
 
 __all__ = [
     "load_data",
@@ -34,4 +35,5 @@ __all__ = [
     "review_and_remediate_qc",
     "compute_imputation_audit",
     "summarize_recommendations",
+    "run_sufficiency_check",
 ]
