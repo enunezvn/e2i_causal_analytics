@@ -65,22 +65,16 @@ class TestContinuousOutcomePower:
 
 class TestBinaryOutcomePower:
     def test_returns_positive_sample_size(self):
-        result = binary_outcome_power(
-            effect_size=0.20, alpha=0.05, power=0.80, baseline_rate=0.30
-        )
+        result = binary_outcome_power(effect_size=0.20, alpha=0.05, power=0.80, baseline_rate=0.30)
         assert result.sample_size > 0
 
     def test_effect_size_type_is_rate_ratio(self):
-        result = binary_outcome_power(
-            effect_size=0.20, alpha=0.05, power=0.80, baseline_rate=0.30
-        )
+        result = binary_outcome_power(effect_size=0.20, alpha=0.05, power=0.80, baseline_rate=0.30)
         assert result.effect_size_type == "rate_ratio"
 
     def test_mde_is_absolute_difference(self):
         # effect_size=0.20 with baseline 0.30 means p2=0.36, |p2-p1|=0.06
-        result = binary_outcome_power(
-            effect_size=0.20, alpha=0.05, power=0.80, baseline_rate=0.30
-        )
+        result = binary_outcome_power(effect_size=0.20, alpha=0.05, power=0.80, baseline_rate=0.30)
         assert abs(result.mde - 0.06) < 1e-9
 
     def test_invalid_baseline_raises(self):
@@ -121,9 +115,7 @@ class TestClusterRCTPower:
 
 class TestTimeToEventPower:
     def test_returns_positive_sample_size(self):
-        result = time_to_event_power(
-            hazard_ratio=0.7, alpha=0.05, power=0.80, event_rate=0.5
-        )
+        result = time_to_event_power(hazard_ratio=0.7, alpha=0.05, power=0.80, event_rate=0.5)
         assert result.sample_size > 0
         assert result.extra["required_events"] > 0
 
@@ -186,7 +178,10 @@ class TestMDEForSampleSize:
     def test_unknown_outcome_type_raises(self):
         with pytest.raises(PowerCalculationError):
             mde_for_sample_size(
-                n=100, alpha=0.05, power=0.80, outcome_type="bogus"  # type: ignore[arg-type]
+                n=100,
+                alpha=0.05,
+                power=0.80,
+                outcome_type="bogus",  # type: ignore[arg-type]
             )
 
 
@@ -258,8 +253,6 @@ class TestSensitivityVariations:
         assert "90%" in result["power_variations"]
 
     def test_variation_records_change_from_base(self):
-        result = sensitivity_variations(
-            effect_size=0.3, alpha=0.05, power=0.80, base_n=200
-        )
+        result = sensitivity_variations(effect_size=0.3, alpha=0.05, power=0.80, base_n=200)
         for entry in result["effect_size_variations"].values():
             assert "change_from_base" in entry

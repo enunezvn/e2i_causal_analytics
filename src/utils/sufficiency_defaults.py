@@ -151,9 +151,7 @@ STRICTNESS_MULTIPLIERS: dict[str, float] = {
 # Used by the audit chain to attach citations to each threshold resolution.
 # ---------------------------------------------------------------------------
 CITATIONS: dict[str, str] = {
-    "ABSOLUTE_FLOORS": (
-        "Vergouwe 2007 (severe-problems EPV<5 zone) + headroom for k-fold splits"
-    ),
+    "ABSOLUTE_FLOORS": ("Vergouwe 2007 (severe-problems EPV<5 zone) + headroom for k-fold splits"),
     "EPV_FLOORS.linear": "Vergouwe 2007 (EPV>=5 consensus floor)",
     "EPV_FLOORS.tree_based": "Riley 2020 / pmsampsize — tree-complexity penalty",
     "EPV_FLOORS.neural_network": "Riley 2020 + stepwise-selection-equivalent complexity",

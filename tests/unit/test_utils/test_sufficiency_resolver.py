@@ -30,9 +30,7 @@ from src.utils.sufficiency_resolver import (
 
 class TestResolveEpvFloor:
     def test_user_override_wins(self):
-        result = resolve_epv_floor(
-            user_config={"epv_floor": 42}, algorithm_family="linear"
-        )
+        result = resolve_epv_floor(user_config={"epv_floor": 42}, algorithm_family="linear")
         assert result.value == 42
         assert result.source == "user_override"
 
@@ -54,9 +52,8 @@ class TestResolveEpvFloor:
             user_config={"strictness_preset": "conservative"},
             algorithm_family="tree_based",
         )
-        assert (
-            conservative.value
-            == max(1, int(round(moderate.value * STRICTNESS_MULTIPLIERS["conservative"])))
+        assert conservative.value == max(
+            1, int(round(moderate.value * STRICTNESS_MULTIPLIERS["conservative"]))
         )
 
     def test_strictness_strict_doubles(self):
@@ -77,15 +74,11 @@ class TestResolveRegressionRatio:
         assert result.value == 5
 
     def test_tree_default(self):
-        result = resolve_regression_ratio(
-            user_config=None, algorithm_family="tree_based"
-        )
+        result = resolve_regression_ratio(user_config=None, algorithm_family="tree_based")
         assert result.value == 10
 
     def test_user_override_wins(self):
-        result = resolve_regression_ratio(
-            user_config={"epv_floor": 8}, algorithm_family="linear"
-        )
+        result = resolve_regression_ratio(user_config={"epv_floor": 8}, algorithm_family="linear")
         assert result.value == 8
         assert result.source == "user_override"
 
@@ -121,31 +114,23 @@ class TestResolveAbsoluteFloor:
         assert result.value == ABSOLUTE_FLOORS["binary_classification"]
 
     def test_literature_default_when_no_data(self):
-        result = resolve_absolute_floor(
-            user_config=None, problem_type="regression"
-        )
+        result = resolve_absolute_floor(user_config=None, problem_type="regression")
         assert result.value == ABSOLUTE_FLOORS["regression"]
         assert result.source == "literature_default"
 
     def test_unknown_problem_type_uses_safe_default(self):
-        result = resolve_absolute_floor(
-            user_config=None, problem_type="not_a_real_type"
-        )
+        result = resolve_absolute_floor(user_config=None, problem_type="not_a_real_type")
         assert result.value == 100  # safe fallback in code
 
 
 class TestResolveObservationalInflation:
     def test_user_override_wins(self):
-        result = resolve_observational_inflation(
-            user_config={"observational_inflation": 3.5}
-        )
+        result = resolve_observational_inflation(user_config={"observational_inflation": 3.5})
         assert result.value == 3.5
         assert result.source == "user_override"
 
     def test_computed_from_observed_overlap(self):
-        result = resolve_observational_inflation(
-            user_config=None, observed_overlap=0.5
-        )
+        result = resolve_observational_inflation(user_config=None, observed_overlap=0.5)
         assert result.value == 2.0  # 1 / 0.5
         assert result.source == "computed_from_data"
 
@@ -155,9 +140,7 @@ class TestResolveObservationalInflation:
         assert result.source == "literature_default"
 
     def test_invalid_overlap_falls_back(self):
-        result = resolve_observational_inflation(
-            user_config=None, observed_overlap=1.5
-        )
+        result = resolve_observational_inflation(user_config=None, observed_overlap=1.5)
         assert result.source == "literature_default"
 
 
@@ -172,9 +155,7 @@ class TestResolveTargetMde:
         assert result.source == "user_override"
 
     def test_continuous_data_driven(self):
-        result = resolve_target_mde(
-            user_config=None, outcome_type="continuous", sigma_outcome=2.0
-        )
+        result = resolve_target_mde(user_config=None, outcome_type="continuous", sigma_outcome=2.0)
         assert result.value == 1.0  # 0.5 * 2.0
         assert result.source == "computed_from_data"
 
@@ -185,17 +166,13 @@ class TestResolveTargetMde:
 
     def test_binary_floor_when_baseline_too_low(self):
         # baseline=0.10 → 0.20 * 0.10 = 0.02, below 0.05 floor → 0.05
-        result = resolve_target_mde(
-            user_config=None, outcome_type="binary", baseline_rate=0.10
-        )
+        result = resolve_target_mde(user_config=None, outcome_type="binary", baseline_rate=0.10)
         assert result.value == 0.05
         assert result.source == "computed_from_data"
 
     def test_binary_relative_when_baseline_high(self):
         # baseline=0.40 → 0.20 * 0.40 = 0.08, above 0.05 floor → 0.08
-        result = resolve_target_mde(
-            user_config=None, outcome_type="binary", baseline_rate=0.40
-        )
+        result = resolve_target_mde(user_config=None, outcome_type="binary", baseline_rate=0.40)
         assert abs(result.value - 0.08) < 1e-9
         assert result.source == "computed_from_data"
 
@@ -228,25 +205,19 @@ class TestResolveAlphaAndPower:
 
 class TestResolveTimeseriesMinN:
     def test_user_absolute_floor_override(self):
-        result = resolve_timeseries_min_n(
-            user_config={"absolute_floor": 500}, seasonal_period=12
-        )
+        result = resolve_timeseries_min_n(user_config={"absolute_floor": 500}, seasonal_period=12)
         assert result.value == 500
         assert result.source == "user_override"
 
     def test_hyndman_formula(self):
         # 2 cycles × 12 (monthly) × 1.0 noise + 0 features + 1 = 25
-        result = resolve_timeseries_min_n(
-            user_config=None, seasonal_period=12, n_features=0
-        )
+        result = resolve_timeseries_min_n(user_config=None, seasonal_period=12, n_features=0)
         # Should be max(literature_floor=100, 25) = 100
         assert result.value == max(100, 25)
 
     def test_high_seasonal_period_exceeds_floor(self):
         # 2 cycles × 52 (weekly) × 1.0 + 5 features + 1 = 110
-        result = resolve_timeseries_min_n(
-            user_config=None, seasonal_period=52, n_features=5
-        )
+        result = resolve_timeseries_min_n(user_config=None, seasonal_period=52, n_features=5)
         assert result.value == 110
 
     def test_noise_inflates_floor(self):
@@ -271,9 +242,7 @@ class TestAuditFields:
         assert len(result.citation) > 0
 
     def test_resolution_includes_inputs(self):
-        result = resolve_observational_inflation(
-            user_config=None, observed_overlap=0.5
-        )
+        result = resolve_observational_inflation(user_config=None, observed_overlap=0.5)
         assert "observed_overlap" in result.inputs
         assert result.inputs["observed_overlap"] == 0.5
 

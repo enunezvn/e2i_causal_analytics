@@ -70,8 +70,10 @@ class PowerAnalysisNode:
                     baseline_value = outcome.get("baseline_value")
                     break
 
-            effect_size = expected_effect if expected_effect is not None else constraints.get(
-                "expected_effect_size", self._default_effect_size
+            effect_size = (
+                expected_effect
+                if expected_effect is not None
+                else constraints.get("expected_effect_size", self._default_effect_size)
             )
             alpha = constraints.get("alpha", self._default_alpha)
             power_target = constraints.get("power", self._default_power)
@@ -81,23 +83,17 @@ class PowerAnalysisNode:
             if design_type_lower in ("cluster_rct", "cluster"):
                 icc = constraints.get("expected_icc", 0.05)
                 cluster_size = constraints.get("cluster_size", 20)
-                forward = cluster_rct_power(
-                    effect_size, alpha, power_target, icc, cluster_size
-                )
+                forward = cluster_rct_power(effect_size, alpha, power_target, icc, cluster_size)
             elif outcome_type == "binary":
                 baseline_rate = (
                     baseline_value
                     if baseline_value is not None
                     else constraints.get("baseline_rate", 0.3)
                 )
-                forward = binary_outcome_power(
-                    effect_size, alpha, power_target, baseline_rate
-                )
+                forward = binary_outcome_power(effect_size, alpha, power_target, baseline_rate)
             elif outcome_type == "time_to_event":
                 event_rate = constraints.get("event_rate", 0.5)
-                forward = time_to_event_power(
-                    effect_size, alpha, power_target, event_rate
-                )
+                forward = time_to_event_power(effect_size, alpha, power_target, event_rate)
             else:
                 forward = continuous_outcome_power(effect_size, alpha, power_target)
 
@@ -159,9 +155,7 @@ class PowerAnalysisNode:
                 "recoverable": False,
             }
             state["errors"] = state.get("errors", []) + [error]
-            state["warnings"] = state.get("warnings", []) + [
-                f"Power analysis failed: {str(e)}"
-            ]
+            state["warnings"] = state.get("warnings", []) + [f"Power analysis failed: {str(e)}"]
             state["status"] = "failed"
 
             latency_ms = int((time.time() - start_time) * 1000)
