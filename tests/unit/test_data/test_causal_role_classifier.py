@@ -1084,6 +1084,15 @@ def test_compile_set_disjoint_from_golden_set_literature() -> None:
     """Plan-239 §4.1/§4.2 — held-out literature golden set must NEVER share
     a feature_name with the DSPy compile set, or the MIPROv2 A/B benchmark
     is contaminated (training-set leakage). PR-blocking.
+
+    Negative-control proof of falsifiability (plan-239 §6.2 L1 mutation-
+    confirm-revert): during implementation, the test was sanity-checked by
+    temporarily appending an entry with feature_name=
+    `family_history_hr_positive_bc_count` (a BC-cohort golden feature) to
+    `build_compile_set()`; running this test produced RED with the expected
+    overlap message; the mutation was then reverted and the test confirmed
+    GREEN. The mutation-confirm-revert sequence is recorded here so a future
+    maintainer can re-run the negative control on demand.
     """
     import json
     from pathlib import Path
@@ -1123,6 +1132,13 @@ def test_compile_set_disjoint_from_golden_set_synthetic() -> None:
     than for the literature golden set; we pin only the 4 pre-#239
     pre-existing collisions as an expected frozen baseline so any NEW overlap
     (e.g., a bucket-D entry that forgets `synth_*` prefix) fires this test.
+
+    Falsifiability shape: this test is a frozen-baseline-with-deny-new-additions
+    invariant rather than a mutation-confirm-revert test. To prove the deny
+    side fires on a regression, temporarily change one bucket-D entry's
+    feature_name from `synth_a1_baseline_severity_max_180d_preindex_alt_confounder`
+    to `baseline_severity_score_preindex` (the synthetic-fixture's bare name)
+    and confirm the test goes RED with the new_overlap message; revert to GREEN.
     """
     import json
     from pathlib import Path
@@ -1203,13 +1219,21 @@ def test_compile_set_no_near_duplicate_with_golden() -> None:
 
 
 def test_compile_set_size_at_least_50() -> None:
-    """Plan-239 §6.2 R1 — issue #239 blocker (MIPROv2 needs ≥50 examples)."""
+    """Plan-239 §6.2 R1 — issue #239 blocker (MIPROv2 needs ≥50 examples).
+
+    Pinned EXACTLY at 50 (not `>=`) per codex impl iter-0 MEDIUM finding:
+    each of the 17 plan-239 additions (#34-#50) was individually audited
+    against the §3.0 semantic-neighbor table; any new addition needs a new
+    §3.0 audit row before incrementing the count. Pinning exact catches
+    accidental size drift that would invalidate the §3.0 disjointness audit.
+    """
     from src.data.causal_role_classifier import build_compile_set
 
     n = len(build_compile_set())
-    assert n >= 50, (
-        f"Plan-239 AC4: compile set must have at least 50 examples "
-        f"(MIPROv2 floor per #239); got {n}."
+    assert n == 50, (
+        f"Plan-239 AC4: compile set must have exactly 50 examples; got {n}. "
+        f"New additions beyond 50 require a new §3.0 semantic-neighbor row "
+        f"per plan-239 §4.3 PR-blocking gate."
     )
 
 
