@@ -330,3 +330,33 @@ class TestEdgeCases:
             _state(train_df=df, problem_type="binary_classification", target_rate=0.30)
         )
         assert result["sufficiency_report"]["human_readable_summary"]
+
+    @pytest.mark.asyncio
+    async def test_skips_when_scope_spec_marks_sample_data(self):
+        """Skip the check when scope_spec.use_sample_data=True.
+
+        Pins the guard added to unblock ``scripts/run_tier0_test.py`` synthetic
+        regimes (and ``MLFoundationPipeline`` when called with sample-data
+        mode). The data_preparer is being used as a QC validator on a small
+        synthetic cohort; the actual training data is fed independently
+        downstream. A HARD_FAIL on a 30-row sample (which would normally
+        trip) must NOT propagate when ``use_sample_data=True``.
+        """
+        df = _binary_df(n=30, prevalence=0.30, n_features=10)
+        state = _state(train_df=df, problem_type="binary_classification", target_rate=0.30)
+        state["scope_spec"]["use_sample_data"] = True
+
+        result = await run_sufficiency_check(state)
+        assert result == {}, (
+            "Sufficiency check must short-circuit when scope_spec.use_sample_data=True; "
+            f"got result={result!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_runs_when_sample_data_flag_absent(self):
+        """Default behavior preserved when use_sample_data is unset or False."""
+        df = _binary_df(n=30, prevalence=0.30, n_features=10)
+        state = _state(train_df=df, problem_type="binary_classification", target_rate=0.30)
+        # use_sample_data not set → check runs as normal
+        result = await run_sufficiency_check(state)
+        assert result.get("sufficiency_report", {}).get("verdict") == "HARD_FAIL"

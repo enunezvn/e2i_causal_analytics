@@ -81,6 +81,29 @@ async def run_sufficiency_check(state: DataPreparerState) -> Dict[str, Any]:
         power_warnings, qc_status.
     """
     experiment_id = state.get("experiment_id", "unknown")
+
+    # Skip on the synthetic-QC-sample path. When ``scope_spec.use_sample_data``
+    # is True the data_preparer is being run as a QC validator on a small
+    # synthetic cohort (typically 500 rows) — the actual training data is
+    # supplied independently downstream (e.g. ``scripts/run_tier0_test.py``
+    # feeds the full ``eligible_df`` directly into ``step_5_model_trainer``).
+    # The sufficiency verdict on the QC sub-sample is not the verdict the
+    # operator cares about: it would HARD_FAIL almost every synthetic regime
+    # by design (sample_size=500 is below the EPV-derived floor for any
+    # realistic minority prevalence), masking the actual training-data
+    # verdict that would land if real data were used. Production runs do
+    # not set ``use_sample_data=True``, so this guard does not weaken the
+    # pre-flight check on real cohorts. Tracked by the unit test
+    # ``test_skips_when_scope_spec_marks_sample_data``.
+    scope_spec = state.get("scope_spec") or {}
+    if _get_scope_value(scope_spec, "use_sample_data", False):
+        logger.info(
+            f"Skipping sufficiency check for experiment {experiment_id}: "
+            "scope_spec.use_sample_data=True (data_preparer is running on a "
+            "synthetic QC sample, not the training data)."
+        )
+        return {}
+
     logger.info(f"Starting sufficiency check for experiment {experiment_id}")
 
     try:
@@ -89,7 +112,6 @@ async def run_sufficiency_check(state: DataPreparerState) -> Dict[str, Any]:
             logger.warning("train_df missing or not a DataFrame; skipping sufficiency check")
             return {}
 
-        scope_spec = state.get("scope_spec") or {}
         problem_type = _get_scope_value(scope_spec, "problem_type", "binary_classification")
         target_column = _get_scope_value(scope_spec, "prediction_target", None)
         user_config = _extract_sufficiency_config(scope_spec)

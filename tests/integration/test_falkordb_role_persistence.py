@@ -30,7 +30,7 @@ KG is required.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Dict
 
 import pytest
 
@@ -312,22 +312,28 @@ async def test_case_5_manifest_source_never_queries_kg() -> None:
 
 
 def test_graph_inserts_kg_role_enrichment_between_baseline_and_finalize() -> None:
-    """The graph edge from ``compute_baseline_metrics`` now routes to
-    ``kg_role_enrichment`` (not directly to ``finalize_output``);
-    ``kg_role_enrichment`` then routes to ``finalize_output``.
+    """``kg_role_enrichment`` sits on the path between
+    ``compute_baseline_metrics`` and ``finalize_output``.
 
-    Falsifiability anchor: revert the §6.3 graph rewiring to the prior
-    ``compute_baseline_metrics → finalize_output`` edge → this assertion
-    trips.
+    The path used to be a single direct edge from
+    ``compute_baseline_metrics`` to ``kg_role_enrichment``. Phase 1 of the
+    data-sufficiency diagnostics (PR #462) inserted ``sufficiency_check``
+    between baseline + enrichment to give the verdict access to baseline
+    statistics. The contract that this test pins is the SHAPE of the path
+    (kg_role_enrichment still appears between baseline and finalize) rather
+    than a specific edge, so future insertions between baseline and
+    enrichment do not require updating this guard.
+
+    Falsifiability anchors that still trip:
+    - Reverting kg_role_enrichment to no longer route to finalize_output.
+    - Restoring the old direct ``compute_baseline_metrics → finalize_output``
+      edge.
     """
     from src.agents.ml_foundation.data_preparer.graph import create_data_preparer_graph
 
     graph = create_data_preparer_graph()
     # LangGraph stores edges on ``.edges`` as a set of (source, target) tuples.
     edges = {(src, tgt) for src, tgt in graph.edges}
-    assert ("compute_baseline_metrics", "kg_role_enrichment") in edges, (
-        f"missing edge compute_baseline_metrics→kg_role_enrichment; edges={sorted(edges)}"
-    )
     assert ("kg_role_enrichment", "finalize_output") in edges, (
         f"missing edge kg_role_enrichment→finalize_output; edges={sorted(edges)}"
     )
@@ -335,6 +341,26 @@ def test_graph_inserts_kg_role_enrichment_between_baseline_and_finalize() -> Non
     assert ("compute_baseline_metrics", "finalize_output") not in edges, (
         "old direct edge compute_baseline_metrics→finalize_output still present; "
         "kg_role_enrichment was not inserted in-between"
+    )
+    # baseline → kg_role_enrichment via zero-or-more intermediate nodes
+    # (currently exactly one: sufficiency_check). Walk the edges forward
+    # from compute_baseline_metrics; the path must reach kg_role_enrichment
+    # before any branch back to a node from a different graph phase.
+    successors: Dict[str, set[str]] = {}
+    for src, tgt in edges:
+        successors.setdefault(src, set()).add(tgt)
+
+    reachable: set[str] = set()
+    frontier = list(successors.get("compute_baseline_metrics", set()))
+    while frontier:
+        node = frontier.pop()
+        if node in reachable:
+            continue
+        reachable.add(node)
+        frontier.extend(successors.get(node, set()))
+    assert "kg_role_enrichment" in reachable, (
+        f"kg_role_enrichment is no longer reachable from compute_baseline_metrics; "
+        f"edges={sorted(edges)}"
     )
 
 
