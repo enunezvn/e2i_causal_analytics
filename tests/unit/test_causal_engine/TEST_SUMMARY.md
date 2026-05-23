@@ -172,17 +172,17 @@ To achieve comprehensive coverage, these additional test files would be benefici
 
 ### High Priority (Large files >600 lines)
 1. `test_discovery_runner.py` - Causal discovery orchestration (680 lines)
-2. `test_cross_validator.py` - Cross-library validation (659 lines)
-3. `test_report_generator.py` - Validation reporting (812 lines)
-4. `test_hierarchical_analyzer.py` - Hierarchical analysis (681 lines)
-5. `test_estimator_selector.py` - Estimator selection (1146 lines)
-6. `test_iv_diagnostics.py` - IV diagnostic tests (630 lines)
+2. `test_report_generator.py` - Validation reporting (812 lines)
+3. `test_hierarchical_analyzer.py` - Hierarchical analysis (681 lines)
+4. `test_estimator_selector.py` - Estimator selection (1146 lines)
+5. `test_iv_diagnostics.py` - IV diagnostic tests (630 lines)
 
 ### Medium Priority (400-600 lines)
-7. `test_confidence_scorer.py` - Confidence scoring (605 lines)
-8. Various validation modules
-9. Energy score calculator
-10. Segment CATE calculator
+6. Various validation modules
+7. Energy score calculator
+8. Segment CATE calculator
+
+> Note: `test_cross_validator.py` and `test_confidence_scorer.py` were retired in PR #463 alongside the source classes per the #457 orphan audit.
 
 ## Running Tests in CI/CD
 
