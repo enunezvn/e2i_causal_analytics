@@ -1,6 +1,6 @@
 # Data-Sufficiency Diagnostics Rollout
 
-**Status:** Phase 0 merged (PR #460). Phase 1 (PR #462) blocked on CI Integration Tests failure.
+**Status:** Phases 0, 1, 2, 3 all merged. Phase 0 (PR #460), Phase 1 (PR #462 + hotfix PR #472), Phase 2 (PR #466 — learning curve), Phase 3 (PR #475 — synthetic preview). Open follow-up: integration-tests lane CI-time growth (issue #473, partially addressed by PR #476 sharding).
 **Owner:** etn3724@gmail.com
 **Started:** 2026-05-22
 **Source PDF:** `de3b5738-Should_you_gather_more_data.pdf` (learning-curve diagnostic)
@@ -51,9 +51,9 @@ Foundational utility modules + Tier 3 PowerAnalysisNode refactor. Zero behavior 
 
 **Tests:** 88 new + 22 existing PowerAnalysisNode + 395 experiment_designer suite — all green.
 
-### PR #462 — Phase 1: Pre-flight check in DataPreparer (IN PROGRESS — CI BLOCKED)
+### PR #462 — Phase 1: Pre-flight check in DataPreparer (MERGED 2026-05-23)
 
-**Status:** Unit tests all green locally (29 new), but CI Integration Tests failing reproducibly. Diagnosis blocked on log access.
+**Status:** Merged at `735465ce`. The 20 codex findings raised post-merge were addressed in **PR #472** (`4e0bfeec`). CI integration-tests failure that briefly blocked the hotfix was diagnosed as the `integration-tests` job hitting its 15-min `timeout-minutes` ceiling (suite wall-clock ≈14-15 min on a 2-core runner with `pytest -n 2`, no headroom) — not a logic failure. **Fixed by raising `timeout-minutes` 15→20 in PR #472**; longer-term sharding tracked as issue #473 and partially landed in PR #476.
 
 **Files created:**
 - `src/agents/ml_foundation/data_preparer/nodes/sufficiency_check.py` — new node runs post-`compute_baseline_metrics`, pre-`kg_role_enrichment`; computes verdict; writes into qc_report plumbing
@@ -82,7 +82,9 @@ Foundational utility modules + Tier 3 PowerAnalysisNode refactor. Zero behavior 
 
 **Report contents:** verdict + verdict_rationale + resolved_thresholds (each with `source` + `citation`) + detectable_mde_at_current_n (Strategy A) + sensitivity_grid across 3 candidate MDEs (Strategy C) + mde_assumption_used (Strategy B) + human_readable_summary.
 
-### PR #463 — Phase 2: Post-training learning curve in ModelTrainer (NOT STARTED)
+### PR #466 — Phase 2: Post-training learning curve in ModelTrainer (MERGED 2026-05-23)
+
+**Status:** Merged at `33082359`. Implemented across commits `14e60bfa` (initial feat, tagged `#463` in commit message — note that GitHub PR number #463 was reused for an unrelated chore-retirement, see #464 for context) + `317bbf7a` (round-1 codex 15 findings) + `7eb03de9` (round-2 codex 7 findings). File: `src/agents/ml_foundation/model_trainer/nodes/learning_curve.py`.
 
 New `learning_curve.py` node, triggered after training when `success_criteria_met=False` (or always-on via `PipelineConfig.always_run_learning_curve=True`). The technique from the source PDF:
 
@@ -97,15 +99,18 @@ New `learning_curve.py` node, triggered after training when `success_criteria_me
 
 **Causal v2:** uses `synthetic_v2` with `TRUE_ATE` for bootstrap-style CI-width estimation.
 
-### PR #464 — Phase 3: Synthetic preview wiring (NOT STARTED)
+### PR #475 — Phase 3: Synthetic preview wiring (MERGED 2026-05-24)
 
-`data_preparer/adapters/synthetic_preview.py` — triggered when `adaptive_verdict="INSUFFICIENT_TRAINING_DATA"` AND `PipelineConfig.synthetic_preview_on_insufficient=True` (opt-in, default False).
+**Status:** Merged at `d34f04e0`. File: `src/agents/ml_foundation/data_preparer/adapters/synthetic_preview.py`. **Earlier draft of this doc cited "PR #464" — that PR number was reused for an unrelated `ValidationReportGenerator` retirement chore (see issue #464); the real Phase 3 PR is #475.**
 
-Routes:
-- Predictive → `E2IDataGenerator.generate_all(n=recommended)` from `src/ml/data_generator.py`
-- Causal → `generate_scenario(scenario, n=recommended)` from `src/ml/synthetic_v2/api.py`
+`synthetic_preview.py` — `build_synthetic_preview(...)` fires post-training only when opted in (`PipelineConfig.synthetic_preview_on_insufficient=True`, default False) AND `PipelineConfig.synthetic_preview_scenario` is set AND the learning-curve diagnostic returned `recommended_additional_samples > 0`.
 
-**Critical invariant:** does NOT auto-mix into training. Saves preview to `pipeline_artifacts/synthetic_preview_<workflow_id>/` and attaches metadata to `PipelineResult.synthetic_preview`. Operator must explicitly pass it via `PipelineConfig.augmentation_data_path` to use.
+**Deviations from the original spec** (called out explicitly in the PR #475 body, grounded in REASON-BEFORE-RULES per CLAUDE.md):
+- **Generator:** the spec said predictive → `E2IDataGenerator.generate_all(n=recommended)`. In reality `E2IDataGenerator` is a platform-database seeder (fixed ~200-patient volume, `export_to_json` only) — it cannot produce a sized `(X, y)` cohort. The adapter uses `synthetic_v2.generate_scenario(scenario, seed, n_total)` for ALL previews (the only real sized-cohort generator in the codebase).
+- **Trigger:** the spec said `adaptive_verdict="INSUFFICIENT_TRAINING_DATA"`. That enum does not exist; `adaptive_validity_check` emits per-feature `severity`, a leakage signal. The real trigger is the post-training `recommended_additional_samples` value, wired in the orchestrator after the learning curve runs.
+- **Scenario selection:** the operator specifies `PipelineConfig.synthetic_preview_scenario` (the 4 real scenarios — A / A-balanced / B / C — are specific clinical setups; there is no context→scenario auto-mapping).
+
+**Critical invariant (preserved):** does NOT auto-mix into training. Saves preview cohort (`.npz`) + audit metadata (`.json`) to `pipeline_artifacts/synthetic_preview_<workflow_id>/`, attaches metadata to `PipelineResult.synthetic_preview` with `auto_mixed_into_training=False`. Adapter failures are recorded, never raised — the training result stands on its own.
 
 ## Threshold catalog
 
@@ -163,8 +168,8 @@ Pipeline-level overrides via `PipelineConfig.force_low_power_run` and `PipelineC
 
 ## Open follow-ups
 
-- **PR #462 CI failure** (current blocker): Integration Tests reproducibly failing on commits `07bf8faf` and `14903a2b` (empty retrigger). Local CI-equivalent sweep ran clean — failure mode not identified yet. Need access to failing log to diagnose.
-- **PR 3+4 sequencing:** wait for PR 2 merge before starting; PR 2 modules are the foundation for PR 3's learning curve and PR 4's synthetic preview wiring.
+- **Integration-tests lane CI-time growth** (issue [#473](https://github.com/enunezvn/e2i_causal_analytics/issues/473)): the 15→20 min `timeout-minutes` bump in PR #472 was a stopgap; the suite (~127 files, `pytest -n 2` on a 2-core runner) will eventually hit 20 too. **Partially addressed in PR #476** (sharding + verify-types disk fix); issue stays open until headroom is comfortable and bounded as the suite grows.
+- **Phase 3 future work** (out of scope of PR #475): consuming the synthetic preview for actual augmentation (operator manually opts to use it as training data) is a follow-on phase. PR #475 only produces and surfaces the preview, per the no-auto-mix invariant.
 
 ## References
 
