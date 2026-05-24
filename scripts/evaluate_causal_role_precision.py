@@ -33,6 +33,17 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from dotenv import load_dotenv
+
+# Bridge .env → process env BEFORE the API-key gate at
+# ``os.environ.get("ANTHROPIC_API_KEY")`` below and BEFORE any DSPy /
+# causal_role_classifier_loader import (which may read provider env
+# vars at import time). Without this call, invoking the script
+# directly from the shell silently degrades to fixture-schema-only
+# validation even when ``ANTHROPIC_API_KEY`` is present in ``.env``
+# but not exported. See GitHub issue #470.
+load_dotenv()
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
