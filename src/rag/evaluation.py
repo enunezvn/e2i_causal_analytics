@@ -348,6 +348,69 @@ def save_evaluation_dataset(samples: List[EvaluationSample], path: str) -> None:
 
 
 # =============================================================================
+# RAGAS Dependency Compatibility (issue #491)
+# =============================================================================
+
+
+class RagasDependencyError(RuntimeError):
+    """Raised when the RAGAS dependency tree is broken or incompatible.
+
+    Distinct from a *transient* evaluation failure (a bad LLM call, a 401, a
+    network blip). A broken import means the evaluator cannot run at all — for
+    example issue #491, where ``ragas`` 0.4.x unconditionally imports
+    ``langchain_community.chat_models.vertexai`` which modern
+    ``langchain-community`` removed. We raise this loudly rather than silently
+    degrading to heuristic fallback scores, because those fallback values look
+    like real (failing) RAG metrics and masquerade as a quality regression.
+    """
+
+
+def _ensure_ragas_vertexai_compat() -> None:
+    """Make RAGAS 0.4.x importable against modern ``langchain-community``.
+
+    ``ragas`` 0.4.x's ``ragas/llms/base.py`` unconditionally runs::
+
+        from langchain_community.chat_models.vertexai import ChatVertexAI
+        from langchain_community.llms import VertexAI
+
+    but current ``langchain-community`` releases no longer ship the Vertex AI
+    integrations (the pinned 0.4.2 does not include them; they migrated to the
+    standalone ``langchain-google-vertexai`` package).
+    E2I evaluation uses OpenAI exclusively and never instantiates Vertex
+    models, so we register lightweight stubs that satisfy ragas's import
+    without dragging in the heavy Google Cloud dependency tree. See issue #491
+    (confirmed against ragas==0.4.3 / langchain-community==0.4.2, 2026-05-24).
+
+    Idempotent and conditional: stubs are only injected when the *real* import
+    fails, so if a future ``langchain-community`` release restores the real
+    Vertex classes those win. If ``langchain-community`` is not installed at
+    all there is nothing to shim (ragas would not be importable either).
+    """
+    import sys
+    import types
+
+    try:
+        import langchain_community  # noqa: F401
+    except ImportError:
+        return
+
+    try:
+        from langchain_community.chat_models.vertexai import ChatVertexAI  # noqa: F401
+    except ImportError:
+        _stub = types.ModuleType("langchain_community.chat_models.vertexai")
+        _stub.ChatVertexAI = type("ChatVertexAI", (), {})  # type: ignore[attr-defined]
+        sys.modules["langchain_community.chat_models.vertexai"] = _stub
+
+    try:
+        from langchain_community.llms import VertexAI  # noqa: F401
+    except ImportError:
+        import langchain_community.llms as _llms
+
+        if not hasattr(_llms, "VertexAI"):
+            _llms.VertexAI = type("VertexAI", (), {})  # type: ignore[attr-defined]
+
+
+# =============================================================================
 # RAGAS Metric Wrappers
 # =============================================================================
 
@@ -527,7 +590,14 @@ class RAGASEvaluator:
         sample_id: str,
     ) -> EvaluationResult:
         """Evaluate using RAGAS library."""
+        # Import block is guarded separately from the evaluation logic. A
+        # failure HERE means the RAGAS dependency tree is broken/incompatible
+        # (issue #491: ragas 0.4.x imports langchain_community.chat_models.
+        # vertexai, removed in modern langchain-community). That is NOT a
+        # transient eval failure, so we raise loudly instead of emitting
+        # heuristic fallback scores that look like a real quality regression.
         try:
+            _ensure_ragas_vertexai_compat()
             import openai
             from datasets import Dataset
             from ragas import evaluate
@@ -539,7 +609,14 @@ class RAGASEvaluator:
                 context_recall,
                 faithfulness,
             )
+        except ImportError as e:
+            raise RagasDependencyError(
+                "RAGAS evaluation dependencies are broken or incompatible "
+                f"({e}). The langchain stack in requirements-ragas.txt likely "
+                "drifted; see issue #491."
+            ) from e
 
+        try:
             # Create a wrapper that adds embed_query interface to RAGAS embeddings
             # RAGAS 0.4.x internally calls embed_query but its embeddings use embed_text
             class EmbeddingsWrapper:
@@ -633,6 +710,15 @@ class RAGASEvaluator:
                 metadata=sample.metadata,
             )
 
+        except ImportError as e:
+            # A dependency break can also surface lazily here (ragas importing a
+            # removed langchain symbol during evaluate()). Same #491 failure
+            # class as the import block above — fail loud, do not fake scores.
+            raise RagasDependencyError(
+                "RAGAS evaluation hit a dependency break at runtime "
+                f"({e}). The langchain stack in requirements-ragas.txt likely "
+                "drifted; see issue #491."
+            ) from e
         except Exception as e:
             logger.error(f"RAGAS evaluation failed: {e}")
             return await self._evaluate_with_fallback(sample, sample_id)

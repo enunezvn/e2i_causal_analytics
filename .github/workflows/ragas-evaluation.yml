@@ -20,6 +20,8 @@ on:
     paths:
       - 'src/rag/**'
       - 'scripts/run_ragas_eval.py'
+      - '.github/workflows/ragas-evaluation.yml'
+      - 'requirements-ragas.txt'
   workflow_dispatch:  # Manual trigger
 
 jobs:

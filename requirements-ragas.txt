@@ -1,11 +1,32 @@
 # Minimal requirements for RAGAS evaluation CI workflow
 # This avoids the graphiti-core vs feast tenacity conflict
+#
+# RAGAS STACK PINNED (issue #491)
+# --------------------------------
+# ragas 0.4.x unconditionally imports `langchain_community.chat_models.vertexai`
+# (and `langchain_community.llms.VertexAI`), which current langchain-community no
+# longer ships (the pinned 0.4.2 does not include them; the Vertex integrations
+# migrated to the standalone langchain-google-vertexai package). With unbounded
+# `>=` pins the resolver kept
+# pulling newer, incompatible langchain releases, so `import ragas` raised
+# ModuleNotFoundError and the evaluator silently fell back to heuristic scores
+# that looked like a real (failing) RAG regression. These exact pins are a
+# verified-working set (confirmed 2026-05-24). Belt-and-suspenders:
+# src/rag/evaluation.py registers a Vertex compat shim
+# (`_ensure_ragas_vertexai_compat`) so ragas imports even on this stack, and
+# raises `RagasDependencyError` loudly if the dependency tree ever drifts again
+# instead of emitting fake scores. When bumping any pin below, re-run
+# `python scripts/run_ragas_eval.py --no-mlflow` and confirm non-fallback
+# scores before merging.
 
-# Core dependencies
-ragas>=0.2.0
-langchain>=0.3.0
-langchain-openai>=0.3.0
-openai>=1.50.0
+# Core dependencies (RAGAS eval stack pinned — see note above)
+ragas==0.4.3
+langchain==1.3.1
+langchain-core==1.4.0
+langchain-community==0.4.2
+langchain-openai==1.2.2
+openai==2.38.0
+datasets==4.8.5
 dspy>=2.5.0
 
 # Testing
