@@ -78,6 +78,14 @@ class PipelineConfig:
     synthetic_preview_on_insufficient: bool = False
     synthetic_preview_scenario: Optional[str] = None
 
+    # Opt-in synthetic AUGMENTATION (Phase 3 consumption). When set to a
+    # reviewed preview cohort (.npz, e.g. produced by synthetic_preview_*),
+    # model_trainer concatenates those rows into the TRAINING split ONLY
+    # (never validation/test/holdout), after split-ratio validation and before
+    # preprocessing. Strict feature-schema match is enforced — a mismatch is
+    # refused (advisory), never silently mixed. Default None = off.
+    augmentation_data_path: Optional[str] = None
+
     # Model selection
     interpretability_required: bool = False
     skip_benchmarks: bool = True
@@ -161,6 +169,12 @@ class PipelineResult:
     # preview cohort's artifact paths + audit metadata; the cohort itself is on
     # disk and is NOT mixed into training (``auto_mixed_into_training=False``).
     synthetic_preview: Optional[Dict[str, Any]] = None
+
+    # Opt-in synthetic-augmentation audit (Phase 3 consumption). Populated from
+    # the trainer's ``training_augmentation`` when augmentation_data_path was
+    # set. ``applied`` distinguishes a real augmentation from a refusal (the
+    # ``skip_reason`` says why); synthetic rows touch the training split only.
+    training_augmentation: Optional[Dict[str, Any]] = None
 
     # Metadata
     stages_completed: List[str] = field(default_factory=list)
@@ -967,6 +981,9 @@ class MLFoundationPipeline:
             "validation_data": input_data.get("validation_data"),
             "test_data": input_data.get("test_data"),
             "holdout_data": input_data.get("holdout_data"),
+            # Opt-in synthetic augmentation cohort path (Phase 3 consumption).
+            # None → the augment_training_data node is a no-op.
+            "augmentation_data_path": self.config.augmentation_data_path,
             # Feast feature references for reproducibility
             "feature_refs": result.feature_refs_used,
             "feast_enabled": result.feast_enabled,
@@ -988,6 +1005,12 @@ class MLFoundationPipeline:
 
         # Store outputs
         result.training_result = trainer_output
+
+        # Surface the opt-in synthetic-augmentation audit at the pipeline level
+        # so the audit chain / UI / export can see whether the model was trained
+        # on synthetic-augmented data (and how much) without reaching into
+        # training_result. None when the trainer didn't emit it.
+        result.training_augmentation = trainer_output.get("training_augmentation")
 
         # PR #463 Phase 2: surface the learning-curve diagnostic at the
         # pipeline-level result so downstream consumers (audit chain, UI,

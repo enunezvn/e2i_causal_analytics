@@ -7,6 +7,7 @@ from langgraph.graph.state import CompiledStateGraph
 
 from .nodes import (
     apply_resampling,
+    augment_training_data,
     check_qc_gate,
     detect_class_imbalance,
     diagnose_and_remediate_quality,
@@ -37,7 +38,10 @@ def _should_proceed_after_splits(state: Dict[str, Any]) -> str:
     if state.get("error"):
         return "end"
     if state.get("split_ratios_valid", False):
-        return "detect_class_imbalance"
+        # Route through the opt-in augmentation node first (no-op unless the
+        # operator set augmentation_data_path). Ratio validation has already
+        # run on the REAL splits, so augmenting train afterward is safe.
+        return "augment_training_data"
     return "end"
 
 
@@ -133,6 +137,9 @@ def create_model_trainer_graph() -> CompiledStateGraph:
           ↓
         [Splits valid?]
           ↓ YES
+        augment_training_data (opt-in synthetic augmentation; no-op unless
+                               augmentation_data_path is set — train only)
+          ↓
         detect_class_imbalance (LLM-assisted)
           ↓
         fit_preprocessing (train only)
@@ -179,6 +186,7 @@ def create_model_trainer_graph() -> CompiledStateGraph:
     workflow.add_node("check_qc_gate", check_qc_gate)  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("load_splits", load_splits)  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("enforce_splits", enforce_splits)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("augment_training_data", augment_training_data)  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("detect_class_imbalance", detect_class_imbalance)  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("fit_preprocessing", fit_preprocessing)  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("apply_resampling", apply_resampling)  # type: ignore[type-var,arg-type,call-overload]
@@ -215,10 +223,16 @@ def create_model_trainer_graph() -> CompiledStateGraph:
         "enforce_splits",
         _should_proceed_after_splits,
         {
-            "detect_class_imbalance": "detect_class_imbalance",
+            "augment_training_data": "augment_training_data",
             "end": END,
         },
     )
+
+    # Opt-in synthetic augmentation (no-op unless augmentation_data_path set) →
+    # class imbalance detection. Placed AFTER enforce_splits (ratios validated
+    # on real data) and BEFORE preprocessing so any synthetic rows flow through
+    # the same preprocessing/resampling as real data.
+    workflow.add_edge("augment_training_data", "detect_class_imbalance")
 
     # Class imbalance detection → preprocessing (always)
     workflow.add_edge("detect_class_imbalance", "fit_preprocessing")

@@ -203,6 +203,20 @@ class ModelTrainerState(BaseAgentSchema):
     split_ratio_checks: Optional[List[str]] = None
     leakage_warnings: Optional[List[str]] = None
 
+    # Synthetic Augmentation (opt-in; Phase 3 preview consumption).
+    # When ``augmentation_data_path`` is set, ``augment_training_data`` (runs
+    # after enforce_splits, before fit_preprocessing) concatenates the reviewed
+    # synthetic cohort into the TRAINING split only — never val/test/holdout.
+    # The remaining fields are an audit trail (also surfaced on the agent output
+    # and ``PipelineResult.training_augmentation``).
+    augmentation_data_path: Optional[str] = None
+    augmentation_applied: Optional[bool] = None
+    augmentation_n_original: Optional[int] = None
+    augmentation_n_synthetic: Optional[int] = None
+    augmentation_source: Optional[str] = None
+    augmentation_fingerprint: Optional[str] = None
+    augmentation_skip_reason: Optional[str] = None
+
     # Class Imbalance Detection
     imbalance_detected: Optional[bool] = None
     imbalance_ratio: Optional[float] = None  # Majority/minority ratio
