@@ -1318,3 +1318,72 @@ def test_compile_with_miprov2_threads_seed_into_constructor_and_compile(
         f"Plan-239 §5.1: seed=42 must be threaded into MIPROv2.compile(); "
         f"got compile_seed={seen.get('compile_seed')!r}."
     )
+
+
+def test_compile_set_size_meets_dspy_miprov2_floor():
+    """DSPy MIPROv2 documented floor is ~200; we target ≥200 for AC3 power."""
+    from src.data.causal_role_classifier import build_compile_set
+
+    examples = build_compile_set()
+    assert len(examples) >= 200, (
+        f"compile-set size {len(examples)} < 200 (DSPy MIPROv2 floor for "
+        "decision-quality bootstrapping)"
+    )
+
+
+def test_compile_set_cohort_floors_balanced():
+    """No-per-cohort-regression AC3 requires CSU/PNH/BC each ≥50."""
+    from collections import Counter
+
+    from src.data.causal_role_classifier import (
+        _canonical_cohort,
+        build_compile_set,
+    )
+
+    counts = Counter(_canonical_cohort(x) for x in build_compile_set())
+    floors = {"CSU": 50, "PNH": 50, "BC": 50, "synthetic_or_other": 50}
+    for cohort, floor in floors.items():
+        assert counts[cohort] >= floor, (
+            f"cohort '{cohort}': {counts[cohort]} entries < floor {floor}. "
+            "AC3 no-cohort-regression rule requires balanced representation."
+        )
+
+
+def test_compile_set_cohort_tags_canonical():
+    """Cohort tags must be canonical post-normalization (no csu/CSU drift)."""
+    from src.data.causal_role_classifier import (
+        _canonical_cohort,
+        build_compile_set,
+    )
+
+    CANONICAL = {
+        "CSU",
+        "PNH",
+        "BC",
+        "synthetic_or_other",
+    }
+    for example in build_compile_set():
+        canonical = _canonical_cohort(example)
+        assert canonical in CANONICAL, (
+            f"non-canonical cohort tag {canonical!r} on example "
+            f"{example.feature_name!r}; must map to one of {CANONICAL}"
+        )
+
+
+def test_compile_set_disjoint_from_literature_golden_set():
+    """Compile-set features must not appear in the 91-entry literature golden set."""
+    import json
+    from pathlib import Path
+
+    from src.data.causal_role_classifier import build_compile_set
+
+    golden_path = Path("tests/fixtures/causal_role_golden_set.json")
+    golden = json.loads(golden_path.read_text())
+    golden_features = {entry["feature_name"].strip().lower() for entry in golden}
+
+    for example in build_compile_set():
+        feat = example.feature_name.strip().lower()
+        assert feat not in golden_features, (
+            f"compile-set feature {example.feature_name!r} also appears in "
+            "literature golden set — leakage would inflate measured precision."
+        )
