@@ -6404,7 +6404,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "Pre-anchor temporal filter (preindex_365d) — prescriber preference "
                 "is measured from prior-year prescribing pattern, before index. "
                 "Pearl arrowhead: instrument (IV->T, IV ⊥ Y | T). Brookhart-Wang "
-                "(PMID 18375005) physician-prescribing-preference style: IV "
+                "preference IV pattern (synthetic DGP, no literature anchor): IV "
                 "constructed from preceding-patient prescribing pattern is "
                 "near-randomized w.r.t. current patient's potential outcomes, "
                 "satisfying exclusion by design. Remediation per role-to-remediation "
@@ -6432,7 +6432,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "IV->Y arrow; IV->Y only through T. Pre-anchor temporal filter "
                 "(preindex_180d). Pearl arrowhead: instrument (IV->T, IV ⊥ Y | T,Z; "
                 "exclusion restriction holds by DGP construction). Brookhart-Wang "
-                "PMID 18375005 short-term-first-initiation-within-window pattern. "
+                "calendar-window first-initiation pattern (synthetic DGP, no literature anchor). "
                 "Remediation per role-to-remediation table: instrument -> keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
@@ -6479,7 +6479,8 @@ def build_compile_set() -> list[dspy.Example]:
                 "panel who received T. P(T=1|IV)=sigmoid(2.5*iv-1), y = 0.5*t + eps. "
                 "No direct IV->Y arrow by DGP construction. Pre-anchor temporal filter "
                 "(preindex_365d; prior-year prescribing). Pearl arrowhead: instrument "
-                "(IV->T, IV ⊥ Y | T). Brookhart-Wang PMID 18375005 prescribing-share "
+                "(IV->T, IV ⊥ Y | T). Brookhart-Wang prescribing-share pattern "
+                "(synthetic DGP, no literature anchor): prior-year prescribing share "
                 "is near-randomized at the patient level, supporting exclusion. "
                 "why_not_duplicate: distinct from binary-preference IV by continuous "
                 "operationalization. Remediation per role-to-remediation table: "
@@ -6506,8 +6507,8 @@ def build_compile_set() -> list[dspy.Example]:
                 "where Z is a baseline confounder. No direct IV->Y arrow. Pre-anchor "
                 "temporal filter (preindex_180d; window membership determined at "
                 "or before index). Pearl arrowhead: instrument (IV->T via supply-side "
-                "regulatory shock, IV ⊥ Y | T,Z). Brookhart-Wang PMID 18375005 "
-                "label-expansion exogeneity style. Remediation per role-to-"
+                "regulatory shock, IV ⊥ Y | T,Z). Brookhart-Wang label-expansion "
+                "exogeneity pattern (synthetic DGP, no literature anchor). Remediation per role-to-"
                 "remediation table: instrument -> keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
@@ -6834,7 +6835,8 @@ def build_compile_set() -> list[dspy.Example]:
                 "temporal filter (preindex_0d) — randomization at index. Pearl "
                 "arrowhead: instrument (IV->T strong, IV independent of Y given T). "
                 "This is the GOLD-STANDARD IV by construction (randomized; exclusion "
-                "trivially holds; Brookhart-Wang PMID 18375005 framework applies). "
+                "trivially holds; Brookhart-Wang randomized-assignment IV pattern "
+                "(synthetic DGP, no literature anchor) applies). "
                 "why_not_duplicate: distinct from observational-preference IVs by "
                 "being a true random shock. Remediation per role-to-remediation "
                 "table: instrument -> keep_with_caveat."
@@ -6865,6 +6867,170 @@ def build_compile_set() -> list[dspy.Example]:
                 "remediation table: descendant -> drop."
             ),
             recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # ----- Sub-bucket B4-X: additional synthetic-DGP entries for explicit synth_a floor -----
+        # Synthetic DGP: synth_a1 collider with unmeasured parent — DGP construction is ground truth.
+        dspy.Example(
+            feature_name="synth_a1_collider_with_unmeasured_parent",
+            derivation_pseudocode=(
+                "source=SYNTH_DGP_A1; derivation_inputs=['C_unmeasured_parent_collider']; "
+                "aggregation=identity; window_days=365; knowable_at=preindex_365d"
+            ),
+            dataset_context=(
+                "synthetic_a1 DGP; cohort=synthetic_a1; treatment=t_binary; "
+                "outcome=y_continuous; prediction_anchor=index"
+            ),
+            causal_role="collider",
+            mechanism=(
+                "Pearl collider with one unmeasured parent in DGP a1: C = f(T, U) "
+                "where T is treatment and U is unmeasured baseline covariate. "
+                "Pre-anchor temporal filter (preindex_365d). Pearl arrowhead: "
+                "collider (T->C<-U; conditioning on C opens the T-U path, inducing "
+                "spurious T-Y association via the backdoor U->Y). The unmeasured "
+                "parent U is not in the feature set — only C is observed. Probes "
+                "whether classifier identifies C as a collider even when one parent "
+                "is unmeasured (role determined by structural position, not "
+                "observability of parents). Remediation per role-to-remediation "
+                "table: collider -> drop."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Synthetic DGP: synth_a2 mediator with proxy confounder — DGP construction is ground truth.
+        dspy.Example(
+            feature_name="synth_a2_mediator_with_proxy_confounder",
+            derivation_pseudocode=(
+                "source=SYNTH_DGP_A2; derivation_inputs=['M_proxy_confounded']; "
+                "aggregation=mean; window_days=90; knowable_at=postindex_90d"
+            ),
+            dataset_context=(
+                "synthetic_a2 DGP; cohort=synthetic_a2; treatment=t_binary; "
+                "outcome=y_continuous; prediction_anchor=index"
+            ),
+            causal_role="mediator",
+            mechanism=(
+                "Pearl partial mediator with a proxy confounder in DGP a2: "
+                "M = 0.7*t + 0.4*Z_proxy + eps_m, Y = 0.5*t + 0.6*M + 0.3*Z_proxy + eps_y. "
+                "Post-treatment temporal filter (postindex_90d): M is measured 90d "
+                "post-index (after treatment onset). Pearl arrowhead: mediator "
+                "(T->M->Y on indirect path; Z_proxy also confounds M-Y relationship). "
+                "Probes partial-mediation pattern where a proxy confounder co-loads "
+                "with the mediator — structural role is mediator (on T->Y path), not "
+                "confounder (Z_proxy is already controlled). Remediation per role-to-"
+                "remediation table: mediator -> keep_with_caveat (window to pre-T)."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Synthetic DGP: synth_a3 descendant via late indirect chain — DGP construction is ground truth.
+        dspy.Example(
+            feature_name="synth_a3_descendant_late_indirect_chain",
+            derivation_pseudocode=(
+                "source=SYNTH_DGP_A3; derivation_inputs=['D_late_indirect_chain']; "
+                "aggregation=last; window_days=270; knowable_at=postindex_270d"
+            ),
+            dataset_context=(
+                "synthetic_a3 DGP; cohort=synthetic_a3; treatment=t_binary; "
+                "outcome=y_continuous; prediction_anchor=index"
+            ),
+            causal_role="descendant",
+            mechanism=(
+                "Pearl descendant via two-step indirect chain in DGP a3 at late "
+                "follow-up: Y -> M_late -> D_chain (where M_late is an intermediate "
+                "post-outcome state). DGP: M_late = 0.8*y + nu_m, D_chain = "
+                "0.7*M_late + 0.1*t + nu_d. Post-outcome temporal filter "
+                "(postindex_270d; captured at 270d post-index, well after Y). Pearl "
+                "arrowhead: descendant (Y->M_late->D, two-hop). Probes whether "
+                "classifier identifies multi-hop post-outcome chains as descendants "
+                "rather than ancestors or confounders. why_not_duplicate: distinct "
+                "from direct Y->D descendants and from the single-hop late-followup "
+                "entry by two-step mediation path. Remediation per role-to-"
+                "remediation table: descendant -> drop."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Synthetic DGP: synth_a4 IV consistency under 2SLS — DGP construction is ground truth.
+        dspy.Example(
+            feature_name="synth_a4_iv_two_stage_consistency_probe",
+            derivation_pseudocode=(
+                "source=SYNTH_DGP_A4; derivation_inputs=['IV_2sls_consistency']; "
+                "aggregation=identity; window_days=365; knowable_at=preindex_365d"
+            ),
+            dataset_context=(
+                "synthetic_a4 DGP; cohort=synthetic_a4; treatment=t_binary; "
+                "outcome=y_continuous; prediction_anchor=index"
+            ),
+            causal_role="instrument",
+            mechanism=(
+                "Pearl instrument probing 2SLS consistency in DGP a4: IV ~ N(0,1) "
+                "independent of all baseline covariates. Stage-1: T = 0.8*iv + "
+                "0.5*Z + eps_t; Stage-2: Y = 0.5*T_hat + 0.3*Z + eps_y. No direct "
+                "IV->Y arrow by DGP construction — exclusion restriction holds. "
+                "Pre-anchor temporal filter (preindex_365d). Pearl arrowhead: "
+                "instrument (IV->T, IV ⊥ Y | T,Z). Brookhart-Wang preference IV "
+                "pattern (synthetic DGP, no literature anchor): probes that "
+                "classifier identifies continuous near-Gaussian IVs as instruments "
+                "in the presence of a measured confounder Z. why_not_duplicate: "
+                "distinct from binary-preference and randomized-shock IVs by "
+                "continuous Gaussian DGP with explicit 2SLS stage structure. "
+                "Remediation per role-to-remediation table: instrument -> keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Synthetic DGP: synth_a1 ancestor as effect modifier — DGP construction is ground truth.
+        dspy.Example(
+            feature_name="synth_a1_ancestor_distant_effect_modifier",
+            derivation_pseudocode=(
+                "source=SYNTH_DGP_A1; derivation_inputs=['A_distant_effect_modifier']; "
+                "aggregation=first; window_days=730; knowable_at=preindex_730d"
+            ),
+            dataset_context=(
+                "synthetic_a1 DGP; cohort=synthetic_a1; treatment=t_binary; "
+                "outcome=y_continuous; prediction_anchor=index"
+            ),
+            causal_role="ancestor",
+            mechanism=(
+                "Pearl ancestor acting as effect modifier in DGP a1: A is a distal "
+                "baseline variable with A->W->T pathway (W is an intermediate "
+                "confounder) and A modifies the T-Y treatment effect: Y = "
+                "(0.5 + 0.3*A)*T + 0.4*W + eps_y. Pre-anchor temporal filter "
+                "(preindex_730d; captured early in history). Pearl arrowhead: "
+                "ancestor (A->W->T with W->Y; A also modifies beta_T). Probes "
+                "whether classifier assigns 'ancestor' to distal variables that "
+                "reach T only through intermediaries and also interact with the "
+                "treatment-outcome relationship. why_not_duplicate: distinct from "
+                "pure-ancestor (no effect modification) and from confounders (A has "
+                "no direct A->Y arrow; effect modification is on T coefficient only). "
+                "Remediation per role-to-remediation table: ancestor -> keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Synthetic DGP: synth_a3 time-varying continuous confounder — DGP construction is ground truth.
+        dspy.Example(
+            feature_name="synth_a3_confounder_time_varying_continuous",
+            derivation_pseudocode=(
+                "source=SYNTH_DGP_A3; derivation_inputs=['Z_timevarying_continuous']; "
+                "aggregation=last; window_days=180; knowable_at=preindex_180d"
+            ),
+            dataset_context=(
+                "synthetic_a3 DGP; cohort=synthetic_a3; treatment=t_binary; "
+                "outcome=y_continuous; prediction_anchor=index"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Pearl time-varying continuous confounder in DGP a3: Z(t) follows "
+                "an AR(1) process Z(t) = 0.8*Z(t-1) + noise, with Z->T (via "
+                "logistic treatment model P(T=1|Z)=sigmoid(1.5*Z)) and Z->Y "
+                "(Y = 0.5*T + 0.6*Z_last + eps). Pre-anchor temporal filter "
+                "(preindex_180d; last observed value before index). Pearl arrowhead: "
+                "confounder (Z->T, Z->Y; backdoor path T<-Z->Y). Probes whether "
+                "classifier handles CONTINUOUS time-varying confounders — feature is "
+                "the last snapshot before index, representing the pre-treatment "
+                "confounder value. Distinct from binary or static confounders by "
+                "autoregressive temporal dynamics. why_not_duplicate: distinct from "
+                "synth_a3_z_timevarying_confounder_baseline_snapshot by continuous "
+                "(not discretized) AR(1) DGP and 180d (not 365d) window. "
+                "Remediation per role-to-remediation table: confounder -> keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
         # =====================================================================
         # End Plan-239 n=200 Task 6 — Bucket 4 cross-cohort + synthetic-DGP (+44)
