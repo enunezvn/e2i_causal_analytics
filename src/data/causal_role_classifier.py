@@ -3625,7 +3625,7 @@ def build_compile_set() -> list[dspy.Example]:
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
         # PMID: 37529919 — Real-world palbociclib combos (DOI:10.2217/fon-2023-0176)
         # Reframed iter-0 HIGH-2: mechanism rewritten from volume/capacity pattern to
-        # Brookhart 2006 physician prescribing preference IV (PMID 16685206). Feature renamed
+        # Brookhart 2006 physician prescribing preference IV (PMID 16617275). Feature renamed
         # to ..._prescribing_preference_tertile_... to drop volume framing.
         dspy.Example(
             feature_name="practice_cdk46i_prescribing_preference_tertile_prior_year_bc",
@@ -3641,7 +3641,7 @@ def build_compile_set() -> list[dspy.Example]:
             mechanism=(
                 "Practice-level tertile of CDK4/6i prescribing PREFERENCE (share of HR+ "
                 "prescriptions that used a CDK4/6i in the prior year) per Brookhart 2006 "
-                "physician prescribing preference IV (PMID 16685206; doi:10.1093/aje/kwj148). "
+                "physician prescribing preference IV (PMID 16617275; doi:10.1097/01.ede.0000193606.58671.c5). "
                 "Z->T: practices with high CDK4/6i preference share are more likely to "
                 "initiate ribociclib over endocrine monotherapy (preference-driven adoption), "
                 "corroborated by real-world CDK4/6i-class comparative data (PMID 37529919; "
@@ -3709,7 +3709,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "Z->Y DIRECT PATH: formulary tier determines patient cost-sharing (copay) → "
                 "directly affects adherence → directly affects PFS independent of treatment "
                 "receipt; this cost-sharing → adherence → outcome pathway violates IV "
-                "exclusion restriction per Brookhart 2006 (PMID 16685206) criteria. "
+                "exclusion restriction per Brookhart 2006 (PMID 16617275) criteria. "
                 "Correct classification is CONFOUNDER (both Z->T and Z->Y direct paths "
                 "present). Temporal filter: derivation window strictly preindex "
                 "(prefix-censoring at index_date). why_not_duplicate: novel payer-"
@@ -3754,7 +3754,7 @@ def build_compile_set() -> list[dspy.Example]:
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
         # PMID: 39442617 — NATALEE final iDFS Ann Oncol 2024 (DOI:10.1016/j.annonc.2024.10.015)
-        # + Brookhart 2006 physician prescribing preference IV (PMID 16685206)
+        # + Brookhart 2006 physician prescribing preference IV (PMID 16617275)
         # Replaced iter-0 HIGH-5: prior MAP-enrollment IV was access-based with no defensible
         # reframing (enrollment directly funds treatment access AND determines outcome via
         # adherence support — hopelessly access-mediated). Dropped; this label-expansion
@@ -3779,7 +3779,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "adopter oncologists who rapidly incorporated the NATALEE-adjuvant indication "
                 "show persistent prescribing preference that affects subsequent ribociclib "
                 "initiation decisions for eligible patients, per Brookhart 2006 physician "
-                "prescribing preference IV framework (PMID 16685206; doi:10.1093/aje/kwj148). "
+                "prescribing preference IV framework (PMID 16617275; doi:10.1097/01.ede.0000193606.58671.c5). "
                 "Z->Y exclusion restriction: the oncologist's adoption velocity after the "
                 "label expansion reflects institutional protocols and early-adopter clinical "
                 "style — this has NO direct biological pathway to patient invasive-disease-"
@@ -4986,7 +4986,7 @@ def build_compile_set() -> list[dspy.Example]:
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
         # ----- Sub-bucket B3-L: Brookhart-Wang IV entries (4 lit-grounded IVs) -----
-        # PMID: 40747638 — Wedi 2025 (FDA approval timing context) + Brookhart 2006 PMID 16685206-PrefIV pattern
+        # PMID: 40747638 — Wedi 2025 (FDA approval timing context) + Brookhart 2006 PMID 16617275-PrefIV pattern
         dspy.Example(
             feature_name="patient_indexed_within_90d_post_fda_approval_omalizumab_biosimilar_ct_p39_flag_csu",
             derivation_pseudocode=(
@@ -5004,7 +5004,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "doi:10.1097/ACI.0000000000001095). Pre-anchor window enforced; the "
                 "approval date is a fixed exogenous calendar event independent of patient "
                 "characteristics. Z->T: approval-recency surge drives biosimilar uptake "
-                "(Brookhart-Wang short-term-IV framework PMID 16685206). EXCLUSION "
+                "(Brookhart-Wang short-term-IV framework PMID 16617275). EXCLUSION "
                 "RESTRICTION DEFENSE: FDA approval date for a biosimilar has no biological "
                 "path Z->Y other than through treatment receipt; the active molecule is "
                 "equivalent, so there is no efficacy-shift confound (Brookhart-Schneeweiss "
@@ -5016,7 +5016,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
-        # PMID: 16685206 — Brookhart 2006 PrefIV + PMID 38008109 PEARL trial-context
+        # PMID: 16617275 — Brookhart 2006 PrefIV + PMID 38008109 PEARL trial-context
         dspy.Example(
             feature_name="index_prescriber_omalizumab_preference_share_tertile_prior_365d_csu",
             derivation_pseudocode=(
@@ -5033,7 +5033,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "biologic fills in the prior 365d (knowable_at=preindex_0d — based on "
                 "prescriptions written BEFORE the focal patient's index, no postindex "
                 "data); Brookhart-Wang preference-based instrumental variable (Brookhart "
-                "2006 PMID 16685206) for CSU biologic selection. Z->T: high-preference-"
+                "2006 PMID 16617275) for CSU biologic selection. Z->T: high-preference-"
                 "tertile prescribers initiate omalizumab more often. EXCLUSION RESTRICTION "
                 "DEFENSE: prescriber preference between omalizumab and other CSU "
                 "biologics affects patient outcome ONLY through treatment receipt; "
@@ -5048,7 +5048,7 @@ def build_compile_set() -> list[dspy.Example]:
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
         # Edge case: Brookhart-Wang label-expansion calendar IV. Construct anchored in
-        # Brookhart 2006 PMID 16685206 (physician prescribing preference / short-term IV
+        # Brookhart 2006 PMID 16617275 (physician prescribing preference / short-term IV
         # designs); operationalization (calendar-quarter post-Remibrutinib FDA label expansion
         # to CIndU indication) is an implementer-chosen design pattern with no specific
         # published claims study yet — probes whether the classifier recognizes regulatory-
@@ -5082,7 +5082,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
-        # PMID: 16685206 — Brookhart 2006 PrefIV + PMID 38008109 PEARL-2 head-to-head ligelizumab vs omalizumab
+        # PMID: 16617275 — Brookhart 2006 PrefIV + PMID 38008109 PEARL-2 head-to-head ligelizumab vs omalizumab
         dspy.Example(
             feature_name="index_prescriber_first_biologic_initiator_within_first_year_post_remibrutinib_launch_flag_csu",
             derivation_pseudocode=(
@@ -5099,7 +5099,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "prescription within the first 365d post-launch (knowable_at=preindex_0d — "
                 "computed against the FOCAL patient's index date but based on prescriber "
                 "history that PRECEDES the focal index). Brookhart-Wang early-adopter "
-                "instrument (PMID 16685206). Z->T: early-adopter prescribers shift toward "
+                "instrument (PMID 16617275). Z->T: early-adopter prescribers shift toward "
                 "remibrutinib for subsequent eligible patients. EXCLUSION RESTRICTION "
                 "DEFENSE: prescriber adoption-recency captures information-diffusion timing "
                 "uncorrelated with patient-level disease biology; pre-launch prescribing "
