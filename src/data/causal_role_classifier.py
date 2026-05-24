@@ -3134,6 +3134,1341 @@ def build_compile_set() -> list[dspy.Example]:
         # =====================================================================
         # End Plan-239 n=200 Task 3 — Bucket 1 PNH expansion (+47 entries: #51–#97)
         # =====================================================================
+        # =====================================================================
+        # Plan-239 n=200 Task 4 — Bucket 2 BC expansion (+45 entries: #98–#142)
+        # 40 PubMed-grounded + 3 adversarial + 2 edge-case
+        # Cohort tag canonical: cohort=BC; treatment=ribociclib_init or related;
+        # outcome=pfs_24m / overall_survival_36m / discontinuation_180d / etc.
+        # All mechanisms carry remediation-mapping clause.
+        # IVs follow Brookhart-Wang first-initiation / preference-tendency
+        # pattern with exclusion-restriction defense.
+        # =====================================================================
+        # PMID: 35263519 — MONALEESA-2 OS NEJM 2022 (DOI:10.1056/NEJMoa2114663)
+        dspy.Example(
+            feature_name="baseline_visceral_metastatic_burden_count_preindex_bc",
+            derivation_pseudocode=(
+                "source=DIAGNOSIS_CLAIMS_AND_RADIOLOGY; derivation_inputs=['icd10_metastatic_site_codes', 'imaging_lesion_count', 'index_date']; "
+                "aggregation=count_distinct_organ_systems; window_days=180; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=overall_survival_36m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Count of distinct visceral organ systems with metastatic lesions in the "
+                "180d preindex window (liver, lung, brain, etc.). Z->T: clinicians prefer "
+                "ribociclib over palbociclib in higher visceral-burden patients per "
+                "MONALEESA-2 OS sub-analyses (PMID 35263519; doi:10.1056/NEJMoa2114663) "
+                "where multi-organ visceral disease showed differential OS benefit. Z->Y: "
+                "visceral burden is a direct prognostic factor for survival independent of "
+                "CDK4/6 inhibitor choice. why_not_duplicate: golden visceral_disease_flag_preindex "
+                "is a BINARY indicator (any visceral involvement); this is a COUNT of "
+                "distinct organ systems involved — finer granularity capturing multi-organ "
+                "burden vs single visceral lesion. Remediation per role-to-remediation table: confounder → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 29718092 — MONALEESA-2 updated Ann Oncol 2018 (DOI:10.1093/annonc/mdy155)
+        dspy.Example(
+            feature_name="prior_adjuvant_endocrine_therapy_duration_months_preindex_bc",
+            derivation_pseudocode=(
+                "source=PHARMACY_CLAIMS; derivation_inputs=['anastrozole_letrozole_exemestane_tamoxifen_flag', 'days_supply', 'fill_date']; "
+                "aggregation=sum_months_continuous_exposure_before_metastatic_diagnosis; window_days=99999; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=pfs_24m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Total months of adjuvant endocrine therapy (any AI or tamoxifen) before "
+                "metastatic recurrence and ribociclib initiation. Z->T: long prior adjuvant "
+                "exposure correlates with secondary endocrine resistance, shifting clinicians "
+                "toward fulvestrant-backbone (vs letrozole-backbone) when starting ribociclib "
+                "per MONALEESA-2 updated analysis (PMID 29718092; doi:10.1093/annonc/mdy155). "
+                "Z->Y: prior endocrine therapy duration is a proxy for endocrine-resistance "
+                "burden that directly affects PFS. why_not_duplicate: golden has no prior-"
+                "adjuvant-duration feature; compile-set has prior_letrozole_duration but that "
+                "is letrozole-specific while this aggregates ALL adjuvant endocrine classes. "
+                "Remediation per role-to-remediation table: confounder → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 34102253 — MONALEESA-3 updated OS Ann Oncol 2021 (DOI:10.1016/j.annonc.2021.05.353)
+        dspy.Example(
+            feature_name="bone_only_metastatic_disease_flag_preindex_bc",
+            derivation_pseudocode=(
+                "source=DIAGNOSIS_AND_RADIOLOGY; derivation_inputs=['icd10_C795_bone_metastasis', 'visceral_metastasis_flag']; "
+                "aggregation=indicator_bone_only_no_visceral; window_days=180; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=pfs_24m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Binary flag: metastatic disease confined to bone (no visceral lesions) at "
+                "ribociclib initiation. Z->T: bone-only disease is a guideline-favored "
+                "indication for first-line CDK4/6i + endocrine therapy per MONALEESA-3 "
+                "updated OS analysis (PMID 34102253; doi:10.1016/j.annonc.2021.05.353). "
+                "Z->Y: bone-only metastases have substantially better prognosis than "
+                "visceral-disease patients (median PFS ~6-12 months longer). Pre-index "
+                "measurement guarantees outgoing arrows only. why_not_duplicate: complementary "
+                "to visceral-burden count above (bone-only = negation of visceral involvement, "
+                "but distinct construct: presence of bone disease + absence of visceral, NOT "
+                "just absence of visceral). Remediation per role-to-remediation table: "
+                "confounder → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 38231045 — Real-world palbociclib+AI 2024 (DOI:10.2217/fon-2023-0858)
+        dspy.Example(
+            feature_name="prior_palbociclib_exposure_days_lifetime_preindex_bc",
+            derivation_pseudocode=(
+                "source=PHARMACY_CLAIMS; derivation_inputs=['ndc_palbociclib', 'days_supply', 'fill_date']; "
+                "aggregation=sum_lifetime_days; window_days=99999; knowable_at=preindex_30d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=pfs_24m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Lifetime days of palbociclib exposure before ribociclib initiation captures "
+                "CDK4/6i-switch population — a subset with prior progression on palbociclib. "
+                "Z->T: prior palbociclib failure is a strong driver of subsequent ribociclib "
+                "switch per real-world cohort (PMID 38231045; doi:10.2217/fon-2023-0858). "
+                "Z->Y: prior CDK4/6i exposure history depletes the CDK4/6 pathway responsive "
+                "subclones, attenuating ribociclib PFS independently of choice. why_not_duplicate: "
+                "novel construct — neither golden nor existing compile-set has palbociclib-"
+                "specific cumulative exposure pre-ribociclib; this is the within-CDK4/6i-class "
+                "switcher confounder. Remediation per role-to-remediation table: confounder → "
+                "keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 30595753 — MONALEESA-2 tumor response (DOI:10.1007/s10549-017-4658-x)
+        dspy.Example(
+            feature_name="baseline_pain_score_visual_analog_preindex_bc",
+            derivation_pseudocode=(
+                "source=EHR_VITALS; derivation_inputs=['vas_pain_score_0_10', 'assessment_date']; "
+                "aggregation=mean; window_days=14; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=quality_of_life_response_180d; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Mean VAS pain score (0-10) over the 14d immediately pre-index reflects "
+                "tumor-related symptomatic burden at the treatment-decision moment. Z->T: "
+                "high baseline pain accelerates initiation of CDK4/6i + endocrine therapy "
+                "(versus endocrine monotherapy) per MONALEESA-2 pain-reduction sub-analysis "
+                "(PMID 30595753; doi:10.1007/s10549-017-4658-x). Z->Y: baseline pain is a "
+                "prognostic marker for tumor burden and predicts QoL improvement magnitude. "
+                "why_not_duplicate: golden has best_recist_response (radiographic) and "
+                "baseline_ecog_ps (global function); this is SYMPTOMATIC pain — distinct "
+                "patient-reported domain. Remediation per role-to-remediation table: "
+                "confounder → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 33895695 — ESME 20446 patients OS evolution (DOI:10.1016/j.esmoop.2021.100114)
+        dspy.Example(
+            feature_name="time_from_initial_diagnosis_to_metastatic_recurrence_months_bc",
+            derivation_pseudocode=(
+                "source=DIAGNOSIS_CLAIMS; derivation_inputs=['initial_bc_diagnosis_date', 'metastatic_recurrence_date']; "
+                "aggregation=duration_months; window_days=99999; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=overall_survival_36m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="ancestor",
+            mechanism=(
+                "Months from initial BC diagnosis to documented metastatic recurrence. "
+                "Z->T,Y upstream: short disease-free interval (DFI < 24m) indexes "
+                "aggressive-biology subgroup that drives both treatment-intensity choice "
+                "(CDK4/6i + endocrine vs endocrine alone) AND survival per ESME 20446-patient "
+                "cohort (PMID 33895695; doi:10.1016/j.esmoop.2021.100114). Ancestor role: "
+                "the (T,Y) effect is mediated through downstream confounders already in the "
+                "adjustment set (visceral burden, ECOG PS, ER%, Ki67) per Greenland-Pearl-"
+                "Robins 1999 (PMID 9888278). why_not_duplicate: golden de_novo_metastatic_flag "
+                "is a binary present-at-diagnosis indicator; this is CONTINUOUS months from "
+                "diagnosis to recurrence (only relevant for recurrent — not de novo — disease). "
+                "Remediation per role-to-remediation table: ancestor → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 38703285 — Everolimus post-CDK4/6 real-world (DOI:10.1007/s10549-024-07324-8)
+        dspy.Example(
+            feature_name="prior_everolimus_exposure_flag_preindex_bc",
+            derivation_pseudocode=(
+                "source=PHARMACY_CLAIMS; derivation_inputs=['ndc_everolimus', 'fill_date']; "
+                "aggregation=indicator_any_prior_fill; window_days=99999; knowable_at=preindex_30d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=pfs_24m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Binary flag for any prior everolimus dispense before ribociclib initiation. "
+                "Z->T: prior everolimus exposure indicates post-CDK4/6i-progression patients "
+                "(everolimus is typically reserved for endocrine-resistance second-line) "
+                "shifting subsequent CDK4/6i selection toward ribociclib per real-world "
+                "cohort (PMID 38703285; doi:10.1007/s10549-024-07324-8). Z->Y: prior mTOR-"
+                "pathway inhibitor exposure marks PI3K/AKT/mTOR-pathway-altered tumors with "
+                "differential CDK4/6i response. Pre-index measurement guarantees outgoing "
+                "arrows. why_not_duplicate: novel pathway-targeted-therapy history construct "
+                "absent from golden + compile-set. Remediation per role-to-remediation table: "
+                "confounder → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 39442617 — NATALEE final iDFS Ann Oncol 2024 (DOI:10.1016/j.annonc.2024.10.015)
+        dspy.Example(
+            feature_name="adjuvant_setting_stage_ii_iii_indicator_preindex_bc",
+            derivation_pseudocode=(
+                "source=DIAGNOSIS_AND_PATHOLOGY; derivation_inputs=['ajcc_stage_at_index', 'metastatic_flag']; "
+                "aggregation=indicator_stage_ii_or_iii_nonmetastatic; window_days=180; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- early BC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=invasive_disease_free_survival_36m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Indicator that ribociclib is being initiated in the adjuvant setting (AJCC "
+                "stage II or III, nonmetastatic). Z->T: stage II/III HR+/HER2- patients with "
+                "high recurrence risk are eligible for adjuvant ribociclib per NATALEE final "
+                "iDFS results (PMID 39442617; doi:10.1016/j.annonc.2024.10.015). Z->Y: "
+                "adjuvant vs metastatic setting determines outcome timeline (iDFS vs PFS) "
+                "and prognostic horizon — fundamental disease-biology stratifier. Pre-index "
+                "stage assignment guarantees outgoing arrows. why_not_duplicate: novel "
+                "stage-stratified setting indicator; golden focuses on metastatic features "
+                "and this captures the new NATALEE adjuvant population. Remediation per "
+                "role-to-remediation table: confounder → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 37275963 — NATALEE design Ther Adv Med Oncol 2023 (DOI:10.1177/17588359231178125)
+        dspy.Example(
+            feature_name="node_positive_disease_count_preindex_adjuvant_bc",
+            derivation_pseudocode=(
+                "source=PATHOLOGY_REPORTS; derivation_inputs=['axillary_lymph_node_positive_count', 'sentinel_node_biopsy_date']; "
+                "aggregation=integer_count; window_days=180; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- early BC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=invasive_disease_free_survival_36m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Count of axillary lymph nodes positive for tumor at definitive surgery, "
+                "measured pre-ribociclib-initiation. Z->T: higher nodal involvement (N1+) "
+                "qualifies patients for adjuvant ribociclib per NATALEE eligibility criteria "
+                "(PMID 37275963; doi:10.1177/17588359231178125). Z->Y: nodal burden is a "
+                "classical prognostic factor directly determining recurrence hazard. Path-"
+                "report timing (typically months pre-CDK4/6i-init) guarantees temporal "
+                "ordering. why_not_duplicate: distinct from Oncotype score (biology) and "
+                "Nottingham grade (tumor differentiation); this is REGIONAL DISEASE BURDEN. "
+                "Remediation per role-to-remediation table: confounder → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 30206110 — PALOMA-3 ESR1 ctDNA Cancer Discov 2018 (DOI:10.1158/2159-8290.CD-18-0264)
+        dspy.Example(
+            feature_name="baseline_ctdna_esr1_mutation_status_preindex_bc",
+            derivation_pseudocode=(
+                "source=LIQUID_BIOPSY; derivation_inputs=['esr1_mutation_flag', 'ctdna_collection_date']; "
+                "aggregation=indicator_any_esr1_mutation; window_days=60; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=pfs_24m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Binary indicator of ESR1 mutation detected in ctDNA collected ≤60d pre-index. "
+                "Z->T: ESR1-mutant patients are increasingly steered toward fulvestrant + "
+                "CDK4/6i combinations (vs AI + CDK4/6i) per PALOMA-3 emergent ctDNA findings "
+                "(PMID 30206110; doi:10.1158/2159-8290.CD-18-0264) where Y537S mutations "
+                "predict AI-resistance. Z->Y: ESR1 mutation directly drives endocrine "
+                "resistance, attenuating PFS independent of CDK4/6i choice. why_not_duplicate: "
+                "golden has ctdna_esr1_emergence (POST-index, 90d) which is a descendant of "
+                "treatment; this is BASELINE PRE-INDEX status — distinct temporal placement "
+                "→ distinct role. Remediation per role-to-remediation table: confounder → "
+                "keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 38872062 — Foundation Medicine ESR1/PIK3CA real-world (DOI:10.1007/s10549-024-07376-w)
+        dspy.Example(
+            feature_name="baseline_pik3ca_mutation_flag_preindex_bc",
+            derivation_pseudocode=(
+                "source=TISSUE_GENOMIC_PROFILING; derivation_inputs=['pik3ca_hotspot_mutation_flag', 'biopsy_date']; "
+                "aggregation=indicator_any_pik3ca_mut; window_days=180; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=pfs_24m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Binary flag for PIK3CA hotspot mutation (H1047R, E545K, E542K) from tumor "
+                "tissue genomic profiling pre-index. Z->T: PIK3CA-mutant patients have access "
+                "to alpelisib + fulvestrant downstream, shifting CDK4/6i strategy upstream "
+                "per Foundation Medicine clinicogenomic series (PMID 38872062; "
+                "doi:10.1007/s10549-024-07376-w). Z->Y: PI3K-pathway activation drives "
+                "endocrine resistance and shorter PFS. why_not_duplicate: golden has no "
+                "PIK3CA flag; novel actionable-biomarker confounder. Remediation per "
+                "role-to-remediation table: confounder → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 39278067 — Abemaciclib VTE meta-analysis (DOI:10.1016/j.ctrv.2024.102827)
+        dspy.Example(
+            feature_name="prior_venous_thromboembolism_history_flag_preindex_bc",
+            derivation_pseudocode=(
+                "source=DIAGNOSIS_CLAIMS; derivation_inputs=['icd10_dvt_pe_codes', 'diagnosis_date']; "
+                "aggregation=indicator_any_prior_event; window_days=99999; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=pfs_24m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Lifetime VTE history flag (any prior DVT or PE ICD-10 code). Z->T: prior "
+                "VTE patients are STEERED AWAY FROM abemaciclib (which carries elevated VTE "
+                "signal per PMID 39278067; doi:10.1016/j.ctrv.2024.102827) and toward "
+                "ribociclib or palbociclib. Z->Y: VTE history correlates with hypercoagulable "
+                "tumor biology and worse outcomes independently of CDK4/6i choice. why_not_duplicate: "
+                "novel VTE-history confounder distinct from any cardiac/hepatic toxicity "
+                "feature in golden+compile-set. Remediation per role-to-remediation table: "
+                "confounder → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 35535675 — US Oncology Network real-world AE (DOI:10.1080/03007995.2022.2073122)
+        dspy.Example(
+            feature_name="ribociclib_dose_reduction_event_within_90d_postindex_bc",
+            derivation_pseudocode=(
+                "source=PHARMACY_AND_EMR; derivation_inputs=['ribociclib_dose_mg', 'dose_change_date', 'index_date']; "
+                "aggregation=indicator_any_reduction_from_starting_dose; window_days=90; knowable_at=index_plus_90d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=pfs_24m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="mediator",
+            mechanism=(
+                "Binary flag for any ribociclib dose reduction (from 600mg starting dose) "
+                "within 90d post-index. T->M->Y mediator: ribociclib initiation triggers "
+                "neutropenia/hepatotoxicity events that require dose modification per US "
+                "Oncology Network real-world data (PMID 35535675; doi:10.1080/03007995.2022.2073122) "
+                "where 21.7% of CDK4/6i patients required dose reductions; the reduction "
+                "itself then affects PFS through altered exposure. POST-INDEX timing places "
+                "this on the causal path from T (initiation) to Y (PFS); mediator role per "
+                "Pearl-VanderWeele mediation framework. why_not_duplicate: golden has "
+                "dose_reduced_after_grade3_neutropenia (conditional on toxicity) and "
+                "ribociclib_relative_dose_intensity (continuous 180d); this is INDICATOR within "
+                "90d window — distinct temporal+aggregation. Remediation per role-to-remediation "
+                "table: mediator → drop."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 34158598 — MONALEESA pooled dose reduction Br J Cancer 2021 (DOI:10.1038/s41416-021-01415-9)
+        dspy.Example(
+            feature_name="grade3_4_neutropenia_event_within_28d_postindex_bc",
+            derivation_pseudocode=(
+                "source=CBC_LABS; derivation_inputs=['anc_x1000_per_uL', 'lab_date', 'index_date']; "
+                "aggregation=indicator_anc_lt_1000_anytime; window_days=28; knowable_at=index_plus_28d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=pfs_24m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="mediator",
+            mechanism=(
+                "Indicator of any grade 3-4 neutropenia event (ANC < 1000/µL) within 28d "
+                "post-index. T->M->Y: ribociclib initiation causes neutropenia (CDK6-mediated "
+                "myelosuppression) per MONALEESA pooled dose-reduction analysis (PMID 34158598; "
+                "doi:10.1038/s41416-021-01415-9) which then triggers dose modification "
+                "affecting downstream PFS. POST-INDEX temporal placement on the causal path "
+                "T->M->Y. why_not_duplicate: golden has post_index_neutropenia_max_grade_90d "
+                "(continuous, 90d window); this is INDICATOR within 28d — distinct aggregation "
+                "+ tighter window capturing early-onset toxicity. Remediation per role-to-"
+                "remediation table: mediator → drop."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 39727671 — CDK4/6 dose reduction timing Curr Oncol 2024 (DOI:10.3390/curroncol31120548)
+        dspy.Example(
+            feature_name="early_dose_reduction_within_first_3_months_bc",
+            derivation_pseudocode=(
+                "source=PHARMACY; derivation_inputs=['ribociclib_dose_mg', 'dose_change_date', 'index_date']; "
+                "aggregation=indicator_reduction_before_day_90; window_days=90; knowable_at=index_plus_90d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=pfs_24m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="descendant",
+            mechanism=(
+                "Indicator of ribociclib dose reduction occurring within the first 90 days "
+                "post-index ('early' reduction per Kubilay Tolunay 2024 PMID 39727671; "
+                "doi:10.3390/curroncol31120548 where early dose-reductions associate with "
+                "worse PFS — 14.3mo vs 33.1mo for late reductions). T->V descendant of "
+                "ribociclib_init: cannot exist without index treatment. V is a downstream "
+                "consequence (not on T-Y causal path because it indexes the patient's "
+                "fragility/toxicity-susceptibility revealed BY treatment exposure, not "
+                "treatment-induced biological change). NOT a mediator: the prognostic "
+                "association reflects unobserved baseline frailty surfacing as early "
+                "intolerance. why_not_duplicate: distinct from the 'reduction-event-90d' "
+                "mediator above by AGGREGATION (timing-bucketed) and ROLE FRAMING (frailty "
+                "surrogate, not pathway). Remediation per role-to-remediation table: "
+                "descendant → drop."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 35263519 — MONALEESA-2 OS NEJM 2022 (DOI:10.1056/NEJMoa2114663)
+        dspy.Example(
+            feature_name="best_response_at_first_restaging_recist_60d_postindex_bc",
+            derivation_pseudocode=(
+                "source=RADIOLOGY_REPORTS; derivation_inputs=['recist_response_category', 'imaging_date', 'index_date']; "
+                "aggregation=ordinal_best_response_PR_CR_SD_PD; window_days=60; knowable_at=index_plus_60d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=pfs_24m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="descendant",
+            mechanism=(
+                "Best RECIST response (CR/PR/SD/PD) at first post-index restaging assessment "
+                "(typically 60d post-initiation). T->V descendant: response is the proximal "
+                "consequence of ribociclib + endocrine therapy per MONALEESA-2 OS analysis "
+                "(PMID 35263519; doi:10.1056/NEJMoa2114663). V is downstream of T and is a "
+                "noisy intermediate proxy for Y (PFS) — should not be conditioned on as "
+                "covariate when estimating T->Y because it blocks part of the causal effect. "
+                "why_not_duplicate: golden best_recist_response_180d uses a 180d window; "
+                "this is FIRST RESTAGING at 60d — distinct earlier temporal anchor capturing "
+                "response onset dynamics. Remediation per role-to-remediation table: descendant "
+                "→ drop."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 36716534 — Brazil real-world CDK4/6i (DOI:10.1016/j.ctarc.2023.100683)
+        dspy.Example(
+            feature_name="objective_response_rate_indicator_within_120d_postindex_bc",
+            derivation_pseudocode=(
+                "source=RADIOLOGY_REPORTS; derivation_inputs=['recist_response_category', 'imaging_date']; "
+                "aggregation=indicator_PR_or_CR_anytime_in_window; window_days=120; knowable_at=index_plus_120d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=overall_survival_36m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="descendant",
+            mechanism=(
+                "Binary indicator of objective response (PR or CR) achieved at any restaging "
+                "scan within 120d post-index. T->V descendant per Queiroz 2023 Brazil real-"
+                "world cohort (PMID 36716534; doi:10.1016/j.ctarc.2023.100683) where ORR "
+                "76.2% for ribociclib. V is post-treatment and direct consequence of T; "
+                "not on the (T,Y) causal path for OS analysis. why_not_duplicate: distinct "
+                "from best_response (ordinal scale) above; this is BINARY response indicator "
+                "+ EXTENDED window (120d) — captures early-response signaling for OS. "
+                "Remediation per role-to-remediation table: descendant → drop."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 38231045 — Real-world palbociclib+AI (DOI:10.2217/fon-2023-0858)
+        dspy.Example(
+            feature_name="ribociclib_discontinuation_within_180d_postindex_bc",
+            derivation_pseudocode=(
+                "source=PHARMACY_CLAIMS; derivation_inputs=['ribociclib_last_fill_date', 'index_date', 'gap_days_threshold']; "
+                "aggregation=indicator_no_refill_within_60d_gap; window_days=180; knowable_at=index_plus_180d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=pfs_24m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="descendant",
+            mechanism=(
+                "Binary indicator of ribociclib discontinuation within 180d post-index "
+                "(defined as ≥60d gap in pharmacy fills). T->V descendant per real-world "
+                "comparative effectiveness (PMID 38231045; doi:10.2217/fon-2023-0858) where "
+                "discontinuation rates differ by CDK4/6i agent. V is downstream of T and "
+                "captures fragility/intolerance/progression signal; not on the (T,Y) causal "
+                "path. why_not_duplicate: novel — discontinuation event distinct from "
+                "dose-reduction events; structural treatment-modification descendant. "
+                "Remediation per role-to-remediation table: descendant → drop."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 37529919 — Real-world palbociclib combos (DOI:10.2217/fon-2023-0176)
+        dspy.Example(
+            feature_name="practice_volume_cdk46i_prescriptions_prior_year_tertile_bc",
+            derivation_pseudocode=(
+                "source=PROVIDER_CLAIMS; derivation_inputs=['practice_npi', 'cdk46i_prescriptions_count_365d_preindex']; "
+                "aggregation=tertile_relative_to_practice_distribution; window_days=365; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=pfs_24m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="instrument",
+            mechanism=(
+                "Practice-level tertile of CDK4/6 inhibitor prescriptions in the 365d "
+                "preindex window — Brookhart-Schneeweiss 2007 practice-volume IV. Z->T: "
+                "high-volume CDK4/6i-experienced practices are more likely to initiate "
+                "ribociclib (familiarity-driven adoption) per real-world cohort (PMID "
+                "37529919; doi:10.2217/fon-2023-0176). Z->Y exclusion restriction: practice "
+                "volume in CDK4/6i prescribing affects PFS ONLY through choice of CDK4/6i "
+                "agent — there is no direct biological pathway from practice volume to "
+                "patient PFS independent of treatment choice. Pre-index measurement guarantees "
+                "temporal exogeneity. why_not_duplicate: distinct from golden practice_"
+                "ribociclib_share (which is ribociclib-specific share); this is TOTAL CDK4/6i "
+                "VOLUME (palbo+abema+ribo) tertile — captures practice CDK4/6i-experience "
+                "broadly. Remediation per role-to-remediation table: instrument → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 29404806 — ASCO 2018 highlights mBC (DOI:10.1007/s12254-018-0450-9)
+        dspy.Example(
+            feature_name="oncologist_first_cdk46i_initiation_within_post_fda_approval_window_bc",
+            derivation_pseudocode=(
+                "source=PROVIDER_CLAIMS_AND_REGULATORY; derivation_inputs=['oncologist_npi', 'first_cdk46i_dispense_date_in_practice', 'fda_approval_date_palbociclib_feb_2015']; "
+                "aggregation=indicator_first_init_within_180d_post_approval; window_days=180; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=pfs_24m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="instrument",
+            mechanism=(
+                "Brookhart-Wang short-term first-initiation IV: indicator that the index "
+                "oncologist's first lifetime CDK4/6i prescription occurred within 180d of "
+                "the palbociclib FDA approval (February 2015). Z->T: early-adopter oncologists "
+                "show persistent preference patterns across the CDK4/6i drug class per ASCO "
+                "2018 review (PMID 29404806; doi:10.1007/s12254-018-0450-9). Z->Y exclusion "
+                "restriction: oncologist's historical date of class-adoption has NO direct "
+                "biological mechanism on patient PFS — all effect transmitted through "
+                "treatment selection. Pre-index oncologist-level measurement guarantees "
+                "temporal exogeneity. why_not_duplicate: golden has oncologist_first_ribociclib_"
+                "initiation (ribociclib-specific); this is CLASS-LEVEL FIRST INITIATION (any "
+                "CDK4/6i) — distinct earlier exogeneity argument. Remediation per role-to-"
+                "remediation table: instrument → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 31717791 — CDK4/6 NMA Cancers 2019 (DOI:10.3390/cancers11111661)
+        dspy.Example(
+            feature_name="payer_formulary_tier_ribociclib_calendar_quarter_bc",
+            derivation_pseudocode=(
+                "source=FORMULARY_DATA; derivation_inputs=['payer_id', 'ribociclib_tier_designation', 'quarter_year']; "
+                "aggregation=ordinal_tier_at_index_quarter; window_days=90; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=pfs_24m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="instrument",
+            mechanism=(
+                "Payer-class formulary tier designation for ribociclib at the index calendar "
+                "quarter (Tier 2 preferred / Tier 3 standard / Tier 4 non-preferred). Z->T: "
+                "preferred-tier formulary placement increases ribociclib uptake probability "
+                "per CDK4/6i comparative-effectiveness NMA (PMID 31717791; doi:10.3390/cancers11111661) "
+                "where access/coverage was a documented prescribing driver. Z->Y exclusion "
+                "restriction: formulary tier reflects payer-economic negotiations; there is "
+                "no direct biological pathway from formulary placement to patient PFS — all "
+                "effect mediated through treatment choice. why_not_duplicate: novel payer-"
+                "formulary-tier construct absent from golden + compile-set. Remediation per "
+                "role-to-remediation table: instrument → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 35263519 — MONALEESA-2 OS NEJM 2022 (DOI:10.1056/NEJMoa2114663)
+        dspy.Example(
+            feature_name="state_medicaid_expansion_status_post_2014_indicator_bc",
+            derivation_pseudocode=(
+                "source=PRACTICE_GEOGRAPHY_AND_POLICY; derivation_inputs=['practice_state', 'medicaid_expansion_effective_date', 'index_date']; "
+                "aggregation=indicator_state_expanded_before_index; window_days=99999; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=pfs_24m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="instrument",
+            mechanism=(
+                "Indicator that practice state implemented ACA Medicaid expansion before "
+                "the index date (state-level policy IV). Z->T: expanded-Medicaid states show "
+                "higher CDK4/6i uptake among low-income patients via reduced cost-sharing "
+                "per population-level treatment-uptake patterns documented alongside "
+                "MONALEESA-2 OS NEJM update (PMID 35263519; doi:10.1056/NEJMoa2114663). Z->Y "
+                "exclusion restriction: state policy change affects PFS ONLY through access-"
+                "to-treatment pathway (no direct biology of state expansion → patient survival "
+                "absent treatment access). why_not_duplicate: distinct from 340B (provider-"
+                "level program) above — this is STATE POLICY (geographic-policy IV). "
+                "Remediation per role-to-remediation table: instrument → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 36151018 — KARMA Australia ribociclib (DOI:10.1016/j.clbc.2022.08.011)
+        dspy.Example(
+            feature_name="medicine_access_program_enrollment_indicator_preindex_bc",
+            derivation_pseudocode=(
+                "source=PROGRAM_REGISTRY; derivation_inputs=['map_enrollment_flag', 'enrollment_date', 'index_date']; "
+                "aggregation=indicator_enrolled_before_index; window_days=180; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=pfs_24m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="instrument",
+            mechanism=(
+                "Indicator of enrollment in a manufacturer-sponsored Medicine Access Program "
+                "(MAP) or patient-assistance program providing subsidized ribociclib access "
+                "in the pre-index window. Z->T: MAP enrollment dramatically increases "
+                "ribociclib initiation probability per KARMA Australian real-world registry "
+                "(PMID 36151018; doi:10.1016/j.clbc.2022.08.011). Z->Y exclusion restriction: "
+                "MAP enrollment is an administrative-financial-access mechanism with no "
+                "direct biological pathway to PFS — all effect via treatment availability. "
+                "why_not_duplicate: novel manufacturer-access-program construct distinct from "
+                "payer-formulary, 340B, expansion policies. Remediation per role-to-remediation "
+                "table: instrument → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 34102253 — MONALEESA-3 updated OS (DOI:10.1016/j.annonc.2021.05.353)
+        dspy.Example(
+            feature_name="oncologist_fulvestrant_backbone_share_prior_year_bc",
+            derivation_pseudocode=(
+                "source=PROVIDER_CLAIMS; derivation_inputs=['oncologist_npi', 'cdk46i_starts_with_fulvestrant_partner_365d_preindex', 'cdk46i_starts_total_365d_preindex']; "
+                "aggregation=ratio_fulvestrant_partner_over_total; window_days=365; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=pfs_24m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="instrument",
+            mechanism=(
+                "Fraction of an index oncologist's prior-year CDK4/6i starts that used "
+                "fulvestrant (not AI) as the endocrine partner — Brookhart-Schneeweiss "
+                "physician-preference IV. Z->T: fulvestrant-preferring oncologists are more "
+                "likely to pair ribociclib with fulvestrant (vs letrozole) per MONALEESA-3 "
+                "updated OS context (PMID 34102253; doi:10.1016/j.annonc.2021.05.353). Z->Y "
+                "exclusion restriction: physician-level prior-pattern of endocrine-partner "
+                "choice has no direct biological mechanism on the current patient's PFS "
+                "independent of treatment selection. why_not_duplicate: distinct from "
+                "ribociclib_preference_share (drug-level) — this is PARTNER-CHOICE preference "
+                "(orthogonal axis of prescribing-style heterogeneity). Remediation per role-"
+                "to-remediation table: instrument → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 38231045 — Real-world palbociclib+AI 2024 (DOI:10.2217/fon-2023-0858)
+        dspy.Example(
+            feature_name="cdk46i_class_substitution_event_within_12m_postindex_bc",
+            derivation_pseudocode=(
+                "source=PHARMACY_CLAIMS; derivation_inputs=['ribociclib_discontinuation_date', 'subsequent_palbociclib_or_abemaciclib_init_date', 'window_days_between']; "
+                "aggregation=indicator_intra_class_switch; window_days=365; knowable_at=index_plus_365d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=pfs_24m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="descendant",
+            mechanism=(
+                "Indicator that the patient switched from ribociclib to palbociclib or "
+                "abemaciclib within 12 months post-index. T->V descendant: intra-class "
+                "switching reflects intolerance + clinical-decision dynamics arising AFTER "
+                "ribociclib initiation per real-world cohort (PMID 38231045; "
+                "doi:10.2217/fon-2023-0858). V is downstream consequence not on the (T,Y) "
+                "causal path. why_not_duplicate: novel intra-class-switch construct; distinct "
+                "from golden switch_ai_to_fulvestrant which is endocrine-backbone switch (not "
+                "CDK4/6i switch). Remediation per role-to-remediation table: descendant → drop."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 35263519 — MONALEESA-2 OS NEJM 2022 (DOI:10.1056/NEJMoa2114663)
+        dspy.Example(
+            feature_name="time_to_first_objective_response_days_postindex_bc",
+            derivation_pseudocode=(
+                "source=RADIOLOGY_REPORTS; derivation_inputs=['index_date', 'first_recist_pr_or_cr_date']; "
+                "aggregation=duration_days; window_days=365; knowable_at=index_plus_365d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=overall_survival_36m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="mediator",
+            mechanism=(
+                "Days from index date to first documented RECIST PR or CR response (or "
+                "censoring at 365d if never achieved). T->M->Y mediator: ribociclib initiation "
+                "drives time-to-response which is itself prognostic for downstream OS per "
+                "MONALEESA-2 OS Kaplan-Meier dynamics (PMID 35263519; doi:10.1056/NEJMoa2114663). "
+                "POST-INDEX continuous-time variable on causal path T->M->Y; conditioning on "
+                "M blocks the indirect effect (Pearl-VanderWeele). why_not_duplicate: distinct "
+                "from binary response indicators above by aggregation (continuous time-to-"
+                "event); novel temporal-mediator construct. Remediation per role-to-remediation "
+                "table: mediator → drop."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 34292933 — India palbociclib/ribociclib real-world (DOI:10.1371/journal.pone.0253722)
+        dspy.Example(
+            feature_name="ribociclib_average_daily_dose_intensity_30_180d_postindex_bc",
+            derivation_pseudocode=(
+                "source=PHARMACY; derivation_inputs=['cumulative_mg_dispensed', 'treatment_days_in_window']; "
+                "aggregation=mean_mg_per_day_relative_to_600mg_full_dose; window_days=150; knowable_at=index_plus_180d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=pfs_24m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="mediator",
+            mechanism=(
+                "Average ribociclib daily dose intensity (cumulative mg / 600mg-days target) "
+                "over the day-30 through day-180 post-index window. T->M->Y mediator: "
+                "ribociclib initiation produces a realized exposure trajectory whose "
+                "intensity directly determines biological CDK4/6 inhibition magnitude per "
+                "India real-world cohort (PMID 34292933; doi:10.1371/journal.pone.0253722); "
+                "dose intensity is the proximal molecular-mechanism mediator between T and Y. "
+                "why_not_duplicate: golden ribociclib_relative_dose_intensity_180d uses "
+                "full-180d window; this is day-30-to-180 window — distinct temporal range "
+                "(excludes ramp-up period). Remediation per role-to-remediation table: "
+                "mediator → drop."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 40019493 — CDK4/6 OS comparative Sci Rep 2024 (DOI:10.1038/s41598-024-53151-8)
+        dspy.Example(
+            feature_name="prior_chemotherapy_lines_count_preindex_bc",
+            derivation_pseudocode=(
+                "source=CHEMOTHERAPY_CLAIMS; derivation_inputs=['hcpcs_chemo_regimen_codes', 'regimen_start_dates']; "
+                "aggregation=count_distinct_regimens_before_index; window_days=99999; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=overall_survival_36m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Count of distinct prior chemotherapy regimens received before ribociclib "
+                "initiation. Z->T: heavily pre-treated patients shift toward later-line "
+                "CDK4/6i + endocrine therapy (where ribociclib OS benefit is documented per "
+                "PMID 40019493; doi:10.1038/s41598-024-53151-8). Z->Y: prior chemotherapy "
+                "lines reflect both disease aggressiveness AND treatment-related cumulative "
+                "toxicity — both shorten OS independent of CDK4/6i choice. Pre-index "
+                "measurement guarantees outgoing arrows. why_not_duplicate: novel chemotherapy-"
+                "history construct distinct from prior_cdk46_lines_count (CDK4/6i-specific) "
+                "in golden. Remediation per role-to-remediation table: confounder → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 38872062 — Foundation Medicine ESR1/PIK3CA (DOI:10.1007/s10549-024-07376-w)
+        dspy.Example(
+            feature_name="emergent_esr1_mutation_90d_postindex_bc",
+            derivation_pseudocode=(
+                "source=LIQUID_BIOPSY_SERIAL; derivation_inputs=['baseline_esr1_status', 'postindex_esr1_status_90d']; "
+                "aggregation=indicator_baseline_negative_then_postindex_positive; window_days=90; knowable_at=index_plus_90d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=pfs_24m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="mediator",
+            mechanism=(
+                "Indicator that an ESR1 mutation EMERGED on serial ctDNA between baseline "
+                "(negative) and 90d post-index (positive). T->M->Y mediator: ribociclib + "
+                "endocrine therapy exposure selects for ESR1-mutant subclones (acquired "
+                "resistance) per Foundation Medicine longitudinal data (PMID 38872062; "
+                "doi:10.1007/s10549-024-07376-w) where ESR1mut rate climbs from 8.1% (1st "
+                "line) to 59% (3rd line). M is on the (T->resistance->Y) causal path. "
+                "why_not_duplicate: golden ctdna_esr1_emergence_flag_90d exists but lacks "
+                "the BASELINE-NEGATIVE PRECONDITION; this DIFFERENCE-IN-STATUS construct "
+                "requires both timepoints. Remediation per role-to-remediation table: "
+                "mediator → drop."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 35263519 — MONALEESA-2 OS NEJM 2022 (DOI:10.1056/NEJMoa2114663)
+        dspy.Example(
+            feature_name="hospitalization_within_90d_postindex_bc",
+            derivation_pseudocode=(
+                "source=INPATIENT_CLAIMS; derivation_inputs=['admission_date', 'index_date', 'admission_reason_code']; "
+                "aggregation=indicator_any_inpatient_admission; window_days=90; knowable_at=index_plus_90d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=overall_survival_36m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="collider",
+            mechanism=(
+                "Indicator of any inpatient hospitalization within 90d post-index. COLLIDER "
+                "T->V<-U: ribociclib_init (T) causes some toxicity-related admissions (febrile "
+                "neutropenia, hepatotoxicity), AND unobserved baseline frailty (U) causes "
+                "non-treatment admissions — admission integrates both per MONALEESA-2 OS "
+                "safety profile (PMID 35263519; doi:10.1056/NEJMoa2114663). Conditioning on "
+                "V opens the backdoor T->V<-U->Y collider path. why_not_duplicate: novel "
+                "post-treatment hospitalization construct absent from golden + compile-set; "
+                "teaches collider-via-multi-cause-event pattern. Remediation per role-to-"
+                "remediation table: collider → drop."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 34158598 — MONALEESA pooled (DOI:10.1038/s41416-021-01415-9)
+        dspy.Example(
+            feature_name="emergency_department_visit_within_60d_postindex_bc",
+            derivation_pseudocode=(
+                "source=ED_CLAIMS; derivation_inputs=['ed_visit_date', 'index_date', 'cpt_ed_visit_codes']; "
+                "aggregation=indicator_any_ed_visit; window_days=60; knowable_at=index_plus_60d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=pfs_24m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="collider",
+            mechanism=(
+                "Binary indicator of any ED visit within 60d post-index. COLLIDER T->V<-U: "
+                "ribociclib_init causes ED visits via neutropenia + hepatotoxicity per "
+                "MONALEESA pooled safety analysis (PMID 34158598; doi:10.1038/s41416-021-01415-9); "
+                "concurrent baseline comorbidity burden (U) drives non-treatment ED utilization "
+                "and ALSO affects PFS. Conditioning on V opens backdoor U->Y path through "
+                "V-collider. why_not_duplicate: distinct from hospitalization-90d above by "
+                "(a) setting (ED vs inpatient), (b) window (60d vs 90d), (c) severity tier "
+                "(ED is less severe filter capturing more events). Remediation per role-to-"
+                "remediation table: collider → drop."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 36151018 — KARMA Australia (DOI:10.1016/j.clbc.2022.08.011)
+        dspy.Example(
+            feature_name="liver_enzyme_grade2_elevation_within_60d_postindex_bc",
+            derivation_pseudocode=(
+                "source=LABS_LFT; derivation_inputs=['alt_iu_l', 'ast_iu_l', 'lab_date', 'index_date', 'uln_alt', 'uln_ast']; "
+                "aggregation=indicator_any_grade2_alt_or_ast_3_to_5x_uln; window_days=60; knowable_at=index_plus_60d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=pfs_24m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="mediator",
+            mechanism=(
+                "Indicator of grade-2 ALT or AST elevation (3-5x ULN) within 60d post-index. "
+                "T->M->Y mediator: ribociclib-induced hepatotoxicity is on the causal path "
+                "where hepatotoxic events trigger dose modification/discontinuation that "
+                "shortens PFS per KARMA registry (PMID 36151018; doi:10.1016/j.clbc.2022.08.011) "
+                "where abnormal liver enzymes were the second-leading dose-reduction reason. "
+                "why_not_duplicate: golden hepatotoxicity_grade3_post_index_flag uses grade-3 "
+                "threshold; this is GRADE-2 — milder threshold, captures earlier-onset signal. "
+                "Remediation per role-to-remediation table: mediator → drop."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 34158598 — MONALEESA pooled (DOI:10.1038/s41416-021-01415-9)
+        dspy.Example(
+            feature_name="qtc_baseline_msec_preindex_bc",
+            derivation_pseudocode=(
+                "source=ECG_REPORTS; derivation_inputs=['qtc_msec_corrected', 'ecg_date']; "
+                "aggregation=mean; window_days=30; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=qtc_prolongation_event_180d; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Mean corrected QT interval (msec) from pre-index ECG over the 30d pre-index "
+                "window. Z->T: high baseline QTc (>450msec) is a contraindication trigger "
+                "for ribociclib initiation per MONALEESA pooled safety (PMID 34158598; "
+                "doi:10.1038/s41416-021-01415-9) where ribociclib carries class-leading QTc "
+                "prolongation signal; high-QTc patients are routed away from ribociclib. "
+                "Z->Y: baseline QTc directly predicts the probability of post-index grade-2/3 "
+                "QTc prolongation outcome. Pre-index measurement guarantees outgoing arrows. "
+                "why_not_duplicate: golden qtc_prolongation_grade2_post_index_flag is the "
+                "POST-INDEX OUTCOME variant; this is BASELINE PRE-INDEX confounder — distinct "
+                "temporal placement → distinct role. Remediation per role-to-remediation "
+                "table: confounder → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 38872062 — Foundation Medicine (DOI:10.1007/s10549-024-07376-w)
+        dspy.Example(
+            feature_name="ctdna_tumor_fraction_pct_preindex_bc",
+            derivation_pseudocode=(
+                "source=LIQUID_BIOPSY; derivation_inputs=['ctdna_tumor_fraction_pct', 'sample_date']; "
+                "aggregation=mean; window_days=60; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=pfs_24m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="ancestor",
+            mechanism=(
+                "Mean ctDNA tumor fraction (TF%) on liquid biopsy in 60d pre-index window. "
+                "Z->T,Y upstream: high TF indexes high tumor burden / progression velocity "
+                "that drives both treatment-intensity escalation AND outcome per Foundation "
+                "Medicine cohort (PMID 38872062; doi:10.1007/s10549-024-07376-w) where TF "
+                "stratifies actionable-mutation detection rates. Ancestor: (T,Y) effect "
+                "is mediated through downstream confounders (visceral burden, LDH, Ki67) per "
+                "Greenland-Pearl-Robins 1999 (PMID 9888278). why_not_duplicate: novel ctDNA-"
+                "burden construct distinct from mutation-status features. Remediation per "
+                "role-to-remediation table: ancestor → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 33895695 — ESME cohort (DOI:10.1016/j.esmoop.2021.100114)
+        dspy.Example(
+            feature_name="prior_lines_endocrine_monotherapy_metastatic_setting_count_bc",
+            derivation_pseudocode=(
+                "source=PHARMACY_AND_TREATMENT_HISTORY; derivation_inputs=['endocrine_agent_starts_after_metastatic_dx_date', 'index_date']; "
+                "aggregation=count_distinct_lines_endocrine_monotherapy; window_days=99999; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=pfs_24m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Count of distinct endocrine-monotherapy lines administered in the metastatic "
+                "setting BEFORE ribociclib initiation. Z->T: heavily endocrine-pre-treated "
+                "patients (≥2 lines) are typically the salvage CDK4/6i population where "
+                "ribociclib is chosen for cross-resistance considerations per ESME cohort "
+                "(PMID 33895695; doi:10.1016/j.esmoop.2021.100114). Z->Y: prior endocrine-"
+                "line count is a strong proxy for tumor endocrine-resistance level shortening "
+                "subsequent CDK4/6i + endocrine PFS. why_not_duplicate: distinct from prior_"
+                "adjuvant_endocrine_therapy_duration (which is ADJUVANT setting); this is "
+                "METASTATIC-setting line count — different setting + different aggregation. "
+                "Remediation per role-to-remediation table: confounder → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 37529919 — Real-world palbociclib combos (DOI:10.2217/fon-2023-0176)
+        dspy.Example(
+            feature_name="prior_aromatase_inhibitor_progression_event_flag_bc",
+            derivation_pseudocode=(
+                "source=PHARMACY_AND_RADIOLOGY; derivation_inputs=['ai_discontinuation_due_to_progression_flag', 'ai_last_fill_date']; "
+                "aggregation=indicator_documented_progression_on_prior_ai; window_days=99999; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=pfs_24m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Indicator of documented progression on a prior aromatase inhibitor (AI) in "
+                "the metastatic setting before ribociclib initiation. Z->T: AI-progressors "
+                "shift toward fulvestrant-backbone (vs AI-backbone) when starting CDK4/6i "
+                "per real-world cohort (PMID 37529919; doi:10.2217/fon-2023-0176). Z->Y: "
+                "documented AI-progression marks established endocrine resistance with "
+                "shortened subsequent PFS. why_not_duplicate: distinct from generic adjuvant-"
+                "duration (Z above) which captures EXPOSURE; this is documented PROGRESSION "
+                "event — distinct construct (failure vs duration). Remediation per role-to-"
+                "remediation table: confounder → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 30595753 — MONALEESA-2 tumor response (DOI:10.1007/s10549-017-4658-x)
+        dspy.Example(
+            feature_name="serum_ldh_concentration_mean_30d_preindex_metastatic_bc",
+            derivation_pseudocode=(
+                "source=CHEMISTRY_LABS; derivation_inputs=['ldh_iu_l', 'lab_date']; "
+                "aggregation=mean; window_days=30; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=overall_survival_36m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Mean serum LDH over the 30d immediately pre-index. Z->T: high baseline LDH "
+                "(>ULN) reflects high tumor proliferation/burden, intensifying clinician "
+                "preference for combination CDK4/6i over endocrine monotherapy per MONALEESA-2 "
+                "tumor-response subset (PMID 30595753; doi:10.1007/s10549-017-4658-x). Z->Y: "
+                "elevated LDH is a well-established OS-prognostic biomarker for metastatic "
+                "breast cancer independent of treatment. Pre-index measurement guarantees "
+                "outgoing arrows. why_not_duplicate: novel — golden + compile-set lack baseline-"
+                "LDH for BC; compile-set has LDH features only in PNH context. Remediation "
+                "per role-to-remediation table: confounder → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 33895695 — ESME (DOI:10.1016/j.esmoop.2021.100114)
+        dspy.Example(
+            feature_name="age_at_metastatic_diagnosis_years_bc",
+            derivation_pseudocode=(
+                "source=DEMOGRAPHIC_AND_DIAGNOSIS; derivation_inputs=['birth_year', 'metastatic_diagnosis_date']; "
+                "aggregation=integer_years; window_days=180; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=overall_survival_36m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Patient age at metastatic-diagnosis date (in years). Z->T: very-elderly "
+                "(>75y) patients are less likely to receive any CDK4/6i and when they do, "
+                "ribociclib is favored over abemaciclib (lower diarrhea burden) per ESME "
+                "20446 patient cohort (PMID 33895695; doi:10.1016/j.esmoop.2021.100114). "
+                "Z->Y: age is a global mortality determinant. why_not_duplicate: golden has "
+                "no age construct anchored on METASTATIC diagnosis specifically; complementary "
+                "to baseline_ecog_ps in golden. Remediation per role-to-remediation table: "
+                "confounder → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 31717791 — CDK4/6 NMA Cancers 2019 (DOI:10.3390/cancers11111661)
+        dspy.Example(
+            feature_name="premenopausal_status_indicator_preindex_bc",
+            derivation_pseudocode=(
+                "source=DEMOGRAPHICS_AND_LAB; derivation_inputs=['menopausal_status_documentation', 'fsh_lh_estradiol_levels']; "
+                "aggregation=indicator_premenopausal; window_days=180; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=pfs_24m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Binary flag for premenopausal status at the time of ribociclib initiation. "
+                "Z->T: premenopausal women require GnRH-agonist co-therapy and have "
+                "MONALEESA-7-anchored ribociclib indication per CDK4/6i NMA evidence (PMID "
+                "31717791; doi:10.3390/cancers11111661). Z->Y: menopausal-status differential "
+                "biology (estrogen-axis, fertility) directly affects PFS independent of "
+                "CDK4/6i choice. Pre-index assessment guarantees outgoing arrows. "
+                "why_not_duplicate: golden post_monaleesa7_premenopausal_approval (calendar-"
+                "policy flag, instrument); this is the PATIENT-LEVEL biological status "
+                "confounder — distinct role + construct. Remediation per role-to-remediation "
+                "table: confounder → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 35535675 — US Oncology Network (DOI:10.1080/03007995.2022.2073122)
+        dspy.Example(
+            feature_name="comorbidity_burden_charlson_weighted_sum_365d_preindex_bc",
+            derivation_pseudocode=(
+                "source=DIAGNOSIS_CLAIMS; derivation_inputs=['icd10_codes_365d_preindex', 'charlson_weights_lookup']; "
+                "aggregation=weighted_sum_charlson_categories; window_days=365; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=overall_survival_36m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Charlson Comorbidity Index computed from 365d pre-index ICD-10 codes "
+                "(Charlson 1987 weighted-comorbidity score). Z->T: high-comorbidity patients "
+                "are channeled toward less-toxic CDK4/6i selections (ribociclib over "
+                "abemaciclib) per US Oncology Network real-world AE patterns (PMID 35535675; "
+                "doi:10.1080/03007995.2022.2073122). Z->Y: comorbidity burden is a direct "
+                "OS prognostic factor. Pre-index measurement window guarantees outgoing "
+                "arrows. why_not_duplicate: novel — golden has individual comorbidity features "
+                "(VTE history above) but no aggregated index; compile-set has no Charlson "
+                "for BC. Remediation per role-to-remediation table: confounder → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 34102253 — MONALEESA-3 (DOI:10.1016/j.annonc.2021.05.353)
+        dspy.Example(
+            feature_name="number_of_metastatic_sites_count_preindex_bc",
+            derivation_pseudocode=(
+                "source=DIAGNOSIS_AND_RADIOLOGY; derivation_inputs=['metastatic_site_codes_preindex', 'imaging_lesion_locations']; "
+                "aggregation=count_distinct_anatomic_sites; window_days=180; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=overall_survival_36m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Total count of distinct anatomic metastatic sites at index (bone, liver, "
+                "lung, brain, nodal, soft tissue). Z->T: ≥3 metastatic sites is a high-burden "
+                "indicator that drives intensified CDK4/6i + endocrine (vs endocrine alone) "
+                "per MONALEESA-3 updated OS sub-analyses (PMID 34102253; doi:10.1016/j.annonc.2021.05.353). "
+                "Z->Y: site count is a direct tumor-burden prognostic factor for OS. "
+                "why_not_duplicate: distinct from visceral_burden_count (visceral-only) and "
+                "bone_only_flag (bone-only); this aggregates ALL anatomic sites including "
+                "non-visceral non-bone — broader composite. Remediation per role-to-remediation "
+                "table: confounder → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 39442617 — NATALEE final iDFS (DOI:10.1016/j.annonc.2024.10.015)
+        dspy.Example(
+            feature_name="anatomic_stage_at_initial_diagnosis_ordinal_bc",
+            derivation_pseudocode=(
+                "source=PATHOLOGY_AND_STAGING; derivation_inputs=['ajcc_stage_8th_ed', 'staging_date']; "
+                "aggregation=ordinal_stage_I_II_III_IV; window_days=99999; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- BC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=invasive_disease_free_survival_36m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="ancestor",
+            mechanism=(
+                "Ordinal anatomic AJCC stage at initial breast-cancer diagnosis (I/II/III/IV). "
+                "Z->T,Y upstream: stage at original diagnosis indexes intrinsic disease "
+                "aggressiveness driving both eligibility/intensity of adjuvant ribociclib "
+                "per NATALEE final iDFS (PMID 39442617; doi:10.1016/j.annonc.2024.10.015) "
+                "AND eventual outcome trajectory. Ancestor role: (T,Y) effect mediated through "
+                "downstream confounders (visceral burden, recurrence biology, node count) "
+                "already in adjustment set per Greenland-Pearl-Robins 1999 (PMID 9888278). "
+                "why_not_duplicate: distinct from adjuvant-stage-ii-iii indicator (binary, "
+                "early-disease subset); this is FULL ORDINAL across all stages. Remediation "
+                "per role-to-remediation table: ancestor → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 30206110 — PALOMA-3 (DOI:10.1158/2159-8290.CD-18-0264)
+        dspy.Example(
+            feature_name="lifetime_endocrine_resistance_event_count_bc",
+            derivation_pseudocode=(
+                "source=TREATMENT_HISTORY; derivation_inputs=['endocrine_progression_events_documented', 'endocrine_agent_classes_used']; "
+                "aggregation=count_distinct_resistance_events_across_lines; window_days=99999; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=pfs_24m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="ancestor",
+            mechanism=(
+                "Lifetime count of documented endocrine-resistance events (progression on "
+                "any endocrine agent) before ribociclib initiation. Z->T,Y upstream: heavy "
+                "resistance-event history indexes a refractory clonal-evolution phenotype "
+                "that drives both CDK4/6i + fulvestrant combination choice AND outcome per "
+                "PALOMA-3 clonal-evolution data (PMID 30206110; doi:10.1158/2159-8290.CD-18-0264). "
+                "Ancestor role: (T,Y) effect mediated through downstream baseline ESR1 status, "
+                "PIK3CA status, and prior-line counts already in adjustment set. why_not_duplicate: "
+                "distinct from prior_AI_progression_event (binary single-event) and "
+                "endocrine_monotherapy_lines (line-count): this is RESISTANCE-EVENT count "
+                "(documented failures specifically). Remediation per role-to-remediation "
+                "table: ancestor → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 35263519 — MONALEESA-2 OS (DOI:10.1056/NEJMoa2114663)
+        dspy.Example(
+            feature_name="time_to_treatment_failure_180d_postindex_bc",
+            derivation_pseudocode=(
+                "source=TREATMENT_HISTORY; derivation_inputs=['ribociclib_discontinuation_date_for_any_reason', 'index_date']; "
+                "aggregation=days_to_discontinuation_or_censoring_180d; window_days=180; knowable_at=index_plus_180d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=overall_survival_36m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="collider",
+            mechanism=(
+                "Days from index to treatment failure (discontinuation for ANY reason — "
+                "progression, toxicity, withdrawal) within 180d window. COLLIDER T->V<-U: "
+                "ribociclib_init causes treatment-failure events (progression-driven and "
+                "toxicity-driven); unobserved patient frailty (U) drives non-treatment-related "
+                "withdrawal AND affects OS per MONALEESA-2 (PMID 35263519; doi:10.1056/NEJMoa2114663). "
+                "Conditioning on V opens collider path. why_not_duplicate: distinct from "
+                "discontinuation_indicator_180d (binary); this is CONTINUOUS time-to-failure "
+                "with mixed-cause framing — collider not descendant because composite cause "
+                "includes T-independent withdrawal. Remediation per role-to-remediation "
+                "table: collider → drop."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 37529919 — Real-world palbociclib (DOI:10.2217/fon-2023-0176)
+        dspy.Example(
+            feature_name="dose_modification_polytherapy_event_count_postindex_bc",
+            derivation_pseudocode=(
+                "source=PHARMACY_AND_EMR; derivation_inputs=['ribociclib_dose_changes', 'endocrine_partner_dose_changes', 'index_date']; "
+                "aggregation=count_distinct_modification_events_either_agent; window_days=180; knowable_at=index_plus_180d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=pfs_24m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="collider",
+            mechanism=(
+                "Total count of dose-modification events across BOTH ribociclib and its "
+                "endocrine partner within 180d post-index. COLLIDER T->V<-U: ribociclib_init "
+                "causes ribociclib-side modifications (toxicity-driven); unobserved patient "
+                "adherence-pattern (U) causes endocrine-side dose-skipping per real-world "
+                "cohort (PMID 37529919; doi:10.2217/fon-2023-0176). The COMPOSITE count "
+                "integrates both, creating an open backdoor when conditioned. why_not_duplicate: "
+                "distinct from single-agent dose-reduction-indicator above; this is COMPOSITE "
+                "TWO-AGENT modification count — collider via composite-multi-cause aggregation. "
+                "Remediation per role-to-remediation table: collider → drop."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 35263519 — MONALEESA-2 OS (DOI:10.1056/NEJMoa2114663)
+        dspy.Example(
+            feature_name="patient_reported_outcome_quality_of_life_change_60d_postindex_bc",
+            derivation_pseudocode=(
+                "source=EHR_PRO_INSTRUMENT; derivation_inputs=['fact_b_score_baseline', 'fact_b_score_60d_postindex']; "
+                "aggregation=difference_postindex_minus_baseline; window_days=60; knowable_at=index_plus_60d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=quality_of_life_response_180d; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="mediator",
+            mechanism=(
+                "Change in FACT-B (Functional Assessment of Cancer Therapy — Breast) score "
+                "from baseline to 60d post-index. T->M->Y mediator: ribociclib initiation "
+                "directly affects symptom burden/QoL via tumor-response AND toxicity per "
+                "MONALEESA-2 OS QoL analyses (PMID 35263519; doi:10.1056/NEJMoa2114663); the "
+                "QoL change then drives downstream PRO outcome at 180d. POST-INDEX timing "
+                "places M on the causal path T->M->Y. why_not_duplicate: novel patient-"
+                "reported-outcome mediator absent from golden + compile-set. Remediation "
+                "per role-to-remediation table: mediator → drop."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # ---- Adversarial entries (worker-evaluator boundary cases) ----
+        # Adversarial: adjuvant vs metastatic line confusion — feature looks like prior line but is from a DIFFERENT setting
+        dspy.Example(
+            feature_name="prior_taxane_in_adjuvant_setting_only_flag_bc",
+            derivation_pseudocode=(
+                "source=CHEMOTHERAPY_CLAIMS; derivation_inputs=['hcpcs_taxane_codes', 'regimen_setting_label_adjuvant_vs_metastatic', 'fill_date']; "
+                "aggregation=indicator_taxane_only_in_adjuvant_pre_metastatic_recurrence; window_days=99999; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=pfs_24m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Adversarial boundary case: adjuvant-only taxane exposure flag (taxane never "
+                "given in the metastatic setting). Worker classifier may mistakenly classify "
+                "this as 'descendant' or 'collider' because chemo-history features generically "
+                "register as treatment-related; the SETTING-specific qualifier (adjuvant-only) "
+                "places it pre-metastatic-diagnosis hence STRICTLY pre-index → confounder. "
+                "Z->T: adjuvant taxane exposure shifts metastatic-setting CDK4/6i selection "
+                "toward ribociclib over chemo-rechallenge. Z->Y: adjuvant taxane reflects "
+                "earlier-stage disease aggressiveness and treatment-related cumulative "
+                "neuropathy/cardiotoxicity that affects PFS independent of CDK4/6i choice. "
+                "why_not_duplicate: distinct from prior_chemotherapy_lines (count across ALL "
+                "settings); this is SETTING-RESTRICTED indicator — boundary-case construct. "
+                "Remediation per role-to-remediation table: confounder → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Adversarial: prior anti-HER2 exposure ambiguity (HER2- cohort but discordant prior status possible)
+        dspy.Example(
+            feature_name="prior_anti_her2_therapy_with_subsequent_her2_loss_flag_bc",
+            derivation_pseudocode=(
+                "source=PHARMACY_AND_PATHOLOGY; derivation_inputs=['anti_her2_agent_history', 'her2_status_at_metastatic_recurrence', 'her2_status_at_initial_diagnosis']; "
+                "aggregation=indicator_prior_her2_positive_initial_then_her2_negative_recurrence_with_anti_her2_history; window_days=99999; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=pfs_24m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Adversarial boundary case: indicator that patient had prior HER2+ status + "
+                "anti-HER2 therapy that later became HER2- at metastatic recurrence (subclonal "
+                "loss). Worker may misclassify as 'mediator' (treatment-induced HER2 loss "
+                "→ CDK4/6i appropriateness) but the relevant treatment-decision is the CURRENT "
+                "ribociclib_init, not the historic trastuzumab — making prior anti-HER2 "
+                "exposure a STRICTLY PRE-INDEX biological-history confounder. Z->T: prior "
+                "HER2-targeted therapy exposure history modifies clinician choice of CDK4/6i "
+                "agent and endocrine partner. Z->Y: prior anti-HER2 therapy reflects earlier-"
+                "stage HER2-driven biology and accumulated cardiac-cumulative toxicity, both "
+                "affecting subsequent PFS. why_not_duplicate: novel HER2-loss-history construct "
+                "absent from golden + compile-set; specifically a confounder-vs-mediator "
+                "boundary case. Remediation per role-to-remediation table: confounder → "
+                "keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Adversarial: practice-level IV that fails exclusion restriction (looks like Brookhart preference but isn't)
+        dspy.Example(
+            feature_name="practice_oncology_nurse_navigator_program_indicator_bc",
+            derivation_pseudocode=(
+                "source=PRACTICE_REGISTRY; derivation_inputs=['practice_npi', 'nurse_navigator_program_active_flag', 'index_date']; "
+                "aggregation=indicator_program_active_at_index; window_days=180; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=pfs_24m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Adversarial boundary case: practice-level oncology nurse navigator program "
+                "indicator looks LIKE a Brookhart practice-level IV but FAILS exclusion "
+                "restriction — nurse navigators do affect outcomes DIRECTLY through adherence-"
+                "support and toxicity-management coaching, not only through treatment choice. "
+                "Worker may classify as 'instrument' but the correct role is CONFOUNDER: "
+                "Z->T (navigator programs increase ribociclib uptake through patient education) "
+                "AND Z->Y direct (navigators reduce dose-reduction events + improve adherence "
+                "→ better PFS independent of CDK4/6i choice). This is the canonical case of "
+                "an apparent-IV that fails exclusion restriction. why_not_duplicate: novel "
+                "practice-program construct; specifically teaches IV-vs-confounder boundary. "
+                "Remediation per role-to-remediation table: confounder → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # ---- Edge case entries ----
+        # Edge case: leakage from staging update post-treatment
+        dspy.Example(
+            feature_name="restaging_event_with_pathology_update_within_30d_postindex_bc",
+            derivation_pseudocode=(
+                "source=PATHOLOGY_AND_RADIOLOGY; derivation_inputs=['restaging_pathology_report_date', 'index_date', 'staging_revision_indicator']; "
+                "aggregation=indicator_any_staging_revision_within_30d_postindex; window_days=30; knowable_at=index_plus_30d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=pfs_24m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="descendant",
+            mechanism=(
+                "Edge case: post-index staging revision event within 30d. THIS LOOKS LIKE A "
+                "BASELINE STAGING FEATURE but the 30d POST-INDEX window means the staging "
+                "update REFLECTS post-treatment data (early scans showing rapid response or "
+                "previously-missed lesions). T->V descendant of ribociclib_init: cannot exist "
+                "without treatment exposure starting the restaging cascade. The edge: schema "
+                "may make this look like baseline_stage_at_initial_dx (which is the ANCESTOR "
+                "above) — but the 30d POST-INDEX window flips it to descendant. Easily "
+                "confused with baseline-staging features per data-leakage anti-pattern. "
+                "why_not_duplicate: distinct from anatomic_stage_at_initial_diagnosis "
+                "(ancestor, baseline) by TEMPORAL WINDOW alone — this is the leakage-edge-"
+                "case companion. Remediation per role-to-remediation table: descendant → drop."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Edge case: prefix-censoring of CDK4/6 hold events (pause/resume cycles)
+        dspy.Example(
+            feature_name="ribociclib_cycle_pause_event_count_first_60d_postindex_bc",
+            derivation_pseudocode=(
+                "source=PHARMACY_AND_EMR; derivation_inputs=['ribociclib_treatment_holiday_periods', 'index_date']; "
+                "aggregation=count_distinct_pause_events_with_strict_prefix_censoring_at_day_60; window_days=60; knowable_at=index_plus_60d"
+            ),
+            dataset_context=(
+                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=pfs_24m; prediction_anchor=ribociclib_init_date"
+            ),
+            causal_role="mediator",
+            mechanism=(
+                "Edge case: count of ribociclib treatment-pause events (week-off cycles "
+                "extended beyond the protocol 1-week off, due to toxicity) within strict "
+                "first-60-day prefix-censored window. T->M->Y mediator on the causal path: "
+                "ribociclib initiation triggers pause-events (toxicity-mediated) which then "
+                "directly affect dose-intensity and PFS. The EDGE: the PREFIX-CENSORING at "
+                "day-60 is critical — naive aggregation over 'all pauses ever' would leak "
+                "post-progression treatment-discontinuation events that are actually "
+                "OUTCOME (PFS) measurements; the 60d cutoff isolates early-toxicity-driven "
+                "pauses from outcome-driven discontinuations. why_not_duplicate: distinct "
+                "from dose_reduction (different concept — pauses are temporary holds, not "
+                "dose-level changes); distinct aggregation + censoring scheme. Remediation "
+                "per role-to-remediation table: mediator → drop."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # =====================================================================
+        # End Plan-239 n=200 Task 4 — Bucket 2 BC expansion (+45 entries: #98–#142)
+        # =====================================================================
     ]
     return examples
 
