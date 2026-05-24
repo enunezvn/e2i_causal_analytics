@@ -144,7 +144,7 @@ The promotion is staged across four levels of increasing intrusiveness. **Each s
 **Mechanism:**
 
 - New env var `ADAPTIVE_VALIDITY_EVALUATOR_GATE_ENABLED=0|1` (default `0`). When `0`, voter behavior is byte-identical to today.
-- When `1`, after the voter computes its candidate severity, the voter calls `evaluate_promotion_rule(...)` exactly once. If the rule fires AND the candidate severity equals the rule's precondition, the voter substitutes the rule's proposed severity AND appends to `evidence` a structured tag `"evaluator_gate:R1:moderate→high"`. The `decided_by` field gains a new value `"evaluator_gate"` ONLY when the gate actually flipped a decision (not when the voter independently reached the same severity). **Schema prerequisite:** the `EnsembleDecidedBy` literal in `src/data/kg/types.py` (~line 28) must be widened to include `"evaluator_gate"` as part of the Stage 3 PR; otherwise the typed dataclass will reject the new value at construction time.
+- When `1`, after the voter computes its candidate severity, the voter calls `evaluate_promotion_rule(...)` exactly once. If the rule fires AND the candidate severity equals the rule's precondition, the voter substitutes the rule's proposed severity AND appends to `evidence` a structured tag `"evaluator_gate:R1:moderate→high"`. The `decided_by` field gains a new value `"evaluator_gate"` ONLY when the gate actually flipped a decision (not when the voter independently reached the same severity). **Schema prerequisites for the Stage 3 PR:** (i) widen the `EnsembleDecidedBy` literal in `src/data/kg/types.py` (~line 28) to include `"evaluator_gate"`; (ii) ship migration 042 adding `adaptive_validity_verdicts.worker_severity_pre_gate` (text, nullable) populated by the voter with the un-mutated worker severity before substitution. Without (i), the typed dataclass will reject the new `decided_by` value at construction. Without (ii), the audit-loop-coupling mitigation in §5 R-4 is not implementable.
 - Remediation override is computed deterministically from the new severity by the existing `_remediation_for_severity` helper. **Remediation is not separately mutated by the gate** at Stage 3 — only severity is, and remediation follows mechanically.
 - A new field `gate_rule_fired: Optional[str]` is added to `EnsembleVerdict` (and surfaced to the sidecar) recording which rule fired (or None).
 
@@ -197,7 +197,7 @@ Initial firing-rate estimates marked `TBD-via-Stage-1` are placeholders for the 
 - **Stage-1 action:** record `would_promote_severity = "high"`.
 - **Stage-3 action:** voter substitutes `severity="high"`, `remediation="drop"` (via deterministic helper), appends `"evaluator_gate:R1:moderate→high"` to evidence.
 - **Rationale:** This is the canonical "the worker said maybe-problematic, the evaluator independently flagged specific missed considerations, escalate to definitely-problematic." It is the rule the issue body explicitly cites as the most defensible.
-- **Expected firing rate:** TBD-via-Stage-1. Conservative prior from the #477 gated subset: roughly 17 of 24 ungated instrument predictions are excluded by `evaluator_satisfied=False`, suggesting evaluator dissatisfaction is *frequent* in the instrument-prediction pool. Translation to the moderate-severity pool requires Stage-1 data.
+- **Expected firing rate:** **TBD-via-Stage-1**. No committed artifact in this repo records the per-entry distribution of `worker_severity=moderate AND evaluator_satisfied=False`; the AC3 verdict JSON (`artifacts/dspy/ac3_verdict_n200.json`) contains only aggregated gated precision floats. Estimating an expected firing rate from a prior would be speculation — Stage 1 must produce the firing-rate histogram directly from the new `would_promote_severity` column (AC1.3).
 - **False-positive risk:** evaluator-wrong-worker-right cases. Stage-2 inter-rater check (AC2.2) is designed to bound this. The §3 fail-open default ensures evaluator outages don't trigger.
 
 ### R2 — Flag-for-review on missed considerations (no severity change)
@@ -261,9 +261,11 @@ Today the evaluator is operator-opt-in (env-var-gated). Stage 3 would imply runn
 
 If the evaluator's verdict is allowed to mutate `severity`, and `severity` is fed back into compile-set curation (it is, via the curation flow), then the evaluator is now indirectly training the worker it audits. This is a known-bad pattern in LLM-evaluator-LLM-worker setups.
 
-**Mitigations:**
-- §3 Stage 1 schema preserves `worker_severity` and `effective_severity` as SEPARATE columns. Compile-set curation MUST be configured to use `worker_severity` (not `effective_severity`) when building demonstrations. This is a documented invariant, enforced by a test.
-- §3 Stage 2 manifests display the `worker_severity` as the primary value with `would_promote_severity` shown adjacent for context.
+**Mitigations (note: the worker-vs-effective separation lives in different surfaces at different stages):**
+
+- **Stages 1-2 (no severity mutation yet):** the existing `adaptive_validity_verdicts.verdict.severity` column is, by construction, still the worker severity (Stage 1's three new columns are shadow-only and never touch `verdict.severity`). Compile-set curation continues reading `verdict.severity` as today, which IS the worker severity in Stages 1-2. No mitigation work required.
+- **Stage 3 (severity mutation enabled):** as a HARD prerequisite to flipping `ADAPTIVE_VALIDITY_EVALUATOR_GATE_ENABLED=1`, migration 042 must add a `worker_severity_pre_gate` column populated with the un-mutated worker severity before the voter substitutes. The mutated value flows to `verdict.severity` (preserving consumer compatibility); curation reads the new `worker_severity_pre_gate` column for compile-set authoring. A test in the Stage 3 PR enforces this read path. (Migration 042 is therefore listed alongside `EnsembleDecidedBy` widening as a Stage 3 schema prerequisite.)
+- §3 Stage 2 manifests display `verdict.severity` (== worker severity at Stage 2) as the primary value with `would_promote_severity` shown adjacent for context.
 
 ### R-5 — Schema breakage downstream
 
