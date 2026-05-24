@@ -78,6 +78,31 @@ def format_markdown_report(
                 f"- **Evaluator notes:** {e.notes or '(empty)'}",
                 f"- **Evaluator model:** `{e.evaluator_model}`",
                 "",
+            ]
+        )
+        # Issue #240 Stage 2: when the Stage-1 shadow R1 rule fired
+        # (``would_promote_severity is not None``), surface a "Promotion
+        # candidate" block showing the proposed escalated severity and the
+        # driving R1 signals (worker_severity + evaluator_satisfied +
+        # len(missed_considerations) >= 1). This is ADDITIVE surfacing of real
+        # Stage-1 shadow data — the value is NOT acted upon (Stage 3, env-var-
+        # gated, would do that); the reviewer decides. Design ref:
+        # ``docs/plans/240-audit-evaluator-gate-promotion.md`` §3 Stage 2 + §4 R1.
+        if e.would_promote_severity is not None:
+            lines.extend(
+                [
+                    "**Promotion candidate (shadow rule R1 — escalate, NOT yet acted upon):**",
+                    f"- **Proposed severity:** `{e.worker_severity}` → "
+                    f"`{e.would_promote_severity}`",
+                    "- **Driving signals (R1 trigger):** "
+                    f"worker_severity=`{e.worker_severity}`, "
+                    f"evaluator_satisfied=`{e.evaluator_satisfied}`, "
+                    f"missed_considerations_count=`{len(e.missed_considerations)}`",
+                    "",
+                ]
+            )
+        lines.extend(
+            [
                 "**Required fill-ins before accepting:**",
                 "- [ ] `expected_causal_role` — confounder | mediator | "
                 "collider | descendant | iv | proxy_confounder",

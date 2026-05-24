@@ -436,6 +436,19 @@ class DisagreementEvent:
     missed_considerations: tuple[str, ...]
     notes: str
     evaluator_model: Optional[str]
+    # Issue #240 Stage 2 (curation surfacing): the Stage-1 shadow
+    # ``would_promote_severity`` field plus the R1 input signals that drove
+    # it. ``would_promote_severity`` is the proposed escalated severity (e.g.
+    # ``"high"``) recorded by R1 in shadow mode, or ``None`` when R1 did not
+    # fire (or the producer predates #240). ``evaluator_satisfied`` is carried
+    # explicitly so the markdown "Promotion candidate" section can show the
+    # full R1 trigger context (worker_severity + evaluator_satisfied +
+    # len(missed_considerations) >= 1) without the reader having to re-derive
+    # it. Additive/nullable with defaults so existing keyword-only
+    # constructions in tests keep working. Design ref:
+    # ``docs/plans/240-audit-evaluator-gate-promotion.md`` §3 Stage 2 + §4 R1.
+    would_promote_severity: Optional[str] = None
+    evaluator_satisfied: Optional[bool] = None
 
 
 def extract_disagreements(
@@ -460,6 +473,14 @@ def extract_disagreements(
             missed_considerations=tuple(r.evaluator_missed_considerations or ()),
             notes=r.evaluator_notes or "",
             evaluator_model=r.evaluator_model,
+            # Issue #240 Stage 2: carry the Stage-1 shadow promotion field
+            # (verbatim from the sidecar; ``None`` when R1 did not fire) plus
+            # the explicit ``evaluator_satisfied`` driving signal. By
+            # construction this loop only yields when
+            # ``r.evaluator_satisfied is False``, so the field is recorded
+            # for downstream display rather than re-derived.
+            would_promote_severity=r.would_promote_severity,
+            evaluator_satisfied=r.evaluator_satisfied,
         )
 
 
