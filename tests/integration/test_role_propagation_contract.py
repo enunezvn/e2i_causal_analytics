@@ -170,7 +170,7 @@ def test_case_5_sidecar_round_trip(tmp_path: Path, monkeypatch, caplog) -> None:
     """Write payload via ``write_adaptive_verdicts_sidecar`` → read via
     ``SidecarReader`` → assert each ``VerdictRecord.role_attribution``
     matches the produced attribution. Reader does NOT emit a
-    ``_check_schema_version`` WARN (since "1.1" minor matches MAJOR=1).
+    ``_check_schema_version`` WARN (since the "1.x" minor matches MAJOR=1).
     """
     from src.agents.ml_foundation.data_preparer.graph import (
         write_adaptive_verdicts_sidecar,
@@ -195,8 +195,9 @@ def test_case_5_sidecar_round_trip(tmp_path: Path, monkeypatch, caplog) -> None:
     path = write_adaptive_verdicts_sidecar(state)
     assert path is not None and path.exists()
     payload = json.loads(Path(path).read_text())
-    # Schema bump assertion.
-    assert payload["schema_version"] == "1.1"
+    # Schema bump assertion (current producer minor; 1.2 since Issue #240
+    # Stage 1 added additive shadow keys — still MAJOR=1).
+    assert payload["schema_version"] == "1.2"
     assert "role_attributions" in payload
     assert len(payload["role_attributions"]) == 2
 

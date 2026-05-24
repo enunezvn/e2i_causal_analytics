@@ -182,7 +182,11 @@ def write_adaptive_verdicts_sidecar(state: Dict[str, Any]) -> Path | None:
             #
             # 1.1 (Phase 1, Issue #237): additive ``role_attributions``
             # list. Reader pins MAJOR=1; minor bumps do not WARN.
-            "schema_version": "1.1",
+            # 1.2 (Issue #240 Stage 1): additive shadow promotion keys
+            # (would_promote_severity / would_flag_for_review /
+            # rationale_incomplete_flag) per the minor-bump-on-additive
+            # policy above. Still MAJOR=1.
+            "schema_version": "1.2",
             "experiment_id": state.get("experiment_id"),
             "data_source": state.get("data_source"),
             "written_at": ts,

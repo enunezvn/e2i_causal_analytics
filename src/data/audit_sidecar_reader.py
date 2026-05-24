@@ -30,7 +30,9 @@ logger = logging.getLogger(__name__)
 #
 # 1.1 (Issue #237 Phase 1): additive ``role_attributions`` list. Reader
 # pins MAJOR=1; minor bumps do not WARN.
-_READER_SCHEMA_VERSION = "1.1"
+# 1.2 (Issue #240 Stage 1): additive shadow promotion keys
+# (would_promote_severity / would_flag_for_review / rationale_incomplete_flag).
+_READER_SCHEMA_VERSION = "1.2"
 _READER_SCHEMA_MAJOR = 1
 
 # Issue #235 A3: the set of verdict-dict keys the reader knows how to
