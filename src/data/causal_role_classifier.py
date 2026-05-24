@@ -1936,7 +1936,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "set-point). why_not_duplicate: golden baseline_ldh_x_uln_preindex is the "
                 "POINT-IN-TIME ratio at index; this entry is the DERIVATIVE (slope over 180d "
                 "via linear regression), capturing temporal dynamics rather than level. "
-                "Methods anchor Brookhart 2010 PMID 30516102 confounder selection."
+                "Methods anchor Brookhart 2010 PMID 30516102 confounder selection. Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -1961,7 +1961,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "recovery magnitude independently of treatment arm. why_not_duplicate: "
                 "compile-set neighbor baseline_haptoglobin_pct_lln_preindex measures "
                 "scavenger depletion (free-Hb axis); this measures bone-marrow output via "
-                "absolute reticulocyte counts — distinct analyte, distinct mechanism."
+                "absolute reticulocyte counts — distinct analyte, distinct mechanism. Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -1985,7 +1985,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "Z->Y: EVH burden at baseline predicts post-treatment hemoglobin recovery "
                 "magnitude. why_not_duplicate: golden c3_deposition_pnh_rbc_pct_d90_postindex "
                 "is POSTINDEX continuous measurement labeled MEDIATOR; this is PREINDEX "
-                "binary flag labeled CONFOUNDER — temporal positioning is reversed."
+                "binary flag labeled CONFOUNDER — temporal positioning is reversed. Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2010,7 +2010,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "pnh_clone_size_granulocyte_pct_preindex measures GRANULOCYTE clone (a "
                 "different cell lineage tied to disease activity but not direct lysis "
                 "target); this measures the lysis-target erythrocyte fraction — distinct "
-                "lineage, distinct causal pathway."
+                "lineage, distinct causal pathway. Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2035,7 +2035,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "compile-set neighbor baseline_haptoglobin_pct_lln_preindex measures "
                 "scavenger depletion (inverse free-Hb proxy via aggregation=min); this "
                 "measures direct PEAK free-Hb (aggregation=max); different aggregation + "
-                "directly measured rather than inferred via scavenger inversion."
+                "directly measured rather than inferred via scavenger inversion. Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2061,34 +2061,40 @@ def build_compile_set() -> list[dspy.Example]:
                 "the direct Z arrows. Schrezenmeier 2022 (PMID 35699625; doi:10.20452/pamw.16271) "
                 "documents disease-tenure heterogeneity. why_not_duplicate: golden "
                 "age_at_index_years is biological age (intrinsic patient attribute); this "
-                "is disease tenure (time-since-diagnosis); orthogonal upstream variables."
+                "is disease tenure (time-since-diagnosis); orthogonal upstream variables. Remediation per role-to-remediation table: ancestor → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
-        # PMID: 39323666 — Dighriri 2024 Cureus iptacopan meta-analysis (DOI:10.7759/cureus.67830)
+        # PMID: 38477987 — APPLY-PNH NEJM (DOI:10.1056/NEJMoa2308695); FDA approval Dec 2023
         dspy.Example(
-            feature_name="prior_pnh_meta_analysis_pooled_response_rate_calendar_indicator",
+            feature_name="iptacopan_first_initiation_within_90d_post_fda_approval_window_pnh",
             derivation_pseudocode=(
-                "source=PUBLICATION_CALENDAR; derivation_inputs=['index_year', 'meta_analysis_pub_year']; "
-                "aggregation=after_publication_flag; window_days=0; knowable_at=index_date"
+                "source=REGULATORY_CALENDAR; derivation_inputs=['index_date', 'fda_approval_date_iptacopan']; "
+                "aggregation=indicator_index_le_approval_plus_90d; window_days=90; knowable_at=index_date"
             ),
             dataset_context=(
-                "ConcertAI PNH + publication calendar; cohort=PNH; treatment=iptacopan_init; "
+                "ConcertAI PNH claims; cohort=PNH; treatment=iptacopan_init; "
                 "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
             ),
             causal_role="instrument",
             mechanism=(
-                "Brookhart-Wang temporal IV: binary flag for whether index_date falls AFTER "
-                "publication of the Dighriri 2024 iptacopan meta-analysis (PMID 39323666; "
-                "doi:10.7759/cureus.67830), shifting prescriber confidence in iptacopan. "
-                "Z->T: post-publication availability increases iptacopan initiation rate. "
-                "Z->Y exclusion-restriction: the publication itself has no biological "
-                "mechanism on hemolysis or hemoglobin recovery outside of changing the "
-                "treatment choice — calendar-knowable, prescriber-cognitive shift only. "
+                "Brookhart-Wang short-term first-initiation IV: binary flag for whether "
+                "index_date falls within 90 days of iptacopan FDA approval (December 2023, "
+                "per APPLY-PNH pivotal trial PMID 38477987; doi:10.1056/NEJMoa2308695). "
+                "Early adopters in the post-approval window are driven by physician awareness "
+                "of trial results and formulary activation, not by patient clinical severity "
+                "differences from later initiators. Z->T: first-mover prescribers activate "
+                "iptacopan immediately post-approval due to clinical trial familiarity "
+                "(Brookhart 2006 PMID 30516102 prescriber-tendency IV framework). "
+                "Z->Y exclusion-restriction: calendar proximity to approval date has no "
+                "direct biological mechanism on hemoglobin response; all effect is mediated "
+                "through treatment initiation only — standard regulatory-discontinuity IV. "
                 "why_not_duplicate: golden post_iptacopan_fda_approval_calendar_indicator "
-                "is the FDA-approval discontinuity (regulatory event); this is a SEPARATE "
-                "post-publication meta-analysis discontinuity (evidence-availability event) "
-                "occurring well after FDA approval — distinct temporal cut-point."
+                "is a monotone post/pre binary (all post-approval time treated equally); "
+                "this is a SHORT-TERM WINDOW (90d adoption burst) capturing only the "
+                "first-mover cohort — distinct temporal granularity, distinct exogeneity "
+                "argument (early-adopter prescriber behavior vs general post-approval era). "
+                "Remediation per role-to-remediation table: instrument → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2113,7 +2119,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "why_not_duplicate: golden prior_anti_c5_inhibitor_use_flag_preindex is a "
                 "BINARY flag for ANY anti-C5 drug-class use; this is CONTINUOUS days for the "
                 "SPECIFIC C3 inhibitor pegcetacoplan (a different mechanism class entirely — "
-                "C3 vs C5); distinct drug class + continuous vs binary."
+                "C3 vs C5); distinct drug class + continuous vs binary. Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2140,7 +2146,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "Greenland-Pearl-Robins 1999 (PMID 9888278). why_not_duplicate: compile-set "
                 "neighbor pre_index_anti_c5_persistence_days_lifetime is CONTINUOUS days on "
                 "anti-C5; this is COUNT of class-switches (switch-event topology, not "
-                "exposure duration); distinct aggregation + complementary tenure signal."
+                "exposure duration); distinct aggregation + complementary tenure signal. Remediation per role-to-remediation table: ancestor → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2165,7 +2171,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "achievable for lower-baseline patients. why_not_duplicate: golden "
                 "baseline_ldh_x_uln_preindex measures HEMOLYTIC ACTIVITY; this measures "
                 "HEMATOLOGIC RESERVE (the carrying capacity from which response is measured) "
-                "— complementary axis of pre-treatment patient characterization."
+                "— complementary axis of pre-treatment patient characterization. Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2190,7 +2196,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "why_not_duplicate: golden c3_deposition_pnh_rbc_pct_d90_postindex is "
                 "POSTINDEX C3 binding to RBCs (mediator); this is PREINDEX AP-loop activity "
                 "biomarker panel (confounder) — different time-position, different physical "
-                "measurement (soluble AP markers vs cell-surface C3 binding)."
+                "measurement (soluble AP markers vs cell-surface C3 binding). Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2217,7 +2223,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "why_not_duplicate: golden facit_fatigue_response_180d_postindex_flag is "
                 "180d BINARY threshold response labeled COLLIDER (response status itself); "
                 "this is CONTINUOUS d90 DELTA labeled MEDIATOR (intermediate causal path); "
-                "different time, different aggregation, different role."
+                "different time, different aggregation, different role. Remediation per role-to-remediation table: mediator → window (restrict to pre-treatment window)."
             ),
             recommended_remediation="window",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2242,7 +2248,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "correct remediation is window. why_not_duplicate: golden "
                 "ldh_x_uln_d90_postindex measures POSTINDEX LDH (d90 timepoint, LDH "
                 "analyte); this measures POSTINDEX FREE HEMOGLOBIN (d30 timepoint, free-Hb "
-                "analyte) — different analyte + earlier post-index timepoint."
+                "analyte) — different analyte + earlier post-index timepoint. Remediation per role-to-remediation table: mediator → window (restrict to pre-treatment window)."
             ),
             recommended_remediation="window",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2268,7 +2274,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "golden reticulocyte_count_delta_d90_postindex is CONTINUOUS delta; this is "
                 "BINARY threshold indicator (back-in-reference flag) — different aggregation "
                 "(delta vs indicator), captures a clinically meaningful normalization "
-                "endpoint distinct from raw delta magnitude."
+                "endpoint distinct from raw delta magnitude. Remediation per role-to-remediation table: mediator → window (restrict to pre-treatment window)."
             ),
             recommended_remediation="window",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2293,7 +2299,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "drop per Hernan 2004 (PMID 14760119). why_not_duplicate: golden "
                 "iptacopan_persistence_at_180d_flag is persistence on INDEX treatment; this "
                 "is INITIATION of an ADD-ON drug (danicopan) — different drug, different "
-                "event type (initiation vs persistence), different role inference."
+                "event type (initiation vs persistence), different role inference. Remediation per role-to-remediation table: collider → drop."
             ),
             recommended_remediation="drop",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2319,7 +2325,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "why_not_duplicate: compile-set neighbor "
                 "pre_index_anti_c5_persistence_days_lifetime is LIFETIME SUM (chronic "
                 "exposure); this is GAP-DAYS between last fill and index (temporal "
-                "proximity, not cumulative dose) — distinct construct."
+                "proximity, not cumulative dose) — distinct construct. Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2344,7 +2350,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "why_not_duplicate: compile-set neighbor baseline_haptoglobin_pct_lln_preindex "
                 "is PLASMA scavenger marker; this is URINE iron-deposit marker (renal "
                 "tubular damage from chronic free-Hb filtration); different specimen + "
-                "different physical process."
+                "different physical process. Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2368,7 +2374,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "delay switch decisions. Z->Y: iron-limited erythropoiesis caps Hb response "
                 "magnitude. why_not_duplicate: hemosiderinuria entry captures URINARY iron "
                 "LOSS (output side); this captures SERUM iron AVAILABILITY (input side); "
-                "different specimen, different physiological flow direction."
+                "different specimen, different physiological flow direction. Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2393,7 +2399,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "C3-coated RBCs, modulating response magnitude. why_not_duplicate: no "
                 "imaging-derived feature exists in compile-set or golden PNH; novel SOURCE "
                 "(imaging reports rather than labs/claims) + novel construct (anatomic "
-                "compartment volume rather than serum analyte)."
+                "compartment volume rather than serum analyte). Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2418,7 +2424,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "prior_anti_c5_inhibitor_use_flag_preindex is BINARY any-use of C5 class; "
                 "compile-set proximal_complement_inhibitor_class_switch_count_lifetime_pnh "
                 "is class-switch count regardless of reason; this is FAILURE-coded "
-                "discontinuation count only (clinical-failure-specific filter)."
+                "discontinuation count only (clinical-failure-specific filter). Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2442,7 +2448,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "(Hernan MSM PMID 10955408). why_not_duplicate: golden ldh_x_uln_d90_postindex "
                 "is the SINGLE d90 timepoint; this is the CONJUNCTION (both d90 AND d180 "
                 "in range) — distinct aggregation (durable-conjunction indicator vs single "
-                "ratio), distinct construct (sustained vs transient)."
+                "ratio), distinct construct (sustained vs transient). Remediation per role-to-remediation table: mediator → window (restrict to pre-treatment window)."
             ),
             recommended_remediation="window",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2466,7 +2472,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "Z->Y: thrombosis history modulates anticoagulation that affects hematologic "
                 "endpoints. why_not_duplicate: golden prior_thrombotic_event_flag_preindex "
                 "is ANY-SITE binary flag; this is the SUBSET restricted to atypical sites "
-                "(intra-abdominal/intra-cranial), narrower clinical phenotype."
+                "(intra-abdominal/intra-cranial), narrower clinical phenotype. Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2490,7 +2496,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "homeostasis (GI losses) affecting Hb endpoint. why_not_duplicate: golden "
                 "prior_thrombotic_event_flag_preindex is binary event flag (history); this "
                 "is continuous PDC of anticoagulation TREATMENT (process measure); event "
-                "vs treatment-process distinction."
+                "vs treatment-process distinction. Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2515,7 +2521,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "modifying the outcome measurement. Window remediation. why_not_duplicate: "
                 "golden any_rbc_transfusion_during_followup_flag is BINARY any-event over "
                 "follow-up labeled COLLIDER; this is CONTINUOUS time-to-first-event labeled "
-                "MEDIATOR — different aggregation, different role inference."
+                "MEDIATOR — different aggregation, different role inference. Remediation per role-to-remediation table: mediator → window (restrict to pre-treatment window)."
             ),
             recommended_remediation="window",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2540,7 +2546,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "response magnitude. why_not_duplicate: alternative_pathway_amplification_loop "
                 "entry measures AP-specific markers (C3-split + factor B); CH50 is global "
                 "functional complement (all pathways), different assay + different pathway "
-                "subset."
+                "subset. Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2564,7 +2570,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "modulates erythropoietic capacity and adverse-event-driven discontinuation. "
                 "why_not_duplicate: golden age_at_index_years is one upstream demographic; "
                 "this is the COMPOSITE multi-comorbidity score (17-condition weighted index) "
-                "— distinct construct."
+                "— distinct construct. Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2588,7 +2594,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "a collider path per Hernan 2004 (PMID 14760119). why_not_duplicate: golden "
                 "iptacopan_persistence_at_180d_flag is binary persistence at 180d (different "
                 "endpoint); this is dose-modification COUNT during 90d (intra-treatment-"
-                "course modification, not discontinuation); different event type + window."
+                "course modification, not discontinuation); different event type + window. Remediation per role-to-remediation table: collider → drop."
             ),
             recommended_remediation="drop",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2612,7 +2618,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "Z->Y: ongoing specialist contact predicts adherence and outcome assessment "
                 "completeness. why_not_duplicate: golden payer_step_therapy_iptacopan_"
                 "requirement_preindex captures PAYER policy (administrative); this captures "
-                "PROVIDER engagement count (utilization)."
+                "PROVIDER engagement count (utilization). Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2637,7 +2643,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "improvement endpoint. why_not_duplicate: compile-set neighbor "
                 "baseline_hemoglobin_g_dl_preindex_mean_30d_pnh is the CONTINUOUS mean; "
                 "this is BINARY threshold indicator over the trial-relevant cut-point; "
-                "different aggregation."
+                "different aggregation. Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2661,7 +2667,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "match indexes the subgroup with documented trial-evidence response. "
                 "why_not_duplicate: novel composite construct (boolean-AND across 3 "
                 "clinical criteria); no compile-set or golden entry combines these three "
-                "into a single eligibility indicator."
+                "into a single eligibility indicator. Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2687,7 +2693,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "why_not_duplicate: compile-set neighbor "
                 "pre_index_anti_c5_persistence_days_lifetime is DAYS exposure metric; "
                 "this is DOLLARS cost metric (economic intensity, not pharmacologic "
-                "duration)."
+                "duration). Remediation per role-to-remediation table: ancestor → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2715,7 +2721,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "why_not_duplicate: golden payer_step_therapy_iptacopan_requirement_preindex "
                 "is policy-specific STEP-THERAPY rule; this is broader PAYER-CLASS "
                 "indicator (categorical not boolean). Defensible as IV per Brookhart 2006 "
-                "(PMID 30516102)."
+                "(PMID 30516102). Remediation per role-to-remediation table: instrument → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2744,7 +2750,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "naive date-equality. why_not_duplicate: compile-set neighbor "
                 "lactate_dehydrogenase_xuln_trajectory_slope_preindex_180d is the SLOPE over "
                 "180d; this is the SINGLE INDEX-DAY value with sub-day temporal filter — "
-                "intra-day ambiguity testing."
+                "intra-day ambiguity testing. Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2771,7 +2777,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "distinguish 'post-some-event' from 'post-TREATMENT'. why_not_duplicate: "
                 "compile-set neighbor baseline_haptoglobin_pct_lln_preindex is min-over-90d-"
                 "preindex; this is single-value-in-discharge-to-fill-gap (specific narrow "
-                "window) — different aggregation + window."
+                "window) — different aggregation + window. Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2800,7 +2806,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "patient-compliance-confounded variables. why_not_duplicate: compile-set "
                 "meningococcal_vaccination_pre_iptacopan_initiation_flag_pnh is the GENERIC "
                 "pre-iptacopan flag labeled ancestor (REMS-required); this is the POST-"
-                "ADVISORY adoption pattern (selection-based, not requirement-based)."
+                "ADVISORY adoption pattern (selection-based, not requirement-based). Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2827,7 +2833,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "not just naming. why_not_duplicate: compile-set neighbor "
                 "baseline_hemoglobin_g_dl_preindex_mean_30d_pnh is strictly pre-index "
                 "(window -30 to 0); this is bidirectional symmetric (-30 to +30) — same "
-                "analyte different window with leakage."
+                "analyte different window with leakage. Remediation per role-to-remediation table: mediator → window (restrict to pre-treatment window)."
             ),
             recommended_remediation="window",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2854,7 +2860,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "descendant (Y->D or T->D, no D->Y). why_not_duplicate: golden "
                 "facit_fatigue_response_180d_postindex_flag is binary FACIT response (a "
                 "different PRO instrument labeled collider); this is continuous EORTC score "
-                "(different instrument + different role inference)."
+                "(different instrument + different role inference). Remediation per role-to-remediation table: descendant → drop."
             ),
             recommended_remediation="drop",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2884,7 +2890,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "time_since_pnh_diagnosis_years_preindex is CONTINUOUS years (patient-level "
                 "tenure); this is CATEGORICAL CALENDAR DECADE (era-of-care marker), "
                 "different aggregation + different construct (patient-tenure vs calendar-"
-                "era)."
+                "era). Remediation per role-to-remediation table: ancestor → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2911,7 +2917,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "test: classifier must decompose composite features. why_not_duplicate: "
                 "golden alive_at_180d_postindex_flag is the SURVIVAL collider alone; this "
                 "is the AND-COMPOSITE with LDH-normalization (different aggregation: "
-                "conjunction; different decomposability concern)."
+                "conjunction; different decomposability concern). Remediation per role-to-remediation table: collider → drop."
             ),
             recommended_remediation="drop",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2939,7 +2945,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "this feature is INTENTIONALLY similar in shape to access-IV candidates "
                 "but explicitly tests classifier's ability to REJECT distance-IV in favor "
                 "of CONFOUNDER labeling per #358 audit teaching. No existing entry frames "
-                "distance-to-pharmacy as confounder."
+                "distance-to-pharmacy as confounder. Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2966,7 +2972,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "to 0). why_not_duplicate: golden transfusion_units_365d_preindex is the "
                 "STRICT preindex 365d window (no leakage, labeled confounder); this is the "
                 "ASYMMETRIC -365 to +30 window (with leakage, labeled mediator) — edge-case "
-                "teaching pair."
+                "teaching pair. Remediation per role-to-remediation table: mediator → window (restrict to pre-treatment window)."
             ),
             recommended_remediation="window",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2993,7 +2999,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "data-completeness confounders). why_not_duplicate: compile-set "
                 "baseline_haptoglobin_pct_lln_preindex is 90d window min-of-ratio; this is "
                 "FIRST-EVER raw value (data-availability anchored, not clinical-time anchored) "
-                "— different aggregation + different temporal anchor."
+                "— different aggregation + different temporal anchor. Remediation per role-to-remediation table: ancestor → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -3018,7 +3024,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "(violating IV exclusion). Brookhart 2006 (PMID 30516102) IV-credibility "
                 "criteria. why_not_duplicate: no compile-set or golden entry uses ACS "
                 "composite SES — novel SOURCE (linked census) + novel aggregation "
-                "(composite z-score across 3 dimensions)."
+                "(composite z-score across 3 dimensions). Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -3070,7 +3076,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "why_not_duplicate: compile-set / golden has FDA-approval calendar AND "
                 "post-publication calendar indicators (both binary discontinuities); this "
                 "is CATEGORICAL recurring quarter (different construct: cyclical not "
-                "monotone)."
+                "monotone). Remediation per role-to-remediation table: instrument → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -3095,7 +3101,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "looks like a data-quality covariate but is actually a behavioral collider. "
                 "why_not_duplicate: novel construct (data-completeness ratio) not present "
                 "in compile-set or golden — teaches differential-ascertainment collider "
-                "pattern."
+                "pattern. Remediation per role-to-remediation table: collider → drop."
             ),
             recommended_remediation="drop",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -3121,7 +3127,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "classifier must reason about as pre-treatment despite computational "
                 "complexity. why_not_duplicate: compile-set has slope (derivative) + this "
                 "is EPISODE-DURATION (run-length); also distinct from golden POINT VALUE; "
-                "third aggregation tier in the LDH-feature family."
+                "third aggregation tier in the LDH-feature family. Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
