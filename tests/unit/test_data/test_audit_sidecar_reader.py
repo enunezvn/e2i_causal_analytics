@@ -693,7 +693,8 @@ def test_sidecar_payload_includes_schema_version_v1(tmp_path, monkeypatch):
     major.minor.
 
     Bumped to ``"1.1"`` by Phase 1 of Issue #237 (additive
-    ``role_attributions`` key). Reader still pins MAJOR=1, so the
+    ``role_attributions`` key), then to ``"1.2"`` by Issue #240 Stage 1
+    (additive shadow promotion keys). Reader still pins MAJOR=1, so the
     forward-compat contract is unchanged."""
     from src.agents.ml_foundation.data_preparer.graph import (
         write_adaptive_verdicts_sidecar,
@@ -718,8 +719,8 @@ def test_sidecar_payload_includes_schema_version_v1(tmp_path, monkeypatch):
     path = write_adaptive_verdicts_sidecar(state)
     assert path is not None
     payload = json.loads(Path(path).read_text())
-    assert payload.get("schema_version") == "1.1", (
-        f"producer must emit top-level schema_version='1.1'; got {payload.get('schema_version')!r}"
+    assert payload.get("schema_version") == "1.2", (
+        f"producer must emit top-level schema_version='1.2'; got {payload.get('schema_version')!r}"
     )
 
 
@@ -792,15 +793,15 @@ def test_reader_warns_on_unknown_schema_version_major(tmp_path, caplog):
     # ``"2.0"`` AND the reader's expected current version. Without this assertion
     # the test would still pass if the WARN stopped naming the reader's
     # expected version, which is the actionable half of the message.
-    # Phase 1 of Issue #237: reader's current version bumped to "1.1"
+    # Issue #240 Stage 1: reader's current version bumped to "1.2"
     # (still MAJOR=1).
     matches = [
         rec
         for rec in caplog.records
-        if "schema_version" in rec.message and "2.0" in rec.message and "1.1" in rec.message
+        if "schema_version" in rec.message and "2.0" in rec.message and "1.2" in rec.message
     ]
     assert matches, (
-        "expected unknown-major WARN naming both '2.0' (payload) and '1.1' (reader); "
+        "expected unknown-major WARN naming both '2.0' (payload) and '1.2' (reader); "
         f"got: {[r.message for r in caplog.records]}"
     )
 
@@ -948,3 +949,117 @@ def test_reader_tolerates_non_list_adaptive_verdicts(tmp_path, caplog):
         if "non-list" in rec.message.lower() and "adaptive_verdicts" in rec.message
     ]
     assert matches, f"expected non-list WARN; got: {[r.message for r in caplog.records]}"
+
+
+# ---------------------------------------------------------------------------
+# Issue #240 Stage 1 — shadow-column surfacing on VerdictRecord.
+#
+# The producer (``_ensemble_to_legacy_dict``) emits three nullable shadow
+# keys per verdict. The mirror's dedicated typed columns can only be
+# populated if the reader surfaces those keys on ``VerdictRecord`` (the
+# mirror reads ``r.would_promote_severity`` etc.). These tests pin that
+# surfacing + the schema-tolerant absence path. Design ref:
+# ``docs/plans/240-audit-evaluator-gate-promotion.md`` §3 Stage 1.
+# ---------------------------------------------------------------------------
+
+
+def test_reader_surfaces_shadow_columns_when_present(tmp_path):
+    from src.data.audit_sidecar_reader import SidecarReader
+
+    _write_sidecar(
+        tmp_path,
+        "exp-shadow",
+        "2026-05-15T10:00:00Z",
+        [
+            {
+                "feature": "f_shadow",
+                "layer": "4",
+                "severity": "moderate",
+                "evaluator_satisfied": False,
+                "evaluator_missed_considerations": ["temporal_filter", "pearl_arrows"],
+                "evaluator_rationale_complete": False,
+                "evaluator_model": "haiku",
+                # Issue #240 Stage-1 shadow keys.
+                "would_promote_severity": "high",
+                "would_flag_for_review": True,
+                "rationale_incomplete_flag": True,
+            }
+        ],
+    )
+
+    reader = SidecarReader(artifacts_dir=tmp_path)
+    records = list(reader.iter_verdict_records())
+    assert len(records) == 1
+    r = records[0]
+    assert r.would_promote_severity == "high"
+    assert r.would_flag_for_review is True
+    assert r.rationale_incomplete_flag is True
+
+
+def test_reader_shadow_columns_none_when_absent(tmp_path):
+    """Pre-#240 sidecars carry no shadow keys → all three surface as None
+    (the same schema-tolerant pattern as the evaluator-audit fields)."""
+    from src.data.audit_sidecar_reader import SidecarReader
+
+    _write_sidecar(
+        tmp_path,
+        "exp-pre240",
+        "2026-05-15T10:00:00Z",
+        [
+            {
+                "feature": "f_legacy",
+                "layer": "4",
+                "severity": "moderate",
+                "evaluator_satisfied": True,
+                "evaluator_model": "haiku",
+            }
+        ],
+    )
+
+    reader = SidecarReader(artifacts_dir=tmp_path)
+    records = list(reader.iter_verdict_records())
+    assert len(records) == 1
+    r = records[0]
+    assert r.would_promote_severity is None
+    assert r.would_flag_for_review is None
+    assert r.rationale_incomplete_flag is None
+
+
+def test_reader_does_not_warn_on_shadow_keys_as_unknown(tmp_path, caplog):
+    """The three shadow keys are registered in ``_KNOWN_VERDICT_KEYS`` so
+    they do not trip the per-file 'unknown verdict keys' WARN."""
+    from src.data.audit_sidecar_reader import SidecarReader
+
+    _write_sidecar(
+        tmp_path,
+        "exp-known",
+        "2026-05-15T10:00:00Z",
+        [
+            {
+                "feature": "f_known",
+                "severity": "moderate",
+                "would_promote_severity": "high",
+                "would_flag_for_review": True,
+                "rationale_incomplete_flag": True,
+            }
+        ],
+    )
+
+    reader = SidecarReader(artifacts_dir=tmp_path)
+    with caplog.at_level("WARNING"):
+        records = list(reader.iter_verdict_records())
+    assert len(records) == 1
+    unknown_warns = [
+        rec
+        for rec in caplog.records
+        if "unknown" in rec.message.lower()
+        and (
+            "would_promote_severity" in rec.message
+            or "would_flag_for_review" in rec.message
+            or "rationale_incomplete_flag" in rec.message
+        )
+    ]
+    assert not unknown_warns, (
+        f"shadow keys must be registered as known; got unknown-key WARNs: "
+        f"{[r.message for r in unknown_warns]}"
+    )

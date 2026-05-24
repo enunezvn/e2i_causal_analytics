@@ -30,7 +30,9 @@ logger = logging.getLogger(__name__)
 #
 # 1.1 (Issue #237 Phase 1): additive ``role_attributions`` list. Reader
 # pins MAJOR=1; minor bumps do not WARN.
-_READER_SCHEMA_VERSION = "1.1"
+# 1.2 (Issue #240 Stage 1): additive shadow promotion keys
+# (would_promote_severity / would_flag_for_review / rationale_incomplete_flag).
+_READER_SCHEMA_VERSION = "1.2"
 _READER_SCHEMA_MAJOR = 1
 
 # Issue #235 A3: the set of verdict-dict keys the reader knows how to
@@ -73,6 +75,14 @@ _KNOWN_VERDICT_KEYS: frozenset[str] = frozenset(
         "evaluator_missed_considerations",
         "evaluator_notes",
         "evaluator_model",
+        # Issue #240 Stage 1 (shadow mode): three nullable promotion-rule
+        # flags emitted by ``_ensemble_to_legacy_dict``. Registered here so
+        # they parse onto VerdictRecord (and feed the mirror's dedicated
+        # columns) without tripping the unknown-verdict-key WARN. Additive
+        # at schema 1.2+ — absent on pre-#240 sidecars (surface as None).
+        "would_promote_severity",
+        "would_flag_for_review",
+        "rationale_incomplete_flag",
     }
 )
 
@@ -120,6 +130,17 @@ class VerdictRecord:
     # ONCE per file at ``iter_verdict_records`` (O(n) construction,
     # O(1) per-record lookup) — see codex iter-2 fix in plan §1.5.
     role_attribution: Optional[dict[str, Any]] = None
+    # Issue #240 Stage 1 (shadow mode): three nullable promotion-rule
+    # flags. ``None`` on pre-#240 sidecars (the producer did not yet emit
+    # these keys) AND on any row where the rule did not fire. Surfaced so
+    # the mirror can populate migration-042's dedicated typed columns
+    # (``would_promote_severity`` / ``would_flag_for_review`` /
+    # ``rationale_incomplete_flag``) rather than leaving the firing signal
+    # buried in the ``verdict`` JSONB blob. See
+    # ``docs/plans/240-audit-evaluator-gate-promotion.md`` §3 Stage 1.
+    would_promote_severity: Optional[str] = None
+    would_flag_for_review: Optional[bool] = None
+    rationale_incomplete_flag: Optional[bool] = None
 
 
 class SidecarReader:
@@ -336,6 +357,13 @@ class SidecarReader:
             evaluator_cost_usd=_opt_float(raw.get("evaluator_cost_usd")),
             raw_verdict=raw,
             role_attribution=role_attribution,
+            # Issue #240 Stage 1 (shadow mode): additive promotion-rule
+            # flags. ``_opt_str`` / ``_opt_bool`` return None on missing
+            # keys (pre-#240 sidecars) — same schema-tolerant pattern as
+            # the evaluator-audit fields above.
+            would_promote_severity=_opt_str(raw.get("would_promote_severity")),
+            would_flag_for_review=_opt_bool(raw.get("would_flag_for_review")),
+            rationale_incomplete_flag=_opt_bool(raw.get("rationale_incomplete_flag")),
         )
 
 

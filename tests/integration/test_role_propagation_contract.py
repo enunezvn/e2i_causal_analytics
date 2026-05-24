@@ -162,7 +162,7 @@ def test_case_4_manifest_overrides_llm_unsatisfied() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Case 5 — Sidecar round-trip with schema_version "1.1"
+# Case 5 — Sidecar round-trip with schema_version "1.2"
 # ---------------------------------------------------------------------------
 
 
@@ -170,7 +170,7 @@ def test_case_5_sidecar_round_trip(tmp_path: Path, monkeypatch, caplog) -> None:
     """Write payload via ``write_adaptive_verdicts_sidecar`` → read via
     ``SidecarReader`` → assert each ``VerdictRecord.role_attribution``
     matches the produced attribution. Reader does NOT emit a
-    ``_check_schema_version`` WARN (since "1.1" minor matches MAJOR=1).
+    ``_check_schema_version`` WARN (since the "1.x" minor matches MAJOR=1).
     """
     from src.agents.ml_foundation.data_preparer.graph import (
         write_adaptive_verdicts_sidecar,
@@ -195,8 +195,9 @@ def test_case_5_sidecar_round_trip(tmp_path: Path, monkeypatch, caplog) -> None:
     path = write_adaptive_verdicts_sidecar(state)
     assert path is not None and path.exists()
     payload = json.loads(Path(path).read_text())
-    # Schema bump assertion.
-    assert payload["schema_version"] == "1.1"
+    # Schema bump assertion (current producer minor; 1.2 since Issue #240
+    # Stage 1 added additive shadow keys — still MAJOR=1).
+    assert payload["schema_version"] == "1.2"
     assert "role_attributions" in payload
     assert len(payload["role_attributions"]) == 2
 
@@ -205,12 +206,12 @@ def test_case_5_sidecar_round_trip(tmp_path: Path, monkeypatch, caplog) -> None:
         reader = SidecarReader(artifacts_dir=tmp_path)
         records = list(reader.iter_verdict_records())
 
-    # No schema-version WARN on "1.1" (matches MAJOR=1).
+    # No schema-version WARN on "1.2" (matches MAJOR=1).
     schema_warns = [
         r for r in caplog.records if "schema_version" in r.message and r.levelname == "WARNING"
     ]
     assert schema_warns == [], (
-        f"reader emitted unexpected schema_version warns for 1.1: {[w.message for w in schema_warns]}"
+        f"reader emitted unexpected schema_version warns for 1.2: {[w.message for w in schema_warns]}"
     )
 
     by_feature = {r.feature: r for r in records}
