@@ -134,13 +134,22 @@ _EVALUATOR_FIELDS: tuple[str, ...] = (
 # Note for jsonb: ``IS DISTINCT FROM`` on jsonb is structural equality
 # (key-order-insensitive object compare, see Postgres docs on jsonb
 # comparison). That is the natural meaning for a payload-changed test.
+#
+# Issue #240 Stage 1 (shadow mode): three dedicated columns
+# (would_promote_severity / would_flag_for_review / rationale_incomplete_flag)
+# are added by migration 042 and populated here from the sidecar's
+# promotion-rule flags (surfaced on VerdictRecord). They join the verdict /
+# evaluator_audit set in BOTH the DO UPDATE SET and the IS DISTINCT FROM
+# change-detection WHERE, so a sidecar whose only delta is a shadow flag
+# still triggers an in-place UPDATE (and an unchanged re-run stays a no-op).
 _UPSERT_SQL = """
 INSERT INTO adaptive_validity_verdicts (
     experiment_id, feature, written_at, source_path,
     verdict, evaluator_audit, causal_role_final, causal_role_source,
+    would_promote_severity, would_flag_for_review, rationale_incomplete_flag,
     imported_at
 )
-VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, now())
+VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, now())
 ON CONFLICT (
     COALESCE(experiment_id, '__unknown__'),
     COALESCE(feature, '__unknown__'),
@@ -154,12 +163,19 @@ ON CONFLICT (
     -- remain no-ops.
     causal_role_final = EXCLUDED.causal_role_final,
     causal_role_source = EXCLUDED.causal_role_source,
+    -- Issue #240 Stage 1 shadow columns: write through on conflict.
+    would_promote_severity = EXCLUDED.would_promote_severity,
+    would_flag_for_review = EXCLUDED.would_flag_for_review,
+    rationale_incomplete_flag = EXCLUDED.rationale_incomplete_flag,
     source_path = EXCLUDED.source_path,
     imported_at = now()
 WHERE adaptive_validity_verdicts.verdict IS DISTINCT FROM EXCLUDED.verdict
    OR adaptive_validity_verdicts.evaluator_audit IS DISTINCT FROM EXCLUDED.evaluator_audit
    OR adaptive_validity_verdicts.causal_role_final IS DISTINCT FROM EXCLUDED.causal_role_final
    OR adaptive_validity_verdicts.causal_role_source IS DISTINCT FROM EXCLUDED.causal_role_source
+   OR adaptive_validity_verdicts.would_promote_severity IS DISTINCT FROM EXCLUDED.would_promote_severity
+   OR adaptive_validity_verdicts.would_flag_for_review IS DISTINCT FROM EXCLUDED.would_flag_for_review
+   OR adaptive_validity_verdicts.rationale_incomplete_flag IS DISTINCT FROM EXCLUDED.rationale_incomplete_flag
 RETURNING (xmax = 0) AS inserted;
 """
 
@@ -349,6 +365,12 @@ def _upsert_records(
                     else None,
                     causal_role_final,
                     causal_role_source,
+                    # Issue #240 Stage 1 shadow columns. None when the rule
+                    # did not fire (or the sidecar predates #240) → column
+                    # stays NULL.
+                    r.would_promote_severity,
+                    r.would_flag_for_review,
+                    r.rationale_incomplete_flag,
                 ),
             )
             row = cur.fetchone()

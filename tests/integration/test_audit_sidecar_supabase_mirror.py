@@ -116,8 +116,11 @@ def _make_verdict(
     severity: str = "moderate",
     contract_source: str = "csu",
     evaluator_satisfied: bool | None = False,
+    would_promote_severity: str | None = None,
+    would_flag_for_review: bool | None = None,
+    rationale_incomplete_flag: bool | None = None,
 ) -> dict[str, Any]:
-    return {
+    verdict: dict[str, Any] = {
         "feature": feature,
         "layer": "4",
         "severity": severity,
@@ -135,6 +138,15 @@ def _make_verdict(
         "evaluator_notes": "thin rationale" if evaluator_satisfied is False else "ok",
         "evaluator_model": "anthropic/claude-haiku-4-5-20251001",
     }
+    # Issue #240 Stage 1 shadow keys — only emitted when supplied, so the
+    # "absent → column NULL" path is also exercisable.
+    if would_promote_severity is not None:
+        verdict["would_promote_severity"] = would_promote_severity
+    if would_flag_for_review is not None:
+        verdict["would_flag_for_review"] = would_flag_for_review
+    if rationale_incomplete_flag is not None:
+        verdict["rationale_incomplete_flag"] = rationale_incomplete_flag
+    return verdict
 
 
 def _write_sidecar(
@@ -342,6 +354,62 @@ def test_changed_verdict_for_same_natural_key_updates_in_place(
         f"FALSIFIABILITY-ANCHOR: pass-2 verdict.severity should be UPDATED to "
         f"'high', got {verdict_v2.get('severity')!r} — if this fires under "
         f"DO NOTHING the silent-drift regression has happened."
+    )
+
+
+def test_shadow_columns_persist_to_dedicated_columns(
+    tmp_path: Path, db_conn: psycopg.Connection, test_namespace: str
+) -> None:
+    """Issue #240 Stage 1 end-to-end: a sidecar carrying the three
+    promotion-rule shadow keys mirrors them into the DEDICATED typed
+    columns (not just the verdict JSONB blob), and a sidecar without them
+    leaves the columns NULL.
+
+    FALSIFIABILITY ANCHOR: remove the three columns from ``_UPSERT_SQL`` (or
+    the three values from the ``_upsert_records`` param tuple) and the
+    populated-row assertions trip — the dedicated columns stay NULL and
+    AC1.1/AC1.3 become unsatisfiable.
+    """
+    exp = f"{test_namespace}-shadow"
+    _write_sidecar(
+        tmp_path,
+        experiment_id=exp,
+        written_at="2026-05-15T10:00:00Z",
+        verdicts=[
+            # R1+R2+R3 all fire → all three dedicated columns populated.
+            _make_verdict(
+                feature="fires",
+                would_promote_severity="high",
+                would_flag_for_review=True,
+                rationale_incomplete_flag=True,
+            ),
+            # No rule fired (pre-#240-shaped row) → columns stay NULL.
+            _make_verdict(feature="quiet", evaluator_satisfied=True),
+        ],
+    )
+    _run_mirror(tmp_path)
+
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT would_promote_severity, would_flag_for_review, "
+            "rationale_incomplete_flag "
+            "FROM adaptive_validity_verdicts WHERE experiment_id=%s AND feature=%s",
+            (exp, "fires"),
+        )
+        fired = cur.fetchone()
+        cur.execute(
+            "SELECT would_promote_severity, would_flag_for_review, "
+            "rationale_incomplete_flag "
+            "FROM adaptive_validity_verdicts WHERE experiment_id=%s AND feature=%s",
+            (exp, "quiet"),
+        )
+        quiet = cur.fetchone()
+
+    assert fired == ("high", True, True), (
+        f"dedicated shadow columns must persist when rules fire; got {fired!r}"
+    )
+    assert quiet == (None, None, None), (
+        f"shadow columns must be NULL when no rule fired; got {quiet!r}"
     )
 
 

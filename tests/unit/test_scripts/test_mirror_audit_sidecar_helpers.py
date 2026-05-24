@@ -139,3 +139,152 @@ class TestResolveCursor:
         ts = datetime(2026, 5, 15, 10, 0, 0, tzinfo=timezone.utc)
         result = _resolve_cursor(db_cursor=ts, since_override=ts)
         assert result == ts
+
+
+# ----------------------------------------------------------------------------
+# Issue #240 Stage 1 — dedicated shadow columns written by the upsert.
+#
+# Migration 042 adds three dedicated typed columns. They are only populated
+# if (a) ``_UPSERT_SQL`` lists them and (b) ``_upsert_records`` passes the
+# VerdictRecord's shadow values in the matching positions. These tests pin
+# both without a live DB: a fake cursor captures the (sql, params) pair.
+# ----------------------------------------------------------------------------
+
+
+class _FakeCursor:
+    """Captures every (sql, params) pair passed to ``execute``. Returns a
+    1-tuple from ``fetchone`` so the upsert counts the row as inserted."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple]] = []
+
+    def __enter__(self) -> "_FakeCursor":
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        return False
+
+    def execute(self, sql: str, params: tuple) -> None:
+        self.calls.append((sql, params))
+
+    def fetchone(self) -> tuple:
+        return (True,)  # xmax == 0 → counted as a new insert
+
+
+class _FakeConn:
+    def __init__(self, cursor: _FakeCursor) -> None:
+        self._cursor = cursor
+        self.commits = 0
+
+    def cursor(self) -> _FakeCursor:
+        return self._cursor
+
+    def commit(self) -> None:
+        self.commits += 1
+
+
+def _verdict_record_with_shadow(
+    *,
+    would_promote_severity,
+    would_flag_for_review,
+    rationale_incomplete_flag,
+):
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    from src.data.audit_sidecar_reader import VerdictRecord
+
+    return VerdictRecord(
+        experiment_id="exp-1",
+        written_at=datetime(2026, 5, 15, 10, 0, 0, tzinfo=timezone.utc),
+        source_path=Path("/dev/null/synthetic"),
+        feature="age",
+        layer="4",
+        severity="moderate",
+        remediation="keep_with_caveat",
+        evidence="layer-4 llm",
+        z_score=4.2,
+        p_value=0.0001,
+        delta_auc=0.12,
+        evaluator_satisfied=False,
+        evaluator_rationale_complete=False,
+        evaluator_missed_considerations=["temporal_filter"],
+        evaluator_notes="thin",
+        evaluator_model="anthropic/claude-haiku-4-5-20251001",
+        raw_verdict={"feature": "age"},
+        would_promote_severity=would_promote_severity,
+        would_flag_for_review=would_flag_for_review,
+        rationale_incomplete_flag=rationale_incomplete_flag,
+    )
+
+
+class TestUpsertShadowColumns:
+    def test_upsert_sql_references_three_shadow_columns(self) -> None:
+        from scripts.mirror_audit_sidecar_to_supabase import _UPSERT_SQL
+
+        for col in (
+            "would_promote_severity",
+            "would_flag_for_review",
+            "rationale_incomplete_flag",
+        ):
+            # INSERT column list + DO UPDATE SET + IS DISTINCT FROM WHERE
+            # → the column name must appear at least 3 times.
+            assert _UPSERT_SQL.count(col) >= 3, (
+                f"{col!r} must be in the INSERT list, the DO UPDATE SET, and the "
+                f"IS DISTINCT FROM change-detection WHERE clause; found "
+                f"{_UPSERT_SQL.count(col)} occurrence(s)"
+            )
+
+    def test_upsert_param_count_matches_placeholders_and_carries_shadow_values(
+        self,
+    ) -> None:
+        from scripts.mirror_audit_sidecar_to_supabase import (
+            _UPSERT_SQL,
+            _upsert_records,
+        )
+
+        rec = _verdict_record_with_shadow(
+            would_promote_severity="high",
+            would_flag_for_review=True,
+            rationale_incomplete_flag=True,
+        )
+        cur = _FakeCursor()
+        conn = _FakeConn(cur)
+
+        new, updated, noop = _upsert_records(conn, [rec], dry_run=False)  # type: ignore[arg-type]
+
+        assert (new, updated, noop) == (1, 0, 0)
+        assert len(cur.calls) == 1
+        sql, params = cur.calls[0]
+        # Positional binding contract: one %s per passed param. A mismatch
+        # here is the bug a live DB would raise as "not enough/too many
+        # arguments"; this catches it without a DB.
+        assert _UPSERT_SQL.count("%s") == len(params), (
+            f"placeholder/param mismatch: {_UPSERT_SQL.count('%s')} %s vs "
+            f"{len(params)} params — the upsert would raise against a real DB"
+        )
+        # The three shadow values must be carried into the param tuple.
+        assert "high" in params
+        assert params.count(True) >= 2  # would_flag_for_review + rationale_incomplete_flag
+
+    def test_upsert_passes_none_shadow_values_when_no_rule_fired(self) -> None:
+        from scripts.mirror_audit_sidecar_to_supabase import (
+            _UPSERT_SQL,
+            _upsert_records,
+        )
+
+        rec = _verdict_record_with_shadow(
+            would_promote_severity=None,
+            would_flag_for_review=None,
+            rationale_incomplete_flag=None,
+        )
+        cur = _FakeCursor()
+        conn = _FakeConn(cur)
+
+        _upsert_records(conn, [rec], dry_run=False)  # type: ignore[arg-type]
+
+        _sql, params = cur.calls[0]
+        assert _UPSERT_SQL.count("%s") == len(params)
+        # The last three positional params are the shadow columns; all None
+        # when no rule fired (column stays NULL).
+        assert params[-3:] == (None, None, None)
