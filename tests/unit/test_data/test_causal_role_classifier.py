@@ -1221,19 +1221,19 @@ def test_compile_set_no_near_duplicate_with_golden() -> None:
 def test_compile_set_size_at_least_50() -> None:
     """Plan-239 §6.2 R1 — issue #239 blocker (MIPROv2 needs ≥50 examples).
 
-    Pinned EXACTLY at 50 (not `>=`) per codex impl iter-0 MEDIUM finding:
-    each of the 17 plan-239 additions (#34-#50) was individually audited
-    against the §3.0 semantic-neighbor table; any new addition needs a new
-    §3.0 audit row before incrementing the count. Pinning exact catches
-    accidental size drift that would invalidate the §3.0 disjointness audit.
+    Originally pinned EXACTLY at 50 (PR #469 codex impl iter-0 MEDIUM finding).
+    Loosened to `>= 50` per plan-239 n=200 growth (Task 3+ buckets target ~200);
+    floor semantic preserved (block accidental regression below 50) but ceiling
+    removed since growth past 50 is the intended Task 3-6 trajectory and
+    each new bucket carries its own per-entry curation contract verification.
     """
     from src.data.causal_role_classifier import build_compile_set
 
     n = len(build_compile_set())
-    assert n == 50, (
-        f"Plan-239 AC4: compile set must have exactly 50 examples; got {n}. "
-        f"New additions beyond 50 require a new §3.0 semantic-neighbor row "
-        f"per plan-239 §4.3 PR-blocking gate."
+    assert n >= 50, (
+        f"Plan-239 AC4: compile set must have at least 50 examples; got {n}. "
+        f"This is the MIPROv2 floor — additions beyond 50 are the deliberate "
+        f"n=200 growth path."
     )
 
 
@@ -1379,7 +1379,11 @@ def test_compile_set_disjoint_from_literature_golden_set():
 
     golden_path = Path("tests/fixtures/causal_role_golden_set.json")
     golden = json.loads(golden_path.read_text())
-    golden_features = {entry["feature_name"].strip().lower() for entry in golden}
+    # Golden set is a dict with schema {"entries": [...], "cohorts": {...}, ...};
+    # iterate over the "entries" list, not the top-level dict (bug fixed during
+    # Task 3 PNH bucket validation — pre-existing red-first test never exercised
+    # the assertion because it TypeError'd on the previous line).
+    golden_features = {entry["feature_name"].strip().lower() for entry in golden["entries"]}
 
     for example in build_compile_set():
         feat = example.feature_name.strip().lower()

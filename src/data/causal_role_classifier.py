@@ -1903,6 +1903,1231 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             recommended_remediation="window",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # =====================================================================
+        # Plan-239 n=200 Task 3 — Bucket 1: PNH expansion (+47 entries)
+        # Cohort floor 5 -> 52. Source mix: 32 PubMed-grounded literature entries
+        # + 8 adversarial (worker-evaluator boundary) + 7 edge cases (leakage /
+        # aggregation / windowing). All entries carry `cohort=PNH` explicit tag.
+        # Disjointness verified vs 50 compile-set + 30 golden PNH entries
+        # (Levenshtein ratio <0.85 on feature_name; (role,cohort,target) triple).
+        # IV entries follow Brookhart-Wang short-term first-initiation pattern
+        # with exclusion-restriction defended in mechanism (per codex #358 audit).
+        # =====================================================================
+        # ----- Sub-bucket B1-L: PubMed literature (30 entries) -----
+        # PMID: 38477987 — Peffault de Latour 2024 APPLY-PNH NEJM (DOI:10.1056/NEJMoa2308695)
+        dspy.Example(
+            feature_name="lactate_dehydrogenase_xuln_trajectory_slope_preindex_180d",
+            derivation_pseudocode=(
+                "source=LABS_LDH; derivation_inputs=['ldh_iu_l', 'ldh_uln_iu_l', 'lab_date']; "
+                "aggregation=linear_regression_slope; window_days=180; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH claims; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Slope of LDH/ULN trajectory over the 180d immediately pre-index reflects "
+                "trajectory of hemolytic activity at the decision point. Z->T: rising-slope "
+                "patients more often switched to iptacopan after suboptimal anti-C5 control "
+                "(Peffault de Latour 2024 APPLY-PNH PMID 38477987; "
+                "doi:10.1056/NEJMoa2308695). Z->Y: rising baseline trajectory predicts post-"
+                "treatment response magnitude (responders revert from higher pre-treatment "
+                "set-point). why_not_duplicate: golden baseline_ldh_x_uln_preindex is the "
+                "POINT-IN-TIME ratio at index; this entry is the DERIVATIVE (slope over 180d "
+                "via linear regression), capturing temporal dynamics rather than level. "
+                "Methods anchor Brookhart 2010 PMID 30516102 confounder selection."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 33730455 — Hillmen 2021 NEJM PEGASUS pegcetacoplan (DOI:10.1056/NEJMoa2029073)
+        dspy.Example(
+            feature_name="absolute_reticulocyte_count_baseline_preindex_pnh",
+            derivation_pseudocode=(
+                "source=CBC_LABS; derivation_inputs=['reticulocyte_abs_count_per_ul', 'lab_date']; "
+                "aggregation=median; window_days=60; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH claims; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Baseline absolute reticulocyte count indexes compensatory erythropoiesis "
+                "intensity in response to chronic hemolysis. Z->T: high reticulocytosis "
+                "despite anti-C5 therapy is a clinical trigger for switch to proximal "
+                "complement inhibitors (Hillmen 2021 PEGASUS PMID 33730455; "
+                "doi:10.1056/NEJMoa2029073). Z->Y: erythropoietic reserve predicts hemoglobin "
+                "recovery magnitude independently of treatment arm. why_not_duplicate: "
+                "compile-set neighbor baseline_haptoglobin_pct_lln_preindex measures "
+                "scavenger depletion (free-Hb axis); this measures bone-marrow output via "
+                "absolute reticulocyte counts — distinct analyte, distinct mechanism."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 38030318 — Lee 2023 Lancet Haematology danicopan ALPHA (DOI:10.1016/S2352-3026(23)00315-0)
+        dspy.Example(
+            feature_name="extravascular_hemolysis_flag_c3_coated_rbc_preindex_pnh",
+            derivation_pseudocode=(
+                "source=FLOW_CYTOMETRY; derivation_inputs=['c3_coated_rbc_pct', 'flow_date']; "
+                "aggregation=max; window_days=180; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH chart-abstracted flow; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Pre-index detection of C3-coated PNH RBCs flags extravascular hemolysis — "
+                "a residual disease driver in anti-C5-treated patients. Z->T: presence of "
+                "EVH-by-C3-binding is the canonical clinical reason for proximal inhibitor "
+                "switch (Lee 2023 ALPHA PMID 38030318; doi:10.1016/S2352-3026(23)00315-0). "
+                "Z->Y: EVH burden at baseline predicts post-treatment hemoglobin recovery "
+                "magnitude. why_not_duplicate: golden c3_deposition_pnh_rbc_pct_d90_postindex "
+                "is POSTINDEX continuous measurement labeled MEDIATOR; this is PREINDEX "
+                "binary flag labeled CONFOUNDER — temporal positioning is reversed."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 33512400 — Brodsky 2021 Blood how I treat PNH (DOI:10.1182/blood.2019003812)
+        dspy.Example(
+            feature_name="type_iii_rbc_clone_fraction_preindex_flow_pnh",
+            derivation_pseudocode=(
+                "source=FLOW_CYTOMETRY; derivation_inputs=['type_iii_rbc_pct', 'flow_date']; "
+                "aggregation=max; window_days=180; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH chart flow; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Erythrocyte (Type III RBC) clone size indexes the proportion of GPI-deficient "
+                "red cells susceptible to complement-mediated lysis. Z->T: large erythrocyte "
+                "clone justifies aggressive proximal complement inhibition per Brodsky 2021 "
+                "(PMID 33512400; doi:10.1182/blood.2019003812). Z->Y: erythrocyte-clone-size "
+                "predicts hemoglobin response ceiling. why_not_duplicate: golden "
+                "pnh_clone_size_granulocyte_pct_preindex measures GRANULOCYTE clone (a "
+                "different cell lineage tied to disease activity but not direct lysis "
+                "target); this measures the lysis-target erythrocyte fraction — distinct "
+                "lineage, distinct causal pathway."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 38622956 — Versino-Fattizzo 2024 IJLH complement biology (DOI:10.1111/ijlh.14281)
+        dspy.Example(
+            feature_name="serum_free_hemoglobin_max_preindex_180d_pnh",
+            derivation_pseudocode=(
+                "source=LABS_PLASMA; derivation_inputs=['free_hemoglobin_mg_dl', 'lab_date']; "
+                "aggregation=max; window_days=180; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH chart labs; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Maximum pre-index plasma free hemoglobin indexes peak intravascular "
+                "hemolytic activity in the 6 months before treatment switch. Z->T: high "
+                "free-Hb events drive proximal inhibitor initiation (Versino-Fattizzo 2024 "
+                "PMID 38622956; doi:10.1111/ijlh.14281). Z->Y: pre-index free-Hb peaks "
+                "predict hemoglobin recovery dynamics independent of arm. why_not_duplicate: "
+                "compile-set neighbor baseline_haptoglobin_pct_lln_preindex measures "
+                "scavenger depletion (inverse free-Hb proxy via aggregation=min); this "
+                "measures direct PEAK free-Hb (aggregation=max); different aggregation + "
+                "directly measured rather than inferred via scavenger inversion."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 35699625 — Schrezenmeier 2022 advances pathophysiology (DOI:10.20452/pamw.16271)
+        dspy.Example(
+            feature_name="time_since_pnh_diagnosis_years_preindex",
+            derivation_pseudocode=(
+                "source=DX_FIRST_PNH; derivation_inputs=['first_pnh_dx_date', 'index_date']; "
+                "aggregation=delta_days_to_years; window_days=99999; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH claims; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="ancestor",
+            mechanism=(
+                "Years from first PNH diagnosis to index reflects disease tenure — an "
+                "upstream patient characteristic affecting both treatment choice and "
+                "response distribution. Z->T,Y but effect on (T,Y) is largely exhausted by "
+                "intermediate confounders (prior anti-C5 days, clone size, transfusion "
+                "history); this entry teaches the ANCESTOR role per Greenland-Pearl-Robins "
+                "1999 (PMID 9888278) where d-separation by downstream confounders blocks "
+                "the direct Z arrows. Schrezenmeier 2022 (PMID 35699625; doi:10.20452/pamw.16271) "
+                "documents disease-tenure heterogeneity. why_not_duplicate: golden "
+                "age_at_index_years is biological age (intrinsic patient attribute); this "
+                "is disease tenure (time-since-diagnosis); orthogonal upstream variables."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 39323666 — Dighriri 2024 Cureus iptacopan meta-analysis (DOI:10.7759/cureus.67830)
+        dspy.Example(
+            feature_name="prior_pnh_meta_analysis_pooled_response_rate_calendar_indicator",
+            derivation_pseudocode=(
+                "source=PUBLICATION_CALENDAR; derivation_inputs=['index_year', 'meta_analysis_pub_year']; "
+                "aggregation=after_publication_flag; window_days=0; knowable_at=index_date"
+            ),
+            dataset_context=(
+                "ConcertAI PNH + publication calendar; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="instrument",
+            mechanism=(
+                "Brookhart-Wang temporal IV: binary flag for whether index_date falls AFTER "
+                "publication of the Dighriri 2024 iptacopan meta-analysis (PMID 39323666; "
+                "doi:10.7759/cureus.67830), shifting prescriber confidence in iptacopan. "
+                "Z->T: post-publication availability increases iptacopan initiation rate. "
+                "Z->Y exclusion-restriction: the publication itself has no biological "
+                "mechanism on hemolysis or hemoglobin recovery outside of changing the "
+                "treatment choice — calendar-knowable, prescriber-cognitive shift only. "
+                "why_not_duplicate: golden post_iptacopan_fda_approval_calendar_indicator "
+                "is the FDA-approval discontinuity (regulatory event); this is a SEPARATE "
+                "post-publication meta-analysis discontinuity (evidence-availability event) "
+                "occurring well after FDA approval — distinct temporal cut-point."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 38348608 — Pegcetacoplan 2024 real-world Am J Hematol (DOI:10.1002/ajh.27242)
+        dspy.Example(
+            feature_name="pre_index_pegcetacoplan_exposure_days_lifetime_pnh",
+            derivation_pseudocode=(
+                "source=PHARMACY_CLAIMS; derivation_inputs=['ndc_code', 'pegcetacoplan_flag', 'days_supply']; "
+                "aggregation=sum; window_days=99999; knowable_at=preindex_30d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH claims; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Total lifetime days exposed to pegcetacoplan (another proximal-complement "
+                "inhibitor) before iptacopan initiation. Z->T: prior pegcetacoplan failure / "
+                "discontinuation drives subsequent iptacopan switch per real-world cohort "
+                "(PMID 38348608; doi:10.1002/ajh.27242). Z->Y: pegcetacoplan exposure history "
+                "shapes hemolytic dynamics independently of iptacopan effect. "
+                "why_not_duplicate: golden prior_anti_c5_inhibitor_use_flag_preindex is a "
+                "BINARY flag for ANY anti-C5 drug-class use; this is CONTINUOUS days for the "
+                "SPECIFIC C3 inhibitor pegcetacoplan (a different mechanism class entirely — "
+                "C3 vs C5); distinct drug class + continuous vs binary."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 36055332 — PEGASUS 48-week 2022 Lancet Haematology (DOI:10.1016/S2352-3026(22)00210-1)
+        dspy.Example(
+            feature_name="proximal_complement_inhibitor_class_switch_count_lifetime_pnh",
+            derivation_pseudocode=(
+                "source=PHARMACY_CLAIMS; derivation_inputs=['ndc_code', 'drug_class_proximal_complement', 'switch_event_flag']; "
+                "aggregation=count_distinct; window_days=99999; knowable_at=preindex_30d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH claims; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="ancestor",
+            mechanism=(
+                "Lifetime count of distinct switches across proximal-complement inhibitor "
+                "classes (pegcetacoplan->ravulizumab->iptacopan etc.) before index. Z->T,Y "
+                "upstream effect: high switch count indexes refractory disease phenotype "
+                "that drives both choice of iptacopan AND eventual outcome — but the (T,Y) "
+                "effect is mediated through downstream confounders (prior C5 days, EVH "
+                "burden, transfusion history) already in the adjustment set per PEGASUS-48wk "
+                "(PMID 36055332; doi:10.1016/S2352-3026(22)00210-1). Ancestor role per "
+                "Greenland-Pearl-Robins 1999 (PMID 9888278). why_not_duplicate: compile-set "
+                "neighbor pre_index_anti_c5_persistence_days_lifetime is CONTINUOUS days on "
+                "anti-C5; this is COUNT of class-switches (switch-event topology, not "
+                "exposure duration); distinct aggregation + complementary tenure signal."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 39079163 — Pegcetacoplan 2024 mild moderate anemia PLOS (DOI:10.1371/journal.pone.0306407)
+        dspy.Example(
+            feature_name="baseline_hemoglobin_g_dl_preindex_mean_30d_pnh",
+            derivation_pseudocode=(
+                "source=CBC_LABS; derivation_inputs=['hemoglobin_g_dl', 'lab_date']; "
+                "aggregation=mean; window_days=30; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH claims; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Mean hemoglobin over the 30d immediately pre-index reflects baseline anemia "
+                "depth at the treatment decision. Z->T: lower baseline Hb is a clinical "
+                "trigger for iptacopan switch per Hillmen 2024 (PMID 39079163; "
+                "doi:10.1371/journal.pone.0306407). Z->Y: baseline Hb sets the lower bound "
+                "for hemoglobin response of >=2 g/dL improvement, making the endpoint more "
+                "achievable for lower-baseline patients. why_not_duplicate: golden "
+                "baseline_ldh_x_uln_preindex measures HEMOLYTIC ACTIVITY; this measures "
+                "HEMATOLOGIC RESERVE (the carrying capacity from which response is measured) "
+                "— complementary axis of pre-treatment patient characterization."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 38622956 — Versino-Fattizzo complement biology (DOI:10.1111/ijlh.14281)
+        dspy.Example(
+            feature_name="alternative_pathway_amplification_loop_haemolysis_score_preindex_pnh",
+            derivation_pseudocode=(
+                "source=BIOMARKER_PANEL; derivation_inputs=['c3_split_product_concentration', 'fb_consumption_pct', 'biomarker_date']; "
+                "aggregation=composite_z_score; window_days=180; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH chart biomarkers; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Composite z-score of alternative-pathway amplification markers (C3 split "
+                "products + factor B consumption) measured pre-index. Z->T: high AP activity "
+                "drives proximal inhibitor (factor B-blocking iptacopan) selection per "
+                "Versino-Fattizzo 2024 (PMID 38622956; doi:10.1111/ijlh.14281). Z->Y: AP "
+                "amplification predicts magnitude of complement-blockade response. "
+                "why_not_duplicate: golden c3_deposition_pnh_rbc_pct_d90_postindex is "
+                "POSTINDEX C3 binding to RBCs (mediator); this is PREINDEX AP-loop activity "
+                "biomarker panel (confounder) — different time-position, different physical "
+                "measurement (soluble AP markers vs cell-surface C3 binding)."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 38477987 — APPLY-PNH NEJM (DOI:10.1056/NEJMoa2308695)
+        dspy.Example(
+            feature_name="fatigue_facit_score_change_d90_postindex_pnh",
+            derivation_pseudocode=(
+                "source=PRO_FACIT; derivation_inputs=['facit_fatigue_score_baseline', 'facit_fatigue_score_d90']; "
+                "aggregation=delta_d90_minus_baseline; window_days=90; knowable_at=postindex+90d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH PRO panel; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="mediator",
+            mechanism=(
+                "Change in FACIT-Fatigue score from baseline to d90 sits on the directed "
+                "path T -> FACIT_change -> Y for outcomes involving Hb-related symptom "
+                "endpoints. T->M: iptacopan reduces hemolysis and improves fatigue at d90 "
+                "per APPLY-PNH (PMID 38477987; doi:10.1056/NEJMoa2308695). M->Y: fatigue "
+                "improvement reflects oxygen-carrying recovery preceding the 180d Hb "
+                "endpoint. Adjusting for M blocks indirect effect — remediation is window "
+                "(restrict to pre-treatment covariates) per Hernan 2004 (PMID 14760119). "
+                "why_not_duplicate: golden facit_fatigue_response_180d_postindex_flag is "
+                "180d BINARY threshold response labeled COLLIDER (response status itself); "
+                "this is CONTINUOUS d90 DELTA labeled MEDIATOR (intermediate causal path); "
+                "different time, different aggregation, different role."
+            ),
+            recommended_remediation="window",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 35561315 — Jang 2022 Blood Adv iptacopan proof-of-concept (DOI:10.1182/bloodadvances.2022006960)
+        dspy.Example(
+            feature_name="d30_postindex_intravascular_hemolysis_freehb_delta_pnh",
+            derivation_pseudocode=(
+                "source=LABS_PLASMA; derivation_inputs=['free_hemoglobin_baseline', 'free_hemoglobin_d30']; "
+                "aggregation=delta_d30_minus_baseline; window_days=30; knowable_at=postindex+30d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH chart labs; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="mediator",
+            mechanism=(
+                "Change in free hemoglobin from baseline to d30 sits on the directed path "
+                "T -> intravascular_hemolysis -> Y per Jang 2022 (PMID 35561315; "
+                "doi:10.1182/bloodadvances.2022006960) — iptacopan blocks factor B and "
+                "suppresses IVH rapidly. T->M->Y is the proximal pharmacologic mediator. "
+                "Adjust for M induces over-adjustment bias (Hernan MSM PMID 10955408); "
+                "correct remediation is window. why_not_duplicate: golden "
+                "ldh_x_uln_d90_postindex measures POSTINDEX LDH (d90 timepoint, LDH "
+                "analyte); this measures POSTINDEX FREE HEMOGLOBIN (d30 timepoint, free-Hb "
+                "analyte) — different analyte + earlier post-index timepoint."
+            ),
+            recommended_remediation="window",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 33730455 — Hillmen PEGASUS NEJM (DOI:10.1056/NEJMoa2029073)
+        dspy.Example(
+            feature_name="postindex_d90_reticulocyte_normalization_flag_pnh",
+            derivation_pseudocode=(
+                "source=CBC_LABS; derivation_inputs=['reticulocyte_abs_count_per_ul_d90', 'ref_upper']; "
+                "aggregation=indicator_lte_ref_upper; window_days=90; knowable_at=postindex+90d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH chart; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="mediator",
+            mechanism=(
+                "Postindex d90 reticulocyte normalization (counts back within reference "
+                "range) sits on T -> erythropoietic_normalization -> Y path. T->M: treatment "
+                "reduces hemolytic stress, removes drive for compensatory reticulocytosis "
+                "per Hillmen 2021 PEGASUS (PMID 33730455; doi:10.1056/NEJMoa2029073). M->Y: "
+                "reticulocyte normalization precedes stable hemoglobin recovery at d180. "
+                "Window remediation per Hernan 2004 (PMID 14760119). why_not_duplicate: "
+                "golden reticulocyte_count_delta_d90_postindex is CONTINUOUS delta; this is "
+                "BINARY threshold indicator (back-in-reference flag) — different aggregation "
+                "(delta vs indicator), captures a clinically meaningful normalization "
+                "endpoint distinct from raw delta magnitude."
+            ),
+            recommended_remediation="window",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 38030318 — Lee ALPHA danicopan (DOI:10.1016/S2352-3026(23)00315-0)
+        dspy.Example(
+            feature_name="add_on_danicopan_initiated_during_followup_flag_pnh",
+            derivation_pseudocode=(
+                "source=PHARMACY_CLAIMS; derivation_inputs=['ndc_code', 'danicopan_flag', 'fill_date']; "
+                "aggregation=any; window_days=180; knowable_at=postindex+180d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH claims; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="collider",
+            mechanism=(
+                "Add-on danicopan initiation during follow-up is jointly caused by (a) "
+                "inadequate iptacopan response (residual EVH) and (b) availability/coverage "
+                "of danicopan in the post-ALPHA period (Lee 2023 ALPHA PMID 38030318; "
+                "doi:10.1016/S2352-3026(23)00315-0). Both poor T-response and patient access "
+                "drive add-on initiation, opening a collider path when conditioned. Remediation "
+                "drop per Hernan 2004 (PMID 14760119). why_not_duplicate: golden "
+                "iptacopan_persistence_at_180d_flag is persistence on INDEX treatment; this "
+                "is INITIATION of an ADD-ON drug (danicopan) — different drug, different "
+                "event type (initiation vs persistence), different role inference."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 32011183 — McKinley 2020 ravulizumab review (DOI:10.1080/14712598.2020.1725468)
+        dspy.Example(
+            feature_name="ravulizumab_to_iptacopan_switch_timing_days_preindex_pnh",
+            derivation_pseudocode=(
+                "source=PHARMACY_CLAIMS; derivation_inputs=['last_ravulizumab_fill_date', 'index_date']; "
+                "aggregation=delta_days; window_days=99999; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH claims; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Days between last ravulizumab fill and iptacopan index date — washout-vs-"
+                "overlap captures planned-switch vs failed-therapy switch. Z->T: short "
+                "washout indexes urgent breakthrough-driven switch; long washout indexes "
+                "planned switch per McKinley 2020 (PMID 32011183; "
+                "doi:10.1080/14712598.2020.1725468). Z->Y: short washout patients carry "
+                "residual C5-blockade pharmacology into iptacopan response window. "
+                "why_not_duplicate: compile-set neighbor "
+                "pre_index_anti_c5_persistence_days_lifetime is LIFETIME SUM (chronic "
+                "exposure); this is GAP-DAYS between last fill and index (temporal "
+                "proximity, not cumulative dose) — distinct construct."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 35699625 — Schrezenmeier 2022 (DOI:10.20452/pamw.16271)
+        dspy.Example(
+            feature_name="hemosiderinuria_dipstick_positive_flag_preindex_pnh",
+            derivation_pseudocode=(
+                "source=URINALYSIS; derivation_inputs=['hemosiderin_urine_dipstick', 'lab_date']; "
+                "aggregation=any_positive; window_days=180; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH chart UA; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Pre-index detection of urinary hemosiderin (Perls-stained desquamated "
+                "tubular cells) flags chronic intravascular hemolysis with iron loss per "
+                "Schrezenmeier 2022 (PMID 35699625; doi:10.20452/pamw.16271). Z->T: "
+                "persistent hemosiderinuria despite C5 inhibition triggers switch. Z->Y: "
+                "chronic iron loss affects erythropoietic reserve, modulating Hb response. "
+                "why_not_duplicate: compile-set neighbor baseline_haptoglobin_pct_lln_preindex "
+                "is PLASMA scavenger marker; this is URINE iron-deposit marker (renal "
+                "tubular damage from chronic free-Hb filtration); different specimen + "
+                "different physical process."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 39404123 — de Castro 2024 Expert Opin Pharmacother (DOI:10.1080/14656566.2024.2404110)
+        dspy.Example(
+            feature_name="serum_iron_saturation_pct_baseline_preindex_pnh",
+            derivation_pseudocode=(
+                "source=LABS_IRON_PANEL; derivation_inputs=['iron_ug_dl', 'tibc_ug_dl', 'lab_date']; "
+                "aggregation=mean_ratio; window_days=60; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH chart labs; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Baseline transferrin saturation (iron / TIBC) indexes iron-replete vs iron-"
+                "deficient state at treatment switch — relevant for iptacopan response "
+                "where erythropoietic recovery requires iron substrate per de Castro 2024 "
+                "(PMID 39404123; doi:10.1080/14656566.2024.2404110). Z->T: low TSAT may "
+                "delay switch decisions. Z->Y: iron-limited erythropoiesis caps Hb response "
+                "magnitude. why_not_duplicate: hemosiderinuria entry captures URINARY iron "
+                "LOSS (output side); this captures SERUM iron AVAILABILITY (input side); "
+                "different specimen, different physiological flow direction."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 33512400 — Brodsky 2021 (DOI:10.1182/blood.2019003812)
+        dspy.Example(
+            feature_name="splenomegaly_imaging_present_flag_preindex_pnh",
+            derivation_pseudocode=(
+                "source=IMAGING_REPORTS; derivation_inputs=['ct_us_report_text', 'splenomegaly_mention']; "
+                "aggregation=any_positive; window_days=365; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH chart imaging; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Pre-index splenomegaly (mentioned in CT/US within 365d pre-index) indexes "
+                "extravascular sequestration capacity which competes with intravascular "
+                "hemolysis as a destruction pathway. Z->T: splenomegaly with anti-C5 "
+                "breakthrough triggers switch to proximal inhibitor per Brodsky 2021 (PMID "
+                "33512400; doi:10.1182/blood.2019003812). Z->Y: large spleen sequesters "
+                "C3-coated RBCs, modulating response magnitude. why_not_duplicate: no "
+                "imaging-derived feature exists in compile-set or golden PNH; novel SOURCE "
+                "(imaging reports rather than labs/claims) + novel construct (anatomic "
+                "compartment volume rather than serum analyte)."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 38477987 — APPLY-PNH (DOI:10.1056/NEJMoa2308695)
+        dspy.Example(
+            feature_name="number_of_prior_failed_complement_inhibitor_lines_pnh",
+            derivation_pseudocode=(
+                "source=PHARMACY_CLAIMS; derivation_inputs=['drug_class_complement_inhibitor', 'discontinuation_reason_failure']; "
+                "aggregation=count_distinct; window_days=99999; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH claims; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Count of distinct prior complement inhibitors with documented failure-"
+                "discontinuation before iptacopan index. Z->T: more prior failures push "
+                "toward iptacopan as later-line option per APPLY-PNH eligibility patterns "
+                "(PMID 38477987; doi:10.1056/NEJMoa2308695). Z->Y: refractory-line position "
+                "predicts smaller absolute response magnitude. why_not_duplicate: golden "
+                "prior_anti_c5_inhibitor_use_flag_preindex is BINARY any-use of C5 class; "
+                "compile-set proximal_complement_inhibitor_class_switch_count_lifetime_pnh "
+                "is class-switch count regardless of reason; this is FAILURE-coded "
+                "discontinuation count only (clinical-failure-specific filter)."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 38622956 — Versino-Fattizzo (DOI:10.1111/ijlh.14281)
+        dspy.Example(
+            feature_name="d180_post_iptacopan_ldh_normalization_durable_flag_pnh",
+            derivation_pseudocode=(
+                "source=LABS_LDH; derivation_inputs=['ldh_x_uln_d90', 'ldh_x_uln_d180']; "
+                "aggregation=indicator_both_lte_1_5; window_days=180; knowable_at=postindex+180d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH chart labs; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="mediator",
+            mechanism=(
+                "Durable LDH normalization (both d90 AND d180 <=1.5xULN) sits on the "
+                "T -> sustained_IVH_suppression -> Y path per Versino-Fattizzo 2024 (PMID "
+                "38622956; doi:10.1111/ijlh.14281). Conjunction of two timepoints distinguishes "
+                "durable from transient response. Adjust for M induces over-adjustment "
+                "(Hernan MSM PMID 10955408). why_not_duplicate: golden ldh_x_uln_d90_postindex "
+                "is the SINGLE d90 timepoint; this is the CONJUNCTION (both d90 AND d180 "
+                "in range) — distinct aggregation (durable-conjunction indicator vs single "
+                "ratio), distinct construct (sustained vs transient)."
+            ),
+            recommended_remediation="window",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 35699625 — Schrezenmeier 2022 (DOI:10.20452/pamw.16271)
+        dspy.Example(
+            feature_name="prior_thrombosis_anatomic_site_atypical_flag_preindex_pnh",
+            derivation_pseudocode=(
+                "source=DX_HISTORICAL; derivation_inputs=['icd10_venous_thrombosis_codes', 'anatomic_site_atypical_set']; "
+                "aggregation=any; window_days=99999; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH claims; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Flag for any historical thrombosis at PNH-atypical site (Budd-Chiari, "
+                "mesenteric, cerebral venous) per Schrezenmeier 2022 (PMID 35699625; "
+                "doi:10.20452/pamw.16271). Z->T: atypical-site thrombosis history indexes "
+                "severe complement dysregulation prompting proximal inhibitor escalation. "
+                "Z->Y: thrombosis history modulates anticoagulation that affects hematologic "
+                "endpoints. why_not_duplicate: golden prior_thrombotic_event_flag_preindex "
+                "is ANY-SITE binary flag; this is the SUBSET restricted to atypical sites "
+                "(intra-abdominal/intra-cranial), narrower clinical phenotype."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 39404123 — de Castro 2024 (DOI:10.1080/14656566.2024.2404110)
+        dspy.Example(
+            feature_name="prior_year_anticoagulation_doac_persistence_pdc_preindex_pnh",
+            derivation_pseudocode=(
+                "source=PHARMACY_CLAIMS; derivation_inputs=['ndc_code', 'doac_class_flag', 'days_supply']; "
+                "aggregation=sum_days_supply_div_365; window_days=365; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH claims; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "DOAC proportion-of-days-covered in the 365d preindex window. Z->T: "
+                "anticoagulated patients have lower threshold for proximal switch given "
+                "iptacopan's lower thrombosis risk per de Castro 2024 (PMID 39404123; "
+                "doi:10.1080/14656566.2024.2404110). Z->Y: anticoagulation modulates iron "
+                "homeostasis (GI losses) affecting Hb endpoint. why_not_duplicate: golden "
+                "prior_thrombotic_event_flag_preindex is binary event flag (history); this "
+                "is continuous PDC of anticoagulation TREATMENT (process measure); event "
+                "vs treatment-process distinction."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 36459381 — Pegcetacoplan 2022 Drugs review (DOI:10.1007/s40265-022-01809-w)
+        dspy.Example(
+            feature_name="time_to_first_postindex_transfusion_event_days_pnh",
+            derivation_pseudocode=(
+                "source=PROCEDURE_CODES; derivation_inputs=['cpt_transfusion_codes', 'service_date', 'index_date']; "
+                "aggregation=min_delta_days_from_index; window_days=180; knowable_at=postindex+180d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH claims; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="mediator",
+            mechanism=(
+                "Days from index to first post-index transfusion lies on the path T -> "
+                "transfusion_dependence -> Y per pegcetacoplan/iptacopan trial patterns "
+                "(PMID 36459381; doi:10.1007/s40265-022-01809-w). T->M: effective treatment "
+                "delays/eliminates transfusion need. M->Y: transfusions transiently inflate "
+                "measured Hb at d180 even when endogenous response is poor — directly "
+                "modifying the outcome measurement. Window remediation. why_not_duplicate: "
+                "golden any_rbc_transfusion_during_followup_flag is BINARY any-event over "
+                "follow-up labeled COLLIDER; this is CONTINUOUS time-to-first-event labeled "
+                "MEDIATOR — different aggregation, different role inference."
+            ),
+            recommended_remediation="window",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 38811284 — Xu 2024 Blood Rev (DOI:10.1016/j.blre.2024.101210)
+        dspy.Example(
+            feature_name="pre_index_complement_pathway_activity_ch50_iu_ml_pnh",
+            derivation_pseudocode=(
+                "source=LABS_FUNCTIONAL_COMPLEMENT; derivation_inputs=['ch50_assay_iu_ml', 'lab_date']; "
+                "aggregation=median; window_days=180; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH chart labs; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Pre-index total complement activity (CH50) measures the functional "
+                "intactness of the classical+terminal complement pathway per Xu 2024 "
+                "(PMID 38811284; doi:10.1016/j.blre.2024.101210). Z->T: low CH50 on existing "
+                "anti-C5 confirms adequate distal blockade; persistent EVH then drives "
+                "switch decision. Z->Y: residual complement activity predicts post-switch "
+                "response magnitude. why_not_duplicate: alternative_pathway_amplification_loop "
+                "entry measures AP-specific markers (C3-split + factor B); CH50 is global "
+                "functional complement (all pathways), different assay + different pathway "
+                "subset."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 33512400 — Brodsky 2021 (DOI:10.1182/blood.2019003812)
+        dspy.Example(
+            feature_name="charlson_comorbidity_index_score_preindex_pnh",
+            derivation_pseudocode=(
+                "source=DX_CLAIMS; derivation_inputs=['icd10_diagnosis_codes', 'charlson_weights_table']; "
+                "aggregation=weighted_sum; window_days=365; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH claims; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Charlson Comorbidity Index summarizes 17 weighted comorbid conditions over "
+                "365d preindex per standard pharmacoepi practice (Brodsky 2021 PMID 33512400 "
+                "treatment-decision context; doi:10.1182/blood.2019003812). Z->T: higher CCI "
+                "favors oral iptacopan over IV infusion regimens. Z->Y: comorbidity burden "
+                "modulates erythropoietic capacity and adverse-event-driven discontinuation. "
+                "why_not_duplicate: golden age_at_index_years is one upstream demographic; "
+                "this is the COMPOSITE multi-comorbidity score (17-condition weighted index) "
+                "— distinct construct."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 38622956 — Versino-Fattizzo (DOI:10.1111/ijlh.14281)
+        dspy.Example(
+            feature_name="iptacopan_dose_modification_during_first_90d_postindex_count_pnh",
+            derivation_pseudocode=(
+                "source=PHARMACY_CLAIMS; derivation_inputs=['ndc_code', 'iptacopan_strength_mg', 'fill_date']; "
+                "aggregation=count_distinct_strengths; window_days=90; knowable_at=postindex+90d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH claims; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="collider",
+            mechanism=(
+                "Count of distinct iptacopan strengths dispensed in first 90d post-index "
+                "indexes early dose modification — jointly caused by (a) early "
+                "tolerability/response signals (T->modification) and (b) prescriber "
+                "preference and patient adherence (independent of T). Conditioning opens "
+                "a collider path per Hernan 2004 (PMID 14760119). why_not_duplicate: golden "
+                "iptacopan_persistence_at_180d_flag is binary persistence at 180d (different "
+                "endpoint); this is dose-modification COUNT during 90d (intra-treatment-"
+                "course modification, not discontinuation); different event type + window."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 36055332 — PEGASUS 48-week (DOI:10.1016/S2352-3026(22)00210-1)
+        dspy.Example(
+            feature_name="pre_index_specialist_hematology_visit_count_180d_pnh",
+            derivation_pseudocode=(
+                "source=PROVIDER_CLAIMS; derivation_inputs=['specialty_code_hematology', 'service_date']; "
+                "aggregation=count; window_days=180; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH claims; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Number of hematology specialist visits in 180d preindex reflects monitoring "
+                "intensity at the treatment-decision juncture per PEGASUS-48wk care patterns "
+                "(PMID 36055332; doi:10.1016/S2352-3026(22)00210-1). Z->T: high monitoring "
+                "frequency surfaces breakthrough hemolysis that triggers switch decisions. "
+                "Z->Y: ongoing specialist contact predicts adherence and outcome assessment "
+                "completeness. why_not_duplicate: golden payer_step_therapy_iptacopan_"
+                "requirement_preindex captures PAYER policy (administrative); this captures "
+                "PROVIDER engagement count (utilization)."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 39079163 — Hillmen 2024 (DOI:10.1371/journal.pone.0306407)
+        dspy.Example(
+            feature_name="mild_moderate_anemia_baseline_indicator_hgb_ge_10_preindex_pnh",
+            derivation_pseudocode=(
+                "source=CBC_LABS; derivation_inputs=['hemoglobin_g_dl_median_30d_preindex']; "
+                "aggregation=indicator_ge_10; window_days=30; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH chart; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Binary indicator for baseline Hb >=10 g/dL (mild/moderate anemia stratum) "
+                "per Hillmen 2024 (PMID 39079163; doi:10.1371/journal.pone.0306407) which "
+                "showed differential proximal-inhibitor response by baseline-Hb stratum. "
+                "Z->T: stratum membership shifts treatment-decision threshold. Z->Y: ceiling "
+                "effect — mild/moderate-anemia patients have less room for >=2g/dL "
+                "improvement endpoint. why_not_duplicate: compile-set neighbor "
+                "baseline_hemoglobin_g_dl_preindex_mean_30d_pnh is the CONTINUOUS mean; "
+                "this is BINARY threshold indicator over the trial-relevant cut-point; "
+                "different aggregation."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 38477987 — APPLY-PNH (DOI:10.1056/NEJMoa2308695)
+        dspy.Example(
+            feature_name="apply_pnh_trial_eligibility_phenotype_match_flag_preindex",
+            derivation_pseudocode=(
+                "source=COMPUTED_FEATURE; derivation_inputs=['anti_c5_treated_flag', 'hgb_lt_10_flag', 'reticulocytosis_flag']; "
+                "aggregation=all_conditions_met; window_days=90; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH chart; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Composite flag indicating patient phenotypically matches APPLY-PNH "
+                "trial eligibility criteria (PMID 38477987; doi:10.1056/NEJMoa2308695): "
+                "anti-C5 treated, Hb<10 baseline, reticulocytosis. Z->T: prescribers more "
+                "likely to switch trial-look-alike patients to iptacopan. Z->Y: phenotype "
+                "match indexes the subgroup with documented trial-evidence response. "
+                "why_not_duplicate: novel composite construct (boolean-AND across 3 "
+                "clinical criteria); no compile-set or golden entry combines these three "
+                "into a single eligibility indicator."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 33730455 — PEGASUS (DOI:10.1056/NEJMoa2029073)
+        dspy.Example(
+            feature_name="prior_year_complement_inhibitor_total_drug_cost_usd_preindex_pnh",
+            derivation_pseudocode=(
+                "source=PHARMACY_CLAIMS; derivation_inputs=['allowed_amount_usd', 'drug_class_complement']; "
+                "aggregation=sum; window_days=365; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH claims; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="ancestor",
+            mechanism=(
+                "Cumulative complement-inhibitor drug cost in 365d preindex indexes "
+                "treatment intensity and payer engagement. Z->T,Y upstream effect but "
+                "mediated through clinical confounders (anti-C5 days, EVH burden) already "
+                "in adjustment set. PEGASUS economic substudy (PMID 33730455; "
+                "doi:10.1056/NEJMoa2029073) documents cost-intensity heterogeneity. "
+                "Ancestor role per Greenland-Pearl-Robins 1999 (PMID 9888278). "
+                "why_not_duplicate: compile-set neighbor "
+                "pre_index_anti_c5_persistence_days_lifetime is DAYS exposure metric; "
+                "this is DOLLARS cost metric (economic intensity, not pharmacologic "
+                "duration)."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 38477987 — APPLY-PNH (DOI:10.1056/NEJMoa2308695)
+        dspy.Example(
+            feature_name="payer_class_commercial_vs_medicare_indicator_preindex_pnh",
+            derivation_pseudocode=(
+                "source=PAYER_FIELD; derivation_inputs=['payer_class_code', 'plan_type']; "
+                "aggregation=index_month_category; window_days=0; knowable_at=index_date"
+            ),
+            dataset_context=(
+                "ConcertAI PNH claims; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="instrument",
+            mechanism=(
+                "Payer class (commercial vs Medicare) at index — used as a Brookhart-style "
+                "policy IV where commercial vs Medicare formulary differentials affect "
+                "iptacopan access. Z->T: differential PA gating shifts initiation rates "
+                "post-APPLY-PNH (PMID 38477987; doi:10.1056/NEJMoa2308695). Z->Y exclusion-"
+                "restriction: payer category itself does not affect Hb biology — only the "
+                "treatment-choice mediation route. Defensibility caveat: payer class may "
+                "correlate with comorbidity profile through age/employment; mechanism "
+                "explicitly adjusts for Charlson Score + age (both included). "
+                "why_not_duplicate: golden payer_step_therapy_iptacopan_requirement_preindex "
+                "is policy-specific STEP-THERAPY rule; this is broader PAYER-CLASS "
+                "indicator (categorical not boolean). Defensible as IV per Brookhart 2006 "
+                "(PMID 30516102)."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # ----- Sub-bucket B1-A: Adversarial / worker-evaluator boundary (8 entries) -----
+        # Adversarial: ambiguous between mediator and confounder via timing (baseline LDH measured AT initiation)
+        dspy.Example(
+            feature_name="ldh_value_on_index_day_intraday_timing_ambiguous_pnh",
+            derivation_pseudocode=(
+                "source=LABS_LDH; derivation_inputs=['ldh_iu_l', 'lab_collection_time', 'iptacopan_first_dose_time']; "
+                "aggregation=value_if_before_dose_else_null; window_days=0; knowable_at=index_date"
+            ),
+            dataset_context=(
+                "ConcertAI PNH chart labs; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Worker-evaluator boundary: LDH measured ON THE INDEX DAY before iptacopan "
+                "first dose. A naive worker might call this MEDIATOR (post-index timepoint) "
+                "or DESCENDANT (index-day measurement), but the temporal filter — value "
+                "captured before drug administration — places it pre-treatment per Hernan "
+                "target-trial framing (Hernan-Robins 2016 PMID 27176981). Mechanism: Z->T "
+                "(immediate-pre-dose LDH drives same-day decision-confirmation); Z->Y "
+                "(baseline-trajectory anchor for response measurement). The adversarial "
+                "challenge: classifier must distinguish intra-day temporal precedence from "
+                "naive date-equality. why_not_duplicate: compile-set neighbor "
+                "lactate_dehydrogenase_xuln_trajectory_slope_preindex_180d is the SLOPE over "
+                "180d; this is the SINGLE INDEX-DAY value with sub-day temporal filter — "
+                "intra-day ambiguity testing."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Adversarial: baseline LDH ambiguity — looks like mediator but is confounder
+        dspy.Example(
+            feature_name="haptoglobin_measured_postdischarge_pre_iptacopan_fill_ambiguous_pnh",
+            derivation_pseudocode=(
+                "source=LABS_HAPTOGLOBIN; derivation_inputs=['hapto_mg_dl', 'hospital_discharge_date', 'first_iptacopan_fill_date']; "
+                "aggregation=value_between_discharge_and_fill; window_days=14; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH chart labs; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Adversarial: haptoglobin lab drawn in the gap between PNH-related hospital "
+                "discharge and first iptacopan pharmacy fill. The discharge event AND the "
+                "fill event are both clinically near-index; a worker may classify this as "
+                "MEDIATOR (post-discharge=post-event), but the temporal filter — measurement "
+                "BEFORE first iptacopan exposure — places it as pre-treatment confounder. "
+                "Z->T: post-discharge haptoglobin level confirms switch decision (low->"
+                "iptacopan). Z->Y: predicts response magnitude. The adversarial test: "
+                "distinguish 'post-some-event' from 'post-TREATMENT'. why_not_duplicate: "
+                "compile-set neighbor baseline_haptoglobin_pct_lln_preindex is min-over-90d-"
+                "preindex; this is single-value-in-discharge-to-fill-gap (specific narrow "
+                "window) — different aggregation + window."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Adversarial: ambiguous between instrument and confounder due to selective compliance
+        dspy.Example(
+            feature_name="meningococcal_vaccine_uptake_post_label_advisory_ambiguous_pnh",
+            derivation_pseudocode=(
+                "source=IMMUNIZATION_REGISTRY; derivation_inputs=['mcv4_admin_date', 'fda_label_advisory_date']; "
+                "aggregation=indicator_within_window; window_days=180; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH chart + immunization; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Adversarial: meningococcal vaccine uptake within 180d after an FDA label "
+                "advisory date. A worker may classify this as INSTRUMENT (post-advisory "
+                "policy shock affecting both vaccine + iptacopan uptake), but the patient-"
+                "level selection (those who DID comply with advisory) carries unmeasured "
+                "confounding through adherence-personality + provider engagement. Z->T arrow "
+                "is real (compliant patients more likely to start iptacopan) but Z->Y "
+                "exclusion-restriction FAILS through adherence/health-engagement back-door "
+                "per Brookhart 2006 (PMID 30516102) IV-credibility checks. Correct label: "
+                "CONFOUNDER. The adversarial test: distinguish policy-shock IVs from "
+                "patient-compliance-confounded variables. why_not_duplicate: compile-set "
+                "meningococcal_vaccination_pre_iptacopan_initiation_flag_pnh is the GENERIC "
+                "pre-iptacopan flag labeled ancestor (REMS-required); this is the POST-"
+                "ADVISORY adoption pattern (selection-based, not requirement-based)."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Adversarial: aggregation hides post-anchor leakage
+        dspy.Example(
+            feature_name="hemoglobin_panel_mean_index_window_minus_30_to_plus_30_pnh",
+            derivation_pseudocode=(
+                "source=CBC_LABS; derivation_inputs=['hemoglobin_g_dl', 'lab_date']; "
+                "aggregation=mean; window_days=60; knowable_at=postindex+30d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH chart labs; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="mediator",
+            mechanism=(
+                "Adversarial: mean Hb over a symmetric -30 to +30d window around index. "
+                "Naive worker may classify as CONFOUNDER (centered on index, includes "
+                "pre-index data), but the post-index half-window contains post-treatment "
+                "values that mediate T->Y. Aggregation hides the leakage. Per Hernan 2004 "
+                "(PMID 14760119), any feature whose computation requires post-index data "
+                "cannot be a pre-treatment confounder regardless of nominal centering. "
+                "Adversarial test: classifier must inspect aggregation window boundaries, "
+                "not just naming. why_not_duplicate: compile-set neighbor "
+                "baseline_hemoglobin_g_dl_preindex_mean_30d_pnh is strictly pre-index "
+                "(window -30 to 0); this is bidirectional symmetric (-30 to +30) — same "
+                "analyte different window with leakage."
+            ),
+            recommended_remediation="window",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Adversarial: descendant vs collider confusion
+        dspy.Example(
+            feature_name="post_iptacopan_quality_of_life_eortc_score_d180_pnh",
+            derivation_pseudocode=(
+                "source=PRO_EORTC; derivation_inputs=['eortc_qlq_c30_global_d180', 'baseline_eortc_score']; "
+                "aggregation=value_d180; window_days=180; knowable_at=postindex+180d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH chart PRO; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="descendant",
+            mechanism=(
+                "Adversarial: post-treatment EORTC QLQ-C30 score at d180. Naive worker may "
+                "classify as MEDIATOR (post-treatment intermediate on T->QoL->Y path), but "
+                "the OUTCOME hemoglobin_response_180d is biologic (laboratory measure), and "
+                "EORTC score is a downstream patient-reported sequelae of the hematologic "
+                "response — no causal arrow QoL -> Hb. The correct role is DESCENDANT (off "
+                "the directed (T,Y) path) per Hernan 2016 (PMID 27176981). Drop from "
+                "adjustment. Adversarial test: distinguish mediator (T->M->Y) from "
+                "descendant (Y->D or T->D, no D->Y). why_not_duplicate: golden "
+                "facit_fatigue_response_180d_postindex_flag is binary FACIT response (a "
+                "different PRO instrument labeled collider); this is continuous EORTC score "
+                "(different instrument + different role inference)."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Adversarial: ancestor vs confounder
+        dspy.Example(
+            feature_name="historical_decade_of_pnh_diagnosis_categorical_preindex",
+            derivation_pseudocode=(
+                "source=DX_FIRST_PNH; derivation_inputs=['first_pnh_dx_date']; "
+                "aggregation=decade_bucket; window_days=99999; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH claims; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="ancestor",
+            mechanism=(
+                "Adversarial: decade-of-diagnosis (1990s/2000s/2010s/2020s) as categorical. "
+                "Naive worker may classify as CONFOUNDER (calendar shifts treatment access "
+                "AND outcomes), but per d-separation analysis (Greenland-Pearl-Robins 1999 "
+                "PMID 9888278), the path Z -> {era-of-care medication options, era-of-care "
+                "diagnostic refinements} -> T,Y is fully mediated through downstream "
+                "confounders (prior anti-C5 days, payer class, FDA-approval-calendar) "
+                "already in the adjustment set. Decade-of-diagnosis becomes ANCESTOR once "
+                "those downstream nodes are present. The adversarial challenge: classifier "
+                "must reason about d-separation completeness, not surface-level temporal "
+                "correlation. why_not_duplicate: compile-set neighbor "
+                "time_since_pnh_diagnosis_years_preindex is CONTINUOUS years (patient-level "
+                "tenure); this is CATEGORICAL CALENDAR DECADE (era-of-care marker), "
+                "different aggregation + different construct (patient-tenure vs calendar-"
+                "era)."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Adversarial: collider hidden in composite feature
+        dspy.Example(
+            feature_name="ldh_normalization_and_alive_at_d180_composite_flag_pnh",
+            derivation_pseudocode=(
+                "source=COMPOSITE; derivation_inputs=['ldh_lte_1_5_uln_d180_flag', 'alive_at_d180_flag']; "
+                "aggregation=and_indicator; window_days=180; knowable_at=postindex+180d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH chart; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="collider",
+            mechanism=(
+                "Adversarial: AND-composite of two post-treatment events (LDH normalized "
+                "AND alive). Naive worker may call this MEDIATOR (post-treatment "
+                "intermediate), but conjunction of treatment-effect AND survival creates a "
+                "classical collider — both arms (T->LDH normalization, T->survival, AND "
+                "underlying-severity->survival, underlying-severity->LDH normalization) "
+                "converge into the composite, so conditioning opens back-door per Hernan "
+                "2004 (PMID 14760119). Composite hides the survivorship-collider. Adversarial "
+                "test: classifier must decompose composite features. why_not_duplicate: "
+                "golden alive_at_180d_postindex_flag is the SURVIVAL collider alone; this "
+                "is the AND-COMPOSITE with LDH-normalization (different aggregation: "
+                "conjunction; different decomposability concern)."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Adversarial: instrument that fails exclusion restriction
+        dspy.Example(
+            feature_name="patient_residence_distance_to_complement_specialty_pharmacy_miles_preindex_pnh_ambiguous",
+            derivation_pseudocode=(
+                "source=GEOCODED_DISTANCE; derivation_inputs=['patient_zip_centroid_lat_lon', 'specialty_pharmacy_lat_lon']; "
+                "aggregation=haversine_miles; window_days=0; knowable_at=index_date"
+            ),
+            dataset_context=(
+                "ConcertAI PNH + geocoding; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Adversarial: distance-to-specialty-pharmacy as candidate IV. Naive worker "
+                "may label INSTRUMENT (geographic access shock to T), but per codex #358 "
+                "audit (which REPLACED distance/facility-volume IVs with Brookhart-Wang "
+                "prescriber-level IVs), distance-IVs violate exclusion restriction through "
+                "(a) urban-rural SES gradient on outcome and (b) monitoring-intensity "
+                "differential by distance. CONFOUNDER is the correct label since distance "
+                "carries direct-Y effect through travel-burden-on-adherence pathway. "
+                "Brookhart 2006 (PMID 30516102) IV-credibility framework. why_not_duplicate: "
+                "this feature is INTENTIONALLY similar in shape to access-IV candidates "
+                "but explicitly tests classifier's ability to REJECT distance-IV in favor "
+                "of CONFOUNDER labeling per #358 audit teaching. No existing entry frames "
+                "distance-to-pharmacy as confounder."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # ----- Sub-bucket B1-E: Edge cases (7 entries) -----
+        # Edge case: post-anchor leakage hidden by aggregation
+        dspy.Example(
+            feature_name="transfusion_units_aggregated_minus_365_to_plus_30_pnh_leakage_edge",
+            derivation_pseudocode=(
+                "source=PROCEDURE_CODES; derivation_inputs=['cpt_transfusion_codes', 'units_transfused', 'service_date']; "
+                "aggregation=sum; window_days=395; knowable_at=postindex+30d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH claims; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="mediator",
+            mechanism=(
+                "Edge case: transfusion units summed over a 395d window spanning -365d "
+                "preindex to +30d postindex. Aggregation conceals 30d of post-anchor "
+                "data — the +30d slice is post-treatment and lies on T -> transfusion_need "
+                "-> Y path per Brodsky 2021 (PMID 33512400; doi:10.1182/blood.2019003812). "
+                "Even if 365/395 = 92% of the window is preindex, the post-anchor leakage "
+                "makes this a mediator with window remediation required (restrict to -365 "
+                "to 0). why_not_duplicate: golden transfusion_units_365d_preindex is the "
+                "STRICT preindex 365d window (no leakage, labeled confounder); this is the "
+                "ASYMMETRIC -365 to +30 window (with leakage, labeled mediator) — edge-case "
+                "teaching pair."
+            ),
+            recommended_remediation="window",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Edge case: prefix censoring corner
+        dspy.Example(
+            feature_name="haptoglobin_first_ever_observed_value_lifetime_pnh_prefix_censor_edge",
+            derivation_pseudocode=(
+                "source=LABS_HAPTOGLOBIN; derivation_inputs=['hapto_mg_dl', 'lab_date']; "
+                "aggregation=first_in_record; window_days=99999; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH claims; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="ancestor",
+            mechanism=(
+                "Edge case: the FIRST EVER recorded haptoglobin in the patient's data — "
+                "subject to left-truncation/prefix-censoring (varies by when the patient "
+                "entered the claims system, not by clinical state). Z->T,Y upstream effect "
+                "but largely informative about data-availability era rather than disease "
+                "state. Schrezenmeier 2022 (PMID 35699625; doi:10.20452/pamw.16271) "
+                "discusses heterogeneity in baseline-assessment-completeness across "
+                "registries. Correctly an ANCESTOR (upstream but mediated through downstream "
+                "data-completeness confounders). why_not_duplicate: compile-set "
+                "baseline_haptoglobin_pct_lln_preindex is 90d window min-of-ratio; this is "
+                "FIRST-EVER raw value (data-availability anchored, not clinical-time anchored) "
+                "— different aggregation + different temporal anchor."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Edge case: aggregation-over-panel hiding instrument-vs-confounder
+        dspy.Example(
+            feature_name="composite_socioeconomic_index_zip_code_preindex_pnh_edge",
+            derivation_pseudocode=(
+                "source=ZIP_LINKED_CENSUS; derivation_inputs=['median_income_acs_5yr', 'pct_uninsured_acs_5yr', 'pct_bachelor_or_higher_acs']; "
+                "aggregation=z_score_composite; window_days=0; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH + ACS census; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Edge case: composite SES z-score (income+uninsured+education) at ZIP level. "
+                "Aggregation hides whether any single dimension acts as instrument (via "
+                "differential coverage) vs confounder (via SES->adherence->outcome). "
+                "Default to CONFOUNDER per #358 audit teaching that ZIP-aggregated SES "
+                "carries direct outcome paths through adherence + comorbidity gradients "
+                "(violating IV exclusion). Brookhart 2006 (PMID 30516102) IV-credibility "
+                "criteria. why_not_duplicate: no compile-set or golden entry uses ACS "
+                "composite SES — novel SOURCE (linked census) + novel aggregation "
+                "(composite z-score across 3 dimensions)."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Edge case: window starts after anchor
+        dspy.Example(
+            feature_name="iptacopan_pharmacokinetic_trough_d14_postindex_concentration_pnh_edge",
+            derivation_pseudocode=(
+                "source=PK_SAMPLING; derivation_inputs=['iptacopan_trough_ng_ml', 'sample_date']; "
+                "aggregation=median; window_days=14; knowable_at=postindex+14d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH chart PK; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="mediator",
+            mechanism=(
+                "Edge case: drug trough concentration measured at d14 post-index — strictly "
+                "post-treatment measurement on the T -> drug_exposure -> Y path. Window "
+                "remediation required. The edge is window-positivity: knowable_at = +14d "
+                "means feature exists only for patients who completed >=14d of treatment, "
+                "introducing selection. Per Hernan-Robins 2016 (PMID 27176981) target-trial "
+                "framing, drug-concentration mediators require strict window-restriction. "
+                "why_not_duplicate: no existing entry uses PK trough concentration as a "
+                "feature; novel SOURCE (PK sampling) + novel construct (pharmacokinetic "
+                "trough)."
+            ),
+            recommended_remediation="window",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Edge case: collinearity with index-dependent variable
+        dspy.Example(
+            feature_name="calendar_quarter_of_iptacopan_index_categorical_q1_q4_pnh_edge",
+            derivation_pseudocode=(
+                "source=DERIVED; derivation_inputs=['index_date']; "
+                "aggregation=calendar_quarter; window_days=0; knowable_at=index_date"
+            ),
+            dataset_context=(
+                "ConcertAI PNH; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="instrument",
+            mechanism=(
+                "Edge case: calendar quarter of index as IV. Z->T: quarter-of-year affects "
+                "treatment-initiation rates through deductible-reset (Q1 surge), supply-"
+                "lag effects, and prescriber-calendar variation per Brookhart 2006 (PMID "
+                "30516102) calendar-based IV framework. Z->Y exclusion-restriction: "
+                "calendar quarter has no biological mechanism on hemoglobin response; "
+                "only indirect through treatment-availability and refill-cadence. The edge "
+                "is the near-collinearity with patient-level deductible state. "
+                "why_not_duplicate: compile-set / golden has FDA-approval calendar AND "
+                "post-publication calendar indicators (both binary discontinuities); this "
+                "is CATEGORICAL recurring quarter (different construct: cyclical not "
+                "monotone)."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Edge case: differential ascertainment across cohort
+        dspy.Example(
+            feature_name="electronic_pro_capture_completeness_pct_postindex_pnh_edge",
+            derivation_pseudocode=(
+                "source=EHR_PRO_FORMS; derivation_inputs=['expected_pro_assessments', 'observed_pro_assessments']; "
+                "aggregation=ratio_observed_div_expected; window_days=180; knowable_at=postindex+180d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH chart; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="collider",
+            mechanism=(
+                "Edge case: completeness ratio of post-index PRO data capture. Jointly "
+                "caused by (a) patient persistence on treatment (T-affected) and (b) site/"
+                "provider data-entry compliance (independent of T). Conditioning opens "
+                "collider path that biases T-Y estimates per Hernan 2004 (PMID 14760119) "
+                "differential ascertainment framework. Drop from adjustment. Edge: this "
+                "looks like a data-quality covariate but is actually a behavioral collider. "
+                "why_not_duplicate: novel construct (data-completeness ratio) not present "
+                "in compile-set or golden — teaches differential-ascertainment collider "
+                "pattern."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Edge case: feature semantically equivalent but with different aggregation tier
+        dspy.Example(
+            feature_name="ldh_above_1_5_uln_continuous_episode_max_duration_days_preindex_pnh_edge",
+            derivation_pseudocode=(
+                "source=LABS_LDH; derivation_inputs=['ldh_iu_l', 'ldh_uln_iu_l', 'lab_date']; "
+                "aggregation=max_consecutive_episode_days_above_threshold; window_days=180; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI PNH chart labs; cohort=PNH; treatment=iptacopan_init; "
+                "outcome=hemoglobin_response_180d; prediction_anchor=iptacopan_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Edge case: longest continuous episode of LDH > 1.5xULN in 180d preindex "
+                "— an EPISODE-DURATION aggregation (not point-value, not slope, not "
+                "average). Captures persistence of breakthrough hemolysis per APPLY-PNH "
+                "design (PMID 38477987; doi:10.1056/NEJMoa2308695). Z->T: long persistent "
+                "episodes drive switch. Z->Y: chronic hemolytic stress predicts response "
+                "magnitude. The edge: aggregation is a derived TIME-COVERAGE concept that "
+                "classifier must reason about as pre-treatment despite computational "
+                "complexity. why_not_duplicate: compile-set has slope (derivative) + this "
+                "is EPISODE-DURATION (run-length); also distinct from golden POINT VALUE; "
+                "third aggregation tier in the LDH-feature family."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # =====================================================================
+        # End Plan-239 n=200 Task 3 — Bucket 1 PNH expansion (+47 entries: #51–#97)
+        # =====================================================================
     ]
     return examples
 
