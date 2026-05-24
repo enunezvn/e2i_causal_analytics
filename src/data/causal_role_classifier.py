@@ -1629,7 +1629,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "patient/prescriber preference. Z->Y only through T: an exogenous shortage on "
                 "an FDA-tracked calendar has no direct biological path to CSU outcomes apart "
                 "from receipt of treatment (Fox 2018 NEJM PMID 29385611; Brookhart-Schneeweiss "
-                "preference IV review PMID 18375005). why_not_duplicate: golden CSU IVs are "
+                "preference IV review PMID 16617275). why_not_duplicate: golden CSU IVs are "
                 "calendar-time-post-approval + prescriber-first-initiation hybrids. This "
                 "REPLACEMENT uses an entirely new source table (FDA_DRUG_SHORTAGE_FEED) and a "
                 "structurally different IV family (supply-side natural experiment)."
@@ -1776,7 +1776,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "directly affect Y. why_not_duplicate: golden BC IVs are calendar/preference-"
                 "based; this entry uses a structurally distinct healthcare-policy IV from a "
                 "new source table (HRSA_340B_OPAIS_FEED) (Conti 2019 JAMA PMID 31334758; "
-                "Brookhart-Schneeweiss PMID 18375005)."
+                "Brookhart-Schneeweiss PMID 16617275)."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -1837,7 +1837,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "`baseline_severity_score_preindex` cannot be reused per §0/V27 — this entry "
                 "uses `synth_a1_` prefix + `_alt_confounder` suffix and `cohort=synthetic_a1` "
                 "discriminator. Provenance: DAG-methods-only (no PHI) per "
-                "Greenland-Pearl-Robins PMID 9888278 + Brookhart PMID 18375005."
+                "Greenland-Pearl-Robins PMID 9888278 + Brookhart PMID 16617275."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -1860,7 +1860,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "ground_truth_role='instrument'. The A4 DAG carries THREE structurally-valid "
                 "instruments (IV1 provider preference, IV2 geographic region, IV3 index-"
                 "provider volume); IV3 satisfies Brookhart-Wang IV conditions by construction "
-                "(PMID 18375005): (1) relevance — prior-year biologic volume strongly predicts "
+                "(PMID 16617275): (1) relevance — prior-year biologic volume strongly predicts "
                 "biologic_initiation_180d via prescribing capacity; (2) exclusion restriction "
                 "— no direct edge to hospitalization_180d in the DGP; (3) no unmeasured "
                 "confounding of IV3↔Y given simulated covariates. Compile set previously "
@@ -1868,7 +1868,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "bare synthetic-fixture `index_provider_biologic_volume_prior_year` cannot be "
                 "reused per §0/V27 — `synth_a4_` prefix + `_alt_instrument` suffix + "
                 "`cohort=synthetic_a4` discriminator. Provenance: DAG-methods-only "
-                "(Brookhart PMID 18375005; Greenland-Pearl-Robins PMID 9888278)."
+                "(Brookhart PMID 16617275; Greenland-Pearl-Robins PMID 9888278)."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -5008,7 +5008,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "RESTRICTION DEFENSE: FDA approval date for a biosimilar has no biological "
                 "path Z->Y other than through treatment receipt; the active molecule is "
                 "equivalent, so there is no efficacy-shift confound (Brookhart-Schneeweiss "
-                "preference-IV review PMID 18375005). why_not_duplicate: golden "
+                "preference-IV review PMID 16617275). why_not_duplicate: golden "
                 "calendar_time_post_remibrutinib_approval_indicator targets a DIFFERENT "
                 "DRUG approval; this targets the omalizumab-biosimilar approval cliff — "
                 "distinct molecule, distinct calendar event. Remediation per role-to-"
@@ -5074,7 +5074,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "doi:10.1016/j.anai.2025.11.008). EXCLUSION RESTRICTION DEFENSE: the "
                 "calendar event (label expansion) cannot affect CSU outcomes except through "
                 "shifting treatment-receipt patterns; CSU disease biology does not change "
-                "with regulatory action (Brookhart-Schneeweiss PMID 18375005). "
+                "with regulatory action (Brookhart-Schneeweiss PMID 16617275). "
                 "why_not_duplicate: distinct from initial-approval-window indicator; this "
                 "is the LABEL-EXPANSION event (different calendar marker, different "
                 "treated-population shift). Remediation per role-to-remediation table: "
@@ -5105,7 +5105,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "uncorrelated with patient-level disease biology; pre-launch prescribing "
                 "behaviour matches across-prescriber adoption profiles, and adoption does "
                 "not change patient outcomes except via treatment receipt (Brookhart-"
-                "Schneeweiss PMID 18375005). why_not_duplicate: golden index_prescriber_"
+                "Schneeweiss PMID 16617275). why_not_duplicate: golden index_prescriber_"
                 "first_btki_initiation_within_first_year_post_approval_flag is the SAME "
                 "FAMILY but uses a DIFFERENT calendar anchor (approval vs launch); the "
                 "launch event lags approval and captures availability not authorization "
