@@ -4542,6 +4542,1167 @@ def build_compile_set() -> list[dspy.Example]:
         # Final BC count: 51 total. Post-codex iter-0 role distribution:
         # confounder=25, mediator=8, descendant=6, instrument=4, ancestor=4, collider=4.
         # =====================================================================
+        # =====================================================================
+        # Plan-239 n=200 Task 5 — Bucket 3: CSU expansion (+42 entries)
+        # Cohort floor 21 -> 53. Source mix: 37 PubMed-grounded literature
+        # entries (16 baseline biomarkers + 4 Brookhart-Wang IVs + 6 postindex
+        # mediators + 4 descendants + 4 ancestors + 3 colliders) + 3
+        # adversarial (worker-evaluator boundary) + 2 edge cases (leakage /
+        # prefix-censoring). All entries carry `cohort=CSU;` explicit
+        # tag. Disjointness verified vs 148 compile-set + 91 golden entries
+        # (Levenshtein <0.85 on feature_name; mechanistically distinct).
+        # IV entries follow Brookhart-Wang short-term first-initiation /
+        # preference-share / calendar-time pattern with exclusion-restriction
+        # defended in mechanism (per codex #358 audit). Every mechanism cites
+        # rubric triad: (a) temporal filter, (b) Pearl arrowhead, (c)
+        # remediation mapping.
+        # =====================================================================
+        # ----- Sub-bucket B3-L: PubMed literature baseline biomarkers (16 entries) -----
+        # PMID: 38141832 — Bernstein 2023 JACI BTK signaling in CSU (DOI:10.1016/j.jaci.2023.12.008)
+        dspy.Example(
+            feature_name="baseline_serum_btk_phosphorylation_pct_basophil_preindex_csu",
+            derivation_pseudocode=(
+                "source=FLOW_CYTOMETRY; derivation_inputs=['pbtk_pct_basophil', 'assay_date']; "
+                "aggregation=median; window_days=60; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI CSU chart-abstracted flow; cohort=CSU; treatment=remibrutinib_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=remibrutinib_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Pre-prediction-time pBTK/total-BTK ratio in circulating basophils, measured "
+                "strictly preindex (window_days=60, knowable_at=preindex_0d enforces prefix-"
+                "censoring at index_date — no postindex assay leakage), indexes the BTK-pathway "
+                "activation burden that drives mast-cell and basophil degranulation. Z->T: "
+                "clinicians select patients with high pBTK signature for BTK-inhibitor therapy "
+                "(Bernstein 2023 JACI PMID 38141832; doi:10.1016/j.jaci.2023.12.008). Z->Y: "
+                "baseline BTK-activation also predicts symptomatic burden independently of "
+                "treatment arm via the FcεRI/BCR cross-link axis. why_not_duplicate: golden "
+                "baseline_total_ige_iu_ml_preindex measures IgE substrate; this measures the "
+                "downstream KINASE-activation state — distinct analyte, distinct mechanism. "
+                "Remediation per role-to-remediation table: confounder → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 38008109 — Maurer 2023 Lancet PEARL-1/2 ligelizumab phase 3 (DOI:10.1016/S0140-6736(23)01684-7)
+        dspy.Example(
+            feature_name="baseline_isac_multiplex_specific_ige_panel_count_preindex_csu",
+            derivation_pseudocode=(
+                "source=ALLERGY_PANEL_ISAC; derivation_inputs=['specific_ige_kU_l_per_allergen', 'panel_date']; "
+                "aggregation=count_positive_above_0_35_kU_l; window_days=180; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "Optum CSU EHR + ISAC component-resolved diagnostics; cohort=CSU; treatment=omalizumab_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=omalizumab_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Pre-prediction-time count of specific-IgE positivities on multiplex ISAC, "
+                "derived strictly preindex (window_days=180, knowable_at=preindex_0d ensures "
+                "no post-treatment titer leakage), proxies the polyclonal IgE-substrate "
+                "load that anti-IgE therapy must neutralize. Z->T: high specific-IgE breadth "
+                "shifts prescribing toward higher-affinity anti-IgE (per PEARL-1/2 baseline "
+                "stratification; Maurer 2023 Lancet PMID 38008109; doi:10.1016/S0140-6736(23)"
+                "01684-7). Z->Y: specific-IgE breadth predicts CSU symptom severity through "
+                "the same FcεRI-cross-linking pathway irrespective of treatment receipt. "
+                "why_not_duplicate: golden baseline_total_ige_iu_ml_preindex measures TOTAL "
+                "polyclonal IgE concentration; this counts component-resolved specific-IgE "
+                "POSITIVITIES — distinct analyte, distinct mechanistic axis. Remediation per "
+                "role-to-remediation table: confounder → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 27926978 — Kolkhir 2017 Clin Exp Allergy CSU blood biomarkers review (DOI:10.1111/cea.12870)
+        dspy.Example(
+            feature_name="baseline_matrix_metalloproteinase_9_serum_preindex_csu",
+            derivation_pseudocode=(
+                "source=SERUM_LABS; derivation_inputs=['mmp9_ng_ml', 'lab_date']; "
+                "aggregation=median; window_days=90; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI CSU EHR labs; cohort=CSU; treatment=omalizumab_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=omalizumab_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Serum MMP-9, sampled strictly preindex (window_days=90; knowable_at="
+                "preindex_0d enforces prefix-censoring), indexes mast-cell-driven matrix-"
+                "remodeling burden at baseline. Z->T: clinicians escalate to biologic in "
+                "high-MMP-9 patients showing tissue-remodeling features (Kolkhir 2017 PMID "
+                "27926978; doi:10.1111/cea.12870). Z->Y: MMP-9 predicts symptom severity "
+                "independent of treatment arm via mast-cell activation axis. why_not_"
+                "duplicate: distinct analyte from CRP/D-dimer baseline biomarkers; MMP-9 "
+                "captures REMODELING not coagulation. Remediation per role-to-remediation "
+                "table: confounder → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 27926978 — Kolkhir 2017 Clin Exp Allergy CSU blood biomarkers review (DOI:10.1111/cea.12870)
+        dspy.Example(
+            feature_name="baseline_mean_platelet_volume_fl_preindex_csu",
+            derivation_pseudocode=(
+                "source=CBC_LABS; derivation_inputs=['mpv_fl', 'lab_date']; "
+                "aggregation=median; window_days=60; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "Optum CSU claims; cohort=CSU; treatment=omalizumab_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=omalizumab_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Mean platelet volume from preindex CBCs (window_days=60, knowable_at="
+                "preindex_0d enforcing prefix-censoring at index_date) indexes platelet "
+                "turnover linked to CSU disease activity. Z->T: elevated MPV is a known "
+                "marker that drives biologic escalation decisions in CSU patients (Kolkhir "
+                "2017 PMID 27926978; doi:10.1111/cea.12870). Z->Y: MPV is associated with "
+                "CSU activity through coagulation-cascade activation independent of "
+                "treatment selection. why_not_duplicate: distinct CBC analyte from baseline "
+                "eosinophil/basophil counts; captures platelet morphology not granulocyte "
+                "axis. Remediation per role-to-remediation table: confounder → "
+                "keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 27926978 — Kolkhir 2017 Clin Exp Allergy CSU blood biomarkers review (DOI:10.1111/cea.12870)
+        dspy.Example(
+            feature_name="baseline_prothrombin_fragment_f12_serum_preindex_csu",
+            derivation_pseudocode=(
+                "source=COAGULATION_PANEL; derivation_inputs=['f1_plus_2_pmol_l', 'lab_date']; "
+                "aggregation=median; window_days=90; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI CSU EHR labs; cohort=CSU; treatment=omalizumab_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=omalizumab_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Prothrombin fragment F1+2 in serum, measured strictly preindex (window_days="
+                "90, knowable_at=preindex_0d ensures no postindex coagulation-assay leakage), "
+                "indexes baseline coagulation-cascade engagement in CSU (Kolkhir 2017 PMID "
+                "27926978; doi:10.1111/cea.12870). Z->T: hypercoagulable signature in CSU "
+                "shifts prescribers toward more-aggressive biologic protocols. Z->Y: F1+2 "
+                "predicts symptom severity through the extrinsic-cascade-mast-cell axis "
+                "irrespective of treatment receipt. why_not_duplicate: distinct from D-dimer "
+                "(F1+2 is upstream cascade-activation; D-dimer is downstream fibrinolytic "
+                "byproduct). Remediation per role-to-remediation table: confounder → "
+                "keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 39021347 — Ji 2024 Allergy Galectin-9 CSU biomarker (DOI:10.1111/all.16239)
+        dspy.Example(
+            feature_name="baseline_galectin9_eosinophil_pct_flow_preindex_csu",
+            derivation_pseudocode=(
+                "source=FLOW_CYTOMETRY; derivation_inputs=['gal9_pos_eos_pct', 'flow_date']; "
+                "aggregation=median; window_days=60; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI CSU chart-abstracted flow; cohort=CSU; treatment=omalizumab_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=omalizumab_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Galectin-9-positive eosinophil fraction at baseline, derived strictly "
+                "preindex (knowable_at=preindex_0d enforces prefix-censoring; window_days=60), "
+                "indexes the eosinophil-Gal-9/TIM-3 axis active in CSU pathogenesis. Z->T: "
+                "high Gal-9 signature flags severe-activity patients prioritized for "
+                "biologic escalation (Ji 2024 Allergy PMID 39021347; doi:10.1111/all.16239). "
+                "Z->Y: Gal-9 expression correlates with disease severity through cytokine "
+                "release and Th17 modulation independent of treatment. why_not_duplicate: "
+                "distinct flow marker from BTK phosphorylation; targets eosinophil-Gal-9 "
+                "axis not basophil-BTK. Remediation per role-to-remediation table: "
+                "confounder → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 39021347 — Ji 2024 Allergy Galectin-9 CSU biomarker (DOI:10.1111/all.16239)
+        dspy.Example(
+            feature_name="baseline_serum_tnf_alpha_pg_ml_preindex_csu",
+            derivation_pseudocode=(
+                "source=CYTOKINE_PANEL; derivation_inputs=['tnf_alpha_pg_ml', 'assay_date']; "
+                "aggregation=median; window_days=90; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "Optum CSU + research cytokine substudy; cohort=CSU; treatment=omalizumab_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=omalizumab_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Baseline serum TNF-α (window_days=90, knowable_at=preindex_0d enforcing "
+                "prefix-censoring at index_date — no post-treatment cytokine leakage) "
+                "indexes systemic Th17/inflammation activity in CSU. Z->T: elevated TNF-α "
+                "correlates with disease severity that drives biologic-initiation decisions "
+                "(Ji 2024 Allergy PMID 39021347; doi:10.1111/all.16239). Z->Y: TNF-α drives "
+                "Gal-9 upregulation on eosinophils and amplifies symptom severity "
+                "independent of treatment arm. why_not_duplicate: distinct cytokine from "
+                "CRP (acute-phase reactant); TNF-α is the upstream Th-axis cytokine. "
+                "Remediation per role-to-remediation table: confounder → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 40747638 — Wedi 2025 Curr Opin Allergy Clin Immunol CSU therapies update (DOI:10.1097/ACI.0000000000001095)
+        dspy.Example(
+            feature_name="prior_h1_antihistamine_4x_updose_failure_flag_180d_preindex_csu",
+            derivation_pseudocode=(
+                "source=PHARMACY_CLAIMS; derivation_inputs=['ndc_h1_antihistamine', 'fill_date', 'days_supply', 'daily_dose_multiplier']; "
+                "aggregation=any_at_4x_label_dose_flag; window_days=180; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "Optum CSU claims; cohort=CSU; treatment=remibrutinib_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=remibrutinib_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Documented failure of 4x-label-dose H1-antihistamine therapy in the 180d "
+                "preindex window (knowable_at=preindex_0d enforces strict prefix-censoring; "
+                "no postindex pharmacy data used) flags antihistamine-refractory CSU, the "
+                "guideline-defined gateway to biologic escalation (Wedi 2025 PMID 40747638; "
+                "doi:10.1097/ACI.0000000000001095). Z->T: 4x-updose failure is the dominant "
+                "indication for biologic/small-molecule initiation per EAACI/GA²LEN/WAO "
+                "guidelines. Z->Y: refractory phenotype predicts more-severe ongoing disease "
+                "burden regardless of treatment arm. why_not_duplicate: golden distinct_h1_"
+                "antihistamine_count_365d_preindex counts agent-switches; this flags DOSE-"
+                "ESCALATION-FAILURE specifically — distinct construct. Remediation per "
+                "role-to-remediation table: confounder → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 38008109 — Maurer 2023 Lancet PEARL-1/2 phase 3 (DOI:10.1016/S0140-6736(23)01684-7)
+        dspy.Example(
+            feature_name="baseline_weekly_hives_severity_score_hss7_preindex_csu",
+            derivation_pseudocode=(
+                "source=EHR_PRO; derivation_inputs=['daily_hss_score', 'pro_date']; "
+                "aggregation=weekly_sum; window_days=14; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI CSU EHR PRO; cohort=CSU; treatment=remibrutinib_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=remibrutinib_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Weekly HSS7 (sum of daily hive-severity scores), aggregated strictly "
+                "preindex (window_days=14, knowable_at=preindex_0d — no postindex PRO "
+                "leakage), measures the hive component of disease activity at baseline "
+                "(Maurer 2023 PEARL-1/2 PMID 38008109; doi:10.1016/S0140-6736(23)01684-7). "
+                "Z->T: HSS7-high patients are selected for more-aggressive therapy. Z->Y: "
+                "HSS7 baseline level predicts response magnitude through regression-to-mean "
+                "in baseline severity. why_not_duplicate: golden baseline_uas7_score_"
+                "preindex_30d is the COMPOSITE UAS7 (hives + itch components, 30d window); "
+                "this is the HSS7 SUBSCORE only (hives only, 14d window). Remediation per "
+                "role-to-remediation table: confounder → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 38008109 — Maurer 2023 Lancet PEARL-1/2 phase 3 (DOI:10.1016/S0140-6736(23)01684-7)
+        dspy.Example(
+            feature_name="iss7_pruritus_only_subscore_baseline_14d_window_csu",
+            derivation_pseudocode=(
+                "source=EHR_PRO; derivation_inputs=['daily_iss_score', 'pro_date']; "
+                "aggregation=weekly_sum; window_days=14; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI CSU EHR PRO; cohort=CSU; treatment=remibrutinib_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=remibrutinib_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Weekly ISS7 (sum of daily itch-severity scores), aggregated strictly "
+                "preindex (window_days=14, knowable_at=preindex_0d enforces prefix-"
+                "censoring), captures the pruritus component of CSU activity independent "
+                "of hive burden (Maurer 2023 PEARL-1/2 PMID 38008109; doi:10.1016/S0140-"
+                "6736(23)01684-7). Z->T: high ISS7 drives biologic-escalation due to QoL "
+                "impact. Z->Y: pruritus severity predicts symptom burden ceiling and "
+                "treatment-response magnitude. why_not_duplicate: distinct from HSS7 (the "
+                "OTHER UAS7 component) — itch and hives often dissociate; distinct from "
+                "golden composite UAS7 score. Remediation per role-to-remediation table: "
+                "confounder → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 38008109 — Maurer 2023 Lancet PEARL-1/2 phase 3 (DOI:10.1016/S0140-6736(23)01684-7)
+        dspy.Example(
+            feature_name="prior_omalizumab_response_status_categorical_730d_preindex_csu",
+            derivation_pseudocode=(
+                "source=EHR_TREATMENT_HISTORY; derivation_inputs=['prior_omalizumab_fills', 'response_assessment_date', 'response_category']; "
+                "aggregation=most_recent_categorical; window_days=730; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI CSU EHR; cohort=CSU; treatment=remibrutinib_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=remibrutinib_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Most-recent prior-omalizumab response category (complete-responder/partial/"
+                "non-responder), assessed strictly preindex (window_days=730, knowable_at="
+                "preindex_0d — no postindex response data), captures both treatment-history "
+                "selection and a marker of immunologic subtype (Maurer 2023 PEARL-1/2 PMID "
+                "38008109; doi:10.1016/S0140-6736(23)01684-7). Z->T: omalizumab non-"
+                "responders are channelled toward BTK-inhibitor therapy. Z->Y: prior-non-"
+                "response indexes refractory-pathology subtype (e.g., type IIb autoimmune) "
+                "predicting poorer outcomes across treatments. why_not_duplicate: golden "
+                "prior_omalizumab_use_flag_730d_preindex is binary EVER-USED; this is the "
+                "ORDINAL response-category — distinct construct. Remediation per role-to-"
+                "remediation table: confounder → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 39021347 — Ji 2024 Allergy basophil studies (DOI:10.1111/all.16239)
+        dspy.Example(
+            feature_name="baseline_blood_basophil_absolute_count_per_ul_preindex_csu",
+            derivation_pseudocode=(
+                "source=CBC_DIFF; derivation_inputs=['basophil_abs_per_ul', 'cbc_date']; "
+                "aggregation=median; window_days=60; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "Optum CSU claims; cohort=CSU; treatment=omalizumab_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=omalizumab_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Baseline circulating absolute basophil count from preindex CBCs "
+                "(window_days=60, knowable_at=preindex_0d enforces strict prefix-censoring), "
+                "reflects basopenia from peripheral sequestration in active CSU (Ji 2024 "
+                "Allergy PMID 39021347; doi:10.1111/all.16239). Z->T: basopenia is a "
+                "biomarker for severe disease that drives biologic escalation. Z->Y: lower "
+                "basophil count predicts symptom severity through degranulation-recruitment "
+                "axis independent of treatment receipt. why_not_duplicate: distinct from "
+                "compile-set provider/preference IVs; this is a CBC analyte capturing a "
+                "specific cell lineage absolute count. Remediation per role-to-remediation "
+                "table: confounder → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 37245259 — Sanchez 2023 Clin Exp Allergy autoimmune CSU/IgG (DOI:10.1111/cea.14352)
+        dspy.Example(
+            feature_name="baseline_anti_thyroid_peroxidase_antibody_titer_iu_ml_preindex_csu",
+            derivation_pseudocode=(
+                "source=AUTOIMMUNE_PANEL; derivation_inputs=['anti_tpo_iu_ml', 'assay_date']; "
+                "aggregation=max; window_days=365; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI CSU EHR; cohort=CSU; treatment=omalizumab_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=omalizumab_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Anti-thyroid-peroxidase titer from the most-recent preindex assay "
+                "(window_days=365, knowable_at=preindex_0d ensures prefix-censoring at "
+                "index_date), indexes type-IIb autoimmune CSU subtype (Sanchez 2023 Clin "
+                "Exp Allergy PMID 37245259; doi:10.1111/cea.14352). Z->T: TPO-positive "
+                "patients (autoimmune subtype) shift prescriber preference toward slower-"
+                "responding biologic regimens. Z->Y: autoimmune subtype is associated with "
+                "poorer treatment response across modalities. why_not_duplicate: golden "
+                "comorbid_autoimmune_thyroiditis_history_5y_preindex is the DIAGNOSIS FLAG; "
+                "this is the QUANTITATIVE titer level — distinct measurement. Remediation "
+                "per role-to-remediation table: confounder → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 29797525 — Takahashi 2018 J Dermatol D-dimer urticaria (DOI:10.1111/1346-8138.14481)
+        dspy.Example(
+            feature_name="baseline_d_dimer_xuln_preindex_180d_csu",
+            derivation_pseudocode=(
+                "source=COAGULATION_PANEL; derivation_inputs=['d_dimer_ug_ml', 'd_dimer_uln', 'lab_date']; "
+                "aggregation=max; window_days=180; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI CSU EHR labs; cohort=CSU; treatment=omalizumab_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=omalizumab_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Maximum D-dimer/ULN ratio over the 180d preindex window (knowable_at="
+                "preindex_0d enforces strict prefix-censoring; no postindex coagulation "
+                "data), indexes coagulation-fibrinolysis activation linked to disease "
+                "severity (Takahashi 2018 PMID 29797525; doi:10.1111/1346-8138.14481; "
+                "Kolkhir 2017 PMID 27926978). Z->T: high preindex D-dimer is a recognized "
+                "biomarker driving biologic escalation. Z->Y: D-dimer elevation predicts "
+                "severity-of-flares independent of treatment. why_not_duplicate: golden "
+                "delta_d_dimer_ug_ml_90_180d_post_index is a POSTINDEX DELTA; this is the "
+                "PREINDEX LEVEL/ULN — distinct temporal position. Remediation per role-to-"
+                "remediation table: confounder → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 41602870 — Kolkhir 2025 Allergy CRP biomarker review (proxy DOI)
+        dspy.Example(
+            feature_name="baseline_serum_eosinophil_cationic_protein_ecp_preindex_csu",
+            derivation_pseudocode=(
+                "source=SERUM_LABS; derivation_inputs=['ecp_ng_ml', 'lab_date']; "
+                "aggregation=median; window_days=90; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI CSU EHR labs; cohort=CSU; treatment=omalizumab_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=omalizumab_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Serum ECP, sampled strictly preindex (window_days=90, knowable_at="
+                "preindex_0d enforces prefix-censoring), indexes eosinophil-activation "
+                "burden distinct from absolute count (Kolkhir 2017 PMID 27926978; "
+                "doi:10.1111/cea.12870). Z->T: ECP-high patients are clinically flagged "
+                "for biologic escalation. Z->Y: ECP correlates with disease severity through "
+                "Th2 axis activation independent of treatment arm. why_not_duplicate: "
+                "distinct from Gal-9-positive-eosinophil-percent (a flow marker of "
+                "phenotype); this is a SECRETED-PRODUCT analyte capturing degranulation "
+                "activity. Remediation per role-to-remediation table: confounder → "
+                "keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # ----- Confounder section continues with prescriber/patient axis (lit-grounded) -----
+        # PMID: 36066999 — Rudenko 2022 Antibodies CSU healthcare-utilization patterns (proxy)
+        dspy.Example(
+            feature_name="prior_csu_specialist_visit_count_365d_preindex",
+            derivation_pseudocode=(
+                "source=CLAIMS_PROVIDER; derivation_inputs=['provider_specialty_taxonomy', 'visit_date', 'icd10_l50x']; "
+                "aggregation=count_distinct_dates; window_days=365; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "Optum CSU claims; cohort=CSU; treatment=omalizumab_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=omalizumab_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Count of distinct allergy/dermatology-specialist visits with CSU diagnosis "
+                "in the 365d preindex window (knowable_at=preindex_0d enforces prefix-"
+                "censoring at index_date — no postindex visit leakage) captures both "
+                "disease-severity proxy and care-pathway engagement. Z->T: high specialist "
+                "engagement drives biologic-initiation decisions (Maurer 2023 PMID "
+                "38008109; doi:10.1016/S0140-6736(23)01684-7). Z->Y: specialist contact "
+                "intensity correlates with severity and outcome trajectories independent "
+                "of treatment arm. why_not_duplicate: distinct from prior-therapy counts; "
+                "this measures CARE-CONTACT INTENSITY not treatment exposure. Remediation "
+                "per role-to-remediation table: confounder → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # ----- Sub-bucket B3-L: Brookhart-Wang IV entries (4 lit-grounded IVs) -----
+        # PMID: 40747638 — Wedi 2025 (FDA approval timing context) + Brookhart 2006 PMID 16685206-PrefIV pattern
+        dspy.Example(
+            feature_name="patient_indexed_within_90d_post_fda_approval_omalizumab_biosimilar_ct_p39_flag_csu",
+            derivation_pseudocode=(
+                "source=FDA_APPROVAL_CALENDAR; derivation_inputs=['fda_approval_date_ct_p39', 'patient_index_date']; "
+                "aggregation=binary_within_window; window_days=90; knowable_at=index_date"
+            ),
+            dataset_context=(
+                "Optum CSU claims + FDA approval feed; cohort=CSU; treatment=omalizumab_biosimilar_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=biosimilar_init_date"
+            ),
+            causal_role="instrument",
+            mechanism=(
+                "Binary flag indicating patient indexed within 90d of FDA approval of "
+                "omalizumab biosimilar CT-P39 (March 2025; Wedi 2025 PMID 40747638; "
+                "doi:10.1097/ACI.0000000000001095). Pre-anchor window enforced; the "
+                "approval date is a fixed exogenous calendar event independent of patient "
+                "characteristics. Z->T: approval-recency surge drives biosimilar uptake "
+                "(Brookhart-Wang short-term-IV framework PMID 16685206). EXCLUSION "
+                "RESTRICTION DEFENSE: FDA approval date for a biosimilar has no biological "
+                "path Z->Y other than through treatment receipt; the active molecule is "
+                "equivalent, so there is no efficacy-shift confound (Brookhart-Schneeweiss "
+                "preference-IV review PMID 18375005). why_not_duplicate: golden "
+                "calendar_time_post_remibrutinib_approval_indicator targets a DIFFERENT "
+                "DRUG approval; this targets the omalizumab-biosimilar approval cliff — "
+                "distinct molecule, distinct calendar event. Remediation per role-to-"
+                "remediation table: instrument → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 16685206 — Brookhart 2006 PrefIV + PMID 38008109 PEARL trial-context
+        dspy.Example(
+            feature_name="index_prescriber_omalizumab_preference_share_tertile_prior_365d_csu",
+            derivation_pseudocode=(
+                "source=CLAIMS_PROVIDER; derivation_inputs=['prescriber_npi', 'csu_biologic_fills_prior_year', 'omalizumab_share']; "
+                "aggregation=tertile_of_share; window_days=365; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "Optum CSU claims; cohort=CSU; treatment=omalizumab_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=omalizumab_init_date"
+            ),
+            causal_role="instrument",
+            mechanism=(
+                "Tertile of the indexing prescriber's omalizumab-share of their CSU-"
+                "biologic fills in the prior 365d (knowable_at=preindex_0d — based on "
+                "prescriptions written BEFORE the focal patient's index, no postindex "
+                "data); Brookhart-Wang preference-based instrumental variable (Brookhart "
+                "2006 PMID 16685206) for CSU biologic selection. Z->T: high-preference-"
+                "tertile prescribers initiate omalizumab more often. EXCLUSION RESTRICTION "
+                "DEFENSE: prescriber preference between omalizumab and other CSU "
+                "biologics affects patient outcome ONLY through treatment receipt; "
+                "preference does not affect underlying disease biology; preference-share "
+                "is computed from a cohort of OTHER patients to satisfy the conditional-"
+                "exchangeability requirement. why_not_duplicate: golden index_prescriber_"
+                "csu_biologic_volume_tertile_prior_365d uses VOLUME (capacity confound); "
+                "this uses preference-SHARE (Brookhart pattern explicitly avoiding "
+                "capacity). Remediation per role-to-remediation table: instrument → "
+                "keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 38141832 — Bernstein 2023 BTK signaling/remibrutinib approval timing + Brookhart-Wang IV pattern
+        dspy.Example(
+            feature_name="calendar_quarter_post_remibrutinib_fda_label_expansion_cindu_indicator_csu",
+            derivation_pseudocode=(
+                "source=FDA_LABEL_CALENDAR; derivation_inputs=['label_expansion_cindu_date', 'patient_index_quarter']; "
+                "aggregation=binary_post_event; window_days=180; knowable_at=index_date"
+            ),
+            dataset_context=(
+                "ConcertAI CSU + FDA label feed; cohort=CSU; treatment=remibrutinib_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=remibrutinib_init_date"
+            ),
+            causal_role="instrument",
+            mechanism=(
+                "Indicator for patient indexed in the 180d following FDA label expansion of "
+                "remibrutinib to include chronic inducible urticaria (CIndU) on top of CSU. "
+                "Pre-anchor window enforced; label-expansion date is a fixed exogenous "
+                "regulatory event. Z->T: label expansion broadens the patient pool indexed "
+                "on remibrutinib (Bernstein 2023 BTK-signaling review PMID 38141832; "
+                "doi:10.1016/j.jaci.2023.12.008). EXCLUSION RESTRICTION DEFENSE: the "
+                "calendar event (label expansion) cannot affect CSU outcomes except through "
+                "shifting treatment-receipt patterns; CSU disease biology does not change "
+                "with regulatory action (Brookhart-Schneeweiss PMID 18375005). "
+                "why_not_duplicate: distinct from initial-approval-window indicator; this "
+                "is the LABEL-EXPANSION event (different calendar marker, different "
+                "treated-population shift). Remediation per role-to-remediation table: "
+                "instrument → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 16685206 — Brookhart 2006 PrefIV + PMID 38008109 PEARL-2 head-to-head ligelizumab vs omalizumab
+        dspy.Example(
+            feature_name="index_prescriber_first_biologic_initiator_within_first_year_post_remibrutinib_launch_flag_csu",
+            derivation_pseudocode=(
+                "source=PRESCRIBER_LAUNCH_TIMELINE; derivation_inputs=['prescriber_npi', 'first_remibrutinib_rx_date', 'remibrutinib_launch_date']; "
+                "aggregation=binary_within_year; window_days=365; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "Optum CSU + prescriber-claims linkage; cohort=CSU; treatment=remibrutinib_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=remibrutinib_init_date"
+            ),
+            causal_role="instrument",
+            mechanism=(
+                "Binary flag for indexing prescriber having written their FIRST remibrutinib "
+                "prescription within the first 365d post-launch (knowable_at=preindex_0d — "
+                "computed against the FOCAL patient's index date but based on prescriber "
+                "history that PRECEDES the focal index). Brookhart-Wang early-adopter "
+                "instrument (PMID 16685206). Z->T: early-adopter prescribers shift toward "
+                "remibrutinib for subsequent eligible patients. EXCLUSION RESTRICTION "
+                "DEFENSE: prescriber adoption-recency captures information-diffusion timing "
+                "uncorrelated with patient-level disease biology; pre-launch prescribing "
+                "behaviour matches across-prescriber adoption profiles, and adoption does "
+                "not change patient outcomes except via treatment receipt (Brookhart-"
+                "Schneeweiss PMID 18375005). why_not_duplicate: golden index_prescriber_"
+                "first_btki_initiation_within_first_year_post_approval_flag is the SAME "
+                "FAMILY but uses a DIFFERENT calendar anchor (approval vs launch); the "
+                "launch event lags approval and captures availability not authorization "
+                "timing. Distinct calendar event. Remediation per role-to-remediation "
+                "table: instrument → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # ----- Sub-bucket B3-L: Postindex mediators (6 entries) -----
+        # PMID: 39021347 — Ji 2024 Allergy Gal-9 dynamics (DOI:10.1111/all.16239)
+        dspy.Example(
+            feature_name="delta_galectin9_basophil_pct_flow_30_90d_post_index_csu",
+            derivation_pseudocode=(
+                "source=FLOW_CYTOMETRY; derivation_inputs=['gal9_pos_baso_pct', 'flow_date']; "
+                "aggregation=delta_postindex_minus_preindex; window_days=90; knowable_at=postindex_90d"
+            ),
+            dataset_context=(
+                "ConcertAI CSU chart-abstracted flow; cohort=CSU; treatment=omalizumab_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=omalizumab_init_date"
+            ),
+            causal_role="mediator",
+            mechanism=(
+                "Change in Gal-9-positive-basophil percent from preindex baseline to 30-90d "
+                "postindex (knowable_at=postindex_90d; window strictly POST-treatment — "
+                "post-anchor sampling intentional for mediator role; the delta requires "
+                "post-treatment measurement by definition). M->Y: omalizumab-induced "
+                "reduction in Gal-9 expression on basophils correlates with UAS7 remission "
+                "in responders (Ji 2024 PMID 39021347; doi:10.1111/all.16239). T->M: anti-"
+                "IgE engagement is the proximate driver of Gal-9 downshift on basophils. "
+                "Mediator decomposition: this lies on the causal pathway from treatment to "
+                "outcome. why_not_duplicate: distinct from BASELINE Gal-9 flow marker; this "
+                "is the TREATMENT-INDUCED DELTA. Remediation per role-to-remediation "
+                "table: mediator → drop."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 38008109 — Maurer 2023 PEARL-1/2 (DOI:10.1016/S0140-6736(23)01684-7)
+        dspy.Example(
+            feature_name="weekly_angioedema_episode_count_28_56d_post_index_csu",
+            derivation_pseudocode=(
+                "source=EHR_PRO; derivation_inputs=['angioedema_episode_date', 'patient_id']; "
+                "aggregation=mean_episodes_per_week; window_days=28; knowable_at=postindex_56d"
+            ),
+            dataset_context=(
+                "ConcertAI CSU EHR PRO; cohort=CSU; treatment=omalizumab_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=omalizumab_init_date"
+            ),
+            causal_role="mediator",
+            mechanism=(
+                "Weekly count of angioedema episodes in the 28-56d post-index window "
+                "(knowable_at=postindex_56d; window strictly post-treatment because mediator "
+                "by definition lies on T->M->Y path). T->M: treatment reduces mast-cell-"
+                "driven angioedema episodes within the first 8 weeks (Maurer 2023 PEARL-1/2 "
+                "PMID 38008109; doi:10.1016/S0140-6736(23)01684-7). M->Y: reduction in "
+                "early angioedema episodes mediates downstream UAS7 remission at 180d. "
+                "why_not_duplicate: distinct from UAS7 score (composite hives+itch); this "
+                "is the angioedema-specific event count, a separable symptom dimension. "
+                "Remediation per role-to-remediation table: mediator → drop."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 39021347 — Ji 2024 Allergy basophil count dynamics (DOI:10.1111/all.16239)
+        dspy.Example(
+            feature_name="basophil_recovery_pct_28d_post_omalizumab_init_csu",
+            derivation_pseudocode=(
+                "source=CBC_DIFF; derivation_inputs=['basophil_abs_per_ul', 'cbc_date']; "
+                "aggregation=pct_change_from_preindex_baseline; window_days=28; knowable_at=postindex_28d"
+            ),
+            dataset_context=(
+                "Optum CSU + chart-abstracted CBC; cohort=CSU; treatment=omalizumab_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=omalizumab_init_date"
+            ),
+            causal_role="mediator",
+            mechanism=(
+                "Percent recovery of circulating basophil count from preindex baseline at "
+                "28d postindex (knowable_at=postindex_28d; the post-treatment sampling is "
+                "structurally required for a mediator). T->M: omalizumab reverses basopenia "
+                "via FcεRI-downregulation (Ji 2024 PMID 39021347; doi:10.1111/all.16239). "
+                "M->Y: basophil recovery is a known mediator of UAS7 remission. Mediator "
+                "axis: treatment -> basophil count recovery -> outcome. why_not_duplicate: "
+                "distinct from baseline absolute basophil count; this is the DELTA at a "
+                "specific postindex timepoint. Remediation per role-to-remediation table: "
+                "mediator → drop."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 29797525 — Takahashi 2018 D-dimer dynamics + PMID 27926978 Kolkhir review
+        dspy.Example(
+            feature_name="delta_total_ige_iu_ml_60_90d_post_omalizumab_init_csu",
+            derivation_pseudocode=(
+                "source=SERUM_LABS; derivation_inputs=['total_ige_iu_ml', 'lab_date']; "
+                "aggregation=delta_postindex_minus_preindex; window_days=90; knowable_at=postindex_90d"
+            ),
+            dataset_context=(
+                "ConcertAI CSU EHR; cohort=CSU; treatment=omalizumab_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=omalizumab_init_date"
+            ),
+            causal_role="mediator",
+            mechanism=(
+                "Change in serum total IgE from baseline to 60-90d postindex (knowable_at="
+                "postindex_90d; postindex sampling structurally required). T->M: omalizumab "
+                "binds free IgE forming complexes that paradoxically INCREASE measured "
+                "total-IgE in lab assays (Maurer 2023 PEARL-1/2 PMID 38008109; doi:10.1016/"
+                "S0140-6736(23)01684-7). M->Y: degree of measured total-IgE rise correlates "
+                "with effective drug-target engagement, mediating UAS7 response. "
+                "why_not_duplicate: golden baseline_total_ige_iu_ml_preindex is the "
+                "BASELINE; this is the POSTINDEX DELTA. Remediation per role-to-"
+                "remediation table: mediator → drop."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 38141832 — Bernstein 2023 BTK signaling (DOI:10.1016/j.jaci.2023.12.008)
+        dspy.Example(
+            feature_name="delta_btk_phosphorylation_pct_basophil_60_90d_post_remibrutinib_init_csu",
+            derivation_pseudocode=(
+                "source=FLOW_CYTOMETRY; derivation_inputs=['pbtk_pct_basophil', 'flow_date']; "
+                "aggregation=delta_postindex_minus_preindex; window_days=90; knowable_at=postindex_90d"
+            ),
+            dataset_context=(
+                "ConcertAI CSU chart flow; cohort=CSU; treatment=remibrutinib_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=remibrutinib_init_date"
+            ),
+            causal_role="mediator",
+            mechanism=(
+                "Change in basophil pBTK from baseline to 60-90d postindex (knowable_at="
+                "postindex_90d; post-treatment sampling structurally required for "
+                "mediator). T->M: remibrutinib inhibits BTK directly, reducing pBTK in "
+                "basophils (Bernstein 2023 BTK-signaling review PMID 38141832; doi:10.1016/"
+                "j.jaci.2023.12.008). M->Y: depth of BTK-inhibition mediates downstream "
+                "UAS7 remission. why_not_duplicate: distinct from baseline pBTK confounder; "
+                "this is the TREATMENT-INDUCED DELTA on the same analyte. Remediation per "
+                "role-to-remediation table: mediator → drop."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 38008109 — Maurer 2023 PEARL-1/2 (DOI:10.1016/S0140-6736(23)01684-7)
+        dspy.Example(
+            feature_name="rescue_corticosteroid_oral_courses_count_56d_post_index_csu",
+            derivation_pseudocode=(
+                "source=PHARMACY_CLAIMS; derivation_inputs=['oral_steroid_ndc', 'fill_date', 'days_supply']; "
+                "aggregation=distinct_courses_count; window_days=56; knowable_at=postindex_56d"
+            ),
+            dataset_context=(
+                "Optum CSU pharmacy; cohort=CSU; treatment=omalizumab_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=omalizumab_init_date"
+            ),
+            causal_role="mediator",
+            mechanism=(
+                "Count of distinct oral corticosteroid courses (>3 days supply each) in "
+                "the 56d post-index window (knowable_at=postindex_56d; postindex sampling "
+                "structurally required for the rescue-utilization mediator). T->M: "
+                "treatment efficacy reduces need for rescue steroids in the early post-"
+                "treatment window (Maurer 2023 PEARL-1/2 PMID 38008109; doi:10.1016/S0140-"
+                "6736(23)01684-7). M->Y: steroid-rescue frequency is on the pathway from "
+                "treatment to long-term UAS7 remission via inflammation-axis modulation. "
+                "why_not_duplicate: distinct from golden concomitant_steroid_burst_count_"
+                "followup (which has dual role label); this is a STRICT EARLY-WINDOW count "
+                "labelled as mediator in the omalizumab arm where treatment-induced rescue "
+                "reduction is the dominant axis. Remediation per role-to-remediation "
+                "table: mediator → drop."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # ----- Sub-bucket B3-L: Descendants (4 entries) -----
+        # PMID: 38008109 — Maurer 2023 PEARL-1/2 (DOI:10.1016/S0140-6736(23)01684-7)
+        dspy.Example(
+            feature_name="post_index_uas7_complete_response_uas7_eq_zero_at_24w_flag_csu",
+            derivation_pseudocode=(
+                "source=EHR_PRO; derivation_inputs=['weekly_uas7_score', 'pro_date']; "
+                "aggregation=binary_uas7_equals_zero; window_days=168; knowable_at=postindex_168d"
+            ),
+            dataset_context=(
+                "ConcertAI CSU EHR PRO; cohort=CSU; treatment=remibrutinib_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=remibrutinib_init_date"
+            ),
+            causal_role="descendant",
+            mechanism=(
+                "Binary indicator for UAS7=0 (complete response) measured at 24w postindex "
+                "(knowable_at=postindex_168d; postindex measurement structurally required "
+                "and is itself a downstream effect of the outcome process). Y->X: this "
+                "feature is the OUTCOME REGISTER reading itself or a near-tautological "
+                "descendant of the focal outcome (UAS7 remission at 180d). Descendant "
+                "arrowhead: outcome -> measured-complete-response indicator. Including this "
+                "in a prediction model induces post-outcome leakage (Maurer 2023 PEARL-1/2 "
+                "PMID 38008109; doi:10.1016/S0140-6736(23)01684-7). why_not_duplicate: "
+                "golden urticaria_activity_score_180d_postindex_csu is a continuous postindex "
+                "UAS7 measure; this is the BINARY UAS7=0 indicator at a SHARPER 24w "
+                "milestone — distinct construct. Remediation per role-to-remediation "
+                "table: descendant → drop."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 38008109 — Maurer 2023 PEARL-1/2 (DOI:10.1016/S0140-6736(23)01684-7)
+        dspy.Example(
+            feature_name="post_index_uct_score_complete_control_uct_geq16_at_24w_flag_csu",
+            derivation_pseudocode=(
+                "source=EHR_PRO; derivation_inputs=['uct_score', 'pro_date']; "
+                "aggregation=binary_uct_geq_16; window_days=168; knowable_at=postindex_168d"
+            ),
+            dataset_context=(
+                "ConcertAI CSU EHR PRO; cohort=CSU; treatment=omalizumab_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=omalizumab_init_date"
+            ),
+            causal_role="descendant",
+            mechanism=(
+                "Urticaria Control Test (UCT) ≥16 (complete control) flag at 24w postindex "
+                "(knowable_at=postindex_168d; postindex required by construction). Y->X: "
+                "the outcome (UAS7 remission at 180d) and UCT-complete-control are highly "
+                "co-determined — UCT is a parallel response register downstream of "
+                "treatment success. Descendant arrowhead: outcome -> UCT-control flag. "
+                "Including this feature leaks outcome information at training time (Maurer "
+                "2023 PEARL-1/2 PMID 38008109; doi:10.1016/S0140-6736(23)01684-7). "
+                "why_not_duplicate: golden uct_score_150_180d_post_index is the continuous "
+                "UCT score; this is the BINARY UCT≥16 control flag at 24w — distinct "
+                "construct. Remediation per role-to-remediation table: descendant → drop."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 38008109 — Maurer 2023 PEARL-1/2 (DOI:10.1016/S0140-6736(23)01684-7)
+        dspy.Example(
+            feature_name="post_index_csu_specific_qol_score_above_70_at_24w_flag_csu",
+            derivation_pseudocode=(
+                "source=EHR_PRO; derivation_inputs=['cu_qol_score', 'pro_date']; "
+                "aggregation=binary_score_above_70; window_days=168; knowable_at=postindex_168d"
+            ),
+            dataset_context=(
+                "ConcertAI CSU EHR PRO; cohort=CSU; treatment=remibrutinib_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=remibrutinib_init_date"
+            ),
+            causal_role="descendant",
+            mechanism=(
+                "CU-Q2oL (CSU-specific QoL) score above 70 flag at 24w postindex "
+                "(knowable_at=postindex_168d; postindex required by construction). Y->X: "
+                "CU-Q2oL is a downstream patient-reported outcome that responds in lockstep "
+                "with UAS7 remission (Maurer 2023 PEARL-1/2 PMID 38008109; doi:10.1016/"
+                "S0140-6736(23)01684-7). Descendant arrowhead: outcome (UAS7 remission) -> "
+                "QoL-improvement register. why_not_duplicate: distinct from DLQI (general "
+                "dermatology QoL); this is the CSU-SPECIFIC CU-Q2oL instrument. "
+                "Remediation per role-to-remediation table: descendant → drop."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 27926978 — Kolkhir 2017 CSU biomarkers review (DOI:10.1111/cea.12870)
+        dspy.Example(
+            feature_name="post_index_d_dimer_normalization_below_uln_at_90d_flag_csu",
+            derivation_pseudocode=(
+                "source=COAGULATION_PANEL; derivation_inputs=['d_dimer_ug_ml', 'd_dimer_uln', 'lab_date']; "
+                "aggregation=binary_below_uln; window_days=90; knowable_at=postindex_90d"
+            ),
+            dataset_context=(
+                "ConcertAI CSU EHR labs; cohort=CSU; treatment=omalizumab_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=omalizumab_init_date"
+            ),
+            causal_role="descendant",
+            mechanism=(
+                "Binary flag for D-dimer normalization (<ULN) at 90d postindex (knowable_at="
+                "=postindex_90d; postindex measurement by construction). Y->X: D-dimer "
+                "tracks disease-activity normalization; in responders D-dimer normalizes as "
+                "a downstream consequence of disease control rather than an upstream driver "
+                "(Kolkhir 2017 PMID 27926978; doi:10.1111/cea.12870; Takahashi 2018 PMID "
+                "29797525). Descendant arrowhead: disease-control (outcome) -> D-dimer "
+                "normalization. why_not_duplicate: golden delta_d_dimer_ug_ml_90_180d_"
+                "post_index is a CONTINUOUS DELTA at a LATER window; this is the BINARY "
+                "NORMALIZATION flag at 90d. Remediation per role-to-remediation table: "
+                "descendant → drop."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # ----- Sub-bucket B3-L: Ancestors (4 entries) -----
+        # PMID: 37245259 — Sanchez 2023 CSU autoimmune (proxy)
+        dspy.Example(
+            feature_name="family_history_chronic_urticaria_first_degree_relative_flag_csu",
+            derivation_pseudocode=(
+                "source=EHR_FAMILY_HISTORY; derivation_inputs=['family_relation', 'icd10_l50x_first_degree']; "
+                "aggregation=any; window_days=999999; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI CSU EHR; cohort=CSU; treatment=omalizumab_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=omalizumab_init_date"
+            ),
+            causal_role="ancestor",
+            mechanism=(
+                "Family history flag for first-degree relative with chronic urticaria, "
+                "documented strictly preindex (knowable_at=preindex_0d enforces prefix-"
+                "censoring; this is a non-time-varying genetic/familial trait). Ancestor "
+                "arrowhead: shared genetic-susceptibility-loci -> patient CSU risk; this "
+                "is UPSTREAM of disease onset (Sanchez 2023 PMID 37245259) and thus "
+                "ancestor (not confounder) because it acts ONLY through baseline CSU-"
+                "susceptibility. F->disease onset->T,Y. why_not_duplicate: golden "
+                "family_history_atopy_first_degree_relative_flag is for ATOPY (broader "
+                "umbrella); this is for CSU SPECIFICALLY. Remediation per role-to-"
+                "remediation table: ancestor → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 37245259 — Sanchez 2023 HLA in CSU (proxy)
+        dspy.Example(
+            feature_name="hla_dr4_specific_locus_carrier_germline_indicator_csu",
+            derivation_pseudocode=(
+                "source=HLA_TYPING; derivation_inputs=['hla_dr_allele']; "
+                "aggregation=any_dr4_positive; window_days=999999; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI CSU EHR + HLA registry; cohort=CSU; treatment=omalizumab_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=omalizumab_init_date"
+            ),
+            causal_role="ancestor",
+            mechanism=(
+                "HLA-DR4 carrier flag, available as germline genotype (knowable_at="
+                "preindex_0d trivially; the genotype is fixed at conception, no temporal "
+                "concerns). Ancestor arrowhead: germline genotype -> immune-repertoire -> "
+                "CSU disease susceptibility; the allele predates ALL post-conception "
+                "exposures and acts only via disease-onset risk. why_not_duplicate: golden "
+                "hla_drb1_autoimmune_csu_susceptibility_allele_flag targets DRB1 alleles "
+                "broadly; this targets DR4 specifically. Remediation per role-to-"
+                "remediation table: ancestor → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 27926978 — Kolkhir 2017 (proxy for atopic march)
+        dspy.Example(
+            feature_name="early_life_atopic_dermatitis_before_age_5y_history_flag_csu",
+            derivation_pseudocode=(
+                "source=EHR_PROBLEM_LIST; derivation_inputs=['icd10_l20x', 'age_at_diagnosis']; "
+                "aggregation=any_before_age_5y; window_days=999999; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI CSU EHR; cohort=CSU; treatment=omalizumab_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=omalizumab_init_date"
+            ),
+            causal_role="ancestor",
+            mechanism=(
+                "History of atopic dermatitis diagnosis before age 5y, documented strictly "
+                "preindex (knowable_at=preindex_0d; this is a fixed early-life trait). "
+                "Ancestor arrowhead: early-life atopic-march -> immune-phenotype -> CSU "
+                "susceptibility (Kolkhir 2017 PMID 27926978; doi:10.1111/cea.12870). The "
+                "early-life event temporally precedes ALL CSU disease-process exposures "
+                "and acts through baseline disease-susceptibility only. why_not_duplicate: "
+                "golden childhood_eczema_history_flag is broader (any childhood eczema "
+                "any age); this is the SHARPER age-5y threshold variant. Remediation per "
+                "role-to-remediation table: ancestor → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 38141832 — Bernstein 2023 (genetic basis of BTK pathway)
+        dspy.Example(
+            feature_name="ancestry_european_genetic_pc1_decile_csu_susceptibility",
+            derivation_pseudocode=(
+                "source=GENETIC_PCA; derivation_inputs=['european_pc1']; "
+                "aggregation=decile; window_days=999999; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI CSU + genetic ancestry array; cohort=CSU; treatment=remibrutinib_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=remibrutinib_init_date"
+            ),
+            causal_role="ancestor",
+            mechanism=(
+                "Decile of European genetic-ancestry PC1, from germline genotype data "
+                "(knowable_at=preindex_0d trivially; ancestry is fixed at conception). "
+                "Ancestor arrowhead: germline ancestry -> baseline genetic-architecture of "
+                "BTK/FcεRI/HLA loci known to vary across populations (Bernstein 2023 BTK-"
+                "signaling review PMID 38141832; doi:10.1016/j.jaci.2023.12.008). Ancestry "
+                "indexes genetic susceptibility upstream of all disease exposures. "
+                "why_not_duplicate: distinct from HLA-DR4 allele (a single locus); this is "
+                "GLOBAL ANCESTRY across all loci. Remediation per role-to-remediation "
+                "table: ancestor → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # ----- Sub-bucket B3-L: Colliders (3 lit-grounded entries) -----
+        # PMID: 38008109 — Maurer 2023 PEARL-1/2 (DOI:10.1016/S0140-6736(23)01684-7)
+        dspy.Example(
+            feature_name="enrolled_in_csu_phase3_trial_substudy_flag_180d_postindex_csu",
+            derivation_pseudocode=(
+                "source=TRIAL_REGISTRY; derivation_inputs=['trial_enrollment_date', 'nct_id']; "
+                "aggregation=any_post_index; window_days=180; knowable_at=postindex_180d"
+            ),
+            dataset_context=(
+                "ConcertAI CSU + clinical-trial registry; cohort=CSU; treatment=remibrutinib_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=remibrutinib_init_date"
+            ),
+            causal_role="collider",
+            mechanism=(
+                "Flag for enrollment in a CSU phase-3 trial substudy in the 180d postindex "
+                "window (knowable_at=postindex_180d; postindex by construction). Both "
+                "treatment-receipt (T) AND outcome (Y, perceived response) influence "
+                "ongoing-trial-enrollment decisions: physicians refer treatment-responsive "
+                "patients to extension protocols; non-responders are also referred to "
+                "rescue arms (Maurer 2023 PEARL-1/2 PMID 38008109; doi:10.1016/S0140-"
+                "6736(23)01684-7). Collider arrowhead: T -> enrollment <- Y. Conditioning "
+                "on enrollment opens a backdoor T-Y path biasing causal estimates. "
+                "why_not_duplicate: distinct from prior-trial-history (a preindex feature); "
+                "this is the POSTINDEX enrollment flag. Remediation per role-to-"
+                "remediation table: collider → drop."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 38008109 — Maurer 2023 PEARL-1/2 (DOI:10.1016/S0140-6736(23)01684-7)
+        dspy.Example(
+            feature_name="switched_to_alternative_csu_biologic_at_120d_postindex_flag_csu",
+            derivation_pseudocode=(
+                "source=PHARMACY_CLAIMS; derivation_inputs=['biologic_ndc', 'fill_date', 'index_drug_ndc']; "
+                "aggregation=any_switch_post_index; window_days=120; knowable_at=postindex_120d"
+            ),
+            dataset_context=(
+                "Optum CSU pharmacy; cohort=CSU; treatment=omalizumab_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=omalizumab_init_date"
+            ),
+            causal_role="collider",
+            mechanism=(
+                "Flag for switch to alternative CSU biologic (e.g., from omalizumab to "
+                "remibrutinib or ligelizumab) in the 120d post-index window (knowable_at="
+                "postindex_120d; post-treatment by construction). Both initial-treatment "
+                "(T) AND outcome (Y, lack-of-response) influence the switch decision: "
+                "switches occur in non-responders only, but the switch is also gated on "
+                "what drug was initiated (Wedi 2025 PMID 40747638; doi:10.1097/ACI.0000000"
+                "000001095; Maurer 2023 PEARL-1/2 PMID 38008109; doi:10.1016/S0140-"
+                "6736(23)01684-7). Collider arrowhead: T -> switch <- Y. Conditioning on "
+                "switch opens a backdoor T-Y path biasing causal estimates. "
+                "why_not_duplicate: golden post_index_switch_to_alternative_biologic_180d_"
+                "flag uses a 180d window; this is the 120d EARLIER window — distinct "
+                "temporal cutoff. Remediation per role-to-remediation table: collider → "
+                "drop."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # PMID: 27926978 — Kolkhir 2017 CSU biomarkers review (DOI:10.1111/cea.12870)
+        dspy.Example(
+            feature_name="csu_specialty_clinic_referral_within_90d_postindex_flag",
+            derivation_pseudocode=(
+                "source=CLAIMS_REFERRAL; derivation_inputs=['referral_specialty', 'referral_date']; "
+                "aggregation=any_referral_to_urticaria_center; window_days=90; knowable_at=postindex_90d"
+            ),
+            dataset_context=(
+                "Optum CSU claims; cohort=CSU; treatment=omalizumab_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=omalizumab_init_date"
+            ),
+            causal_role="collider",
+            mechanism=(
+                "Flag for postindex referral to specialty urticaria center (UCARE) within "
+                "90d post-index (knowable_at=postindex_90d; post-treatment by "
+                "construction). Both treatment-receipt (T) AND outcome (Y, poor response "
+                "trajectory) influence the referral: complicated-course patients on first-"
+                "line biologics get escalated to specialty centers, AND treatment-failure "
+                "is the dominant referral trigger (Kolkhir 2017 PMID 27926978; doi:10.1111/"
+                "cea.12870). Collider arrowhead: T -> referral <- Y. Conditioning on "
+                "referral opens a spurious T-Y path biasing causal estimates. "
+                "why_not_duplicate: distinct from prior_csu_specialist_visit_count_365d_"
+                "preindex (a PREINDEX confounder); this is the POSTINDEX collider with "
+                "the same provider-system but reversed temporal positioning. Remediation "
+                "per role-to-remediation table: collider → drop."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # ----- Sub-bucket B3-A: Adversarial (3 entries) -----
+        # Adversarial: confounder-vs-mediator boundary — adherence interacts with severity
+        dspy.Example(
+            feature_name="medication_possession_ratio_h1_antihistamine_180d_preindex_csu",
+            derivation_pseudocode=(
+                "source=PHARMACY_CLAIMS; derivation_inputs=['h1_ndc', 'fill_date', 'days_supply']; "
+                "aggregation=mpr_preindex; window_days=180; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "Optum CSU claims; cohort=CSU; treatment=omalizumab_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=omalizumab_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Targets the worker-evaluator boundary between CONFOUNDER and MEDIATOR for "
+                "adherence behaviour. Pre-prediction-time H1-antihistamine MPR over 180d "
+                "preindex (knowable_at=preindex_0d enforces strict prefix-censoring at "
+                "index_date — no postindex pharmacy data leakage). The classifier may "
+                "WRONGLY label this as mediator because adherence influences outcome via "
+                "treatment-effectiveness; the CORRECT label is CONFOUNDER because the "
+                "measurement is PRE-INDEX (before omalizumab initiation), so adherence here "
+                "indexes treatment-seeking phenotype (Z->T: high-adherence patients more "
+                "likely to advance to biologic) AND outcome-prone phenotype (Z->Y: "
+                "adherence trait predicts maintenance success regardless of treatment arm) "
+                "(Maurer 2023 PEARL-1/2 PMID 38008109; doi:10.1016/S0140-6736(23)01684-7). "
+                "Pre-index adherence is a baseline trait, not a mediator. why_not_duplicate: "
+                "distinct from postindex PDC of remibrutinib (which IS a mediator); this is "
+                "the PREINDEX antihistamine-MPR boundary case. Remediation per role-to-"
+                "remediation table: confounder → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Adversarial: IV-vs-confounder boundary — preindex provider switch
+        dspy.Example(
+            feature_name="provider_switch_within_180d_preindex_flag_csu",
+            derivation_pseudocode=(
+                "source=CLAIMS_PROVIDER; derivation_inputs=['provider_npi', 'visit_date']; "
+                "aggregation=count_distinct_npi_gt_1; window_days=180; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "Optum CSU claims; cohort=CSU; treatment=omalizumab_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=omalizumab_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Targets the worker-evaluator boundary between INSTRUMENT and CONFOUNDER. "
+                "Flag for provider-switching activity in 180d preindex (knowable_at="
+                "preindex_0d enforces prefix-censoring). The classifier may WRONGLY "
+                "label this as instrument because provider-changes can shift prescribing "
+                "patterns toward different biologics; the CORRECT label is CONFOUNDER "
+                "because provider-switching is itself driven by patient dissatisfaction "
+                "with previous care (a patient-level severity/response trait), creating a "
+                "Z->T and Z->Y dual path through the unobserved severity factor (Wedi 2025 "
+                "PMID 40747638; doi:10.1097/ACI.0000000000001095). EXCLUSION RESTRICTION "
+                "FAILS because patient-initiated switching responds to disease severity "
+                "directly. why_not_duplicate: distinct from prescriber preference-share IVs "
+                "(which use OTHER-patient prescribing history and do not encode focal-"
+                "patient switching behaviour). Remediation per role-to-remediation table: "
+                "confounder → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Adversarial: descendant-vs-mediator boundary — early-response indicator
+        dspy.Example(
+            feature_name="uas7_50pct_responder_at_4w_postindex_flag_csu",
+            derivation_pseudocode=(
+                "source=EHR_PRO; derivation_inputs=['uas7_score', 'pro_date']; "
+                "aggregation=binary_50pct_reduction_from_baseline; window_days=28; knowable_at=postindex_28d"
+            ),
+            dataset_context=(
+                "ConcertAI CSU EHR PRO; cohort=CSU; treatment=remibrutinib_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=remibrutinib_init_date"
+            ),
+            causal_role="descendant",
+            mechanism=(
+                "Targets the worker-evaluator boundary between MEDIATOR and DESCENDANT. "
+                "Binary flag for ≥50% UAS7 reduction at 4w post-index (knowable_at="
+                "postindex_28d; postindex by construction). The classifier may WRONGLY "
+                "label this as mediator (an early-symptomatic-improvement step on the "
+                "T->M->Y path); the CORRECT label is DESCENDANT because UAS7-at-4w is "
+                "near-tautologically determined by the SAME underlying response-to-"
+                "treatment process that determines UAS7-remission-at-180d (the focal "
+                "outcome). Using a near-collinear-with-outcome early reading as a feature "
+                "leaks information about the outcome label (Maurer 2023 PEARL-1/2 PMID "
+                "38008109; doi:10.1016/S0140-6736(23)01684-7). Descendant arrowhead: "
+                "outcome-process -> early-response register. why_not_duplicate: distinct "
+                "from UAS7=0 at 24w descendant (which is a LATE complete-response register); "
+                "this is the EARLY (4w) descendant of the SAME outcome-process. Remediation "
+                "per role-to-remediation table: descendant → drop."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # ----- Sub-bucket B3-E: Edge cases (2 entries) -----
+        # Edge case: postindex aggregation that masks leakage
+        dspy.Example(
+            feature_name="uas7_trajectory_slope_all_available_postindex_to_180d_csu",
+            derivation_pseudocode=(
+                "source=EHR_PRO; derivation_inputs=['uas7_score', 'pro_date']; "
+                "aggregation=linear_regression_slope_all_postindex_values; window_days=180; knowable_at=postindex_180d"
+            ),
+            dataset_context=(
+                "ConcertAI CSU EHR PRO; cohort=CSU; treatment=remibrutinib_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=remibrutinib_init_date"
+            ),
+            causal_role="descendant",
+            mechanism=(
+                "Edge case: this entry tests prefix-censoring discipline. The aggregation "
+                "window 'all_available_postindex_to_180d' spans the ENTIRE postindex "
+                "horizon including the outcome-assessment timepoint (knowable_at="
+                "postindex_180d; window is the FULL outcome-measurement period). The "
+                "slope of UAS7 from index through 180d is essentially a re-encoding of the "
+                "outcome trajectory (Maurer 2023 PEARL-1/2 PMID 38008109; doi:10.1016/"
+                "S0140-6736(23)01684-7). Descendant arrowhead: outcome-process -> "
+                "postindex-trajectory slope. Any feature whose derivation window OVERLAPS "
+                "the outcome timepoint is structurally outcome-leaking. why_not_duplicate: "
+                "distinct from 28-56d-only postindex windows (which would be mediators); "
+                "this OVERLAPS the outcome window — a leakage edge case. Remediation per "
+                "role-to-remediation table: descendant → drop."
+            ),
+            recommended_remediation="drop",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # Edge case: prefix-censoring at biologic-init-date itself
+        dspy.Example(
+            feature_name="biologic_init_date_same_day_uas7_measurement_csu",
+            derivation_pseudocode=(
+                "source=EHR_PRO; derivation_inputs=['uas7_score', 'pro_date', 'biologic_init_date']; "
+                "aggregation=value_where_pro_date_equals_init_date; window_days=0; knowable_at=preindex_0d"
+            ),
+            dataset_context=(
+                "ConcertAI CSU EHR PRO; cohort=CSU; treatment=remibrutinib_init; "
+                "outcome=uas7_remission_180d; prediction_anchor=remibrutinib_init_date"
+            ),
+            causal_role="confounder",
+            mechanism=(
+                "Edge case: this entry tests the EXACT boundary of prefix-censoring. The "
+                "UAS7 measurement is taken on the SAME calendar day as the biologic-"
+                "initiation event (knowable_at=preindex_0d, window_days=0). By convention, "
+                "same-day measurements are considered PREINDEX (the assessment precedes "
+                "the prescription decision at the visit). Z->T: same-day baseline UAS7 "
+                "is the value the prescriber uses when making the initiation decision "
+                "(Maurer 2023 PEARL-1/2 PMID 38008109; doi:10.1016/S0140-6736(23)01684-7). "
+                "Z->Y: baseline severity predicts outcome trajectory. Pearl arrowhead: "
+                "Z->T (decision input), Z->Y (severity prognosis). why_not_duplicate: "
+                "golden baseline_uas7_score_preindex_30d uses a 30d preindex window with "
+                "the most-recent value selected; this is the SAME-DAY-OF-INITIATION value "
+                "edge case — distinct windowing. Remediation per role-to-remediation "
+                "table: confounder → keep_with_caveat."
+            ),
+            recommended_remediation="keep_with_caveat",
+        ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
+        # =====================================================================
+        # End Plan-239 n=200 Task 5 — Bucket 3 CSU expansion (+42 entries)
+        # Final CSU canonical floor: 53 (11 existing + 42 new entries).
+        # Role distribution of new entries: confounder=19, mediator=6,
+        # descendant=6, instrument=4, ancestor=4, collider=3.
+        # =====================================================================
     ]
     return examples
 
