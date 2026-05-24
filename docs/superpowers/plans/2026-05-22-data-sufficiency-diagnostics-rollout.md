@@ -1,6 +1,6 @@
 # Data-Sufficiency Diagnostics Rollout
 
-**Status:** COMPLETE — all phases merged. Phase 0 (PR #460), Phase 1 (PR #462, finalized in PR #472), Phase 2 (PR #463, +hotfix #466), Phase 3 (PR #475). Rollout delivered 2026-05-24.
+**Status:** COMPLETE — all phases merged. Phase 0 (PR #460), Phase 1 (PR #462, finalized in PR #472), Phase 2 (PR #466 — learning curve; commit message tagged the planned "#463" but that PR number was reused for an unrelated chore — see issue #464), Phase 3 (PR #475). Rollout delivered 2026-05-24.
 **Owner:** etn3724@gmail.com
 **Started:** 2026-05-22
 **Source PDF:** `de3b5738-Should_you_gather_more_data.pdf` (learning-curve diagnostic)
@@ -82,7 +82,9 @@ Foundational utility modules + Tier 3 PowerAnalysisNode refactor. Zero behavior 
 
 **Report contents:** verdict + verdict_rationale + resolved_thresholds (each with `source` + `citation`) + detectable_mde_at_current_n (Strategy A) + sensitivity_grid across 3 candidate MDEs (Strategy C) + mde_assumption_used (Strategy B) + human_readable_summary.
 
-### PR #463 — Phase 2: Post-training learning curve in ModelTrainer (MERGED — +hotfix #466)
+### PR #466 — Phase 2: Post-training learning curve in ModelTrainer (MERGED 2026-05-23)
+
+> Originally planned as "PR #463". GitHub PR #463 was reused for an unrelated `ConfidenceScorer`/`CrossValidator`/`ABReconciler` retirement chore (see issue #464); the actual Phase 2 learning-curve PR is #466.
 
 New `learning_curve.py` node, triggered after training when `success_criteria_met=False` (or always-on via `PipelineConfig.always_run_learning_curve=True`). The technique from the source PDF:
 
@@ -95,7 +97,7 @@ New `learning_curve.py` node, triggered after training when `success_criteria_me
 
 **Cost controls:** k=7 (not 12), single-fit per bucket (no nested HPO), 3-min walltime cap, INCONCLUSIVE verdict on cap-out.
 
-**Causal v2:** uses `synthetic_v2` with `TRUE_ATE` for bootstrap-style CI-width estimation.
+**Causal branch (as merged):** bootstraps ATE CI width directly from the train set `(X_train, y_train, treatment_column)` via a difference-in-means estimator at each bucket size — the spec's `synthetic_v2` + `TRUE_ATE` route was NOT taken. See `_bootstrap_ate_ci_width` in `src/agents/ml_foundation/model_trainer/nodes/learning_curve.py:427` and the `proxy_model="dim-bootstrap"` field in the report payload.
 
 ### PR #475 — Phase 3: Synthetic preview wiring (MERGED 2026-05-24)
 
