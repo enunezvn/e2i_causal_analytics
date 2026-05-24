@@ -115,8 +115,14 @@ class ABResultsRepository(BaseRepository):
                 from src.repositories import get_supabase_client
 
                 self.client = get_supabase_client()
-            except ImportError:
-                logger.warning("Supabase client not available, running in mock mode")
+            except ImportError as exc:
+                # #471: include the actual ImportError so operators
+                # don't read this as "Supabase is down" when the real
+                # cause is a missing package install.
+                logger.warning(
+                    "Supabase client not available, running in mock mode (ImportError: %s)",
+                    exc,
+                )
 
     # =========================================================================
     # RESULTS OPERATIONS

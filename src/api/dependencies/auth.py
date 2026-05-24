@@ -218,7 +218,17 @@ async def verify_supabase_token(token: str) -> Optional[Dict[str, Any]]:
         against Supabase's auth service.
     """
     if not SUPABASE_URL or not SUPABASE_ANON_KEY:
-        logger.warning("Supabase not configured - auth disabled")
+        # #471: surface per-var truthiness — "auth disabled" was a
+        # serious posture change collapsed under a non-actionable log.
+        from src.utils.env_diagnostics import env_state
+
+        logger.warning(
+            "Supabase not configured - auth disabled. Diagnostic: %s; %s. "
+            "If .env contains these, ensure load_dotenv() ran before "
+            "module import.",
+            env_state("SUPABASE_URL"),
+            env_state("SUPABASE_ANON_KEY"),
+        )
         return None
 
     try:

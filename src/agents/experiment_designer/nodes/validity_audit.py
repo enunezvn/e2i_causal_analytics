@@ -9,6 +9,16 @@ Contract: .claude/contracts/tier3-contracts.md lines 82-142
 
 V4.4: Added DAG-aware validity validation.
 V4.5: Added LangChain ChatAnthropic integration with graceful fallback.
+V4.6 (#471): REWIRE — silent MockValidityLLM fallback was a CLAUDE.md
+    HARMFUL-NOW anti-mocking violation (prod LangGraph node returning
+    plausible-real validity scores when ANTHROPIC_API_KEY missing). The
+    fallback now raises ``RuntimeError`` with a diagnostic that
+    distinguishes <unset> / <empty-string> / <set,len=N> + reports
+    ``.env`` existence; the dev-mode mock path is preserved behind the
+    explicit ``EXPERIMENT_DESIGNER_USE_MOCK_LLM=1`` opt-in flag, and the
+    mock now emits an in-band ``mock_response_for_dev_only=True`` marker
+    so downstream consumers / log readers can distinguish synthetic
+    audits from real LLM output.
 """
 
 import asyncio
@@ -18,6 +28,7 @@ import os
 import re
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, Protocol, cast, runtime_checkable
 
 from pydantic import SecretStr
@@ -28,8 +39,28 @@ from src.agents.experiment_designer.state import (
     MitigationRecommendation,
     ValidityThreat,
 )
+from src.utils.env_diagnostics import env_state
+from src.utils.project_root import find_project_root
 
 logger = logging.getLogger(__name__)
+
+# Opt-in flag for the dev-mode mock path. Set to "1" (or any truthy
+# string per ``_flag_enabled``) to allow ``_get_validity_llm()`` to
+# return ``MockValidityLLM`` when ``ANTHROPIC_API_KEY`` is missing.
+# Without this flag, missing-key raises explicitly to prevent the
+# silent-mock anti-pattern (#471).
+_MOCK_FLAG_ENV_VAR = "EXPERIMENT_DESIGNER_USE_MOCK_LLM"
+
+
+def _flag_enabled(var: str) -> bool:
+    """Treat ``1`` / ``true`` / ``yes`` / ``on`` (case-insensitive) as opt-in.
+
+    Anything else (including ``0``, empty, ``false``) leaves the flag
+    OFF. This matches the convention used elsewhere in the codebase
+    (see ``ADAPTIVE_VALIDITY_EVALUATOR_ENABLED``).
+    """
+    raw = os.environ.get(var, "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
 
 
 # ===== LLM INTERFACE =====
@@ -42,20 +73,70 @@ class LLMInterface(Protocol):
         ...
 
 
+def _build_missing_key_error(reason: str) -> RuntimeError:
+    """Construct the standardized ``RuntimeError`` for missing-key paths.
+
+    Centralized so every raise site emits the same diagnostic envelope:
+    actual env state of ``ANTHROPIC_API_KEY`` (distinguishes <unset> /
+    <empty-string> / <set,len=N>), existence of the project ``.env``
+    file (load-chain ambiguity), and the explicit opt-in escape hatch
+    for developers who actually want the mock.
+    """
+    try:
+        dotenv_path: Path | None = find_project_root() / ".env"
+    except Exception:  # pragma: no cover - defensive
+        dotenv_path = None
+    diag = env_state("ANTHROPIC_API_KEY", dotenv_path=dotenv_path)
+    return RuntimeError(
+        f"validity_audit: cannot initialize LLM — {reason}. "
+        f"Diagnostic: {diag}. "
+        "If your .env contains ANTHROPIC_API_KEY, ensure load_dotenv() ran "
+        "before this module was imported (see #470/#471 audit). "
+        f"For development without an API key, set {_MOCK_FLAG_ENV_VAR}=1 "
+        "explicitly to opt into MockValidityLLM (returns clearly-fake values "
+        "marked with 'mock_response_for_dev_only=True')."
+    )
+
+
 def _get_validity_llm() -> tuple[Any, str, bool]:
     """Get LLM for validity audit.
 
-    Attempts to use ChatAnthropic if available and configured,
-    otherwise falls back to MockValidityLLM.
+    Returns a real ``ChatAnthropic`` instance when ``ANTHROPIC_API_KEY``
+    is set, the dev-mode ``MockValidityLLM`` when the opt-in flag
+    ``EXPERIMENT_DESIGNER_USE_MOCK_LLM=1`` is set, and raises
+    ``RuntimeError`` with a precise diagnostic otherwise.
+
+    The previous behavior (silent mock fallback on missing key, missing
+    install, or any init error) was a CLAUDE.md anti-mocking
+    HARMFUL-NOW violation because the mock returns structured
+    ``ValidityFinding`` records that look identical to real audit
+    output, and the production LangGraph node ``ValidityAuditNode`` is
+    not gated by any feature flag. See issue #471.
 
     Returns:
-        Tuple of (llm_instance, model_name, is_real_llm)
+        Tuple of (llm_instance, model_name, is_real_llm). When the
+        opt-in flag is set and the key is also set, the real LLM still
+        wins — the flag only governs missing-key behavior.
+
+    Raises:
+        RuntimeError: When ``ANTHROPIC_API_KEY`` is unset / empty AND
+            the opt-in flag is not set, OR when an explicit attempt to
+            initialize ``ChatAnthropic`` fails (import-missing,
+            misconfig, etc.) without the opt-in flag.
     """
-    # Check if API key is configured
     api_key = os.environ.get("ANTHROPIC_API_KEY")
+    use_mock = _flag_enabled(_MOCK_FLAG_ENV_VAR)
+
     if not api_key:
-        logger.info("ANTHROPIC_API_KEY not set, using mock LLM for validity audit")
-        return MockValidityLLM(), "mock-validity-llm", False
+        if use_mock:
+            logger.info(
+                "validity_audit: %s=1 opt-in honored; using MockValidityLLM "
+                "(returns clearly-fake values marked dev-only). %s",
+                _MOCK_FLAG_ENV_VAR,
+                env_state("ANTHROPIC_API_KEY"),
+            )
+            return MockValidityLLM(), "mock-validity-llm", False
+        raise _build_missing_key_error("ANTHROPIC_API_KEY missing or empty")
 
     try:
         from langchain_anthropic import ChatAnthropic
@@ -72,23 +153,49 @@ def _get_validity_llm() -> tuple[Any, str, bool]:
         return llm, model_name, True
 
     except ImportError:
-        logger.warning(
-            "langchain_anthropic not installed, using mock LLM. "
-            "Install with: pip install langchain-anthropic"
+        if use_mock:
+            logger.warning(
+                "validity_audit: langchain_anthropic not installed; "
+                "%s=1 opt-in honored — falling back to MockValidityLLM. "
+                "Install with: pip install langchain-anthropic",
+                _MOCK_FLAG_ENV_VAR,
+            )
+            return MockValidityLLM(), "mock-validity-llm", False
+        raise _build_missing_key_error(
+            "langchain_anthropic is not installed (pip install langchain-anthropic)"
         )
-        return MockValidityLLM(), "mock-validity-llm", False
 
     except Exception as e:
-        logger.warning(f"Failed to initialize ChatAnthropic: {e}, using mock LLM")
-        return MockValidityLLM(), "mock-validity-llm", False
+        if use_mock:
+            logger.warning(
+                "validity_audit: ChatAnthropic init failed (%s); "
+                "%s=1 opt-in honored — falling back to MockValidityLLM.",
+                e,
+                _MOCK_FLAG_ENV_VAR,
+            )
+            return MockValidityLLM(), "mock-validity-llm", False
+        # Preserve original cause for debugging.
+        raise _build_missing_key_error(f"ChatAnthropic initialization failed: {e}") from e
 
 
 class MockValidityLLM:
     """Mock LLM for testing validity audit.
 
-    Used as fallback when ChatAnthropic is not available (missing API key or
-    langchain-anthropic not installed). Returns realistic mock responses for
-    testing and development.
+    Used as an OPT-IN dev-mode fallback when ``ChatAnthropic`` is not
+    available (missing API key or ``langchain-anthropic`` not
+    installed) AND the operator has explicitly set
+    ``EXPERIMENT_DESIGNER_USE_MOCK_LLM=1`` to acknowledge the synthetic
+    output (#471). Returns a structured response that mirrors the real
+    LLM's schema so downstream parsing exercises the full code path,
+    but carries an in-band ``mock_response_for_dev_only=True`` marker
+    so consumers (and humans inspecting logs / debug dumps) can
+    distinguish synthetic audits from real LLM output without
+    re-reading the env state.
+
+    The numeric fields are intentionally NOT plausible-real (the
+    ``overall_validity_score`` is kept at the historical 0.75 only for
+    parser-compat with existing tests; the dev-only marker is the
+    primary distinguisher per CLAUDE.md anti-mocking discipline).
     """
 
     async def ainvoke(self, prompt: str) -> "MockValidityResponse":
@@ -96,6 +203,11 @@ class MockValidityLLM:
         await asyncio.sleep(0.1)
 
         mock_response = {
+            # #471: In-band dev-only marker — primary distinguisher per
+            # CLAUDE.md anti-mocking discipline. Downstream consumers
+            # (and operator log-readers) can grep this string to
+            # discover synthetic audits without re-reading env state.
+            "mock_response_for_dev_only": True,
             "internal_validity_threats": [
                 {
                     "threat_type": "internal",
@@ -163,7 +275,11 @@ class ValidityAuditNode:
     4. Recommend mitigations
     5. Determine if redesign is needed
 
-    Model: Claude Sonnet 4 (primary), with graceful fallback to mock
+    Model: Claude Sonnet 4 (primary). Fail-closed when ANTHROPIC_API_KEY
+    is missing — raises RuntimeError with diagnostic. Dev-mode mock is
+    available behind explicit ``EXPERIMENT_DESIGNER_USE_MOCK_LLM=1``
+    opt-in flag (#471 anti-mocking REWIRE — pre-fix this was a silent
+    fallback returning plausible-real validity scores).
     Performance Target: <30s for validity audit
     """
 

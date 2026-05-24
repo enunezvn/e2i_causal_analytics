@@ -71,8 +71,14 @@ class RAGContextNode:
                 self._retriever = deps.get("retriever")
                 self._embedding_service = deps.get("embedding_service")
                 self._entity_extractor = deps.get("entity_extractor")
-        except ImportError:
-            logger.warning("RAG dependencies not available - using mock mode")
+        except ImportError as exc:
+            # #471: include the actual ImportError so operators don't
+            # read "RAG broken" when the real cause is a missing
+            # package install or moved module.
+            logger.warning(
+                "RAG dependencies not available - using mock mode (ImportError: %s)",
+                exc,
+            )
             self._retriever = None
 
         self._initialized = True

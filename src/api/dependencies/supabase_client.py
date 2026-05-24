@@ -63,7 +63,19 @@ def init_supabase() -> Optional[Any]:
         return _supabase_client
 
     if not SUPABASE_URL or not SUPABASE_KEY:
-        logger.warning("Supabase credentials not configured - database features unavailable")
+        # #471: surface per-var truthiness so operators can see WHICH
+        # of SUPABASE_URL / SUPABASE_KEY / SUPABASE_SERVICE_KEY is
+        # missing (was just "not configured" — collapsed all 3 cases).
+        from src.utils.env_diagnostics import env_state
+
+        logger.warning(
+            "Supabase credentials not configured - database features unavailable. "
+            "Diagnostic: %s; %s; %s. If .env contains these, ensure "
+            "load_dotenv() ran before module import.",
+            env_state("SUPABASE_URL"),
+            env_state("SUPABASE_KEY"),
+            env_state("SUPABASE_SERVICE_KEY"),
+        )
         return None
 
     logger.info(f"Initializing Supabase connection to {SUPABASE_URL[:50]}...")
