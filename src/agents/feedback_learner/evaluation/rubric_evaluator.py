@@ -17,7 +17,10 @@ Configuration:
 import json
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
+
+from src.utils.env_diagnostics import env_state
+from src.utils.project_root import find_project_root
 
 # anthropic is optional - graceful degradation when not available
 try:
@@ -175,11 +178,26 @@ class RubricEvaluator:
             self.client = None
             if not _has_anthropic:
                 logger.warning(
-                    "anthropic package not installed, RubricEvaluator will use fallback scoring"
+                    "RubricEvaluator: anthropic package not installed; using "
+                    "heuristic_fallback scoring. RubricEvaluation.evaluation_method "
+                    "will be set to 'heuristic_fallback' for every evaluation."
                 )
             else:
+                # #471: Sharpen the misleading "No ANTHROPIC_API_KEY found"
+                # log — that string lies when .env has the key but wasn't
+                # loaded into the process. Surface the actual env state +
+                # dotenv-load-chain ambiguity.
+                try:
+                    dotenv_path = find_project_root() / ".env"
+                except Exception:  # pragma: no cover - defensive
+                    dotenv_path = None
                 logger.warning(
-                    "No ANTHROPIC_API_KEY found, RubricEvaluator will use fallback scoring"
+                    "RubricEvaluator: Anthropic key unreachable; using "
+                    "heuristic_fallback scoring (RubricEvaluation.evaluation_method "
+                    "will be set to 'heuristic_fallback'). Diagnostic: %s. "
+                    "If your .env contains ANTHROPIC_API_KEY, ensure "
+                    "load_dotenv() ran before this module was imported.",
+                    env_state("ANTHROPIC_API_KEY", dotenv_path=dotenv_path),
                 )
 
     async def evaluate(self, context: EvaluationContext) -> RubricEvaluation:
@@ -198,11 +216,17 @@ class RubricEvaluator:
             context.agent_names,
         )
 
-        # Get criterion scores (from AI or fallback)
+        # Get criterion scores (from AI or fallback).
+        # #471: track which path produced the scores so the resulting
+        # RubricEvaluation carries an unambiguous evaluation_method
+        # field — pre-#471 the neutral 3.0 fallback was structurally
+        # indistinguishable from a real 3.0 LLM score (audit H1).
         if self.client:
-            criterion_scores, overall_analysis = await self._evaluate_with_ai(context)
+            criterion_scores, overall_analysis, evaluation_method = await self._evaluate_with_ai(
+                context
+            )
         else:
-            criterion_scores, overall_analysis = self._fallback_evaluation()
+            criterion_scores, overall_analysis, evaluation_method = self._fallback_evaluation()
 
         # Calculate weighted score
         weighted_score = self._calculate_weighted_score(criterion_scores)
@@ -227,6 +251,7 @@ class RubricEvaluator:
             overall_analysis=overall_analysis,
             pattern_flags=pattern_flags,
             improvement_suggestion=improvement_suggestion,
+            evaluation_method=evaluation_method,
         )
 
         logger.info(
@@ -240,8 +265,15 @@ class RubricEvaluator:
 
     async def _evaluate_with_ai(
         self, context: EvaluationContext
-    ) -> tuple[List[CriterionScore], str]:
-        """Evaluate using AI-as-judge methodology."""
+    ) -> tuple[List[CriterionScore], str, Literal["llm", "heuristic_fallback"]]:
+        """Evaluate using AI-as-judge methodology.
+
+        Returns a 3-tuple ``(criterion_scores, overall_analysis,
+        evaluation_method)`` where ``evaluation_method`` is ``"llm"``
+        on the happy path and ``"heuristic_fallback"`` if any error
+        (API failure, parse failure) routes us through
+        ``_fallback_evaluation`` (#471).
+        """
         eval_prompt = self._build_evaluation_prompt(context)
 
         try:
@@ -317,8 +349,15 @@ Format your response as JSON:
 }}
 ```"""
 
-    def _parse_evaluation_response(self, response_text: str) -> tuple[List[CriterionScore], str]:
-        """Parse AI evaluation response into structured scores."""
+    def _parse_evaluation_response(
+        self, response_text: str
+    ) -> tuple[List[CriterionScore], str, Literal["llm", "heuristic_fallback"]]:
+        """Parse AI evaluation response into structured scores.
+
+        Returns ``"llm"`` as the evaluation_method on the happy path
+        and propagates ``"heuristic_fallback"`` from
+        ``_fallback_evaluation`` on parse failure (#471).
+        """
         try:
             # Find JSON block
             json_start = response_text.find("{")
@@ -355,11 +394,21 @@ Format your response as JSON:
 
         overall_analysis = parsed.get("overall_analysis", self._summarize_evaluation(scores))
 
-        return scores, overall_analysis
+        return scores, overall_analysis, "llm"
 
-    def _fallback_evaluation(self) -> tuple[List[CriterionScore], str]:
-        """Return neutral scores when AI evaluation is unavailable."""
-        logger.info("Using fallback evaluation (neutral scores)")
+    def _fallback_evaluation(
+        self,
+    ) -> tuple[List[CriterionScore], str, Literal["llm", "heuristic_fallback"]]:
+        """Return neutral scores when AI evaluation is unavailable.
+
+        Returned tuple's third element is always ``"heuristic_fallback"``
+        so the resulting ``RubricEvaluation`` is structurally
+        distinguishable from a real-LLM-judged evaluation (#471 audit H1).
+        """
+        logger.info(
+            "Using fallback evaluation (neutral 3.0 scores). "
+            "RubricEvaluation.evaluation_method='heuristic_fallback'."
+        )
         scores = [
             CriterionScore(
                 criterion=c.name,
@@ -368,7 +417,7 @@ Format your response as JSON:
             )
             for c in self.criteria
         ]
-        return scores, "Fallback evaluation used - AI unavailable"
+        return scores, "Fallback evaluation used - AI unavailable", "heuristic_fallback"
 
     def _calculate_weighted_score(self, scores: List[CriterionScore]) -> float:
         """Calculate weighted average score."""

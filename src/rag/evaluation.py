@@ -393,7 +393,23 @@ class RAGASEvaluator:
         if os.environ.get("ANTHROPIC_API_KEY"):
             logger.info("Auto-detected Anthropic API key for RAGAS evaluation")
             return "anthropic"
-        logger.warning("No LLM API key found, will use fallback heuristic evaluation")
+        # #471: sharpen "No LLM API key found" — the message lies when
+        # .env contains either key but wasn't loaded into the process.
+        # The returned EvaluationResult still carries
+        # metadata={"evaluation_method": "fallback_heuristic"} which
+        # downstream consumers can use to distinguish synthetic from
+        # real scores, so this is LABEL-SHARPER not REWIRE.
+        from src.utils.env_diagnostics import env_state
+
+        logger.warning(
+            "RAGAS auto-detect found neither OPENAI_API_KEY nor "
+            "ANTHROPIC_API_KEY in os.environ; falling back to heuristic "
+            "evaluator. Diagnostic: %s; %s. If .env contains either key, "
+            "ensure load_dotenv() ran before RAGEvaluationPipeline was "
+            "constructed.",
+            env_state("OPENAI_API_KEY"),
+            env_state("ANTHROPIC_API_KEY"),
+        )
         return "none"
 
     def _check_ragas(self) -> bool:

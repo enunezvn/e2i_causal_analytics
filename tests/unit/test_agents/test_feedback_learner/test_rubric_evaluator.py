@@ -464,12 +464,18 @@ class TestFallbackEvaluation:
     """Test fallback evaluation behavior."""
 
     def test_fallback_returns_neutral_scores(self, evaluator_no_client):
-        """Fallback should return neutral (3.0) scores."""
-        scores, analysis = evaluator_no_client._fallback_evaluation()
+        """Fallback should return neutral (3.0) scores.
+
+        #471: _fallback_evaluation now returns a 3-tuple whose third
+        element is the literal "heuristic_fallback" so downstream
+        RubricEvaluation carries an unambiguous evaluation_method field.
+        """
+        scores, analysis, evaluation_method = evaluator_no_client._fallback_evaluation()
         assert len(scores) == 5
         for score in scores:
             assert score.score == 3.0
         assert "Fallback" in analysis
+        assert evaluation_method == "heuristic_fallback"
 
 
 class TestSummarizeEvaluation:
@@ -561,17 +567,27 @@ class TestParseEvaluationResponse:
     "uncertainty_communication": {"score": 3, "reasoning": "OK", "evidence": "test"}
 }
 ```"""
-        scores, analysis = evaluator_no_client._parse_evaluation_response(response)
+        scores, analysis, evaluation_method = evaluator_no_client._parse_evaluation_response(
+            response
+        )
         assert len(scores) == 5
         assert scores[0].score == 4.0
+        # #471: successful parse returns "llm" evaluation_method.
+        assert evaluation_method == "llm"
 
     def test_parse_invalid_json_fallback(self, evaluator_no_client):
         """Should fallback on invalid JSON."""
         response = "This is not valid JSON at all"
-        scores, analysis = evaluator_no_client._parse_evaluation_response(response)
+        scores, analysis, evaluation_method = evaluator_no_client._parse_evaluation_response(
+            response
+        )
         assert len(scores) == 5
         for score in scores:
             assert score.score == 3.0
+        # #471: parse-failure path propagates the fallback marker so
+        # the resulting RubricEvaluation is distinguishable from a
+        # real LLM evaluation that happened to score 3.0 everywhere.
+        assert evaluation_method == "heuristic_fallback"
 
     def test_parse_clamps_out_of_range_scores(self, evaluator_no_client):
         """Should clamp scores to 1-5 range."""
@@ -583,7 +599,7 @@ class TestParseEvaluationResponse:
     "regulatory_awareness": {"score": 4, "reasoning": "Good"},
     "uncertainty_communication": {"score": 3, "reasoning": "OK"}
 }"""
-        scores, _ = evaluator_no_client._parse_evaluation_response(response)
+        scores, _, _ = evaluator_no_client._parse_evaluation_response(response)
         score_values = {s.criterion: s.score for s in scores}
         assert score_values["causal_validity"] == 5.0  # Clamped to max
         assert score_values["actionability"] == 1.0  # Clamped to min

@@ -6,7 +6,7 @@ Models for evaluation context, criterion scores, and evaluation results.
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -60,7 +60,17 @@ class PatternFlag(BaseModel):
 
 
 class RubricEvaluation(BaseModel):
-    """Complete evaluation result."""
+    """Complete evaluation result.
+
+    The ``evaluation_method`` field distinguishes real LLM-judged scores
+    from heuristic-fallback neutral scores (see #471 audit H1). Pre-#471,
+    ``_fallback_evaluation`` emitted neutral 3.0 scores that were
+    structurally indistinguishable from real 3.0 scores to downstream
+    ``ImprovementDecision`` logic; the field defaults to ``"llm"`` for
+    backward compatibility with existing call sites that always invoke
+    the AI path, and is set to ``"heuristic_fallback"`` whenever the
+    no-key / no-package / parse-failure fallback runs.
+    """
 
     weighted_score: float = Field(ge=1.0, le=5.0)
     criterion_scores: List[CriterionScore]
@@ -69,6 +79,15 @@ class RubricEvaluation(BaseModel):
     pattern_flags: List[PatternFlag] = Field(default_factory=list)
     improvement_suggestion: Optional[str] = None
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+    evaluation_method: Literal["llm", "heuristic_fallback"] = Field(
+        default="llm",
+        description=(
+            "Source of the scores in this evaluation. 'llm' = real "
+            "Anthropic API call; 'heuristic_fallback' = neutral 3.0 "
+            "scores returned because the client was unavailable "
+            "(missing key, missing package, or API error)."
+        ),
+    )
 
     @property
     def is_acceptable(self) -> bool:
