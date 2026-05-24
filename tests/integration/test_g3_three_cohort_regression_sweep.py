@@ -1046,6 +1046,11 @@ class TestOrchestratorThreadingHigh4:
         # without raising _HblpRoutingViolationError.
         assert verdicts, "Expected at least one verdict from Optum orchestrator path"
 
+    # Marked slow (#481): runs two real-orchestrator end-to-end paths
+    # (low-N + high-N) on Optum-shaped synthetic fixtures; observed
+    # ~37s on the CI runner, dominating the lane behind the
+    # synthetic-cohort-growth scenarios.
+    @pytest.mark.slow
     @pytest.mark.asyncio
     async def test_optum_shaped_low_n_threads_to_hblp(
         self, monkeypatch: pytest.MonkeyPatch
