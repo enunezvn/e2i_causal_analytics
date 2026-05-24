@@ -20,11 +20,29 @@ from pathlib import Path
 import pytest
 
 
+def _live_lm_available() -> bool:
+    """Match the project convention from test_miprov2_reproducibility.py:
+    check key SHAPE, not just truthiness. CI may set ANTHROPIC_API_KEY to a
+    placeholder value (any non-empty string) which would otherwise bypass a
+    truthiness-only skip and try to hit Anthropic with a bogus key — that
+    burns wall time, can crash the pytest worker, and surfaces as a failure
+    rather than a skip. Project memory: feedback_live_lm_skip_must_check_key_shape.
+    """
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
+    return key.startswith("sk-ant-")
+
+
 @pytest.mark.live_lm
+@pytest.mark.skipif(
+    not _live_lm_available(),
+    reason=(
+        "live_lm test requires a real sk-ant-* ANTHROPIC_API_KEY. Skipped "
+        "in CI without one. Project convention: check key shape, not just "
+        "truthiness, because CI may set the var to a placeholder value."
+    ),
+)
 def test_enable_evaluator_flag_populates_evaluator_audit(tmp_path: Path) -> None:
     """--enable-evaluator + ANTHROPIC_API_KEY → gated subset non-empty."""
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        pytest.skip("ANTHROPIC_API_KEY not set; live_lm test skipped")
 
     project_root = Path(__file__).resolve().parents[2]
     full_path = project_root / "tests" / "fixtures" / "causal_role_golden_set.json"
