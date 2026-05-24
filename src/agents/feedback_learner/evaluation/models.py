@@ -104,7 +104,13 @@ class RubricEvaluation(BaseModel):
         ]
 
     def to_learning_signal_format(self) -> Dict[str, Any]:
-        """Convert to format for learning_signals table."""
+        """Convert to format for learning_signals table.
+
+        #471 audit H1: emits ``evaluation_method`` so persisted rows
+        retain the heuristic_fallback distinction (otherwise a 3.0
+        neutral fallback is indistinguishable from a real LLM 3.0
+        score at the storage layer).
+        """
         return {
             "rubric_scores": {
                 s.criterion: {"score": s.score, "reasoning": s.reasoning}
@@ -115,6 +121,7 @@ class RubricEvaluation(BaseModel):
                 "decision": self.decision.value,
                 "pattern_flags": [p.model_dump() for p in self.pattern_flags],
                 "suggestion": self.improvement_suggestion,
+                "evaluation_method": self.evaluation_method,
             },
         }
 

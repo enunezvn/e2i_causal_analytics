@@ -167,6 +167,13 @@ class RubricNode:
                     "pattern_flags": [p.model_dump() for p in evaluation.pattern_flags],
                     "suggestion": evaluation.improvement_suggestion,
                     "overall_analysis": evaluation.overall_analysis,
+                    # #471 audit H1: propagate evaluation_method into the
+                    # persisted learning-signal so downstream consumers
+                    # (queries against learning_signals table, dashboards,
+                    # offline analyses) can filter out heuristic_fallback
+                    # rows that would otherwise look like real LLM-judged
+                    # 3.0 scores.
+                    "evaluation_method": evaluation.evaluation_method,
                 },
                 "context_summary": {
                     "user_query": context.user_query[:500],  # Truncate for storage

@@ -153,9 +153,17 @@ class TestExperimentDesignerSLA:
         assert result.get("power_analysis") is not None
 
     @pytest.mark.asyncio
-    async def test_validity_audit_under_30s(self):
+    async def test_validity_audit_under_30s(self, monkeypatch):
         """Test validity audit node completes under 30 seconds."""
         import importlib.util
+
+        # #471: this test loads validity_audit via spec_from_file_location
+        # so the autouse conftest patch on the package-import path does
+        # NOT apply. ValidityAuditNode() now raises RuntimeError when
+        # ANTHROPIC_API_KEY is unset (anti-mocking REWIRE). Enable the
+        # explicit dev-mode mock flag so the construction succeeds, then
+        # patch node.llm with the test's mock response object below.
+        monkeypatch.setenv("EXPERIMENT_DESIGNER_USE_MOCK_LLM", "1")
 
         spec = importlib.util.spec_from_file_location(
             "validity_audit", "src/agents/experiment_designer/nodes/validity_audit.py"

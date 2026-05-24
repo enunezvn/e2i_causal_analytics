@@ -275,7 +275,11 @@ class ValidityAuditNode:
     4. Recommend mitigations
     5. Determine if redesign is needed
 
-    Model: Claude Sonnet 4 (primary), with graceful fallback to mock
+    Model: Claude Sonnet 4 (primary). Fail-closed when ANTHROPIC_API_KEY
+    is missing — raises RuntimeError with diagnostic. Dev-mode mock is
+    available behind explicit ``EXPERIMENT_DESIGNER_USE_MOCK_LLM=1``
+    opt-in flag (#471 anti-mocking REWIRE — pre-fix this was a silent
+    fallback returning plausible-real validity scores).
     Performance Target: <30s for validity audit
     """
 
