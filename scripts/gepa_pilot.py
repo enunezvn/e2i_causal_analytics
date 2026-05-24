@@ -32,6 +32,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+from dotenv import load_dotenv
+
+# Bridge .env → process env BEFORE any DSPy / provider-SDK import that may
+# read ``os.environ`` at import time. Without this call, invoking the
+# script directly from the shell silently no-ops DSPy LM configuration
+# when ``ANTHROPIC_API_KEY`` lives in ``.env`` but is not exported.
+# See GitHub issue #470.
+load_dotenv()
+
 # Add project root to path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
