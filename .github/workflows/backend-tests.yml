@@ -230,18 +230,24 @@ jobs:
     name: Integration Tests
     runs-on: ubuntu-latest
     needs: lint
-    # Sharded 2 ways via pytest-split so each shard runs ~half the suite and
-    # stays well under the cap — addresses #473 (the single-job lane was
-    # creeping toward the timeout ceiling: PR #466 ran 14:02, PR #472 15:08).
-    # ``fail-fast: false`` so one shard's failure still lets the other report.
-    # The 20-min cap is retained as a per-shard safety net. The ``ci-success``
-    # aggregate gates on the matrix result (all shards must pass), so the
-    # required check is unaffected by the per-shard job-name suffixes.
+    # Sharded 4 ways via pytest-split so each shard runs ~a quarter of the
+    # suite and stays well under the cap. Initially sharded N=2 by PR #476
+    # (issue #473), but post-merge main showed 6:41 vs 14:00 imbalance
+    # because pytest-split without a ``.test_durations`` file distributes by
+    # test-id hash — fine for uniform suites, but integration tests have
+    # heavy DB / MLflow / e2e callers that bunch onto one shard. Issue #480
+    # bumps the matrix to N=4: finer hash-partitioning narrows the worst-case
+    # to ~1/4 of total wall, getting the slowest shard under 10 min.
+    # ``fail-fast: false`` so one shard's failure still lets the others
+    # report. The 20-min cap is retained as a per-shard safety net. The
+    # ``ci-success`` aggregate gates on the matrix result (all shards must
+    # pass), so the required check is unaffected by the per-shard job-name
+    # suffixes or the shard count itself.
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3, 4]
     services:
       redis:
         image: redis:7-alpine
@@ -379,7 +385,7 @@ jobs:
             --ignore=tests/integration/test_agents/test_data_preparer/ \
             --ignore=tests/integration/api/test_rbac_endpoints.py \
             -m "not slow" \
-            --splits 2 \
+            --splits 4 \
             --group ${{ matrix.shard }} \
             -n 2 \
             --dist=loadscope \
