@@ -157,10 +157,16 @@ The promotion is staged across four levels of increasing intrusiveness. **Each s
 
 **Acceptance criteria (gate to Stage 4):**
 
-- AC3.1 — At Stage 3 enabled for 30 days against a non-production validation cohort, `precision_instrument` on the gated subset of the golden set is **strictly ≥** the corresponding **gated baseline** measured in #477 (the artifact's `overall.gated.precision_instrument` was 1.0 at n=240 — must remain 1.0 OR a previously-`null` cohort must reach a defined value ≥1.0). The comparison is gated-vs-gated; un-gated precision is not a Stage-3 success condition because Stage 3 only mutates verdicts that survive the evaluator filter.
-- AC3.2 — Per-cohort regression check: no cohort drops more than 1 instrument TP or gains any FP vs the comparable Stage-1 shadow run. (Strict superset of #477's AC3 cohort-regression rule.)
-- AC3.3 — Operator runbook documents the kill-switch + the exact verdict-row query to identify gate-flipped decisions for rollback.
-- AC3.4 — Multi-vendor concern (codex Gate-1 rejection of Anthropic-only correlated failures) addressed: either #242 multi-model evaluator ensemble shipped, OR an explicit written decision from stakeholders that single-vendor risk is acceptable for the specific Stage-3 rule. This is a HARD prerequisite per the producer plan's failure-mode analysis.
+Critical framing note: R1 fires ONLY on `evaluator_audit.satisfied == False` (§4), but §2's `gate=true` subset is defined as `evaluator_audit.satisfied is True`. R1-promoted verdicts are therefore by construction in the **`gate=false` (un-gated) subset**, not the gated subset. AC3.1 must be defined on the subset R1 actually touches, otherwise Stage 3 success can be declared without ever measuring the rule's effect. The AC3.1–AC3.2 definitions below explicitly target the **promoted-subset** (where `gate_rule_fired is not None`) AND preserve the gated-subset as a non-regression guard.
+
+- AC3.1 (promoted-subset metric — the rule actually fires here) — At Stage 3 enabled for 30 days against a non-production validation cohort, the **promoted subset** is defined as: entries where `verdict.gate_rule_fired == "R1"` (i.e., the voter actually substituted severity moderate → high). On this subset, the precision-of-the-promotion-decision is computed against the golden set:
+  - **True positive promotion** = ground truth role is `instrument` AND original worker severity was `moderate` AND new (promoted) severity is `high` (rule correctly escalated a feature whose underlying ground truth supports the drop direction). Note: this AC uses `causal_role == "instrument"` ground truth as the proxy for "feature whose moderate verdict should have been high" because instrument-FN-as-leak is the dominant production-routing risk surface; alternative proxies (e.g. ground truth `causal_role ∈ {confounder, mediator}` for which moderate is correct and promotion is harmful) are tracked separately via AC3.2.
+  - **False positive promotion** = ground truth role is NOT `instrument` AND severity was promoted moderate → high (rule escalated a feature that should have stayed moderate).
+  - **Required threshold:** `promotion_precision = TP_promoted / (TP_promoted + FP_promoted) ≥ 0.80` at the OVERALL cohort, AND no measurable cohort drops below 0.70. (Thresholds are an initial proposal; Stage 1 firing-rate + Stage 2 reviewer-labeled FP data should refine.)
+- AC3.2 (gated-subset non-regression guard — the rule must not damage the existing gated metric) — On the gated subset (still defined as `evaluator_audit.satisfied is True`, **un**affected by R1 because R1 only fires on `satisfied=False`), `precision_instrument` is **strictly ≥** the artifact's `gated_precision_instrument` baseline (1.0 OVERALL/PNH/BC; `null` CSU stays `null`). Mechanically R1 cannot move this number (the subsets are disjoint), so AC3.2 is a sanity check that no other change leaked across — if it fails, something other than R1 broke.
+- AC3.3 — Per-cohort: no cohort gains any FP_promoted; no cohort loses an instrument TP it had at Stage-1 shadow run.
+- AC3.4 — Operator runbook documents the kill-switch + the exact verdict-row query to identify gate-flipped decisions for rollback. SQL one-liner included in the runbook: `SELECT feature_name, severity, gate_rule_fired, worker_severity_pre_gate FROM adaptive_validity_verdicts WHERE gate_rule_fired IS NOT NULL ORDER BY written_at DESC LIMIT 100;`.
+- AC3.5 — Multi-vendor concern (codex Gate-1 rejection of Anthropic-only correlated failures) addressed: either #242 multi-model evaluator ensemble shipped, OR an explicit written decision from stakeholders that single-vendor risk is acceptable for the specific Stage-3 rule. This is a HARD prerequisite per the producer plan's failure-mode analysis.
 
 ### Stage 4 — Hard-gate severity AND routing modulation (long-horizon)
 
@@ -173,7 +179,7 @@ The promotion is staged across four levels of increasing intrusiveness. **Each s
 
 **Acceptance criteria (placeholders; concrete thresholds require Stage 3 operational data):**
 
-- AC4.1 — 90 days of Stage 3 operational data show R1 (and any newly-promoted rule) holding AC3.1 + AC3.2 consistently with no rollback events.
+- AC4.1 — 90 days of Stage 3 operational data show R1 (and any newly-promoted rule) holding AC3.1 + AC3.2 + AC3.3 consistently with no rollback events.
 - AC4.2 — Per-consumer (`role_attribution`, KG mirror) impact analysis on the Stage-3 shadow data confirms the routing-gate's blast radius is bounded and reversible.
 - AC4.3 — `EnsembleDecidedBy` literal in `src/data/kg/types.py` widened to include `"evaluator_gate"` (already a Stage-3 prerequisite — see §5 R-5 mitigation note).
 - AC4.4 — Stakeholder sign-off on remediation-override semantics (a strictly larger blast radius than severity-modulation alone).
@@ -231,7 +237,7 @@ The Haiku evaluator is a smaller model than the Sonnet worker. There is no a-pri
 **Mitigations:**
 - §3 Stage 2 AC2.1 caps FP rate at 10% before any Stage-3 promotion.
 - §3 Stage 3 fail-open default + kill-switch.
-- §3 Stage 3 AC3.2 per-cohort regression check.
+- §3 Stage 3 AC3.3 per-cohort regression check (no FP_promoted gained; no Stage-1 instrument TP lost).
 - §4 R1's scope-limit to moderate→high only (the lowest-stakes severity transition).
 
 ### R-2 — Evaluator fragility / correlated failures
@@ -241,7 +247,7 @@ The Haiku evaluator is a smaller model than the Sonnet worker. There is no a-pri
 The producer plan's codex Gate-1 review (per issue body) flagged that two Anthropic-family models (Sonnet worker + Haiku evaluator) may correlate in their failure modes. A confident-wrong worker on a feature that the evaluator also misunderstands → the evaluator certifies the wrong answer; the gate would be a false confidence boost.
 
 **Mitigations:**
-- §3 Stage 3 AC3.4 — multi-vendor evaluator (#242) is a HARD prerequisite OR an explicit stakeholder-signed risk acceptance.
+- §3 Stage 3 AC3.5 — multi-vendor evaluator (#242) is a HARD prerequisite OR an explicit stakeholder-signed risk acceptance.
 - The audit-only contract is preserved through Stage 2; correlated failure manifests only as suboptimal curation candidates, not as wrong decisions.
 
 ### R-3 — Cost (per-classification Haiku call)
@@ -297,7 +303,7 @@ Each stage's instrumentation is a strict subset of the next. This is a design co
 
 ### A-2 — Multi-model ensemble first, gate second (block on #242)
 
-**Considered, partially accepted:** the multi-vendor evaluator is a HARD prerequisite for Stage 3 per AC3.4. However, blocking Stages 1–2 on it would prevent us from accumulating the very data needed to scope #242 (which rules' FPs would multi-vendor reduce by how much?). Decision: Stages 1–2 proceed; Stage 3 blocks on #242 OR stakeholder risk acceptance.
+**Considered, partially accepted:** the multi-vendor evaluator is a HARD prerequisite for Stage 3 per AC3.5. However, blocking Stages 1–2 on it would prevent us from accumulating the very data needed to scope #242 (which rules' FPs would multi-vendor reduce by how much?). Decision: Stages 1–2 proceed; Stage 3 blocks on #242 OR stakeholder risk acceptance.
 
 ### A-3 — Pure-human gate (defeat the cost-saving point)
 
@@ -314,10 +320,10 @@ Each stage's instrumentation is a strict subset of the next. This is a design co
 The following decisions are out of Claude's authority and must be answered before Stage 1 implementation work begins:
 
 1. **Cost-per-FP-vs-cost-per-FN ratios** (for §3 AC2.3). What is the operating cost of incorrectly dropping a useful feature vs incorrectly retaining a leaky feature? Both have downstream consequences in the commercial-analytics pipeline; the ratio drives which rules pass the cost-benefit gate.
-2. **Multi-vendor evaluator (#242) timeline.** Is shipping a non-Anthropic evaluator a 2026-H2 commitment, a 2026-H1 commitment, or speculative? AC3.4 blocks on either it or an explicit risk-acceptance.
+2. **Multi-vendor evaluator (#242) timeline.** Is shipping a non-Anthropic evaluator a 2026-H2 commitment, a 2026-H1 commitment, or speculative? AC3.5 blocks on either it or an explicit risk-acceptance.
 3. **Rule prioritization.** Stages 1–2 collect data on R1, R2, R3 simultaneously. Which rule does the team want to promote to Stage 3 first if all three pass AC2 thresholds?
 4. **Shadow-data retention.** How long should the shadow column rows be retained? 90 days for Stage-2 analysis is the assumed default; PII / log-retention policies may constrain this.
-5. **Acceptable per-cohort regression at Stage 3.** AC3.2 says "no cohort drops more than 1 instrument TP." Is that the right threshold? At the n=91 golden-set scale, 1 TP is roughly 1 percentage point of cohort precision — large enough to matter, small enough to be noise.
+5. **Acceptable per-cohort regression at Stage 3.** AC3.3 says "no cohort loses a Stage-1 instrument TP." Is zero loss the right threshold? At the n=91 golden-set scale, 1 TP is roughly 1 percentage point of cohort precision — large enough to matter, small enough to be noise. Also: AC3.1's promotion-precision thresholds (0.80 OVERALL, 0.70 per cohort) are initial proposals; revisit after Stage 1 data.
 6. **Promotion-as-codification of an empirical pattern, or as a *change*?** If Stage-1 data shows R1 would fire on >50% of moderate-severity verdicts, R1 is no longer a "soft promotion" — it's a significant policy shift. Is there a firing-rate ceiling above which a different governance review is required?
 
 ---
@@ -333,16 +339,17 @@ The following decisions are out of Claude's authority and must be answered befor
 | 2 | AC2.1 | Each Stage-3-candidate rule has FP-rate < 10% on human-reviewed sample |
 | 2 | AC2.2 | Inter-rater Cohen's κ ≥ 0.6 on 100-sample blind label |
 | 2 | AC2.3 | Per-rule cost-benefit positive |
-| 3 | AC3.1 | Gated `precision_instrument` ≥ #477 baseline (1.000) |
-| 3 | AC3.2 | Per-cohort: no cohort loses >1 instrument TP or gains any FP |
-| 3 | AC3.3 | Kill-switch + rollback query documented in operator runbook |
-| 3 | AC3.4 | #242 multi-vendor evaluator shipped OR signed stakeholder risk acceptance |
+| 3 | AC3.1 | Promoted-subset (`gate_rule_fired == "R1"`): `promotion_precision ≥ 0.80` OVERALL, ≥0.70 per cohort |
+| 3 | AC3.2 | Gated-subset (`evaluator_satisfied=True`) non-regression: `precision_instrument ≥` #477 artifact baseline |
+| 3 | AC3.3 | Per-cohort: no FP_promoted gained; no Stage-1 instrument TP lost |
+| 3 | AC3.4 | Kill-switch + rollback SQL query documented in operator runbook |
+| 3 | AC3.5 | #242 multi-vendor evaluator shipped OR signed stakeholder risk acceptance |
 | 4 | AC4.1 | 90 days of Stage-3 operational data with no rollback events |
 | 4 | AC4.2 | Per-consumer routing-gate impact analysis bounded |
 | 4 | AC4.3 | `EnsembleDecidedBy` literal widened to include `"evaluator_gate"` |
 | 4 | AC4.4 | Stakeholder sign-off on remediation-override semantics |
 
-The original issue body's three "decision document" requirements are addressed as: (a) what gate semantics → §3 + §4; (b) multi-vendor dependency → R-2 + AC3.4; (c) cost/latency budget → R-3 + AC1.4; (d) rollback story → §3 Stage 3 "Rollback story" + AC3.3.
+The original issue body's three "decision document" requirements are addressed as: (a) what gate semantics → §3 + §4; (b) multi-vendor dependency → R-2 + AC3.5; (c) cost/latency budget → R-3 + AC1.4; (d) rollback story → §3 Stage 3 "Rollback story" + AC3.4.
 
 The original issue's two acceptance constraints (ADDITIVE not REPLACEMENT; no regression on 25/25 producer tests) are upheld by §6's strict-subset design and §5 R-5 mitigation.
 
