@@ -1,6 +1,7 @@
 """Node functions for model_trainer agent."""
 
 from .apply_resampling import apply_resampling
+from .augment_training_data import augment_training_data
 from .checkpointer import list_checkpoints, load_checkpoint, save_checkpoint
 from .detect_class_imbalance import detect_class_imbalance
 from .evaluator import evaluate_model
@@ -23,6 +24,7 @@ from .survival_model import (
 
 __all__ = [
     "apply_resampling",
+    "augment_training_data",
     "check_qc_gate",
     "derive_survival_target",
     "detect_class_imbalance",

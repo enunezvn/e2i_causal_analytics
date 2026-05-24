@@ -258,6 +258,9 @@ class ModelTrainerAgent:
             "validation_data": input_data.get("validation_data") or {},
             "test_data": input_data.get("test_data") or {},
             "holdout_data": input_data.get("holdout_data") or {},
+            # Opt-in synthetic augmentation: path to a reviewed Phase-3 preview
+            # cohort (.npz). None → ``augment_training_data`` is a no-op.
+            "augmentation_data_path": input_data.get("augmentation_data_path"),
             # Configurable minimum samples per split (consumed by split_enforcer)
             "min_samples_per_split": input_data.get("min_samples_per_split", 10),
             # Day-3 fold-iteration random_state plumbing (W3-lite Day 3 +
@@ -550,6 +553,18 @@ class ModelTrainerAgent:
             "resampling_strategy": resampling_strategy,
             "original_distribution": original_distribution,
             "resampled_distribution": resampled_distribution,
+            # Synthetic augmentation audit (opt-in; Phase 3 preview consumption).
+            # ``applied`` is False both when not requested and when refused on a
+            # schema mismatch (see ``skip_reason``). Synthetic rows are added to
+            # the training split only — never validation/test/holdout.
+            "training_augmentation": {
+                "applied": bool(final_state.get("augmentation_applied", False)),
+                "n_original": final_state.get("augmentation_n_original"),
+                "n_synthetic": final_state.get("augmentation_n_synthetic"),
+                "source": final_state.get("augmentation_source"),
+                "audit_fingerprint": final_state.get("augmentation_fingerprint"),
+                "skip_reason": final_state.get("augmentation_skip_reason"),
+            },
             # Database (updated after persistence)
             "persisted_to_db": False,
             # Context
