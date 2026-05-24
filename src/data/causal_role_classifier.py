@@ -3624,9 +3624,9 @@ def build_compile_set() -> list[dspy.Example]:
             recommended_remediation="drop",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
         # PMID: 37529919 — Real-world palbociclib combos (DOI:10.2217/fon-2023-0176)
-        # Relabeled iter-0 HIGH-2: renamed from practice_volume_cdk46i_prescriptions_prior_year_tertile_bc
-        # to practice_cdk46i_prescribing_preference_tertile_prior_year_bc; mechanism reframed from
-        # volume/capacity pattern to Brookhart 2006 physician prescribing preference IV.
+        # Reframed iter-0 HIGH-2: mechanism rewritten from volume/capacity pattern to
+        # Brookhart 2006 physician prescribing preference IV (PMID 16685206). Feature renamed
+        # to ..._prescribing_preference_tertile_... to drop volume framing.
         dspy.Example(
             feature_name="practice_cdk46i_prescribing_preference_tertile_prior_year_bc",
             derivation_pseudocode=(
@@ -3755,9 +3755,10 @@ def build_compile_set() -> list[dspy.Example]:
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
         # PMID: 39442617 — NATALEE final iDFS Ann Oncol 2024 (DOI:10.1016/j.annonc.2024.10.015)
         # + Brookhart 2006 physician prescribing preference IV (PMID 16685206)
-        # Replaced iter-0 HIGH-5: medicine_access_program_enrollment_indicator_preindex_bc was
-        # an access-based IV with no defensible reframing (MAP enrollment directly funds treatment
-        # access AND determines outcome via adherence support — hopelessly access-mediated).
+        # Replaced iter-0 HIGH-5: prior MAP-enrollment IV was access-based with no defensible
+        # reframing (enrollment directly funds treatment access AND determines outcome via
+        # adherence support — hopelessly access-mediated). Dropped; this label-expansion
+        # Brookhart-Wang short-term IV is the substitute.
         # Replaced with NATALEE adjuvant label-expansion Brookhart-Wang short-term IV.
         dspy.Example(
             feature_name="oncologist_first_cdk46i_initiation_within_180d_post_kisqali_label_expansion_bc",
