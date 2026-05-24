@@ -97,7 +97,7 @@ New `learning_curve.py` node, triggered after training when `success_criteria_me
 
 **Cost controls:** k=7 (not 12), single-fit per bucket (no nested HPO), 3-min walltime cap, INCONCLUSIVE verdict on cap-out.
 
-**Causal v2:** uses `synthetic_v2` with `TRUE_ATE` for bootstrap-style CI-width estimation.
+**Causal branch (as merged):** bootstraps ATE CI width directly from the train set `(X_train, y_train, treatment_column)` using a difference-in-means estimator at each bucket size — the spec's `synthetic_v2` + `TRUE_ATE` route was NOT taken. See `_bootstrap_ate_ci_width` in `src/agents/ml_foundation/model_trainer/nodes/learning_curve.py:427` and `proxy_model="dim-bootstrap"` in the report payload.
 
 ### PR #475 — Phase 3: Synthetic preview wiring (MERGED 2026-05-24)
 

@@ -120,3 +120,33 @@ def test_ci_timeout_fix_recorded(doc_text: str) -> None:
     assert ("15→20" in doc_text) or ("integration-tests" in doc_text and "timeout" in doc_text), (
         "Record the integration-tests timeout diagnosis + fix from PR #472"
     )
+
+
+def test_phase2_causal_branch_does_not_misclaim_synthetic_v2(doc_text: str) -> None:
+    """Codex caught this: an earlier draft kept the spec sentence
+    'Causal v2: uses synthetic_v2 with TRUE_ATE for bootstrap-style CI-width
+    estimation' even after the Phase 2 section was flipped to MERGED. The
+    merged learning_curve.py uses neither — see _bootstrap_ate_ci_width
+    (difference-in-means on the train set). Asserting the false sentence is
+    absent prevents future merged-section-with-stale-spec-detail drift."""
+    forbidden = "uses `synthetic_v2` with `TRUE_ATE` for bootstrap-style CI-width estimation"
+    assert forbidden not in doc_text, (
+        "Phase 2 causal branch must describe the merged dim-bootstrap path, "
+        "not the rejected synthetic_v2+TRUE_ATE spec."
+    )
+    # Cross-check against the real implementation: the merged file must
+    # contain _bootstrap_ate_ci_width and NOT use TRUE_ATE in this module.
+    learning_curve_path = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "agents"
+        / "ml_foundation"
+        / "model_trainer"
+        / "nodes"
+        / "learning_curve.py"
+    )
+    src = learning_curve_path.read_text(encoding="utf-8")
+    assert "_bootstrap_ate_ci_width" in src, "merged Phase 2 must define the bootstrap helper"
+    assert "TRUE_ATE" not in src, (
+        "merged Phase 2 does not use TRUE_ATE; if it now does, update the doc"
+    )
