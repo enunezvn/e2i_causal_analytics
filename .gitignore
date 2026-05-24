@@ -216,3 +216,8 @@ backups/
 data/kg_cache/*.json
 !data/kg_cache/.gitkeep
 .codex
+
+# Layer-4 A/B compile intermediates (only the winning artifact is committed
+# as artifacts/dspy/causal_role_classifier.json; intermediate Bootstrap/MIPROv2
+# compile outputs at n=200 stay local-only).
+artifacts/dspy/cr_*_n200.json

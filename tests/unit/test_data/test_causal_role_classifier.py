@@ -1391,3 +1391,25 @@ def test_compile_set_disjoint_from_literature_golden_set():
             f"compile-set feature {example.feature_name!r} also appears in "
             "literature golden set — leakage would inflate measured precision."
         )
+
+
+def test_ac3_verdict_n200_artifact_present_and_valid_schema():
+    """The committed AC3 verdict JSON must validate against the schema."""
+    import json
+    from pathlib import Path
+
+    p = Path("artifacts/dspy/ac3_verdict_n200.json")
+    assert p.exists(), "AC3 verdict JSON missing — Task 9 not completed"
+
+    v = json.loads(p.read_text())
+    assert v["schema_version"] == 1
+    assert "miprov2_wins" in v
+    assert "branch_decision" in v
+    assert v["compile_seed"] == 42
+    assert v["golden_set_n_entries"] == 91
+    assert isinstance(v["rows"], list)
+    assert len(v["rows"]) == 4  # OVERALL + 3 cohorts
+    for row in v["rows"]:
+        assert "cohort" in row
+        assert "bootstrap_gated_precision_instrument" in row
+        assert "miprov2_gated_precision_instrument" in row
