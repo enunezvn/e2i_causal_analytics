@@ -159,6 +159,85 @@ class CausalRoleClassifier(dspy.Module):
         )
 
 
+_COHORT_EXPLICIT_TAG_MAP: dict[str, str] = {
+    "csu": "CSU",
+    "CSU": "CSU",
+    "bc": "BC",
+    "HR+_BC": "BC",
+    "HR+_BreastCancer": "BC",
+    "pnh": "PNH",
+    "PNH": "PNH",
+}
+
+_SYNTHETIC_OR_OTHER_EXPLICIT_PREFIXES: tuple[str, ...] = (
+    "synthetic_",
+    "hypertension",
+    "Hypertension",
+)
+
+_COHORT_KEYWORD_HEURISTICS: tuple[tuple[str, str], ...] = (
+    ("PNH", "PNH"),
+    ("Fabhalta", "PNH"),
+    ("iptacopan", "PNH"),
+    ("paroxysmal nocturnal hemoglobinuria", "PNH"),
+    ("Kisqali", "BC"),
+    ("ribociclib", "BC"),
+    ("HR+_BreastCancer", "BC"),
+    ("HR+_BC", "BC"),
+    ("breast cancer", "BC"),
+    ("CSU", "CSU"),
+    ("ConcertAI CSU", "CSU"),
+    ("chronic spontaneous urticaria", "CSU"),
+    ("Remibrutinib", "CSU"),
+    ("remibrutinib", "CSU"),
+    ("Hypertension", "synthetic_or_other"),
+    ("hypertension", "synthetic_or_other"),
+    ("synthetic", "synthetic_or_other"),
+)
+
+
+def _canonical_cohort(example: "dspy.Example") -> str:
+    """Return the canonical cohort tag for a compile-set example.
+
+    Resolution order:
+    1. Explicit ``cohort=<token>`` substring in ``dataset_context`` —
+       normalized via ``_COHORT_EXPLICIT_TAG_MAP`` /
+       ``_SYNTHETIC_OR_OTHER_EXPLICIT_PREFIXES``.
+    2. Keyword heuristics (PNH/Fabhalta, Kisqali/BC, CSU/Remibrutinib,
+       synthetic, etc.) against the full ``dataset_context`` string.
+    3. Default: ``"synthetic_or_other"`` for anything otherwise
+       unclassifiable.
+
+    Never raises — the AC3 per-cohort accounting tolerates a
+    ``synthetic_or_other`` bucket for unclassifiable entries; the
+    bucket-1..4 curation pass will tag new entries explicitly.
+    """
+    ctx = getattr(example, "dataset_context", "") or ""
+
+    # Priority 1: explicit cohort=<token>
+    marker = "cohort="
+    idx = ctx.find(marker)
+    if idx >= 0:
+        start = idx + len(marker)
+        end = start
+        while end < len(ctx) and ctx[end] not in (";", " ", "\n", "\t"):
+            end += 1
+        raw = ctx[start:end].strip()
+        if raw in _COHORT_EXPLICIT_TAG_MAP:
+            return _COHORT_EXPLICIT_TAG_MAP[raw]
+        if any(raw.startswith(p) for p in _SYNTHETIC_OR_OTHER_EXPLICIT_PREFIXES):
+            return "synthetic_or_other"
+        # Unknown explicit tag — fall through to keyword heuristics.
+
+    # Priority 2: keyword heuristics in full dataset_context
+    for keyword, cohort in _COHORT_KEYWORD_HEURISTICS:
+        if keyword in ctx:
+            return cohort
+
+    # Priority 3: default
+    return "synthetic_or_other"
+
+
 def build_compile_set() -> list[dspy.Example]:
     """Build the DSPy compile set: 50 curated examples covering all 6 roles.
 
