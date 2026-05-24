@@ -133,7 +133,12 @@ class SufficiencyConfig(BaseModel):
     epv_floor: int | None = None
     absolute_floor: int | None = None
     observational_inflation: float | None = None
-    # Hotfix F5: tightened to gt=0, lt=1 (was unbounded → accepted NaN/negative/>=1)
+    # Hotfix F5+R2.2: gt=0, lt=1e6. Binary target_mde is an absolute risk
+    # difference in (0,1) (re-validated per-outcome_type at the resolver);
+    # continuous target_mde is a raw effect size in outcome units (may exceed 1,
+    # so the schema bound is deliberately loose and the resolver enforces the
+    # outcome-specific bound). Round-1 F5 first set lt=1, which R2.2 widened
+    # because it wrongly rejected legitimate continuous-outcome effect sizes.
     target_mde: float | None = None
     baseline_rate: float | None = None
     event_rate: float | None = None
@@ -151,7 +156,10 @@ class SufficiencyConfig(BaseModel):
                                "literature_default"] | None = None
 ```
 
-Pipeline-level overrides via `PipelineConfig.force_low_power_run` and `PipelineConfig.sufficiency_strictness_preset` propagate into `scope_spec.sufficiency` at pipeline init time (per-key caller values win).
+Pipeline-level overrides via `PipelineConfig.force_low_power_run` and `PipelineConfig.sufficiency_strictness_preset` propagate into `scope_spec.sufficiency` at pipeline init time. The merge contract is **not** uniform per-key (hotfix R2.1):
+
+- `force_low_power_run` is **strict pipeline-wins**. The orchestrator owns this pharma-safety flag; a caller-supplied `scope_spec.sufficiency.force_low_power_run` cannot widen *or* narrow it. If the pipeline value is `False` (the safe default) and the caller passed `True`, the caller value is overridden to `False` with a loud WARN for auditability. To enable low-power runs, set the flag at the `PipelineConfig` boundary, never via `scope_spec`.
+- `sufficiency_strictness_preset` is **caller-wins**: a caller that set `strict` (e.g. for regulatory submission) is not silently downgraded; the pipeline-level preset only fills the gap when the caller left it unset.
 
 ## Open follow-ups
 

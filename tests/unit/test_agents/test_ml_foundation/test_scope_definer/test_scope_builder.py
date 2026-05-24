@@ -833,3 +833,116 @@ async def test_r22_regression_with_large_sigma_outcome_survives_schema():
     schema = ScopeSpecSchema(**scope_spec_dict)
     assert schema.sufficiency is not None
     assert schema.sufficiency.target_mde == 2.0
+
+
+# ===========================================================================
+# Round-3 finding: END-TO-END audit chain. The R2.3 round-trip tests above
+# call resolve_target_mde directly; they never exercise the sufficiency_check
+# NODE (_extract_sufficiency_config + the per-classifier mde_assumption
+# construction) that actually copies the provenance into the persisted
+# report.mde_assumption_used['source']. These two tests drive the full
+# build_scope_spec -> run_sufficiency_check -> report chain.
+# ===========================================================================
+
+
+def _e2e_binary_df(n: int, prevalence: float, n_features: int):
+    import numpy as np
+
+    rng = np.random.default_rng(seed=7)
+    data = {f"x{i}": rng.normal(size=n) for i in range(n_features)}
+    y = np.zeros(n, dtype=int)
+    y[: int(round(n * prevalence))] = 1
+    rng.shuffle(y)
+    data["y"] = pd.Series(y)
+    return pd.DataFrame(data)
+
+
+@pytest.mark.asyncio
+async def test_e2e_audit_chain_binary_source_flows_to_report():
+    """build_scope_spec stamps ``computed_from_data`` at the scope boundary;
+    the node must carry that provenance into report.mde_assumption_used.
+    """
+    from uuid import uuid4
+
+    from src.agents.ml_foundation.data_preparer.nodes.sufficiency_check import (
+        run_sufficiency_check,
+    )
+
+    scope_result = await build_scope_spec(
+        {
+            "inferred_problem_type": "binary_classification",
+            "inferred_target_variable": "y",
+            "target_outcome": "Test",
+            "brand": "Test",
+            "baseline_rate": 0.30,
+        }
+    )
+    sufficiency = scope_result["scope_spec"]["sufficiency"]
+    assert sufficiency["target_mde_source"] == "computed_from_data"
+
+    node_state = {
+        "audit_workflow_id": uuid4(),
+        "experiment_id": "test-exp",
+        "scope_spec": {
+            "problem_type": "binary_classification",
+            "prediction_target": "y",
+            "experiment_id": "test-exp",
+            "sufficiency": sufficiency,
+        },
+        "train_df": _e2e_binary_df(4000, 0.30, 8),
+        "target_rate": 0.30,
+        "blocking_issues": [],
+    }
+    report = (await run_sufficiency_check(node_state))["sufficiency_report"]
+    assert report["mde_assumption_used"]["source"] == "computed_from_data", (
+        "audit-chain break: scope_builder stamped 'computed_from_data' but the "
+        f"node reported {report['mde_assumption_used']['source']!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_e2e_audit_chain_causal_defer_no_fake_user_override():
+    """R2.4 end-to-end: a causal scope with NO user override defers
+    target_mde at scope time; the node then resolves from loaded data and
+    must record a GENUINE provenance — never a fake ``user_override``.
+    """
+    from uuid import uuid4
+
+    from src.agents.ml_foundation.data_preparer.nodes.sufficiency_check import (
+        run_sufficiency_check,
+    )
+
+    scope_result = await build_scope_spec(
+        {
+            "inferred_problem_type": "causal_inference",
+            "inferred_target_variable": "y",
+            "target_outcome": "Test",
+            "brand": "Test",
+        }
+    )
+    sufficiency = scope_result["scope_spec"].get("sufficiency") or {}
+    # Defer contract: no scope-time target_mde, source explicitly None.
+    assert sufficiency.get("target_mde") is None
+    assert sufficiency.get("target_mde_source") is None
+
+    node_state = {
+        "audit_workflow_id": uuid4(),
+        "experiment_id": "test-exp",
+        "scope_spec": {
+            "problem_type": "causal_inference",
+            "prediction_target": "y",
+            "experiment_id": "test-exp",
+            "sufficiency": sufficiency,
+        },
+        "train_df": _e2e_binary_df(3000, 0.30, 6),
+        "target_rate": 0.30,
+        "blocking_issues": [],
+    }
+    report = (await run_sufficiency_check(node_state))["sufficiency_report"]
+    mde = report.get("mde_assumption_used")
+    assert mde is not None, "causal node should populate mde_assumption_used"
+    assert mde["source"] != "user_override", (
+        "R2.4 regression: causal scope with NO user override produced a FAKE "
+        "'user_override' audit label"
+    )
+    assert mde["source"] in ("computed_from_data", "literature_default")
