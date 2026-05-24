@@ -79,7 +79,7 @@ _KNOWN_VERDICT_KEYS: frozenset[str] = frozenset(
         # flags emitted by ``_ensemble_to_legacy_dict``. Registered here so
         # they parse onto VerdictRecord (and feed the mirror's dedicated
         # columns) without tripping the unknown-verdict-key WARN. Additive
-        # at schema 1.1+ — absent on pre-#240 sidecars (surface as None).
+        # at schema 1.2+ — absent on pre-#240 sidecars (surface as None).
         "would_promote_severity",
         "would_flag_for_review",
         "rationale_incomplete_flag",

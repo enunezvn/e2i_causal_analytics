@@ -162,7 +162,7 @@ def test_case_4_manifest_overrides_llm_unsatisfied() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Case 5 — Sidecar round-trip with schema_version "1.1"
+# Case 5 — Sidecar round-trip with schema_version "1.2"
 # ---------------------------------------------------------------------------
 
 
@@ -206,12 +206,12 @@ def test_case_5_sidecar_round_trip(tmp_path: Path, monkeypatch, caplog) -> None:
         reader = SidecarReader(artifacts_dir=tmp_path)
         records = list(reader.iter_verdict_records())
 
-    # No schema-version WARN on "1.1" (matches MAJOR=1).
+    # No schema-version WARN on "1.2" (matches MAJOR=1).
     schema_warns = [
         r for r in caplog.records if "schema_version" in r.message and r.levelname == "WARNING"
     ]
     assert schema_warns == [], (
-        f"reader emitted unexpected schema_version warns for 1.1: {[w.message for w in schema_warns]}"
+        f"reader emitted unexpected schema_version warns for 1.2: {[w.message for w in schema_warns]}"
     )
 
     by_feature = {r.feature: r for r in records}
