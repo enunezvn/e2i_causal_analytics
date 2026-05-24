@@ -1,6 +1,6 @@
 # Data-Sufficiency Diagnostics Rollout
 
-**Status:** Phase 0 merged (PR #460). Phase 1 (PR #462) blocked on CI Integration Tests failure.
+**Status:** COMPLETE — all phases merged. Phase 0 (PR #460), Phase 1 (PR #462, finalized in PR #472), Phase 2 (PR #463, +hotfix #466), Phase 3 (PR #475). Rollout delivered 2026-05-24.
 **Owner:** etn3724@gmail.com
 **Started:** 2026-05-22
 **Source PDF:** `de3b5738-Should_you_gather_more_data.pdf` (learning-curve diagnostic)
@@ -51,9 +51,9 @@ Foundational utility modules + Tier 3 PowerAnalysisNode refactor. Zero behavior 
 
 **Tests:** 88 new + 22 existing PowerAnalysisNode + 395 experiment_designer suite — all green.
 
-### PR #462 — Phase 1: Pre-flight check in DataPreparer (IN PROGRESS — CI BLOCKED)
+### PR #462 — Phase 1: Pre-flight check in DataPreparer (MERGED)
 
-**Status:** Unit tests all green locally (29 new), but CI Integration Tests failing reproducibly. Diagnosis blocked on log access.
+**Status:** Merged. The 20 codex-review findings were fixed in PR #472, which also cleared the CI red: the `integration-tests` lane was hitting its 15-min timeout (an infra limit, not a logic failure), so the cap was raised to 20 min. The lane was later sharded 2 ways (PR #476, #473) to keep it bounded as the suite grows.
 
 **Files created:**
 - `src/agents/ml_foundation/data_preparer/nodes/sufficiency_check.py` — new node runs post-`compute_baseline_metrics`, pre-`kg_role_enrichment`; computes verdict; writes into qc_report plumbing
@@ -82,7 +82,7 @@ Foundational utility modules + Tier 3 PowerAnalysisNode refactor. Zero behavior 
 
 **Report contents:** verdict + verdict_rationale + resolved_thresholds (each with `source` + `citation`) + detectable_mde_at_current_n (Strategy A) + sensitivity_grid across 3 candidate MDEs (Strategy C) + mde_assumption_used (Strategy B) + human_readable_summary.
 
-### PR #463 — Phase 2: Post-training learning curve in ModelTrainer (NOT STARTED)
+### PR #463 — Phase 2: Post-training learning curve in ModelTrainer (MERGED — +hotfix #466)
 
 New `learning_curve.py` node, triggered after training when `success_criteria_met=False` (or always-on via `PipelineConfig.always_run_learning_curve=True`). The technique from the source PDF:
 
@@ -97,15 +97,20 @@ New `learning_curve.py` node, triggered after training when `success_criteria_me
 
 **Causal v2:** uses `synthetic_v2` with `TRUE_ATE` for bootstrap-style CI-width estimation.
 
-### PR #464 — Phase 3: Synthetic preview wiring (NOT STARTED)
+### PR #475 — Phase 3: Synthetic preview wiring (MERGED 2026-05-24)
 
-`data_preparer/adapters/synthetic_preview.py` — triggered when `adaptive_verdict="INSUFFICIENT_TRAINING_DATA"` AND `PipelineConfig.synthetic_preview_on_insufficient=True` (opt-in, default False).
+> The original plan reused the "#464" number for an unrelated chore (`64aeffd8`), so Phase 3 shipped as **PR #475**.
 
-Routes:
-- Predictive → `E2IDataGenerator.generate_all(n=recommended)` from `src/ml/data_generator.py`
-- Causal → `generate_scenario(scenario, n=recommended)` from `src/ml/synthetic_v2/api.py`
+`data_preparer/adapters/synthetic_preview.py` — `build_synthetic_preview(...)`, wired into `pipeline.py` via `_maybe_build_synthetic_preview()`. Opt-in: fires only when `PipelineConfig.synthetic_preview_on_insufficient=True` (default False), a `synthetic_preview_scenario` is set, AND the post-training learning curve produced `recommended_additional_samples > 0`.
 
-**Critical invariant:** does NOT auto-mix into training. Saves preview to `pipeline_artifacts/synthetic_preview_<workflow_id>/` and attaches metadata to `PipelineResult.synthetic_preview`. Operator must explicitly pass it via `PipelineConfig.augmentation_data_path` to use.
+**Built against the real APIs — the original spec was revised during implementation** because it referenced APIs that don't exist (per the repo's REASON-BEFORE-RULES + anti-mocking discipline; building it literally would have produced a plausible-but-nonfunctional adapter):
+
+- **Generator:** all previews use `synthetic_v2.generate_scenario(scenario, seed, n_total)` → `SyntheticDataset`. The spec's predictive route `E2IDataGenerator.generate_all(n=...)` was the wrong tool — `E2IDataGenerator` is a fixed-volume platform-DB seeder (`export_to_json` only), not a sized `(X, y)` cohort generator.
+- **Trigger:** the real post-training `recommended_additional_samples` signal. The spec's `adaptive_verdict="INSUFFICIENT_TRAINING_DATA"` enum does not exist.
+- **Scenario:** the operator sets `PipelineConfig.synthetic_preview_scenario` (one of the 4 real `synthetic_v2` scenarios); there is no context→scenario auto-inference.
+- Preview size clamped to `[200, 20000]`; adapter failures are advisory (recorded on the result, never raised).
+
+**Critical invariant (held):** does NOT auto-mix into training. Writes the cohort (`.npz`) + audit metadata (`.json`) to `pipeline_artifacts/synthetic_preview_<workflow_id>/` and attaches metadata to `PipelineResult.synthetic_preview` with `auto_mixed_into_training=False`. Actually consuming the preview for augmentation is a deliberate non-goal of this rollout (opt-in only) and is left as future work.
 
 ## Threshold catalog
 
@@ -163,8 +168,11 @@ Pipeline-level overrides via `PipelineConfig.force_low_power_run` and `PipelineC
 
 ## Open follow-ups
 
-- **PR #462 CI failure** (current blocker): Integration Tests reproducibly failing on commits `07bf8faf` and `14903a2b` (empty retrigger). Local CI-equivalent sweep ran clean — failure mode not identified yet. Need access to failing log to diagnose.
-- **PR 3+4 sequencing:** wait for PR 2 merge before starting; PR 2 modules are the foundation for PR 3's learning curve and PR 4's synthetic preview wiring.
+All rollout phases are merged. The remaining items are out of the original scope:
+
+- **#473 — integration-tests lane:** sharded 2 ways (PR #476) so it stays bounded as the suite grows; the lower-priority items (move the heaviest tests to `slow-tests.yml`; investigate D6 per-pipeline overhead) remain open.
+- **Yang 2025 v2 causal-power decomposition** (deferred "Phase 2 v2" per Non-goals): the full causal sample-size decomposition from arxiv:2501.11181 was intentionally deferred. Not yet scheduled.
+- **Preview → augmentation consumption:** producing the preview (Phase 3) is done; an operator opt-in path to actually train on the preview cohort is a non-goal of this rollout and would be a separate future effort.
 
 ## References
 
