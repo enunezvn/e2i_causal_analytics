@@ -186,7 +186,9 @@ def write_adaptive_verdicts_sidecar(state: Dict[str, Any]) -> Path | None:
             # (would_promote_severity / would_flag_for_review /
             # rationale_incomplete_flag) per the minor-bump-on-additive
             # policy above. Still MAJOR=1.
-            "schema_version": "1.2",
+            # 1.3 (Issue #240 Stage 3): additive env-gated soft-gate keys
+            # (gate_rule_fired / worker_severity_pre_gate). Still MAJOR=1.
+            "schema_version": "1.3",
             "experiment_id": state.get("experiment_id"),
             "data_source": state.get("data_source"),
             "written_at": ts,

@@ -694,7 +694,8 @@ def test_sidecar_payload_includes_schema_version_v1(tmp_path, monkeypatch):
 
     Bumped to ``"1.1"`` by Phase 1 of Issue #237 (additive
     ``role_attributions`` key), then to ``"1.2"`` by Issue #240 Stage 1
-    (additive shadow promotion keys). Reader still pins MAJOR=1, so the
+    (additive shadow promotion keys), then to ``"1.3"`` by Issue #240
+    Stage 3 (additive soft-gate keys). Reader still pins MAJOR=1, so the
     forward-compat contract is unchanged."""
     from src.agents.ml_foundation.data_preparer.graph import (
         write_adaptive_verdicts_sidecar,
@@ -719,8 +720,8 @@ def test_sidecar_payload_includes_schema_version_v1(tmp_path, monkeypatch):
     path = write_adaptive_verdicts_sidecar(state)
     assert path is not None
     payload = json.loads(Path(path).read_text())
-    assert payload.get("schema_version") == "1.2", (
-        f"producer must emit top-level schema_version='1.2'; got {payload.get('schema_version')!r}"
+    assert payload.get("schema_version") == "1.3", (
+        f"producer must emit top-level schema_version='1.3'; got {payload.get('schema_version')!r}"
     )
 
 
@@ -793,15 +794,15 @@ def test_reader_warns_on_unknown_schema_version_major(tmp_path, caplog):
     # ``"2.0"`` AND the reader's expected current version. Without this assertion
     # the test would still pass if the WARN stopped naming the reader's
     # expected version, which is the actionable half of the message.
-    # Issue #240 Stage 1: reader's current version bumped to "1.2"
+    # Issue #240 Stage 3: reader's current version bumped to "1.3"
     # (still MAJOR=1).
     matches = [
         rec
         for rec in caplog.records
-        if "schema_version" in rec.message and "2.0" in rec.message and "1.2" in rec.message
+        if "schema_version" in rec.message and "2.0" in rec.message and "1.3" in rec.message
     ]
     assert matches, (
-        "expected unknown-major WARN naming both '2.0' (payload) and '1.2' (reader); "
+        "expected unknown-major WARN naming both '2.0' (payload) and '1.3' (reader); "
         f"got: {[r.message for r in caplog.records]}"
     )
 

@@ -188,6 +188,8 @@ def _verdict_record_with_shadow(
     would_promote_severity,
     would_flag_for_review,
     rationale_incomplete_flag,
+    gate_rule_fired=None,
+    worker_severity_pre_gate=None,
 ):
     from datetime import datetime, timezone
     from pathlib import Path
@@ -215,6 +217,8 @@ def _verdict_record_with_shadow(
         would_promote_severity=would_promote_severity,
         would_flag_for_review=would_flag_for_review,
         rationale_incomplete_flag=rationale_incomplete_flag,
+        gate_rule_fired=gate_rule_fired,
+        worker_severity_pre_gate=worker_severity_pre_gate,
     )
 
 
@@ -285,6 +289,52 @@ class TestUpsertShadowColumns:
 
         _sql, params = cur.calls[0]
         assert _UPSERT_SQL.count("%s") == len(params)
-        # The last three positional params are the shadow columns; all None
-        # when no rule fired (column stays NULL).
-        assert params[-3:] == (None, None, None)
+        # The last two positional params are the Stage-3 gate columns and
+        # the three before them are the Stage-1 shadow columns; all None when
+        # nothing fired (columns stay NULL). Five trailing None params.
+        assert params[-5:] == (None, None, None, None, None)
+
+
+class TestUpsertGateColumns:
+    """Issue #240 Stage 3 — dedicated soft-gate columns written by the
+    upsert. Migration 043 adds ``gate_rule_fired`` + ``worker_severity_pre_gate``.
+    Mirrors TestUpsertShadowColumns: pins SQL references + positional binding
+    without a live DB."""
+
+    def test_upsert_sql_references_two_gate_columns(self) -> None:
+        from scripts.mirror_audit_sidecar_to_supabase import _UPSERT_SQL
+
+        for col in ("gate_rule_fired", "worker_severity_pre_gate"):
+            # INSERT column list + DO UPDATE SET + IS DISTINCT FROM WHERE.
+            assert _UPSERT_SQL.count(col) >= 3, (
+                f"{col!r} must be in the INSERT list, the DO UPDATE SET, and the "
+                f"IS DISTINCT FROM change-detection WHERE clause; found "
+                f"{_UPSERT_SQL.count(col)} occurrence(s)"
+            )
+
+    def test_upsert_carries_gate_values_in_param_tuple(self) -> None:
+        from scripts.mirror_audit_sidecar_to_supabase import (
+            _UPSERT_SQL,
+            _upsert_records,
+        )
+
+        rec = _verdict_record_with_shadow(
+            would_promote_severity=None,
+            would_flag_for_review=None,
+            rationale_incomplete_flag=None,
+            gate_rule_fired="R1",
+            worker_severity_pre_gate="moderate",
+        )
+        cur = _FakeCursor()
+        conn = _FakeConn(cur)
+
+        _upsert_records(conn, [rec], dry_run=False)  # type: ignore[arg-type]
+
+        sql, params = cur.calls[0]
+        assert _UPSERT_SQL.count("%s") == len(params), (
+            f"placeholder/param mismatch: {_UPSERT_SQL.count('%s')} %s vs "
+            f"{len(params)} params — the upsert would raise against a real DB"
+        )
+        # The two gate values are the LAST two positional params (they were
+        # appended after the three Stage-1 shadow columns).
+        assert params[-2:] == ("R1", "moderate")

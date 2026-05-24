@@ -73,12 +73,14 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 from datetime import datetime, timezone
 from typing import Any, Iterable, Optional, TypedDict
 
 from src.data.kg.types import (
     CausalRole,
     CitationVerdict,
+    EnsembleSeverity,
     EnsembleVerdict,
     KGEdge,
     KGSignal,
@@ -120,6 +122,34 @@ LAYER_1_SEVERITY_HIGH = "high"
 LEAK_ROLES: frozenset[str] = frozenset({"mediator", "collider", "descendant"})
 ACCEPT_ROLES: frozenset[str] = frozenset({"ancestor", "confounder", "instrument"})
 VALID_LLM_ROLES: frozenset[str] = LEAK_ROLES | ACCEPT_ROLES
+
+# Issue #240 Stage 3 — env kill-switch for the audit-evaluator soft-gate.
+# DEFAULT OFF: when the env var is unset or any value other than the
+# literal "1", the gate NEVER fires and ``vote`` is byte-identical to its
+# pre-Stage-3 behaviour. Read at call time (not import time) so the
+# operator runbook's "unset → next process invocation reverts" rollback
+# story holds without a code change. Design:
+# ``docs/plans/240-audit-evaluator-gate-promotion.md`` §3 Stage 3.
+EVALUATOR_GATE_ENABLED_ENV = "ADAPTIVE_VALIDITY_EVALUATOR_GATE_ENABLED"
+
+# The single severity transition the Stage-3 gate is allowed to perform
+# (design §3 Stage 3 + §4 R1): moderate → high. Remediation follows
+# deterministically (the escalated "high" verdict drops the feature).
+_GATE_PRECONDITION_SEVERITY: EnsembleSeverity = "moderate"
+_GATE_ESCALATED_SEVERITY: EnsembleSeverity = "high"
+_GATE_ESCALATED_REMEDIATION: Remediation = "drop"
+_GATE_EVIDENCE_TAG = "evaluator_gate:R1:moderate→high"
+
+
+def _evaluator_gate_enabled() -> bool:
+    """True iff the Stage-3 soft-gate kill-switch is explicitly ``"1"``.
+
+    Default OFF. Any value other than the exact string ``"1"`` (including
+    unset, ``"0"``, ``""``, ``"true"``) leaves the gate disabled — the
+    conservative fail-closed reading for a behaviour-mutating flag.
+    """
+    return os.environ.get(EVALUATOR_GATE_ENABLED_ENV) == "1"
+
 
 # KG predicates we recognise as drug→disease "treats" evidence
 # (Open Targets) and as taxonomic isa (UMLS relations). Stored as
@@ -460,6 +490,16 @@ class EnsembleVoter:
     ) -> EnsembleVerdict:
         """Combine upstream verdicts into one ensemble verdict.
 
+        Computes the *candidate* verdict via :meth:`_vote_candidate` (the
+        full precedence logic), then applies the Issue #240 Stage 3
+        env-gated soft-gate via :meth:`_apply_evaluator_gate`. The gate is
+        a NO-OP by default (the kill-switch env var
+        ``ADAPTIVE_VALIDITY_EVALUATOR_GATE_ENABLED`` defaults OFF), so this
+        wrapper returns the candidate verdict byte-identically unless an
+        operator has explicitly enabled the gate AND rule R1 fires on a
+        moderate candidate (design §3 Stage 3). The R1 helper is called at
+        most once per ``vote`` (this single post-candidate call site).
+
         Args:
             feature_name: Name of the feature being adjudicated.
             layer_1_verdict: Layer 1 (manifest contract) verdict dict
@@ -484,6 +524,38 @@ class EnsembleVoter:
             rationale, and the audit-trail-relevant inputs. Always
             returns a verdict — abstaining is itself a verdict
             (``severity="abstain"``).
+        """
+        candidate = self._vote_candidate(
+            feature_name,
+            layer_1_verdict=layer_1_verdict,
+            adversarial_verdict=adversarial_verdict,
+            kg_edges=kg_edges,
+            feature_entity_ids=feature_entity_ids,
+            target_entity_ids=target_entity_ids,
+            llm_verdict=llm_verdict,
+            citation_verdicts=citation_verdicts,
+        )
+        return self._apply_evaluator_gate(candidate, llm_verdict)
+
+    def _vote_candidate(
+        self,
+        feature_name: str,
+        *,
+        layer_1_verdict: Optional[dict] = None,
+        adversarial_verdict: Optional[dict] = None,
+        kg_edges: Iterable[KGEdge] = (),
+        feature_entity_ids: Iterable[str] = (),
+        target_entity_ids: Iterable[str] = (),
+        llm_verdict: Optional[LLMVerdict] = None,
+        citation_verdicts: Iterable[CitationVerdict] = (),
+    ) -> EnsembleVerdict:
+        """Pre-gate precedence logic for :meth:`vote`.
+
+        Returns the voter's *candidate* verdict from the four upstream
+        signals. This is the full pre-Stage-3 ``vote`` body; the Stage-3
+        gate is applied by the public :meth:`vote` wrapper so the gate sees
+        a finished candidate and fires R1 at most once. Tests that need to
+        assert pre-gate behaviour can call this directly.
         """
         kg_signal, considered_edges = classify_kg_signal(
             kg_edges,
@@ -902,6 +974,94 @@ class EnsembleVoter:
             layer_1_input=layer_1_snapshot,
             adversarial_input=adversarial_snapshot,
             llm_input=llm_verdict,
+        )
+
+    @staticmethod
+    def _apply_evaluator_gate(
+        verdict: EnsembleVerdict,
+        llm_verdict: Optional[LLMVerdict],
+    ) -> EnsembleVerdict:
+        """Issue #240 Stage 3 — env-gated, fail-open soft-gate.
+
+        Applied to the voter's *candidate* verdict at every ``vote`` exit
+        path. Behaviour:
+
+        - **Flag OFF (default).** When
+          ``ADAPTIVE_VALIDITY_EVALUATOR_GATE_ENABLED`` is unset or not the
+          literal ``"1"``, return ``verdict`` UNCHANGED (identity) — the
+          voter is byte-identical to its pre-Stage-3 behaviour. This is
+          the load-bearing default-OFF guarantee (proven by the
+          byte-identity test).
+        - **Fail-open.** When the worker carried no evaluator audit
+          (``llm_verdict.evaluator_audit is None`` — evaluator disabled)
+          OR the evaluator errored (``satisfied is None``), R1 cannot fire
+          and the verdict passes through unchanged, even with the flag on.
+        - **R1 fires.** When the flag is ``"1"`` AND the candidate
+          ``severity == "moderate"`` AND ``evaluate_r1`` returns
+          ``"high"``, substitute ``severity="high"``,
+          ``remediation="drop"`` (the deterministic escalation per design
+          §4 R1), set ``decided_by="evaluator_gate"``, append the
+          structured evidence tag, and record ``gate_rule_fired="R1"``.
+          A NEW frozen ``EnsembleVerdict`` is returned (the input is never
+          mutated); the original worker severity is recoverable downstream
+          via ``gate_rule_fired`` (always "moderate" for R1) and is
+          persisted to ``worker_severity_pre_gate`` by
+          ``_ensemble_to_legacy_dict``.
+
+        The gate intentionally does NOT set ``decided_by="evaluator_gate"``
+        when the voter independently reached ``severity="high"`` (the
+        precondition is exactly ``"moderate"``), so ``decided_by`` records
+        the gate ONLY when it actually flipped a decision (design §3).
+        """
+        if not _evaluator_gate_enabled():
+            return verdict
+        if verdict.severity != _GATE_PRECONDITION_SEVERITY:
+            # Gate is only allowed to act on a moderate candidate. High /
+            # info / abstain pass through (R1's precondition is moderate).
+            return verdict
+        evaluator_audit = llm_verdict.evaluator_audit if llm_verdict is not None else None
+        # Fail-open: no audit (evaluator disabled) OR evaluator errored.
+        # ``satisfied is None`` is the runner's signal for an evaluator
+        # exception; ``evaluate_r1`` already treats ``satisfied is not
+        # False`` as no-fire, so a None audit / None satisfied cannot
+        # trigger. The explicit guard documents the fail-open contract.
+        if evaluator_audit is None or evaluator_audit.satisfied is None:
+            return verdict
+        # Lazy import keeps the module's top-level surface free of the
+        # promotion-rules dependency (matches the shadow-mode call site in
+        # ``adaptive_validity_check._ensemble_to_legacy_dict``).
+        from src.data.evaluator_promotion_rules import evaluate_r1
+
+        proposed = evaluate_r1(verdict.severity, evaluator_audit)
+        if proposed != _GATE_ESCALATED_SEVERITY:
+            return verdict
+        # R1 fired: escalate moderate → high. Build a new frozen verdict
+        # (dataclasses.replace would re-run __init__; an explicit copy of
+        # the mutated fields keeps the intent obvious and the input
+        # untouched).
+        logger.info(
+            "evaluator_gate: R1 escalated severity moderate→high for feature %r "
+            "(decided_by %s→evaluator_gate)",
+            verdict.feature_name,
+            verdict.decided_by,
+        )
+        return EnsembleVerdict(
+            feature_name=verdict.feature_name,
+            severity=_GATE_ESCALATED_SEVERITY,
+            remediation=_GATE_ESCALATED_REMEDIATION,
+            decided_by="evaluator_gate",
+            confidence=verdict.confidence,
+            final_role=verdict.final_role,
+            kg_signal=verdict.kg_signal,
+            kg_edges_considered=verdict.kg_edges_considered,
+            verified_citations=verdict.verified_citations,
+            unverified_citations=verdict.unverified_citations,
+            disagreements=verdict.disagreements,
+            evidence=verdict.evidence + (_GATE_EVIDENCE_TAG,),
+            layer_1_input=verdict.layer_1_input,
+            adversarial_input=verdict.adversarial_input,
+            llm_input=verdict.llm_input,
+            gate_rule_fired="R1",
         )
 
     @staticmethod
