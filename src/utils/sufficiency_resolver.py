@@ -12,6 +12,7 @@ threshold flows through this module.
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any
 
 from src.utils.sufficiency_defaults import (
@@ -256,21 +257,89 @@ def resolve_target_mde(
     """Target minimum detectable effect.
 
     Hierarchy:
-    1. user_config.target_mde — explicit override
+    1. user_config.target_mde — explicit override (or scope-builder-stamped value)
     2. Computed from data characteristics:
-       - continuous: 0.5 * sigma_outcome (Cohen "medium" anchored to data)
+       - continuous: 0.5 * sigma_outcome (Cohen "medium" anchored to data,
+         IN OUTCOME UNITS — raw effect size, NOT dimensionless Cohen's d)
        - binary: max(absolute floor, relative shift × baseline_rate)
+         (in absolute-risk-difference units, must be in (0, 1))
        - hazard_ratio: literature default (no data-driven path yet)
     3. Literature default from Cohen 1988 / MCID conventions
+
+    Source-attribution contract (R2.3 / R2.4 round-2):
+        ``user_config['target_mde_source']``, when set, is treated as the
+        authoritative provenance label. scope_builder writes BOTH
+        ``target_mde`` and ``target_mde_source`` together (per the D1
+        audit-chain contract); the resolver MUST preserve that stamp so
+        ``computed_from_data`` / ``literature_default`` values pre-stamped
+        upstream don't get silently re-labelled as ``user_override``. If
+        ``target_mde_source`` is absent, the resolver assumes the value
+        came directly from the user (the historical "raw scope_spec dict"
+        path) and stamps ``user_override`` itself.
     """
     override = _user_override(user_config, "target_mde")
     if override is not None:
-        return ThresholdResolution(
-            name="target_mde",
-            value=float(override),
-            source="user_override",
-            citation="scope_spec.sufficiency.target_mde",
-            inputs={"outcome_type": outcome_type},
+        # F5 (PR #462 hotfix) + R2.2 (round-2): validate the override
+        # BEFORE accepting it. ``SufficiencyConfig.target_mde`` carries
+        # ``gt=0, lt=1e6`` (R2.2: widened so continuous-outcome raw effect
+        # sizes don't get schema-rejected). The resolver re-validates with
+        # outcome-type-aware bounds because raw dicts can bypass the schema:
+        #   * binary: must be in (0, 1) — absolute risk difference
+        #   * continuous: must be positive and finite — raw effect size in
+        #     outcome units, no upper bound
+        #   * time_to_event / unknown: must be positive and finite
+        # NaN/inf are always rejected.
+        try:
+            override_float = float(override)
+        except (TypeError, ValueError):
+            override_float = math.nan
+        if not math.isfinite(override_float) or override_float <= 0.0:
+            valid_override = False
+        elif outcome_type == "binary":
+            valid_override = override_float < 1.0
+        else:
+            # continuous / time_to_event / unknown: positive + finite only.
+            valid_override = True
+        if valid_override:
+            # R2.3 / R2.4: preserve scope_builder's provenance stamp if
+            # present (target_mde_source). Without this, scope_builder's
+            # pre-stamped ``computed_from_data`` / ``literature_default``
+            # values would always get re-labelled as ``user_override`` —
+            # breaking the audit chain that D1 of the rollout plan
+            # explicitly built.
+            stamped_source = _user_override(user_config, "target_mde_source")
+            if stamped_source in (
+                "user_override",
+                "computed_from_data",
+                "literature_default",
+            ):
+                source = stamped_source
+                citation = (
+                    "scope_spec.sufficiency.target_mde "
+                    f"(source pre-stamped by upstream: {stamped_source})"
+                )
+            else:
+                source = "user_override"
+                citation = "scope_spec.sufficiency.target_mde"
+            return ThresholdResolution(
+                name="target_mde",
+                value=override_float,
+                source=source,
+                citation=citation,
+                inputs={"outcome_type": outcome_type},
+            )
+        # Outcome-type-aware warning text.
+        if outcome_type == "binary":
+            bound_msg = "must be in (0, 1) and finite (absolute risk difference)"
+        else:
+            bound_msg = "must be positive and finite"
+        logger.warning(
+            "scope_spec.sufficiency.target_mde=%r is invalid for "
+            "outcome_type=%r (%s); falling back to data-driven / "
+            "literature default.",
+            override,
+            outcome_type,
+            bound_msg,
         )
 
     if outcome_type == "continuous":

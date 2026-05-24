@@ -230,7 +230,10 @@ jobs:
     name: Integration Tests
     runs-on: ubuntu-latest
     needs: lint
-    timeout-minutes: 15
+    # Suite runs ~14 min on a healthy runner (PR #466 baseline); the prior
+    # 15-min cap left only ~1 min of headroom and produced spurious
+    # timeout-cancellations under runner load. 20 min restores headroom.
+    timeout-minutes: 20
     services:
       redis:
         image: redis:7-alpine
