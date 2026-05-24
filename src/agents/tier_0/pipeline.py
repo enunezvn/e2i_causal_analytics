@@ -67,6 +67,17 @@ class PipelineConfig:
     # paper-replication runs.
     always_run_learning_curve: bool = False
 
+    # Phase 3 — synthetic-data preview on insufficiency (opt-in; default off).
+    # When the post-training learning curve recommends more data
+    # (``recommended_additional_samples``), produce a PREVIEW synthetic cohort
+    # sized to that recommendation so the operator can inspect it. The preview
+    # is written to artifacts and surfaced on ``PipelineResult.synthetic_preview``
+    # — it is NEVER auto-mixed into training. ``synthetic_preview_scenario`` is
+    # the ``synthetic_v2`` scenario to generate (required for the preview to
+    # fire; the operator chooses it — there is no auto-inference).
+    synthetic_preview_on_insufficient: bool = False
+    synthetic_preview_scenario: Optional[str] = None
+
     # Model selection
     interpretability_required: bool = False
     skip_benchmarks: bool = True
@@ -143,6 +154,13 @@ class PipelineResult:
     # landed on main yet — when it does, this field will be merged into the
     # unified report dict downstream of the merge.
     training_sufficiency_report: Optional[Dict[str, Any]] = None
+
+    # Phase 3 — synthetic-data preview metadata, populated only when
+    # ``PipelineConfig.synthetic_preview_on_insufficient`` is set, a scenario
+    # is specified, and the learning curve recommended more data. Contains the
+    # preview cohort's artifact paths + audit metadata; the cohort itself is on
+    # disk and is NOT mixed into training (``auto_mixed_into_training=False``).
+    synthetic_preview: Optional[Dict[str, Any]] = None
 
     # Metadata
     stages_completed: List[str] = field(default_factory=list)
@@ -978,6 +996,11 @@ class MLFoundationPipeline:
         # False, this stays None — consistent with the node's short-circuit.
         result.training_sufficiency_report = trainer_output.get("sufficiency_report")
 
+        # Phase 3: opt-in synthetic-data preview when the learning curve
+        # recommended more data. Advisory only — failures here never fail the
+        # pipeline, and the preview is never auto-mixed into training.
+        self._maybe_build_synthetic_preview(result)
+
         # Hop 4 of 4 (adaptive_criteria_v3_followup): propagate the
         # trainer's (possibly-overlaid) success_criteria back onto
         # ``PipelineResult.success_criteria``. Without this, the
@@ -1033,6 +1056,51 @@ class MLFoundationPipeline:
 
         if self.config.on_stage_complete:
             self.config.on_stage_complete(PipelineStage.MODEL_TRAINING, trainer_output)
+
+    def _maybe_build_synthetic_preview(self, result: PipelineResult) -> None:
+        """Phase 3: opt-in synthetic preview when the learning curve asked for more data.
+
+        Fires only when (1) ``synthetic_preview_on_insufficient`` is set, (2) a
+        ``synthetic_preview_scenario`` is specified, and (3) the post-training
+        learning curve produced a positive ``recommended_additional_samples``.
+        Advisory: any failure is recorded on ``result.synthetic_preview`` and
+        logged, but never propagated (the training result stands on its own).
+        The generated cohort is written to artifacts and is NOT auto-mixed.
+        """
+        if not self.config.synthetic_preview_on_insufficient:
+            return
+        scenario = self.config.synthetic_preview_scenario
+        if not scenario:
+            logger.info(
+                "synthetic_preview_on_insufficient is set but no "
+                "synthetic_preview_scenario was provided; skipping preview."
+            )
+            return
+        report = result.training_sufficiency_report or {}
+        recommended = report.get("recommended_additional_samples")
+        if not isinstance(recommended, (int, float)) or recommended <= 0:
+            # Learning curve didn't run, or didn't recommend more data → nothing
+            # to preview. (Pre-flight HARD_FAIL blocks earlier and never reaches
+            # training, so this path is specifically the "trained but needs more
+            # data to hit target" case.)
+            return
+        try:
+            from src.agents.ml_foundation.data_preparer.adapters.synthetic_preview import (
+                build_synthetic_preview,
+            )
+
+            result.synthetic_preview = build_synthetic_preview(
+                scenario=scenario,
+                recommended_n=int(recommended),
+                workflow_id=str(result.audit_workflow_id or result.pipeline_run_id),
+            )
+        except Exception as exc:  # advisory feature — never fail the pipeline
+            logger.warning(
+                "Synthetic preview generation failed (advisory; pipeline unaffected): %s",
+                exc,
+                exc_info=True,
+            )
+            result.synthetic_preview = {"generated": False, "error": str(exc)}
 
     async def _run_feature_analysis(
         self,
