@@ -637,6 +637,10 @@ class TestRAGASGEPAOpikIntegration:
         assert provider._evaluation_sample_class is not None
         assert provider.enabled is True
 
+    # Marked slow (#481): exercises real RAGAS evaluator on a single
+    # sample; observed ~26s on the CI runner. Moved off the
+    # PR-blocking lane; still run via slow-tests.yml (-m slow).
+    @pytest.mark.slow
     @pytest.mark.asyncio
     async def test_ragas_feedback_provider_evaluate(self):
         """Test RAGASFeedbackProvider.evaluate() returns proper structure."""
@@ -661,6 +665,9 @@ class TestRAGASGEPAOpikIntegration:
         assert 0.0 <= result["score"] <= 1.0
         assert isinstance(result["feedback"], str)
 
+    # Marked slow (#481): same RAGAS-evaluator code path as the sibling
+    # test above; observed ~30s on the CI runner.
+    @pytest.mark.slow
     @pytest.mark.asyncio
     async def test_ragas_feedback_provider_evaluate_with_run_id(self):
         """Test RAGASFeedbackProvider.evaluate() accepts run_id for tracing."""

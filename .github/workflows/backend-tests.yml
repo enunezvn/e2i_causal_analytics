@@ -350,6 +350,14 @@ jobs:
       #     migration is verified instead via tests/unit/test_ml_foundation_schemas.py
       #     and tests/integration/test_agents/test_state_checkpoint_replay.py.
       # - api/test_rbac_endpoints.py: needs live API.
+      # Deselect ``@pytest.mark.slow`` tests on the PR-blocking lane
+      # (#481). The same tests are run off-PR via
+      # ``.github/workflows/slow-tests.yml`` (Job A: ``pytest -m slow``)
+      # so coverage is preserved. Drift between the two contract
+      # points (this ``-m "not slow"`` flag, the slow-tests.yml
+      # ``-m slow`` flag, and the ``slow`` marker registration in
+      # ``pyproject.toml``) is guarded by
+      # tests/integration/test_slow_marker_discipline.py.
       - name: Run integration tests
         run: |
           pytest tests/integration/ \
@@ -370,6 +378,7 @@ jobs:
             --ignore=tests/integration/test_feedback_loop_integration.py \
             --ignore=tests/integration/test_agents/test_data_preparer/ \
             --ignore=tests/integration/api/test_rbac_endpoints.py \
+            -m "not slow" \
             --splits 2 \
             --group ${{ matrix.shard }} \
             -n 2 \

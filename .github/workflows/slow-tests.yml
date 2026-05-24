@@ -94,6 +94,19 @@ jobs:
       MKL_NUM_THREADS: '1'
       OPENBLAS_NUM_THREADS: '1'
       NUMEXPR_NUM_THREADS: '1'
+      # Env parity with backend-tests.yml integration-tests (issue #481).
+      # Job A runs `pytest -m slow` which sweeps in real_data + slow tests
+      # (test_csu_negative_control_20260510.py, test_optum_held_out_*,
+      # test_g1_lineage_audit_sweep.py). Those fixtures hard-fail when
+      # CSU/Optum cohort files are absent unless this env var opts into
+      # the documented skip path — which is exactly the case on the GH
+      # Actions runner. Without it, every scheduled run errors out (see
+      # run 26355735293 and the 4 preceding nightly runs).
+      ALLOW_MISSING_REAL_DATA: '1'
+      # Asyncio-pollution strict-mode trip-switch (issue #221). The
+      # integration-tests lane is the canonical place this gate fires;
+      # mirror it here so slow-marked async tests can't quietly regress.
+      E2I_ASSERT_NO_ASYNCIO_POLLUTION: '1'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
