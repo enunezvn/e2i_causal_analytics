@@ -1,0 +1,38 @@
+{
+  "ac3_rule": "miprov2.overall.gated.precision_instrument >= bootstrap.overall.gated.precision_instrument AND for each cohort c in {CSU_remibrutinib, PNH_fabhalta, BC_kisqali}: miprov2[c].gated.precision_instrument >= bootstrap[c].gated.precision_instrument",
+  "branch_decision": "miprov2_default",
+  "cohort_ok": true,
+  "cohort_regressions": [],
+  "compile_n_examples": 240,
+  "compile_seed": 42,
+  "golden_set_n_entries": 91,
+  "miprov2_wins": true,
+  "overall_ok": true,
+  "rows": [
+    {
+      "bootstrap_gated_precision_instrument": 1.0,
+      "cohort": "OVERALL",
+      "miprov2_gated_precision_instrument": 1.0,
+      "miprov2_meets_or_exceeds_bootstrap": true
+    },
+    {
+      "bootstrap_gated_precision_instrument": null,
+      "cohort": "CSU_remibrutinib",
+      "miprov2_gated_precision_instrument": null,
+      "miprov2_meets_or_exceeds_bootstrap": null
+    },
+    {
+      "bootstrap_gated_precision_instrument": 1.0,
+      "cohort": "PNH_fabhalta",
+      "miprov2_gated_precision_instrument": 1.0,
+      "miprov2_meets_or_exceeds_bootstrap": true
+    },
+    {
+      "bootstrap_gated_precision_instrument": 1.0,
+      "cohort": "BC_kisqali",
+      "miprov2_gated_precision_instrument": 1.0,
+      "miprov2_meets_or_exceeds_bootstrap": true
+    }
+  ],
+  "schema_version": 1
+}

@@ -1221,19 +1221,19 @@ def test_compile_set_no_near_duplicate_with_golden() -> None:
 def test_compile_set_size_at_least_50() -> None:
     """Plan-239 §6.2 R1 — issue #239 blocker (MIPROv2 needs ≥50 examples).
 
-    Pinned EXACTLY at 50 (not `>=`) per codex impl iter-0 MEDIUM finding:
-    each of the 17 plan-239 additions (#34-#50) was individually audited
-    against the §3.0 semantic-neighbor table; any new addition needs a new
-    §3.0 audit row before incrementing the count. Pinning exact catches
-    accidental size drift that would invalidate the §3.0 disjointness audit.
+    Originally pinned EXACTLY at 50 (PR #469 codex impl iter-0 MEDIUM finding).
+    Loosened to `>= 50` per plan-239 n=200 growth (Task 3+ buckets target ~200);
+    floor semantic preserved (block accidental regression below 50) but ceiling
+    removed since growth past 50 is the intended Task 3-6 trajectory and
+    each new bucket carries its own per-entry curation contract verification.
     """
     from src.data.causal_role_classifier import build_compile_set
 
     n = len(build_compile_set())
-    assert n == 50, (
-        f"Plan-239 AC4: compile set must have exactly 50 examples; got {n}. "
-        f"New additions beyond 50 require a new §3.0 semantic-neighbor row "
-        f"per plan-239 §4.3 PR-blocking gate."
+    assert n >= 50, (
+        f"Plan-239 AC4: compile set must have at least 50 examples; got {n}. "
+        f"This is the MIPROv2 floor — additions beyond 50 are the deliberate "
+        f"n=200 growth path."
     )
 
 
@@ -1318,3 +1318,98 @@ def test_compile_with_miprov2_threads_seed_into_constructor_and_compile(
         f"Plan-239 §5.1: seed=42 must be threaded into MIPROv2.compile(); "
         f"got compile_seed={seen.get('compile_seed')!r}."
     )
+
+
+def test_compile_set_size_meets_dspy_miprov2_floor():
+    """DSPy MIPROv2 documented floor is ~200; we target ≥200 for AC3 power."""
+    from src.data.causal_role_classifier import build_compile_set
+
+    examples = build_compile_set()
+    assert len(examples) >= 200, (
+        f"compile-set size {len(examples)} < 200 (DSPy MIPROv2 floor for "
+        "decision-quality bootstrapping)"
+    )
+
+
+def test_compile_set_cohort_floors_balanced():
+    """No-per-cohort-regression AC3 requires CSU/PNH/BC each ≥50."""
+    from collections import Counter
+
+    from src.data.causal_role_classifier import (
+        _canonical_cohort,
+        build_compile_set,
+    )
+
+    counts = Counter(_canonical_cohort(x) for x in build_compile_set())
+    floors = {"CSU": 50, "PNH": 50, "BC": 50, "synthetic_or_other": 50}
+    for cohort, floor in floors.items():
+        assert counts[cohort] >= floor, (
+            f"cohort '{cohort}': {counts[cohort]} entries < floor {floor}. "
+            "AC3 no-cohort-regression rule requires balanced representation."
+        )
+
+
+def test_compile_set_cohort_tags_canonical():
+    """Cohort tags must be canonical post-normalization (no csu/CSU drift)."""
+    from src.data.causal_role_classifier import (
+        _canonical_cohort,
+        build_compile_set,
+    )
+
+    CANONICAL = {
+        "CSU",
+        "PNH",
+        "BC",
+        "synthetic_or_other",
+    }
+    for example in build_compile_set():
+        canonical = _canonical_cohort(example)
+        assert canonical in CANONICAL, (
+            f"non-canonical cohort tag {canonical!r} on example "
+            f"{example.feature_name!r}; must map to one of {CANONICAL}"
+        )
+
+
+def test_compile_set_disjoint_from_literature_golden_set():
+    """Compile-set features must not appear in the 91-entry literature golden set."""
+    import json
+    from pathlib import Path
+
+    from src.data.causal_role_classifier import build_compile_set
+
+    golden_path = Path("tests/fixtures/causal_role_golden_set.json")
+    golden = json.loads(golden_path.read_text())
+    # Golden set is a dict with schema {"entries": [...], "cohorts": {...}, ...};
+    # iterate over the "entries" list, not the top-level dict (bug fixed during
+    # Task 3 PNH bucket validation — pre-existing red-first test never exercised
+    # the assertion because it TypeError'd on the previous line).
+    golden_features = {entry["feature_name"].strip().lower() for entry in golden["entries"]}
+
+    for example in build_compile_set():
+        feat = example.feature_name.strip().lower()
+        assert feat not in golden_features, (
+            f"compile-set feature {example.feature_name!r} also appears in "
+            "literature golden set — leakage would inflate measured precision."
+        )
+
+
+def test_ac3_verdict_n200_artifact_present_and_valid_schema():
+    """The committed AC3 verdict JSON must validate against the schema."""
+    import json
+    from pathlib import Path
+
+    p = Path("artifacts/dspy/ac3_verdict_n200.json")
+    assert p.exists(), "AC3 verdict JSON missing — Task 9 not completed"
+
+    v = json.loads(p.read_text())
+    assert v["schema_version"] == 1
+    assert "miprov2_wins" in v
+    assert "branch_decision" in v
+    assert v["compile_seed"] == 42
+    assert v["golden_set_n_entries"] == 91
+    assert isinstance(v["rows"], list)
+    assert len(v["rows"]) == 4  # OVERALL + 3 cohorts
+    for row in v["rows"]:
+        assert "cohort" in row
+        assert "bootstrap_gated_precision_instrument" in row
+        assert "miprov2_gated_precision_instrument" in row

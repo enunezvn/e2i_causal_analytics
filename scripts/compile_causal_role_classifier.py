@@ -110,13 +110,13 @@ DEFAULT_MAX_BOOTSTRAPPED_DEMOS = 4
 # Pre-Option-C cap of 24 < 33 would force random.sample(33, 24) to
 # drop 9 of 33 demos uniformly per run (~27% per-demo loss probability);
 # at cap=40 >= 33 the sample step retains all labeled demos
-# deterministically.
-DEFAULT_MAX_LABELED_DEMOS = 40
+# deterministically. n=240 compile-set + buffer (was 40 for n=33 era).
+DEFAULT_MAX_LABELED_DEMOS = 250
 
 # Plan-239 §5.5: --optimizer miprov2 uses a higher labeled-demo cap so the
-# 50-example compile set survives `random.sample(demos, max_labeled_demos)`
-# with headroom. Default 60 (= 50 + 10 slot headroom for future expansion).
-MIPROV2_DEFAULT_MAX_LABELED_DEMOS = 60
+# compile set survives `random.sample(demos, max_labeled_demos)` with
+# headroom. n=240 compile-set + buffer (was 60 for n=50 era).
+MIPROV2_DEFAULT_MAX_LABELED_DEMOS = 250
 
 # Plan-239 §5.2: artifact JSON keys whose values are nondeterministic
 # across runs (timestamps, cache counters, run IDs). normalize_artifact_json
@@ -487,7 +487,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "bounded by max_labeled_demos + max_bootstrapped_demos = "
             f"{DEFAULT_MAX_LABELED_DEMOS} + {DEFAULT_MAX_BOOTSTRAPPED_DEMOS} "
             f"= {DEFAULT_MAX_LABELED_DEMOS + DEFAULT_MAX_BOOTSTRAPPED_DEMOS} "
-            "(Phase-4 S12 Option C; covers the 33-example compile set + "
+            "(Phase-4 S12 Option C; covers the n=240 compile set + "
             f"slot headroom). Default: {DEFAULT_MAX_BOOTSTRAPPED_DEMOS}."
         ),
     )

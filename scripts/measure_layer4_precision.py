@@ -7,9 +7,11 @@ golden set built under issue #358 supplies the ground truth.
 Invocation::
 
     python scripts/measure_layer4_precision.py \\
+        --enable-evaluator \\
+        --evaluator-gate true \\
+        [--classifier-artifact artifacts/dspy/cr_bootstrap_n200.json] \\
         [--golden-set tests/fixtures/causal_role_golden_set.json] \\
         [--cohort CSU_remibrutinib|PNH_fabhalta|BC_kisqali|all] \\
-        [--evaluator-gate true|false|both] \\
         [--threshold 0.95] \\
         [--report-path /tmp/layer4_precision_report.json]
 
@@ -32,6 +34,12 @@ Implementation notes:
   routing. ``--evaluator-gate both`` reports both gated and ungated
   precision so you can see what the gate buys you on the literature set.
 
+- The Haiku audit evaluator is wired into ``classify_feature`` and
+  gated by the env var ``ADAPTIVE_VALIDITY_EVALUATOR_ENABLED=1``.
+  The ``--enable-evaluator`` flag sets this in-process BEFORE the
+  loader import. Without it, the gated subset will be empty (all
+  entries fall through to ``skipped_no_eval``).
+
 - The literature-derived golden set has 90 entries (30 per cohort).
   ≥6 per cohort are labeled ``instrument`` → ≥18 instrument labels
   total → enough for a meaningful precision estimate when prevalence
@@ -43,6 +51,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -59,11 +68,9 @@ if str(PROJECT_ROOT) not in sys.path:
 # key sits in .env (conftest does this for pytest paths; CLI does not).
 load_dotenv()
 
-from src.data.causal_role_classifier_loader import (  # noqa: E402
-    classify_feature,
-    ensure_dspy_lm_configured,
-    load_compiled_classifier,
-)
+# NOTE: the classifier_loader import is intentionally deferred into main() so
+# that --enable-evaluator can set ADAPTIVE_VALIDITY_EVALUATOR_ENABLED=1 before
+# the module is first imported (the env var is read at import time).
 
 DEFAULT_GOLDEN_SET = PROJECT_ROOT / "tests" / "fixtures" / "causal_role_golden_set.json"
 DEFAULT_THRESHOLD = 0.95
@@ -137,6 +144,9 @@ def _evaluate_entries(
     require_evaluator: bool,
     classifier_artifact: Optional[Path] = None,
     disagreements: Optional[list[dict[str, str]]] = None,
+    _classify_feature: Any,
+    _ensure_dspy_lm_configured: Any,
+    _load_compiled_classifier: Any,
 ) -> dict[tuple[str, str], CohortMetrics]:
     """Run the classifier on each entry and bucket into per-cohort metrics.
 
@@ -149,6 +159,11 @@ def _evaluate_entries(
     ``{cohort, gate, predicted_role, ground_truth_role}`` — feature_name
     and derivation_pseudocode are excluded by construction (plan-239 §6.4
     HARD RULE: golden-set entries must not leak into compile-set authoring).
+
+    The three ``_*`` parameters receive the lazily-imported loader callables
+    from ``main()`` so that ``ADAPTIVE_VALIDITY_EVALUATOR_ENABLED`` is set
+    before the loader module is first imported (env-var-before-import
+    contract for the --enable-evaluator flag).
     """
     # Ensure DSPy has an LM configured at inference time. Plan-239 §6.8 A/B
     # requires the classifier to actually run against the literature golden
@@ -157,12 +172,12 @@ def _evaluate_entries(
     # ensure_dspy_lm_configured() helper is provider-aware and no-ops when
     # an LM is already configured or when no provider-matching key is in env
     # (matches conftest dotenv path + production orchestrator behaviour).
-    ensure_dspy_lm_configured()
+    _ensure_dspy_lm_configured()
 
     if classifier_artifact is not None:
-        classifier = load_compiled_classifier(artifact_path=classifier_artifact)
+        classifier = _load_compiled_classifier(artifact_path=classifier_artifact)
     else:
-        classifier = load_compiled_classifier()
+        classifier = _load_compiled_classifier()
     if classifier is None:
         logger.warning(
             "load_compiled_classifier returned None — no LM configured. "
@@ -192,7 +207,7 @@ def _evaluate_entries(
             metrics.n_skipped_no_lm += 1
             continue
 
-        verdict = classify_feature(
+        verdict = _classify_feature(
             feature_name=feature_name,
             derivation_pseudocode=derivation,
             dataset_context=context,
@@ -309,7 +324,8 @@ def _format_report(
     return "\n".join(lines)
 
 
-def main() -> int:
+def _build_parser() -> argparse.ArgumentParser:
+    """Return the argument parser for measure_layer4_precision.py."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--golden-set",
@@ -328,6 +344,16 @@ def main() -> int:
         choices=("true", "false", "both"),
         default="both",
         help="Apply evaluator_satisfied=True gate. 'both' reports both subsets.",
+    )
+    parser.add_argument(
+        "--enable-evaluator",
+        action="store_true",
+        help=(
+            "Set ADAPTIVE_VALIDITY_EVALUATOR_ENABLED=1 in-process BEFORE "
+            "importing the classifier loader, so classify_feature attaches "
+            "evaluator_audit to each verdict. Required for the gated "
+            "subset to be non-empty. Pair with --evaluator-gate=true."
+        ),
     )
     parser.add_argument(
         "--threshold",
@@ -368,7 +394,42 @@ def main() -> int:
         default="INFO",
         help="Python logging level (default: INFO)",
     )
-    args = parser.parse_args()
+    return parser
+
+
+def main() -> int:
+    args = _build_parser().parse_args()
+
+    # --enable-evaluator: set env var BEFORE importing the classifier loader so
+    # classify_feature sees ADAPTIVE_VALIDITY_EVALUATOR_ENABLED=1 at import
+    # time (env-var-before-import contract).
+    if args.enable_evaluator:
+        os.environ["ADAPTIVE_VALIDITY_EVALUATOR_ENABLED"] = "1"
+
+    # Test seam: pytest may patch module-level `load_compiled_classifier` /
+    # `classify_feature` / `ensure_dspy_lm_configured` on this module before
+    # calling main(); honor those overrides. Each symbol is resolved
+    # independently so partial patches (e.g., only load_compiled_classifier)
+    # do not get clobbered by the lazy import. Lazy-imports happen AFTER the
+    # env-var contract above so the loader reads
+    # ADAPTIVE_VALIDITY_EVALUATOR_ENABLED on its first import.
+    _module = sys.modules[__name__]
+    _load_compiled_classifier = getattr(_module, "load_compiled_classifier", None)
+    _classify_feature = getattr(_module, "classify_feature", None)
+    _ensure_dspy_lm_configured = getattr(_module, "ensure_dspy_lm_configured", None)
+
+    if _load_compiled_classifier is None:
+        from src.data.causal_role_classifier_loader import (  # noqa: E402
+            load_compiled_classifier as _load_compiled_classifier,
+        )
+    if _classify_feature is None:
+        from src.data.causal_role_classifier_loader import (  # noqa: E402
+            classify_feature as _classify_feature,
+        )
+    if _ensure_dspy_lm_configured is None:
+        from src.data.causal_role_classifier_loader import (  # noqa: E402
+            ensure_dspy_lm_configured as _ensure_dspy_lm_configured,
+        )
 
     logging.basicConfig(
         level=getattr(logging, args.log_level.upper()),
@@ -406,6 +467,9 @@ def main() -> int:
                 require_evaluator=gate,
                 classifier_artifact=args.classifier_artifact,
                 disagreements=disagreements,
+                _classify_feature=_classify_feature,
+                _ensure_dspy_lm_configured=_ensure_dspy_lm_configured,
+                _load_compiled_classifier=_load_compiled_classifier,
             )
         )
 
