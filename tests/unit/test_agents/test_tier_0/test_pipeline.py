@@ -451,3 +451,86 @@ async def test_pipeline_strictness_preset_caller_wins() -> None:
     merged_suff = captured["scope_spec"]["sufficiency"]
     # User-supplied strictness_preset wins for a calibration knob.
     assert merged_suff["strictness_preset"] == "strict"
+
+
+# ===========================================================================
+# Phase 3: synthetic-preview wiring (_maybe_build_synthetic_preview).
+# The preview fires only when opted in, a scenario is set, AND the learning
+# curve recommended more data. It is advisory: adapter failures never raise.
+# ===========================================================================
+
+_PREVIEW_ADAPTER = (
+    "src.agents.ml_foundation.data_preparer.adapters.synthetic_preview.build_synthetic_preview"
+)
+
+
+def _result_with_recommendation(recommended) -> PipelineResult:
+    result = PipelineResult(
+        pipeline_run_id="pipe_preview",
+        status="running",
+        current_stage=PipelineStage.MODEL_TRAINING,
+        experiment_id="exp_preview",
+    )
+    result.training_sufficiency_report = (
+        {"recommended_additional_samples": recommended} if recommended is not None else None
+    )
+    return result
+
+
+def test_preview_skipped_when_opt_in_off() -> None:
+    pipeline = MLFoundationPipeline(config=PipelineConfig(synthetic_preview_scenario="s"))
+    result = _result_with_recommendation(5000)
+    with patch(_PREVIEW_ADAPTER) as adapter:
+        pipeline._maybe_build_synthetic_preview(result)
+    adapter.assert_not_called()
+    assert result.synthetic_preview is None
+
+
+def test_preview_skipped_when_no_scenario() -> None:
+    config = PipelineConfig(synthetic_preview_on_insufficient=True)
+    pipeline = MLFoundationPipeline(config=config)
+    result = _result_with_recommendation(5000)
+    with patch(_PREVIEW_ADAPTER) as adapter:
+        pipeline._maybe_build_synthetic_preview(result)
+    adapter.assert_not_called()
+    assert result.synthetic_preview is None
+
+
+@pytest.mark.parametrize("recommended", [None, 0, -10])
+def test_preview_skipped_when_no_recommendation(recommended) -> None:
+    config = PipelineConfig(
+        synthetic_preview_on_insufficient=True, synthetic_preview_scenario="scenario_x"
+    )
+    pipeline = MLFoundationPipeline(config=config)
+    result = _result_with_recommendation(recommended)
+    with patch(_PREVIEW_ADAPTER) as adapter:
+        pipeline._maybe_build_synthetic_preview(result)
+    adapter.assert_not_called()
+    assert result.synthetic_preview is None
+
+
+def test_preview_fires_when_opted_in_with_recommendation() -> None:
+    config = PipelineConfig(
+        synthetic_preview_on_insufficient=True,
+        synthetic_preview_scenario="scenario_a_diagnostic_ebc_idfs_5y_balanced",
+    )
+    pipeline = MLFoundationPipeline(config=config)
+    result = _result_with_recommendation(5000)
+    with patch(_PREVIEW_ADAPTER, return_value={"auto_mixed_into_training": False}) as adapter:
+        pipeline._maybe_build_synthetic_preview(result)
+    adapter.assert_called_once()
+    _, kwargs = adapter.call_args
+    assert kwargs["scenario"] == "scenario_a_diagnostic_ebc_idfs_5y_balanced"
+    assert kwargs["recommended_n"] == 5000
+    assert result.synthetic_preview == {"auto_mixed_into_training": False}
+
+
+def test_preview_failure_is_advisory_and_does_not_raise() -> None:
+    config = PipelineConfig(
+        synthetic_preview_on_insufficient=True, synthetic_preview_scenario="scenario_x"
+    )
+    pipeline = MLFoundationPipeline(config=config)
+    result = _result_with_recommendation(5000)
+    with patch(_PREVIEW_ADAPTER, side_effect=RuntimeError("boom")):
+        pipeline._maybe_build_synthetic_preview(result)  # must NOT raise
+    assert result.synthetic_preview == {"generated": False, "error": "boom"}
