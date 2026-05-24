@@ -5047,8 +5047,12 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
-        # PMID: 41270830 — Chhiba & Saini 2025 Ann Allergy Asthma Immunol (DOI:10.1016/j.anai.2025.11.008)
-        # Remibrutinib received FDA approval based on phase 3 UAS7 reductions in CSU/CIndU.
+        # Edge case: Brookhart-Wang label-expansion calendar IV. Construct anchored in
+        # Brookhart 2006 PMID 16685206 (physician prescribing preference / short-term IV
+        # designs); operationalization (calendar-quarter post-Remibrutinib FDA label expansion
+        # to CIndU indication) is an implementer-chosen design pattern with no specific
+        # published claims study yet — probes whether the classifier recognizes regulatory-
+        # timing IVs analogous to bucket-1's iptacopan_first_initiation_within_90d_post_fda_approval_window_pnh.
         dspy.Example(
             feature_name="calendar_quarter_post_remibrutinib_fda_label_expansion_cindu_indicator_csu",
             derivation_pseudocode=(
@@ -5538,9 +5542,12 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             recommended_remediation="drop",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
-        # PMID: 22289728 — Zazzali 2012 Ann Allergy Asthma Immunol CIU utilization (DOI:10.1016/j.anai.2011.10.018)
-        # Claims study: 56% primary care, 14% allergist, 5% dermatologist manage CIU; OCS bursts
-        # suggest escalation driven by poor response, anchoring T->referral<-Y collider structure.
+        # Edge case: T->referral<-Y collider structure (Hernan 2004 collider patterns).
+        # Underlying claims-routing construct is anchored in Zazzali 2012 PMID 22289728
+        # CIU utilization patterns (56% PCP / 14% allergist / 5% dermatologist routing),
+        # but the specific 90d-postindex window operationalization is an implementer-chosen
+        # collider-detection design choice — probes whether the classifier recognizes the
+        # T->referral<-Y collider when referral is jointly determined by treatment and outcome.
         dspy.Example(
             feature_name="csu_specialty_clinic_referral_within_90d_postindex_flag",
             derivation_pseudocode=(
