@@ -406,17 +406,30 @@ def main() -> int:
     if args.enable_evaluator:
         os.environ["ADAPTIVE_VALIDITY_EVALUATOR_ENABLED"] = "1"
 
-    # Lazy import: must come AFTER the env-var above so the loader module reads
-    # ADAPTIVE_VALIDITY_EVALUATOR_ENABLED correctly on first import.
-    from src.data.causal_role_classifier_loader import (  # noqa: E402
-        classify_feature as _classify_feature,
-    )
-    from src.data.causal_role_classifier_loader import (
-        ensure_dspy_lm_configured as _ensure_dspy_lm_configured,
-    )
-    from src.data.causal_role_classifier_loader import (
-        load_compiled_classifier as _load_compiled_classifier,
-    )
+    # Test seam: pytest may patch module-level `load_compiled_classifier` /
+    # `classify_feature` / `ensure_dspy_lm_configured` on this module before
+    # calling main(); honor those overrides. Each symbol is resolved
+    # independently so partial patches (e.g., only load_compiled_classifier)
+    # do not get clobbered by the lazy import. Lazy-imports happen AFTER the
+    # env-var contract above so the loader reads
+    # ADAPTIVE_VALIDITY_EVALUATOR_ENABLED on its first import.
+    _module = sys.modules[__name__]
+    _load_compiled_classifier = getattr(_module, "load_compiled_classifier", None)
+    _classify_feature = getattr(_module, "classify_feature", None)
+    _ensure_dspy_lm_configured = getattr(_module, "ensure_dspy_lm_configured", None)
+
+    if _load_compiled_classifier is None:
+        from src.data.causal_role_classifier_loader import (  # noqa: E402
+            load_compiled_classifier as _load_compiled_classifier,
+        )
+    if _classify_feature is None:
+        from src.data.causal_role_classifier_loader import (  # noqa: E402
+            classify_feature as _classify_feature,
+        )
+    if _ensure_dspy_lm_configured is None:
+        from src.data.causal_role_classifier_loader import (  # noqa: E402
+            ensure_dspy_lm_configured as _ensure_dspy_lm_configured,
+        )
 
     logging.basicConfig(
         level=getattr(logging, args.log_level.upper()),
