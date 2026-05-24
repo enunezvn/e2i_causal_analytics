@@ -24,6 +24,20 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # This job installs BOTH the full frontend (npm ci) and the heavy ML
+      # backend (pip install -r requirements.txt) on one runner, which can
+      # exhaust the ~14 GB default disk ([Errno 28] No space left on device
+      # during pip install). Purge preinstalled SDKs we don't use to reclaim
+      # ~20 GB before the installs. Each removal is non-fatal (|| true).
+      - name: Free up runner disk space
+        run: |
+          echo "Disk before cleanup:"; df -h /
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet \
+            /usr/share/swift /usr/local/share/boost \
+            /opt/hostedtoolcache/CodeQL || true
+          sudo docker image prune -af || true
+          echo "Disk after cleanup:"; df -h /
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
