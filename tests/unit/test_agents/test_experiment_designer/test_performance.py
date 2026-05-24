@@ -179,8 +179,11 @@ class TestExperimentDesignerSLA:
             "achieved_power": 0.8,
         }
 
-        # Mock the LLM - node uses MockValidityLLM by default when no API key
-        # But we can also patch it directly for faster testing
+        # Mock the LLM — node uses MockValidityLLM here because the
+        # explicit EXPERIMENT_DESIGNER_USE_MOCK_LLM=1 dev-mode flag is
+        # set above (post-#471 the previous silent "default when no
+        # API key" behavior is fail-closed unless the flag is set).
+        # We still patch node.llm directly for faster testing.
         mock_response = MagicMock()
         mock_response.content = """{
             "internal_validity_threats": [],
