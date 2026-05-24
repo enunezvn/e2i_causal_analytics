@@ -1212,6 +1212,28 @@ def _ensemble_to_legacy_dict(
     # evaluator was disabled / failed / had no worker verdict to read.
     llm_audit = getattr(llm_in, "evaluator_audit", None) if llm_in is not None else None
 
+    # Issue #240 Stage 1 (shadow mode) — iterate the promotion-rule
+    # registry to compute three shadow flags from
+    # ``(verdict.severity, llm_audit)``. ALL rules are pure functions
+    # that read both inputs without mutation; the voter does NOT consume
+    # the returned values at Stage 1. Design ref:
+    # ``docs/plans/240-audit-evaluator-gate-promotion.md`` §3 Stage 1.
+    #
+    # Byte-identity invariant (AC1.2): when every rule returns None,
+    # the legacy dict below must be byte-identical (modulo the three
+    # shadow keys) to the legacy dict produced before this hook landed.
+    # Enforced by tests/integration/test_audit_evaluator_shadow_byte_identity.py.
+    #
+    # Lazy import (matches the EnsembleVoter/Verdict pattern above) —
+    # ``evaluator_promotion_rules`` itself only depends on
+    # ``kg.types.LLMEvaluatorAudit`` which is already in the import
+    # graph, but the lazy form keeps the top-level surface uniform.
+    from src.data.evaluator_promotion_rules import PROMOTION_RULES
+
+    _shadow_results: dict[str, object | None] = {"R1": None, "R2": None, "R3": None}
+    for _rule_id, _rule_fn in PROMOTION_RULES:
+        _shadow_results[_rule_id] = _rule_fn(verdict.severity, llm_audit)
+
     return {
         "feature": verdict.feature_name,
         "layer": layer_str,
@@ -1284,6 +1306,15 @@ def _ensemble_to_legacy_dict(
         "evaluator_input_tokens": llm_audit.input_tokens if llm_audit else None,
         "evaluator_output_tokens": llm_audit.output_tokens if llm_audit else None,
         "evaluator_cost_usd": llm_audit.cost_usd if llm_audit else None,
+        # Issue #240 Stage 1 (shadow mode) — three nullable flags
+        # populated from the promotion-rule registry above. NULL when
+        # the rule's trigger did not fire. The voter does NOT read
+        # these fields at Stage 1; they exist for analytics only. See
+        # ``src/data/evaluator_promotion_rules.py`` for rule semantics
+        # and ``docs/plans/240-audit-evaluator-gate-promotion.md`` §3.
+        "would_promote_severity": _shadow_results["R1"],
+        "would_flag_for_review": _shadow_results["R2"],
+        "rationale_incomplete_flag": _shadow_results["R3"],
     }
 
 
@@ -1360,6 +1391,14 @@ def _legacy_adversarial_alone_verdict(
         "evaluator_input_tokens": None,
         "evaluator_output_tokens": None,
         "evaluator_cost_usd": None,
+        # Issue #240 Stage 1 (shadow mode) — adversarial-only bypass
+        # has no LLM verdict, so the evaluator never runs and no
+        # promotion rule can fire. All three shadow flags are
+        # explicitly None for sidecar-schema uniformity (so consumers
+        # see the same key set across all four legacy-dict producers).
+        "would_promote_severity": None,
+        "would_flag_for_review": None,
+        "rationale_incomplete_flag": None,
     }
 
 
@@ -1427,6 +1466,11 @@ def _legacy_info_verdict(
         "evaluator_input_tokens": None,
         "evaluator_output_tokens": None,
         "evaluator_cost_usd": None,
+        # Issue #240 Stage 1 (shadow mode) — info-only bypass has no
+        # LLM verdict; shadow flags stay None for schema uniformity.
+        "would_promote_severity": None,
+        "would_flag_for_review": None,
+        "rationale_incomplete_flag": None,
     }
 
 
@@ -1491,6 +1535,11 @@ def _legacy_short_circuit_verdict(feature: str, *, evidence: str) -> dict[str, A
         "evaluator_input_tokens": None,
         "evaluator_output_tokens": None,
         "evaluator_cost_usd": None,
+        # Issue #240 Stage 1 (shadow mode) — short-circuit bypass has
+        # no LLM verdict; shadow flags stay None for schema uniformity.
+        "would_promote_severity": None,
+        "would_flag_for_review": None,
+        "rationale_incomplete_flag": None,
     }
 
 
