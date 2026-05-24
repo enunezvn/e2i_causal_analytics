@@ -4585,7 +4585,12 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
-        # PMID: 38008109 — Maurer 2023 Lancet PEARL-1/2 ligelizumab phase 3 (DOI:10.1016/S0140-6736(23)01684-7)
+        # Edge case: ISAC multiplex specific-IgE as CSU confounder — no dedicated observational
+        # PMID specifically validates ISAC-panel positivity count as a treatment-stratifying
+        # confounder in CSU (Maurer 2023 PEARL-1/2 PMID 38008109 covers ligelizumab RCT
+        # stratification, not ISAC-count as a confounder in routine care). This entry probes
+        # whether the classifier correctly identifies a granular diagnostic-panel feature as
+        # confounder rather than mediator or outcome-surrogate.
         dspy.Example(
             feature_name="baseline_isac_multiplex_specific_ige_panel_count_preindex_csu",
             derivation_pseudocode=(
@@ -4602,9 +4607,11 @@ def build_compile_set() -> list[dspy.Example]:
                 "derived strictly preindex (window_days=180, knowable_at=preindex_0d ensures "
                 "no post-treatment titer leakage), proxies the polyclonal IgE-substrate "
                 "load that anti-IgE therapy must neutralize. Z->T: high specific-IgE breadth "
-                "shifts prescribing toward higher-affinity anti-IgE (per PEARL-1/2 baseline "
-                "stratification; Maurer 2023 Lancet PMID 38008109; doi:10.1016/S0140-6736(23)"
-                "01684-7). Z->Y: specific-IgE breadth predicts CSU symptom severity through "
+                "shifts prescribing toward higher-affinity anti-IgE (mechanistic rationale: "
+                "polyclonal IgE breadth increases omalizumab dosing requirements via FcεRI "
+                "saturation; no single observational study has operationalized ISAC-count "
+                "as a prescribing confounder — this is a plausible-but-unvalidated feature). "
+                "Z->Y: specific-IgE breadth predicts CSU symptom severity through "
                 "the same FcεRI-cross-linking pathway irrespective of treatment receipt. "
                 "why_not_duplicate: golden baseline_total_ige_iu_ml_preindex measures TOTAL "
                 "polyclonal IgE concentration; this counts component-resolved specific-IgE "
@@ -5040,7 +5047,8 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
-        # PMID: 38141832 — Bernstein 2023 BTK signaling/remibrutinib approval timing + Brookhart-Wang IV pattern
+        # PMID: 41270830 — Chhiba & Saini 2025 Ann Allergy Asthma Immunol (DOI:10.1016/j.anai.2025.11.008)
+        # Remibrutinib received FDA approval based on phase 3 UAS7 reductions in CSU/CIndU.
         dspy.Example(
             feature_name="calendar_quarter_post_remibrutinib_fda_label_expansion_cindu_indicator_csu",
             derivation_pseudocode=(
@@ -5057,8 +5065,9 @@ def build_compile_set() -> list[dspy.Example]:
                 "remibrutinib to include chronic inducible urticaria (CIndU) on top of CSU. "
                 "Pre-anchor window enforced; label-expansion date is a fixed exogenous "
                 "regulatory event. Z->T: label expansion broadens the patient pool indexed "
-                "on remibrutinib (Bernstein 2023 BTK-signaling review PMID 38141832; "
-                "doi:10.1016/j.jaci.2023.12.008). EXCLUSION RESTRICTION DEFENSE: the "
+                "on remibrutinib (Chhiba & Saini 2025 Ann Allergy review of FDA approval "
+                "based on phase 3 UAS7 reductions; PMID 41270830; "
+                "doi:10.1016/j.anai.2025.11.008). EXCLUSION RESTRICTION DEFENSE: the "
                 "calendar event (label expansion) cannot affect CSU outcomes except through "
                 "shifting treatment-receipt patterns; CSU disease biology does not change "
                 "with regulatory action (Brookhart-Schneeweiss PMID 18375005). "
@@ -5412,7 +5421,12 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
-        # PMID: 27926978 — Kolkhir 2017 (proxy for atopic march)
+        # Edge case: Early-life AD before age 5y as CSU ancestor — no published paper maps
+        # specifically the age-5y AD threshold to adult CSU susceptibility via atopic march.
+        # Kolkhir 2017 (PMID 27926978) covers blood biomarkers in CSU, not the AD-to-CSU
+        # developmental pathway. This entry probes whether the classifier recognizes a fixed
+        # prenatal/neonatal trait as an ancestor even when the mechanism is plausible but
+        # not directly cited in an observational study of CSU specifically.
         dspy.Example(
             feature_name="early_life_atopic_dermatitis_before_age_5y_history_flag_csu",
             derivation_pseudocode=(
@@ -5428,16 +5442,20 @@ def build_compile_set() -> list[dspy.Example]:
                 "History of atopic dermatitis diagnosis before age 5y, documented strictly "
                 "preindex (knowable_at=preindex_0d; this is a fixed early-life trait). "
                 "Ancestor arrowhead: early-life atopic-march -> immune-phenotype -> CSU "
-                "susceptibility (Kolkhir 2017 PMID 27926978; doi:10.1111/cea.12870). The "
-                "early-life event temporally precedes ALL CSU disease-process exposures "
-                "and acts through baseline disease-susceptibility only. why_not_duplicate: "
-                "golden childhood_eczema_history_flag is broader (any childhood eczema "
-                "any age); this is the SHARPER age-5y threshold variant. Remediation per "
+                "susceptibility (mechanistic rationale: atopic march — early eczema confers "
+                "Th2-skewed immune phenotype elevating adult urticaria risk; no single "
+                "observational study validates the age-5y AD cutoff specifically for CSU, "
+                "making this a plausible edge case for the classifier). The early-life event "
+                "temporally precedes ALL CSU disease-process exposures and acts through "
+                "baseline disease-susceptibility only. why_not_duplicate: golden "
+                "childhood_eczema_history_flag is broader (any childhood eczema any age); "
+                "this is the SHARPER age-5y threshold variant. Remediation per "
                 "role-to-remediation table: ancestor → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
-        # PMID: 38141832 — Bernstein 2023 (genetic basis of BTK pathway)
+        # PMID: 35933036 — Zhang 2022 J Invest Dermatol GWAS of CSU (DOI:10.1016/j.jid.2022.07.012)
+        # First GWAS of CSU identifying risk loci (HLA-G, PTPN22, LILRA3) overlapping autoimmune genetics.
         dspy.Example(
             feature_name="ancestry_european_genetic_pc1_decile_csu_susceptibility",
             derivation_pseudocode=(
@@ -5453,8 +5471,9 @@ def build_compile_set() -> list[dspy.Example]:
                 "Decile of European genetic-ancestry PC1, from germline genotype data "
                 "(knowable_at=preindex_0d trivially; ancestry is fixed at conception). "
                 "Ancestor arrowhead: germline ancestry -> baseline genetic-architecture of "
-                "BTK/FcεRI/HLA loci known to vary across populations (Bernstein 2023 BTK-"
-                "signaling review PMID 38141832; doi:10.1016/j.jaci.2023.12.008). Ancestry "
+                "HLA/PTPN22/LILRA3/IGHG loci that vary across ancestry groups and "
+                "predispose to CSU via autoimmune pathways (Zhang 2022 J Invest Dermatol "
+                "GWAS of CSU; PMID 35933036; doi:10.1016/j.jid.2022.07.012). Ancestry "
                 "indexes genetic susceptibility upstream of all disease exposures. "
                 "why_not_duplicate: distinct from HLA-DR4 allele (a single locus); this is "
                 "GLOBAL ANCESTRY across all loci. Remediation per role-to-remediation "
@@ -5519,7 +5538,9 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             recommended_remediation="drop",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
-        # PMID: 27926978 — Kolkhir 2017 CSU biomarkers review (DOI:10.1111/cea.12870)
+        # PMID: 22289728 — Zazzali 2012 Ann Allergy Asthma Immunol CIU utilization (DOI:10.1016/j.anai.2011.10.018)
+        # Claims study: 56% primary care, 14% allergist, 5% dermatologist manage CIU; OCS bursts
+        # suggest escalation driven by poor response, anchoring T->referral<-Y collider structure.
         dspy.Example(
             feature_name="csu_specialty_clinic_referral_within_90d_postindex_flag",
             derivation_pseudocode=(
@@ -5537,13 +5558,15 @@ def build_compile_set() -> list[dspy.Example]:
                 "construction). Both treatment-receipt (T) AND outcome (Y, poor response "
                 "trajectory) influence the referral: complicated-course patients on first-"
                 "line biologics get escalated to specialty centers, AND treatment-failure "
-                "is the dominant referral trigger (Kolkhir 2017 PMID 27926978; doi:10.1111/"
-                "cea.12870). Collider arrowhead: T -> referral <- Y. Conditioning on "
-                "referral opens a spurious T-Y path biasing causal estimates. "
-                "why_not_duplicate: distinct from prior_csu_specialist_visit_count_365d_"
-                "preindex (a PREINDEX confounder); this is the POSTINDEX collider with "
-                "the same provider-system but reversed temporal positioning. Remediation "
-                "per role-to-remediation table: collider → drop."
+                "is the dominant referral trigger (Zazzali 2012 CIU claims study: 56% "
+                "primary care vs 14% allergist routing; OCS bursts signal severity-driven "
+                "escalation; PMID 22289728; doi:10.1016/j.anai.2011.10.018). Collider "
+                "arrowhead: T -> referral <- Y. Conditioning on referral opens a spurious "
+                "T-Y path biasing causal estimates. why_not_duplicate: distinct from "
+                "prior_csu_specialist_visit_count_365d_preindex (a PREINDEX confounder); "
+                "this is the POSTINDEX collider with the same provider-system but reversed "
+                "temporal positioning. Remediation per role-to-remediation table: "
+                "collider → drop."
             ),
             recommended_remediation="drop",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
