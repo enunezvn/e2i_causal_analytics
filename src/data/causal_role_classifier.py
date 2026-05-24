@@ -3139,9 +3139,18 @@ def build_compile_set() -> list[dspy.Example]:
         # 40 PubMed-grounded + 3 adversarial + 2 edge-case
         # Cohort tag canonical: cohort=BC; treatment=ribociclib_init or related;
         # outcome=pfs_24m / overall_survival_36m / discontinuation_180d / etc.
-        # All mechanisms carry remediation-mapping clause.
+        # All mechanisms carry remediation-mapping clause + temporal-filter clause.
         # IVs follow Brookhart-Wang first-initiation / preference-tendency
         # pattern with exclusion-restriction defense.
+        # Post-codex iter-0 fixes: confounder=25, mediator=8, descendant=6,
+        # instrument=4, ancestor=4, collider=4 (total 51 BC entries).
+        # HIGH-2: practice_volume IV renamed to practice_cdk46i_prescribing_preference
+        #         (Brookhart 2006 physician prescribing preference reframe, not access-volume).
+        # HIGH-3: payer_formulary_tier relabeled instrument→confounder (cost-sharing→adherence path).
+        # HIGH-4: state_medicaid_expansion relabeled instrument→confounder (access→adherence path).
+        # HIGH-5: medicine_access_program_enrollment dropped (hopelessly access-mediated);
+        #         replaced with oncologist_first_cdk46i_initiation_within_180d_post_kisqali_
+        #         label_expansion_bc (NATALEE Sep 2024 adjuvant Brookhart-Wang IV).
         # =====================================================================
         # PMID: 35263519 — MONALEESA-2 OS NEJM 2022 (DOI:10.1056/NEJMoa2114663)
         dspy.Example(
@@ -3191,6 +3200,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "burden that directly affects PFS. why_not_duplicate: golden has no prior-"
                 "adjuvant-duration feature; compile-set has prior_letrozole_duration but that "
                 "is letrozole-specific while this aggregates ALL adjuvant endocrine classes. "
+                "Temporal filter: derivation window strictly preindex (prefix-censoring at index_date). "
                 "Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
@@ -3243,8 +3253,9 @@ def build_compile_set() -> list[dspy.Example]:
                 "subclones, attenuating ribociclib PFS independently of choice. why_not_duplicate: "
                 "novel construct — neither golden nor existing compile-set has palbociclib-"
                 "specific cumulative exposure pre-ribociclib; this is the within-CDK4/6i-class "
-                "switcher confounder. Remediation per role-to-remediation table: confounder → "
-                "keep_with_caveat."
+                "switcher confounder. Temporal filter: derivation window strictly preindex "
+                "(prefix-censoring at index_date). "
+                "Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -3297,6 +3308,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "Robins 1999 (PMID 9888278). why_not_duplicate: golden de_novo_metastatic_flag "
                 "is a binary present-at-diagnosis indicator; this is CONTINUOUS months from "
                 "diagnosis to recurrence (only relevant for recurrent — not de novo — disease). "
+                "Temporal filter: derivation window strictly preindex (prefix-censoring at index_date). "
                 "Remediation per role-to-remediation table: ancestor → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
@@ -3447,7 +3459,8 @@ def build_compile_set() -> list[dspy.Example]:
                 "ribociclib or palbociclib. Z->Y: VTE history correlates with hypercoagulable "
                 "tumor biology and worse outcomes independently of CDK4/6i choice. why_not_duplicate: "
                 "novel VTE-history confounder distinct from any cardiac/hepatic toxicity "
-                "feature in golden+compile-set. Remediation per role-to-remediation table: "
+                "feature in golden+compile-set. Temporal filter: derivation window strictly preindex "
+                "(prefix-censoring at index_date). Remediation per role-to-remediation table: "
                 "confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
@@ -3529,8 +3542,9 @@ def build_compile_set() -> list[dspy.Example]:
                 "association reflects unobserved baseline frailty surfacing as early "
                 "intolerance. why_not_duplicate: distinct from the 'reduction-event-90d' "
                 "mediator above by AGGREGATION (timing-bucketed) and ROLE FRAMING (frailty "
-                "surrogate, not pathway). Remediation per role-to-remediation table: "
-                "descendant → drop."
+                "surrogate, not pathway). Post-treatment aggregation window (day-0 to day-90 post-index); "
+                "no post-treatment data leakage into preindex features. "
+                "Remediation per role-to-remediation table: descendant → drop."
             ),
             recommended_remediation="drop",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -3604,15 +3618,19 @@ def build_compile_set() -> list[dspy.Example]:
                 "captures fragility/intolerance/progression signal; not on the (T,Y) causal "
                 "path. why_not_duplicate: novel — discontinuation event distinct from "
                 "dose-reduction events; structural treatment-modification descendant. "
+                "Post-treatment aggregation window (day-0 to day-180 post-index); no post-treatment data leakage into preindex features. "
                 "Remediation per role-to-remediation table: descendant → drop."
             ),
             recommended_remediation="drop",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
         # PMID: 37529919 — Real-world palbociclib combos (DOI:10.2217/fon-2023-0176)
+        # Relabeled iter-0 HIGH-2: renamed from practice_volume_cdk46i_prescriptions_prior_year_tertile_bc
+        # to practice_cdk46i_prescribing_preference_tertile_prior_year_bc; mechanism reframed from
+        # volume/capacity pattern to Brookhart 2006 physician prescribing preference IV.
         dspy.Example(
-            feature_name="practice_volume_cdk46i_prescriptions_prior_year_tertile_bc",
+            feature_name="practice_cdk46i_prescribing_preference_tertile_prior_year_bc",
             derivation_pseudocode=(
-                "source=PROVIDER_CLAIMS; derivation_inputs=['practice_npi', 'cdk46i_prescriptions_count_365d_preindex']; "
+                "source=PROVIDER_CLAIMS; derivation_inputs=['practice_npi', 'practice_cdk46i_share_of_prior_year_HRpos_prescriptions_tertile']; "
                 "aggregation=tertile_relative_to_practice_distribution; window_days=365; knowable_at=preindex_0d"
             ),
             dataset_context=(
@@ -3621,18 +3639,22 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="instrument",
             mechanism=(
-                "Practice-level tertile of CDK4/6 inhibitor prescriptions in the 365d "
-                "preindex window — Brookhart-Schneeweiss 2007 practice-volume IV. Z->T: "
-                "high-volume CDK4/6i-experienced practices are more likely to initiate "
-                "ribociclib (familiarity-driven adoption) per real-world cohort (PMID "
-                "37529919; doi:10.2217/fon-2023-0176). Z->Y exclusion restriction: practice "
-                "volume in CDK4/6i prescribing affects PFS ONLY through choice of CDK4/6i "
-                "agent — there is no direct biological pathway from practice volume to "
-                "patient PFS independent of treatment choice. Pre-index measurement guarantees "
-                "temporal exogeneity. why_not_duplicate: distinct from golden practice_"
-                "ribociclib_share (which is ribociclib-specific share); this is TOTAL CDK4/6i "
-                "VOLUME (palbo+abema+ribo) tertile — captures practice CDK4/6i-experience "
-                "broadly. Remediation per role-to-remediation table: instrument → keep_with_caveat."
+                "Practice-level tertile of CDK4/6i prescribing PREFERENCE (share of HR+ "
+                "prescriptions that used a CDK4/6i in the prior year) per Brookhart 2006 "
+                "physician prescribing preference IV (PMID 16685206; doi:10.1093/aje/kwj148). "
+                "Z->T: practices with high CDK4/6i preference share are more likely to "
+                "initiate ribociclib over endocrine monotherapy (preference-driven adoption), "
+                "corroborated by real-world CDK4/6i-class comparative data (PMID 37529919; "
+                "doi:10.2217/fon-2023-0176). Z->Y exclusion restriction: the oncologist's "
+                "historic CDK4/6i prescribing preference reflects institutional protocols and "
+                "personal clinical-pattern, NOT patient biology — preference affects PFS ONLY "
+                "through treatment receipt; no direct biological pathway from prescribing "
+                "style to patient PFS independent of treatment choice. Temporal filter: "
+                "derivation window strictly preindex (prefix-censoring at index_date). "
+                "why_not_duplicate: distinct from golden practice_ribociclib_share (which is "
+                "ribociclib-specific share); this is CDK4/6i-CLASS preference share tertile "
+                "— broader class-level prescribing-preference IV per Brookhart 2006 framework. "
+                "Remediation per role-to-remediation table: instrument → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -3665,6 +3687,9 @@ def build_compile_set() -> list[dspy.Example]:
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
         # PMID: 31717791 — CDK4/6 NMA Cancers 2019 (DOI:10.3390/cancers11111661)
+        # Relabeled iter-0 HIGH-3: was instrument, relabeled to confounder.
+        # Formulary access mediates outcome via cost-sharing → adherence path,
+        # violating IV exclusion restriction per #358 audit principle.
         dspy.Example(
             feature_name="payer_formulary_tier_ribociclib_calendar_quarter_bc",
             derivation_pseudocode=(
@@ -3675,22 +3700,29 @@ def build_compile_set() -> list[dspy.Example]:
                 "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
                 "outcome=pfs_24m; prediction_anchor=ribociclib_init_date"
             ),
-            causal_role="instrument",
+            causal_role="confounder",
             mechanism=(
-                "Payer-class formulary tier designation for ribociclib at the index calendar "
-                "quarter (Tier 2 preferred / Tier 3 standard / Tier 4 non-preferred). Z->T: "
+                "Pre-index formulary tier for ribociclib at the index calendar quarter "
+                "(Tier 2 preferred / Tier 3 standard / Tier 4 non-preferred). Z->T: "
                 "preferred-tier formulary placement increases ribociclib uptake probability "
-                "per CDK4/6i comparative-effectiveness NMA (PMID 31717791; doi:10.3390/cancers11111661) "
-                "where access/coverage was a documented prescribing driver. Z->Y exclusion "
-                "restriction: formulary tier reflects payer-economic negotiations; there is "
-                "no direct biological pathway from formulary placement to patient PFS — all "
-                "effect mediated through treatment choice. why_not_duplicate: novel payer-"
-                "formulary-tier construct absent from golden + compile-set. Remediation per "
-                "role-to-remediation table: instrument → keep_with_caveat."
+                "per CDK4/6i comparative-effectiveness NMA (PMID 31717791; doi:10.3390/cancers11111661). "
+                "Z->Y DIRECT PATH: formulary tier determines patient cost-sharing (copay) → "
+                "directly affects adherence → directly affects PFS independent of treatment "
+                "receipt; this cost-sharing → adherence → outcome pathway violates IV "
+                "exclusion restriction per Brookhart 2006 (PMID 16685206) criteria. "
+                "Correct classification is CONFOUNDER (both Z->T and Z->Y direct paths "
+                "present). Temporal filter: derivation window strictly preindex "
+                "(prefix-censoring at index_date). why_not_duplicate: novel payer-"
+                "formulary-tier construct absent from golden + compile-set; specifically "
+                "teaches invalid-IV-relabeled-to-confounder boundary. Remediation per "
+                "role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
         # PMID: 35263519 — MONALEESA-2 OS NEJM 2022 (DOI:10.1056/NEJMoa2114663)
+        # Relabeled iter-0 HIGH-4: was instrument, relabeled to confounder.
+        # Medicaid expansion affects outcome via cost-sharing → access → adherence pathway,
+        # violating IV exclusion restriction per #358 audit principle.
         dspy.Example(
             feature_name="state_medicaid_expansion_status_post_2014_indicator_bc",
             derivation_pseudocode=(
@@ -3701,44 +3733,62 @@ def build_compile_set() -> list[dspy.Example]:
                 "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
                 "outcome=pfs_24m; prediction_anchor=ribociclib_init_date"
             ),
-            causal_role="instrument",
+            causal_role="confounder",
             mechanism=(
-                "Indicator that practice state implemented ACA Medicaid expansion before "
-                "the index date (state-level policy IV). Z->T: expanded-Medicaid states show "
+                "State Medicaid expansion affects both treatment receipt and downstream "
+                "adherence and follow-up care, violating IV exclusion restriction per #358 "
+                "audit principle; treated as confounder. Z->T: expanded-Medicaid states show "
                 "higher CDK4/6i uptake among low-income patients via reduced cost-sharing "
-                "per population-level treatment-uptake patterns documented alongside "
-                "MONALEESA-2 OS NEJM update (PMID 35263519; doi:10.1056/NEJMoa2114663). Z->Y "
-                "exclusion restriction: state policy change affects PFS ONLY through access-"
-                "to-treatment pathway (no direct biology of state expansion → patient survival "
-                "absent treatment access). why_not_duplicate: distinct from 340B (provider-"
-                "level program) above — this is STATE POLICY (geographic-policy IV). "
-                "Remediation per role-to-remediation table: instrument → keep_with_caveat."
+                "per population-level patterns alongside MONALEESA-2 OS update (PMID 35263519; "
+                "doi:10.1056/NEJMoa2114663). Z->Y DIRECT PATH: Medicaid expansion improves "
+                "access to ALL healthcare services (oncology follow-up visits, supportive "
+                "care, toxicity management) — this access improvement directly affects PFS "
+                "independent of CDK4/6i receipt; exclusion restriction fails because expansion "
+                "does not affect outcome ONLY through CDK4/6i choice. Correct classification "
+                "is CONFOUNDER (both Z->T and Z->Y direct paths confirmed). Temporal filter: "
+                "derivation window strictly preindex (prefix-censoring at index_date). "
+                "why_not_duplicate: distinct from 340B (provider-level program); this is "
+                "STATE POLICY (geographic-policy confounder). Remediation per role-to-"
+                "remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
-        # PMID: 36151018 — KARMA Australia ribociclib (DOI:10.1016/j.clbc.2022.08.011)
+        # PMID: 39442617 — NATALEE final iDFS Ann Oncol 2024 (DOI:10.1016/j.annonc.2024.10.015)
+        # + Brookhart 2006 physician prescribing preference IV (PMID 16685206)
+        # Replaced iter-0 HIGH-5: medicine_access_program_enrollment_indicator_preindex_bc was
+        # an access-based IV with no defensible reframing (MAP enrollment directly funds treatment
+        # access AND determines outcome via adherence support — hopelessly access-mediated).
+        # Replaced with NATALEE adjuvant label-expansion Brookhart-Wang short-term IV.
         dspy.Example(
-            feature_name="medicine_access_program_enrollment_indicator_preindex_bc",
+            feature_name="oncologist_first_cdk46i_initiation_within_180d_post_kisqali_label_expansion_bc",
             derivation_pseudocode=(
-                "source=PROGRAM_REGISTRY; derivation_inputs=['map_enrollment_flag', 'enrollment_date', 'index_date']; "
-                "aggregation=indicator_enrolled_before_index; window_days=180; knowable_at=preindex_0d"
+                "source=PROVIDER_CLAIMS_AND_REGULATORY; derivation_inputs=['oncologist_npi', 'first_kisqali_adjuvant_dispense_date', 'kisqali_natalee_label_expansion_date_sep_2024']; "
+                "aggregation=indicator_first_adjuvant_kisqali_init_within_180d_post_label_expansion; window_days=180; knowable_at=preindex_0d"
             ),
             dataset_context=(
-                "ConcertAI HR+/HER2- mBC; cohort=BC; treatment=ribociclib_init; "
-                "outcome=pfs_24m; prediction_anchor=ribociclib_init_date"
+                "ConcertAI HR+/HER2- early BC; cohort=BC; treatment=ribociclib_init; "
+                "outcome=invasive_disease_free_survival_36m; prediction_anchor=ribociclib_init_date"
             ),
             causal_role="instrument",
             mechanism=(
-                "Indicator of enrollment in a manufacturer-sponsored Medicine Access Program "
-                "(MAP) or patient-assistance program providing subsidized ribociclib access "
-                "in the pre-index window. Z->T: MAP enrollment dramatically increases "
-                "ribociclib initiation probability per KARMA Australian real-world registry "
-                "(PMID 36151018; doi:10.1016/j.clbc.2022.08.011). Z->Y exclusion restriction: "
-                "MAP enrollment is an administrative-financial-access mechanism with no "
-                "direct biological pathway to PFS — all effect via treatment availability. "
-                "why_not_duplicate: novel manufacturer-access-program construct distinct from "
-                "payer-formulary, 340B, expansion policies. Remediation per role-to-remediation "
-                "table: instrument → keep_with_caveat."
+                "Brookhart-Wang short-term first-initiation IV: indicator that the index "
+                "oncologist initiated Kisqali (ribociclib) for an adjuvant HR+/HER2- early "
+                "BC patient within 180d of the NATALEE adjuvant label expansion (FDA approval "
+                "Sep 2024; PMID 39442617; doi:10.1016/j.annonc.2024.10.015). Z->T: early-"
+                "adopter oncologists who rapidly incorporated the NATALEE-adjuvant indication "
+                "show persistent prescribing preference that affects subsequent ribociclib "
+                "initiation decisions for eligible patients, per Brookhart 2006 physician "
+                "prescribing preference IV framework (PMID 16685206; doi:10.1093/aje/kwj148). "
+                "Z->Y exclusion restriction: the oncologist's adoption velocity after the "
+                "label expansion reflects institutional protocols and early-adopter clinical "
+                "style — this has NO direct biological pathway to patient invasive-disease-"
+                "free survival; all effect is transmitted through treatment receipt. Temporal "
+                "filter: derivation window strictly preindex (prefix-censoring at index_date). "
+                "why_not_duplicate: distinct from palbociclib-class-level first-initiation IV "
+                "above (which is metastatic-class first adoption, 2015 FDA); this is the "
+                "NATALEE-ADJUVANT-SPECIFIC label-expansion adoption IV — different indication "
+                "(adjuvant) + different regulatory event (Sep 2024). Remediation per role-to-"
+                "remediation table: instrument → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -3764,7 +3814,9 @@ def build_compile_set() -> list[dspy.Example]:
                 "choice has no direct biological mechanism on the current patient's PFS "
                 "independent of treatment selection. why_not_duplicate: distinct from "
                 "ribociclib_preference_share (drug-level) — this is PARTNER-CHOICE preference "
-                "(orthogonal axis of prescribing-style heterogeneity). Remediation per role-"
+                "(orthogonal axis of prescribing-style heterogeneity). Temporal filter: "
+                "derivation window strictly preindex (prefix-censoring at index_date). "
+                "Remediation per role-"
                 "to-remediation table: instrument → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
@@ -3789,7 +3841,9 @@ def build_compile_set() -> list[dspy.Example]:
                 "doi:10.2217/fon-2023-0858). V is downstream consequence not on the (T,Y) "
                 "causal path. why_not_duplicate: novel intra-class-switch construct; distinct "
                 "from golden switch_ai_to_fulvestrant which is endocrine-backbone switch (not "
-                "CDK4/6i switch). Remediation per role-to-remediation table: descendant → drop."
+                "CDK4/6i switch). Post-treatment aggregation window (day-0 to day-365 post-index); "
+                "no post-treatment data leakage into preindex features. "
+                "Remediation per role-to-remediation table: descendant → drop."
             ),
             recommended_remediation="drop",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -3890,8 +3944,9 @@ def build_compile_set() -> list[dspy.Example]:
                 "line) to 59% (3rd line). M is on the (T->resistance->Y) causal path. "
                 "why_not_duplicate: golden ctdna_esr1_emergence_flag_90d exists but lacks "
                 "the BASELINE-NEGATIVE PRECONDITION; this DIFFERENCE-IN-STATUS construct "
-                "requires both timepoints. Remediation per role-to-remediation table: "
-                "mediator → drop."
+                "requires both timepoints. Post-treatment aggregation window (day-0 to day-90 post-index); "
+                "no post-treatment data leakage into preindex features. "
+                "Remediation per role-to-remediation table: mediator → drop."
             ),
             recommended_remediation="drop",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -3940,7 +3995,9 @@ def build_compile_set() -> list[dspy.Example]:
                 "and ALSO affects PFS. Conditioning on V opens backdoor U->Y path through "
                 "V-collider. why_not_duplicate: distinct from hospitalization-90d above by "
                 "(a) setting (ED vs inpatient), (b) window (60d vs 90d), (c) severity tier "
-                "(ED is less severe filter capturing more events). Remediation per role-to-"
+                "(ED is less severe filter capturing more events). Post-treatment aggregation "
+                "window (day-0 to day-60 post-index); no post-treatment data leakage into preindex features. "
+                "Remediation per role-to-"
                 "remediation table: collider → drop."
             ),
             recommended_remediation="drop",
@@ -3965,6 +4022,8 @@ def build_compile_set() -> list[dspy.Example]:
                 "where abnormal liver enzymes were the second-leading dose-reduction reason. "
                 "why_not_duplicate: golden hepatotoxicity_grade3_post_index_flag uses grade-3 "
                 "threshold; this is GRADE-2 — milder threshold, captures earlier-onset signal. "
+                "Post-treatment aggregation window (day-0 to day-60 post-index); "
+                "no post-treatment data leakage into preindex features. "
                 "Remediation per role-to-remediation table: mediator → drop."
             ),
             recommended_remediation="drop",
@@ -4043,6 +4102,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "subsequent CDK4/6i + endocrine PFS. why_not_duplicate: distinct from prior_"
                 "adjuvant_endocrine_therapy_duration (which is ADJUVANT setting); this is "
                 "METASTATIC-setting line count — different setting + different aggregation. "
+                "Temporal filter: derivation window strictly preindex (prefix-censoring at index_date). "
                 "Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
@@ -4067,7 +4127,8 @@ def build_compile_set() -> list[dspy.Example]:
                 "documented AI-progression marks established endocrine resistance with "
                 "shortened subsequent PFS. why_not_duplicate: distinct from generic adjuvant-"
                 "duration (Z above) which captures EXPOSURE; this is documented PROGRESSION "
-                "event — distinct construct (failure vs duration). Remediation per role-to-"
+                "event — distinct construct (failure vs duration). Temporal filter: derivation "
+                "window strictly preindex (prefix-censoring at index_date). Remediation per role-to-"
                 "remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
@@ -4116,7 +4177,8 @@ def build_compile_set() -> list[dspy.Example]:
                 "20446 patient cohort (PMID 33895695; doi:10.1016/j.esmoop.2021.100114). "
                 "Z->Y: age is a global mortality determinant. why_not_duplicate: golden has "
                 "no age construct anchored on METASTATIC diagnosis specifically; complementary "
-                "to baseline_ecog_ps in golden. Remediation per role-to-remediation table: "
+                "to baseline_ecog_ps in golden. Temporal filter: derivation window strictly preindex "
+                "(prefix-censoring at index_date). Remediation per role-to-remediation table: "
                 "confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
@@ -4192,7 +4254,8 @@ def build_compile_set() -> list[dspy.Example]:
                 "Z->Y: site count is a direct tumor-burden prognostic factor for OS. "
                 "why_not_duplicate: distinct from visceral_burden_count (visceral-only) and "
                 "bone_only_flag (bone-only); this aggregates ALL anatomic sites including "
-                "non-visceral non-bone — broader composite. Remediation per role-to-remediation "
+                "non-visceral non-bone — broader composite. Temporal filter: derivation window "
+                "strictly preindex (prefix-censoring at index_date). Remediation per role-to-remediation "
                 "table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
@@ -4218,7 +4281,8 @@ def build_compile_set() -> list[dspy.Example]:
                 "downstream confounders (visceral burden, recurrence biology, node count) "
                 "already in adjustment set per Greenland-Pearl-Robins 1999 (PMID 9888278). "
                 "why_not_duplicate: distinct from adjuvant-stage-ii-iii indicator (binary, "
-                "early-disease subset); this is FULL ORDINAL across all stages. Remediation "
+                "early-disease subset); this is FULL ORDINAL across all stages. Temporal filter: "
+                "derivation window strictly preindex (prefix-censoring at index_date). Remediation "
                 "per role-to-remediation table: ancestor → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
@@ -4245,7 +4309,8 @@ def build_compile_set() -> list[dspy.Example]:
                 "PIK3CA status, and prior-line counts already in adjustment set. why_not_duplicate: "
                 "distinct from prior_AI_progression_event (binary single-event) and "
                 "endocrine_monotherapy_lines (line-count): this is RESISTANCE-EVENT count "
-                "(documented failures specifically). Remediation per role-to-remediation "
+                "(documented failures specifically). Temporal filter: derivation window "
+                "strictly preindex (prefix-censoring at index_date). Remediation per role-to-remediation "
                 "table: ancestor → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
@@ -4271,8 +4336,9 @@ def build_compile_set() -> list[dspy.Example]:
                 "Conditioning on V opens collider path. why_not_duplicate: distinct from "
                 "discontinuation_indicator_180d (binary); this is CONTINUOUS time-to-failure "
                 "with mixed-cause framing — collider not descendant because composite cause "
-                "includes T-independent withdrawal. Remediation per role-to-remediation "
-                "table: collider → drop."
+                "includes T-independent withdrawal. Post-treatment aggregation window "
+                "(day-0 to day-180 post-index); no post-treatment data leakage into preindex features. "
+                "Remediation per role-to-remediation table: collider → drop."
             ),
             recommended_remediation="drop",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -4297,6 +4363,8 @@ def build_compile_set() -> list[dspy.Example]:
                 "integrates both, creating an open backdoor when conditioned. why_not_duplicate: "
                 "distinct from single-agent dose-reduction-indicator above; this is COMPOSITE "
                 "TWO-AGENT modification count — collider via composite-multi-cause aggregation. "
+                "Post-treatment aggregation window (day-0 to day-180 post-index); "
+                "no post-treatment data leakage into preindex features. "
                 "Remediation per role-to-remediation table: collider → drop."
             ),
             recommended_remediation="drop",
@@ -4320,8 +4388,9 @@ def build_compile_set() -> list[dspy.Example]:
                 "MONALEESA-2 OS QoL analyses (PMID 35263519; doi:10.1056/NEJMoa2114663); the "
                 "QoL change then drives downstream PRO outcome at 180d. POST-INDEX timing "
                 "places M on the causal path T->M->Y. why_not_duplicate: novel patient-"
-                "reported-outcome mediator absent from golden + compile-set. Remediation "
-                "per role-to-remediation table: mediator → drop."
+                "reported-outcome mediator absent from golden + compile-set. Post-treatment "
+                "aggregation window (day-0 to day-60 post-index); no post-treatment data leakage into preindex features. "
+                "Remediation per role-to-remediation table: mediator → drop."
             ),
             recommended_remediation="drop",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -4406,6 +4475,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "→ better PFS independent of CDK4/6i choice). This is the canonical case of "
                 "an apparent-IV that fails exclusion restriction. why_not_duplicate: novel "
                 "practice-program construct; specifically teaches IV-vs-confounder boundary. "
+                "Temporal filter: derivation window strictly preindex (prefix-censoring at index_date). "
                 "Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
@@ -4468,6 +4538,8 @@ def build_compile_set() -> list[dspy.Example]:
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
         # =====================================================================
         # End Plan-239 n=200 Task 4 — Bucket 2 BC expansion (+45 entries: #98–#142)
+        # Final BC count: 51 total. Post-codex iter-0 role distribution:
+        # confounder=25, mediator=8, descendant=6, instrument=4, ancestor=4, collider=4.
         # =====================================================================
     ]
     return examples
