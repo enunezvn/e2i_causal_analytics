@@ -7,6 +7,8 @@ tested separately in tests/integration/ where API keys / mocks are managed.
 
 from __future__ import annotations
 
+from typing import Any
+
 
 def test_compile_set_has_diverse_examples():
     """The compile set must cover multiple causal roles, not just one."""
@@ -1072,4 +1074,247 @@ def test_persisted_artifact_has_treatment_outcome_explicit_instruments():
         f"arms): if both are missing, BootstrapFewShot may have failed on "
         f"the new (T, Y) schema. Recompile with the §3.5 demos verified "
         f"present in build_compile_set()."
+    )
+
+
+# --- Plan-239: compile-set vs golden-set disjointness invariants (§4) -------
+
+
+def test_compile_set_disjoint_from_golden_set_literature() -> None:
+    """Plan-239 §4.1/§4.2 — held-out literature golden set must NEVER share
+    a feature_name with the DSPy compile set, or the MIPROv2 A/B benchmark
+    is contaminated (training-set leakage). PR-blocking.
+
+    Negative-control proof of falsifiability (plan-239 §6.2 L1 mutation-
+    confirm-revert): during implementation, the test was sanity-checked by
+    temporarily appending an entry with feature_name=
+    `family_history_hr_positive_bc_count` (a BC-cohort golden feature) to
+    `build_compile_set()`; running this test produced RED with the expected
+    overlap message; the mutation was then reverted and the test confirmed
+    GREEN. The mutation-confirm-revert sequence is recorded here so a future
+    maintainer can re-run the negative control on demand.
+    """
+    import json
+    from pathlib import Path
+
+    from src.data.causal_role_classifier import build_compile_set
+
+    compile_features = {ex.feature_name for ex in build_compile_set()}
+    golden_path = (
+        Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "causal_role_golden_set.json"
+    )
+    golden_features = {e["feature_name"] for e in json.loads(golden_path.read_text())["entries"]}
+
+    overlap = compile_features & golden_features
+    assert overlap == set(), (
+        f"Compile set and held-out literature golden set MUST be disjoint on "
+        f"feature_name. Overlap: {sorted(overlap)}. Plan-239 §4.1."
+    )
+
+
+_PRE_EXISTING_SYNTH_COLLISIONS: frozenset[str] = frozenset(
+    {
+        "age_at_index",
+        "alive_at_180d_observation_window",
+        "baseline_severity_score_preindex",
+        "index_provider_biologic_volume_prior_year",
+    }
+)
+
+
+def test_compile_set_disjoint_from_golden_set_synthetic() -> None:
+    """Plan-239 §4.1 sibling invariant — compile-set additions must NOT reuse
+    synthetic-fixture bare feature_names (per §0/V27). New bucket-D synthetic
+    compile-set entries are required to carry `synth_*` prefix.
+
+    The synthetic fixture is used by DGP integration tests (not by the AC3
+    held-out literature A/B benchmark), so the contamination harm is narrower
+    than for the literature golden set; we pin only the 4 pre-#239
+    pre-existing collisions as an expected frozen baseline so any NEW overlap
+    (e.g., a bucket-D entry that forgets `synth_*` prefix) fires this test.
+
+    Falsifiability shape: this test is a frozen-baseline-with-deny-new-additions
+    invariant rather than a mutation-confirm-revert test. To prove the deny
+    side fires on a regression, temporarily change one bucket-D entry's
+    feature_name from `synth_a1_baseline_severity_max_180d_preindex_alt_confounder`
+    to `baseline_severity_score_preindex` (the synthetic-fixture's bare name)
+    and confirm the test goes RED with the new_overlap message; revert to GREEN.
+    """
+    import json
+    from pathlib import Path
+
+    from src.data.causal_role_classifier import build_compile_set
+
+    compile_features = {ex.feature_name for ex in build_compile_set()}
+    synth_path = (
+        Path(__file__).resolve().parents[3]
+        / "tests"
+        / "fixtures"
+        / "causal_role_golden_set_synthetic.json"
+    )
+    synth_features = {e["feature_name"] for e in json.loads(synth_path.read_text())["entries"]}
+
+    overlap = compile_features & synth_features
+    new_overlap = overlap - _PRE_EXISTING_SYNTH_COLLISIONS
+    assert not new_overlap, (
+        f"Plan-239 §4.1: new compile-set entries must not share feature_name "
+        f"with the synthetic golden fixture (bucket-D entries need `synth_*` "
+        f"prefix per §0/V27). New overlap: {sorted(new_overlap)}; pre-existing "
+        f"baseline: {sorted(_PRE_EXISTING_SYNTH_COLLISIONS)}."
+    )
+
+
+def test_golden_set_does_not_carry_causal_role_field() -> None:
+    """Plan-239 §4.1 iter-2 negative-control — the literature golden fixture
+    must NOT carry a `causal_role` key; the canonical role-key on golden
+    entries is `ground_truth_role`. If a future golden refresh accidentally
+    introduces `causal_role`, the semantic-overlap test's field-name
+    discipline becomes silently no-op-able. This guard fires first.
+    """
+    import json
+    from pathlib import Path
+
+    golden_path = (
+        Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "causal_role_golden_set.json"
+    )
+    entries = json.loads(golden_path.read_text())["entries"]
+    contaminated = [e["feature_name"] for e in entries if "causal_role" in e]
+    assert not contaminated, (
+        f"Golden fixture unexpectedly carries `causal_role` on entries: "
+        f"{contaminated}. Field-name discipline in plan-239 §4.1 may be obsolete; "
+        f"semantic-overlap test could silently no-op."
+    )
+
+
+def test_compile_set_no_near_duplicate_with_golden() -> None:
+    """Plan-239 §4.3 — no compile-set entry may share a derivation signature
+    (source, sorted(inputs), aggregation, window_days) with a golden-set entry
+    whose role label matches the compile entry's `causal_role`, UNLESS
+    allowlisted with justification.
+
+    Field-name discipline (iter-2): compile entries use `causal_role`; the
+    literature golden fixture uses `ground_truth_role`. The signature check
+    compares `compile_entry.causal_role == golden_entry["ground_truth_role"]`.
+    """
+    import sys
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[3]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+
+    from scripts.check_compile_golden_semantic_overlap import find_unauthorized_collisions
+    from src.data.causal_role_classifier import build_compile_set
+
+    collisions = find_unauthorized_collisions(build_compile_set())
+    assert not collisions, (
+        f"Plan-239 §4.3 PR-blocking: unauthorized same-role same-signature "
+        f"collisions between compile-set and golden-set: {collisions}. "
+        f"Either differentiate the derivation or add an allowlist entry with "
+        f"non-empty justification to tests/fixtures/compile_golden_semantic_allowlist.json."
+    )
+
+
+# --- Plan-239: red-first tests (R1-R3) ---------------------------------------
+
+
+def test_compile_set_size_at_least_50() -> None:
+    """Plan-239 §6.2 R1 — issue #239 blocker (MIPROv2 needs ≥50 examples).
+
+    Pinned EXACTLY at 50 (not `>=`) per codex impl iter-0 MEDIUM finding:
+    each of the 17 plan-239 additions (#34-#50) was individually audited
+    against the §3.0 semantic-neighbor table; any new addition needs a new
+    §3.0 audit row before incrementing the count. Pinning exact catches
+    accidental size drift that would invalidate the §3.0 disjointness audit.
+    """
+    from src.data.causal_role_classifier import build_compile_set
+
+    n = len(build_compile_set())
+    assert n == 50, (
+        f"Plan-239 AC4: compile set must have exactly 50 examples; got {n}. "
+        f"New additions beyond 50 require a new §3.0 semantic-neighbor row "
+        f"per plan-239 §4.3 PR-blocking gate."
+    )
+
+
+def test_optimizer_flag_accepts_miprov2() -> None:
+    """Plan-239 §6.2 R2 / AC1 — compile script must accept --optimizer miprov2."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parents[3] / "scripts" / "compile_causal_role_classifier.py"
+    proc = subprocess.run(
+        [sys.executable, str(script), "--help"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert proc.returncode == 0, f"--help should exit 0; got {proc.returncode}"
+    assert "--optimizer" in proc.stdout, (
+        "Plan-239 AC1: scripts/compile_causal_role_classifier.py must accept "
+        "--optimizer flag. Got --help output without the flag."
+    )
+    assert "miprov2" in proc.stdout, (
+        "Plan-239 AC1: --optimizer must list 'miprov2' as a valid choice."
+    )
+
+
+def test_compile_with_miprov2_threads_seed_into_constructor_and_compile(
+    monkeypatch: Any,
+) -> None:
+    """Plan-239 §5.1 / §6.2 R3 — wrapper must thread --seed into BOTH the
+    MIPROv2 constructor and its compile() call. Belt-and-suspenders.
+    """
+    import importlib
+    import sys
+
+    seen: dict[str, Any] = {}
+
+    class _FakeMipro:
+        def __init__(self, *args: Any, seed: int | None = None, **kwargs: Any) -> None:
+            seen["init_seed"] = seed
+            seen["init_args"] = args
+            seen["init_kwargs"] = kwargs
+
+        def compile(self, *args: Any, seed: int | None = None, **kwargs: Any) -> object:
+            seen["compile_seed"] = seed
+            seen["compile_args"] = args
+            seen["compile_kwargs"] = kwargs
+            return object()
+
+    # Patch dspy.teleprompt.MIPROv2 with the fake.
+    import dspy.teleprompt as tp
+
+    monkeypatch.setattr(tp, "MIPROv2", _FakeMipro, raising=True)
+
+    # Import the wrapper (must exist for this test to pass).
+    sys.modules.pop("scripts.compile_causal_role_classifier", None)
+    mod = importlib.import_module("scripts.compile_causal_role_classifier")
+    assert hasattr(mod, "_compile_with_miprov2"), (
+        "Plan-239 §5.1: scripts/compile_causal_role_classifier.py must "
+        "define _compile_with_miprov2(...) to wrap the MIPROv2 path."
+    )
+
+    # Stub the program + trainset enough that the wrapper can execute.
+    class _StubProgram:
+        def __init__(self) -> None:
+            self.metadata: dict[str, Any] = {}
+
+    program = _StubProgram()
+    trainset: list[Any] = []
+    mod._compile_with_miprov2(
+        program=program,
+        trainset=trainset,
+        seed=42,
+        max_labeled_demos=60,
+    )
+
+    assert seen.get("init_seed") == 42, (
+        f"Plan-239 §5.1: seed=42 must be threaded into MIPROv2 constructor; "
+        f"got init_seed={seen.get('init_seed')!r}."
+    )
+    assert seen.get("compile_seed") == 42, (
+        f"Plan-239 §5.1: seed=42 must be threaded into MIPROv2.compile(); "
+        f"got compile_seed={seen.get('compile_seed')!r}."
     )

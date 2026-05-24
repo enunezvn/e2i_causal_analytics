@@ -1,0 +1,5 @@
+{
+  "schema_version": 1,
+  "allowlist": [],
+  "policy": "Empty by default. Plan-239 §4.3 PR-blocking semantic-overlap test fails if any compile-set entry shares a derivation signature (source, sorted(inputs), aggregation, window_days) with a golden-set entry whose ground_truth_role matches the compile entry's causal_role, UNLESS the pair appears here with a non-empty `justification` field referencing plan-239 §3.0 distance assessment. Adding a row REQUIRES deliberate adjudication — silent drift not allowed."
+}
