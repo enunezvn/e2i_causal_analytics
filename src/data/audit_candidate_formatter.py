@@ -146,6 +146,24 @@ def format_json_manifest(
                 "dataset_context": None,
                 "expected_causal_role": None,
                 "expected_remediation": None,
+                # Issue #240 Stage 2 (design §3 + §5 R-4): the manifest is the
+                # machine-readable curation artifact, so it must carry the same
+                # promotion context as the markdown — worker verdict as the
+                # primary value with the R1 promotion candidate adjacent.
+                "worker_verdict": {
+                    "severity": e.worker_severity,
+                    "remediation": e.worker_remediation,
+                },
+                "promotion_candidate": (
+                    {
+                        "rule": "R1",
+                        "would_promote_severity": e.would_promote_severity,
+                        "evaluator_satisfied": e.evaluator_satisfied,
+                        "missed_considerations_count": len(e.missed_considerations),
+                    }
+                    if e.would_promote_severity is not None
+                    else None
+                ),
                 "evaluator_audit": {
                     "satisfied": False,
                     "rationale_complete": e.rationale_complete,

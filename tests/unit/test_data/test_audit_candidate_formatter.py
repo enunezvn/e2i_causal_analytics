@@ -160,6 +160,36 @@ def test_format_json_manifest_shape():
     assert c0["source_run_id"] == "exp-1"
 
 
+def test_json_manifest_carries_promotion_candidate_when_r1_fired():
+    """Codex iter-0 MEDIUM: the machine-readable manifest must carry the
+    Stage-2 promotion context (design §3 + §5 R-4: manifests show worker
+    severity with would_promote_severity adjacent), not just the markdown."""
+    from src.data.audit_candidate_formatter import format_json_manifest
+
+    events = [
+        _make_event("fired", would_promote_severity="high"),
+        _make_event("quiet", would_promote_severity=None),
+    ]
+    manifest = format_json_manifest(
+        events, generated_at=datetime(2026, 5, 15, 11, 0, tzinfo=timezone.utc)
+    )
+    fired, quiet = manifest["candidates"]
+
+    # Worker verdict surfaced as primary value (design §5 R-4).
+    assert fired["worker_verdict"]["severity"] == "moderate"
+    assert fired["worker_verdict"]["remediation"] == "keep_with_caveat"
+
+    # Promotion candidate block present + adjacent when R1 fired.
+    assert fired["promotion_candidate"] == {
+        "rule": "R1",
+        "would_promote_severity": "high",
+        "evaluator_satisfied": False,
+        "missed_considerations_count": 1,
+    }
+    # None when no rule fired (machine consumers can filter on this).
+    assert quiet["promotion_candidate"] is None
+
+
 def test_json_manifest_is_round_trippable():
     """The manifest is consumed by a human; it must round-trip through
     json.dumps/json.loads cleanly."""
