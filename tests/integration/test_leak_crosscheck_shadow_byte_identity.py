@@ -306,79 +306,82 @@ def test_node_crosscheck_fires_for_x1_confounder(minimal_train_df, monkeypatch):
     assert "would_flag_role_leak_disagreement" in x1_verdict_no_llm
 
 
-def test_node_crosscheck_fires_true_with_confounder_llm_verdict(minimal_train_df, monkeypatch):
-    """When the LLM assigns confounder to x1 AND leakage_findings marks x1
-    as high-severity, ``would_flag_role_leak_disagreement`` must be ``True``
-    for x1, while leakage_severity and the severity/remediation fields on x1
-    are NOT changed.
+def _firing_state(exp_id: str) -> dict:
+    """State that makes Layer 4 fire DETERMINISTICALLY for x1.
 
-    This test patches both ``_try_load_layer_4_classifier`` (returns a fake
-    non-None sentinel) and the ``classify_feature`` import inside the node
-    so no actual API call is made.
+    Layer 4 fires when ``adv_severity_pre == "moderate"`` (z-band 3σ<z≤5σ).
+    Empirically (fixed seeds: data seed 7, ``adaptive_seed=42``,
+    ``adaptive_n_permutations=100``, n=400) a target-correlation coefficient
+    of 0.30 lands x1's permutation z-score squarely in the moderate band —
+    so x1 routes to Layer 4 every run. (Stronger coefficients push it to
+    ``high`` and weaker ones to ``info``, neither of which fires Layer 4
+    without ``layer_1_declared_safe``; 0.30 is the stable middle.)
     """
-    # Fake classifier sentinel — just needs to be not-None so Layer 4 fires.
-    fake_classifier = object()
+    rng = np.random.default_rng(7)
+    n = 400
+    y = rng.integers(0, 2, size=n)
+    x1 = y.astype(float) * 0.30 + rng.normal(0, 1.0, size=n)
+    x2 = rng.normal(0, 1, size=n)
+    df = pd.DataFrame({"x1": x1, "x2": x2, "outcome": y})
+    return {
+        "experiment_id": exp_id,
+        "train_df": df,
+        "scope_spec": {"prediction_target": "outcome"},
+        "leakage_findings": [
+            {"feature": "x1", "severity": "high", "check_name": "single_feature_auc"}
+        ],
+        "adaptive_n_permutations": 100,
+        "adaptive_seed": 42,
+    }
 
+
+def _patch_layer4_confounder(monkeypatch) -> None:
+    """Make Layer 4 return a stubbed confounder verdict (no API)."""
     confounder_verdict = LLMVerdict(
         causal_role="confounder",  # type: ignore[arg-type]
         mechanism="temporal window, pre-index, Pearl arrows",
         recommended_remediation="keep",
         evaluator_audit=None,
     )
-
-    monkeypatch.setattr(_AVC_MODULE, "_try_load_layer_4_classifier", lambda: fake_classifier)
-
-    # Patch classify_feature in the module namespace used by the node.
-    # The node does: from src.data.causal_role_classifier_loader import classify_feature
-    # at call-time, so we need to patch the loader module attribute.
+    monkeypatch.setattr(_AVC_MODULE, "_try_load_layer_4_classifier", lambda: object())
     import src.data.causal_role_classifier_loader as loader_mod
 
     monkeypatch.setattr(loader_mod, "classify_feature", lambda **_kw: confounder_verdict)
 
-    # Use a DataFrame where x1 is moderate-severity (adversarial): 3σ < z ≤ 5σ.
-    # We need adv_severity_pre == "moderate" for Layer 4 to fire.
-    # Build a slightly-correlated x1 (not perfect) so AUC ≈ 0.70-0.80 → z ~ 3-5σ.
-    rng = np.random.default_rng(99)
-    n = 300
-    y = rng.integers(0, 2, size=n)
-    x1_mod = y.astype(float) * 0.6 + rng.normal(0, 1.0, size=n)
-    x2_noise = rng.normal(0, 1, size=n)
-    df_moderate = pd.DataFrame({"x1": x1_mod, "x2": x2_noise, "outcome": y})
 
-    prior_findings = [{"feature": "x1", "severity": "high", "check_name": "single_feature_auc"}]
-    state = {
-        "experiment_id": "test-501-with-llm",
-        "train_df": df_moderate,
-        "scope_spec": {"prediction_target": "outcome"},
-        "leakage_findings": prior_findings,
-        "adaptive_n_permutations": 50,  # faster test
-    }
-    result = _run_node(state)
+def test_node_crosscheck_fires_true_with_confounder_llm_verdict(monkeypatch):
+    """When the LLM assigns confounder to x1 AND leakage_findings marks x1
+    as high-severity, ``would_flag_role_leak_disagreement`` must be ``True``
+    for x1, while leakage_severity and the severity/remediation fields on x1
+    are NOT changed.
+
+    Patches ``_try_load_layer_4_classifier`` (returns a non-None sentinel)
+    and ``classify_feature`` (returns a confounder verdict) so no API call is
+    made, and uses ``_firing_state`` which deterministically drives x1 into
+    the moderate z-band so Layer 4 ACTUALLY fires. (An earlier version of
+    this test used a config that never reached the moderate band, so its
+    "fired" assertion was unreachable — the test silently asserted only the
+    None branch. The firing config closes that gap.)
+    """
+    _patch_layer4_confounder(monkeypatch)
+
+    result = _run_node(_firing_state("test-501-fires-true"))
     verdicts = result.get("adaptive_verdicts", [])
     x1_verdict = next((v for v in verdicts if v["feature"] == "x1"), None)
     assert x1_verdict is not None, "x1 verdict must exist"
 
-    # Check cross-check field (True when LLM said confounder + stat said high).
-    # Note: Layer 4 fires only when adversarial severity is moderate or
-    # (high + layer_1_declared_safe). For the moderate-correlation case Layer 4
-    # fires → confounder LLM verdict → stat finding high → True.
-    # If x1 ends up info or high without layer_1_declared_safe, Layer 4 won't
-    # fire and llm_role will be None → cross-check will be None.
-    # We accept EITHER outcome and assert the invariant:
-    flag_val = x1_verdict.get("would_flag_role_leak_disagreement")
-    llm_role_val = x1_verdict.get("llm_role")
-    if llm_role_val == "confounder":
-        # Layer 4 fired → expect True.
-        assert flag_val is True, (
-            f"Expected True when llm_role=confounder and stat=high, got {flag_val!r}"
-        )
-    else:
-        # Layer 4 didn't fire (x1 is info or high without layer_1_declared_safe).
-        assert flag_val is None, f"Expected None when llm_role is None, got {flag_val!r}"
+    # Guard: the firing path MUST be exercised (else the test is vacuous).
+    assert x1_verdict.get("llm_role") == "confounder", (
+        f"Layer 4 did not fire — llm_role={x1_verdict.get('llm_role')!r}; "
+        "the firing config regressed and this test would be vacuous"
+    )
+    # LLM said benign keep-role (confounder) + stat said high → flag True.
+    assert x1_verdict.get("would_flag_role_leak_disagreement") is True, (
+        f"Expected True when llm_role=confounder and stat=high, "
+        f"got {x1_verdict.get('would_flag_role_leak_disagreement')!r}"
+    )
 
-    # INVARIANT: leakage_severity and the severity/remediation fields must
-    # NOT be changed by the presence of would_flag_role_leak_disagreement.
-    # The cross-check is shadow only.
+    # INVARIANT: leakage_severity must NOT be perturbed by the cross-check.
     assert "leakage_severity" not in result or result.get("leakage_severity") in (
         None,
         "high",
@@ -507,6 +510,79 @@ def test_node_shadow_crosscheck_on_vs_off_byte_identity(minimal_train_df, monkey
     # it must never alter the severity escalation path).
     assert result_on.get("leakage_severity") == result_off.get("leakage_severity"), (
         "leakage_severity changed by cross-check — must not affect severity escalation"
+    )
+
+
+def test_node_shadow_on_vs_off_byte_identity_firing_path(monkeypatch):
+    """LOAD-BEARING SAFETY TEST — shadow invariance on the FIRING path.
+
+    The no-fire ON-vs-OFF test above disables Layer 4, so the cross-check
+    never returns ``True`` and a regression that mutated a non-additive field
+    *only when the flag fires* would slip through. This test closes that gap:
+    Layer 4 fires (stubbed confounder verdict on the deterministic
+    ``_firing_state`` config), so the cross-check evaluates to ``True`` for
+    x1 in the ON run. We then compare against an OFF run where ONLY
+    ``evaluate_role_vs_statistical_leak`` is made inert (Layer 4 still fires
+    the same confounder verdict), and assert every non-additive verdict field
+    + ``leakage_severity`` are byte-identical. So even when the cross-check
+    FIRES, the only difference between ON and OFF is the additive
+    ``would_flag_role_leak_disagreement`` key.
+
+    Falsifiability: add any non-additive mutation guarded by
+    ``if would_flag_role_leak_disagreement:`` inside the node → ON's x1
+    verdict diverges from OFF's → this test trips. The no-fire variant could
+    NOT catch that.
+    """
+    _patch_layer4_confounder(monkeypatch)
+
+    # Treatment: real cross-check → x1 flag fires True (confounder + stat high).
+    result_on = _run_node(_firing_state("test-shadow-fire-on"))
+    verdicts_on = {v["feature"]: v for v in result_on.get("adaptive_verdicts", [])}
+
+    # Guard: the firing path MUST actually be exercised (non-vacuous).
+    x1_on = verdicts_on.get("x1")
+    assert x1_on is not None and x1_on.get("llm_role") == "confounder", (
+        "Layer 4 did not fire in ON run — firing config regressed; test would be vacuous"
+    )
+    assert x1_on.get("would_flag_role_leak_disagreement") is True, (
+        "Cross-check did not fire True in ON run — cannot test firing-path shadow invariance"
+    )
+
+    # Baseline: cross-check made inert (flag → None) but Layer 4 STILL fires
+    # the same confounder verdict, so the ONLY changed input is the flag.
+    monkeypatch.setattr(
+        _CROSSCHECK_MODULE,
+        "evaluate_role_vs_statistical_leak",
+        lambda _role, _sev: None,
+    )
+    result_off = _run_node(_firing_state("test-shadow-fire-off"))
+    verdicts_off = {v["feature"]: v for v in result_off.get("adaptive_verdicts", [])}
+
+    # OFF still fires Layer 4 (confounder) but the flag is suppressed to None.
+    x1_off = verdicts_off.get("x1")
+    assert x1_off is not None and x1_off.get("llm_role") == "confounder", (
+        "Layer 4 did not fire in OFF run — runs not comparable"
+    )
+    assert x1_off.get("would_flag_role_leak_disagreement") is None, (
+        "OFF baseline should suppress the flag to None"
+    )
+
+    assert set(verdicts_on.keys()) == set(verdicts_off.keys()), (
+        "Feature sets differ ON vs OFF on the firing path"
+    )
+
+    for feat in verdicts_on:
+        v_on = verdicts_on[feat]
+        v_off = verdicts_off[feat]
+        # The genuine shadow proof on the firing path: every non-additive
+        # field is byte-identical even though x1's flag is True (on) vs None
+        # (off).
+        assert _canonical_bytes(_without_additive_keys(v_on)) == _canonical_bytes(
+            _without_additive_keys(v_off)
+        ), f"Non-additive fields changed by a FIRING cross-check for {feat} — NOT shadow"
+
+    assert result_on.get("leakage_severity") == result_off.get("leakage_severity"), (
+        "leakage_severity changed by a firing cross-check — must not affect severity"
     )
 
 
