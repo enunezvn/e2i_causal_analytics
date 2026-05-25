@@ -511,6 +511,54 @@ class TestInstrumentAnalyzerProducer:
 
         assert not result.get("instrument_strength_by_feature")
 
+    @pytest.mark.asyncio
+    async def test_noop_preserves_precomputed_strength(self):
+        """No specs/tier0_data but a precomputed strength on state -> PRESERVED, not clobbered.
+
+        Regression for the codex-flagged routing bug: the IV node must not erase a
+        precomputed instrument_strength_by_feature (the P-1 passthrough path that
+        _initialize_state already copies) just because it has nothing of its own to run.
+        """
+        node = InstrumentAnalyzerNode()
+        state = {
+            "instrument_specs": None,
+            "tier0_data": None,
+            "instrument_strength_by_feature": {"trx": _strong_diag(24.0)},
+        }
+
+        result = await node.execute(state)  # type: ignore[arg-type]
+
+        by_feature = result["instrument_strength_by_feature"]
+        assert by_feature["trx"]["instrument_strength"] == "strong"
+        assert by_feature["trx"]["first_stage_f_stat"] == 24.0
+
+    @pytest.mark.asyncio
+    async def test_real_estimate_merges_onto_precomputed(self):
+        """A real first-stage result merges on top of a precomputed map (recompute wins; others kept)."""
+        node = InstrumentAnalyzerNode()
+        df = self._strong_dgp_df()
+        state = {
+            "tier0_data": df,
+            "instrument_specs": {
+                "trx": {
+                    "treatment_col": "rep_calls",
+                    "instrument_cols": ["weather_shock"],
+                    "outcome_col": "trx",
+                }
+            },
+            # A different feature precomputed via passthrough must be preserved.
+            "instrument_strength_by_feature": {"nrx": _strong_diag(18.0)},
+        }
+
+        result = await node.execute(state)  # type: ignore[arg-type]
+
+        by_feature = result["instrument_strength_by_feature"]
+        # Precomputed nrx preserved...
+        assert by_feature["nrx"]["first_stage_f_stat"] == 18.0
+        # ...and trx computed from the REAL first stage.
+        assert by_feature["trx"]["instrument_strength"] == "strong"
+        assert by_feature["trx"]["first_stage_f_stat"] >= 10.0
+
 
 # =============================================================================
 # Routing — _initialize_state copy + end-to-end graph wire (AC4)

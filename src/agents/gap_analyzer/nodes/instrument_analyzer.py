@@ -52,15 +52,23 @@ class InstrumentAnalyzerNode:
 
         Returns:
             ``{"instrument_strength_by_feature": {...}}`` mapping feature_name to the
-            ``IVDiagnostics.to_dict()`` output. Empty when no usable spec/data exists.
+            ``IVDiagnostics.to_dict()`` output. Preserves any precomputed map already on
+            state (the P-1 passthrough path) and merges freshly-computed entries on top.
         """
         start_time = time.time()
         instrument_specs = state.get("instrument_specs")
         tier0_data = state.get("tier0_data")
 
-        # Fail-closed no-op: no specs or no data => no instrument signal at all.
+        # Preserve any precomputed strengths already on state (e.g. supplied via
+        # GapAnalyzerAgent input / a future orchestrator P-1 passthrough). The IV step
+        # must NOT clobber them when it has nothing of its own to compute; it merges
+        # freshly-computed real diagnostics on top (recomputation wins for that feature).
+        existing = state.get("instrument_strength_by_feature") or {}
+        by_feature: Dict[str, Dict[str, Any]] = dict(existing)
+
+        # Fail-closed no-op: no specs or no data => nothing to compute; keep what we have.
         if not instrument_specs or tier0_data is None:
-            return {"instrument_strength_by_feature": {}}
+            return {"instrument_strength_by_feature": by_feature}
 
         # tier0_data is an opaque passthrough; require a DataFrame-like API.
         if not hasattr(tier0_data, "columns"):
@@ -69,10 +77,9 @@ class InstrumentAnalyzerNode:
                 "(type=%s); skipping IV first stage.",
                 type(tier0_data).__name__,
             )
-            return {"instrument_strength_by_feature": {}}
+            return {"instrument_strength_by_feature": by_feature}
 
         available_columns = set(tier0_data.columns)
-        by_feature: Dict[str, Dict[str, Any]] = {}
         warnings: List[str] = []
 
         for feature_name, spec in instrument_specs.items():
