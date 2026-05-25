@@ -71,7 +71,7 @@ ALTER TABLE adaptive_validity_verdicts
     ADD COLUMN IF NOT EXISTS rationale_incomplete_flag  BOOLEAN;
 
 COMMENT ON COLUMN adaptive_validity_verdicts.would_promote_severity IS
-'Stage 1 of Issue #240 audit-evaluator gate promotion. Set by promotion rule R1 (moderate→high escalation when evaluator dissatisfied AND ≥1 missed considerations) to the proposed severity (currently always ''high''). NULL when R1 did not fire. Stage 1 is SHADOW MODE — the voter does NOT read this column. Populated by scripts/mirror_audit_sidecar_to_supabase.py from the sidecar ``would_promote_severity`` key (additive at sidecar schema 1.2+; absent on pre-#240 sidecars → column NULL).';
+'Stage 1 of Issue #240 audit-evaluator gate promotion. Set by promotion rule R1 (info→moderate escalation when evaluator dissatisfied AND ≥1 missed considerations; reframed 2026-05-25 from moderate→high per docs/plans/240-r1-reachability-investigation.md) to the proposed severity (currently always ''moderate''). NULL when R1 did not fire. Stage 1 is SHADOW MODE — the voter does NOT read this column. Populated by scripts/mirror_audit_sidecar_to_supabase.py from the sidecar ``would_promote_severity`` key (additive at sidecar schema 1.2+; absent on pre-#240 sidecars → column NULL).';
 
 COMMENT ON COLUMN adaptive_validity_verdicts.would_flag_for_review IS
 'Stage 1 of Issue #240 audit-evaluator gate promotion. Set by promotion rule R2 (≥2 missed considerations) to TRUE when its trigger fires. NULL when R2 did not fire. R2 accelerates curation review and is NOT promoted to Stage 3 by design.';

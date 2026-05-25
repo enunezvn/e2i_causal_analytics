@@ -133,12 +133,17 @@ VALID_LLM_ROLES: frozenset[str] = LEAK_ROLES | ACCEPT_ROLES
 EVALUATOR_GATE_ENABLED_ENV = "ADAPTIVE_VALIDITY_EVALUATOR_GATE_ENABLED"
 
 # The single severity transition the Stage-3 gate is allowed to perform
-# (design §3 Stage 3 + §4 R1): moderate → high. Remediation follows
-# deterministically (the escalated "high" verdict drops the feature).
-_GATE_PRECONDITION_SEVERITY: EnsembleSeverity = "moderate"
-_GATE_ESCALATED_SEVERITY: EnsembleSeverity = "high"
-_GATE_ESCALATED_REMEDIATION: Remediation = "drop"
-_GATE_EVIDENCE_TAG = "evaluator_gate:R1:moderate→high"
+# (design §3 Stage 3 + §4 R1, reframed 2026-05-25): info → moderate.
+# Remediation follows deterministically — the escalated "moderate" disposition
+# routes the feature to review (matching the voter's adversarial-moderate
+# branch, which uses remediation="review"). The original moderate→high
+# transition was proved unreachable in production (the evaluator audit only
+# rides valid-role verdicts → high/info, never moderate); see
+# docs/plans/240-r1-reachability-investigation.md.
+_GATE_PRECONDITION_SEVERITY: EnsembleSeverity = "info"
+_GATE_ESCALATED_SEVERITY: EnsembleSeverity = "moderate"
+_GATE_ESCALATED_REMEDIATION: Remediation = "review"
+_GATE_EVIDENCE_TAG = "evaluator_gate:R1:info→moderate"
 
 
 def _evaluator_gate_enabled() -> bool:
@@ -997,27 +1002,27 @@ class EnsembleVoter:
           OR the evaluator errored (``satisfied is None``), R1 cannot fire
           and the verdict passes through unchanged, even with the flag on.
         - **R1 fires.** When the flag is ``"1"`` AND the candidate
-          ``severity == "moderate"`` AND ``evaluate_r1`` returns
-          ``"high"``, substitute ``severity="high"``,
-          ``remediation="drop"`` (the deterministic escalation per design
-          §4 R1), set ``decided_by="evaluator_gate"``, append the
-          structured evidence tag, and record ``gate_rule_fired="R1"``.
-          A NEW frozen ``EnsembleVerdict`` is returned (the input is never
-          mutated); the original worker severity is recoverable downstream
-          via ``gate_rule_fired`` (always "moderate" for R1) and is
-          persisted to ``worker_severity_pre_gate`` by
+          ``severity == "info"`` AND ``evaluate_r1`` returns
+          ``"moderate"``, substitute ``severity="moderate"``,
+          ``remediation="review"`` (the deterministic escalation per design
+          §4 R1, reframed info→moderate), set ``decided_by="evaluator_gate"``,
+          append the structured evidence tag, and record
+          ``gate_rule_fired="R1"``. A NEW frozen ``EnsembleVerdict`` is
+          returned (the input is never mutated); the original worker severity
+          is recoverable downstream via ``gate_rule_fired`` (always "info" for
+          R1) and is persisted to ``worker_severity_pre_gate`` by
           ``_ensemble_to_legacy_dict``.
 
         The gate intentionally does NOT set ``decided_by="evaluator_gate"``
-        when the voter independently reached ``severity="high"`` (the
-        precondition is exactly ``"moderate"``), so ``decided_by`` records
+        when the voter independently reached ``severity="moderate"`` (the
+        precondition is exactly ``"info"``), so ``decided_by`` records
         the gate ONLY when it actually flipped a decision (design §3).
         """
         if not _evaluator_gate_enabled():
             return verdict
         if verdict.severity != _GATE_PRECONDITION_SEVERITY:
-            # Gate is only allowed to act on a moderate candidate. High /
-            # info / abstain pass through (R1's precondition is moderate).
+            # Gate is only allowed to act on an info (accept-role) candidate.
+            # High / moderate / abstain pass through (R1's precondition is info).
             return verdict
         evaluator_audit = llm_verdict.evaluator_audit if llm_verdict is not None else None
         # Fail-open: no audit (evaluator disabled) OR evaluator errored.
@@ -1035,12 +1040,12 @@ class EnsembleVoter:
         proposed = evaluate_r1(verdict.severity, evaluator_audit)
         if proposed != _GATE_ESCALATED_SEVERITY:
             return verdict
-        # R1 fired: escalate moderate → high. Build a new frozen verdict
+        # R1 fired: escalate info → moderate. Build a new frozen verdict
         # (dataclasses.replace would re-run __init__; an explicit copy of
         # the mutated fields keeps the intent obvious and the input
         # untouched).
         logger.info(
-            "evaluator_gate: R1 escalated severity moderate→high for feature %r "
+            "evaluator_gate: R1 escalated severity info→moderate for feature %r "
             "(decided_by %s→evaluator_gate)",
             verdict.feature_name,
             verdict.decided_by,

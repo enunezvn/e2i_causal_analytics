@@ -1,31 +1,41 @@
 """Issue #240 Stage 3 — env-gated audit-evaluator soft-gate on EnsembleVoter.
 
 Design reference: ``docs/plans/240-audit-evaluator-gate-promotion.md`` §3 Stage 3
-(Mechanism + Fail-open) and §4 R1.
+(Mechanism + Fail-open) and §4 R1, **reframed 2026-05-25** to the reachable
+``info → moderate`` transition (see
+``docs/plans/240-r1-reachability-investigation.md``).
+
+Why the reframe matters for THESE tests: the original suite drove the gate via
+an *invalid* LLM role ("not_a_real_role") so the voter sanitised the LLM to
+None and fell through to the adversarial-moderate-alone branch while still
+carrying the audit. A reachability audit proved that arrangement is impossible
+in production — the loader (``classify_feature``) returns ``None`` for an
+out-of-vocabulary role *before* the evaluator ever runs, so an audit-bearing
+verdict ALWAYS has a valid role, and a valid role maps to severity ``high``
+(leak) or ``info`` (accept) — never ``moderate``. So the audited candidate the
+gate can actually see is ``info``, and the reachable escalation is
+``info → moderate``.
 
 Load-bearing invariants pinned here:
 
-(a) **Default OFF ⇒ byte-identical.** With the kill-switch env var unset, the
-    full ``vote`` output (severity / remediation / decided_by / evidence /
-    gate_rule_fired) is identical to ``_vote_candidate`` — the gate never
-    fires and adds nothing. This is the central "ship the disabled mechanism
-    only" guarantee.
+(reachability) **The gate precondition is reachable in production.** A VALID
+    accept-role worker verdict carrying an evaluator audit, routed through the
+    real ``vote``, yields candidate severity ``"info"`` — the exact state R1'
+    triggers on. (The old suite could only manufacture the gate's precondition
+    by bypassing the loader; this one does not.)
 
-(b) **flag=1 + R1 fires + candidate moderate ⇒ flip.** severity moderate→high,
-    decided_by="evaluator_gate", the structured evidence tag is appended, and
+(a) **Default OFF ⇒ byte-identical.** Kill-switch unset ⇒ full ``vote`` output
+    equals ``_vote_candidate`` field-for-field — the gate never fires.
+
+(b) **flag=1 + R1 fires + candidate info ⇒ flip.** severity info→moderate,
+    remediation→"review", decided_by="evaluator_gate", evidence tag appended,
     ``gate_rule_fired == "R1"``.
 
-(c) **Fail-open.** flag=1 but the worker carried no evaluator_audit (evaluator
-    disabled) ⇒ no flip. Same for an evaluator error (``satisfied is None``).
+(c) **Fail-open.** flag=1 but no audit (evaluator disabled) OR ``satisfied is
+    None`` (evaluator error) ⇒ no flip.
 
-(d) **flag=1 but candidate severity != moderate ⇒ no flip.**
-
-The voter never produces ``severity="moderate"`` from a *valid* LLM role
-(``_llm_severity`` maps valid leak roles → "high", accept roles → "info"); the
-moderate candidate the gate acts on is the **adversarial-moderate-alone** path
-(``sanitised_llm is None`` because the LLM role was outside the supported
-vocabulary, while ``llm_verdict`` — and its ``evaluator_audit`` — are still
-carried in). These tests construct exactly that arrangement.
+(d) **flag=1 but candidate severity != info ⇒ no flip** (high leak-role
+    candidate; real moderate adversarial-alone candidate).
 """
 
 from __future__ import annotations
@@ -58,10 +68,10 @@ def _audit(
 def _llm_with_audit(audit, *, role: str = "ancestor") -> LLMVerdict:
     """LLMVerdict carrying an evaluator audit.
 
-    ``role`` defaults to ``"ancestor"`` (a *valid* role). To reach the
-    voter's adversarial-moderate candidate path we pass an INVALID role so
-    the voter sanitises the LLM to None (skips the LLM path) while still
-    carrying ``llm_input`` — and thus the evaluator audit — into the verdict.
+    ``role`` defaults to ``"ancestor"`` — a *valid accept role*. The voter maps
+    accept roles to ensemble severity ``"info"`` via ``_llm_severity``, which is
+    R1's reachable precondition. This mirrors the real production object: the
+    loader only ever emits audit-bearing verdicts with valid roles.
     """
     return LLMVerdict(
         causal_role=role,  # type: ignore[arg-type]
@@ -72,7 +82,8 @@ def _llm_with_audit(audit, *, role: str = "ancestor") -> LLMVerdict:
 
 
 def _adv_moderate() -> dict:
-    """Adversarial-moderate verdict dict (mirror of _build_verdict shape)."""
+    """Adversarial-moderate verdict dict (the only producer of a *moderate*
+    ensemble candidate — and, in production, it carries NO LLM verdict/audit)."""
     return {
         "feature": "feat_x",
         "layer": "3",
@@ -90,31 +101,14 @@ def _adv_moderate() -> dict:
     }
 
 
-def _vote_moderate_candidate(voter: EnsembleVoter, audit) -> tuple:
-    """Return (candidate, final) verdicts for a moderate adversarial path
-    carrying an LLM verdict with the given evaluator audit.
-
-    The LLM role is INVALID ("collider_invalid") so ``sanitised_llm`` is None
-    and the voter falls through to the adversarial-moderate-alone path
-    (candidate severity="moderate") while still carrying ``llm_input``.
-    """
-    llm = _llm_with_audit(audit, role="not_a_real_role")
-    candidate = voter._vote_candidate(
-        "feat_x",
-        adversarial_verdict=_adv_moderate(),
-        llm_verdict=llm,
-    )
-    final = voter.vote(
-        "feat_x",
-        adversarial_verdict=_adv_moderate(),
-        llm_verdict=llm,
-    )
+def _vote_info_candidate(voter: EnsembleVoter, audit, *, role: str = "ancestor") -> tuple:
+    """Return (candidate, final) for the PRODUCTION-REACHABLE info path: a valid
+    accept-role worker verdict carrying ``audit``, routed through the real voter.
+    Candidate severity is ``"info"`` (R1's reframed precondition)."""
+    llm = _llm_with_audit(audit, role=role)
+    candidate = voter._vote_candidate("feat_x", llm_verdict=llm)
+    final = voter.vote("feat_x", llm_verdict=llm)
     return candidate, final
-
-
-# ---------------------------------------------------------------------------
-# (a) Default OFF ⇒ byte-identical
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture
@@ -122,18 +116,35 @@ def voter() -> EnsembleVoter:
     return EnsembleVoter()
 
 
-def test_candidate_path_actually_reaches_moderate(monkeypatch, voter):
-    """Sanity: the arrangement under test really yields a moderate candidate.
+# ---------------------------------------------------------------------------
+# (reachability) the gate precondition occurs on the real production path
+# ---------------------------------------------------------------------------
 
-    If this regresses (the voter stops producing moderate here), the flip
-    test below would pass vacuously, so pin it explicitly."""
+
+def test_info_candidate_is_reachable_via_valid_accept_role(monkeypatch, voter):
+    """The reframed gate fires on ``info``. Prove a VALID accept-role worker
+    verdict (the only kind that carries an audit in production) yields a
+    ``info`` candidate through the real voter — so the gate's precondition is
+    genuinely reachable, unlike the pre-reframe ``moderate`` precondition which
+    no production path could pair with an audit.
+
+    FALSIFIABILITY: if ``_llm_severity`` ever maps accept roles away from
+    ``info``, this trips and the flip tests below would be testing an
+    unreachable state."""
     monkeypatch.delenv(EVALUATOR_GATE_ENABLED_ENV, raising=False)
     audit = _audit(satisfied=False, missed=("temporal_filter",))
-    candidate, _final = _vote_moderate_candidate(voter, audit)
-    assert candidate.severity == "moderate", (
-        f"test setup must produce a moderate candidate; got {candidate.severity!r}"
+    candidate, _final = _vote_info_candidate(voter, audit)
+    assert candidate.severity == "info", (
+        f"valid accept role must yield an info candidate; got {candidate.severity!r}"
     )
+    assert candidate.llm_input is not None
+    assert candidate.llm_input.evaluator_audit is audit  # audit really rides along
     assert candidate.gate_rule_fired is None
+
+
+# ---------------------------------------------------------------------------
+# (a) Default OFF ⇒ byte-identical
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -148,7 +159,7 @@ def test_default_off_is_byte_identical(monkeypatch, voter, audit):
     """Flag unset ⇒ vote() == _vote_candidate() field-for-field. The gate
     never fires and never mutates anything (the ship-disabled guarantee)."""
     monkeypatch.delenv(EVALUATOR_GATE_ENABLED_ENV, raising=False)
-    candidate, final = _vote_moderate_candidate(voter, audit)
+    candidate, final = _vote_info_candidate(voter, audit)
     assert final.severity == candidate.severity
     assert final.remediation == candidate.remediation
     assert final.decided_by == candidate.decided_by
@@ -166,30 +177,30 @@ def test_non_one_flag_values_keep_gate_off(monkeypatch, voter, flag_value):
     """Only the exact string "1" enables the gate; everything else is OFF."""
     monkeypatch.setenv(EVALUATOR_GATE_ENABLED_ENV, flag_value)
     audit = _audit(satisfied=False, missed=("temporal_filter",))
-    candidate, final = _vote_moderate_candidate(voter, audit)
-    assert final.severity == candidate.severity == "moderate"
+    candidate, final = _vote_info_candidate(voter, audit)
+    assert final.severity == candidate.severity == "info"
     assert final.gate_rule_fired is None
     assert final.decided_by != "evaluator_gate"
 
 
 # ---------------------------------------------------------------------------
-# (b) flag=1 + R1 fires + candidate moderate ⇒ flip
+# (b) flag=1 + R1 fires + candidate info ⇒ flip info→moderate
 # ---------------------------------------------------------------------------
 
 
-def test_flag_on_r1_fires_flips_to_high(monkeypatch, voter):
+def test_flag_on_r1_fires_flips_to_moderate(monkeypatch, voter):
     monkeypatch.setenv(EVALUATOR_GATE_ENABLED_ENV, "1")
     audit = _audit(satisfied=False, missed=("temporal_filter",))
-    candidate, final = _vote_moderate_candidate(voter, audit)
+    candidate, final = _vote_info_candidate(voter, audit)
 
-    # Candidate was moderate; gate escalated it.
-    assert candidate.severity == "moderate"
-    assert final.severity == "high"
-    assert final.remediation == "drop"
+    # Candidate was info (accept role); gate escalated it.
+    assert candidate.severity == "info"
+    assert final.severity == "moderate"
+    assert final.remediation == "review"
     assert final.decided_by == "evaluator_gate"
     assert final.gate_rule_fired == "R1"
     # Structured evidence tag appended (and the candidate's evidence kept).
-    assert "evaluator_gate:R1:moderate→high" in final.evidence
+    assert "evaluator_gate:R1:info→moderate" in final.evidence
     for line in candidate.evidence:
         assert line in final.evidence
     # Non-mutated audit-trail inputs preserved.
@@ -201,8 +212,8 @@ def test_flag_on_input_verdict_not_mutated(monkeypatch, voter):
     """The gate returns a NEW frozen verdict; the candidate is untouched."""
     monkeypatch.setenv(EVALUATOR_GATE_ENABLED_ENV, "1")
     audit = _audit(satisfied=False, missed=("temporal_filter",))
-    candidate, final = _vote_moderate_candidate(voter, audit)
-    assert candidate.severity == "moderate"  # candidate object unchanged
+    candidate, final = _vote_info_candidate(voter, audit)
+    assert candidate.severity == "info"  # candidate object unchanged
     assert candidate.gate_rule_fired is None
     assert final is not candidate
 
@@ -215,9 +226,9 @@ def test_flag_on_input_verdict_not_mutated(monkeypatch, voter):
 def test_flag_on_fail_open_when_audit_none(monkeypatch, voter):
     """No evaluator_audit (evaluator disabled) ⇒ no flip even with flag on."""
     monkeypatch.setenv(EVALUATOR_GATE_ENABLED_ENV, "1")
-    candidate, final = _vote_moderate_candidate(voter, None)
-    assert candidate.severity == "moderate"
-    assert final.severity == "moderate"
+    candidate, final = _vote_info_candidate(voter, None)
+    assert candidate.severity == "info"
+    assert final.severity == "info"
     assert final.gate_rule_fired is None
     assert final.decided_by != "evaluator_gate"
 
@@ -227,9 +238,9 @@ def test_flag_on_fail_open_when_evaluator_errored(monkeypatch, voter):
     fail-open: no flip."""
     monkeypatch.setenv(EVALUATOR_GATE_ENABLED_ENV, "1")
     audit = _audit(satisfied=None, missed=("temporal_filter",))
-    candidate, final = _vote_moderate_candidate(voter, audit)
-    assert candidate.severity == "moderate"
-    assert final.severity == "moderate"
+    candidate, final = _vote_info_candidate(voter, audit)
+    assert candidate.severity == "info"
+    assert final.severity == "info"
     assert final.gate_rule_fired is None
 
 
@@ -237,9 +248,9 @@ def test_flag_on_no_fire_when_satisfied_true(monkeypatch, voter):
     """Evaluator satisfied ⇒ R1 does not fire ⇒ no flip."""
     monkeypatch.setenv(EVALUATOR_GATE_ENABLED_ENV, "1")
     audit = _audit(satisfied=True, missed=())
-    candidate, final = _vote_moderate_candidate(voter, audit)
-    assert candidate.severity == "moderate"
-    assert final.severity == "moderate"
+    candidate, final = _vote_info_candidate(voter, audit)
+    assert candidate.severity == "info"
+    assert final.severity == "info"
     assert final.gate_rule_fired is None
 
 
@@ -247,21 +258,21 @@ def test_flag_on_no_fire_when_no_missed_considerations(monkeypatch, voter):
     """R1 requires >=1 missed consideration; zero ⇒ no fire."""
     monkeypatch.setenv(EVALUATOR_GATE_ENABLED_ENV, "1")
     audit = _audit(satisfied=False, missed=())
-    candidate, final = _vote_moderate_candidate(voter, audit)
-    assert candidate.severity == "moderate"
-    assert final.severity == "moderate"
+    candidate, final = _vote_info_candidate(voter, audit)
+    assert candidate.severity == "info"
+    assert final.severity == "info"
     assert final.gate_rule_fired is None
 
 
 # ---------------------------------------------------------------------------
-# (d) flag=1 but candidate severity != moderate ⇒ no flip
+# (d) flag=1 but candidate severity != info ⇒ no flip
 # ---------------------------------------------------------------------------
 
 
 def test_flag_on_high_candidate_not_relabeled_as_gate(monkeypatch, voter):
-    """A candidate the voter independently scored "high" (valid leak LLM role)
-    is NOT relabeled decided_by="evaluator_gate" — the gate only marks itself
-    when it actually flips a moderate. Even with a dissatisfied evaluator."""
+    """A candidate the voter scored "high" (valid leak LLM role) is NOT
+    relabeled decided_by="evaluator_gate" — the gate only marks itself when it
+    actually flips an info candidate. Even with a dissatisfied evaluator."""
     monkeypatch.setenv(EVALUATOR_GATE_ENABLED_ENV, "1")
     audit = _audit(satisfied=False, missed=("temporal_filter",))
     # "mediator" is a valid leak role → voter scores severity="high".
@@ -273,15 +284,19 @@ def test_flag_on_high_candidate_not_relabeled_as_gate(monkeypatch, voter):
     assert final.decided_by == candidate.decided_by  # stays "llm"
     assert final.decided_by != "evaluator_gate"
     assert final.gate_rule_fired is None
-    assert "evaluator_gate:R1:moderate→high" not in final.evidence
+    assert "evaluator_gate:R1:info→moderate" not in final.evidence
 
 
-def test_flag_on_info_candidate_no_flip(monkeypatch, voter):
-    """Accept-role LLM → severity="info"; gate's moderate precondition fails."""
+def test_flag_on_real_moderate_candidate_no_flip(monkeypatch, voter):
+    """A genuine *moderate* candidate (adversarial-alone, no LLM verdict) is no
+    longer the gate's precondition (which is now ``info``) — and in production
+    it carries no audit anyway. Confirm the gate leaves it untouched: this is
+    the exact state the pre-reframe gate wrongly targeted."""
     monkeypatch.setenv(EVALUATOR_GATE_ENABLED_ENV, "1")
-    audit = _audit(satisfied=False, missed=("temporal_filter",))
-    llm = _llm_with_audit(audit, role="ancestor")  # accept role → info
-    final = voter.vote("feat_x", llm_verdict=llm)
-    assert final.severity == "info"
+    candidate = voter._vote_candidate("feat_x", adversarial_verdict=_adv_moderate())
+    final = voter.vote("feat_x", adversarial_verdict=_adv_moderate())
+    assert candidate.severity == "moderate"
+    assert candidate.llm_input is None  # no audit on this path, by construction
+    assert final.severity == "moderate"
     assert final.gate_rule_fired is None
     assert final.decided_by != "evaluator_gate"

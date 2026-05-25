@@ -51,15 +51,16 @@ def _llm_verdict() -> LLMVerdict:
 
 def _gate_flipped_verdict() -> EnsembleVerdict:
     """A verdict as the voter's gate would emit after R1 escalates
-    moderate→high: severity=high, decided_by=evaluator_gate, gate_rule_fired=R1."""
+    info→moderate: severity=moderate, remediation=review,
+    decided_by=evaluator_gate, gate_rule_fired=R1 (reframed 2026-05-25)."""
     return EnsembleVerdict(
         feature_name="feat_x",
-        severity="high",
-        remediation="drop",
+        severity="moderate",
+        remediation="review",
         decided_by="evaluator_gate",
         confidence=0.6,
-        final_role=None,
-        evidence=("Adversarial probe: severity=moderate", "evaluator_gate:R1:moderate→high"),
+        final_role="ancestor",
+        evidence=("layer-4 llm", "evaluator_gate:R1:info→moderate"),
         llm_input=_llm_verdict(),
         gate_rule_fired="R1",
     )
@@ -87,11 +88,11 @@ def _ungated_verdict() -> EnsembleVerdict:
 def test_gate_flipped_verdict_records_pre_gate_worker_severity():
     payload = _ensemble_to_legacy_dict(_gate_flipped_verdict(), adversarial_input=None)
     assert payload["gate_rule_fired"] == "R1"
-    # R-4: the un-mutated worker severity ("moderate"), NOT the escalated
-    # "high" — so curation never trains on the gate-escalated label.
-    assert payload["worker_severity_pre_gate"] == "moderate"
+    # R-4: the un-mutated worker severity ("info"), NOT the escalated
+    # "moderate" — so curation never trains on the gate-escalated label.
+    assert payload["worker_severity_pre_gate"] == "info"
     # The mutated value still flows to ``severity`` (consumer compatibility).
-    assert payload["severity"] == "high"
+    assert payload["severity"] == "moderate"
 
 
 def test_ungated_verdict_leaves_gate_keys_null():
@@ -159,4 +160,4 @@ def test_reader_surfaces_gate_keys_onto_verdict_record(tmp_path):
     assert len(records) == 1
     rec = records[0]
     assert rec.gate_rule_fired == "R1"
-    assert rec.worker_severity_pre_gate == "moderate"
+    assert rec.worker_severity_pre_gate == "info"

@@ -30,7 +30,8 @@
 --       recorded BEFORE the voter substituted (design §5 R-4 audit-loop-
 --       coupling mitigation). Compile-set curation reads THIS column so it
 --       never trains the worker on a gate-escalated label. For R1 this is
---       always ``'moderate'`` (R1's only transition is moderate→high);
+--       always ``'info'`` (R1's only transition is info→moderate, reframed
+--       2026-05-25 — see docs/plans/240-r1-reachability-investigation.md);
 --       NULL when no gate fired (then ``verdict.severity`` already IS the
 --       worker severity).
 --
@@ -44,7 +45,7 @@
 -- evaluator) + Stage-1/2 empirical data + stakeholder sign-off (design AC3.5).
 --
 -- AC3.4 rollback query (operator runbook):
---   SELECT feature_name, severity, gate_rule_fired, worker_severity_pre_gate
+--   SELECT feature, severity, gate_rule_fired, worker_severity_pre_gate
 --   FROM adaptive_validity_verdicts
 --   WHERE gate_rule_fired IS NOT NULL
 --   ORDER BY written_at DESC LIMIT 100;

@@ -34,13 +34,21 @@ def _audit(
 
 
 # ---------------------------------------------------------------------------
-# R1 — moderate→high escalation when evaluator dissatisfied AND ≥1 missed
+# R1 — info→moderate escalation when evaluator dissatisfied AND ≥1 missed.
+#
+# Reframed (2026-05-25) from the original moderate→high after the deep-research
+# finding that (ensemble severity == "moderate" AND evaluator_audit present) is
+# structurally unreachable in production: the audit only ever rides a valid-role
+# worker verdict, whose ensemble severity is high/info — never moderate. The
+# reachable, intent-preserving transition is "accept-role (info) verdict whose
+# reasoning the evaluator distrusts → escalate disposition info→moderate".
+# See docs/plans/240-r1-reachability-investigation.md.
 # ---------------------------------------------------------------------------
 
 
-def test_r1_fires_returns_high_when_all_conditions_met():
+def test_r1_fires_returns_moderate_when_all_conditions_met():
     audit = _audit(satisfied=False, missed=("temporal_filter",))
-    assert evaluate_r1("moderate", audit) == "high"
+    assert evaluate_r1("info", audit) == "moderate"
 
 
 def test_r1_does_not_fire_when_severity_is_high():
@@ -48,9 +56,11 @@ def test_r1_does_not_fire_when_severity_is_high():
     assert evaluate_r1("high", audit) is None
 
 
-def test_r1_does_not_fire_when_severity_is_info():
+def test_r1_does_not_fire_when_severity_is_moderate():
+    # The pre-reframe precondition; now a no-fire (moderate has no audit in prod
+    # and is no longer the trigger severity).
     audit = _audit(satisfied=False, missed=("temporal_filter",))
-    assert evaluate_r1("info", audit) is None
+    assert evaluate_r1("moderate", audit) is None
 
 
 def test_r1_does_not_fire_when_severity_is_abstain():
@@ -60,16 +70,16 @@ def test_r1_does_not_fire_when_severity_is_abstain():
 
 def test_r1_does_not_fire_when_evaluator_satisfied():
     audit = _audit(satisfied=True, missed=())
-    assert evaluate_r1("moderate", audit) is None
+    assert evaluate_r1("info", audit) is None
 
 
 def test_r1_does_not_fire_when_no_missed_considerations():
     audit = _audit(satisfied=False, missed=())
-    assert evaluate_r1("moderate", audit) is None
+    assert evaluate_r1("info", audit) is None
 
 
 def test_r1_does_not_fire_when_audit_is_none():
-    assert evaluate_r1("moderate", None) is None
+    assert evaluate_r1("info", None) is None
 
 
 # ---------------------------------------------------------------------------

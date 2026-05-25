@@ -126,23 +126,25 @@ def _canonical_bytes(payload: dict) -> bytes:
 @pytest.mark.parametrize(
     "severity, audit",
     [
-        # R1 should fire: moderate + dissatisfied + ≥1 missed.
-        ("moderate", _audit(satisfied=False, missed=("temporal_filter",))),
-        # R2 should fire: ≥2 missed (and R1 too).
+        # R1 should fire: info + dissatisfied + ≥1 missed (reframed
+        # info→moderate; the audited path is high/info, never moderate).
+        ("info", _audit(satisfied=False, missed=("temporal_filter",))),
+        # R2 should fire: ≥2 missed (and R1 too, on info).
         (
-            "moderate",
+            "info",
             _audit(satisfied=False, missed=("temporal_filter", "pearl_arrows")),
         ),
         # R3 should fire: rationale_complete=False.
         (
-            "moderate",
+            "info",
             _audit(satisfied=True, rationale_complete=False),
         ),
         # No rule fires: satisfied + complete + no missed.
-        ("moderate", _audit(satisfied=True, rationale_complete=True)),
-        # Worker severity high: R1 cannot fire even if evaluator dissatisfied.
+        ("info", _audit(satisfied=True, rationale_complete=True)),
+        # Worker severity high (leak role): R1 cannot fire (precondition is
+        # info) even if evaluator dissatisfied; R2 still fires here.
         ("high", _audit(satisfied=False, missed=("temporal_filter",))),
-        # No evaluator audit (disabled / failed).
+        # Real moderate candidate (adversarial-alone) carries no audit.
         ("moderate", None),
     ],
 )
@@ -182,13 +184,13 @@ def test_shadow_path_is_byte_identical_to_disabled_rules(monkeypatch, severity, 
 # ---------------------------------------------------------------------------
 
 
-def test_r1_fires_populates_would_promote_severity_high():
+def test_r1_fires_populates_would_promote_severity_moderate():
     verdict = _make_ensemble_verdict(
-        severity="moderate",
+        severity="info",
         audit=_audit(satisfied=False, missed=("temporal_filter",)),
     )
     payload = _ensemble_to_legacy_dict(verdict, adversarial_input=None)
-    assert payload["would_promote_severity"] == "high"
+    assert payload["would_promote_severity"] == "moderate"
 
 
 def test_r2_fires_populates_would_flag_for_review_true():

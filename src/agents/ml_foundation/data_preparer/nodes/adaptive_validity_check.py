@@ -1322,14 +1322,15 @@ def _ensemble_to_legacy_dict(
         # fire. ``worker_severity_pre_gate`` recovers the un-mutated worker
         # severity so compile-set curation never trains on a gate-escalated
         # label: when R1 flipped the verdict, the worker severity was
-        # "moderate" by R1's precondition (moderate→high is the only
-        # transition the gate performs); NULL when no gate fired (then
-        # ``verdict.severity`` already IS the worker severity, so the
-        # sentinel is None — the same nullable-shadow contract as the three
-        # Stage-1 columns above). See
-        # ``docs/plans/240-audit-evaluator-gate-promotion.md`` §3/§5.
+        # "info" by R1's precondition (info→moderate is the only
+        # transition the gate performs, reframed 2026-05-25); NULL when no
+        # gate fired (then ``verdict.severity`` already IS the worker
+        # severity, so the sentinel is None — the same nullable-shadow
+        # contract as the three Stage-1 columns above). See
+        # ``docs/plans/240-audit-evaluator-gate-promotion.md`` §3/§5 +
+        # ``docs/plans/240-r1-reachability-investigation.md``.
         "gate_rule_fired": verdict.gate_rule_fired,
-        "worker_severity_pre_gate": ("moderate" if verdict.gate_rule_fired == "R1" else None),
+        "worker_severity_pre_gate": ("info" if verdict.gate_rule_fired == "R1" else None),
     }
 
 
