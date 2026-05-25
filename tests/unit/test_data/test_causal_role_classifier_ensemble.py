@@ -457,6 +457,41 @@ def test_classify_one_exception_is_nonvote_with_error(monkeypatch):
     assert vote.latency_ms is not None  # timing recorded even on failure
 
 
+def test_classify_one_preserves_quota_phrase_for_graceful_stop(monkeypatch):
+    """A real litellm credit-balance error carries the matchable phrase ~118
+    chars in. The harness graceful-stop inspects ``vote.error`` for it, so
+    ``_classify_one`` must NOT truncate the message below that phrase — else the
+    stop is unreachable and the run pollutes every remaining row (the live bug).
+    """
+    from src.data import causal_role_classifier_ensemble as ens
+
+    monkeypatch.setattr(ens, "_make_lm", lambda model: _FakeLM())
+
+    real_litellm_error = (
+        'litellm.BadRequestError: AnthropicException - {"type":"error","error":'
+        '{"type":"invalid_request_error","message":"Your credit balance is too '
+        "low to access the Anthropic API. Please go to Plans & Billing to "
+        'upgrade or purchase credits."}}'
+    )
+    assert real_litellm_error.find("credit balance is too low") > 80  # past the old cutoff
+
+    def _boom(classifier, lm, **kw):
+        raise RuntimeError(real_litellm_error)
+
+    monkeypatch.setattr(ens, "_predict_under_lm", _boom)
+    vote = ens._classify_one(
+        "anthropic/claude-sonnet-4-6",
+        feature_name="f",
+        derivation_pseudocode="d",
+        dataset_context="c",
+        classifier=object(),
+    )
+    assert vote.causal_role is None
+    assert vote.error is not None
+    # The phrase the harness `_is_quota_error` matches must survive in vote.error.
+    assert "credit balance is too low" in vote.error
+
+
 def test_classify_one_invalid_role_is_nonvote(monkeypatch):
     from src.data import causal_role_classifier_ensemble as ens
 

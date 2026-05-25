@@ -414,11 +414,16 @@ def _classify_one(
     except Exception as exc:  # noqa: BLE001 — best-effort: any failure = non-vote
         latency_ms = (time.perf_counter() - start) * 1000.0
         logger.warning("ensemble: model=%s raised: %s — recording non-vote.", model, exc)
+        # Keep the FULL provider message: the A/B harness inspects vote.error for
+        # credit/quota exhaustion to stop cleanly, and the matchable phrase often
+        # sits >80 chars into a litellm error (e.g. Anthropic's "credit balance is
+        # too low" lands ~char 118). Truncating here hides it and silently defeats
+        # the graceful stop — the run then pollutes every remaining row.
         return EnsembleModelVote(
             model=model,
             causal_role=None,
             latency_ms=latency_ms,
-            error=(str(exc)[:80] or type(exc).__name__),
+            error=(str(exc) or type(exc).__name__),
         )
 
     latency_ms = (time.perf_counter() - start) * 1000.0
