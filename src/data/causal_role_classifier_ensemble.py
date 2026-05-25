@@ -51,6 +51,7 @@ from src.data.causal_role_classifier import CausalRoleClassifier
 # few-shot demos).
 from src.data.causal_role_classifier_loader import (
     _PROVIDER_TO_ENV_VARS,
+    _env_value_is_usable,
     _extract_lm_usage,
     _model_provider,
     load_compiled_classifier,
@@ -112,18 +113,31 @@ class EnsemblePreflightError(RuntimeError):
 
 
 def _preflight_models(models: Sequence[str]) -> None:
-    """Verify every member's provider key is present; raise listing what's
-    missing. Reuses the loader's provider→env-var map so the two stay in sync."""
-    missing: list[str] = []
+    """Verify every member is addressable AND its provider key is usable; raise
+    listing every problem. Reuses the loader's provider→env-var map and its
+    non-whitespace key guard so the two stay in sync.
+
+    A member fails preflight when it has no recognised provider prefix (a bare
+    name or a typo like ``opnai/gpt-5`` could never authenticate) OR when none
+    of its provider's keys are set to a non-empty/non-whitespace value. Both
+    would otherwise pass to call time and surface as a silent runtime non-vote,
+    collapsing the ensemble to fewer vendors — the exact failure preflight
+    exists to prevent.
+    """
+    problems: list[str] = []
     for model in models:
         provider = _model_provider(model)
-        env_vars = _PROVIDER_TO_ENV_VARS.get(provider) if provider else None
-        if env_vars and not any(os.environ.get(var) for var in env_vars):
-            missing.append(f"{model} needs one of {list(env_vars)}")
-    if missing:
-        raise EnsemblePreflightError(
-            "ensemble preflight failed — missing provider API key(s): " + "; ".join(missing)
-        )
+        if provider is None or provider not in _PROVIDER_TO_ENV_VARS:
+            problems.append(
+                f"{model} has no recognised provider prefix "
+                f"(expected one of {sorted(_PROVIDER_TO_ENV_VARS)})"
+            )
+            continue
+        env_vars = _PROVIDER_TO_ENV_VARS[provider]
+        if not any(_env_value_is_usable(var) for var in env_vars):
+            problems.append(f"{model} needs one of {list(env_vars)} set (non-empty)")
+    if problems:
+        raise EnsemblePreflightError("ensemble preflight failed — " + "; ".join(problems))
 
 
 # --- Per-provider pricing (USD per million tokens) ---------------------------

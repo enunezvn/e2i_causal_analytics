@@ -593,3 +593,41 @@ def test_run_ensemble_runs_preflight_by_default(monkeypatch):
             models=("anthropic/claude-sonnet-4-6", "openai/gpt-5"),
             classifier=object(),
         )
+
+
+# ---------------------------------------------------------------------------
+# Codex iter-0 MEDIUM — preflight must reject whitespace-only keys AND
+# unrecognized/bare providers (else they silently degrade to runtime non-votes,
+# defeating the config-error-vs-runtime-outage distinction).
+# ---------------------------------------------------------------------------
+
+
+def test_preflight_raises_on_whitespace_only_key(monkeypatch):
+    from src.data import causal_role_classifier_ensemble as ens
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-x")
+    monkeypatch.setenv("OPENAI_API_KEY", "   ")  # whitespace-only = unusable
+    with pytest.raises(ens.EnsemblePreflightError) as exc:
+        ens._preflight_models(("anthropic/claude-sonnet-4-6", "openai/gpt-5"))
+    assert "OPENAI_API_KEY" in str(exc.value)
+
+
+def test_preflight_raises_on_unrecognized_provider(monkeypatch):
+    from src.data import causal_role_classifier_ensemble as ens
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-x")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-x")
+    # typo provider — keys are present but the member can never authenticate
+    with pytest.raises(ens.EnsemblePreflightError) as exc:
+        ens._preflight_models(("anthropic/claude-sonnet-4-6", "opnai/gpt-5"))
+    assert "opnai/gpt-5" in str(exc.value)
+
+
+def test_preflight_raises_on_bare_model_name(monkeypatch):
+    from src.data import causal_role_classifier_ensemble as ens
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-x")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-x")
+    with pytest.raises(ens.EnsemblePreflightError) as exc:
+        ens._preflight_models(("anthropic/claude-sonnet-4-6", "gpt-5"))  # no provider prefix
+    assert "gpt-5" in str(exc.value)

@@ -488,9 +488,11 @@ class EnsembleClassification:
         healthy_votes: Count of votes with ``causal_role is not None``.
         total_cost_usd: Sum of healthy votes' ``cost_usd``; ``None`` when no
             healthy vote surfaced cost.
-        max_latency_ms: Slowest healthy vote's latency (ensemble runs the
-            models in parallel, so wall-time ~= the slowest); ``None`` when
-            unavailable.
+        max_latency_ms: Slowest member latency across all votes that recorded
+            timing — INCLUDING failed votes (a timeout/error still records how
+            long the call took). The ensemble runs members in parallel, so this
+            approximates wall-clock time. ``None`` when no vote recorded a
+            latency.
     """
 
     feature_name: str
