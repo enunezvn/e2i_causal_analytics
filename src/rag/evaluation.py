@@ -1166,8 +1166,12 @@ class RAGASEvaluator:
                 # one evaluate() runs at a time).
                 openai_client = openai.OpenAI()
                 ragas_embeddings = RagasOpenAIEmbeddings(client=openai_client)
-                embeddings = _RagasEmbeddingsWrapper(ragas_embeddings)
-                wrapped_llm = llm_factory("gpt-4o", client=openai_client)
+                # Annotated Any: ragas's own type hints are imprecise (llm_factory ->
+                # InstructorBaseRagasLLM, evaluate() -> EvaluationResult | Executor),
+                # which would otherwise trip mypy arg-type/union-attr checks below.
+                # CI resolves ragas types; the dev venv does not.
+                embeddings: Any = _RagasEmbeddingsWrapper(ragas_embeddings)
+                wrapped_llm: Any = llm_factory("gpt-4o", client=openai_client)
 
                 data = {
                     "question": [samples[i].query for i in batch_indices],
@@ -1191,7 +1195,7 @@ class RAGASEvaluator:
                 # no nest_asyncio patching happens off the main thread. RAGAS
                 # parallelises the row x metric judge calls internally up to
                 # RunConfig.max_workers — that is what cuts runtime.
-                result = await asyncio.to_thread(
+                result: Any = await asyncio.to_thread(
                     evaluate,
                     dataset=dataset,
                     metrics=[
