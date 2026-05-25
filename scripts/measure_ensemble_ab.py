@@ -76,10 +76,10 @@ logger = logging.getLogger(__name__)
 GOLDEN = REPO_ROOT / "tests/fixtures/causal_role_golden_set.json"
 BENIGN = {"ancestor", "confounder", "instrument"}  # for leak-false-negative detection
 
-# Assumed token size per call for upfront cost estimate.
-# Based on observed golden-set entry sizes (~300 input, ~50 output tokens).
-# This is a DOCUMENTED ESTIMATE — actual spend varies; the per-entry telemetry
-# accumulates the real cost.
+# Assumed token size per call for the upfront cost ESTIMATE only (the friendly
+# "~$X for N entries" print). Based on observed golden-set entry sizes
+# (~300 input, ~50 output tokens). Actual spend varies; the per-entry telemetry
+# accumulates the real cost — this estimate never gates the budget guard.
 _EST_INPUT_TOKENS_PER_CALL = 300
 _EST_OUTPUT_TOKENS_PER_CALL = 50
 _EST_USD_PER_CALL = (
@@ -91,15 +91,38 @@ _EST_USD_PER_CALL = (
     + _EST_OUTPUT_TOKENS_PER_CALL / 1e6 * ens.GPT5_OUTPUT_USD_PER_MTOK
 )
 
-# Patterns that reliably identify Anthropic credit-balance / quota exhaustion.
-# These strings appear in HTTP 402 / 429 response bodies from the Anthropic API.
+# CONSERVATIVE per-entry upper bound used by the BUDGET GUARD (not the estimate).
+# The guard stops BEFORE a call when accumulated-actual + this bound would exceed
+# --max-cost, so actual spend can never overshoot the cap (better to stop one
+# entry early than overspend). Sized for the Opus-heavy worst case: a long
+# reasoning entry at ~3k input + ~1k output tokens across all 3 models. Opus
+# dominates ($15/$75 per MTok). Recompute if pricing or expected entry size
+# changes; it only needs to be a true upper bound on a single 3-model entry.
+_BOUND_INPUT_TOKENS_PER_CALL = 3000
+_BOUND_OUTPUT_TOKENS_PER_CALL = 1000
+_EST_MAX_USD_PER_ENTRY = (
+    _BOUND_INPUT_TOKENS_PER_CALL / 1e6 * ens.SONNET_INPUT_USD_PER_MTOK
+    + _BOUND_OUTPUT_TOKENS_PER_CALL / 1e6 * ens.SONNET_OUTPUT_USD_PER_MTOK
+    + _BOUND_INPUT_TOKENS_PER_CALL / 1e6 * ens.OPUS_INPUT_USD_PER_MTOK
+    + _BOUND_OUTPUT_TOKENS_PER_CALL / 1e6 * ens.OPUS_OUTPUT_USD_PER_MTOK
+    + _BOUND_INPUT_TOKENS_PER_CALL / 1e6 * ens.GPT5_INPUT_USD_PER_MTOK
+    + _BOUND_OUTPUT_TOKENS_PER_CALL / 1e6 * ens.GPT5_OUTPUT_USD_PER_MTOK
+)
+
+# Patterns that identify a credit-balance / quota exhaustion error from ANY
+# provider (Anthropic credit balance OR OpenAI insufficient_quota). Stopping on
+# a real quota error from either vendor is correct — it is money / hard limits,
+# not a transient blip. Transient rate-limit-with-retry messages are
+# deliberately NOT matched here (those degrade to a single non-vote and the run
+# continues); only an exhaustion signal halts the run. These strings appear in
+# HTTP 402 / 429 response bodies.
 _QUOTA_PATTERNS: list[str] = [
-    r"credit balance is too low",
-    r"insufficient.{0,20}credit",
-    r"insufficient.{0,20}quota",
-    r"\bquota\b",
+    r"credit balance is too low",  # Anthropic 402
+    r"insufficient.{0,20}credit",  # Anthropic variants
+    r"insufficient.{0,20}quota",  # OpenAI insufficient_quota
+    r"\bquota\b",  # any "...exceeded your current quota..." (OpenAI 429)
     r"429 insufficient",
-    r"rate.limit.exceeded",
+    r"rate.limit.exceeded",  # hard rate-limit exhaustion (not a retry hint)
 ]
 _QUOTA_RE = re.compile("|".join(_QUOTA_PATTERNS), re.IGNORECASE)
 
@@ -161,12 +184,14 @@ def _estimate_cost(n_entries: int, per_call_usd: float) -> float:
 
 
 def _is_quota_error(exc_or_text: Any) -> bool:
-    """Return True iff *exc_or_text* signals an Anthropic credit-balance or quota
-    exhaustion.
+    """Return True iff *exc_or_text* signals credit-balance / quota exhaustion
+    from ANY provider (Anthropic credit-balance OR OpenAI insufficient_quota).
 
-    Accepts an Exception (its string representation is searched) or a plain str.
-    Transient rate-limit retries, timeouts, and other errors return False so the
-    caller can handle them differently (record as a non-vote and continue).
+    Stopping on a real quota error from either vendor is correct — it is a
+    money / hard-limit condition, not a transient blip. Accepts an Exception
+    (its string representation is searched) or a plain str. Transient
+    rate-limit-with-retry messages, timeouts, and other errors return False so
+    the caller handles them differently (record as a non-vote and continue).
     """
     text = str(exc_or_text)
     return bool(_QUOTA_RE.search(text))
@@ -315,17 +340,22 @@ def _run_measurement_loop(
 
     Returns ``(rows, stop_reason)`` where ``stop_reason`` is:
     * ``None``    — completed all entries normally
-    * ``"budget"``— stopped because the next call would exceed ``max_cost``
-    * ``"quota"`` — stopped because a quota/credit error was raised
+    * ``"budget"``— stopped because the next call could exceed ``max_cost``
+    * ``"quota"`` — stopped because a quota/credit-exhaustion error was seen
 
     ``rows`` contains only entries measured in THIS call (not the full done dict).
-    Merges with *done* for writes to *out* (so the checkpoint always holds ALL
-    prior + current results).
+
+    Checkpointing (HIGH 3): rows are held in a dict keyed by ``feature_name`` so
+    a retried row REPLACES its prior (e.g. contaminated) version in place. The
+    deduped set is written on EVERY incremental persist, so a mid-run exit never
+    leaves duplicate rows for one feature in the checkpoint.
 
     NOTE: ``out`` is written after EACH entry (incremental checkpoint).
     """
-    # Start with all previously-done rows so writes are cumulative.
-    all_rows: list[dict[str, Any]] = list(done.values())
+    # Keyed by feature_name so a retry REPLACES a prior row (e.g. a contaminated
+    # one) rather than coexisting with it. Seeded from *done* so the incremental
+    # checkpoint always holds ALL prior + current results, deduped.
+    rows_by_name: dict[str, dict[str, Any]] = {name: dict(row) for name, row in done.items()}
     new_rows: list[dict[str, Any]] = []
     cumulative_cost = 0.0
     stop_reason: Optional[str] = None
@@ -333,14 +363,16 @@ def _run_measurement_loop(
     for e in entries:
         gt = e["ground_truth_role"]
 
-        # --- Budget pre-check ---
+        # --- Budget pre-check (HIGH 2) ---
+        # Use a CONSERVATIVE upper bound, not the friendly estimate, so actual
+        # spend can never overshoot the cap. Stop one entry early rather than
+        # risk an Opus-heavy entry pushing accumulated cost over --max-cost.
         if max_cost is not None:
-            remaining_budget = max_cost - cumulative_cost
-            # Use estimated cost per entry as a conservative pre-check
-            if remaining_budget < _EST_USD_PER_CALL:
+            if cumulative_cost + _EST_MAX_USD_PER_ENTRY > max_cost:
                 print(
-                    f"\n[BUDGET] Remaining budget ${remaining_budget:.4f} < "
-                    f"estimated per-entry cost ${_EST_USD_PER_CALL:.4f} — stopping. "
+                    f"\n[BUDGET] Accumulated ${cumulative_cost:.4f} + conservative "
+                    f"per-entry bound ${_EST_MAX_USD_PER_ENTRY:.4f} would exceed cap "
+                    f"${max_cost:.4f} — stopping before the next call. "
                     f"Re-run with --out to resume from this point."
                 )
                 stop_reason = "budget"
@@ -356,10 +388,13 @@ def _run_measurement_loop(
                 prompt_mode=prompt_mode,
             )
         except Exception as exc:  # noqa: BLE001
+            # A quota error that propagates as a raise (e.g. preflight / non-vote
+            # path bypassed) is still handled cleanly; the common case is the
+            # vote.error path below (HIGH 1).
             if _is_quota_error(exc):
                 print(
                     f"\n[QUOTA] Credit/quota exhaustion detected: {exc}\n"
-                    f"Checkpointed {len(new_rows)} new entries. "
+                    f"Checkpointed {len(new_rows)} new entries this run. "
                     f"Top up credits and re-run with --out to resume."
                 )
                 stop_reason = "quota"
@@ -374,7 +409,43 @@ def _run_measurement_loop(
         s = next((v.causal_role for v in clf.votes if "sonnet" in v.model), None)
         o = next((v.causal_role for v in clf.votes if "opus" in v.model), None)
         g = next((v.causal_role for v in clf.votes if "gpt" in v.model), None)
-        contaminated = s is None or o is None
+
+        # HIGH 4: a missing GPT-5 vote means this is NOT a valid multi-VENDOR
+        # measurement (the whole point of #242), so the row is contaminated and
+        # excluded from conclusions — but a GPT-5-only failure does NOT halt the
+        # run (only account-wide quota exhaustion does, handled below).
+        contaminated = s is None or o is None or g is None
+
+        # HIGH 1: _classify_one SWALLOWS exceptions into vote.error (correct for
+        # telemetry / degrade-to-healthy), so a credit-exhaustion error never
+        # reaches the except-clause above. Inspect each member's error string;
+        # if ANY is a quota/credit-exhaustion error, persist what we have and
+        # STOP — do NOT keep iterating remaining entries recording them as
+        # contaminated non-votes (the data-pollution failure we are fixing).
+        quota_errors = [
+            getattr(v, "error", None)
+            for v in clf.votes
+            if getattr(v, "error", None) and _is_quota_error(getattr(v, "error", ""))
+        ]
+
+        if quota_errors:
+            # This entry's votes are tainted by an exhaustion error — it is NOT a
+            # valid measurement, so it is NOT recorded. Persist what we already
+            # have (clean prior entries) and stop.
+            print(
+                f"{e['feature_name'][:40]:40s} gt={gt:10s} -> [QUOTA] "
+                f"member error: {quota_errors[0]}"
+            )
+            print(
+                f"\n[QUOTA] Credit/quota exhaustion detected in a model vote: "
+                f"{quota_errors[0]}\n"
+                f"Checkpointed {len(new_rows)} new entries this run; remaining "
+                f"entries NOT measured. Top up credits and re-run with --out to resume."
+            )
+            stop_reason = "quota"
+            if out is not None:
+                _persist(out, list(rows_by_name.values()))
+            break
 
         print(
             f"{e['feature_name'][:40]:40s} gt={gt:10s} S={str(s):10s} O={str(o):10s} "
@@ -395,11 +466,13 @@ def _run_measurement_loop(
             "prompt_mode": prompt_mode,
         }
         new_rows.append(row)
-        all_rows.append(row)
+        # Replace any prior row for this feature (HIGH 3 — retry overwrites).
+        rows_by_name[e["feature_name"]] = row
 
-        # Incremental checkpoint: write after EVERY entry so a crash loses at most one
+        # Incremental checkpoint: write the DEDUPED set after EVERY entry so a
+        # crash or quota stop loses at most one entry and never duplicates rows.
         if out is not None:
-            _persist(out, all_rows)
+            _persist(out, list(rows_by_name.values()))
 
     return new_rows, stop_reason
 
@@ -550,7 +623,8 @@ def main() -> int:
         return 1
     if stop_reason == "quota":
         print(
-            f"\n[RESUME] Quota exhausted.  Top up Anthropic credits and re-run:\n"
+            f"\n[RESUME] Provider quota / credit exhausted.  Top up the affected "
+            f"provider's balance and re-run:\n"
             f"  .venv/bin/python scripts/measure_ensemble_ab.py "
             f"--out {args.out} --roles {args.roles}"
         )

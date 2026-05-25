@@ -30,7 +30,7 @@ import pytest
 # ---------------------------------------------------------------------------
 # Path bootstrap (needed when running from repo root without installing)
 # ---------------------------------------------------------------------------
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
@@ -259,8 +259,9 @@ class TestBudgetGuard:
         return _FakeCLF()
 
     def test_stops_when_cost_exceeded(self, tmp_path, monkeypatch):
-        """With max_cost=0.03 and per-entry cost=0.02, should stop after first entry
-        (second would push total to 0.04 > cap)."""
+        """Budget guard stops cleanly (stop_reason=='budget') and never overshoots
+        the cap.  Uses the CONSERVATIVE per-entry bound, so the number of measured
+        entries is bounded by floor(cap / bound)."""
         entries = [
             {
                 "feature_name": f"feat_{i}",
@@ -268,30 +269,39 @@ class TestBudgetGuard:
                 "derivation_pseudocode": "",
                 "dataset_context": "",
             }
-            for i in range(5)
+            for i in range(20)
         ]
         call_count = {"n": 0}
         fake_classify = self._fake_classify
+        actual = {"total": 0.0}
 
         def _mock_run(*, feature_name, derivation_pseudocode, dataset_context, **kwargs):
             call_count["n"] += 1
-            return fake_classify(cost_per_call=0.02)
+            clf = fake_classify(cost_per_call=0.02)
+            actual["total"] += clf.total_cost_usd
+            return clf
 
         # Patch run_ensemble_classification inside the script module
         monkeypatch.setattr(ab, "_run_ensemble_for_entry", _mock_run, raising=False)
 
+        # Guard trips when accumulated-actual + conservative-bound > cap.
+        # With actual=$0.02/entry and bound ~$0.158, a $0.30 cap trips once
+        # accumulated > 0.142 (after ~8 entries), strictly before all 20.
+        cap = 0.30
         rows, stopped = ab._run_measurement_loop(
             entries=entries,
             done={},
             models=("anthropic/claude-sonnet-4-6", "anthropic/claude-opus-4-7", "openai/gpt-5"),
             classifier=object(),
-            max_cost=0.03,
+            max_cost=cap,
             out=None,
             prompt_mode="compiled",
         )
-        # Only 1 entry should have been measured before the cap triggered
-        assert call_count["n"] == 1
         assert stopped == "budget"
+        # Real guarantee: accumulated actual spend never exceeded the cap.
+        assert actual["total"] <= cap
+        # And the guard stopped strictly before exhausting all 20 entries.
+        assert call_count["n"] < 20
 
 
 class TestQuotaStop:
@@ -638,3 +648,300 @@ class TestPromptModeThreading:
         )
         assert verdict is not None
         assert verdict.causal_role == "descendant"
+
+
+# ===========================================================================
+# Codex iter-1 findings — regression tests (red-first)
+# ===========================================================================
+
+
+def _clf_with_votes(votes_spec, total_cost=0.01, fused_role="confounder", agreement="full"):
+    """Build a fake EnsembleClassification-like object.
+
+    *votes_spec* is a list of (model, role, error) tuples.
+    """
+
+    class _FakeVote:
+        def __init__(self, model, role, error):
+            self.model = model
+            self.causal_role = role
+            self.mechanism = ""
+            self.cost_usd = (total_cost / len(votes_spec)) if total_cost is not None else None
+            self.error = error
+
+    class _FakeCLF:
+        def __init__(self):
+            self.fused_role = fused_role
+            self.agreement = agreement
+            self.total_cost_usd = total_cost
+            self.votes = [_FakeVote(m, r, e) for (m, r, e) in votes_spec]
+
+    return _FakeCLF()
+
+
+def _entries(n):
+    return [
+        {
+            "feature_name": f"feat_{i}",
+            "ground_truth_role": "confounder",
+            "derivation_pseudocode": "",
+            "dataset_context": "",
+        }
+        for i in range(n)
+    ]
+
+
+_MODELS = ("anthropic/claude-sonnet-4-6", "anthropic/claude-opus-4-7", "openai/gpt-5")
+
+
+class TestQuotaStopFromVoteError:
+    """HIGH 1: quota errors arrive as vote.error (swallowed by _classify_one),
+    NOT as a raised exception. The loop must inspect vote.error and stop cleanly."""
+
+    def test_quota_in_vote_error_stops_loop(self, tmp_path, monkeypatch):
+        """A vote whose error contains a credit-balance message stops the loop after
+        that entry; remaining entries are NOT measured."""
+        entries = _entries(4)
+        call_count = {"n": 0}
+
+        def _mock_run(*, feature_name, **kwargs):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                # clean first entry
+                return _clf_with_votes(
+                    [
+                        ("anthropic/claude-sonnet-4-6", "confounder", None),
+                        ("anthropic/claude-opus-4-7", "confounder", None),
+                        ("openai/gpt-5", "confounder", None),
+                    ]
+                )
+            # second entry: Sonnet vote carries a quota error (swallowed into vote.error)
+            return _clf_with_votes(
+                [
+                    (
+                        "anthropic/claude-sonnet-4-6",
+                        None,
+                        "Error: Your credit balance is too low to access the API",
+                    ),
+                    ("anthropic/claude-opus-4-7", None, "credit balance is too low"),
+                    ("openai/gpt-5", "confounder", None),
+                ],
+                fused_role=None,
+                agreement="split",
+            )
+
+        monkeypatch.setattr(ab, "_run_ensemble_for_entry", _mock_run, raising=False)
+        out = tmp_path / "ckpt.json"
+
+        rows, stopped = ab._run_measurement_loop(
+            entries=entries,
+            done={},
+            models=_MODELS,
+            classifier=object(),
+            max_cost=None,
+            out=out,
+            prompt_mode="compiled",
+        )
+        assert stopped == "quota"
+        # The loop must NOT continue to feat_2 / feat_3
+        assert call_count["n"] == 2
+        # Checkpoint written and contains only the clean first entry (the quota
+        # entry is a non-measurement and must not pollute the dataset).
+        import json as _json
+
+        saved = _json.loads(out.read_text())["rows"]
+        saved_names = {r["feature_name"] for r in saved}
+        assert "feat_0" in saved_names
+        assert "feat_2" not in saved_names and "feat_3" not in saved_names
+
+    def test_non_quota_vote_error_does_not_stop(self, monkeypatch):
+        """A transient (non-quota) error on a single model is recorded as a non-vote
+        and the loop CONTINUES (only quota / credit exhaustion halts)."""
+        entries = _entries(3)
+        call_count = {"n": 0}
+
+        def _mock_run(*, feature_name, **kwargs):
+            call_count["n"] += 1
+            # GPT-5 has a transient timeout on every entry — not a quota error
+            return _clf_with_votes(
+                [
+                    ("anthropic/claude-sonnet-4-6", "confounder", None),
+                    ("anthropic/claude-opus-4-7", "confounder", None),
+                    ("openai/gpt-5", None, "timeout connecting to API"),
+                ]
+            )
+
+        monkeypatch.setattr(ab, "_run_ensemble_for_entry", _mock_run, raising=False)
+
+        rows, stopped = ab._run_measurement_loop(
+            entries=entries,
+            done={},
+            models=_MODELS,
+            classifier=object(),
+            max_cost=None,
+            out=None,
+            prompt_mode="compiled",
+        )
+        assert stopped is None
+        assert call_count["n"] == 3  # all entries measured
+
+
+class TestBudgetCapNoOverspend:
+    """HIGH 2: the cap must use a conservative upper bound so actual cost cannot
+    exceed --max-cost even when a single entry costs more than the simple estimate."""
+
+    def test_stops_before_accumulated_exceeds_cap(self, monkeypatch):
+        """Per-entry actual cost ($0.12) is far above the SIMPLE estimate
+        (~$0.011) — the old guard compared against that estimate and would have
+        overspent. The guard must use the conservative bound and never let
+        accumulated actual cost exceed the cap, even when actual >> estimate."""
+        # Per-entry actual cost is below the conservative bound (a true upper
+        # bound on a single 3-model entry) but far above the friendly estimate.
+        per_entry = 0.12
+        assert per_entry > ab._EST_USD_PER_CALL  # would have fooled the old guard
+        assert per_entry <= ab._EST_MAX_USD_PER_ENTRY  # within the conservative bound
+        entries = _entries(20)
+        measured_cost = {"total": 0.0}
+
+        def _mock_run(*, feature_name, **kwargs):
+            clf = _clf_with_votes(
+                [
+                    ("anthropic/claude-sonnet-4-6", "confounder", None),
+                    ("anthropic/claude-opus-4-7", "confounder", None),
+                    ("openai/gpt-5", "confounder", None),
+                ],
+                total_cost=per_entry,
+            )
+            measured_cost["total"] += clf.total_cost_usd
+            return clf
+
+        monkeypatch.setattr(ab, "_run_ensemble_for_entry", _mock_run, raising=False)
+
+        cap = 1.00
+        rows, stopped = ab._run_measurement_loop(
+            entries=entries,
+            done={},
+            models=_MODELS,
+            classifier=object(),
+            max_cost=cap,
+            out=None,
+            prompt_mode="compiled",
+        )
+        assert stopped == "budget"
+        # Real guarantee: accumulated actual spend never exceeded the cap.
+        assert measured_cost["total"] <= cap
+        # Stopped strictly before exhausting all 20 entries.
+        assert len(rows) < 20
+
+    def test_conservative_bound_is_at_least_simple_estimate(self):
+        """The conservative per-entry upper bound must be >= the simple estimate
+        (Opus-heavy worst case dominates)."""
+        assert ab._EST_MAX_USD_PER_ENTRY >= ab._EST_USD_PER_CALL
+
+
+class TestContaminatedRetryDedup:
+    """HIGH 3: a retried contaminated row must REPLACE the old row in the checkpoint,
+    never coexist — even on an incremental (mid-run) persist."""
+
+    def test_retry_replaces_contaminated_row_in_checkpoint(self, tmp_path, monkeypatch):
+        out = tmp_path / "ckpt.json"
+        # Seed a checkpoint with a contaminated row for feat_0
+        ab._persist(
+            out,
+            [
+                {
+                    "feature_name": "feat_0",
+                    "gt": "confounder",
+                    "sonnet": "confounder",
+                    "opus": None,
+                    "gpt5": "confounder",
+                    "contaminated": True,
+                    "prompt_mode": "compiled",
+                }
+            ],
+        )
+        done = ab._load_checkpoint(out)
+
+        def _mock_run(*, feature_name, **kwargs):
+            # retry succeeds cleanly this time
+            return _clf_with_votes(
+                [
+                    ("anthropic/claude-sonnet-4-6", "confounder", None),
+                    ("anthropic/claude-opus-4-7", "confounder", None),
+                    ("openai/gpt-5", "confounder", None),
+                ]
+            )
+
+        monkeypatch.setattr(ab, "_run_ensemble_for_entry", _mock_run, raising=False)
+
+        # Only feat_0 is remaining (it was contaminated)
+        rows, stopped = ab._run_measurement_loop(
+            entries=_entries(1),  # feat_0
+            done=done,
+            models=_MODELS,
+            classifier=object(),
+            max_cost=None,
+            out=out,
+            prompt_mode="compiled",
+        )
+        import json as _json
+
+        saved = _json.loads(out.read_text())["rows"]
+        feat0_rows = [r for r in saved if r["feature_name"] == "feat_0"]
+        # Exactly ONE row for feat_0 — the retried clean one, not the old contaminated.
+        assert len(feat0_rows) == 1
+        assert feat0_rows[0]["contaminated"] is False
+
+
+class TestGpt5NonVoteContaminated:
+    """HIGH 4: a missing GPT-5 vote means the row is not a valid multi-vendor
+    measurement → contaminated=True, but the run must CONTINUE (only Anthropic
+    account-wide quota halts)."""
+
+    def test_missing_gpt5_marks_contaminated_and_continues(self, monkeypatch):
+        entries = _entries(2)
+        call_count = {"n": 0}
+
+        def _mock_run(*, feature_name, **kwargs):
+            call_count["n"] += 1
+            # Sonnet + Opus present, GPT-5 missing (a transient OpenAI failure)
+            return _clf_with_votes(
+                [
+                    ("anthropic/claude-sonnet-4-6", "confounder", None),
+                    ("anthropic/claude-opus-4-7", "confounder", None),
+                    ("openai/gpt-5", None, "timeout"),
+                ]
+            )
+
+        monkeypatch.setattr(ab, "_run_ensemble_for_entry", _mock_run, raising=False)
+
+        rows, stopped = ab._run_measurement_loop(
+            entries=entries,
+            done={},
+            models=_MODELS,
+            classifier=object(),
+            max_cost=None,
+            out=None,
+            prompt_mode="compiled",
+        )
+        assert stopped is None  # continues — GPT-5 transient failure does not halt
+        assert call_count["n"] == 2
+        assert all(r["contaminated"] is True for r in rows)
+
+
+class TestQuotaPatternAnyProvider:
+    """MEDIUM: any provider's quota / credit-exhaustion error is a clean-stop trigger
+    (an OpenAI quota error is also money/limits). Transient != quota."""
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Error code: 429 - insufficient_quota: You exceeded your current quota",
+            "You exceeded your current quota, please check your plan and billing",
+        ],
+    )
+    def test_openai_quota_strings_are_quota(self, text):
+        assert ab._is_quota_error(text) is True
+
+    def test_transient_rate_limit_is_not_quota(self):
+        assert ab._is_quota_error("rate limited — retry in 60s") is False
