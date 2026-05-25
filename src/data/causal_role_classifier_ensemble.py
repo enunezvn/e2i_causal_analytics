@@ -50,7 +50,9 @@ from src.data.causal_role_classifier import CausalRoleClassifier
 # the compiled-artifact loader (all 3 ensemble members share the same compiled
 # few-shot demos).
 from src.data.causal_role_classifier_loader import (
+    _PROVIDER_TO_ENV_VARS,
     _extract_lm_usage,
+    _model_provider,
     load_compiled_classifier,
 )
 from src.data.kg.types import (
@@ -96,6 +98,32 @@ def _resolve_models() -> tuple[str, str, str]:
         os.environ.get("ENSEMBLE_OPUS_MODEL", _DEFAULT_OPUS),
         os.environ.get("ENSEMBLE_GPT_MODEL", _DEFAULT_GPT),
     )
+
+
+class EnsemblePreflightError(RuntimeError):
+    """Raised when an ensemble member's provider API key is absent.
+
+    A *missing key* is a configuration error, NOT a runtime outage. We fail
+    loudly here rather than letting that member error at call time and degrade
+    to a non-vote — silently running a 2-of-3 "ensemble" of two Anthropic
+    siblings would throw away the independent-provider property that is the
+    entire reason #242 exists (see module docstring + #240 AC3.5).
+    """
+
+
+def _preflight_models(models: Sequence[str]) -> None:
+    """Verify every member's provider key is present; raise listing what's
+    missing. Reuses the loader's provider→env-var map so the two stay in sync."""
+    missing: list[str] = []
+    for model in models:
+        provider = _model_provider(model)
+        env_vars = _PROVIDER_TO_ENV_VARS.get(provider) if provider else None
+        if env_vars and not any(os.environ.get(var) for var in env_vars):
+            missing.append(f"{model} needs one of {list(env_vars)}")
+    if missing:
+        raise EnsemblePreflightError(
+            "ensemble preflight failed — missing provider API key(s): " + "; ".join(missing)
+        )
 
 
 # --- Per-provider pricing (USD per million tokens) ---------------------------
@@ -397,12 +425,19 @@ def run_ensemble_classification(
     models: Optional[Sequence[str]] = None,
     classifier: Any = None,
     max_workers: int = 3,
+    preflight: bool = True,
 ) -> EnsembleClassification:
     """Run all members in parallel and fuse. Returns the rich
     :class:`EnsembleClassification` (per-provider votes + telemetry) for the
     offline harness / curation consumers.
+
+    ``preflight`` (default True) checks every member's provider key up front and
+    raises :class:`EnsemblePreflightError` if one is missing — so a config gap
+    fails loudly instead of silently collapsing the ensemble to one vendor.
     """
     model_tuple = tuple(models) if models is not None else _resolve_models()
+    if preflight:
+        _preflight_models(model_tuple)
     if classifier is None:
         classifier = load_compiled_classifier()
         if classifier is None:
@@ -439,6 +474,7 @@ def classify_feature_ensemble(
     models: Optional[Sequence[str]] = None,
     classifier: Any = None,
     max_workers: int = 3,
+    preflight: bool = True,
 ) -> Optional[LLMVerdict]:
     """Public entry mirroring the single-model ``classify_feature`` contract.
 
@@ -454,5 +490,6 @@ def classify_feature_ensemble(
         models=models,
         classifier=classifier,
         max_workers=max_workers,
+        preflight=preflight,
     )
     return _ensemble_to_llm_verdict(classification)

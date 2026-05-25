@@ -476,8 +476,15 @@ def test_classify_one_invalid_role_is_nonvote(monkeypatch):
 
 
 def _patch_classify_one_by_role(monkeypatch, role_by_model):
-    """Patch _classify_one to return a scripted healthy vote per model."""
+    """Patch _classify_one to return a scripted healthy vote per model.
+
+    Also sets both provider keys so the (default-on) preflight passes — these
+    tests exercise orchestration/fusion, not the preflight (P5 tests that).
+    """
     from src.data import causal_role_classifier_ensemble as ens
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-test")
 
     def _fake(model, **kw):
         return EnsembleModelVote(model=model, causal_role=role_by_model[model])
@@ -531,3 +538,58 @@ def test_run_ensemble_classification_invokes_all_models(monkeypatch):
     assert len(clf.votes) == 3
     assert {v.model for v in clf.votes} == set(models)
     assert clf.agreement == "full"
+
+
+# ---------------------------------------------------------------------------
+# P5 — _preflight_models (loud on missing key; config-error != runtime outage)
+# ---------------------------------------------------------------------------
+
+
+def test_preflight_passes_when_all_keys_present(monkeypatch):
+    from src.data import causal_role_classifier_ensemble as ens
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-x")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-x")
+    # Should not raise.
+    ens._preflight_models(
+        ("anthropic/claude-sonnet-4-6", "anthropic/claude-opus-4-7", "openai/gpt-5")
+    )
+
+
+def test_preflight_raises_naming_missing_openai_key(monkeypatch):
+    from src.data import causal_role_classifier_ensemble as ens
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-x")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    with pytest.raises(ens.EnsemblePreflightError) as exc:
+        ens._preflight_models(("anthropic/claude-sonnet-4-6", "openai/gpt-5"))
+    assert "OPENAI_API_KEY" in str(exc.value)
+    # the non-Anthropic member is the whole point — don't silently drop it
+    assert "gpt-5" in str(exc.value)
+
+
+def test_preflight_raises_when_anthropic_missing(monkeypatch):
+    from src.data import causal_role_classifier_ensemble as ens
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-x")
+    with pytest.raises(ens.EnsemblePreflightError) as exc:
+        ens._preflight_models(("anthropic/claude-sonnet-4-6", "openai/gpt-5"))
+    assert "ANTHROPIC_API_KEY" in str(exc.value)
+
+
+def test_run_ensemble_runs_preflight_by_default(monkeypatch):
+    """run_ensemble_classification fails loudly on a missing key (does NOT
+    silently degrade to a single-vendor 'ensemble')."""
+    from src.data import causal_role_classifier_ensemble as ens
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-x")
+    with pytest.raises(ens.EnsemblePreflightError):
+        ens.run_ensemble_classification(
+            feature_name="f",
+            derivation_pseudocode="d",
+            dataset_context="c",
+            models=("anthropic/claude-sonnet-4-6", "openai/gpt-5"),
+            classifier=object(),
+        )
