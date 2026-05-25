@@ -5,7 +5,7 @@ for the gap analyzer workflow: gap detection → ROI calculation → prioritizat
 """
 
 import operator
-from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
+from typing import Annotated, Any, Dict, List, Literal, NotRequired, Optional, TypedDict
 from uuid import UUID
 
 
@@ -73,6 +73,31 @@ class ROIEstimate(TypedDict):
     confidence: float  # Legacy confidence in estimate (0.0-1.0)
     assumptions: List[str]  # Economic assumptions made
 
+    # V4.4: Causal-evidence ROI adjustment (written by PrioritizerNode when causal
+    # evidence is present). Made explicit here to stop the silent-extra-key drift;
+    # V4.4 historically wrote these onto a dict(roi_estimate) and re-cast to ROIEstimate.
+    causal_adjustment_factor: NotRequired[float]
+    causal_adjustment_reason: NotRequired[Optional[str]]
+
+    # #357: Instrument-availability ROI adjustment (written by PrioritizerNode when a
+    # STRONG instrument is available for the opportunity's feature). Independent of and
+    # additive to the V4.4 causal adjustment above (compounded — see prioritizer).
+    instrument_adjustment_factor: NotRequired[float]
+    instrument_adjustment_reason: NotRequired[Optional[str]]
+
+
+class InstrumentSpec(TypedDict):
+    """#357 P-2 producer input: per-feature instrument specification for the IV first stage.
+
+    Maps to the columns needed to run a real first-stage regression against tier0_data
+    for a given opportunity feature (feature_name matches gap["metric"]).
+    """
+
+    treatment_col: str  # D: endogenous treatment column in tier0_data
+    instrument_cols: List[str]  # Z: one or more instrument columns (>= 1)
+    outcome_col: NotRequired[str]  # Y: outcome; defaults to the feature's metric column
+    covariate_cols: NotRequired[List[str]]  # X: exogenous controls (optional)
+
 
 class PrioritizedOpportunity(TypedDict):
     """Prioritized gap with ROI estimate and action recommendation.
@@ -110,6 +135,12 @@ class GapAnalyzerState(TypedDict):
     time_period: str  # Analysis period (e.g., "current_quarter", "2024-Q3")
     filters: Optional[Dict[str, Any]]  # Additional filters
     tier0_data: Optional[Any]  # DataFrame passthrough from tier0 testing (patient-level data)
+
+    # #357: per-feature instrument specification for the IV first stage (producer input).
+    # Maps feature_name (== gap["metric"]) -> InstrumentSpec describing the treatment,
+    # instrument, outcome, and covariate columns to slice out of tier0_data. Absent =>
+    # the IV step is a no-op and the instrument-availability bonus never fires.
+    instrument_specs: Optional[Dict[str, "InstrumentSpec"]]
 
     # === CONFIGURATION ===
     gap_type: Literal["vs_target", "vs_benchmark", "vs_potential", "temporal", "all"]
@@ -232,6 +263,18 @@ class GapAnalyzerState(TypedDict):
 
     # Causal prioritization outputs
     causal_evidence_warnings: Optional[List[str]]  # Warnings about causal evidence
+
+    # ========================================================================
+    # #357: Instrument-availability (IV first-stage strength) integration
+    # ========================================================================
+
+    # Per-feature instrument strength from a REAL IV first-stage F-test
+    # (src/causal_engine/iv), produced by InstrumentAnalyzerNode from instrument_specs
+    # + tier0_data. Maps feature_name -> IVDiagnostics.to_dict() output, i.e. keys:
+    #   "instrument_strength" (str: "strong"|"moderate"|"weak"|"very_weak"),
+    #   "is_weak_instrument" (bool), "first_stage_f_stat" (float).
+    # Absent/None => no instrument analysis available => no bonus (fail-closed, like V4.4).
+    instrument_strength_by_feature: Optional[Dict[str, Dict[str, Any]]]
 
 
 # Type aliases for output contract compliance

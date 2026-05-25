@@ -300,6 +300,11 @@ class GapAnalyzerAgent(SkillsMixin):
             "time_period": input_data.get("time_period", "current_quarter"),
             "filters": input_data.get("filters"),
             "tier0_data": input_data.get("tier0_data"),  # Passthrough from tier0 testing
+            # #357: per-feature instrument specs (producer input) + any pre-computed
+            # instrument strength (P-1 future passthrough). Both default to None so the
+            # IV step is a no-op and the bonus stays fail-closed when absent.
+            "instrument_specs": input_data.get("instrument_specs"),
+            "instrument_strength_by_feature": input_data.get("instrument_strength_by_feature"),
             # Configuration
             "gap_type": input_data.get("gap_type", "vs_potential"),  # type: ignore
             "min_gap_threshold": input_data.get("min_gap_threshold", 5.0),
