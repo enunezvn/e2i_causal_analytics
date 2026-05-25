@@ -278,16 +278,11 @@ jobs:
             exit 0
           fi
           GOV_SHA="$(cat governance_checkout/.governance_verifier_sha 2>/dev/null || echo unknown)"
-          python -c "
-import json, sys
-p = 'g2_run_manifest.json'
-with open(p) as f:
-    m = json.load(f)
-m['governance_verifier_sha'] = '$GOV_SHA'
-with open(p, 'w') as f:
-    json.dump(m, f, indent=2, sort_keys=True)
-print(f'[OK] injected governance_verifier_sha={m[\"governance_verifier_sha\"]} into manifest')
-"
+          jq --sort-keys --arg sha "$GOV_SHA" \
+            '.governance_verifier_sha = $sha' \
+            g2_run_manifest.json > /tmp/_gov_sha_inject.json
+          mv /tmp/_gov_sha_inject.json g2_run_manifest.json
+          echo "[OK] injected governance_verifier_sha=$GOV_SHA into manifest"
 
       - name: Append G2 outcome to gate_history (MED-10)
         # MED-10 fix: the manifest is appended to the N1 audit trail
