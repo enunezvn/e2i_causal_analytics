@@ -1158,20 +1158,25 @@ class RAGASEvaluator:
 
         if batch_indices:
             try:
-                # Configure the judge ONCE for the whole batch. gpt-4o (not -mini)
-                # is the judge for the same reason as the per-sample path (issue
-                # #491). Passed as evaluate() arguments; this code does not assign
-                # them onto the shared metric singletons (RAGAS sets them transiently
-                # for this single call and resets in finally — race-free because only
-                # one evaluate() runs at a time).
-                openai_client = openai.OpenAI()
-                ragas_embeddings = RagasOpenAIEmbeddings(client=openai_client)
-                # Annotated Any: ragas's own type hints are imprecise (llm_factory ->
-                # InstructorBaseRagasLLM, evaluate() -> EvaluationResult | Executor),
-                # which would otherwise trip mypy arg-type/union-attr checks below.
-                # CI resolves ragas types; the dev venv does not.
+                # Configure the judge ONCE for the whole batch. gpt-4o (not -mini) is
+                # the judge (issue #491). CRITICAL (issue #504): the LLM uses an ASYNC
+                # OpenAI client. ragas's InstructorLLM.agenerate() RAISES on a sync
+                # client and falls back to a per-call thread-spawn+join that serialises
+                # the executor — so a sync client made the batched run ~serial. Locally
+                # measured: sync 44.7s vs async 7.6s (3 samples); async n=30 = ~64s with
+                # 0 NaNs and gate values matching main. AsyncOpenAI -> is_async=True ->
+                # genuine `await client.create()` -> real concurrency up to max_workers.
+                # Embeddings use a separate SYNC client (the validated config; the few
+                # answer_relevancy embedding calls are not the bottleneck). Passed as
+                # evaluate() args, NOT assigned onto the shared metric singletons (ragas
+                # sets them transiently for this one call; race-free as only one
+                # evaluate() runs at a time). `: Any` silences ragas's imprecise type
+                # hints (mypy arg-type/union-attr) that surface only in CI.
+                llm_client = openai.AsyncOpenAI()
+                embeddings_client = openai.OpenAI()
+                ragas_embeddings = RagasOpenAIEmbeddings(client=embeddings_client)
                 embeddings: Any = _RagasEmbeddingsWrapper(ragas_embeddings)
-                wrapped_llm: Any = llm_factory("gpt-4o", client=openai_client)
+                wrapped_llm: Any = llm_factory("gpt-4o", client=llm_client)
 
                 data = {
                     "question": [samples[i].query for i in batch_indices],
@@ -1186,17 +1191,16 @@ class RAGASEvaluator:
                 # NaN/success envelope — and therefore the gate scores — is identical
                 # to main's per-sample path (issue #504: wall-time-only change).
                 run_config = RunConfig(max_workers=self.config.ragas_max_workers)
-                # evaluate() is synchronous and blocking; run it in a worker thread
-                # so it does not block this coroutine's event loop (evaluate_batch is
-                # also reachable from opik_integration, not just the offline CLI). This
-                # is safe with RAGAS: on a thread with no running loop, ragas's
-                # apply_nest_asyncio() is a no-op (async_utils.is_event_loop_running()
-                # -> False) and ragas falls back to asyncio.run() on a fresh loop, so
-                # no nest_asyncio patching happens off the main thread. RAGAS
-                # parallelises the row x metric judge calls internally up to
-                # RunConfig.max_workers — that is what cuts runtime.
-                result: Any = await asyncio.to_thread(
-                    evaluate,
+                # Call evaluate() DIRECTLY (not via asyncio.to_thread). evaluate() is
+                # synchronous; ragas re-enters the running event loop (nest_asyncio) and
+                # drives its judge calls on it — and with the ASYNC LLM client above
+                # those calls run concurrently up to max_workers. This direct-call +
+                # async-client combo is the locally-validated config (issue #504: n=30
+                # in ~64s, 0 NaNs, gate values matching main). An earlier asyncio.to_thread
+                # wrapper ran ragas on a worker-thread loop and collapsed to serial
+                # (1/120 jobs in 75 min in CI). Blocking the loop here is fine: the gate
+                # is an offline CLI run with nothing else on the loop.
+                result: Any = evaluate(
                     dataset=dataset,
                     metrics=[
                         faithfulness,

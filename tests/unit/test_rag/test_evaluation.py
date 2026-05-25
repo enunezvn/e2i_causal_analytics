@@ -999,3 +999,22 @@ def test_gate_script_routes_to_batched_path_by_default():
     assert "enable_opik_tracing=args.opik_tracing" in script, (
         "gate must wire tracing to the default-off flag, not hardcode it on"
     )
+
+
+def test_batched_ragas_uses_async_openai_client_and_direct_call():
+    """#504 fix (locally measured): the LLM judge MUST use an ASYNC OpenAI client.
+    ragas's InstructorLLM.agenerate() raises on a sync client and falls back to a
+    per-call thread-spawn that serialises the judge calls (~6x slower: sync 44.7s
+    vs async 7.6s on 3 samples). And evaluate() must be called DIRECTLY, not via
+    asyncio.to_thread (which collapsed concurrency to serial in CI: 1/120 in 75min)."""
+    _point_mock_evaluate_at_frame(3)
+    openai_mod = sys.modules["openai"]
+    openai_mod.AsyncOpenAI.reset_mock()
+    ev = _batched_ragas_evaluator()
+    with (
+        patch("src.rag.evaluation._ensure_ragas_vertexai_compat"),
+        patch("asyncio.to_thread") as mock_to_thread,
+    ):
+        asyncio.run(ev.evaluate_batch(_answered_samples(3)))
+    openai_mod.AsyncOpenAI.assert_called()  # LLM judge client is async (the #504 fix)
+    mock_to_thread.assert_not_called()  # evaluate() called directly, not off-thread
