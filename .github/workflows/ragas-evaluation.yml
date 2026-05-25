@@ -7,6 +7,15 @@
 
 name: RAGAS Evaluation
 
+# Cancel an in-progress run when a newer commit lands on the same ref (issue
+# #504). The full gpt-4o eval is long, so superseded PR pushes would otherwise
+# pile up and run to completion. Keying on github.ref keeps each PR and main in
+# its own group, so a legitimately-running main eval is never cancelled by PR
+# activity (and vice-versa).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   push:
     branches: [main]
@@ -28,6 +37,10 @@ jobs:
   ragas-evaluation:
     name: RAG Quality Evaluation
     runs-on: ubuntu-latest
+    # Bound a hung/runaway eval (issue #504), capping the GitHub default of 360
+    # min. Healthy runs are well under this; tighten once the batched runtime
+    # (~12-18 min at n=30) is confirmed in CI.
+    timeout-minutes: 150
 
     strategy:
       matrix:

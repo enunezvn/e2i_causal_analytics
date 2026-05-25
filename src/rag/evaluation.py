@@ -177,6 +177,14 @@ class EvaluationConfig:
     max_concurrent: int = 5
     timeout_seconds: int = 60
     retry_count: int = 3
+    # RAGAS RunConfig concurrency cap for the batched evaluate() (issue #504).
+    # Bounds the in-flight gpt-4o judge calls — the judge prompts are large, so
+    # this is TPM-limited; 8 is conservative (RAGAS defaults to 16). This is the
+    # ONLY RunConfig override: timeout and max_retries stay at RAGAS defaults so
+    # the per-call success/NaN envelope (and thus the gate scores) is identical
+    # to main — a tighter timeout/retry would turn slow judge calls into NaN->0.0
+    # and silently move gate values.
+    ragas_max_workers: int = 8
 
 
 # =============================================================================
@@ -730,6 +738,47 @@ def _ensure_ragas_vertexai_compat() -> None:
 # =============================================================================
 
 
+# =============================================================================
+# RAGAS scoring helpers (shared by the per-sample and batched evaluate paths)
+# =============================================================================
+
+
+class _RagasEmbeddingsWrapper:
+    """Bridge RAGAS embeddings to the LangChain embed_query/embed_documents interface.
+
+    RAGAS 0.4.x internally calls embed_query, but its OpenAI embeddings expose
+    embed_text/embed_texts; this adapts between them. Shared by the per-sample
+    and batched evaluation paths.
+    """
+
+    def __init__(self, ragas_embeddings):
+        self._embeddings = ragas_embeddings
+
+    def embed_query(self, text: str) -> list:  # type: ignore[type-arg]
+        """LangChain-compatible embed_query method."""
+        return self._embeddings.embed_text(text)  # type: ignore[no-any-return]
+
+    def embed_documents(self, texts: list) -> list:  # type: ignore[type-arg]
+        """LangChain-compatible embed_documents method."""
+        return self._embeddings.embed_texts(texts)  # type: ignore[no-any-return]
+
+    def __getattr__(self, name):
+        return getattr(self._embeddings, name)
+
+
+def _safe_score(value: Any, default: float = 0.0) -> float:
+    """Convert NaN/None metric values to a default (RAGAS emits NaN on a failed row).
+
+    Accepts Any: the per-row score comes from RAGAS's untyped to_pandas() row dict,
+    so it may be a float, numpy float, None, or NaN; this normalises all of them.
+    """
+    import math
+
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return default
+    return float(value)
+
+
 class RAGASEvaluator:
     """
     Wrapper for RAGAS evaluation metrics with Opik observability.
@@ -899,12 +948,62 @@ class RAGASEvaluator:
 
             return result
 
+    def _build_result_from_scores(
+        self,
+        sample: EvaluationSample,
+        sample_id: str,
+        scores: Dict[str, Any],
+    ) -> EvaluationResult:
+        """Build an EvaluationResult from a single row's RAGAS scores + threshold check.
+
+        Shared by the per-sample and batched RAGAS paths so both derive the gate
+        inputs from the same per-row metric values (issue #504: batching must change
+        only wall time, never the scores the quality gate checks).
+        """
+        faith = _safe_score(scores.get("faithfulness"), 0.0)
+        relevancy = _safe_score(scores.get("answer_relevancy"), 0.0)
+        precision = _safe_score(scores.get("context_precision"), 0.0)
+        recall = _safe_score(scores.get("context_recall"), 0.0)
+
+        overall = (faith + relevancy + precision + recall) / 4
+
+        passed = all(
+            [
+                faith
+                >= self.config.thresholds.get("faithfulness", DEFAULT_THRESHOLDS["faithfulness"]),
+                relevancy
+                >= self.config.thresholds.get(
+                    "answer_relevancy", DEFAULT_THRESHOLDS["answer_relevancy"]
+                ),
+                precision
+                >= self.config.thresholds.get(
+                    "context_precision", DEFAULT_THRESHOLDS["context_precision"]
+                ),
+                recall
+                >= self.config.thresholds.get(
+                    "context_recall", DEFAULT_THRESHOLDS["context_recall"]
+                ),
+            ]
+        )
+
+        return EvaluationResult(
+            sample_id=sample_id,
+            query=sample.query,
+            faithfulness=faith,
+            answer_relevancy=relevancy,
+            context_precision=precision,
+            context_recall=recall,
+            overall_score=overall,
+            passed_thresholds=passed,
+            metadata=sample.metadata,
+        )
+
     async def _evaluate_with_ragas(
         self,
         sample: EvaluationSample,
         sample_id: str,
     ) -> EvaluationResult:
-        """Evaluate using RAGAS library."""
+        """Evaluate using RAGAS library (per-sample; used for Opik tracing + fallback)."""
         # Import block is guarded separately from the evaluation logic. A
         # failure HERE means the RAGAS dependency tree is broken/incompatible
         # (issue #491: ragas 0.4.x imports langchain_community.chat_models.
@@ -932,30 +1031,11 @@ class RAGASEvaluator:
             ) from e
 
         try:
-            # Create a wrapper that adds embed_query interface to RAGAS embeddings
-            # RAGAS 0.4.x internally calls embed_query but its embeddings use embed_text
-            class EmbeddingsWrapper:
-                """Wrapper to bridge RAGAS embeddings with LangChain interface."""
-
-                def __init__(self, ragas_embeddings):
-                    self._embeddings = ragas_embeddings
-
-                def embed_query(self, text: str) -> list:  # type: ignore[type-arg]
-                    """LangChain-compatible embed_query method."""
-                    return self._embeddings.embed_text(text)  # type: ignore[no-any-return]
-
-                def embed_documents(self, texts: list) -> list:  # type: ignore[type-arg]
-                    """LangChain-compatible embed_documents method."""
-                    return self._embeddings.embed_texts(texts)  # type: ignore[no-any-return]
-
-                def __getattr__(self, name):
-                    return getattr(self._embeddings, name)
-
             # Configure embeddings for answer_relevancy metric
             # RAGAS 0.4.x requires explicit embeddings configuration
             openai_client = openai.OpenAI()
             ragas_embeddings = RagasOpenAIEmbeddings(client=openai_client)
-            embeddings = EmbeddingsWrapper(ragas_embeddings)
+            embeddings = _RagasEmbeddingsWrapper(ragas_embeddings)
             answer_relevancy.embeddings = embeddings
 
             # Configure LLM for metrics that need it. gpt-4o (not -mini) is used
@@ -989,57 +1069,11 @@ class RAGASEvaluator:
                 ],
             )
 
-            # Extract scores and handle NaN values
-            import math
-
+            # Extract per-row scores and build the result. Scoring + gating is
+            # shared with the batched path (_build_result_from_scores) so the two
+            # produce identical gate inputs from the same per-row metric values.
             scores = result.to_pandas().iloc[0].to_dict()
-
-            def safe_score(value: float, default: float = 0.0) -> float:
-                """Convert NaN/None to default value."""
-                if value is None or (isinstance(value, float) and math.isnan(value)):
-                    return default
-                return float(value)
-
-            faith = safe_score(scores.get("faithfulness"), 0.0)
-            relevancy = safe_score(scores.get("answer_relevancy"), 0.0)
-            precision = safe_score(scores.get("context_precision"), 0.0)
-            recall = safe_score(scores.get("context_recall"), 0.0)
-
-            overall = (faith + relevancy + precision + recall) / 4
-
-            # Check thresholds
-            passed = all(
-                [
-                    faith
-                    >= self.config.thresholds.get(
-                        "faithfulness", DEFAULT_THRESHOLDS["faithfulness"]
-                    ),
-                    relevancy
-                    >= self.config.thresholds.get(
-                        "answer_relevancy", DEFAULT_THRESHOLDS["answer_relevancy"]
-                    ),
-                    precision
-                    >= self.config.thresholds.get(
-                        "context_precision", DEFAULT_THRESHOLDS["context_precision"]
-                    ),
-                    recall
-                    >= self.config.thresholds.get(
-                        "context_recall", DEFAULT_THRESHOLDS["context_recall"]
-                    ),
-                ]
-            )
-
-            return EvaluationResult(
-                sample_id=sample_id,
-                query=sample.query,
-                faithfulness=faith,
-                answer_relevancy=relevancy,
-                context_precision=precision,
-                context_recall=recall,
-                overall_score=overall,
-                passed_thresholds=passed,
-                metadata=sample.metadata,
-            )
+            return self._build_result_from_scores(sample, sample_id, scores)
 
         except ImportError as e:
             # A dependency break can also surface lazily here (ragas importing a
@@ -1053,6 +1087,143 @@ class RAGASEvaluator:
         except Exception as e:
             logger.error(f"RAGAS evaluation failed: {e}")
             return await self._evaluate_with_fallback(sample, sample_id)
+
+    async def _evaluate_batch_with_ragas(
+        self,
+        samples: List[EvaluationSample],
+        batch_run_id: Optional[str] = None,
+    ) -> List[EvaluationResult]:
+        """Evaluate every answered sample in ONE ragas.evaluate() call (issue #504).
+
+        The previous design called evaluate() once per sample on a 1-row dataset;
+        that synchronous, event-loop-blocking call defeated the Semaphore/gather in
+        evaluate_batch, so a 30-sample run executed ~serially (~96 min). RAGAS scores
+        each row independently, so a single N-row call yields identical per-row scores
+        while letting RAGAS's own RunConfig executor parallelise the row x metric judge
+        calls. The judge LLM, embeddings, and RunConfig are passed as evaluate()
+        arguments; this code does not assign them onto the shared metric singletons.
+        (RAGAS itself transiently sets metric.llm/.embeddings for the duration of the
+        single call and resets them in finally; because exactly one evaluate() runs at
+        a time here, that is race-free — unlike the old per-sample path, where N
+        concurrent calls mutated the singletons.) RunConfig overrides ONLY max_workers,
+        leaving timeout/max_retries at RAGAS defaults, so per-row scores match main.
+        Per-row scoring and gating is shared via _build_result_from_scores.
+        """
+        try:
+            _ensure_ragas_vertexai_compat()
+            import openai
+            from datasets import Dataset
+            from ragas import evaluate
+            from ragas.embeddings import OpenAIEmbeddings as RagasOpenAIEmbeddings
+            from ragas.llms import llm_factory
+            from ragas.metrics import (
+                answer_relevancy,
+                context_precision,
+                context_recall,
+                faithfulness,
+            )
+            from ragas.run_config import RunConfig
+        except ImportError as e:
+            raise RagasDependencyError(
+                "RAGAS evaluation dependencies are broken or incompatible "
+                f"({e}). The langchain stack in requirements-ragas.txt likely "
+                "drifted; see issue #491."
+            ) from e
+
+        # Partition: no-answer samples get the same result the per-sample path
+        # produces; only answered samples are sent into the batched evaluate().
+        # results is indexed by original position so input order is preserved.
+        results: List[Optional[EvaluationResult]] = [None] * len(samples)
+        sample_ids: List[str] = []
+        batch_indices: List[int] = []
+        for i, sample in enumerate(samples):
+            sample_id = f"{sample.metadata.get('brand', 'unknown')}_{int(time.time())}"
+            sample_ids.append(sample_id)
+            if not sample.answer:
+                logger.warning(f"Sample {sample_id} has no answer to evaluate")
+                results[i] = EvaluationResult(
+                    sample_id=sample_id,
+                    query=sample.query,
+                    faithfulness=None,
+                    answer_relevancy=None,
+                    context_precision=None,
+                    context_recall=None,
+                    overall_score=None,
+                    metadata={"error": "No answer provided"},
+                )
+                continue
+            if not sample.retrieved_contexts:
+                sample.retrieved_contexts = sample.contexts
+            batch_indices.append(i)
+
+        if batch_indices:
+            try:
+                # Configure the judge ONCE for the whole batch. gpt-4o (not -mini)
+                # is the judge for the same reason as the per-sample path (issue
+                # #491). Passed as evaluate() arguments; this code does not assign
+                # them onto the shared metric singletons (RAGAS sets them transiently
+                # for this single call and resets in finally — race-free because only
+                # one evaluate() runs at a time).
+                openai_client = openai.OpenAI()
+                ragas_embeddings = RagasOpenAIEmbeddings(client=openai_client)
+                embeddings = _RagasEmbeddingsWrapper(ragas_embeddings)
+                wrapped_llm = llm_factory("gpt-4o", client=openai_client)
+
+                data = {
+                    "question": [samples[i].query for i in batch_indices],
+                    "answer": [samples[i].answer for i in batch_indices],
+                    "contexts": [samples[i].retrieved_contexts for i in batch_indices],
+                    "ground_truth": [samples[i].ground_truth for i in batch_indices],
+                }
+                dataset = Dataset.from_dict(data)
+
+                # RunConfig overrides ONLY max_workers (concurrency cap). Timeout and
+                # max_retries are deliberately left at RAGAS defaults so the per-call
+                # NaN/success envelope — and therefore the gate scores — is identical
+                # to main's per-sample path (issue #504: wall-time-only change).
+                run_config = RunConfig(max_workers=self.config.ragas_max_workers)
+                # evaluate() is synchronous and blocking; run it in a worker thread
+                # so it does not block this coroutine's event loop (evaluate_batch is
+                # also reachable from opik_integration, not just the offline CLI). This
+                # is safe with RAGAS: on a thread with no running loop, ragas's
+                # apply_nest_asyncio() is a no-op (async_utils.is_event_loop_running()
+                # -> False) and ragas falls back to asyncio.run() on a fresh loop, so
+                # no nest_asyncio patching happens off the main thread. RAGAS
+                # parallelises the row x metric judge calls internally up to
+                # RunConfig.max_workers — that is what cuts runtime.
+                result = await asyncio.to_thread(
+                    evaluate,
+                    dataset=dataset,
+                    metrics=[
+                        faithfulness,
+                        answer_relevancy,
+                        context_precision,
+                        context_recall,
+                    ],
+                    llm=wrapped_llm,
+                    embeddings=embeddings,
+                    run_config=run_config,
+                )
+
+                # RAGAS preserves input row order; map each row back to its sample.
+                df = result.to_pandas()
+                for row_pos, i in enumerate(batch_indices):
+                    scores = df.iloc[row_pos].to_dict()
+                    results[i] = self._build_result_from_scores(samples[i], sample_ids[i], scores)
+            except ImportError as e:
+                raise RagasDependencyError(
+                    "RAGAS evaluation hit a dependency break at runtime "
+                    f"({e}). The langchain stack in requirements-ragas.txt likely "
+                    "drifted; see issue #491."
+                ) from e
+            except Exception as e:
+                logger.error(
+                    f"RAGAS batch evaluation failed: {e}; falling back to heuristic scorer"
+                )
+                for i in batch_indices:
+                    results[i] = await self._evaluate_with_fallback(samples[i], sample_ids[i])
+
+        return [r for r in results if r is not None]
 
     async def _evaluate_with_fallback(
         self,
@@ -1151,6 +1322,20 @@ class RAGASEvaluator:
         Returns:
             List of evaluation results
         """
+        # Fast path (issue #504): score the whole set in ONE ragas.evaluate() call.
+        # Used whenever RAGAS is the active backend and per-sample Opik tracing is
+        # not enabled (tracing needs a span per sample, so it keeps the per-sample
+        # path below). RAGAS scores each row independently, so the gate values are
+        # unchanged — only wall time drops (~96 min -> ~12-18 min at n=30).
+        use_batched = (
+            self._ragas_available
+            and self._llm_configured
+            and not (self._opik_tracer is not None and self.enable_opik_tracing)
+        )
+        if use_batched:
+            return await self._evaluate_batch_with_ragas(samples, batch_run_id)
+
+        # Per-sample path: Opik tracing (span per sample) or the heuristic fallback.
         semaphore = asyncio.Semaphore(self.config.max_concurrent)
 
         async def evaluate_with_semaphore(sample: EvaluationSample, idx: int) -> EvaluationResult:

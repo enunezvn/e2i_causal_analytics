@@ -9,6 +9,7 @@ Tests cover:
 - MLflow and Opik integration
 """
 
+import asyncio
 import json
 import sys
 import tempfile
@@ -24,6 +25,7 @@ sys.modules["ragas"] = mock_ragas
 sys.modules["ragas.metrics"] = MagicMock()
 sys.modules["ragas.llms"] = MagicMock()
 sys.modules["ragas.embeddings"] = MagicMock()
+sys.modules["ragas.run_config"] = MagicMock()
 sys.modules["datasets"] = MagicMock()
 sys.modules["openai"] = MagicMock()
 sys.modules["mlflow"] = MagicMock()
@@ -807,3 +809,181 @@ class TestEdgeCases:
 
         passed, failures = pipeline.check_thresholds(report)
         assert len(failures) == 0  # No failures if scores are None
+
+
+# =============================================================================
+# Test batched RAGAS evaluation (issue #504 — single evaluate() over N rows)
+# =============================================================================
+#
+# These guard the CI-runtime fix: the RAGAS gate must score the whole golden
+# set in ONE ragas.evaluate() call (RAGAS parallelises the row x metric jobs
+# internally via its own RunConfig executor) instead of one serial, event-loop-
+# blocking evaluate() per sample. The per-row scores the gate checks MUST be
+# unchanged — only wall time. ragas/datasets/openai are mocked at module import
+# (top of file), so these run without the RAGAS stack (both the CI unit-test job
+# and the dev venv lack it). Written as sync functions calling asyncio.run so
+# they are also runnable outside pytest (the conftest datasets-import chain
+# blocks local pytest collection — see issue #496 notes).
+
+
+def _batched_ragas_evaluator():
+    """A RAGASEvaluator forced onto the batched RAGAS path (ragas + LLM available, no Opik tracer)."""
+    with patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}):
+        ev = RAGASEvaluator(config=EvaluationConfig(log_to_mlflow=False), enable_opik_tracing=False)
+    ev._ragas_available = True
+    ev._llm_configured = True
+    ev._opik_tracer = None
+    return ev
+
+
+def _point_mock_evaluate_at_frame(n):
+    """Make the mocked ragas.evaluate() return an n-row to_pandas() with distinct per-row scores."""
+    import pandas as pd
+
+    mock_ragas.evaluate.reset_mock()
+    mock_ragas.evaluate.side_effect = None
+    sys.modules["datasets"].Dataset.from_dict.reset_mock()
+    frame = pd.DataFrame(
+        {
+            "faithfulness": [round(0.90 + i / 1000, 3) for i in range(n)],
+            "answer_relevancy": [round(0.80 + i / 1000, 3) for i in range(n)],
+            "context_precision": [round(0.85 + i / 1000, 3) for i in range(n)],
+            "context_recall": [round(0.88 + i / 1000, 3) for i in range(n)],
+        }
+    )
+    result = MagicMock()
+    result.to_pandas.return_value = frame
+    mock_ragas.evaluate.return_value = result
+    return frame
+
+
+def _answered_samples(n):
+    return [
+        EvaluationSample(
+            query=f"q{i}", ground_truth=f"gt{i}", answer=f"a{i}", retrieved_contexts=[f"c{i}"]
+        )
+        for i in range(n)
+    ]
+
+
+def test_batched_ragas_calls_evaluate_once_on_full_dataset():
+    """#504: N samples -> ONE evaluate() on an N-row dataset (was N serial 1-row calls)."""
+    n = 5
+    _point_mock_evaluate_at_frame(n)
+    ev = _batched_ragas_evaluator()
+    with patch("src.rag.evaluation._ensure_ragas_vertexai_compat"):
+        results = asyncio.run(ev.evaluate_batch(_answered_samples(n)))
+    assert mock_ragas.evaluate.call_count == 1, (
+        f"expected ONE batched evaluate(), got {mock_ragas.evaluate.call_count}"
+    )
+    data_arg = sys.modules["datasets"].Dataset.from_dict.call_args.args[0]
+    assert len(data_arg["question"]) == n
+    assert len(results) == n
+
+
+def test_batched_ragas_maps_each_row_to_its_sample_in_order():
+    """Per-row scores from the batched frame map back to the right sample, in order."""
+    n = 4
+    frame = _point_mock_evaluate_at_frame(n)
+    ev = _batched_ragas_evaluator()
+    with patch("src.rag.evaluation._ensure_ragas_vertexai_compat"):
+        results = asyncio.run(ev.evaluate_batch(_answered_samples(n)))
+    for i in range(n):
+        assert results[i].faithfulness == frame["faithfulness"].iloc[i]
+        assert results[i].answer_relevancy == frame["answer_relevancy"].iloc[i]
+        assert results[i].context_precision == frame["context_precision"].iloc[i]
+        assert results[i].context_recall == frame["context_recall"].iloc[i]
+
+
+def test_batched_ragas_passes_judge_as_args_without_mutating_singletons():
+    """Judge llm/embeddings/run_config go in as evaluate() args; the module-level metric
+    singletons are NOT mutated (no cross-call race — the #504 thread-safety fix)."""
+    n = 3
+    _point_mock_evaluate_at_frame(n)
+    metrics_mod = sys.modules["ragas.metrics"]
+    sentinel = object()
+    for name in ("faithfulness", "answer_relevancy", "context_precision", "context_recall"):
+        getattr(metrics_mod, name).llm = sentinel
+    ev = _batched_ragas_evaluator()
+    with patch("src.rag.evaluation._ensure_ragas_vertexai_compat"):
+        asyncio.run(ev.evaluate_batch(_answered_samples(n)))
+    kwargs = mock_ragas.evaluate.call_args.kwargs
+    assert "llm" in kwargs and "embeddings" in kwargs and "run_config" in kwargs
+    for name in ("faithfulness", "answer_relevancy", "context_precision", "context_recall"):
+        assert getattr(metrics_mod, name).llm is sentinel, (
+            f"{name}.llm was mutated on the shared singleton"
+        )
+
+
+def test_batched_ragas_handles_no_answer_samples_without_scoring_them():
+    """No-answer samples get the 'No answer provided' result; only answered ones are batched; order kept."""
+    _point_mock_evaluate_at_frame(2)
+    ev = _batched_ragas_evaluator()
+    samples = [
+        EvaluationSample(query="q0", ground_truth="gt0", answer="a0", retrieved_contexts=["c0"]),
+        EvaluationSample(query="q1", ground_truth="gt1", answer="", retrieved_contexts=["c1"]),
+        EvaluationSample(query="q2", ground_truth="gt2", answer="a2", retrieved_contexts=["c2"]),
+    ]
+    with patch("src.rag.evaluation._ensure_ragas_vertexai_compat"):
+        results = asyncio.run(ev.evaluate_batch(samples))
+    assert len(results) == 3
+    assert results[1].metadata.get("error") == "No answer provided"
+    assert results[1].faithfulness is None
+    data_arg = sys.modules["datasets"].Dataset.from_dict.call_args.args[0]
+    assert len(data_arg["question"]) == 2
+    assert mock_ragas.evaluate.call_count == 1
+
+
+def test_ragas_workflow_has_concurrency_and_timeout():
+    """#504 pure-infra guards: cancel superseded runs + bound runaway runs."""
+    import yaml
+
+    wf_path = Path(__file__).resolve().parents[3] / ".github" / "workflows" / "ragas-evaluation.yml"
+    wf = yaml.safe_load(wf_path.read_text())
+    assert "concurrency" in wf, "workflow needs a concurrency group to cancel superseded runs"
+    assert wf["concurrency"].get("cancel-in-progress") is True
+    assert wf["jobs"]["ragas-evaluation"].get("timeout-minutes"), (
+        "ragas-evaluation job needs timeout-minutes"
+    )
+
+
+def test_batched_ragas_falls_back_to_heuristic_when_evaluate_raises():
+    """A non-import error in the batched evaluate() falls every sample back to the
+    heuristic scorer — no sample dropped, length preserved (#504)."""
+    _point_mock_evaluate_at_frame(3)
+    mock_ragas.evaluate.side_effect = RuntimeError("ragas blew up")
+    ev = _batched_ragas_evaluator()
+    with patch("src.rag.evaluation._ensure_ragas_vertexai_compat"):
+        results = asyncio.run(ev.evaluate_batch(_answered_samples(3)))
+    mock_ragas.evaluate.side_effect = None
+    assert len(results) == 3
+    # heuristic fallback returns numeric (non-None) scores
+    assert all(r.faithfulness is not None for r in results)
+
+
+def test_batched_ragas_runconfig_caps_only_workers_not_timeout_or_retries():
+    """RunConfig must override ONLY max_workers; timeout/max_retries stay at RAGAS
+    defaults so the per-call NaN envelope (and the gate scores) match main (#504)."""
+    _point_mock_evaluate_at_frame(2)
+    run_config_cls = sys.modules["ragas.run_config"].RunConfig
+    run_config_cls.reset_mock()
+    ev = _batched_ragas_evaluator()
+    with patch("src.rag.evaluation._ensure_ragas_vertexai_compat"):
+        asyncio.run(ev.evaluate_batch(_answered_samples(2)))
+    run_config_cls.assert_called_once()
+    kwargs = run_config_cls.call_args.kwargs
+    assert "max_workers" in kwargs
+    assert "timeout" not in kwargs and "max_retries" not in kwargs
+
+
+def test_evaluate_batch_uses_per_sample_path_when_opik_tracing_enabled():
+    """With Opik tracing on, evaluate_batch must NOT use the batched path (tracing
+    needs a span per sample), so it routes to evaluate_sample instead (#504)."""
+    ev = _batched_ragas_evaluator()
+    ev._opik_tracer = MagicMock()  # tracer present
+    ev.enable_opik_tracing = True
+    ev._evaluate_batch_with_ragas = AsyncMock()
+    ev.evaluate_sample = AsyncMock(return_value=EvaluationResult(sample_id="x", query="q"))
+    asyncio.run(ev.evaluate_batch(_answered_samples(2)))
+    ev._evaluate_batch_with_ragas.assert_not_called()
+    assert ev.evaluate_sample.await_count == 2
