@@ -23,27 +23,33 @@ baselines.
 ``tests/benchmarks/data/retrieval_queries.jsonl`` and the labeled-query
 loader from ``tests/benchmarks/_loader.py``.
 
-**Baseline strategy (placeholder-first-run-blesses, retained for the
-hybrid p50/p95 baselines only — per issue #403)**: the sibling cascade +
-bm25 baselines are CI-blessed-median, but the hybrid retriever cannot
-be re-blessed from CI because the live retriever skips when
-``SUPABASE_URL`` / ``SUPABASE_KEY`` / ``OPENAI_API_KEY`` are absent. The
-first CI run that has all three secrets BLESSES the measured p50/p95 as
-the baseline (re-write ``tests/benchmarks/baselines/performance.json``
-in that PR; see the existing ``_placeholder_rationale`` entries on the
-hybrid baselines for the follow-up tracker). Subsequent runs compare
-against the blessed value within the documented tolerance bands.
+**Baseline strategy (CI-blessed-median against a local pgvector
+substrate — issue #414)**: box 2 runs the live HybridRetriever against a
+seeded local ``pgvector`` container — the REAL ``hybrid_vector_search`` /
+``hybrid_fulltext_search`` SQL functions, reached through a test-side
+``DirectSQLMemoryConnector`` with a deterministic embedder — so there are
+NO Supabase / OpenAI secrets and NO network. This isolates our code, so
+the baseline guards CODE-latency regressions (not third-party API
+latency). The baseline is CI-blessed-median like the sibling cascade +
+bm25 boxes: trigger ≥3 ``workflow_dispatch`` runs, take the
+median-of-medians, and write ``tests/benchmarks/baselines/performance.json``
+(see ``_ci_observation`` / ``_blessed_from_ci_runs`` there). Subsequent
+runs compare against the blessed value within the documented tolerance
+bands.
 
-**Skip semantics**:
-* Skips with ``requires_supabase`` if the SERVICES_AVAILABLE['supabase']
-  probe in the root conftest reports False — without Supabase, the dense
-  + sparse retrieval streams cannot run.
-* Skips when ``OPENAI_API_KEY`` is missing or not in the ``sk-*`` shape —
-  the dense stream's embedding HTTP call would hang at TLS read until
-  pytest-timeout kills the test (per
-  [[feedback-live-lm-skip-must-check-key-shape]]).
-* Does NOT require FalkorDB — the graph stream degrades gracefully to []
-  when absent (per PR #374 load-bearing pattern).
+**Run modes / skip semantics**:
+* Local pgvector substrate (CI + local): set ``BENCH_SUBSTRATE=local_pg``
+  + ``BENCH_PG_DSN``. The ``_substrate_connector`` fixture injects the
+  test-side connector; a fail-closed direct-connector preflight asserts
+  every query returns rows on BOTH streams, so a broken/unseeded substrate
+  fails loudly rather than blessing a fast-but-meaningless 0.0.
+* Legacy live path (no substrate configured): runs only when
+  ``OPENAI_API_KEY`` is in the ``sk-*`` shape — else skips, because the
+  dense stream's embedding HTTP call would otherwise hang at TLS read
+  ([[feedback-live-lm-skip-must-check-key-shape]]).
+* Skips entirely when neither path is available.
+* Never invokes the graph stream (the benchmark passes no
+  ``entities``/``kpi_name``), so FalkorDB is not required.
 
 **xdist disabled** (per
 [[causal-role-propagation-phases-2-7-close-20260518]]): xdist can starve
