@@ -162,7 +162,7 @@ def test_case_4_manifest_overrides_llm_unsatisfied() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Case 5 — Sidecar round-trip with schema_version "1.3"
+# Case 5 — Sidecar round-trip with schema_version "1.4"
 # ---------------------------------------------------------------------------
 
 
@@ -195,9 +195,10 @@ def test_case_5_sidecar_round_trip(tmp_path: Path, monkeypatch, caplog) -> None:
     path = write_adaptive_verdicts_sidecar(state)
     assert path is not None and path.exists()
     payload = json.loads(Path(path).read_text())
-    # Schema bump assertion (current producer minor; 1.3 since Issue #240
-    # Stage 3 added additive soft-gate keys — still MAJOR=1).
-    assert payload["schema_version"] == "1.3"
+    # Schema bump assertion (current producer minor; 1.4 since Issue #501
+    # added the additive `would_flag_role_leak_disagreement` shadow key — still
+    # MAJOR=1; #240 Stage 3 had bumped 1.2 → 1.3 for its soft-gate keys).
+    assert payload["schema_version"] == "1.4"
     assert "role_attributions" in payload
     assert len(payload["role_attributions"]) == 2
 
@@ -206,12 +207,12 @@ def test_case_5_sidecar_round_trip(tmp_path: Path, monkeypatch, caplog) -> None:
         reader = SidecarReader(artifacts_dir=tmp_path)
         records = list(reader.iter_verdict_records())
 
-    # No schema-version WARN on "1.3" (matches MAJOR=1).
+    # No schema-version WARN on "1.4" (exact match with the reader; MAJOR=1).
     schema_warns = [
         r for r in caplog.records if "schema_version" in r.message and r.levelname == "WARNING"
     ]
     assert schema_warns == [], (
-        f"reader emitted unexpected schema_version warns for 1.3: {[w.message for w in schema_warns]}"
+        f"reader emitted unexpected schema_version warns for 1.4: {[w.message for w in schema_warns]}"
     )
 
     by_feature = {r.feature: r for r in records}
