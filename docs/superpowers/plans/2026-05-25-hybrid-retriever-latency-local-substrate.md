@@ -280,8 +280,11 @@ git commit -m "feat(#414): minimal pg+pgvector schema for hybrid latency substra
 Implements the 4 methods the retriever calls (`vector_search_by_text`, `fulltext_search`,
 `graph_traverse`, `graph_traverse_kpi`), mirroring the result-shaping logic in
 `src/rag/memory_connector.py` but calling the SQL functions directly via psycopg2.
-**Fail-closed:** no `except: return []` — DB errors propagate so a broken substrate fails
-the benchmark loudly. Behavioral tests live in Task 5 (they need the seeded DB).
+**Fail-closed (part 1 of 2):** no `except: return []` — DB errors raise from this
+connector. NOTE (codex audit HIGH-1): `HybridRetriever`'s own dense/sparse paths swallow
+exceptions (`retriever.py:88,146`), so this raise alone is NOT sufficient — Task 6 adds a
+direct-connector preflight that bypasses that swallow. Behavioral tests live in Task 5
+(they need the seeded DB).
 
 - [ ] **Step 1: Confirm the RetrievalResult / RetrievalSource imports**
 
@@ -306,8 +309,10 @@ from typing import Any, Dict, List, Optional
 import psycopg2
 import psycopg2.extras
 
-# Mirror the imports verified in Step 1 (from src/rag/memory_connector.py):
-from src.rag.models.retrieval_models import RetrievalResult, RetrievalSource
+# Imports verified against src/rag/memory_connector.py:20-21 — RetrievalSource
+# lives in src.rag.types, NOT retrieval_models (codex audit MED-1):
+from src.rag.models.retrieval_models import RetrievalResult
+from src.rag.types import RetrievalSource
 from tests.benchmarks.substrate.embedder import embed_text, to_pgvector_literal
 
 
@@ -719,55 +724,71 @@ def test_hybrid_retriever_latency_against_baseline() -> None:
             "for the local pgvector path, or provide live SUPABASE/OPENAI creds."
         )
 
+    queries = load_queries(_QUERY_FILE)
+    baseline = _load_baseline()
+
+    connector = _make_substrate_connector() if use_substrate else None
     if use_substrate:
-        _inject_substrate(_make_substrate_connector())
+        _inject_substrate(connector)
     try:
-        queries = load_queries(_QUERY_FILE)
-        baseline = _load_baseline()
+        # FAIL-CLOSED preflight (codex audit HIGH-1 + HIGH-2). HybridRetriever's
+        # dense/sparse paths wrap the connector in `except: return []`
+        # (retriever.py:88,146), so a broken/unseeded substrate would otherwise
+        # surface as empty results, NOT an error. Here we call the connector
+        # DIRECTLY (bypassing that swallow): a DB/connection/SQL error RAISES and
+        # fails the run, and we require EVERY query to return rows on BOTH streams
+        # (not just one) so a partially-seeded substrate also fails loudly.
+        if use_substrate:
+            pre_loop = asyncio.new_event_loop()
+            try:
+                empties = []
+                for q in queries:
+                    dense = pre_loop.run_until_complete(
+                        connector.vector_search_by_text(
+                            q.query_text, k=_TOP_K, filters=q.filters or None,
+                            max_staleness=q.max_staleness,
+                        )
+                    )
+                    sparse = pre_loop.run_until_complete(
+                        connector.fulltext_search(
+                            q.query_text, k=_TOP_K, filters=q.filters or None,
+                            max_staleness=q.max_staleness,
+                        )
+                    )
+                    if not dense or not sparse:
+                        empties.append((q.query_text[:40], len(dense), len(sparse)))
+            finally:
+                pre_loop.close()
+            assert not empties, (
+                "FAIL-CLOSED: substrate returned an empty stream for "
+                f"{len(empties)}/{len(queries)} queries "
+                f"(query, dense_n, sparse_n): {empties[:5]}. The substrate is "
+                "broken or unseeded — refusing to bless (issue #403 mode)."
+            )
+
+        # Timed fused run through the real retriever path.
         timings_ms: List[float] = []
-        nonempty = 0
         loop = asyncio.new_event_loop()
         try:
             for q in queries:
-                # _run_one_query_timed returns (elapsed_ms, result_count); see Step 3
-                elapsed, count = loop.run_until_complete(_run_one_query_timed(q, k=_TOP_K))
+                elapsed = loop.run_until_complete(_run_one_query_timed(q, k=_TOP_K))
                 timings_ms.append(elapsed)
-                nonempty += 1 if count > 0 else 0
         finally:
             loop.close()
-
-        if use_substrate:
-            assert nonempty > 0, (
-                "FAIL-CLOSED: every query returned 0 results against the local "
-                "substrate — the DB is reachable but unseeded/misconfigured. "
-                "Refusing to bless a fast-but-meaningless 0.0 (issue #403 mode)."
-            )
-        # ... existing p50/p95 + tolerance-band assertion logic continues unchanged ...
+        # ... existing p50/p95 compute + print + write_measurements + placeholder
+        #     early-return + tolerance-band assertion continue UNCHANGED below ...
     finally:
         if use_substrate:
             _reset_substrate()
+            connector.close()
 ```
 
-- [ ] **Step 3: Make `_run_one_query_timed` also return the result count**
+- [ ] **Step 3: (no change to `_run_one_query_timed`)**
 
-Change `_run_one_query_timed` (currently `tests/benchmarks/test_hybrid_retriever_latency.py:102-117`) so it returns `(elapsed_ms, len(results))`:
-
-```python
-async def _run_one_query_timed(query: LabeledQuery, k: int) -> Tuple[float, int]:
-    from src.rag.retriever import hybrid_search
-
-    start = time.perf_counter()
-    results = await hybrid_search(
-        query=query.query_text,
-        k=k,
-        filters=query.filters or None,
-        max_staleness=query.max_staleness,
-    )
-    elapsed_ms = (time.perf_counter() - start) * 1000.0
-    return elapsed_ms, len(results)
-```
-
-Ensure `Tuple` is imported (`from typing import ... Tuple`).
+The fail-closed guarantee now comes from the Step 2 direct-connector preflight, so
+`_run_one_query_timed` keeps its production signature (returns `float`). No edit to it is
+needed — do NOT add a result-count return (that earlier approach was rejected because the
+retriever's `except: return []` swallow made an in-loop count guard unreliable).
 
 - [ ] **Step 4: Run the benchmark locally against the seeded substrate**
 
@@ -777,10 +798,13 @@ export BENCH_SUBSTRATE=local_pg
 export BENCH_PG_DSN="postgresql://postgres:bench@localhost:55432/postgres"
 pytest tests/benchmarks/test_hybrid_retriever_latency.py -v -o addopts="" -p no:xdist
 ```
-Expected: the test RUNS (not skipped). It will currently **fail the assertion** comparing
-observed p50/p95 against the `0.0` baseline (delta exceeds band) — that is correct and
-expected at this stage; record the observed p50/p95 printed in the `[issue-#391 box-2]`
-line. The fail-closed `nonempty > 0` assertion must NOT trip.
+Expected: the test RUNS (not skipped) and **PASSES** — with the baseline still at `0.0`,
+the existing placeholder early-return (`if p50_baseline == 0.0 ...: return`,
+`test_hybrid_retriever_latency.py:264`) returns before the tolerance assertion, while still
+printing the `[issue-#391 box-2]` p50/p95 line and writing `measurements.json`. Record the
+printed p50/p95. The fail-closed preflight must NOT trip; if it does, the substrate is
+broken/unseeded — fix before proceeding. (After Task 11 sets `mean_ms > 0`, the early-return
+is bypassed and the tolerance assertion guards for real.)
 
 - [ ] **Step 5: Commit**
 
@@ -855,6 +879,7 @@ Insert immediately before the `Run HybridRetriever latency benchmark (box 2)` st
 
 ```yaml
       - name: Provision hybrid-retriever substrate (box 2)
+        if: always()  # codex audit LOW: don't skip provisioning if box 1 failed
         env:
           PGPASSWORD: bench
           BENCH_PG_DSN: postgresql://postgres:bench@localhost:5432/postgres
@@ -922,8 +947,10 @@ gh pr create --title "feat(#414): local pg+pgvector substrate for HybridRetrieve
 ```
 Note: per repo memory, `gh pr edit --body-file` silently fails — if the body needs edits
 later, use `gh api repos/enunezvn/e2i_causal_analytics/pulls/<N> -X PATCH -f body=...`.
-At this point CI WILL fail the box-2 assertion (baseline still 0.0) — expected; Task 11
-re-blesses from the green-measurement runs.
+At this point CI box-2 **passes** via the placeholder early-return (baseline still 0.0)
+while still emitting `measurements.json` + the printed p50/p95; the fail-closed preflight
+still guards a broken substrate. Task 11 re-blesses from those measurements — once
+`mean_ms > 0` the early-return is bypassed and the tolerance assertion guards for real.
 
 - [ ] **Step 3: Commit**
 
@@ -957,8 +984,9 @@ done
 ```
 Expected: each dir contains the box-2 `measurements.json` with per-query p50/p95.
 Compute **median-of-p50s** and **median-of-p95s** across the 3 runs, and the cross-run
-**stdev** for each (used for tolerance bands). Note: the box-2 assertion FAILS in these
-runs (baseline 0.0) — that is expected; we only need the printed/recorded measurements.
+**stdev** for each (used for tolerance bands). Note: box-2 **passes** in these runs via the
+placeholder early-return at 0.0 baseline, but `measurements.json` is written before that
+return — so the numbers are available even though the tolerance assertion hasn't run yet.
 
 ---
 
