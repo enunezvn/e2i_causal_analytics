@@ -390,6 +390,17 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--ensemble",
+        action="store_true",
+        help=(
+            "Issue #242: route classification through the multi-model worker "
+            "ensemble (classify_feature_ensemble: Sonnet 4.6 + Opus 4.7 + GPT-5, "
+            "agreement-or-escalate) instead of the single-model classify_feature. "
+            "Requires all three provider keys (preflight fails loudly otherwise). "
+            "Use for the offline single-Sonnet-vs-ensemble A/B."
+        ),
+    )
+    parser.add_argument(
         "--log-level",
         default="INFO",
         help="Python logging level (default: INFO)",
@@ -430,6 +441,19 @@ def main() -> int:
         from src.data.causal_role_classifier_loader import (  # noqa: E402
             ensure_dspy_lm_configured as _ensure_dspy_lm_configured,
         )
+
+    # #242: --ensemble swaps the single-model worker for the multi-model
+    # ensemble entry point. Resolved via the same getattr-then-lazy-import seam
+    # so pytest can patch ``classify_feature_ensemble`` on this module. The
+    # ensemble is signature-compatible with classify_feature (feature_name,
+    # derivation_pseudocode, dataset_context, classifier) — extras default.
+    if args.ensemble:
+        _classify_feature = getattr(_module, "classify_feature_ensemble", None)
+        if _classify_feature is None:
+            from src.data.causal_role_classifier_ensemble import (  # noqa: E402
+                classify_feature_ensemble as _classify_feature,
+            )
+        logger.info("ensemble mode: routing classification via classify_feature_ensemble (#242)")
 
     logging.basicConfig(
         level=getattr(logging, args.log_level.upper()),

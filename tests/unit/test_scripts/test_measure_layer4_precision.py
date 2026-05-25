@@ -240,3 +240,58 @@ def test_measure_layer4_precision_classifier_artifact_override(tmp_path: Path) -
         f"--classifier-artifact not threaded; load_compiled_classifier received "
         f"{passed!r}, expected {fake_artifact!r}. Plan-239 §6.0 F1."
     )
+
+
+def test_measure_layer4_precision_ensemble_flag_routes_to_ensemble(tmp_path: Path) -> None:
+    """#242 — ``--ensemble`` routes classification through
+    ``classify_feature_ensemble`` (multi-model) instead of the single-model
+    ``classify_feature``, so the offline A/B harness can score the ensemble.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("_mlp_ens_module", _SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["_mlp_ens_module"] = module
+    spec.loader.exec_module(module)
+
+    golden = _golden_fixture(tmp_path)
+    ensemble_calls: list[str] = []
+    single_calls: list[str] = []
+
+    def _load(*a: Any, **k: Any) -> object:
+        return object()
+
+    def _ensemble(*, feature_name, derivation_pseudocode, dataset_context, classifier, **kw):
+        ensemble_calls.append(feature_name)
+        return _FakeVerdict("instrument")
+
+    def _single(*, feature_name, derivation_pseudocode, dataset_context, classifier, **kw):
+        single_calls.append(feature_name)
+        return _FakeVerdict("instrument")
+
+    module.load_compiled_classifier = _load  # type: ignore[attr-defined]
+    module.classify_feature_ensemble = _ensemble  # type: ignore[attr-defined]
+    module.classify_feature = _single  # type: ignore[attr-defined]
+    module.ensure_dspy_lm_configured = lambda *a, **k: None  # type: ignore[attr-defined]
+
+    argv = [
+        "measure_layer4_precision.py",
+        "--golden-set",
+        str(golden),
+        "--evaluator-gate",
+        "false",
+        "--threshold",
+        "0.0",
+        "--ensemble",
+    ]
+    old_argv = sys.argv
+    try:
+        sys.argv = argv
+        rc = module.main()
+    finally:
+        sys.argv = old_argv
+
+    assert rc == 0
+    assert ensemble_calls, "--ensemble must route through classify_feature_ensemble"
+    assert not single_calls, "single-model classify_feature must NOT run under --ensemble"
