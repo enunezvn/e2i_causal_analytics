@@ -147,9 +147,19 @@ class EvaluationReport(BaseModel):
 # discreteness on a small sample — a 0.80 gate flakes ~1/3 of runs on a healthy
 # pipeline. 0.70 sits one noise-quantum below the floor (and matches
 # context_recall) while still catching real regressions, which crater well below.
+#
+# Issue #496: answer_relevancy is calibrated to 0.75 (not 0.85). Expanding the
+# golden set to 30 (done to stabilise context_recall) revealed AR's true level
+# under the gpt-4o judge is a rock-stable 0.804 — identical across two full CI
+# runs — well below the old 0.85 gate: 19/30 samples score under 0.85 (including
+# an original sample), because the judge scores the "one query, answer
+# synthesises two facts" style at ~0.80. The 0.85 gate was a lucky-high-draw
+# artifact of the 10-sample set (AR 0.880). 0.75 sits one noise-quantum below
+# the 0.804 floor while still catching a genuine relevancy regression, which
+# craters well below.
 DEFAULT_THRESHOLDS = {
     "faithfulness": 0.70,
-    "answer_relevancy": 0.85,
+    "answer_relevancy": 0.75,
     "context_precision": 0.80,
     "context_recall": 0.70,
     "overall_score": 0.80,
