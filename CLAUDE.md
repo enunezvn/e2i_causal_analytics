@@ -39,6 +39,28 @@ Memory: [[feedback-reason-before-rules-20260521]].
 
 ---
 
+## CHEAPEST-DISPROOF FIRST (HIGHEST PRIORITY — user-pinned 2026-05-25)
+
+> **Before building or recommending any expensive solution, run the cheapest experiment that could DISPROVE it — in an environment FAITHFUL to the target. Do not theorize or pattern-match a solution into existence — get the disproving data FIRST, then propose the solution.**
+
+Mechanism-validation is not premise-validation. A green test suite, a clean codex audit, and tidy commits prove your *code* is correct; they say NOTHING about whether the *solution's core assumption* holds. The assumption is only validated by measuring the real outcome **in the real environment**. Elaborate rigor built on an unverified premise is guessing in a lab coat.
+
+### Required BEFORE writing code or proposing a fix
+
+1. Name the **single assumption** the solution depends on ("batching will parallelize this", "the bottleneck is X", "this consumer needs Y").
+2. Identify the **cheapest experiment that would prove that assumption FALSE**.
+3. **Run it and show the result.** Proceed only if the assumption survives.
+
+- Prefer free/local/instant over expensive: READ the dependency's source, run a one-line repro, inspect the real runtime/telemetry/config — BEFORE a full build, a long CI run, a multi-agent dispatch, or a PR.
+- A projection or model ("should be ~6× faster") is a **hypothesis**. Label it unverified; never present it as a measured result; falsify it cheaply before acting.
+- **The experiment must be FAITHFUL to the target environment** — same key/tier/config/scale. A passing run in a non-faithful environment is a false green. If you can't run it faithfully (e.g. you lack the prod/CI key), say so and treat the local result as suggestive, not decisive — the faithful experiment IS the target environment.
+
+### Incident that forced this directive (#504, 2026-05-25)
+
+Asked to speed up the ~96-min RAGAS CI gate, I took the investigation's "~12–18 min via batching" projection as fact and built the whole thing — batched refactor, 9 red-first tests, two codex rounds to ACCEPT, clean commits, a PR — on the **unverified premise that batching parallelises the gpt-4o judge calls**. A `to_thread` wrapper serialised it in CI (1/120 jobs in 75 min). The cheap disproof I'd skipped — a ~5-min read of the cached ragas source — then found the real cause: our **sync** `openai.OpenAI()` client forces ragas off its async path. Fixed with `openai.AsyncOpenAI()` → a local benchmark showed **6× faster (n=30 in ~64 s, gates matching main)** — GREEN. But that local key was a **higher tier than CI's**; on CI's key the real concurrency tripped ragas's per-job timeouts (faithfulness→0.000, a 49-min failing run). The binding constraint was never the code — it's **CI's OpenAI key throughput**. A cheap experiment in an *unfaithful* environment (wrong key tier) gave a false green and cost another failed run. Resolved by making the eval manual-only. Memory: [[feedback-cheapest-disproof-first-20260525]].
+
+---
+
 ## Anti-Mocking & Verification Discipline (SUBORDINATE to REASON-BEFORE-RULES)
 
 This section captures specific lessons from plan-354. It does NOT override the requirement to investigate intent first.

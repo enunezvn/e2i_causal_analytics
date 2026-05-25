@@ -7,22 +7,18 @@
 
 name: RAGAS Evaluation
 
+# MANUAL-ONLY (issue #504). This gpt-4o RAGAS eval is bound by the CI OpenAI key's
+# throughput: a full 30-sample run takes ~96 min, and raising concurrency to cut that
+# trips ragas's per-job timeouts (faithfulness/context_precision collapse to 0.0)
+# rather than going faster — the constraint is OpenAI throughput, not code (see #504
+# for the investigation: batching + an async client was ~6x faster locally on a
+# higher-tier key but timed out on the CI key). So it no longer runs automatically on
+# every src/rag push/PR. Trigger it on demand from the Actions tab ("Run workflow")
+# when you want a RAG-quality check. The golden set, calibrated thresholds, and judge
+# config (#358/#491/#496) are unchanged. To restore automatic runs — e.g. on a
+# higher-tier OpenAI key — re-add the push/pull_request triggers below.
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'src/rag/**'
-      - 'scripts/run_ragas_eval.py'
-      - '.github/workflows/ragas-evaluation.yml'
-      - 'requirements-ragas.txt'
-  pull_request:
-    branches: [main]
-    paths:
-      - 'src/rag/**'
-      - 'scripts/run_ragas_eval.py'
-      - '.github/workflows/ragas-evaluation.yml'
-      - 'requirements-ragas.txt'
-  workflow_dispatch:  # Manual trigger
+  workflow_dispatch:  # Manual trigger only
 
 jobs:
   ragas-evaluation:
