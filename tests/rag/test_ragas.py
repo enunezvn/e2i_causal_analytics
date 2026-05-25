@@ -175,9 +175,10 @@ class TestEvaluationConfig:
     def test_default_config(self):
         """Test default configuration values."""
         config = EvaluationConfig()
-        # Thresholds adjusted to realistic baseline per Phase 6 plan
-        assert config.thresholds["faithfulness"] == 0.80
-        assert config.thresholds["answer_relevancy"] == 0.85
+        # Calibrated to the gpt-4o judge noise floors: faithfulness 0.70 (#491),
+        # answer_relevancy 0.75 (#496). See DEFAULT_THRESHOLDS.
+        assert config.thresholds["faithfulness"] == 0.70
+        assert config.thresholds["answer_relevancy"] == 0.75
         assert config.log_to_mlflow is True
         assert config.batch_size == 10
 
@@ -190,9 +191,10 @@ class TestEvaluationConfig:
 
     def test_default_thresholds_constant(self):
         """Test that default thresholds are defined."""
-        # Thresholds adjusted to realistic baseline per Phase 6 plan
-        assert DEFAULT_THRESHOLDS["faithfulness"] == 0.80
-        assert DEFAULT_THRESHOLDS["answer_relevancy"] == 0.85
+        # Calibrated to the gpt-4o judge noise floors: faithfulness 0.70 (#491),
+        # answer_relevancy 0.75 (#496).
+        assert DEFAULT_THRESHOLDS["faithfulness"] == 0.70
+        assert DEFAULT_THRESHOLDS["answer_relevancy"] == 0.75
         assert DEFAULT_THRESHOLDS["context_precision"] == 0.80
         assert DEFAULT_THRESHOLDS["context_recall"] == 0.70
 

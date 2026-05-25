@@ -1010,10 +1010,22 @@ class RAGASEvaluator:
             # Check thresholds
             passed = all(
                 [
-                    faith >= self.config.thresholds.get("faithfulness", 0.85),
-                    relevancy >= self.config.thresholds.get("answer_relevancy", 0.90),
-                    precision >= self.config.thresholds.get("context_precision", 0.80),
-                    recall >= self.config.thresholds.get("context_recall", 0.80),
+                    faith
+                    >= self.config.thresholds.get(
+                        "faithfulness", DEFAULT_THRESHOLDS["faithfulness"]
+                    ),
+                    relevancy
+                    >= self.config.thresholds.get(
+                        "answer_relevancy", DEFAULT_THRESHOLDS["answer_relevancy"]
+                    ),
+                    precision
+                    >= self.config.thresholds.get(
+                        "context_precision", DEFAULT_THRESHOLDS["context_precision"]
+                    ),
+                    recall
+                    >= self.config.thresholds.get(
+                        "context_recall", DEFAULT_THRESHOLDS["context_recall"]
+                    ),
                 ]
             )
 
@@ -1095,10 +1107,20 @@ class RAGASEvaluator:
 
         passed = all(
             [
-                faith >= self.config.thresholds.get("faithfulness", 0.85),
-                relevancy >= self.config.thresholds.get("answer_relevancy", 0.90),
-                precision >= self.config.thresholds.get("context_precision", 0.80),
-                recall >= self.config.thresholds.get("context_recall", 0.80),
+                faith
+                >= self.config.thresholds.get("faithfulness", DEFAULT_THRESHOLDS["faithfulness"]),
+                relevancy
+                >= self.config.thresholds.get(
+                    "answer_relevancy", DEFAULT_THRESHOLDS["answer_relevancy"]
+                ),
+                precision
+                >= self.config.thresholds.get(
+                    "context_precision", DEFAULT_THRESHOLDS["context_precision"]
+                ),
+                recall
+                >= self.config.thresholds.get(
+                    "context_recall", DEFAULT_THRESHOLDS["context_recall"]
+                ),
             ]
         )
 
@@ -1378,10 +1400,18 @@ class RAGEvaluationPipeline:
             and avg_relevancy is not None
             and avg_precision is not None
             and avg_recall is not None
-            and avg_faith >= self.config.thresholds.get("faithfulness", 0.85)
-            and avg_relevancy >= self.config.thresholds.get("answer_relevancy", 0.90)
-            and avg_precision >= self.config.thresholds.get("context_precision", 0.80)
-            and avg_recall >= self.config.thresholds.get("context_recall", 0.80)
+            and avg_faith
+            >= self.config.thresholds.get("faithfulness", DEFAULT_THRESHOLDS["faithfulness"])
+            and avg_relevancy
+            >= self.config.thresholds.get(
+                "answer_relevancy", DEFAULT_THRESHOLDS["answer_relevancy"]
+            )
+            and avg_precision
+            >= self.config.thresholds.get(
+                "context_precision", DEFAULT_THRESHOLDS["context_precision"]
+            )
+            and avg_recall
+            >= self.config.thresholds.get("context_recall", DEFAULT_THRESHOLDS["context_recall"])
         )
 
         elapsed = time.time() - start_time
@@ -1526,24 +1556,32 @@ class RAGEvaluationPipeline:
         failures = []
 
         if report.avg_faithfulness is not None:
-            threshold = self.config.thresholds.get("faithfulness", 0.85)
+            threshold = self.config.thresholds.get(
+                "faithfulness", DEFAULT_THRESHOLDS["faithfulness"]
+            )
             if report.avg_faithfulness < threshold:
                 failures.append(f"Faithfulness {report.avg_faithfulness:.3f} < {threshold}")
 
         if report.avg_answer_relevancy is not None:
-            threshold = self.config.thresholds.get("answer_relevancy", 0.90)
+            threshold = self.config.thresholds.get(
+                "answer_relevancy", DEFAULT_THRESHOLDS["answer_relevancy"]
+            )
             if report.avg_answer_relevancy < threshold:
                 failures.append(f"Answer Relevancy {report.avg_answer_relevancy:.3f} < {threshold}")
 
         if report.avg_context_precision is not None:
-            threshold = self.config.thresholds.get("context_precision", 0.80)
+            threshold = self.config.thresholds.get(
+                "context_precision", DEFAULT_THRESHOLDS["context_precision"]
+            )
             if report.avg_context_precision < threshold:
                 failures.append(
                     f"Context Precision {report.avg_context_precision:.3f} < {threshold}"
                 )
 
         if report.avg_context_recall is not None:
-            threshold = self.config.thresholds.get("context_recall", 0.80)
+            threshold = self.config.thresholds.get(
+                "context_recall", DEFAULT_THRESHOLDS["context_recall"]
+            )
             if report.avg_context_recall < threshold:
                 failures.append(f"Context Recall {report.avg_context_recall:.3f} < {threshold}")
 
