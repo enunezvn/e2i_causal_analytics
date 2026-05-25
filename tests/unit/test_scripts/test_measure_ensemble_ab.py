@@ -785,6 +785,52 @@ class TestQuotaStopFromVoteError:
         assert stopped is None
         assert call_count["n"] == 3  # all entries measured
 
+    def test_realistic_litellm_quota_error_stops_loop_end_to_end(self, tmp_path, monkeypatch):
+        """End-to-end guard for the live bug: drive a REALISTIC litellm credit
+        error through the REAL _classify_one -> run_ensemble_classification ->
+        loop (NOT a hand-built short-error stub). The phrase sits >80 chars into
+        the message; under the old str(exc)[:80] truncation the loop never
+        stopped and polluted every row. This must stop after the first entry.
+        """
+        import src.data.causal_role_classifier_ensemble as ens
+
+        real_litellm_error = (
+            'litellm.BadRequestError: AnthropicException - {"type":"error","error":'
+            '{"type":"invalid_request_error","message":"Your credit balance is too '
+            "low to access the Anthropic API. Please go to Plans & Billing to "
+            'upgrade or purchase credits."}}'
+        )
+        assert real_litellm_error.find("credit balance is too low") > 80
+
+        def _boom(classifier, lm, **kw):
+            raise RuntimeError(real_litellm_error)
+
+        # Stub the deepest seams so the REAL _classify_one runs and records the
+        # full error; do NOT stub _run_ensemble_for_entry (that would bypass the
+        # truncation path that caused the live bug).
+        monkeypatch.setattr(ens, "_preflight_models", lambda *a, **k: None)
+        monkeypatch.setattr(ens, "_make_lm", lambda model: MagicMock())
+        monkeypatch.setattr(ens, "_predict_under_lm", _boom)
+
+        out = tmp_path / "ckpt.json"
+        rows, stopped = ab._run_measurement_loop(
+            entries=_entries(3),
+            done={},
+            models=_MODELS,
+            classifier=object(),
+            max_cost=None,
+            out=out,
+            prompt_mode="compiled",
+        )
+
+        assert stopped == "quota"  # RED under str(exc)[:80]; GREEN once full error kept
+        # The quota entry is a non-measurement and later entries are never reached,
+        # so nothing is recorded as data.
+        assert rows == []
+        if out.exists():
+            saved = {r["feature_name"] for r in json.loads(out.read_text())["rows"]}
+            assert saved == set()
+
 
 class TestBudgetCapNoOverspend:
     """HIGH 2: the cap must use a conservative upper bound so actual cost cannot

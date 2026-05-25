@@ -447,8 +447,12 @@ class EnsembleModelVote:
         latency_ms: Wall-clock duration of this model's call in milliseconds.
         input_tokens / output_tokens: Per-call token usage.
         cost_usd: Per-call cost from the model's documented per-MTok rates.
-        error: Short error label (e.g. ``"timeout"``) when the model failed;
-            ``None`` when the vote is healthy.
+        error: The FULL provider error message when the model failed (e.g. a
+            litellm credit-balance error), or a short label like ``"timeout"`` /
+            ``"invalid_role"``; ``None`` when the vote is healthy. Stored
+            untruncated on purpose — the A/B harness inspects this string for
+            credit/quota exhaustion to stop cleanly, and the matchable phrase can
+            sit >80 chars into a provider error.
     """
 
     model: str
