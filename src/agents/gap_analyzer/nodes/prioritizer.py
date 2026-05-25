@@ -13,7 +13,7 @@ V4.4: Added causal evidence filtering and confidence adjustments.
 """
 
 import time
-from typing import Any, Dict, List, Literal, Tuple, cast
+from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
 from ..state import (
     GapAnalyzerState,
@@ -26,6 +26,16 @@ from ..state import (
 DIRECT_CAUSE_BOOST = 1.2  # Boost for direct causes
 NO_CAUSAL_EVIDENCE_PENALTY = 0.7  # Penalty for predictive-only features
 HIGH_CAUSAL_SCORE_THRESHOLD = 0.6  # Threshold for "high" causal importance
+
+# #357: Instrument-availability bonus — credibility boost when a STRONG instrument
+# (first-stage F >= 10, Staiger-Stock) is available for the opportunity's feature.
+STRONG_INSTRUMENT_BONUS = 1.15  # < DIRECT_CAUSE_BOOST (1.2): availability of a strong
+#                                 identification strategy is supporting evidence, not as
+#                                 strong as a confirmed direct-cause edge.
+STRONG_INSTRUMENT_F_FLOOR = 10.0  # Staiger-Stock strong threshold; mirrors
+#                                   IVDiagnostics.is_weak_instrument (F < 10) and
+#                                   _classify_instrument_strength (f_stat >= 10 -> STRONG).
+#                                   Inclusive ">= 10" boundary (belt-and-suspenders gate).
 
 
 class PrioritizerNode:
@@ -112,6 +122,17 @@ class PrioritizerNode:
                     direct_cause_features or [],
                     predictive_only_features or [],
                 )
+
+            # #357: Apply instrument-availability bonus if available. Independent of and
+            # ADDITIVE to the V4.4 causal adjustment above — runs after it, so when a
+            # feature is both a direct cause AND strong-instrumented the two compound.
+            if self._has_instrument_evidence(state):
+                instrument_lookup = state.get("instrument_strength_by_feature") or {}
+                opportunities, instrument_warnings = self._apply_instrument_availability_bonus(
+                    opportunities,
+                    instrument_lookup,
+                )
+                causal_evidence_warnings.extend(instrument_warnings)
 
             # Sort by expected ROI (descending) - may have been adjusted by causal evidence
             opportunities.sort(key=lambda o: o["roi_estimate"]["expected_roi"], reverse=True)
@@ -502,3 +523,99 @@ class PrioritizerNode:
         # 1. We have causal rankings
         # 2. Discovery gate decision is accept or review (not reject)
         return bool(causal_rankings) and discovery_gate_decision in ("accept", "review")
+
+    # =========================================================================
+    # #357: Instrument-Availability Bonus Methods
+    # =========================================================================
+
+    def _has_instrument_evidence(self, state: GapAnalyzerState) -> bool:
+        """Check if per-feature instrument strength is available.
+
+        Independent of the V4.4 causal gate: the instrument bonus can apply even when
+        causal_rankings is absent, and vice-versa (the two mechanisms are additive and
+        decoupled).
+
+        Args:
+            state: Current gap analyzer state
+
+        Returns:
+            True if instrument strength data is present (non-empty).
+        """
+        return bool(state.get("instrument_strength_by_feature"))
+
+    def _apply_instrument_availability_bonus(
+        self,
+        opportunities: List[PrioritizedOpportunity],
+        instrument_lookup: Dict[str, Dict[str, Any]],
+    ) -> Tuple[List[PrioritizedOpportunity], List[str]]:
+        """Boost opportunity ROI when a STRONG instrument is available (#357, Option-3).
+
+        Asymmetric by design (bonus-only, D-4): only ``InstrumentStrength.STRONG`` earns a
+        bonus; MODERATE/WEAK/VERY_WEAK/absent -> factor 1.0 (no penalty — absence of an
+        instrument is not evidence the opportunity is bad).
+
+        Belt-and-suspenders gate: requires BOTH ``instrument_strength == "strong"`` AND a
+        real ``first_stage_f_stat >= STRONG_INSTRUMENT_F_FLOOR`` — guards against any
+        upstream that sets the enum without a real F-stat.
+
+        Compounding with V4.4 (D-3 = multiply): this runs AFTER the V4.4 causal adjustment
+        and multiplies the already-causal-adjusted ``expected_roi``. The instrument factor
+        is recorded in NEW ROI keys (``instrument_adjustment_factor`` /
+        ``instrument_adjustment_reason``) so the V4.4 record is never overwritten.
+
+        Args:
+            opportunities: Opportunities to adjust (possibly already V4.4-adjusted)
+            instrument_lookup: feature_name -> IVDiagnostics.to_dict() output
+
+        Returns:
+            Tuple of (adjusted opportunities, instrument warnings)
+        """
+        adjusted_opportunities: List[PrioritizedOpportunity] = []
+        warnings: List[str] = []
+
+        for opp in opportunities:
+            gap = opp["gap"]
+            feature_name = self._get_gap_feature_name(gap)
+            roi_estimate = opp["roi_estimate"]
+            original_roi = roi_estimate["expected_roi"]
+
+            diag = instrument_lookup.get(feature_name)
+
+            adjustment_factor = 1.0
+            adjustment_reason: Optional[str] = None
+
+            if diag is not None:
+                strength = diag.get("instrument_strength")
+                try:
+                    f_stat = float(diag.get("first_stage_f_stat", 0.0))
+                except (TypeError, ValueError):
+                    f_stat = 0.0
+
+                if strength == "strong" and f_stat >= STRONG_INSTRUMENT_F_FLOOR:
+                    adjustment_factor = STRONG_INSTRUMENT_BONUS
+                    adjustment_reason = "strong_instrument_bonus"
+                    warnings.append(
+                        f"Gap '{gap['gap_id']}' targets '{feature_name}' which has a strong "
+                        f"instrument (first-stage F={f_stat:.1f}). "
+                        f"ROI boosted by {STRONG_INSTRUMENT_BONUS:.0%}."
+                    )
+
+            if adjustment_factor != 1.0:
+                adjusted_roi_estimate = dict(roi_estimate)
+                adjusted_roi_estimate["expected_roi"] = original_roi * adjustment_factor
+                adjusted_roi_estimate["instrument_adjustment_factor"] = adjustment_factor
+                adjusted_roi_estimate["instrument_adjustment_reason"] = adjustment_reason
+
+                adjusted_opp: PrioritizedOpportunity = {
+                    "rank": opp["rank"],
+                    "gap": opp["gap"],
+                    "roi_estimate": cast(ROIEstimate, adjusted_roi_estimate),
+                    "recommended_action": opp["recommended_action"],
+                    "implementation_difficulty": opp["implementation_difficulty"],
+                    "time_to_impact": opp["time_to_impact"],
+                }
+                adjusted_opportunities.append(adjusted_opp)
+            else:
+                adjusted_opportunities.append(opp)
+
+        return adjusted_opportunities, warnings

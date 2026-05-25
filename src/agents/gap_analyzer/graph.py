@@ -1,7 +1,7 @@
 """LangGraph workflow for Gap Analyzer Agent.
 
-Defines the 5-node linear workflow:
-audit_init → gap_detector → roi_calculator → prioritizer → formatter
+Defines the 6-node linear workflow:
+audit_init → gap_detector → roi_calculator → instrument_analyzer → prioritizer → formatter
 
 Performance target: <20s total execution time
 
@@ -30,6 +30,7 @@ from src.utils.audit_chain import AgentTier
 from .nodes import (
     FormatterNode,
     GapDetectorNode,
+    InstrumentAnalyzerNode,
     PrioritizerNode,
     ROICalculatorNode,
 )
@@ -68,6 +69,7 @@ def create_gap_analyzer_graph(
         use_bootstrap=use_bootstrap,
         n_simulations=n_simulations,
     )
+    instrument_analyzer = InstrumentAnalyzerNode()
     prioritizer = PrioritizerNode()
     formatter = FormatterNode()
 
@@ -81,14 +83,18 @@ def create_gap_analyzer_graph(
     workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain
     workflow.add_node("gap_detector", gap_detector.execute)  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("roi_calculator", roi_calculator.execute)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("instrument_analyzer", instrument_analyzer.execute)  # type: ignore[type-var,arg-type,call-overload]  # #357
     workflow.add_node("prioritizer", prioritizer.execute)  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("formatter", formatter.execute)  # type: ignore[type-var,arg-type,call-overload]
 
-    # Define linear flow starting with audit initialization
+    # Define linear flow starting with audit initialization.
+    # #357: instrument_analyzer runs between roi_calculator and prioritizer so that
+    # instrument_strength_by_feature is populated before prioritization applies the bonus.
     workflow.set_entry_point("audit_init")
     workflow.add_edge("audit_init", "gap_detector")
     workflow.add_edge("gap_detector", "roi_calculator")
-    workflow.add_edge("roi_calculator", "prioritizer")
+    workflow.add_edge("roi_calculator", "instrument_analyzer")
+    workflow.add_edge("instrument_analyzer", "prioritizer")
     workflow.add_edge("prioritizer", "formatter")
     workflow.add_edge("formatter", END)
 
