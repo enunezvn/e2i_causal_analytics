@@ -20,6 +20,8 @@ on:
     paths:
       - 'src/rag/**'
       - 'scripts/run_ragas_eval.py'
+      - '.github/workflows/ragas-evaluation.yml'
+      - 'requirements-ragas.txt'
   workflow_dispatch:  # Manual trigger
 
 jobs:
@@ -88,7 +90,8 @@ jobs:
           import json
           with open('ragas-results/evaluation-report.json') as f:
               report = json.load(f)
-          thresholds = {'faithfulness': 0.80, 'answer_relevancy': 0.85, 'context_precision': 0.80, 'context_recall': 0.70}
+          # faithfulness 0.70 (not 0.80): calibrated to gpt-4o judge noise floor on the 10-sample set (#491); mirrors DEFAULT_THRESHOLDS
+          thresholds = {'faithfulness': 0.70, 'answer_relevancy': 0.85, 'context_precision': 0.80, 'context_recall': 0.70}
           for metric, threshold in thresholds.items():
               score = report.get(f'avg_{metric}', 'N/A')
               if isinstance(score, float):
@@ -131,7 +134,9 @@ jobs:
               report = json.load(f)
 
           thresholds = {
-              'faithfulness': 0.80,
+              # faithfulness 0.70 (not 0.80): calibrated to gpt-4o judge noise
+              # floor on the 10-sample golden set (#491); mirrors DEFAULT_THRESHOLDS.
+              'faithfulness': 0.70,
               'answer_relevancy': 0.85,
               'context_precision': 0.80,
               'context_recall': 0.70,

@@ -548,8 +548,8 @@ class TestRAGEvaluationPipeline:
             total_samples=10,
             passed_samples=5,
             failed_samples=5,
-            avg_faithfulness=0.70,  # Below threshold
-            avg_answer_relevancy=0.75,  # Below threshold
+            avg_faithfulness=0.50,  # Below calibrated 0.70 threshold (#491)
+            avg_answer_relevancy=0.75,  # Below 0.85 threshold
             thresholds=DEFAULT_THRESHOLDS,
             all_thresholds_passed=False,
             results=[],
@@ -560,6 +560,64 @@ class TestRAGEvaluationPipeline:
 
         assert passed is False
         assert len(failures) > 0
+        assert any("Faithfulness" in f for f in failures)
+
+    def test_faithfulness_floor_passes_calibrated_threshold(self, pipeline):
+        """Issue #491: with the accurate gpt-4o judge, faithfulness on the
+        10-sample golden set has an empirical floor of ~0.77 (n=8 runs:
+        0.77 x3, 0.85 x4, 0.875 x1), driven by per-claim verdict discreteness
+        on a small sample, NOT a RAG-quality problem. The faithfulness
+        threshold is calibrated to 0.70 (== context_recall's threshold; one
+        noise-quantum below the floor) so a healthy pipeline at its noise
+        floor passes the gate instead of flaking ~1/3 of runs. Other metrics
+        held at their stable observed values (AR 0.876, CP 0.90, CR 0.75)."""
+        report = EvaluationReport(
+            run_id="test",
+            timestamp="2024-01-01",
+            total_samples=10,
+            passed_samples=10,
+            failed_samples=0,
+            avg_faithfulness=0.77,  # observed gpt-4o floor; must clear 0.70 gate
+            avg_answer_relevancy=0.876,
+            avg_context_precision=0.90,
+            avg_context_recall=0.75,
+            overall_score=0.82,
+            thresholds=DEFAULT_THRESHOLDS,
+            all_thresholds_passed=True,
+            results=[],
+            evaluation_time_seconds=30.0,
+        )
+
+        passed, failures = pipeline.check_thresholds(report)
+
+        assert passed is True, f"floor 0.77 must pass calibrated gate; got {failures}"
+        assert len(failures) == 0
+
+    def test_faithfulness_regression_below_floor_still_fails(self, pipeline):
+        """The 0.70 calibration must still catch a genuine faithfulness
+        regression (e.g. the RAG starts hallucinating): a value well below the
+        ~0.77 noise floor must fail the gate. Guards against the calibration
+        being misread as 'faithfulness no longer matters'."""
+        report = EvaluationReport(
+            run_id="test",
+            timestamp="2024-01-01",
+            total_samples=10,
+            passed_samples=4,
+            failed_samples=6,
+            avg_faithfulness=0.55,  # genuine regression, multiple quanta below floor
+            avg_answer_relevancy=0.876,
+            avg_context_precision=0.90,
+            avg_context_recall=0.75,
+            overall_score=0.67,
+            thresholds=DEFAULT_THRESHOLDS,
+            all_thresholds_passed=False,
+            results=[],
+            evaluation_time_seconds=30.0,
+        )
+
+        passed, failures = pipeline.check_thresholds(report)
+
+        assert passed is False
         assert any("Faithfulness" in f for f in failures)
 
 
