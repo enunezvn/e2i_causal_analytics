@@ -38,7 +38,7 @@ import time
 import typing
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Optional, Sequence
+from typing import Any, Literal, Optional, Sequence
 
 import dspy
 
@@ -372,6 +372,7 @@ def _classify_one(
     derivation_pseudocode: str,
     dataset_context: str,
     classifier: Any,
+    prompt_mode: Literal["compiled", "zeroshot"] = "compiled",
 ) -> EnsembleModelVote:
     """Run ONE model over the feature, returning a healthy vote or — on any
     failure / invalid role — a NON-vote (``causal_role=None`` + ``error``).
@@ -380,12 +381,31 @@ def _classify_one(
     raise: one provider's outage must not sink the ensemble. Timing is recorded
     even on the failure path (operators can see how long a rate-limited call
     took). Telemetry mirrors the #241 evaluator path.
+
+    ``prompt_mode="zeroshot"`` runs a FRESH (uncompiled) CausalRoleClassifier
+    with no few-shot demos instead of the shared compiled artifact, so each
+    vendor reasons from the bare signature only (#242 de-confound ablation).
+    ``prompt_mode="compiled"`` (default) preserves today's behaviour exactly.
     """
+    # De-confound: in zeroshot mode, each model gets a fresh uncompiled
+    # CausalRoleClassifier so no Sonnet-optimised demos are injected into
+    # Opus or GPT-5.  This is the cheap, valid ablation — no per-vendor
+    # compile step required.
+    #
+    # TODO: per-vendor compiled artifacts (Opus-compiled + GPT-5-compiled)
+    # would be a stronger ablation but require separate compile runs and
+    # spend.  Leave as a documented future step.
+    effective_classifier: Any
+    if prompt_mode == "zeroshot":
+        effective_classifier = CausalRoleClassifier()
+    else:
+        effective_classifier = classifier
+
     start = time.perf_counter()
     try:
         lm = _make_lm(model)
         prediction = _predict_under_lm(
-            classifier,
+            effective_classifier,
             lm,
             feature_name=feature_name,
             derivation_pseudocode=derivation_pseudocode,
@@ -394,11 +414,16 @@ def _classify_one(
     except Exception as exc:  # noqa: BLE001 — best-effort: any failure = non-vote
         latency_ms = (time.perf_counter() - start) * 1000.0
         logger.warning("ensemble: model=%s raised: %s — recording non-vote.", model, exc)
+        # Keep the FULL provider message: the A/B harness inspects vote.error for
+        # credit/quota exhaustion to stop cleanly, and the matchable phrase often
+        # sits >80 chars into a litellm error (e.g. Anthropic's "credit balance is
+        # too low" lands ~char 118). Truncating here hides it and silently defeats
+        # the graceful stop — the run then pollutes every remaining row.
         return EnsembleModelVote(
             model=model,
             causal_role=None,
             latency_ms=latency_ms,
-            error=(str(exc)[:80] or type(exc).__name__),
+            error=(str(exc) or type(exc).__name__),
         )
 
     latency_ms = (time.perf_counter() - start) * 1000.0
@@ -440,6 +465,7 @@ def run_ensemble_classification(
     classifier: Any = None,
     max_workers: int = 3,
     preflight: bool = True,
+    prompt_mode: Literal["compiled", "zeroshot"] = "compiled",
 ) -> EnsembleClassification:
     """Run all members in parallel and fuse. Returns the rich
     :class:`EnsembleClassification` (per-provider votes + telemetry) for the
@@ -448,6 +474,14 @@ def run_ensemble_classification(
     ``preflight`` (default True) checks every member's provider key up front and
     raises :class:`EnsemblePreflightError` if one is missing — so a config gap
     fails loudly instead of silently collapsing the ensemble to one vendor.
+
+    ``prompt_mode`` controls which classifier each member uses:
+
+    * ``"compiled"`` (default) — shared compiled artifact (Sonnet-optimised few-shot
+      demos); preserves today's production behaviour exactly.
+    * ``"zeroshot"`` — each member gets a fresh :class:`CausalRoleClassifier` with
+      NO demos so each vendor reasons from the bare signature only.  This is the
+      #242 de-confound ablation: Sonnet-bias correlation eliminated.
     """
     model_tuple = tuple(models) if models is not None else _resolve_models()
     if preflight:
@@ -471,6 +505,7 @@ def run_ensemble_classification(
                 derivation_pseudocode=derivation_pseudocode,
                 dataset_context=dataset_context,
                 classifier=classifier,
+                prompt_mode=prompt_mode,
             ): model
             for model in model_tuple
         }
@@ -489,6 +524,7 @@ def classify_feature_ensemble(
     classifier: Any = None,
     max_workers: int = 3,
     preflight: bool = True,
+    prompt_mode: Literal["compiled", "zeroshot"] = "compiled",
 ) -> Optional[LLMVerdict]:
     """Public entry mirroring the single-model ``classify_feature`` contract.
 
@@ -496,6 +532,9 @@ def classify_feature_ensemble(
     ``evaluator_audit`` sidecar) on ``full``/``majority``; ``None`` on ``split``
     (the voter then abstains / escalates). The richer per-provider breakdown is
     available via :func:`run_ensemble_classification`.
+
+    ``prompt_mode`` is forwarded to :func:`run_ensemble_classification`; see
+    that function's docstring for details.
     """
     classification = run_ensemble_classification(
         feature_name=feature_name,
@@ -505,5 +544,6 @@ def classify_feature_ensemble(
         classifier=classifier,
         max_workers=max_workers,
         preflight=preflight,
+        prompt_mode=prompt_mode,
     )
     return _ensemble_to_llm_verdict(classification)
