@@ -42,6 +42,56 @@ from src.data.kg.types import (
     EnsembleModelVote,
 )
 
+# --- Per-provider pricing (USD per million tokens) ---------------------------
+# Mirrors the documented ``HAIKU_*_USD_PER_MTOK`` constants in
+# ``src/data/causal_role_evaluator.py`` (#241 telemetry). These are list-price
+# ESTIMATES for the ensemble's three members and the single place to update on
+# a price change; ``_cost_for`` is the only consumer. Per-provider so the
+# ensemble can report cost for Sonnet / Opus / GPT-5 independently (#242 AC4).
+SONNET_INPUT_USD_PER_MTOK = 3.00
+SONNET_OUTPUT_USD_PER_MTOK = 15.00
+OPUS_INPUT_USD_PER_MTOK = 15.00
+OPUS_OUTPUT_USD_PER_MTOK = 75.00
+GPT5_INPUT_USD_PER_MTOK = 1.25
+GPT5_OUTPUT_USD_PER_MTOK = 10.00
+
+
+def _rates_for_model(model: str) -> Optional[tuple[float, float]]:
+    """Map a provider-prefixed model string to its ``(input, output)`` per-MTok
+    rates, or ``None`` for a model the ensemble does not price.
+
+    Matched by substring so minor version suffixes (``-4-6``, dated variants)
+    resolve to the same family. ``opus`` is checked before ``sonnet`` only for
+    clarity; the two never co-occur in one string.
+    """
+    m = model.lower()
+    if "opus" in m:
+        return (OPUS_INPUT_USD_PER_MTOK, OPUS_OUTPUT_USD_PER_MTOK)
+    if "sonnet" in m:
+        return (SONNET_INPUT_USD_PER_MTOK, SONNET_OUTPUT_USD_PER_MTOK)
+    if "gpt-5" in m or "gpt5" in m:
+        return (GPT5_INPUT_USD_PER_MTOK, GPT5_OUTPUT_USD_PER_MTOK)
+    return None
+
+
+def _cost_for(
+    model: str,
+    input_tokens: Optional[int],
+    output_tokens: Optional[int],
+) -> Optional[float]:
+    """Cost in USD for one model call, from its per-MTok rates.
+
+    ``None`` when token counts were not surfaced (cache hit / missing usage)
+    or when the model family is not priced — never guesses a cost.
+    """
+    if input_tokens is None or output_tokens is None:
+        return None
+    rates = _rates_for_model(model)
+    if rates is None:
+        return None
+    input_rate, output_rate = rates
+    return input_tokens / 1e6 * input_rate + output_tokens / 1e6 * output_rate
+
 
 def _aggregate_telemetry(
     votes: Sequence[EnsembleModelVote],

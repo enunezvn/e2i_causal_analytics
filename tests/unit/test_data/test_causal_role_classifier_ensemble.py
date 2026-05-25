@@ -7,6 +7,8 @@ EnsembleModelVote tuples — no LM, no API, fully deterministic (red-first).
 
 from __future__ import annotations
 
+import pytest
+
 from src.data.kg.types import EnsembleModelVote
 
 
@@ -152,3 +154,95 @@ def test_fuse_feature_name_and_votes_round_trip():
     clf = _fuse_votes("feat_x", votes)
     assert clf.feature_name == "feat_x"
     assert clf.votes == votes
+
+
+# ---------------------------------------------------------------------------
+# P2 — per-provider cost constants + _cost_for + telemetry aggregation (#242 AC4)
+# ---------------------------------------------------------------------------
+
+
+def test_cost_for_sonnet_uses_sonnet_rates():
+    from src.data.causal_role_classifier_ensemble import (
+        SONNET_INPUT_USD_PER_MTOK,
+        SONNET_OUTPUT_USD_PER_MTOK,
+        _cost_for,
+    )
+
+    cost = _cost_for("anthropic/claude-sonnet-4-6", 1000, 200)
+    expected = 1000 / 1e6 * SONNET_INPUT_USD_PER_MTOK + 200 / 1e6 * SONNET_OUTPUT_USD_PER_MTOK
+    assert cost == pytest.approx(expected)
+
+
+def test_cost_for_opus_uses_opus_rates():
+    from src.data.causal_role_classifier_ensemble import (
+        OPUS_INPUT_USD_PER_MTOK,
+        OPUS_OUTPUT_USD_PER_MTOK,
+        _cost_for,
+    )
+
+    cost = _cost_for("anthropic/claude-opus-4-7", 1000, 200)
+    expected = 1000 / 1e6 * OPUS_INPUT_USD_PER_MTOK + 200 / 1e6 * OPUS_OUTPUT_USD_PER_MTOK
+    assert cost == pytest.approx(expected)
+
+
+def test_cost_for_gpt5_uses_gpt5_rates():
+    from src.data.causal_role_classifier_ensemble import (
+        GPT5_INPUT_USD_PER_MTOK,
+        GPT5_OUTPUT_USD_PER_MTOK,
+        _cost_for,
+    )
+
+    cost = _cost_for("openai/gpt-5", 1000, 200)
+    expected = 1000 / 1e6 * GPT5_INPUT_USD_PER_MTOK + 200 / 1e6 * GPT5_OUTPUT_USD_PER_MTOK
+    assert cost == pytest.approx(expected)
+
+
+def test_cost_for_none_tokens_returns_none():
+    from src.data.causal_role_classifier_ensemble import _cost_for
+
+    assert _cost_for("openai/gpt-5", None, 200) is None
+    assert _cost_for("openai/gpt-5", 1000, None) is None
+
+
+def test_cost_for_unknown_model_returns_none():
+    from src.data.causal_role_classifier_ensemble import _cost_for
+
+    assert _cost_for("anthropic/claude-haiku-4-5", 1000, 200) is None
+
+
+def test_aggregate_telemetry_sums_cost_and_takes_max_latency():
+    from src.data.causal_role_classifier_ensemble import _aggregate_telemetry
+
+    votes = (
+        _vote("anthropic/claude-sonnet-4-6", "confounder", cost=0.01, latency=500.0),
+        _vote("anthropic/claude-opus-4-7", "confounder", cost=0.05, latency=900.0),
+        _vote("openai/gpt-5", "confounder", cost=0.02, latency=700.0),
+    )
+    total_cost, max_latency = _aggregate_telemetry(votes)
+    assert total_cost == pytest.approx(0.08)
+    assert max_latency == 900.0
+
+
+def test_aggregate_telemetry_all_none_returns_none():
+    from src.data.causal_role_classifier_ensemble import _aggregate_telemetry
+
+    votes = (
+        _vote("anthropic/claude-sonnet-4-6", None, error="timeout"),
+        _vote("anthropic/claude-opus-4-7", None, error="timeout"),
+    )
+    total_cost, max_latency = _aggregate_telemetry(votes)
+    assert total_cost is None
+    assert max_latency is None
+
+
+def test_fuse_votes_populates_aggregate_telemetry():
+    from src.data.causal_role_classifier_ensemble import _fuse_votes
+
+    votes = (
+        _vote("anthropic/claude-sonnet-4-6", "descendant", cost=0.01, latency=500.0),
+        _vote("anthropic/claude-opus-4-7", "descendant", cost=0.05, latency=900.0),
+        _vote("openai/gpt-5", "descendant", cost=0.02, latency=700.0),
+    )
+    clf = _fuse_votes("feat", votes)
+    assert clf.total_cost_usd == pytest.approx(0.08)
+    assert clf.max_latency_ms == 900.0
