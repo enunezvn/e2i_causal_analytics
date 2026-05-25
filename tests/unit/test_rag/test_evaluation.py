@@ -987,3 +987,15 @@ def test_evaluate_batch_uses_per_sample_path_when_opik_tracing_enabled():
     asyncio.run(ev.evaluate_batch(_answered_samples(2)))
     ev._evaluate_batch_with_ragas.assert_not_called()
     assert ev.evaluate_sample.await_count == 2
+
+
+def test_gate_script_routes_to_batched_path_by_default():
+    """#504: scripts/run_ragas_eval.py must default Opik tracing OFF (via the
+    --opik-tracing opt-in flag) so evaluate_batch uses the fast batched path.
+    Static guard so the gate cannot silently regress to the slow per-sample
+    tracing path (which is what made the first PR run show no speedup)."""
+    script = (Path(__file__).resolve().parents[3] / "scripts" / "run_ragas_eval.py").read_text()
+    assert "--opik-tracing" in script, "gate must expose the --opik-tracing opt-in flag"
+    assert "enable_opik_tracing=args.opik_tracing" in script, (
+        "gate must wire tracing to the default-off flag, not hardcode it on"
+    )

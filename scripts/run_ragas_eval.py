@@ -123,6 +123,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Verbose output",
     )
+    parser.add_argument(
+        "--opik-tracing",
+        action="store_true",
+        help=(
+            "Enable per-sample Opik tracing. This forces the slower per-sample "
+            "evaluation path; it is OFF by default so the gate uses the fast "
+            "single-call batched path (issue #504). Metric values are identical "
+            "either way — tracing only adds observability spans."
+        ),
+    )
 
     return parser.parse_args()
 
@@ -154,10 +164,13 @@ async def main() -> int:
     logger.info(f"Thresholds: {thresholds}")
     logger.info(f"MLflow logging: {'Enabled' if not args.no_mlflow else 'Disabled'}")
 
-    # Initialize pipeline
+    # Initialize pipeline. Opik per-sample tracing is OFF for the gate so
+    # evaluate_batch takes the fast single-call batched path (issue #504);
+    # opt in with --opik-tracing. Tracing does not change metric values.
     pipeline = RAGEvaluationPipeline(
         config=config,
         dataset_path=args.dataset,
+        enable_opik_tracing=args.opik_tracing,
     )
 
     logger.info(f"Dataset: {len(pipeline.dataset)} samples")
