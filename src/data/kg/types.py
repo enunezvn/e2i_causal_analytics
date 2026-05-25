@@ -40,6 +40,14 @@ EnsembleDecidedBy = Literal[
     "evaluator_gate",
 ]
 
+# Issue #242 — agreement level of the multi-model worker ensemble over a
+# single feature's ``causal_role``. ``full`` = all healthy models agree
+# (auto-verdict); ``majority`` = 2-of-3 agree, 3rd dissents (majority
+# verdict + split audit); ``split`` = all disagree OR <=1 healthy vote
+# (escalate to ``unknown`` / human review). A model that errored is a
+# NON-vote (degrade-to-healthy), not a disagreement.
+EnsembleAgreement = Literal["full", "majority", "split"]
+
 KGSignal = Literal[
     "leak_drug_treats_disease",
     "taxonomic_descendant",
@@ -415,6 +423,85 @@ class LLMEvaluatorAudit:
     input_tokens: Optional[int] = None
     output_tokens: Optional[int] = None
     cost_usd: Optional[float] = None
+
+
+@dataclass(frozen=True)
+class EnsembleModelVote:
+    """Issue #242 — one model's classification of a single feature inside the
+    multi-model worker ensemble.
+
+    A *healthy* vote carries a ``causal_role`` (and ``error is None``); a model
+    that raised/timed out is a *non-vote* with ``causal_role is None`` and a
+    short ``error`` label. Telemetry mirrors :class:`LLMEvaluatorAudit` (#241)
+    but is recorded PER PROVIDER so the ensemble can report cost/latency for
+    each of Sonnet / Opus / GPT-5 independently (#242 AC4). All telemetry
+    fields are ``None`` when usage was not surfaced by the underlying LM
+    (cache hit, missing history) or when the model errored.
+
+    Attributes:
+        model: Provider-prefixed model string, e.g. ``"openai/gpt-5"`` or
+            ``"anthropic/claude-opus-4-7"`` (the litellm/DSPy form).
+        causal_role: The role this model assigned, or ``None`` when it errored.
+        mechanism: The model's free-text justification (``""`` on error).
+        recommended_remediation: The model's remediation, or ``None`` on error.
+        latency_ms: Wall-clock duration of this model's call in milliseconds.
+        input_tokens / output_tokens: Per-call token usage.
+        cost_usd: Per-call cost from the model's documented per-MTok rates.
+        error: Short error label (e.g. ``"timeout"``) when the model failed;
+            ``None`` when the vote is healthy.
+    """
+
+    model: str
+    causal_role: Optional[CausalRole]
+    mechanism: str = ""
+    recommended_remediation: Optional[Remediation] = None
+    latency_ms: Optional[float] = None
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    cost_usd: Optional[float] = None
+    error: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class EnsembleClassification:
+    """Issue #242 — fused result of running the worker ensemble over one
+    feature.
+
+    Produced by ``_fuse_votes`` (a pure function) from the per-model
+    :class:`EnsembleModelVote` tuple. ``agreement`` drives the downstream
+    trust signal: ``full`` => the gate may trust the verdict; ``majority`` /
+    ``split`` => the worker-vendors disagreed, which is exactly the
+    asymmetric-failure-mode signal #240's gate needs (it cannot come from two
+    Anthropic siblings). ``fused_role is None`` iff ``agreement == "split"``
+    (escalate / ``unknown``).
+
+    Attributes:
+        feature_name: The feature classified.
+        agreement: ``"full"`` / ``"majority"`` / ``"split"``.
+        fused_role: Majority ``causal_role``; ``None`` when escalating (split).
+        fused_mechanism: Mechanism text carried from the majority vote
+            (``""`` when split).
+        fused_remediation: Remediation from the majority vote; ``None`` when
+            split.
+        votes: All per-model votes (including errored non-votes), in a stable
+            order, for the audit trail + per-provider telemetry.
+        healthy_votes: Count of votes with ``causal_role is not None``.
+        total_cost_usd: Sum of healthy votes' ``cost_usd``; ``None`` when no
+            healthy vote surfaced cost.
+        max_latency_ms: Slowest healthy vote's latency (ensemble runs the
+            models in parallel, so wall-time ~= the slowest); ``None`` when
+            unavailable.
+    """
+
+    feature_name: str
+    agreement: EnsembleAgreement
+    fused_role: Optional[CausalRole]
+    fused_mechanism: str
+    fused_remediation: Optional[Remediation]
+    votes: tuple[EnsembleModelVote, ...]
+    healthy_votes: int
+    total_cost_usd: Optional[float] = None
+    max_latency_ms: Optional[float] = None
 
 
 @dataclass(frozen=True)
