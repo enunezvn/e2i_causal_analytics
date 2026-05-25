@@ -1315,6 +1315,22 @@ def _ensemble_to_legacy_dict(
         "would_promote_severity": _shadow_results["R1"],
         "would_flag_for_review": _shadow_results["R2"],
         "rationale_incomplete_flag": _shadow_results["R3"],
+        # Issue #240 Stage 3 (env-gated soft-gate) — audit-loop-coupling
+        # mitigation (design §5 R-4). ``gate_rule_fired`` names the rule
+        # that modulated ``verdict.severity`` inside the voter (only
+        # ``"R1"`` today), or None when the gate was disabled / did not
+        # fire. ``worker_severity_pre_gate`` recovers the un-mutated worker
+        # severity so compile-set curation never trains on a gate-escalated
+        # label: when R1 flipped the verdict, the worker severity was
+        # "info" by R1's precondition (info→moderate is the only
+        # transition the gate performs, reframed 2026-05-25); NULL when no
+        # gate fired (then ``verdict.severity`` already IS the worker
+        # severity, so the sentinel is None — the same nullable-shadow
+        # contract as the three Stage-1 columns above). See
+        # ``docs/plans/240-audit-evaluator-gate-promotion.md`` §3/§5 +
+        # ``docs/plans/240-r1-reachability-investigation.md``.
+        "gate_rule_fired": verdict.gate_rule_fired,
+        "worker_severity_pre_gate": ("info" if verdict.gate_rule_fired == "R1" else None),
     }
 
 
@@ -1399,6 +1415,12 @@ def _legacy_adversarial_alone_verdict(
         "would_promote_severity": None,
         "would_flag_for_review": None,
         "rationale_incomplete_flag": None,
+        # Issue #240 Stage 3 — bypass paths never route through the voter,
+        # so the env-gated soft-gate cannot fire here. Both gate keys are
+        # explicitly None for sidecar-schema uniformity across all four
+        # legacy-dict producers.
+        "gate_rule_fired": None,
+        "worker_severity_pre_gate": None,
     }
 
 
@@ -1471,6 +1493,12 @@ def _legacy_info_verdict(
         "would_promote_severity": None,
         "would_flag_for_review": None,
         "rationale_incomplete_flag": None,
+        # Issue #240 Stage 3 — bypass paths never route through the voter,
+        # so the env-gated soft-gate cannot fire here. Both gate keys are
+        # explicitly None for sidecar-schema uniformity across all four
+        # legacy-dict producers.
+        "gate_rule_fired": None,
+        "worker_severity_pre_gate": None,
     }
 
 
@@ -1540,6 +1568,12 @@ def _legacy_short_circuit_verdict(feature: str, *, evidence: str) -> dict[str, A
         "would_promote_severity": None,
         "would_flag_for_review": None,
         "rationale_incomplete_flag": None,
+        # Issue #240 Stage 3 — bypass paths never route through the voter,
+        # so the env-gated soft-gate cannot fire here. Both gate keys are
+        # explicitly None for sidecar-schema uniformity across all four
+        # legacy-dict producers.
+        "gate_rule_fired": None,
+        "worker_severity_pre_gate": None,
     }
 
 

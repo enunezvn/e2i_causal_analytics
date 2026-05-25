@@ -44,26 +44,37 @@ def evaluate_r1(
     worker_severity: str,
     evaluator_audit: Optional[LLMEvaluatorAudit],
 ) -> Optional[str]:
-    """Trigger: ``worker_severity == "moderate"`` AND
+    """Trigger: ``worker_severity == "info"`` AND
     ``evaluator_audit.satisfied == False`` AND
     ``len(evaluator_audit.missed_considerations) >= 1``.
 
-    Stage 1 action: returns ``"high"`` when the trigger fires (the
-    sidecar/column records the proposed severity), else ``None``.
+    Reframed 2026-05-25 from the original ``moderate → high``. A deep-research
+    reachability audit (``docs/plans/240-r1-reachability-investigation.md``)
+    proved the old precondition was structurally unreachable: the evaluator
+    audit only ever rides a valid causal-role worker verdict, whose ensemble
+    severity is ``high`` (leak roles) or ``info`` (accept roles) — never
+    ``moderate`` (which comes only from the LLM-absent adversarial-alone path).
+    So ``(severity == "moderate" AND audit present)`` cannot occur in
+    production. The reachable, intent-preserving signal is: the worker produced
+    an ACCEPT role (ensemble ``info``) BUT the evaluator distrusts that
+    reasoning (dissatisfied + named missed considerations) → escalate the
+    disposition ``info → moderate`` (route to review).
 
-    Stage 3 action (env-var-gated; NOT live at Stage 1): the voter
-    substitutes ``severity="high"`` and lets the deterministic
-    remediation helper recompute ``remediation``.
+    Stage 1 action: returns ``"moderate"`` when the trigger fires (the
+    sidecar/column records the proposed escalated severity), else ``None``.
+
+    Stage 3 action (env-var-gated; NOT live at Stage 1): the voter substitutes
+    ``severity="moderate"`` (remediation follows to ``"review"``).
     """
     if evaluator_audit is None:
         return None
-    if worker_severity != "moderate":
+    if worker_severity != "info":
         return None
     if evaluator_audit.satisfied is not False:
         return None
     if len(evaluator_audit.missed_considerations) < 1:
         return None
-    return "high"
+    return "moderate"
 
 
 # ---------------------------------------------------------------------------

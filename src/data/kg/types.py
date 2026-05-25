@@ -25,7 +25,20 @@ Remediation = Literal[
 
 EnsembleSeverity = Literal["high", "moderate", "info", "abstain"]
 
-EnsembleDecidedBy = Literal["layer_1", "adversarial", "kg", "llm", "abstain"]
+# ``evaluator_gate`` (Issue #240 Stage 3): set ONLY when the env-gated
+# soft-gate (``ADAPTIVE_VALIDITY_EVALUATOR_GATE_ENABLED=1``) actually
+# flipped the voter's candidate severity (moderate→high via rule R1).
+# When the gate is disabled (the default) OR fires but the voter had
+# already reached the same severity independently, ``decided_by`` keeps
+# its pre-gate value. Design: ``docs/plans/240-audit-evaluator-gate-promotion.md`` §3 Stage 3.
+EnsembleDecidedBy = Literal[
+    "layer_1",
+    "adversarial",
+    "kg",
+    "llm",
+    "abstain",
+    "evaluator_gate",
+]
 
 KGSignal = Literal[
     "leak_drug_treats_disease",
@@ -545,3 +558,14 @@ class EnsembleVerdict:
     layer_1_input: Optional[dict] = field(default=None, repr=False)
     adversarial_input: Optional[dict] = field(default=None, repr=False)
     llm_input: Optional[LLMVerdict] = field(default=None, repr=False)
+    # Issue #240 Stage 3 (env-gated soft-gate). Records which promotion
+    # rule actually modulated this verdict's severity inside
+    # ``EnsembleVoter.vote`` (currently only ``"R1"``). ``None`` when no
+    # rule fired — which is ALWAYS the case when the kill-switch env var
+    # ``ADAPTIVE_VALIDITY_EVALUATOR_GATE_ENABLED`` is unset / ``"0"``
+    # (the default), or when the gate was enabled but did not flip the
+    # decision (candidate severity != "moderate", evaluator audit absent,
+    # or evaluator errored — fail-open). Additive + Optional so naive
+    # consumers that assume a fixed field set are unaffected (design §5
+    # R-5). Design: ``docs/plans/240-audit-evaluator-gate-promotion.md`` §3 Stage 3.
+    gate_rule_fired: Optional[str] = None

@@ -32,7 +32,10 @@ logger = logging.getLogger(__name__)
 # pins MAJOR=1; minor bumps do not WARN.
 # 1.2 (Issue #240 Stage 1): additive shadow promotion keys
 # (would_promote_severity / would_flag_for_review / rationale_incomplete_flag).
-_READER_SCHEMA_VERSION = "1.2"
+# 1.3 (Issue #240 Stage 3): additive env-gated soft-gate keys
+# (gate_rule_fired / worker_severity_pre_gate). Still MAJOR=1 — additive,
+# nullable, absent on pre-#240-Stage-3 sidecars (surface as None).
+_READER_SCHEMA_VERSION = "1.3"
 _READER_SCHEMA_MAJOR = 1
 
 # Issue #235 A3: the set of verdict-dict keys the reader knows how to
@@ -83,6 +86,16 @@ _KNOWN_VERDICT_KEYS: frozenset[str] = frozenset(
         "would_promote_severity",
         "would_flag_for_review",
         "rationale_incomplete_flag",
+        # Issue #240 Stage 3 (env-gated soft-gate): two nullable keys
+        # emitted by ``_ensemble_to_legacy_dict``. ``gate_rule_fired`` names
+        # the rule that flipped severity (only "R1" today; None when the
+        # gate was off or did not fire); ``worker_severity_pre_gate`` is the
+        # un-mutated worker severity recorded BEFORE substitution (design §5
+        # R-4). Registered so they parse onto VerdictRecord and feed the
+        # mirror's dedicated columns. Additive at schema 1.3+; absent on
+        # pre-Stage-3 sidecars (surface as None).
+        "gate_rule_fired",
+        "worker_severity_pre_gate",
     }
 )
 
@@ -141,6 +154,17 @@ class VerdictRecord:
     would_promote_severity: Optional[str] = None
     would_flag_for_review: Optional[bool] = None
     rationale_incomplete_flag: Optional[bool] = None
+    # Issue #240 Stage 3 (env-gated soft-gate): two nullable fields. ``None``
+    # on pre-Stage-3 sidecars (the producer did not yet emit these keys) AND
+    # on any row where the gate was disabled / did not fire.
+    # ``gate_rule_fired`` names the rule that modulated severity (only "R1"
+    # today); ``worker_severity_pre_gate`` is the un-mutated worker severity
+    # recorded before substitution (design §5 R-4) so curation never trains
+    # on a gate-escalated label. Surfaced so the mirror can populate
+    # migration-043's dedicated typed column. See
+    # ``docs/plans/240-audit-evaluator-gate-promotion.md`` §3/§5.
+    gate_rule_fired: Optional[str] = None
+    worker_severity_pre_gate: Optional[str] = None
 
 
 class SidecarReader:
@@ -364,6 +388,11 @@ class SidecarReader:
             would_promote_severity=_opt_str(raw.get("would_promote_severity")),
             would_flag_for_review=_opt_bool(raw.get("would_flag_for_review")),
             rationale_incomplete_flag=_opt_bool(raw.get("rationale_incomplete_flag")),
+            # Issue #240 Stage 3: env-gated soft-gate fields. ``_opt_str``
+            # returns None on missing keys (pre-Stage-3 sidecars) — same
+            # schema-tolerant pattern as the shadow fields above.
+            gate_rule_fired=_opt_str(raw.get("gate_rule_fired")),
+            worker_severity_pre_gate=_opt_str(raw.get("worker_severity_pre_gate")),
         )
 
 

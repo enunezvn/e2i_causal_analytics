@@ -144,7 +144,7 @@ The promotion is staged across four levels of increasing intrusiveness. **Each s
 **Mechanism:**
 
 - New env var `ADAPTIVE_VALIDITY_EVALUATOR_GATE_ENABLED=0|1` (default `0`). When `0`, voter behavior is byte-identical to today.
-- When `1`, after the voter computes its candidate severity, the voter calls `evaluate_promotion_rule(...)` exactly once. If the rule fires AND the candidate severity equals the rule's precondition, the voter substitutes the rule's proposed severity AND appends to `evidence` a structured tag `"evaluator_gate:R1:moderate→high"`. The `decided_by` field gains a new value `"evaluator_gate"` ONLY when the gate actually flipped a decision (not when the voter independently reached the same severity). **Schema prerequisites for the Stage 3 PR:** (i) widen the `EnsembleDecidedBy` literal in `src/data/kg/types.py` (~line 28) to include `"evaluator_gate"`; (ii) ship migration 042 adding `adaptive_validity_verdicts.worker_severity_pre_gate` (text, nullable) populated by the voter with the un-mutated worker severity before substitution. Without (i), the typed dataclass will reject the new `decided_by` value at construction. Without (ii), the audit-loop-coupling mitigation in §5 R-4 is not implementable.
+- When `1`, after the voter computes its candidate severity, the voter calls `evaluate_promotion_rule(...)` exactly once. If the rule fires AND the candidate severity equals the rule's precondition, the voter substitutes the rule's proposed severity AND appends to `evidence` a structured tag `"evaluator_gate:R1:info→moderate"` (reframed 2026-05-25 — see the R1 note in §4). The `decided_by` field gains a new value `"evaluator_gate"` ONLY when the gate actually flipped a decision (not when the voter independently reached the same severity). **Schema prerequisites for the Stage 3 PR:** (i) widen the `EnsembleDecidedBy` literal in `src/data/kg/types.py` (~line 28) to include `"evaluator_gate"`; (ii) ship migration 042 adding `adaptive_validity_verdicts.worker_severity_pre_gate` (text, nullable) populated by the voter with the un-mutated worker severity before substitution. Without (i), the typed dataclass will reject the new `decided_by` value at construction. Without (ii), the audit-loop-coupling mitigation in §5 R-4 is not implementable.
 - Remediation override is computed deterministically from the new severity by the existing `_remediation_for_severity` helper. **Remediation is not separately mutated by the gate** at Stage 3 — only severity is, and remediation follows mechanically.
 - A new field `gate_rule_fired: Optional[str]` is added to `EnsembleVerdict` (and surfaced to the sidecar) recording which rule fired (or None).
 
@@ -197,12 +197,25 @@ Each rule below has:
 
 Initial firing-rate estimates marked `TBD-via-Stage-1` are placeholders for the §3 AC1.3 table.
 
-### R1 — Moderate→High escalation on dissatisfied evaluator
+### R1 — Info→Moderate escalation on dissatisfied evaluator
 
-- **Trigger:** `worker_verdict.severity == "moderate" AND evaluator_audit.satisfied == False AND len(evaluator_audit.missed_considerations) >= 1`.
-- **Stage-1 action:** record `would_promote_severity = "high"`.
-- **Stage-3 action:** voter substitutes `severity="high"`, `remediation="drop"` (via deterministic helper), appends `"evaluator_gate:R1:moderate→high"` to evidence.
-- **Rationale:** This is the canonical "the worker said maybe-problematic, the evaluator independently flagged specific missed considerations, escalate to definitely-problematic." It is the rule the issue body explicitly cites as the most defensible.
+> **REFRAMED 2026-05-25 (was Moderate→High).** A deep-research reachability audit
+> (`docs/plans/240-r1-reachability-investigation.md`) proved the original
+> `moderate → high` trigger is **structurally unreachable in production**: the
+> evaluator audit only ever rides a *valid causal-role* worker verdict, whose
+> ensemble severity is `high` (leak roles) or `info` (accept roles) — never
+> `moderate` (which comes only from the LLM-absent adversarial-alone path). So
+> `(severity == "moderate" AND audit present)` cannot occur. R1 is reframed to
+> the reachable, intent-preserving transition `info → moderate`: the worker
+> produced an *accept* role but the evaluator distrusts that reasoning, so the
+> disposition is escalated for review. The AC3.1 promotion-precision math below
+> (TP/FP definitions keyed to the old moderate→high direction) is **SUPERSEDED**
+> and must be re-derived for `info → moderate` before any Stage-3 activation.
+
+- **Trigger:** `worker_verdict.severity == "info" AND evaluator_audit.satisfied == False AND len(evaluator_audit.missed_considerations) >= 1`.
+- **Stage-1 action:** record `would_promote_severity = "moderate"`.
+- **Stage-3 action:** voter substitutes `severity="moderate"`, `remediation="review"`, appends `"evaluator_gate:R1:info→moderate"` to evidence.
+- **Rationale:** "the worker said *accept* (info-disposition), but the evaluator independently flagged specific missed considerations → escalate the disposition to *review* (moderate)." This preserves the issue's intent ("evaluator distrust escalates disposition") on the only severity transition that is actually reachable with an audit attached.
 - **Expected firing rate:** **TBD-via-Stage-1**. No committed artifact in this repo records the per-entry distribution of `worker_severity=moderate AND evaluator_satisfied=False`; the AC3 verdict JSON (`artifacts/dspy/ac3_verdict_n200.json`) contains only aggregated gated precision floats. Estimating an expected firing rate from a prior would be speculation — Stage 1 must produce the firing-rate histogram directly from the new `would_promote_severity` column (AC1.3).
 - **False-positive risk:** evaluator-wrong-worker-right cases. Stage-2 inter-rater check (AC2.2) is designed to bound this. The §3 fail-open default ensures evaluator outages don't trigger.
 
@@ -238,7 +251,7 @@ The Haiku evaluator is a smaller model than the Sonnet worker. There is no a-pri
 - §3 Stage 2 AC2.1 caps FP rate at 10% before any Stage-3 promotion.
 - §3 Stage 3 fail-open default + kill-switch.
 - §3 Stage 3 AC3.3 per-cohort regression check (no FP_promoted gained; no Stage-1 instrument TP lost).
-- §4 R1's scope-limit to moderate→high only (the lowest-stakes severity transition).
+- §4 R1's scope-limit to info→moderate only (reframed 2026-05-25; the lowest-stakes severity transition that is reachable with an audit attached).
 
 ### R-2 — Evaluator fragility / correlated failures
 

@@ -142,14 +142,23 @@ _EVALUATOR_FIELDS: tuple[str, ...] = (
 # evaluator_audit set in BOTH the DO UPDATE SET and the IS DISTINCT FROM
 # change-detection WHERE, so a sidecar whose only delta is a shadow flag
 # still triggers an in-place UPDATE (and an unchanged re-run stays a no-op).
+#
+# Issue #240 Stage 3 (env-gated soft-gate): two further dedicated columns
+# (gate_rule_fired / worker_severity_pre_gate) are added by migration 043
+# and populated here from the sidecar keys (surfaced on VerdictRecord).
+# ``worker_severity_pre_gate`` is the un-mutated worker severity recorded
+# before the voter substitutes (design §5 R-4); the AC3.4 rollback query
+# selects both columns. They join the same DO UPDATE SET + IS DISTINCT FROM
+# set so a row whose only delta is a gate flip still triggers an UPDATE.
 _UPSERT_SQL = """
 INSERT INTO adaptive_validity_verdicts (
     experiment_id, feature, written_at, source_path,
     verdict, evaluator_audit, causal_role_final, causal_role_source,
     would_promote_severity, would_flag_for_review, rationale_incomplete_flag,
+    gate_rule_fired, worker_severity_pre_gate,
     imported_at
 )
-VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, now())
+VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, now())
 ON CONFLICT (
     COALESCE(experiment_id, '__unknown__'),
     COALESCE(feature, '__unknown__'),
@@ -167,6 +176,9 @@ ON CONFLICT (
     would_promote_severity = EXCLUDED.would_promote_severity,
     would_flag_for_review = EXCLUDED.would_flag_for_review,
     rationale_incomplete_flag = EXCLUDED.rationale_incomplete_flag,
+    -- Issue #240 Stage 3 soft-gate columns: write through on conflict.
+    gate_rule_fired = EXCLUDED.gate_rule_fired,
+    worker_severity_pre_gate = EXCLUDED.worker_severity_pre_gate,
     source_path = EXCLUDED.source_path,
     imported_at = now()
 WHERE adaptive_validity_verdicts.verdict IS DISTINCT FROM EXCLUDED.verdict
@@ -176,6 +188,8 @@ WHERE adaptive_validity_verdicts.verdict IS DISTINCT FROM EXCLUDED.verdict
    OR adaptive_validity_verdicts.would_promote_severity IS DISTINCT FROM EXCLUDED.would_promote_severity
    OR adaptive_validity_verdicts.would_flag_for_review IS DISTINCT FROM EXCLUDED.would_flag_for_review
    OR adaptive_validity_verdicts.rationale_incomplete_flag IS DISTINCT FROM EXCLUDED.rationale_incomplete_flag
+   OR adaptive_validity_verdicts.gate_rule_fired IS DISTINCT FROM EXCLUDED.gate_rule_fired
+   OR adaptive_validity_verdicts.worker_severity_pre_gate IS DISTINCT FROM EXCLUDED.worker_severity_pre_gate
 RETURNING (xmax = 0) AS inserted;
 """
 
@@ -371,6 +385,11 @@ def _upsert_records(
                     r.would_promote_severity,
                     r.would_flag_for_review,
                     r.rationale_incomplete_flag,
+                    # Issue #240 Stage 3 soft-gate columns. None when the
+                    # gate was disabled / did not fire (or the sidecar
+                    # predates Stage 3) → column stays NULL.
+                    r.gate_rule_fired,
+                    r.worker_severity_pre_gate,
                 ),
             )
             row = cur.fetchone()
