@@ -408,25 +408,36 @@ def test_node_crosscheck_does_not_fire_for_noise_feature(minimal_train_df, monke
     assert x2_verdict.get("would_flag_role_leak_disagreement") is None
 
 
-def test_node_shadow_byte_identity(minimal_train_df, monkeypatch):
-    """LOAD-BEARING SAFETY TEST.
+def test_node_shadow_crosscheck_on_vs_off_byte_identity(minimal_train_df, monkeypatch):
+    """LOAD-BEARING SAFETY TEST — the genuine shadow invariant.
 
-    The byte-identity shadow invariant: the presence of
-    ``would_flag_role_leak_disagreement`` in every verdict must NOT change
-    ``severity``, ``remediation``, ``leakage_severity``, routing, or any
-    other pre-existing verdict field. The cross-check is shadow-only.
+    Earlier this test compared two runs of the *same* (cross-check-ON) code
+    path. That only proved determinism: a regression that mutated a
+    non-additive field *inside* the cross-check block would perturb both runs
+    identically and slip through. To actually prove SHADOW behaviour we must
+    compare cross-check-ON against cross-check-OFF and show that the ONLY
+    difference is the additive ``would_flag_role_leak_disagreement`` key.
 
-    Implementation:
-    * Two identical node runs with the same seed → both produce the same
-      results (determinism check).
-    * All non-additive fields are byte-identical across both runs.
-    * ``leakage_severity`` is identical across both runs.
-    * The additive key ``would_flag_role_leak_disagreement`` exists in every
-      verdict and does not perturb any other key.
+    Mechanism: the node imports ``evaluate_role_vs_statistical_leak``
+    function-locally at entry, so monkeypatching the crosscheck module's
+    symbol to an inert ``lambda: None`` reproduces pre-#501 behaviour (the
+    flag is always ``None``; every other code path runs unchanged). Same seed
+    on both runs holds the stochastic adversarial probe fixed, so any
+    non-additive difference can only come from the cross-check computation
+    itself.
 
-    This is the most important test in this file. It enforces that the
-    cross-check behaves exactly like the Stage-1 shadow rules: present but
-    invisible to all decision-making code paths.
+    Asserts:
+    * Same feature set ON vs OFF.
+    * Every non-additive verdict field is byte-identical ON vs OFF.
+    * ``leakage_severity`` is identical ON vs OFF (severity escalation path
+      untouched).
+    * The additive key is present in every verdict and is correctly excluded
+      from the canonical non-additive bytes.
+
+    Falsifiability: add ``verdict["severity"] = "critical"`` (or any
+    non-additive mutation) inside the cross-check block in
+    ``adaptive_validity_check`` → ON differs from OFF → this test trips.
+    (The pre-existing determinism-only version could NOT catch that.)
     """
     monkeypatch.setattr(_AVC_MODULE, "_try_load_layer_4_classifier", lambda: None)
 
@@ -442,51 +453,60 @@ def test_node_shadow_byte_identity(minimal_train_df, monkeypatch):
             "adaptive_seed": 42,
         }
 
-    # Run 1: normal run with cross-check wired (the new code path).
-    result_run1 = _run_node(_make_state("test-byte-id-run1"))
-    verdicts_run1 = {v["feature"]: v for v in result_run1.get("adaptive_verdicts", [])}
+    # Treatment: cross-check wired (the new #501 code path, same seed).
+    result_on = _run_node(_make_state("test-shadow-on"))
+    verdicts_on = {v["feature"]: v for v in result_on.get("adaptive_verdicts", [])}
 
-    # Run 2: identical input → byte-identical non-additive fields.
-    result_run2 = _run_node(_make_state("test-byte-id-run2"))
-    verdicts_run2 = {v["feature"]: v for v in result_run2.get("adaptive_verdicts", [])}
+    # Baseline: cross-check made inert (reproduces pre-#501 behaviour — the
+    # flag is always None; everything else runs identically). Same seed.
+    monkeypatch.setattr(
+        _CROSSCHECK_MODULE,
+        "evaluate_role_vs_statistical_leak",
+        lambda _role, _sev: None,
+    )
+    result_off = _run_node(_make_state("test-shadow-off"))
+    verdicts_off = {v["feature"]: v for v in result_off.get("adaptive_verdicts", [])}
 
-    # Assert same feature set.
-    assert set(verdicts_run1.keys()) == set(verdicts_run2.keys()), (
-        "Feature sets differ between runs — non-deterministic node behaviour"
+    # Same feature set ON vs OFF.
+    assert set(verdicts_on.keys()) == set(verdicts_off.keys()), (
+        "Feature sets differ ON vs OFF — cross-check changed which verdicts are produced"
     )
 
-    for feat in verdicts_run1:
-        v1 = verdicts_run1[feat]
-        v2 = verdicts_run2[feat]
+    for feat in verdicts_on:
+        v_on = verdicts_on[feat]
+        v_off = verdicts_off[feat]
 
         # ``would_flag_role_leak_disagreement`` must be present in every verdict.
-        assert "would_flag_role_leak_disagreement" in v1, (
+        assert "would_flag_role_leak_disagreement" in v_on, (
             f"would_flag_role_leak_disagreement missing from {feat} verdict"
         )
 
-        # severity and remediation MUST be byte-identical across runs (determinism).
-        assert v1["severity"] == v2["severity"], (
-            f"severity non-deterministic for {feat}: {v1['severity']!r} vs {v2['severity']!r}"
+        # severity and remediation MUST be byte-identical ON vs OFF.
+        assert v_on["severity"] == v_off["severity"], (
+            f"severity changed by cross-check for {feat}: "
+            f"{v_on['severity']!r} (on) vs {v_off['severity']!r} (off)"
         )
-        assert v1["remediation"] == v2["remediation"], f"remediation non-deterministic for {feat}"
+        assert v_on["remediation"] == v_off["remediation"], (
+            f"remediation changed by cross-check for {feat}"
+        )
 
-        # ALL non-additive fields must be byte-identical across runs.
-        assert _canonical_bytes(_without_additive_keys(v1)) == _canonical_bytes(
-            _without_additive_keys(v2)
-        ), f"Non-additive fields non-deterministic for {feat}"
+        # ALL non-additive fields must be byte-identical ON vs OFF — this is
+        # the genuine shadow proof (the cross-check computation perturbs
+        # nothing but its own additive key).
+        assert _canonical_bytes(_without_additive_keys(v_on)) == _canonical_bytes(
+            _without_additive_keys(v_off)
+        ), f"Non-additive fields changed by cross-check for {feat} — NOT shadow"
 
-        # The additive key must not alter any of the byte-canonical non-additive fields.
-        # (Structural proof: the key is in _ALL_ADDITIVE_KEYS so it IS excluded from
-        # the canonical bytes above — this confirms the exclusion is correct.)
-        assert "would_flag_role_leak_disagreement" not in _without_additive_keys(v1), (
+        # The additive key must not leak into the canonical non-additive set.
+        assert "would_flag_role_leak_disagreement" not in _without_additive_keys(v_on), (
             "would_flag_role_leak_disagreement leaked into non-additive set — "
             "_ALL_ADDITIVE_KEYS is missing the key"
         )
 
-    # leakage_severity must be deterministic (cross-check is shadow only —
+    # leakage_severity must be identical ON vs OFF (cross-check is shadow only —
     # it must never alter the severity escalation path).
-    assert result_run1.get("leakage_severity") == result_run2.get("leakage_severity"), (
-        "leakage_severity non-deterministic — cross-check must not affect severity"
+    assert result_on.get("leakage_severity") == result_off.get("leakage_severity"), (
+        "leakage_severity changed by cross-check — must not affect severity escalation"
     )
 
 
