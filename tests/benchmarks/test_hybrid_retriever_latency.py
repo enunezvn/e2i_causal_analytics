@@ -67,6 +67,18 @@ from typing import Any, Dict, List, Tuple
 import pytest
 
 from tests.benchmarks._loader import LabeledQuery, load_queries
+from tests.benchmarks.substrate.fixture import (
+    inject as _inject_substrate,
+)
+from tests.benchmarks.substrate.fixture import (
+    make_connector as _make_substrate_connector,
+)
+from tests.benchmarks.substrate.fixture import (
+    reset as _reset_substrate,
+)
+from tests.benchmarks.substrate.fixture import (
+    substrate_ready as _substrate_ready,
+)
 
 pytestmark = pytest.mark.benchmark
 
@@ -160,9 +172,27 @@ def _within_tolerance(
     )
 
 
-@pytest.mark.requires_supabase
+@pytest.fixture
+def _substrate_connector():
+    """Substrate path (#414): inject the local-pg connector, reset + close after.
+
+    Yields ``None`` when the local substrate isn't configured (legacy live path),
+    so the test falls back to its OPENAI/Supabase skip logic.
+    """
+    if not _substrate_ready():
+        yield None
+        return
+    conn = _make_substrate_connector()
+    _inject_substrate(conn)
+    try:
+        yield conn
+    finally:
+        _reset_substrate()
+        conn.close()
+
+
 @pytest.mark.timeout(600)
-def test_hybrid_retriever_latency_against_baseline() -> None:
+def test_hybrid_retriever_latency_against_baseline(_substrate_connector) -> None:
     """Box 2 of issue #391: < 200ms target for fused search.
 
     Measures p50 / p95 wall-clock per query across the 36-query labeled set
@@ -175,15 +205,55 @@ def test_hybrid_retriever_latency_against_baseline() -> None:
 
     **Skip semantics**: see the module docstring.
     """
-    if not _retrieval_env_ready():
+    use_substrate = _substrate_connector is not None
+    if not use_substrate and not _retrieval_env_ready():
         pytest.skip(
-            "OPENAI_API_KEY missing or not in sk-* shape; dense-stream "
-            "embedding service would hang. Set a real key to run the "
-            "live benchmark end-to-end."
+            "no benchmark substrate: set BENCH_SUBSTRATE=local_pg + BENCH_PG_DSN "
+            "for the local pgvector path, or provide a live sk-* OPENAI_API_KEY "
+            "(+ Supabase) for the legacy end-to-end path."
         )
 
     queries = load_queries(_QUERY_FILE)
     baseline = _load_baseline()
+
+    # FAIL-CLOSED preflight (codex audit HIGH-1 + HIGH-2). HybridRetriever's
+    # dense/sparse paths swallow exceptions (`except: return []`,
+    # src/rag/retriever.py:88,146), so a broken/unseeded substrate would
+    # otherwise surface as empty results, NOT an error. Call the connector
+    # DIRECTLY here (bypassing that swallow): a DB/SQL/connection error RAISES,
+    # and we require EVERY query to return rows on BOTH streams so a partially
+    # seeded substrate also fails loudly instead of blessing a fast 0.0.
+    if use_substrate:
+        pre_loop = asyncio.new_event_loop()
+        try:
+            empties = []
+            for q in queries:
+                dense = pre_loop.run_until_complete(
+                    _substrate_connector.vector_search_by_text(
+                        q.query_text,
+                        k=_TOP_K,
+                        filters=q.filters or None,
+                        max_staleness=q.max_staleness,
+                    )
+                )
+                sparse = pre_loop.run_until_complete(
+                    _substrate_connector.fulltext_search(
+                        q.query_text,
+                        k=_TOP_K,
+                        filters=q.filters or None,
+                        max_staleness=q.max_staleness,
+                    )
+                )
+                if not dense or not sparse:
+                    empties.append((q.query_text[:40], len(dense), len(sparse)))
+        finally:
+            pre_loop.close()
+        assert not empties, (
+            "FAIL-CLOSED: substrate returned an empty stream for "
+            f"{len(empties)}/{len(queries)} queries (query, dense_n, sparse_n): "
+            f"{empties[:5]}. Broken or unseeded substrate — refusing to bless "
+            "(issue #403 mode)."
+        )
 
     timings_ms: List[float] = []
     loop = asyncio.new_event_loop()
