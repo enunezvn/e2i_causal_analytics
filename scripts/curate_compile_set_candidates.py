@@ -43,7 +43,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -53,9 +53,23 @@ from src.data.audit_candidate_formatter import (  # noqa: E402
 )
 from src.data.audit_sidecar_reader import (  # noqa: E402
     SidecarReader,
+    VerdictRecord,
     dedup_disagreements,
     extract_disagreements,
 )
+
+# Issue #240 Stage 2: map a promotion-rule id to the ``VerdictRecord``
+# predicate that is true iff that Stage-1 shadow rule fired on the row. R1
+# fires when ``would_promote_severity`` is set; R2 when ``would_flag_for_review``
+# is True; R3 when ``rationale_incomplete_flag`` is True. The predicate is
+# evaluated on the record (not the DisagreementEvent) because R2/R3 flags live
+# only on VerdictRecord. Design ref:
+# ``docs/plans/240-audit-evaluator-gate-promotion.md`` §3 Stage 2 + §4 R1/R2/R3.
+_PROMOTION_RULE_PREDICATES: dict[str, Callable[[VerdictRecord], bool]] = {
+    "R1": lambda r: r.would_promote_severity is not None,
+    "R2": lambda r: r.would_flag_for_review is True,
+    "R3": lambda r: r.rationale_incomplete_flag is True,
+}
 
 
 def _parse_date(value: str) -> datetime:
@@ -101,6 +115,18 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="Inclusive upper bound on sidecar written_at (UTC).",
     )
     parser.add_argument(
+        "--filter-promotion-rule",
+        choices=sorted(_PROMOTION_RULE_PREDICATES),
+        default=None,
+        help=(
+            "Issue #240 Stage 2: restrict candidates to disagreement rows where "
+            "the named Stage-1 shadow promotion rule fired. R1 = "
+            "would_promote_severity set (moderate→high escalation candidate); "
+            "R2 = would_flag_for_review; R3 = rationale_incomplete_flag. "
+            "Omit to include every evaluator-disagreement row."
+        ),
+    )
+    parser.add_argument(
         "--log-level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
@@ -134,6 +160,22 @@ def main(argv: Optional[list[str]] = None) -> int:
         until=args.until,
     )
     records = list(reader.iter_verdict_records())
+    # Issue #240 Stage 2: optionally restrict to rows where one Stage-1 shadow
+    # rule fired. The predicate runs on VerdictRecord (R2/R3 flags live there,
+    # not on DisagreementEvent) BEFORE extraction. extract_disagreements still
+    # applies its own satisfied=False filter afterwards, so a row that fired a
+    # rule but is not a disagreement (e.g. R3 on a satisfied verdict) is
+    # correctly dropped — the curation flow only surfaces disagreements.
+    if args.filter_promotion_rule is not None:
+        predicate = _PROMOTION_RULE_PREDICATES[args.filter_promotion_rule]
+        before = len(records)
+        records = [r for r in records if predicate(r)]
+        logger.info(
+            "--filter-promotion-rule %s: %d of %d verdict records matched",
+            args.filter_promotion_rule,
+            len(records),
+            before,
+        )
     disagreements = list(extract_disagreements(records))
     deduped = list(dedup_disagreements(disagreements))
 

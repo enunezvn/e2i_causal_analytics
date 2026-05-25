@@ -8,7 +8,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-def _make_event(feature: str = "f1", *, missed=("temporal_filter",), notes="thin rationale"):
+def _make_event(
+    feature: str = "f1",
+    *,
+    missed=("temporal_filter",),
+    notes="thin rationale",
+    would_promote_severity=None,
+    evaluator_satisfied=False,
+):
     from src.data.audit_sidecar_reader import DisagreementEvent
 
     return DisagreementEvent(
@@ -22,6 +29,8 @@ def _make_event(feature: str = "f1", *, missed=("temporal_filter",), notes="thin
         missed_considerations=missed,
         notes=notes,
         evaluator_model="anthropic/claude-haiku-4-5-20251001",
+        would_promote_severity=would_promote_severity,
+        evaluator_satisfied=evaluator_satisfied,
     )
 
 
@@ -66,6 +75,47 @@ def test_format_markdown_report_lists_all_required_fill_ins():
     assert "Required fill-ins before accepting" in md
 
 
+def test_format_markdown_report_includes_promotion_candidate_section():
+    """Issue #240 Stage 2: when a row carries a non-None
+    ``would_promote_severity`` (R1 fired in shadow mode), the markdown adds a
+    'Promotion candidate' section showing the proposed severity + the driving
+    R1 signals. Design ref: §3 Stage 2 Mechanism + §4 R1."""
+    from src.data.audit_candidate_formatter import format_markdown_report
+
+    events = [
+        _make_event(
+            "promote_me",
+            missed=("temporal_filter", "pearl_arrows"),
+            would_promote_severity="high",
+        )
+    ]
+    md = format_markdown_report(
+        events, generated_at=datetime(2026, 5, 15, 11, 0, tzinfo=timezone.utc)
+    )
+
+    assert "Promotion candidate" in md
+    # Proposed escalated severity surfaced.
+    assert "high" in md
+    # The R1 rule is named so a reviewer knows which rule fired.
+    assert "R1" in md
+    # Driving signals: worker severity, evaluator satisfied, missed count.
+    assert "moderate" in md
+    # missed_considerations count (2) drives the >= 1 trigger.
+    assert "2" in md
+
+
+def test_format_markdown_report_omits_promotion_section_when_no_rule_fired():
+    """A disagreement row where R1 did NOT fire (would_promote_severity is
+    None) must NOT carry a 'Promotion candidate' section."""
+    from src.data.audit_candidate_formatter import format_markdown_report
+
+    events = [_make_event("no_promote", would_promote_severity=None)]
+    md = format_markdown_report(
+        events, generated_at=datetime(2026, 5, 15, 11, 0, tzinfo=timezone.utc)
+    )
+    assert "Promotion candidate" not in md
+
+
 def test_format_markdown_report_empty_input_is_handled():
     from src.data.audit_candidate_formatter import format_markdown_report
 
@@ -108,6 +158,36 @@ def test_format_json_manifest_shape():
     assert c0["evaluator_audit"]["notes"] == "thin rationale"
     # Source attribution.
     assert c0["source_run_id"] == "exp-1"
+
+
+def test_json_manifest_carries_promotion_candidate_when_r1_fired():
+    """Codex iter-0 MEDIUM: the machine-readable manifest must carry the
+    Stage-2 promotion context (design §3 + §5 R-4: manifests show worker
+    severity with would_promote_severity adjacent), not just the markdown."""
+    from src.data.audit_candidate_formatter import format_json_manifest
+
+    events = [
+        _make_event("fired", would_promote_severity="high"),
+        _make_event("quiet", would_promote_severity=None),
+    ]
+    manifest = format_json_manifest(
+        events, generated_at=datetime(2026, 5, 15, 11, 0, tzinfo=timezone.utc)
+    )
+    fired, quiet = manifest["candidates"]
+
+    # Worker verdict surfaced as primary value (design §5 R-4).
+    assert fired["worker_verdict"]["severity"] == "moderate"
+    assert fired["worker_verdict"]["remediation"] == "keep_with_caveat"
+
+    # Promotion candidate block present + adjacent when R1 fired.
+    assert fired["promotion_candidate"] == {
+        "rule": "R1",
+        "would_promote_severity": "high",
+        "evaluator_satisfied": False,
+        "missed_considerations_count": 1,
+    }
+    # None when no rule fired (machine consumers can filter on this).
+    assert quiet["promotion_candidate"] is None
 
 
 def test_json_manifest_is_round_trippable():

@@ -1063,3 +1063,109 @@ def test_reader_does_not_warn_on_shadow_keys_as_unknown(tmp_path, caplog):
         f"shadow keys must be registered as known; got unknown-key WARNs: "
         f"{[r.message for r in unknown_warns]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue #240 Stage 2 — surface the shadow ``would_promote_severity`` + the
+# driving R1 input signals onto ``DisagreementEvent`` so the curation flow
+# (markdown report + CLI filter) can present promotion candidates. Design ref:
+# ``docs/plans/240-audit-evaluator-gate-promotion.md`` §3 Stage 2 Mechanism.
+# ---------------------------------------------------------------------------
+
+
+def test_extract_disagreements_surfaces_promotion_fields():
+    """A satisfied=False record carrying the Stage-1 ``would_promote_severity``
+    shadow field must surface that field AND the R1 driving signals
+    (worker_severity, evaluator_satisfied, missed-considerations count) on the
+    emitted ``DisagreementEvent``."""
+    from src.data.audit_sidecar_reader import (
+        VerdictRecord,
+        extract_disagreements,
+    )
+
+    rec = VerdictRecord(
+        experiment_id="e",
+        written_at=datetime.now(timezone.utc),
+        source_path=Path("/dev/null"),
+        feature="f-promote",
+        layer="4",
+        severity="moderate",
+        remediation="keep_with_caveat",
+        evidence=None,
+        z_score=2.0,
+        p_value=0.05,
+        delta_auc=0.04,
+        evaluator_satisfied=False,
+        evaluator_rationale_complete=False,
+        evaluator_missed_considerations=["temporal_filter", "pearl_arrows"],
+        evaluator_notes="thin",
+        evaluator_model="haiku",
+        raw_verdict={},
+        would_promote_severity="high",
+    )
+
+    events = list(extract_disagreements([rec]))
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.would_promote_severity == "high"
+    # Driving R1 signals are surfaced for the curation reviewer.
+    assert ev.worker_severity == "moderate"
+    assert ev.evaluator_satisfied is False
+    assert ev.missed_considerations == ("temporal_filter", "pearl_arrows")
+
+
+def test_extract_disagreements_promotion_none_when_rule_did_not_fire():
+    """A satisfied=False record where R1 did NOT fire (no shadow field) still
+    yields a DisagreementEvent, but with ``would_promote_severity=None``."""
+    from src.data.audit_sidecar_reader import (
+        VerdictRecord,
+        extract_disagreements,
+    )
+
+    rec = VerdictRecord(
+        experiment_id="e",
+        written_at=datetime.now(timezone.utc),
+        source_path=Path("/dev/null"),
+        feature="f-no-promote",
+        layer="4",
+        severity="moderate",
+        remediation="keep_with_caveat",
+        evidence=None,
+        z_score=2.0,
+        p_value=0.05,
+        delta_auc=0.04,
+        evaluator_satisfied=False,
+        evaluator_rationale_complete=False,
+        evaluator_missed_considerations=[],
+        evaluator_notes="thin",
+        evaluator_model="haiku",
+        raw_verdict={},
+        # would_promote_severity defaults to None (R1 did not fire).
+    )
+
+    events = list(extract_disagreements([rec]))
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.would_promote_severity is None
+    assert ev.evaluator_satisfied is False
+
+
+def test_disagreement_event_promotion_fields_default_to_none():
+    """The new promotion fields are additive/nullable with defaults so
+    existing keyword-only DisagreementEvent constructions keep working."""
+    from src.data.audit_sidecar_reader import DisagreementEvent
+
+    ev = DisagreementEvent(
+        experiment_id="e",
+        written_at=datetime.now(timezone.utc),
+        source_path=Path("/dev/null"),
+        feature="f",
+        worker_severity="moderate",
+        worker_remediation="keep_with_caveat",
+        rationale_complete=False,
+        missed_considerations=("temporal_filter",),
+        notes="n",
+        evaluator_model="haiku",
+    )
+    assert ev.would_promote_severity is None
+    assert ev.evaluator_satisfied is None
