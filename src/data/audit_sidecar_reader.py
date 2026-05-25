@@ -35,7 +35,10 @@ logger = logging.getLogger(__name__)
 # 1.3 (Issue #240 Stage 3): additive env-gated soft-gate keys
 # (gate_rule_fired / worker_severity_pre_gate). Still MAJOR=1 — additive,
 # nullable, absent on pre-#240-Stage-3 sidecars (surface as None).
-_READER_SCHEMA_VERSION = "1.3"
+# 1.4 (Issue #501 / #240): additive leakage × role cross-check shadow key
+# (would_flag_role_leak_disagreement). Still MAJOR=1 — additive, nullable,
+# absent on pre-#501 sidecars (surface as None without a warning).
+_READER_SCHEMA_VERSION = "1.4"
 _READER_SCHEMA_MAJOR = 1
 
 # Issue #235 A3: the set of verdict-dict keys the reader knows how to
@@ -96,6 +99,15 @@ _KNOWN_VERDICT_KEYS: frozenset[str] = frozenset(
         # pre-Stage-3 sidecars (surface as None).
         "gate_rule_fired",
         "worker_severity_pre_gate",
+        # Issue #501 / #240 (leakage × role cross-check, shadow mode): one
+        # nullable boolean key. ``True`` when the LLM assigned a benign
+        # keep-as-clean-predictor role (ancestor/confounder/instrument) AND
+        # ``detect_leakage`` independently flagged the same feature at
+        # critical/high severity. ``None`` otherwise (either input absent,
+        # role non-benign, or severity below threshold). Additive at schema
+        # 1.4+; absent on pre-#501 sidecars (surface as None without a
+        # warning — matches the existing Stage-3 precedent).
+        "would_flag_role_leak_disagreement",
     }
 )
 
@@ -165,6 +177,16 @@ class VerdictRecord:
     # ``docs/plans/240-audit-evaluator-gate-promotion.md`` §3/§5.
     gate_rule_fired: Optional[str] = None
     worker_severity_pre_gate: Optional[str] = None
+    # Issue #501 / #240 (leakage × role cross-check, shadow mode): nullable
+    # boolean. ``True`` when the LLM assigned a benign keep-as-clean-predictor
+    # role (ancestor/confounder/instrument) AND ``detect_leakage`` independently
+    # flagged the same feature at critical/high severity (the statistical
+    # detector and the LLM reason on orthogonal inputs — feature values-vs-target
+    # vs. name/derivation metadata — so this is a genuinely independent signal).
+    # ``None`` when either input is absent, the role is non-benign, or the
+    # statistical severity is below the threshold. Absent on pre-#501 sidecars
+    # (surface as None without a warning). Additive at schema 1.4+.
+    would_flag_role_leak_disagreement: Optional[bool] = None
 
 
 class SidecarReader:
@@ -393,6 +415,14 @@ class SidecarReader:
             # schema-tolerant pattern as the shadow fields above.
             gate_rule_fired=_opt_str(raw.get("gate_rule_fired")),
             worker_severity_pre_gate=_opt_str(raw.get("worker_severity_pre_gate")),
+            # Issue #501 / #240 (leakage × role cross-check, shadow mode).
+            # ``_opt_bool`` returns None on missing keys (pre-#501 sidecars)
+            # and emits a WARNING on non-bool values (producer schema drift)
+            # — same strict-bool-coercion contract as the Stage-1 shadow
+            # fields (``would_flag_for_review``, ``rationale_incomplete_flag``).
+            would_flag_role_leak_disagreement=_opt_bool(
+                raw.get("would_flag_role_leak_disagreement")
+            ),
         )
 
 

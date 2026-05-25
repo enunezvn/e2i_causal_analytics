@@ -188,7 +188,9 @@ def write_adaptive_verdicts_sidecar(state: Dict[str, Any]) -> Path | None:
             # policy above. Still MAJOR=1.
             # 1.3 (Issue #240 Stage 3): additive env-gated soft-gate keys
             # (gate_rule_fired / worker_severity_pre_gate). Still MAJOR=1.
-            "schema_version": "1.3",
+            # 1.4 (Issue #501 / #240): additive leakage × role cross-check
+            # shadow key (would_flag_role_leak_disagreement). Still MAJOR=1.
+            "schema_version": "1.4",
             "experiment_id": state.get("experiment_id"),
             "data_source": state.get("data_source"),
             "written_at": ts,

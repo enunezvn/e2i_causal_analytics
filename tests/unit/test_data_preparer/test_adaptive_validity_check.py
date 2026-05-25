@@ -606,6 +606,20 @@ def test_verdict_schema_is_uniform_across_layer_1_and_layer_3():
         "evaluator_missed_considerations",
         "evaluator_notes",
         "evaluator_model",
+        # Issue #240 Stage 2/3 soft-gate keys — additive; merged into every
+        # verdict by #240 but this assertion set was not updated then (the test
+        # was red on main). Repaired here alongside the #501 addition below.
+        "would_promote_severity",
+        "would_flag_for_review",
+        "gate_rule_fired",
+        "worker_severity_pre_gate",
+        "rationale_incomplete_flag",
+        "evaluator_latency_ms",
+        "evaluator_input_tokens",
+        "evaluator_output_tokens",
+        "evaluator_cost_usd",
+        # Issue #501 — leakage × role shadow cross-check key:
+        "would_flag_role_leak_disagreement",
     }
     for v in result["adaptive_verdicts"]:
         assert set(v.keys()) == canonical_keys, (
@@ -1146,6 +1160,20 @@ def test_phase29_compose_legacy_verdict_all_none_signals_returns_abstain():
         "evaluator_missed_considerations",
         "evaluator_notes",
         "evaluator_model",
+        # Issue #240 Stage 2/3 soft-gate keys — additive; merged into every
+        # verdict by #240 but this assertion set was not updated then (the test
+        # was red on main). Repaired here alongside the #501 addition below.
+        "would_promote_severity",
+        "would_flag_for_review",
+        "gate_rule_fired",
+        "worker_severity_pre_gate",
+        "rationale_incomplete_flag",
+        "evaluator_latency_ms",
+        "evaluator_input_tokens",
+        "evaluator_output_tokens",
+        "evaluator_cost_usd",
+        # Issue #501 — leakage × role shadow cross-check key:
+        "would_flag_role_leak_disagreement",
     }
     assert set(verdict.keys()) == expected_keys
 
@@ -2227,6 +2255,20 @@ async def test_phase29_stage2_e2e_main_loop_with_populated_cache(tmp_path, monke
         "evaluator_missed_considerations",
         "evaluator_notes",
         "evaluator_model",
+        # Issue #240 Stage 2/3 soft-gate keys — additive; merged into every
+        # verdict by #240 but this assertion set was not updated then (the test
+        # was red on main). Repaired here alongside the #501 addition below.
+        "would_promote_severity",
+        "would_flag_for_review",
+        "gate_rule_fired",
+        "worker_severity_pre_gate",
+        "rationale_incomplete_flag",
+        "evaluator_latency_ms",
+        "evaluator_input_tokens",
+        "evaluator_output_tokens",
+        "evaluator_cost_usd",
+        # Issue #501 — leakage × role shadow cross-check key:
+        "would_flag_role_leak_disagreement",
     }
     assert set(verdict.keys()) == expected_keys
 
