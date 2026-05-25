@@ -201,3 +201,66 @@ def test_json_manifest_is_round_trippable():
     serialised = json.dumps(manifest, indent=2)
     parsed = json.loads(serialised)
     assert parsed == manifest
+
+
+# ---------------------------------------------------------------------------
+# P7 (#242) — the curation formatter ALREADY surfaces ensemble disagreement.
+# The multi-model adapter (P3) shapes its agreement-state as an
+# LLMEvaluatorAudit whose evaluator_model is "ensemble:<members>" and whose
+# missed_considerations carry per-model dissent ("<model>:<role>"). The existing
+# formatter renders BOTH unconditionally (evaluator_model + missed_considerations
+# lines), so AC3 ("disagreement routable to the curation consumer") needs NO new
+# formatter code — a dedicated "split section" would be cosmetic reformatting of
+# data already shown. These tests pin that contract.
+# ---------------------------------------------------------------------------
+
+
+def _make_ensemble_event(feature="f_ensemble"):
+    from src.data.audit_sidecar_reader import DisagreementEvent
+
+    return DisagreementEvent(
+        experiment_id="exp-ens",
+        written_at=datetime(2026, 5, 25, 12, 0, tzinfo=timezone.utc),
+        source_path=Path("/tmp/exp-ens/adaptive_verdicts_X.json"),
+        feature=feature,
+        worker_severity="high",
+        worker_remediation="drop",
+        rationale_complete=False,
+        # per-model dissent labels as the ensemble adapter emits them
+        missed_considerations=("claude-sonnet-4-6:ancestor",),
+        notes="ensemble majority (3 healthy) on descendant; dissent: claude-sonnet-4-6:ancestor",
+        evaluator_model="ensemble:claude-sonnet-4-6+claude-opus-4-7+gpt-5",
+        would_promote_severity=None,
+        evaluator_satisfied=False,
+    )
+
+
+def test_formatter_surfaces_ensemble_model_label():
+    from src.data.audit_candidate_formatter import format_markdown_report
+
+    md = format_markdown_report(
+        [_make_ensemble_event()], generated_at=datetime(2026, 5, 25, tzinfo=timezone.utc)
+    )
+    # the multi-vendor membership is visible to the curator (not mistaken for Haiku)
+    assert "ensemble:claude-sonnet-4-6+claude-opus-4-7+gpt-5" in md
+
+
+def test_formatter_surfaces_ensemble_per_model_dissent():
+    from src.data.audit_candidate_formatter import format_markdown_report
+
+    md = format_markdown_report(
+        [_make_ensemble_event()], generated_at=datetime(2026, 5, 25, tzinfo=timezone.utc)
+    )
+    # the dissenting model + its role appear in the Missed considerations line
+    assert "claude-sonnet-4-6:ancestor" in md
+
+
+def test_json_manifest_carries_ensemble_dissent():
+    from src.data.audit_candidate_formatter import format_json_manifest
+
+    doc = format_json_manifest(
+        [_make_ensemble_event()], generated_at=datetime(2026, 5, 25, tzinfo=timezone.utc)
+    )
+    blob = json.dumps(doc)
+    assert "ensemble:claude-sonnet-4-6+claude-opus-4-7+gpt-5" in blob
+    assert "claude-sonnet-4-6:ancestor" in blob
