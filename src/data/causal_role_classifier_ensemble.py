@@ -32,9 +32,27 @@ is exhaustively unit-tested without an LM.
 
 from __future__ import annotations
 
+import logging
+import os
+import time
+import typing
 from collections import Counter
-from typing import Optional, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Optional, Sequence
 
+import dspy
+
+from src.data.causal_role_classifier import CausalRoleClassifier
+
+# Single source of truth for the #241 dual OpenAI/Anthropic usage-shape
+# extractor (reused, not reimplemented, so a future provider-shape change
+# reaches both the single-model loader and this ensemble with one diff) and
+# the compiled-artifact loader (all 3 ensemble members share the same compiled
+# few-shot demos).
+from src.data.causal_role_classifier_loader import (
+    _extract_lm_usage,
+    load_compiled_classifier,
+)
 from src.data.kg.types import (
     CausalRole,
     EnsembleAgreement,
@@ -42,7 +60,43 @@ from src.data.kg.types import (
     EnsembleModelVote,
     LLMEvaluatorAudit,
     LLMVerdict,
+    Remediation,
 )
+
+logger = logging.getLogger(__name__)
+
+# Default ensemble members (#242: Sonnet 4.6 + Opus 4.7 + GPT-5). Provider-
+# prefixed litellm/DSPy form. Overridable per-deploy via env (read at CALL
+# time, never import time) so model drift is a config change, not a code edit.
+_DEFAULT_SONNET = "anthropic/claude-sonnet-4-6"
+_DEFAULT_OPUS = "anthropic/claude-opus-4-7"
+_DEFAULT_GPT = "openai/gpt-5"
+
+_VALID_ROLES = frozenset(typing.get_args(CausalRole))
+_VALID_REMEDIATIONS = frozenset(typing.get_args(Remediation))
+
+
+def _coerce_role(value: object) -> Optional[CausalRole]:
+    """Return ``value`` iff it is in the ``CausalRole`` vocabulary, else None.
+
+    Reads the Literal via ``typing.get_args`` so the vocabulary has one
+    definition (``types.py``) and cannot drift.
+    """
+    return value if value in _VALID_ROLES else None  # type: ignore[return-value]
+
+
+def _coerce_remediation(value: object) -> Optional[Remediation]:
+    return value if value in _VALID_REMEDIATIONS else None  # type: ignore[return-value]
+
+
+def _resolve_models() -> tuple[str, str, str]:
+    """The three ensemble member model strings, from env with defaults."""
+    return (
+        os.environ.get("ENSEMBLE_SONNET_MODEL", _DEFAULT_SONNET),
+        os.environ.get("ENSEMBLE_OPUS_MODEL", _DEFAULT_OPUS),
+        os.environ.get("ENSEMBLE_GPT_MODEL", _DEFAULT_GPT),
+    )
+
 
 # --- Per-provider pricing (USD per million tokens) ---------------------------
 # Mirrors the documented ``HAIKU_*_USD_PER_MTOK`` constants in
@@ -237,3 +291,168 @@ def _ensemble_to_llm_verdict(clf: EnsembleClassification) -> Optional[LLMVerdict
         recommended_remediation=clf.fused_remediation or "keep_with_caveat",
         evaluator_audit=audit,
     )
+
+
+# --- Per-model execution (the only code that touches an LM) ------------------
+# ``_make_lm`` and ``_predict_under_lm`` are deliberately tiny indirections so
+# unit tests can stub them and exercise _classify_one / the orchestration with
+# NO live API call. Production wires them to real DSPy.
+
+
+def _make_lm(model: str) -> Any:
+    """Construct a per-model DSPy LM. Construction is lazy (no API call until
+    the LM is invoked), so a missing key surfaces at call time, not here."""
+    return dspy.LM(model=model)
+
+
+def _predict_under_lm(
+    classifier: Any,
+    lm: Any,
+    *,
+    feature_name: str,
+    derivation_pseudocode: str,
+    dataset_context: str,
+) -> Any:
+    """Run the shared classifier under ``lm`` via the established per-call
+    ``dspy.settings.context`` override (mirrors the loader's evaluator path)."""
+    with dspy.settings.context(lm=lm):
+        return classifier(
+            feature_name=feature_name,
+            derivation_pseudocode=derivation_pseudocode,
+            dataset_context=dataset_context,
+        )
+
+
+def _classify_one(
+    model: str,
+    *,
+    feature_name: str,
+    derivation_pseudocode: str,
+    dataset_context: str,
+    classifier: Any,
+) -> EnsembleModelVote:
+    """Run ONE model over the feature, returning a healthy vote or — on any
+    failure / invalid role — a NON-vote (``causal_role=None`` + ``error``).
+
+    A non-vote is degrade-to-healthy fuel for :func:`_fuse_votes`, never a
+    raise: one provider's outage must not sink the ensemble. Timing is recorded
+    even on the failure path (operators can see how long a rate-limited call
+    took). Telemetry mirrors the #241 evaluator path.
+    """
+    start = time.perf_counter()
+    try:
+        lm = _make_lm(model)
+        prediction = _predict_under_lm(
+            classifier,
+            lm,
+            feature_name=feature_name,
+            derivation_pseudocode=derivation_pseudocode,
+            dataset_context=dataset_context,
+        )
+    except Exception as exc:  # noqa: BLE001 — best-effort: any failure = non-vote
+        latency_ms = (time.perf_counter() - start) * 1000.0
+        logger.warning("ensemble: model=%s raised: %s — recording non-vote.", model, exc)
+        return EnsembleModelVote(
+            model=model,
+            causal_role=None,
+            latency_ms=latency_ms,
+            error=(str(exc)[:80] or type(exc).__name__),
+        )
+
+    latency_ms = (time.perf_counter() - start) * 1000.0
+    role = _coerce_role(getattr(prediction, "causal_role", None))
+    if role is None:
+        logger.warning(
+            "ensemble: model=%s returned causal_role=%r outside vocabulary — non-vote.",
+            model,
+            getattr(prediction, "causal_role", None),
+        )
+        return EnsembleModelVote(
+            model=model, causal_role=None, latency_ms=latency_ms, error="invalid_role"
+        )
+
+    remediation = _coerce_remediation(getattr(prediction, "recommended_remediation", None))
+    raw_mechanism = getattr(prediction, "mechanism", "")
+    mechanism = raw_mechanism if isinstance(raw_mechanism, str) else ""
+    input_tokens, output_tokens = _extract_lm_usage(lm)
+    cost_usd = _cost_for(model, input_tokens, output_tokens)
+    return EnsembleModelVote(
+        model=model,
+        causal_role=role,
+        mechanism=mechanism,
+        recommended_remediation=remediation,
+        latency_ms=latency_ms,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cost_usd=cost_usd,
+        error=None,
+    )
+
+
+def run_ensemble_classification(
+    *,
+    feature_name: str,
+    derivation_pseudocode: str,
+    dataset_context: str,
+    models: Optional[Sequence[str]] = None,
+    classifier: Any = None,
+    max_workers: int = 3,
+) -> EnsembleClassification:
+    """Run all members in parallel and fuse. Returns the rich
+    :class:`EnsembleClassification` (per-provider votes + telemetry) for the
+    offline harness / curation consumers.
+    """
+    model_tuple = tuple(models) if models is not None else _resolve_models()
+    if classifier is None:
+        classifier = load_compiled_classifier()
+        if classifier is None:
+            logger.warning(
+                "ensemble: no compiled classifier artifact found — falling back "
+                "to an uncompiled CausalRoleClassifier() for all members."
+            )
+            classifier = CausalRoleClassifier()
+
+    workers = max(1, min(max_workers, len(model_tuple)))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        future_by_model = {
+            executor.submit(
+                _classify_one,
+                model,
+                feature_name=feature_name,
+                derivation_pseudocode=derivation_pseudocode,
+                dataset_context=dataset_context,
+                classifier=classifier,
+            ): model
+            for model in model_tuple
+        }
+        votes_by_model = {future_by_model[f]: f.result() for f in future_by_model}
+
+    votes = tuple(votes_by_model[m] for m in model_tuple)  # stable member order
+    return _fuse_votes(feature_name, votes)
+
+
+def classify_feature_ensemble(
+    *,
+    feature_name: str,
+    derivation_pseudocode: str,
+    dataset_context: str,
+    models: Optional[Sequence[str]] = None,
+    classifier: Any = None,
+    max_workers: int = 3,
+) -> Optional[LLMVerdict]:
+    """Public entry mirroring the single-model ``classify_feature`` contract.
+
+    Returns an ``LLMVerdict`` (with the ensemble agreement packaged as its
+    ``evaluator_audit`` sidecar) on ``full``/``majority``; ``None`` on ``split``
+    (the voter then abstains / escalates). The richer per-provider breakdown is
+    available via :func:`run_ensemble_classification`.
+    """
+    classification = run_ensemble_classification(
+        feature_name=feature_name,
+        derivation_pseudocode=derivation_pseudocode,
+        dataset_context=dataset_context,
+        models=models,
+        classifier=classifier,
+        max_workers=max_workers,
+    )
+    return _ensemble_to_llm_verdict(classification)

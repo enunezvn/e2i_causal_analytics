@@ -366,3 +366,168 @@ def test_adapter_evaluator_model_names_all_three_members():
     assert verdict is not None and verdict.evaluator_audit is not None
     model_str = verdict.evaluator_audit.evaluator_model
     assert "sonnet" in model_str and "opus" in model_str and "gpt-5" in model_str
+
+
+# ---------------------------------------------------------------------------
+# P4 — _classify_one + classify_feature_ensemble (dspy STUBBED — no live API)
+# ---------------------------------------------------------------------------
+
+
+class _FakeLM:
+    """Stand-in for a dspy.LM: only needs a ``.history`` for usage extraction."""
+
+    def __init__(self, history=None):
+        self.history = history or []
+
+
+class _FakePrediction:
+    def __init__(self, role, mechanism="", remediation=None):
+        self.causal_role = role
+        self.mechanism = mechanism
+        self.recommended_remediation = remediation
+
+
+def test_resolve_models_defaults(monkeypatch):
+    from src.data import causal_role_classifier_ensemble as ens
+
+    for var in ("ENSEMBLE_SONNET_MODEL", "ENSEMBLE_OPUS_MODEL", "ENSEMBLE_GPT_MODEL"):
+        monkeypatch.delenv(var, raising=False)
+    assert ens._resolve_models() == (
+        "anthropic/claude-sonnet-4-6",
+        "anthropic/claude-opus-4-7",
+        "openai/gpt-5",
+    )
+
+
+def test_resolve_models_env_override(monkeypatch):
+    from src.data import causal_role_classifier_ensemble as ens
+
+    monkeypatch.setenv("ENSEMBLE_GPT_MODEL", "openai/gpt-5-mini")
+    assert ens._resolve_models()[2] == "openai/gpt-5-mini"
+
+
+def test_classify_one_healthy_records_role_and_telemetry(monkeypatch):
+    from src.data import causal_role_classifier_ensemble as ens
+
+    monkeypatch.setattr(
+        ens,
+        "_make_lm",
+        lambda model: _FakeLM([{"usage": {"prompt_tokens": 100, "completion_tokens": 20}}]),
+    )
+    monkeypatch.setattr(
+        ens,
+        "_predict_under_lm",
+        lambda classifier, lm, **kw: _FakePrediction("confounder", "pre-index", "keep_with_caveat"),
+    )
+    vote = ens._classify_one(
+        "anthropic/claude-sonnet-4-6",
+        feature_name="f",
+        derivation_pseudocode="d",
+        dataset_context="c",
+        classifier=object(),
+    )
+    assert vote.causal_role == "confounder"
+    assert vote.error is None
+    assert vote.input_tokens == 100
+    assert vote.output_tokens == 20
+    assert vote.cost_usd == pytest.approx(
+        100 / 1e6 * ens.SONNET_INPUT_USD_PER_MTOK + 20 / 1e6 * ens.SONNET_OUTPUT_USD_PER_MTOK
+    )
+    assert vote.latency_ms is not None
+
+
+def test_classify_one_exception_is_nonvote_with_error(monkeypatch):
+    from src.data import causal_role_classifier_ensemble as ens
+
+    monkeypatch.setattr(ens, "_make_lm", lambda model: _FakeLM())
+
+    def _boom(classifier, lm, **kw):
+        raise RuntimeError("rate limited")
+
+    monkeypatch.setattr(ens, "_predict_under_lm", _boom)
+    vote = ens._classify_one(
+        "openai/gpt-5",
+        feature_name="f",
+        derivation_pseudocode="d",
+        dataset_context="c",
+        classifier=object(),
+    )
+    assert vote.causal_role is None
+    assert vote.error is not None
+    assert vote.latency_ms is not None  # timing recorded even on failure
+
+
+def test_classify_one_invalid_role_is_nonvote(monkeypatch):
+    from src.data import causal_role_classifier_ensemble as ens
+
+    monkeypatch.setattr(ens, "_make_lm", lambda model: _FakeLM())
+    monkeypatch.setattr(
+        ens, "_predict_under_lm", lambda classifier, lm, **kw: _FakePrediction("not_a_role")
+    )
+    vote = ens._classify_one(
+        "openai/gpt-5",
+        feature_name="f",
+        derivation_pseudocode="d",
+        dataset_context="c",
+        classifier=object(),
+    )
+    assert vote.causal_role is None
+    assert vote.error == "invalid_role"
+
+
+def _patch_classify_one_by_role(monkeypatch, role_by_model):
+    """Patch _classify_one to return a scripted healthy vote per model."""
+    from src.data import causal_role_classifier_ensemble as ens
+
+    def _fake(model, **kw):
+        return EnsembleModelVote(model=model, causal_role=role_by_model[model])
+
+    monkeypatch.setattr(ens, "_classify_one", _fake)
+    return ens
+
+
+def test_classify_feature_ensemble_full_returns_verdict(monkeypatch):
+    models = ("anthropic/claude-sonnet-4-6", "anthropic/claude-opus-4-7", "openai/gpt-5")
+    ens = _patch_classify_one_by_role(monkeypatch, dict.fromkeys(models, "confounder"))
+
+    verdict = ens.classify_feature_ensemble(
+        feature_name="f",
+        derivation_pseudocode="d",
+        dataset_context="c",
+        models=models,
+        classifier=object(),
+    )
+    assert verdict is not None
+    assert verdict.causal_role == "confounder"
+    assert verdict.evaluator_audit is not None and verdict.evaluator_audit.satisfied is True
+
+
+def test_classify_feature_ensemble_split_returns_none(monkeypatch):
+    models = ("anthropic/claude-sonnet-4-6", "anthropic/claude-opus-4-7", "openai/gpt-5")
+    ens = _patch_classify_one_by_role(
+        monkeypatch,
+        {models[0]: "confounder", models[1]: "mediator", models[2]: "collider"},
+    )
+    verdict = ens.classify_feature_ensemble(
+        feature_name="f",
+        derivation_pseudocode="d",
+        dataset_context="c",
+        models=models,
+        classifier=object(),
+    )
+    assert verdict is None
+
+
+def test_run_ensemble_classification_invokes_all_models(monkeypatch):
+    models = ("anthropic/claude-sonnet-4-6", "anthropic/claude-opus-4-7", "openai/gpt-5")
+    ens = _patch_classify_one_by_role(monkeypatch, dict.fromkeys(models, "descendant"))
+    clf = ens.run_ensemble_classification(
+        feature_name="f",
+        derivation_pseudocode="d",
+        dataset_context="c",
+        models=models,
+        classifier=object(),
+    )
+    assert len(clf.votes) == 3
+    assert {v.model for v in clf.votes} == set(models)
+    assert clf.agreement == "full"
