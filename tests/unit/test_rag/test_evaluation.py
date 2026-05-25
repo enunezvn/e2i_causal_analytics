@@ -238,6 +238,43 @@ class TestDatasetFunctions:
         assert sample.metadata["brand"] == "Kisqali"
         assert sample.metadata["kpi"] == "TRx"
 
+    def test_default_dataset_has_at_least_30_samples(self):
+        """Issue #496: the 10-sample golden set is too small for stable
+        LLM-judge gates — per-sample verdict discreteness gives the aggregate
+        metrics a ~0.08-0.10 noise band, so thresholds sat inside the band and
+        flaked (faithfulness ~1/3 of runs; context_recall landed AT its 0.70
+        gate). Expanding to >=30 shrinks the variance of every metric's mean by
+        ~sqrt(3) so the floors rise and the thresholds become comfortable."""
+        dataset = get_default_evaluation_dataset()
+        assert len(dataset) >= 30, (
+            f"golden set has {len(dataset)} samples; >=30 required to keep "
+            "LLM-judge metric variance below the gate thresholds (#496)"
+        )
+
+    def test_every_sample_is_evaluable_by_ragas(self):
+        """Every golden sample must carry the four fields RAGAS needs or it
+        silently corrupts the aggregate (NaN/0 → drags a metric below its
+        gate): query, ground_truth, a non-empty answer, non-empty contexts,
+        and non-empty retrieved_contexts. Guards the 20 samples added for #496."""
+        dataset = get_default_evaluation_dataset()
+        for i, s in enumerate(dataset):
+            assert s.query and s.query.strip(), f"sample {i}: empty query"
+            assert s.ground_truth and s.ground_truth.strip(), f"sample {i}: empty ground_truth"
+            assert s.answer and s.answer.strip(), f"sample {i}: empty answer"
+            assert s.contexts and all(c.strip() for c in s.contexts), (
+                f"sample {i}: empty/blank contexts"
+            )
+            assert s.retrieved_contexts and all(c.strip() for c in s.retrieved_contexts), (
+                f"sample {i}: empty/blank retrieved_contexts"
+            )
+
+    def test_every_sample_has_metadata(self):
+        """Every sample carries non-empty metadata (brand and/or kpi/analysis_type)
+        so per-category coverage stays auditable as the set grows (#496)."""
+        dataset = get_default_evaluation_dataset()
+        for i, s in enumerate(dataset):
+            assert s.metadata, f"sample {i} ({s.query!r}): empty metadata"
+
 
 # =============================================================================
 # Test RAGASEvaluator
