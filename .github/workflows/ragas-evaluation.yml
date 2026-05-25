@@ -24,6 +24,12 @@ jobs:
   ragas-evaluation:
     name: RAG Quality Evaluation
     runs-on: ubuntu-latest
+    # Fail-fast guard (#504): real runtime is ~96 min on the CI OpenAI key tier;
+    # 150 min is comfortably above that while preventing a hung run from burning
+    # the 360-min GitHub Actions default. No concurrency block needed — this job
+    # is manual-only (workflow_dispatch), so there are no automatic runs to
+    # supersede and the timeout already caps the blast radius of any hung run.
+    timeout-minutes: 150
 
     strategy:
       matrix:
