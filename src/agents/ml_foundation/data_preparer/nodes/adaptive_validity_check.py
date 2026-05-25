@@ -1331,6 +1331,13 @@ def _ensemble_to_legacy_dict(
         # ``docs/plans/240-r1-reachability-investigation.md``.
         "gate_rule_fired": verdict.gate_rule_fired,
         "worker_severity_pre_gate": ("info" if verdict.gate_rule_fired == "R1" else None),
+        # Issue #501 / #240 — leakage × role cross-check (shadow mode).
+        # Default None here; the per-feature loop in the node orchestrator
+        # overrides this value via an in-loop assignment after
+        # ``_compose_legacy_verdict`` returns. The None default ensures
+        # schema uniformity: every verdict dict carries the key regardless
+        # of whether the orchestrator later sets it to True.
+        "would_flag_role_leak_disagreement": None,
     }
 
 
@@ -1421,6 +1428,10 @@ def _legacy_adversarial_alone_verdict(
         # legacy-dict producers.
         "gate_rule_fired": None,
         "worker_severity_pre_gate": None,
+        # Issue #501 / #240 — leakage × role cross-check (shadow mode).
+        # Adversarial-only bypass has no LLM verdict, so the cross-check
+        # cannot fire here. None for sidecar-schema uniformity.
+        "would_flag_role_leak_disagreement": None,
     }
 
 
@@ -1499,6 +1510,9 @@ def _legacy_info_verdict(
         # legacy-dict producers.
         "gate_rule_fired": None,
         "worker_severity_pre_gate": None,
+        # Issue #501 / #240 — leakage × role cross-check (shadow mode).
+        # Info-only bypass has no LLM verdict. None for schema uniformity.
+        "would_flag_role_leak_disagreement": None,
     }
 
 
@@ -1574,6 +1588,9 @@ def _legacy_short_circuit_verdict(feature: str, *, evidence: str) -> dict[str, A
         # legacy-dict producers.
         "gate_rule_fired": None,
         "worker_severity_pre_gate": None,
+        # Issue #501 / #240 — leakage × role cross-check (shadow mode).
+        # Short-circuit bypass has no LLM verdict. None for schema uniformity.
+        "would_flag_role_leak_disagreement": None,
     }
 
 
@@ -2831,6 +2848,40 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
     flagged: list[str] = []
     voter = _get_ensemble_voter_class()()
 
+    # Issue #501 / #240 — leakage × role cross-check (shadow mode).
+    # Build a per-feature lookup from the PRIOR ``leakage_findings`` list
+    # (the statistical detect_leakage output already in state) BEFORE this
+    # node appends its own adversarial verdicts to the cumulative stream.
+    # Using this node's own verdicts would be CIRCULAR (they feed the
+    # ensemble vote). The lookup maps feature → max severity among all its
+    # statistical findings, so a feature flagged at both moderate and high
+    # maps to "high" (the dominant signal).
+    #
+    # This dict is pure data: no LM call, no I/O. It is consumed once per
+    # feature below (after ``_compose_legacy_verdict``) to set
+    # ``would_flag_role_leak_disagreement``. Shadow-only: the value is
+    # never read by the voter, leakage_severity, or any routing logic.
+    #
+    # Lazy import follows the existing pattern (see ``_ensemble_to_legacy_dict``
+    # importing ``evaluator_promotion_rules``). Imported once here at node
+    # entry so the per-feature loop doesn't repeat the import call.
+    from src.data.leakage_role_crosscheck import evaluate_role_vs_statistical_leak
+
+    _prior_findings_for_crosscheck: list[dict[str, Any]] = list(state.get("leakage_findings") or [])
+    _SEVERITY_RANK = {"critical": 3, "high": 2, "moderate": 1, "info": 0}
+    stat_leak_by_feature: dict[str, str] = {}
+    for _f in _prior_findings_for_crosscheck:
+        if not isinstance(_f, dict):
+            continue
+        _fname = _f.get("feature")
+        _fsev = _f.get("severity")
+        if not isinstance(_fname, str) or not isinstance(_fsev, str):
+            continue
+        if _SEVERITY_RANK.get(_fsev, -1) > _SEVERITY_RANK.get(
+            stat_leak_by_feature.get(_fname, ""), -1
+        ):
+            stat_leak_by_feature[_fname] = _fsev
+
     # Stage 2 KG wiring (Phase 2.9 PR-D): load offline KG cache once at
     # node entry, reuse the per-feature lookup across both passes.
     # ``None`` means no cache configured / file missing / kg_mode='off'
@@ -2878,6 +2929,17 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
                 feature_entity_ids=feat_ids,
                 target_entity_ids=target_ids,
                 kg_mode=kg_mode,
+            )
+            # Issue #501 / #240 — leakage × role cross-check (shadow mode).
+            # Same as the Layer 3 loop: override the None default from the
+            # producer. Layer 1 verdicts rarely carry an LLM role (Layer 4
+            # fires only in the Layer 3 loop) so this will almost always
+            # remain None, but schema uniformity demands the assignment.
+            # ``evaluate_role_vs_statistical_leak`` is imported once at node
+            # entry (see stat_leak_by_feature block above).
+            verdict["would_flag_role_leak_disagreement"] = evaluate_role_vs_statistical_leak(
+                verdict.get("llm_role"),
+                stat_leak_by_feature.get(feat),
             )
             verdicts.append(verdict)
             flagged.append(feat)
@@ -2933,16 +2995,23 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
         col = train_df[feat]
         mask = col.notna() & binary_label_mask
         if mask.sum() < MIN_LAYER3_SAMPLES:
-            verdicts.append(
-                _compose_legacy_verdict(
-                    feat,
-                    voter=voter,
-                    short_circuit_evidence=(
-                        f"Skipped: only {int(mask.sum())} non-null rows "
-                        f"(need ≥{MIN_LAYER3_SAMPLES})"
-                    ),
-                )
+            _sc_verdict = _compose_legacy_verdict(
+                feat,
+                voter=voter,
+                short_circuit_evidence=(
+                    f"Skipped: only {int(mask.sum())} non-null rows (need ≥{MIN_LAYER3_SAMPLES})"
+                ),
             )
+            # Issue #501 — short-circuit bypasses never carry an LLM role
+            # so evaluate_role_vs_statistical_leak always returns None here.
+            # Assignment preserves schema uniformity (the key is already None
+            # from the producer; this is explicit for audit-trail clarity).
+            # ``evaluate_role_vs_statistical_leak`` imported once at node entry.
+            _sc_verdict["would_flag_role_leak_disagreement"] = evaluate_role_vs_statistical_leak(
+                _sc_verdict.get("llm_role"),
+                stat_leak_by_feature.get(feat),
+            )
+            verdicts.append(_sc_verdict)
             continue
 
         try:
@@ -2955,13 +3024,18 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
             )
         except Exception as exc:
             logger.warning("adaptive_validity_check: scoring failed for %s: %s", feat, exc)
-            verdicts.append(
-                _compose_legacy_verdict(
-                    feat,
-                    voter=voter,
-                    short_circuit_evidence=f"Adversarial scoring error: {exc}",
-                )
+            _err_verdict = _compose_legacy_verdict(
+                feat,
+                voter=voter,
+                short_circuit_evidence=f"Adversarial scoring error: {exc}",
             )
+            # Issue #501 — same schema-uniformity assignment as above.
+            # ``evaluate_role_vs_statistical_leak`` imported once at node entry.
+            _err_verdict["would_flag_role_leak_disagreement"] = evaluate_role_vs_statistical_leak(
+                _err_verdict.get("llm_role"),
+                stat_leak_by_feature.get(feat),
+            )
+            verdicts.append(_err_verdict)
             continue
 
         contract = lookup_feature_contract(feat, data_source=manifest_source)
@@ -3091,6 +3165,27 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
         # adversarial path (voter rule for adv-alone or the bypass route).
         if ablation_escalated and verdict.get("decided_by") == "adversarial":
             verdict["decided_by"] = "adversarial_ablation"
+        # Issue #501 / #240 — leakage × role cross-check (shadow mode).
+        # Override the None default set by ``_compose_legacy_verdict`` (via
+        # its producer functions) with the result of the pure cross-check
+        # function. Only fires (True) when:
+        #   1. The LLM assigned a benign keep-clean role (ancestor /
+        #      confounder / instrument) — i.e. ``verdict["llm_role"]`` is
+        #      in BENIGN_KEEP_ROLES.
+        #   2. The statistical detect_leakage already flagged this feature
+        #      at critical/high severity (via ``stat_leak_by_feature``
+        #      built at node entry from the PRIOR leakage_findings — never
+        #      from this node's own adversarial verdicts, which would be
+        #      circular).
+        # Shadow-only: this value is never read by the voter, leakage_severity,
+        # routing, or any decision-making code. It is written to the sidecar
+        # for analytics and curation only. Byte-identity invariant enforced by
+        # ``tests/integration/test_leak_crosscheck_shadow_byte_identity.py``.
+        # ``evaluate_role_vs_statistical_leak`` imported once at node entry.
+        verdict["would_flag_role_leak_disagreement"] = evaluate_role_vs_statistical_leak(
+            verdict.get("llm_role"),
+            stat_leak_by_feature.get(feat),
+        )
         verdicts.append(verdict)
         if verdict["severity"] == "high":
             flagged.append(feat)
