@@ -66,6 +66,23 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
+    # Local pgvector substrate for box 2 (issue #414). Lets the HybridRetriever
+    # latency benchmark run the REAL SQL functions against a seeded local DB —
+    # no Supabase/OpenAI secrets. See tests/benchmarks/substrate/.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_PASSWORD: bench
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     strategy:
       matrix:
         python-version: ['3.12']
@@ -114,13 +131,34 @@ jobs:
         # dependencies needed in CI; the test runs unconditionally.
         run: scripts/run_benchmarks.sh cascade
 
+      - name: Provision hybrid-retriever substrate (box 2)
+        if: always()  # codex audit LOW: don't skip provisioning if box 1 failed
+        env:
+          PGPASSWORD: bench
+          BENCH_PG_DSN: postgresql://postgres:bench@localhost:5432/postgres
+        # Load the minimal schema + the REAL hybrid_vector_search /
+        # hybrid_fulltext_search SQL functions into the pgvector service
+        # container, then seed a deterministic corpus. This lets box 2 run
+        # the live retriever path against a local substrate — no Supabase /
+        # OpenAI secrets, no network. See tests/benchmarks/substrate/.
+        run: |
+          command -v psql >/dev/null || (sudo apt-get update && sudo apt-get install -y postgresql-client)
+          psql "$BENCH_PG_DSN" -v ON_ERROR_STOP=1 \
+            -f tests/benchmarks/substrate/bench_schema.sql \
+            -f database/memory/011_hybrid_search_functions_fixed.sql \
+            -f database/memory/022_hybrid_search_max_staleness.sql
+          python -m tests.benchmarks.substrate.seed
+
       - name: Run HybridRetriever latency benchmark (box 2)
         if: always()
-        # Box 2 needs SUPABASE_URL + SUPABASE_KEY + OPENAI_API_KEY to do
-        # real work. Without them, the test skips itself (requires_supabase
-        # marker + sk-* shape check). We still RUN the harness so the
-        # smoke tests + baseline-file validation execute and the
-        # skip-reason lands in the CI summary.
+        # Box 2 runs the live HybridRetriever against the seeded local
+        # pgvector substrate (BENCH_SUBSTRATE=local_pg) — deterministic
+        # embedder, no Supabase/OpenAI secrets, no network. The benchmark
+        # FAILS CLOSED if the substrate is broken/unseeded (direct-connector
+        # preflight in test_hybrid_retriever_latency.py).
+        env:
+          BENCH_SUBSTRATE: local_pg
+          BENCH_PG_DSN: postgresql://postgres:bench@localhost:5432/postgres
         run: scripts/run_benchmarks.sh hybrid
 
       - name: Run BM25 rebuild-time benchmark (box 3)
