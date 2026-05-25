@@ -565,3 +565,81 @@ def test_feature_contract_accepts_umls_system():
         kg_entity_codes=(("UMLS", "C0011615"),),
     )
     assert fc.kg_entity_codes == (("UMLS", "C0011615"),)
+
+
+# ---------------------------------------------------------------------------
+# Issue #501 — CausalStructureAttestation edge-list field (plan §8.3).
+# ---------------------------------------------------------------------------
+
+
+def test_feature_contract_causal_structure_defaults_none():
+    """An un-attested contract has ``causal_structure is None`` and all existing
+    construction paths are unaffected (backward-compatible default)."""
+    from src.data.feature_contract import FeatureContract, KnowableAt
+
+    fc = FeatureContract(
+        name="age_at_index",
+        knowable_at=KnowableAt(reference="index_date"),
+        source="demo",
+        derivation_inputs=("birth_date", "index_date"),
+    )
+    assert fc.causal_structure is None
+
+
+def test_feature_contract_causal_structure_roundtrips_edge_list():
+    """An authored edge list builds a valid nx.DiGraph fragment and the extended
+    ``extract_role`` over it returns the M-structure collider role.
+
+    Encodes the REAL DAG ``T → V ← U → Y`` (independent second parent U), the
+    anti-mocking-faithful shape for cases 1,2,7,8,9.
+    """
+    import networkx as nx
+
+    from src.data.feature_contract import (
+        CausalStructureAttestation,
+        FeatureContract,
+        KnowableAt,
+    )
+    from src.ml.causal_role_dgp.extractor import extract_role
+
+    attestation = CausalStructureAttestation(
+        treatment_node="T",
+        outcome_node="Y",
+        feature_node="V",
+        edges=(("T", "V"), ("U", "V"), ("U", "Y")),
+    )
+    fc = FeatureContract(
+        name="on_treatment_at_12m_flag",
+        knowable_at=KnowableAt(reference="index_date"),
+        source="derived",
+        derivation_inputs=("treatment_status",),
+        causal_role="collider",
+        causal_structure=attestation,
+    )
+    assert fc.causal_structure is attestation
+
+    graph = nx.DiGraph(list(fc.causal_structure.edges))
+    role = extract_role(
+        fc.causal_structure.feature_node,
+        fc.causal_structure.treatment_node,
+        fc.causal_structure.outcome_node,
+        graph,
+    )
+    assert role == "collider"
+
+
+def test_causal_structure_attestation_is_frozen_and_hashable():
+    """The attestation is frozen + hashable (edges normalized to tuple-of-tuple),
+    so a FeatureContract carrying it stays hashable."""
+    from src.data.feature_contract import CausalStructureAttestation
+
+    # Pass JSON-friendly list-of-lists; __post_init__ normalizes to tuples.
+    attestation = CausalStructureAttestation(
+        treatment_node="T",
+        outcome_node="Y",
+        feature_node="V",
+        edges=[["T", "V"], ["U", "V"], ["U", "Y"]],  # type: ignore[arg-type]
+    )
+    assert attestation.edges == (("T", "V"), ("U", "V"), ("U", "Y"))
+    # hashable (frozen + tuple edges)
+    assert isinstance(hash(attestation), int)

@@ -38,7 +38,12 @@ logger = logging.getLogger(__name__)
 # 1.4 (Issue #501 / #240): additive leakage × role cross-check shadow key
 # (would_flag_role_leak_disagreement). Still MAJOR=1 — additive, nullable,
 # absent on pre-#501 sidecars (surface as None without a warning).
-_READER_SCHEMA_VERSION = "1.4"
+# 1.5 (Issue #501 / #240): additive M-structure structural-remediation gate
+# shadow keys (structural_role / structural_llm_disagreement /
+# structural_remediation_override / structural_gate_fired). Still MAJOR=1 —
+# additive, nullable, absent on pre-1.5 sidecars (surface as None without a
+# warning, mirroring the 1.4 leak-crosscheck-key handling).
+_READER_SCHEMA_VERSION = "1.5"
 _READER_SCHEMA_MAJOR = 1
 
 # Issue #235 A3: the set of verdict-dict keys the reader knows how to
@@ -108,6 +113,21 @@ _KNOWN_VERDICT_KEYS: frozenset[str] = frozenset(
         # 1.4+; absent on pre-#501 sidecars (surface as None without a
         # warning — matches the existing Stage-3 precedent).
         "would_flag_role_leak_disagreement",
+        # Issue #501 / #240 (M-structure structural-remediation gate, shadow
+        # mode): four nullable keys emitted by the validity-node per-feature
+        # loop. ``structural_role`` is the role the M-structure-extended
+        # deterministic extractor derives from the feature's authored
+        # ``FeatureContract.causal_structure`` edge list (None when un-attested).
+        # ``structural_llm_disagreement`` (bool) is True iff that role differs
+        # from the LLM role. ``structural_remediation_override`` is the
+        # remediation the gate forced when ON (e.g. "drop"), else None.
+        # ``structural_gate_fired`` is "R-STRUCT" when the env-gated override
+        # fired, else None. Additive at schema 1.5+; absent on pre-1.5 sidecars
+        # (surface as None without a warning).
+        "structural_role",
+        "structural_llm_disagreement",
+        "structural_remediation_override",
+        "structural_gate_fired",
     }
 )
 
@@ -187,6 +207,19 @@ class VerdictRecord:
     # statistical severity is below the threshold. Absent on pre-#501 sidecars
     # (surface as None without a warning). Additive at schema 1.4+.
     would_flag_role_leak_disagreement: Optional[bool] = None
+    # Issue #501 / #240 (M-structure structural-remediation gate, shadow mode):
+    # four nullable fields. ``structural_role`` is the deterministic role the
+    # M-structure-extended extractor derives from the feature's authored DAG
+    # fragment (None when un-attested). ``structural_llm_disagreement`` (bool) is
+    # True iff that role disagrees with the LLM role. ``structural_remediation_-
+    # override`` is the remediation the gate forced when ON (e.g. "drop"), else
+    # None. ``structural_gate_fired`` is "R-STRUCT" when the env-gated override
+    # fired, else None. Absent on pre-1.5 sidecars (surface as None without a
+    # warning). Additive at schema 1.5+.
+    structural_role: Optional[str] = None
+    structural_llm_disagreement: Optional[bool] = None
+    structural_remediation_override: Optional[str] = None
+    structural_gate_fired: Optional[str] = None
 
 
 class SidecarReader:
@@ -423,6 +456,16 @@ class SidecarReader:
             would_flag_role_leak_disagreement=_opt_bool(
                 raw.get("would_flag_role_leak_disagreement")
             ),
+            # Issue #501 / #240 (M-structure structural-remediation gate, shadow
+            # mode). ``_opt_str`` / ``_opt_bool`` return None on missing keys
+            # (pre-1.5 sidecars) — same schema-tolerant pattern as the fields
+            # above. ``structural_role`` / ``structural_remediation_override`` /
+            # ``structural_gate_fired`` are strings; ``structural_llm_disagreement``
+            # is a bool (strict coercion, WARNING on producer schema drift).
+            structural_role=_opt_str(raw.get("structural_role")),
+            structural_llm_disagreement=_opt_bool(raw.get("structural_llm_disagreement")),
+            structural_remediation_override=_opt_str(raw.get("structural_remediation_override")),
+            structural_gate_fired=_opt_str(raw.get("structural_gate_fired")),
         )
 
 

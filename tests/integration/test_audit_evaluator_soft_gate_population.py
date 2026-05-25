@@ -135,11 +135,12 @@ def test_reader_known_keys_include_gate_keys():
     assert "worker_severity_pre_gate" in _KNOWN_VERDICT_KEYS
 
 
-def test_reader_schema_version_is_1_4():
-    # Bumped 1.3 → 1.4 by Issue #501 (additive `would_flag_role_leak_disagreement`
-    # shadow key), mirroring the per-additive-keyset minor bump #240 Stage 3 made
-    # (→ 1.3). MAJOR stays 1 (additive, nullable, backward-compatible).
-    assert _READER_SCHEMA_VERSION == "1.4"
+def test_reader_schema_version_is_1_5():
+    # Bumped 1.4 → 1.5 by Issue #501 (additive M-structure structural-remediation
+    # gate shadow keys), mirroring the per-additive-keyset minor bump #508 made
+    # (1.3 → 1.4 for the leak-crosscheck key) and #240 Stage 3 (→ 1.3). MAJOR
+    # stays 1 (additive, nullable, backward-compatible).
+    assert _READER_SCHEMA_VERSION == "1.5"
 
 
 def test_reader_surfaces_gate_keys_onto_verdict_record(tmp_path):

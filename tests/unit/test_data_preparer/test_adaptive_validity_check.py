@@ -620,6 +620,11 @@ def test_verdict_schema_is_uniform_across_layer_1_and_layer_3():
         "evaluator_cost_usd",
         # Issue #501 — leakage × role shadow cross-check key:
         "would_flag_role_leak_disagreement",
+        # Issue #501 — M-structure structural-remediation gate shadow keys:
+        "structural_role",
+        "structural_llm_disagreement",
+        "structural_remediation_override",
+        "structural_gate_fired",
     }
     for v in result["adaptive_verdicts"]:
         assert set(v.keys()) == canonical_keys, (
@@ -1174,6 +1179,11 @@ def test_phase29_compose_legacy_verdict_all_none_signals_returns_abstain():
         "evaluator_cost_usd",
         # Issue #501 — leakage × role shadow cross-check key:
         "would_flag_role_leak_disagreement",
+        # Issue #501 — M-structure structural-remediation gate shadow keys:
+        "structural_role",
+        "structural_llm_disagreement",
+        "structural_remediation_override",
+        "structural_gate_fired",
     }
     assert set(verdict.keys()) == expected_keys
 
@@ -2269,6 +2279,11 @@ async def test_phase29_stage2_e2e_main_loop_with_populated_cache(tmp_path, monke
         "evaluator_cost_usd",
         # Issue #501 — leakage × role shadow cross-check key:
         "would_flag_role_leak_disagreement",
+        # Issue #501 — M-structure structural-remediation gate shadow keys:
+        "structural_role",
+        "structural_llm_disagreement",
+        "structural_remediation_override",
+        "structural_gate_fired",
     }
     assert set(verdict.keys()) == expected_keys
 

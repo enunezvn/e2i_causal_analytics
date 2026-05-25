@@ -1338,6 +1338,21 @@ def _ensemble_to_legacy_dict(
         # schema uniformity: every verdict dict carries the key regardless
         # of whether the orchestrator later sets it to True.
         "would_flag_role_leak_disagreement": None,
+        # Issue #501 — M-structure structural-remediation gate (shadow,
+        # env-gated by ADAPTIVE_VALIDITY_STRUCTURAL_GATE_ENABLED). All four
+        # keys default None here; the per-feature loop overrides them via
+        # in-loop single-key assignment (mirroring the #508 key above) when a
+        # feature carries a ``FeatureContract.causal_structure`` attestation.
+        # ``structural_role``: the role the extended extractor derives from the
+        # authored DAG fragment (None when un-attested). ``structural_llm_dis-
+        # agreement``: True iff structural_role != llm_role (both present).
+        # ``structural_remediation_override``: the remediation the gate forced
+        # (e.g. "drop"), or None. ``structural_gate_fired``: the rule id
+        # ("R-STRUCT") when the env-gated override fired, else None.
+        "structural_role": None,
+        "structural_llm_disagreement": None,
+        "structural_remediation_override": None,
+        "structural_gate_fired": None,
     }
 
 
@@ -1432,6 +1447,13 @@ def _legacy_adversarial_alone_verdict(
         # Adversarial-only bypass has no LLM verdict, so the cross-check
         # cannot fire here. None for sidecar-schema uniformity.
         "would_flag_role_leak_disagreement": None,
+        # Issue #501 — M-structure structural keys. Adversarial-only bypass
+        # carries no LLM role / contract attestation, so they stay None;
+        # present for sidecar-schema uniformity across all four producers.
+        "structural_role": None,
+        "structural_llm_disagreement": None,
+        "structural_remediation_override": None,
+        "structural_gate_fired": None,
     }
 
 
@@ -1513,6 +1535,12 @@ def _legacy_info_verdict(
         # Issue #501 / #240 — leakage × role cross-check (shadow mode).
         # Info-only bypass has no LLM verdict. None for schema uniformity.
         "would_flag_role_leak_disagreement": None,
+        # Issue #501 — M-structure structural keys. Info-only bypass carries
+        # no LLM role / attestation; None for schema uniformity.
+        "structural_role": None,
+        "structural_llm_disagreement": None,
+        "structural_remediation_override": None,
+        "structural_gate_fired": None,
     }
 
 
@@ -1591,7 +1619,108 @@ def _legacy_short_circuit_verdict(feature: str, *, evidence: str) -> dict[str, A
         # Issue #501 / #240 — leakage × role cross-check (shadow mode).
         # Short-circuit bypass has no LLM verdict. None for schema uniformity.
         "would_flag_role_leak_disagreement": None,
+        # Issue #501 — M-structure structural keys. Short-circuit bypass
+        # carries no LLM role / attestation; None for schema uniformity.
+        "structural_role": None,
+        "structural_llm_disagreement": None,
+        "structural_remediation_override": None,
+        "structural_gate_fired": None,
     }
+
+
+def _apply_structural_attestation(
+    verdict: dict[str, Any],
+    contract: Optional[FeatureContract],
+) -> None:
+    """Issue #501 — M-structure structural-remediation gate (shadow, env-gated).
+
+    Mutates ``verdict`` IN PLACE via single-key assignments (mirrors the #508
+    leak-crosscheck pattern). NEVER reassigns the dict, so #508's key and every
+    precomputed field are preserved. No-op (all four structural keys stay None,
+    remediation untouched) when:
+
+    * the feature carries no ``contract.causal_structure`` attestation; OR
+    * the extended ``extract_role`` derives a role equal to the LLM role (no
+      disagreement); OR
+    * the env switch ``ADAPTIVE_VALIDITY_STRUCTURAL_GATE_ENABLED`` is OFF (then
+      the *telemetry* keys ``structural_role`` / ``structural_llm_disagreement``
+      are still recorded for analytics, but NO remediation override is applied
+      and ``structural_gate_fired`` stays None — dark-launchable).
+
+    When attested AND disagreeing: always records ``structural_role`` +
+    ``structural_llm_disagreement`` (shadow telemetry, gate-independent). The
+    remediation override + ``structural_gate_fired="R-STRUCT"`` are applied ONLY
+    when the env switch is on (the gate's ACTING behaviour). Severity is NEVER
+    mutated (the reachable seam is remediation, per §4.1; R1's severity path and
+    the byte-identity invariant are undisturbed).
+    """
+    if contract is None or contract.causal_structure is None:
+        return
+
+    attestation = contract.causal_structure
+    # Build the authored DAG fragment and derive the structural role with the
+    # M-structure-extended extractor (deterministic, zero LLM cost).
+    import networkx as nx
+
+    from src.data.kg.ensemble_voter import (
+        apply_structural_remediation_gate,
+        structural_gate_enabled,
+    )
+    from src.ml.causal_role_dgp.extractor import extract_role
+
+    try:
+        graph = nx.DiGraph(list(attestation.edges))
+        structural_role = extract_role(
+            attestation.feature_node,
+            attestation.treatment_node,
+            attestation.outcome_node,
+            graph,
+        )
+    except Exception as exc:  # noqa: BLE001 - attestation is author data; never crash the node
+        logger.warning(
+            "adaptive_validity_check: structural attestation for %r could not be "
+            "classified (%s); skipping structural gate",
+            verdict.get("feature"),
+            exc,
+        )
+        return
+
+    llm_role = verdict.get("llm_role")
+    # Shadow telemetry (gate-independent): always record the derived role and
+    # whether it disagrees with the LLM role.
+    verdict["structural_role"] = structural_role
+    disagreement = (
+        structural_role is not None and llm_role is not None and structural_role != llm_role
+    )
+    verdict["structural_llm_disagreement"] = disagreement if llm_role is not None else None
+
+    if not structural_gate_enabled():
+        # Dark-launch: telemetry recorded, but no remediation override.
+        return
+
+    override = apply_structural_remediation_gate(
+        structural_role=structural_role,
+        llm_role=llm_role if isinstance(llm_role, str) else None,
+        current_remediation=verdict.get("remediation"),
+        llm_remediation=(
+            verdict.get("llm_remediation")
+            if isinstance(verdict.get("llm_remediation"), str)
+            else None
+        ),
+    )
+    if override is not None:
+        logger.info(
+            "structural_gate: R-STRUCT narrowed remediation %r→%r for feature %r "
+            "(structural_role=%s, llm_role=%s)",
+            verdict.get("remediation"),
+            override,
+            verdict.get("feature"),
+            structural_role,
+            llm_role,
+        )
+        verdict["remediation"] = override
+        verdict["structural_remediation_override"] = override
+        verdict["structural_gate_fired"] = "R-STRUCT"
 
 
 def _compose_legacy_verdict(
@@ -3186,6 +3315,19 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
             verdict.get("llm_role"),
             stat_leak_by_feature.get(feat),
         )
+        # Issue #501 — M-structure structural-remediation gate (shadow,
+        # env-gated). COEXISTS with the #508 leak-crosscheck above: this is a
+        # DISJOINT failure mode (intra-LEAK-role subtype misclassification, the
+        # #242 collider↔mediator↔descendant correlated failures), gated at the
+        # reachable remediation seam (collider narrows remediation to {drop},
+        # overriding an LLM's permissive transform/window). Computed via single-
+        # key assignment on the EXISTING verdict dict — NEVER reassign
+        # ``verdict = {...}`` (that wipes precomputed state, including #508's key
+        # just set above). The structural role is derived from the feature's
+        # authored ``FeatureContract.causal_structure`` edge list (None when
+        # un-attested → no override). ``_apply_structural_attestation`` is a
+        # pure helper; the env switch makes the override default-OFF.
+        _apply_structural_attestation(verdict, contract)
         verdicts.append(verdict)
         if verdict["severity"] == "high":
             flagged.append(feat)

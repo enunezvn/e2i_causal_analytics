@@ -123,6 +123,32 @@ LEAK_ROLES: frozenset[str] = frozenset({"mediator", "collider", "descendant"})
 ACCEPT_ROLES: frozenset[str] = frozenset({"ancestor", "confounder", "instrument"})
 VALID_LLM_ROLES: frozenset[str] = LEAK_ROLES | ACCEPT_ROLES
 
+# Issue #501 §4.1 — role→remediation maps hoisted to module-level constants so
+# both ``_role_to_remediation`` AND the structural-remediation gate read ONE
+# source of truth (no duplicated map → no drift trap; cf. the #491/#496 threshold
+# drift-trap lesson). Behaviour-identical to the prior function-local dicts
+# (pinned by ``test_role_to_remediation_map_hoist_is_behavior_identical``).
+ROLE_DEFAULT_REMEDIATION: dict[str, Remediation] = {
+    "mediator": "window",
+    "descendant": "drop",
+    "collider": "drop",
+    "ancestor": "keep_with_caveat",
+    "confounder": "keep_with_caveat",
+    "instrument": "keep_with_caveat",
+}
+# The set of remediations consistent with each role. A ``collider`` FORBIDS
+# transform/window (you cannot re-derive a collider into safety; conditioning on
+# the common effect IS the harm) → ``{drop}`` only. This is the load-bearing
+# asymmetry the structural gate exploits (#501 §4.1).
+ROLE_VALID_REMEDIATIONS: dict[str, frozenset[Remediation]] = {
+    "mediator": frozenset({"window", "transform", "drop"}),
+    "descendant": frozenset({"drop", "transform"}),
+    "collider": frozenset({"drop"}),
+    "ancestor": frozenset({"keep_with_caveat", "keep"}),
+    "confounder": frozenset({"keep_with_caveat", "keep"}),
+    "instrument": frozenset({"keep_with_caveat", "keep"}),
+}
+
 # Issue #240 Stage 3 — env kill-switch for the audit-evaluator soft-gate.
 # DEFAULT OFF: when the env var is unset or any value other than the
 # literal "1", the gate NEVER fires and ``vote`` is byte-identical to its
@@ -370,29 +396,85 @@ def _role_to_remediation(
         confounder → ``keep_with_caveat``
         instrument → ``keep_with_caveat`` (IV-validity check upstream)
     """
-    role_default: dict[str, Remediation] = {
-        "mediator": "window",
-        "descendant": "drop",
-        "collider": "drop",
-        "ancestor": "keep_with_caveat",
-        "confounder": "keep_with_caveat",
-        "instrument": "keep_with_caveat",
-    }
-    default = role_default[role]
+    # Issue #501 §4.1 — read the hoisted module-level constants (single source
+    # of truth, shared with the structural-remediation gate). Behaviour is
+    # identical to the prior function-local dicts.
+    default = ROLE_DEFAULT_REMEDIATION[role]
     if llm_remediation is None:
         return default
     # If LLM's remediation is sane for the role, prefer it.
-    valid_per_role: dict[str, frozenset[Remediation]] = {
-        "mediator": frozenset({"window", "transform", "drop"}),
-        "descendant": frozenset({"drop", "transform"}),
-        "collider": frozenset({"drop"}),
-        "ancestor": frozenset({"keep_with_caveat", "keep"}),
-        "confounder": frozenset({"keep_with_caveat", "keep"}),
-        "instrument": frozenset({"keep_with_caveat", "keep"}),
-    }
-    if llm_remediation in valid_per_role[role]:
+    if llm_remediation in ROLE_VALID_REMEDIATIONS[role]:
         return llm_remediation
     return default
+
+
+# Issue #501 §4.3 — sibling env kill-switch for the structural-remediation gate.
+# DEFAULT OFF (parallel to EVALUATOR_GATE_ENABLED_ENV): when unset or any value
+# other than the literal "1", the structural gate NEVER overrides remediation and
+# the per-feature loop is byte-identical (modulo the additive None-valued audit
+# keys). A SIBLING var (not shared with the R1 evaluator gate) so the two toggle
+# independently. Read at call time so unset → next invocation reverts.
+STRUCTURAL_GATE_ENABLED_ENV = "ADAPTIVE_VALIDITY_STRUCTURAL_GATE_ENABLED"
+
+
+def structural_gate_enabled() -> bool:
+    """True iff the #501 structural-remediation gate is enabled (env == "1")."""
+    import os
+
+    return os.environ.get(STRUCTURAL_GATE_ENABLED_ENV) == "1"
+
+
+def apply_structural_remediation_gate(
+    *,
+    structural_role: Optional[str],
+    llm_role: Optional[str],
+    current_remediation: Optional[str],
+    llm_remediation: Optional[str],
+) -> Optional[str]:
+    """Compute the structure-constrained remediation override (Issue #501 §4.1).
+
+    The REACHABLE functional seam for intra-LEAK-role disagreement is REMEDIATION,
+    not severity (all LEAK_ROLES map to ``high`` severity, so an ``info→moderate``
+    escalation is unreachable for these cases — codex iter-0 HIGH-1). When a
+    feature carries an authored structural attestation whose derived role
+    ``structural_role`` DISAGREES with the LLM's ``llm_role``, the structural role
+    is treated as authoritative for remediation:
+    ``_role_to_remediation(structural_role, llm_remediation)``.
+
+    Because ``_role_to_remediation`` already prefers the LLM's own proposal IFF it
+    lies in ``ROLE_VALID_REMEDIATIONS[structural_role]`` and falls back to
+    ``ROLE_DEFAULT_REMEDIATION[structural_role]`` otherwise, this single call
+    expresses BOTH halves:
+      * ``structural_role == "collider"`` → the LLM's ``window``/``transform`` is
+        rejected (not in ``{drop}``) → forced to ``drop``.
+      * ``structural_role == "descendant"`` → a raw LLM ``transform`` is permitted
+        (it is in ``{drop, transform}``) → a transformable descendant is NOT
+        over-restricted.
+
+    Returns the override remediation when the gate fires, else ``None`` (no
+    override — the caller keeps ``current_remediation``). The gate fires ONLY when
+    ALL hold: the env switch is on, both roles are present, and they disagree.
+    Severity is NEVER mutated here (so R1's path and the byte-identity invariant
+    are undisturbed). This function is PURE: no I/O beyond the env read in
+    ``structural_gate_enabled`` (which the caller invokes), no mutation.
+    """
+    if structural_role is None or llm_role is None:
+        return None
+    if structural_role == llm_role:
+        return None
+    if structural_role not in ROLE_DEFAULT_REMEDIATION:
+        # Defensive: an attestation-derived role outside the known taxonomy
+        # (should not happen — extract_role only returns the six roles) does
+        # not override.
+        return None
+    override = _role_to_remediation(
+        structural_role,  # type: ignore[arg-type]
+        llm_remediation,  # type: ignore[arg-type]
+    )
+    if override == current_remediation:
+        # No actual change — treat as a no-op (do not tag a gate firing).
+        return None
+    return override
 
 
 def _score_llm_verdict(
