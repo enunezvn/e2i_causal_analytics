@@ -13,10 +13,7 @@ from pathlib import Path
 import yaml  # noqa: PLC0415
 
 WORKFLOW_PATH = (
-    Path(__file__).parent.parent.parent
-    / ".github"
-    / "workflows"
-    / "ragas-evaluation.yml"
+    Path(__file__).parent.parent.parent / ".github" / "workflows" / "ragas-evaluation.yml"
 )
 
 JOB_KEY = "ragas-evaluation"
