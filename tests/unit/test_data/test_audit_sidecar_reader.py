@@ -721,8 +721,8 @@ def test_sidecar_payload_includes_schema_version_v1(tmp_path, monkeypatch):
     path = write_adaptive_verdicts_sidecar(state)
     assert path is not None
     payload = json.loads(Path(path).read_text())
-    assert payload.get("schema_version") == "1.4", (
-        f"producer must emit top-level schema_version='1.4'; got {payload.get('schema_version')!r}"
+    assert payload.get("schema_version") == "1.5", (
+        f"producer must emit top-level schema_version='1.5'; got {payload.get('schema_version')!r}"
     )
 
 
@@ -795,15 +795,15 @@ def test_reader_warns_on_unknown_schema_version_major(tmp_path, caplog):
     # ``"2.0"`` AND the reader's expected current version. Without this assertion
     # the test would still pass if the WARN stopped naming the reader's
     # expected version, which is the actionable half of the message.
-    # Issue #501 / #240: reader's current version bumped to "1.4"
+    # Issue #501 / #240: reader's current version bumped to "1.5"
     # (still MAJOR=1).
     matches = [
         rec
         for rec in caplog.records
-        if "schema_version" in rec.message and "2.0" in rec.message and "1.4" in rec.message
+        if "schema_version" in rec.message and "2.0" in rec.message and "1.5" in rec.message
     ]
     assert matches, (
-        "expected unknown-major WARN naming both '2.0' (payload) and '1.4' (reader); "
+        "expected unknown-major WARN naming both '2.0' (payload) and '1.5' (reader); "
         f"got: {[r.message for r in caplog.records]}"
     )
 
@@ -1171,3 +1171,96 @@ def test_disagreement_event_promotion_fields_default_to_none():
     )
     assert ev.would_promote_severity is None
     assert ev.evaluator_satisfied is None
+
+
+def test_sidecar_roundtrip_schema_1_5(tmp_path):
+    """Issue #501: a 1.5 sidecar carrying the four M-structure structural keys
+    round-trips onto VerdictRecord; a 1.4 sidecar (no structural keys) surfaces
+    them as None with NO warning (mirrors #508's 1.3→None handling)."""
+
+    from src.data.audit_sidecar_reader import (
+        _READER_SCHEMA_VERSION,
+        SidecarReader,
+    )
+
+    assert _READER_SCHEMA_VERSION == "1.5"
+
+    # --- 1.5 sidecar with the structural keys populated ---
+    sub = tmp_path / "exp-15"
+    sub.mkdir(parents=True)
+    payload_15 = {
+        "experiment_id": "exp-15",
+        "schema_version": "1.5",
+        "data_source": "synthetic",
+        "written_at": "2026-05-25T10:00:00Z",
+        "leakage_severity": "high",
+        "leaked_features": [],
+        "adaptive_flagged_features": [],
+        "adaptive_verdicts": [
+            {
+                "feature": "on_treatment_at_12m_flag",
+                "layer": "4",
+                "severity": "high",
+                "remediation": "drop",
+                "llm_role": "mediator",
+                "structural_role": "collider",
+                "structural_llm_disagreement": True,
+                "structural_remediation_override": "drop",
+                "structural_gate_fired": "R-STRUCT",
+            }
+        ],
+    }
+    (sub / "adaptive_verdicts_20260525T100000Z.json").write_text(json.dumps(payload_15))
+
+    reader = SidecarReader(artifacts_dir=tmp_path)
+    records = list(reader.iter_verdict_records())
+    assert len(records) == 1
+    rec = records[0]
+    assert rec.structural_role == "collider"
+    assert rec.structural_llm_disagreement is True
+    assert rec.structural_remediation_override == "drop"
+    assert rec.structural_gate_fired == "R-STRUCT"
+
+
+def test_sidecar_1_4_returns_none_for_structural_keys_no_warning(tmp_path, caplog):
+    """A 1.4 sidecar (no structural keys) surfaces all four as None and does NOT
+    emit an unknown-key warning (forward/backward-compat contract)."""
+    import logging
+
+    from src.data.audit_sidecar_reader import SidecarReader
+
+    sub = tmp_path / "exp-14"
+    sub.mkdir(parents=True)
+    payload_14 = {
+        "experiment_id": "exp-14",
+        "schema_version": "1.4",
+        "data_source": "synthetic",
+        "written_at": "2026-05-24T10:00:00Z",
+        "leakage_severity": "none",
+        "leaked_features": [],
+        "adaptive_flagged_features": [],
+        "adaptive_verdicts": [
+            {
+                "feature": "f-14",
+                "layer": "4",
+                "severity": "info",
+                "would_flag_role_leak_disagreement": None,
+            }
+        ],
+    }
+    (sub / "adaptive_verdicts_20260524T100000Z.json").write_text(json.dumps(payload_14))
+
+    reader = SidecarReader(artifacts_dir=tmp_path)
+    with caplog.at_level(logging.WARNING):
+        records = list(reader.iter_verdict_records())
+    assert len(records) == 1
+    rec = records[0]
+    assert rec.structural_role is None
+    assert rec.structural_llm_disagreement is None
+    assert rec.structural_remediation_override is None
+    assert rec.structural_gate_fired is None
+    # No unknown-key / schema warning for the absent structural keys.
+    structural_warnings = [
+        r for r in caplog.records if "structural_" in r.message and "unknown" in r.message.lower()
+    ]
+    assert not structural_warnings

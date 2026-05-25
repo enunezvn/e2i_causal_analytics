@@ -112,6 +112,83 @@ def test_extract_role_unclassified_raises() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Issue #501 — confounder-collider M-structure T → V ← U → Y (RED-first).
+# Covers #242 correlated-failure cases 1,2,7,8,9 (the dominant pharmacoepi
+# collider mode the current extractor mis-returns as ``descendant``).
+# Plan .claude/plans/501_ac35_gate_implementation_plan.md §8.1.
+# ---------------------------------------------------------------------------
+
+
+def test_extract_role_m_structure_confounder_collider() -> None:
+    """On {T→V, U→V, U→Y}, V is a confounder-collider M-structure → collider.
+
+    U is an independent second parent (NOT T-downstream) with its own arrow into
+    Y; conditioning on V opens the backdoor ``T → V ← U → Y``. The pre-#501
+    extractor returns ``descendant`` here (RED first). Cases 1,2,7,8,9.
+    """
+    G = nx.DiGraph()
+    G.add_edges_from([("T", "V"), ("U", "V"), ("U", "Y")])
+    assert extract_role("V", "T", "Y", G) == "collider"
+
+
+def test_extract_role_m_structure_does_not_fire_on_mediator_via_U() -> None:
+    """On {T→V, U→V, V→Y}, U reaches Y ONLY through V → V is a mediator.
+
+    The corrected predicate requires U to reach Y on a path that BYPASSES V; here
+    no such path exists (U → V → Y), so the M-structure rule must NOT fire and V
+    stays a mediator (on the T→V→Y path). Regression guard for the naive
+    predicate that would have wrongly returned collider.
+    """
+    G = nx.DiGraph()
+    G.add_edges_from([("T", "V"), ("U", "V"), ("V", "Y")])
+    assert extract_role("V", "T", "Y", G) == "mediator"
+
+
+def test_extract_role_m_structure_plus_on_path_is_collider() -> None:
+    """On {T→V, U→V, U→Y, V→Y}, V is both on-path AND M-structure → collider.
+
+    Pearl priority is collider > mediator: the independent U→Y arrow (bypassing
+    V) makes V a collider even though V also lies on a T→V→Y path.
+    """
+    G = nx.DiGraph()
+    G.add_edges_from([("T", "V"), ("U", "V"), ("U", "Y"), ("V", "Y")])
+    assert extract_role("V", "T", "Y", G) == "collider"
+
+
+def test_extract_role_literal_collider_still_fires_post_extension() -> None:
+    """On {T→V, Y→V}, the literal common-descendant collider survives (cases 10,11).
+
+    The M-structure rule's condition (b) excludes ``V ∈ descendants(Y)``, so the
+    literal shape is still handled by Step 1, not double-handled.
+    """
+    G = nx.DiGraph()
+    G.add_edges_from([("T", "V"), ("Y", "V")])
+    assert extract_role("V", "T", "Y", G) == "collider"
+
+
+def test_extract_role_m_structure_off_path_descendant_unaffected() -> None:
+    """On {T→V, T→Y} (no independent second parent), V stays a descendant (cases 3,4,5).
+
+    No M-structure parent exists, so the rule does not fire and the off-path
+    descendant classification is preserved.
+    """
+    G = nx.DiGraph()
+    G.add_edges_from([("T", "V"), ("T", "Y")])
+    assert extract_role("V", "T", "Y", G) == "descendant"
+
+
+def test_extract_role_m_structure_does_not_misfire_on_confounder() -> None:
+    """On {Z→T, Z→Y}, Z is a parent of T (not a T-descendant) → confounder, not collider.
+
+    Condition (a) requires V ∈ descendants(T); a confounder fails it, so the
+    M-structure rule must not fire and Step 2 (confounder) governs.
+    """
+    G = nx.DiGraph()
+    G.add_edges_from([("Z", "T"), ("Z", "Y"), ("T", "Y")])
+    assert extract_role("Z", "T", "Y", G) == "confounder"
+
+
+# ---------------------------------------------------------------------------
 # §3.2 scenario builders — distribution / structure invariants
 # ---------------------------------------------------------------------------
 

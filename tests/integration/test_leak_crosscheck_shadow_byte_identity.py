@@ -75,12 +75,26 @@ _CROSSCHECK_MODULE = importlib.import_module("src.data.leakage_role_crosscheck")
 # ---------------------------------------------------------------------------
 
 _ALL_SHADOW_KEYS_501 = frozenset({"would_flag_role_leak_disagreement"})
+# Issue #501 M-structure structural-remediation gate shadow keys (additive at
+# schema 1.5). Disjoint from the leak-crosscheck key above; both shadow paths
+# add nullable keys to every verdict, so the byte-identity strip must account
+# for them too.
+_STRUCTURAL_KEYS_501 = frozenset(
+    {
+        "structural_role",
+        "structural_llm_disagreement",
+        "structural_remediation_override",
+        "structural_gate_fired",
+    }
+)
 _ALL_SHADOW_KEYS_240 = frozenset(
     {"would_promote_severity", "would_flag_for_review", "rationale_incomplete_flag"}
 )
 _GATE_KEYS_240 = frozenset({"gate_rule_fired", "worker_severity_pre_gate"})
 # All keys introduced by Stage-1 / Stage-3 / Stage-501 shadow paths.
-_ALL_ADDITIVE_KEYS = _ALL_SHADOW_KEYS_501 | _ALL_SHADOW_KEYS_240 | _GATE_KEYS_240
+_ALL_ADDITIVE_KEYS = (
+    _ALL_SHADOW_KEYS_501 | _STRUCTURAL_KEYS_501 | _ALL_SHADOW_KEYS_240 | _GATE_KEYS_240
+)
 
 
 def _audit(

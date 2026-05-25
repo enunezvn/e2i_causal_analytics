@@ -190,7 +190,11 @@ def write_adaptive_verdicts_sidecar(state: Dict[str, Any]) -> Path | None:
             # (gate_rule_fired / worker_severity_pre_gate). Still MAJOR=1.
             # 1.4 (Issue #501 / #240): additive leakage × role cross-check
             # shadow key (would_flag_role_leak_disagreement). Still MAJOR=1.
-            "schema_version": "1.4",
+            # 1.5 (Issue #501 / #240): additive M-structure structural-
+            # remediation gate shadow keys (structural_role /
+            # structural_llm_disagreement / structural_remediation_override /
+            # structural_gate_fired). Still MAJOR=1.
+            "schema_version": "1.5",
             "experiment_id": state.get("experiment_id"),
             "data_source": state.get("data_source"),
             "written_at": ts,
