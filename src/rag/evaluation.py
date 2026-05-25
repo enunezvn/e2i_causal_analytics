@@ -561,7 +561,11 @@ def get_default_evaluation_dataset() -> List[EvaluationSample]:
                 "Call plan attainment Q4: 86% of planned HCP calls completed; target-tier (decile 8-10) attainment at 91%.",
                 "Reach: 94% of target HCPs received at least one call; frequency gap concentrated in rural territories.",
             ],
-            metadata={"kpi": "call_plan_attainment", "analysis_type": "field_force", "period": "Q4"},
+            metadata={
+                "kpi": "call_plan_attainment",
+                "analysis_type": "field_force",
+                "period": "Q4",
+            },
         ),
         EvaluationSample(
             query="What is the average time from diagnosis to therapy initiation?",
