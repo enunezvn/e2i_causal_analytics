@@ -246,3 +246,123 @@ def test_fuse_votes_populates_aggregate_telemetry():
     clf = _fuse_votes("feat", votes)
     assert clf.total_cost_usd == pytest.approx(0.08)
     assert clf.max_latency_ms == 900.0
+
+
+# ---------------------------------------------------------------------------
+# P3 — _ensemble_to_llm_verdict adapter (#242 AC3: voter/#240-gate consume it)
+# ---------------------------------------------------------------------------
+
+
+def test_adapter_full_satisfied_true_no_missed():
+    from src.data.causal_role_classifier_ensemble import (
+        _ensemble_to_llm_verdict,
+        _fuse_votes,
+    )
+
+    clf = _fuse_votes(
+        "feat",
+        (
+            _vote(
+                "anthropic/claude-sonnet-4-6",
+                "confounder",
+                remediation="keep_with_caveat",
+                mechanism="pre-index",
+            ),
+            _vote("anthropic/claude-opus-4-7", "confounder", remediation="keep_with_caveat"),
+            _vote("openai/gpt-5", "confounder", remediation="keep_with_caveat"),
+        ),
+    )
+    verdict = _ensemble_to_llm_verdict(clf)
+    assert verdict is not None
+    assert verdict.causal_role == "confounder"
+    assert verdict.recommended_remediation == "keep_with_caveat"
+    assert verdict.evaluator_audit is not None
+    assert verdict.evaluator_audit.satisfied is True
+    assert verdict.evaluator_audit.missed_considerations == ()
+    assert verdict.evaluator_audit.evaluator_model.startswith("ensemble:")
+
+
+def test_adapter_majority_satisfied_false_lists_dissent():
+    from src.data.causal_role_classifier_ensemble import (
+        _ensemble_to_llm_verdict,
+        _fuse_votes,
+    )
+
+    clf = _fuse_votes(
+        "feat",
+        (
+            _vote("anthropic/claude-sonnet-4-6", "ancestor"),  # dissenter
+            _vote("anthropic/claude-opus-4-7", "descendant"),
+            _vote("openai/gpt-5", "descendant"),
+        ),
+    )
+    verdict = _ensemble_to_llm_verdict(clf)
+    assert verdict is not None
+    assert verdict.causal_role == "descendant"
+    assert verdict.evaluator_audit is not None
+    assert verdict.evaluator_audit.satisfied is False
+    # dissenting model + its role surfaced for the split audit
+    missed = " ".join(verdict.evaluator_audit.missed_considerations)
+    assert "ancestor" in missed
+    # cap + length contract from LLMEvaluatorAudit
+    assert len(verdict.evaluator_audit.missed_considerations) <= 5
+    assert all(len(x) <= 80 for x in verdict.evaluator_audit.missed_considerations)
+
+
+def test_adapter_split_returns_none():
+    """Split = no confident verdict → adapter returns None so the voter abstains
+    (escalate to review / 'unknown'), matching single-model classify_feature."""
+    from src.data.causal_role_classifier_ensemble import (
+        _ensemble_to_llm_verdict,
+        _fuse_votes,
+    )
+
+    clf = _fuse_votes(
+        "feat",
+        (
+            _vote("anthropic/claude-sonnet-4-6", "confounder"),
+            _vote("anthropic/claude-opus-4-7", "mediator"),
+            _vote("openai/gpt-5", "collider"),
+        ),
+    )
+    assert _ensemble_to_llm_verdict(clf) is None
+
+
+def test_adapter_carries_aggregate_telemetry():
+    from src.data.causal_role_classifier_ensemble import (
+        _ensemble_to_llm_verdict,
+        _fuse_votes,
+    )
+
+    clf = _fuse_votes(
+        "feat",
+        (
+            _vote("anthropic/claude-sonnet-4-6", "descendant", cost=0.01, latency=500.0),
+            _vote("anthropic/claude-opus-4-7", "descendant", cost=0.05, latency=900.0),
+            _vote("openai/gpt-5", "descendant", cost=0.02, latency=700.0),
+        ),
+    )
+    verdict = _ensemble_to_llm_verdict(clf)
+    assert verdict is not None and verdict.evaluator_audit is not None
+    assert verdict.evaluator_audit.cost_usd == pytest.approx(0.08)
+    assert verdict.evaluator_audit.latency_ms == 900.0
+
+
+def test_adapter_evaluator_model_names_all_three_members():
+    from src.data.causal_role_classifier_ensemble import (
+        _ensemble_to_llm_verdict,
+        _fuse_votes,
+    )
+
+    clf = _fuse_votes(
+        "feat",
+        (
+            _vote("anthropic/claude-sonnet-4-6", "instrument"),
+            _vote("anthropic/claude-opus-4-7", "instrument"),
+            _vote("openai/gpt-5", "instrument"),
+        ),
+    )
+    verdict = _ensemble_to_llm_verdict(clf)
+    assert verdict is not None and verdict.evaluator_audit is not None
+    model_str = verdict.evaluator_audit.evaluator_model
+    assert "sonnet" in model_str and "opus" in model_str and "gpt-5" in model_str

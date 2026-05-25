@@ -40,6 +40,8 @@ from src.data.kg.types import (
     EnsembleAgreement,
     EnsembleClassification,
     EnsembleModelVote,
+    LLMEvaluatorAudit,
+    LLMVerdict,
 )
 
 # --- Per-provider pricing (USD per million tokens) ---------------------------
@@ -163,4 +165,75 @@ def _fuse_votes(
         healthy_votes=n_healthy,
         total_cost_usd=total_cost,
         max_latency_ms=max_latency,
+    )
+
+
+def _model_basename(model: str) -> str:
+    """Drop the provider prefix for compact audit labels (``openai/gpt-5`` →
+    ``gpt-5``)."""
+    return model.split("/")[-1]
+
+
+def _ensemble_to_llm_verdict(clf: EnsembleClassification) -> Optional[LLMVerdict]:
+    """Adapt a fused :class:`EnsembleClassification` to the ``LLMVerdict`` shape
+    the existing ``EnsembleVoter`` (and the #240 severity-gate) already consume
+    — so the ensemble plugs in with ZERO voter changes (#242 AC3).
+
+    The ensemble's agreement-state is packaged as the ``LLMEvaluatorAudit``
+    sidecar the gate reads (``evaluate_r1`` consumes ``satisfied`` +
+    ``missed_considerations``): ``full`` => ``satisfied=True`` (the gate may
+    trust the multi-vendor verdict); ``majority`` => ``satisfied=False`` with
+    the dissenting model(s) listed in ``missed_considerations``.
+
+    ``split`` (``fused_role is None``) returns ``None`` — no confident verdict,
+    so the voter abstains / escalates to review (``unknown``), matching the
+    single-model ``classify_feature`` "no confident verdict → None" contract.
+    """
+    if clf.fused_role is None:
+        return None
+
+    members = "+".join(_model_basename(v.model) for v in clf.votes)
+    evaluator_model = f"ensemble:{members}"
+    satisfied = clf.agreement == "full"
+
+    if satisfied:
+        missed: tuple[str, ...] = ()
+        notes = (
+            f"ensemble full agreement ({clf.healthy_votes}/{len(clf.votes)} models) "
+            f"on {clf.fused_role}"
+        )
+    else:
+        # majority: surface each dissenting HEALTHY vote as "<model>:<role>"
+        # (<=5 items, each <=80 chars per the LLMEvaluatorAudit contract).
+        missed = tuple(
+            f"{_model_basename(v.model)}:{v.causal_role}"[:80]
+            for v in clf.votes
+            if v.causal_role is not None and v.causal_role != clf.fused_role
+        )[:5]
+        notes = (
+            f"ensemble majority ({clf.healthy_votes} healthy) on {clf.fused_role}; "
+            f"dissent: {', '.join(missed) or 'none'}"
+        )
+
+    in_toks = [v.input_tokens for v in clf.votes if v.input_tokens is not None]
+    out_toks = [v.output_tokens for v in clf.votes if v.output_tokens is not None]
+
+    audit = LLMEvaluatorAudit(
+        satisfied=satisfied,
+        rationale_complete=satisfied,
+        missed_considerations=missed,
+        notes=notes[:500],
+        evaluator_model=evaluator_model,
+        latency_ms=clf.max_latency_ms,
+        input_tokens=sum(in_toks) if in_toks else None,
+        output_tokens=sum(out_toks) if out_toks else None,
+        cost_usd=clf.total_cost_usd,
+    )
+
+    return LLMVerdict(
+        causal_role=clf.fused_role,
+        mechanism=clf.fused_mechanism,
+        # Match the single-model loader's convention for a missing remediation.
+        recommended_remediation=clf.fused_remediation or "keep_with_caveat",
+        evaluator_audit=audit,
     )
