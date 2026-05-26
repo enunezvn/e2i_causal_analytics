@@ -11,12 +11,15 @@ p50 target — standard tail-latency budget for a 3-stream fused search).
 **Tolerance bands** (codified in
 ``tests/benchmarks/baselines/performance.json``; re-stated here so the
 test docstring carries the same numbers as the JSON, per codex iter-0 L1):
-- p50: 20% relative OR 50ms absolute (whichever wider).
-- p95: 25% relative OR 100ms absolute (whichever wider).
-The wider-of-the-two policy is `max(rel, abs)` — see
-``_within_tolerance`` for the rationale; absolute bands protect against
-noise on near-zero baselines, relative bands catch real drift at large
-baselines.
+- p50: 50% relative OR 8ms absolute (whichever wider).
+- p95: 50% relative OR 12ms absolute (whichever wider).
+The wider-of-the-two policy is `max(rel, abs)` — see ``_within_tolerance``
+for the rationale. At the local-substrate scale (p50≈3.9ms, p95≈9.09ms;
+issue #414) the absolute floors dominate and are sized to catch a real
+regression (a broken stream concurrency roughly doubles fused latency)
+while tolerating ubuntu-runner variance; the relative bands take over if a
+future re-bless lands a much larger baseline. See the JSON
+``_tolerance_rationale`` for the derivation.
 
 **Companion**: this benchmark is the latency-shaped sibling of PR #379's
 ``test_retrieval_quality.py`` (Recall@10 + MRR). Both share
