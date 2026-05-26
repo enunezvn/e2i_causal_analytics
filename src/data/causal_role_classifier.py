@@ -6382,9 +6382,9 @@ def build_compile_set() -> list[dspy.Example]:
                 "Probes partial-mediation pattern where a proxy confounder co-loads "
                 "with the mediator — structural role is mediator (on T->Y path), not "
                 "confounder (Z_proxy is already controlled). Remediation per role-to-"
-                "remediation table: mediator -> keep_with_caveat (window to pre-T)."
+                "remediation table: mediator -> window (windowed to pre-T)."
             ),
-            recommended_remediation="keep_with_caveat",
+            recommended_remediation="window",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
         # Synthetic DGP: synth_a3 descendant via late indirect chain — DGP construction is ground truth.
         dspy.Example(
