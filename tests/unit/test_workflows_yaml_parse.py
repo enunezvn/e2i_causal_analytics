@@ -9,9 +9,7 @@ import pathlib
 import pytest
 import yaml
 
-WORKFLOWS_DIR = (
-    pathlib.Path(__file__).parent.parent.parent / ".github" / "workflows"
-)
+WORKFLOWS_DIR = pathlib.Path(__file__).parent.parent.parent / ".github" / "workflows"
 
 
 def collect_workflow_files():
@@ -26,6 +24,4 @@ def test_workflow_yaml_parses(workflow_path: pathlib.Path) -> None:
     try:
         yaml.safe_load(content)
     except yaml.YAMLError as exc:
-        pytest.fail(
-            f"{workflow_path.name} failed YAML parse:\n{exc}"
-        )
+        pytest.fail(f"{workflow_path.name} failed YAML parse:\n{exc}")

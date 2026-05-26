@@ -17,6 +17,72 @@ from __future__ import annotations
 import networkx as nx
 
 
+def _is_confounder_collider_m_structure(
+    node: str,
+    treatment: str,
+    outcome: str,
+    graph: nx.DiGraph,
+) -> bool:
+    """Detect the confounder-collider M-structure ``T → V ← U → Y`` (Issue #501).
+
+    A node ``V`` is a confounder-collider M-structure w.r.t. ``(T, Y)`` iff ALL
+    of (plan ``.claude/plans/501_ac35_gate_implementation_plan.md`` §1.2):
+
+    - **(a)** ``V ∈ descendants(T)`` — T reaches V (the ``T → V`` arm).
+    - **(b)** ``V ∉ descendants(Y)`` — V is NOT a literal common-descendant of Y
+      (else the literal-collider rule, ``extract_role`` Step 1, already
+      classified it; this guards against double-handling AND against the
+      ``Y → V`` phantom-edge dodge).
+    - **(c)** there exists a parent ``U ∈ predecessors(V)``, ``U ∉ {T, Y, V}``,
+      with ``U ∉ descendants(T)`` (U is **independent** of T — not itself
+      T-downstream).
+    - **(d)** in the graph with ``V`` removed, there is a directed path
+      ``U → … → Y`` (U reaches the outcome via a path that **bypasses V** — a
+      genuine independent arrowhead into Y, opening the backdoor
+      ``T → V ← U → Y``).
+
+    The "remove V, then test U → Y" formulation (d) is what distinguishes the
+    real M-structure from the ``U → V → Y`` case where U is merely an ancestor
+    of a mediator (it would wrongly fire without the bypass test). It also makes
+    the rule **non-fakeable** per anti-mocking: the only way to make it fire is
+    to author a *real* independent parent U with a *real* ``U → Y`` path; a
+    phantom ``Y → V`` edge is caught by condition (b), and asserting a ``U → Y``
+    edge the derivation does not support is a false structural attestation, not a
+    rule-game.
+
+    This implements the discriminator the classifier already documents in prose
+    at ``src/data/causal_role_classifier.py:282-298`` ("baseline severity is
+    itself a T-Y confounder with an arrowhead into V") but ``extract_role`` never
+    coded.
+
+    This function is PURE: it does not mutate ``graph`` (condition (d) operates
+    on a copy).
+    """
+    desc_t = nx.descendants(graph, treatment)
+    # (a) T reaches V.
+    if node not in desc_t:
+        return False
+    # (b) V is not a literal common-descendant of Y (Step 1 owns that shape).
+    if node in nx.descendants(graph, outcome):
+        return False
+    # (c)+(d): find an independent second parent U that reaches Y bypassing V.
+    for parent in graph.predecessors(node):
+        if parent in (treatment, outcome, node):
+            continue
+        if parent in desc_t:
+            # U must be independent of T — not itself T-downstream.
+            continue
+        graph_no_v = graph.copy()
+        graph_no_v.remove_node(node)
+        if (
+            parent in graph_no_v
+            and outcome in graph_no_v
+            and nx.has_path(graph_no_v, parent, outcome)
+        ):
+            return True
+    return False
+
+
 def extract_role(
     node: str,
     treatment: str,
@@ -43,6 +109,16 @@ def extract_role(
     """
     # Step 1: common descendant of T and Y → collider
     if (node in nx.descendants(graph, treatment)) and (node in nx.descendants(graph, outcome)):
+        return "collider"
+
+    # Step 1.5 (Issue #501): confounder-collider M-structure T → V ← U → Y
+    # (independent second parent U into both V and Y) → collider. Placed
+    # AFTER Step 1 (literal T → V ← Y is handled there; cond. (b) excludes it)
+    # and BEFORE the mediator/descendant fork (Step 3), which would otherwise
+    # mis-return ``descendant`` for these cases. The confounder check (Step 2)
+    # is disjoint: a confounder is a *parent* of T, while the M-structure V is a
+    # *descendant* of T, so ordering Step 1.5 before Step 2 is safe.
+    if _is_confounder_collider_m_structure(node, treatment, outcome, graph):
         return "collider"
 
     # Step 2: direct parent of BOTH T and Y → confounder

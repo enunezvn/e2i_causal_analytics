@@ -130,6 +130,55 @@ class KnowableAt:
 
 
 @dataclass(frozen=True)
+class CausalStructureAttestation:
+    """Authored DAG-fragment attestation for one feature (Issue #501).
+
+    The structural *evidence* behind a feature's causal role: the minimal set of
+    edges over ``{treatment_node, outcome_node, feature_node, U…}`` from which the
+    deterministic ``src.ml.causal_role_dgp.extractor.extract_role`` (extended to
+    detect the confounder-collider M-structure ``T → V ← U → Y``) can derive the
+    role. Co-located with ``FeatureContract.causal_role`` so the role and its
+    justification live in one object (no drift trap).
+
+    **Anti-mocking contract (plan §1.3/§2).** ``edges`` MUST encode the REAL DAG
+    from the feature's derivation + literature. There is NO ``causal_role`` field
+    here on purpose: the role is *derived* from the edges by the extractor, not
+    declared, so an author cannot assert a role without writing the edges that
+    justify it. A phantom ``(outcome_node, feature_node)`` edge is caught by the
+    extractor's literal-collider rule (not the M-structure rule), and asserting a
+    second-parent ``U → Y`` edge the derivation does not support is a false
+    structural attestation — the exact violation this field forbids. If the true
+    structure is unknown, leave ``causal_structure=None`` (the honest "we don't
+    certify the structure" state), NOT an attestation with a fabricated edge.
+
+    Frozen + tuple-of-tuple edges so the whole ``FeatureContract`` stays hashable
+    and immutable, mirroring ``kg_entity_codes``.
+
+    Attributes:
+        treatment_node: the treatment label ``T`` used in ``edges``.
+        outcome_node: the outcome label ``Y`` used in ``edges``.
+        feature_node: the feature label ``V`` (the node whose role is derived).
+        edges: directed edges ``(src, dst)`` of the authored DAG fragment.
+    """
+
+    treatment_node: str
+    outcome_node: str
+    feature_node: str
+    edges: tuple[tuple[str, str], ...] = ()
+
+    def __post_init__(self) -> None:
+        # Normalize edges to tuple-of-tuples so the frozen dataclass stays
+        # hashable even when a caller passes JSON-friendly list-of-lists
+        # (mirrors FeatureContract.kg_entity_codes normalization).
+        if not isinstance(self.edges, tuple) or any(not isinstance(e, tuple) for e in self.edges):
+            object.__setattr__(
+                self,
+                "edges",
+                tuple(tuple(e) for e in self.edges),
+            )
+
+
+@dataclass(frozen=True)
 class FeatureContract:
     """Declarative spec for a single feature.
 
@@ -191,6 +240,17 @@ class FeatureContract:
     # .derive_role_attributions``; manifest sources bypass the
     # LLM-evaluator gate per C1.
     causal_role: Optional[str] = None
+    # Issue #501 — optional authored DAG-fragment attestation backing the
+    # role. ``None`` (default) means "no structural attestation" → the
+    # Layer-4 remediation gate falls back to today's Layer-1/3/4 path (no
+    # regression, dark-launchable per feature). When present, the extended
+    # ``extract_role`` derives a deterministic structural role ``R_struct``
+    # from ``causal_structure.edges`` and the Layer-4 structural-remediation
+    # gate may narrow remediation toward the structure's safe set on a
+    # structural-vs-LLM disagreement. See ``CausalStructureAttestation`` for
+    # the anti-mocking contract (edges encode the REAL DAG, role is derived
+    # not declared).
+    causal_structure: Optional[CausalStructureAttestation] = None
     # Test-only escape hatch: allows constructing a contract that DECLARES
     # itself unwindowed (so its honest knowable_at is post_index). Used in
     # validate_contract_chain tests to verify propagation. Never set in
