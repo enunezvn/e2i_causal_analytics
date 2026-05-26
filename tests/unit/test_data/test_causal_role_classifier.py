@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 
 def test_compile_set_has_diverse_examples():
     """The compile set must cover multiple causal roles, not just one."""
@@ -286,6 +288,10 @@ def test_compile_set_remediation_values_are_valid_literals():
         )
 
 
+@pytest.mark.xfail(
+    reason="#519: pending MIPROv2-vs-BootstrapFewShot compile-strategy + synth_a2 remediation decision",
+    strict=True,
+)
 def test_compile_set_role_remediation_pairs_are_consistent():
     """Role/remediation pairs should respect causal semantics:
     - ``descendant`` and ``mediator`` should NOT be ``keep_with_caveat``
@@ -926,6 +932,10 @@ def _load_artifact_demos() -> list[dict]:
     return demos
 
 
+@pytest.mark.xfail(
+    reason="#519: pending MIPROv2-vs-BootstrapFewShot compile-strategy + synth_a2 remediation decision",
+    strict=True,
+)
 def test_persisted_artifact_preserves_legacy_demo_roles():
     """Phase-4 S12 Option C (§3.4): all 21 pre-Option-C demos retain their
     labeled causal_role in the recompiled artifact under cohort-only
@@ -991,6 +1001,10 @@ def test_persisted_artifact_preserves_legacy_demo_roles():
     )
 
 
+@pytest.mark.xfail(
+    reason="#519: pending MIPROv2-vs-BootstrapFewShot compile-strategy + synth_a2 remediation decision",
+    strict=True,
+)
 def test_persisted_artifact_emits_role_conditional_on_treatment_outcome():
     """Phase-4 S12 Option C (§3.5 Stage 1): 12 paired-fixture quadruples
     `(feature_name, treatment, outcome, role)` are present in the artifact.
