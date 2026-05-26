@@ -25,22 +25,30 @@
   "hybrid_retriever_search_p50": {
     "_target_ms": 200.0,
     "_target_rationale": "Issue #391 PERFORMANCE box 2: '< 200ms for fused search'. Live retriever in CI skips when SUPABASE_URL/OPENAI_API_KEY absent; baseline is blessed on the first environment that has both.",
-    "_placeholder_rationale": "Remains at 0.0 (placeholder) until a CI run has SUPABASE_URL + SUPABASE_KEY + OPENAI_API_KEY available — the test currently skips with `requires_supabase` + `sk-*` shape check. The pre-#403 36-query dev-box run (no sk-* OPENAI key — dense stream degraded gracefully to []) produced p50~336ms which was NOT representative; we deliberately do NOT re-bless from a degraded-stream measurement. Re-bless tracked in GH #414 — when secrets land, follow the same 3-run methodology used for the cascade + bm25 baselines (see _methodology above).",
-    "_followup_issue": 414,
-    "mean_ms": 0.0,
-    "tolerance_pct": 20.0,
-    "tolerance_abs_ms": 50.0,
-    "_tolerance_rationale": "20% relative OR 50ms absolute. Wider band than cascade because network round-trips dominate; absolute band protects against jitter. Bands carried forward from PR #401 pending CI re-bless (GH #414)."
+    "_ci_observation": "3 CI workflow_dispatch runs on feat/414-hybrid-latency-local-substrate (run IDs 26424907910, 26424905458, 26424903181) against the local pgvector substrate (deterministic embedder, REAL hybrid_vector_search / hybrid_fulltext_search SQL fns — NO Supabase/OpenAI, NO network) produced per-run p50 [4.23, 3.90, 3.71]ms; med-of-meds=3.90ms, stdev=0.26ms (6.7%). Absolute ms reflect Python/asyncio + local pgvector query cost on ubuntu-latest, NOT production network latency — this baseline guards CODE-latency regressions (issue #414). The 200ms _target_ms remains the documentation anchor for the production SLA.",
+    "_blessed_from_ci_runs": [
+      26424907910,
+      26424905458,
+      26424903181
+    ],
+    "mean_ms": 3.9,
+    "tolerance_pct": 50.0,
+    "tolerance_abs_ms": 8.0,
+    "_tolerance_rationale": "50% relative OR 8ms absolute (whichever wider) → fails above ~11.9ms, ~3x the 3.9ms baseline. Sized from the observed cross-run stdev (0.26ms / 6.7%) with margin for ubuntu-runner variance: catches a real regression (e.g. broken dense/sparse concurrency roughly doubles fused latency) while tolerating CI noise. Derived from the #414 substrate runs, NOT the PR #401 placeholder defaults."
   },
   "hybrid_retriever_search_p95": {
     "_target_ms": 500.0,
     "_target_rationale": "Tail-latency budget: p95 should not exceed 2.5x the p50 target (200ms). 500ms is a conservative tail-latency ceiling for a 3-stream fused search.",
-    "_placeholder_rationale": "Remains at 0.0 (placeholder) for the same reason as hybrid_retriever_search_p50 — see that entry's _placeholder_rationale. The pre-#403 36-query dev-box run produced p95~1041ms (with degraded dense stream); NOT representative; we deliberately do NOT re-bless from that data. Re-bless tracked in GH #414.",
-    "_followup_issue": 414,
-    "mean_ms": 0.0,
-    "tolerance_pct": 25.0,
-    "tolerance_abs_ms": 100.0,
-    "_tolerance_rationale": "25% relative OR 100ms absolute. p95 is noisier than p50 — wider tolerance is appropriate. Bands carried forward from PR #401 pending CI re-bless (GH #414)."
+    "_ci_observation": "Same 3 CI runs as hybrid_retriever_search_p50 (IDs 26424907910, 26424905458, 26424903181). Per-run p95 [9.90, 9.09, 8.94]ms; med-of-meds=9.09ms, stdev=0.52ms (5.7%). Local-substrate measurement (no network); guards code-latency tail regressions, not the production 500ms SLA (_target_ms).",
+    "_blessed_from_ci_runs": [
+      26424907910,
+      26424905458,
+      26424903181
+    ],
+    "mean_ms": 9.09,
+    "tolerance_pct": 50.0,
+    "tolerance_abs_ms": 12.0,
+    "_tolerance_rationale": "50% relative OR 12ms absolute (whichever wider) → fails above ~21ms, ~2.3x the 9.09ms baseline. Sized from observed cross-run stdev (0.52ms / 5.7%) plus runner-variance margin; the p95 tail is slightly noisier than p50 so the absolute floor is larger. Derived from the #414 substrate runs."
   },
   "bm25_build_1k": {
     "_ci_observation": "3 CI runs produced per-run median_ms [20.55, 21.08, 21.07]; med-of-meds=21.07ms, stdev across runs=0.30ms (1.42%), range across 9 individual timings=2.01ms (20.44–22.45). Build time for 1000-doc corpus via the reference Python BM25 implementation; corpus repeats from synthetic_corpus.jsonl to fill the slice.",
