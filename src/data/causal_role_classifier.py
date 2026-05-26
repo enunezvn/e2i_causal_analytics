@@ -1434,16 +1434,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="confounder",
             mechanism=(
-                "Classical (T=iptacopan_init, Y=ldh_normalization_180d) confounder. "
-                "Z->T arrow: low pre-index haptoglobin (free-hemoglobin scavenger depletion) "
-                "marks severe intravascular hemolysis and drives iptacopan-vs-anti-C5 "
-                "candidacy per Brodsky 2014 (PMID 25237199; doi:10.1182/blood-2014-02-522128). "
-                "Z->Y arrow: deeper baseline hemolysis predicts post-index hemolytic-marker "
-                "normalization independently of treatment choice. why_not_duplicate: golden "
-                "neighbor baseline_ldh_x_uln_preindex uses source=LABS_HEMOLYSIS with "
-                "aggregation=mean(LDH/ULN); this entry pulls a DIFFERENT analyte (haptoglobin, "
-                "not LDH) measuring upstream hemoglobin-scavenger depletion (LDH measures "
-                "downstream cell lysis), with aggregation=min-of-haptoglobin/LLN-ratio."
+                "Classical (T=iptacopan_init, Y=ldh_normalization_180d) confounder. Z->T arrow: low pre-index haptoglobin (free-hemoglobin scavenger depletion) marks severe intravascular hemolysis and drives iptacopan-vs-anti-C5 candidacy per Brodsky 2014 (PMID 25237199; doi:10.1182/blood-2014-02-522128). Z->Y arrow: deeper baseline hemolysis predicts post-index hemolytic-marker normalization independently of treatment choice. why_not_duplicate: the nearest same-cohort golden-set neighbor uses source=LABS_HEMOLYSIS with aggregation=mean(LDH/ULN); this entry pulls a DIFFERENT analyte (haptoglobin, not LDH) measuring upstream hemoglobin-scavenger depletion (LDH measures downstream cell lysis), with aggregation=min-of-haptoglobin/LLN-ratio."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -1460,18 +1451,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="ancestor",
             mechanism=(
-                "Ancestor of (T=iptacopan_init, Y=ldh_normalization_180d). Lifetime cumulative "
-                "days-on-anti-C5 before iptacopan-switch reflects underlying disease chronicity "
-                "per Risitano 2020 (PMID 33347547; doi:10.1016/S2352-3026(20)30308-1) — long "
-                "historical exposure indexes entrenched chronic PNH phenotype, upstream of "
-                "both the immediate switch decision and post-index response. why_not_duplicate: "
-                "golden neighbor prior_anti_c5_inhibitor_use_flag_preindex is BINARY any-use "
-                "(aggregation=any) over 730d window, labeled CONFOUNDER (captures prior-"
-                "treatment-failure pathway); this entry is CONTINUOUS lifetime sum-of-days "
-                "(aggregation=sum, unlimited preindex window), labeled ANCESTOR (indexes "
-                "disease chronicity upstream of the immediate switch decision, not its "
-                "proximal confounder). Different role + different aggregation + different "
-                "window teaches an ancestor-vs-confounder boundary the golden set lacks."
+                "Ancestor of (T=iptacopan_init, Y=ldh_normalization_180d). Lifetime cumulative days-on-anti-C5 before iptacopan-switch reflects underlying disease chronicity per Risitano 2020 (PMID 33347547; doi:10.1016/S2352-3026(20)30308-1) — long historical exposure indexes entrenched chronic PNH phenotype, upstream of both the immediate switch decision and post-index response. why_not_duplicate: the nearest same-cohort golden-set neighbor is BINARY any-use (aggregation=any) over 730d window; this entry is CONTINUOUS lifetime sum-of-days (aggregation=sum, unlimited preindex window), labeled ANCESTOR (indexes disease chronicity upstream of the immediate switch decision, not its proximal confounder). Different role + different aggregation + different window teaches an ancestor-vs-confounder boundary the golden set lacks."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -1488,16 +1468,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="descendant",
             mechanism=(
-                "Descendant of T=iptacopan_init: post-index burden of hemolysis-coded ED days. "
-                "T->V arrow: treatment efficacy modulates incident hemolytic crises that drive "
-                "ED utilization per Hill 2020 (PMID 31816102). No V->Y arrow back to LDH "
-                "normalization. Standard remediation per Hernan 2016 (PMID 27176981) is drop "
-                "from any (T,Y) effect-estimation adjustment set. why_not_duplicate: golden "
-                "neighbor pnh_related_hospitalizations_365d_postindex_count uses "
-                "source=CLAIMS_HOSPITALIZATION, agg=count of events over 365d. This entry "
-                "changes SOURCE TABLE (ED_VISITS vs HOSPITALIZATIONS), SETTING (emergency "
-                "outpatient vs inpatient), AGGREGATION (sum-of-days vs count-of-events), "
-                "and narrows WINDOW to 90d on a clinically distinct event type."
+                "Descendant of T=iptacopan_init: post-index burden of hemolysis-coded ED days. T->V arrow: treatment efficacy modulates incident hemolytic crises that drive ED utilization per Hill 2020 (PMID 31816102). No V->Y arrow back to LDH normalization. Standard remediation per Hernan 2016 (PMID 27176981) is drop from any (T,Y) effect-estimation adjustment set. why_not_duplicate: the nearest same-cohort golden-set neighbor uses source=CLAIMS_HOSPITALIZATION, agg=count of events over 365d. This entry changes SOURCE TABLE (ED_VISITS vs HOSPITALIZATIONS), SETTING (emergency outpatient vs inpatient), AGGREGATION (sum-of-days vs count-of-events), and narrows WINDOW to 90d on a clinically distinct event type."
             ),
             recommended_remediation="drop",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -1514,16 +1485,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="confounder",
             mechanism=(
-                "Classical (T=ribociclib_add, Y=pfs_event_24m) confounder. Nottingham SBR "
-                "grade (composite of tubule formation + nuclear pleomorphism + mitotic count, "
-                "binned Grade 1/2/3) per Elston-Ellis 1991 (PMID 1995317) and Rakha 2019 "
-                "(PMID 27557947). Z->T: higher grade drives AI+CDK4/6 escalation over "
-                "AI-mono. Z->Y: higher grade predicts progression independently. "
-                "why_not_duplicate: golden neighbors er_percent_preindex and "
-                "ki67_index_percent_preindex are SINGLE-MARKER CONTINUOUS (most-recent assay "
-                "value). This entry is COMPOSITE CATEGORICAL grade aggregated as MODE across "
-                "diagnostic reports, with derivation_inputs that are the three SBR subscores "
-                "(not a single immunohistochemical marker)."
+                "Classical (T=ribociclib_add, Y=pfs_event_24m) confounder. Nottingham SBR grade (composite of tubule formation + nuclear pleomorphism + mitotic count, binned Grade 1/2/3) per Elston-Ellis 1991 (PMID 1995317) and Rakha 2019 (PMID 27557947). Z->T: higher grade drives AI+CDK4/6 escalation over AI-mono. Z->Y: higher grade predicts progression independently. why_not_duplicate: the nearest same-cohort golden-set neighbors are SINGLE-MARKER CONTINUOUS (most-recent assay value). This entry is COMPOSITE CATEGORICAL grade aggregated as MODE across diagnostic reports, with derivation_inputs that are the three SBR subscores (not a single immunohistochemical marker)."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -1540,16 +1502,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="confounder",
             mechanism=(
-                "Classical (T=ribociclib_add, Y=pfs_event_24m) confounder. Pre-index sum-"
-                "of-days letrozole exposure reflects prior endocrine-therapy intensity per "
-                "Hortobagyi 2021 MONALEESA-2 OS (PMID 33513289; doi:10.1056/NEJMoa2114663). "
-                "Z->T: longer prior AI-backbone exposure drives ribociclib add-on timing. "
-                "Z->Y: longer prior letrozole predicts secondary endocrine resistance, "
-                "depressing PFS regardless of CDK4/6 add. why_not_duplicate: golden neighbor "
-                "prior_cdk46_lines_count counts CDK4/6 LINES (prior failure-on-class). This "
-                "entry counts AROMATASE-INHIBITOR DURATION (orthogonal drug class, different "
-                "MoA: estrogen-synthesis blockade vs CDK4/6 inhibition), aggregated as "
-                "SUM-OF-DAYS not COUNT-OF-LINES — different drug class + different aggregation."
+                "Classical (T=ribociclib_add, Y=pfs_event_24m) confounder. Pre-index sum-of-days letrozole exposure reflects prior endocrine-therapy intensity per Hortobagyi 2021 MONALEESA-2 OS (PMID 33513289; doi:10.1056/NEJMoa2114663). Z->T: longer prior AI-backbone exposure drives ribociclib add-on timing. Z->Y: longer prior letrozole predicts secondary endocrine resistance, depressing PFS regardless of CDK4/6 add. why_not_duplicate: the nearest same-cohort golden-set neighbor counts CDK4/6 LINES (prior failure-on-class). This entry counts AROMATASE-INHIBITOR DURATION (orthogonal drug class, different MoA: estrogen-synthesis blockade vs CDK4/6 inhibition), aggregated as SUM-OF-DAYS not COUNT-OF-LINES — different drug class + different aggregation."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -1566,16 +1519,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="descendant",
             mechanism=(
-                "Descendant of T=ribociclib_add. T->V: ribociclib-induced myelosuppression "
-                "drives febrile neutropenia episodes per Tripathy 2019 MONALEESA-7 safety "
-                "(PMID 31526833). CLAIMS-EVENT-BASED (ICD D70.x co-occurring with R50.9 "
-                "within 7d), not lab-value-based. No V->Y arrow back to PFS at 24m. "
-                "Remediation per Hernan 2000 (PMID 10955408) is drop from (T,Y) adjustment "
-                "set. why_not_duplicate: golden neighbor post_index_neutropenia_max_grade_90d "
-                "is LAB-VALUE-BASED (ANC graded by CTCAE) aggregated as WORST-VALUE over 90d "
-                "and labeled MEDIATOR (dose-intensity path). This entry is CLAIM-EVENT-BASED "
-                "(D70.x + R50.9 conjunction) aggregated as COUNT-OF-EPISODES over 180d, "
-                "labeled DESCENDANT — teaches the lab-vs-claim boundary within neutropenia."
+                "Descendant of T=ribociclib_add. T->V: ribociclib-induced myelosuppression drives febrile neutropenia episodes per Tripathy 2019 MONALEESA-7 safety (PMID 31526833). CLAIMS-EVENT-BASED (ICD D70.x co-occurring with R50.9 within 7d), not lab-value-based. No V->Y arrow back to PFS at 24m. Remediation per Hernan 2000 (PMID 10955408) is drop from (T,Y) adjustment set. why_not_duplicate: the nearest same-cohort golden-set neighbor is LAB-VALUE-BASED (ANC graded by CTCAE) aggregated as WORST-VALUE over 90d. This entry is CLAIM-EVENT-BASED (D70.x + R50.9 conjunction) aggregated as COUNT-OF-EPISODES over 180d, labeled DESCENDANT — teaches the lab-vs-claim boundary within neutropenia."
             ),
             recommended_remediation="drop",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -1593,18 +1537,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="mediator",
             mechanism=(
-                "Targets clinical-mediator-vs-biomarker-mediator boundary: the classifier "
-                "mistakes PRO-based clinical activity scores for descendants because they "
-                "look outcome-like. This entry teaches that UAS7 (weekly-sum patient-reported "
-                "urticaria-activity score per Saini 2021, PMID 33321141) sits on the "
-                "T->M_clinical->Y mediation path between remibrutinib_init and "
-                "uas7_remission_180d, not downstream of Y. why_not_duplicate: golden mediators "
-                "delta_basophil_activation_test_cd63_pct_28_56d and "
-                "delta_anti_fcepsilon_ri_igg_titer_post_treatment_60_90d are LAB-BASED "
-                "biomarker DELTAS at sub-90d windows on `lab_results`. This entry is a "
-                "PATIENT-REPORTED CLINICAL ACTIVITY SCORE at the 180d window from "
-                "`ehr_assessments` — clinical-mediator vs biomarker-mediator. Methods anchor "
-                "PMID 10955408 (Hernan 2000 MSM)."
+                "Targets clinical-mediator-vs-biomarker-mediator boundary: the classifier mistakes PRO-based clinical activity scores for descendants because they look outcome-like. This entry teaches that UAS7 (weekly-sum patient-reported urticaria-activity score per Saini 2021, PMID 33321141) sits on the T->M_clinical->Y mediation path between remibrutinib_init and uas7_remission_180d, not downstream of Y. why_not_duplicate: the nearest same-cohort golden-set neighbors are LAB-BASED biomarker DELTAS at sub-90d windows on `lab_results`. This entry is a PATIENT-REPORTED CLINICAL ACTIVITY SCORE at the 180d window from `ehr_assessments` — clinical-mediator vs biomarker-mediator. Methods anchor PMID 10955408 (Hernan 2000 MSM)."
             ),
             recommended_remediation="window",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -1659,9 +1592,9 @@ def build_compile_set() -> list[dspy.Example]:
                 "(no variation among compliant initiators) and V has no direct path to "
                 "ldh_normalization_180d. With neither a discriminating V->T arrow nor V->Y, V "
                 "sits upstream of T as a pre-anchor protocol-compliance ancestor "
-                "(Greenland-Pearl-Robins 1999 PMID 9888278). why_not_duplicate: golden PNH "
-                "has no vaccination-status entry; nearest neighbor prior_thrombotic_event_flag "
-                "is a true confounder from DIAGNOSIS_HISTORY with different source + role."
+                "(Greenland-Pearl-Robins 1999 PMID 9888278). why_not_duplicate: the golden PNH "
+                "set has no vaccination-status entry; the nearest golden-set neighbor draws from "
+                "DIAGNOSIS_HISTORY (a prior-event flag) with a different source + construct."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -1687,7 +1620,7 @@ def build_compile_set() -> list[dspy.Example]:
                 "NCCN 2021 (PMID 33119927) drives CDK4/6-line selection: V->T (de-novo more "
                 "likely to receive 1L CDK4/6) AND V->Y (independent progression biology). "
                 "why_not_duplicate: iter-0 candidate was a CONTINUOUS time-from-primary-dx in "
-                "the same recurrence-biology family as BC golden visceral_disease_flag. This "
+                "the same recurrence-biology family as its nearest BC golden-set neighbor. This "
                 "REPLACEMENT is a BINARY classification from new source pathology_staging_summary."
             ),
             recommended_remediation="keep_with_caveat",
@@ -1927,16 +1860,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="confounder",
             mechanism=(
-                "Slope of LDH/ULN trajectory over the 180d immediately pre-index reflects "
-                "trajectory of hemolytic activity at the decision point. Z->T: rising-slope "
-                "patients more often switched to iptacopan after suboptimal anti-C5 control "
-                "(Peffault de Latour 2024 APPLY-PNH PMID 38477987; "
-                "doi:10.1056/NEJMoa2308695). Z->Y: rising baseline trajectory predicts post-"
-                "treatment response magnitude (responders revert from higher pre-treatment "
-                "set-point). why_not_duplicate: golden baseline_ldh_x_uln_preindex is the "
-                "POINT-IN-TIME ratio at index; this entry is the DERIVATIVE (slope over 180d "
-                "via linear regression), capturing temporal dynamics rather than level. "
-                "Methods anchor Brookhart 2010 PMID 30516102 confounder selection. Remediation per role-to-remediation table: confounder → keep_with_caveat."
+                "Slope of LDH/ULN trajectory over the 180d immediately pre-index reflects trajectory of hemolytic activity at the decision point. Z->T: rising-slope patients more often switched to iptacopan after suboptimal anti-C5 control (Peffault de Latour 2024 APPLY-PNH PMID 38477987; doi:10.1056/NEJMoa2308695). Z->Y: rising baseline trajectory predicts post-treatment response magnitude (responders revert from higher pre-treatment set-point). why_not_duplicate: the nearest golden-set neighbor is the POINT-IN-TIME ratio at index; this entry is the DERIVATIVE (slope over 180d via linear regression), capturing temporal dynamics rather than level. Methods anchor Brookhart 2010 PMID 30516102 confounder selection. Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -1978,14 +1902,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="confounder",
             mechanism=(
-                "Pre-index detection of C3-coated PNH RBCs flags extravascular hemolysis — "
-                "a residual disease driver in anti-C5-treated patients. Z->T: presence of "
-                "EVH-by-C3-binding is the canonical clinical reason for proximal inhibitor "
-                "switch (Lee 2023 ALPHA PMID 38030318; doi:10.1016/S2352-3026(23)00315-0). "
-                "Z->Y: EVH burden at baseline predicts post-treatment hemoglobin recovery "
-                "magnitude. why_not_duplicate: golden c3_deposition_pnh_rbc_pct_d90_postindex "
-                "is POSTINDEX continuous measurement labeled MEDIATOR; this is PREINDEX "
-                "binary flag labeled CONFOUNDER — temporal positioning is reversed. Remediation per role-to-remediation table: confounder → keep_with_caveat."
+                "Pre-index detection of C3-coated PNH RBCs flags extravascular hemolysis — a residual disease driver in anti-C5-treated patients. Z->T: presence of EVH-by-C3-binding is the canonical clinical reason for proximal inhibitor switch (Lee 2023 ALPHA PMID 38030318; doi:10.1016/S2352-3026(23)00315-0). Z->Y: EVH burden at baseline predicts post-treatment hemoglobin recovery magnitude. why_not_duplicate: the nearest golden-set neighbor is POSTINDEX continuous measurement; this is PREINDEX binary flag labeled CONFOUNDER — temporal positioning is reversed. Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2002,15 +1919,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="confounder",
             mechanism=(
-                "Erythrocyte (Type III RBC) clone size indexes the proportion of GPI-deficient "
-                "red cells susceptible to complement-mediated lysis. Z->T: large erythrocyte "
-                "clone justifies aggressive proximal complement inhibition per Brodsky 2021 "
-                "(PMID 33512400; doi:10.1182/blood.2019003812). Z->Y: erythrocyte-clone-size "
-                "predicts hemoglobin response ceiling. why_not_duplicate: golden "
-                "pnh_clone_size_granulocyte_pct_preindex measures GRANULOCYTE clone (a "
-                "different cell lineage tied to disease activity but not direct lysis "
-                "target); this measures the lysis-target erythrocyte fraction — distinct "
-                "lineage, distinct causal pathway. Remediation per role-to-remediation table: confounder → keep_with_caveat."
+                "Erythrocyte (Type III RBC) clone size indexes the proportion of GPI-deficient red cells susceptible to complement-mediated lysis. Z->T: large erythrocyte clone justifies aggressive proximal complement inhibition per Brodsky 2021 (PMID 33512400; doi:10.1182/blood.2019003812). Z->Y: erythrocyte-clone-size predicts hemoglobin response ceiling. why_not_duplicate: the nearest golden-set neighbor measures GRANULOCYTE clone (a different cell lineage tied to disease activity but not direct lysis target); this measures the lysis-target erythrocyte fraction — distinct lineage, distinct causal pathway. Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2052,16 +1961,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="ancestor",
             mechanism=(
-                "Years from first PNH diagnosis to index reflects disease tenure — an "
-                "upstream patient characteristic affecting both treatment choice and "
-                "response distribution. Z->T,Y but effect on (T,Y) is largely exhausted by "
-                "intermediate confounders (prior anti-C5 days, clone size, transfusion "
-                "history); this entry teaches the ANCESTOR role per Greenland-Pearl-Robins "
-                "1999 (PMID 9888278) where d-separation by downstream confounders blocks "
-                "the direct Z arrows. Schrezenmeier 2022 (PMID 35699625; doi:10.20452/pamw.16271) "
-                "documents disease-tenure heterogeneity. why_not_duplicate: golden "
-                "age_at_index_years is biological age (intrinsic patient attribute); this "
-                "is disease tenure (time-since-diagnosis); orthogonal upstream variables. Remediation per role-to-remediation table: ancestor → keep_with_caveat."
+                "Years from first PNH diagnosis to index reflects disease tenure — an upstream patient characteristic affecting both treatment choice and response distribution. Z->T,Y but effect on (T,Y) is largely exhausted by intermediate confounders (prior anti-C5 days, clone size, transfusion history); this entry teaches the ANCESTOR role per Greenland-Pearl-Robins 1999 (PMID 9888278) where d-separation by downstream confounders blocks the direct Z arrows. Schrezenmeier 2022 (PMID 35699625; doi:10.20452/pamw.16271) documents disease-tenure heterogeneity. why_not_duplicate: the nearest golden-set neighbor is biological age (intrinsic patient attribute); this is disease tenure (time-since-diagnosis); orthogonal upstream variables. Remediation per role-to-remediation table: ancestor → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2078,23 +1978,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="instrument",
             mechanism=(
-                "Brookhart-Wang short-term first-initiation IV: binary flag for whether "
-                "index_date falls within 90 days of iptacopan FDA approval (December 2023, "
-                "per APPLY-PNH pivotal trial PMID 38477987; doi:10.1056/NEJMoa2308695). "
-                "Early adopters in the post-approval window are driven by physician awareness "
-                "of trial results and formulary activation, not by patient clinical severity "
-                "differences from later initiators. Z->T: first-mover prescribers activate "
-                "iptacopan immediately post-approval due to clinical trial familiarity "
-                "(Brookhart 2006 PMID 30516102 prescriber-tendency IV framework). "
-                "Z->Y exclusion-restriction: calendar proximity to approval date has no "
-                "direct biological mechanism on hemoglobin response; all effect is mediated "
-                "through treatment initiation only — standard regulatory-discontinuity IV. "
-                "why_not_duplicate: golden post_iptacopan_fda_approval_calendar_indicator "
-                "is a monotone post/pre binary (all post-approval time treated equally); "
-                "this is a SHORT-TERM WINDOW (90d adoption burst) capturing only the "
-                "first-mover cohort — distinct temporal granularity, distinct exogeneity "
-                "argument (early-adopter prescriber behavior vs general post-approval era). "
-                "Remediation per role-to-remediation table: instrument → keep_with_caveat."
+                "Brookhart-Wang short-term first-initiation IV: binary flag for whether index_date falls within 90 days of iptacopan FDA approval (December 2023, per APPLY-PNH pivotal trial PMID 38477987; doi:10.1056/NEJMoa2308695). Early adopters in the post-approval window are driven by physician awareness of trial results and formulary activation, not by patient clinical severity differences from later initiators. Z->T: first-mover prescribers activate iptacopan immediately post-approval due to clinical trial familiarity (Brookhart 2006 PMID 30516102 prescriber-tendency IV framework). Z->Y exclusion-restriction: calendar proximity to approval date has no direct biological mechanism on hemoglobin response; all effect is mediated through treatment initiation only — standard regulatory-discontinuity IV. why_not_duplicate: the nearest golden-set neighbor is a monotone post/pre binary (all post-approval time treated equally); this is a SHORT-TERM WINDOW (90d adoption burst) capturing only the first-mover cohort — distinct temporal granularity, distinct exogeneity argument (early-adopter prescriber behavior vs general post-approval era). Remediation per role-to-remediation table: instrument → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2111,15 +1995,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="confounder",
             mechanism=(
-                "Total lifetime days exposed to pegcetacoplan (another proximal-complement "
-                "inhibitor) before iptacopan initiation. Z->T: prior pegcetacoplan failure / "
-                "discontinuation drives subsequent iptacopan switch per real-world cohort "
-                "(PMID 38348608; doi:10.1002/ajh.27242). Z->Y: pegcetacoplan exposure history "
-                "shapes hemolytic dynamics independently of iptacopan effect. "
-                "why_not_duplicate: golden prior_anti_c5_inhibitor_use_flag_preindex is a "
-                "BINARY flag for ANY anti-C5 drug-class use; this is CONTINUOUS days for the "
-                "SPECIFIC C3 inhibitor pegcetacoplan (a different mechanism class entirely — "
-                "C3 vs C5); distinct drug class + continuous vs binary. Remediation per role-to-remediation table: confounder → keep_with_caveat."
+                "Total lifetime days exposed to pegcetacoplan (another proximal-complement inhibitor) before iptacopan initiation. Z->T: prior pegcetacoplan failure / discontinuation drives subsequent iptacopan switch per real-world cohort (PMID 38348608; doi:10.1002/ajh.27242). Z->Y: pegcetacoplan exposure history shapes hemolytic dynamics independently of iptacopan effect. why_not_duplicate: the nearest golden-set neighbor is a BINARY flag for ANY anti-C5 drug-class use; this is CONTINUOUS days for the SPECIFIC C3 inhibitor pegcetacoplan (a different mechanism class entirely — C3 vs C5); distinct drug class + continuous vs binary. Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2163,15 +2039,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="confounder",
             mechanism=(
-                "Mean hemoglobin over the 30d immediately pre-index reflects baseline anemia "
-                "depth at the treatment decision. Z->T: lower baseline Hb is a clinical "
-                "trigger for iptacopan switch per Hillmen 2024 (PMID 39079163; "
-                "doi:10.1371/journal.pone.0306407). Z->Y: baseline Hb sets the lower bound "
-                "for hemoglobin response of >=2 g/dL improvement, making the endpoint more "
-                "achievable for lower-baseline patients. why_not_duplicate: golden "
-                "baseline_ldh_x_uln_preindex measures HEMOLYTIC ACTIVITY; this measures "
-                "HEMATOLOGIC RESERVE (the carrying capacity from which response is measured) "
-                "— complementary axis of pre-treatment patient characterization. Remediation per role-to-remediation table: confounder → keep_with_caveat."
+                "Mean hemoglobin over the 30d immediately pre-index reflects baseline anemia depth at the treatment decision. Z->T: lower baseline Hb is a clinical trigger for iptacopan switch per Hillmen 2024 (PMID 39079163; doi:10.1371/journal.pone.0306407). Z->Y: baseline Hb sets the lower bound for hemoglobin response of >=2 g/dL improvement, making the endpoint more achievable for lower-baseline patients. why_not_duplicate: the nearest golden-set neighbor measures HEMOLYTIC ACTIVITY; this measures HEMATOLOGIC RESERVE (the carrying capacity from which response is measured) — complementary axis of pre-treatment patient characterization. Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2188,15 +2056,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="confounder",
             mechanism=(
-                "Composite z-score of alternative-pathway amplification markers (C3 split "
-                "products + factor B consumption) measured pre-index. Z->T: high AP activity "
-                "drives proximal inhibitor (factor B-blocking iptacopan) selection per "
-                "Versino-Fattizzo 2024 (PMID 38622956; doi:10.1111/ijlh.14281). Z->Y: AP "
-                "amplification predicts magnitude of complement-blockade response. "
-                "why_not_duplicate: golden c3_deposition_pnh_rbc_pct_d90_postindex is "
-                "POSTINDEX C3 binding to RBCs (mediator); this is PREINDEX AP-loop activity "
-                "biomarker panel (confounder) — different time-position, different physical "
-                "measurement (soluble AP markers vs cell-surface C3 binding). Remediation per role-to-remediation table: confounder → keep_with_caveat."
+                "Composite z-score of alternative-pathway amplification markers (C3 split products + factor B consumption) measured pre-index. Z->T: high AP activity drives proximal inhibitor (factor B-blocking iptacopan) selection per Versino-Fattizzo 2024 (PMID 38622956; doi:10.1111/ijlh.14281). Z->Y: AP amplification predicts magnitude of complement-blockade response. why_not_duplicate: the nearest golden-set neighbor is a POSTINDEX measurement of C3 binding to RBCs; this is a PREINDEX AP-loop activity biomarker panel — different time-position, different physical measurement (soluble AP markers vs cell-surface C3 binding). Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2213,17 +2073,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="mediator",
             mechanism=(
-                "Change in FACIT-Fatigue score from baseline to d90 sits on the directed "
-                "path T -> FACIT_change -> Y for outcomes involving Hb-related symptom "
-                "endpoints. T->M: iptacopan reduces hemolysis and improves fatigue at d90 "
-                "per APPLY-PNH (PMID 38477987; doi:10.1056/NEJMoa2308695). M->Y: fatigue "
-                "improvement reflects oxygen-carrying recovery preceding the 180d Hb "
-                "endpoint. Adjusting for M blocks indirect effect — remediation is window "
-                "(restrict to pre-treatment covariates) per Hernan 2004 (PMID 14760119). "
-                "why_not_duplicate: golden facit_fatigue_response_180d_postindex_flag is "
-                "180d BINARY threshold response labeled COLLIDER (response status itself); "
-                "this is CONTINUOUS d90 DELTA labeled MEDIATOR (intermediate causal path); "
-                "different time, different aggregation, different role. Remediation per role-to-remediation table: mediator → window (restrict to pre-treatment window)."
+                "Change in FACIT-Fatigue score from baseline to d90 sits on the directed path T -> FACIT_change -> Y for outcomes involving Hb-related symptom endpoints. T->M: iptacopan reduces hemolysis and improves fatigue at d90 per APPLY-PNH (PMID 38477987; doi:10.1056/NEJMoa2308695). M->Y: fatigue improvement reflects oxygen-carrying recovery preceding the 180d Hb endpoint. Adjusting for M blocks indirect effect — remediation is window (restrict to pre-treatment covariates) per Hernan 2004 (PMID 14760119). why_not_duplicate: the nearest golden-set neighbor is 180d BINARY threshold response; this is CONTINUOUS d90 DELTA labeled MEDIATOR (intermediate causal path); different time, different aggregation, different role. Remediation per role-to-remediation table: mediator → window (restrict to pre-treatment window)."
             ),
             recommended_remediation="window",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2240,15 +2090,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="mediator",
             mechanism=(
-                "Change in free hemoglobin from baseline to d30 sits on the directed path "
-                "T -> intravascular_hemolysis -> Y per Jang 2022 (PMID 35561315; "
-                "doi:10.1182/bloodadvances.2022006960) — iptacopan blocks factor B and "
-                "suppresses IVH rapidly. T->M->Y is the proximal pharmacologic mediator. "
-                "Adjust for M induces over-adjustment bias (Hernan MSM PMID 10955408); "
-                "correct remediation is window. why_not_duplicate: golden "
-                "ldh_x_uln_d90_postindex measures POSTINDEX LDH (d90 timepoint, LDH "
-                "analyte); this measures POSTINDEX FREE HEMOGLOBIN (d30 timepoint, free-Hb "
-                "analyte) — different analyte + earlier post-index timepoint. Remediation per role-to-remediation table: mediator → window (restrict to pre-treatment window)."
+                "Change in free hemoglobin from baseline to d30 sits on the directed path T -> intravascular_hemolysis -> Y per Jang 2022 (PMID 35561315; doi:10.1182/bloodadvances.2022006960) — iptacopan blocks factor B and suppresses IVH rapidly. T->M->Y is the proximal pharmacologic mediator. Adjust for M induces over-adjustment bias (Hernan MSM PMID 10955408); correct remediation is window. why_not_duplicate: the nearest golden-set neighbor measures POSTINDEX LDH (d90 timepoint, LDH analyte); this measures POSTINDEX FREE HEMOGLOBIN (d30 timepoint, free-Hb analyte) — different analyte + earlier post-index timepoint. Remediation per role-to-remediation table: mediator → window (restrict to pre-treatment window)."
             ),
             recommended_remediation="window",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2265,16 +2107,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="mediator",
             mechanism=(
-                "Postindex d90 reticulocyte normalization (counts back within reference "
-                "range) sits on T -> erythropoietic_normalization -> Y path. T->M: treatment "
-                "reduces hemolytic stress, removes drive for compensatory reticulocytosis "
-                "per Hillmen 2021 PEGASUS (PMID 33730455; doi:10.1056/NEJMoa2029073). M->Y: "
-                "reticulocyte normalization precedes stable hemoglobin recovery at d180. "
-                "Window remediation per Hernan 2004 (PMID 14760119). why_not_duplicate: "
-                "golden reticulocyte_count_delta_d90_postindex is CONTINUOUS delta; this is "
-                "BINARY threshold indicator (back-in-reference flag) — different aggregation "
-                "(delta vs indicator), captures a clinically meaningful normalization "
-                "endpoint distinct from raw delta magnitude. Remediation per role-to-remediation table: mediator → window (restrict to pre-treatment window)."
+                "Postindex d90 reticulocyte normalization (counts back within reference range) sits on T -> erythropoietic_normalization -> Y path. T->M: treatment reduces hemolytic stress, removes drive for compensatory reticulocytosis per Hillmen 2021 PEGASUS (PMID 33730455; doi:10.1056/NEJMoa2029073). M->Y: reticulocyte normalization precedes stable hemoglobin recovery at d180. Window remediation per Hernan 2004 (PMID 14760119). why_not_duplicate: the nearest golden-set neighbor is CONTINUOUS delta; this is BINARY threshold indicator (back-in-reference flag) — different aggregation (delta vs indicator), captures a clinically meaningful normalization endpoint distinct from raw delta magnitude. Remediation per role-to-remediation table: mediator → window (restrict to pre-treatment window)."
             ),
             recommended_remediation="window",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2291,15 +2124,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="collider",
             mechanism=(
-                "Add-on danicopan initiation during follow-up is jointly caused by (a) "
-                "inadequate iptacopan response (residual EVH) and (b) availability/coverage "
-                "of danicopan in the post-ALPHA period (Lee 2023 ALPHA PMID 38030318; "
-                "doi:10.1016/S2352-3026(23)00315-0). Both poor T-response and patient access "
-                "drive add-on initiation, opening a collider path when conditioned. Remediation "
-                "drop per Hernan 2004 (PMID 14760119). why_not_duplicate: golden "
-                "iptacopan_persistence_at_180d_flag is persistence on INDEX treatment; this "
-                "is INITIATION of an ADD-ON drug (danicopan) — different drug, different "
-                "event type (initiation vs persistence), different role inference. Remediation per role-to-remediation table: collider → drop."
+                "Add-on danicopan initiation during follow-up is jointly caused by (a) inadequate iptacopan response (residual EVH) and (b) availability/coverage of danicopan in the post-ALPHA period (Lee 2023 ALPHA PMID 38030318; doi:10.1016/S2352-3026(23)00315-0). Both poor T-response and patient access drive add-on initiation, opening a collider path when conditioned. Remediation drop per Hernan 2004 (PMID 14760119). why_not_duplicate: the nearest golden-set neighbor is persistence on INDEX treatment; this is INITIATION of an ADD-ON drug (danicopan) — different drug, different event type (initiation vs persistence), different role inference. Remediation per role-to-remediation table: collider → drop."
             ),
             recommended_remediation="drop",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2416,15 +2241,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="confounder",
             mechanism=(
-                "Count of distinct prior complement inhibitors with documented failure-"
-                "discontinuation before iptacopan index. Z->T: more prior failures push "
-                "toward iptacopan as later-line option per APPLY-PNH eligibility patterns "
-                "(PMID 38477987; doi:10.1056/NEJMoa2308695). Z->Y: refractory-line position "
-                "predicts smaller absolute response magnitude. why_not_duplicate: golden "
-                "prior_anti_c5_inhibitor_use_flag_preindex is BINARY any-use of C5 class; "
-                "compile-set proximal_complement_inhibitor_class_switch_count_lifetime_pnh "
-                "is class-switch count regardless of reason; this is FAILURE-coded "
-                "discontinuation count only (clinical-failure-specific filter). Remediation per role-to-remediation table: confounder → keep_with_caveat."
+                "Count of distinct prior complement inhibitors with documented failure-discontinuation before iptacopan index. Z->T: more prior failures push toward iptacopan as later-line option per APPLY-PNH eligibility patterns (PMID 38477987; doi:10.1056/NEJMoa2308695). Z->Y: refractory-line position predicts smaller absolute response magnitude. why_not_duplicate: the nearest golden-set neighbor is BINARY any-use of C5 class; compile-set proximal_complement_inhibitor_class_switch_count_lifetime_pnh is class-switch count regardless of reason; this is FAILURE-coded discontinuation count only (clinical-failure-specific filter). Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2441,14 +2258,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="mediator",
             mechanism=(
-                "Durable LDH normalization (both d90 AND d180 <=1.5xULN) sits on the "
-                "T -> sustained_IVH_suppression -> Y path per Versino-Fattizzo 2024 (PMID "
-                "38622956; doi:10.1111/ijlh.14281). Conjunction of two timepoints distinguishes "
-                "durable from transient response. Adjust for M induces over-adjustment "
-                "(Hernan MSM PMID 10955408). why_not_duplicate: golden ldh_x_uln_d90_postindex "
-                "is the SINGLE d90 timepoint; this is the CONJUNCTION (both d90 AND d180 "
-                "in range) — distinct aggregation (durable-conjunction indicator vs single "
-                "ratio), distinct construct (sustained vs transient). Remediation per role-to-remediation table: mediator → window (restrict to pre-treatment window)."
+                "Durable LDH normalization (both d90 AND d180 <=1.5xULN) sits on the T -> sustained_IVH_suppression -> Y path per Versino-Fattizzo 2024 (PMID 38622956; doi:10.1111/ijlh.14281). Conjunction of two timepoints distinguishes durable from transient response. Adjust for M induces over-adjustment (Hernan MSM PMID 10955408). why_not_duplicate: the nearest golden-set neighbor is the SINGLE d90 timepoint; this is the CONJUNCTION (both d90 AND d180 in range) — distinct aggregation (durable-conjunction indicator vs single ratio), distinct construct (sustained vs transient). Remediation per role-to-remediation table: mediator → window (restrict to pre-treatment window)."
             ),
             recommended_remediation="window",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2465,14 +2275,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="confounder",
             mechanism=(
-                "Flag for any historical thrombosis at PNH-atypical site (Budd-Chiari, "
-                "mesenteric, cerebral venous) per Schrezenmeier 2022 (PMID 35699625; "
-                "doi:10.20452/pamw.16271). Z->T: atypical-site thrombosis history indexes "
-                "severe complement dysregulation prompting proximal inhibitor escalation. "
-                "Z->Y: thrombosis history modulates anticoagulation that affects hematologic "
-                "endpoints. why_not_duplicate: golden prior_thrombotic_event_flag_preindex "
-                "is ANY-SITE binary flag; this is the SUBSET restricted to atypical sites "
-                "(intra-abdominal/intra-cranial), narrower clinical phenotype. Remediation per role-to-remediation table: confounder → keep_with_caveat."
+                "Flag for any historical thrombosis at PNH-atypical site (Budd-Chiari, mesenteric, cerebral venous) per Schrezenmeier 2022 (PMID 35699625; doi:10.20452/pamw.16271). Z->T: atypical-site thrombosis history indexes severe complement dysregulation prompting proximal inhibitor escalation. Z->Y: thrombosis history modulates anticoagulation that affects hematologic endpoints. why_not_duplicate: the nearest golden-set neighbor is ANY-SITE binary flag; this is the SUBSET restricted to atypical sites (intra-abdominal/intra-cranial), narrower clinical phenotype. Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2489,14 +2292,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="confounder",
             mechanism=(
-                "DOAC proportion-of-days-covered in the 365d preindex window. Z->T: "
-                "anticoagulated patients have lower threshold for proximal switch given "
-                "iptacopan's lower thrombosis risk per de Castro 2024 (PMID 39404123; "
-                "doi:10.1080/14656566.2024.2404110). Z->Y: anticoagulation modulates iron "
-                "homeostasis (GI losses) affecting Hb endpoint. why_not_duplicate: golden "
-                "prior_thrombotic_event_flag_preindex is binary event flag (history); this "
-                "is continuous PDC of anticoagulation TREATMENT (process measure); event "
-                "vs treatment-process distinction. Remediation per role-to-remediation table: confounder → keep_with_caveat."
+                "DOAC proportion-of-days-covered in the 365d preindex window. Z->T: anticoagulated patients have lower threshold for proximal switch given iptacopan's lower thrombosis risk per de Castro 2024 (PMID 39404123; doi:10.1080/14656566.2024.2404110). Z->Y: anticoagulation modulates iron homeostasis (GI losses) affecting Hb endpoint. why_not_duplicate: the nearest golden-set neighbor is binary event flag (history); this is continuous PDC of anticoagulation TREATMENT (process measure); event vs treatment-process distinction. Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2513,15 +2309,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="mediator",
             mechanism=(
-                "Days from index to first post-index transfusion lies on the path T -> "
-                "transfusion_dependence -> Y per pegcetacoplan/iptacopan trial patterns "
-                "(PMID 36459381; doi:10.1007/s40265-022-01809-w). T->M: effective treatment "
-                "delays/eliminates transfusion need. M->Y: transfusions transiently inflate "
-                "measured Hb at d180 even when endogenous response is poor — directly "
-                "modifying the outcome measurement. Window remediation. why_not_duplicate: "
-                "golden any_rbc_transfusion_during_followup_flag is BINARY any-event over "
-                "follow-up labeled COLLIDER; this is CONTINUOUS time-to-first-event labeled "
-                "MEDIATOR — different aggregation, different role inference. Remediation per role-to-remediation table: mediator → window (restrict to pre-treatment window)."
+                "Days from index to first post-index transfusion lies on the path T -> transfusion_dependence -> Y per pegcetacoplan/iptacopan trial patterns (PMID 36459381; doi:10.1007/s40265-022-01809-w). T->M: effective treatment delays/eliminates transfusion need. M->Y: transfusions transiently inflate measured Hb at d180 even when endogenous response is poor — directly modifying the outcome measurement. Window remediation. why_not_duplicate: the nearest golden-set neighbor is BINARY any-event over follow-up; this is CONTINUOUS time-to-first-event labeled MEDIATOR — different aggregation, different role inference. Remediation per role-to-remediation table: mediator → window (restrict to pre-treatment window)."
             ),
             recommended_remediation="window",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2563,14 +2351,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="confounder",
             mechanism=(
-                "Charlson Comorbidity Index summarizes 17 weighted comorbid conditions over "
-                "365d preindex per standard pharmacoepi practice (Brodsky 2021 PMID 33512400 "
-                "treatment-decision context; doi:10.1182/blood.2019003812). Z->T: higher CCI "
-                "favors oral iptacopan over IV infusion regimens. Z->Y: comorbidity burden "
-                "modulates erythropoietic capacity and adverse-event-driven discontinuation. "
-                "why_not_duplicate: golden age_at_index_years is one upstream demographic; "
-                "this is the COMPOSITE multi-comorbidity score (17-condition weighted index) "
-                "— distinct construct. Remediation per role-to-remediation table: confounder → keep_with_caveat."
+                "Charlson Comorbidity Index summarizes 17 weighted comorbid conditions over 365d preindex per standard pharmacoepi practice (Brodsky 2021 PMID 33512400 treatment-decision context; doi:10.1182/blood.2019003812). Z->T: higher CCI favors oral iptacopan over IV infusion regimens. Z->Y: comorbidity burden modulates erythropoietic capacity and adverse-event-driven discontinuation. why_not_duplicate: the nearest golden-set neighbor is one upstream demographic; this is the COMPOSITE multi-comorbidity score (17-condition weighted index) — distinct construct. Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2587,14 +2368,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="collider",
             mechanism=(
-                "Count of distinct iptacopan strengths dispensed in first 90d post-index "
-                "indexes early dose modification — jointly caused by (a) early "
-                "tolerability/response signals (T->modification) and (b) prescriber "
-                "preference and patient adherence (independent of T). Conditioning opens "
-                "a collider path per Hernan 2004 (PMID 14760119). why_not_duplicate: golden "
-                "iptacopan_persistence_at_180d_flag is binary persistence at 180d (different "
-                "endpoint); this is dose-modification COUNT during 90d (intra-treatment-"
-                "course modification, not discontinuation); different event type + window. Remediation per role-to-remediation table: collider → drop."
+                "Count of distinct iptacopan strengths dispensed in first 90d post-index indexes early dose modification — jointly caused by (a) early tolerability/response signals (T->modification) and (b) prescriber preference and patient adherence (independent of T). Conditioning opens a collider path per Hernan 2004 (PMID 14760119). why_not_duplicate: the nearest golden-set neighbor is binary persistence at 180d (different endpoint); this is dose-modification COUNT during 90d (intra-treatment-course modification, not discontinuation); different event type + window. Remediation per role-to-remediation table: collider → drop."
             ),
             recommended_remediation="drop",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2611,14 +2385,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="confounder",
             mechanism=(
-                "Number of hematology specialist visits in 180d preindex reflects monitoring "
-                "intensity at the treatment-decision juncture per PEGASUS-48wk care patterns "
-                "(PMID 36055332; doi:10.1016/S2352-3026(22)00210-1). Z->T: high monitoring "
-                "frequency surfaces breakthrough hemolysis that triggers switch decisions. "
-                "Z->Y: ongoing specialist contact predicts adherence and outcome assessment "
-                "completeness. why_not_duplicate: golden payer_step_therapy_iptacopan_"
-                "requirement_preindex captures PAYER policy (administrative); this captures "
-                "PROVIDER engagement count (utilization). Remediation per role-to-remediation table: confounder → keep_with_caveat."
+                "Number of hematology specialist visits in 180d preindex reflects monitoring intensity at the treatment-decision juncture per PEGASUS-48wk care patterns (PMID 36055332; doi:10.1016/S2352-3026(22)00210-1). Z->T: high monitoring frequency surfaces breakthrough hemolysis that triggers switch decisions. Z->Y: ongoing specialist contact predicts adherence and outcome assessment completeness. why_not_duplicate: the nearest golden-set neighbor captures PAYER policy (administrative); this captures PROVIDER engagement count (utilization). Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2710,18 +2477,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="instrument",
             mechanism=(
-                "Payer class (commercial vs Medicare) at index — used as a Brookhart-style "
-                "policy IV where commercial vs Medicare formulary differentials affect "
-                "iptacopan access. Z->T: differential PA gating shifts initiation rates "
-                "post-APPLY-PNH (PMID 38477987; doi:10.1056/NEJMoa2308695). Z->Y exclusion-"
-                "restriction: payer category itself does not affect Hb biology — only the "
-                "treatment-choice mediation route. Defensibility caveat: payer class may "
-                "correlate with comorbidity profile through age/employment; mechanism "
-                "explicitly adjusts for Charlson Score + age (both included). "
-                "why_not_duplicate: golden payer_step_therapy_iptacopan_requirement_preindex "
-                "is policy-specific STEP-THERAPY rule; this is broader PAYER-CLASS "
-                "indicator (categorical not boolean). Defensible as IV per Brookhart 2006 "
-                "(PMID 30516102). Remediation per role-to-remediation table: instrument → keep_with_caveat."
+                "Payer class (commercial vs Medicare) at index — used as a Brookhart-style policy IV where commercial vs Medicare formulary differentials affect iptacopan access. Z->T: differential PA gating shifts initiation rates post-APPLY-PNH (PMID 38477987; doi:10.1056/NEJMoa2308695). Z->Y exclusion-restriction: payer category itself does not affect Hb biology — only the treatment-choice mediation route. Defensibility caveat: payer class may correlate with comorbidity profile through age/employment; mechanism explicitly adjusts for Charlson Score + age (both included). why_not_duplicate: the nearest golden-set neighbor is policy-specific STEP-THERAPY rule; this is broader PAYER-CLASS indicator (categorical not boolean). Defensible as IV per Brookhart 2006 (PMID 30516102). Remediation per role-to-remediation table: instrument → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2850,17 +2606,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="descendant",
             mechanism=(
-                "Adversarial: post-treatment EORTC QLQ-C30 score at d180. Naive worker may "
-                "classify as MEDIATOR (post-treatment intermediate on T->QoL->Y path), but "
-                "the OUTCOME hemoglobin_response_180d is biologic (laboratory measure), and "
-                "EORTC score is a downstream patient-reported sequelae of the hematologic "
-                "response — no causal arrow QoL -> Hb. The correct role is DESCENDANT (off "
-                "the directed (T,Y) path) per Hernan 2016 (PMID 27176981). Drop from "
-                "adjustment. Adversarial test: distinguish mediator (T->M->Y) from "
-                "descendant (Y->D or T->D, no D->Y). why_not_duplicate: golden "
-                "facit_fatigue_response_180d_postindex_flag is binary FACIT response (a "
-                "different PRO instrument labeled collider); this is continuous EORTC score "
-                "(different instrument + different role inference). Remediation per role-to-remediation table: descendant → drop."
+                "Adversarial: post-treatment EORTC QLQ-C30 score at d180. Naive worker may classify as MEDIATOR (post-treatment intermediate on T->QoL->Y path), but the OUTCOME hemoglobin_response_180d is biologic (laboratory measure), and EORTC score is a downstream patient-reported sequelae of the hematologic response — no causal arrow QoL -> Hb. The correct role is DESCENDANT (off the directed (T,Y) path) per Hernan 2016 (PMID 27176981). Drop from adjustment. Adversarial test: distinguish mediator (T->M->Y) from descendant (Y->D or T->D, no D->Y). why_not_duplicate: the nearest golden-set neighbor is a binary FACIT response (a different patient-reported-outcome measure); this is a continuous EORTC score (different PRO measure + different role inference). Remediation per role-to-remediation table: descendant → drop."
             ),
             recommended_remediation="drop",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2907,17 +2653,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="collider",
             mechanism=(
-                "Adversarial: AND-composite of two post-treatment events (LDH normalized "
-                "AND alive). Naive worker may call this MEDIATOR (post-treatment "
-                "intermediate), but conjunction of treatment-effect AND survival creates a "
-                "classical collider — both arms (T->LDH normalization, T->survival, AND "
-                "underlying-severity->survival, underlying-severity->LDH normalization) "
-                "converge into the composite, so conditioning opens back-door per Hernan "
-                "2004 (PMID 14760119). Composite hides the survivorship-collider. Adversarial "
-                "test: classifier must decompose composite features. why_not_duplicate: "
-                "golden alive_at_180d_postindex_flag is the SURVIVAL collider alone; this "
-                "is the AND-COMPOSITE with LDH-normalization (different aggregation: "
-                "conjunction; different decomposability concern). Remediation per role-to-remediation table: collider → drop."
+                "Adversarial: AND-composite of two post-treatment events (LDH normalized AND alive). Naive worker may call this MEDIATOR (post-treatment intermediate), but conjunction of treatment-effect AND survival creates a classical collider — both arms (T->LDH normalization, T->survival, AND underlying-severity->survival, underlying-severity->LDH normalization) converge into the composite, so conditioning opens back-door per Hernan 2004 (PMID 14760119). Composite hides the survivorship-collider. Adversarial test: classifier must decompose composite features. why_not_duplicate: the nearest golden-set neighbor is the SURVIVAL endpoint alone; this is the AND-COMPOSITE with LDH-normalization (different aggregation: conjunction; different decomposability concern). Remediation per role-to-remediation table: collider → drop."
             ),
             recommended_remediation="drop",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -2963,16 +2699,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="mediator",
             mechanism=(
-                "Edge case: transfusion units summed over a 395d window spanning -365d "
-                "preindex to +30d postindex. Aggregation conceals 30d of post-anchor "
-                "data — the +30d slice is post-treatment and lies on T -> transfusion_need "
-                "-> Y path per Brodsky 2021 (PMID 33512400; doi:10.1182/blood.2019003812). "
-                "Even if 365/395 = 92% of the window is preindex, the post-anchor leakage "
-                "makes this a mediator with window remediation required (restrict to -365 "
-                "to 0). why_not_duplicate: golden transfusion_units_365d_preindex is the "
-                "STRICT preindex 365d window (no leakage, labeled confounder); this is the "
-                "ASYMMETRIC -365 to +30 window (with leakage, labeled mediator) — edge-case "
-                "teaching pair. Remediation per role-to-remediation table: mediator → window (restrict to pre-treatment window)."
+                "Edge case: transfusion units summed over a 395d window spanning -365d preindex to +30d postindex. Aggregation conceals 30d of post-anchor data — the +30d slice is post-treatment and lies on T -> transfusion_need -> Y path per Brodsky 2021 (PMID 33512400; doi:10.1182/blood.2019003812). Even if 365/395 = 92% of the window is preindex, the post-anchor leakage makes this a mediator with window remediation required (restrict to -365 to 0). why_not_duplicate: the nearest golden-set neighbor is the STRICT preindex 365d window (no leakage); this is the ASYMMETRIC -365 to +30 window (with leakage, labeled mediator) — edge-case teaching pair. Remediation per role-to-remediation table: mediator → window (restrict to pre-treatment window)."
             ),
             recommended_remediation="window",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -3165,16 +2892,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="confounder",
             mechanism=(
-                "Count of distinct visceral organ systems with metastatic lesions in the "
-                "180d preindex window (liver, lung, brain, etc.). Z->T: clinicians prefer "
-                "ribociclib over palbociclib in higher visceral-burden patients per "
-                "MONALEESA-2 OS sub-analyses (PMID 35263519; doi:10.1056/NEJMoa2114663) "
-                "where multi-organ visceral disease showed differential OS benefit. Z->Y: "
-                "visceral burden is a direct prognostic factor for survival independent of "
-                "CDK4/6 inhibitor choice. why_not_duplicate: golden visceral_disease_flag_preindex "
-                "is a BINARY indicator (any visceral involvement); this is a COUNT of "
-                "distinct organ systems involved — finer granularity capturing multi-organ "
-                "burden vs single visceral lesion. Remediation per role-to-remediation table: confounder → keep_with_caveat."
+                "Count of distinct visceral organ systems with metastatic lesions in the 180d preindex window (liver, lung, brain, etc.). Z->T: clinicians prefer ribociclib over palbociclib in higher visceral-burden patients per MONALEESA-2 OS sub-analyses (PMID 35263519; doi:10.1056/NEJMoa2114663) where multi-organ visceral disease showed differential OS benefit. Z->Y: visceral burden is a direct prognostic factor for survival independent of CDK4/6 inhibitor choice. why_not_duplicate: the nearest golden-set neighbor is a BINARY indicator (any visceral involvement); this is a COUNT of distinct organ systems involved — finer granularity capturing multi-organ burden vs single visceral lesion. Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -3278,8 +2996,8 @@ def build_compile_set() -> list[dspy.Example]:
                 "(versus endocrine monotherapy) per MONALEESA-2 pain-reduction sub-analysis "
                 "(PMID 30595753; doi:10.1007/s10549-017-4658-x). Z->Y: baseline pain is a "
                 "prognostic marker for tumor burden and predicts QoL improvement magnitude. "
-                "why_not_duplicate: golden has best_recist_response (radiographic) and "
-                "baseline_ecog_ps (global function); this is SYMPTOMATIC pain — distinct "
+                "why_not_duplicate: the golden set has radiographic-response and "
+                "global-function neighbors; this is SYMPTOMATIC pain — distinct "
                 "patient-reported domain. Remediation per role-to-remediation table: "
                 "confounder → keep_with_caveat."
             ),
@@ -3409,8 +3127,8 @@ def build_compile_set() -> list[dspy.Example]:
                 "(PMID 30206110; doi:10.1158/2159-8290.CD-18-0264) where Y537S mutations "
                 "predict AI-resistance. Z->Y: ESR1 mutation directly drives endocrine "
                 "resistance, attenuating PFS independent of CDK4/6i choice. why_not_duplicate: "
-                "golden has ctdna_esr1_emergence (POST-index, 90d) which is a descendant of "
-                "treatment; this is BASELINE PRE-INDEX status — distinct temporal placement "
+                "the nearest golden-set neighbor is a POST-index ctDNA emergence measurement "
+                "(90d); this is BASELINE PRE-INDEX status — distinct temporal placement "
                 "→ distinct role. Remediation per role-to-remediation table: confounder → "
                 "keep_with_caveat."
             ),
@@ -3485,9 +3203,9 @@ def build_compile_set() -> list[dspy.Example]:
                 "where 21.7% of CDK4/6i patients required dose reductions; the reduction "
                 "itself then affects PFS through altered exposure. POST-INDEX timing places "
                 "this on the causal path from T (initiation) to Y (PFS); mediator role per "
-                "Pearl-VanderWeele mediation framework. why_not_duplicate: golden has "
-                "dose_reduced_after_grade3_neutropenia (conditional on toxicity) and "
-                "ribociclib_relative_dose_intensity (continuous 180d); this is INDICATOR within "
+                "Pearl-VanderWeele mediation framework. why_not_duplicate: the golden set has "
+                "a toxicity-conditional dose-reduction neighbor and a "
+                "continuous-180d dose-intensity neighbor; this is an INDICATOR within a "
                 "90d window — distinct temporal+aggregation. Remediation per role-to-remediation "
                 "table: mediator → drop."
             ),
@@ -3506,15 +3224,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="mediator",
             mechanism=(
-                "Indicator of any grade 3-4 neutropenia event (ANC < 1000/µL) within 28d "
-                "post-index. T->M->Y: ribociclib initiation causes neutropenia (CDK6-mediated "
-                "myelosuppression) per MONALEESA pooled dose-reduction analysis (PMID 34158598; "
-                "doi:10.1038/s41416-021-01415-9) which then triggers dose modification "
-                "affecting downstream PFS. POST-INDEX temporal placement on the causal path "
-                "T->M->Y. why_not_duplicate: golden has post_index_neutropenia_max_grade_90d "
-                "(continuous, 90d window); this is INDICATOR within 28d — distinct aggregation "
-                "+ tighter window capturing early-onset toxicity. Remediation per role-to-"
-                "remediation table: mediator → drop."
+                "Indicator of any grade 3-4 neutropenia event (ANC < 1000/µL) within 28d post-index. T->M->Y: ribociclib initiation causes neutropenia (CDK6-mediated myelosuppression) per MONALEESA pooled dose-reduction analysis (PMID 34158598; doi:10.1038/s41416-021-01415-9) which then triggers dose modification affecting downstream PFS. POST-INDEX temporal placement on the causal path T->M->Y. why_not_duplicate: the nearest golden-set neighbor exists (continuous, 90d window); this is INDICATOR within 28d — distinct aggregation + tighter window capturing early-onset toxicity. Remediation per role-to-remediation table: mediator → drop."
             ),
             recommended_remediation="drop",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -3561,16 +3271,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="descendant",
             mechanism=(
-                "Best RECIST response (CR/PR/SD/PD) at first post-index restaging assessment "
-                "(typically 60d post-initiation). T->V descendant: response is the proximal "
-                "consequence of ribociclib + endocrine therapy per MONALEESA-2 OS analysis "
-                "(PMID 35263519; doi:10.1056/NEJMoa2114663). V is downstream of T and is a "
-                "noisy intermediate proxy for Y (PFS) — should not be conditioned on as "
-                "covariate when estimating T->Y because it blocks part of the causal effect. "
-                "why_not_duplicate: golden best_recist_response_180d uses a 180d window; "
-                "this is FIRST RESTAGING at 60d — distinct earlier temporal anchor capturing "
-                "response onset dynamics. Remediation per role-to-remediation table: descendant "
-                "→ drop."
+                "Best RECIST response (CR/PR/SD/PD) at first post-index restaging assessment (typically 60d post-initiation). T->V descendant: response is the proximal consequence of ribociclib + endocrine therapy per MONALEESA-2 OS analysis (PMID 35263519; doi:10.1056/NEJMoa2114663). V is downstream of T and is a noisy intermediate proxy for Y (PFS) — should not be conditioned on as covariate when estimating T->Y because it blocks part of the causal effect. why_not_duplicate: the nearest golden-set neighbor uses a 180d window; this is FIRST RESTAGING at 60d — distinct earlier temporal anchor capturing response onset dynamics. Remediation per role-to-remediation table: descendant → drop."
             ),
             recommended_remediation="drop",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -3651,8 +3352,8 @@ def build_compile_set() -> list[dspy.Example]:
                 "through treatment receipt; no direct biological pathway from prescribing "
                 "style to patient PFS independent of treatment choice. Temporal filter: "
                 "derivation window strictly preindex (prefix-censoring at index_date). "
-                "why_not_duplicate: distinct from golden practice_ribociclib_share (which is "
-                "ribociclib-specific share); this is CDK4/6i-CLASS preference share tertile "
+                "why_not_duplicate: distinct from its nearest golden-set neighbor (a "
+                "single-drug-specific prescribing share); this is CDK4/6i-CLASS preference share tertile "
                 "— broader class-level prescribing-preference IV per Brookhart 2006 framework. "
                 "Remediation per role-to-remediation table: instrument → keep_with_caveat."
             ),
@@ -3679,8 +3380,8 @@ def build_compile_set() -> list[dspy.Example]:
                 "restriction: oncologist's historical date of class-adoption has NO direct "
                 "biological mechanism on patient PFS — all effect transmitted through "
                 "treatment selection. Pre-index oncologist-level measurement guarantees "
-                "temporal exogeneity. why_not_duplicate: golden has oncologist_first_ribociclib_"
-                "initiation (ribociclib-specific); this is CLASS-LEVEL FIRST INITIATION (any "
+                "temporal exogeneity. why_not_duplicate: the nearest golden-set neighbor is a "
+                "single-drug-specific first-initiation flag; this is CLASS-LEVEL FIRST INITIATION (any "
                 "CDK4/6i) — distinct earlier exogeneity argument. Remediation per role-to-"
                 "remediation table: instrument → keep_with_caveat."
             ),
@@ -3841,8 +3542,8 @@ def build_compile_set() -> list[dspy.Example]:
                 "ribociclib initiation per real-world cohort (PMID 38231045; "
                 "doi:10.2217/fon-2023-0858). V is downstream consequence not on the (T,Y) "
                 "causal path. why_not_duplicate: novel intra-class-switch construct; distinct "
-                "from golden switch_ai_to_fulvestrant which is endocrine-backbone switch (not "
-                "CDK4/6i switch). Post-treatment aggregation window (day-0 to day-365 post-index); "
+                "from its nearest golden-set neighbor, which is an endocrine-backbone switch (not "
+                "a CDK4/6i switch). Post-treatment aggregation window (day-0 to day-365 post-index); "
                 "no post-treatment data leakage into preindex features. "
                 "Remediation per role-to-remediation table: descendant → drop."
             ),
@@ -3886,16 +3587,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="mediator",
             mechanism=(
-                "Average ribociclib daily dose intensity (cumulative mg / 600mg-days target) "
-                "over the day-30 through day-180 post-index window. T->M->Y mediator: "
-                "ribociclib initiation produces a realized exposure trajectory whose "
-                "intensity directly determines biological CDK4/6 inhibition magnitude per "
-                "India real-world cohort (PMID 34292933; doi:10.1371/journal.pone.0253722); "
-                "dose intensity is the proximal molecular-mechanism mediator between T and Y. "
-                "why_not_duplicate: golden ribociclib_relative_dose_intensity_180d uses "
-                "full-180d window; this is day-30-to-180 window — distinct temporal range "
-                "(excludes ramp-up period). Remediation per role-to-remediation table: "
-                "mediator → drop."
+                "Average ribociclib daily dose intensity (cumulative mg / 600mg-days target) over the day-30 through day-180 post-index window. T->M->Y mediator: ribociclib initiation produces a realized exposure trajectory whose intensity directly determines biological CDK4/6 inhibition magnitude per India real-world cohort (PMID 34292933; doi:10.1371/journal.pone.0253722); dose intensity is the proximal molecular-mechanism mediator between T and Y. why_not_duplicate: the nearest golden-set neighbor uses full-180d window; this is day-30-to-180 window — distinct temporal range (excludes ramp-up period). Remediation per role-to-remediation table: mediator → drop."
             ),
             recommended_remediation="drop",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -3912,15 +3604,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="confounder",
             mechanism=(
-                "Count of distinct prior chemotherapy regimens received before ribociclib "
-                "initiation. Z->T: heavily pre-treated patients shift toward later-line "
-                "CDK4/6i + endocrine therapy (where ribociclib OS benefit is documented per "
-                "PMID 40019493; doi:10.1038/s41598-024-53151-8). Z->Y: prior chemotherapy "
-                "lines reflect both disease aggressiveness AND treatment-related cumulative "
-                "toxicity — both shorten OS independent of CDK4/6i choice. Pre-index "
-                "measurement guarantees outgoing arrows. why_not_duplicate: novel chemotherapy-"
-                "history construct distinct from prior_cdk46_lines_count (CDK4/6i-specific) "
-                "in golden. Remediation per role-to-remediation table: confounder → keep_with_caveat."
+                "Count of distinct prior chemotherapy regimens received before ribociclib initiation. Z->T: heavily pre-treated patients shift toward later-line CDK4/6i + endocrine therapy (where ribociclib OS benefit is documented per PMID 40019493; doi:10.1038/s41598-024-53151-8). Z->Y: prior chemotherapy lines reflect both disease aggressiveness AND treatment-related cumulative toxicity — both shorten OS independent of CDK4/6i choice. Pre-index measurement guarantees outgoing arrows. why_not_duplicate: novel chemotherapy-history construct distinct from its nearest golden-set neighbor. Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -3937,17 +3621,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="mediator",
             mechanism=(
-                "Indicator that an ESR1 mutation EMERGED on serial ctDNA between baseline "
-                "(negative) and 90d post-index (positive). T->M->Y mediator: ribociclib + "
-                "endocrine therapy exposure selects for ESR1-mutant subclones (acquired "
-                "resistance) per Foundation Medicine longitudinal data (PMID 38872062; "
-                "doi:10.1007/s10549-024-07376-w) where ESR1mut rate climbs from 8.1% (1st "
-                "line) to 59% (3rd line). M is on the (T->resistance->Y) causal path. "
-                "why_not_duplicate: golden ctdna_esr1_emergence_flag_90d exists but lacks "
-                "the BASELINE-NEGATIVE PRECONDITION; this DIFFERENCE-IN-STATUS construct "
-                "requires both timepoints. Post-treatment aggregation window (day-0 to day-90 post-index); "
-                "no post-treatment data leakage into preindex features. "
-                "Remediation per role-to-remediation table: mediator → drop."
+                "Indicator that an ESR1 mutation EMERGED on serial ctDNA between baseline (negative) and 90d post-index (positive). T->M->Y mediator: ribociclib + endocrine therapy exposure selects for ESR1-mutant subclones (acquired resistance) per Foundation Medicine longitudinal data (PMID 38872062; doi:10.1007/s10549-024-07376-w) where ESR1mut rate climbs from 8.1% (1st line) to 59% (3rd line). M is on the (T->resistance->Y) causal path. why_not_duplicate: the nearest golden-set neighbor lacks the BASELINE-NEGATIVE PRECONDITION; this DIFFERENCE-IN-STATUS construct requires both timepoints. Post-treatment aggregation window (day-0 to day-90 post-index); no post-treatment data leakage into preindex features. Remediation per role-to-remediation table: mediator → drop."
             ),
             recommended_remediation="drop",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -4016,16 +3690,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="mediator",
             mechanism=(
-                "Indicator of grade-2 ALT or AST elevation (3-5x ULN) within 60d post-index. "
-                "T->M->Y mediator: ribociclib-induced hepatotoxicity is on the causal path "
-                "where hepatotoxic events trigger dose modification/discontinuation that "
-                "shortens PFS per KARMA registry (PMID 36151018; doi:10.1016/j.clbc.2022.08.011) "
-                "where abnormal liver enzymes were the second-leading dose-reduction reason. "
-                "why_not_duplicate: golden hepatotoxicity_grade3_post_index_flag uses grade-3 "
-                "threshold; this is GRADE-2 — milder threshold, captures earlier-onset signal. "
-                "Post-treatment aggregation window (day-0 to day-60 post-index); "
-                "no post-treatment data leakage into preindex features. "
-                "Remediation per role-to-remediation table: mediator → drop."
+                "Indicator of grade-2 ALT or AST elevation (3-5x ULN) within 60d post-index. T->M->Y mediator: ribociclib-induced hepatotoxicity is on the causal path where hepatotoxic events trigger dose modification/discontinuation that shortens PFS per KARMA registry (PMID 36151018; doi:10.1016/j.clbc.2022.08.011) where abnormal liver enzymes were the second-leading dose-reduction reason. why_not_duplicate: the nearest golden-set neighbor uses grade-3 threshold; this is GRADE-2 — milder threshold, captures earlier-onset signal. Post-treatment aggregation window (day-0 to day-60 post-index); no post-treatment data leakage into preindex features. Remediation per role-to-remediation table: mediator → drop."
             ),
             recommended_remediation="drop",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -4042,17 +3707,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="confounder",
             mechanism=(
-                "Mean corrected QT interval (msec) from pre-index ECG over the 30d pre-index "
-                "window. Z->T: high baseline QTc (>450msec) is a contraindication trigger "
-                "for ribociclib initiation per MONALEESA pooled safety (PMID 34158598; "
-                "doi:10.1038/s41416-021-01415-9) where ribociclib carries class-leading QTc "
-                "prolongation signal; high-QTc patients are routed away from ribociclib. "
-                "Z->Y: baseline QTc directly predicts the probability of post-index grade-2/3 "
-                "QTc prolongation outcome. Pre-index measurement guarantees outgoing arrows. "
-                "why_not_duplicate: golden qtc_prolongation_grade2_post_index_flag is the "
-                "POST-INDEX OUTCOME variant; this is BASELINE PRE-INDEX confounder — distinct "
-                "temporal placement → distinct role. Remediation per role-to-remediation "
-                "table: confounder → keep_with_caveat."
+                "Mean corrected QT interval (msec) from pre-index ECG over the 30d pre-index window. Z->T: high baseline QTc (>450msec) is a contraindication trigger for ribociclib initiation per MONALEESA pooled safety (PMID 34158598; doi:10.1038/s41416-021-01415-9) where ribociclib carries class-leading QTc prolongation signal; high-QTc patients are routed away from ribociclib. Z->Y: baseline QTc directly predicts the probability of post-index grade-2/3 QTc prolongation outcome. Pre-index measurement guarantees outgoing arrows. why_not_duplicate: the nearest golden-set neighbor is the POST-INDEX OUTCOME variant; this is BASELINE PRE-INDEX confounder — distinct temporal placement → distinct role. Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -4176,9 +3831,9 @@ def build_compile_set() -> list[dspy.Example]:
                 "(>75y) patients are less likely to receive any CDK4/6i and when they do, "
                 "ribociclib is favored over abemaciclib (lower diarrhea burden) per ESME "
                 "20446 patient cohort (PMID 33895695; doi:10.1016/j.esmoop.2021.100114). "
-                "Z->Y: age is a global mortality determinant. why_not_duplicate: golden has "
+                "Z->Y: age is a global mortality determinant. why_not_duplicate: the golden set has "
                 "no age construct anchored on METASTATIC diagnosis specifically; complementary "
-                "to baseline_ecog_ps in golden. Temporal filter: derivation window strictly preindex "
+                "to its nearest baseline-functional-status golden-set neighbor. Temporal filter: derivation window strictly preindex "
                 "(prefix-censoring at index_date). Remediation per role-to-remediation table: "
                 "confounder → keep_with_caveat."
             ),
@@ -4203,8 +3858,8 @@ def build_compile_set() -> list[dspy.Example]:
                 "31717791; doi:10.3390/cancers11111661). Z->Y: menopausal-status differential "
                 "biology (estrogen-axis, fertility) directly affects PFS independent of "
                 "CDK4/6i choice. Pre-index assessment guarantees outgoing arrows. "
-                "why_not_duplicate: golden post_monaleesa7_premenopausal_approval (calendar-"
-                "policy flag, instrument); this is the PATIENT-LEVEL biological status "
+                "why_not_duplicate: the nearest golden-set neighbor is a calendar-policy "
+                "approval flag; this is the PATIENT-LEVEL biological status "
                 "confounder — distinct role + construct. Remediation per role-to-remediation "
                 "table: confounder → keep_with_caveat."
             ),
@@ -4571,17 +4226,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="confounder",
             mechanism=(
-                "Pre-prediction-time pBTK/total-BTK ratio in circulating basophils, measured "
-                "strictly preindex (window_days=60, knowable_at=preindex_0d enforces prefix-"
-                "censoring at index_date — no postindex assay leakage), indexes the BTK-pathway "
-                "activation burden that drives mast-cell and basophil degranulation. Z->T: "
-                "clinicians select patients with high pBTK signature for BTK-inhibitor therapy "
-                "(Bernstein 2023 JACI PMID 38141832; doi:10.1016/j.jaci.2023.12.008). Z->Y: "
-                "baseline BTK-activation also predicts symptomatic burden independently of "
-                "treatment arm via the FcεRI/BCR cross-link axis. why_not_duplicate: golden "
-                "baseline_total_ige_iu_ml_preindex measures IgE substrate; this measures the "
-                "downstream KINASE-activation state — distinct analyte, distinct mechanism. "
-                "Remediation per role-to-remediation table: confounder → keep_with_caveat."
+                "Pre-prediction-time pBTK/total-BTK ratio in circulating basophils, measured strictly preindex (window_days=60, knowable_at=preindex_0d enforces prefix-censoring at index_date — no postindex assay leakage), indexes the BTK-pathway activation burden that drives mast-cell and basophil degranulation. Z->T: clinicians select patients with high pBTK signature for BTK-inhibitor therapy (Bernstein 2023 JACI PMID 38141832; doi:10.1016/j.jaci.2023.12.008). Z->Y: baseline BTK-activation also predicts symptomatic burden independently of treatment arm via the FcεRI/BCR cross-link axis. why_not_duplicate: the nearest golden-set neighbor measures IgE substrate; this measures the downstream KINASE-activation state — distinct analyte, distinct mechanism. Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -4603,20 +4248,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="confounder",
             mechanism=(
-                "Pre-prediction-time count of specific-IgE positivities on multiplex ISAC, "
-                "derived strictly preindex (window_days=180, knowable_at=preindex_0d ensures "
-                "no post-treatment titer leakage), proxies the polyclonal IgE-substrate "
-                "load that anti-IgE therapy must neutralize. Z->T: high specific-IgE breadth "
-                "shifts prescribing toward higher-affinity anti-IgE (mechanistic rationale: "
-                "polyclonal IgE breadth increases omalizumab dosing requirements via FcεRI "
-                "saturation; no single observational study has operationalized ISAC-count "
-                "as a prescribing confounder — this is a plausible-but-unvalidated feature). "
-                "Z->Y: specific-IgE breadth predicts CSU symptom severity through "
-                "the same FcεRI-cross-linking pathway irrespective of treatment receipt. "
-                "why_not_duplicate: golden baseline_total_ige_iu_ml_preindex measures TOTAL "
-                "polyclonal IgE concentration; this counts component-resolved specific-IgE "
-                "POSITIVITIES — distinct analyte, distinct mechanistic axis. Remediation per "
-                "role-to-remediation table: confounder → keep_with_caveat."
+                "Pre-prediction-time count of specific-IgE positivities on multiplex ISAC, derived strictly preindex (window_days=180, knowable_at=preindex_0d ensures no post-treatment titer leakage), proxies the polyclonal IgE-substrate load that anti-IgE therapy must neutralize. Z->T: high specific-IgE breadth shifts prescribing toward higher-affinity anti-IgE (mechanistic rationale: polyclonal IgE breadth increases omalizumab dosing requirements via FcεRI saturation; no single observational study has operationalized ISAC-count as a prescribing confounder — this is a plausible-but-unvalidated feature). Z->Y: specific-IgE breadth predicts CSU symptom severity through the same FcεRI-cross-linking pathway irrespective of treatment receipt. why_not_duplicate: the nearest golden-set neighbor measures TOTAL polyclonal IgE concentration; this counts component-resolved specific-IgE POSITIVITIES — distinct analyte, distinct mechanistic axis. Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -4761,17 +4393,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="confounder",
             mechanism=(
-                "Documented failure of 4x-label-dose H1-antihistamine therapy in the 180d "
-                "preindex window (knowable_at=preindex_0d enforces strict prefix-censoring; "
-                "no postindex pharmacy data used) flags antihistamine-refractory CSU, the "
-                "guideline-defined gateway to biologic escalation (Wedi 2025 PMID 40747638; "
-                "doi:10.1097/ACI.0000000000001095). Z->T: 4x-updose failure is the dominant "
-                "indication for biologic/small-molecule initiation per EAACI/GA²LEN/WAO "
-                "guidelines. Z->Y: refractory phenotype predicts more-severe ongoing disease "
-                "burden regardless of treatment arm. why_not_duplicate: golden distinct_h1_"
-                "antihistamine_count_365d_preindex counts agent-switches; this flags DOSE-"
-                "ESCALATION-FAILURE specifically — distinct construct. Remediation per "
-                "role-to-remediation table: confounder → keep_with_caveat."
+                "Documented failure of 4x-label-dose H1-antihistamine therapy in the 180d preindex window (knowable_at=preindex_0d enforces strict prefix-censoring; no postindex pharmacy data used) flags antihistamine-refractory CSU, the guideline-defined gateway to biologic escalation (Wedi 2025 PMID 40747638; doi:10.1097/ACI.0000000000001095). Z->T: 4x-updose failure is the dominant indication for biologic/small-molecule initiation per EAACI/GA²LEN/WAO guidelines. Z->Y: refractory phenotype predicts more-severe ongoing disease burden regardless of treatment arm. why_not_duplicate: the nearest golden-set neighbor counts agent-switches; this flags DOSE-ESCALATION-FAILURE specifically — distinct construct. Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -4788,16 +4410,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="confounder",
             mechanism=(
-                "Weekly HSS7 (sum of daily hive-severity scores), aggregated strictly "
-                "preindex (window_days=14, knowable_at=preindex_0d — no postindex PRO "
-                "leakage), measures the hive component of disease activity at baseline "
-                "(Maurer 2023 PEARL-1/2 PMID 38008109; doi:10.1016/S0140-6736(23)01684-7). "
-                "Z->T: HSS7-high patients are selected for more-aggressive therapy. Z->Y: "
-                "HSS7 baseline level predicts response magnitude through regression-to-mean "
-                "in baseline severity. why_not_duplicate: golden baseline_uas7_score_"
-                "preindex_30d is the COMPOSITE UAS7 (hives + itch components, 30d window); "
-                "this is the HSS7 SUBSCORE only (hives only, 14d window). Remediation per "
-                "role-to-remediation table: confounder → keep_with_caveat."
+                "Weekly HSS7 (sum of daily hive-severity scores), aggregated strictly preindex (window_days=14, knowable_at=preindex_0d — no postindex PRO leakage), measures the hive component of disease activity at baseline (Maurer 2023 PEARL-1/2 PMID 38008109; doi:10.1016/S0140-6736(23)01684-7). Z->T: HSS7-high patients are selected for more-aggressive therapy. Z->Y: HSS7 baseline level predicts response magnitude through regression-to-mean in baseline severity. why_not_duplicate: the nearest golden-set neighbor is the COMPOSITE UAS7 (hives + itch components, 30d window); this is the HSS7 SUBSCORE only (hives only, 14d window). Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -4840,17 +4453,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="confounder",
             mechanism=(
-                "Most-recent prior-omalizumab response category (complete-responder/partial/"
-                "non-responder), assessed strictly preindex (window_days=730, knowable_at="
-                "preindex_0d — no postindex response data), captures both treatment-history "
-                "selection and a marker of immunologic subtype (Maurer 2023 PEARL-1/2 PMID "
-                "38008109; doi:10.1016/S0140-6736(23)01684-7). Z->T: omalizumab non-"
-                "responders are channelled toward BTK-inhibitor therapy. Z->Y: prior-non-"
-                "response indexes refractory-pathology subtype (e.g., type IIb autoimmune) "
-                "predicting poorer outcomes across treatments. why_not_duplicate: golden "
-                "prior_omalizumab_use_flag_730d_preindex is binary EVER-USED; this is the "
-                "ORDINAL response-category — distinct construct. Remediation per role-to-"
-                "remediation table: confounder → keep_with_caveat."
+                "Most-recent prior-omalizumab response category (complete-responder/partial/non-responder), assessed strictly preindex (window_days=730, knowable_at=preindex_0d — no postindex response data), captures both treatment-history selection and a marker of immunologic subtype (Maurer 2023 PEARL-1/2 PMID 38008109; doi:10.1016/S0140-6736(23)01684-7). Z->T: omalizumab non-responders are channelled toward BTK-inhibitor therapy. Z->Y: prior-non-response indexes refractory-pathology subtype (e.g., type IIb autoimmune) predicting poorer outcomes across treatments. why_not_duplicate: the nearest golden-set neighbor is binary EVER-USED; this is the ORDINAL response-category — distinct construct. Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -4893,16 +4496,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="confounder",
             mechanism=(
-                "Anti-thyroid-peroxidase titer from the most-recent preindex assay "
-                "(window_days=365, knowable_at=preindex_0d ensures prefix-censoring at "
-                "index_date), indexes type-IIb autoimmune CSU subtype (Sanchez 2023 Clin "
-                "Exp Allergy PMID 37245259; doi:10.1111/cea.14352). Z->T: TPO-positive "
-                "patients (autoimmune subtype) shift prescriber preference toward slower-"
-                "responding biologic regimens. Z->Y: autoimmune subtype is associated with "
-                "poorer treatment response across modalities. why_not_duplicate: golden "
-                "comorbid_autoimmune_thyroiditis_history_5y_preindex is the DIAGNOSIS FLAG; "
-                "this is the QUANTITATIVE titer level — distinct measurement. Remediation "
-                "per role-to-remediation table: confounder → keep_with_caveat."
+                "Anti-thyroid-peroxidase titer from the most-recent preindex assay (window_days=365, knowable_at=preindex_0d ensures prefix-censoring at index_date), indexes type-IIb autoimmune CSU subtype (Sanchez 2023 Clin Exp Allergy PMID 37245259; doi:10.1111/cea.14352). Z->T: TPO-positive patients (autoimmune subtype) shift prescriber preference toward slower-responding biologic regimens. Z->Y: autoimmune subtype is associated with poorer treatment response across modalities. why_not_duplicate: the nearest golden-set neighbor is the DIAGNOSIS FLAG; this is the QUANTITATIVE titer level — distinct measurement. Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -4919,16 +4513,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="confounder",
             mechanism=(
-                "Maximum D-dimer/ULN ratio over the 180d preindex window (knowable_at="
-                "preindex_0d enforces strict prefix-censoring; no postindex coagulation "
-                "data), indexes coagulation-fibrinolysis activation linked to disease "
-                "severity (Takahashi 2018 PMID 29797525; doi:10.1111/1346-8138.14481; "
-                "Kolkhir 2017 PMID 27926978). Z->T: high preindex D-dimer is a recognized "
-                "biomarker driving biologic escalation. Z->Y: D-dimer elevation predicts "
-                "severity-of-flares independent of treatment. why_not_duplicate: golden "
-                "delta_d_dimer_ug_ml_90_180d_post_index is a POSTINDEX DELTA; this is the "
-                "PREINDEX LEVEL/ULN — distinct temporal position. Remediation per role-to-"
-                "remediation table: confounder → keep_with_caveat."
+                "Maximum D-dimer/ULN ratio over the 180d preindex window (knowable_at=preindex_0d enforces strict prefix-censoring; no postindex coagulation data), indexes coagulation-fibrinolysis activation linked to disease severity (Takahashi 2018 PMID 29797525; doi:10.1111/1346-8138.14481; Kolkhir 2017 PMID 27926978). Z->T: high preindex D-dimer is a recognized biomarker driving biologic escalation. Z->Y: D-dimer elevation predicts severity-of-flares independent of treatment. why_not_duplicate: the nearest golden-set neighbor is a POSTINDEX DELTA; this is the PREINDEX LEVEL/ULN — distinct temporal position. Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -4999,20 +4584,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="instrument",
             mechanism=(
-                "Binary flag indicating patient indexed within 90d of FDA approval of "
-                "omalizumab biosimilar CT-P39 (March 2025; Wedi 2025 PMID 40747638; "
-                "doi:10.1097/ACI.0000000000001095). Pre-anchor window enforced; the "
-                "approval date is a fixed exogenous calendar event independent of patient "
-                "characteristics. Z->T: approval-recency surge drives biosimilar uptake "
-                "(Brookhart-Wang short-term-IV framework PMID 16617275). EXCLUSION "
-                "RESTRICTION DEFENSE: FDA approval date for a biosimilar has no biological "
-                "path Z->Y other than through treatment receipt; the active molecule is "
-                "equivalent, so there is no efficacy-shift confound (Brookhart-Schneeweiss "
-                "preference-IV review PMID 16617275). why_not_duplicate: golden "
-                "calendar_time_post_remibrutinib_approval_indicator targets a DIFFERENT "
-                "DRUG approval; this targets the omalizumab-biosimilar approval cliff — "
-                "distinct molecule, distinct calendar event. Remediation per role-to-"
-                "remediation table: instrument → keep_with_caveat."
+                "Binary flag indicating patient indexed within 90d of FDA approval of omalizumab biosimilar CT-P39 (March 2025; Wedi 2025 PMID 40747638; doi:10.1097/ACI.0000000000001095). Pre-anchor window enforced; the approval date is a fixed exogenous calendar event independent of patient characteristics. Z->T: approval-recency surge drives biosimilar uptake (Brookhart-Wang short-term-IV framework PMID 16617275). EXCLUSION RESTRICTION DEFENSE: FDA approval date for a biosimilar has no biological path Z->Y other than through treatment receipt; the active molecule is equivalent, so there is no efficacy-shift confound (Brookhart-Schneeweiss preference-IV review PMID 16617275). why_not_duplicate: the nearest golden-set neighbor targets a DIFFERENT DRUG approval; this targets the omalizumab-biosimilar approval cliff — distinct molecule, distinct calendar event. Remediation per role-to-remediation table: instrument → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -5029,21 +4601,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="instrument",
             mechanism=(
-                "Tertile of the indexing prescriber's omalizumab-share of their CSU-"
-                "biologic fills in the prior 365d (knowable_at=preindex_0d — based on "
-                "prescriptions written BEFORE the focal patient's index, no postindex "
-                "data); Brookhart-Wang preference-based instrumental variable (Brookhart "
-                "2006 PMID 16617275) for CSU biologic selection. Z->T: high-preference-"
-                "tertile prescribers initiate omalizumab more often. EXCLUSION RESTRICTION "
-                "DEFENSE: prescriber preference between omalizumab and other CSU "
-                "biologics affects patient outcome ONLY through treatment receipt; "
-                "preference does not affect underlying disease biology; preference-share "
-                "is computed from a cohort of OTHER patients to satisfy the conditional-"
-                "exchangeability requirement. why_not_duplicate: golden index_prescriber_"
-                "csu_biologic_volume_tertile_prior_365d uses VOLUME (capacity confound); "
-                "this uses preference-SHARE (Brookhart pattern explicitly avoiding "
-                "capacity). Remediation per role-to-remediation table: instrument → "
-                "keep_with_caveat."
+                "Tertile of the indexing prescriber's omalizumab-share of their CSU-biologic fills in the prior 365d (knowable_at=preindex_0d — based on prescriptions written BEFORE the focal patient's index, no postindex data); Brookhart-Wang preference-based instrumental variable (Brookhart 2006 PMID 16617275) for CSU biologic selection. Z->T: high-preference-tertile prescribers initiate omalizumab more often. EXCLUSION RESTRICTION DEFENSE: prescriber preference between omalizumab and other CSU biologics affects patient outcome ONLY through treatment receipt; preference does not affect underlying disease biology; preference-share is computed from a cohort of OTHER patients to satisfy the conditional-exchangeability requirement. why_not_duplicate: the nearest golden-set neighbor uses VOLUME (capacity confound); this uses preference-SHARE (Brookhart pattern explicitly avoiding capacity). Remediation per role-to-remediation table: instrument → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -5095,22 +4653,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="instrument",
             mechanism=(
-                "Binary flag for indexing prescriber having written their FIRST remibrutinib "
-                "prescription within the first 365d post-launch (knowable_at=preindex_0d — "
-                "computed against the FOCAL patient's index date but based on prescriber "
-                "history that PRECEDES the focal index). Brookhart-Wang early-adopter "
-                "instrument (PMID 16617275). Z->T: early-adopter prescribers shift toward "
-                "remibrutinib for subsequent eligible patients. EXCLUSION RESTRICTION "
-                "DEFENSE: prescriber adoption-recency captures information-diffusion timing "
-                "uncorrelated with patient-level disease biology; pre-launch prescribing "
-                "behaviour matches across-prescriber adoption profiles, and adoption does "
-                "not change patient outcomes except via treatment receipt (Brookhart-"
-                "Schneeweiss PMID 16617275). why_not_duplicate: golden index_prescriber_"
-                "first_btki_initiation_within_first_year_post_approval_flag is the SAME "
-                "FAMILY but uses a DIFFERENT calendar anchor (approval vs launch); the "
-                "launch event lags approval and captures availability not authorization "
-                "timing. Distinct calendar event. Remediation per role-to-remediation "
-                "table: instrument → keep_with_caveat."
+                "Binary flag for indexing prescriber having written their FIRST remibrutinib prescription within the first 365d post-launch (knowable_at=preindex_0d — computed against the FOCAL patient's index date but based on prescriber history that PRECEDES the focal index). Brookhart-Wang early-adopter instrument (PMID 16617275). Z->T: early-adopter prescribers shift toward remibrutinib for subsequent eligible patients. EXCLUSION RESTRICTION DEFENSE: prescriber adoption-recency captures information-diffusion timing uncorrelated with patient-level disease biology; pre-launch prescribing behaviour matches across-prescriber adoption profiles, and adoption does not change patient outcomes except via treatment receipt (Brookhart-Schneeweiss PMID 16617275). why_not_duplicate: the nearest golden-set neighbor is the SAME FAMILY but uses a DIFFERENT calendar anchor (approval vs launch); the launch event lags approval and captures availability not authorization timing. Distinct calendar event. Remediation per role-to-remediation table: instrument → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -5205,15 +4748,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="mediator",
             mechanism=(
-                "Change in serum total IgE from baseline to 60-90d postindex (knowable_at="
-                "postindex_90d; postindex sampling structurally required). T->M: omalizumab "
-                "binds free IgE forming complexes that paradoxically INCREASE measured "
-                "total-IgE in lab assays (Maurer 2023 PEARL-1/2 PMID 38008109; doi:10.1016/"
-                "S0140-6736(23)01684-7). M->Y: degree of measured total-IgE rise correlates "
-                "with effective drug-target engagement, mediating UAS7 response. "
-                "why_not_duplicate: golden baseline_total_ige_iu_ml_preindex is the "
-                "BASELINE; this is the POSTINDEX DELTA. Remediation per role-to-"
-                "remediation table: mediator → drop."
+                "Change in serum total IgE from baseline to 60-90d postindex (knowable_at=postindex_90d; postindex sampling structurally required). T->M: omalizumab binds free IgE forming complexes that paradoxically INCREASE measured total-IgE in lab assays (Maurer 2023 PEARL-1/2 PMID 38008109; doi:10.1016/S0140-6736(23)01684-7). M->Y: degree of measured total-IgE rise correlates with effective drug-target engagement, mediating UAS7 response. why_not_duplicate: the nearest golden-set neighbor is the BASELINE; this is the POSTINDEX DELTA. Remediation per role-to-remediation table: mediator → drop."
             ),
             recommended_remediation="drop",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -5311,16 +4846,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="descendant",
             mechanism=(
-                "Urticaria Control Test (UCT) ≥16 (complete control) flag at 24w postindex "
-                "(knowable_at=postindex_168d; postindex required by construction). Y->X: "
-                "the outcome (UAS7 remission at 180d) and UCT-complete-control are highly "
-                "co-determined — UCT is a parallel response register downstream of "
-                "treatment success. Descendant arrowhead: outcome -> UCT-control flag. "
-                "Including this feature leaks outcome information at training time (Maurer "
-                "2023 PEARL-1/2 PMID 38008109; doi:10.1016/S0140-6736(23)01684-7). "
-                "why_not_duplicate: golden uct_score_150_180d_post_index is the continuous "
-                "UCT score; this is the BINARY UCT≥16 control flag at 24w — distinct "
-                "construct. Remediation per role-to-remediation table: descendant → drop."
+                "Urticaria Control Test (UCT) ≥16 (complete control) flag at 24w postindex (knowable_at=postindex_168d; postindex required by construction). Y->X: the outcome (UAS7 remission at 180d) and UCT-complete-control are highly co-determined — UCT is a parallel response register downstream of treatment success. Descendant arrowhead: outcome -> UCT-control flag. Including this feature leaks outcome information at training time (Maurer 2023 PEARL-1/2 PMID 38008109; doi:10.1016/S0140-6736(23)01684-7). why_not_duplicate: the nearest golden-set neighbor is the continuous UCT score; this is the BINARY UCT≥16 control flag at 24w — distinct construct. Remediation per role-to-remediation table: descendant → drop."
             ),
             recommended_remediation="drop",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -5361,16 +4887,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="descendant",
             mechanism=(
-                "Binary flag for D-dimer normalization (<ULN) at 90d postindex (knowable_at="
-                "=postindex_90d; postindex measurement by construction). Y->X: D-dimer "
-                "tracks disease-activity normalization; in responders D-dimer normalizes as "
-                "a downstream consequence of disease control rather than an upstream driver "
-                "(Kolkhir 2017 PMID 27926978; doi:10.1111/cea.12870; Takahashi 2018 PMID "
-                "29797525). Descendant arrowhead: disease-control (outcome) -> D-dimer "
-                "normalization. why_not_duplicate: golden delta_d_dimer_ug_ml_90_180d_"
-                "post_index is a CONTINUOUS DELTA at a LATER window; this is the BINARY "
-                "NORMALIZATION flag at 90d. Remediation per role-to-remediation table: "
-                "descendant → drop."
+                "Binary flag for D-dimer normalization (<ULN) at 90d postindex (knowable_at==postindex_90d; postindex measurement by construction). Y->X: D-dimer tracks disease-activity normalization; in responders D-dimer normalizes as a downstream consequence of disease control rather than an upstream driver (Kolkhir 2017 PMID 27926978; doi:10.1111/cea.12870; Takahashi 2018 PMID 29797525). Descendant arrowhead: disease-control (outcome) -> D-dimer normalization. why_not_duplicate: the nearest golden-set neighbor is a CONTINUOUS DELTA at a LATER window; this is the BINARY NORMALIZATION flag at 90d. Remediation per role-to-remediation table: descendant → drop."
             ),
             recommended_remediation="drop",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -5388,16 +4905,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="ancestor",
             mechanism=(
-                "Family history flag for first-degree relative with chronic urticaria, "
-                "documented strictly preindex (knowable_at=preindex_0d enforces prefix-"
-                "censoring; this is a non-time-varying genetic/familial trait). Ancestor "
-                "arrowhead: shared genetic-susceptibility-loci -> patient CSU risk; this "
-                "is UPSTREAM of disease onset (Sanchez 2023 PMID 37245259) and thus "
-                "ancestor (not confounder) because it acts ONLY through baseline CSU-"
-                "susceptibility. F->disease onset->T,Y. why_not_duplicate: golden "
-                "family_history_atopy_first_degree_relative_flag is for ATOPY (broader "
-                "umbrella); this is for CSU SPECIFICALLY. Remediation per role-to-"
-                "remediation table: ancestor → keep_with_caveat."
+                "Family history flag for first-degree relative with chronic urticaria, documented strictly preindex (knowable_at=preindex_0d enforces prefix-censoring; this is a non-time-varying genetic/familial trait). Ancestor arrowhead: shared genetic-susceptibility-loci -> patient CSU risk; this is UPSTREAM of disease onset (Sanchez 2023 PMID 37245259) and thus ancestor (not confounder) because it acts ONLY through baseline CSU-susceptibility. F->disease onset->T,Y. why_not_duplicate: the nearest golden-set neighbor is for ATOPY (broader umbrella); this is for CSU SPECIFICALLY. Remediation per role-to-remediation table: ancestor → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -5414,14 +4922,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="ancestor",
             mechanism=(
-                "HLA-DR4 carrier flag, available as germline genotype (knowable_at="
-                "preindex_0d trivially; the genotype is fixed at conception, no temporal "
-                "concerns). Ancestor arrowhead: germline genotype -> immune-repertoire -> "
-                "CSU disease susceptibility; the allele predates ALL post-conception "
-                "exposures and acts only via disease-onset risk. why_not_duplicate: golden "
-                "hla_drb1_autoimmune_csu_susceptibility_allele_flag targets DRB1 alleles "
-                "broadly; this targets DR4 specifically. Remediation per role-to-"
-                "remediation table: ancestor → keep_with_caveat."
+                "HLA-DR4 carrier flag, available as germline genotype (knowable_at=preindex_0d trivially; the genotype is fixed at conception, no temporal concerns). Ancestor arrowhead: germline genotype -> immune-repertoire -> CSU disease susceptibility; the allele predates ALL post-conception exposures and acts only via disease-onset risk. why_not_duplicate: the nearest golden-set neighbor targets DRB1 alleles broadly; this targets DR4 specifically. Remediation per role-to-remediation table: ancestor → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -5443,18 +4944,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="ancestor",
             mechanism=(
-                "History of atopic dermatitis diagnosis before age 5y, documented strictly "
-                "preindex (knowable_at=preindex_0d; this is a fixed early-life trait). "
-                "Ancestor arrowhead: early-life atopic-march -> immune-phenotype -> CSU "
-                "susceptibility (mechanistic rationale: atopic march — early eczema confers "
-                "Th2-skewed immune phenotype elevating adult urticaria risk; no single "
-                "observational study validates the age-5y AD cutoff specifically for CSU, "
-                "making this a plausible edge case for the classifier). The early-life event "
-                "temporally precedes ALL CSU disease-process exposures and acts through "
-                "baseline disease-susceptibility only. why_not_duplicate: golden "
-                "childhood_eczema_history_flag is broader (any childhood eczema any age); "
-                "this is the SHARPER age-5y threshold variant. Remediation per "
-                "role-to-remediation table: ancestor → keep_with_caveat."
+                "History of atopic dermatitis diagnosis before age 5y, documented strictly preindex (knowable_at=preindex_0d; this is a fixed early-life trait). Ancestor arrowhead: early-life atopic-march -> immune-phenotype -> CSU susceptibility (mechanistic rationale: atopic march — early eczema confers Th2-skewed immune phenotype elevating adult urticaria risk; no single observational study validates the age-5y AD cutoff specifically for CSU, making this a plausible edge case for the classifier). The early-life event temporally precedes ALL CSU disease-process exposures and acts through baseline disease-susceptibility only. why_not_duplicate: the nearest golden-set neighbor is broader (any childhood eczema any age); this is the SHARPER age-5y threshold variant. Remediation per role-to-remediation table: ancestor → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -5526,19 +5016,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="collider",
             mechanism=(
-                "Flag for switch to alternative CSU biologic (e.g., from omalizumab to "
-                "remibrutinib or ligelizumab) in the 120d post-index window (knowable_at="
-                "postindex_120d; post-treatment by construction). Both initial-treatment "
-                "(T) AND outcome (Y, lack-of-response) influence the switch decision: "
-                "switches occur in non-responders only, but the switch is also gated on "
-                "what drug was initiated (Wedi 2025 PMID 40747638; doi:10.1097/ACI.0000000"
-                "000001095; Maurer 2023 PEARL-1/2 PMID 38008109; doi:10.1016/S0140-"
-                "6736(23)01684-7). Collider arrowhead: T -> switch <- Y. Conditioning on "
-                "switch opens a backdoor T-Y path biasing causal estimates. "
-                "why_not_duplicate: golden post_index_switch_to_alternative_biologic_180d_"
-                "flag uses a 180d window; this is the 120d EARLIER window — distinct "
-                "temporal cutoff. Remediation per role-to-remediation table: collider → "
-                "drop."
+                "Flag for switch to alternative CSU biologic (e.g., from omalizumab to remibrutinib or ligelizumab) in the 120d post-index window (knowable_at=postindex_120d; post-treatment by construction). Both initial-treatment (T) AND outcome (Y, lack-of-response) influence the switch decision: switches occur in non-responders only, but the switch is also gated on what drug was initiated (Wedi 2025 PMID 40747638; doi:10.1097/ACI.0000000000001095; Maurer 2023 PEARL-1/2 PMID 38008109; doi:10.1016/S0140-6736(23)01684-7). Collider arrowhead: T -> switch <- Y. Conditioning on switch opens a backdoor T-Y path biasing causal estimates. why_not_duplicate: the nearest golden-set neighbor uses a 180d window; this is the 120d EARLIER window — distinct temporal cutoff. Remediation per role-to-remediation table: collider → drop."
             ),
             recommended_remediation="drop",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),
@@ -5711,19 +5189,7 @@ def build_compile_set() -> list[dspy.Example]:
             ),
             causal_role="confounder",
             mechanism=(
-                "Edge case: this entry tests the EXACT boundary of prefix-censoring. The "
-                "UAS7 measurement is taken on the SAME calendar day as the biologic-"
-                "initiation event (knowable_at=preindex_0d, window_days=0). By convention, "
-                "same-day measurements are considered PREINDEX (the assessment precedes "
-                "the prescription decision at the visit). Z->T: same-day baseline UAS7 "
-                "is the value the prescriber uses when making the initiation decision "
-                "(Maurer 2023 PEARL-1/2 PMID 38008109; doi:10.1016/S0140-6736(23)01684-7). "
-                "Z->Y: baseline severity predicts outcome trajectory. Pearl arrowhead: "
-                "Z->T (decision input), Z->Y (severity prognosis). why_not_duplicate: "
-                "golden baseline_uas7_score_preindex_30d uses a 30d preindex window with "
-                "the most-recent value selected; this is the SAME-DAY-OF-INITIATION value "
-                "edge case — distinct windowing. Remediation per role-to-remediation "
-                "table: confounder → keep_with_caveat."
+                "Edge case: this entry tests the EXACT boundary of prefix-censoring. The UAS7 measurement is taken on the SAME calendar day as the biologic-initiation event (knowable_at=preindex_0d, window_days=0). By convention, same-day measurements are considered PREINDEX (the assessment precedes the prescription decision at the visit). Z->T: same-day baseline UAS7 is the value the prescriber uses when making the initiation decision (Maurer 2023 PEARL-1/2 PMID 38008109; doi:10.1016/S0140-6736(23)01684-7). Z->Y: baseline severity predicts outcome trajectory. Pearl arrowhead: Z->T (decision input), Z->Y (severity prognosis). why_not_duplicate: the nearest golden-set neighbor uses a 30d preindex window with the most-recent value selected; this is the SAME-DAY-OF-INITIATION value edge case — distinct windowing. Remediation per role-to-remediation table: confounder → keep_with_caveat."
             ),
             recommended_remediation="keep_with_caveat",
         ).with_inputs("feature_name", "derivation_pseudocode", "dataset_context"),

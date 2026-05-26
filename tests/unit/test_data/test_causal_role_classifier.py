@@ -1393,6 +1393,294 @@ def test_compile_set_disjoint_from_literature_golden_set():
         )
 
 
+def test_no_golden_test_feature_name_in_compiled_demo_bound_fields():
+    """Issue #517 guard: no held-out golden TEST feature-name may appear in any
+    compiled-demo-bound exemplar OUTPUT field.
+
+    The DSPy demos carry the exemplar's labeled OUTPUT fields (``causal_role``,
+    ``mechanism``, ``recommended_remediation``) into the compiled prompt text.
+    The ``why_not_duplicate:`` disjointness prose lives inside ``mechanism`` and
+    must argue distinctness STRUCTURALLY (pattern + cohort + biomarker + window)
+    — it must NOT name a held-out golden-set TEST feature-name, because that text
+    leaks the test distribution into training demos and inflates the MEASURED
+    golden-set precision (train/test leakage). Surfaced by the #502 hardening
+    experiment: scrubbing this prose dropped measured wins 5/6 -> 3/6.
+
+    Word-bounded match so a golden name cannot hide as a deliberate token; a
+    plain substring of an unrelated clinical phrase is not flagged.
+    """
+    import json
+    import re
+    from pathlib import Path
+
+    from src.data.causal_role_classifier import build_compile_set
+
+    golden_path = Path("tests/fixtures/causal_role_golden_set.json")
+    golden = json.loads(golden_path.read_text())
+    golden_names = sorted(
+        {entry["feature_name"] for entry in golden["entries"]},
+        key=len,
+        reverse=True,
+    )
+
+    # Output fields the compiled DSPy demo serializes (inputs are the 3
+    # .with_inputs(...) fields; everything else on the Example is a demo label).
+    OUTPUT_FIELDS = ("causal_role", "mechanism", "recommended_remediation")
+
+    violations: list[str] = []
+    for example in build_compile_set():
+        own = example.feature_name
+        for field_name in OUTPUT_FIELDS:
+            text = str(getattr(example, field_name, ""))
+            for gname in golden_names:
+                if gname == own:
+                    continue  # an exemplar may legitimately be its own subject
+                if re.search(
+                    r"(?<![A-Za-z0-9_])" + re.escape(gname) + r"(?![A-Za-z0-9_])",
+                    text,
+                ):
+                    violations.append(
+                        f"exemplar {own!r} field {field_name!r} names golden TEST feature {gname!r}"
+                    )
+
+    assert not violations, (
+        f"{len(violations)} golden-test-name leak(s) in compiled-demo-bound "
+        "exemplar fields (issue #517 train/test leakage):\n  "
+        + "\n  ".join(violations[:20])
+        + ("\n  ..." if len(violations) > 20 else "")
+    )
+
+
+def test_no_held_out_neighbor_role_in_why_not_duplicate_prose():
+    """Issue #517 guard (codex round-1 HIGH/MED): the ``why_not_duplicate:``
+    prose must not leak the held-out golden NEIGHBOR's role, even when the
+    neighbor's feature-name has been removed or truncated.
+
+    Two leak classes this catches that the word-bounded feature-name guard does
+    NOT:
+
+    * **Truncated golden-name**: a golden TEST feature-name minus a suffix
+      (e.g. ``ctdna_esr1_emergence`` for the golden
+      ``ctdna_esr1_emergence_flag_90d``) still leaks the held-out entry. We flag
+      any underscore-token run of length >= 3 that is a unique PREFIX of exactly
+      one golden TEST feature-name.
+    * **Neighbor-role label**: a causal-role word attached to the NEIGHBOR side
+      of the contrast (the clause describing "the nearest golden-set neighbor" /
+      "golden ...", before the exemplar's own "this ..." clause and outside the
+      trailing "Remediation per role-to-remediation table: <own_role> ..."
+      clause). Stating the neighbor's role reveals the held-out answer.
+
+    The exemplar's OWN role (its ``causal_role`` label, its trailing remediation
+    clause, and self-descriptions like "novel X confounder" / "teaches the X
+    pattern" on the "this entry" side) is legitimate and intentionally NOT
+    flagged — only the held-out neighbor's role is the leak.
+    """
+    import json
+    import re
+    from pathlib import Path
+
+    from src.data.causal_role_classifier import build_compile_set
+
+    golden_path = Path("tests/fixtures/causal_role_golden_set.json")
+    golden = json.loads(golden_path.read_text())
+    golden_names = {entry["feature_name"] for entry in golden["entries"]}
+
+    role_alt = "collider|mediator|confounder|instrument|ancestor|descendant"
+
+    # Build the set of unique long PREFIXES of golden names (>= 3 underscore
+    # tokens) that uniquely identify exactly one golden feature, for the
+    # truncated-name check.
+    def token_prefixes(name: str) -> list[str]:
+        toks = name.split("_")
+        return ["_".join(toks[:k]) for k in range(3, len(toks))]
+
+    prefix_owner: dict[str, set[str]] = {}
+    for gname in golden_names:
+        for p in token_prefixes(gname):
+            prefix_owner.setdefault(p, set()).add(gname)
+    unique_prefixes = {
+        p: next(iter(owners)) for p, owners in prefix_owner.items() if len(owners) == 1
+    }
+
+    violations: list[str] = []
+    for example in build_compile_set():
+        own = example.feature_name
+        mech = str(example.mechanism)
+        if "why_not_duplicate" not in mech:
+            continue
+        seg = mech[mech.index("why_not_duplicate") :]
+
+        # Truncated golden-name leak (word-bounded unique prefix), excluding the
+        # exemplar's own name / its own prefixes.
+        own_prefixes = set(token_prefixes(own))
+        for p, gname in unique_prefixes.items():
+            if gname == own or p in own_prefixes:
+                continue
+            if re.search(r"(?<![A-Za-z0-9_])" + re.escape(p) + r"(?![A-Za-z0-9_])", seg):
+                violations.append(
+                    f"exemplar {own!r} names a truncated golden TEST feature "
+                    f"{p!r} (prefix of {gname!r})"
+                )
+
+        # Neighbor-role leak: role word on the NEIGHBOR side of the contrast.
+        # NEIGHBOR side = text after "why_not_duplicate:" up to the first
+        # "this ..." clause, excluding the trailing remediation clause, and only
+        # when that text references the neighbor ("neighbor"/"golden"/"nearest").
+        neighbor_side = re.split(r"Remediation per role-to-remediation table", seg, maxsplit=1)[0]
+        this_split = re.search(r"\bthis\b", neighbor_side, flags=re.IGNORECASE)
+        if this_split:
+            neighbor_side = neighbor_side[: this_split.start()]
+        references_neighbor = re.search(
+            r"\b(neighbor|golden|nearest)\b", neighbor_side, flags=re.IGNORECASE
+        )
+        # Self-description verbs on the neighbor side are the exemplar's own
+        # pedagogy, not a neighbor-role leak.
+        is_self_description = re.search(
+            r"\b(novel|teaches|specifically teaches)\b",
+            neighbor_side,
+            flags=re.IGNORECASE,
+        )
+        if references_neighbor and not is_self_description:
+            role_hit = re.search(r"(?i)\b(" + role_alt + r")\b", neighbor_side)
+            if role_hit:
+                violations.append(
+                    f"exemplar {own!r} states held-out neighbor role "
+                    f"{role_hit.group(1)!r} in why_not_duplicate"
+                )
+
+    assert not violations, (
+        f"{len(violations)} held-out neighbor leak(s) in why_not_duplicate prose "
+        "(issue #517, codex round-1):\n  " + "\n  ".join(violations[:20])
+    )
+
+
+def test_persisted_artifact_demos_are_leak_free_and_source_consistent():
+    """Issue #517 guard (codex round-1 MED): the SHIPPED artifact's persisted
+    demos must (a) be free of golden-test-name / truncated-name leaks in every
+    serialized field, and (b) carry a ``mechanism`` byte-identical to their
+    source exemplar.
+
+    The two source-level guards above validate ``build_compile_set()``, but the
+    artifact ``artifacts/dspy/causal_role_classifier.json`` is what actually
+    ships and is edited by this PR. This test closes the source/artifact gap:
+    an offline artifact patch that reintroduced leakage, or copied the wrong
+    mechanism across duplicate ``feature_name`` / distinct ``(T, Y)`` variants,
+    would fire here. The full-identity key (feature_name + derivation_pseudocode
+    + dataset_context + causal_role) is required precisely because 6
+    feature-names have 2-3 paired-fixture variants with different roles.
+    """
+    import json
+    import re
+    from pathlib import Path
+
+    from src.data.causal_role_classifier import build_compile_set
+
+    artifact_path = Path("artifacts/dspy/causal_role_classifier.json")
+    if not artifact_path.exists():
+        import pytest
+
+        pytest.skip("compiled artifact not present")
+
+    artifact = json.loads(artifact_path.read_text())
+    demos = artifact.get("classify.predict", {}).get("demos", [])
+    assert demos, "artifact has no persisted demos"
+
+    golden = json.loads(Path("tests/fixtures/causal_role_golden_set.json").read_text())
+    golden_names = sorted(
+        {entry["feature_name"] for entry in golden["entries"]}, key=len, reverse=True
+    )
+
+    def token_prefixes(name: str) -> list[str]:
+        toks = name.split("_")
+        return ["_".join(toks[:k]) for k in range(3, len(toks))]
+
+    prefix_owner: dict[str, set[str]] = {}
+    for gname in golden_names:
+        for p in token_prefixes(gname):
+            prefix_owner.setdefault(p, set()).add(gname)
+    unique_prefixes = {p: next(iter(o)) for p, o in prefix_owner.items() if len(o) == 1}
+
+    # Source map keyed on the FULL demo identity.
+    src_map = {
+        (
+            ex.feature_name,
+            ex.derivation_pseudocode,
+            ex.dataset_context,
+            ex.causal_role,
+        ): ex.mechanism
+        for ex in build_compile_set()
+    }
+
+    # Prose OUTPUT fields where a held-out NEIGHBOR reference would live. The
+    # INPUT fields (derivation_pseudocode, dataset_context) describe the
+    # exemplar's OWN feature — a clinical token there (e.g. a derivation_input
+    # named ``ldh_x_uln_d90``) is the exemplar's own derivation, not a leak —
+    # so they are excluded from the leak scan (mirrors the source-level guards,
+    # which scan only the demo OUTPUT fields).
+    PROSE_FIELDS = ("mechanism", "reasoning")
+
+    leak_violations: list[str] = []
+    consistency_violations: list[str] = []
+    for dm in demos:
+        own = dm.get("feature_name")
+        own_prefixes = set(token_prefixes(str(own)))
+        # (a) leakage across prose output fields
+        for field_name in PROSE_FIELDS:
+            text = str(dm.get(field_name, "") or "")
+            for gname in golden_names:
+                if gname == own:
+                    continue
+                if re.search(
+                    r"(?<![A-Za-z0-9_])" + re.escape(gname) + r"(?![A-Za-z0-9_])",
+                    text,
+                ):
+                    leak_violations.append(
+                        f"demo {own!r} field {field_name!r} names golden {gname!r}"
+                    )
+            for prefix, gname in unique_prefixes.items():
+                if gname == own or prefix in own_prefixes:
+                    continue
+                if re.search(
+                    r"(?<![A-Za-z0-9_])" + re.escape(prefix) + r"(?![A-Za-z0-9_])",
+                    text,
+                ):
+                    leak_violations.append(
+                        f"demo {own!r} field {field_name!r} names truncated "
+                        f"golden {prefix!r} (prefix of {gname!r})"
+                    )
+        # (b) source/artifact mechanism consistency on the full key
+        key = (
+            own,
+            dm.get("derivation_pseudocode"),
+            dm.get("dataset_context"),
+            dm.get("causal_role"),
+        )
+        if key not in src_map:
+            # A persisted demo with no matching source exemplar means the
+            # artifact carries supervision the compile set cannot account for
+            # (codex round-1 LOW hardening) — fail loudly rather than silently
+            # skipping the consistency check for it.
+            consistency_violations.append(
+                f"demo {own!r} (role {dm.get('causal_role')!r}) has no matching "
+                "full-identity source exemplar in build_compile_set()"
+            )
+        elif dm.get("mechanism") != src_map[key]:
+            consistency_violations.append(
+                f"demo {own!r} (role {dm.get('causal_role')!r}) mechanism "
+                "diverges from its source exemplar"
+            )
+
+    assert not leak_violations, (
+        f"{len(leak_violations)} golden-name leak(s) in the SHIPPED artifact's "
+        "persisted demos (issue #517):\n  " + "\n  ".join(leak_violations[:20])
+    )
+    assert not consistency_violations, (
+        f"{len(consistency_violations)} artifact demo(s) whose mechanism does not "
+        "match its full-identity source exemplar (issue #517, codex round-1 — "
+        "wrong-variant mechanism copy):\n  " + "\n  ".join(consistency_violations[:20])
+    )
+
+
 def test_ac3_verdict_n200_artifact_present_and_valid_schema():
     """The committed AC3 verdict JSON must validate against the schema."""
     import json
