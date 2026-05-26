@@ -11,39 +11,50 @@ p50 target — standard tail-latency budget for a 3-stream fused search).
 **Tolerance bands** (codified in
 ``tests/benchmarks/baselines/performance.json``; re-stated here so the
 test docstring carries the same numbers as the JSON, per codex iter-0 L1):
-- p50: 20% relative OR 50ms absolute (whichever wider).
-- p95: 25% relative OR 100ms absolute (whichever wider).
-The wider-of-the-two policy is `max(rel, abs)` — see
-``_within_tolerance`` for the rationale; absolute bands protect against
-noise on near-zero baselines, relative bands catch real drift at large
-baselines.
+- p50: 50% relative OR 8ms absolute (whichever wider).
+- p95: 50% relative OR 12ms absolute (whichever wider).
+The wider-of-the-two policy is `max(rel, abs)` — see ``_within_tolerance``
+for the rationale. At the local-substrate scale (p50≈3.9ms, p95≈9.09ms;
+issue #414) the absolute floors dominate, making these INTENTIONALLY
+fixed-threshold gross-regression guards (~3x p50, ~2.3x p95) rather than
+tight 2x relative guards — a true 2x slowdown still passes. The floors are
+sized to absorb ubuntu-runner variance so the gate doesn't flake while
+still catching gross regressions (broken stream concurrency, N+1, blocking
+calls → ≥3x); the relative bands take over only if a future re-bless lands
+a much larger baseline. See the JSON ``_tolerance_rationale`` for details.
 
 **Companion**: this benchmark is the latency-shaped sibling of PR #379's
 ``test_retrieval_quality.py`` (Recall@10 + MRR). Both share
 ``tests/benchmarks/data/retrieval_queries.jsonl`` and the labeled-query
 loader from ``tests/benchmarks/_loader.py``.
 
-**Baseline strategy (placeholder-first-run-blesses, retained for the
-hybrid p50/p95 baselines only — per issue #403)**: the sibling cascade +
-bm25 baselines are CI-blessed-median, but the hybrid retriever cannot
-be re-blessed from CI because the live retriever skips when
-``SUPABASE_URL`` / ``SUPABASE_KEY`` / ``OPENAI_API_KEY`` are absent. The
-first CI run that has all three secrets BLESSES the measured p50/p95 as
-the baseline (re-write ``tests/benchmarks/baselines/performance.json``
-in that PR; see the existing ``_placeholder_rationale`` entries on the
-hybrid baselines for the follow-up tracker). Subsequent runs compare
-against the blessed value within the documented tolerance bands.
+**Baseline strategy (CI-blessed-median against a local pgvector
+substrate — issue #414)**: box 2 runs the live HybridRetriever against a
+seeded local ``pgvector`` container — the REAL ``hybrid_vector_search`` /
+``hybrid_fulltext_search`` SQL functions, reached through a test-side
+``DirectSQLMemoryConnector`` with a deterministic embedder — so there are
+NO Supabase / OpenAI secrets and NO network. This isolates our code, so
+the baseline guards CODE-latency regressions (not third-party API
+latency). The baseline is CI-blessed-median like the sibling cascade +
+bm25 boxes: trigger ≥3 ``workflow_dispatch`` runs, take the
+median-of-medians, and write ``tests/benchmarks/baselines/performance.json``
+(see ``_ci_observation`` / ``_blessed_from_ci_runs`` there). Subsequent
+runs compare against the blessed value within the documented tolerance
+bands.
 
-**Skip semantics**:
-* Skips with ``requires_supabase`` if the SERVICES_AVAILABLE['supabase']
-  probe in the root conftest reports False — without Supabase, the dense
-  + sparse retrieval streams cannot run.
-* Skips when ``OPENAI_API_KEY`` is missing or not in the ``sk-*`` shape —
-  the dense stream's embedding HTTP call would hang at TLS read until
-  pytest-timeout kills the test (per
-  [[feedback-live-lm-skip-must-check-key-shape]]).
-* Does NOT require FalkorDB — the graph stream degrades gracefully to []
-  when absent (per PR #374 load-bearing pattern).
+**Run modes / skip semantics**:
+* Local pgvector substrate (CI + local): set ``BENCH_SUBSTRATE=local_pg``
+  + ``BENCH_PG_DSN``. The ``_substrate_connector`` fixture injects the
+  test-side connector; a fail-closed direct-connector preflight asserts
+  every query returns rows on BOTH streams, so a broken/unseeded substrate
+  fails loudly rather than blessing a fast-but-meaningless 0.0.
+* Legacy live path (no substrate configured): runs only when
+  ``OPENAI_API_KEY`` is in the ``sk-*`` shape — else skips, because the
+  dense stream's embedding HTTP call would otherwise hang at TLS read
+  ([[feedback-live-lm-skip-must-check-key-shape]]).
+* Skips entirely when neither path is available.
+* Never invokes the graph stream (the benchmark passes no
+  ``entities``/``kpi_name``), so FalkorDB is not required.
 
 **xdist disabled** (per
 [[causal-role-propagation-phases-2-7-close-20260518]]): xdist can starve
@@ -67,6 +78,18 @@ from typing import Any, Dict, List, Tuple
 import pytest
 
 from tests.benchmarks._loader import LabeledQuery, load_queries
+from tests.benchmarks.substrate.fixture import (
+    inject as _inject_substrate,
+)
+from tests.benchmarks.substrate.fixture import (
+    make_connector as _make_substrate_connector,
+)
+from tests.benchmarks.substrate.fixture import (
+    reset as _reset_substrate,
+)
+from tests.benchmarks.substrate.fixture import (
+    substrate_ready as _substrate_ready,
+)
 
 pytestmark = pytest.mark.benchmark
 
@@ -77,15 +100,28 @@ _TOP_K = 10
 
 
 def _retrieval_env_ready() -> bool:
-    """True iff the live retriever has the env it needs to run end-to-end.
+    """True iff the LEGACY live (non-substrate) retriever has the env it needs.
 
-    Mirrors ``tests/benchmarks/test_retrieval_quality.py::_retrieval_env_ready``.
-    Per [[feedback-live-lm-skip-must-check-key-shape]]: check the key SHAPE
-    rather than just presence so CI placeholder values (e.g. ``'test-key'``)
-    skip rather than 401'ing against the live API.
+    Requires BOTH a real ``sk-*`` OpenAI key (dense-stream embedding) AND
+    Supabase creds (dense + sparse streams go through ``get_supabase_client``).
+
+    The Supabase check is load-bearing (codex code-review HIGH, #414): this
+    function replaced the old ``@pytest.mark.requires_supabase`` marker, which
+    had to be removed because it would also skip the local-substrate path. But
+    a ``sk-*`` key ALONE is not enough — without Supabase the production
+    connector raises, ``HybridRetriever``'s ``except: return []`` swallows it,
+    and the benchmark would bless fast-but-empty 0.0 measurements with no
+    failure. Mirror the ``SERVICES_AVAILABLE['supabase']`` probe
+    (``conftest.py``: ``SUPABASE_URL`` + ``SUPABASE_ANON_KEY``/
+    ``SUPABASE_SERVICE_KEY``). Per [[feedback-live-lm-skip-must-check-key-shape]]
+    we check the key SHAPE so CI placeholder values skip rather than 401'ing.
     """
     key = os.getenv("OPENAI_API_KEY", "")
-    return key.startswith("sk-")
+    supabase_ready = bool(
+        os.getenv("SUPABASE_URL")
+        and (os.getenv("SUPABASE_ANON_KEY") or os.getenv("SUPABASE_SERVICE_KEY"))
+    )
+    return key.startswith("sk-") and supabase_ready
 
 
 def _load_baseline() -> Dict[str, Any]:
@@ -160,9 +196,27 @@ def _within_tolerance(
     )
 
 
-@pytest.mark.requires_supabase
+@pytest.fixture
+def _substrate_connector():
+    """Substrate path (#414): inject the local-pg connector, reset + close after.
+
+    Yields ``None`` when the local substrate isn't configured (legacy live path),
+    so the test falls back to its OPENAI/Supabase skip logic.
+    """
+    if not _substrate_ready():
+        yield None
+        return
+    conn = _make_substrate_connector()
+    _inject_substrate(conn)
+    try:
+        yield conn
+    finally:
+        _reset_substrate()
+        conn.close()
+
+
 @pytest.mark.timeout(600)
-def test_hybrid_retriever_latency_against_baseline() -> None:
+def test_hybrid_retriever_latency_against_baseline(_substrate_connector) -> None:
     """Box 2 of issue #391: < 200ms target for fused search.
 
     Measures p50 / p95 wall-clock per query across the 36-query labeled set
@@ -175,15 +229,55 @@ def test_hybrid_retriever_latency_against_baseline() -> None:
 
     **Skip semantics**: see the module docstring.
     """
-    if not _retrieval_env_ready():
+    use_substrate = _substrate_connector is not None
+    if not use_substrate and not _retrieval_env_ready():
         pytest.skip(
-            "OPENAI_API_KEY missing or not in sk-* shape; dense-stream "
-            "embedding service would hang. Set a real key to run the "
-            "live benchmark end-to-end."
+            "no benchmark substrate: set BENCH_SUBSTRATE=local_pg + BENCH_PG_DSN "
+            "for the local pgvector path, or provide a live sk-* OPENAI_API_KEY "
+            "(+ Supabase) for the legacy end-to-end path."
         )
 
     queries = load_queries(_QUERY_FILE)
     baseline = _load_baseline()
+
+    # FAIL-CLOSED preflight (codex audit HIGH-1 + HIGH-2). HybridRetriever's
+    # dense/sparse paths swallow exceptions (`except: return []`,
+    # src/rag/retriever.py:88,146), so a broken/unseeded substrate would
+    # otherwise surface as empty results, NOT an error. Call the connector
+    # DIRECTLY here (bypassing that swallow): a DB/SQL/connection error RAISES,
+    # and we require EVERY query to return rows on BOTH streams so a partially
+    # seeded substrate also fails loudly instead of blessing a fast 0.0.
+    if use_substrate:
+        pre_loop = asyncio.new_event_loop()
+        try:
+            empties = []
+            for q in queries:
+                dense = pre_loop.run_until_complete(
+                    _substrate_connector.vector_search_by_text(
+                        q.query_text,
+                        k=_TOP_K,
+                        filters=q.filters or None,
+                        max_staleness=q.max_staleness,
+                    )
+                )
+                sparse = pre_loop.run_until_complete(
+                    _substrate_connector.fulltext_search(
+                        q.query_text,
+                        k=_TOP_K,
+                        filters=q.filters or None,
+                        max_staleness=q.max_staleness,
+                    )
+                )
+                if not dense or not sparse:
+                    empties.append((q.query_text[:40], len(dense), len(sparse)))
+        finally:
+            pre_loop.close()
+        assert not empties, (
+            "FAIL-CLOSED: substrate returned an empty stream for "
+            f"{len(empties)}/{len(queries)} queries (query, dense_n, sparse_n): "
+            f"{empties[:5]}. Broken or unseeded substrate — refusing to bless "
+            "(issue #403 mode)."
+        )
 
     timings_ms: List[float] = []
     loop = asyncio.new_event_loop()
@@ -225,11 +319,11 @@ def test_hybrid_retriever_latency_against_baseline() -> None:
         flush=True,
     )
 
-    # Persist measurements to test-results/measurements-*.json so a
-    # CI-artifact-driven re-bless flow (issue #403 / follow-up GH #414)
-    # can extract the raw numbers when this test eventually runs end-to-
-    # end (it currently skips in CI without SUPABASE_URL + SUPABASE_KEY
-    # + OPENAI_API_KEY).
+    # Persist measurements to test-results/measurements-*.json so the
+    # CI-artifact-driven re-bless flow (issue #403 / #414) can extract the
+    # raw numbers. Under BENCH_SUBSTRATE=local_pg the test runs against the
+    # seeded pgvector substrate (no Supabase/OpenAI); the legacy live path
+    # runs only with real sk-* OpenAI + Supabase creds.
     #
     # Codex iter-2 M2 closure: emit TWO records with distinct
     # `statistic` + `value_ms` so the p95 box's primary scalar IS p95
