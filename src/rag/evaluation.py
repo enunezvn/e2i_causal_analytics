@@ -725,6 +725,144 @@ def _ensure_ragas_vertexai_compat() -> None:
             _llms.VertexAI = type("VertexAI", (), {})  # type: ignore[attr-defined]
 
 
+@dataclass
+class RagasSmokeResult:
+    """Structured result of :func:`verify_ragas_dependencies`.
+
+    ``ok`` is True only when every check that ran passed. ``checks`` records the
+    boolean outcome of each individual check (``imports``, ``golden_set``,
+    ``dataset_build``); ``failures`` carries human-readable detail for each one
+    that failed.
+    """
+
+    ok: bool
+    failures: List[str] = field(default_factory=list)
+    checks: Dict[str, bool] = field(default_factory=dict)
+
+
+def _import_ragas_components() -> Dict[str, Any]:
+    """Run the Vertex compat shim and the exact RAGAS import sequence the
+    evaluator needs, returning the imported callables.
+
+    Centralised so the real evaluator (:meth:`RAGASEvaluator._evaluate_with_ragas`)
+    and the cheap dependency smoke (:func:`verify_ragas_dependencies`) exercise
+    the *same* imports — they cannot drift, so the smoke faithfully guards what
+    the eval actually does.
+
+    Raises:
+        RagasDependencyError: if any import fails. A broken import (issue #491)
+            means the evaluator cannot run at all, so we fail loud rather than
+            silently degrading to heuristic fallback scores that masquerade as a
+            real quality regression.
+    """
+    try:
+        _ensure_ragas_vertexai_compat()
+        import openai
+        from datasets import Dataset
+        from ragas import evaluate
+        from ragas.embeddings import OpenAIEmbeddings as RagasOpenAIEmbeddings
+        from ragas.llms import llm_factory
+        from ragas.metrics import (
+            answer_relevancy,
+            context_precision,
+            context_recall,
+            faithfulness,
+        )
+    except ImportError as e:
+        raise RagasDependencyError(
+            "RAGAS evaluation dependencies are broken or incompatible "
+            f"({e}). The langchain stack in requirements-ragas.txt likely "
+            "drifted; see issue #491."
+        ) from e
+
+    return {
+        "openai": openai,
+        "Dataset": Dataset,
+        "evaluate": evaluate,
+        "OpenAIEmbeddings": RagasOpenAIEmbeddings,
+        "llm_factory": llm_factory,
+        "faithfulness": faithfulness,
+        "answer_relevancy": answer_relevancy,
+        "context_precision": context_precision,
+        "context_recall": context_recall,
+    }
+
+
+def verify_ragas_dependencies(min_samples: int = 30) -> RagasSmokeResult:
+    """Cheap, key-free smoke check of the RAGAS evaluation stack.
+
+    Runs the real import sequence (:func:`_import_ragas_components`), validates
+    golden-set integrity, and builds a one-row dataset — WITHOUT calling
+    ``evaluate()`` or constructing an OpenAI client, so it needs no API key and
+    spends nothing.
+
+    This restores the automatic per-PR guard that going manual-only (#504)
+    removed: the full gpt-4o eval is the only thing that used to exercise the
+    real import path, and that path is exactly what silently broke for 5 days in
+    #491. Intended to run on every PR touching the RAG eval stack.
+
+    Args:
+        min_samples: minimum golden-set size expected (30 since #496).
+
+    Returns:
+        RagasSmokeResult with per-check booleans and failure detail.
+    """
+    failures: List[str] = []
+    checks: Dict[str, bool] = {}
+
+    # 1. Imports — the #491 break class.
+    components: Optional[Dict[str, Any]] = None
+    try:
+        components = _import_ragas_components()
+        checks["imports"] = True
+    except RagasDependencyError as e:
+        checks["imports"] = False
+        failures.append(f"ragas import failed (#491 class): {e}")
+
+    # 2. Golden-set integrity — size and the fields the evaluator consumes.
+    dataset = get_default_evaluation_dataset()
+    golden_ok = len(dataset) >= min_samples
+    if not golden_ok:
+        failures.append(
+            f"golden set has {len(dataset)} samples, expected >= {min_samples} "
+            "(see #496); the eval would run on a degraded set."
+        )
+    for i, sample in enumerate(dataset):
+        missing = [
+            field_name
+            for field_name in ("query", "ground_truth", "answer")
+            if not (getattr(sample, field_name, None) or "").strip()
+        ]
+        if not (sample.contexts or sample.retrieved_contexts):
+            missing.append("contexts/retrieved_contexts")
+        if missing:
+            golden_ok = False
+            failures.append(f"golden sample {i} missing/empty: {', '.join(missing)}")
+            break
+    checks["golden_set"] = golden_ok
+
+    # 3. Dataset build (no API call) — only meaningful with imports + samples.
+    if components is not None and dataset:
+        try:
+            first = dataset[0]
+            components["Dataset"].from_dict(
+                {
+                    "question": [first.query],
+                    "answer": [first.answer],
+                    "contexts": [first.retrieved_contexts or first.contexts],
+                    "ground_truth": [first.ground_truth],
+                }
+            )
+            checks["dataset_build"] = True
+        except Exception as e:  # noqa: BLE001 - any build failure is a smoke failure
+            checks["dataset_build"] = False
+            failures.append(f"Dataset.from_dict build failed: {e}")
+    else:
+        checks["dataset_build"] = False
+
+    return RagasSmokeResult(ok=not failures, failures=failures, checks=checks)
+
+
 # =============================================================================
 # RAGAS Metric Wrappers
 # =============================================================================
@@ -905,31 +1043,25 @@ class RAGASEvaluator:
         sample_id: str,
     ) -> EvaluationResult:
         """Evaluate using RAGAS library."""
-        # Import block is guarded separately from the evaluation logic. A
-        # failure HERE means the RAGAS dependency tree is broken/incompatible
-        # (issue #491: ragas 0.4.x imports langchain_community.chat_models.
-        # vertexai, removed in modern langchain-community). That is NOT a
-        # transient eval failure, so we raise loudly instead of emitting
-        # heuristic fallback scores that look like a real quality regression.
-        try:
-            _ensure_ragas_vertexai_compat()
-            import openai
-            from datasets import Dataset
-            from ragas import evaluate
-            from ragas.embeddings import OpenAIEmbeddings as RagasOpenAIEmbeddings
-            from ragas.llms import llm_factory
-            from ragas.metrics import (
-                answer_relevancy,
-                context_precision,
-                context_recall,
-                faithfulness,
-            )
-        except ImportError as e:
-            raise RagasDependencyError(
-                "RAGAS evaluation dependencies are broken or incompatible "
-                f"({e}). The langchain stack in requirements-ragas.txt likely "
-                "drifted; see issue #491."
-            ) from e
+        # The import sequence is centralised in _import_ragas_components so this
+        # method and the cheap dependency smoke (verify_ragas_dependencies)
+        # exercise the SAME imports and cannot drift. A failure there means the
+        # RAGAS dependency tree is broken/incompatible (issue #491: ragas 0.4.x
+        # imports langchain_community.chat_models.vertexai, removed in modern
+        # langchain-community). It raises RagasDependencyError, which we let
+        # propagate — it is intentionally OUTSIDE the broad ``except`` below, so
+        # a broken tree fails loud instead of emitting heuristic fallback scores
+        # that look like a real quality regression.
+        components = _import_ragas_components()
+        openai = components["openai"]
+        Dataset = components["Dataset"]
+        evaluate = components["evaluate"]
+        RagasOpenAIEmbeddings = components["OpenAIEmbeddings"]
+        llm_factory = components["llm_factory"]
+        faithfulness = components["faithfulness"]
+        answer_relevancy = components["answer_relevancy"]
+        context_precision = components["context_precision"]
+        context_recall = components["context_recall"]
 
         try:
             # Create a wrapper that adds embed_query interface to RAGAS embeddings
