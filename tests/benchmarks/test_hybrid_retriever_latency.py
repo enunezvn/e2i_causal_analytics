@@ -15,11 +15,13 @@ test docstring carries the same numbers as the JSON, per codex iter-0 L1):
 - p95: 50% relative OR 12ms absolute (whichever wider).
 The wider-of-the-two policy is `max(rel, abs)` — see ``_within_tolerance``
 for the rationale. At the local-substrate scale (p50≈3.9ms, p95≈9.09ms;
-issue #414) the absolute floors dominate and are sized to catch a real
-regression (a broken stream concurrency roughly doubles fused latency)
-while tolerating ubuntu-runner variance; the relative bands take over if a
-future re-bless lands a much larger baseline. See the JSON
-``_tolerance_rationale`` for the derivation.
+issue #414) the absolute floors dominate, making these INTENTIONALLY
+fixed-threshold gross-regression guards (~3x p50, ~2.3x p95) rather than
+tight 2x relative guards — a true 2x slowdown still passes. The floors are
+sized to absorb ubuntu-runner variance so the gate doesn't flake while
+still catching gross regressions (broken stream concurrency, N+1, blocking
+calls → ≥3x); the relative bands take over only if a future re-bless lands
+a much larger baseline. See the JSON ``_tolerance_rationale`` for details.
 
 **Companion**: this benchmark is the latency-shaped sibling of PR #379's
 ``test_retrieval_quality.py`` (Recall@10 + MRR). Both share
@@ -317,11 +319,11 @@ def test_hybrid_retriever_latency_against_baseline(_substrate_connector) -> None
         flush=True,
     )
 
-    # Persist measurements to test-results/measurements-*.json so a
-    # CI-artifact-driven re-bless flow (issue #403 / follow-up GH #414)
-    # can extract the raw numbers when this test eventually runs end-to-
-    # end (it currently skips in CI without SUPABASE_URL + SUPABASE_KEY
-    # + OPENAI_API_KEY).
+    # Persist measurements to test-results/measurements-*.json so the
+    # CI-artifact-driven re-bless flow (issue #403 / #414) can extract the
+    # raw numbers. Under BENCH_SUBSTRATE=local_pg the test runs against the
+    # seeded pgvector substrate (no Supabase/OpenAI); the legacy live path
+    # runs only with real sk-* OpenAI + Supabase creds.
     #
     # Codex iter-2 M2 closure: emit TWO records with distinct
     # `statistic` + `value_ms` so the p95 box's primary scalar IS p95

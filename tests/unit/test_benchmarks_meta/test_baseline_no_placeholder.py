@@ -52,7 +52,7 @@ _REBLESSED_BOXES = (
 
 # Keys that belong to the pre-re-bless era and MUST be absent from the
 # re-blessed boxes' specs. Their presence indicates a partial-revert.
-_PLACEHOLDER_BREADCRUMB_PREFIXES = ("_observed_on_dev_box_", "_seeded_")
+_PLACEHOLDER_BREADCRUMB_PREFIXES = ("_observed_on_dev_box_", "_seeded_", "_placeholder")
 
 
 def _load_baseline() -> Dict[str, Any]:

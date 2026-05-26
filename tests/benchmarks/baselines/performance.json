@@ -1,6 +1,6 @@
 {
   "_schema_version": 1,
-  "_description": "Performance baseline for issue #391 PERFORMANCE slice (4 boxes: cascade BFS / HybridRetriever / BM25 rebuild / Postgres slow log). Four of the six baselines (cascade_5hop_bfs + bm25_build_1k/5k/10k) are CI-blessed from 3 workflow_dispatch runs on the feat/403-perf-baseline-rebless branch (see _blessed_from_ci_runs); the harness compares current p50/p95 wall-clock against these baselines and fails on regression beyond the documented tolerance band. The two HybridRetriever baselines (p50/p95) remain at 0.0 because the live retriever skips in CI without SUPABASE_URL + SUPABASE_KEY + OPENAI_API_KEY — re-bless tracked in GH #414. Real production targets are listed in _target_* fields for reference; baseline mean_ms values reflect the CI runner shape, not the absolute targets. When re-blessing a baseline, replicate the 3-run methodology (workflow_dispatch on the rebless branch) and update _blessed_from_ci_runs to match.",
+  "_description": "Performance baseline for issue #391 PERFORMANCE slice (4 boxes: cascade BFS / HybridRetriever / BM25 rebuild / Postgres slow log). All six baselines are CI-blessed from workflow_dispatch runs (see per-box _blessed_from_ci_runs): cascade_5hop_bfs + bm25_build_1k/5k/10k on the feat/403-perf-baseline-rebless branch (#403), and the two HybridRetriever baselines (p50/p95) against a local pgvector substrate (#414; deterministic embedder + the real hybrid_*_search SQL functions, no Supabase/OpenAI secrets). The harness compares current p50/p95 wall-clock against these baselines and fails on regression beyond the documented tolerance band. Real production targets are listed in _target_* fields for reference; baseline mean_ms values reflect the CI runner shape, not the absolute targets. When re-blessing a baseline, replicate the 3-run methodology (workflow_dispatch on the rebless branch) and update _blessed_from_ci_runs to match.",
   "_baseline_strategy": "ci-blessed-median",
   "_blessed_from_ci_runs": [
     "26198955868",
@@ -34,7 +34,7 @@
     "mean_ms": 3.9,
     "tolerance_pct": 50.0,
     "tolerance_abs_ms": 8.0,
-    "_tolerance_rationale": "50% relative OR 8ms absolute (whichever wider) → fails above ~11.9ms, ~3x the 3.9ms baseline. Sized from the observed cross-run stdev (0.26ms / 6.7%) with margin for ubuntu-runner variance: catches a real regression (e.g. broken dense/sparse concurrency roughly doubles fused latency) while tolerating CI noise. Derived from the #414 substrate runs, NOT the PR #401 placeholder defaults."
+    "_tolerance_rationale": "50% relative OR 8ms absolute (whichever wider) → effective ceiling ~11.9ms ≈ 3x the 3.9ms baseline. At this small absolute scale the 8ms floor dominates, so this is INTENTIONALLY a fixed-threshold gross-regression guard (~3x), NOT a tight 2x relative guard — a true 2x slowdown (~7.8ms) would still pass. The floor is sized to absorb ubuntu-runner variance (a loaded runner can sit several ms above the 3.71-4.23ms bless range) so the gate does not flake, while still catching gross regressions (broken dense/sparse concurrency, an N+1, or a blocking call → ≥3x). Derived from the #414 substrate runs, NOT the PR #401 placeholder defaults."
   },
   "hybrid_retriever_search_p95": {
     "_target_ms": 500.0,
@@ -48,7 +48,7 @@
     "mean_ms": 9.09,
     "tolerance_pct": 50.0,
     "tolerance_abs_ms": 12.0,
-    "_tolerance_rationale": "50% relative OR 12ms absolute (whichever wider) → fails above ~21ms, ~2.3x the 9.09ms baseline. Sized from observed cross-run stdev (0.52ms / 5.7%) plus runner-variance margin; the p95 tail is slightly noisier than p50 so the absolute floor is larger. Derived from the #414 substrate runs."
+    "_tolerance_rationale": "50% relative OR 12ms absolute (whichever wider) → effective ceiling ~21ms ≈ 2.3x the 9.09ms baseline. As with p50, the absolute floor dominates at this scale: a fixed-threshold gross-regression guard sized to absorb ubuntu-runner variance (the p95 tail is slightly noisier than p50, hence the larger floor), NOT a tight 2x relative guard. Derived from the #414 substrate runs."
   },
   "bm25_build_1k": {
     "_ci_observation": "3 CI runs produced per-run median_ms [20.55, 21.08, 21.07]; med-of-meds=21.07ms, stdev across runs=0.30ms (1.42%), range across 9 individual timings=2.01ms (20.44–22.45). Build time for 1000-doc corpus via the reference Python BM25 implementation; corpus repeats from synthetic_corpus.jsonl to fill the slice.",
