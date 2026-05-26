@@ -1,0 +1,87 @@
+# RAGAS Dependency Smoke Guard
+#
+# Automatic, $0, key-free counterpart to the manual-only "RAGAS Evaluation"
+# workflow (#504). That full gpt-4o eval is throughput-bound on the CI OpenAI
+# key, so it runs only on demand — which removed the one automatic signal that
+# the RAGAS dependency tree still *imports*. That import path is exactly what
+# silently broke for 5 days in #491 (ragas 0.4.x importing a Vertex symbol that
+# modern langchain-community dropped, with the evaluator degrading to
+# plausible-looking heuristic fallback scores that masquerade as a regression).
+#
+# This job installs the pinned requirements-ragas.txt stack and runs
+# `scripts/run_ragas_eval.py --smoke`, which verifies the real import sequence
+# plus golden-set integrity with NO gpt-4o calls and NO OpenAI secret. It is
+# fast (~2-4 min) and spends nothing, so it can gate every PR that touches the
+# RAG eval stack. The full quality eval stays manual (ragas-evaluation.yml).
+
+name: RAGAS Smoke
+
+on:
+  pull_request:
+    paths:
+      - "src/rag/**"
+      - "scripts/run_ragas_eval.py"
+      - "requirements-ragas.txt"
+      - ".github/workflows/ragas-smoke.yml"
+  push:
+    branches: [main, develop]
+    paths:
+      - "src/rag/**"
+      - "scripts/run_ragas_eval.py"
+      - "requirements-ragas.txt"
+      - ".github/workflows/ragas-smoke.yml"
+
+# Cancel superseded runs immediately. The manual eval workflow can't use this
+# (no automatic runs to supersede); this one runs on every push, so a newer
+# commit should stop the older smoke (also avoids the no-cancel waste noted in
+# #504).
+concurrency:
+  group: ragas-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ragas-smoke:
+    name: RAGAS Dependency Smoke
+    runs-on: ubuntu-latest
+    # Fail-fast guard far below the 360-min GitHub default. The smoke makes no
+    # gpt-4o calls — it is import + golden-set checks only — so a few minutes is
+    # ample and a hung run should die fast.
+    timeout-minutes: 15
+
+    strategy:
+      matrix:
+        python-version: ['3.12']
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-ragas-${{ hashFiles('requirements-ragas.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-ragas-
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Pinned minimal RAGAS stack (same as the eval workflow) — this is the
+          # stack whose import we are guarding.
+          pip install -r requirements-ragas.txt
+          # Editable, no-deps so `src.rag.evaluation` imports without dragging in
+          # the full project dependency tree.
+          pip install -e . --no-deps
+
+      - name: Run RAGAS dependency smoke check
+        # Key-free: the smoke verifies imports + golden-set integrity only and
+        # makes no gpt-4o calls, so it spends nothing and needs no API secret.
+        run: |
+          python scripts/run_ragas_eval.py --smoke

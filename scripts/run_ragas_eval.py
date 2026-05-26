@@ -31,6 +31,7 @@ from pathlib import Path
 
 # Load environment variables from .env file
 from dotenv import load_dotenv
+
 load_dotenv()
 
 # Add project root to path
@@ -38,9 +39,10 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.rag.evaluation import (
+    DEFAULT_THRESHOLDS,
     EvaluationConfig,
     RAGEvaluationPipeline,
-    DEFAULT_THRESHOLDS,
+    verify_ragas_dependencies,
 )
 
 logging.basicConfig(
@@ -52,9 +54,7 @@ logger = logging.getLogger(__name__)
 
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser(
-        description="Run RAGAS evaluation for E2I RAG pipeline"
-    )
+    parser = argparse.ArgumentParser(description="Run RAGAS evaluation for E2I RAG pipeline")
 
     # Dataset options
     parser.add_argument(
@@ -109,6 +109,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Exit with error code if thresholds not met",
     )
+    parser.add_argument(
+        "--smoke",
+        action="store_true",
+        help=(
+            "Run the $0, key-free dependency smoke check only: verifies the "
+            "RAGAS import stack (the #491 break class) and golden-set integrity "
+            "with no gpt-4o calls, then exit 0/1. Used by the ragas-smoke CI "
+            "job (#504/#491)."
+        ),
+    )
 
     # Output options
     parser.add_argument(
@@ -127,12 +137,37 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _run_smoke_check() -> int:
+    """Run the cheap, key-free RAGAS dependency smoke check and report.
+
+    No gpt-4o calls and no OpenAI key: it verifies the dependency tree imports
+    (the #491 break class) and the golden set is intact. Returns 0 on pass, 1 on
+    failure. Wired into the ragas-smoke CI job (#504).
+    """
+    logger.info("=" * 60)
+    logger.info("RAGAS Dependency Smoke Check ($0, key-free)")
+    logger.info("=" * 60)
+    result = verify_ragas_dependencies()
+    for name, passed in result.checks.items():
+        logger.info("  %-14s %s", name, "PASS" if passed else "FAIL")
+    if result.ok:
+        logger.info("RESULT: OK - RAGAS dependency stack is healthy")
+        return 0
+    logger.error("RESULT: FAILED - RAGAS dependency smoke check found problems:")
+    for failure in result.failures:
+        logger.error("  - %s", failure)
+    return 1
+
+
 async def main() -> int:
     """Run evaluation pipeline."""
     args = parse_args()
 
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
+
+    if args.smoke:
+        return _run_smoke_check()
 
     # Build configuration
     thresholds = {
@@ -206,7 +241,9 @@ async def main() -> int:
         )
 
     if report.avg_context_precision is not None:
-        status = "PASS" if report.avg_context_precision >= thresholds["context_precision"] else "FAIL"
+        status = (
+            "PASS" if report.avg_context_precision >= thresholds["context_precision"] else "FAIL"
+        )
         logger.info(
             f"Context Precision:  {report.avg_context_precision:.3f} (threshold: {thresholds['context_precision']}) [{status}]"
         )
@@ -243,10 +280,11 @@ async def main() -> int:
 
 def run_with_cleanup() -> int:
     """Run the async main function with proper cleanup."""
-    import os
 
     # Suppress asyncio cleanup warnings that can occur with RAGAS/OpenAI clients
-    warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*coroutine.*was never awaited.*")
+    warnings.filterwarnings(
+        "ignore", category=RuntimeWarning, message=".*coroutine.*was never awaited.*"
+    )
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
