@@ -7,6 +7,8 @@
 - **Predecessor:** `docs/plans/240-audit-evaluator-gate-promotion.md` (the parent design; §3 Stage 4 was a sketch — this refines it).
 - **Predecessor PRs:** Stage 1 (#492, shadow mode, MERGED), Stage 2 (curation surfacing), Stage 3 (soft-gate severity, env-gated default-OFF).
 
+> **Updated 2026-05-26:** the **#242 multi-vendor-ensemble prerequisite** named below (the AC3.5 inheritance in §1, the R-C mitigation in §5, the recommended-path note in §6) is **RETIRED** — refuted in #242 (closed not-planned: a Sonnet 4.6 + Opus 4.7 + GPT-5 ensemble did **not** decorrelate frontier failures; correlated failure was 30% on hard cases and *rose* to 40% under a per-vendor zero-shot de-confound, i.e. the correlation is intrinsic to the frontier models, not a prompt artifact). The single-vendor correlated-failure RISK is unchanged; what changed is the **independence signal** — it is now a deterministic, **non-LLM** structural/statistical cross-check shipped in SHADOW mode: **#508** (merge `5a767ad0`, leakage × role cross-check) + **#515** (merge `e39d8e20`, M-structure role disambiguation), not more LLM vendors. See the #240 RE-SCOPE UPDATE.
+
 ---
 
 ## 1. Why this is a proposal, not an implementation
@@ -18,7 +20,7 @@ The parent design (§3 Stage 4, §11) states plainly that Stage 4 *"is a sketch,
 1. **90 days of Stage-3 operational data** showing R1 holding AC3.1–AC3.3 with zero rollback events (AC4.1). Stage 3 ships default-OFF; the clock has not started.
 2. **Per-consumer blast-radius analysis** (AC4.2) on Stage-3 shadow data — `role_attribution`, KG mirror, `compile_set_curation` impact must be bounded and reversible.
 3. **Stakeholder sign-off** on remediation-override semantics (AC4.4) — a strictly larger blast radius than severity-modulation alone; out of Claude's authority.
-4. **#242 multi-vendor evaluator** (still OPEN) OR signed single-vendor risk acceptance — already a Stage-3 hard prerequisite (AC3.5); Stage 4 inherits it and raises the stakes.
+4. **Independence signal for single-vendor correlated-failure risk** — already a Stage-3 hard prerequisite (AC3.5); Stage 4 inherits it and raises the stakes. The multi-vendor-ensemble form of this dependency is **RETIRED** (refuted in #242, closed not-planned — multi-vendor LLM agreement does not decorrelate frontier failures); the inherited prerequisite is now the deterministic non-LLM cross-check (#508 leak × role, merge `5a767ad0`; #515 M-structure, merge `e39d8e20`), shipped in shadow, OR a signed single-vendor risk acceptance.
 
 Until 1–4 hold, the responsible action is: keep the Stage 1–3 instrumentation (which is a strict subset of Stage 4's needs — §6 of the parent), accumulate data, and revisit.
 
@@ -66,13 +68,13 @@ Stage 3 modulates **severity only** (R1: `moderate → high`), env-gated and rev
 
 - **R-A — Remediation/severity contradiction.** An independent remediation override can produce `severity=moderate, remediation=drop`, which downstream consumers may not expect. Mitigation: a voter-level invariant test + a consumer-compatibility audit before enabling.
 - **R-B — Routing-gate cascade.** Filtering downstream consumers on `satisfied` can silently drop a feature from the KG entirely. Mitigation: per-consumer flags + the `worker_*_pre_gate` columns so every dropped feature is recoverable from the audit trail; staged per-consumer rollout.
-- **R-C — Compounded single-vendor risk.** Routing decisions on a single Anthropic evaluator multiply the correlated-failure risk (parent §5 R-2). Mitigation: #242 multi-vendor evaluator is a hard prerequisite, not just a recommendation, at Stage 4.
+- **R-C — Compounded single-vendor risk.** Routing decisions on a single Anthropic evaluator multiply the correlated-failure risk (parent §5 R-2). Mitigation: a deterministic, **non-LLM** independence cross-check is a hard prerequisite, not just a recommendation, at Stage 4 — **#508** (leak × role, merge `5a767ad0`) + **#515** (M-structure role disambiguation, merge `e39d8e20`), both shipped in shadow. (The previously-named #242 multi-vendor-ensemble mitigation is RETIRED: #242, closed not-planned, proved multi-vendor LLM agreement does not decorrelate frontier failures — correlation *rose* to 40% under a per-vendor de-confound. Adding LLM vendors does not reduce this risk; a non-LLM signal does.)
 
 ---
 
 ## 6. Recommended path
 
-1. **Do not implement now.** Ship Stages 1–3, enable Stage 3 only after AC3.5 (#242 or risk acceptance) + Stage-1/2 data.
+1. **Do not implement now.** Ship Stages 1–3, enable Stage 3 only after AC3.5 (the deterministic non-LLM independence cross-check — #508 leak × role + #515 M-structure, shipped in shadow — OR a signed single-vendor risk acceptance; the #242 multi-vendor-ensemble form is RETIRED) + Stage-1/2 data.
 2. Accumulate 90 days of Stage-3 operational data.
 3. Run the per-consumer blast-radius study (AC4.2) on that data.
 4. Bring the calibrated thresholds + remediation-override semantics to stakeholders (AC4.4).

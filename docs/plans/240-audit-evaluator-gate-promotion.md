@@ -9,6 +9,8 @@
   - `.claude/plans/archive/14_layer4_evaluator_audit_consumer_DONE_dd222f0a-c6313e5b.md` (curation consumer)
 - **Empirical basis:** PR [#477](https://github.com/enunezvn/e2i_causal_analytics/pull/477) — MIPROv2 gated A/B at compile-set n=240, golden-set n=91, executed with `--enable-evaluator` (`ADAPTIVE_VALIDITY_EVALUATOR_ENABLED=1`), artifact `artifacts/dspy/ac3_verdict_n200.json`.
 
+> **Updated 2026-05-26:** the **#242 multi-vendor-evaluator (T3.1 ensemble) prerequisite** asserted below for Stage 3 (AC3.5, §5 R-2, §7 A-2, §8 Q2, §9 summary) is **RETIRED** — refuted in #242 (closed not-planned: a Sonnet 4.6 + Opus 4.7 + GPT-5 ensemble did **not** decorrelate frontier failures; ensemble accuracy == single-Sonnet exactly (19/30), correlated failure 30% on hard cases — *all three* models, incl. GPT-5, agreeing on the same wrong answer — and it *rose* to 40% under a per-vendor zero-shot de-confound, proving the correlation is intrinsic to the frontier models, not a prompt artifact). The single-vendor correlated-failure RISK (§5 R-2) is **unchanged and still real**; what is retired is the *mitigation*. The independence signal is now a deterministic, **non-LLM** structural/statistical cross-check shipped in SHADOW mode (env-gated, default-OFF): **#508** (merge `5a767ad0`, leakage × role cross-check on KEEP-CLEAN roles via the statistical `detect_leakage`) + **#515** (merge `e39d8e20`, M-structure role disambiguation at the `_role_to_remediation` seam). Promoting these shadow signals from recording-only to acting remains this tracker's (#240) job, still gated on the Acceptance criteria below plus 90-day data / κ / stakeholder sign-off. See the #240 RE-SCOPE UPDATE.
+
 ---
 
 ## 1. Context: today's audit-only contract
@@ -166,7 +168,7 @@ Critical framing note: R1 fires ONLY on `evaluator_audit.satisfied == False` (§
 - AC3.2 (gated-subset non-regression guard — the rule must not damage the existing gated metric) — On the gated subset (still defined as `evaluator_audit.satisfied is True`, **un**affected by R1 because R1 only fires on `satisfied=False`), `precision_instrument` is **strictly ≥** the artifact's `gated_precision_instrument` baseline (1.0 OVERALL/PNH/BC; `null` CSU stays `null`). Mechanically R1 cannot move this number (the subsets are disjoint), so AC3.2 is a sanity check that no other change leaked across — if it fails, something other than R1 broke.
 - AC3.3 — Per-cohort: no cohort gains any FP_promoted; no cohort loses an instrument TP it had at Stage-1 shadow run.
 - AC3.4 — Operator runbook documents the kill-switch + the exact verdict-row query to identify gate-flipped decisions for rollback. SQL one-liner included in the runbook: `SELECT feature_name, severity, gate_rule_fired, worker_severity_pre_gate FROM adaptive_validity_verdicts WHERE gate_rule_fired IS NOT NULL ORDER BY written_at DESC LIMIT 100;`.
-- AC3.5 — Multi-vendor concern (codex Gate-1 rejection of Anthropic-only correlated failures) addressed: either #242 multi-model evaluator ensemble shipped, OR an explicit written decision from stakeholders that single-vendor risk is acceptable for the specific Stage-3 rule. This is a HARD prerequisite per the producer plan's failure-mode analysis.
+- AC3.5 — Single-vendor correlated-failure concern (codex Gate-1 rejection of Anthropic-only correlated failures) addressed: a deterministic, **non-LLM** independence cross-check is live in shadow — **#508** (leakage × role, merge `5a767ad0`) + **#515** (M-structure role disambiguation, merge `e39d8e20`) — OR an explicit written decision from stakeholders that single-vendor risk is acceptable for the specific Stage-3 rule. This is a HARD prerequisite per the producer plan's failure-mode analysis. **(Re-scoped 2026-05-26: the original "ship a #242 multi-vendor evaluator ensemble" form of this prerequisite is RETIRED — #242, closed not-planned, proved multi-vendor LLM agreement does not decorrelate frontier failures; the independence signal is now the non-LLM cross-check above, not more LLM vendors.)**
 
 ### Stage 4 — Hard-gate severity AND routing modulation (long-horizon)
 
@@ -260,7 +262,7 @@ The Haiku evaluator is a smaller model than the Sonnet worker. There is no a-pri
 The producer plan's codex Gate-1 review (per issue body) flagged that two Anthropic-family models (Sonnet worker + Haiku evaluator) may correlate in their failure modes. A confident-wrong worker on a feature that the evaluator also misunderstands → the evaluator certifies the wrong answer; the gate would be a false confidence boost.
 
 **Mitigations:**
-- §3 Stage 3 AC3.5 — multi-vendor evaluator (#242) is a HARD prerequisite OR an explicit stakeholder-signed risk acceptance.
+- §3 Stage 3 AC3.5 — a deterministic, **non-LLM** independence cross-check (#508 leakage × role, merge `5a767ad0`; #515 M-structure role disambiguation, merge `e39d8e20`), shipped in shadow, is a HARD prerequisite OR an explicit stakeholder-signed risk acceptance. **(Re-scoped 2026-05-26: the multi-vendor-ensemble mitigation originally named here is RETIRED — #242, closed not-planned, proved adding LLM vendors does not decorrelate this failure; correlated failure *rose* to 40% under a per-vendor de-confound. A non-LLM signal is the replacement; more LLM vendors are not.)**
 - The audit-only contract is preserved through Stage 2; correlated failure manifests only as suboptimal curation candidates, not as wrong decisions.
 
 ### R-3 — Cost (per-classification Haiku call)
@@ -314,9 +316,9 @@ Each stage's instrumentation is a strict subset of the next. This is a design co
 
 **Rejected:** the producer plan explicitly held the "plausibility ≠ verification" invariant; codex Gate-1 rejected verdict-replacement framings. Skipping data collection violates REASON-BEFORE-RULES (acting on a pattern match without an intent investigation).
 
-### A-2 — Multi-model ensemble first, gate second (block on #242)
+### A-2 — Independence-signal first, gate second (originally "multi-model ensemble first, block on #242")
 
-**Considered, partially accepted:** the multi-vendor evaluator is a HARD prerequisite for Stage 3 per AC3.5. However, blocking Stages 1–2 on it would prevent us from accumulating the very data needed to scope #242 (which rules' FPs would multi-vendor reduce by how much?). Decision: Stages 1–2 proceed; Stage 3 blocks on #242 OR stakeholder risk acceptance.
+**Considered, partially accepted — and the form of the independence signal has since changed.** An independence signal addressing the single-vendor correlated-failure risk is a HARD prerequisite for Stage 3 per AC3.5; Stages 1–2 do not block on it (blocking them would prevent accumulating the very data needed to scope it). Decision: Stages 1–2 proceed; Stage 3 blocks on the independence signal OR stakeholder risk acceptance. **(Re-scoped 2026-05-26: the signal was originally a #242 multi-vendor LLM ensemble; that is RETIRED — #242, closed not-planned, proved multi-vendor agreement does not decorrelate frontier failures, with correlated failure *rising* to 40% under a per-vendor de-confound. The independence signal is now the deterministic non-LLM cross-check #508 (leak × role, merge `5a767ad0`) + #515 (M-structure, merge `e39d8e20`), shipped in shadow.)**
 
 ### A-3 — Pure-human gate (defeat the cost-saving point)
 
@@ -333,7 +335,7 @@ Each stage's instrumentation is a strict subset of the next. This is a design co
 The following decisions are out of Claude's authority and must be answered before Stage 1 implementation work begins:
 
 1. **Cost-per-FP-vs-cost-per-FN ratios** (for §3 AC2.3). What is the operating cost of incorrectly dropping a useful feature vs incorrectly retaining a leaky feature? Both have downstream consequences in the commercial-analytics pipeline; the ratio drives which rules pass the cost-benefit gate.
-2. **Multi-vendor evaluator (#242) timeline.** Is shipping a non-Anthropic evaluator a 2026-H2 commitment, a 2026-H1 commitment, or speculative? AC3.5 blocks on either it or an explicit risk-acceptance.
+2. **Independence-signal promotion timeline.** The non-LLM independence signal (#508 leak × role + #515 M-structure) is already shipped in shadow; AC3.5 blocks Stage 3 on either promoting it from shadow to acting or an explicit single-vendor risk-acceptance. What is the timeline for the 90-day shadow-data accumulation + κ + stakeholder review that gates that promotion? **(Re-scoped 2026-05-26: the original question — "is shipping a non-Anthropic / #242 multi-vendor evaluator a 2026-H1/H2 commitment?" — is moot: #242 is closed not-planned, multi-vendor LLM agreement having been proven not to decorrelate frontier failures.)**
 3. **Rule prioritization.** Stages 1–2 collect data on R1, R2, R3 simultaneously. Which rule does the team want to promote to Stage 3 first if all three pass AC2 thresholds?
 4. **Shadow-data retention.** How long should the shadow column rows be retained? 90 days for Stage-2 analysis is the assumed default; PII / log-retention policies may constrain this.
 5. **Acceptable per-cohort regression at Stage 3.** AC3.3 says "no cohort loses a Stage-1 instrument TP." Is zero loss the right threshold? At the n=91 golden-set scale, 1 TP is roughly 1 percentage point of cohort precision — large enough to matter, small enough to be noise. Also: AC3.1's promotion-precision thresholds (0.80 OVERALL, 0.70 per cohort) are initial proposals; revisit after Stage 1 data.
@@ -356,13 +358,13 @@ The following decisions are out of Claude's authority and must be answered befor
 | 3 | AC3.2 | Gated-subset (`evaluator_satisfied=True`) non-regression: `precision_instrument ≥` #477 artifact baseline |
 | 3 | AC3.3 | Per-cohort: no FP_promoted gained; no Stage-1 instrument TP lost |
 | 3 | AC3.4 | Kill-switch + rollback SQL query documented in operator runbook |
-| 3 | AC3.5 | #242 multi-vendor evaluator shipped OR signed stakeholder risk acceptance |
+| 3 | AC3.5 | Deterministic non-LLM independence cross-check live (#508 leak × role + #515 M-structure, shadow) promoted to acting OR signed stakeholder risk acceptance (the #242 multi-vendor-ensemble form is RETIRED — see §5 R-2) |
 | 4 | AC4.1 | 90 days of Stage-3 operational data with no rollback events |
 | 4 | AC4.2 | Per-consumer routing-gate impact analysis bounded |
 | 4 | AC4.3 | `EnsembleDecidedBy` literal widened to include `"evaluator_gate"` |
 | 4 | AC4.4 | Stakeholder sign-off on remediation-override semantics |
 
-The original issue body's three "decision document" requirements are addressed as: (a) what gate semantics → §3 + §4; (b) multi-vendor dependency → R-2 + AC3.5; (c) cost/latency budget → R-3 + AC1.4; (d) rollback story → §3 Stage 3 "Rollback story" + AC3.4.
+The original issue body's three "decision document" requirements are addressed as: (a) what gate semantics → §3 + §4; (b) the independence-signal dependency (was "multi-vendor dependency"; the multi-vendor-ensemble form RETIRED per #242, now the non-LLM #508/#515 cross-check) → R-2 + AC3.5; (c) cost/latency budget → R-3 + AC1.4; (d) rollback story → §3 Stage 3 "Rollback story" + AC3.4.
 
 The original issue's two acceptance constraints (ADDITIVE not REPLACEMENT; no regression on 25/25 producer tests) are upheld by §6's strict-subset design and §5 R-5 mitigation.
 
@@ -372,7 +374,7 @@ The original issue's two acceptance constraints (ADDITIVE not REPLACEMENT; no re
 
 - Any code change to `EnsembleVoter`, `LLMEvaluatorAudit`, or the audit producer in this PR. This proposal is design only.
 - The shadow-mode prototype itself (would be a follow-up PR; see §11).
-- Resolution of #242 (multi-model ensemble).
+- The multi-vendor / multi-model ensemble route (#242) — **closed not-planned 2026-05-26** (refuted: multi-vendor LLM agreement does not decorrelate frontier failures). The independence signal it was meant to supply is now the non-LLM #508/#515 shadow cross-check; promoting that from shadow to acting is in scope for the broader #240 tracker, not for this design proposal.
 - HITL-queue framings — explicitly excluded by the issue body.
 
 ---
