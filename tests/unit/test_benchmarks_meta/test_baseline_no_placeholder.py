@@ -1,23 +1,20 @@
 """Meta-test: drift guard against placeholder baselines (issue #403).
 
-Issue #403 re-blesses 4 of 6 baselines in
-``tests/benchmarks/baselines/performance.json`` from CI-measured values
-(the 2 hybrid-retriever baselines remain placeholder because their
-benchmark skips in CI without Supabase + OpenAI secrets). This meta-test
-pins the post-re-bless state so a future revert to placeholder mode (or
-accidental zeroing-out of a baseline) fails loudly here, in the default
-unit-test sweep, rather than only when someone happens to run the
-benchmark harness.
+Issue #403 re-blessed 4 of 6 baselines in
+``tests/benchmarks/baselines/performance.json`` from CI-measured values;
+issue #414 re-blessed the last 2 (the hybrid-retriever p50/p95 baselines)
+from a local pgvector substrate — no Supabase/OpenAI secrets needed. All 6
+are now CI-blessed-median. This meta-test pins the post-re-bless state so a
+future revert to placeholder mode (or accidental zeroing-out of a baseline)
+fails loudly here, in the default unit-test sweep, rather than only when
+someone happens to run the benchmark harness.
 
 Drift-guard contract:
-  * The 4 re-blessable boxes (cascade_5hop_bfs, bm25_build_1k,
-    bm25_build_5k, bm25_build_10k) MUST have ``mean_ms > 0.0`` and MUST
-    NOT carry placeholder breadcrumbs (``_observed_on_dev_box_*`` or
-    ``_seeded_*`` keys) — those breadcrumbs belong to the
-    "placeholder-first-run-blesses" era, which closed in issue #403.
-  * The 2 hybrid baselines (p50/p95) MAY remain at 0.0 with a refreshed
-    breadcrumb pointing at the follow-up tracker; we don't pin their
-    state because the legitimate re-bless path lands in a separate PR.
+  * All 6 re-blessed boxes (cascade_5hop_bfs, bm25_build_1k, bm25_build_5k,
+    bm25_build_10k, hybrid_retriever_search_p50, hybrid_retriever_search_p95)
+    MUST have ``mean_ms > 0.0`` and MUST NOT carry placeholder breadcrumbs
+    (``_observed_on_dev_box_*`` or ``_seeded_*`` keys) — those breadcrumbs
+    belong to the "placeholder-first-run-blesses" era, which closed in #403.
   * The top-level ``_baseline_strategy`` MUST be the post-re-bless value
     (``ci-blessed-median``), not the pre-re-bless value
     (``placeholder-first-run-blesses``).
@@ -40,20 +37,15 @@ import pytest
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _BASELINE_FILE = _REPO_ROOT / "tests" / "benchmarks" / "baselines" / "performance.json"
 
-# Boxes whose baselines were re-blessed from CI in issue #403. Their
-# ``mean_ms`` MUST be strictly positive after the re-bless lands.
+# Boxes whose baselines were re-blessed from CI. cascade + bm25 from issue
+# #403; the 2 hybrid boxes from issue #414 (CI-blessed-median against a local
+# pgvector substrate — see their _ci_observation in performance.json). Their
+# ``mean_ms`` MUST be strictly positive.
 _REBLESSED_BOXES = (
     "cascade_5hop_bfs",
     "bm25_build_1k",
     "bm25_build_5k",
     "bm25_build_10k",
-)
-
-# Boxes whose benchmarks skip in CI (require SUPABASE_URL + SUPABASE_KEY
-# + OPENAI_API_KEY) and therefore CANNOT be re-blessed from a CI run.
-# These intentionally remain at 0.0 with a refreshed breadcrumb; the
-# follow-up tracker is filed when the secrets become available.
-_PLACEHOLDER_BOXES_HYBRID = (
     "hybrid_retriever_search_p50",
     "hybrid_retriever_search_p95",
 )
@@ -186,41 +178,3 @@ def test_reblessed_box_provenance(box: str) -> None:
         "which CI run(s) produced this baseline so future bisects can "
         "trace a regression back to its source."
     )
-
-
-def test_hybrid_boxes_are_still_placeholder_with_refreshed_breadcrumb() -> None:
-    """The 2 hybrid boxes stay placeholder until Supabase + OpenAI CI secrets land.
-
-    Drift-guard premise: silently re-blessing the hybrid boxes from a
-    dev-box measurement is exactly the failure mode that prompted issue
-    #403 in the first place. The 2 hybrid boxes MUST stay at
-    ``mean_ms == 0.0`` until a CI run with both secrets present produces
-    a measurement; the placeholder breadcrumb must point at the follow-up
-    tracker so a reviewer knows the gap is tracked, not forgotten.
-    """
-    baseline = _load_baseline()
-    for box in _PLACEHOLDER_BOXES_HYBRID:
-        spec = baseline[box]
-        mean_ms = spec.get("mean_ms")
-        assert mean_ms == 0.0, (
-            f"{box}.mean_ms must remain 0.0 (placeholder) until a CI "
-            f"run with SUPABASE_URL + SUPABASE_KEY + OPENAI_API_KEY "
-            f"produces a measurement; got {mean_ms!r}. If those secrets "
-            "are now available in CI, file a follow-up PR to re-bless "
-            "these boxes from CI data — do NOT bless from dev-box "
-            "measurements."
-        )
-        # The breadcrumb must explicitly explain why the placeholder
-        # stays — naming the missing secrets and pointing at a follow-up
-        # tracker. We don't pin the exact key name (the breadcrumb may
-        # rename to a more honest shape post-re-bless) but we DO pin that
-        # some text-valued metadata key explains the placeholder.
-        rationale_values = [
-            v for k, v in spec.items() if k.startswith("_") and isinstance(v, str) and v.strip()
-        ]
-        assert rationale_values, (
-            f"{box} is a placeholder but carries no explanatory "
-            "metadata. Add a string-valued underscore-key (e.g. "
-            "_placeholder_rationale) explaining why the value is 0.0 "
-            "and naming the follow-up tracker."
-        )
