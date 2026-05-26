@@ -340,8 +340,8 @@
         "derivation_pseudocode": "source=SYNTH_DGP_A2; derivation_inputs=['M_proxy_confounded']; aggregation=mean; window_days=90; knowable_at=postindex_90d",
         "dataset_context": "synthetic_a2 DGP; cohort=synthetic_a2; treatment=t_binary; outcome=y_continuous; prediction_anchor=index",
         "causal_role": "mediator",
-        "mechanism": "Pearl partial mediator with a proxy confounder in DGP a2: M = 0.7*t + 0.4*Z_proxy + eps_m, Y = 0.5*t + 0.6*M + 0.3*Z_proxy + eps_y. Post-treatment temporal filter (postindex_90d): M is measured 90d post-index (after treatment onset). Pearl arrowhead: mediator (T->M->Y on indirect path; Z_proxy also confounds M-Y relationship). Probes partial-mediation pattern where a proxy confounder co-loads with the mediator — structural role is mediator (on T->Y path), not confounder (Z_proxy is already controlled). Remediation per role-to-remediation table: mediator -> keep_with_caveat (window to pre-T).",
-        "recommended_remediation": "keep_with_caveat"
+        "mechanism": "Pearl partial mediator with a proxy confounder in DGP a2: M = 0.7*t + 0.4*Z_proxy + eps_m, Y = 0.5*t + 0.6*M + 0.3*Z_proxy + eps_y. Post-treatment temporal filter (postindex_90d): M is measured 90d post-index (after treatment onset). Pearl arrowhead: mediator (T->M->Y on indirect path; Z_proxy also confounds M-Y relationship). Probes partial-mediation pattern where a proxy confounder co-loads with the mediator — structural role is mediator (on T->Y path), not confounder (Z_proxy is already controlled). Remediation per role-to-remediation table: mediator -> window (windowed to pre-T).",
+        "recommended_remediation": "window"
       },
       {
         "feature_name": "prior_thrombosis_anatomic_site_atypical_flag_preindex_pnh",
