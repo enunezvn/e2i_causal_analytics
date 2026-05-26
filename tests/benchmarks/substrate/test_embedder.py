@@ -4,7 +4,7 @@ from tests.benchmarks.substrate.embedder import EMBED_DIM, embed_text, to_pgvect
 
 
 def _cos(a, b):
-    return sum(x * y for x, y in zip(a, b))
+    return sum(x * y for x, y in zip(a, b, strict=True))
 
 
 def test_dimension_and_unit_norm():
