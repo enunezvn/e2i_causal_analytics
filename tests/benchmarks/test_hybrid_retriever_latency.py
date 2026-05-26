@@ -95,15 +95,28 @@ _TOP_K = 10
 
 
 def _retrieval_env_ready() -> bool:
-    """True iff the live retriever has the env it needs to run end-to-end.
+    """True iff the LEGACY live (non-substrate) retriever has the env it needs.
 
-    Mirrors ``tests/benchmarks/test_retrieval_quality.py::_retrieval_env_ready``.
-    Per [[feedback-live-lm-skip-must-check-key-shape]]: check the key SHAPE
-    rather than just presence so CI placeholder values (e.g. ``'test-key'``)
-    skip rather than 401'ing against the live API.
+    Requires BOTH a real ``sk-*`` OpenAI key (dense-stream embedding) AND
+    Supabase creds (dense + sparse streams go through ``get_supabase_client``).
+
+    The Supabase check is load-bearing (codex code-review HIGH, #414): this
+    function replaced the old ``@pytest.mark.requires_supabase`` marker, which
+    had to be removed because it would also skip the local-substrate path. But
+    a ``sk-*`` key ALONE is not enough — without Supabase the production
+    connector raises, ``HybridRetriever``'s ``except: return []`` swallows it,
+    and the benchmark would bless fast-but-empty 0.0 measurements with no
+    failure. Mirror the ``SERVICES_AVAILABLE['supabase']`` probe
+    (``conftest.py``: ``SUPABASE_URL`` + ``SUPABASE_ANON_KEY``/
+    ``SUPABASE_SERVICE_KEY``). Per [[feedback-live-lm-skip-must-check-key-shape]]
+    we check the key SHAPE so CI placeholder values skip rather than 401'ing.
     """
     key = os.getenv("OPENAI_API_KEY", "")
-    return key.startswith("sk-")
+    supabase_ready = bool(
+        os.getenv("SUPABASE_URL")
+        and (os.getenv("SUPABASE_ANON_KEY") or os.getenv("SUPABASE_SERVICE_KEY"))
+    )
+    return key.startswith("sk-") and supabase_ready
 
 
 def _load_baseline() -> Dict[str, Any]:
