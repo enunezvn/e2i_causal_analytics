@@ -323,7 +323,7 @@
         "pmid": "37653397",
         "url": "https://pubmed.ncbi.nlm.nih.gov/37653397/"
       },
-      "rationale": "Switching the endocrine backbone from AI to fulvestrant is a downstream clinical decision triggered by suspected progression, ESR1 emergence, or AI intolerance; it is caused by treatment history but is not on the original-treatment->24m-PFS path (it is a response TO impending failure). Descendant; analyses that adjust for it would condition on a post-baseline event downstream of treatment.",
+      "rationale": "Switching the endocrine backbone from AI to fulvestrant is a downstream clinical decision triggered by suspected progression, ESR1 emergence, or AI intolerance; it is caused by treatment history but is not on the original-treatment->24m-PFS path (it is a response TO impending failure). Descendant; analyses that adjust for it would condition on a post-baseline event downstream of treatment. The descendant-vs-collider discriminator is whether the trigger is an INDEPENDENT prognostic parent of 24m-PFS or reduces to the patient's own T-driven trajectory, and the literature settles it toward T-driven: ESR1 mutations are essentially absent in treatment-naive disease and their frequency rises with cumulative endocrine exposure (Jeselsohn 2015 Nat Rev Clin Oncol; Bhave 2024 Breast Cancer Res Treat: ~8% first-line to ~59% third-line), i.e. T (aromatase inhibition) -> ESR1 emergence is acquired, treatment-driven resistance, exactly the monitor-rising-bESR1-then-switch scenario of PADA-1 (Bidard 2022 Lancet Oncol). The second arrow into the switch is therefore itself downstream of T (not an exogenous U->Y parent), satisfying the descendant carve-out. Caveat: 'AI intolerance' is cleanly T-driven and ESR1 emergence is the literature-backed leg; 'suspected progression' carries some treatment-independent disease biology, but the dominant, citable mechanism is T-driven, so descendant holds.",
       "scenario": "BC_kisqali",
       "treatment_explicit": true
     },
@@ -796,14 +796,14 @@
       "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
       "derivation_pseudocode": "source=claims_dispense; derivation_inputs=[ndc_omalizumab_dupilumab_ligelizumab, switch_date]; aggregation=binary 1 if switch from remibrutinib to any other biologic in [index_date + 1d, index_date + 180d]; window_days=180; knowable_at=index_date_plus_180",
       "feature_name": "post_index_switch_to_alternative_biologic_180d_flag",
-      "ground_truth_role": "descendant",
+      "ground_truth_role": "collider",
       "provenance": {
         "citation": "Gimenez-Arnau AM, Szalewski R, Hide M, et al. 2025. Remibrutinib in chronic spontaneous urticaria: 52-week results from two phase 3 studies. J Allergy Clin Immunol 157(1):143-154.",
         "doi": "10.1016/j.jaci.2025.09.028",
         "pmid": "41115533",
         "url": "https://pubmed.ncbi.nlm.nih.gov/41115533/"
       },
-      "rationale": "Switching to omalizumab/dupilumab/ligelizumab post-remibrutinib is downstream of both the treatment (T determines the index drug) AND the outcome (non-response Y drives switching). Per VanderWeele 2015 and the EAACI 2021 treatment-ladder framework, treatment-switching is a descendant of Y. It is informative as an outcome surrogate (Gim\u00e9nez-Arnau 2025 long-term REMIX paper documents the switch pathway) but cannot be used as a predictor without inducing selection bias.",
+      "rationale": "Switching to omalizumab/dupilumab/ligelizumab post-remibrutinib has two parents: the treatment (T determines the index drug) AND the realized outcome (non-response Y drives switching) -- structurally T -> V <- Y, a common effect of T and Y, i.e. a COLLIDER. Conditioning on it opens a collider/selection-bias path between T and Y. This matches the project's own collider exemplars with the same T->V<-Y shape (any_rbc_transfusion_during_followup_flag, facit_fatigue_response_180d_postindex_flag), so labeling it collider keeps the taxonomy internally consistent. Unlike a descendant (which remediation may transform-and-keep in a safe pre-outcome window), a collider driven by the patient's realized outcome can ONLY be dropped -- there is no safe re-windowing out of collider bias -- so collider correctly closes the transform loophole. The earlier descendant-of-Y reading (VanderWeele 2015, EAACI 2021 treatment-ladder) also drops the feature; the flip changes the remediation class, not the drop-as-predictor conclusion. Gim\u00e9nez-Arnau 2025 REMIX documents the switch pathway.",
       "scenario": "CSU_remibrutinib",
       "treatment_explicit": true
     },
