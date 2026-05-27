@@ -279,6 +279,40 @@ def test_deploy_trigger_includes_patch_dependencies():
     )
 
 
+def test_deploy_trigger_includes_compose_files():
+    """A compose-only change must TRIGGER the workflow, not silently never deploy.
+
+    The deploy script runs ``docker compose -f docker/docker-compose.yml
+    -f docker/docker-compose.dev.yml ... up`` — so those two files are live deploy
+    inputs (tmpfs perms, volumes, env, ulimits). They were absent from on.push.paths,
+    so the very compose hardening shipped in PR #527 would not have auto-deployed; the
+    in-script rebuild detector recreates from compose, but only after the trigger fires.
+
+    ``docker-compose.secure.yml`` is intentionally NOT required here: the deploy
+    workflow does not consume it (no ``-f docker-compose.secure.yml`` in the script),
+    so a change to it must not trigger this deploy. Asserting the two consumed files
+    by literal name (not a ``docker-compose*.yml`` glob) keeps the trigger set aligned
+    with what the script actually ``-f``-mounts.
+    """
+    doc = yaml.safe_load(DEPLOY_WORKFLOW.read_text())
+    # PyYAML (YAML 1.1) parses a bare ``on:`` mapping key as the boolean True.
+    on = doc.get("on")
+    if on is None:
+        on = doc.get(True)
+    paths = (on or {}).get("push", {}).get("paths", []) or []
+    for required in ("docker/docker-compose.yml", "docker/docker-compose.dev.yml"):
+        assert required in paths, (
+            f"deploy on.push.paths must include {required!r} — the deploy script "
+            f"consumes it via -f, so a change to it must trigger a deploy "
+            f"(parsed paths: {paths})"
+        )
+    assert "docker/docker-compose.secure.yml" not in paths, (
+        "docker-compose.secure.yml must NOT be in the deploy trigger: the deploy "
+        "workflow does not consume it (no -f docker-compose.secure.yml), so including "
+        "it would fire spurious deploys"
+    )
+
+
 def test_deploy_workflow_keeps_safety_hardening():
     """Guard: the deploy.yml rewrite must not drop the existing hang/rollback hardening."""
     text = DEPLOY_WORKFLOW.read_text()

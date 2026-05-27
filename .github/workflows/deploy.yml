@@ -7,6 +7,14 @@ on:
       - 'src/**'
       - 'config/**'
       - 'docker/Dockerfile'
+      # Compose files ARE deploy inputs: the SSH script runs
+      # `docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml ... up`,
+      # so a compose-only change (tmpfs perms, volumes, env, ulimits — cf. PR #527's
+      # own hardening, which would NOT have auto-deployed) must trigger a deploy. The
+      # in-script rebuild detector recreates from compose, but only after this fires.
+      # docker-compose.secure.yml is intentionally excluded: the deploy script does not -f it.
+      - 'docker/docker-compose.yml'
+      - 'docker/docker-compose.dev.yml'
       - 'docker/frontend/**'
       - 'frontend/**'
       - 'requirements.txt'
