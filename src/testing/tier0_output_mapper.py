@@ -73,6 +73,10 @@ class Tier0StateContract(TypedDict, total=False):
     leakage_severity: NotRequired[str]
     leaked_features: NotRequired[list]
     leakage_findings: NotRequired[list]
+    # Pre-training heuristic findings (Step-2 graph + Step-5 structural) recorded on
+    # SCENARIO regimes WITHOUT applying them to the live gate fields above — see
+    # scripts/run_tier0_test._route_leakage_outputs (FU1 / #528).
+    leakage_diagnostics: NotRequired[dict]
     leakage_suspected: NotRequired[bool]
     leakage_remediation_status: NotRequired[str]
     leakage_remediated_features: NotRequired[list]

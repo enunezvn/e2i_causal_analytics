@@ -4600,6 +4600,71 @@ def _resolve_feature_manifest_source(
     return None
 
 
+def _route_leakage_outputs(
+    state: dict,
+    *,
+    severity: str,
+    leaked: list,
+    findings: list,
+    source: str,
+    is_scenario_regime: bool,
+) -> None:
+    """Route PRE-TRAINING heuristic leakage outputs to live state or to diagnostics.
+
+    Two pre-training heuristic detectors write leakage state in the runner: Step-2's
+    graph (``adaptive_validity_check`` can escalate severity even when the name-based
+    detector is ``skip_leakage_check``-gated) and Step-5's structural checks on the
+    real feature matrix. Both can FALSE-POSITIVE on clinically-grounded synthetic
+    fixtures (the documented ``journey_status`` trap). On those scenario regimes,
+    writing the live ``leakage_severity``/``leaked_features``/``leakage_findings``
+    would (a) trip the Step-5a LLM remediator (which then hallucinates a replacement
+    feature set) and (b) block deployment at the leakage gate — neither warranted,
+    since the fixture has no real leakage by construction.
+
+    So on a scenario regime the findings are recorded under
+    ``state["leakage_diagnostics"][source]`` (transparency) and the live fields are
+    left untouched. On a real / RWD regime the live fields are written as before, so
+    genuine leakage still remediates and blocks.
+
+    The POST-training EMPIRICAL signal (``leakage_suspected``/``suspicion_level`` from
+    ``check_imbalance_aware_suspicion``) is the genuine leakage gate and is NOT routed
+    here — it stays live on every regime (see ``_deploy_blocked_by_leakage``).
+    """
+    if is_scenario_regime:
+        diagnostics = state.setdefault("leakage_diagnostics", {})
+        diagnostics[source] = {
+            "severity": severity,
+            "leaked_features": list(leaked),
+            "findings": list(findings),
+            "note": (
+                "scenario regime: pre-training heuristic finding recorded for "
+                "transparency but NOT applied to the live leakage gate (no real "
+                "leakage by construction; the post-training empirical signal "
+                "remains the live gate)"
+            ),
+        }
+        return
+    state["leakage_severity"] = severity
+    state["leaked_features"] = leaked
+    state["leakage_findings"] = findings
+
+
+def _deploy_blocked_by_leakage(state: dict) -> bool:
+    """Whether the leakage gate should block deployment.
+
+    Mirrors the model-deployer leakage gate: the POST-training empirical suspicion
+    signal (``leakage_suspected`` / ``suspicion_level``) OR a live high/critical
+    ``leakage_severity`` blocks. On scenario regimes the pre-training heuristics are
+    diagnostic-only (see ``_route_leakage_outputs``), so on those regimes this fires
+    only on the genuine post-training empirical signal.
+    """
+    return bool(
+        state.get("leakage_suspected", False)
+        or state.get("leakage_severity", "none") in ("high", "critical")
+        or state.get("suspicion_level", "none") in ("high", "critical")
+    )
+
+
 async def run_pipeline(
     step: int | None = None,
     dry_run: bool = False,
@@ -4882,10 +4947,19 @@ async def run_pipeline(
             if result.get("validation_df") is not None:
                 state["validation_df"] = result["validation_df"]
 
-            # Propagate leakage detection state
-            state["leakage_severity"] = result.get("leakage_severity", "none")
-            state["leaked_features"] = result.get("leaked_features", [])
-            state["leakage_findings"] = result.get("leakage_findings", [])
+            # Propagate leakage detection state. On scenario regimes the Step-2
+            # graph's leakage outputs (incl. any adaptive_validity_check escalation,
+            # which is NOT skip_leakage_check-gated) are PRE-TRAINING heuristics that
+            # can false-positive on synthetic fixtures — route them to diagnostics so
+            # they neither trip Step-5a remediation nor block deploy (FU1 / #528).
+            _route_leakage_outputs(
+                state,
+                severity=result.get("leakage_severity", "none"),
+                leaked=result.get("leaked_features", []),
+                findings=result.get("leakage_findings", []),
+                source="step2_graph",
+                is_scenario_regime=(regime in _SCENARIO_REGIME_TO_NAME),
+            )
             # Propagate Layer 5 adaptive-validity audit trail (PR #84+) so
             # the TIER0_E2E_JSON_OUT artifact captures per-feature verdicts
             # for the CSU val_AUC measurement test (Item A2). Without this
@@ -5609,12 +5683,28 @@ async def run_pipeline(
                     )
 
                 if _all_findings:
-                    state["leakage_severity"] = _aggregate_severity(_all_findings)
-                    state["leaked_features"] = _get_leaked_features(_all_findings)
-                    state["leakage_findings"] = [f.to_dict() for f in _all_findings]
+                    _sev = _aggregate_severity(_all_findings)
+                    _leaked = _get_leaked_features(_all_findings)
+                    _findings_dicts = [f.to_dict() for f in _all_findings]
+                    # Step-5 structural checks are PRE-TRAINING heuristics; on scenario
+                    # regimes route to diagnostics (don't touch the live gate fields)
+                    # so a synthetic false-positive doesn't block deploy / remediate.
+                    _route_leakage_outputs(
+                        state,
+                        severity=_sev,
+                        leaked=_leaked,
+                        findings=_findings_dicts,
+                        source="step5_structural",
+                        is_scenario_regime=(regime in _SCENARIO_REGIME_TO_NAME),
+                    )
                     print(f"\n  ⚠️  Pre-training leakage detection: {len(_all_findings)} findings")
-                    print(f"     Severity: {state['leakage_severity']}")
-                    print(f"     Leaked features: {state['leaked_features']}")
+                    print(f"     Severity: {_sev}")
+                    print(f"     Leaked features: {_leaked}")
+                    if regime in _SCENARIO_REGIME_TO_NAME:
+                        print(
+                            "     (scenario regime → recorded as diagnostic-only; "
+                            "live leakage gate unaffected)"
+                        )
                     for _f in _all_findings:
                         print(
                             f"     [{_f.severity.value.upper()}] {_f.check_name}: {_f.description}"
@@ -5640,6 +5730,12 @@ async def run_pipeline(
                     # Build a minimal state dict for the remediation node
                     _rem_state = {
                         "experiment_id": experiment_id,
+                        # Defense-in-depth: on a scenario regime this block is
+                        # unreachable (live leakage_severity stays "none" — see
+                        # _route_leakage_outputs), but if it ever is reached the
+                        # remediator's own skip-gate must engage so it cannot
+                        # hallucinate a replacement feature set on synthetic data.
+                        "skip_leakage_check": (regime in _SCENARIO_REGIME_TO_NAME),
                         "leakage_severity": state["leakage_severity"],
                         "leaked_features": state["leaked_features"],
                         "leakage_findings": state["leakage_findings"],
@@ -6534,12 +6630,11 @@ async def run_pipeline(
                         result_message=f"Deployment BLOCKED — {_quality_reason}",
                     )
                 )
-            # Block deployment if leakage suspected
-            elif (
-                state.get("leakage_suspected", False)
-                or state.get("leakage_severity", "none") in ("high", "critical")
-                or state.get("suspicion_level", "none") in ("high", "critical")
-            ):
+            # Block deployment if leakage suspected. The leakage-gate predicate is
+            # extracted so it is unit-testable and so the FU1 scenario-regime routing
+            # (pre-training heuristics → diagnostics; post-training empirical signal
+            # stays live) is exercised by the same condition prod uses.
+            elif _deploy_blocked_by_leakage(state):
                 _leakage_severity = state.get("leakage_severity", "none")
                 _suspicion_level = state.get("suspicion_level", "none")
                 print(f"\n  🚨 DEPLOYMENT BLOCKED: Data leakage detected")
