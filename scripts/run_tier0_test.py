@@ -2340,7 +2340,17 @@ async def step_2_data_preparer(
 
 
 async def step_2b_feast_registration(experiment_id: str, state: dict[str, Any]) -> dict[str, Any]:
-    """Step 2b: Register features with Feast feature store (gracefully degrading)."""
+    """Step 2b: Register features with Feast feature store (gracefully degrading).
+
+    NOTE (FU2 / #528): Feast is INTENTIONALLY absent from the app image — every
+    Feast release (0.43–0.63) pins ``tenacity<9``, unsatisfiable against the prod
+    ``tenacity==9.1.2`` required by graphiti-core (see requirements.txt, #307). So
+    ``import feast`` fails in this container and these feast steps degrade BY DESIGN
+    to the custom feature-store fallback — expected, not a bug. Real Feast lives in
+    the ``e2i_feast`` sidecar and is exercised by ``tests/integration/test_feast_*``.
+    (Whether the prod predictions route should fail-loud vs silently fall back is
+    tracked separately — see #532.)
+    """
     import time as time_mod
 
     step_start = time_mod.time()
@@ -2456,7 +2466,11 @@ async def step_2b_feast_registration(experiment_id: str, state: dict[str, Any]) 
 
 
 async def step_2c_feast_freshness_check(state: dict[str, Any]) -> dict[str, Any]:
-    """Step 2c: Check feature freshness in Feast (gracefully degrading)."""
+    """Step 2c: Check feature freshness in Feast (gracefully degrading).
+
+    Feast is absent from the app image by design (tenacity conflict, #307) → degrades
+    to fallback; see step_2b_feast_registration docstring + #532 (FU2 / #528).
+    """
     import time as time_mod
 
     step_start = time_mod.time()
@@ -4149,7 +4163,9 @@ async def step_8_observability_connector(
         ("Event emission", emission_successful, f"{result.get('events_logged', 0)} events")
     )
 
-    # Feast online feature retrieval check (gracefully degrading)
+    # Feast online feature retrieval check (gracefully degrading). Feast is absent
+    # from the app image by design (tenacity conflict, #307), so this falls back to
+    # the custom store — see step_2b_feast_registration docstring + #532 (FU2 / #528).
     feast_online_ok = False
     feast_online_detail = "skipped"
     try:
