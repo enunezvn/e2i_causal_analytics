@@ -536,8 +536,8 @@ services:
       - no-new-privileges:true
     read_only: true
     tmpfs:
-      - /tmp:size=50M,mode=1770
-      - /app/tmp:size=100M,mode=1770
+      - /tmp:size=50M,mode=1777
+      - /app/tmp:size=100M,uid=1000,gid=1000,mode=0700
     deploy:
       resources:
         limits:
@@ -573,7 +573,7 @@ services:
       - experiment_designs:/app/data/experiment_designs
       - feature_cache:/app/data/feature_cache:ro
     tmpfs:
-      - /app/tmp:size=256M,mode=1770
+      - /app/tmp:size=256M,uid=1000,gid=1000,mode=0700
     environment:
       <<: *common-env
       WORKER_TYPE: light
@@ -622,7 +622,7 @@ services:
       - experiment_designs:/app/data/experiment_designs
       - feature_cache:/app/data/feature_cache:ro
     tmpfs:
-      - /app/tmp:size=2G,mode=1770
+      - /app/tmp:size=2G,uid=1000,gid=1000,mode=0700
     environment:
       <<: *common-env
       WORKER_TYPE: medium
@@ -671,7 +671,7 @@ services:
       - experiment_designs:/app/data/experiment_designs
       - feature_cache:/app/data/feature_cache:ro
     tmpfs:
-      - /app/tmp:size=8G,mode=1770  # Large scratch space for heavy computation
+      - /app/tmp:size=8G,uid=1000,gid=1000,mode=0700  # Large scratch space for heavy computation
     environment:
       <<: *common-env
       WORKER_TYPE: heavy
@@ -751,7 +751,11 @@ services:
       - no-new-privileges:true
     read_only: true
     tmpfs:
-      - /tmp:size=50M,mode=1770
+      - /tmp:size=50M,mode=1777
+      # beat autodiscovers src.mlops/src.agents, which transitively import shap ->
+      # matplotlib writes its cache to MPLCONFIGDIR (/app/tmp) at import time; the
+      # rootfs is read_only, so provide a writable e2i-owned tmpfs here too.
+      - /app/tmp:size=64M,uid=1000,gid=1000,mode=0700
     deploy:
       resources:
         limits:
