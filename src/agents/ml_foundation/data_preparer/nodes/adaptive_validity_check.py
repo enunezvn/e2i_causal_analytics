@@ -99,6 +99,9 @@ import pandas as pd
 from src.data.adversarial_leakage import (
     compute_adversarial_score,
     compute_feature_ablation,
+    fdr_confident_set,
+    fdr_permutation_budget,
+    min_permutations_for_fdr,
 )
 from src.data.feature_contract import FeatureContract
 from src.data.manifests import (
@@ -212,6 +215,17 @@ logger = logging.getLogger(__name__)
 HIGH_Z = 5.0
 MODERATE_Z = 3.0
 DEFAULT_PERMUTATIONS = 200
+
+# Plan v4 Layer-A Phase 1 — dynamic FDR confident set (firing/severity driver).
+# DEFAULT_FDR_Q: the Benjamini-Hochberg false-discovery rate for the confident
+#   set. 0.10 (not 0.05) because this is a SCREENING gate that routes features
+#   to drop/review, not a confirmatory scientific claim — and the looser q
+#   halves the feasibility floor (ceil(m/q) permutations), bounding cost.
+# DEFAULT_FDR_MAX_PERMUTATIONS: the cap on the feasibility-aware budget. When a
+#   cohort is so wide that ceil(m/q) exceeds this, FDR is infeasible and the
+#   node falls back to the static σ-band for that run (never silently empty).
+DEFAULT_FDR_Q = 0.10
+DEFAULT_FDR_MAX_PERMUTATIONS = 2000
 
 # Minimum non-null sample count to run Layer 3 scoring on a feature.
 # Below this floor the permutation-baseline z-score is too noisy to be
@@ -1146,6 +1160,88 @@ def _adversarial_input(
         # invariant holds.
         "_hblp_classified": True,
     }
+
+
+def _marginal_effect_size(score: dict[str, Any]) -> float:
+    """Signed marginal effect ``actual_auc - null_mean`` for the FDR effect axis.
+
+    The confident set intersects BH-rejection with ``|effect| > floor``; on the
+    always-on marginal path the effect is how far the feature's folded AUC sits
+    above its permutation-null mean. Returns NaN when either field is
+    missing/non-numeric (a degenerate score) — ``fdr_confident_set`` treats NaN
+    as non-confident.
+    """
+    auc = score.get("actual_auc")
+    null_mean = score.get("null_mean")
+    if auc is None or null_mean is None:
+        return float("nan")
+    try:
+        return float(auc) - float(null_mean)
+    except (TypeError, ValueError):
+        return float("nan")
+
+
+def _apply_fdr_firing_override(
+    adv_input: dict[str, Any],
+    *,
+    is_confident: bool,
+    fdr_q: float,
+) -> dict[str, Any]:
+    """Re-decide the auto-fire (HIGH) tier from the FDR confident set.
+
+    Plan v4 Layer-A Phase 1: when the dynamic Benjamini-Hochberg confident set
+    is the active firing driver, a feature's ``severity="high"`` (auto-drop)
+    decision comes from confident-set membership — NOT the static z>5σ band.
+    This wraps the *marginal* σ-band verdict from ``_adversarial_input`` and
+    overrides ONLY the HIGH tier:
+
+      * ``is_confident=True``  → severity=high, remediation=drop. FDR confidently
+        flags the feature (BH-rejected ∩ ``|delta_AUC|>floor``), so it fires even
+        if the static z-threshold only saw moderate/info — the adaptive benefit
+        of a cohort-relative FDR decision over a fixed σ-threshold.
+      * ``is_confident=False`` AND the σ-band said high → DEMOTE to
+        moderate/ambiguous. The feature is suspicious but NOT FDR-confident:
+        route to review, do not auto-drop (FDR is the auto-fire authority).
+      * otherwise (σ-band moderate/info) → unchanged. The moderate→review band
+        (the "ambiguous interior") and the info/keep band stay z-based.
+
+    Applied to the MARGINAL verdict BEFORE the opt-in ablation MAX-rule combine,
+    so the joint-model ablation signal (which catches interaction-only leaks the
+    marginal permutation cannot) can still escalate a not-confident feature on
+    its own merits — FDR governs the marginal tier, not the orthogonal ablation
+    escalation. Only the consequential auto-drop decision is FDR-controlled
+    (Plan v4 N3: the statistical severity-ladder semantics are otherwise
+    preserved). Returns a NEW dict; the input is not mutated. Records
+    ``fdr_confident`` (bool) on the result for the audit trail.
+
+    Args:
+        adv_input: the per-feature dict from ``_adversarial_input``.
+        is_confident: True iff the feature is in the FDR confident set.
+        fdr_q: the active FDR level (annotated into the evidence string).
+    """
+    out = dict(adv_input)
+    out["fdr_confident"] = bool(is_confident)
+    sigma_severity = out.get("severity")
+    base_evidence = out.get("evidence", "")
+    if is_confident:
+        out["severity"] = "high"
+        out["severity_pre_joint_check"] = "high"
+        out["remediation"] = "drop"
+        out["evidence"] = (
+            f"{base_evidence} [FDR firing driver: CONFIDENT leak at "
+            f"q={fdr_q:.3g} (BH-rejected ∩ |delta_AUC|>floor) → drop]"
+        )
+    elif sigma_severity == "high":
+        # σ-band flagged high but FDR is NOT confident → demote to review.
+        out["severity"] = "moderate"
+        out["severity_pre_joint_check"] = "moderate"
+        out["remediation"] = "ambiguous"
+        out["evidence"] = (
+            f"{base_evidence} [FDR firing driver: NOT confident at "
+            f"q={fdr_q:.3g} (σ-band high not BH-confirmed) → demoted to review]"
+        )
+    # else: σ-band moderate/info — unchanged (review / clean tiers stay z-based).
+    return out
 
 
 # Map ``EnsembleVerdict.decided_by`` → legacy ``layer`` field for the
@@ -3116,6 +3212,87 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
                     LAYER5_DELTA_AUC_FLOOR_DEFAULT,
                 )
 
+    # ------------------------------------------------------------------
+    # Plan v4 Layer-A Phase 1 — dynamic FDR confident set (firing driver).
+    # The static z>5σ "high" tier is replaced by a Benjamini-Hochberg confident
+    # set over the per-feature plus-one permutation p-values (BH-rejected ∩
+    # |delta_AUC| > floor). A plus-one p-value can clear the BH rank-1 threshold
+    # q/m only when n_permutations >= ceil(m/q), so we (a) size the permutation
+    # budget to that feasibility floor up to a cap, (b) fall back to the static
+    # σ-band when a cohort is too wide for the cap (never a silently-empty set),
+    # and (c) score every Layer-3-eligible feature ONCE at that budget so the
+    # confident set is known before any feature is classified. Default-ON
+    # (validated faithfully on the Optum initiation cohort: caught the real
+    # treatment_initiated leak, zero false positives on 39 legit features).
+    # ------------------------------------------------------------------
+    fdr_enabled = bool(state.get("adaptive_fdr_enabled", True))
+    _fdr_q = state.get("adaptive_fdr_q")
+    fdr_q = float(_fdr_q) if _fdr_q is not None else DEFAULT_FDR_Q
+    _fdr_cap = state.get("adaptive_fdr_max_permutations")
+    fdr_cap = int(_fdr_cap) if _fdr_cap is not None else DEFAULT_FDR_MAX_PERMUTATIONS
+
+    l3_candidates = [feat for feat in numeric_candidates if feat not in layer_1_caught]
+    # Cheap pre-scan (no permutations): which candidates clear the min-samples
+    # gate? Those are the BH hypotheses; their count m sizes the feasibility
+    # floor and each is scored once below.
+    l3_masks: dict[str, Any] = {}
+    bh_eligible: list[str] = []
+    for feat in l3_candidates:
+        feat_mask = train_df[feat].notna() & binary_label_mask
+        l3_masks[feat] = feat_mask
+        if int(feat_mask.sum()) >= MIN_LAYER3_SAMPLES:
+            bh_eligible.append(feat)
+
+    fdr_active = False
+    if not fdr_enabled:
+        fdr_reason = "disabled"
+    elif not bh_eligible:
+        fdr_reason = "no_eligible_features"
+    else:
+        n_perms, fdr_active = fdr_permutation_budget(
+            len(bh_eligible), fdr_q, default=n_perms, cap=fdr_cap
+        )
+        fdr_reason = (
+            "active"
+            if fdr_active
+            else (
+                f"sigma_fallback: BH floor "
+                f"{min_permutations_for_fdr(len(bh_eligible), fdr_q)} > cap {fdr_cap} "
+                f"at m={len(bh_eligible)} eligible features"
+            )
+        )
+
+    # Score every BH-eligible feature ONCE at the chosen budget. A scoring
+    # exception is stored as a sentinel so the classify loop emits the same
+    # error verdict it produced when scoring was inline.
+    l3_scores: dict[str, Any] = {}
+    for feat in bh_eligible:
+        feat_mask = l3_masks[feat]
+        try:
+            l3_scores[feat] = compute_adversarial_score(
+                train_df[feat][feat_mask].to_numpy(dtype=float),
+                train_df.loc[feat_mask, target].to_numpy(dtype=int),
+                n_permutations=n_perms,
+                seed=seed,
+                z_threshold=HIGH_Z,
+            )
+        except Exception as exc:  # noqa: BLE001 — recorded; re-surfaced as a verdict below
+            l3_scores[feat] = exc
+
+    confident_features: set[str] = set()
+    if fdr_active:
+        _scored_ok = [f for f in bh_eligible if not isinstance(l3_scores[f], BaseException)]
+        _confident_mask = fdr_confident_set(
+            [l3_scores[f].get("p_value") for f in _scored_ok],
+            [_marginal_effect_size(l3_scores[f]) for f in _scored_ok],
+            q=fdr_q,
+            n_permutations=n_perms,
+            effect_floor=LAYER5_DELTA_AUC_FLOOR_DEFAULT,
+        )
+        confident_features = {
+            f for f, is_conf in zip(_scored_ok, _confident_mask, strict=True) if bool(is_conf)
+        }
+
     # Layer 3 pass — numeric columns only, skipping anything Layer 1 already caught.
     for feat in numeric_candidates:
         if feat in layer_1_caught:
@@ -3143,20 +3320,16 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
             verdicts.append(_sc_verdict)
             continue
 
-        try:
-            score = compute_adversarial_score(
-                col[mask].to_numpy(dtype=float),
-                train_df.loc[mask, target].to_numpy(dtype=int),
-                n_permutations=n_perms,
-                seed=seed,
-                z_threshold=HIGH_Z,
-            )
-        except Exception as exc:
-            logger.warning("adaptive_validity_check: scoring failed for %s: %s", feat, exc)
+        # Phase 1: read the score computed once in the FDR pre-pass above. A
+        # BaseException sentinel means scoring raised — emit the same error
+        # verdict the inline try/except produced.
+        score = l3_scores.get(feat)
+        if isinstance(score, BaseException):
+            logger.warning("adaptive_validity_check: scoring failed for %s: %s", feat, score)
             _err_verdict = _compose_legacy_verdict(
                 feat,
                 voter=voter,
-                short_circuit_evidence=f"Adversarial scoring error: {exc}",
+                short_circuit_evidence=f"Adversarial scoring error: {score}",
             )
             # Issue #501 — same schema-uniformity assignment as above.
             # ``evaluate_role_vs_statistical_leak`` imported once at node entry.
@@ -3165,6 +3338,10 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
                 stat_leak_by_feature.get(feat),
             )
             verdicts.append(_err_verdict)
+            continue
+        if score is None:
+            # Defensive: any feature past the min-samples gate is in l3_scores;
+            # None would mean logic drift — skip rather than crash.
             continue
 
         contract = lookup_feature_contract(feat, data_source=manifest_source)
@@ -3185,6 +3362,18 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
             n_train_pos=n_train_pos,
             layer_1_declared_safe=layer_1_declared_safe,
         )
+
+        # Plan v4 Layer-A Phase 1 — FDR confident set drives the HIGH tier.
+        # Applied to the MARGINAL verdict BEFORE the ablation combine so the
+        # orthogonal joint-model ablation signal can still escalate a
+        # not-confident feature on its own merits. No-op when FDR fell back to
+        # the static σ-band (fdr_active=False) — the legacy z-band then decides.
+        if fdr_active:
+            adv_input = _apply_fdr_firing_override(
+                adv_input,
+                is_confident=feat in confident_features,
+                fdr_q=fdr_q,
+            )
 
         # Issue #196 — Phase 3.3 Layer-3 ablation MAX-rule combination.
         # When the opt-in ablation pass produced a per-feature row for this
@@ -3385,6 +3574,19 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
         "adaptive_flagged_features": extended_flagged,
         "leaked_features": merged_leaked,
         "leakage_findings": merged_findings,
+        # Plan v4 Layer-A Phase 1 — auditable FDR firing-driver summary. Always
+        # present so sidecar/audit consumers can see whether the dynamic
+        # confident set drove this run (active) or the σ-band fallback did, the
+        # q/budget used, and which features were confidently flagged.
+        "leakage_fdr": {
+            "active": fdr_active,
+            "enabled": fdr_enabled,
+            "q": fdr_q,
+            "n_permutations": n_perms,
+            "n_confident": len(confident_features),
+            "confident_features": sorted(confident_features),
+            "reason": fdr_reason,
+        },
     }
     if new_severity != prior_severity:
         update["leakage_severity"] = new_severity

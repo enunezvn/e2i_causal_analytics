@@ -492,3 +492,82 @@ def test_benjamini_hochberg_rejects_infinite_pvalue():
     # NaN, by contrast, is still tolerated (not rejected, no raise).
     mask = np.asarray(benjamini_hochberg([float("nan"), 0.001], q=0.05), dtype=bool)
     assert not bool(mask[0])  # NaN -> not rejected
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 — feasibility-aware permutation budget + the FDR confident set.
+# These compose the Phase-0 primitives (min_permutations_for_fdr,
+# benjamini_hochberg) into the two pure helpers the adaptive_validity_check
+# consumer wires in: budget sizing (with a σ-band-fallback signal when a
+# cohort is too wide for BH at the cap) and the confident-leak mask
+# (BH-rejection ∩ |effect| > floor).
+# ---------------------------------------------------------------------------
+
+
+def test_fdr_permutation_budget_raises_to_floor_when_feasible():
+    """At a width whose BH feasibility floor exceeds the default but fits the
+    cap, the budget is raised to the floor so a BH rejection is *possible*."""
+    from src.data.adversarial_leakage import fdr_permutation_budget, min_permutations_for_fdr
+
+    floor = min_permutations_for_fdr(95, 0.05)  # 1899
+    n_perm, feasible = fdr_permutation_budget(95, 0.05, default=200, cap=2000)
+    assert feasible is True
+    assert n_perm == floor == 1899
+
+
+def test_fdr_permutation_budget_infeasible_above_cap_signals_fallback():
+    """When the feasibility floor exceeds the cap, FDR is infeasible: return the
+    default budget and feasible=False so the caller falls back to the σ-band."""
+    from src.data.adversarial_leakage import fdr_permutation_budget, min_permutations_for_fdr
+
+    assert min_permutations_for_fdr(300, 0.05) == 5999  # > cap
+    n_perm, feasible = fdr_permutation_budget(300, 0.05, default=200, cap=2000)
+    assert feasible is False
+    assert n_perm == 200  # σ-fallback uses the default budget for the z-scores
+
+
+def test_fdr_permutation_budget_keeps_default_when_floor_below_default():
+    """A narrow cohort whose floor is below the configured default keeps the
+    default budget (never *lowers* below it) and stays feasible."""
+    from src.data.adversarial_leakage import fdr_permutation_budget, min_permutations_for_fdr
+
+    assert min_permutations_for_fdr(5, 0.10) == 49  # < default 200
+    n_perm, feasible = fdr_permutation_budget(5, 0.10, default=200, cap=2000)
+    assert feasible is True
+    assert n_perm == 200
+
+
+def test_fdr_confident_set_requires_both_bh_rejection_and_effect_floor():
+    """The confident set is the INTERSECTION: a feature must be BH-rejected AND
+    have |effect| above the floor. BH-rejected-but-tiny-effect (the #194
+    'ambiguous interior') and big-effect-but-not-BH-rejected are both excluded.
+    """
+    from src.data.adversarial_leakage import fdr_confident_set
+
+    # sorted p = [.001,.001,.5,.5]; BH q=.10 m=4 thresholds [.025,.05,.075,.10]
+    # -> rejects ranks 0,1 (the two p=.001). effect floor 0.1.
+    p_values = [0.001, 0.001, 0.5, 0.5]
+    effects = [0.30, 0.01, 0.30, 0.01]
+    mask = np.asarray(
+        fdr_confident_set(p_values, effects, q=0.10, n_permutations=1000, effect_floor=0.1),
+        dtype=bool,
+    )
+    # feat0: BH ✓ + effect 0.30>0.1 ✓ -> confident
+    # feat1: BH ✓ but effect 0.01≤0.1 -> excluded (ambiguous interior)
+    # feat2: effect 0.30 but NOT BH-rejected (p=0.5) -> excluded
+    # feat3: neither -> excluded
+    assert mask.tolist() == [True, False, False, False]
+
+
+def test_fdr_confident_set_tolerates_nan_effect_as_non_confident():
+    """A NaN effect size (degenerate ablation/score) is never confident, even if
+    BH rejects its p-value — and must not raise."""
+    from src.data.adversarial_leakage import fdr_confident_set
+
+    mask = np.asarray(
+        fdr_confident_set(
+            [0.001, 0.001], [float("nan"), 0.30], q=0.10, n_permutations=1000, effect_floor=0.1
+        ),
+        dtype=bool,
+    )
+    assert mask.tolist() == [False, True]
