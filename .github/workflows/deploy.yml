@@ -11,6 +11,10 @@ on:
       - 'frontend/**'
       - 'requirements.txt'
       - 'pyproject.toml'
+      # pip path-installs baked into the image (Dockerfile: COPY patches/ ./patches/,
+      # requirements.txt: ./patches/ag-ui-langgraph + ./patches/copilotkit). Kept in
+      # sync with the in-script rebuild detector so a patch-only change still deploys.
+      - 'patches/**'
   workflow_dispatch:
 
 env:
@@ -112,12 +116,36 @@ jobs:
               echo "==> Skipping migrations: SUPABASE_DB_URL unset"
             fi
 
-            # Rebuild + recreate app services so dependency/code changes in the
-            # image actually land. `restart` alone reuses the stale baked venv
-            # (the anonymous /app/.venv volume), which silently dropped new deps
-            # and caused the 2026-05-26 outage. --renew-anon-volumes discards the
-            # stale venv; --build picks up requirements + code changes.
-            $COMPOSE_CMD up -d --build --no-deps --force-recreate --renew-anon-volumes \
+            # The /app/.venv anon-volume mask is gone, so a forward recreate carries
+            # the image's current deps; the anon-volume renewal flag is not needed here.
+            # Decide rebuild by EXCLUSION, not enumeration: rebuild unless every
+            # changed file is a dev-overlay bind mount (src/, config/, tests/,
+            # feature_repo/, frontend/src|public|index.html). Any other path is a
+            # baked image input — Dockerfile, requirements*, pyproject, patches/,
+            # frontend build config (vite.config.ts, tailwind.config.js, tsconfig*),
+            # package manifests, etc. — so it forces a rebuild without us having to
+            # enumerate (and inevitably miss) each one. A no-delta re-run (PREV==NEW,
+            # e.g. a retry after a partial/interrupted build) also rebuilds, since we
+            # cannot prove the local image is current. NB: this exclusion is tied to
+            # docker-compose.dev.yml's bind mounts; the deferred prod-target switch
+            # (no bind mounts) must revisit it.
+            # Capture changed files that are NOT dev-overlay bind mounts. Use a
+            # captured-output emptiness test rather than the quiet-invert (-qv) exit
+            # status: the droplet's grep may be ugrep, whose quiet-invert exit code is
+            # unreliable and would risk a false-negative (skipping a needed rebuild).
+            # `|| true` keeps set -e happy when every changed file IS bind-mounted
+            # (grep then exits non-zero).
+            CHANGED_BAKED=$(git diff --name-only "$PREV_SHA" "$NEW_SHA" \
+              | grep -vE '^(src/|config/|tests/|feature_repo/|frontend/src/|frontend/public/|frontend/index\.html$)' \
+              || true)
+            if [ "$PREV_SHA" = "$NEW_SHA" ] || [ -n "$CHANGED_BAKED" ]; then
+              echo "==> Rebuilding image (no-delta re-run or a non-bind-mounted image input changed)"
+              BUILD_FLAG="--build"
+            else
+              echo "==> Bind-mounted code-only change — recreating from current image"
+              BUILD_FLAG=""
+            fi
+            $COMPOSE_CMD up -d $BUILD_FLAG --no-deps --force-recreate \
               api frontend worker_light worker_medium scheduler
 
             # Health check
@@ -135,6 +163,11 @@ jobs:
             if [ "$HEALTHY" = false ]; then
               echo "==> Health check failed — rolling back to ${PREV_SHA:0:7}"
               git checkout "$PREV_SHA"
+              # Rollback rebuilds from PREV_SHA AND renews anonymous volumes: the
+              # rolled-back commit may predate this hotfix and still carry the
+              # /app/.venv mask, so renewing repopulates the venv from the freshly
+              # rebuilt PREV_SHA image instead of reusing a stale anon volume.
+              # Correctness over speed on the failure path.
               $COMPOSE_CMD up -d --build --no-deps --force-recreate --renew-anon-volumes \
                 api frontend worker_light worker_medium scheduler
               sleep 10

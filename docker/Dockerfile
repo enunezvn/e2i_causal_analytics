@@ -22,7 +22,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONFAULTHANDLER=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    MPLCONFIGDIR=/app/tmp \
+    MPLBACKEND=Agg
+# matplotlib (imported transitively via shap) writes a font cache at import time;
+# MPLCONFIGDIR points it at the writable /app/tmp tmpfs and MPLBACKEND=Agg forces a
+# headless backend so the non-root e2i user cannot crash on an unwritable cache dir.
 
 # Install system dependencies required for scientific computing
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -132,7 +137,9 @@ COPY --from=dependencies /app/.venv /app/.venv
 ENV PATH="/app/.venv/bin:$PATH" \
     VIRTUAL_ENV="/app/.venv" \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    MPLCONFIGDIR=/app/tmp \
+    MPLBACKEND=Agg
 
 # Copy application code
 COPY src/ ./src/

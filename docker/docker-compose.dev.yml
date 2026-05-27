@@ -21,6 +21,12 @@ services:
     build:
       target: development  # Use development stage of Dockerfile
     container_name: e2i_api_dev
+    # uvicorn --reload (below) opens many fds via the watcher; raise the limit so
+    # the dev/prod-shared API container does not exhaust file descriptors.
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     deploy:
       resources:
         limits:
@@ -48,7 +54,6 @@ services:
 
       # Prevent bind mount from overwriting container's installed packages
       - /app/src/__pycache__
-      - /app/.venv
 
       # -----------------------------------------------------------------------
       # SHARED VOLUMES - Still needed for data exchange
@@ -102,15 +107,14 @@ services:
       - ../config:/app/config
       - ../tests:/app/tests
       - /app/src/__pycache__
-      - /app/.venv
       - ml_artifacts:/app/data/ml_artifacts
       - causal_outputs:/app/data/causal_outputs
       - agent_outputs:/app/data/agent_outputs
       - experiment_designs:/app/data/experiment_designs
       - feature_cache:/app/data/feature_cache:ro
     tmpfs:
-      - /tmp:size=256M,mode=1770
-      - /app/tmp:size=512M,mode=1770
+      - /tmp:size=256M,mode=1777
+      - /app/tmp:size=512M,uid=1000,gid=1000,mode=0700
     environment:
       - ENVIRONMENT=development
       - LOG_LEVEL=DEBUG
@@ -137,14 +141,13 @@ services:
       - ../config:/app/config
       - ../tests:/app/tests
       - /app/src/__pycache__
-      - /app/.venv
       - ml_artifacts:/app/data/ml_artifacts
       - causal_outputs:/app/data/causal_outputs
       - agent_outputs:/app/data/agent_outputs
       - experiment_designs:/app/data/experiment_designs
       - feature_cache:/app/data/feature_cache:ro
     tmpfs:
-      - /app/tmp:size=2G,mode=1770
+      - /app/tmp:size=2G,uid=1000,gid=1000,mode=0700
     environment:
       - ENVIRONMENT=development
       - LOG_LEVEL=DEBUG
@@ -179,14 +182,13 @@ services:
       - ../config:/app/config
       - ../tests:/app/tests
       - /app/src/__pycache__
-      - /app/.venv
       - ml_artifacts:/app/data/ml_artifacts
       - causal_outputs:/app/data/causal_outputs
       - agent_outputs:/app/data/agent_outputs
       - experiment_designs:/app/data/experiment_designs
       - feature_cache:/app/data/feature_cache:ro
     tmpfs:
-      - /app/tmp:size=4G,mode=1770
+      - /app/tmp:size=4G,uid=1000,gid=1000,mode=0700
     environment:
       - ENVIRONMENT=development
       - LOG_LEVEL=DEBUG
