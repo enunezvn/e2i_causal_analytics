@@ -3231,6 +3231,12 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
     _fdr_cap = state.get("adaptive_fdr_max_permutations")
     fdr_cap = int(_fdr_cap) if _fdr_cap is not None else DEFAULT_FDR_MAX_PERMUTATIONS
 
+    # Plan v4 Phase 1: the Layer-4 LLM auditor is OFF by default. When False the
+    # LLM is never invoked — the FDR confident set + the deterministic voter
+    # decide. Set adaptive_layer4_enabled=True to run it as an auditor during the
+    # Phase-3 attestation ramp (still audit-only in the voter by default).
+    layer4_enabled = bool(state.get("adaptive_layer4_enabled", False))
+
     l3_candidates = [feat for feat in numeric_candidates if feat not in layer_1_caught]
     # Cheap pre-scan (no permutations): which candidates clear the min-samples
     # gate? Those are the BH hypotheses; their count m sizes the feasibility
@@ -3433,8 +3439,14 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
         # the pre-#212 behaviour for those callers.
         llm_verdict: Optional[Any] = None
         adv_severity_pre = adv_input.get("severity_pre_joint_check", adv_input.get("severity"))
-        layer_4_should_fire = adv_severity_pre == "moderate" or (
-            adv_severity_pre == "high" and layer_1_declared_safe
+        # Plan v4 Phase 1: the Layer-4 LLM auditor is OFF by default
+        # (adaptive_layer4_enabled). When off, the LLM is never CALLED — the FDR
+        # confident set + the deterministic voter decide. When on (the Phase-3
+        # ramp auditor) the verdict is STILL audit-only in the voter unless
+        # ADAPTIVE_LAYER4_LLM_DECIDES=1 (ensemble_voter._llm_decides_enabled).
+        layer_4_should_fire = layer4_enabled and (
+            adv_severity_pre == "moderate"
+            or (adv_severity_pre == "high" and layer_1_declared_safe)
         )
         if layer_4_classifier is not None and layer_4_should_fire:
             try:
