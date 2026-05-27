@@ -115,11 +115,11 @@ def write_adaptive_verdicts_sidecar(state: Dict[str, Any]) -> Path | None:
     ``Path.replace()``d into place so an interrupted run never leaves a
     half-written JSON on the volume (codex review LOW-9).
 
-    The serialized verdicts carry an empirical ``p_value`` field whose floor
-    is ``1 / n_permutations`` (default 200). A persisted ``p_value=0.0``
-    therefore means ``< 1/n_permutations``, NOT exact zero (backlog #11.e).
-    Severity routing in the producer uses ``z_score``, so this rounding is
-    purely informational for downstream sidecar consumers.
+    The serialized verdicts carry an empirical ``p_value`` field computed with
+    the plus-one (Phipson & Smyth) permutation estimator, whose floor is
+    ``1 / (1 + n_permutations)``; it is therefore NEVER exactly 0.0 (backlog
+    #11.e). Severity routing in the producer uses ``z_score``, so the p_value
+    is informational for downstream sidecar consumers.
 
     Layer-4 evaluator audit-only fields (Plan
     ``.claude/plans/layer4_evaluator_audit_signal.md``):
