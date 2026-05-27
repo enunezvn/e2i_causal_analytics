@@ -18,14 +18,18 @@ Reference documentation for the E2I Causal Analytics synthetic data system. Cove
 
 ## Overview
 
-The platform uses two separate synthetic data systems:
+The platform uses several complementary synthetic-data systems, built up over successive iterations. All share the same goal — data with **known causal structure** so the pipeline can be validated against ground truth — but differ in fidelity and purpose:
 
 | System | Location | Purpose | Scale |
 |--------|----------|---------|-------|
-| **Modular generators** | `src/ml/synthetic/` | Causal validation with ground truth effects | 15K HCPs, 85K patients (3 brands) |
-| **Legacy generator** | `src/ml/data_generator.py` | Quick prototyping, KPI gap table seeding | ~200 patients, ~50 HCPs |
+| **Synthetic v2 — clinical scenarios** | `src/ml/synthetic_v2/` | Disease-specific cohorts with full causal DAGs; tier0 `--regime` runs + RWD concurrent validation | ~6K rows/scenario (configurable) |
+| **Synthetic v1 — generic-DGP generators** | `src/ml/synthetic/` | Causal validation with embedded TRUE_ATE across 5 DGPs; `synthetic-benchmarks` CI | 15K HCPs, 85K patients (3 brands) |
+| **Legacy generator** | `src/ml/data_generator.py` | Quick prototyping, KPI gap-table seeding | ~200 patients, ~50 HCPs |
+| **Causal-role golden sets** | `src/ml/causal_role_dgp/` + `tests/fixtures/` | Labeled feature→role examples for the `CausalRoleClassifier` | 91 literature + 74 synthetic entries |
 
-The modular system is the primary system. It generates data with **known causal effects** (TRUE_ATE) embedded in the data generating process, allowing the causal inference pipeline to be validated against ground truth. Without this, there is no way to know if the pipeline's ATE estimates are correct or just artifacts of confounding.
+> **Generations.** v1 (`src/ml/synthetic/`) is the original ground-truth-ATE validation system and is still exercised by the `synthetic-benchmarks` CI workflow. v2 (`src/ml/synthetic_v2/`) is the current focus — clinically-grounded, disease-specific scenarios the tier0 pipeline consumes via `--regime`. A **v3 design exists as a proposal only** (`docs/synthetic_v3_design.md`, issue #200); there is no `src/ml/synthetic_v3/` yet.
+
+The v1 and v2 systems both embed **known causal effects** (TRUE_ATE / explicit DAGs) in the data generating process, so the causal inference pipeline can be validated against ground truth. Without this, there is no way to know if the pipeline's ATE estimates are correct or just artifacts of confounding.
 
 ### Why Synthetic Data?
 
@@ -36,7 +40,40 @@ The modular system is the primary system. It generates data with **known causal 
 
 ---
 
+## Synthetic v2 — Disease-Specific Clinical Scenarios
+
+`src/ml/synthetic_v2/` is the current synthetic-data system. Where v1 generates generic confounded/heterogeneous DGPs, v2 builds **clinically-grounded cohorts for specific brand indications**, each with a full causal DAG (confounders, mediators, instruments, descendants, colliders) drawn from a literature-anchored design. These are the cohorts the tier0 pipeline consumes via `run_tier0_test.py --regime <scenario>`.
+
+### Scenarios
+
+| Scenario | Indication / Franchise | Outcome | Notes |
+|----------|------------------------|---------|-------|
+| `scenario_a` | HR+/HER2- early breast cancer (Kisqali) | 5-yr iDFS / disease progression | Diagnostic cohort |
+| `scenario_a_balanced` | Same, 50:50 prevalence derivative | — | For class-balanced runs |
+| `scenario_b` | IgA nephropathy (Fabhalta) | 5-yr ESKD progression | Screening cohort |
+| `scenario_c` | Chronic spontaneous urticaria (remibrutinib) | 12-wk UAS7=0 response | **RWD concurrent-validation hook** against `data/rwd/csu/` |
+
+### Architecture
+
+| Module | Purpose |
+|--------|---------|
+| `scenarios/_base.py` | `ScenarioBuilder` ABC — each scenario declares `default_n_total` (~6K) and `correlation_blocks` |
+| `scenarios/scenario_{a,a_balanced,b,c}.py` | Per-scenario feature sets, DAG edges, effect sizes |
+| `dgp.py` | Shared primitives: per-feature i.i.d. sampling, Cholesky-injected block correlation (must stay PSD) |
+| `splits.py` | ML-compliant chronological splits |
+| `manifest.py` | Feature manifest (declared features, roles, post-index forbidden flags) |
+| `rwd_loaders/csu_rwd.py` | Loads real CSU data for Scenario C concurrent validation |
+| `yaml_loader.py`, `api.py` | `generate_scenario(scenario, seed, n_total)` entry point |
+
+### Leakage-free by construction
+
+The v2 scenarios are designed so that **no feature leaks the outcome** — DAG edges are explicit and post-index features are flagged in the manifest. Because of this, the tier0 runner's `--regime scenario_*` path uses `skip_leakage_check=True`: the LLM-assisted leakage detector would otherwise false-positive on legitimate clinical features (e.g. `journey_status`). For real-world (RWD) cohorts the leakage detector and Layer-1 manifest verdicts run in full against the on-disk columns.
+
+---
+
 ## Data Generating Processes (DGPs)
+
+> The DGPs and generators in this and the following sections describe the **v1 generic-DGP system** (`src/ml/synthetic/`). For the current disease-specific system see [Synthetic v2](#synthetic-v2--disease-specific-clinical-scenarios) above.
 
 Five DGP types are defined in `src/ml/synthetic/config.py`, each with a known TRUE_ATE and specific confounding structure. The pipeline must recover each TRUE_ATE within the specified tolerance (default: +/- 0.05).
 
@@ -554,6 +591,19 @@ scripts/run_tests_batched.sh
 
 ---
 
+## Causal-Role Golden Sets
+
+Separate from population data, these labeled fixtures evaluate the `CausalRoleClassifier` (the Layer-4 audit-evaluator line of work — issues #240 / #358 / #502):
+
+| Fixture | Entries | Source |
+|---------|---------|--------|
+| `tests/fixtures/causal_role_golden_set.json` | 91 (3 cohorts: BC / CSU / PNH) | Literature-derived (#358) |
+| `tests/fixtures/causal_role_golden_set_synthetic.json` | 74 (4 DGP scenarios) | Synthetic DGP — `src/ml/causal_role_dgp/` |
+
+The synthetic golden set uses four hand-specified DAGs (`A1_confounder_heavy`, `A2_mediator_heavy`, `A3_descendant_collider_rich`, `A4_instrument_rich`). The compiled DSPy classifier and its AC3 verdict artifact live in `artifacts/dspy/` (`causal_role_classifier.json`, `ac3_verdict_n200.json`). Build/check scripts: `scripts/build_causal_role_golden_set.py`, `scripts/check_compile_golden_semantic_overlap.py`.
+
+---
+
 ## Key Source Files
 
 ### Generation
@@ -574,6 +624,11 @@ scripts/run_tests_batched.sh
 | `src/ml/synthetic/generators/feature_value_generator.py` | Raw feature value generation |
 | `src/ml/synthetic/ground_truth/causal_effects.py` | `GroundTruthStore` for tracking known effects |
 | `src/ml/data_generator.py` | Legacy generator (200 patients, 50 HCPs, KPI gap tables) |
+| `src/ml/synthetic_v2/api.py` | v2 entry point — `generate_scenario(scenario, seed, n_total)` |
+| `src/ml/synthetic_v2/dgp.py` | v2 shared DGP machinery (sampling, Cholesky block correlation) |
+| `src/ml/synthetic_v2/scenarios/` | v2 per-scenario builders (A, A-balanced, B, C) |
+| `src/ml/causal_role_dgp/golden_set.py` | Synthetic golden-set DGP for the `CausalRoleClassifier` |
+| `docs/synthetic_v3_design.md` | v3 design proposal (no implementation yet — issue #200) |
 
 ### Validation
 

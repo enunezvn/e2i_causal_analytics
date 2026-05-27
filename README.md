@@ -83,8 +83,10 @@ e2i_causal_analytics/
 │   └── migrations/            # Feature store, feedback loop, validation schemas
 │
 ├── data/
-│   ├── synthetic/             # ~200 patients, ~50 HCPs (20 JSON files)
-│   └── training/              # fastText corpus
+│   ├── rwd/                   # Real-world data (CSU, Optum) — git-ignored
+│   ├── training/              # fastText corpus
+│   └── kg_cache/              # Knowledge-graph cache (git-ignored)
+│                              # synthetic population data is generated on-demand (not stored)
 │
 ├── src/                       # Main source code
 │   ├── nlp/                   # Query processing, entity extraction
@@ -100,7 +102,7 @@ e2i_causal_analytics/
 │   ├── memory/                # Tri-memory backends (working, episodic, procedural, semantic)
 │   ├── causal_engine/         # EconML CausalForestDML, CausalML, DoWhy integration
 │   ├── rag/                   # Hybrid RAG (vector + full-text + graph via FalkorDB)
-│   ├── ml/                    # ML operations & data management
+│   ├── ml/                    # ML ops + synthetic generators (synthetic/, synthetic_v2/, data_generator.py)
 │   ├── mlops/                 # MLflow, Opik, Feast, BentoML, SHAP connectors
 │   ├── workers/               # Celery task definitions and event consumers
 │   ├── api/                   # FastAPI endpoints & middleware
