@@ -938,12 +938,12 @@ def _adversarial_input(
     adversarial signal" and let the voter abstain or the bypass paths
     emit a legacy info verdict.
 
-    The ``p_value`` propagated into the verdict dict is the empirical
-    upper-tail proportion from ``compute_adversarial_score``; it is bounded
-    below by ``1 / n_permutations`` (default 200 → floor 0.005), so a
-    persisted ``p_value=0.0`` means ``< 1/n_permutations``, NOT exact zero
-    (backlog #11.b). Severity routing here uses ``z_score`` only, so this
-    rounding is purely informational for downstream consumers.
+    The ``p_value`` propagated into the verdict dict is the plus-one
+    (Phipson & Smyth) upper-tail permutation p-value from
+    ``compute_adversarial_score``; its floor is ``1 / (1 + n_permutations)``
+    (default 200 → floor ~0.00498) and it is therefore NEVER exactly 0.0
+    (backlog #11.b). Severity routing here uses ``z_score`` only, so the
+    p_value is informational for downstream consumers.
 
     Args:
         score: Raw output from ``compute_adversarial_score``.

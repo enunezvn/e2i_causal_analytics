@@ -19,6 +19,9 @@ Reference: .claude/plans/adaptive_temporal_validity_redesign.md (Layer 3).
 
 from __future__ import annotations
 
+import math
+import zlib
+from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
@@ -55,10 +58,14 @@ def compute_adversarial_score(
         - null_mean: mean AUC under permuted labels (also folded)
         - null_std: std of folded permuted AUC distribution
         - z_score: (actual_auc - null_mean) / null_std
-        - p_value: empirical upper-tail proportion of the folded null
-          distribution (i.e. ``np.mean(folded_null >= folded_actual)``).
-          Bounded below by ``1 / n_permutations``; ``0.0`` therefore means
-          ``< 1/n_permutations``, NOT exact zero.
+        - p_value: plus-one (Phipson & Smyth 2010) empirical upper-tail
+          permutation p-value on the folded scale:
+          ``(1 + #{folded_null >= folded_actual}) / (1 + n_permutations)``.
+          Floored at ``1 / (1 + n_permutations)`` and therefore NEVER exactly
+          0.0 — a finite permutation sample cannot prove impossibility, and a
+          literal 0.0 would corrupt the downstream BH multiple-testing step
+          (see ``benjamini_hochberg``). This is the unbiased fix for the old
+          ``np.mean(null >= actual)`` form, which could return exactly 0.0.
         - suspicious: True if z_score > z_threshold
         - n_permutations: actual number of permutations completed
     """
@@ -113,15 +120,20 @@ def compute_adversarial_score(
     else:
         z_score = float("inf") if actual_auc > null_mean else 0.0
 
-    # Empirical upper-tail p_value on the folded scale. The fold of both
-    # ``actual_auc`` and the null distribution to [0.5, 1.0] makes this an
-    # effectively two-sided test on the underlying raw AUC: a raw AUC of 0.05
-    # (anticorrelation) and 0.95 (correlation) both fold to 0.95 and produce
-    # the same suspicious-leakage signal. The upper-tail comparison on the
-    # folded scale is mathematically equivalent to the two-sided test on the
-    # raw scale, but the formula itself is one-sided. ``p_value=0.0`` means
-    # ``< 1/n_permutations``, not exact zero.
-    p_value = float(np.mean(null_arr >= actual_auc))
+    # Plus-one (Phipson & Smyth 2010) empirical upper-tail p_value on the
+    # folded scale. The fold of both ``actual_auc`` and the null distribution
+    # to [0.5, 1.0] makes this an effectively two-sided test on the underlying
+    # raw AUC: a raw AUC of 0.05 (anticorrelation) and 0.95 (correlation) both
+    # fold to 0.95 and produce the same suspicious-leakage signal.
+    #
+    # The ``(1 + count) / (1 + n)`` form floors the p-value at 1/(1+n) so it is
+    # NEVER exactly 0.0 — a finite permutation sample cannot prove
+    # impossibility, and a literal 0.0 would corrupt the downstream BH
+    # multiple-testing math (it would dominate every rank). This replaces the
+    # old ``np.mean(null >= actual)``, which returned exactly 0.0 for a sharp
+    # leak despite the docstring's (then-false) floor claim.
+    n_perm_done = len(null_arr)
+    p_value = float((1 + int(np.sum(null_arr >= actual_auc))) / (1 + n_perm_done))
 
     return {
         "actual_auc": actual_auc,
@@ -169,6 +181,9 @@ def compute_feature_ablation(
             - feature: name
             - delta_auc: full_auc - auc_without_feature (positive = feature helps)
             - z_score: z-score of delta_auc against permutation null
+            - p_value: plus-one upper-tail permutation p-value of delta_auc,
+              floored at 1/(1+n_permutations) (never exactly 0.0); the input
+              to BH multiple-testing across features (see ``benjamini_hochberg``)
             - suspicious: True if z_score > z_threshold
     """
     if model_factory is None:
@@ -186,7 +201,6 @@ def compute_feature_ablation(
     full_model.fit(X_arr.values, y_arr)
     full_auc = float(roc_auc_score(y_arr, full_model.predict_proba(X_arr.values)[:, 1]))
 
-    rng = np.random.default_rng(seed)
     per_feature_results: list[dict[str, Any]] = []
 
     for feat_name in feature_names:
@@ -202,9 +216,20 @@ def compute_feature_ablation(
 
         # Permutation null for delta_auc: shuffle the FEATURE column, retrain,
         # measure delta. Smaller n_permutations because of training cost.
+        #
+        # Each feature gets an INDEPENDENT permutation stream keyed to its name
+        # (not one shared sequential RNG). A shared RNG made each feature's null
+        # depend on how many draws earlier features consumed — coupling the
+        # per-feature p-values and making the multiple-testing inputs depend on
+        # arbitrary column order. Keying by name (crc32) yields reproducible,
+        # column-order-invariant, mutually-independent nulls — the correct
+        # inputs for the BH step (see ``benjamini_hochberg``).
+        feat_rng = np.random.default_rng(
+            np.random.SeedSequence([int(seed), zlib.crc32(feat_name.encode("utf-8"))])
+        )
         null_deltas: list[float] = []
         for _ in range(n_permutations):
-            shuffled_feat = rng.permutation(X_arr[feat_name].values)
+            shuffled_feat = feat_rng.permutation(X_arr[feat_name].values)
             X_perm = X_arr.copy()
             X_perm[feat_name] = shuffled_feat
             try:
@@ -232,6 +257,16 @@ def compute_feature_ablation(
             # null_std == 0: every permuted delta_auc equals null_mean
             z_score = float("inf") if delta_auc > null_mean else 0.0
 
+        # Plus-one upper-tail p-value of the |delta_AUC| permutation null,
+        # matching compute_adversarial_score's one-sided semantics (a large
+        # positive delta_auc = feature is important/leaky). Floored at
+        # 1/(1+n), never exactly 0.0 — the valid input for the BH step.
+        if np.isnan(delta_auc) or not null_deltas:
+            p_value = float("nan")
+        else:
+            null_delta_arr = np.asarray(null_deltas)
+            p_value = float((1 + int(np.sum(null_delta_arr >= delta_auc))) / (1 + len(null_deltas)))
+
         per_feature_results.append(
             {
                 "feature": feat_name,
@@ -241,6 +276,7 @@ def compute_feature_ablation(
                 "null_mean": null_mean,
                 "null_std": null_std,
                 "z_score": z_score,
+                "p_value": p_value,
                 "suspicious": z_score > z_threshold if not np.isnan(z_score) else False,
             }
         )
@@ -251,3 +287,156 @@ def compute_feature_ablation(
         "n_permutations": n_permutations,
         "per_feature": per_feature_results,
     }
+
+
+def min_permutations_for_fdr(n_features: int, q: float) -> int:
+    """Minimum permutations for a BH rejection to be *possible* at all.
+
+    The smallest plus-one permutation p-value is ``1 / (1 + n)`` (zero null
+    exceedances). For the most-significant feature (BH rank 1) to clear its
+    threshold ``q / m`` we need ``1/(1+n) <= q/m``  i.e.  ``n >= m/q - 1``.
+    The smallest integer satisfying that is ``ceil(m/q) - 1`` (== ``ceil(m/q -
+    1)``), which we return.
+
+    This is the *bare feasibility floor*: at exactly this budget only a rank-1
+    feature with ZERO null exceedances can clear BH, so statistical power is
+    near zero. A caller sizing a real budget should use substantially more (the
+    Layer-4 plan suggests ~1000); this value exists to detect the
+    structurally-always-empty misconfiguration, NOT to recommend a budget. The
+    previous ``ceil(m/q)`` was one too high — it called the exact-boundary
+    budget (where rank-1 rejection IS possible) structurally empty.
+
+    Worked example: m=40 features at FDR q=0.05 needs ``ceil(40/0.05) - 1 =
+    799`` permutations for rank-1 to be reachable (the plus-one floor ``1/800``
+    exactly equals ``q/m``); the legacy ``n_permutations=200`` ablation default
+    could therefore *never* flag anything, regardless of how clear the leak was.
+
+    Args:
+        n_features: number of features (hypotheses) the BH step ranks over.
+        q: target false-discovery rate, in (0, 1).
+
+    Returns:
+        ceil(n_features / q) - 1 (the exact feasibility floor); 0 when
+        n_features <= 0.
+    """
+    if not 0.0 < q < 1.0:
+        raise ValueError(f"q (target FDR) must be in (0, 1); got {q}")
+    if n_features <= 0:
+        return 0
+    return math.ceil(n_features / q) - 1
+
+
+def benjamini_hochberg(
+    p_values: Sequence[float] | np.ndarray,
+    q: float = 0.05,
+    *,
+    n_permutations: int | None = None,
+) -> np.ndarray:
+    """Benjamini-Hochberg FDR-controlled rejection mask (the BH step-up rule).
+
+    Returns a boolean array aligned with the INPUT order of ``p_values``:
+    ``True`` = reject the null for that feature (= a confident leak signal at
+    false-discovery-rate <= ``q``).
+
+    The step-up rule: sort p ascending, find the largest rank ``k`` with
+    ``p_(k) <= (k/m) * q``, and reject ALL ranks ``1..k`` (even ranks whose own
+    p-value exceeds their individual threshold — this is what distinguishes BH
+    from naive per-test thresholding and is what controls the FDR).
+
+    Why BH and not the more conservative Benjamini-Yekutieli (BY): BY divides
+    the thresholds by ``H_m = sum(1/i)`` (~3.5 at m=40). Combined with the
+    plus-one permutation floor ``1/(1+n)``, BY's rank-1 threshold
+    ``q/(m*H_m)`` is unreachable for realistic feature counts and permutation
+    budgets (it would demand ~5x more permutations), yielding an always-empty
+    set. BH is the appropriate control here; the leak hypotheses are not
+    adversarially anti-correlated.
+
+    Input contract: p-values must be valid probabilities in ``(0, 1]``. Plus-one
+    permutation p-values are NEVER exactly 0.0 (see ``compute_adversarial_score``
+    / ``compute_feature_ablation``); a 0.0 — or any value outside ``(0, 1]`` — is
+    rejected with ValueError rather than silently sorted to the top of the BH
+    ranking and rejected, which would defeat the plus-one contract and let a
+    stale empirical-zero sidecar corrupt the confident set. Non-finite entries
+    (``NaN`` — e.g. an ablation on a degenerate feature) are permitted and
+    treated as non-significant (never rejected).
+
+    Args:
+        p_values: per-feature permutation p-values (use the plus-one estimator
+            from ``compute_adversarial_score`` / ``compute_feature_ablation`` so
+            none is exactly 0.0).
+        q: target false-discovery rate, in (0, 1).
+        n_permutations: if given, the permutation budget that PRODUCED these
+            p-values. Two checks then fire: (1) the function refuses to run
+            (ValueError) when the budget is too small for ANY rejection to be
+            possible (``n_permutations < min_permutations_for_fdr(m, q)``),
+            surfacing the always-empty-set misconfiguration instead of silently
+            returning all-False; and (2) every finite p-value is validated to be
+            achievable from that budget (``>= 1/(1 + n_permutations)``) — a
+            sub-floor value cannot have come from the plus-one estimator at this
+            budget and is rejected as invalid input.
+
+    Returns:
+        Boolean ndarray (input-aligned). All-False when nothing clears BH.
+    """
+    if not 0.0 < q < 1.0:
+        raise ValueError(f"q (target FDR) must be in (0, 1); got {q}")
+
+    p = np.asarray(list(p_values), dtype=float)
+    m = p.size
+    if m == 0:
+        return np.zeros(0, dtype=bool)
+
+    # Validate the p-values. ONLY NaN (e.g. a degenerate ablation that could
+    # not compute a delta_auc) is tolerated and treated as non-significant;
+    # every other entry must be a genuine probability in (0, 1]. A 0.0, an
+    # out-of-range value, or a +/-inf cannot be a plus-one permutation p-value
+    # and would otherwise enter the BH ranking — a -inf in particular sorts
+    # FIRST and would be wrongly rejected as a confident leak. Fail loud.
+    nan_mask = np.isnan(p)
+    invalid = ~nan_mask & (~np.isfinite(p) | (p <= 0.0) | (p > 1.0))
+    if np.any(invalid):
+        raise ValueError(
+            "p_values must be valid probabilities in (0, 1] (NaN tolerated as "
+            f"non-significant); got {p[invalid].tolist()}. Plus-one permutation "
+            "p-values are never exactly 0.0, infinite, or out of range — such a "
+            "value would be sorted into the BH ranking and wrongly rejected."
+        )
+
+    if n_permutations is not None:
+        required = min_permutations_for_fdr(m, q)
+        if n_permutations < required:
+            raise ValueError(
+                f"n_permutations={n_permutations} is too small for BH at q={q} "
+                f"over m={m} features: the plus-one floor 1/(1+{n_permutations})="
+                f"{1.0 / (1 + n_permutations):.3g} exceeds the BH rank-1 threshold "
+                f"q/m={q / m:.3g}, so the confident set is structurally empty. "
+                f"Need n_permutations >= {required}."
+            )
+        # Every non-NaN p-value (now guaranteed finite and in (0, 1] by the
+        # check above) must be achievable from this budget; a sub-floor value
+        # cannot have come from the plus-one estimator at n_permutations (e.g. a
+        # stale empirical-zero sidecar, a fixture, or a mismatched-n caller) and
+        # would corrupt the confident set. Fail loud.
+        floor = 1.0 / (1 + n_permutations)
+        below_floor = ~nan_mask & (p < floor - 1e-12)
+        if np.any(below_floor):
+            raise ValueError(
+                f"p_values {p[below_floor].tolist()} are below the plus-one "
+                f"floor 1/(1+{n_permutations})={floor:.3g} and so cannot have "
+                "been produced by the plus-one estimator at this permutation "
+                "budget; pass the n_permutations that actually produced them."
+            )
+
+    order = np.argsort(p, kind="stable")
+    sorted_p = p[order]
+    thresholds = (np.arange(1, m + 1) / m) * q
+    below = sorted_p <= thresholds
+
+    mask_sorted = np.zeros(m, dtype=bool)
+    if below.any():
+        k = int(np.nonzero(below)[0].max())  # largest 0-based rank that passes
+        mask_sorted[: k + 1] = True
+
+    mask = np.empty(m, dtype=bool)
+    mask[order] = mask_sorted  # map sorted-order decisions back to input order
+    return mask
