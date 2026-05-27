@@ -3445,8 +3445,7 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
         # ramp auditor) the verdict is STILL audit-only in the voter unless
         # ADAPTIVE_LAYER4_LLM_DECIDES=1 (ensemble_voter._llm_decides_enabled).
         layer_4_should_fire = layer4_enabled and (
-            adv_severity_pre == "moderate"
-            or (adv_severity_pre == "high" and layer_1_declared_safe)
+            adv_severity_pre == "moderate" or (adv_severity_pre == "high" and layer_1_declared_safe)
         )
         if layer_4_classifier is not None and layer_4_should_fire:
             try:
