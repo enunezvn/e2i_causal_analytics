@@ -56,8 +56,18 @@ class ModelDeployerState(BaseAgentSchema):
     target_environment: Optional[Literal["staging", "shadow", "production"]] = None
     deployment_name: Optional[str] = None
 
-    # Serving configuration
-    resources: Optional[Dict[str, str]] = None  # {"cpu": "2", "memory": "4Gi"}
+    # Serving configuration.
+    # Typed ``Dict[str, Any]`` (not ``Dict[str, str]``): callers pass a
+    # string-only input config (e.g. ``{"cpu": "2", "memory": "4Gi"}``), but
+    # ``plan_deployment`` writes back ``ResourceProfile.to_dict()``
+    # (deployment_planner.py:486), which is mixed-type — ``gpu`` is ``None`` and
+    # ``replicas``/``min_replicas``/``max_replicas``/``target_cpu_utilization``
+    # are ``int`` (the orchestrator consumes the ints numerically at
+    # deployment_orchestrator.py:248). Under the old ``str`` annotation,
+    # ``StateGraph(ModelDeployerState)`` + ``validate_assignment=True``
+    # rejected that write with 5 Pydantic errors, failing deployment-planning
+    # on every run. See #535.
+    resources: Optional[Dict[str, Any]] = None
     max_batch_size: Optional[int] = None
     max_latency_ms: Optional[int] = None
 
