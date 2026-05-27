@@ -32,9 +32,7 @@ EXACT_PIN_PACKAGES = ("imbalanced-learn", "ngboost", "mapie")
 def _constraint_for(text: str, pkg: str) -> str:
     """Return the version specifier on ``pkg``'s requirement line (the line that
     STARTS with the package name, so comment lines mentioning it are ignored)."""
-    pattern = re.compile(
-        rf"^\s*{re.escape(pkg)}\s*([<>=!~][^#\s]*)", re.MULTILINE | re.IGNORECASE
-    )
+    pattern = re.compile(rf"^\s*{re.escape(pkg)}\s*([<>=!~][^#\s]*)", re.MULTILINE | re.IGNORECASE)
     match = pattern.search(text)
     assert match, f"no {pkg!r} requirement line found in {ROOT_REQS}"
     return match.group(1).strip()
@@ -44,7 +42,9 @@ def test_runtime_deps_use_exact_pins():
     """imbalanced-learn / ngboost / mapie must be pinned with ``==`` in requirements.txt."""
     text = ROOT_REQS.read_text()
     offenders = {
-        pkg: c for pkg in EXACT_PIN_PACKAGES if not (c := _constraint_for(text, pkg)).startswith("==")
+        pkg: c
+        for pkg in EXACT_PIN_PACKAGES
+        if not (c := _constraint_for(text, pkg)).startswith("==")
     }
     assert not offenders, (
         "these runtime deps must use exact == pins (range pins risk silent version "
