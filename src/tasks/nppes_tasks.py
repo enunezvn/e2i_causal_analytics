@@ -42,15 +42,17 @@ import logging
 import os
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator, Mapping, Optional
 
-from scripts.rwd_common import (
-    NppesAddress,
-    NppesRecord,
-    NppesTaxonomy,
-    _parse_nppes_date,
-)
 from src.workers.celery_app import celery_app
+
+if TYPE_CHECKING:
+    # ``scripts/`` is intentionally NOT copied into the runtime container image
+    # (it ships only ``src/``). Importing ``scripts.rwd_common`` at module load
+    # crashed celery autodiscover at boot (prod incident 2026-05-26), so the
+    # NPPES schema symbols are imported lazily inside the functions that build
+    # records (below); here they exist for type-checkers only.
+    from scripts.rwd_common import NppesAddress, NppesRecord, NppesTaxonomy
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +87,8 @@ def _extract_bulk_taxonomies(row: Mapping[str, str]) -> tuple[NppesTaxonomy, ...
     ``Healthcare Provider Taxonomy Code_N`` (N=1..15) plus a parallel
     ``Healthcare Provider Primary Taxonomy Switch_N`` flag.
     """
+    from scripts.rwd_common import NppesTaxonomy
+
     out: list[NppesTaxonomy] = []
     for n in range(1, 16):
         code = (row.get(f"Healthcare Provider Taxonomy Code_{n}") or "").strip()
@@ -116,6 +120,8 @@ def _extract_bulk_taxonomies(row: Mapping[str, str]) -> tuple[NppesTaxonomy, ...
 def _row_to_record(row: Mapping[str, str]) -> NppesRecord | None:
     """Translate one bulk-dump row into an ``NppesRecord``. Returns ``None``
     on missing/invalid NPI."""
+    from scripts.rwd_common import NppesAddress, NppesRecord, _parse_nppes_date
+
     npi = (row.get("NPI") or "").strip()
     if not (len(npi) == 10 and npi.isdigit()):
         return None
@@ -350,6 +356,8 @@ def postgres_cache_loader_factory(db_url: str) -> Callable[[str], Optional[Nppes
 def _row_tuple_to_record(row: tuple[Any, ...]) -> NppesRecord:
     """Reconstruct ``NppesRecord`` from a DB row tuple. Centralised so the
     psycopg loader + any future SQLAlchemy loader stay consistent."""
+    from scripts.rwd_common import NppesAddress, NppesRecord, NppesTaxonomy
+
     (
         npi,
         entity_type,
