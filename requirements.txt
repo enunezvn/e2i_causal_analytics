@@ -130,7 +130,7 @@ huggingface-hub==0.36.0
 hyperframe==6.1.0
 identify==2.6.15
 idna==3.15  # CVE-2026-45409 / GHSA-65pc-fj4g-8rjx — ReDoS in valid_contexto; fix in 3.15
-imbalanced-learn>=0.12.0  # SMOTE, RandomOverSampler, RandomUnderSampler for class imbalance
+imbalanced-learn==0.14.1  # SMOTE/over/under-sampler; exact-pinned (FU3-C #528), was unbounded >=0.12.0
 importlib_metadata==8.5.0
 iniconfig==2.3.0
 instructor==1.13.0
@@ -379,7 +379,9 @@ zipp==3.23.0
 zstandard==0.25.0
 
 # Phase 1 W2 (adaptive_criteria_v3_followup): calibration-native + conformal.
-# Pinned as ranges per shard 19 §E — 0.5.x / 0.8.x APIs are stable; next
-# minor releases are planned breaking changes.
-ngboost>=0.5.1,<0.6
-mapie>=0.8.0,<0.9
+# Exact-pinned (FU3-C / #528) to the resolved, import-tested versions from the
+# live api image — closes the rebuild-drift class (no lock file). The shard 19 §E
+# upper bounds (next 0.6 / 0.9 minor = planned breaking changes) are subsumed by
+# the exact pin; bump deliberately + re-test, don't widen back to a range.
+ngboost==0.5.10
+mapie==0.8.6
