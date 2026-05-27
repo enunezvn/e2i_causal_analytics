@@ -81,7 +81,11 @@ class DataPreparerAgent:
                 - data_source: Data source table/view name
                 - split_id: Optional ML split ID
                 - validation_suite: Optional GE suite name
-                - skip_leakage_check: Whether to skip leakage detection
+                - skip_leakage_check: Skip the legacy name-based detect_leakage
+                  node ONLY. The data-driven adaptive validity / FDR layer
+                  (adaptive_validity_check) ALWAYS runs as the safety net and
+                  can still escalate leakage_severity / leaked_features
+                  regardless of this flag (#533, Option 2).
 
         Returns:
             Dictionary containing:

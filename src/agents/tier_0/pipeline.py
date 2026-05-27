@@ -92,6 +92,9 @@ class PipelineConfig:
     skip_mlflow: bool = False
 
     # Data preparation
+    # Skips ONLY the legacy name-based detect_leakage node. The data-driven
+    # adaptive validity / FDR layer always runs as the safety net and can still
+    # escalate leakage findings regardless of this flag (#533, Option 2).
     skip_leakage_check: bool = False
     use_sample_data: bool = False
 

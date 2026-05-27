@@ -190,3 +190,15 @@ def test_node_fdr_disabled_uses_sigma_band():
     fdr = result.get("leakage_fdr")
     assert fdr is not None and fdr["active"] is False
     assert "leak_perfect" in set(result["adaptive_flagged_features"])
+
+
+def test_node_adaptive_escalates_regardless_of_skip_leakage_check():
+    """#533 (Option 2): ``skip_leakage_check`` gates ONLY the legacy name-based
+    detect_leakage node — the data-driven adaptive/FDR layer always runs as the
+    safety net. The leak is flagged even when skip_leakage_check=True."""
+    state = _make_state(_leak_df(), "y", skip_leakage_check=True)
+    result = _run(state)
+    assert "leak_perfect" in set(result["adaptive_flagged_features"]), (
+        "adaptive_validity_check must escalate the leak regardless of "
+        "skip_leakage_check (which gates only the legacy name-based detector)"
+    )
