@@ -86,6 +86,17 @@ You then list the **edges** (arrows) as pairs, e.g.
    time points or two different quantities — split them into distinct nodes
    (e.g. baseline value vs post-treatment change).
 
+6. **Always include the `T → Y` treatment-effect edge.** In every cohort the
+   treatment genuinely affects the outcome — that is the effect being studied
+   (e.g. remibrutinib reduces UAS7). So `["T", "Y"]` belongs in every DAG. This is
+   a *causal assumption*, not a formatting trick. It also ensures both anchors `T`
+   and `Y` are present as graph nodes (the extractor raises if an anchor is
+   missing). It is **load-bearing** for outcome-echo descendants: a pure
+   `Y → feature` echo is only classified `descendant` because `T → Y → feature`
+   makes the feature reachable from `T` *through* `Y`. Omitting `T → Y` for such a
+   feature makes it unrelated to `T` and routes it to review (a conservative
+   error, never a missed leak) — but the faithful model includes the edge.
+
 ---
 
 ## 2. The six roles — definitions you can draw to

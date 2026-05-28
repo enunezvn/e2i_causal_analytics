@@ -1,6 +1,7 @@
 {
   "description": "Per-feature review record for the CSU_remibrutinib labeled leak-decision validation (Layer-4 Track-2B-v3 Phase 1). Edges authored BLIND to true_role; scored once via src.ml.causal_role_dgp.extractor.extract_role. Author once, score once.",
-  "protocol": "non-circular: DAG edges authored from feature_name + derivation_pseudocode + dataset_context + external literature (PubMed/ClinicalTrials), BLIND to ground_truth_role/rationale/provenance. ground_truth_role pulled independently from tests/fixtures/causal_role_golden_set.json.",
+  "protocol": "non-circular by MECHANISM: DAG edges authored from feature_name + derivation_pseudocode + dataset_context + external literature (PubMed/ClinicalTrials), BLIND to ground_truth_role/rationale/provenance. The label-free authored edges live in tests/fixtures/causal_role_csu_blind_authored_edges.json; the scoring fixture is REBUILT from that source joined with the INDEPENDENT labels in tests/fixtures/causal_role_golden_set.json (build_edge_augmented_fixture), verified byte-identical in tests/unit/test_data/test_csu_golden_set_edges.py. Labels never enter the authoring.",
+  "t_to_y_causal_assumption": "Every DAG includes the edge T->Y because remibrutinib genuinely reduces UAS7 (the studied effect) \u2014 a required CAUSAL ASSUMPTION, not a node-presence workaround. It is load-bearing for the pure outcome-echo descendants (post_index_dlqi_score_150_180d, uct_score_150_180d_post_index): T->Y->feature is what makes them descendant; without T->Y they are unrelated to T and route to review (conservative, never a missed leak). Pinned by test_t_to_y_is_load_bearing_for_outcome_echo_descendants.",
   "gate": {
     "metric": "missed_leaks == 0",
     "passed": true
