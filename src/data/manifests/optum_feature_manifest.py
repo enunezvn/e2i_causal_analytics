@@ -21,7 +21,13 @@ Several feature families are expanded via helper functions:
 
 from __future__ import annotations
 
-from src.data.feature_contract import FeatureContract, KnowableAt
+import dataclasses
+
+from src.data.feature_contract import (
+    CausalStructureAttestation,
+    FeatureContract,
+    KnowableAt,
+)
 
 OPTUM_LOOKBACK_DAYS = 180
 
@@ -743,10 +749,99 @@ OPTUM_FEATURES: list[FeatureContract] = (
 )
 
 
+# =============================================================================
+# Causal-structure attestations — Layer-4 structural decider (Track-2B-v3 Phase 2)
+# =============================================================================
+#
+# Every SAFE (pre/at-index) Optum feature is enriched — at the ``optum_contract_for``
+# accessor below, which keeps the ``OPTUM_FEATURES`` registry statically traceable
+# for the Layer-1 coverage guard — with the DAG fragment from
+# which ``src.ml.causal_role_dgp.extractor.extract_role`` DERIVES its causal role
+# relative to (T=biologic_initiation, Y=initiated_biologic_180d). Optum-initiation
+# is a dx-anchored, treatment-naive PREDICTION cohort, so every legitimate
+# pre-index feature is a confounder or instrument of the biologic-initiation
+# decision (all ACCEPT) — none is outcome-derived. Verified against
+# ``scripts/convert_optum_rwd.py``: feature windows are strictly pre-index
+# ([index-180d, index-1d]) and biologic rows are stripped from the drug-class
+# features, so no SAFE feature can encode the index biologic (leakage is
+# structurally precluded, not merely absent). Per-feature literature grounding:
+# ``docs/layer4/optum_initiation_attestation_research.md``.
+#
+# Post-index FORBIDDEN columns are NOT model inputs and are left un-attested
+# (they fall to the manifest's forbidden gate). The decider stays DARK until an
+# explicit, cohort-scoped ramp; these attestations are inert today.
+#
+# Role is DERIVED from edges, never declared. Two patterns:
+#   confounder: feature->T, feature->Y, T->Y  (disease-severity / treatment-burden proxies)
+#   instrument: feature->T, T->Y               (access/geography/payer/calendar drivers of T only)
+_OPTUM_TREATMENT_NODE = "biologic_initiation"
+_OPTUM_OUTCOME_NODE = "initiated_biologic_180d"
+
+# SAFE features whose honest mechanism acts on the initiation DECISION only
+# (no direct path to the outcome): geography/residence (specialist proximity &
+# regional adoption), coverage/payer (formulary, prior-auth, step-therapy),
+# specialist-access (the biologic-prescribing channel), and calendar anchors
+# (temporal biologic adoption). Everything else SAFE is a confounder.
+_OPTUM_INSTRUMENT_FEATURES: frozenset[str] = frozenset(
+    {
+        "zip5",
+        "zip3",
+        "zip_code",
+        "geographic_region",
+        "urban_rural_code",
+        "insurance_product",
+        "plan_type",
+        "payer_category",
+        "office_visits_allergist",
+        "office_visits_dermatology",
+        "specialist_concentration",
+        "primary_specialist_type",
+        "saw_allergist_flag",
+        "saw_dermatologist_flag",
+        "specialist_visit_interaction",
+        "index_date",
+        "lookback_start_date",
+    }
+)
+
+
+def _optum_attestation(feature_node: str) -> CausalStructureAttestation:
+    """Authored DAG fragment for a SAFE Optum feature (role derived, not declared).
+
+    Instruments drive only the treatment decision (``feature->T``); confounders are
+    common causes of the decision AND the outcome (``feature->T``, ``feature->Y``).
+    Always includes the treatment-effect edge ``T->Y``.
+    """
+    t, y = _OPTUM_TREATMENT_NODE, _OPTUM_OUTCOME_NODE
+    if feature_node in _OPTUM_INSTRUMENT_FEATURES:
+        edges: tuple[tuple[str, str], ...] = ((feature_node, t), (t, y))
+    else:
+        edges = ((feature_node, t), (feature_node, y), (t, y))
+    return CausalStructureAttestation(
+        treatment_node=t,
+        outcome_node=y,
+        feature_node=feature_node,
+        edges=edges,
+    )
+
+
 def optum_contract_for(name: str) -> FeatureContract | None:
-    """Return the FeatureContract for a named Optum feature, or None if absent."""
+    """Return the FeatureContract for a named Optum feature, or None if absent.
+
+    SAFE (pre/at-index) features are ENRICHED here with their structural
+    ``CausalStructureAttestation`` (Track-2B-v3 Phase 2). This accessor is the
+    canonical lookup the Layer-4 structural decider reaches via
+    ``lookup_feature_contract``, so attaching the attestation here keeps the
+    ``OPTUM_FEATURES`` registry a purely declarative, statically-analyzable list
+    that the Layer-1 manifest-coverage guard (``scripts/check_manifest_coverage.py``)
+    can trace — a list-comprehension rebuild of the registry is an unsupported
+    binding shape for that guard's AST tracer. Post-index FORBIDDEN columns are
+    never enriched; the role is DERIVED from the authored edges, never declared.
+    """
     for c in OPTUM_FEATURES:
         if c.name == name:
+            if c.knowable_at.is_pre_or_at_index() and c.causal_structure is None:
+                return dataclasses.replace(c, causal_structure=_optum_attestation(c.name))
             return c
     return None
 
