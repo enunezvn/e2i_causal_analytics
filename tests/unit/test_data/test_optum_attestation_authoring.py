@@ -23,7 +23,13 @@ from src.ml.causal_role_dgp.extractor import derive_structural_role
 
 
 def _safe_features():
-    return [c for c in OPTUM_FEATURES if c.knowable_at.is_pre_or_at_index()]
+    # Attestations are attached at the optum_contract_for accessor (the decider's
+    # lookup path via lookup_feature_contract), keeping the OPTUM_FEATURES registry
+    # statically traceable for the Layer-1 coverage guard. Validate the enriched
+    # view the decider actually sees.
+    return [
+        optum_contract_for(c.name) for c in OPTUM_FEATURES if c.knowable_at.is_pre_or_at_index()
+    ]
 
 
 def _forbidden_features():

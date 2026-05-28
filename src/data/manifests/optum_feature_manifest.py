@@ -753,7 +753,9 @@ OPTUM_FEATURES: list[FeatureContract] = (
 # Causal-structure attestations — Layer-4 structural decider (Track-2B-v3 Phase 2)
 # =============================================================================
 #
-# Every SAFE (pre/at-index) Optum feature is attested with the DAG fragment from
+# Every SAFE (pre/at-index) Optum feature is enriched — at the ``optum_contract_for``
+# accessor below, which keeps the ``OPTUM_FEATURES`` registry statically traceable
+# for the Layer-1 coverage guard — with the DAG fragment from
 # which ``src.ml.causal_role_dgp.extractor.extract_role`` DERIVES its causal role
 # relative to (T=biologic_initiation, Y=initiated_biologic_180d). Optum-initiation
 # is a dx-anchored, treatment-naive PREDICTION cohort, so every legitimate
@@ -823,20 +825,23 @@ def _optum_attestation(feature_node: str) -> CausalStructureAttestation:
     )
 
 
-# Attach attestations to every pre/at-index feature; post-index FORBIDDEN columns
-# stay un-attested. FeatureContract is frozen → rebuild via dataclasses.replace.
-OPTUM_FEATURES = [
-    dataclasses.replace(c, causal_structure=_optum_attestation(c.name))
-    if (c.knowable_at.is_pre_or_at_index() and c.causal_structure is None)
-    else c
-    for c in OPTUM_FEATURES
-]
-
-
 def optum_contract_for(name: str) -> FeatureContract | None:
-    """Return the FeatureContract for a named Optum feature, or None if absent."""
+    """Return the FeatureContract for a named Optum feature, or None if absent.
+
+    SAFE (pre/at-index) features are ENRICHED here with their structural
+    ``CausalStructureAttestation`` (Track-2B-v3 Phase 2). This accessor is the
+    canonical lookup the Layer-4 structural decider reaches via
+    ``lookup_feature_contract``, so attaching the attestation here keeps the
+    ``OPTUM_FEATURES`` registry a purely declarative, statically-analyzable list
+    that the Layer-1 manifest-coverage guard (``scripts/check_manifest_coverage.py``)
+    can trace — a list-comprehension rebuild of the registry is an unsupported
+    binding shape for that guard's AST tracer. Post-index FORBIDDEN columns are
+    never enriched; the role is DERIVED from the authored edges, never declared.
+    """
     for c in OPTUM_FEATURES:
         if c.name == name:
+            if c.knowable_at.is_pre_or_at_index() and c.causal_structure is None:
+                return dataclasses.replace(c, causal_structure=_optum_attestation(c.name))
             return c
     return None
 
