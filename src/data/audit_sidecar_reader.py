@@ -47,7 +47,11 @@ logger = logging.getLogger(__name__)
 # firing-driver decision). Run-level (not per-verdict) so the reader does not
 # iterate it; bumping the expected version keeps the exact-match contract from
 # WARNing on the new minor. Still MAJOR=1.
-_READER_SCHEMA_VERSION = "1.6"
+# 1.7 (Layer-4 Phase 2): additive per-verdict ``structural_unclassifiable`` key
+# (True when the deterministic structural decider fired on an unclassifiable
+# attestation → review). Additive, nullable, absent on pre-1.7 sidecars (surface
+# as None without a warning, mirroring the 1.5 structural-key handling). MAJOR=1.
+_READER_SCHEMA_VERSION = "1.7"
 _READER_SCHEMA_MAJOR = 1
 
 # Issue #235 A3: the set of verdict-dict keys the reader knows how to
@@ -132,6 +136,10 @@ _KNOWN_VERDICT_KEYS: frozenset[str] = frozenset(
         "structural_llm_disagreement",
         "structural_remediation_override",
         "structural_gate_fired",
+        # Plan v4 Layer B / Phase 2: True when the voter's structural rule fired
+        # on an unclassifiable/malformed attestation (routed to review). Additive
+        # at schema 1.7+; absent on pre-1.7 sidecars (surface as None).
+        "structural_unclassifiable",
     }
 )
 
@@ -224,6 +232,10 @@ class VerdictRecord:
     structural_llm_disagreement: Optional[bool] = None
     structural_remediation_override: Optional[str] = None
     structural_gate_fired: Optional[str] = None
+    # Plan v4 Layer B / Phase 2: True when the structural rule decided on an
+    # unclassifiable/malformed attestation (decided_by="structural", role None →
+    # review). Absent on pre-1.7 sidecars (surface as None). Additive at 1.7+.
+    structural_unclassifiable: Optional[bool] = None
 
 
 class SidecarReader:
@@ -470,6 +482,7 @@ class SidecarReader:
             structural_llm_disagreement=_opt_bool(raw.get("structural_llm_disagreement")),
             structural_remediation_override=_opt_str(raw.get("structural_remediation_override")),
             structural_gate_fired=_opt_str(raw.get("structural_gate_fired")),
+            structural_unclassifiable=_opt_bool(raw.get("structural_unclassifiable")),
         )
 
 
