@@ -1,0 +1,753 @@
+{
+  "description": "Per-feature review record for the CSU_remibrutinib labeled leak-decision validation (Layer-4 Track-2B-v3 Phase 1). Edges authored BLIND to true_role; scored once via src.ml.causal_role_dgp.extractor.extract_role. Author once, score once.",
+  "protocol": "non-circular by PROVENANCE + protocol: the author saw only the label-free brief tests/fixtures/causal_role_csu_blind_briefs.json (feature_name + derivation_pseudocode + dataset_context) and external literature, BLIND to ground_truth_role/rationale/provenance. The label-free authored edges live in tests/fixtures/causal_role_csu_blind_authored_edges.json; the scoring fixture is the byte-identical join of those edges with the INDEPENDENT labels in tests/fixtures/causal_role_golden_set.json. Author-once/score-once; no edges edited to match labels.",
+  "t_to_y_causal_assumption": "Every DAG includes the edge T->Y because remibrutinib genuinely reduces UAS7 (the studied effect) \u2014 a required CAUSAL ASSUMPTION, not a node-presence workaround. It is load-bearing for the pure outcome-echo descendants (post_index_dlqi_score_150_180d, uct_score_150_180d_post_index): T->Y->feature is what makes them descendant; without T->Y they are unrelated to T and route to review (conservative, never a missed leak). Pinned by test_t_to_y_is_load_bearing_for_outcome_echo_descendants.",
+  "gate": {
+    "metric": "missed_leaks == 0",
+    "passed": true
+  },
+  "summary": {
+    "n": 31,
+    "exact_role_agreement": 28,
+    "leak_decision_accuracy": 1.0,
+    "missed_leaks": 0,
+    "false_alarms": 0,
+    "unclassifiable": 0,
+    "ambiguous_flagged": 7,
+    "disagreements": [
+      "delta_crp_mg_l_60_120d_post_index",
+      "delta_d_dimer_ug_ml_90_180d_post_index",
+      "delta_serum_il17_pg_ml_60_120d_post_index"
+    ]
+  },
+  "records": [
+    {
+      "feature": "childhood_eczema_history_flag",
+      "edges": [
+        [
+          "childhood_eczema_history_flag",
+          "U_atopic_diathesis"
+        ],
+        [
+          "U_atopic_diathesis",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "derived_role": "ancestor",
+      "true_role": "ancestor",
+      "agree_exact": true,
+      "leak_bucket_derived": "ACCEPT",
+      "leak_bucket_true": "ACCEPT",
+      "leak_decision_agree": true,
+      "ambiguous": false,
+      "citations_rationale": "Childhood eczema = atopic diathesis, a background prognostic factor for the urticaria course but not a driver of the treatment-escalation decision (which keys on current refractory disease activity). Prognostic-only. JAMA 2024 CSU review (10.1001/jama.2024.15568)."
+    },
+    {
+      "feature": "family_history_atopy_first_degree_relative_flag",
+      "edges": [
+        [
+          "family_history_atopy_first_degree_relative_flag",
+          "U_heritable_atopy"
+        ],
+        [
+          "U_heritable_atopy",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "derived_role": "ancestor",
+      "true_role": "ancestor",
+      "agree_exact": true,
+      "leak_bucket_derived": "ACCEPT",
+      "leak_bucket_true": "ACCEPT",
+      "leak_decision_agree": true,
+      "ambiguous": false,
+      "citations_rationale": "First-degree-relative atopy is a heritable predisposition marker influencing the patient's urticaria prognosis, not the prescribing choice. Prognostic-only. JAMA 2024 review (10.1001/jama.2024.15568)."
+    },
+    {
+      "feature": "hla_drb1_autoimmune_csu_susceptibility_allele_flag",
+      "edges": [
+        [
+          "hla_drb1_autoimmune_csu_susceptibility_allele_flag",
+          "U_autoimmune_endotype"
+        ],
+        [
+          "U_autoimmune_endotype",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "derived_role": "ancestor",
+      "true_role": "ancestor",
+      "agree_exact": true,
+      "leak_bucket_derived": "ACCEPT",
+      "leak_bucket_true": "ACCEPT",
+      "leak_decision_agree": true,
+      "ambiguous": true,
+      "citations_rationale": "HLA-DRB1 susceptibility allele predisposes to the autoimmune type-IIb CSU endotype (HLA-CSU association: PMID 35933036, 34539625), which is more refractory and shapes prognosis. Genotype is exogenous (fixed at conception) and not used in routine prescribing, so no real HLA->T edge -> prognostic ancestor. Ambiguous: endotype severity could indirectly drive escalation, but HLA itself is not a prescribing input."
+    },
+    {
+      "feature": "patient_age_at_index_years",
+      "edges": [
+        [
+          "patient_age_at_index_years",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "derived_role": "ancestor",
+      "true_role": "ancestor",
+      "agree_exact": true,
+      "leak_bucket_derived": "ACCEPT",
+      "leak_bucket_true": "ACCEPT",
+      "leak_decision_agree": true,
+      "ambiguous": false,
+      "citations_rationale": "Age is a baseline prognostic demographic for the urticaria course (CSU peaks in females 30-50, JAMA 2024 10.1001/jama.2024.15568). Prognostic covariate with a path to outcome; not the lever of the escalation decision."
+    },
+    {
+      "feature": "patient_sex_female_indicator",
+      "edges": [
+        [
+          "patient_sex_female_indicator",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "derived_role": "ancestor",
+      "true_role": "ancestor",
+      "agree_exact": true,
+      "leak_bucket_derived": "ACCEPT",
+      "leak_bucket_true": "ACCEPT",
+      "leak_decision_agree": true,
+      "ambiguous": false,
+      "citations_rationale": "Female sex is a baseline prognostic demographic (CSU female predominance, JAMA 2024 10.1001/jama.2024.15568). Exogenous; path to outcome via prognosis, not a treatment-choice driver."
+    },
+    {
+      "feature": "alive_and_enrolled_at_180d_post_index_flag",
+      "edges": [
+        [
+          "T",
+          "alive_and_enrolled_at_180d_post_index_flag"
+        ],
+        [
+          "Y",
+          "alive_and_enrolled_at_180d_post_index_flag"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "derived_role": "collider",
+      "true_role": "collider",
+      "agree_exact": true,
+      "leak_bucket_derived": "LEAK",
+      "leak_bucket_true": "LEAK",
+      "leak_decision_agree": true,
+      "ambiguous": false,
+      "citations_rationale": "Alive-and-enrolled-at-180d is a survival/selection node driven both by being on treatment (T) and by disease/health status (Y) -> conditioning induces selection (collider) bias. T has a non-outcome route (mere persistence in care) -> collider."
+    },
+    {
+      "feature": "on_treatment_persistent_180d_pdc80_flag",
+      "edges": [
+        [
+          "T",
+          "on_treatment_persistent_180d_pdc80_flag"
+        ],
+        [
+          "Y",
+          "on_treatment_persistent_180d_pdc80_flag"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "derived_role": "collider",
+      "true_role": "collider",
+      "agree_exact": true,
+      "leak_bucket_derived": "LEAK",
+      "leak_bucket_true": "LEAK",
+      "leak_decision_agree": true,
+      "ambiguous": false,
+      "citations_rationale": "180d persistence/PDC is a common effect of starting treatment (T) and of whether it works (responders persist, non-responders stop -> Y) -> on-treatment collider; conditioning induces responder bias. T has a non-Y route (being on drug) -> collider."
+    },
+    {
+      "feature": "on_treatment_remibrutinib_at_180d_postindex_flag",
+      "edges": [
+        [
+          "T",
+          "on_treatment_remibrutinib_at_180d_postindex_flag"
+        ],
+        [
+          "Y",
+          "on_treatment_remibrutinib_at_180d_postindex_flag"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "derived_role": "collider",
+      "true_role": "collider",
+      "agree_exact": true,
+      "leak_bucket_derived": "LEAK",
+      "leak_bucket_true": "LEAK",
+      "leak_decision_agree": true,
+      "ambiguous": false,
+      "citations_rationale": "Remibrutinib persistence at 180d is a common effect of being on treatment (T) and of response sustaining continuation (Y) -> on-treatment collider. T has a non-outcome route (being on drug) -> collider."
+    },
+    {
+      "feature": "patient_initiated_discontinuation_180d_flag",
+      "edges": [
+        [
+          "T",
+          "patient_initiated_discontinuation_180d_flag"
+        ],
+        [
+          "Y",
+          "patient_initiated_discontinuation_180d_flag"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "derived_role": "collider",
+      "true_role": "collider",
+      "agree_exact": true,
+      "leak_bucket_derived": "LEAK",
+      "leak_bucket_true": "LEAK",
+      "leak_decision_agree": true,
+      "ambiguous": false,
+      "citations_rationale": "Patient-initiated discontinuation (non-AE) is a common effect of being on treatment (T) and of the response (non-response drives stopping; satisfaction can too -> Y) -> collider; conditioning induces bias. T has a non-outcome route -> collider."
+    },
+    {
+      "feature": "post_index_switch_to_alternative_biologic_180d_flag",
+      "edges": [
+        [
+          "T",
+          "post_index_switch_to_alternative_biologic_180d_flag"
+        ],
+        [
+          "Y",
+          "post_index_switch_to_alternative_biologic_180d_flag"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "derived_role": "collider",
+      "true_role": "collider",
+      "agree_exact": true,
+      "leak_bucket_derived": "LEAK",
+      "leak_bucket_true": "LEAK",
+      "leak_decision_agree": true,
+      "ambiguous": false,
+      "citations_rationale": "Switching off remibrutinib to another biologic is a common effect of being on remibrutinib (T) and of inadequate response (poor responders switch -> Y) -> collider; a treatment-failure selection node. T has a non-outcome route (being on the index drug) -> collider."
+    },
+    {
+      "feature": "baseline_total_ige_iu_ml_preindex",
+      "edges": [
+        [
+          "baseline_total_ige_iu_ml_preindex",
+          "T"
+        ],
+        [
+          "baseline_total_ige_iu_ml_preindex",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "derived_role": "confounder",
+      "true_role": "confounder",
+      "agree_exact": true,
+      "leak_bucket_derived": "ACCEPT",
+      "leak_bucket_true": "ACCEPT",
+      "leak_decision_agree": true,
+      "ambiguous": false,
+      "citations_rationale": "Baseline total IgE is a validated predictor of CSU treatment response (Front Allergy 2025 10.3389/falgy.2024.1451296; EJD review 10.1684/ejd.2024.4600) -> Y; and low IgE predicts poor omalizumab response, informing the choice to escalate to BTKi -> T. Pre-index common cause of treatment and outcome."
+    },
+    {
+      "feature": "baseline_uas7_score_preindex_30d",
+      "edges": [
+        [
+          "baseline_uas7_score_preindex_30d",
+          "T"
+        ],
+        [
+          "baseline_uas7_score_preindex_30d",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "derived_role": "confounder",
+      "true_role": "confounder",
+      "agree_exact": true,
+      "leak_bucket_derived": "ACCEPT",
+      "leak_bucket_true": "ACCEPT",
+      "leak_decision_agree": true,
+      "ambiguous": false,
+      "citations_rationale": "Pre-index UAS7 severity drives the escalation decision (high disease activity = antihistamine non-response = trigger for biologic/BTKi, EURTC/JAMA 2024 10.1001/jama.2024.15568) -> T, and conditions the achievable UAS7 improvement -> Y. Classic baseline-severity confounder."
+    },
+    {
+      "feature": "comorbid_autoimmune_thyroiditis_history_5y_preindex",
+      "edges": [
+        [
+          "comorbid_autoimmune_thyroiditis_history_5y_preindex",
+          "T"
+        ],
+        [
+          "comorbid_autoimmune_thyroiditis_history_5y_preindex",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "derived_role": "confounder",
+      "true_role": "confounder",
+      "agree_exact": true,
+      "leak_bucket_derived": "ACCEPT",
+      "leak_bucket_true": "ACCEPT",
+      "leak_decision_agree": true,
+      "ambiguous": false,
+      "citations_rationale": "Autoimmune thyroiditis marks the autoimmune (type-IIb) CSU endotype (~20% comorbidity; worse omalizumab response; JAMA 2024 10.1001/jama.2024.15568), shaping both who is escalated to BTKi (-> T) and the achievable response (-> Y). Common cause."
+    },
+    {
+      "feature": "distinct_h1_antihistamine_count_365d_preindex",
+      "edges": [
+        [
+          "distinct_h1_antihistamine_count_365d_preindex",
+          "T"
+        ],
+        [
+          "distinct_h1_antihistamine_count_365d_preindex",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "derived_role": "confounder",
+      "true_role": "confounder",
+      "agree_exact": true,
+      "leak_bucket_derived": "ACCEPT",
+      "leak_bucket_true": "ACCEPT",
+      "leak_decision_agree": true,
+      "ambiguous": false,
+      "citations_rationale": "Count of distinct H1-antihistamines tried is a refractoriness proxy: antihistamine failure is the guideline trigger to escalate to biologic/BTKi (-> T) and marks harder-to-treat disease (-> Y). JAMA 2024 ladder (10.1001/jama.2024.15568). Common cause."
+    },
+    {
+      "feature": "pdc_preindex_preventive_medications_score_tertile",
+      "edges": [
+        [
+          "pdc_preindex_preventive_medications_score_tertile",
+          "T"
+        ],
+        [
+          "pdc_preindex_preventive_medications_score_tertile",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "derived_role": "confounder",
+      "true_role": "confounder",
+      "agree_exact": true,
+      "leak_bucket_derived": "ACCEPT",
+      "leak_bucket_true": "ACCEPT",
+      "leak_decision_agree": true,
+      "ambiguous": true,
+      "citations_rationale": "Composite preventive-med PDC + screening uptake is a healthy-adherer / healthcare-engagement proxy. No direct biological effect on urticaria, but the underlying adherence/engagement trait it proxies plausibly drives both whether the patient initiates & adheres to remibrutinib (-> T) and the realized on-treatment benefit (-> Y) (healthy-adherer bias, a well-known pharmacoepi confounder). Ambiguous: it is a proxy, so edge direction is a modeling choice."
+    },
+    {
+      "feature": "prior_omalizumab_use_flag_730d_preindex",
+      "edges": [
+        [
+          "prior_omalizumab_use_flag_730d_preindex",
+          "T"
+        ],
+        [
+          "prior_omalizumab_use_flag_730d_preindex",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "derived_role": "confounder",
+      "true_role": "confounder",
+      "agree_exact": true,
+      "leak_bucket_derived": "ACCEPT",
+      "leak_bucket_true": "ACCEPT",
+      "leak_decision_agree": true,
+      "ambiguous": false,
+      "citations_rationale": "Prior omalizumab use marks advanced ladder position; omalizumab inadequate-response is the direct trigger to start remibrutinib (-> T; ~30% omalizumab-insufficient, JAMA 2024 10.1001/jama.2024.15568) and marks a refractory subgroup with a distinct response profile (-> Y). Common cause / confounder."
+    },
+    {
+      "feature": "post_index_dlqi_score_150_180d",
+      "edges": [
+        [
+          "Y",
+          "post_index_dlqi_score_150_180d"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "derived_role": "descendant",
+      "true_role": "descendant",
+      "agree_exact": true,
+      "leak_bucket_derived": "LEAK",
+      "leak_bucket_true": "LEAK",
+      "leak_decision_agree": true,
+      "ambiguous": false,
+      "citations_rationale": "Post-treatment DLQI is a direct downstream consequence of the UAS7 symptom response (symptom relief -> QoL improvement); an outcome echo measured at the same window. Treatment reaches DLQI only through the response -> Y -> DLQI. Descendant."
+    },
+    {
+      "feature": "post_index_petechiae_event_180d_flag",
+      "edges": [
+        [
+          "T",
+          "post_index_petechiae_event_180d_flag"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "derived_role": "descendant",
+      "true_role": "descendant",
+      "agree_exact": true,
+      "leak_bucket_derived": "LEAK",
+      "leak_bucket_true": "LEAK",
+      "leak_decision_agree": true,
+      "ambiguous": false,
+      "citations_rationale": "Petechiae are a remibrutinib-specific adverse effect (3.8% vs 0.3% placebo, NEJM REMIX 10.1056/NEJMoa2408792), caused by the drug, not by the urticaria response, and with no path to UAS7 outcome -> a treatment dead-end (descendant of T, no path to Y). Leak by construction (post-index, treatment-induced)."
+    },
+    {
+      "feature": "post_index_thrombocytopenia_event_180d_flag",
+      "edges": [
+        [
+          "T",
+          "post_index_thrombocytopenia_event_180d_flag"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "derived_role": "descendant",
+      "true_role": "descendant",
+      "agree_exact": true,
+      "leak_bucket_derived": "LEAK",
+      "leak_bucket_true": "LEAK",
+      "leak_decision_agree": true,
+      "ambiguous": true,
+      "citations_rationale": "Thrombocytopenia post-index is modeled as a treatment-induced hematologic effect (BTK role in platelet/GPVI signaling; petechiae/bleeding signal in REMIX, 10.1056/NEJMoa2408792), a dead-end w.r.t. the UAS7 response (T -> event, no path to Y) -> descendant. Ambiguous: low-frequency; could be an unrelated event, but drug-effect is the defensible link."
+    },
+    {
+      "feature": "uct_score_150_180d_post_index",
+      "edges": [
+        [
+          "Y",
+          "uct_score_150_180d_post_index"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "derived_role": "descendant",
+      "true_role": "descendant",
+      "agree_exact": true,
+      "leak_bucket_derived": "LEAK",
+      "leak_bucket_true": "LEAK",
+      "leak_decision_agree": true,
+      "ambiguous": false,
+      "citations_rationale": "UCT is a patient-reported urticaria-control measure at the same 150-180d window as the UAS7 outcome -> a near-parallel re-measurement / echo of the response (Y -> UCT). Treatment reaches it only through the response. Descendant; outcome leakage by construction."
+    },
+    {
+      "feature": "calendar_time_post_remibrutinib_approval_indicator",
+      "edges": [
+        [
+          "calendar_time_post_remibrutinib_approval_indicator",
+          "T"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "derived_role": "instrument",
+      "true_role": "instrument",
+      "agree_exact": true,
+      "leak_bucket_derived": "ACCEPT",
+      "leak_bucket_true": "ACCEPT",
+      "leak_decision_agree": true,
+      "ambiguous": false,
+      "citations_rationale": "Post-FDA-approval period gates availability/uptake of remibrutinib (-> T) but does not act on an individual's urticaria response biology and shares no common cause with it -> exclusion + exogeneity hold. Encouragement-type instrument (approval timing)."
+    },
+    {
+      "feature": "index_prescriber_btk_inhibitor_preference_share_prior_365d",
+      "edges": [
+        [
+          "index_prescriber_btk_inhibitor_preference_share_prior_365d",
+          "T"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "derived_role": "instrument",
+      "true_role": "instrument",
+      "agree_exact": true,
+      "leak_bucket_derived": "ACCEPT",
+      "leak_bucket_true": "ACCEPT",
+      "leak_decision_agree": true,
+      "ambiguous": false,
+      "citations_rationale": "Prescriber prior-BTKi preference share is a preference-based instrument (Brookhart-type): it shifts the treatment a patient receives (-> T) without a direct path to that patient's UAS7 response and without a shared common cause -> exclusion + exogeneity. Standard prescriber-preference IV."
+    },
+    {
+      "feature": "index_prescriber_csu_biologic_volume_tertile_prior_365d",
+      "edges": [
+        [
+          "index_prescriber_csu_biologic_volume_tertile_prior_365d",
+          "T"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "derived_role": "instrument",
+      "true_role": "instrument",
+      "agree_exact": true,
+      "leak_bucket_derived": "ACCEPT",
+      "leak_bucket_true": "ACCEPT",
+      "leak_decision_agree": true,
+      "ambiguous": true,
+      "citations_rationale": "Prescriber CSU-biologic volume tertile, conditioned on visit-frequency + UCT-completeness strata (per derivation) to remove the care-quality/surveillance channel, acts as an access instrument shifting receipt of remibrutinib (-> T). Ambiguous: absent perfect stratification, specialist expertise could open a volume->Y path (exclusion risk)."
+    },
+    {
+      "feature": "index_prescriber_first_btki_initiation_within_first_year_post_approval_flag",
+      "edges": [
+        [
+          "index_prescriber_first_btki_initiation_within_first_year_post_approval_flag",
+          "T"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "derived_role": "instrument",
+      "true_role": "instrument",
+      "agree_exact": true,
+      "leak_bucket_derived": "ACCEPT",
+      "leak_bucket_true": "ACCEPT",
+      "leak_decision_agree": true,
+      "ambiguous": false,
+      "citations_rationale": "Prescriber early-adopter flag is an adoption-propensity instrument: an early-adopting prescriber raises receipt of remibrutinib (-> T) without a direct path to the patient's UAS7 response or a shared common cause -> exclusion + exogeneity."
+    },
+    {
+      "feature": "payer_formulary_tier_change_remibrutinib_quarter",
+      "edges": [
+        [
+          "payer_formulary_tier_change_remibrutinib_quarter",
+          "T"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "derived_role": "instrument",
+      "true_role": "instrument",
+      "agree_exact": true,
+      "leak_bucket_derived": "ACCEPT",
+      "leak_bucket_true": "ACCEPT",
+      "leak_decision_agree": true,
+      "ambiguous": false,
+      "citations_rationale": "Payer formulary-tier change is an access/cost shock driving remibrutinib initiation (-> T) with no direct path to the patient's UAS7 response and no shared common cause -> exclusion + exogeneity. Formulary-access instrument."
+    },
+    {
+      "feature": "regional_zip3_quarter_remibrutinib_uptake_share",
+      "edges": [
+        [
+          "regional_zip3_quarter_remibrutinib_uptake_share",
+          "T"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "derived_role": "instrument",
+      "true_role": "instrument",
+      "agree_exact": true,
+      "leak_bucket_derived": "ACCEPT",
+      "leak_bucket_true": "ACCEPT",
+      "leak_decision_agree": true,
+      "ambiguous": false,
+      "citations_rationale": "Regional zip3-quarter uptake share is an area-level adoption instrument (geographic-variation IV): higher local uptake raises individual receipt of remibrutinib (-> T) without a direct path to that individual's UAS7 response or a shared common cause -> exclusion + exogeneity."
+    },
+    {
+      "feature": "delta_anti_fcepsilon_ri_igg_titer_post_treatment_60_90d",
+      "edges": [
+        [
+          "T",
+          "delta_anti_fcepsilon_ri_igg_titer_post_treatment_60_90d"
+        ],
+        [
+          "delta_anti_fcepsilon_ri_igg_titer_post_treatment_60_90d",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "derived_role": "mediator",
+      "true_role": "mediator",
+      "agree_exact": true,
+      "leak_bucket_derived": "LEAK",
+      "leak_bucket_true": "LEAK",
+      "leak_decision_agree": true,
+      "ambiguous": false,
+      "citations_rationale": "BTK inhibition reduces anti-FcepsilonRI IgG (RILECSU, 10.1001/jamadermatol.2025.0733); this autoantibody drives FcepsilonRI mast-cell/basophil activation, so its treatment-induced change lies on the mechanistic path T -> biomarker change -> UAS7 response. Mediator."
+    },
+    {
+      "feature": "delta_basophil_activation_test_cd63_pct_28_56d",
+      "edges": [
+        [
+          "T",
+          "delta_basophil_activation_test_cd63_pct_28_56d"
+        ],
+        [
+          "delta_basophil_activation_test_cd63_pct_28_56d",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "derived_role": "mediator",
+      "true_role": "mediator",
+      "agree_exact": true,
+      "leak_bucket_derived": "LEAK",
+      "leak_bucket_true": "LEAK",
+      "leak_decision_agree": true,
+      "ambiguous": false,
+      "citations_rationale": "BAT CD63 reads FcepsilonRI-driven basophil degranulation, the pathway BTK transduces; remibrutinib inhibits BTK -> reduces basophil activation -> UAS7 improvement (mechanism: NEJM REMIX 10.1056/NEJMoa2408792; BAT activity-tracking PMID 26198455). On-path pharmacodynamic mediator."
+    },
+    {
+      "feature": "delta_crp_mg_l_60_120d_post_index",
+      "edges": [
+        [
+          "T",
+          "delta_crp_mg_l_60_120d_post_index"
+        ],
+        [
+          "Y",
+          "delta_crp_mg_l_60_120d_post_index"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "derived_role": "collider",
+      "true_role": "mediator",
+      "agree_exact": false,
+      "leak_bucket_derived": "LEAK",
+      "leak_bucket_true": "LEAK",
+      "leak_decision_agree": true,
+      "ambiguous": true,
+      "citations_rationale": "CRP is a downstream systemic-inflammation marker that TRACKS CSU disease activity and falls with response (EJD review 10.1684/ejd.2024.4600), rather than a node the BTKi acts through. Modeled as a common effect: treatment lowers inflammation (T -> CRP change) and the achieved symptom response also reflects in CRP (Y -> CRP change). Ambiguous: could be read as an on-path mediator; CSU activity markers are canonically mediator-vs-collider under-determined."
+    },
+    {
+      "feature": "delta_d_dimer_ug_ml_90_180d_post_index",
+      "edges": [
+        [
+          "T",
+          "delta_d_dimer_ug_ml_90_180d_post_index"
+        ],
+        [
+          "Y",
+          "delta_d_dimer_ug_ml_90_180d_post_index"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "derived_role": "collider",
+      "true_role": "mediator",
+      "agree_exact": false,
+      "leak_bucket_derived": "LEAK",
+      "leak_bucket_true": "LEAK",
+      "leak_decision_agree": true,
+      "ambiguous": true,
+      "citations_rationale": "D-dimer is a coagulation-activation marker of CSU disease activity that falls with response (EJD review 10.1684/ejd.2018.3443), not a pathway the BTKi acts through. Modeled as a common effect of treatment (T -> D-dimer change) and the achieved response (Y -> D-dimer change). Ambiguous: activity-marker mediator-vs-collider under-determination."
+    },
+    {
+      "feature": "delta_serum_il17_pg_ml_60_120d_post_index",
+      "edges": [
+        [
+          "T",
+          "delta_serum_il17_pg_ml_60_120d_post_index"
+        ],
+        [
+          "Y",
+          "delta_serum_il17_pg_ml_60_120d_post_index"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "derived_role": "collider",
+      "true_role": "mediator",
+      "agree_exact": false,
+      "leak_bucket_derived": "LEAK",
+      "leak_bucket_true": "LEAK",
+      "leak_decision_agree": true,
+      "ambiguous": true,
+      "citations_rationale": "Serum IL-17 is a downstream inflammatory cytokine correlate of CSU activity, not the primary FcepsilonRI/mast-cell pathway remibrutinib transduces; modeled as a common effect of treatment (T -> IL-17 change) and achieved response (Y -> IL-17 change). Ambiguous: activity-marker mediator-vs-collider under-determination."
+    }
+  ],
+  "non_circularity_epistemic_boundary": "HONEST (codex iter-1): the committed artifacts + tests prove the authoring INPUTS were label-free and labels were joined independently, but cannot by JSON inspection prove the edge TOPOLOGY was not reverse-engineered from labels (a label-derived author emits canonical shapes using no forbidden string \u2014 pinned by test_negative_control_label_derived_source_still_passes_string_guards). Blindness rests on the committed blind-brief provenance + the author-once/score-once protocol."
+}

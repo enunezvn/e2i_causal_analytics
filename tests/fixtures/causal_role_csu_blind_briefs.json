@@ -1,0 +1,163 @@
+{
+  "briefs": [
+    {
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=claims_diagnosis; derivation_inputs=[icd10_L20_atopic_dermatitis, dx_date_pediatric]; aggregation=binary 1 if any L20.* claim before age 18 (or by self-report); window_days=NA; knowable_at=index_date_minus_1",
+      "feature_name": "childhood_eczema_history_flag"
+    },
+    {
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=patient_history_questionnaire; derivation_inputs=[family_atopy_history_self_report]; aggregation=binary 1 if any first-degree relative reported with atopic dermatitis/asthma/allergic rhinitis; window_days=NA; knowable_at=index_date_minus_1",
+      "feature_name": "family_history_atopy_first_degree_relative_flag"
+    },
+    {
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=genetic_panel_optional; derivation_inputs=[hla_drb1_serotype_panel]; aggregation=indicator for HLA-DRB1 alleles associated with autoimmune-CSU susceptibility per Bernstein 2024 type-IIb-autoimmune phenotype; window_days=NA; knowable_at=index_date_minus_1",
+      "feature_name": "hla_drb1_autoimmune_csu_susceptibility_allele_flag"
+    },
+    {
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=patient_demographics; derivation_inputs=[birth_year, index_date_year]; aggregation=age_years = index_date_year - birth_year; window_days=NA; knowable_at=index_date_minus_1",
+      "feature_name": "patient_age_at_index_years"
+    },
+    {
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=patient_demographics; derivation_inputs=[sex_at_birth]; aggregation=binary 1 if female; window_days=NA; knowable_at=index_date_minus_1",
+      "feature_name": "patient_sex_female_indicator"
+    },
+    {
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=claims_master; derivation_inputs=[enrollment_status, last_claim_date]; aggregation=binary 1 if patient has any claim or enrollment indicator within [index_date + 165d, index_date + 195d]; window_days=195; knowable_at=index_date_plus_180",
+      "feature_name": "alive_and_enrolled_at_180d_post_index_flag"
+    },
+    {
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=claims_dispense; derivation_inputs=[remibrutinib_dispense_date, days_supply]; aggregation=binary 1 if continuously on therapy through [index_date + 175d, index_date + 180d] with >=80% PDC; window_days=180; knowable_at=index_date_plus_180",
+      "feature_name": "on_treatment_persistent_180d_pdc80_flag"
+    },
+    {
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=medication_events; derivation_inputs=['fill_date','days_supply','drug_class=BTKi']; aggregation=ANY_FILL_WITHIN_30D_OF_DAY180; window_days=180; knowable_at=index_date+180d; binary_flag_treatment_persistence_at_180d",
+      "feature_name": "on_treatment_remibrutinib_at_180d_postindex_flag"
+    },
+    {
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=claims_dispense; derivation_inputs=[remibrutinib_last_dispense_date, days_supply, gap_threshold_60d]; aggregation=binary 1 if patient-initiated discontinuation (gap > 60d, not preceded by AE-coded encounter); window_days=180; knowable_at=index_date_plus_180",
+      "feature_name": "patient_initiated_discontinuation_180d_flag"
+    },
+    {
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=lab_results; derivation_inputs=[loinc_19113-0_total_ige, result_value_iu_ml, collect_date]; aggregation=last value in [index_date - 365d, index_date - 1d]; window_days=365; knowable_at=index_date_minus_1",
+      "feature_name": "baseline_total_ige_iu_ml_preindex"
+    },
+    {
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=ehr_assessments; derivation_inputs=[uas7_score, assessment_date]; aggregation=last non-null UAS7 in [index_date - 30d, index_date - 1d]; window_days=30; knowable_at=index_date_minus_1",
+      "feature_name": "baseline_uas7_score_preindex_30d"
+    },
+    {
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=claims_diagnosis; derivation_inputs=[icd10_E06.3_autoimmune_thyroiditis]; aggregation=binary 1 if any qualifying claim in [index_date - 1825d, index_date - 1d]; window_days=1825; knowable_at=index_date_minus_1",
+      "feature_name": "comorbid_autoimmune_thyroiditis_history_5y_preindex"
+    },
+    {
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=claims_dispense; derivation_inputs=[ndc_h1_antihistamines_levocetirizine_fexofenadine_cetirizine_loratadine, dispense_date]; aggregation=count distinct H1AH NDCs in [index_date - 365d, index_date - 1d]; window_days=365; knowable_at=index_date_minus_1",
+      "feature_name": "distinct_h1_antihistamine_count_365d_preindex"
+    },
+    {
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=claims_dispense; derivation_inputs=[statin_ndc_pdc_365d, antihypertensive_ndc_pdc_365d, influenza_vaccine_claim, mammography_or_colonoscopy_screening_claim]; aggregation=tertile of composite proportion-of-days-covered (PDC) score across statin/antihypertensive preventive medications + binary preventive-service uptake indicators, measured in [index_date - 365d, index_date - 1d]; window_days=365; knowable_at=index_date_minus_1",
+      "feature_name": "pdc_preindex_preventive_medications_score_tertile"
+    },
+    {
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=claims_dispense; derivation_inputs=[ndc_code, dispense_date]; aggregation=binary 1 if any omalizumab (NDC 50242-040*) dispense in [index_date - 730d, index_date - 1d]; window_days=730; knowable_at=index_date_minus_1",
+      "feature_name": "prior_omalizumab_use_flag_730d_preindex"
+    },
+    {
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=ehr_assessments; derivation_inputs=[dlqi_score, assessment_date]; aggregation=last DLQI in [index_date + 150d, index_date + 180d]; window_days=180; knowable_at=index_date_plus_180",
+      "feature_name": "post_index_dlqi_score_150_180d"
+    },
+    {
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=claims_diagnosis; derivation_inputs=[icd10_d72.829_petechiae, dx_date]; aggregation=binary 1 if any qualifying claim in [index_date + 1d, index_date + 180d]; window_days=180; knowable_at=index_date_plus_180",
+      "feature_name": "post_index_petechiae_event_180d_flag"
+    },
+    {
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=claims_dispense; derivation_inputs=[ndc_omalizumab_dupilumab_ligelizumab, switch_date]; aggregation=binary 1 if switch from remibrutinib to any other biologic in [index_date + 1d, index_date + 180d]; window_days=180; knowable_at=index_date_plus_180",
+      "feature_name": "post_index_switch_to_alternative_biologic_180d_flag"
+    },
+    {
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=lab_results; derivation_inputs=[loinc_complete_blood_count_platelet, result_value, collect_date]; aggregation=binary 1 if any platelet count < 100 x10^9/L in [index_date + 1d, index_date + 180d]; window_days=180; knowable_at=index_date_plus_180",
+      "feature_name": "post_index_thrombocytopenia_event_180d_flag"
+    },
+    {
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=ehr_assessments; derivation_inputs=[uct_score_patient_reported, assessment_date]; aggregation=last non-null Urticaria Control Test (UCT) score in [index_date + 150d, index_date + 180d]; window_days=180; knowable_at=index_date_plus_180",
+      "feature_name": "uct_score_150_180d_post_index"
+    },
+    {
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=claims_master; derivation_inputs=[index_date_year_month]; aggregation=binary indicator (1 = post-FDA-approval of remibrutinib quarter, 0 = pre); window_days=NA; knowable_at=index_date",
+      "feature_name": "calendar_time_post_remibrutinib_approval_indicator"
+    },
+    {
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=claims_dispense; derivation_inputs=[prescriber_npi, drug_class_bti_or_omalizumab, dispense_date]; aggregation=count_share_by_prescriber over [index_date - 365d, index_date - 1d]; window_days=365; knowable_at=index_date_minus_1",
+      "feature_name": "index_prescriber_btk_inhibitor_preference_share_prior_365d"
+    },
+    {
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=claims_dispense; derivation_inputs=[prescriber_npi, biologic_or_btki_count_distinct_patients, patient_visit_frequency_strata, uct_collection_completeness]; aggregation=count distinct CSU patients prescribed any biologic/BTKi by prescriber, tertile-binned; window_days=365; knowable_at=index_date_minus_1; analysis_stratum=conditional on visit-frequency tertile + UCT-collection-completeness tertile",
+      "feature_name": "index_prescriber_csu_biologic_volume_tertile_prior_365d"
+    },
+    {
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=claims_dispense; derivation_inputs=[prescriber_npi, ndc_remibrutinib, first_remibrutinib_dispense_date_by_prescriber, remibrutinib_fda_approval_date]; aggregation=binary 1 if this prescriber's FIRST-EVER remibrutinib dispense occurred within 365 days of the remibrutinib FDA approval date (early-adopter flag, assigned at the prescriber level then attached to each patient by index prescriber); window_days=NA; knowable_at=index_date_minus_1",
+      "feature_name": "index_prescriber_first_btki_initiation_within_first_year_post_approval_flag"
+    },
+    {
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=claims_master JOIN payer_formulary; derivation_inputs=[payer_id, drug_tier_remibrutinib, index_date_quarter]; aggregation=indicator for payer-formulary-tier-change quarter where remibrutinib moved to non-preferred or preferred; window_days=NA; knowable_at=index_date",
+      "feature_name": "payer_formulary_tier_change_remibrutinib_quarter"
+    },
+    {
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=claims_master; derivation_inputs=[patient_zip3, prescriber_zip3]; aggregation=zip3-quarter share of CSU patients initiating remibrutinib among all biologic/BTKi-eligible initiators; window_days=90; knowable_at=index_date",
+      "feature_name": "regional_zip3_quarter_remibrutinib_uptake_share"
+    },
+    {
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=lab_results; derivation_inputs=[loinc_2160-0_anti_fcepsilon_ri_iggig, result_value, collect_date]; aggregation=delta = post_value - baseline_value where post in [index_date + 60d, index_date + 90d]; window_days=90; knowable_at=index_date_plus_90",
+      "feature_name": "delta_anti_fcepsilon_ri_igg_titer_post_treatment_60_90d"
+    },
+    {
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=lab_results; derivation_inputs=[loinc_basophil_activation_test_cd63, result_pct, collect_date]; aggregation=delta = post - baseline where post in [index_date + 28d, index_date + 56d]; window_days=56; knowable_at=index_date_plus_56",
+      "feature_name": "delta_basophil_activation_test_cd63_pct_28_56d"
+    },
+    {
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=lab_results; derivation_inputs=[loinc_1988-5_crp, result_mg_l, collect_date]; aggregation=delta = post - baseline where post in [index_date + 60d, index_date + 120d]; window_days=120; knowable_at=index_date_plus_120",
+      "feature_name": "delta_crp_mg_l_60_120d_post_index"
+    },
+    {
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=lab_results; derivation_inputs=[loinc_d_dimer_30240-1, result_ug_ml, collect_date]; aggregation=delta = post - baseline where post in [index_date + 90d, index_date + 180d]; window_days=180; knowable_at=index_date_plus_180",
+      "feature_name": "delta_d_dimer_ug_ml_90_180d_post_index"
+    },
+    {
+      "dataset_context": "cohort=CSU_remibrutinib; brand=Remibrutinib (LOU064, BTK inhibitor); indication=Chronic Spontaneous Urticaria refractory to H1 antihistamines; data_source=ConcertAI CSU claims; target=treatment_response_UAS7_reduction_180d; prediction_anchor=index_date (first remibrutinib dispense)",
+      "derivation_pseudocode": "source=lab_results; derivation_inputs=[loinc_il17_serum, result_pg_ml, collect_date]; aggregation=delta = post - baseline where post in [index_date + 60d, index_date + 120d]; window_days=120; knowable_at=index_date_plus_120",
+      "feature_name": "delta_serum_il17_pg_ml_60_120d_post_index"
+    }
+  ],
+  "cohort": "CSU_remibrutinib",
+  "derived_from": "tests/fixtures/causal_role_golden_set.json (cohort==CSU_remibrutinib), label-free projection",
+  "description": "The BLIND authoring brief for the CSU_remibrutinib structural validation (Layer-4 Track-2B-v3 Phase 1): EXACTLY the label-free inputs the DAG author was given \u2014 feature_name, derivation_pseudocode, and dataset_context (the T=remibrutinib / Y=UAS7-reduction-180d frame). This is the PROVENANCE record of the authoring process: it carries NO ground_truth_role, NO rationale, NO provenance, and NO role string, so it documents that the author saw only the mechanism-relevant metadata, never the answer. The author researched external clinical/pharmacology literature (PubMed/ClinicalTrials) from these briefs and produced tests/fixtures/causal_role_csu_blind_authored_edges.json; the scoring fixture is then the blind edges joined with the INDEPENDENT golden labels. NOTE (honest epistemic boundary, per codex iter-1): committing this brief + the label-free edge source proves the AUTHORING INPUTS were label-free and the labels were joined independently; it cannot by itself prove a human did not separately consult labels. The non-circularity guarantee rests on this committed blind-input provenance + the documented author-once/score-once protocol, NOT on the artifact tests alone (which are necessary, not sufficient \u2014 see test_negative_control_* documenting that a label-derived canonical-topology source would still pass the string/rebuild guards).",
+  "total_entries": 31
+}

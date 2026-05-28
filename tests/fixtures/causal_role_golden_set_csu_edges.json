@@ -1,0 +1,640 @@
+{
+  "entries": [
+    {
+      "cohort": "CSU_remibrutinib",
+      "edges": [
+        [
+          "childhood_eczema_history_flag",
+          "U_atopic_diathesis"
+        ],
+        [
+          "U_atopic_diathesis",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "feature_name": "childhood_eczema_history_flag",
+      "feature_node": "childhood_eczema_history_flag",
+      "ground_truth_role": "ancestor",
+      "outcome_node": "Y",
+      "treatment_node": "T"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "edges": [
+        [
+          "family_history_atopy_first_degree_relative_flag",
+          "U_heritable_atopy"
+        ],
+        [
+          "U_heritable_atopy",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "feature_name": "family_history_atopy_first_degree_relative_flag",
+      "feature_node": "family_history_atopy_first_degree_relative_flag",
+      "ground_truth_role": "ancestor",
+      "outcome_node": "Y",
+      "treatment_node": "T"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "edges": [
+        [
+          "hla_drb1_autoimmune_csu_susceptibility_allele_flag",
+          "U_autoimmune_endotype"
+        ],
+        [
+          "U_autoimmune_endotype",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "feature_name": "hla_drb1_autoimmune_csu_susceptibility_allele_flag",
+      "feature_node": "hla_drb1_autoimmune_csu_susceptibility_allele_flag",
+      "ground_truth_role": "ancestor",
+      "outcome_node": "Y",
+      "treatment_node": "T"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "edges": [
+        [
+          "patient_age_at_index_years",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "feature_name": "patient_age_at_index_years",
+      "feature_node": "patient_age_at_index_years",
+      "ground_truth_role": "ancestor",
+      "outcome_node": "Y",
+      "treatment_node": "T"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "edges": [
+        [
+          "patient_sex_female_indicator",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "feature_name": "patient_sex_female_indicator",
+      "feature_node": "patient_sex_female_indicator",
+      "ground_truth_role": "ancestor",
+      "outcome_node": "Y",
+      "treatment_node": "T"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "edges": [
+        [
+          "baseline_total_ige_iu_ml_preindex",
+          "T"
+        ],
+        [
+          "baseline_total_ige_iu_ml_preindex",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "feature_name": "baseline_total_ige_iu_ml_preindex",
+      "feature_node": "baseline_total_ige_iu_ml_preindex",
+      "ground_truth_role": "confounder",
+      "outcome_node": "Y",
+      "treatment_node": "T"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "edges": [
+        [
+          "baseline_uas7_score_preindex_30d",
+          "T"
+        ],
+        [
+          "baseline_uas7_score_preindex_30d",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "feature_name": "baseline_uas7_score_preindex_30d",
+      "feature_node": "baseline_uas7_score_preindex_30d",
+      "ground_truth_role": "confounder",
+      "outcome_node": "Y",
+      "treatment_node": "T"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "edges": [
+        [
+          "comorbid_autoimmune_thyroiditis_history_5y_preindex",
+          "T"
+        ],
+        [
+          "comorbid_autoimmune_thyroiditis_history_5y_preindex",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "feature_name": "comorbid_autoimmune_thyroiditis_history_5y_preindex",
+      "feature_node": "comorbid_autoimmune_thyroiditis_history_5y_preindex",
+      "ground_truth_role": "confounder",
+      "outcome_node": "Y",
+      "treatment_node": "T"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "edges": [
+        [
+          "distinct_h1_antihistamine_count_365d_preindex",
+          "T"
+        ],
+        [
+          "distinct_h1_antihistamine_count_365d_preindex",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "feature_name": "distinct_h1_antihistamine_count_365d_preindex",
+      "feature_node": "distinct_h1_antihistamine_count_365d_preindex",
+      "ground_truth_role": "confounder",
+      "outcome_node": "Y",
+      "treatment_node": "T"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "edges": [
+        [
+          "pdc_preindex_preventive_medications_score_tertile",
+          "T"
+        ],
+        [
+          "pdc_preindex_preventive_medications_score_tertile",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "feature_name": "pdc_preindex_preventive_medications_score_tertile",
+      "feature_node": "pdc_preindex_preventive_medications_score_tertile",
+      "ground_truth_role": "confounder",
+      "outcome_node": "Y",
+      "treatment_node": "T"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "edges": [
+        [
+          "prior_omalizumab_use_flag_730d_preindex",
+          "T"
+        ],
+        [
+          "prior_omalizumab_use_flag_730d_preindex",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "feature_name": "prior_omalizumab_use_flag_730d_preindex",
+      "feature_node": "prior_omalizumab_use_flag_730d_preindex",
+      "ground_truth_role": "confounder",
+      "outcome_node": "Y",
+      "treatment_node": "T"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "edges": [
+        [
+          "calendar_time_post_remibrutinib_approval_indicator",
+          "T"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "feature_name": "calendar_time_post_remibrutinib_approval_indicator",
+      "feature_node": "calendar_time_post_remibrutinib_approval_indicator",
+      "ground_truth_role": "instrument",
+      "outcome_node": "Y",
+      "treatment_node": "T"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "edges": [
+        [
+          "index_prescriber_btk_inhibitor_preference_share_prior_365d",
+          "T"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "feature_name": "index_prescriber_btk_inhibitor_preference_share_prior_365d",
+      "feature_node": "index_prescriber_btk_inhibitor_preference_share_prior_365d",
+      "ground_truth_role": "instrument",
+      "outcome_node": "Y",
+      "treatment_node": "T"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "edges": [
+        [
+          "index_prescriber_csu_biologic_volume_tertile_prior_365d",
+          "T"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "feature_name": "index_prescriber_csu_biologic_volume_tertile_prior_365d",
+      "feature_node": "index_prescriber_csu_biologic_volume_tertile_prior_365d",
+      "ground_truth_role": "instrument",
+      "outcome_node": "Y",
+      "treatment_node": "T"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "edges": [
+        [
+          "index_prescriber_first_btki_initiation_within_first_year_post_approval_flag",
+          "T"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "feature_name": "index_prescriber_first_btki_initiation_within_first_year_post_approval_flag",
+      "feature_node": "index_prescriber_first_btki_initiation_within_first_year_post_approval_flag",
+      "ground_truth_role": "instrument",
+      "outcome_node": "Y",
+      "treatment_node": "T"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "edges": [
+        [
+          "payer_formulary_tier_change_remibrutinib_quarter",
+          "T"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "feature_name": "payer_formulary_tier_change_remibrutinib_quarter",
+      "feature_node": "payer_formulary_tier_change_remibrutinib_quarter",
+      "ground_truth_role": "instrument",
+      "outcome_node": "Y",
+      "treatment_node": "T"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "edges": [
+        [
+          "regional_zip3_quarter_remibrutinib_uptake_share",
+          "T"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "feature_name": "regional_zip3_quarter_remibrutinib_uptake_share",
+      "feature_node": "regional_zip3_quarter_remibrutinib_uptake_share",
+      "ground_truth_role": "instrument",
+      "outcome_node": "Y",
+      "treatment_node": "T"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "edges": [
+        [
+          "T",
+          "delta_anti_fcepsilon_ri_igg_titer_post_treatment_60_90d"
+        ],
+        [
+          "delta_anti_fcepsilon_ri_igg_titer_post_treatment_60_90d",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "feature_name": "delta_anti_fcepsilon_ri_igg_titer_post_treatment_60_90d",
+      "feature_node": "delta_anti_fcepsilon_ri_igg_titer_post_treatment_60_90d",
+      "ground_truth_role": "mediator",
+      "outcome_node": "Y",
+      "treatment_node": "T"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "edges": [
+        [
+          "T",
+          "delta_basophil_activation_test_cd63_pct_28_56d"
+        ],
+        [
+          "delta_basophil_activation_test_cd63_pct_28_56d",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "feature_name": "delta_basophil_activation_test_cd63_pct_28_56d",
+      "feature_node": "delta_basophil_activation_test_cd63_pct_28_56d",
+      "ground_truth_role": "mediator",
+      "outcome_node": "Y",
+      "treatment_node": "T"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "edges": [
+        [
+          "T",
+          "delta_crp_mg_l_60_120d_post_index"
+        ],
+        [
+          "Y",
+          "delta_crp_mg_l_60_120d_post_index"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "feature_name": "delta_crp_mg_l_60_120d_post_index",
+      "feature_node": "delta_crp_mg_l_60_120d_post_index",
+      "ground_truth_role": "mediator",
+      "outcome_node": "Y",
+      "treatment_node": "T"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "edges": [
+        [
+          "T",
+          "delta_d_dimer_ug_ml_90_180d_post_index"
+        ],
+        [
+          "Y",
+          "delta_d_dimer_ug_ml_90_180d_post_index"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "feature_name": "delta_d_dimer_ug_ml_90_180d_post_index",
+      "feature_node": "delta_d_dimer_ug_ml_90_180d_post_index",
+      "ground_truth_role": "mediator",
+      "outcome_node": "Y",
+      "treatment_node": "T"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "edges": [
+        [
+          "T",
+          "delta_serum_il17_pg_ml_60_120d_post_index"
+        ],
+        [
+          "Y",
+          "delta_serum_il17_pg_ml_60_120d_post_index"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "feature_name": "delta_serum_il17_pg_ml_60_120d_post_index",
+      "feature_node": "delta_serum_il17_pg_ml_60_120d_post_index",
+      "ground_truth_role": "mediator",
+      "outcome_node": "Y",
+      "treatment_node": "T"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "edges": [
+        [
+          "T",
+          "alive_and_enrolled_at_180d_post_index_flag"
+        ],
+        [
+          "Y",
+          "alive_and_enrolled_at_180d_post_index_flag"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "feature_name": "alive_and_enrolled_at_180d_post_index_flag",
+      "feature_node": "alive_and_enrolled_at_180d_post_index_flag",
+      "ground_truth_role": "collider",
+      "outcome_node": "Y",
+      "treatment_node": "T"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "edges": [
+        [
+          "T",
+          "on_treatment_persistent_180d_pdc80_flag"
+        ],
+        [
+          "Y",
+          "on_treatment_persistent_180d_pdc80_flag"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "feature_name": "on_treatment_persistent_180d_pdc80_flag",
+      "feature_node": "on_treatment_persistent_180d_pdc80_flag",
+      "ground_truth_role": "collider",
+      "outcome_node": "Y",
+      "treatment_node": "T"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "edges": [
+        [
+          "T",
+          "on_treatment_remibrutinib_at_180d_postindex_flag"
+        ],
+        [
+          "Y",
+          "on_treatment_remibrutinib_at_180d_postindex_flag"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "feature_name": "on_treatment_remibrutinib_at_180d_postindex_flag",
+      "feature_node": "on_treatment_remibrutinib_at_180d_postindex_flag",
+      "ground_truth_role": "collider",
+      "outcome_node": "Y",
+      "treatment_node": "T"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "edges": [
+        [
+          "T",
+          "patient_initiated_discontinuation_180d_flag"
+        ],
+        [
+          "Y",
+          "patient_initiated_discontinuation_180d_flag"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "feature_name": "patient_initiated_discontinuation_180d_flag",
+      "feature_node": "patient_initiated_discontinuation_180d_flag",
+      "ground_truth_role": "collider",
+      "outcome_node": "Y",
+      "treatment_node": "T"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "edges": [
+        [
+          "T",
+          "post_index_switch_to_alternative_biologic_180d_flag"
+        ],
+        [
+          "Y",
+          "post_index_switch_to_alternative_biologic_180d_flag"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "feature_name": "post_index_switch_to_alternative_biologic_180d_flag",
+      "feature_node": "post_index_switch_to_alternative_biologic_180d_flag",
+      "ground_truth_role": "collider",
+      "outcome_node": "Y",
+      "treatment_node": "T"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "edges": [
+        [
+          "Y",
+          "post_index_dlqi_score_150_180d"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "feature_name": "post_index_dlqi_score_150_180d",
+      "feature_node": "post_index_dlqi_score_150_180d",
+      "ground_truth_role": "descendant",
+      "outcome_node": "Y",
+      "treatment_node": "T"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "edges": [
+        [
+          "T",
+          "post_index_petechiae_event_180d_flag"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "feature_name": "post_index_petechiae_event_180d_flag",
+      "feature_node": "post_index_petechiae_event_180d_flag",
+      "ground_truth_role": "descendant",
+      "outcome_node": "Y",
+      "treatment_node": "T"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "edges": [
+        [
+          "T",
+          "post_index_thrombocytopenia_event_180d_flag"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "feature_name": "post_index_thrombocytopenia_event_180d_flag",
+      "feature_node": "post_index_thrombocytopenia_event_180d_flag",
+      "ground_truth_role": "descendant",
+      "outcome_node": "Y",
+      "treatment_node": "T"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "edges": [
+        [
+          "Y",
+          "uct_score_150_180d_post_index"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "feature_name": "uct_score_150_180d_post_index",
+      "feature_node": "uct_score_150_180d_post_index",
+      "ground_truth_role": "descendant",
+      "outcome_node": "Y",
+      "treatment_node": "T"
+    }
+  ],
+  "fixture_kind": "csu_remibrutinib_heldout_edges",
+  "total_entries": 31
+}
