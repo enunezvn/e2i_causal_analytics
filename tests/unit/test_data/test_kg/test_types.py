@@ -97,3 +97,13 @@ def test_ensemble_decided_by_literal_includes_evaluator_gate():
     from src.data.kg.types import EnsembleDecidedBy
 
     assert "evaluator_gate" in typing.get_args(EnsembleDecidedBy)
+
+
+def test_ensemble_decided_by_literal_includes_structural():
+    """Plan v4 Layer B / Phase 2: the structural decider tags its verdicts
+    ``decided_by="structural"`` — the literal must admit it."""
+    import typing
+
+    from src.data.kg.types import EnsembleDecidedBy
+
+    assert "structural" in typing.get_args(EnsembleDecidedBy)
