@@ -107,6 +107,123 @@ def test_fdr_override_does_not_mutate_input():
 
 
 # ---------------------------------------------------------------------------
+# Layer-1 declared-safe prior must govern the FDR auto-fire too (root-cause fix
+# for the dx_l50_1_count false positive, faithful Optum D4-run 2026-05-28).
+#
+# The adversarial discriminator cannot distinguish a strong PRE-INDEX predictor
+# from a leak — both predict the target. ``hblp_classify`` compensates with a
+# 1.5x declared-safe threshold inflation, so a manifest-cleared pre-index
+# feature lands at info/moderate. But ``_apply_fdr_firing_override`` historically
+# escalated ANY BH-confident feature to high/drop UNCONDITIONALLY, bypassing that
+# prior and silently dropping legitimate pre-index confounders (e.g. CSU
+# dx_l50_1_count: knowable_at<=index, σ-band info, yet auto-dropped). The fix:
+# honor declared-safe in the FDR tier as well — route the FDR-vs-manifest
+# disagreement to review instead of auto-dropping, UNLESS the σ-band (already
+# inflated) independently reached high (overwhelming evidence still fires).
+# ---------------------------------------------------------------------------
+
+
+def test_fdr_override_confident_declared_safe_info_routes_to_review_not_drop():
+    """A Layer-1 declared-safe (pre-index) feature the FDR set flags confident,
+    whose inflated σ-band severity is NOT high, must NOT be auto-dropped — route
+    to review (moderate/ambiguous) so the structural decider / Layer-4 / operator
+    adjudicates. This is the dx_l50_1_count case (σ-band info, BH-confident)."""
+    import importlib
+
+    mod = importlib.import_module(MOD)
+    adv = _adv_input(
+        severity="info",
+        severity_pre_joint_check="info",
+        remediation="keep",
+        z_score=5.80,
+        actual_auc=0.70,
+        delta_auc=0.16,
+        delta_auc_below_floor=False,
+    )
+    out = mod._apply_fdr_firing_override(
+        adv, is_confident=True, fdr_q=0.10, layer_1_declared_safe=True
+    )
+    assert out["severity"] == "moderate"
+    assert out["remediation"] == "ambiguous"
+    assert out["fdr_confident"] is True
+    assert "declared-safe" in out["evidence"].lower()
+
+
+def test_fdr_override_confident_declared_safe_moderate_stays_review():
+    """A declared-safe feature whose σ-band is moderate and which FDR flags
+    confident is also NOT force-dropped — it stays at review, not high/drop."""
+    import importlib
+
+    mod = importlib.import_module(MOD)
+    adv = _adv_input(
+        severity="moderate",
+        severity_pre_joint_check="moderate",
+        remediation="ambiguous",
+        delta_auc=0.16,
+        delta_auc_below_floor=False,
+    )
+    out = mod._apply_fdr_firing_override(
+        adv, is_confident=True, fdr_q=0.10, layer_1_declared_safe=True
+    )
+    assert out["severity"] == "moderate"
+    assert out["remediation"] == "ambiguous"
+
+
+def test_fdr_override_confident_declared_safe_but_sigma_high_still_drops():
+    """Overwhelming evidence: a declared-safe feature whose (already 1.5x-inflated)
+    σ-band severity ALREADY reached high still fires high/drop. Declared-safe
+    raises the bar; it does not grant immunity when the bar is cleared anyway."""
+    import importlib
+
+    mod = importlib.import_module(MOD)
+    adv = _adv_input(
+        severity="high",
+        severity_pre_joint_check="high",
+        remediation="drop",
+        z_score=15.0,
+        actual_auc=0.95,
+        delta_auc=0.45,
+        delta_auc_below_floor=False,
+    )
+    out = mod._apply_fdr_firing_override(
+        adv, is_confident=True, fdr_q=0.10, layer_1_declared_safe=True
+    )
+    assert out["severity"] == "high"
+    assert out["remediation"] == "drop"
+
+
+def test_fdr_override_confident_not_declared_safe_still_drops():
+    """Scope guard: a NOT-declared-safe feature (post-index / no manifest
+    clearance) the FDR set flags confident still fires high/drop. The fix is
+    scoped to pre-index manifest-cleared features; real leaks are unaffected."""
+    import importlib
+
+    mod = importlib.import_module(MOD)
+    adv = _adv_input(
+        severity="info", remediation="keep", delta_auc=0.40, delta_auc_below_floor=False
+    )
+    out = mod._apply_fdr_firing_override(
+        adv, is_confident=True, fdr_q=0.10, layer_1_declared_safe=False
+    )
+    assert out["severity"] == "high"
+    assert out["remediation"] == "drop"
+
+
+def test_fdr_override_declared_safe_param_defaults_false():
+    """Backward compatibility: existing callers omit ``layer_1_declared_safe``;
+    the default (False) preserves the legacy unconditional high/drop promotion."""
+    import importlib
+
+    mod = importlib.import_module(MOD)
+    adv = _adv_input(
+        severity="info", remediation="keep", delta_auc=0.40, delta_auc_below_floor=False
+    )
+    out = mod._apply_fdr_firing_override(adv, is_confident=True, fdr_q=0.10)
+    assert out["severity"] == "high"
+    assert out["remediation"] == "drop"
+
+
+# ---------------------------------------------------------------------------
 # Node-level FDR integration: default-on firing, σ-band fallback, off-switch.
 # ---------------------------------------------------------------------------
 
