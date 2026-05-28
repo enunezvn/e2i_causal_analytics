@@ -902,16 +902,21 @@ def test_adaptive_validity_check_emits_decided_by_llm_on_csu_feature(
     )
 
 
-def test_layer4_llm_not_called_by_default(reset_dspy_lm) -> None:
-    """Plan v4 Phase 1 call-gating: with an LM configured but
-    adaptive_layer4_enabled unset (default OFF), the node does NOT invoke the
-    LLM — no verdict is decided_by='llm' and no llm_role is surfaced. The FDR
-    confident set + the deterministic voter decide. (Locks the default that the
-    reconciled decided_by='llm' node test opts OUT of via the flag.)"""
+def test_layer4_llm_not_called_by_default(reset_dspy_lm, monkeypatch) -> None:
+    """Plan v4 Phase 1 — the FULL production default (BOTH gates OFF) end-to-end.
+    With an LM configured but adaptive_layer4_enabled unset (call-gate OFF) AND
+    ADAPTIVE_LAYER4_LLM_DECIDES unset (voter audit-only), the node does NOT
+    invoke the LLM — no verdict is decided_by='llm' and no llm_role is surfaced;
+    the FDR confident set + the deterministic voter decide. Deletes the file's
+    autouse decides env so this regression-guards the true production path
+    (codex iter-1 MEDIUM: no single test covered both defaults OFF together)."""
     from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
         adaptive_validity_check,
     )
 
+    # Override the file-level autouse fixture: exercise BOTH production defaults
+    # (call-gate OFF via the omitted state flag + voter audit-only via no env).
+    monkeypatch.delenv("ADAPTIVE_LAYER4_LLM_DECIDES", raising=False)
     dspy.configure(lm=_stub_dspy_lm_with_role("ancestor", "keep_with_caveat"))
     df = _make_layer_3_moderate_df()
     state = {

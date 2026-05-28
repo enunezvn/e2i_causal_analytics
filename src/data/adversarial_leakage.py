@@ -526,14 +526,17 @@ def fdr_confident_set(
     Returns:
         Boolean ndarray (input-aligned): ``True`` = confident leak.
     """
-    p_arr = np.asarray(list(p_values), dtype=float)
-    eff = np.asarray(list(effect_sizes), dtype=float)
-    if p_arr.shape != eff.shape:
+    # Alignment check FIRST — before any dtype coercion — so a length mismatch
+    # raises the intended error rather than a confusing conversion error.
+    p_list = list(p_values)
+    eff_list = list(effect_sizes)
+    if len(p_list) != len(eff_list):
         raise ValueError(
             "p_values and effect_sizes must be the same length (input-aligned); "
-            f"got {p_arr.shape[0]} p-values and {eff.shape[0]} effect sizes"
+            f"got {len(p_list)} p-values and {len(eff_list)} effect sizes"
         )
-    bh = benjamini_hochberg(p_arr, q, n_permutations=n_permutations)
+    bh = benjamini_hochberg(p_list, q, n_permutations=n_permutations)
+    eff = np.asarray(eff_list, dtype=float)
     meaningful = np.isfinite(eff) & (np.abs(eff) > float(effect_floor))
     # numpy's ``&`` operator is typed to return ``Any``; cast back to the
     # declared ndarray so the Any does not leak out (mypy no-any-return).
