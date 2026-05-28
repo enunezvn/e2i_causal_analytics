@@ -3415,6 +3415,16 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
         # voter by _compose_legacy_verdict). Resolved ONCE here; the per-feature
         # code below reuses this ``contract`` (the redundant Layer-3 re-lookup
         # was removed).
+        #
+        # Scope note: this loop is ``numeric_candidates`` minus ``layer_1_caught``
+        # — the SAME scope as the Layer-4 LLM, whose ONLY call site
+        # (``classify_feature``, below in this loop) shares it. The structural
+        # decider replaces the LLM EXACTLY where the LLM runs. Non-numeric /
+        # excluded / manifest-forbidden features (filtered out by
+        # ``_select_features``) and Layer-1-caught leaks (already decided by the
+        # higher-precedence Layer-1 veto, which sits ABOVE structural) are out of
+        # the Layer-3/4 decider's scope BY DESIGN — there is no LLM path they
+        # could "fall through" to, so this is not a silent drop.
         contract = lookup_feature_contract(feat, data_source=manifest_source)
         structural_role: Optional[CausalRole] = None
         structural_unclassifiable = False
