@@ -91,7 +91,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Iterable, Optional
+from typing import TYPE_CHECKING, Any, Dict, Iterable, Optional, cast
 
 import numpy as np
 import pandas as pd
@@ -126,7 +126,7 @@ from src.ml.causal_role_dgp.extractor import derive_structural_role
 # keeps adaptive_validity_check.py's import surface free of httpx.
 if TYPE_CHECKING:
     from src.data.kg.ensemble_voter import EnsembleVoter
-    from src.data.kg.types import EnsembleVerdict, KGEdge, LLMVerdict
+    from src.data.kg.types import CausalRole, EnsembleVerdict, KGEdge, LLMVerdict
 
 
 class _HblpRoutingViolationError(RuntimeError):
@@ -1302,6 +1302,9 @@ _DECIDED_BY_TO_LAYER: dict[str, str] = {
     "adversarial_ablation": "3",
     "kg": "2",
     "llm": "4",
+    # Plan v4 Layer B / Phase 2 — the deterministic structural decider replaces
+    # the LLM in the Layer-4 slot for attested features, so it maps to layer "4".
+    "structural": "4",
     "abstain": "abstain",
 }
 
@@ -1494,10 +1497,22 @@ def _ensemble_to_legacy_dict(
         # ``structural_remediation_override``: the remediation the gate forced
         # (e.g. "drop"), or None. ``structural_gate_fired``: the rule id
         # ("R-STRUCT") when the env-gated override fired, else None.
-        "structural_role": None,
+        #
+        # Plan v4 Layer B / Phase 2: when the voter's STRUCTURAL rule decided this
+        # verdict (decided_by="structural"), surface the deterministic role here
+        # from ``verdict.final_role`` — the structural decider does NOT run the
+        # post-LLM ``_apply_structural_attestation`` telemetry path (guarded off
+        # for decided_by="structural"), so this adapter is where the structural
+        # role becomes observable. ``structural_unclassifiable`` is True exactly
+        # when the rule fired on a malformed attestation (decided_by="structural"
+        # AND final_role is None → routed to review).
+        "structural_role": (verdict.final_role if verdict.decided_by == "structural" else None),
         "structural_llm_disagreement": None,
         "structural_remediation_override": None,
         "structural_gate_fired": None,
+        "structural_unclassifiable": (
+            verdict.decided_by == "structural" and verdict.final_role is None
+        ),
     }
 
 
@@ -1594,11 +1609,15 @@ def _legacy_adversarial_alone_verdict(
         "would_flag_role_leak_disagreement": None,
         # Issue #501 — M-structure structural keys. Adversarial-only bypass
         # carries no LLM role / contract attestation, so they stay None;
-        # present for sidecar-schema uniformity across all four producers.
+        # present for sidecar-schema uniformity across all producers. Plan v4
+        # Layer B / Phase 2: ``structural_unclassifiable`` is None on this bypass
+        # — an attested feature would route through the voter (the bypass gate
+        # now checks structural inputs), never here.
         "structural_role": None,
         "structural_llm_disagreement": None,
         "structural_remediation_override": None,
         "structural_gate_fired": None,
+        "structural_unclassifiable": None,
     }
 
 
@@ -1681,11 +1700,14 @@ def _legacy_info_verdict(
         # Info-only bypass has no LLM verdict. None for schema uniformity.
         "would_flag_role_leak_disagreement": None,
         # Issue #501 — M-structure structural keys. Info-only bypass carries
-        # no LLM role / attestation; None for schema uniformity.
+        # no LLM role / attestation; None for schema uniformity. Plan v4 Layer B
+        # / Phase 2: structural_unclassifiable is None here (attested features
+        # route through the voter, not this bypass).
         "structural_role": None,
         "structural_llm_disagreement": None,
         "structural_remediation_override": None,
         "structural_gate_fired": None,
+        "structural_unclassifiable": None,
     }
 
 
@@ -1765,11 +1787,14 @@ def _legacy_short_circuit_verdict(feature: str, *, evidence: str) -> dict[str, A
         # Short-circuit bypass has no LLM verdict. None for schema uniformity.
         "would_flag_role_leak_disagreement": None,
         # Issue #501 — M-structure structural keys. Short-circuit bypass
-        # carries no LLM role / attestation; None for schema uniformity.
+        # carries no LLM role / attestation; None for schema uniformity. Plan v4
+        # Layer B / Phase 2: structural_unclassifiable is None here (attested
+        # features route through the voter via the extended bypass gate).
         "structural_role": None,
         "structural_llm_disagreement": None,
         "structural_remediation_override": None,
         "structural_gate_fired": None,
+        "structural_unclassifiable": None,
     }
 
 
@@ -1799,6 +1824,12 @@ def _apply_structural_attestation(
     mutated (the reachable seam is remediation, per §4.1; R1's severity path and
     the byte-identity invariant are undisturbed).
     """
+    if verdict.get("decided_by") == "structural":
+        # Plan v4 Layer B / Phase 2: the voter's STRUCTURAL rule already decided
+        # this verdict from the SAME authored edges (decided_by="structural").
+        # Re-running the post-LLM telemetry/override here would double-apply (and
+        # could re-narrow remediation) — skip it (one decision, one code path).
+        return
     if contract is None or contract.causal_structure is None:
         return
 
@@ -1874,6 +1905,8 @@ def _compose_legacy_verdict(
     n_train_pos: Optional[int] = None,
     layer_1_declared_safe: Optional[bool] = None,
     llm_verdict: Optional["LLMVerdict"] = None,
+    structural_role: Optional["CausalRole"] = None,
+    structural_unclassifiable: bool = False,
 ) -> dict[str, Any]:
     """Compose one legacy verdict dict from the per-source inputs.
 
@@ -1968,7 +2001,14 @@ def _compose_legacy_verdict(
             "pre-classified dicts that bypassed the routing chain."
         )
 
-    if short_circuit_evidence is not None:
+    # Plan v4 Layer B / Phase 2: an attested feature must reach the voter even on
+    # the short-circuit path — its structural role is data-INDEPENDENT, so a
+    # too-few-rows / scoring-error feature still gets its structural decision.
+    if (
+        short_circuit_evidence is not None
+        and structural_role is None
+        and not structural_unclassifiable
+    ):
         return _legacy_short_circuit_verdict(feature, evidence=short_circuit_evidence)
 
     # Materialize once so we can both check truthiness and forward without
@@ -2013,6 +2053,8 @@ def _compose_legacy_verdict(
         and adversarial_input is not None
         and not kg_edges_tuple
         and llm_verdict is None
+        and structural_role is None
+        and not structural_unclassifiable
     ):
         return _legacy_adversarial_alone_verdict(feature, adversarial_input)
 
@@ -2027,6 +2069,8 @@ def _compose_legacy_verdict(
         feature_entity_ids=feature_ids_tuple,
         target_entity_ids=target_ids_tuple,
         llm_verdict=llm_verdict,
+        structural_role=structural_role,
+        structural_unclassifiable=structural_unclassifiable,
     )
     legacy = _ensemble_to_legacy_dict(verdict, adversarial_input=adversarial_input)
 
@@ -2479,6 +2523,8 @@ def _build_verdict(
     voter: Optional["EnsembleVoter"] = None,
     n_train_pos: Optional[int] = None,
     layer_1_declared_safe: bool = False,
+    structural_role: Optional["CausalRole"] = None,
+    structural_unclassifiable: bool = False,
 ) -> dict[str, Any]:
     """Backward-compat wrapper for the legacy Layer 3 verdict builder.
 
@@ -2503,7 +2549,17 @@ def _build_verdict(
     # Degenerate-score case: ``_adversarial_input`` returns severity=info
     # with z_score=None. Route via the bypass info path so the legacy
     # "Adversarial score undefined" evidence is preserved exactly.
-    if adv.get("z_score") is None and adv.get("severity") == "info":
+    # Plan v4 Layer B / Phase 2: a degenerate-score feature that is ALSO attested
+    # must still reach the voter for its (data-independent) structural decision —
+    # gate the info-alone bypass on the absence of structural inputs (mirrors the
+    # _compose_legacy_verdict bypass gates) so _build_verdict callers can't lose
+    # the structural decision either.
+    if (
+        adv.get("z_score") is None
+        and adv.get("severity") == "info"
+        and structural_role is None
+        and not structural_unclassifiable
+    ):
         return _legacy_info_verdict(
             feature,
             adversarial_input=adv,
@@ -2516,6 +2572,8 @@ def _build_verdict(
         adversarial_input=adv,
         n_train_pos=n_train_pos,
         layer_1_declared_safe=layer_1_declared_safe,
+        structural_role=structural_role,
+        structural_unclassifiable=structural_unclassifiable,
     )
 
 
@@ -3276,6 +3334,12 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
     # decide. Set adaptive_layer4_enabled=True to run it as an auditor during the
     # Phase-3 attestation ramp (still audit-only in the voter by default).
     layer4_enabled = bool(state.get("adaptive_layer4_enabled", False))
+    # Plan v4 Layer B / Phase 2 — dark-launch flag (default OFF). When False (the
+    # production default) no structural derivation runs and the new decision
+    # branch is never taken, so the first authored manifest cannot auto-activate
+    # it. Declared on DataPreparerState (extra="ignore" drops undeclared keys on
+    # the model path), so a future Phase-3 ramp can enable it in production.
+    structural_decider_enabled = bool(state.get("adaptive_structural_decider_enabled", False))
 
     l3_candidates = [feat for feat in numeric_candidates if feat not in layer_1_caught]
     # Cheap pre-scan (no permutations): which candidates clear the min-samples
@@ -3343,6 +3407,23 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
         if feat in layer_1_caught:
             continue
 
+        # Plan v4 Layer B / Phase 2: resolve the contract + derive the
+        # deterministic structural role at the TOP of the loop — BEFORE the
+        # short-circuit gates — because the role is data-INDEPENDENT (from
+        # authored edges). A too-few-rows / scoring-error feature WITH an
+        # attestation must still get its structural decision (routed through the
+        # voter by _compose_legacy_verdict). Resolved ONCE here; the per-feature
+        # code below reuses this ``contract`` (the redundant Layer-3 re-lookup
+        # was removed).
+        contract = lookup_feature_contract(feat, data_source=manifest_source)
+        structural_role: Optional[CausalRole] = None
+        structural_unclassifiable = False
+        if structural_decider_enabled:
+            _role_str, _structural_err = derive_structural_role(contract)
+            structural_unclassifiable = _structural_err is not None
+            # extract_role returns exactly the six CausalRole members → cast is sound.
+            structural_role = cast("CausalRole", _role_str) if _role_str is not None else None
+
         col = train_df[feat]
         mask = col.notna() & binary_label_mask
         if mask.sum() < MIN_LAYER3_SAMPLES:
@@ -3352,6 +3433,8 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
                 short_circuit_evidence=(
                     f"Skipped: only {int(mask.sum())} non-null rows (need ≥{MIN_LAYER3_SAMPLES})"
                 ),
+                structural_role=structural_role,
+                structural_unclassifiable=structural_unclassifiable,
             )
             # Issue #501 — short-circuit bypasses never carry an LLM role
             # so evaluate_role_vs_statistical_leak always returns None here.
@@ -3375,6 +3458,8 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
                 feat,
                 voter=voter,
                 short_circuit_evidence=f"Adversarial scoring error: {score}",
+                structural_role=structural_role,
+                structural_unclassifiable=structural_unclassifiable,
             )
             # Issue #501 — same schema-uniformity assignment as above.
             # ``evaluate_role_vs_statistical_leak`` imported once at node entry.
@@ -3389,7 +3474,6 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
             # None would mean logic drift — skip rather than crash.
             continue
 
-        contract = lookup_feature_contract(feat, data_source=manifest_source)
         edges, feat_ids = _kg_inputs(feat, contract)
         # Plan v4 §2 G3 wiring: route severity classification through
         # ``hblp_classify`` by threading cohort metadata into both the
@@ -3483,8 +3567,17 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
         # confident set + the deterministic voter decide. When on (the Phase-3
         # ramp auditor) the verdict is STILL audit-only in the voter unless
         # ADAPTIVE_LAYER4_LLM_DECIDES=1 (ensemble_voter._llm_decides_enabled).
-        layer_4_should_fire = layer4_enabled and (
-            adv_severity_pre == "moderate" or (adv_severity_pre == "high" and layer_1_declared_safe)
+        # Plan v4 Layer B / Phase 2: skip the LLM entirely for attested features
+        # — extract_role decides via the voter, so the LLM is never the decider
+        # (nor even called) for a feature carrying a structural attestation.
+        layer_4_should_fire = (
+            layer4_enabled
+            and structural_role is None
+            and not structural_unclassifiable
+            and (
+                adv_severity_pre == "moderate"
+                or (adv_severity_pre == "high" and layer_1_declared_safe)
+            )
         )
         if layer_4_classifier is not None and layer_4_should_fire:
             try:
@@ -3522,6 +3615,8 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
             n_train_pos=n_train_pos,
             layer_1_declared_safe=layer_1_declared_safe,
             llm_verdict=llm_verdict,
+            structural_role=structural_role,
+            structural_unclassifiable=structural_unclassifiable,
         )
         # Issue #196 Phase 3.3 — tag ``decided_by="adversarial_ablation"`` so
         # audit-trail consumers can distinguish "permutation caught it" from

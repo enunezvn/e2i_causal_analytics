@@ -114,6 +114,14 @@ class DataPreparerState(BaseAgentSchema):
     adaptive_flagged_features: Optional[List[str]] = None  # features at z > 5σ above null
     adaptive_n_permutations: Optional[int] = None  # override default permutation count
     adaptive_seed: Optional[int] = None  # override default RNG seed
+    # Plan v4 Layer B / Phase 2 — dark-launch flag for the deterministic
+    # structural role decider. DEFAULT None (read as False) → the structural
+    # decision path is NEVER taken in production until an operator opts in.
+    # Declared (not relied on via ``extra``) because BaseAgentSchema is
+    # ``extra="ignore"``: an undeclared key set on the state MODEL would be
+    # silently dropped, so a future Phase-3 ramp could not enable it. See
+    # .claude/plans/layer4-phase2-layerB-20260528.md §2.5.
+    adaptive_structural_decider_enabled: Optional[bool] = None
 
     # Phase 1 of causal-role propagation (Issue #237 reframe). Typed
     # list of ``RoleAttribution`` rows (see
