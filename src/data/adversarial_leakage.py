@@ -22,7 +22,7 @@ from __future__ import annotations
 import math
 import zlib
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -529,4 +529,6 @@ def fdr_confident_set(
     bh = benjamini_hochberg(p_values, q, n_permutations=n_permutations)
     eff = np.asarray(list(effect_sizes), dtype=float)
     meaningful = np.isfinite(eff) & (np.abs(eff) > float(effect_floor))
-    return np.asarray(bh, dtype=bool) & meaningful
+    # numpy's ``&`` operator is typed to return ``Any``; cast back to the
+    # declared ndarray so the Any does not leak out (mypy no-any-return).
+    return cast("np.ndarray", np.asarray(bh, dtype=bool) & meaningful)
