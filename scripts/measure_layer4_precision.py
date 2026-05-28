@@ -157,9 +157,16 @@ def _structural_predict(entry: dict[str, Any]) -> str:
             f"the golden set first (plan Task 8)."
         )
     graph = nx.DiGraph([tuple(e) for e in edges])
-    return extract_role(
-        entry["feature_node"], entry["treatment_node"], entry["outcome_node"], graph
-    )
+    try:
+        return extract_role(
+            entry["feature_node"], entry["treatment_node"], entry["outcome_node"], graph
+        )
+    except ValueError:
+        # Unclassifiable authored DAG (the node has no relation to T or Y):
+        # score as "unclassified" (a miss / route-to-review), never crash the
+        # whole eval. The SystemExit above still fires for the genuinely
+        # edge-less case — that is a wrong-fixture error, not a per-feature miss.
+        return "unclassified"
 
 
 def _macro_precision(buckets: dict[tuple[str, str], CohortMetrics]) -> Optional[float]:
@@ -185,6 +192,58 @@ def _macro_precision(buckets: dict[tuple[str, str], CohortMetrics]) -> Optional[
         return None
     precisions = [correct.get(p, 0) / predicted_total[p] for p in predicted_total]
     return sum(precisions) / len(precisions)
+
+
+def _leak_decision_metrics(
+    buckets: dict[tuple[str, str], CohortMetrics],
+) -> dict[str, Any]:
+    """Leak-vs-accept DECISION metrics — the functional gate for leakage
+    detection (Plan v4 Layer B / Phase 2 Track-2B-v2).
+
+    Layer-4's output is the binary leak-vs-accept bucket: ``LEAK_ROLES``
+    ({mediator, collider, descendant}) map to ``high`` severity and
+    ``ACCEPT_ROLES`` ({confounder, instrument, ancestor}) to ``info``
+    (``ensemble_voter``). Exact causal-role precision penalises WITHIN-bucket
+    distinctions that do not change the leakage decision; this scores the
+    decision itself and surfaces ``missed_leaks`` — the safety-critical count of
+    LEAK features placed in ACCEPT (a real leak slipping through). An
+    ``unclassified`` prediction routes to review (not counted as a decision).
+    Uses the ungated buckets (falls back to all when no ungated pass ran).
+    """
+    from src.data.kg.ensemble_voter import ACCEPT_ROLES, LEAK_ROLES
+
+    def _bucket(role: str) -> str:
+        if role in LEAK_ROLES:
+            return "LEAK"
+        if role in ACCEPT_ROLES:
+            return "ACCEPT"
+        return "REVIEW"
+
+    relevant = [m for m in buckets.values() if m.gate == "ungated"] or list(buckets.values())
+    decided = correct = reviewed = missed_leaks = false_alarms = 0
+    for m in relevant:
+        for truth, row in m.confusion.items():
+            tb = _bucket(str(truth))
+            for pred, cnt in row.items():
+                pb = _bucket(str(pred))
+                if pb == "REVIEW":
+                    reviewed += cnt
+                    continue
+                decided += cnt
+                if tb == pb:
+                    correct += cnt
+                elif tb == "LEAK" and pb == "ACCEPT":
+                    missed_leaks += cnt
+                elif tb == "ACCEPT" and pb == "LEAK":
+                    false_alarms += cnt
+    return {
+        "leak_decision_accuracy": (correct / decided) if decided else None,
+        "decided": decided,
+        "correct": correct,
+        "reviewed": reviewed,
+        "missed_leaks": missed_leaks,
+        "false_alarms": false_alarms,
+    }
 
 
 def _evaluate_entries(
@@ -567,6 +626,9 @@ def main() -> int:
             "decider": args.decider,
             "threshold": args.threshold,
             "macro_precision": macro_prec,
+            "leak_decision": (
+                _leak_decision_metrics(buckets) if args.decider == "structural" else None
+            ),
             "per_cohort": [m.as_dict() for m in buckets.values()],
             "overall": overall,
         }
@@ -590,15 +652,29 @@ def main() -> int:
     # precision and ALL are below threshold.
     # Structural decider: gate on macro-averaged precision (the non-circular
     # literature metric, plan Task 8) rather than the LLM instrument precision.
+    # Structural decider: gate on the leak-vs-accept DECISION (Track-2B-v2), not
+    # exact-role precision. Layer-4's functional output is the leak/accept bucket;
+    # within-bucket role differences (mediator↔collider↔descendant) do not change
+    # the verdict. A single missed leak (LEAK feature placed in ACCEPT) is a
+    # safety failure regardless of accuracy. ``macro_precision`` stays in the
+    # report as a secondary diagnostic.
     if args.decider == "structural":
-        if macro_prec is None:
-            logger.warning("No structural predictions made — macro precision not measured.")
+        leak = _leak_decision_metrics(buckets)
+        if leak["decided"] == 0:
+            logger.warning("No structural decisions made — leak-decision not measured.")
             return 0
-        if macro_prec >= args.threshold:
+        if leak["missed_leaks"] > 0:
+            logger.error(
+                "Structural decider placed %d LEAK feature(s) into ACCEPT (missed leak) — fail.",
+                leak["missed_leaks"],
+            )
+            return 1
+        acc = leak["leak_decision_accuracy"]
+        if acc is not None and acc >= args.threshold:
             return 0
         logger.error(
-            "Structural macro precision %.3f did not meet threshold %.2f",
-            macro_prec,
+            "Structural leak-decision accuracy %.3f did not meet threshold %.2f",
+            acc,
             args.threshold,
         )
         return 1

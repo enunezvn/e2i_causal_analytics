@@ -71,6 +71,34 @@ def test_extract_role_descendant() -> None:
     assert extract_role("D", "T", "Y", G) == "descendant"
 
 
+def test_extract_role_outcome_descendant_is_descendant_not_collider() -> None:
+    """On {T→Y→D}, D is purely downstream of the OUTCOME — every T→D path goes
+    through Y, so it is an outcome-echo (the literature golden set's
+    ``descendant`` usage), NOT a bias-inducing ``collider``. Still a leak-role
+    (outcome leakage), but the role is descendant. Refinement of Step 1."""
+    G = nx.DiGraph()
+    G.add_edges_from([("T", "Y"), ("Y", "D")])
+    assert extract_role("D", "T", "Y", G) == "descendant"
+
+
+def test_extract_role_true_collider_keeps_separate_treatment_channel() -> None:
+    """A genuine collider needs a T→V path NOT through Y. With {T→Y, Y→V, T→V}
+    the direct T→V survives removing Y, so V stays ``collider`` even though it is
+    also downstream of Y (conditioning still opens a non-causal path)."""
+    G = nx.DiGraph()
+    G.add_edges_from([("T", "Y"), ("Y", "V"), ("T", "V")])
+    assert extract_role("V", "T", "Y", G) == "collider"
+
+
+def test_extract_role_outcome_descendant_via_mediator_channel_is_collider() -> None:
+    """A T-channel through a mediator M (not through Y) plus a Y→V channel is
+    still a collider: removing Y leaves T→M→V, a separate channel. {T→Y, T→M,
+    M→V, Y→V}."""
+    G = nx.DiGraph()
+    G.add_edges_from([("T", "Y"), ("T", "M"), ("M", "V"), ("Y", "V")])
+    assert extract_role("V", "T", "Y", G) == "collider"
+
+
 def test_extract_role_instrument() -> None:
     """On {Z→T, T→Y} (no Z→Y, no common ancestor of Z and Y), Z is an instrument.
 

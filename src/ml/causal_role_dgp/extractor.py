@@ -112,9 +112,25 @@ def extract_role(
             six roles (i.e., it has no relation to either ``T`` or
             ``Y`` in the DAG). This signals a malformed scenario.
     """
-    # Step 1: common descendant of T and Y → collider
+    # Step 1: common descendant of T and Y. A genuine *collider* has a T→node
+    # path that does NOT pass through Y (conditioning on it opens a non-causal
+    # T–Y path). If EVERY T→node path goes through Y — i.e. removing Y
+    # disconnects node from T — then node is purely downstream of the OUTCOME:
+    # an outcome-echo, classified ``descendant`` (matching the literature golden
+    # set's usage, and still a leak-role: outcome leakage) rather than a
+    # bias-inducing ``collider``. Standard causal theory: a common descendant of
+    # T and Y reachable from T only through Y is a descendant of Y, not a
+    # backdoor-opening collider (Greenland-Pearl-Robins 1999).
     if (node in nx.descendants(graph, treatment)) and (node in nx.descendants(graph, outcome)):
-        return "collider"
+        _graph_no_y = graph.copy()
+        _graph_no_y.remove_node(outcome)
+        if (
+            treatment in _graph_no_y
+            and node in _graph_no_y
+            and nx.has_path(_graph_no_y, treatment, node)
+        ):
+            return "collider"
+        return "descendant"
 
     # Step 1.5 (Issue #501): confounder-collider M-structure T → V ← U → Y
     # (independent second parent U into both V and Y) → collider. Placed
