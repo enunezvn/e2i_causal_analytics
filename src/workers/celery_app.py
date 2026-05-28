@@ -146,6 +146,10 @@ celery_app.conf.task_routes = {
     "src.tasks.hyperparameter_tune": {"queue": "ml"},
     "src.tasks.train_*": {"queue": "ml"},
     "src.tasks.fit_*": {"queue": "ml"},
+    # Live retraining runs a full MLFoundationPipeline (scope→prep→train→deploy),
+    # so it belongs on worker_heavy's `ml` queue, not the default queue. The
+    # name doesn't match the train_*/fit_* globs, so route it explicitly.
+    "src.tasks.execute_model_retraining": {"queue": "ml"},
     # Digital twin generation
     "src.tasks.generate_twins": {"queue": "twins"},
     "src.tasks.twin.*": {"queue": "twins"},
@@ -187,9 +191,12 @@ celery_app.conf.task_routes = {
 # =============================================================================
 
 celery_app.conf.beat_schedule = {
-    # Drift monitoring every 6 hours
+    # Drift monitoring every 6 hours. Targets check_all_production_models (the
+    # real per-model drift sweep in src/tasks/drift_monitoring_tasks.py); the
+    # prior "src.tasks.monitor_model_drift" was a dangling ref to a task that
+    # never existed and would crash the scheduler when this entry fired.
     "monitor-drift": {
-        "task": "src.tasks.monitor_model_drift",
+        "task": "src.tasks.check_all_production_models",
         "schedule": 21600.0,  # 6 hours
         "options": {"queue": "analytics"},
     },

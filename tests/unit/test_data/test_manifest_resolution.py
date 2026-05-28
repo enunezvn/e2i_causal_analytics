@@ -44,6 +44,25 @@ def test_autodetect_none_data_source() -> None:
     assert autodetect_manifest_source(None) == set()
 
 
+def test_autodetect_non_str_data_source_is_safe() -> None:
+    # MLFoundationPipeline accepts a dict data_source for file_dir cohorts
+    # ({"type": "file_dir", "path": ...}). The resolver must not crash on it
+    # (Path(dict) would raise) — autodetect simply yields no segment match.
+    assert autodetect_manifest_source({"type": "file_dir", "path": "data/rwd/optum/x"}) == set()
+
+
+def test_resolve_dict_data_source_with_override() -> None:
+    # A file_dir dict data_source + explicit override (the live-trigger path)
+    # must resolve to the override without attempting path autodetection.
+    ds = {"type": "file_dir", "path": "data/rwd/optum/initiation"}
+    assert resolve_manifest_source(ds, "optum") == "optum"
+
+
+def test_resolve_dict_data_source_without_override_is_unset() -> None:
+    ds = {"type": "file_dir", "path": "data/rwd/optum/initiation"}
+    assert resolve_manifest_source(ds, None) is None
+
+
 def test_resolve_autodetects_optum() -> None:
     assert resolve_manifest_source("data/rwd/optum/initiation", None) == "optum"
 

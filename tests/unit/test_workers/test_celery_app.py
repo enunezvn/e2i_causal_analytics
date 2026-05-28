@@ -277,7 +277,11 @@ class TestBeatSchedule:
 
         schedule = celery_app.conf.beat_schedule.get("monitor-drift")
         assert schedule is not None
-        assert schedule["task"] == "src.tasks.monitor_model_drift"
+        # Targets the real drift-sweep task. The prior "src.tasks.monitor_model_drift"
+        # was a dangling ref to a task that never existed (it would crash beat at
+        # fire time); the registered sweep is check_all_production_models. See
+        # test_celery_retraining_wiring.py for the registration guard.
+        assert schedule["task"] == "src.tasks.check_all_production_models"
         assert schedule["schedule"] == 21600.0  # 6 hours
         assert schedule["options"]["queue"] == "analytics"
 

@@ -701,6 +701,151 @@ def evaluate_retraining_need(
     return run_async(execute_evaluation())  # type: ignore[no-any-return]
 
 
+def _cohort_input_from_training_config(training_config: Dict[str, Any]) -> Dict[str, Any]:
+    """Build the ``MLFoundationPipeline.run`` input_data from a retraining
+    contract.
+
+    A live retrain must name *which* committed cohort batch/table to retrain on
+    (``data_source``) and *what* to predict (``target_outcome``). Both are
+    required — fail loud rather than let a retrain silently run against the
+    wrong (or no) cohort. ``feature_manifest_source`` (resolved upstream from
+    the cohort identity) opts the run into Layer-5 manifest contracts.
+    """
+    data_source = training_config.get("data_source")
+    if not data_source:
+        raise ValueError(
+            "training_config is missing 'data_source' — a live retrain must name "
+            "the committed cohort batch/table to retrain on (no on-demand cohort "
+            "assembly exists). Pass it via the trigger's cohort contract."
+        )
+    target_outcome = training_config.get("target_outcome")
+    if not target_outcome:
+        raise ValueError(
+            "training_config is missing 'target_outcome' — a live retrain must "
+            "name the prediction target column."
+        )
+
+    input_data: Dict[str, Any] = {
+        "problem_description": (
+            training_config.get("problem_description") or f"Retrain model on cohort {data_source}"
+        ),
+        "business_objective": (
+            training_config.get("business_objective") or "Triggered model refresh (drift/manual)"
+        ),
+        "target_outcome": target_outcome,
+        "data_source": data_source,
+    }
+    # Optional pass-through: brand context, the Layer-5 manifest opt-in, and the
+    # deployment target. feature_manifest_source flows into scope_spec via the
+    # pipeline's scope stage (Phase B), engaging Layer-1 contracts + #544.
+    for opt in ("brand", "feature_manifest_source", "target_environment"):
+        if training_config.get(opt) is not None:
+            input_data[opt] = training_config[opt]
+    return input_data
+
+
+def _extract_validation_auc(result: Any) -> Optional[float]:
+    """Return the real validation AUC the pipeline produced, or ``None``.
+
+    Reads ``result.training_result['validation_metrics']`` (roc_auc / auc_roc /
+    auc). ``None`` means the pipeline produced no certifiable metric — the
+    caller MUST fail closed rather than synthesize a placeholder.
+    """
+    training_result = getattr(result, "training_result", None) or {}
+    metrics = training_result.get("validation_metrics") or {}
+    for key in ("roc_auc", "auc_roc", "auc", "val_auc"):
+        val = metrics.get(key)
+        if isinstance(val, (int, float)) and not isinstance(val, bool):
+            return float(val)
+    return None
+
+
+async def _execute_real_retraining(
+    retraining_id: str,
+    model_version: str,
+    new_version: str,
+    training_config: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Run the real ``MLFoundationPipeline`` for a retraining job and persist the
+    REAL outcome.
+
+    Fails closed: any path that does not yield a certifiable validation metric
+    (missing cohort identity, pipeline exception, QC-gate halt, or a completed
+    run with no metric) marks the job ``failed`` and writes NO performance value.
+    This replaces the Phase-14 ``performance_after = 0.85  # Simulated`` stub —
+    a fake metric must never reach ``ml_retraining_history`` (or the monitoring
+    API that surfaces it). The deploy/gate decision (incl. the Layer-4 leakage /
+    AUC gates) is enforced inside the pipeline's model_deployer stage.
+    """
+    from src.repositories.drift_monitoring import RetrainingHistoryRepository
+    from src.services.retraining_trigger import get_retraining_trigger_service
+
+    repo = RetrainingHistoryRepository()
+    service = get_retraining_trigger_service()
+
+    async def _mark_failed(reason: str) -> Dict[str, Any]:
+        logger.error(f"Retraining {retraining_id} failed closed: {reason}")
+        try:
+            await repo.update(retraining_id, {"status": "failed", "error_message": reason})
+        except Exception as e:  # noqa: BLE001 — never mask the original failure
+            logger.error(f"Also failed to mark retraining {retraining_id} failed: {e}")
+        return {
+            "status": "failed",
+            "retraining_id": retraining_id,
+            "old_version": model_version,
+            "new_version": new_version,
+            "error": reason,
+        }
+
+    # Resolve the cohort to retrain on BEFORE touching state — fail loud if the
+    # contract lacks the identity (the pipeline is never invoked in that case).
+    try:
+        pipeline_input = _cohort_input_from_training_config(training_config)
+    except ValueError as e:
+        return await _mark_failed(str(e))
+
+    try:
+        await repo.update(retraining_id, {"status": "training"})
+        logger.info(
+            f"Retraining {retraining_id}: running MLFoundationPipeline on "
+            f"data_source={pipeline_input['data_source']!r} "
+            f"(manifest={pipeline_input.get('feature_manifest_source')!r})"
+        )
+        from src.agents.tier_0.pipeline import MLFoundationPipeline
+
+        pipeline = MLFoundationPipeline()
+        result = await pipeline.run(pipeline_input)
+    except Exception as e:  # noqa: BLE001 — convert any failure into fail-closed
+        return await _mark_failed(f"pipeline raised {type(e).__name__}: {e}")
+
+    status = getattr(result, "status", "failed")
+    performance_after = _extract_validation_auc(result)
+    if status != "completed" or performance_after is None:
+        return await _mark_failed(
+            f"pipeline status={status!r}, validation_auc={performance_after!r} — no "
+            "certifiable metric produced; job marked failed (no metric written)"
+        )
+
+    # Real metric in hand — record completion. The pipeline already gated
+    # deployment on success_criteria_met + the regulatory AUC/leakage gate.
+    await service.complete_retraining(
+        job_id=retraining_id,
+        performance_after=performance_after,
+        success=True,
+    )
+    deployment = getattr(result, "deployment_result", None) or {}
+    return {
+        "status": "completed",
+        "retraining_id": retraining_id,
+        "old_version": model_version,
+        "new_version": new_version,
+        "performance_after": performance_after,
+        "mlflow_model_version": deployment.get("model_version"),
+        "deployed": bool(deployment.get("deployment_successful", deployment.get("model_version"))),
+        "message": f"Model {new_version} retrained; validation AUC={performance_after:.4f}",
+    }
+
+
 @celery_app.task(bind=True, name="src.tasks.execute_model_retraining")
 def execute_model_retraining(
     self,
@@ -709,93 +854,29 @@ def execute_model_retraining(
     new_version: str,
     training_config: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """Execute model retraining job.
+    """Execute a model retraining job by running the REAL MLFoundationPipeline.
 
-    This is a placeholder that integrates with the Model Trainer agent.
-    In production, this would:
-    1. Prepare training data
-    2. Run hyperparameter tuning
-    3. Train the model
-    4. Validate performance
-    5. Register new model version
+    Loads the committed cohort named in ``training_config`` (data_source +
+    target_outcome + optional feature_manifest_source), runs scope → data-prep
+    (QC gate) → train → deploy (gated), and records the real validation metric.
+    Fails closed — never writes a simulated metric. Routed to the ``ml`` queue
+    (worker_heavy) since it runs a full training pipeline.
 
     Args:
         retraining_id: Retraining history record ID
         model_version: Original model version
         new_version: New model version to create
-        training_config: Training configuration
+        training_config: Training contract incl. the cohort identity
 
     Returns:
-        Retraining results
+        Retraining results (real metric on success; failure reason otherwise)
     """
     logger.info(
         f"Starting model retraining: {model_version} -> {new_version}, task {self.request.id}"
     )
-
-    async def execute_retraining():
-        from src.repositories.drift_monitoring import RetrainingHistoryRepository
-        from src.services.retraining_trigger import get_retraining_trigger_service
-
-        repo = RetrainingHistoryRepository()
-        service = get_retraining_trigger_service()
-
-        try:
-            # Update status to training
-            await repo.update(retraining_id, {"status": "training"})
-
-            # NOTE: This is a placeholder for actual model training.
-            # In production, this would:
-            # 1. Load training data using the Model Trainer agent
-            # 2. Prepare features via Feature Analyzer
-            # 3. Train model with hyperparameter tuning
-            # 4. Evaluate on holdout set
-            # 5. Register with MLflow
-
-            logger.info(f"Training config: {training_config}")
-
-            # Simulate training (placeholder)
-            import asyncio
-
-            await asyncio.sleep(1)  # Would be actual training time
-
-            # For now, simulate a successful retraining with slight improvement
-            performance_after = 0.85  # Simulated performance
-
-            # Complete the retraining
-            await service.complete_retraining(
-                job_id=retraining_id,
-                performance_after=performance_after,
-                success=True,
-            )
-
-            return {
-                "status": "completed",
-                "retraining_id": retraining_id,
-                "old_version": model_version,
-                "new_version": new_version,
-                "performance_after": performance_after,
-                "message": f"Model {new_version} trained successfully",
-            }
-
-        except Exception as e:
-            logger.error(f"Model retraining failed: {e}")
-
-            # Mark as failed
-            await repo.update(
-                retraining_id,
-                {
-                    "status": "failed",
-                    "error_message": str(e),
-                },
-            )
-
-            return {
-                "status": "failed",
-                "retraining_id": retraining_id,
-                "error": str(e),
-            }
-
-    return run_async(execute_retraining())  # type: ignore[no-any-return]
+    return run_async(  # type: ignore[no-any-return]
+        _execute_real_retraining(retraining_id, model_version, new_version, training_config)
+    )
 
 
 @celery_app.task(bind=True, name="src.tasks.check_retraining_for_all_models")

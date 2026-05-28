@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -39,16 +40,18 @@ def known_manifest_sources() -> tuple[str, ...]:
     return tuple(MANIFEST_SOURCES.keys())
 
 
-def autodetect_manifest_source(data_source: str | None) -> set[str]:
+def autodetect_manifest_source(data_source: str | dict[str, Any] | None) -> set[str]:
     """Return the registered manifest sources that appear as path segments in
     ``data_source`` (case-insensitive).
 
     Returns the full *set* of matches (not the first) so the caller can detect
     ambiguity rather than silently pick one by iteration order. A ``None`` /
-    empty ``data_source``, or a bare table name with no recognizable segment,
-    yields the empty set.
+    empty ``data_source``, a non-string ``data_source`` (e.g. the
+    ``{"type": "file_dir", "path": ...}`` dict MLFoundationPipeline accepts for
+    file batches), or a bare table name with no recognizable segment yields the
+    empty set — path autodetection only applies to string paths.
     """
-    if not data_source:
+    if not data_source or not isinstance(data_source, str):
         return set()
     known = set(known_manifest_sources())
     parts = {p.lower() for p in Path(data_source).parts}
@@ -56,7 +59,7 @@ def autodetect_manifest_source(data_source: str | None) -> set[str]:
 
 
 def resolve_manifest_source(
-    data_source: str | None,
+    data_source: str | dict[str, Any] | None,
     override: str | None = None,
 ) -> str | None:
     """Resolve which cohort manifest Layer 5 should consult on this run.

@@ -271,6 +271,8 @@ class RetrainingTriggerService:
         reason: TriggerReason,
         config_overrides: Optional[Dict[str, Any]] = None,
         approved_by: Optional[str] = None,
+        *,
+        cohort: Optional[Dict[str, Any]] = None,
     ) -> RetrainingJob:
         """
         Trigger model retraining.
@@ -282,6 +284,11 @@ class RetrainingTriggerService:
             reason: Reason for triggering retraining
             config_overrides: Optional training config overrides
             approved_by: User who approved (if manual approval)
+            cohort: Cohort identity for a real retrain — ``data_source`` (the
+                committed cohort batch/table), ``target_outcome``, and optionally
+                ``brand`` / ``feature_manifest_source``. Threaded into
+                training_config so ``execute_model_retraining`` can run the real
+                MLFoundationPipeline. Without it the queued task fails closed.
 
         Returns:
             Created retraining job
@@ -312,6 +319,9 @@ class RetrainingTriggerService:
 
         # Build training config
         training_config = self._build_training_config(reason, drift_score, performance_before)
+        # Cohort identity → reaches execute_model_retraining → MLFoundationPipeline.
+        if cohort:
+            training_config.update({k: v for k, v in cohort.items() if v is not None})
         if config_overrides:
             training_config.update(config_overrides)
         training_config["approved_by"] = approved_by
