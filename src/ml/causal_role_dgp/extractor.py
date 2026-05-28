@@ -14,7 +14,12 @@ validation.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Optional
+
 import networkx as nx
+
+if TYPE_CHECKING:
+    from src.data.feature_contract import FeatureContract
 
 
 def _is_confounder_collider_m_structure(
@@ -151,3 +156,33 @@ def extract_role(
         f"unclassified node {node!r} under (T={treatment!r}, Y={outcome!r}); "
         f"no role applies — this signals a malformed scenario DAG."
     )
+
+
+def derive_structural_role(
+    contract: Optional[FeatureContract],
+) -> tuple[Optional[str], Optional[str]]:
+    """Derive the deterministic causal role from a feature's authored
+    ``CausalStructureAttestation`` edges via :func:`extract_role`.
+
+    Returns ``(role, error)``:
+
+    * ``(role, None)`` — attestation present and classifiable;
+    * ``(None, None)`` — contract is ``None`` or has no ``causal_structure``
+      (un-attested — the common case, and the dark-launch default);
+    * ``(None, "<message>")`` — ``extract_role`` raised (malformed/unclassifiable
+      authored DAG); the caller routes the feature to review.
+
+    Pure, deterministic, zero LLM cost. This is the single code path shared by the
+    pre-LLM structural decider (the ``EnsembleVoter`` wiring) AND the post-LLM
+    telemetry helper ``_apply_structural_attestation`` — graph-building lives here,
+    not in two places.
+    """
+    if contract is None or contract.causal_structure is None:
+        return None, None
+    att = contract.causal_structure
+    try:
+        graph = nx.DiGraph(list(att.edges))
+        role = extract_role(att.feature_node, att.treatment_node, att.outcome_node, graph)
+        return role, None
+    except Exception as exc:  # noqa: BLE001 — author DAG errors must never crash the node
+        return None, str(exc)

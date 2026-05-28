@@ -424,3 +424,60 @@ def test_scenario_dag_contains_T_and_Y() -> None:
         s = build_scenario(name)
         assert s.treatment_node in s.dag.nodes, f"{name} missing T node"
         assert s.outcome_node in s.dag.nodes, f"{name} missing Y node"
+
+
+# ---------------------------------------------------------------------------
+# Plan v4 Layer B / Phase 2 — pure ``derive_structural_role`` helper (Task 1).
+# Lifts the graph-building + ``extract_role`` call out of the post-LLM telemetry
+# helper into a pure, deterministic, zero-LLM-cost function the decider shares.
+# ---------------------------------------------------------------------------
+from src.data.feature_contract import CausalStructureAttestation, FeatureContract, KnowableAt
+from src.ml.causal_role_dgp.extractor import derive_structural_role
+
+
+def _contract_with(edges, *, role=None):
+    return FeatureContract(
+        name="V",
+        knowable_at=KnowableAt(reference="index_date"),
+        source="derived",
+        causal_role=role,
+        causal_structure=CausalStructureAttestation(
+            treatment_node="T", outcome_node="Y", feature_node="V", edges=edges
+        ),
+    )
+
+
+def test_derive_structural_role_confounder():
+    role, err = derive_structural_role(_contract_with((("V", "T"), ("V", "Y"))))
+    assert role == "confounder" and err is None
+
+
+def test_derive_structural_role_collider():
+    role, err = derive_structural_role(_contract_with((("T", "V"), ("Y", "V"))))
+    assert role == "collider" and err is None
+
+
+def test_derive_structural_role_none_when_unattested():
+    role, err = derive_structural_role(
+        FeatureContract(name="V", knowable_at=KnowableAt(reference="index_date"), source="demo")
+    )
+    assert role is None and err is None
+
+
+def test_derive_structural_role_returns_error_on_unclassifiable():
+    # T and Y ARE in the graph, but V has no classifiable relation to either →
+    # extract_role's own ValueError ("unclassified node ...") fires. (The plan's
+    # original fixture ``(("V","Z"),)`` instead omits T/Y entirely → a networkx
+    # "node not in digraph" error whose message lacks "unclassified"; that path
+    # is covered by the next test.)
+    role, err = derive_structural_role(_contract_with((("T", "Y"), ("V", "Q"))))
+    assert role is None
+    assert err is not None and "unclassified" in err.lower()
+
+
+def test_derive_structural_role_captures_malformed_graph_error():
+    # Edges omit the declared T/Y nodes (an author typo) → networkx raises before
+    # extract_role can classify. derive_structural_role must CAPTURE it as
+    # (None, message) and never crash the calling node.
+    role, err = derive_structural_role(_contract_with((("V", "Z"),)))
+    assert role is None and err is not None

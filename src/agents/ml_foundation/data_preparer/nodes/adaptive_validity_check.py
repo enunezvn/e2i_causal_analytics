@@ -113,6 +113,7 @@ from src.data.manifests import (
     SYNTHETIC_FORBIDDEN_AS_FEATURES,
     lookup_feature_contract,
 )
+from src.ml.causal_role_dgp.extractor import derive_structural_role
 
 # ``EnsembleVoter`` and ``EnsembleVerdict`` are LAZY-imported below to
 # avoid triggering ``src.data.kg.__init__`` at module-import time. The
@@ -1801,31 +1802,22 @@ def _apply_structural_attestation(
     if contract is None or contract.causal_structure is None:
         return
 
-    attestation = contract.causal_structure
-    # Build the authored DAG fragment and derive the structural role with the
-    # M-structure-extended extractor (deterministic, zero LLM cost).
-    import networkx as nx
-
+    # Derive the structural role from the authored DAG fragment via the shared
+    # pure helper (deterministic, zero LLM cost) — the SAME code path the pre-LLM
+    # decider uses, so graph-building lives in one place. ``contract`` is non-None
+    # and carries ``causal_structure`` here (guarded above).
     from src.data.kg.ensemble_voter import (
         apply_structural_remediation_gate,
         structural_gate_enabled,
     )
-    from src.ml.causal_role_dgp.extractor import extract_role
 
-    try:
-        graph = nx.DiGraph(list(attestation.edges))
-        structural_role = extract_role(
-            attestation.feature_node,
-            attestation.treatment_node,
-            attestation.outcome_node,
-            graph,
-        )
-    except Exception as exc:  # noqa: BLE001 - attestation is author data; never crash the node
+    structural_role, structural_err = derive_structural_role(contract)
+    if structural_err is not None:
         logger.warning(
             "adaptive_validity_check: structural attestation for %r could not be "
             "classified (%s); skipping structural gate",
             verdict.get("feature"),
-            exc,
+            structural_err,
         )
         return
 
