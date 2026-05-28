@@ -182,6 +182,28 @@ def _evaluator_gate_enabled() -> bool:
     return os.environ.get(EVALUATOR_GATE_ENABLED_ENV) == "1"
 
 
+# Plan v4 Phase 1 — env switch for the Layer-4 LLM *decides* path. The LLM
+# causal-role classifier is unreliable on the ambiguous band (#242: single
+# Sonnet 0.633 on hard roles, 30-40% correlated failure that ensembling did
+# not fix), so by DEFAULT it is demoted to AUDIT-ONLY: its verdict is recorded
+# for the audit trail but never sets the final severity/remediation — the
+# decision falls through to the deterministic rules (KG-only / adversarial /
+# abstain). This generalizes the issue-#212 cap (which only audit-capped the
+# weak-effect case) to ALL cases. Setting the var to the literal "1" restores
+# the legacy decides path (decided_by="llm") for the Phase-3 attestation ramp
+# or back-compat. Read at call time so unset → next invocation reverts.
+LAYER4_LLM_DECIDES_ENV = "ADAPTIVE_LAYER4_LLM_DECIDES"
+
+
+def _llm_decides_enabled() -> bool:
+    """True iff the Layer-4 LLM is allowed to DECIDE (env == "1").
+
+    Default OFF → the LLM is audit-only: it never sets ``decided_by="llm"``.
+    Any value other than the exact string ``"1"`` leaves it audit-only.
+    """
+    return os.environ.get(LAYER4_LLM_DECIDES_ENV) == "1"
+
+
 # KG predicates we recognise as drug→disease "treats" evidence
 # (Open Targets) and as taxonomic isa (UMLS relations). Stored as
 # lowercase for case-insensitive matching at classification time.
@@ -927,8 +949,11 @@ class EnsembleVoter:
         # `llm_verdict` for valid roles, or None if the role was outside
         # the supported vocabulary; the original `llm_verdict` is still
         # carried into ``llm_input`` so the audit trail records what
-        # was actually passed in.
-        if sanitised_llm is not None:
+        # was actually passed in. Plan v4 Phase 1: this DECIDES path (incl. the
+        # KG-contradicts-LLM abstain) runs ONLY when the LLM is explicitly
+        # allowed to decide. By default the LLM is audit-only — the elif branch
+        # below records its verdict without deciding (see _llm_decides_enabled).
+        if sanitised_llm is not None and _llm_decides_enabled():
             if _kg_contradicts_llm(kg_signal, sanitised_llm.causal_role):
                 evidence.append(
                     f"KG signal {kg_signal!r} contradicts LLM role "
@@ -994,6 +1019,23 @@ class EnsembleVoter:
                 adversarial_input=adversarial_snapshot,
                 llm_input=llm_verdict,
             )
+
+        # 4b. Audit-only LLM (Plan v4 Phase 1 DEFAULT). The LLM verdict is
+        # recorded for the audit trail but does NOT decide severity/remediation
+        # — the decision falls through to the deterministic rules below
+        # (KG-only / adversarial-moderate→review / abstain). This generalizes
+        # the #212 cap to ALL cases: the unreliable LLM never fills the vacuum.
+        elif sanitised_llm is not None:
+            evidence.append(
+                "LLM verdict (audit-only, not used for the decision): "
+                f"causal_role={sanitised_llm.causal_role}, "
+                f"recommended_remediation={sanitised_llm.recommended_remediation}"
+            )
+            if _kg_contradicts_llm(kg_signal, sanitised_llm.causal_role):
+                disagreements.append(
+                    f"kg={kg_signal} disagrees with llm={sanitised_llm.causal_role} "
+                    "(audit-only; LLM not used for the decision)"
+                )
 
         # 5. KG-only (no LLM) path: confident KG leak signal alone is
         # enough to drop the feature. Confidence is below the

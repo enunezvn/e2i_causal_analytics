@@ -717,13 +717,33 @@ def test_sidecar_payload_includes_schema_version_v1(tmp_path, monkeypatch):
                 "evaluator_satisfied": False,
             }
         ],
+        # Layer-4 Phase 1 (schema 1.6): run-level FDR firing-driver summary.
+        "leakage_fdr": {
+            "active": True,
+            "enabled": True,
+            "q": 0.1,
+            "n_permutations": 800,
+            "n_confident": 1,
+            "confident_features": ["f"],
+            "reason": "active",
+        },
     }
     path = write_adaptive_verdicts_sidecar(state)
     assert path is not None
     payload = json.loads(Path(path).read_text())
-    assert payload.get("schema_version") == "1.5", (
-        f"producer must emit top-level schema_version='1.5'; got {payload.get('schema_version')!r}"
+    assert payload.get("schema_version") == "1.6", (
+        f"producer must emit top-level schema_version='1.6'; got {payload.get('schema_version')!r}"
     )
+    # Schema 1.6: the FDR firing-driver summary is persisted in the audit-of-record.
+    assert payload.get("leakage_fdr") == {
+        "active": True,
+        "enabled": True,
+        "q": 0.1,
+        "n_permutations": 800,
+        "n_confident": 1,
+        "confident_features": ["f"],
+        "reason": "active",
+    }, f"sidecar must persist leakage_fdr; got {payload.get('leakage_fdr')!r}"
 
 
 def test_reader_warns_on_missing_schema_version_legacy_fallback(tmp_path, caplog):
@@ -795,15 +815,15 @@ def test_reader_warns_on_unknown_schema_version_major(tmp_path, caplog):
     # ``"2.0"`` AND the reader's expected current version. Without this assertion
     # the test would still pass if the WARN stopped naming the reader's
     # expected version, which is the actionable half of the message.
-    # Issue #501 / #240: reader's current version bumped to "1.5"
+    # Layer-4 Phase 1: reader's current version bumped to "1.6"
     # (still MAJOR=1).
     matches = [
         rec
         for rec in caplog.records
-        if "schema_version" in rec.message and "2.0" in rec.message and "1.5" in rec.message
+        if "schema_version" in rec.message and "2.0" in rec.message and "1.6" in rec.message
     ]
     assert matches, (
-        "expected unknown-major WARN naming both '2.0' (payload) and '1.5' (reader); "
+        "expected unknown-major WARN naming both '2.0' (payload) and '1.6' (reader); "
         f"got: {[r.message for r in caplog.records]}"
     )
 
@@ -1183,9 +1203,10 @@ def test_sidecar_roundtrip_schema_1_5(tmp_path):
         SidecarReader,
     )
 
-    assert _READER_SCHEMA_VERSION == "1.5"
+    assert _READER_SCHEMA_VERSION == "1.6"
 
-    # --- 1.5 sidecar with the structural keys populated ---
+    # --- 1.5 sidecar with the structural keys populated (older minor; the 1.6
+    # reader must still parse it without a WARN — same MAJOR=1) ---
     sub = tmp_path / "exp-15"
     sub.mkdir(parents=True)
     payload_15 = {

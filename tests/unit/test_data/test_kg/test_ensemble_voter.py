@@ -1249,3 +1249,66 @@ def test_invalid_llm_role_does_not_block_layer_1_veto():
     assert all("not_a_role" not in d for d in v.disagreements)
     # But the audit trail still records what the LLM said
     assert v.llm_input is bad
+
+
+# ---------------------------------------------------------------------------
+# Plan v4 Phase 1 — LLM demoted to audit-only in the voter (generalize #212).
+# By default the LLM verdict NEVER decides severity/remediation; it is recorded
+# for the audit trail and the decision falls through to the deterministic rules
+# (KG-only / adversarial-moderate→review / abstain). The legacy decides path is
+# preserved behind ADAPTIVE_LAYER4_LLM_DECIDES=1 for the ramp/back-compat.
+# ---------------------------------------------------------------------------
+
+
+def test_llm_audit_only_by_default_does_not_decide(monkeypatch):
+    """With LLM-decides OFF (default), an LLM leak verdict that would have driven
+    decided_by='llm' (severity=high/drop) is NOT used; the decision falls
+    through to the deterministic adversarial-moderate review."""
+    monkeypatch.delenv("ADAPTIVE_LAYER4_LLM_DECIDES", raising=False)
+    voter = EnsembleVoter()
+    v = voter.vote(
+        "feat_x",
+        adversarial_verdict={"severity": "moderate", "z_score": 4.0},
+        llm_verdict=_llm_verdict(role="descendant", remediation="drop"),
+    )
+    assert v.decided_by != "llm"
+    assert v.decided_by == "adversarial"
+    assert v.severity == "moderate"
+    assert v.remediation == "review"
+    # the LLM verdict is still recorded for the audit trail
+    assert v.llm_input is not None
+    assert any("audit" in e.lower() for e in v.evidence)
+
+
+def test_llm_decides_when_flag_enabled(monkeypatch):
+    """ADAPTIVE_LAYER4_LLM_DECIDES=1 restores the legacy decides path (ramp /
+    back-compat): the LLM leak role drives decided_by='llm', severity=high."""
+    monkeypatch.setenv("ADAPTIVE_LAYER4_LLM_DECIDES", "1")
+    voter = EnsembleVoter()
+    v = voter.vote(
+        "feat_x",
+        adversarial_verdict={"severity": "moderate", "z_score": 4.0},
+        llm_verdict=_llm_verdict(role="descendant", remediation="drop"),
+    )
+    assert v.decided_by == "llm"
+    assert v.severity == "high"
+    assert v.remediation == "drop"
+    assert v.final_role == "descendant"
+
+
+def test_llm_audit_only_kg_corroborated_leak_still_caught_by_kg(monkeypatch):
+    """Audit-only does not weaken leak detection: a KG-corroborated leak the LLM
+    would have dropped is still dropped — by the deterministic KG-only rule."""
+    monkeypatch.delenv("ADAPTIVE_LAYER4_LLM_DECIDES", raising=False)
+    voter = EnsembleVoter()
+    v = voter.vote(
+        "feat_x",
+        kg_edges=[_kg_treats_edge()],
+        feature_entity_ids=["CHEMBL:DRUG_X"],
+        target_entity_ids=["EFO:0000270"],
+        llm_verdict=_llm_verdict(role="descendant"),
+        citation_verdicts=[_verified_citation()],
+    )
+    assert v.decided_by == "kg"  # NOT "llm"
+    assert v.severity == "high"
+    assert v.remediation == "drop"

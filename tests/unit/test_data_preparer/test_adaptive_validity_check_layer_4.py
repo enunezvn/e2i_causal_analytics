@@ -62,6 +62,19 @@ def reset_dspy_lm() -> Any:
         pass
 
 
+@pytest.fixture(autouse=True)
+def _enable_layer4_llm_decides(monkeypatch):
+    """This file pins the Layer-4 LLM-*decides* path (decided_by="llm", the #212
+    cap, layer="4"). Plan v4 Phase 1 demoted the LLM to audit-only by DEFAULT
+    (ensemble_voter._llm_decides_enabled), so enable the decides flag here — the
+    mechanism is preserved behind it for the Phase-3 ramp / back-compat. NOTE:
+    the node-level test additionally sets ``adaptive_layer4_enabled=True`` in its
+    state to invoke the LLM CALL (the env flag only governs the voter's
+    decide-vs-audit behaviour, not whether the node calls the classifier).
+    """
+    monkeypatch.setenv("ADAPTIVE_LAYER4_LLM_DECIDES", "1")
+
+
 def _stub_dspy_lm_with_role(role: str, remediation: str = "keep_with_caveat") -> dspy.LM:
     """Return a DummyLM that always answers the CausalRoleSignature with
     ``role`` + ``remediation``.
@@ -869,6 +882,10 @@ def test_adaptive_validity_check_emits_decided_by_llm_on_csu_feature(
         },
         "leakage_findings": [],
         "leaked_features": [],
+        # Phase 1: opt into the LLM auditor CALL (off by default). Combined with
+        # the autouse ADAPTIVE_LAYER4_LLM_DECIDES=1 fixture, this exercises the
+        # full legacy decided_by="llm" path end-to-end.
+        "adaptive_layer4_enabled": True,
     }
     result = asyncio.run(adaptive_validity_check(state))
     verdicts = result["adaptive_verdicts"]
@@ -882,6 +899,49 @@ def test_adaptive_validity_check_emits_decided_by_llm_on_csu_feature(
     assert all(v.get("layer") == "4" for v in llm_verdicts), (
         f"Expected layer='4' for all decided_by='llm' verdicts; got "
         f"{[(v['feature'], v.get('layer')) for v in llm_verdicts]}"
+    )
+
+
+def test_layer4_llm_not_called_by_default(reset_dspy_lm, monkeypatch) -> None:
+    """Plan v4 Phase 1 — the FULL production default (BOTH gates OFF) end-to-end.
+    With an LM configured but adaptive_layer4_enabled unset (call-gate OFF) AND
+    ADAPTIVE_LAYER4_LLM_DECIDES unset (voter audit-only), the node does NOT
+    invoke the LLM — no verdict is decided_by='llm' and no llm_role is surfaced;
+    the FDR confident set + the deterministic voter decide. Deletes the file's
+    autouse decides env so this regression-guards the true production path
+    (codex iter-1 MEDIUM: no single test covered both defaults OFF together)."""
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        adaptive_validity_check,
+    )
+
+    # Override the file-level autouse fixture: exercise BOTH production defaults
+    # (call-gate OFF via the omitted state flag + voter audit-only via no env).
+    monkeypatch.delenv("ADAPTIVE_LAYER4_LLM_DECIDES", raising=False)
+    dspy.configure(lm=_stub_dspy_lm_with_role("ancestor", "keep_with_caveat"))
+    df = _make_layer_3_moderate_df()
+    state = {
+        "experiment_id": "test-phase1-gate-off",
+        "train_df": df,
+        "validation_df": None,
+        "test_df": None,
+        "scope_spec": {
+            "prediction_target": "treatment_initiated",
+            "required_features": ["age_continuous"],
+            "excluded_features": [],
+            "feature_manifest_source": "csu",
+        },
+        "leakage_findings": [],
+        "leaked_features": [],
+        # adaptive_layer4_enabled intentionally omitted → default OFF.
+    }
+    result = asyncio.run(adaptive_validity_check(state))
+    verdicts = result["adaptive_verdicts"]
+    assert all(v.get("decided_by") != "llm" for v in verdicts), (
+        "LLM must not decide when the auditor is off by default; got "
+        f"{[(v['feature'], v.get('decided_by')) for v in verdicts]}"
+    )
+    assert all(v.get("llm_role") is None for v in verdicts), (
+        "LLM must not be called (no llm_role) when adaptive_layer4_enabled is off"
     )
 
 
@@ -1090,6 +1150,11 @@ def test_ensure_dspy_lm_configured_high_declared_safe_records_llm_disagreement(
         },
         "leakage_findings": [],
         "leaked_features": [],
+        # Phase 1: opt into the LLM auditor CALL so the disagreement is recorded.
+        # The adversarial-high veto still wins on severity (decided_by stays
+        # "adversarial"); the LLM is audited, not decisive — exactly Part B's
+        # intent. (No decides flag needed: rule-2 precedes the LLM rule.)
+        "adaptive_layer4_enabled": True,
     }
     result = asyncio.run(adaptive_validity_check(state))
     age_verdicts = [v for v in result["adaptive_verdicts"] if v["feature"] == "age_continuous"]

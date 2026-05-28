@@ -346,6 +346,11 @@ def _firing_state(exp_id: str) -> dict:
         ],
         "adaptive_n_permutations": 100,
         "adaptive_seed": 42,
+        # Plan v4 Phase 1: the Layer-4 LLM auditor is OFF by default. This test
+        # exercises the LLM-FIRING path (the #501 crosscheck shadow rides on the
+        # surfaced llm_role), so enable the call-gate. The LLM is still
+        # audit-only in the voter — only its surfaced role is consumed here.
+        "adaptive_layer4_enabled": True,
     }
 
 

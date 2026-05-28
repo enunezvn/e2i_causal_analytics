@@ -22,7 +22,7 @@ from __future__ import annotations
 import math
 import zlib
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -440,3 +440,104 @@ def benjamini_hochberg(
     mask = np.empty(m, dtype=bool)
     mask[order] = mask_sorted  # map sorted-order decisions back to input order
     return mask
+
+
+def fdr_permutation_budget(
+    n_features: int,
+    q: float,
+    *,
+    default: int,
+    cap: int,
+) -> tuple[int, bool]:
+    """Feasibility-aware permutation budget for the BH/FDR confident set.
+
+    A plus-one permutation p-value can only resolve below the BH rank-1
+    threshold ``q / m`` when ``n_permutations >= min_permutations_for_fdr(m,
+    q)`` (the floor scales as ``ceil(m / q)`` — quadratic in feature count for a
+    fixed q). This helper sizes the budget for that feasibility AND signals when
+    a cohort is too wide to afford it within ``cap``, so the caller can fall
+    back to the static σ-band instead of silently producing an always-empty
+    confident set.
+
+    Returns ``(n_permutations, feasible)``:
+      * ``feasible=True``  → run BH at ``n_permutations`` — raised to the
+        feasibility floor so a rejection is *possible*, but never lowered below
+        ``default`` (which preserves z-score quality for narrow cohorts whose
+        floor is tiny).
+      * ``feasible=False`` → the floor exceeds ``cap``; FDR is infeasible at
+        this width. Returns ``default`` (the budget for the σ-band's z-scores)
+        and the caller MUST use the static σ-band, not the confident set.
+
+    Args:
+        n_features: number of features (BH hypotheses) to be ranked.
+        q: target false-discovery rate, in (0, 1).
+        default: the configured baseline permutation count (e.g. the legacy
+            ``DEFAULT_PERMUTATIONS``); the floor never lowers the budget below
+            this. ``cap`` is expected to be >= ``default``.
+        cap: the maximum affordable permutation budget. When the feasibility
+            floor exceeds it, FDR is declared infeasible (σ-band fallback).
+
+    Returns:
+        ``(n_permutations, feasible)``.
+    """
+    floor = min_permutations_for_fdr(n_features, q)
+    if floor > cap:
+        return default, False
+    return max(floor, default), True
+
+
+def fdr_confident_set(
+    p_values: Sequence[float] | np.ndarray,
+    effect_sizes: Sequence[float] | np.ndarray,
+    *,
+    q: float,
+    n_permutations: int,
+    effect_floor: float,
+) -> np.ndarray:
+    """Confident-leak mask = BH-rejection ∩ ``|effect| > effect_floor``.
+
+    The FDR-controlled, cohort-size-adaptive replacement for the static σ-band's
+    auto-fire (severity=high) tier. A feature is a *confident* leak only when
+    BOTH conditions hold (input-aligned boolean ``True``):
+
+      * its plus-one permutation p-value clears Benjamini-Hochberg at FDR ``q``
+        (``benjamini_hochberg`` — statistical confidence that adapts to the
+        cohort's null automatically, unlike a fixed z-threshold), AND
+      * its absolute effect size exceeds ``effect_floor`` (the issue-#194
+        pharma-actionable bar). A BH-significant feature with a tiny effect is
+        the "ambiguous interior" — routed to review, NOT auto-dropped.
+
+    ``NaN`` effect sizes (a degenerate score/ablation that could not compute a
+    delta) are never confident. The ``n_permutations`` that produced
+    ``p_values`` is forwarded to ``benjamini_hochberg`` so its feasibility +
+    plus-one-floor guards fire (an always-empty / sub-floor misconfiguration
+    raises rather than silently returning all-False).
+
+    Args:
+        p_values: per-feature plus-one permutation p-values, input-aligned with
+            ``effect_sizes``.
+        effect_sizes: per-feature signed effect size (e.g. ``actual_auc -
+            null_mean`` for the marginal path, or ``delta_auc`` for ablation).
+        q: target false-discovery rate, in (0, 1).
+        n_permutations: the permutation budget that produced ``p_values``.
+        effect_floor: minimum ``|effect|`` for a BH-significant feature to count
+            as a confident leak (else it is the ambiguous interior → review).
+
+    Returns:
+        Boolean ndarray (input-aligned): ``True`` = confident leak.
+    """
+    # Alignment check FIRST — before any dtype coercion — so a length mismatch
+    # raises the intended error rather than a confusing conversion error.
+    p_list = list(p_values)
+    eff_list = list(effect_sizes)
+    if len(p_list) != len(eff_list):
+        raise ValueError(
+            "p_values and effect_sizes must be the same length (input-aligned); "
+            f"got {len(p_list)} p-values and {len(eff_list)} effect sizes"
+        )
+    bh = benjamini_hochberg(p_list, q, n_permutations=n_permutations)
+    eff = np.asarray(eff_list, dtype=float)
+    meaningful = np.isfinite(eff) & (np.abs(eff) > float(effect_floor))
+    # numpy's ``&`` operator is typed to return ``Any``; cast back to the
+    # declared ndarray so the Any does not leak out (mypy no-any-return).
+    return cast("np.ndarray", np.asarray(bh, dtype=bool) & meaningful)

@@ -444,7 +444,14 @@ def test_explicit_seed_zero_is_honored(monkeypatch):
             "y": rng.integers(0, 2, n),
         }
     )
-    state = _make_state(df, "y", adaptive_seed=0, adaptive_n_permutations=0)
+    # FDR off: this guards the σ-band path's explicit-zero READ (the falsy-zero
+    # regression). The Phase-1 FDR pre-pass deliberately RAISES n_permutations=0
+    # to the BH feasibility floor — correct budget-sizing, but it would mask the
+    # raw read this test pins. The falsy-zero `is not None` read is unchanged by
+    # Phase 1; FDR's budget-raising is exercised in test_adaptive_validity_check_fdr.
+    state = _make_state(
+        df, "y", adaptive_seed=0, adaptive_n_permutations=0, adaptive_fdr_enabled=False
+    )
     _ = _run(state)
     assert captured.get("seed") == 0, (
         f"Expected seed=0 to be honored; got {captured.get('seed')!r} (falsy-zero bug regression)"

@@ -63,7 +63,10 @@ class DataPreparerState(BaseAgentSchema):
 
     # Validation configuration
     validation_suite: Optional[str] = None  # Great Expectations suite name
-    skip_leakage_check: Optional[bool] = None  # Skip data leakage detection (NOT RECOMMENDED)
+    # Skips ONLY the legacy name-based detect_leakage node. The data-driven
+    # adaptive validity / FDR layer (adaptive_validity_check) ALWAYS runs as the
+    # safety net and can still escalate leakage_severity (#533, Option 2).
+    skip_leakage_check: Optional[bool] = None  # (NOT RECOMMENDED)
 
     # === INTERMEDIATE FIELDS ===
     # Data loading
