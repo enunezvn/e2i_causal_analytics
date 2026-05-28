@@ -1187,6 +1187,7 @@ def _apply_fdr_firing_override(
     *,
     is_confident: bool,
     fdr_q: float,
+    layer_1_declared_safe: bool = False,
 ) -> dict[str, Any]:
     """Re-decide the auto-fire (HIGH) tier from the FDR confident set.
 
@@ -1196,15 +1197,36 @@ def _apply_fdr_firing_override(
     This wraps the *marginal* σ-band verdict from ``_adversarial_input`` and
     overrides ONLY the HIGH tier:
 
-      * ``is_confident=True``  → severity=high, remediation=drop. FDR confidently
-        flags the feature (BH-rejected ∩ ``|delta_AUC|>floor``), so it fires even
-        if the static z-threshold only saw moderate/info — the adaptive benefit
-        of a cohort-relative FDR decision over a fixed σ-threshold.
+      * ``is_confident=True`` AND NOT ``layer_1_declared_safe`` → severity=high,
+        remediation=drop. FDR confidently flags the feature (BH-rejected ∩
+        ``|delta_AUC|>floor``), so it fires even if the static z-threshold only
+        saw moderate/info — the adaptive benefit of a cohort-relative FDR
+        decision over a fixed σ-threshold.
+      * ``is_confident=True`` AND ``layer_1_declared_safe`` AND the σ-band did
+        NOT independently reach high → ROUTE TO REVIEW (moderate/ambiguous), do
+        NOT auto-drop. See the declared-safe carve-out below.
       * ``is_confident=False`` AND the σ-band said high → DEMOTE to
         moderate/ambiguous. The feature is suspicious but NOT FDR-confident:
         route to review, do not auto-drop (FDR is the auto-fire authority).
       * otherwise (σ-band moderate/info) → unchanged. The moderate→review band
         (the "ambiguous interior") and the info/keep band stay z-based.
+
+    Declared-safe carve-out (faithful Optum D4-run, 2026-05-28). The adversarial
+    discriminator measures only how strongly a feature predicts the target — it
+    cannot distinguish a strong PRE-INDEX predictor from a leak. ``hblp_classify``
+    compensates by giving a Layer-1-cleared feature (``knowable_at <= index``) a
+    1.5x-inflated z-threshold, so a merely-strong pre-index predictor lands at
+    info/moderate, not high. Forcing such a feature to high/drop purely on FDR
+    confident-set membership BYPASSES that prior and silently drops legitimate
+    pre-index confounders (e.g. CSU ``dx_l50_1_count``: knowable_at<=index,
+    σ-band info, |delta_AUC|=0.16, BH-confident → was auto-dropped). So when the
+    feature is declared-safe AND the (already inflated) σ-band did not itself
+    reach high, the FDR-vs-manifest disagreement is routed to review rather than
+    auto-dropped — surfaced for the structural decider / Layer-4 / operator. The
+    prior raises the bar; it does not grant immunity: a declared-safe feature
+    whose inflated σ-band reaches high anyway (overwhelming evidence) still
+    fires high/drop. NOT-declared-safe features (post-index / no manifest
+    clearance — i.e. real leaks like ``treatment_initiated``) are unaffected.
 
     Applied to the MARGINAL verdict BEFORE the opt-in ablation MAX-rule combine,
     so the joint-model ablation signal (which catches interaction-only leaks the
@@ -1219,12 +1241,31 @@ def _apply_fdr_firing_override(
         adv_input: the per-feature dict from ``_adversarial_input``.
         is_confident: True iff the feature is in the FDR confident set.
         fdr_q: the active FDR level (annotated into the evidence string).
+        layer_1_declared_safe: True iff the feature's manifest contract declared
+            ``knowable_at <= index_date`` (Layer 1 cleared it as pre-index). When
+            True, an FDR confident-set membership alone does NOT auto-drop the
+            feature unless the σ-band independently reached high.
     """
     out = dict(adv_input)
     out["fdr_confident"] = bool(is_confident)
     sigma_severity = out.get("severity")
     base_evidence = out.get("evidence", "")
-    if is_confident:
+    if is_confident and layer_1_declared_safe and sigma_severity != "high":
+        # FDR-confident BUT Layer-1 declared-safe (pre-index) AND the σ-band —
+        # which already applied the 1.5x declared-safe inflation in
+        # ``hblp_classify`` — did not itself reach high. Honor that prior: do
+        # NOT auto-drop a manifest-cleared pre-index feature on BH-confidence
+        # alone (the adversarial signal cannot tell a strong pre-index predictor
+        # from a leak). Route the FDR-vs-manifest disagreement to review.
+        out["severity"] = "moderate"
+        out["severity_pre_joint_check"] = "moderate"
+        out["remediation"] = "ambiguous"
+        out["evidence"] = (
+            f"{base_evidence} [FDR firing driver: BH-confident at q={fdr_q:.3g} "
+            f"but Layer-1 declared-safe (knowable_at<=index) AND σ-band "
+            f"{sigma_severity!r} not high → declined auto-drop; routed to review]"
+        )
+    elif is_confident:
         out["severity"] = "high"
         out["severity_pre_joint_check"] = "high"
         out["remediation"] = "drop"
@@ -3512,6 +3553,7 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
                 adv_input,
                 is_confident=feat in confident_features,
                 fdr_q=fdr_q,
+                layer_1_declared_safe=layer_1_declared_safe,
             )
 
         # Issue #196 — Phase 3.3 Layer-3 ablation MAX-rule combination.
