@@ -25,6 +25,7 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, cast
 from uuid import UUID
 
+from src.data.manifests.resolution import resolve_manifest_source
 from src.utils.audit_chain import AgentTier, AuditChainService
 
 logger = logging.getLogger(__name__)
@@ -604,6 +605,19 @@ class MLFoundationPipeline:
 
         logger.info("Stage 1: Running scope_definer")
 
+        # Layer 5 manifest opt-in (the programmatic / live-ready origin). The
+        # step-runner scripts resolve this themselves; the pipeline is the
+        # origin for the API and the live retraining trigger. Resolve from the
+        # data_source path segment or an explicit feature_manifest_source
+        # override (the trigger passes the latter), then thread it through
+        # scope_definer → scope_spec so Layer-1 manifest contracts (and PR
+        # #544's declared-safe FDR honor) engage downstream. Unknown / unset →
+        # None (cross-cohort false-positive guard preserved).
+        feature_manifest_source = resolve_manifest_source(
+            input_data.get("data_source"),
+            input_data.get("feature_manifest_source"),
+        )
+
         # Prepare scope_definer input
         scope_input = {
             "problem_description": input_data["problem_description"],
@@ -615,6 +629,7 @@ class MLFoundationPipeline:
             "problem_type_hint": input_data.get("problem_type_hint"),
             "target_variable": input_data.get("target_variable"),
             "candidate_features": input_data.get("candidate_features"),
+            "feature_manifest_source": feature_manifest_source,
             # D1.1: thread workflow-level audit_workflow_id so per-agent
             # State doesn't mint a fresh UUID via default_factory.
             "audit_workflow_id": result.audit_workflow_id,
@@ -1240,6 +1255,11 @@ class MLFoundationPipeline:
             "success_criteria_met": training_output.get("success_criteria_met", False),
             "deployment_name": f"{result.experiment_id}_deployment",
             "target_environment": target_env,
+            # Thread the full scope_spec (carrying feature_manifest_source) so
+            # the deployer's regulatory_deployment_manifest can record which
+            # cohort manifest gated the model at promotion time. Previously
+            # omitted, so the deployer fell back to a flat None.
+            "scope_spec": result.scope_spec,
             # D1.1: thread workflow-level audit_workflow_id (see scope_input).
             "audit_workflow_id": result.audit_workflow_id,
         }

@@ -4523,86 +4523,47 @@ def _to_jsonable(value: Any) -> Any:
     return str(value)
 
 
-_FEATURE_MANIFEST_SOURCES: tuple[str, ...] = ("csu", "optum", "synthetic")
+# Layer 5 manifest-source resolution: the canonical strictness contract (M1
+# ambiguous / M2 conflict / unknown override / M3 unmatched→None) lives in
+# ``src.data.manifests.resolution`` (Phase B), shared with the
+# ``MLFoundationPipeline`` scope stage and the live retraining trigger and keyed
+# off the ``MANIFEST_SOURCES`` registry (single source of truth — adding a
+# source is one edit there). ``_resolve_feature_manifest_source`` stays a thin
+# operator-facing wrapper that delegates the strict logic and adds a stderr
+# WARNING when a provided ``data_dir`` matched no known source, so an operator
+# running an unrecognised RWD path sees why Layer 5 stays silent. Library
+# callers use the shared resolver directly and rely on its debug log.
+from src.data.manifests.resolution import (  # noqa: E402
+    known_manifest_sources as _known_manifest_sources,
+)
+from src.data.manifests.resolution import (  # noqa: E402
+    resolve_manifest_source as _shared_resolve_manifest_source,
+)
 
-
-def _autodetect_manifest_source(data_dir: str | None) -> set[str]:
-    """Return the set of known manifest sources that appear as path
-    segments in ``data_dir`` (case-insensitive).
-
-    Pulled out of ``_resolve_feature_manifest_source`` so the resolver
-    can detect ambiguity (multiple matches) rather than silently picking
-    the first by iteration order.
-    """
-    if not data_dir:
-        return set()
-    parts = {p.lower() for p in Path(data_dir).parts}
-    return {s for s in _FEATURE_MANIFEST_SOURCES if s in parts}
+_FEATURE_MANIFEST_SOURCES: tuple[str, ...] = _known_manifest_sources()
 
 
 def _resolve_feature_manifest_source(
     data_dir: str | None,
     override: str | None,
 ) -> str | None:
-    """Resolve which cohort manifest Layer 5 should consult on this run.
+    """Operator-facing wrapper around the shared manifest-source resolver.
 
-    Priority: explicit ``override`` (the ``--feature-manifest-source`` CLI
-    flag) > auto-detection from ``data_dir`` > unset.
+    Delegates the M1 (ambiguous) / M2 (override conflict) / unknown-override
+    strictness + path-segment auto-detection to
+    ``src.data.manifests.resolution.resolve_manifest_source`` (single source of
+    truth) and additionally emits a stderr WARNING when a provided ``data_dir``
+    resolved to no manifest, so an operator running an unrecognised RWD path
+    sees why Layer 5 verdicts stay silent. Synthetic / ad-hoc runs (no
+    ``data_dir``) remain frictionless.
 
-    Strictness contract (codex M1/M2/M3, 2026-05-08): the resolver fails
-    fast on:
-
-    - **M1 ambiguous data_dir**: a path that contains BOTH ``csu`` and
-      ``optum`` segments (e.g., ``data/rwd/csu/optum_baseline``) raises
-      ``ValueError`` rather than silently picking ``csu`` by iteration
-      order. The caller must disambiguate via explicit
-      ``--feature-manifest-source``.
-    - **M2 override conflict**: if both ``override`` and ``data_dir`` are
-      supplied AND the data_dir's auto-detect would yield a DIFFERENT
-      source, raises ``ValueError`` to prevent a silent CSU-data-against-
-      Optum-manifest mismatch.
-    - **M3 unmatched RWD path**: not enforced here — see CLI guidance:
-      a ``data/rwd/<unknown>`` path returns None and emits a stderr
-      warning so the user can decide whether to set the override
-      explicitly.
-
-    Without this resolution, ``feature_manifest_source`` was never
-    threaded into ``scope_spec`` for RWD runs and Layer 5's
-    manifest-driven Layer 1 verdicts silently no-op'd; forbidden columns
-    fell through to Layer 3 (statistical-only), undercutting the
-    deterministic post-index leak catch the manifests provide.
+    Without this resolution, ``feature_manifest_source`` was never threaded into
+    ``scope_spec`` for RWD runs and Layer 5's manifest-driven Layer 1 verdicts
+    silently no-op'd; forbidden columns fell through to Layer 3
+    (statistical-only), undercutting the deterministic post-index leak catch.
     """
-    detected = _autodetect_manifest_source(data_dir)
-
-    if len(detected) > 1:
-        raise ValueError(
-            f"data_dir={data_dir!r} contains multiple known manifest "
-            f"sources {sorted(detected)} as path segments — auto-detection "
-            f"is ambiguous. Pass --feature-manifest-source explicitly to "
-            f"disambiguate."
-        )
-
-    if override is not None:
-        if detected and override not in detected:
-            raise ValueError(
-                f"--feature-manifest-source={override!r} conflicts with "
-                f"data_dir={data_dir!r} which auto-detects to "
-                f"{sorted(detected)}. The conflict suggests the wrong "
-                f"manifest is being applied (e.g., Optum data measured "
-                f"against CSU contracts). If this is intentional, rename "
-                f"the data_dir to remove the misleading segment, or run "
-                f"the data through the matching converter first."
-            )
-        return override
-
-    if len(detected) == 1:
-        return next(iter(detected))
-
-    # data_dir provided but no known segment matched — emit a warning
-    # so the operator can decide whether to set --feature-manifest-source
-    # explicitly. We do NOT fail here because synthetic runs (no
-    # data_dir) and ad-hoc paths must remain frictionless.
-    if data_dir:
+    resolved = _shared_resolve_manifest_source(data_dir, override)
+    if resolved is None and override is None and data_dir:
         import sys as _sys
 
         print(
@@ -4613,7 +4574,7 @@ def _resolve_feature_manifest_source(
             f"be consulted.",
             file=_sys.stderr,
         )
-    return None
+    return resolved
 
 
 def _route_leakage_outputs(
