@@ -87,3 +87,12 @@ def test_resolve_unknown_override_fails_fast() -> None:
     # loud rather than silently no-op (anti-mocking).
     with pytest.raises(ValueError, match="not a registered|unknown|registered manifest"):
         resolve_manifest_source(None, "bogus")
+
+
+@pytest.mark.parametrize("source", sorted(MANIFEST_SOURCES))
+def test_every_registered_source_round_trips_as_override(source: str) -> None:
+    """Wiring guard (Phase C): every manifest source registered in
+    MANIFEST_SOURCES must be a valid override — i.e. resolvable. Auto-extends
+    with the registry, so adding a source that the resolver would reject (or
+    forgetting to register one a runner already passes) trips here."""
+    assert resolve_manifest_source(None, source) == source

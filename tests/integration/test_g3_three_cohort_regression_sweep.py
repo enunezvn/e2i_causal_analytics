@@ -1104,7 +1104,11 @@ class TestOrchestratorThreadingHigh4:
                 "actual_auc": 0.72,
                 "null_mean": 0.50,
                 "null_std": 0.04,
-                "p_value": 0.001,
+                # Plus-one-floor-valid: the smallest p achievable from 50
+                # permutations is 1/(1+50)≈0.0196 ("actual beat all shuffles").
+                # The earlier 0.001 was impossible at this budget and tripped
+                # benjamini_hochberg's floor guard (adversarial_leakage.py).
+                "p_value": 1.0 / 51,
                 "n_permutations": 50,
                 "suspicious": True,
             }
@@ -1115,16 +1119,26 @@ class TestOrchestratorThreadingHigh4:
             _fake_adversarial_score,
         )
 
+        # This test isolates the HBLP σ-threshold threading (n_train_pos +
+        # layer_1_declared_safe). The FDR firing driver (#538, default-on) is a
+        # SEPARATE mechanism with its own tests; left enabled it would override
+        # the z-driven HBLP severity for a confident declared-safe feature
+        # (#544 routes such features to review), collapsing the differential
+        # outcome this test pins. Disable it here so the severities reflect
+        # HBLP classification alone.
+        #
         # Low-N path: n_train_pos=22, manifest-safe (age_at_index has
         # Optum-manifest knowable_at=enrollment → declared_safe=True).
         low_n_state = _make_synthetic_optum_state_with_deterministic_pos_count(
             n_train_pos=22, seed=11
         )
+        low_n_state["adaptive_fdr_enabled"] = False
         low_n_result = await _run_orchestrator(low_n_state)
         # High-N path: n_train_pos=200, same manifest path.
         high_n_state = _make_synthetic_optum_state_with_deterministic_pos_count(
             n_train_pos=200, seed=11
         )
+        high_n_state["adaptive_fdr_enabled"] = False
         high_n_result = await _run_orchestrator(high_n_state)
 
         # Find the age_at_index Layer 3 verdict in each run. Layer 3
