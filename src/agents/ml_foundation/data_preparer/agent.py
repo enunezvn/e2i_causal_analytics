@@ -134,6 +134,13 @@ class DataPreparerAgent:
             "split_id": input_data.get("split_id"),
             "validation_suite": input_data.get("validation_suite"),
             "skip_leakage_check": input_data.get("skip_leakage_check", False),
+            # Track-2B-v3 D5.0: carry the structural-decider activation flag into
+            # the top-level DataPreparerState so adaptive_validity_check's
+            # state.get("adaptive_structural_decider_enabled", False) is driven by
+            # the per-run PipelineConfig. Dark default (False) when absent.
+            "adaptive_structural_decider_enabled": input_data.get(
+                "adaptive_structural_decider_enabled", False
+            ),
         }
 
         # Execute the graph with optional Opik tracing

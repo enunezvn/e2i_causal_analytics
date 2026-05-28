@@ -96,6 +96,13 @@ class PipelineConfig:
     # adaptive validity / FDR layer always runs as the safety net and can still
     # escalate leakage findings regardless of this flag (#533, Option 2).
     skip_leakage_check: bool = False
+    # Track-2B-v3: activate the deterministic structural causal-role decider
+    # (Layer-4) for THIS run's cohort. Dark by default — the decider only
+    # decides when this is True AND a feature carries a CausalStructureAttestation
+    # (0 attested today). Cohort-scoped via this per-run config rather than a
+    # global read-default at adaptive_validity_check.py, so activation is opt-in
+    # per pipeline run, not a single un-scoped global flip.
+    adaptive_structural_decider_enabled: bool = False
     use_sample_data: bool = False
 
     # Data-sufficiency pre-flight (Phase 1).
@@ -705,6 +712,9 @@ class MLFoundationPipeline:
             "split_id": input_data.get("split_id"),
             "validation_suite": input_data.get("validation_suite"),
             "skip_leakage_check": self.config.skip_leakage_check,
+            # Track-2B-v3 D5.0: thread the structural-decider activation flag so
+            # the per-run PipelineConfig (not a global default) scopes activation.
+            "adaptive_structural_decider_enabled": self.config.adaptive_structural_decider_enabled,
             # D1.1: thread workflow-level audit_workflow_id (see scope_input).
             "audit_workflow_id": result.audit_workflow_id,
         }
