@@ -43,7 +43,11 @@ logger = logging.getLogger(__name__)
 # structural_remediation_override / structural_gate_fired). Still MAJOR=1 —
 # additive, nullable, absent on pre-1.5 sidecars (surface as None without a
 # warning, mirroring the 1.4 leak-crosscheck-key handling).
-_READER_SCHEMA_VERSION = "1.5"
+# 1.6 (Layer-4 Phase 1): additive run-level ``leakage_fdr`` summary key (the FDR
+# firing-driver decision). Run-level (not per-verdict) so the reader does not
+# iterate it; bumping the expected version keeps the exact-match contract from
+# WARNing on the new minor. Still MAJOR=1.
+_READER_SCHEMA_VERSION = "1.6"
 _READER_SCHEMA_MAJOR = 1
 
 # Issue #235 A3: the set of verdict-dict keys the reader knows how to

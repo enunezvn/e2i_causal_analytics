@@ -571,3 +571,12 @@ def test_fdr_confident_set_tolerates_nan_effect_as_non_confident():
         dtype=bool,
     )
     assert mask.tolist() == [False, True]
+
+
+def test_fdr_confident_set_rejects_mismatched_lengths():
+    """p_values and effect_sizes must be input-aligned; a length mismatch is a
+    caller bug (silent numpy broadcasting would hide it) — fail loud."""
+    from src.data.adversarial_leakage import fdr_confident_set
+
+    with pytest.raises(ValueError, match="same length"):
+        fdr_confident_set([0.01, 0.02], [0.5], q=0.10, n_permutations=1000, effect_floor=0.1)

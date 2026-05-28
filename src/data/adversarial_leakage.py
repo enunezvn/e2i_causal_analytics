@@ -526,8 +526,14 @@ def fdr_confident_set(
     Returns:
         Boolean ndarray (input-aligned): ``True`` = confident leak.
     """
-    bh = benjamini_hochberg(p_values, q, n_permutations=n_permutations)
+    p_arr = np.asarray(list(p_values), dtype=float)
     eff = np.asarray(list(effect_sizes), dtype=float)
+    if p_arr.shape != eff.shape:
+        raise ValueError(
+            "p_values and effect_sizes must be the same length (input-aligned); "
+            f"got {p_arr.shape[0]} p-values and {eff.shape[0]} effect sizes"
+        )
+    bh = benjamini_hochberg(p_arr, q, n_permutations=n_permutations)
     meaningful = np.isfinite(eff) & (np.abs(eff) > float(effect_floor))
     # numpy's ``&`` operator is typed to return ``Any``; cast back to the
     # declared ndarray so the Any does not leak out (mypy no-any-return).

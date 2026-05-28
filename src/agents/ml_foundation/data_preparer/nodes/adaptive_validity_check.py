@@ -1244,6 +1244,54 @@ def _apply_fdr_firing_override(
     return out
 
 
+def _fdr_confident_features(
+    bh_eligible: list[str],
+    l3_scores: dict[str, Any],
+    *,
+    q: float,
+    n_permutations: int,
+    effect_floor: float,
+) -> set[str]:
+    """Confident-leak set over the FULL eligible BH family.
+
+    A scoring exception (BaseException sentinel) or a missing/degenerate score
+    for an eligible feature is kept in the Benjamini-Hochberg family as a
+    NON-rejected ``NaN`` p-value — NOT dropped. Dropping it would shrink ``m``
+    and LOOSEN the BH threshold ``q/m``, which could falsely promote a
+    borderline feature to a confident leak (codex iter-0 HIGH). ``NaN`` p-values
+    and effects are tolerated by ``fdr_confident_set`` (never rejected) and keep
+    ``m`` equal to the number of eligible hypotheses the permutation budget was
+    sized for — the conservative, correct denominator.
+    """
+    if not bh_eligible:
+        return set()
+    p_values: list[float] = []
+    effect_sizes: list[float] = []
+    for feat in bh_eligible:
+        score = l3_scores.get(feat)
+        if isinstance(score, dict):
+            p = score.get("p_value")
+            p_values.append(
+                float(p)
+                if isinstance(p, (int, float)) and not isinstance(p, bool)
+                else float("nan")
+            )
+            effect_sizes.append(_marginal_effect_size(score))
+        else:
+            # Scoring raised, or no score → a non-rejected NaN that still COUNTS
+            # toward m (keeps the BH family size honest).
+            p_values.append(float("nan"))
+            effect_sizes.append(float("nan"))
+    mask = fdr_confident_set(
+        p_values,
+        effect_sizes,
+        q=q,
+        n_permutations=n_permutations,
+        effect_floor=effect_floor,
+    )
+    return {feat for feat, is_conf in zip(bh_eligible, mask, strict=True) if bool(is_conf)}
+
+
 # Map ``EnsembleVerdict.decided_by`` → legacy ``layer`` field for the
 # audit-trail JSON sidecar. Phase 2.9 Stage 1 only emits "layer_1" and
 # "adversarial"; Stage 2 will add "kg" → "2", Stage 3 will add "llm" → "4".
@@ -3287,17 +3335,16 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
 
     confident_features: set[str] = set()
     if fdr_active:
-        _scored_ok = [f for f in bh_eligible if not isinstance(l3_scores[f], BaseException)]
-        _confident_mask = fdr_confident_set(
-            [l3_scores[f].get("p_value") for f in _scored_ok],
-            [_marginal_effect_size(l3_scores[f]) for f in _scored_ok],
+        # Build the confident set over the FULL eligible family (errored
+        # features stay as non-rejected NaN so a scoring exception cannot shrink
+        # m and loosen q/m — codex iter-0 HIGH).
+        confident_features = _fdr_confident_features(
+            bh_eligible,
+            l3_scores,
             q=fdr_q,
             n_permutations=n_perms,
             effect_floor=LAYER5_DELTA_AUC_FLOOR_DEFAULT,
         )
-        confident_features = {
-            f for f, is_conf in zip(_scored_ok, _confident_mask, strict=True) if bool(is_conf)
-        }
 
     # Layer 3 pass — numeric columns only, skipping anything Layer 1 already caught.
     for feat in numeric_candidates:

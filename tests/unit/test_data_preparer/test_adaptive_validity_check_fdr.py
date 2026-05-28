@@ -192,6 +192,37 @@ def test_node_fdr_disabled_uses_sigma_band():
     assert "leak_perfect" in set(result["adaptive_flagged_features"])
 
 
+def test_fdr_confident_features_errored_feature_does_not_shrink_bh_family():
+    """codex iter-0 HIGH: a scoring EXCEPTION must remain in the BH family as a
+    non-rejected NaN — NOT be dropped. Dropping it shrinks m and LOOSENS the BH
+    threshold q/m, which can falsely promote a borderline feature to confident.
+
+    Family {leak, borderline, errored}, q=0.10:
+      * keep errored as NaN (m=3): borderline p=0.08 vs rank-2 threshold
+        2*0.10/3≈0.067 → NOT rejected → confident set = {leak}.
+      * drop errored (m=2): borderline p=0.08 vs rank-2 threshold 0.10 → rejected
+        → confident set = {leak, borderline} (the bug).
+    """
+    import importlib
+
+    mod = importlib.import_module(MOD)
+    leak = {"p_value": 0.005, "actual_auc": 0.99, "null_mean": 0.50}  # effect 0.49 > floor
+    borderline = {"p_value": 0.08, "actual_auc": 0.99, "null_mean": 0.50}  # effect 0.49 > floor
+    scores: dict[str, Any] = {
+        "leak": leak,
+        "borderline": borderline,
+        "errored": RuntimeError("scoring blew up"),
+    }
+    confident = mod._fdr_confident_features(
+        ["leak", "borderline", "errored"],
+        scores,
+        q=0.10,
+        n_permutations=1000,
+        effect_floor=0.1,
+    )
+    assert confident == {"leak"}
+
+
 def test_node_adaptive_escalates_regardless_of_skip_leakage_check():
     """#533 (Option 2): ``skip_leakage_check`` gates ONLY the legacy name-based
     detect_leakage node — the data-driven adaptive/FDR layer always runs as the

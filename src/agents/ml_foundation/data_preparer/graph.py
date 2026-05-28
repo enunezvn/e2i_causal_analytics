@@ -194,7 +194,12 @@ def write_adaptive_verdicts_sidecar(state: Dict[str, Any]) -> Path | None:
             # remediation gate shadow keys (structural_role /
             # structural_llm_disagreement / structural_remediation_override /
             # structural_gate_fired). Still MAJOR=1.
-            "schema_version": "1.5",
+            # 1.6 (Layer-4 Phase 1): additive run-level ``leakage_fdr`` summary
+            # — the dynamic FDR firing-driver decision (active / enabled / q /
+            # n_permutations / n_confident / confident_features / reason) so the
+            # auto-fire provenance is persisted in the audit-of-record, not just
+            # in-memory state. Still MAJOR=1.
+            "schema_version": "1.6",
             "experiment_id": state.get("experiment_id"),
             "data_source": state.get("data_source"),
             "written_at": ts,
@@ -203,6 +208,8 @@ def write_adaptive_verdicts_sidecar(state: Dict[str, Any]) -> Path | None:
             "adaptive_flagged_features": state.get("adaptive_flagged_features", []),
             "adaptive_verdicts": verdicts,
             "role_attributions": role_attributions,
+            # Run-level FDR firing-driver summary (None on legacy/pre-1.6 runs).
+            "leakage_fdr": state.get("leakage_fdr"),
         }
         # Atomic write: stage to .tmp then rename so an interrupted run
         # never leaves a half-written JSON (codex review LOW-9).
