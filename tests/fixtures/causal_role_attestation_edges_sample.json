@@ -1,0 +1,22 @@
+{
+  "fixture_kind": "attestation_edges_sample",
+  "total_entries": 2,
+  "entries": [
+    {
+      "feature_name": "age",
+      "ground_truth_role": "confounder",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "age",
+      "edges": [["age", "T"], ["age", "Y"]]
+    },
+    {
+      "feature_name": "post_event",
+      "ground_truth_role": "collider",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "post_event",
+      "edges": [["T", "post_event"], ["Y", "post_event"]]
+    }
+  ]
+}
