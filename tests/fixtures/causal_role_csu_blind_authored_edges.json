@@ -1,4 +1,5 @@
 {
+  "authoring_inputs": "tests/fixtures/causal_role_csu_blind_briefs.json (the label-free brief the author saw)",
   "cohort": "CSU_remibrutinib",
   "description": "BLIND authoring source for the CSU_remibrutinib structural validation (Layer-4 Track-2B-v3 Phase 1). Each DAG was authored from feature_name + derivation_pseudocode + dataset_context + external clinical/pharmacology literature, BLIND to the golden ground_truth_role/rationale/provenance. ENTRIES are STRUCTURAL-ONLY (feature/treatment/outcome nodes + edges + an author ambiguity flag): they carry no role string, no label, no rationale prose \u2014 so they cannot encode the answer. The scoring fixture tests/fixtures/causal_role_golden_set_csu_edges.json is REBUILT from this source joined with the INDEPENDENT labels in tests/fixtures/causal_role_golden_set.json via build_edge_augmented_fixture (verified byte-identical in tests/unit/test_data/test_csu_golden_set_edges.py), so labels enter only from the independent golden set. Cited per-edge rationale lives in docs/layer4/csu_golden_validation_review_record.json (a post-hoc scored artifact, not this rebuild source). Every DAG includes the true T->Y edge: remibrutinib DOES reduce UAS7 (the studied effect) \u2014 a required causal assumption.",
   "entries": [
@@ -606,6 +607,7 @@
       "treatment_node": "T"
     }
   ],
+  "non_circularity_note": "Artifact tests (label-free source + byte-identical rebuild from independent golden labels) are NECESSARY but NOT SUFFICIENT: a label-derived author could emit the same canonical topologies with no forbidden string (see test_negative_control_label_derived_source_still_passes_string_guards). Blindness rests on the committed blind-brief provenance + author-once/score-once protocol.",
   "protocol": "author-once / score-once; edges were NOT edited to match labels after scoring.",
   "total_entries": 31
 }

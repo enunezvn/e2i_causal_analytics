@@ -9,15 +9,30 @@ gate it was built to demonstrate: ``missed_leaks == 0`` — no LEAK feature
 (mediator/collider/descendant) is ever placed in ACCEPT
 (ancestor/confounder/instrument) by the deterministic ``extract_role`` decider.
 
-Non-circularity is made MECHANICALLY AUDITABLE (not merely asserted): the
-scoring fixture is REBUILT here from a committed LABEL-FREE / ROLE-FREE blind
-authoring source (``causal_role_csu_blind_authored_edges.json``) joined with the
-INDEPENDENT labels in ``causal_role_golden_set.json`` via
-``build_edge_augmented_fixture``. The labels therefore enter only from the
-independent golden set, never from the authored payload — a p-hacked edge file
-that encoded the labels would be caught by the label-free-source guard
-(``test_blind_source_is_label_free``) and the byte-identical rebuild
-(``test_scoring_fixture_is_rebuilt_from_blind_source``).
+Non-circularity rests on TWO committed provenance artifacts plus the
+author-once/score-once protocol — NOT on artifact tests alone:
+
+1. ``causal_role_csu_blind_briefs.json`` — the EXACT label-free inputs the DAG
+   author was given (feature_name + derivation_pseudocode + dataset_context),
+   verified to match the golden set's inputs and to contain no label/role string
+   (``test_blind_briefs_*``).
+2. ``causal_role_csu_blind_authored_edges.json`` — the STRUCTURAL-ONLY authored
+   edges (no role string, no label, no rationale; ``test_blind_source_is_label_free``).
+The scoring fixture is the byte-identical join of (2) with the INDEPENDENT golden
+labels via ``build_edge_augmented_fixture`` (``test_scoring_fixture_is_rebuilt_
+from_blind_source``), so labels enter only from the independent golden set.
+
+HONEST EPISTEMIC BOUNDARY (codex iter-1, accepted): the artifact tests are
+NECESSARY, NOT SUFFICIENT. They prove (a) the authoring inputs were label-free,
+(b) the edge source carries no role/label string, and (c) the labels were joined
+independently. They CANNOT, by inspecting the resulting JSON, prove the edge
+*topology* was not reverse-engineered from the labels — a label-derived author
+could emit the canonical shapes (feature->Y for ancestor, feature->T + feature->Y
+for confounder, ...) using no forbidden string. ``test_negative_control_label_
+derived_source_still_passes_string_guards`` documents exactly that gap. The
+guarantee that the topology is genuinely blind rests on the committed blind-input
+provenance (1) + the author-once/score-once protocol, which this artifact set
+makes auditable but does not, on its own, mechanically enforce.
 
 The decider remains DARK in production; this fixture is the labeled CSU-cohort
 acceptance evidence that gates a future production-authoring phase.
@@ -35,6 +50,7 @@ from src.ml.causal_role_dgp.extractor import extract_role
 _REPO = Path(__file__).resolve().parents[3]
 _FIXTURE = _REPO / "tests" / "fixtures" / "causal_role_golden_set_csu_edges.json"
 _BLIND_SOURCE = _REPO / "tests" / "fixtures" / "causal_role_csu_blind_authored_edges.json"
+_BLIND_BRIEFS = _REPO / "tests" / "fixtures" / "causal_role_csu_blind_briefs.json"
 _GOLDEN = _REPO / "tests" / "fixtures" / "causal_role_golden_set.json"
 
 _VALID_ROLES = frozenset(
@@ -277,3 +293,98 @@ def test_t_to_y_is_load_bearing_for_outcome_echo_descendants():
         except ValueError:
             raised = True
         assert raised, f"{fname}: expected unclassifiable without T->Y"
+
+
+# --- Authoring-process provenance + honest negative control (codex iter-1 HIGH) ---
+
+
+def test_blind_briefs_are_label_free_and_match_golden_inputs():
+    """The committed blind brief is EXACTLY the label-free inputs the author saw.
+
+    Provenance of the authoring PROCESS (not just the resulting JSON): the brief
+    carries only feature_name + derivation_pseudocode + dataset_context, contains
+    no label/role string, and its per-feature inputs are byte-identical to the
+    golden set's — i.e. the author worked from the real mechanism metadata, never
+    the answer.
+    """
+    doc = json.loads(_BLIND_BRIEFS.read_text())
+    briefs = {b["feature_name"]: b for b in doc["briefs"]}
+    assert doc["total_entries"] == 31 and len(briefs) == 31
+
+    blob = json.dumps(doc["briefs"])
+    for field in _LABEL_REVEALING_FIELDS + ("rationale",):
+        assert field not in blob, f"blind brief leaks {field!r}"
+    for role in _VALID_ROLES:
+        assert role not in blob, f"blind brief leaks role string {role!r}"
+
+    golden = {
+        e["feature_name"]: e
+        for e in json.loads(_GOLDEN.read_text())["entries"]
+        if e.get("cohort") == "CSU_remibrutinib"
+    }
+    assert set(briefs) == set(golden)
+    for f, g in golden.items():
+        assert set(briefs[f]) == {"feature_name", "derivation_pseudocode", "dataset_context"}
+        assert briefs[f]["derivation_pseudocode"] == g["derivation_pseudocode"], f
+        assert briefs[f]["dataset_context"] == g["dataset_context"], f
+
+
+def test_blind_source_features_match_briefs():
+    # The authored edge source covers exactly the features in the blind brief —
+    # the author authored the briefed set, not a hand-picked subset.
+    briefs = {b["feature_name"] for b in json.loads(_BLIND_BRIEFS.read_text())["briefs"]}
+    src = {e["feature_name"] for e in json.loads(_BLIND_SOURCE.read_text())["entries"]}
+    assert src == briefs
+
+
+def test_negative_control_label_derived_source_still_passes_string_guards():
+    """HONEST NEGATIVE CONTROL (codex iter-1): the string/rebuild guards are
+    necessary but NOT sufficient to prove blind authorship.
+
+    A source authored *from the labels* — emitting each role's canonical topology
+    — uses none of the forbidden role/label strings, so it passes
+    ``test_blind_source_is_label_free`` and would rebuild a valid scoring fixture.
+    This test asserts that gap explicitly so no reviewer mistakes the artifact
+    tests for a proof of blindness. The blindness guarantee rests on the committed
+    blind-brief provenance + the author-once/score-once protocol, not on these
+    guards.
+    """
+    canonical = {  # role -> canonical edge topology (the label IS the topology)
+        "ancestor": [["f", "Y"], ["T", "Y"]],
+        "confounder": [["f", "T"], ["f", "Y"], ["T", "Y"]],
+        "instrument": [["f", "T"], ["T", "Y"]],
+        "mediator": [["T", "f"], ["f", "Y"], ["T", "Y"]],
+        "collider": [["T", "f"], ["Y", "f"], ["T", "Y"]],
+        "descendant": [["Y", "f"], ["T", "Y"]],
+    }
+    # NEUTRAL feature names decoupled from the role (do NOT name a feature after
+    # its role, or the name itself would leak it — the point is a source that
+    # encodes the answer ONLY in the topology, not in any string).
+    fnames = {role: f"nc_feature_{i}" for i, role in enumerate(canonical)}
+    label_derived_entries = [
+        {
+            "feature_name": fnames[role],
+            "feature_node": fnames[role],
+            "treatment_node": "T",
+            "outcome_node": "Y",
+            "edges": [
+                [a if a != "f" else fnames[role], b if b != "f" else fnames[role]] for a, b in edges
+            ],
+            "ambiguous": False,
+        }
+        for role, edges in canonical.items()
+    ]
+    entries_blob = json.dumps(label_derived_entries)
+    # It passes the same string guards the real blind source passes:
+    for field in _LABEL_REVEALING_FIELDS:
+        assert field not in entries_blob
+    for role in _VALID_ROLES:
+        assert role not in entries_blob
+    # ...yet each topology trivially re-derives its source role — i.e. the label
+    # is encoded in the shape, which the string guards cannot detect. This is the
+    # documented necessary-not-sufficient boundary; provenance covers it.
+    for role, edges in canonical.items():
+        fnode = fnames[role]
+        norm = [[a if a != "f" else fnode, b if b != "f" else fnode] for a, b in edges]
+        derived = extract_role(fnode, "T", "Y", nx.DiGraph([tuple(e) for e in norm]))
+        assert derived == role, f"canonical topology for {role} -> {derived}"

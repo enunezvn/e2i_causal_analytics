@@ -1,6 +1,6 @@
 {
   "description": "Per-feature review record for the CSU_remibrutinib labeled leak-decision validation (Layer-4 Track-2B-v3 Phase 1). Edges authored BLIND to true_role; scored once via src.ml.causal_role_dgp.extractor.extract_role. Author once, score once.",
-  "protocol": "non-circular by MECHANISM: DAG edges authored from feature_name + derivation_pseudocode + dataset_context + external literature (PubMed/ClinicalTrials), BLIND to ground_truth_role/rationale/provenance. The label-free authored edges live in tests/fixtures/causal_role_csu_blind_authored_edges.json; the scoring fixture is REBUILT from that source joined with the INDEPENDENT labels in tests/fixtures/causal_role_golden_set.json (build_edge_augmented_fixture), verified byte-identical in tests/unit/test_data/test_csu_golden_set_edges.py. Labels never enter the authoring.",
+  "protocol": "non-circular by PROVENANCE + protocol: the author saw only the label-free brief tests/fixtures/causal_role_csu_blind_briefs.json (feature_name + derivation_pseudocode + dataset_context) and external literature, BLIND to ground_truth_role/rationale/provenance. The label-free authored edges live in tests/fixtures/causal_role_csu_blind_authored_edges.json; the scoring fixture is the byte-identical join of those edges with the INDEPENDENT labels in tests/fixtures/causal_role_golden_set.json. Author-once/score-once; no edges edited to match labels.",
   "t_to_y_causal_assumption": "Every DAG includes the edge T->Y because remibrutinib genuinely reduces UAS7 (the studied effect) \u2014 a required CAUSAL ASSUMPTION, not a node-presence workaround. It is load-bearing for the pure outcome-echo descendants (post_index_dlqi_score_150_180d, uct_score_150_180d_post_index): T->Y->feature is what makes them descendant; without T->Y they are unrelated to T and route to review (conservative, never a missed leak). Pinned by test_t_to_y_is_load_bearing_for_outcome_echo_descendants.",
   "gate": {
     "metric": "missed_leaks == 0",
@@ -748,5 +748,6 @@
       "ambiguous": true,
       "citations_rationale": "Serum IL-17 is a downstream inflammatory cytokine correlate of CSU activity, not the primary FcepsilonRI/mast-cell pathway remibrutinib transduces; modeled as a common effect of treatment (T -> IL-17 change) and achieved response (Y -> IL-17 change). Ambiguous: activity-marker mediator-vs-collider under-determination."
     }
-  ]
+  ],
+  "non_circularity_epistemic_boundary": "HONEST (codex iter-1): the committed artifacts + tests prove the authoring INPUTS were label-free and labels were joined independently, but cannot by JSON inspection prove the edge TOPOLOGY was not reverse-engineered from labels (a label-derived author emits canonical shapes using no forbidden string \u2014 pinned by test_negative_control_label_derived_source_still_passes_string_guards). Blindness rests on the committed blind-brief provenance + the author-once/score-once protocol."
 }
