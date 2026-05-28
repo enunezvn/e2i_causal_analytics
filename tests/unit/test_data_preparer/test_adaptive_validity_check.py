@@ -632,6 +632,8 @@ def test_verdict_schema_is_uniform_across_layer_1_and_layer_3():
         "structural_llm_disagreement",
         "structural_remediation_override",
         "structural_gate_fired",
+        # Plan v4 Layer B / Phase 2 — structural decider unclassifiable flag:
+        "structural_unclassifiable",
     }
     for v in result["adaptive_verdicts"]:
         assert set(v.keys()) == canonical_keys, (
@@ -1051,6 +1053,8 @@ def test_phase29_decided_by_to_layer_mapping_covers_all_cases():
         "adversarial_ablation": "3",
         "kg": "2",
         "llm": "4",
+        # Plan v4 Layer B / Phase 2 — structural decider maps to Layer 4.
+        "structural": "4",
         "abstain": "abstain",
     }
 
@@ -1191,6 +1195,8 @@ def test_phase29_compose_legacy_verdict_all_none_signals_returns_abstain():
         "structural_llm_disagreement",
         "structural_remediation_override",
         "structural_gate_fired",
+        # Plan v4 Layer B / Phase 2 — structural decider unclassifiable flag:
+        "structural_unclassifiable",
     }
     assert set(verdict.keys()) == expected_keys
 
@@ -2291,6 +2297,8 @@ async def test_phase29_stage2_e2e_main_loop_with_populated_cache(tmp_path, monke
         "structural_llm_disagreement",
         "structural_remediation_override",
         "structural_gate_fired",
+        # Plan v4 Layer B / Phase 2 — structural decider unclassifiable flag:
+        "structural_unclassifiable",
     }
     assert set(verdict.keys()) == expected_keys
 

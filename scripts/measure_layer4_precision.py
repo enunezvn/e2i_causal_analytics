@@ -137,6 +137,56 @@ def _load_golden_set(path: Path) -> dict[str, Any]:
     return data
 
 
+def _structural_predict(entry: dict[str, Any]) -> str:
+    """Predict a feature's causal role deterministically from its authored DAG
+    edges via :func:`extract_role` (Plan v4 Layer B / Phase 2).
+
+    Raises ``SystemExit`` when the entry carries no ``edges`` — the 91-entry
+    literature golden set must be edge-augmented before ``--decider structural``
+    can score it (plan Task 8); failing loudly beats silently scoring nothing.
+    """
+    import networkx as nx
+
+    from src.ml.causal_role_dgp.extractor import extract_role
+
+    edges = entry.get("edges")
+    if not edges:
+        raise SystemExit(
+            f"--decider structural requires per-entry 'edges'; entry "
+            f"{entry.get('feature_name', '<missing>')!r} has none. Edge-augment "
+            f"the golden set first (plan Task 8)."
+        )
+    graph = nx.DiGraph([tuple(e) for e in edges])
+    return extract_role(
+        entry["feature_node"], entry["treatment_node"], entry["outcome_node"], graph
+    )
+
+
+def _macro_precision(buckets: dict[tuple[str, str], CohortMetrics]) -> Optional[float]:
+    """Macro-averaged per-PREDICTED-role precision across the ungated buckets.
+
+    For each predicted role P, precision(P) = correct(P) / predicted(P); the
+    macro average weights every predicted role equally (the non-circular
+    literature metric plan Task 8 gates on, ≥0.90). Uses the ungated buckets (the
+    decider's raw predictions) so a gated+ungated double-run does not double-
+    count; falls back to all buckets when no ungated pass ran. Returns None when
+    nothing was predicted.
+    """
+    relevant = [m for m in buckets.values() if m.gate == "ungated"] or list(buckets.values())
+    predicted_total: dict[str, int] = {}
+    correct: dict[str, int] = {}
+    for m in relevant:
+        for truth, row in m.confusion.items():
+            for pred, cnt in row.items():
+                predicted_total[pred] = predicted_total.get(pred, 0) + cnt
+                if pred == truth:
+                    correct[pred] = correct.get(pred, 0) + cnt
+    if not predicted_total:
+        return None
+    precisions = [correct.get(p, 0) / predicted_total[p] for p in predicted_total]
+    return sum(precisions) / len(precisions)
+
+
 def _evaluate_entries(
     entries: list[dict[str, Any]],
     *,
@@ -144,6 +194,7 @@ def _evaluate_entries(
     require_evaluator: bool,
     classifier_artifact: Optional[Path] = None,
     disagreements: Optional[list[dict[str, str]]] = None,
+    decider: str = "llm",
     _classify_feature: Any,
     _ensure_dspy_lm_configured: Any,
     _load_compiled_classifier: Any,
@@ -172,17 +223,21 @@ def _evaluate_entries(
     # ensure_dspy_lm_configured() helper is provider-aware and no-ops when
     # an LM is already configured or when no provider-matching key is in env
     # (matches conftest dotenv path + production orchestrator behaviour).
-    _ensure_dspy_lm_configured()
+    # The structural decider is LLM-free; only configure/load the DSPy classifier
+    # for the 'llm' decider.
+    classifier = None
+    if decider != "structural":
+        _ensure_dspy_lm_configured()
 
-    if classifier_artifact is not None:
-        classifier = _load_compiled_classifier(artifact_path=classifier_artifact)
-    else:
-        classifier = _load_compiled_classifier()
-    if classifier is None:
-        logger.warning(
-            "load_compiled_classifier returned None — no LM configured. "
-            "All entries will be reported as skipped_no_lm."
-        )
+        if classifier_artifact is not None:
+            classifier = _load_compiled_classifier(artifact_path=classifier_artifact)
+        else:
+            classifier = _load_compiled_classifier()
+        if classifier is None:
+            logger.warning(
+                "load_compiled_classifier returned None — no LM configured. "
+                "All entries will be reported as skipped_no_lm."
+            )
 
     gate_label = "gated" if require_evaluator else "ungated"
     bucket: dict[tuple[str, str], CohortMetrics] = {}
@@ -203,36 +258,43 @@ def _evaluate_entries(
         derivation = entry.get("derivation_pseudocode", "")
         context = entry.get("dataset_context", "")
 
-        if classifier is None:
-            metrics.n_skipped_no_lm += 1
-            continue
-
-        verdict = _classify_feature(
-            feature_name=feature_name,
-            derivation_pseudocode=derivation,
-            dataset_context=context,
-            classifier=classifier,
-        )
-        if verdict is None:
-            metrics.n_skipped_no_lm += 1
-            continue
-
-        # require_evaluator gate is applied here: skip entries where the
-        # evaluator did not satisfy criteria. In production, the evaluator
-        # would run alongside the classifier — for this metric script we
-        # approximate by treating verdict.evaluator_audit.satisfied as the
-        # gate. When require_evaluator=False, all classifier outputs count.
-        evaluator_audit = getattr(verdict, "evaluator_audit", None)
-        if require_evaluator:
-            if evaluator_audit is None:
-                metrics.n_skipped_no_eval += 1
-                continue
-            if not getattr(evaluator_audit, "satisfied", False):
-                metrics.n_skipped_no_eval += 1
+        if decider == "structural":
+            # Deterministic structural decider: extract_role over the entry's
+            # authored DAG edges (Plan v4 Layer B / Phase 2). No LLM, no
+            # evaluator gate — every entry with edges is scored.
+            predicted = _structural_predict(entry)
+            metrics.n_evaluated += 1
+        else:
+            if classifier is None:
+                metrics.n_skipped_no_lm += 1
                 continue
 
-        metrics.n_evaluated += 1
-        predicted = verdict.causal_role
+            verdict = _classify_feature(
+                feature_name=feature_name,
+                derivation_pseudocode=derivation,
+                dataset_context=context,
+                classifier=classifier,
+            )
+            if verdict is None:
+                metrics.n_skipped_no_lm += 1
+                continue
+
+            # require_evaluator gate is applied here: skip entries where the
+            # evaluator did not satisfy criteria. In production, the evaluator
+            # would run alongside the classifier — for this metric script we
+            # approximate by treating verdict.evaluator_audit.satisfied as the
+            # gate. When require_evaluator=False, all classifier outputs count.
+            evaluator_audit = getattr(verdict, "evaluator_audit", None)
+            if require_evaluator:
+                if evaluator_audit is None:
+                    metrics.n_skipped_no_eval += 1
+                    continue
+                if not getattr(evaluator_audit, "satisfied", False):
+                    metrics.n_skipped_no_eval += 1
+                    continue
+
+            metrics.n_evaluated += 1
+            predicted = verdict.causal_role
 
         # Track confusion matrix entries.
         truth_row = metrics.confusion.setdefault(str(ground_truth), {})
@@ -356,6 +418,18 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--decider",
+        choices=("llm", "structural"),
+        default="llm",
+        help=(
+            "Which role decider to score. 'llm' (default) runs the compiled DSPy "
+            "classifier. 'structural' runs the deterministic extract_role over each "
+            "entry's authored DAG 'edges' (Plan v4 Layer B / Phase 2) — LLM-free; "
+            "requires per-entry edges/feature_node/treatment_node/outcome_node and "
+            "gates on macro_precision."
+        ),
+    )
+    parser.add_argument(
         "--threshold",
         type=float,
         default=DEFAULT_THRESHOLD,
@@ -418,18 +492,22 @@ def main() -> int:
     _classify_feature = getattr(_module, "classify_feature", None)
     _ensure_dspy_lm_configured = getattr(_module, "ensure_dspy_lm_configured", None)
 
-    if _load_compiled_classifier is None:
-        from src.data.causal_role_classifier_loader import (  # noqa: E402
-            load_compiled_classifier as _load_compiled_classifier,
-        )
-    if _classify_feature is None:
-        from src.data.causal_role_classifier_loader import (  # noqa: E402
-            classify_feature as _classify_feature,
-        )
-    if _ensure_dspy_lm_configured is None:
-        from src.data.causal_role_classifier_loader import (  # noqa: E402
-            ensure_dspy_lm_configured as _ensure_dspy_lm_configured,
-        )
+    # The structural decider is LLM-free — skip importing the DSPy classifier
+    # loader entirely (no ANTHROPIC_API_KEY / DSPy LM needed). The loader
+    # callables stay None and are never invoked on the structural path.
+    if args.decider != "structural":
+        if _load_compiled_classifier is None:
+            from src.data.causal_role_classifier_loader import (  # noqa: E402
+                load_compiled_classifier as _load_compiled_classifier,
+            )
+        if _classify_feature is None:
+            from src.data.causal_role_classifier_loader import (  # noqa: E402
+                classify_feature as _classify_feature,
+            )
+        if _ensure_dspy_lm_configured is None:
+            from src.data.causal_role_classifier_loader import (  # noqa: E402
+                ensure_dspy_lm_configured as _ensure_dspy_lm_configured,
+            )
 
     logging.basicConfig(
         level=getattr(logging, args.log_level.upper()),
@@ -452,7 +530,11 @@ def main() -> int:
     )
 
     gates_to_run: list[bool]
-    if args.evaluator_gate == "true":
+    if args.decider == "structural":
+        # The evaluator gate is an LLM-only concept; the deterministic structural
+        # decider has no evaluator_audit, so run a single ungated pass.
+        gates_to_run = [False]
+    elif args.evaluator_gate == "true":
         gates_to_run = [True]
     elif args.evaluator_gate == "false":
         gates_to_run = [False]
@@ -467,6 +549,7 @@ def main() -> int:
                 require_evaluator=gate,
                 classifier_artifact=args.classifier_artifact,
                 disagreements=disagreements,
+                decider=args.decider,
                 _classify_feature=_classify_feature,
                 _ensure_dspy_lm_configured=_ensure_dspy_lm_configured,
                 _load_compiled_classifier=_load_compiled_classifier,
@@ -474,13 +557,16 @@ def main() -> int:
         )
 
     overall = _aggregate_metrics(buckets)
+    macro_prec = _macro_precision(buckets)
     print(_format_report(buckets=buckets, overall=overall, threshold=args.threshold))
 
     if args.report_path:
         report_doc = {
             "golden_set_path": str(args.golden_set),
             "cohort_filter": args.cohort,
+            "decider": args.decider,
             "threshold": args.threshold,
+            "macro_precision": macro_prec,
             "per_cohort": [m.as_dict() for m in buckets.values()],
             "overall": overall,
         }
@@ -502,6 +588,21 @@ def main() -> int:
     # 0 if no instrument predictions were made (n/a — typically because no
     # LM is configured locally); 1 if at least one gate has a measurable
     # precision and ALL are below threshold.
+    # Structural decider: gate on macro-averaged precision (the non-circular
+    # literature metric, plan Task 8) rather than the LLM instrument precision.
+    if args.decider == "structural":
+        if macro_prec is None:
+            logger.warning("No structural predictions made — macro precision not measured.")
+            return 0
+        if macro_prec >= args.threshold:
+            return 0
+        logger.error(
+            "Structural macro precision %.3f did not meet threshold %.2f",
+            macro_prec,
+            args.threshold,
+        )
+        return 1
+
     measurable_precisions = [
         m["precision_instrument"] for m in overall.values() if m["precision_instrument"] is not None
     ]

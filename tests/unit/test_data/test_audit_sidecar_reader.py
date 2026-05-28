@@ -731,8 +731,8 @@ def test_sidecar_payload_includes_schema_version_v1(tmp_path, monkeypatch):
     path = write_adaptive_verdicts_sidecar(state)
     assert path is not None
     payload = json.loads(Path(path).read_text())
-    assert payload.get("schema_version") == "1.6", (
-        f"producer must emit top-level schema_version='1.6'; got {payload.get('schema_version')!r}"
+    assert payload.get("schema_version") == "1.7", (
+        f"producer must emit top-level schema_version='1.7'; got {payload.get('schema_version')!r}"
     )
     # Schema 1.6: the FDR firing-driver summary is persisted in the audit-of-record.
     assert payload.get("leakage_fdr") == {
@@ -815,15 +815,15 @@ def test_reader_warns_on_unknown_schema_version_major(tmp_path, caplog):
     # ``"2.0"`` AND the reader's expected current version. Without this assertion
     # the test would still pass if the WARN stopped naming the reader's
     # expected version, which is the actionable half of the message.
-    # Layer-4 Phase 1: reader's current version bumped to "1.6"
+    # Layer-4 Phase 2: reader's current version bumped to "1.7"
     # (still MAJOR=1).
     matches = [
         rec
         for rec in caplog.records
-        if "schema_version" in rec.message and "2.0" in rec.message and "1.6" in rec.message
+        if "schema_version" in rec.message and "2.0" in rec.message and "1.7" in rec.message
     ]
     assert matches, (
-        "expected unknown-major WARN naming both '2.0' (payload) and '1.6' (reader); "
+        "expected unknown-major WARN naming both '2.0' (payload) and '1.7' (reader); "
         f"got: {[r.message for r in caplog.records]}"
     )
 
@@ -1203,9 +1203,9 @@ def test_sidecar_roundtrip_schema_1_5(tmp_path):
         SidecarReader,
     )
 
-    assert _READER_SCHEMA_VERSION == "1.6"
+    assert _READER_SCHEMA_VERSION == "1.7"
 
-    # --- 1.5 sidecar with the structural keys populated (older minor; the 1.6
+    # --- 1.5 sidecar with the structural keys populated (older minor; the 1.7
     # reader must still parse it without a WARN — same MAJOR=1) ---
     sub = tmp_path / "exp-15"
     sub.mkdir(parents=True)
@@ -1241,6 +1241,41 @@ def test_sidecar_roundtrip_schema_1_5(tmp_path):
     assert rec.structural_llm_disagreement is True
     assert rec.structural_remediation_override == "drop"
     assert rec.structural_gate_fired == "R-STRUCT"
+
+
+def test_sidecar_roundtrip_structural_unclassifiable_1_7(tmp_path):
+    """Plan v4 Layer B / Phase 2: a 1.7 sidecar carrying
+    ``structural_unclassifiable`` round-trips onto VerdictRecord (the structural
+    decider fired on a malformed attestation → review)."""
+    from src.data.audit_sidecar_reader import SidecarReader
+
+    sub = tmp_path / "exp-17"
+    sub.mkdir(parents=True)
+    payload_17 = {
+        "experiment_id": "exp-17",
+        "schema_version": "1.7",
+        "data_source": "synthetic",
+        "written_at": "2026-05-28T10:00:00Z",
+        "leakage_severity": "moderate",
+        "leaked_features": [],
+        "adaptive_flagged_features": [],
+        "adaptive_verdicts": [
+            {
+                "feature": "bad_attest",
+                "layer": "4",
+                "severity": "moderate",
+                "remediation": "review",
+                "structural_role": None,
+                "structural_unclassifiable": True,
+            }
+        ],
+    }
+    (sub / "adaptive_verdicts_20260528T100000Z.json").write_text(json.dumps(payload_17))
+
+    records = list(SidecarReader(artifacts_dir=tmp_path).iter_verdict_records())
+    assert len(records) == 1
+    assert records[0].structural_unclassifiable is True
+    assert records[0].structural_role is None
 
 
 def test_sidecar_1_4_returns_none_for_structural_keys_no_warning(tmp_path, caplog):
@@ -1280,6 +1315,7 @@ def test_sidecar_1_4_returns_none_for_structural_keys_no_warning(tmp_path, caplo
     assert rec.structural_llm_disagreement is None
     assert rec.structural_remediation_override is None
     assert rec.structural_gate_fired is None
+    assert rec.structural_unclassifiable is None  # Phase-2 key absent on a 1.4 sidecar
     # No unknown-key / schema warning for the absent structural keys.
     structural_warnings = [
         r for r in caplog.records if "structural_" in r.message and "unknown" in r.message.lower()

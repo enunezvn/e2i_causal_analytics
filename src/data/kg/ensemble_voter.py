@@ -576,6 +576,17 @@ def _llm_severity(role: CausalRole) -> str:
     return "info"
 
 
+def _structural_severity(role: CausalRole) -> str:
+    """Map a deterministic structural role to the EnsembleVerdict severity bucket.
+
+    Same leak→high / accept→info mapping as :func:`_llm_severity` (via the shared
+    ``LEAK_ROLES`` constant), but named separately so the audit trail — and any
+    future divergence between the LLM and structural severity policies — stays
+    legible.
+    """
+    return "high" if role in LEAK_ROLES else "info"
+
+
 class EnsembleVoter:
     """Phase 2.7 voter.
 
@@ -596,6 +607,8 @@ class EnsembleVoter:
         target_entity_ids: Iterable[str] = (),
         llm_verdict: Optional[LLMVerdict] = None,
         citation_verdicts: Iterable[CitationVerdict] = (),
+        structural_role: Optional[CausalRole] = None,
+        structural_unclassifiable: bool = False,
     ) -> EnsembleVerdict:
         """Combine upstream verdicts into one ensemble verdict.
 
@@ -643,6 +656,8 @@ class EnsembleVoter:
             target_entity_ids=target_entity_ids,
             llm_verdict=llm_verdict,
             citation_verdicts=citation_verdicts,
+            structural_role=structural_role,
+            structural_unclassifiable=structural_unclassifiable,
         )
         return self._apply_evaluator_gate(candidate, llm_verdict)
 
@@ -657,6 +672,8 @@ class EnsembleVoter:
         target_entity_ids: Iterable[str] = (),
         llm_verdict: Optional[LLMVerdict] = None,
         citation_verdicts: Iterable[CitationVerdict] = (),
+        structural_role: Optional[CausalRole] = None,
+        structural_unclassifiable: bool = False,
     ) -> EnsembleVerdict:
         """Pre-gate precedence logic for :meth:`vote`.
 
@@ -905,6 +922,64 @@ class EnsembleVoter:
                 decided_by="adversarial",
                 final_role="descendant",
                 confidence=ADVERSARIAL_HIGH_CONFIDENCE,
+                kg_signal=kg_signal,
+                kg_edges_considered=considered_edges,
+                verified_citations=verified,
+                unverified_citations=unverified,
+                disagreements=tuple(disagreements),
+                evidence=tuple(evidence),
+                layer_1_input=layer_1_snapshot,
+                adversarial_input=adversarial_snapshot,
+                llm_input=llm_verdict,
+            )
+
+        # ► STRUCTURAL rule (Plan v4 Layer B / Phase 2). The deterministic role
+        # derived from the feature's authored CausalStructureAttestation edges
+        # decides — replacing the unreliable LLM for attested features. Placed
+        # BELOW the empirical statistical vetoes (Layer-1 high, adversarial high)
+        # so an empirical leak still wins, and ABOVE the KG/LLM block so the LLM
+        # never decides for an attested feature. ``confidence=1.0`` means
+        # "deterministic GIVEN the authored edges"; it does NOT assert the edges
+        # are themselves correct (that is the non-circular literature-precision
+        # bar, plan Task 8). New kwargs default to None/False, so every existing
+        # caller and every un-attested feature skips this block unchanged.
+        if structural_role is not None:
+            structural_sev = _structural_severity(structural_role)
+            structural_rem = ROLE_DEFAULT_REMEDIATION[structural_role]
+            evidence.append(
+                f"Structural decider: extract_role(authored edges)={structural_role!r} "
+                f"→ severity={structural_sev}, remediation={structural_rem} "
+                f"(deterministic; LLM skipped)"
+            )
+            return EnsembleVerdict(
+                feature_name=feature_name,
+                severity=structural_sev,  # type: ignore[arg-type]
+                remediation=structural_rem,
+                decided_by="structural",
+                final_role=structural_role,
+                confidence=1.0,
+                kg_signal=kg_signal,
+                kg_edges_considered=considered_edges,
+                verified_citations=verified,
+                unverified_citations=unverified,
+                disagreements=tuple(disagreements),
+                evidence=tuple(evidence),
+                layer_1_input=layer_1_snapshot,
+                adversarial_input=adversarial_snapshot,
+                llm_input=llm_verdict,
+            )
+        if structural_unclassifiable:
+            evidence.append(
+                "Structural decider: authored attestation could not be classified "
+                "(malformed DAG) — routing to review (no empirical-high veto fired)"
+            )
+            return EnsembleVerdict(
+                feature_name=feature_name,
+                severity="moderate",
+                remediation="review",
+                decided_by="structural",
+                final_role=None,
+                confidence=0.0,
                 kg_signal=kg_signal,
                 kg_edges_considered=considered_edges,
                 verified_citations=verified,

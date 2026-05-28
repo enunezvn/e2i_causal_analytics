@@ -38,6 +38,9 @@ EnsembleDecidedBy = Literal[
     "llm",
     "abstain",
     "evaluator_gate",
+    # Plan v4 Layer B / Phase 2: the deterministic structural decider drove the
+    # verdict (authored ``CausalStructureAttestation`` edges → ``extract_role``).
+    "structural",
 ]
 
 KGSignal = Literal[

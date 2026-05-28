@@ -199,7 +199,10 @@ def write_adaptive_verdicts_sidecar(state: Dict[str, Any]) -> Path | None:
             # n_permutations / n_confident / confident_features / reason) so the
             # auto-fire provenance is persisted in the audit-of-record, not just
             # in-memory state. Still MAJOR=1.
-            "schema_version": "1.6",
+            # 1.7 (Layer-4 Phase 2): additive per-verdict ``structural_unclassifiable``
+            # key (True when the structural decider fired on an unclassifiable
+            # attestation → review). Additive, nullable. Still MAJOR=1.
+            "schema_version": "1.7",
             "experiment_id": state.get("experiment_id"),
             "data_source": state.get("data_source"),
             "written_at": ts,

@@ -135,12 +135,13 @@ def test_reader_known_keys_include_gate_keys():
     assert "worker_severity_pre_gate" in _KNOWN_VERDICT_KEYS
 
 
-def test_reader_schema_version_is_1_6():
-    # Bumped 1.5 → 1.6 by Layer-4 Phase 1 (additive run-level ``leakage_fdr``
-    # summary), mirroring the per-additive-keyset minor bumps: #501 (1.4 → 1.5
-    # M-structure keys), #508 (1.3 → 1.4 leak-crosscheck key), #240 Stage 3
-    # (→ 1.3). MAJOR stays 1 (additive, nullable, backward-compatible).
-    assert _READER_SCHEMA_VERSION == "1.6"
+def test_reader_schema_version_is_1_7():
+    # Bumped 1.6 → 1.7 by Layer-4 Phase 2 (additive per-verdict
+    # ``structural_unclassifiable`` key), mirroring the per-additive-keyset minor
+    # bumps: Phase 1 (1.5 → 1.6 leakage_fdr), #501 (1.4 → 1.5 M-structure keys),
+    # #508 (1.3 → 1.4 leak-crosscheck key), #240 Stage 3 (→ 1.3). MAJOR stays 1
+    # (additive, nullable, backward-compatible).
+    assert _READER_SCHEMA_VERSION == "1.7"
 
 
 def test_reader_surfaces_gate_keys_onto_verdict_record(tmp_path):
