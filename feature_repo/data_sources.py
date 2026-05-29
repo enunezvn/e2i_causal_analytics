@@ -21,18 +21,26 @@ from feast.types import String, UnixTimestamp
 # PostgreSQL Data Sources (Supabase)
 # =============================================================================
 
-# Business metrics table - contains aggregated KPIs per HCP/territory.
-# Reads from canonical business_metrics table; hcp_brand_id is a generated
-# column (migration 033). Filter excludes the legacy per-brand+region
-# aggregate rows (hcp_id IS NULL), so only the per-HCP rollup rows produced
-# by the per-HCP business-metrics ETL (6B-infra-2a) flow into Feast.
+# Business metrics table - per-HCP KPIs. Reads from canonical business_metrics;
+# hcp_id / event_timestamp / hcp_brand_id and the metric columns are added by
+# migration 033 (hcp_brand_id is a STORED generated column). The hcp_id IS NOT
+# NULL filter excludes the legacy per-(brand, region) aggregate rows so only the
+# per-HCP rollup rows produced by the 6B-infra-2a ETL flow into Feast.
+#
+# #556 drift fix: migration 033 made business_metrics per-HCP and never added
+# territory_id or brand_id (the per-HCP ETL writes brand(enum)+region+hcp_id;
+# hcp_brand_id is generated from hcp_id || enum_text(brand)). The prior
+# SELECT/WHERE referenced territory_id + brand_id, which do not exist on the
+# canonical table, so materialize() failed (UndefinedColumn). The HCP-keyed
+# consumers (hcp_conversion_features, hcp_engagement_features) join on hcp_id +
+# hcp_brand_id, both present. The territory+brand-keyed market_dynamics_features
+# can no longer be served from this per-HCP source and is set online=False
+# (see market_features.py).
 business_metrics_source = PostgreSQLSource(
     name="business_metrics_source",
     query="""
         SELECT
             hcp_id::VARCHAR,
-            territory_id::VARCHAR,
-            brand_id::VARCHAR,
             hcp_brand_id::VARCHAR,
             event_timestamp,
             trx_count,
@@ -46,8 +54,6 @@ business_metrics_source = PostgreSQLSource(
         FROM business_metrics
         WHERE event_timestamp >= NOW() - INTERVAL '365 days'
           AND hcp_id IS NOT NULL AND hcp_id <> ''
-          AND brand_id IS NOT NULL AND brand_id <> ''
-          AND territory_id IS NOT NULL AND territory_id <> ''
     """,
     timestamp_field="event_timestamp",
     created_timestamp_column="created_at",
@@ -59,6 +65,16 @@ business_metrics_source = PostgreSQLSource(
 # is_churned and brand_id are generated columns (migration 033).
 # adherence_rate / refill_count / gap_days are populated by the per-patient
 # adherence ETL (6B-infra-2b).
+#
+# #556 drift fix: the FeatureView fields therapy_start_date / days_on_therapy /
+# churn_risk_score were aliases of bridging-view expressions that migration 033
+# never promoted onto the canonical table. Map them to the real canonical
+# columns: journey_start_date (therapy start), journey_duration_days (days on
+# therapy), and risk_score (churn risk). journey_start_date is DATE on the
+# canonical table but the FeatureView field is UnixTimestamp, so cast it to
+# TIMESTAMPTZ (matching the dropped 031/032 bridging view) — a bare DATE would
+# break the FV's type contract at materialize. COALESCE the two numeric fields
+# so a NULL canonical value materializes as 0 rather than dropping the row.
 patient_journey_source = PostgreSQLSource(
     name="patient_journey_source",
     query="""
@@ -67,13 +83,13 @@ patient_journey_source = PostgreSQLSource(
             brand_id::VARCHAR,
             patient_brand_id::VARCHAR,
             event_date AS event_timestamp,
-            therapy_start_date,
-            days_on_therapy,
+            journey_start_date::TIMESTAMPTZ AS therapy_start_date,
+            COALESCE(journey_duration_days, 0) AS days_on_therapy,
             adherence_rate,
             refill_count,
             gap_days,
             is_churned,
-            churn_risk_score,
+            COALESCE(risk_score, 0) AS churn_risk_score,
             created_at
         FROM patient_journeys
         WHERE event_date >= NOW() - INTERVAL '365 days'

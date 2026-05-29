@@ -37,14 +37,23 @@ market_dynamics_fv = FeatureView(
         Field(name="engagement_score", dtype=Float32, description="Average engagement score"),
     ],
     source=business_metrics_source,
-    online=True,
+    # #556: online serving DISABLED. This view is keyed on (territory, brand) but
+    # its source, business_metrics_source, is per-HCP after migration 033 (keys:
+    # hcp_id, hcp_brand_id — territory_id/brand_id were dropped, see
+    # data_sources.py). The per-HCP source cannot supply the territory+brand join
+    # keys, so materialize() would fail. Rather than serve plausible-wrong
+    # territory data, online serving is off until a proper per-(territory, brand)
+    # rollup source exists (tracked in #556). The definition is retained (roadmap:
+    # ROI prediction); it has no current online/offline consumer in src/.
+    online=False,
     tags={
         "use_case": "roi_prediction",
         "model_type": "regression",
         "owner": "ml-foundation",
         "criticality": "medium",
+        "online_disabled_reason": "issue-556-per-hcp-source-lacks-territory-brand-keys",
     },
-    description="Market dynamics features for ROI prediction.",
+    description="Market dynamics features for ROI prediction (online disabled pending a per-(territory, brand) source — #556).",
 )
 
 

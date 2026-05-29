@@ -16,12 +16,14 @@ on:
     branches: [main, develop]
     paths:
       - 'feature_repo/**'
+      - 'database/**'
       - 'docker/Dockerfile.feast'
       - '.github/workflows/feast-apply.yml'
   pull_request:
     branches: [main, develop]
     paths:
       - 'feature_repo/**'
+      - 'database/**'
       - 'docker/Dockerfile.feast'
       - '.github/workflows/feast-apply.yml'
   workflow_dispatch:
@@ -44,6 +46,25 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
+
+      - name: Guard - Feast source-query columns exist in canonical DDL
+        # Hermetic (no feast, no DB): AST-parses feature_repo/data_sources.py and
+        # text-parses the committed schema DDL under database/, asserting every
+        # source-query column exists. This catches the #556 drift class on any
+        # feature_repo/** or database/** change (backend-tests.yml intentionally
+        # does NOT trigger on those paths). The live EXPLAIN + FEAST_INTEGRATION
+        # parity test remain the environment-specific backstops.
+        run: |
+          pip install --upgrade pip
+          pip install pytest
+          # Run the hermetic guard in ISOLATION from the repo's pytest config:
+          #   --noconftest    -> skip tests/conftest.py (it imports pytest_asyncio,
+          #                      not installed in this lean job)
+          #   -o addopts=""   -> drop pyproject's forced "-n 4 --dist=loadscope"
+          #                      (pytest-xdist not installed here)
+          # The guard is pure-stdlib + pytest; it needs neither plugin.
+          pytest tests/unit/test_feature_repo/test_data_sources_columns_exist.py \
+            --noconftest -o addopts="" -p no:cacheprovider
 
       - name: Verify CI Feast version matches production container
         # Production runs `feastdev/feature-server:0.43.0` (see

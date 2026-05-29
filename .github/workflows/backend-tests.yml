@@ -189,6 +189,7 @@ jobs:
             tests/unit/observability/ \
             tests/unit/test_data/ \
             tests/unit/test_feature_store/test_feast_client.py \
+            tests/unit/test_feature_repo/test_data_sources_columns_exist.py \
             --ignore=tests/unit/test_api/test_chatbot_tools.py \
             --ignore=tests/unit/test_api/test_episodic_memory_bridge.py \
             --ignore=tests/unit/test_api/test_cors_configuration.py \

@@ -304,11 +304,23 @@ class TestFeatureViewDefinitions:
             get_feature_view("unknown_view")
 
     def test_all_feature_views_have_online_enabled(self):
-        """Test that all feature views have online serving enabled."""
+        """All feature views serve online, except market_dynamics_features.
+
+        #556: market_dynamics_features is (territory, brand)-keyed but its source
+        (business_metrics_source) is per-HCP after migration 033 and cannot supply
+        those join keys, so online serving is disabled until a real per-(territory,
+        brand) source exists. The exemption is explicit so a regression that turns
+        another view offline is still caught.
+        """
         from features import FEATURE_VIEW_MAP
 
+        ONLINE_DISABLED = {"market_dynamics_features"}
         for name, fv in FEATURE_VIEW_MAP.items():
-            assert fv.online is True, f"Feature view {name} should have online=True"
+            expected = fv.name not in ONLINE_DISABLED
+            assert fv.online is expected, (
+                f"Feature view {name} expected online={expected} "
+                f"(market_dynamics_features is intentionally offline per #556)."
+            )
 
     def test_all_feature_views_have_use_case_tag(self):
         """Test that all feature views have use_case tag."""
