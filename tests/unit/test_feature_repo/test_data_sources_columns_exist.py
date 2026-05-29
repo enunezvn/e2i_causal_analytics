@@ -182,14 +182,19 @@ def _ddl_columns() -> dict[str, set[str]]:
             if not tm:
                 continue
             table = tm.group(1).lower()
-            for cm in re.finditer(
-                r"ADD COLUMN\s+(?:IF NOT EXISTS\s+)?([a-z_][a-z0-9_]*)", stmt, re.IGNORECASE
+            # Apply ADD/DROP COLUMN in the exact order they appear in the
+            # statement, so `DROP COLUMN x, ADD COLUMN x` nets to add and
+            # `ADD COLUMN x, DROP COLUMN x` nets to drop (single ordered scan,
+            # not all-adds-then-all-drops).
+            for am in re.finditer(
+                r"\b(ADD|DROP) COLUMN\s+(?:IF (?:NOT )?EXISTS\s+)?([a-z_][a-z0-9_]*)",
+                stmt,
+                re.IGNORECASE,
             ):
-                cols.setdefault(table, set()).add(cm.group(1).lower())
-            for dm in re.finditer(
-                r"DROP COLUMN\s+(?:IF EXISTS\s+)?([a-z_][a-z0-9_]*)", stmt, re.IGNORECASE
-            ):
-                cols.get(table, set()).discard(dm.group(1).lower())
+                if am.group(1).upper() == "ADD":
+                    cols.setdefault(table, set()).add(am.group(2).lower())
+                else:
+                    cols.get(table, set()).discard(am.group(2).lower())
     return cols
 
 
