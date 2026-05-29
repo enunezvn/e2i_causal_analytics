@@ -319,11 +319,13 @@ class TwinRetrainingService:
             f"reason: {reason.value}, job_id: {job.job_id}"
         )
 
-        # Queue retraining task (if Celery is available)
+        # Queue the real retraining task (#548: execute_twin_retraining now
+        # exists in src.tasks.ab_testing_tasks; the import succeeds and the
+        # task is enqueued). An ImportError here would mean the task module
+        # genuinely failed to load (e.g. a broken Celery app) — report that
+        # truthfully, NOT the old misleading "Celery tasks not available".
         try:
-            from src.tasks.ab_testing_tasks import (
-                execute_twin_retraining,  # type: ignore[attr-defined]
-            )
+            from src.tasks.ab_testing_tasks import execute_twin_retraining
 
             task = execute_twin_retraining.delay(
                 retraining_job_id=job.job_id,
@@ -331,8 +333,10 @@ class TwinRetrainingService:
                 training_config=training_config,
             )
             logger.info(f"Queued retraining task: {task.id}")
-        except ImportError:
-            logger.warning("Celery tasks not available, retraining job created but not queued")
+        except ImportError as e:
+            logger.error(
+                f"Twin retraining task module failed to import; job created but not queued: {e}"
+            )
         except Exception as e:
             logger.error(f"Failed to queue retraining task: {e}")
 
@@ -418,6 +422,39 @@ class TwinRetrainingService:
             f"success={success}"
         )
 
+        return job
+
+    async def fail_retraining(
+        self,
+        job_id: str,
+        error_message: str,
+    ) -> Optional[TwinRetrainingJob]:
+        """Mark a retraining job FAILED, writing NO fidelity metric (#548).
+
+        The fail-closed counterpart of ``complete_retraining``: when a real
+        training run can't be certified (missing data source, train exception,
+        non-finite metric, missing model row), the job is recorded as FAILED
+        with the reason — and ``fidelity_after`` is left ``None`` rather than a
+        fabricated 0.0 that could be misread as a real (poor) fidelity score.
+
+        Args:
+            job_id: Retraining job ID
+            error_message: Why the retraining could not be certified
+
+        Returns:
+            Updated job or None if the job is unknown
+        """
+        job = self._pending_jobs.get(job_id)
+        if not job:
+            logger.warning(f"Retraining job not found: {job_id}")
+            return None
+
+        job.status = TwinRetrainingStatus.FAILED
+        job.completed_at = datetime.now(timezone.utc)
+        job.error_message = error_message
+        # fidelity_after intentionally left None — no metric on failure.
+
+        logger.info(f"Failed retraining job {job_id}: {error_message}")
         return job
 
     async def cancel_retraining(

@@ -27,6 +27,22 @@ from src.digital_twin.retraining_service import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _no_broker_enqueue():
+    """Keep these service-level unit tests off the live Celery broker.
+
+    #548 made ``execute_twin_retraining`` a real registered task, so
+    ``trigger_retraining`` now imports it and calls ``.delay(...)``. Without this
+    fixture each trigger test would perform real Redis broker I/O (and hang/slow
+    when a broker is reachable). The real queueing + log behavior is covered
+    explicitly in ``test_retraining_service_queueing.py``; here we just prevent
+    the enqueue so we exercise the service's own job-creation logic.
+    """
+    with patch("src.tasks.ab_testing_tasks.execute_twin_retraining") as mock_task:
+        mock_task.delay = MagicMock(return_value=MagicMock(id="test-task-id"))
+        yield mock_task
+
+
 @pytest.fixture
 def config():
     """Retraining config with default thresholds."""

@@ -155,6 +155,10 @@ celery_app.conf.task_routes = {
     "src.tasks.twin.*": {"queue": "twins"},
     "src.tasks.train_twin_model": {"queue": "ml"},
     "src.tasks.simulate_population": {"queue": "twins"},
+    # Live twin retraining (#548) runs a full TwinGenerator.train (sklearn
+    # ensemble), so it belongs on worker_heavy's `ml` queue. The name doesn't
+    # match the train_*/twin.* globs, so route it explicitly.
+    "src.tasks.execute_twin_retraining": {"queue": "ml"},
     # -------------------------------------------------------------------------
     # A/B Testing Tasks (Phase 15)
     # -------------------------------------------------------------------------

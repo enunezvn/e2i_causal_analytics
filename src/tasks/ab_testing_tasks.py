@@ -25,12 +25,16 @@ import logging
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 from uuid import UUID
 
 import yaml  # type: ignore[import-untyped]
 
+from src.digital_twin.twin_generator import TwinGenerator
 from src.workers.celery_app import celery_app
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -964,6 +968,268 @@ def cleanup_old_ab_results(
             }
 
     return cast(Dict[str, Any], run_async(execute_cleanup()))
+
+
+# --------------------------------------------------------------------------- #
+# Digital-twin retraining (#548)
+#
+# TwinRetrainingService.trigger_retraining imports execute_twin_retraining from
+# this module and queues it. Before #548 no such task existed: the ImportError
+# was caught and logged as the MISLEADING "Celery tasks not available" (Celery
+# IS available — only this one task was missing), so the LIVE auto-retraining
+# path (FidelityTracker(auto_trigger_retraining=True) → check_and_trigger →
+# trigger_retraining) silently no-oped.
+#
+# This is the twin analogue of #545's `execute_model_retraining`: a thin Celery
+# task → async core that runs the REAL TwinGenerator.train and records ONLY the
+# real validation metric, failing CLOSED on any path that can't certify one.
+# Twins are sklearn ensembles (TwinGenerator), NOT the MLFoundationPipeline.
+# --------------------------------------------------------------------------- #
+def _twin_training_data_from_config(
+    training_config: Dict[str, Any],
+) -> tuple["pd.DataFrame", str]:
+    """Resolve the twin's training DataFrame + target column from the contract.
+
+    The twin retraining system has NO live cohort feed — a degradation
+    auto-trigger's ``training_config`` (built by ``_build_training_config``)
+    carries tuning knobs but no data. So the task can only run a real retrain
+    when a caller supplies a concrete ``data_source`` (a .csv/.parquet path) and
+    ``target_column`` (e.g. via ``config_overrides``). Absent either, we fail
+    LOUD here so the core fails closed rather than fabricate a metric — mirroring
+    #545's ``_cohort_input_from_training_config`` ValueError contract.
+
+    Raises:
+        ValueError: if ``data_source`` or ``target_column`` is missing.
+    """
+    import pandas as pd
+
+    data_source = training_config.get("data_source")
+    if not data_source or not isinstance(data_source, str):
+        raise ValueError(
+            "training_config lacks a concrete 'data_source' — twin retraining has "
+            "no live cohort feed, so without a data path there is nothing to train "
+            "on (fail closed rather than fabricate a metric)"
+        )
+    target_column = training_config.get("target_column")
+    if not target_column or not isinstance(target_column, str):
+        raise ValueError(
+            "training_config lacks a 'target_column' — cannot train a twin without "
+            "an outcome to model (fail closed)"
+        )
+
+    if data_source.endswith(".parquet"):
+        df = pd.read_parquet(data_source)
+    else:
+        df = pd.read_csv(data_source)
+    return df, target_column
+
+
+def _extract_validation_r2(metrics: Any) -> Optional[float]:
+    """Return the REAL finite validation R² ``TwinGenerator.train`` produced, or
+    ``None``.
+
+    ``TwinModelMetrics.r2_score`` is the held-out validation R² (twin_generator
+    .py:216). ``None`` / non-finite means the run produced no certifiable metric
+    — the caller MUST fail closed rather than synthesize a placeholder.
+    """
+    import math
+
+    r2 = getattr(metrics, "r2_score", None)
+    if isinstance(r2, (int, float)) and not isinstance(r2, bool) and math.isfinite(r2):
+        return float(r2)
+    return None
+
+
+async def _execute_real_twin_retraining(
+    retraining_job_id: str,
+    model_id: str,
+    training_config: Dict[str, Any],
+    service: Any = None,
+) -> Dict[str, Any]:
+    """Run a REAL ``TwinGenerator.train`` for a twin retraining job and record
+    the REAL outcome.
+
+    Fails closed: any path that does not yield a certifiable validation R²
+    (missing data source / target, missing model row, train exception, or a
+    completed train with no finite R²) marks the job ``failed`` via
+    ``TwinRetrainingService.fail_retraining`` (which writes NO ``fidelity_after``).
+    A fake metric must never reach the job record.
+
+    PERSISTENCE GAP (codex HIGH; durable-persistence follow-up #549): this path is fully honest only
+    same-process/eager today. Twin retraining job state lives ONLY in the
+    service's in-process ``_pending_jobs`` dict (no durable job table), and
+    ``TwinGenerator.train`` does not persist the model artifact. In a real Celery
+    worker (a separate process from the API that queued the job), the service's
+    store is empty so ``complete_retraining`` returns ``None`` — when that
+    happens we FAIL CLOSED (return a non-success result, write no metric) rather
+    than report a false "completed". Making this path durable across the worker
+    boundary requires (a) durable twin-model persistence and (b) shared/durable
+    job storage.
+
+    Args:
+        retraining_job_id: TwinRetrainingJob id created by trigger_retraining.
+        model_id: id of the twin model being retrained (used to rebuild the
+            trainer's type/brand/feature/target contract from the saved row).
+        training_config: the retraining contract; must carry a concrete
+            ``data_source`` + ``target_column`` for a real run (else fail closed).
+        service: optional TwinRetrainingService used to persist completion; one
+            is constructed if not supplied.
+
+    Returns:
+        Result dict (real ``validation_r2`` on success; failure reason otherwise).
+    """
+    from src.digital_twin.models.twin_models import Brand, TwinType
+    from src.digital_twin.retraining_service import get_twin_retraining_service
+    from src.digital_twin.twin_repository import TwinModelRepository
+
+    if service is None:
+        service = get_twin_retraining_service()
+
+    async def _mark_failed(reason: str) -> Dict[str, Any]:
+        logger.error(f"Twin retraining {retraining_job_id} failed closed: {reason}")
+        try:
+            await service.fail_retraining(
+                job_id=retraining_job_id,
+                error_message=reason,
+            )
+        except Exception as e:  # noqa: BLE001 — never mask the original failure
+            logger.error(f"Also failed to mark twin retraining {retraining_job_id} failed: {e}")
+        return {
+            "status": "failed",
+            "retraining_job_id": retraining_job_id,
+            "model_id": model_id,
+            "error": reason,
+            "validation_r2": None,
+        }
+
+    # Resolve training inputs BEFORE touching anything — fail loud if the
+    # contract lacks a data source / target (the trainer is never invoked then).
+    try:
+        data, target_column = _twin_training_data_from_config(training_config)
+    except ValueError as e:
+        return await _mark_failed(str(e))
+
+    # Locate the saved model row to rebuild the trainer's identity/feature set.
+    repo = TwinModelRepository()
+    try:
+        from uuid import UUID
+
+        model_row = await repo.get_model(UUID(model_id))
+    except Exception as e:  # noqa: BLE001 — convert lookup failure to fail-closed
+        return await _mark_failed(f"model lookup raised {type(e).__name__}: {e}")
+    if not model_row:
+        return await _mark_failed(
+            f"twin model {model_id} not found — cannot rebuild the trainer contract"
+        )
+
+    try:
+        twin_type = TwinType(model_row["twin_type"])
+        brand = Brand(model_row["brand"])
+    except (KeyError, ValueError) as e:
+        return await _mark_failed(
+            f"twin model row missing/invalid twin_type|brand: {type(e).__name__}: {e}"
+        )
+
+    feature_cols = model_row.get("feature_columns") or None
+    algorithm = (model_row.get("training_config") or {}).get("algorithm", "random_forest")
+
+    # Run the REAL training. Any exception → fail closed (no metric written).
+    try:
+        generator = TwinGenerator(twin_type=twin_type, brand=brand)
+        metrics = generator.train(
+            data=data,
+            target_col=target_column,
+            feature_cols=feature_cols,
+            algorithm=algorithm,
+        )
+    except Exception as e:  # noqa: BLE001 — convert any train failure to fail-closed
+        return await _mark_failed(f"TwinGenerator.train raised {type(e).__name__}: {e}")
+
+    validation_r2 = _extract_validation_r2(metrics)
+    if validation_r2 is None:
+        return await _mark_failed(
+            "TwinGenerator.train produced no finite validation R² — not certifiable; "
+            "job marked failed (no metric written)"
+        )
+
+    new_model_id = str(getattr(metrics, "model_id", model_id))
+    # PERSISTENCE BOUNDARY (codex HIGH; durable-persistence follow-up #549):
+    # complete_retraining records the completion ONLY in this service's
+    # in-process ``_pending_jobs`` dict (retraining_service.py:143/315/409) —
+    # there is NO durable twin-retraining-job table/repository, and
+    # ``get_twin_retraining_service`` returns a FRESH service per call
+    # (retraining_service.py:600), so a Celery worker (separate process from the
+    # API that queued the job) has an EMPTY store and complete_retraining returns
+    # None. ``TwinGenerator.train`` (twin_generator.py:213-233) likewise builds a
+    # new model_id but does NOT persist the model artifact anywhere durable.
+    # Until BOTH (a) durable twin-model persistence and (b) shared/durable job
+    # storage exist, this success path only works same-process/eager — across the
+    # worker boundary we FAIL CLOSED below rather than report a false "completed".
+    recorded = await service.complete_retraining(
+        job_id=retraining_job_id,
+        new_model_id=new_model_id,
+        fidelity_after=validation_r2,
+        success=True,
+    )
+    if recorded is None:
+        # The train really ran (R²=validation_r2) but the completion could not be
+        # recorded: the job is not in THIS worker's in-process store. Reporting
+        # "completed" with a real-looking metric would be a false success.
+        return await _mark_failed(
+            f"twin retraining ran (validation R²={validation_r2:.4f}) but completion "
+            f"could not be recorded: job {retraining_job_id} not present in this "
+            "worker's in-process store — twin retraining job state is not shared "
+            "across processes and the retrained model is not durably persisted "
+            "(see follow-up #549). No completion or metric was recorded."
+        )
+
+    logger.info(
+        f"Twin retraining {retraining_job_id} complete: "
+        f"new_model={new_model_id}, validation R²={validation_r2:.4f}"
+    )
+    return {
+        "status": "completed",
+        "retraining_job_id": retraining_job_id,
+        "model_id": model_id,
+        "new_model_id": new_model_id,
+        "validation_r2": validation_r2,
+        "message": f"Twin {new_model_id} retrained; validation R²={validation_r2:.4f}",
+    }
+
+
+@celery_app.task(bind=True, name="src.tasks.execute_twin_retraining")
+def execute_twin_retraining(
+    self,
+    retraining_job_id: str,
+    model_id: str,
+    training_config: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Execute a digital-twin retraining job by running the REAL TwinGenerator.
+
+    Rebuilds the trainer from the saved twin model's contract, runs a real
+    ``TwinGenerator.train`` on the contract's data source, and records the real
+    validation R² via ``TwinRetrainingService.complete_retraining``. Fails closed
+    — never writes a fabricated metric (the twin analogue of #545's
+    ``execute_model_retraining``). Routed to the heavy ``ml`` queue since it
+    runs a full sklearn training job.
+
+    Args:
+        retraining_job_id: TwinRetrainingJob id from trigger_retraining.
+        model_id: id of the twin model being retrained.
+        training_config: retraining contract (must carry data_source +
+            target_column for a real run; else the job fails closed).
+
+    Returns:
+        Retraining results (real metric on success; failure reason otherwise).
+    """
+    logger.info(
+        f"Starting twin retraining for model {model_id}, "
+        f"job {retraining_job_id}, task {self.request.id}"
+    )
+    return cast(
+        Dict[str, Any],
+        run_async(_execute_real_twin_retraining(retraining_job_id, model_id, training_config)),
+    )
 
 
 # Celery Beat schedule configuration
