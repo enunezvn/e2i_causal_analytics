@@ -222,6 +222,7 @@ describe('Monitoring API Client', () => {
       const result = await completeRetraining('job-uuid-123', {
         performance_after: 0.92,
         success: true,
+        mlflow_run_id: 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6',
         notes: 'Model retrained successfully',
       });
 

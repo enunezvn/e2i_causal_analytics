@@ -442,14 +442,32 @@ class RetrainingTriggerService:
         job_id: str,
         performance_after: float,
         success: bool = True,
+        *,
+        mlflow_run_id: Optional[str] = None,
     ) -> Optional[RetrainingJob]:
         """
         Mark retraining job as complete.
+
+        WRITE-BOUNDARY TRUST MODEL (#546): this method does NOT itself verify
+        ``performance_after`` — a ``success=True`` write must be metric-certified
+        by its caller. The two current callers are both safe: the manual API
+        endpoint gates via ``_verify_success_provenance`` (resolves
+        ``mlflow_run_id`` against a finished ``ml_training_runs`` row and matches
+        the metric within tolerance), and the automated pipeline path
+        (``drift_monitoring_tasks._execute_real_retraining``) self-certifies via
+        ``success_criteria_met`` on a real ``MLFoundationPipeline`` result (and
+        supplies no ``mlflow_run_id``). Any NEW untrusted caller must verify
+        provenance before calling this with ``success=True``.
 
         Args:
             job_id: Retraining job UUID
             performance_after: Performance metric after retraining
             success: Whether retraining was successful
+            mlflow_run_id: Provenance pointer to the MLflow run that produced
+                ``performance_after`` (#546). Persisted on the record's
+                ``training_config`` when supplied so a completed metric is
+                auditable back to its run. ``None`` on the automated path, which
+                already certified the metric via the live pipeline.
 
         Returns:
             Updated job or None
@@ -457,7 +475,9 @@ class RetrainingTriggerService:
         from src.repositories.drift_monitoring import RetrainingHistoryRepository
 
         repo = RetrainingHistoryRepository()
-        record = await repo.complete_retraining(job_id, performance_after, success)
+        record = await repo.complete_retraining(
+            job_id, performance_after, success, mlflow_run_id=mlflow_run_id
+        )
 
         if not record:
             return None

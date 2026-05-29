@@ -23,6 +23,7 @@ Version: 4.1.0
 """
 
 import logging
+import math
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
@@ -1305,17 +1306,33 @@ class TriggerRetrainingRequest(BaseModel):
 
 
 class CompleteRetrainingRequest(BaseModel):
-    """Request to mark retraining as complete."""
+    """Request to mark retraining as complete.
+
+    ``mlflow_run_id`` is the provenance pointer to the MLflow run that produced
+    ``performance_after`` (#546). It is optional on the schema (so failure/abort
+    completions stay non-breaking), but the endpoint REQUIRES it on a success
+    completion AND verifies it resolves to a real ``finished`` training run whose
+    recorded validation AUC matches ``performance_after`` — see
+    ``complete_retraining`` / ``_verify_success_provenance``.
+    """
 
     performance_after: float = Field(..., description="Performance metric after retraining")
     success: bool = Field(default=True, description="Whether retraining was successful")
     notes: Optional[str] = Field(None, description="Additional notes")
+    mlflow_run_id: Optional[str] = Field(
+        None,
+        description=(
+            "MLflow run ID that produced performance_after. Required on a success "
+            "completion (success=true): the metric must point at a real run."
+        ),
+    )
 
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
                 "performance_after": 0.92,
                 "success": True,
+                "mlflow_run_id": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6",
                 "notes": "Model retrained with expanded dataset",
             }
         }
@@ -1603,6 +1620,81 @@ async def get_retraining_status(job_id: str) -> RetrainingJobResponse:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# Validation-AUC keys, in priority order — mirrors
+# drift_monitoring_tasks._extract_validation_auc so the manual-completion gate
+# reads a run's metric the same way the automated path does.
+_VALIDATION_AUC_KEYS = ("roc_auc", "auc_roc", "auc", "val_auc")
+# Tolerance for matching a manually-submitted performance_after against the
+# value recorded for the real run (rounding/serialisation slack only).
+_PROVENANCE_AUC_TOL = 1e-3
+
+
+def _validation_auc_from_metrics(metrics: Dict[str, Any]) -> Optional[float]:
+    """Return the finite validation AUC from a run's ``validation_metrics`` map.
+
+    Tries ``_VALIDATION_AUC_KEYS`` in order; returns ``None`` if none is present
+    or finite (same semantics as the automated path's ``_extract_validation_auc``).
+    """
+    for key in _VALIDATION_AUC_KEYS:
+        val = metrics.get(key)
+        if isinstance(val, (int, float)) and not isinstance(val, bool) and math.isfinite(val):
+            return float(val)
+    return None
+
+
+async def _verify_success_provenance(performance_after: float, mlflow_run_id: str) -> None:
+    """Certify a manual SUCCESS completion against the REAL training run (#546).
+
+    Resolves ``mlflow_run_id`` to the ``ml_training_runs`` row the model-trainer
+    persisted (``MLTrainingRunRepository.get_by_mlflow_run_id``) and requires:
+    the run exists, is ``finished``, has a finite validation AUC, and that AUC
+    matches the submitted ``performance_after`` within ``_PROVENANCE_AUC_TOL``.
+    Raises ``HTTPException(422)`` on any failure (fail-closed). Obtains the async
+    Supabase client the same way the live retraining task does
+    (``get_async_supabase_client``), so the lookup runs against the real table.
+    """
+    from src.memory.services.factories import get_async_supabase_client
+    from src.repositories.ml_experiment import MLTrainingRunRepository
+
+    client = await get_async_supabase_client()
+    repo = MLTrainingRunRepository(client)
+    run = await repo.get_by_mlflow_run_id(mlflow_run_id)
+    if run is None:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"no training run found for mlflow_run_id={mlflow_run_id!r}; "
+                "cannot certify a manual success completion"
+            ),
+        )
+    if run.status != "finished":
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"training run {mlflow_run_id!r} has status={run.status!r} "
+                "(expected 'finished'); cannot certify a success completion"
+            ),
+        )
+    run_auc = _validation_auc_from_metrics(run.validation_metrics or {})
+    if run_auc is None:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"training run {mlflow_run_id!r} has no finite validation AUC "
+                f"(keys tried: {', '.join(_VALIDATION_AUC_KEYS)}); cannot certify"
+            ),
+        )
+    if abs(performance_after - run_auc) > _PROVENANCE_AUC_TOL:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"performance_after={performance_after!r} does not match the "
+                f"validation AUC recorded for run {mlflow_run_id!r} "
+                f"(run_auc={run_auc!r}, tol={_PROVENANCE_AUC_TOL})"
+            ),
+        )
+
+
 @router.post(
     "/retraining/{job_id}/complete",
     response_model=RetrainingJobResponse,
@@ -1617,6 +1709,34 @@ async def complete_retraining(
     """
     Mark a retraining job as complete.
 
+    Provenance gate (#546). A SUCCESS completion (``success=True``) records a
+    ``performance_after`` that the rest of the platform treats as a real, earned
+    validation metric. The automated path (``_execute_real_retraining``) only
+    reaches this point after running the real ``MLFoundationPipeline``, extracting
+    a validation AUC, and confirming ``success_criteria_met``. A manual caller has
+    no such backing, so before persisting a SUCCESS the endpoint requires:
+
+    1. a finite ``performance_after`` in the plausible AUC range ``[0.0, 1.0]``
+       (rejects ``None``/``NaN``/``inf``/out-of-range); AND
+    2. a non-empty ``mlflow_run_id`` provenance pointer; AND
+    3. that pointer resolves to a REAL, ``finished`` training run in
+       ``ml_training_runs`` (persisted by the model-trainer) whose recorded
+       validation AUC matches the submitted ``performance_after`` within
+       ``_PROVENANCE_AUC_TOL`` (1e-3) — see ``_verify_success_provenance``.
+
+    This is NOT provenance theater: step 3 looks the run up by
+    ``mlflow_run_id`` and rejects an invented id, an unfinished run, a run
+    without a finite validation AUC, or a metric that does not match what the
+    run actually recorded (validation-AUC keys, in order:
+    roc_auc, auc_roc, auc, val_auc). The check runs at the endpoint (the trust
+    boundary for an untrusted manual admin caller) rather than in the service —
+    the service's ``complete_retraining`` is shared with the automated path,
+    which already certified its metric via the live pipeline and passes no
+    ``mlflow_run_id``; gating there would muddy the certified path.
+
+    FAILURE/abort completions (``success=False``) are unchanged — they carry no
+    promotable metric and need no provenance.
+
     Args:
         job_id: Retraining job ID
         request: Completion details
@@ -1626,12 +1746,34 @@ async def complete_retraining(
     """
     from src.services.retraining_trigger import get_retraining_trigger_service
 
+    if request.success:
+        metric = request.performance_after
+        if not math.isfinite(metric) or not (0.0 <= metric <= 1.0):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"performance_after={metric!r} is not a plausible validation "
+                    "metric for a success completion (must be a finite value in "
+                    "[0.0, 1.0])"
+                ),
+            )
+        if not (request.mlflow_run_id and request.mlflow_run_id.strip()):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "provenance required for a success completion: pass "
+                    "mlflow_run_id naming the run that produced performance_after"
+                ),
+            )
+        await _verify_success_provenance(metric, request.mlflow_run_id.strip())
+
     try:
         service = get_retraining_trigger_service()
         job = await service.complete_retraining(
             job_id=job_id,
             performance_after=request.performance_after,
             success=request.success,
+            mlflow_run_id=request.mlflow_run_id,
         )
 
         if not job:
