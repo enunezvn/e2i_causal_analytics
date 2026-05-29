@@ -192,3 +192,17 @@ def test_droplet_pulls_from_ghcr_with_local_build_fallback():
     )
     # The fallback path must still build locally.
     assert script.count("--build") >= 1, "a failed pull must fall back to a local build"
+    # The GHCR pull must NOT be gated on the local rebuild detector (BUILD_FLAG): the
+    # CI build-push (a `needs:` of deploy) builds the image for THIS commit including
+    # any baked change, so skipping the pull when BUILD_FLAG is set would wrongly run
+    # the OOM-prone React build on the droplet for exactly the commits that change
+    # baked inputs (e.g. this PR itself).
+    assert "export IMAGE_TAG=" in script
+    pull_block = script.split("export IMAGE_TAG=", 1)[1].split("ordered rollout", 1)[0]
+    assert "docker login" in pull_block and "$COMPOSE_CMD pull" in pull_block, (
+        "the pull must happen in the block right after IMAGE_TAG is exported"
+    )
+    assert 'BUILD_FLAG"' not in pull_block.replace("APP_BUILD_FLAG", ""), (
+        "the GHCR pull decision must be INDEPENDENT of BUILD_FLAG (do not skip the pull "
+        "when a baked input changed — the CI image for this commit already has it)"
+    )

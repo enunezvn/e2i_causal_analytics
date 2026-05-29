@@ -248,22 +248,22 @@ jobs:
               BUILD_FLAG=""
             fi
 
-            # #528-B: pull the pre-built app images from GHCR (built+pushed by the
-            # build-and-push jobs for THIS commit) instead of building on the droplet.
+            # #528-B: pull the pre-built app + frontend images from GHCR instead of
+            # building on the droplet. The build-and-push jobs are a `needs:` of this
+            # deploy, so the images for THIS commit ($NEW_SHA) are already pushed and
+            # ALREADY INCLUDE any baked-input change — pulling is correct regardless of
+            # the local rebuild detector, and it avoids running the OOM-prone React
+            # production build on the droplet. So the pull is INDEPENDENT of BUILD_FLAG:
+            # try login+pull first; fall back to a local build ONLY if login or pull
+            # fails (registry hiccup / missing image) so a deploy is never wedged.
             # feast/feast-materializer are sidecar images NOT pushed to GHCR — they keep
-            # building locally below. The pull is best-effort: if login or pull fails, OR
-            # a baked image input changed in this commit (BUILD_FLAG=--build), fall back
-            # to a local build so a registry hiccup never wedges the deploy.
+            # building locally below, governed by $BUILD_FLAG.
             #   image: refs in docker-compose.yml resolve ghcr.io/$IMAGE_OWNER/<img>:$IMAGE_TAG
             export IMAGE_OWNER="$(echo "${IMAGE_OWNER:-}" | tr '[:upper:]' '[:lower:]')"
             export IMAGE_TAG="$NEW_SHA"
-            APP_BUILD_FLAG="$BUILD_FLAG"
-            if [ -n "$BUILD_FLAG" ]; then
-              echo "==> Baked image input changed — building app images locally (skip GHCR pull)"
-              APP_BUILD_FLAG="--build"
-            elif [ -n "$IMAGE_OWNER" ] \
-                 && echo "${GHCR_TOKEN:-}" | docker login "${REGISTRY:-ghcr.io}" -u "${GHCR_USER:-$IMAGE_OWNER}" --password-stdin >/dev/null 2>&1 \
-                 && $COMPOSE_CMD pull api worker_light worker_medium scheduler frontend; then
+            if [ -n "$IMAGE_OWNER" ] \
+               && echo "${GHCR_TOKEN:-}" | docker login "${REGISTRY:-ghcr.io}" -u "${GHCR_USER:-$IMAGE_OWNER}" --password-stdin >/dev/null 2>&1 \
+               && $COMPOSE_CMD pull api worker_light worker_medium scheduler frontend; then
               echo "==> Pulled app images from GHCR at ${IMAGE_TAG:0:7} — using them (no local build)"
               APP_BUILD_FLAG="--no-build"
             else
