@@ -130,22 +130,32 @@ class TwinRetrainingService:
         self,
         config: Optional[TwinRetrainingConfig] = None,
         repository=None,
+        job_repository=None,
     ):
         """
         Initialize twin retraining service.
 
         Args:
             config: Retraining configuration
-            repository: Optional TwinRepository for persistence
+            repository: Optional TwinRepository for fidelity persistence
+            job_repository: Optional TwinRetrainingJobRepository for DURABLE,
+                process-shared retraining-job state (#549). When provided, jobs
+                are persisted at trigger time and read/updated through it so a
+                Celery worker (a separate process) can record a completion the
+                API process re-reads. When None, the service uses ONLY the
+                in-process ``_pending_jobs`` dict (the legacy same-process
+                behavior) — completions do NOT survive the worker boundary.
         """
         self.config = config or TwinRetrainingConfig()
         self.repository = repository
+        self.job_repository = job_repository
         self._pending_jobs: Dict[str, TwinRetrainingJob] = {}
 
         logger.info(
             f"Initialized TwinRetrainingService "
             f"(fidelity_threshold={self.config.fidelity_threshold}, "
-            f"auto_approve_threshold={self.config.auto_approve_threshold})"
+            f"auto_approve_threshold={self.config.auto_approve_threshold}, "
+            f"durable_jobs={'on' if job_repository is not None else 'off'})"
         )
 
     async def evaluate_retraining_need(
@@ -319,6 +329,23 @@ class TwinRetrainingService:
             f"reason: {reason.value}, job_id: {job.job_id}"
         )
 
+        # Persist to the durable, process-shared store BEFORE enqueuing so the
+        # Celery worker (a separate process) can find + complete this job (#549).
+        # Best-effort: a persistence hiccup degrades to the legacy in-process
+        # path (the worker then fails closed) rather than blocking the trigger.
+        if self.job_repository is not None:
+            try:
+                await self.job_repository.create_job(
+                    job_id=job.job_id,
+                    model_id=job.model_id,
+                    trigger_reason=job.trigger_reason.value,
+                    status=job.status.value,
+                    fidelity_before=job.fidelity_before,
+                    training_config=training_config,
+                )
+            except Exception as e:  # noqa: BLE001 — never let persistence block the trigger
+                logger.error(f"Failed to persist twin retraining job {job.job_id}: {e}")
+
         # Queue the real retraining task (#548: execute_twin_retraining now
         # exists in src.tasks.ab_testing_tasks; the import succeeds and the
         # task is enqueued). An ImportError here would mean the task module
@@ -383,8 +410,40 @@ class TwinRetrainingService:
             approved_by="auto_approved" if auto_approve else None,
         )
 
+    @staticmethod
+    def _job_from_record(record: Any) -> "TwinRetrainingJob":
+        """Reconstruct the in-memory job dataclass from a durable record.
+
+        Surfaces a worker's durable completion to a process whose in-process
+        ``_pending_jobs`` never held the job (the cross-process read).
+        """
+        return TwinRetrainingJob(
+            job_id=record.id,
+            model_id=record.model_id,
+            new_model_id=record.new_model_id,
+            trigger_reason=TwinTriggerReason(record.trigger_reason),
+            status=TwinRetrainingStatus(record.status),
+            created_at=record.created_at,
+            started_at=record.started_at,
+            completed_at=record.completed_at,
+            fidelity_before=record.fidelity_before,
+            fidelity_after=record.fidelity_after,
+            training_config=record.training_config,
+            error_message=record.error_message,
+        )
+
     async def get_job_status(self, job_id: str) -> Optional[TwinRetrainingJob]:
-        """Get status of a retraining job."""
+        """Get status of a retraining job.
+
+        When a durable job store is wired it is the source of truth across
+        processes (e.g. the API reading a status the Celery worker wrote); falls
+        back to the in-process dict when the store is absent or the job is not
+        (yet) persisted there.
+        """
+        if self.job_repository is not None:
+            record = await self.job_repository.get_job(job_id)
+            if record is not None:
+                return self._job_from_record(record)
         return self._pending_jobs.get(job_id)
 
     async def complete_retraining(
@@ -403,25 +462,77 @@ class TwinRetrainingService:
             fidelity_after: Fidelity score of new model
             success: Whether retraining was successful
 
+        Records the completion durably when a job store is wired, so a Celery
+        worker's completion survives its process boundary and is retrievable by
+        the API process (#549). The caller MUST have certified ``fidelity_after``
+        as a real finite metric before calling with ``success=True`` (the #548
+        fail-closed contract lives in ``_execute_real_twin_retraining``); this
+        method only records what it is given.
+
         Returns:
-            Updated job or None
+            Updated job, or None if the job is unknown to BOTH stores.
         """
         job = self._pending_jobs.get(job_id)
-        if not job:
+
+        # When a durable store is wired it is the source of truth across
+        # processes. Confirm the durable write BEFORE mutating the in-process
+        # copy, so a failed durable write can never leak a false "completed"
+        # through ``get_job_status``'s dict fallback (#549 codex HIGH). A metric
+        # (new_model_id / fidelity_after) is reflected ONLY on success — a
+        # non-success completion is a failure that carries NO metric (#548).
+        if self.job_repository is not None:
+            record = await self.job_repository.complete_job(
+                job_id,
+                new_model_id=new_model_id,
+                fidelity_after=fidelity_after,
+                success=success,
+            )
+            if record is None:
+                # Durable store wired but did not record (inert client / unknown
+                # job). Success REQUIRES a durable record — fail closed AND force
+                # the in-process copy to a non-success state so the dict fallback
+                # in get_job_status can never surface a false completion.
+                if job is not None:
+                    job.status = TwinRetrainingStatus.FAILED
+                    job.completed_at = datetime.now(timezone.utc)
+                    job.error_message = "durable completion could not be recorded"
+                    job.new_model_id = None
+                    job.fidelity_after = None
+                logger.warning(
+                    f"Durable completion not recorded for job {job_id} "
+                    "(store inert or job unknown); not reporting success"
+                )
+                return None
+            # Durable write confirmed — reflect it in the in-process copy.
+            if job is not None:
+                job.completed_at = datetime.now(timezone.utc)
+                if success:
+                    job.new_model_id = new_model_id
+                    job.fidelity_after = fidelity_after
+                    job.status = TwinRetrainingStatus.COMPLETED
+                else:
+                    job.status = TwinRetrainingStatus.FAILED
+                    job.new_model_id = None
+                    job.fidelity_after = None
+                return job
+            logger.info(f"Completed retraining job {job_id} (durable): success={success}")
+            return self._job_from_record(record)
+
+        # Legacy in-process-only path (no durable store wired): the dict IS the
+        # source of truth, so mutate it directly.
+        if job is None:
             logger.warning(f"Retraining job not found: {job_id}")
             return None
-
-        job.new_model_id = new_model_id
-        job.fidelity_after = fidelity_after
         job.completed_at = datetime.now(timezone.utc)
-        job.status = TwinRetrainingStatus.COMPLETED if success else TwinRetrainingStatus.FAILED
-
-        logger.info(
-            f"Completed retraining job {job_id}: "
-            f"fidelity {job.fidelity_before:.2f} -> {fidelity_after:.2f}, "
-            f"success={success}"
-        )
-
+        if success:
+            job.new_model_id = new_model_id
+            job.fidelity_after = fidelity_after
+            job.status = TwinRetrainingStatus.COMPLETED
+        else:
+            job.status = TwinRetrainingStatus.FAILED
+            job.new_model_id = None
+            job.fidelity_after = None
+        logger.info(f"Completed retraining job {job_id}: success={success}")
         return job
 
     async def fail_retraining(
@@ -444,16 +555,31 @@ class TwinRetrainingService:
         Returns:
             Updated job or None if the job is unknown
         """
+        # Update the in-process copy if THIS process created the job.
         job = self._pending_jobs.get(job_id)
-        if not job:
-            logger.warning(f"Retraining job not found: {job_id}")
+        if job is not None:
+            job.status = TwinRetrainingStatus.FAILED
+            job.completed_at = datetime.now(timezone.utc)
+            job.error_message = error_message
+            # No metric on failure (#548). Clear any stale metric from a prior
+            # completion so a complete->fail transition leaves no metric behind.
+            job.new_model_id = None
+            job.fidelity_after = None
+
+        # Record the failure durably so it survives the worker boundary (#549).
+        if self.job_repository is not None:
+            record = await self.job_repository.fail_job(job_id, error_message=error_message)
+            if record is not None:
+                logger.info(f"Failed retraining job {job_id} (durable): {error_message}")
+                return job if job is not None else self._job_from_record(record)
+            if job is not None:
+                return job
+            logger.warning(f"Retraining job not found (durable + in-process): {job_id}")
             return None
 
-        job.status = TwinRetrainingStatus.FAILED
-        job.completed_at = datetime.now(timezone.utc)
-        job.error_message = error_message
-        # fidelity_after intentionally left None — no metric on failure.
-
+        if job is None:
+            logger.warning(f"Retraining job not found: {job_id}")
+            return None
         logger.info(f"Failed retraining job {job_id}: {error_message}")
         return job
 
@@ -462,21 +588,46 @@ class TwinRetrainingService:
         job_id: str,
         reason: str,
     ) -> Optional[TwinRetrainingJob]:
-        """Cancel a pending retraining job."""
+        """Cancel a pending retraining job (durable when a job store is wired)."""
         job = self._pending_jobs.get(job_id)
+
+        if self.job_repository is not None:
+            record = await self.job_repository.get_job(job_id)
+            # Current status from the durable record, else the in-process copy.
+            if record is not None:
+                current_status = TwinRetrainingStatus(record.status)
+            elif job is not None:
+                current_status = job.status
+            else:
+                return None  # unknown to both stores
+
+            if current_status not in (
+                TwinRetrainingStatus.PENDING,
+                TwinRetrainingStatus.APPROVED,
+            ):
+                logger.warning(f"Cannot cancel job {job_id} in status {current_status}")
+                return None
+
+            updated = await self.job_repository.cancel_job(job_id, reason=reason)
+            if job is not None:
+                job.status = TwinRetrainingStatus.CANCELLED
+                job.error_message = f"Cancelled: {reason}"
+            logger.info(f"Cancelled retraining job {job_id}: {reason}")
+            if updated is not None:
+                return job if job is not None else self._job_from_record(updated)
+            return job  # in-process updated even if durable was inert
+
+        # Legacy in-process-only path.
         if not job:
             return None
-
         if job.status not in (
             TwinRetrainingStatus.PENDING,
             TwinRetrainingStatus.APPROVED,
         ):
             logger.warning(f"Cannot cancel job {job_id} in status {job.status}")
             return None
-
         job.status = TwinRetrainingStatus.CANCELLED
         job.error_message = f"Cancelled: {reason}"
-
         logger.info(f"Cancelled retraining job {job_id}: {reason}")
         return job
 
@@ -600,15 +751,30 @@ class TwinRetrainingService:
 def get_twin_retraining_service(
     config: Optional[TwinRetrainingConfig] = None,
     repository=None,
+    job_repository=None,
 ) -> TwinRetrainingService:
     """
     Get twin retraining service instance.
 
+    By default the service is wired with a durable, process-shared
+    ``TwinRetrainingJobRepository`` (#549) so the API and a Celery worker both
+    bind the SAME job store via ``get_supabase()`` with no explicit wiring —
+    the worker's completion (with the real validation metric) is recorded
+    durably and retrievable by the API process. In an unconfigured env (no
+    Supabase creds) the repository is inert and the service falls back to the
+    in-process dict, so this is safe in tests and offline.
+
     Args:
         config: Optional configuration
-        repository: Optional TwinRepository
+        repository: Optional TwinRepository for fidelity persistence
+        job_repository: Optional override for the durable job store (mainly for
+            tests); when None a default ``TwinRetrainingJobRepository`` is wired.
 
     Returns:
         TwinRetrainingService instance
     """
-    return TwinRetrainingService(config, repository)
+    if job_repository is None:
+        from src.digital_twin.twin_repository import TwinRetrainingJobRepository
+
+        job_repository = TwinRetrainingJobRepository()
+    return TwinRetrainingService(config, repository, job_repository=job_repository)

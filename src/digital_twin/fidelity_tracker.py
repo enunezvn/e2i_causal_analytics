@@ -85,6 +85,16 @@ class FidelityTracker:
             auto_trigger_retraining: Whether to auto-trigger retraining on degradation
         """
         self.repository = repository
+        # When auto-retraining is enabled but no service was injected, wire the
+        # DURABLE retraining service (#549) so an auto-triggered job is persisted
+        # to the shared store and can be completed by the Celery worker and
+        # re-read by this (API) process. Without it the auto-trigger path would
+        # dispatch jobs the worker cannot record (fail closed). Lazy import avoids
+        # import-time coupling between the tracker and the service factory.
+        if retraining_service is None and auto_trigger_retraining:
+            from .retraining_service import get_twin_retraining_service
+
+            retraining_service = get_twin_retraining_service()
         self._retraining_service = retraining_service
         self._auto_trigger_retraining = auto_trigger_retraining
         self.records: Dict[UUID, FidelityRecord] = {}
