@@ -1063,6 +1063,10 @@ class TwinRetrainingJobRepository(BaseRepository[TwinRetrainingJobRecord]):
         updates: Dict[str, Any] = {
             "status": "failed",
             "error_message": error_message,
+            # Clear any stale metric (#548: a failed job carries NO metric) so a
+            # complete->fail transition cannot leave a real-looking score behind.
+            "new_model_id": None,
+            "fidelity_after": None,
             "completed_at": datetime.now(timezone.utc).isoformat(),
         }
         return await self.update(job_id, updates)

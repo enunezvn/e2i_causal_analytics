@@ -472,20 +472,14 @@ class TwinRetrainingService:
         Returns:
             Updated job, or None if the job is unknown to BOTH stores.
         """
-        # Update the in-process copy if THIS process created the job. A metric
-        # (new_model_id / fidelity_after) is recorded ONLY on success — a
-        # non-success completion is a failure and writes NO metric (#548).
         job = self._pending_jobs.get(job_id)
-        if job is not None:
-            job.completed_at = datetime.now(timezone.utc)
-            if success:
-                job.new_model_id = new_model_id
-                job.fidelity_after = fidelity_after
-                job.status = TwinRetrainingStatus.COMPLETED
-            else:
-                job.status = TwinRetrainingStatus.FAILED
 
-        # Update the durable, shared record (the cross-process path).
+        # When a durable store is wired it is the source of truth across
+        # processes. Confirm the durable write BEFORE mutating the in-process
+        # copy, so a failed durable write can never leak a false "completed"
+        # through ``get_job_status``'s dict fallback (#549 codex HIGH). A metric
+        # (new_model_id / fidelity_after) is reflected ONLY on success — a
+        # non-success completion is a failure that carries NO metric (#548).
         if self.job_repository is not None:
             record = await self.job_repository.complete_job(
                 job_id,
@@ -493,28 +487,52 @@ class TwinRetrainingService:
                 fidelity_after=fidelity_after,
                 success=success,
             )
-            if record is not None:
-                logger.info(f"Completed retraining job {job_id} (durable): success={success}")
-                return job if job is not None else self._job_from_record(record)
-            # A durable store WAS wired but did not record the completion (inert
-            # client or unknown job). Success REQUIRES a durable record — do NOT
-            # mask an unrecorded write with the in-process copy (#549 codex HIGH):
-            # reporting success here would be a false success. Fail closed.
-            logger.warning(
-                f"Durable completion not recorded for job {job_id} "
-                "(store inert or job unknown); not reporting success"
-            )
-            return None
+            if record is None:
+                # Durable store wired but did not record (inert client / unknown
+                # job). Success REQUIRES a durable record — fail closed AND force
+                # the in-process copy to a non-success state so the dict fallback
+                # in get_job_status can never surface a false completion.
+                if job is not None:
+                    job.status = TwinRetrainingStatus.FAILED
+                    job.completed_at = datetime.now(timezone.utc)
+                    job.error_message = "durable completion could not be recorded"
+                    job.new_model_id = None
+                    job.fidelity_after = None
+                logger.warning(
+                    f"Durable completion not recorded for job {job_id} "
+                    "(store inert or job unknown); not reporting success"
+                )
+                return None
+            # Durable write confirmed — reflect it in the in-process copy.
+            if job is not None:
+                job.completed_at = datetime.now(timezone.utc)
+                if success:
+                    job.new_model_id = new_model_id
+                    job.fidelity_after = fidelity_after
+                    job.status = TwinRetrainingStatus.COMPLETED
+                else:
+                    job.status = TwinRetrainingStatus.FAILED
+                    job.new_model_id = None
+                    job.fidelity_after = None
+                return job
+            logger.info(f"Completed retraining job {job_id} (durable): success={success}")
+            return self._job_from_record(record)
 
-        # Legacy in-process-only path (no durable store wired).
+        # Legacy in-process-only path (no durable store wired): the dict IS the
+        # source of truth, so mutate it directly.
         if job is None:
             logger.warning(f"Retraining job not found: {job_id}")
             return None
-        logger.info(
-            f"Completed retraining job {job_id}: "
-            f"fidelity {job.fidelity_before:.2f} -> {fidelity_after:.2f}, "
-            f"success={success}"
-        )
+        job.completed_at = datetime.now(timezone.utc)
+        if success:
+            job.new_model_id = new_model_id
+            job.fidelity_after = fidelity_after
+            job.status = TwinRetrainingStatus.COMPLETED
+        else:
+            job.status = TwinRetrainingStatus.FAILED
+            job.new_model_id = None
+            job.fidelity_after = None
+        logger.info(f"Completed retraining job {job_id}: success={success}")
         return job
 
     async def fail_retraining(
@@ -543,7 +561,10 @@ class TwinRetrainingService:
             job.status = TwinRetrainingStatus.FAILED
             job.completed_at = datetime.now(timezone.utc)
             job.error_message = error_message
-            # fidelity_after intentionally left None — no metric on failure.
+            # No metric on failure (#548). Clear any stale metric from a prior
+            # completion so a complete->fail transition leaves no metric behind.
+            job.new_model_id = None
+            job.fidelity_after = None
 
         # Record the failure durably so it survives the worker boundary (#549).
         if self.job_repository is not None:

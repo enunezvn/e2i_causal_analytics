@@ -152,6 +152,14 @@ async def test_complete_fails_closed_when_durable_store_inert() -> None:
         )
         assert result is None
 
+        # codex iter-1 HIGH: the status API must NOT surface a false 'completed'
+        # via the in-process dict fallback after a failed durable write — the
+        # in-process copy was forced to a non-success state with no metric.
+        seen = await service.get_job_status(job.job_id)
+        assert seen is not None
+        assert seen.status != TwinRetrainingStatus.COMPLETED
+        assert seen.fidelity_after is None
+
 
 @pytest.mark.asyncio
 async def test_complete_with_success_false_writes_no_metric(fake_supabase) -> None:
@@ -173,6 +181,38 @@ async def test_complete_with_success_false_writes_no_metric(fake_supabase) -> No
     assert result.status == TwinRetrainingStatus.FAILED
     assert result.fidelity_after is None
     assert result.new_model_id is None
+
+    durable = await repo.get_job(job.job_id)
+    assert durable is not None
+    assert durable.status == "failed"
+    assert durable.fidelity_after is None
+    assert durable.new_model_id is None
+
+
+@pytest.mark.asyncio
+async def test_complete_then_fail_clears_stale_metric(fake_supabase) -> None:
+    """#549 codex iter-1 MEDIUM: a complete->fail transition must leave NO metric.
+    fail_retraining clears any fidelity_after / new_model_id from a prior
+    completion, so the #548 invariant holds across state transitions, not just for
+    fresh pending jobs — in BOTH the returned job and the durable record."""
+    from src.digital_twin.twin_repository import TwinRetrainingJobRepository
+
+    repo = TwinRetrainingJobRepository(supabase_client=fake_supabase)
+    service = _service(repo)
+    model_id = uuid4()
+    job = await service.trigger_retraining(model_id, TwinTriggerReason.MANUAL)
+
+    completed = await service.complete_retraining(
+        job.job_id, new_model_id="m-1", fidelity_after=0.8, success=True
+    )
+    assert completed is not None and completed.fidelity_after == 0.8
+
+    # A later failure must clear the stale metric.
+    failed = await service.fail_retraining(job.job_id, "post-hoc invalidation")
+    assert failed is not None
+    assert failed.status == TwinRetrainingStatus.FAILED
+    assert failed.fidelity_after is None
+    assert failed.new_model_id is None
 
     durable = await repo.get_job(job.job_id)
     assert durable is not None

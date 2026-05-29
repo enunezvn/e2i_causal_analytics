@@ -1059,9 +1059,11 @@ async def _execute_real_twin_retraining(
     persisted to the shared ``twin_retraining_jobs`` table via
     ``TwinRetrainingJobRepository`` and the retrained model to
     ``digital_twin_models`` via ``TwinModelRepository.save_model``. Because both
-    the API and the worker resolve the SAME ``get_supabase()`` client, a job the
-    API created is found here and its completion (with the real metric + the
-    persisted ``new_model_id``) is recorded and retrievable by the API process.
+    the API and the worker resolve the SAME ``get_async_supabase_client()``
+    singleton (BaseRepository awaits ``.execute()``, so the async client is
+    required), a job the API created is found here and its completion (with the
+    real metric + the persisted ``new_model_id``) is recorded and retrievable by
+    the API process.
     If the durable store cannot record the completion (genuinely-unknown job, or
     an inert/unconfigured env) this still FAILS CLOSED — it never reports a false
     "completed".
