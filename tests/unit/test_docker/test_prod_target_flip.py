@@ -309,6 +309,14 @@ def test_materialize_gate_failure_is_fail_loud_and_rolls_feast_back():
         "gate failure must recreate feast + materializer at PREV_SHA (restore the Feast the old API uses)"
     )
     assert "exit 1" in branch, "gate failure must fail the deploy loudly"
+    # Order matters: the feast rollback must run BEFORE exit 1 — else `exit 1` would
+    # be dead-code-before-rollback, leaving the new/broken Feast under the old API.
+    checkout_idx = branch.index('git checkout "$PREV_SHA"')
+    up_idx = branch.index("--force-recreate feast feast-materializer", checkout_idx)
+    exit_idx = branch.index("exit 1", up_idx)
+    assert checkout_idx < up_idx < exit_idx, (
+        "gate failure must checkout PREV_SHA, then recreate feast, THEN exit 1 (rollback before exit)"
+    )
 
 
 # --------------------------------------------------------------------------- #
