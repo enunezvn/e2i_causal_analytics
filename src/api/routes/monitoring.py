@@ -1373,6 +1373,26 @@ class RetrainingJobResponse(BaseModel):
     notes: Optional[str] = None
 
 
+# Domain RetrainingStatus → API RetrainingStatusEnum. The domain has more
+# granular in-flight states (training, validating) than the API surface, which
+# collapses them to a single in_progress. Without this mapping a live job in
+# "training" (the real pipeline holds it there for minutes) would raise
+# ValueError in RetrainingStatusEnum(...) and 500 the status endpoint.
+_DOMAIN_TO_API_STATUS: Dict[str, RetrainingStatusEnum] = {
+    "training": RetrainingStatusEnum.IN_PROGRESS,
+    "validating": RetrainingStatusEnum.IN_PROGRESS,
+}
+
+
+def _to_api_status(domain_status: str) -> RetrainingStatusEnum:
+    """Map a domain RetrainingStatus value to the API enum, collapsing the
+    granular in-flight states to in_progress; otherwise the value maps 1:1."""
+    mapped = _DOMAIN_TO_API_STATUS.get(domain_status)
+    if mapped is not None:
+        return mapped
+    return RetrainingStatusEnum(domain_status)
+
+
 def _retraining_job_to_response(
     job: Any,
     *,
@@ -1392,7 +1412,7 @@ def _retraining_job_to_response(
     return RetrainingJobResponse(
         job_id=job.job_id,
         model_version=job.model_version,
-        status=RetrainingStatusEnum(job.status.value),
+        status=_to_api_status(job.status.value),
         trigger_reason=job.trigger_reason.value,
         triggered_at=job.created_at,
         triggered_by=triggered_by,
@@ -1546,6 +1566,7 @@ async def get_retraining_status(job_id: str) -> RetrainingJobResponse:
 async def complete_retraining(
     job_id: str,
     request: CompleteRetrainingRequest,
+    _admin: dict = Depends(require_admin),
 ) -> RetrainingJobResponse:
     """
     Mark a retraining job as complete.

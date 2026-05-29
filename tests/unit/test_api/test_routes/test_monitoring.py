@@ -1144,6 +1144,37 @@ class TestGetRetrainingStatus:
         data = response.json()
         assert data["status"] == "in_progress"
 
+    def test_get_retraining_status_training_real_job(self, client):
+        """codex MEDIUM-1: a real in-progress job has domain status 'training',
+        but the API enum exposes 'in_progress'. The status endpoint must map it
+        (200, not 500) — the live pipeline keeps a job in 'training' for minutes,
+        so this path is hit in practice."""
+        from src.services.retraining_trigger import (
+            RetrainingJob,
+            RetrainingStatus,
+            TriggerReason,
+        )
+
+        real_job = RetrainingJob(
+            job_id="rt-training-1",
+            model_version="optum_v1",
+            new_model_version="optum_v1_retrained",
+            trigger_reason=TriggerReason.MANUAL,
+            status=RetrainingStatus.TRAINING,
+            created_at=datetime.now(timezone.utc),
+        )
+        with patch(
+            "src.services.retraining_trigger.get_retraining_trigger_service"
+        ) as mock_get_service:
+            service = MagicMock()
+            service.get_retraining_status = AsyncMock(return_value=real_job)
+            mock_get_service.return_value = service
+
+            response = client.get("/monitoring/retraining/status/rt-training-1")
+
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "in_progress"
+
     def test_get_retraining_status_not_found(self, client):
         """Test getting non-existent retraining job."""
         with patch(

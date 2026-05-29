@@ -207,6 +207,37 @@ async def test_real_retraining_completed_but_no_metric_fails_closed() -> None:
 
 
 @pytest.mark.asyncio
+async def test_real_retraining_completed_but_criteria_not_met_fails_closed() -> None:
+    """codex HIGH-1: the pipeline sets status='completed' even when it SKIPS
+    deployment because success criteria were not met (pipeline.py:553-560). A
+    trained-but-not-promotable run must NOT be recorded as a successful retrain —
+    fail closed, write no metric."""
+    result = SimpleNamespace(
+        status="completed",
+        training_result={"validation_metrics": {"roc_auc": 0.61}, "success_criteria_met": False},
+        deployment_result=None,
+    )
+    pipe_patch, _ = _patch_pipeline(result)
+
+    repo = MagicMock()
+    repo.update = AsyncMock()
+    service = MagicMock()
+    service.complete_retraining = AsyncMock()
+
+    with (
+        pipe_patch,
+        patch("src.repositories.drift_monitoring.RetrainingHistoryRepository", return_value=repo),
+        patch(
+            "src.services.retraining_trigger.get_retraining_trigger_service", return_value=service
+        ),
+    ):
+        out = await _execute_real_retraining("rt-criteria", "v1", "v2", dict(_FULL_COHORT))
+
+    assert out["status"] == "failed"
+    service.complete_retraining.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_real_retraining_missing_cohort_fails_closed() -> None:
     """Training config without a data_source can't retrain → fail closed,
     pipeline never invoked, no metric written."""

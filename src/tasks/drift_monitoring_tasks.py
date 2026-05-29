@@ -820,14 +820,21 @@ async def _execute_real_retraining(
 
     status = getattr(result, "status", "failed")
     performance_after = _extract_validation_auc(result)
-    if status != "completed" or performance_after is None:
+    # The pipeline reports status="completed" even when it SKIPS deployment
+    # because success criteria were not met (pipeline.py:553-560). A
+    # trained-but-not-promotable run is NOT a successful retrain — require the
+    # success-criteria gate too, else fail closed.
+    training_result = getattr(result, "training_result", None) or {}
+    success_criteria_met = bool(training_result.get("success_criteria_met"))
+    if status != "completed" or performance_after is None or not success_criteria_met:
         return await _mark_failed(
-            f"pipeline status={status!r}, validation_auc={performance_after!r} — no "
-            "certifiable metric produced; job marked failed (no metric written)"
+            f"pipeline status={status!r}, validation_auc={performance_after!r}, "
+            f"success_criteria_met={success_criteria_met} — not a promotable result; "
+            "job marked failed (no metric written)"
         )
 
-    # Real metric in hand — record completion. The pipeline already gated
-    # deployment on success_criteria_met + the regulatory AUC/leakage gate.
+    # Real metric + success criteria met — record completion. The pipeline also
+    # gated deployment on the regulatory AUC/leakage gate.
     await service.complete_retraining(
         job_id=retraining_id,
         performance_after=performance_after,
