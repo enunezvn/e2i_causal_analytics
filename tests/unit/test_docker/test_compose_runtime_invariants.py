@@ -256,8 +256,14 @@ def test_deploy_conditional_build_is_retry_safe_and_covers_non_bindmounted_input
         "avoid grep -qv here: the droplet's grep is ugrep, whose -qv exit status is "
         "unreliable and would risk a false-negative that skips a needed rebuild"
     )
-    for bind in ("src/", "frontend/src/"):
-        assert bind in text, f"bind-mount exclusion must list the dev-overlay mount {bind!r}"
+    # Post-#528-A the prod-target app services have NO bind mounts; src/ + config/ are
+    # baked into the image (a change to either must force a rebuild → NOT excluded).
+    # The paths that remain bind-mounted (recreate, not rebuild) are feature_repo/
+    # (feast + materializer) and frontend/* (the frontend stays dev/Vite via the slim
+    # overlay until #528-B). Detailed token-level assertions live in
+    # tests/unit/test_docker/test_prod_target_flip.py.
+    for bind in ("frontend/src/", "feature_repo/"):
+        assert bind in text, f"bind-mount exclusion must list the still-bind-mounted path {bind!r}"
 
 
 def test_deploy_trigger_includes_patch_dependencies():

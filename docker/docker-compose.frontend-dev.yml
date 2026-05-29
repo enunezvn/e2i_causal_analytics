@@ -1,0 +1,63 @@
+# =============================================================================
+# Production-deploy overlay — frontend ONLY (#528-A)
+# =============================================================================
+# The production deploy applies this slim overlay on top of docker-compose.yml:
+#
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.frontend-dev.yml ... up
+#
+# It exists because of an asymmetry between the app services and the frontend:
+#
+#   * api / worker_* / scheduler  -> the base compose already defines a real
+#     `target: production` stage in docker/Dockerfile, so the prod deploy uses the
+#     base definition directly (NO override). This is the #528-A flip: we stop
+#     running the full docker-compose.dev.yml in prod (the #527 dev-in-prod
+#     incident: target:development, uvicorn --reload, ENVIRONMENT=development).
+#
+#   * frontend  -> docker/frontend/Dockerfile has only `base` + `development`
+#     stages; its `production` (nginx) stage was deleted in aa58e71c. The base
+#     compose's `frontend: build.target: production` is therefore a DANGLING ref.
+#     Until #528-B restores the prod nginx image, the frontend MUST keep running
+#     the Vite dev server — so this overlay re-pins ONLY the frontend to its
+#     development stage. Restoring the prod frontend image (and dropping this
+#     overlay) is #528-B.
+#
+# This file deliberately overrides NOTHING but `frontend`. Keep it in lockstep
+# with the frontend block in docker-compose.dev.yml (the local-dev overlay);
+# tests/unit/test_docker/test_prod_target_flip.py guards that it stays
+# frontend-only and reproduces the full override.
+
+services:
+  frontend:
+    build:
+      target: development
+    container_name: e2i_frontend_dev
+    # Override base ports (base has 3002:80 for the would-be nginx prod image;
+    # the Vite dev server listens on 5173). Compose merges port arrays, so use
+    # !override to replace rather than append.
+    ports: !override
+      - "3002:5173"  # Vite dev server port
+    volumes:
+      # React source for hot-reloading.
+      - ../frontend/src:/app/src
+      - ../frontend/public:/app/public
+      - ../frontend/index.html:/app/index.html
+      # Keep node_modules in the container (OS-specific binaries).
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
+      - VITE_API_URL=/api
+      - VITE_WS_URL=wss://eznomics.site
+      - VITE_COPILOT_ENABLED=true
+    command: npm run dev -- --host 0.0.0.0 --port 5173
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
+        reservations:
+          cpus: '0.25'
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1:5173"]
+      interval: 30s
+      start_period: 90s
