@@ -210,7 +210,9 @@ class TestSchemaDriftFix556:
         """The FV fields therapy_start_date / days_on_therapy / churn_risk_score
         must alias the real canonical columns, not select nonexistent ones."""
         query = sources["patient_journey"].query
-        assert "journey_start_date AS therapy_start_date" in query
+        # journey_start_date is DATE on the canonical table; the FV field is
+        # UnixTimestamp, so it must be cast to TIMESTAMPTZ (as the old bridge did).
+        assert "journey_start_date::TIMESTAMPTZ AS therapy_start_date" in query
         assert "COALESCE(journey_duration_days, 0) AS days_on_therapy" in query
         assert "COALESCE(risk_score, 0) AS churn_risk_score" in query
         # therapy_start_date must appear only as the alias target, never selected

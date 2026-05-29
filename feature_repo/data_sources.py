@@ -70,8 +70,11 @@ business_metrics_source = PostgreSQLSource(
 # churn_risk_score were aliases of bridging-view expressions that migration 033
 # never promoted onto the canonical table. Map them to the real canonical
 # columns: journey_start_date (therapy start), journey_duration_days (days on
-# therapy), and risk_score (churn risk). COALESCE the two numeric fields so a
-# NULL canonical value materializes as 0 rather than dropping the row.
+# therapy), and risk_score (churn risk). journey_start_date is DATE on the
+# canonical table but the FeatureView field is UnixTimestamp, so cast it to
+# TIMESTAMPTZ (matching the dropped 031/032 bridging view) — a bare DATE would
+# break the FV's type contract at materialize. COALESCE the two numeric fields
+# so a NULL canonical value materializes as 0 rather than dropping the row.
 patient_journey_source = PostgreSQLSource(
     name="patient_journey_source",
     query="""
@@ -80,7 +83,7 @@ patient_journey_source = PostgreSQLSource(
             brand_id::VARCHAR,
             patient_brand_id::VARCHAR,
             event_date AS event_timestamp,
-            journey_start_date AS therapy_start_date,
+            journey_start_date::TIMESTAMPTZ AS therapy_start_date,
             COALESCE(journey_duration_days, 0) AS days_on_therapy,
             adherence_rate,
             refill_count,

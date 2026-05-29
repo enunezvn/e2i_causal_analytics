@@ -150,10 +150,14 @@ def _referenced_columns(query: str) -> set[str]:
 
 
 def _ddl_columns() -> dict[str, set[str]]:
-    """{table: columns} from base CREATE TABLE + migration 033 ADD COLUMN.
+    """{table: columns} from base CREATE TABLE + ALTER TABLE ADD/DROP COLUMN.
 
-    Over-capture is safe (it can only relax the guard); under-capture would show
-    up immediately as a false 'missing column' in this test's own assertions.
+    Files are processed in sorted (≈ migration) order and ALTERs applied in
+    statement order, so an ADD-then-DROP (e.g. a transient column) ends up
+    correctly absent and a DROP-then-readd ends up present. Remaining over-capture
+    can only relax the guard; under-capture would surface immediately as a false
+    'missing column' in this test's own assertions. Actually-dropped/renamed
+    columns in the live DB are covered by the EXPLAIN + FEAST_INTEGRATION backstops.
     """
     cols: dict[str, set[str]] = {}
 
@@ -172,7 +176,7 @@ def _ddl_columns() -> dict[str, set[str]]:
                 if mm and mm.group(1).lower() not in _CONSTRAINT_KW:
                     cols.setdefault(table, set()).add(mm.group(1).lower())
 
-        # ALTER TABLE <t> ... ADD COLUMN [IF NOT EXISTS] <c>
+        # ALTER TABLE <t> ... ADD/DROP COLUMN, applied in statement order.
         for stmt in text.split(";"):
             tm = re.search(r"ALTER TABLE\s+(?:public\.)?([a-z_][a-z0-9_]*)", stmt, re.IGNORECASE)
             if not tm:
@@ -182,6 +186,10 @@ def _ddl_columns() -> dict[str, set[str]]:
                 r"ADD COLUMN\s+(?:IF NOT EXISTS\s+)?([a-z_][a-z0-9_]*)", stmt, re.IGNORECASE
             ):
                 cols.setdefault(table, set()).add(cm.group(1).lower())
+            for dm in re.finditer(
+                r"DROP COLUMN\s+(?:IF EXISTS\s+)?([a-z_][a-z0-9_]*)", stmt, re.IGNORECASE
+            ):
+                cols.get(table, set()).discard(dm.group(1).lower())
     return cols
 
 
