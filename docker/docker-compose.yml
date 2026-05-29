@@ -797,6 +797,13 @@ services:
     volumes:
       - causal_outputs:/app/data/causal_outputs:ro  # Read-only for monitoring
     environment:
+      # #528-A: the scheduler does NOT inherit <<: *common-env (unlike api/workers),
+      # so set ENVIRONMENT=production explicitly. Pre-flip the dev overlay supplied
+      # ENVIRONMENT=development; once the prod deploy drops that overlay, celery beat
+      # must schedule with the same prod config the workers execute under (avoids a
+      # half-flip). Local dev still overrides this to development via
+      # docker-compose.dev.yml's scheduler block.
+      ENVIRONMENT: production
       CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/1
       CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/2
       SUPABASE_URL: ${SUPABASE_URL}

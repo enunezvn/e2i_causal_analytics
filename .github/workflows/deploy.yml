@@ -8,13 +8,18 @@ on:
       - 'config/**'
       - 'docker/Dockerfile'
       # Compose files ARE deploy inputs: the SSH script runs
-      # `docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml ... up`,
+      # `docker compose -f docker/docker-compose.yml -f <overlay> ... up`,
       # so a compose-only change (tmpfs perms, volumes, env, ulimits — cf. PR #527's
       # own hardening, which would NOT have auto-deployed) must trigger a deploy. The
       # in-script rebuild detector recreates from compose, but only after this fires.
       # docker-compose.secure.yml is intentionally excluded: the deploy script does not -f it.
+      # #528-A: the deploy now consumes the slim docker-compose.frontend-dev.yml overlay
+      # (frontend-only) for the forward path; docker-compose.dev.yml stays listed as the
+      # pre-flip rollback fallback (the deploy may -f it when rolling back to a commit
+      # that predates the slim overlay).
       - 'docker/docker-compose.yml'
       - 'docker/docker-compose.dev.yml'
+      - 'docker/docker-compose.frontend-dev.yml'
       - 'docker/frontend/**'
       - 'frontend/**'
       - 'requirements.txt'
@@ -98,7 +103,22 @@ jobs:
             set -e
 
             PROJECT_DIR="/home/enunez/Projects/e2i_causal_analytics"
-            COMPOSE_CMD="docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml"
+
+            # #528-A: pick the compose overlay by file existence. The prod deploy now
+            # runs the slim FRONTEND-ONLY overlay (docker-compose.frontend-dev.yml) so
+            # api/workers/scheduler use the base prod target instead of the full dev
+            # overlay (the #527 dev-in-prod incident: target:development, --reload,
+            # ENVIRONMENT=development). docker-compose.dev.yml stays the fallback for
+            # commits that predate the slim overlay — so a rollback to a pre-flip commit
+            # cleanly reverts the flip instead of failing on a missing -f target.
+            # COMPOSE_CMD is (re)computed after EVERY checkout, since the tree changes.
+            pick_overlay() {
+              if [ -f docker/docker-compose.frontend-dev.yml ]; then
+                echo docker/docker-compose.frontend-dev.yml
+              else
+                echo docker/docker-compose.dev.yml
+              fi
+            }
 
             cd "$PROJECT_DIR"
             PREV_SHA=$(git rev-parse HEAD)
@@ -116,6 +136,10 @@ jobs:
             NEW_SHA=$(git rev-parse HEAD)
             echo "==> Deploying ${NEW_SHA:0:7}"
 
+            # Tree is now at NEW_SHA — select the overlay that exists at this commit.
+            COMPOSE_CMD="docker compose -f docker/docker-compose.yml -f $(pick_overlay)"
+            echo "==> Compose overlay: $(pick_overlay)"
+
             # Run migrations only when the DB URL is present in the deploy env;
             # run_migrations.sh hard-exits otherwise, which `set -e` would abort on.
             if [ -n "${SUPABASE_DB_URL:-}" ]; then
@@ -127,16 +151,19 @@ jobs:
             # The /app/.venv anon-volume mask is gone, so a forward recreate carries
             # the image's current deps; the anon-volume renewal flag is not needed here.
             # Decide rebuild by EXCLUSION, not enumeration: rebuild unless every
-            # changed file is a dev-overlay bind mount (src/, config/, tests/,
-            # feature_repo/, frontend/src|public|index.html). Any other path is a
-            # baked image input — Dockerfile, requirements*, pyproject, patches/,
-            # frontend build config (vite.config.ts, tailwind.config.js, tsconfig*),
-            # package manifests, etc. — so it forces a rebuild without us having to
-            # enumerate (and inevitably miss) each one. A no-delta re-run (PREV==NEW,
-            # e.g. a retry after a partial/interrupted build) also rebuilds, since we
-            # cannot prove the local image is current. NB: this exclusion is tied to
-            # docker-compose.dev.yml's bind mounts; the deferred prod-target switch
-            # (no bind mounts) must revisit it.
+            # changed file is still BIND-MOUNTED at runtime. #528-A flipped the app
+            # services to the prod target, so src/ + config/ are now COPYed into the
+            # image (Dockerfile production stage) — a change to either is a baked image
+            # input and MUST force a rebuild, so they are NO LONGER excluded. The paths
+            # that remain bind-mounted (recreate, not rebuild) are: tests/ (not in the
+            # prod image at all), feature_repo/ (bind-mounted into feast + the
+            # materializer), and frontend/src|public|index.html (the frontend stays
+            # dev/Vite via the slim overlay until #528-B). Any other path is a baked
+            # image input — Dockerfile, requirements*, pyproject, patches/, frontend
+            # build config (vite.config.ts, tailwind.config.js, tsconfig*), package
+            # manifests, etc. — so it forces a rebuild without us enumerating each one.
+            # A no-delta re-run (PREV==NEW, e.g. a retry after a partial/interrupted
+            # build) also rebuilds, since we cannot prove the local image is current.
             # Capture changed files that are NOT dev-overlay bind mounts. Use a
             # captured-output emptiness test rather than the quiet-invert (-qv) exit
             # status: the droplet's grep may be ugrep, whose quiet-invert exit code is
@@ -144,7 +171,7 @@ jobs:
             # `|| true` keeps set -e happy when every changed file IS bind-mounted
             # (grep then exits non-zero).
             CHANGED_BAKED=$(git diff --name-only "$PREV_SHA" "$NEW_SHA" \
-              | grep -vE '^(src/|config/|tests/|feature_repo/|frontend/src/|frontend/public/|frontend/index\.html$)' \
+              | grep -vE '^(tests/|feature_repo/|frontend/src/|frontend/public/|frontend/index\.html$)' \
               || true)
             if [ "$PREV_SHA" = "$NEW_SHA" ] || [ -n "$CHANGED_BAKED" ]; then
               echo "==> Rebuilding image (no-delta re-run or a non-bind-mounted image input changed)"
@@ -153,6 +180,39 @@ jobs:
               echo "==> Bind-mounted code-only change — recreating from current image"
               BUILD_FLAG=""
             fi
+            # #528-A ordered rollout — a FRESH online store BEFORE the prod-target API
+            # serves. The flip makes the fail-loud #532 Feast read path authoritative,
+            # so serving against a stale/empty store would return null features or 503.
+            # Recreate the feast sidecar + materializer FIRST and wait for the
+            # materializer to report HEALTHY — its heartbeat healthcheck only passes
+            # after a successful materialize (docker/feast/materializer-entrypoint.sh
+            # writes the heartbeat after its first successful run) — and only THEN flip
+            # api/workers/scheduler to the prod target. A single `up -d` of everything
+            # gated solely on API health would let the prod API serve a stale store.
+            $COMPOSE_CMD up -d $BUILD_FLAG --no-deps --force-recreate feast feast-materializer
+
+            echo "==> Waiting for feast-materializer to report a fresh store (healthy heartbeat)..."
+            MAT_FRESH=false
+            for i in $(seq 1 60); do
+              MAT_STATUS=$(docker inspect -f '{{ .State.Health.Status }}' e2i_feast_materializer 2>/dev/null || echo "starting")
+              if [ "$MAT_STATUS" = "healthy" ]; then
+                MAT_FRESH=true
+                echo "==> feast-materializer healthy on attempt ${i} — online store materialized"
+                break
+              fi
+              sleep 5
+            done
+            if [ "$MAT_FRESH" = false ]; then
+              # Fail loud WITHOUT flipping the API: api/workers/scheduler are untouched
+              # so far (still on the pre-deploy container), so prod keeps serving the old
+              # version rather than a prod-target API over a stale/empty store.
+              echo "==> feast-materializer did not become healthy in time — refusing to flip"
+              echo "==> the prod-target API onto a stale/empty online store. Deploy FAILED."
+              docker logs --tail 50 e2i_feast_materializer 2>&1 || true
+              exit 1
+            fi
+
+            # Store is fresh — now flip the app services to the prod target.
             $COMPOSE_CMD up -d $BUILD_FLAG --no-deps --force-recreate \
               api frontend worker_light worker_medium scheduler
 
@@ -171,6 +231,12 @@ jobs:
             if [ "$HEALTHY" = false ]; then
               echo "==> Health check failed — rolling back to ${PREV_SHA:0:7}"
               git checkout "$PREV_SHA"
+              # PREV_SHA may predate the slim frontend overlay (#528-A) — recompute
+              # COMPOSE_CMD so the rollback -f's the overlay that exists at this commit.
+              # Rolling back to a pre-flip commit therefore REVERTS the flip (falls back
+              # to docker-compose.dev.yml: dev target, --reload, the recoverable state).
+              COMPOSE_CMD="docker compose -f docker/docker-compose.yml -f $(pick_overlay)"
+              echo "==> Rollback compose overlay: $(pick_overlay)"
               # Rollback rebuilds from PREV_SHA AND renews anonymous volumes: the
               # rolled-back commit may predate this hotfix and still carry the
               # /app/.venv mask, so renewing repopulates the venv from the freshly
