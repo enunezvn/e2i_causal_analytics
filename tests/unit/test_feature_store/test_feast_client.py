@@ -8,7 +8,7 @@ Tests cover:
 - Feature statistics
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pandas as pd
@@ -546,7 +546,9 @@ class TestFeatureFreshness:
         client = FeastClient()
         client._initialized = True
         # Record materialization 30 minutes ago
-        client._materialization_timestamps["hcp_features"] = datetime.now() - timedelta(minutes=30)
+        client._materialization_timestamps["hcp_features"] = datetime.now(timezone.utc) - timedelta(
+            minutes=30
+        )
 
         freshness = await client.get_feature_freshness("hcp_features")
 
@@ -566,7 +568,9 @@ class TestFeatureFreshness:
             "feature_views": {},
         }
         # Record materialization 14 hours ago (past warning, before staleness)
-        client._materialization_timestamps["hcp_features"] = datetime.now() - timedelta(hours=14)
+        client._materialization_timestamps["hcp_features"] = datetime.now(timezone.utc) - timedelta(
+            hours=14
+        )
 
         freshness = await client.get_feature_freshness("hcp_features")
 
@@ -584,7 +588,9 @@ class TestFeatureFreshness:
             "feature_views": {},
         }
         # Record materialization 30 hours ago (past staleness, before expiry)
-        client._materialization_timestamps["hcp_features"] = datetime.now() - timedelta(hours=30)
+        client._materialization_timestamps["hcp_features"] = datetime.now(timezone.utc) - timedelta(
+            hours=30
+        )
 
         freshness = await client.get_feature_freshness("hcp_features")
 
@@ -601,7 +607,9 @@ class TestFeatureFreshness:
             "feature_views": {},
         }
         # Record materialization 50 hours ago (past 2x staleness)
-        client._materialization_timestamps["hcp_features"] = datetime.now() - timedelta(hours=50)
+        client._materialization_timestamps["hcp_features"] = datetime.now(timezone.utc) - timedelta(
+            hours=50
+        )
 
         freshness = await client.get_feature_freshness("hcp_features")
 
@@ -626,7 +634,7 @@ class TestFeatureFreshness:
         client._store = mock_store
 
         # Record one materialization
-        client._materialization_timestamps["hcp_features"] = datetime.now()
+        client._materialization_timestamps["hcp_features"] = datetime.now(timezone.utc)
 
         result = await client.get_all_freshness()
 
@@ -649,11 +657,11 @@ class TestFeatureFreshness:
     def test_record_materialization_default_now(self):
         """Test recording materialization defaults to current time."""
         client = FeastClient()
-        before = datetime.now()
+        before = datetime.now(timezone.utc)
 
         client.record_materialization("hcp_features")
 
-        after = datetime.now()
+        after = datetime.now(timezone.utc)
         recorded = client._materialization_timestamps["hcp_features"]
         assert before <= recorded <= after
 
@@ -731,13 +739,13 @@ class TestMaterializationTimestampTracking:
         mock_store.materialize.return_value = None
         client._store = mock_store
 
-        before = datetime.now()
+        before = datetime.now(timezone.utc)
         await client.materialize(
-            start_date=datetime.now() - timedelta(days=1),
-            end_date=datetime.now(),
+            start_date=datetime.now(timezone.utc) - timedelta(days=1),
+            end_date=datetime.now(timezone.utc),
             feature_views=["hcp_features", "brand_features"],
         )
-        after = datetime.now()
+        after = datetime.now(timezone.utc)
 
         # Both feature views should have timestamps recorded
         assert "hcp_features" in client._materialization_timestamps
@@ -760,9 +768,9 @@ class TestMaterializationTimestampTracking:
         mock_store.list_feature_views.return_value = [mock_fv]
         client._store = mock_store
 
-        before = datetime.now()
-        await client.materialize_incremental(end_date=datetime.now())
-        after = datetime.now()
+        before = datetime.now(timezone.utc)
+        await client.materialize_incremental(end_date=datetime.now(timezone.utc))
+        after = datetime.now(timezone.utc)
 
         # Feature view should have timestamp recorded
         assert "hcp_features" in client._materialization_timestamps
