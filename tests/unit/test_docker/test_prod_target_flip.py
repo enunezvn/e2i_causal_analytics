@@ -175,22 +175,27 @@ def test_base_app_services_are_prod_target():
 # --------------------------------------------------------------------------- #
 # deploy.yml consumes the slim overlay, not the full dev overlay
 # --------------------------------------------------------------------------- #
-def test_deploy_consumes_frontend_dev_overlay_not_full_dev():
-    """The deploy command must -f the slim frontend overlay, never the full dev one.
+def test_forward_deploy_uses_no_dev_overlay_when_frontend_has_prod_image():
+    """Post-#528-B the forward deploy runs the base prod stack with NO dev overlay.
 
-    Using docker-compose.dev.yml here is exactly the dev-in-prod regression (#527).
+    #528-A introduced the slim frontend-dev overlay only because the frontend had no
+    prod image. #528-B restored that image, so pick_overlay short-circuits to an EMPTY
+    overlay when the frontend Dockerfile has an ``AS production`` stage — the forward
+    deploy is base compose alone (api/workers/scheduler AND frontend on the prod
+    target). docker-compose.dev.yml / the slim overlay remain referenced only as the
+    pre-flip / #528-A-era rollback fallbacks (driven by the checked-out tree).
     """
     script = _deploy_script()
-    assert "docker-compose.frontend-dev.yml" in script, (
-        "deploy must consume the slim docker-compose.frontend-dev.yml overlay"
+    assert "grep -q 'AS production' docker/frontend/Dockerfile" in script, (
+        "pick_overlay must short-circuit to NO overlay when the frontend has a prod image (#528-B)"
     )
-    # The forward compose command must not -f the full dev overlay. (The rollback
-    # path MAY fall back to it when rolling back to a pre-flip commit; see the
-    # overlay-existence test — so we scope this to the forward COMPOSE_CMD region.)
-    forward, _, _rb = script.partition('if [ "$HEALTHY" = false ]')
-    assert "-f docker/docker-compose.dev.yml" not in forward, (
-        "forward deploy must not -f docker-compose.dev.yml (that is the #527 dev-in-prod path)"
+    # This branch's frontend Dockerfile DOES have the production stage, so a forward
+    # deploy of this commit resolves to base-only (no dev-in-prod overlay, #527).
+    assert "AS production" in (REPO_ROOT / "docker" / "frontend" / "Dockerfile").read_text(), (
+        "the frontend Dockerfile must have a production stage so the forward deploy needs no overlay"
     )
+    # The rollback fallbacks (both overlays) stay referenced for older commits.
+    assert "docker-compose.frontend-dev.yml" in script and "docker-compose.dev.yml" in script
 
 
 def test_deploy_overlay_is_chosen_by_file_existence_for_safe_rollback():
