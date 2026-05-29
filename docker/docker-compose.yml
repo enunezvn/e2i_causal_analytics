@@ -62,6 +62,11 @@ x-common-worker: &common-worker
     context: ..
     dockerfile: docker/Dockerfile
     target: production
+  # #528-B: GHCR-pull tag for the shared api image. The deploy pulls this from GHCR
+  # (built+pushed in CI for the deployed commit) instead of building on the droplet;
+  # the `build:` above remains the local-build fallback. IMAGE_OWNER/IMAGE_TAG are
+  # exported by deploy.yml; the defaults keep local `docker compose` working.
+  image: ghcr.io/${IMAGE_OWNER:-local}/e2i-api:${IMAGE_TAG:-latest}
   restart: unless-stopped
   security_opt:
     - no-new-privileges:true
@@ -563,6 +568,8 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
       target: production
+    # #528-B: GHCR-pull tag (built+pushed in CI); `build:` is the local fallback.
+    image: ghcr.io/${IMAGE_OWNER:-local}/e2i-api:${IMAGE_TAG:-latest}
     container_name: e2i_api
     restart: unless-stopped
     logging: *default-logging
@@ -791,6 +798,8 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
       target: production
+    # #528-B: same shared api image, GHCR-pull tag; `build:` is the local fallback.
+    image: ghcr.io/${IMAGE_OWNER:-local}/e2i-api:${IMAGE_TAG:-latest}
     container_name: e2i_scheduler
     restart: unless-stopped
     logging: *default-logging
@@ -859,6 +868,9 @@ services:
       context: ..
       dockerfile: docker/frontend/Dockerfile
       target: production
+    # #528-B: GHCR-pull tag for the nginx frontend image (built+pushed in CI by the
+    # frontend build-push job); `build:` is the local fallback.
+    image: ghcr.io/${IMAGE_OWNER:-local}/e2i-frontend:${IMAGE_TAG:-latest}
     container_name: e2i_frontend
     restart: unless-stopped
     logging: *default-logging
@@ -876,8 +888,15 @@ services:
       - no-new-privileges:true
     read_only: true
     tmpfs:
-      - /var/cache/nginx:size=10M,mode=0770
-      - /var/run:size=5M,mode=0770
+      # #528-B: the nginx production stage runs as the non-root e2i user (uid 1000)
+      # under a read_only rootfs, so these scratch tmpfs must be owned by uid 1000 —
+      # else nginx dies at startup with `mkdir() "/var/cache/nginx/client_temp"
+      # failed (13: Permission denied)` (a root-owned mode-0770 tmpfs is unwritable to
+      # uid 1000). Verified out-of-band: without uid= the container emerg-exits; with
+      # it nginx serves /health. Same non-root-tmpfs lesson as api/scheduler /app/tmp
+      # in #527.
+      - /var/cache/nginx:size=10M,mode=0770,uid=1000,gid=1000
+      - /var/run:size=5M,mode=0770,uid=1000,gid=1000
     deploy:
       resources:
         limits:

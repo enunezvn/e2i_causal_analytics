@@ -33,6 +33,7 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/e2i-api
+  IMAGE_NAME_FRONTEND: ${{ github.repository_owner }}/e2i-frontend
 
 jobs:
   test:
@@ -64,8 +65,11 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # #528-B: full-length sha so the droplet can pull this exact commit's image
+          # by `$(git rev-parse HEAD)` (immutable, no short-sha ambiguity). `latest`
+          # is kept for humans/manual pulls.
           tags: |
-            type=sha,prefix=
+            type=sha,prefix=,format=long
             type=raw,value=latest
 
       - name: Set up Docker Buildx
@@ -82,41 +86,104 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  # #528-B: build + push the frontend nginx production image so the droplet can pull
+  # it instead of building Vite/nginx on the box. Mirrors build-and-push (api).
+  build-and-push-frontend:
+    name: Build & Push Frontend Image
+    runs-on: ubuntu-latest
+    needs: test
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_FRONTEND }}
+          tags: |
+            type=sha,prefix=,format=long
+            type=raw,value=latest
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/frontend/Dockerfile
+          target: production
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   deploy:
     name: Deploy to Droplet
     runs-on: ubuntu-latest
-    needs: [build-and-push]
+    needs: [build-and-push, build-and-push-frontend]
     environment: production
+    # #528-B: packages:read so the job's GITHUB_TOKEN can pull the images it just
+    # pushed; the token is forwarded to the droplet for `docker login ghcr.io`.
+    permissions:
+      contents: read
+      packages: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
+        env:
+          # #528-B: forwarded to the droplet for the GHCR pull. IMAGE_OWNER names the
+          # GHCR namespace; GHCR_USER/GHCR_TOKEN authenticate the pull (GITHUB_TOKEN is
+          # valid for the life of this job, which is when the droplet pulls).
+          IMAGE_OWNER: ${{ github.repository_owner }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           command_timeout: 30m
           script_stop: true
+          envs: IMAGE_OWNER,GHCR_USER,GHCR_TOKEN
           script: |
             set -e
 
             PROJECT_DIR="/home/enunez/Projects/e2i_causal_analytics"
 
-            # #528-A: pick the compose overlay by file existence. The prod deploy now
-            # runs the slim FRONTEND-ONLY overlay (docker-compose.frontend-dev.yml) so
-            # api/workers/scheduler use the base prod target instead of the full dev
-            # overlay (the #527 dev-in-prod incident: target:development, --reload,
-            # ENVIRONMENT=development). docker-compose.dev.yml stays the fallback for
-            # commits that predate the slim overlay — so a rollback to a pre-flip commit
-            # cleanly reverts the flip instead of failing on a missing -f target.
+            # Pick the compose overlay for the CHECKED-OUT commit, driven by what that
+            # commit actually provides (so both forward deploys and rollbacks pick the
+            # right one across all three eras):
+            #   * #528-B onward — the frontend Dockerfile has an `AS production` (nginx)
+            #     stage, so the frontend runs the base prod target like the app services
+            #     → NO overlay at all (base compose alone, everything prod).
+            #   * #528-A era — frontend has no prod stage; the slim frontend-only overlay
+            #     keeps just the frontend on dev/Vite while app services are base prod.
+            #   * pre-flip — neither exists; the full dev overlay (the #527 dev-in-prod
+            #     model) is the rollback target.
+            # Echoes the full `-f <file>` flag, or empty for the no-overlay case.
             # COMPOSE_CMD is (re)computed after EVERY checkout, since the tree changes.
             pick_overlay() {
-              if [ -f docker/docker-compose.frontend-dev.yml ]; then
-                echo docker/docker-compose.frontend-dev.yml
+              if grep -q 'AS production' docker/frontend/Dockerfile 2>/dev/null; then
+                echo ""
+              elif [ -f docker/docker-compose.frontend-dev.yml ]; then
+                echo "-f docker/docker-compose.frontend-dev.yml"
               else
-                echo docker/docker-compose.dev.yml
+                echo "-f docker/docker-compose.dev.yml"
               fi
             }
 
@@ -136,9 +203,9 @@ jobs:
             NEW_SHA=$(git rev-parse HEAD)
             echo "==> Deploying ${NEW_SHA:0:7}"
 
-            # Tree is now at NEW_SHA — select the overlay that exists at this commit.
-            COMPOSE_CMD="docker compose -f docker/docker-compose.yml -f $(pick_overlay)"
-            echo "==> Compose overlay: $(pick_overlay)"
+            # Tree is now at NEW_SHA — select the overlay this commit needs (may be none).
+            COMPOSE_CMD="docker compose -f docker/docker-compose.yml $(pick_overlay)"
+            echo "==> Compose overlay: $(pick_overlay) (empty = base prod only)"
 
             # Run migrations only when the DB URL is present in the deploy env;
             # run_migrations.sh hard-exits otherwise, which `set -e` would abort on.
@@ -180,6 +247,30 @@ jobs:
               echo "==> Bind-mounted code-only change — recreating from current image"
               BUILD_FLAG=""
             fi
+
+            # #528-B: pull the pre-built app + frontend images from GHCR instead of
+            # building on the droplet. The build-and-push jobs are a `needs:` of this
+            # deploy, so the images for THIS commit ($NEW_SHA) are already pushed and
+            # ALREADY INCLUDE any baked-input change — pulling is correct regardless of
+            # the local rebuild detector, and it avoids running the OOM-prone React
+            # production build on the droplet. So the pull is INDEPENDENT of BUILD_FLAG:
+            # try login+pull first; fall back to a local build ONLY if login or pull
+            # fails (registry hiccup / missing image) so a deploy is never wedged.
+            # feast/feast-materializer are sidecar images NOT pushed to GHCR — they keep
+            # building locally below, governed by $BUILD_FLAG.
+            #   image: refs in docker-compose.yml resolve ghcr.io/$IMAGE_OWNER/<img>:$IMAGE_TAG
+            export IMAGE_OWNER="$(echo "${IMAGE_OWNER:-}" | tr '[:upper:]' '[:lower:]')"
+            export IMAGE_TAG="$NEW_SHA"
+            if [ -n "$IMAGE_OWNER" ] \
+               && echo "${GHCR_TOKEN:-}" | docker login "${REGISTRY:-ghcr.io}" -u "${GHCR_USER:-$IMAGE_OWNER}" --password-stdin >/dev/null 2>&1 \
+               && $COMPOSE_CMD pull api worker_light worker_medium scheduler frontend; then
+              echo "==> Pulled app images from GHCR at ${IMAGE_TAG:0:7} — using them (no local build)"
+              APP_BUILD_FLAG="--no-build"
+            else
+              echo "==> GHCR pull unavailable — falling back to a local build for app images"
+              APP_BUILD_FLAG="--build"
+            fi
+
             # #528-A ordered rollout — a FRESH online store BEFORE the prod-target API
             # serves. The flip makes the fail-loud #532 Feast read path authoritative,
             # so serving against a stale/empty store would return null features or 503.
@@ -222,13 +313,14 @@ jobs:
               echo "==> never flipped — they keep serving the pre-deploy version). Deploy FAILED."
               docker logs --tail 50 e2i_feast_materializer 2>&1 || true
               git checkout "$PREV_SHA"
-              COMPOSE_CMD="docker compose -f docker/docker-compose.yml -f $(pick_overlay)"
+              COMPOSE_CMD="docker compose -f docker/docker-compose.yml $(pick_overlay)"
               $COMPOSE_CMD up -d --build --no-deps --force-recreate feast feast-materializer
               exit 1
             fi
 
-            # Store is fresh — now flip the app services to the prod target.
-            $COMPOSE_CMD up -d $BUILD_FLAG --no-deps --force-recreate \
+            # Store is fresh — now flip the app services to the prod target, using the
+            # GHCR-pulled images (--no-build) or a local build on fallback (#528-B).
+            $COMPOSE_CMD up -d $APP_BUILD_FLAG --no-deps --force-recreate \
               api frontend worker_light worker_medium scheduler
 
             # Health check
@@ -246,12 +338,13 @@ jobs:
             if [ "$HEALTHY" = false ]; then
               echo "==> Health check failed — rolling back to ${PREV_SHA:0:7}"
               git checkout "$PREV_SHA"
-              # PREV_SHA may predate the slim frontend overlay (#528-A) — recompute
-              # COMPOSE_CMD so the rollback -f's the overlay that exists at this commit.
-              # Rolling back to a pre-flip commit therefore REVERTS the flip (falls back
-              # to docker-compose.dev.yml: dev target, --reload, the recoverable state).
-              COMPOSE_CMD="docker compose -f docker/docker-compose.yml -f $(pick_overlay)"
-              echo "==> Rollback compose overlay: $(pick_overlay)"
+              # PREV_SHA may predate the frontend prod image / slim overlay — recompute
+              # COMPOSE_CMD so the rollback uses the overlay that commit needs (pick_overlay
+              # echoes the full `-f <file>` flag, or empty when the frontend has a prod
+              # stage). Rolling back to a pre-flip commit therefore REVERTS the flip
+              # (falls back to docker-compose.dev.yml: dev target, --reload, recoverable).
+              COMPOSE_CMD="docker compose -f docker/docker-compose.yml $(pick_overlay)"
+              echo "==> Rollback compose overlay: $(pick_overlay) (empty = base prod only)"
               # Rollback rebuilds from PREV_SHA AND renews anonymous volumes: the
               # rolled-back commit may predate this hotfix and still carry the
               # /app/.venv mask, so renewing repopulates the venv from the freshly
