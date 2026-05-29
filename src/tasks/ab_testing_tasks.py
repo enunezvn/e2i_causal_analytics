@@ -1055,16 +1055,16 @@ async def _execute_real_twin_retraining(
     ``TwinRetrainingService.fail_retraining`` (which writes NO ``fidelity_after``).
     A fake metric must never reach the job record.
 
-    PERSISTENCE GAP (codex HIGH; durable-persistence follow-up #549): this path is fully honest only
-    same-process/eager today. Twin retraining job state lives ONLY in the
-    service's in-process ``_pending_jobs`` dict (no durable job table), and
-    ``TwinGenerator.train`` does not persist the model artifact. In a real Celery
-    worker (a separate process from the API that queued the job), the service's
-    store is empty so ``complete_retraining`` returns ``None`` — when that
-    happens we FAIL CLOSED (return a non-success result, write no metric) rather
-    than report a false "completed". Making this path durable across the worker
-    boundary requires (a) durable twin-model persistence and (b) shared/durable
-    job storage.
+    DURABLE ACROSS THE WORKER BOUNDARY (#549): twin retraining job state is
+    persisted to the shared ``twin_retraining_jobs`` table via
+    ``TwinRetrainingJobRepository`` and the retrained model to
+    ``digital_twin_models`` via ``TwinModelRepository.save_model``. Because both
+    the API and the worker resolve the SAME ``get_supabase()`` client, a job the
+    API created is found here and its completion (with the real metric + the
+    persisted ``new_model_id``) is recorded and retrievable by the API process.
+    If the durable store cannot record the completion (genuinely-unknown job, or
+    an inert/unconfigured env) this still FAILS CLOSED — it never reports a false
+    "completed".
 
     Args:
         retraining_job_id: TwinRetrainingJob id created by trigger_retraining.
@@ -1078,7 +1078,8 @@ async def _execute_real_twin_retraining(
     Returns:
         Result dict (real ``validation_r2`` on success; failure reason otherwise).
     """
-    from src.digital_twin.models.twin_models import Brand, TwinType
+    from src.api.dependencies.supabase_client import get_supabase
+    from src.digital_twin.models.twin_models import Brand, TwinModelConfig, TwinType
     from src.digital_twin.retraining_service import get_twin_retraining_service
     from src.digital_twin.twin_repository import TwinModelRepository
 
@@ -1110,7 +1111,9 @@ async def _execute_real_twin_retraining(
         return await _mark_failed(str(e))
 
     # Locate the saved model row to rebuild the trainer's identity/feature set.
-    repo = TwinModelRepository()
+    # Bind the process-shared Supabase client so the lookup AND the durable
+    # save_model below actually hit the DB in a real worker process (#549).
+    repo = TwinModelRepository(supabase_client=get_supabase())
     try:
         from uuid import UUID
 
@@ -1152,19 +1155,40 @@ async def _execute_real_twin_retraining(
             "job marked failed (no metric written)"
         )
 
-    new_model_id = str(getattr(metrics, "model_id", model_id))
-    # PERSISTENCE BOUNDARY (codex HIGH; durable-persistence follow-up #549):
-    # complete_retraining records the completion ONLY in this service's
-    # in-process ``_pending_jobs`` dict (retraining_service.py:143/315/409) —
-    # there is NO durable twin-retraining-job table/repository, and
-    # ``get_twin_retraining_service`` returns a FRESH service per call
-    # (retraining_service.py:600), so a Celery worker (separate process from the
-    # API that queued the job) has an EMPTY store and complete_retraining returns
-    # None. ``TwinGenerator.train`` (twin_generator.py:213-233) likewise builds a
-    # new model_id but does NOT persist the model artifact anywhere durable.
-    # Until BOTH (a) durable twin-model persistence and (b) shared/durable job
-    # storage exist, this success path only works same-process/eager — across the
-    # worker boundary we FAIL CLOSED below rather than report a false "completed".
+    # Persist the retrained model durably so new_model_id references a real,
+    # retrievable digital_twin_models row rather than an ephemeral uuid (#549).
+    # The config is rebuilt from the SOURCE model row's contract; save_model
+    # writes the metadata row (and the artifact to MLflow when a client is
+    # configured). A persistence failure FAILS CLOSED — we never record a
+    # completion for a model we could not durably store.
+    try:
+        config = TwinModelConfig(
+            model_name=f"{model_row.get('model_name') or 'twin'}_retrained",
+            model_description="Automated twin retraining (#549 durable persistence)",
+            twin_type=twin_type,
+            brand=brand,
+            algorithm=algorithm,
+            feature_columns=list(feature_cols or []),
+            target_column=target_column,
+            geographic_scope=model_row.get("geographic_scope", "national"),
+        )
+        persisted_id = await repo.save_model(
+            config=config,
+            metrics=metrics,
+            model_artifact=getattr(generator, "model", None),
+        )
+    except Exception as e:  # noqa: BLE001 — durable persistence failure → fail closed
+        return await _mark_failed(
+            f"retrained twin model could not be persisted: {type(e).__name__}: {e}"
+        )
+    new_model_id = str(persisted_id)
+
+    # Record the completion in the DURABLE, process-shared job store (#549). In a
+    # real worker the service (get_twin_retraining_service) is wired to the shared
+    # store, so the job the API created at trigger time is found and the
+    # completion + real metric are recorded and retrievable by the API process.
+    # If the store cannot record it (genuinely-unknown job, or inert/unconfigured
+    # env) we FAIL CLOSED below rather than report a false "completed".
     recorded = await service.complete_retraining(
         job_id=retraining_job_id,
         new_model_id=new_model_id,
@@ -1172,15 +1196,15 @@ async def _execute_real_twin_retraining(
         success=True,
     )
     if recorded is None:
-        # The train really ran (R²=validation_r2) but the completion could not be
-        # recorded: the job is not in THIS worker's in-process store. Reporting
-        # "completed" with a real-looking metric would be a false success.
+        # The train ran (R²=validation_r2) and the model was persisted, but the
+        # completion could not be recorded in the durable job store: the job id
+        # is unknown there (never persisted at trigger time) or the store is
+        # inert/unconfigured. Reporting "completed" would be a false success.
         return await _mark_failed(
-            f"twin retraining ran (validation R²={validation_r2:.4f}) but completion "
-            f"could not be recorded: job {retraining_job_id} not present in this "
-            "worker's in-process store — twin retraining job state is not shared "
-            "across processes and the retrained model is not durably persisted "
-            "(see follow-up #549). No completion or metric was recorded."
+            f"twin retraining ran (validation R²={validation_r2:.4f}, model "
+            f"{new_model_id} persisted) but completion could not be recorded: job "
+            f"{retraining_job_id} not found in the durable job store (unknown or "
+            "store unconfigured). No completion or metric was recorded."
         )
 
     logger.info(

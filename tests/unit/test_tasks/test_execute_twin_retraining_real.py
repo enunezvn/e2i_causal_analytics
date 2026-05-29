@@ -129,6 +129,9 @@ def _patch_repo_and_service(model_row: Any):
     """
     repo = MagicMock()
     repo.get_model = AsyncMock(return_value=model_row)
+    # #549: the task now persists the retrained model durably before recording
+    # completion — save_model returns the persisted model id.
+    repo.save_model = AsyncMock(return_value=uuid4())
     repo_patch = patch("src.digital_twin.twin_repository.TwinModelRepository", return_value=repo)
 
     service = MagicMock()
@@ -180,12 +183,13 @@ async def test_twin_retraining_records_real_metric(tmp_path: Any) -> None:
 
 
 @pytest.mark.asyncio
-async def test_twin_retraining_cross_process_completion_not_recorded(tmp_path: Any) -> None:
-    """codex HIGH (#548): in a real Celery worker the service is a FRESH instance
-    with an EMPTY _pending_jobs (jobs are in-process only; no DB), so
-    complete_retraining returns None — the completion was NOT recorded. The task
-    must NOT report 'completed' or a real-looking metric in that case; it returns
-    an honest non-success status and writes no fabricated completion."""
+async def test_fail_closed_when_durable_completion_not_recorded(tmp_path: Any) -> None:
+    """Fail-closed guard (#548 invariant, still required after #549): if
+    complete_retraining returns None — the durable job store could not record the
+    completion (the job id is unknown there, or the store is inert/unconfigured) —
+    the task must NOT report 'completed' or a real-looking metric. It returns an
+    honest non-success status and writes no fabricated completion. (#549 makes the
+    HAPPY path record across the worker boundary; this is the degraded case.)"""
     from src.tasks.ab_testing_tasks import _execute_real_twin_retraining
 
     model_row = _model_row()
