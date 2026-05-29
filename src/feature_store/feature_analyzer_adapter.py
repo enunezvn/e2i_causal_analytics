@@ -681,6 +681,15 @@ class FeatureAnalyzerAdapter:
         feast_available = await self._ensure_feast_initialized()
 
         if not feast_available or not self._feast_client:
+            # #556: FAIL CLOSED. Feast unavailable means freshness CANNOT be
+            # verified, so we must not report fresh=True — that silently defeats
+            # the QC/registrar gate that blocks on stale features. The
+            # ALLOW_STALE_FEAST escape hatch in feast_registrar lets intentional
+            # no-Feast environments proceed. (Serving paths that intentionally
+            # degrade-with-warning, e.g. prediction_synthesizer per #438, do not
+            # use this adapter.)
+            result["fresh"] = False
+            result["stale_features"] = list(feature_refs)
             result["recommendations"].append(
                 "Feast not available - feature freshness cannot be verified"
             )
@@ -713,12 +722,27 @@ class FeatureAnalyzerAdapter:
                             f"(last updated {age_hours:.1f} hours ago)"
                         )
                 else:
+                    # #556: no real recency signal (stats absent, or last_updated
+                    # is None because get_feature_statistics no longer fabricates
+                    # now()) → freshness unverifiable → fail closed rather than
+                    # silently passing. Real per-source recency is a tracked follow-up.
                     result["feature_ages"][feature_ref] = None
-                    result["recommendations"].append(f"No statistics available for {feature_ref}")
+                    result["fresh"] = False
+                    result["stale_features"].append(feature_ref)
+                    result["recommendations"].append(
+                        f"Freshness unverifiable for {feature_ref} (no recency signal); "
+                        "set ALLOW_STALE_FEAST=1 to proceed, or wait for real-recency support"
+                    )
 
             except Exception as e:
+                # #556: an errored freshness lookup is unverifiable → fail closed.
                 logger.warning(f"Failed to check freshness for {feature_ref}: {e}")
                 result["feature_ages"][feature_ref] = None
+                result["fresh"] = False
+                result["stale_features"].append(feature_ref)
+                result["recommendations"].append(
+                    f"Could not verify freshness for {feature_ref}: {e}"
+                )
 
         if result["fresh"]:
             logger.info(f"All {len(feature_refs)} features are fresh")

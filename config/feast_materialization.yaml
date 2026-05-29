@@ -31,7 +31,16 @@ schedule:
   # Time zone for scheduling
   timezone: "UTC"
 
-# Feature view configurations
+# Feature view configurations.
+# #556: this block must enumerate EVERY online-served feature view, otherwise
+# the materializer leaves the omitted views to decay. All 9 registry views are
+# listed below (the previously-omitted ones — the three 1-day-TTL views plus
+# trigger_response and hcp_profile — were exactly the ones going stale).
+# max_staleness_hours is the alerting threshold; the materialize cadence is the
+# global schedule.interval_hours (6h) unless a per-view interval_hours overrides
+# it. NOTE: the in-sidecar materializer (PR2) runs a single global-cadence loop,
+# so per-view interval_hours below is the TARGET; sub-global per-view cadence
+# (e.g. trigger_response hourly) needs a dedicated timer — tracked as follow-up.
 feature_views:
   hcp_conversion_features:
     enabled: true
@@ -41,9 +50,21 @@ feature_views:
     # Specific schedule (overrides global)
     interval_hours: 4
 
+  hcp_engagement_features:
+    enabled: true
+    priority: high
+    # ttl=1 day → must be refreshed well within 24h; global 6h cadence covers it.
+    max_staleness_hours: 24.0
+
   patient_journey_features:
     enabled: true
     priority: high
+    max_staleness_hours: 24.0
+
+  patient_adherence_features:
+    enabled: true
+    priority: high
+    # ttl=1 day.
     max_staleness_hours: 24.0
 
   trigger_effectiveness_features:
@@ -51,8 +72,33 @@ feature_views:
     priority: medium
     max_staleness_hours: 48.0
 
-  market_dynamics_features:
+  trigger_response_features:
     enabled: true
+    priority: high
+    # Tagged freshness_requirement: hourly on the FeatureView. The global 6h
+    # materialize loop CANNOT meet a 1h target; interval_hours: 1 records the
+    # intended cadence, but until a per-view sub-global timer exists the
+    # effective refresh is 6h — accepted gap, tracked in #556.
+    max_staleness_hours: 6.0
+    interval_hours: 1
+
+  hcp_profile_features:
+    enabled: true
+    priority: medium
+    # ttl=30 days; slow-moving profile attributes.
+    max_staleness_hours: 168.0
+
+  territory_performance_features:
+    enabled: true
+    priority: medium
+    # ttl=1 day.
+    max_staleness_hours: 24.0
+
+  market_dynamics_features:
+    # DISABLED (#556): online=False — (territory, brand)-keyed but the per-HCP
+    # business_metrics source cannot supply those join keys. Do not materialize
+    # until a real per-(territory, brand) source exists.
+    enabled: false
     priority: low
     max_staleness_hours: 168.0  # Weekly
 

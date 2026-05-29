@@ -281,7 +281,11 @@ class MaterializationJob:
 
             result = {
                 "status": "completed",
-                "fresh": len(stale_features) == 0,
+                # #556: errors (a view with no recency signal / failed stat lookup)
+                # are UNVERIFIABLE, not "fresh". Counting only stale_features let an
+                # all-unverifiable run report fresh=True and silently suppress the
+                # scheduled staleness alert (feast_tasks alerts only on fresh=False).
+                "fresh": len(stale_features) == 0 and len(errors) == 0,
                 "stale_features": stale_features,
                 "fresh_features": fresh_features,
                 "errors": errors,

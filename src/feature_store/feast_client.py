@@ -193,7 +193,14 @@ class FeatureStatistics(BaseModel):
     max_value: Optional[float] = None
     mean_value: Optional[float] = None
     stddev_value: Optional[float] = None
-    last_updated: datetime
+    # #556: Optional — None means "recency could not be determined". Do NOT
+    # fabricate datetime.now() here: a freshness check that compares now() to a
+    # fabricated now() always reports fresh, silently defeating the QC gate
+    # (anti-mocking). last_updated must be a REAL max(event_timestamp) from the
+    # data or None. Computing real recency per source table is a tracked
+    # follow-up; until then these stat paths report None (→ unverifiable →
+    # fail-closed at check_feature_freshness).
+    last_updated: Optional[datetime] = None
 
 
 class FeatureFreshness(BaseModel):
@@ -901,7 +908,7 @@ class FeastClient:
                 feature_name=feature_name,
                 count=0,
                 null_count=0,
-                last_updated=datetime.now(timezone.utc),
+                last_updated=None,  # #556: no real recency signal computed; None=unverifiable (never fabricate now())
             )
 
         # Query statistics from Supabase
@@ -933,7 +940,7 @@ class FeastClient:
             feature_name=feature_name,
             count=0,
             null_count=0,
-            last_updated=datetime.now(timezone.utc),
+            last_updated=None,  # #556: no real recency signal computed; None=unverifiable (never fabricate now())
         )
 
     def _infer_source_table(self, feature_view: str) -> Optional[str]:
@@ -1007,7 +1014,7 @@ class FeastClient:
                     max_value=float(row["max_val"]) if row.get("max_val") else None,
                     mean_value=float(row["mean_val"]) if row.get("mean_val") else None,
                     stddev_value=float(row["stddev_val"]) if row.get("stddev_val") else None,
-                    last_updated=datetime.now(timezone.utc),
+                    last_updated=None,  # #556: no real recency signal computed; None=unverifiable (never fabricate now())
                 )
         except Exception as e:
             # Try simpler count-only query if stats query fails
@@ -1024,7 +1031,7 @@ class FeastClient:
                     feature_name=column_name,
                     count=total_count,
                     null_count=0,
-                    last_updated=datetime.now(timezone.utc),
+                    last_updated=None,  # #556: no real recency signal computed; None=unverifiable (never fabricate now())
                 )
             except Exception as count_error:
                 logger.warning(f"Count query also failed: {count_error}")
@@ -1035,7 +1042,7 @@ class FeastClient:
             feature_name=column_name,
             count=0,
             null_count=0,
-            last_updated=datetime.now(timezone.utc),
+            last_updated=None,  # #556: no real recency signal computed; None=unverifiable (never fabricate now())
         )
 
     async def _compute_stats_from_feast(
@@ -1107,7 +1114,7 @@ class FeastClient:
                     max_value=float(series.max()) if pd.notna(series.max()) else None,
                     mean_value=float(series.mean()) if pd.notna(series.mean()) else None,
                     stddev_value=float(series.std()) if pd.notna(series.std()) else None,
-                    last_updated=datetime.now(timezone.utc),
+                    last_updated=None,  # #556: no real recency signal computed; None=unverifiable (never fabricate now())
                 )
 
         except Exception as e:
@@ -1119,7 +1126,7 @@ class FeastClient:
             feature_name=feature_name,
             count=0,
             null_count=0,
-            last_updated=datetime.now(timezone.utc),
+            last_updated=None,  # #556: no real recency signal computed; None=unverifiable (never fabricate now())
         )
 
     async def list_feature_views(self) -> List[Dict[str, Any]]:
