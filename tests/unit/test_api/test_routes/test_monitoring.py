@@ -1052,6 +1052,65 @@ class TestTriggerRetraining:
         assert data["job_id"] == "retrain-job-123"
         assert data["status"] == "pending"
 
+    def test_trigger_retraining_with_real_job_and_cohort(self, client):
+        """Faithful test: the endpoint must build a valid response from a REAL
+        RetrainingJob (which has created_at, NOT triggered_at/triggered_by) and
+        thread the cohort contract into the service — without passing the
+        unsupported triggered_by/notes/auto_approve kwargs the service rejects.
+
+        The MagicMock-based test above masks the real dataclass mismatch; this
+        one exercises the actual contract.
+        """
+        from src.services.retraining_trigger import (
+            RetrainingJob,
+            RetrainingStatus,
+            TriggerReason,
+        )
+
+        real_job = RetrainingJob(
+            job_id="rt-real-1",
+            model_version="optum_v1",
+            new_model_version="optum_v1_retrained_20260528",
+            trigger_reason=TriggerReason.MANUAL,
+            status=RetrainingStatus.PENDING,
+            created_at=datetime.now(timezone.utc),
+            performance_before=0.66,
+        )
+
+        with patch(
+            "src.services.retraining_trigger.get_retraining_trigger_service"
+        ) as mock_get_service:
+            service = MagicMock()
+            service.trigger_retraining = AsyncMock(return_value=real_job)
+            mock_get_service.return_value = service
+
+            response = client.post(
+                "/monitoring/retraining/trigger/optum_v1",
+                json={
+                    "reason": "manual",
+                    "data_source": "data/rwd/optum/initiation",
+                    "target_outcome": "initiated_biologic_180d",
+                    "feature_manifest_source": "optum",
+                    "auto_approve": True,
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["job_id"] == "rt-real-1"
+        assert data["status"] == "pending"
+        assert data["triggered_at"] is not None  # sourced from job.created_at
+
+        kwargs = service.trigger_retraining.await_args.kwargs
+        # cohort identity threaded for a real retrain
+        assert kwargs["cohort"]["data_source"] == "data/rwd/optum/initiation"
+        assert kwargs["cohort"]["feature_manifest_source"] == "optum"
+        # auto_approve=True → approved_by populated; unsupported kwargs gone
+        assert kwargs["approved_by"] == "api_user"
+        assert "triggered_by" not in kwargs
+        assert "auto_approve" not in kwargs
+        assert "notes" not in kwargs
+
 
 class TestGetRetrainingStatus:
     """Test GET /monitoring/retraining/status/{job_id} endpoint."""
@@ -1084,6 +1143,37 @@ class TestGetRetrainingStatus:
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "in_progress"
+
+    def test_get_retraining_status_training_real_job(self, client):
+        """codex MEDIUM-1: a real in-progress job has domain status 'training',
+        but the API enum exposes 'in_progress'. The status endpoint must map it
+        (200, not 500) — the live pipeline keeps a job in 'training' for minutes,
+        so this path is hit in practice."""
+        from src.services.retraining_trigger import (
+            RetrainingJob,
+            RetrainingStatus,
+            TriggerReason,
+        )
+
+        real_job = RetrainingJob(
+            job_id="rt-training-1",
+            model_version="optum_v1",
+            new_model_version="optum_v1_retrained",
+            trigger_reason=TriggerReason.MANUAL,
+            status=RetrainingStatus.TRAINING,
+            created_at=datetime.now(timezone.utc),
+        )
+        with patch(
+            "src.services.retraining_trigger.get_retraining_trigger_service"
+        ) as mock_get_service:
+            service = MagicMock()
+            service.get_retraining_status = AsyncMock(return_value=real_job)
+            mock_get_service.return_value = service
+
+            response = client.get("/monitoring/retraining/status/rt-training-1")
+
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "in_progress"
 
     def test_get_retraining_status_not_found(self, client):
         """Test getting non-existent retraining job."""

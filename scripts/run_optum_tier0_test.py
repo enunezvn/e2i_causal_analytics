@@ -139,6 +139,22 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--feature-manifest-source",
+        type=str,
+        choices=("csu", "optum", "synthetic"),
+        default=None,
+        help=(
+            "Opt this run into a cohort-specific feature manifest so Layer 5 "
+            "(adaptive_validity_check) consults the matching FeatureContract "
+            "registry for layer='1' verdicts. When omitted the value is "
+            "auto-detected from the resolved Optum cohort dir "
+            "('data/rwd/optum/<cohort>' → 'optum'); pass explicitly to override "
+            "the auto-detection. A conflicting override (e.g. 'csu' against an "
+            "Optum data dir) fails fast (M2) rather than silently applying the "
+            "wrong manifest."
+        ),
+    )
+    parser.add_argument(
         "--smoke-test-only",
         action="store_true",
         help=(
@@ -173,10 +189,22 @@ def main() -> int:
         )
         return 2
 
+    # Resolve which feature manifest Layer 5 should consult. Optum cohorts live
+    # under 'data/rwd/optum/<cohort>', so auto-detection yields 'optum'; an
+    # explicit --feature-manifest-source overrides it (and a conflicting choice
+    # fails fast via the M1/M2/M3 contract). Without this, run_pipeline left
+    # feature_manifest_source unset and Layer 5's manifest-driven Layer 1
+    # verdicts (post-index leak catch + declared-safe σ-inflation, PR #544)
+    # silently no-op'd for every Optum run. Mirrors the CSU runner.
+    feature_manifest_source = tier0._resolve_feature_manifest_source(
+        str(data_dir), args.feature_manifest_source
+    )
+
     print("\n=== Optum Tier-0 Pipeline Runner ===")
     print(f"  Cohort: {args.cohort}")
     print(f"  Target: {tier0.CONFIG.target_outcome}")
     print(f"  Data dir: {data_dir}")
+    print(f"  Feature manifest: {feature_manifest_source}")
     print(f"  AUC threshold: {tier0.CONFIG.min_auc_threshold}")
     print(f"  MLflow: {tier0.CONFIG.enable_mlflow}, Opik: {tier0.CONFIG.enable_opik}")
 
@@ -207,6 +235,7 @@ def main() -> int:
             imbalance_ratio=None,
             include_bentoml=not args.no_bentoml,
             data_dir=str(data_dir),
+            feature_manifest_source=feature_manifest_source,
         )
     )
 

@@ -342,6 +342,16 @@ async def build_scope_spec(state: Dict[str, Any]) -> Dict[str, Any]:
     if sufficiency is not None:
         scope_spec["sufficiency"] = sufficiency
 
+    # Layer 5 manifest opt-in: forward the resolved cohort manifest source
+    # (set upstream by the pipeline from data_source / explicit override) so
+    # adaptive_validity_check consults the matching FeatureContract registry
+    # for layer="1" verdicts. Only attach when set — leaving it absent
+    # preserves the cross-cohort false-positive guard for synthetic / research
+    # regimes that never resolved a manifest.
+    feature_manifest_source = state.get("feature_manifest_source")
+    if feature_manifest_source is not None:
+        scope_spec["feature_manifest_source"] = feature_manifest_source
+
     return {
         "experiment_id": experiment_id,
         "experiment_name": experiment_name,

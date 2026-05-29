@@ -171,6 +171,10 @@ class ScopeDefinerAgent:
             "brand": input_data.get("brand", "unknown"),
             "region": input_data.get("region", "all"),
             "use_case": input_data.get("use_case", "commercial_targeting"),
+            # Layer 5 manifest opt-in: forward the resolved cohort manifest
+            # source verbatim so scope_builder copies it onto scope_spec. Unset
+            # → None (no manifest pass; cross-cohort false-positive guard).
+            "feature_manifest_source": input_data.get("feature_manifest_source"),
             # Block 1B: surface prediction_timestamp into the state so the
             # scope_builder node can copy it onto scope_spec verbatim.
             "prediction_timestamp": input_data.get("prediction_timestamp"),

@@ -74,6 +74,13 @@ class ScopeDefinerState(BaseAgentSchema):
     region: Optional[str] = None
     use_case: Optional[str] = None
 
+    # Layer 5 manifest opt-in. The pipeline resolves which cohort manifest
+    # (csu/optum/synthetic) applies — from data_source or an explicit override
+    # via src.data.manifests.resolution.resolve_manifest_source — and threads
+    # it here so scope_builder copies it onto scope_spec. Unset → no manifest
+    # (cross-cohort false-positive guard). See scope_spec["feature_manifest_source"].
+    feature_manifest_source: Optional[str] = None
+
     # Temporal anchoring (Block 1B scaffolding; consumed in Block 4+).
     # Inference cutoff time the model predicts from — feeds scope_spec so
     # downstream agents can clip lookback windows and post-prediction filters.

@@ -1265,15 +1265,43 @@ class TriggerRetrainingRequest(BaseModel):
     notes: Optional[str] = Field(None, description="Additional notes")
     auto_approve: bool = Field(default=False, description="Auto-approve retraining")
 
+    # Cohort identity for a REAL retrain (Phase D). The live trigger runs the
+    # MLFoundationPipeline on a committed cohort, so it needs to know which
+    # cohort batch/table (``data_source``) and what to predict
+    # (``target_outcome``); ``feature_manifest_source`` opts into Layer-5
+    # contracts. Optional at the schema layer so drift/scheduled callers still
+    # validate — execute_model_retraining fails closed if data_source is absent.
+    data_source: Optional[str] = Field(
+        None, description="Committed cohort batch/table to retrain on"
+    )
+    target_outcome: Optional[str] = Field(None, description="Prediction target column")
+    brand: Optional[str] = Field(None, description="Brand context")
+    feature_manifest_source: Optional[str] = Field(
+        None, description="Layer-5 manifest source (csu/optum/synthetic)"
+    )
+
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "reason": "data_drift",
-                "notes": "Significant drift detected in key features",
+                "reason": "manual",
+                "notes": "Refresh on latest Optum cohort",
                 "auto_approve": False,
+                "data_source": "data/rwd/optum/initiation",
+                "target_outcome": "initiated_biologic_180d",
+                "feature_manifest_source": "optum",
             }
         }
     )
+
+    def cohort_contract(self) -> Dict[str, Any]:
+        """The cohort identity to thread into the retraining trigger (None-free)."""
+        fields = {
+            "data_source": self.data_source,
+            "target_outcome": self.target_outcome,
+            "brand": self.brand,
+            "feature_manifest_source": self.feature_manifest_source,
+        }
+        return {k: v for k, v in fields.items() if v is not None}
 
 
 class CompleteRetrainingRequest(BaseModel):
@@ -1322,20 +1350,79 @@ class RetrainingDecisionResponse(BaseModel):
 
 
 class RetrainingJobResponse(BaseModel):
-    """Response for retraining job."""
+    """Response for retraining job.
+
+    ``triggered_by``/``approved_at``/``notes`` are request-side metadata not
+    stored on the domain ``RetrainingJob`` — they are Optional and populated
+    only where the calling endpoint actually has them (e.g. the trigger
+    endpoint knows ``triggered_by``). ``triggered_at`` is sourced from the
+    job's ``created_at``.
+    """
 
     job_id: str
     model_version: str
     status: RetrainingStatusEnum
     trigger_reason: str
     triggered_at: datetime
-    triggered_by: str
+    triggered_by: Optional[str] = None
     approved_at: Optional[datetime] = None
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     performance_before: Optional[float] = None
     performance_after: Optional[float] = None
     notes: Optional[str] = None
+
+
+# Domain RetrainingStatus → API RetrainingStatusEnum. The domain has more
+# granular in-flight states (training, validating) than the API surface, which
+# collapses them to a single in_progress. Without this mapping a live job in
+# "training" (the real pipeline holds it there for minutes) would raise
+# ValueError in RetrainingStatusEnum(...) and 500 the status endpoint.
+_DOMAIN_TO_API_STATUS: Dict[str, RetrainingStatusEnum] = {
+    "training": RetrainingStatusEnum.IN_PROGRESS,
+    "validating": RetrainingStatusEnum.IN_PROGRESS,
+}
+
+
+def _to_api_status(domain_status: str) -> RetrainingStatusEnum:
+    """Map a domain RetrainingStatus value to the API enum, collapsing the
+    granular in-flight states to in_progress; otherwise the value maps 1:1."""
+    mapped = _DOMAIN_TO_API_STATUS.get(domain_status)
+    if mapped is not None:
+        return mapped
+    return RetrainingStatusEnum(domain_status)
+
+
+def _retraining_job_to_response(
+    job: Any,
+    *,
+    triggered_by: Optional[str] = None,
+    notes: Optional[str] = None,
+) -> "RetrainingJobResponse":
+    """Map a domain ``RetrainingJob`` to the API response.
+
+    Single mapping site for all four retraining endpoints. Sources
+    ``triggered_at`` from the job's ``created_at`` (the domain object has no
+    separate ``triggered_at``) and only sets request-side metadata
+    (``triggered_by``/``notes``) when the caller supplies it. Replaces the
+    per-endpoint ``job.triggered_at  # type: ignore[attr-defined]`` blocks that
+    referenced fields the dataclass never had (they passed only against
+    MagicMock test doubles).
+    """
+    return RetrainingJobResponse(
+        job_id=job.job_id,
+        model_version=job.model_version,
+        status=_to_api_status(job.status.value),
+        trigger_reason=job.trigger_reason.value,
+        triggered_at=job.created_at,
+        triggered_by=triggered_by,
+        approved_at=None,
+        started_at=job.started_at,
+        completed_at=job.completed_at,
+        performance_before=job.performance_before,
+        performance_after=job.performance_after,
+        notes=notes,
+    )
 
 
 @router.post(
@@ -1414,28 +1501,22 @@ async def trigger_retraining(
         # Map enum
         reason = TriggerReason(request.reason.value)
 
+        # Map the request onto the service's actual signature: cohort identity
+        # for a real retrain, notes via config_overrides, and approved_by when
+        # the caller asked to auto-approve. (The prior call passed triggered_by/
+        # notes/auto_approve as kwargs the service never accepted — they only
+        # survived under type: ignore and would TypeError at runtime.)
+        cohort = request.cohort_contract()
+        config_overrides = {"notes": request.notes} if request.notes else None
         job = await service.trigger_retraining(
             model_version=model_id,
             reason=reason,
-            triggered_by=triggered_by,  # type: ignore[call-arg]
-            notes=request.notes,  # type: ignore[call-arg]
-            auto_approve=request.auto_approve,  # type: ignore[call-arg]
+            config_overrides=config_overrides,
+            approved_by=(triggered_by if request.auto_approve else None),
+            cohort=(cohort or None),
         )
 
-        return RetrainingJobResponse(
-            job_id=job.job_id,
-            model_version=job.model_version,
-            status=RetrainingStatusEnum(job.status.value),
-            trigger_reason=job.trigger_reason.value,
-            triggered_at=job.triggered_at,  # type: ignore[attr-defined]
-            triggered_by=job.triggered_by,  # type: ignore[attr-defined]
-            approved_at=job.approved_at,  # type: ignore[attr-defined]
-            started_at=job.started_at,
-            completed_at=job.completed_at,
-            performance_before=job.performance_before,
-            performance_after=job.performance_after,
-            notes=job.notes,  # type: ignore[attr-defined]
-        )
+        return _retraining_job_to_response(job, triggered_by=triggered_by, notes=request.notes)
 
     except Exception as e:
         logger.error(f"Failed to trigger retraining: {e}")
@@ -1467,20 +1548,7 @@ async def get_retraining_status(job_id: str) -> RetrainingJobResponse:
         if not job:
             raise HTTPException(status_code=404, detail=f"Retraining job {job_id} not found")
 
-        return RetrainingJobResponse(
-            job_id=job.job_id,
-            model_version=job.model_version,
-            status=RetrainingStatusEnum(job.status.value),
-            trigger_reason=job.trigger_reason.value,
-            triggered_at=job.triggered_at,  # type: ignore[attr-defined]
-            triggered_by=job.triggered_by,  # type: ignore[attr-defined]
-            approved_at=job.approved_at,  # type: ignore[attr-defined]
-            started_at=job.started_at,
-            completed_at=job.completed_at,
-            performance_before=job.performance_before,
-            performance_after=job.performance_after,
-            notes=job.notes,  # type: ignore[attr-defined]
-        )
+        return _retraining_job_to_response(job)
 
     except HTTPException:
         raise
@@ -1498,6 +1566,7 @@ async def get_retraining_status(job_id: str) -> RetrainingJobResponse:
 async def complete_retraining(
     job_id: str,
     request: CompleteRetrainingRequest,
+    _admin: dict = Depends(require_admin),
 ) -> RetrainingJobResponse:
     """
     Mark a retraining job as complete.
@@ -1522,20 +1591,7 @@ async def complete_retraining(
         if not job:
             raise HTTPException(status_code=404, detail=f"Retraining job {job_id} not found")
 
-        return RetrainingJobResponse(
-            job_id=job.job_id,
-            model_version=job.model_version,
-            status=RetrainingStatusEnum(job.status.value),
-            trigger_reason=job.trigger_reason.value,
-            triggered_at=job.triggered_at,  # type: ignore[attr-defined]
-            triggered_by=job.triggered_by,  # type: ignore[attr-defined]
-            approved_at=job.approved_at,  # type: ignore[attr-defined]
-            started_at=job.started_at,
-            completed_at=job.completed_at,
-            performance_before=job.performance_before,
-            performance_after=job.performance_after,
-            notes=job.notes,  # type: ignore[attr-defined]
-        )
+        return _retraining_job_to_response(job, notes=request.notes)
 
     except HTTPException:
         raise
@@ -1579,20 +1635,7 @@ async def rollback_retraining(
         if not job:
             raise HTTPException(status_code=404, detail=f"Retraining job {job_id} not found")
 
-        return RetrainingJobResponse(
-            job_id=job.job_id,
-            model_version=job.model_version,
-            status=RetrainingStatusEnum(job.status.value),
-            trigger_reason=job.trigger_reason.value,
-            triggered_at=job.triggered_at,  # type: ignore[attr-defined]
-            triggered_by=job.triggered_by,  # type: ignore[attr-defined]
-            approved_at=job.approved_at,  # type: ignore[attr-defined]
-            started_at=job.started_at,
-            completed_at=job.completed_at,
-            performance_before=job.performance_before,
-            performance_after=job.performance_after,
-            notes=job.notes,  # type: ignore[attr-defined]
-        )
+        return _retraining_job_to_response(job)
 
     except HTTPException:
         raise
