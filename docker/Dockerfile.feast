@@ -33,6 +33,11 @@ RUN mkdir -p /feast/data
 # --chmod=755 sets the executable bit at COPY time; the base image runs as a
 # non-root user that can't `chmod` files owned by root in /.
 COPY --chmod=755 feast/entrypoint.sh /entrypoint.sh
+# Shared populate helper (sourced by both entrypoints) + the #556 materializer
+# entrypoint. The materializer runs from this SAME image (the only one that can
+# import feast); the compose `feast-materializer` service overrides ENTRYPOINT.
+COPY --chmod=755 feast/_populate_feast.sh /_populate_feast.sh
+COPY --chmod=755 feast/materializer-entrypoint.sh /materializer-entrypoint.sh
 
 # Set environment variables
 ENV FEAST_USAGE=false \

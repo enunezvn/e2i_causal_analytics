@@ -31,6 +31,27 @@ def load_config() -> Dict[str, Any]:
     return {}
 
 
+def _fail_loud_if_skipped(result: Dict[str, Any], kind: str) -> None:
+    """#556: raise on a ``skipped`` materialization so a no-op is never silent.
+
+    ``MaterializationJob`` returns ``status="skipped"`` when the runtime cannot
+    materialize — e.g. the app/worker image cannot ``import feast`` (tenacity
+    conflict, #307), so ``FeastClient.materialize()`` finds no embedded store.
+    Silently returning that masks a stale online store. The real scheduled
+    materialize runs in the e2i_feast sidecar materializer
+    (docker/feast/materializer-entrypoint.sh); on a worker this task must fail
+    loudly so the misconfiguration is visible rather than passing as success.
+    """
+    if result.get("status") == "skipped":
+        reason = result.get("reason") or "feast unavailable in this runtime"
+        raise RuntimeError(
+            f"{kind} feature materialization skipped ({reason}); this runtime cannot "
+            "materialize — the e2i_feast sidecar materializer owns scheduled "
+            "materialization (#556). Failing loud so the no-op does not silently "
+            "mask a stale online store."
+        )
+
+
 def run_async(coro):
     """Helper to run async coroutine in sync context."""
     try:
@@ -99,6 +120,7 @@ def materialize_features(
 
     # Log result
     status = result.get("status", "unknown")
+    _fail_loud_if_skipped(result, "Full")
     if status == "completed":
         duration = result.get("duration_seconds", 0)
         logger.info(
@@ -156,6 +178,7 @@ def materialize_incremental_features(
 
     # Log result
     status = result.get("status", "unknown")
+    _fail_loud_if_skipped(result, "Incremental")
     if status == "completed":
         duration = result.get("duration_seconds", 0)
         logger.info(f"Incremental materialization complete: duration={duration:.2f}s")

@@ -20,46 +20,11 @@
 # =============================================================================
 set -e
 
-: "${SUPABASE_POSTGRES_PASSWORD:?SUPABASE_POSTGRES_PASSWORD must be set}"
-: "${REDIS_PASSWORD:?REDIS_PASSWORD must be set}"
-
-if [ ! -d /feast-src ]; then
-    echo "[entrypoint] ERROR: /feast-src not bind-mounted (compose must mount ../feature_repo:/feast-src:ro)" >&2
-    exit 1
-fi
-if [ ! -f /feast-src/feature_store.yaml.tmpl ]; then
-    echo "[entrypoint] ERROR: /feast-src/feature_store.yaml.tmpl missing — bind mount points at the wrong directory" >&2
-    exit 1
-fi
-
-# Populate /feast by copying source .py files in from /feast-src. /feast/data
-# is a separate volume (registry + materialization output) and is left alone.
-# Copy (not symlink) because Feast 0.43.0 parse_repo rejects symlinks whose
-# targets resolve outside the working dir.
-mkdir -p /feast/features
-cp -f /feast-src/entities.py     /feast/entities.py
-cp -f /feast-src/data_sources.py /feast/data_sources.py
-for f in /feast-src/features/*.py; do
-    cp -f "$f" "/feast/features/$(basename "$f")"
-done
-
-# Render feature_store.yaml. Use Python (robust to special chars in password).
-python3 - <<'PY'
-import os, sys
-src = '/feast-src/feature_store.yaml.tmpl'
-dst = '/feast/feature_store.yaml'
-content = open(src).read()
-for var in ('SUPABASE_POSTGRES_PASSWORD', 'REDIS_PASSWORD'):
-    placeholder = '${' + var + '}'
-    if placeholder in content:
-        val = os.environ.get(var)
-        if not val:
-            sys.exit(f'[entrypoint] ERROR: {var} required by template but not set')
-        content = content.replace(placeholder, val)
-open(dst, 'w').write(content)
-os.chmod(dst, 0o600)
-print('[entrypoint] rendered /feast/feature_store.yaml from template')
-PY
+# Populate /feast (env + bind-mount validation, copy source, render yaml).
+# Shared with the materializer (#556) via the sourced helper so the two cannot
+# drift in how the repo is populated.
+. /_populate_feast.sh
+populate_feast
 
 echo "[entrypoint] feast version: $(feast version)"
 # Hard-fail on Feast SDK drift — the registry-proto layout, parse_repo

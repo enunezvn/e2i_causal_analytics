@@ -319,3 +319,110 @@ def test_deploy_workflow_keeps_safety_hardening():
     assert "command_timeout" in text, "deploy must keep command_timeout (appleboy hang guard)"
     assert "--max-time" in text, "deploy must keep a bounded health curl (--max-time)"
     assert "--connect-timeout" in text, "deploy must keep a bounded health curl (--connect-timeout)"
+
+
+# =============================================================================
+# #556 - Feast materializer service invariants
+# =============================================================================
+# The Redis online store is only kept fresh by the in-sidecar materializer
+# (the app/worker image cannot import feast, #307, so the Celery materialize
+# beats are no-ops). These guards pin the materializer's declared config so it
+# cannot silently regress. Runtime proof is the deploy-time materialize smoke.
+
+DOCKERFILE_FEAST = REPO_ROOT / "docker" / "Dockerfile.feast"
+POPULATE_HELPER = REPO_ROOT / "docker" / "feast" / "_populate_feast.sh"
+MATERIALIZER_ENTRYPOINT = REPO_ROOT / "docker" / "feast" / "materializer-entrypoint.sh"
+MATERIALIZE_CONFIG = REPO_ROOT / "config" / "feast_materialization.yaml"
+
+
+def _materializer() -> dict:
+    svc = _services(_load(BASE_COMPOSE)).get("feast-materializer")
+    assert svc, "feast-materializer service must exist in the base compose (#556)"
+    return svc
+
+
+def test_materializer_uses_same_image_as_feast_serving():
+    """Built from Dockerfile.feast — the ONLY image that can import feast. A second
+    independently-versioned feast image would be a second 0.43.0 drift surface."""
+    svc = _materializer()
+    build = svc.get("build") or {}
+    assert build.get("dockerfile") == "Dockerfile.feast", (
+        f"feast-materializer must build from Dockerfile.feast (got {build!r})"
+    )
+
+
+def test_materializer_overrides_entrypoint_to_materialize_loop():
+    svc = _materializer()
+    assert svc.get("entrypoint") == ["/materializer-entrypoint.sh"], (
+        f"feast-materializer must override the entrypoint to the materialize loop "
+        f"(got {svc.get('entrypoint')!r})"
+    )
+
+
+def test_materializer_shares_registry_and_mounts_config():
+    """Shares the feast_registry volume (reads what `feast` applied; materialize-only)
+    and mounts the cadence config read-only (#556: config/ is not on the app image)."""
+    svc = _materializer()
+    vols = svc.get("volumes") or []
+    joined = "\n".join(vols)
+    assert "feast_registry:/feast/data" in joined, "must share the feast_registry volume"
+    assert "../feature_repo:/feast-src:ro" in joined, "must mount the feature repo source ro"
+    assert "feast_materialization.yaml:/feast/feast_materialization.yaml:ro" in joined, (
+        "must mount config/feast_materialization.yaml read-only for the cadence"
+    )
+
+
+def test_materializer_waits_for_feast_apply():
+    """Materialize-only depends on `feast` having applied the registry first."""
+    svc = _materializer()
+    dep = svc.get("depends_on") or {}
+    assert "feast" in dep, "feast-materializer must depend_on the feast service"
+    cond = dep["feast"].get("condition") if isinstance(dep["feast"], dict) else None
+    assert cond == "service_healthy", (
+        f"feast-materializer must wait for feast service_healthy (got {cond!r})"
+    )
+
+
+def test_materializer_has_healthcheck_and_no_serving_port():
+    """A hung loop must be visible (heartbeat healthcheck); the materializer is
+    not a server, so it must not publish a port."""
+    svc = _materializer()
+    assert svc.get("healthcheck"), "feast-materializer must declare a healthcheck (hung-loop guard)"
+    assert not svc.get("ports"), "feast-materializer is not a server; it must not publish ports"
+
+
+def test_dockerfile_feast_ships_materializer_scripts():
+    text = DOCKERFILE_FEAST.read_text()
+    assert "materializer-entrypoint.sh" in text, (
+        "Dockerfile.feast must COPY the materializer entrypoint"
+    )
+    assert "_populate_feast.sh" in text, "Dockerfile.feast must COPY the shared populate helper"
+    assert POPULATE_HELPER.exists() and MATERIALIZER_ENTRYPOINT.exists(), (
+        "the populate helper + materializer entrypoint scripts must exist"
+    )
+
+
+def test_materialization_config_enumerates_all_online_views():
+    """#556: every ONLINE-served feature view must be in the materialization config,
+    else the materializer leaves the omitted views to decay (exactly the failure
+    that left the 1-day-TTL views stale). market_dynamics is the only allowed
+    omission from the online set (it is online=False)."""
+    cfg = yaml.safe_load(MATERIALIZE_CONFIG.read_text()) or {}
+    configured = set((cfg.get("feature_views") or {}).keys())
+    online_served = {
+        "hcp_conversion_features",
+        "hcp_engagement_features",
+        "patient_journey_features",
+        "patient_adherence_features",
+        "trigger_effectiveness_features",
+        "trigger_response_features",
+        "hcp_profile_features",
+        "territory_performance_features",
+    }
+    missing = online_served - configured
+    assert not missing, f"materialization config is missing online-served views: {sorted(missing)}"
+    # market_dynamics is present but disabled (online=False)
+    md = (cfg.get("feature_views") or {}).get("market_dynamics_features") or {}
+    assert md.get("enabled") is False, (
+        "market_dynamics_features must be enabled=False in the config (#556)"
+    )

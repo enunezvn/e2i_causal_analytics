@@ -478,6 +478,76 @@ services:
       - "e2i.service=mlops"
       - "e2i.component=feature-store"
 
+  # ---------------------------------------------------------------------------
+  # Feast materializer (#556) - keeps the Redis ONLINE store populated
+  # ---------------------------------------------------------------------------
+  # Same image as `feast` (the only one that can import feast); overrides the
+  # entrypoint to a materialize-only loop. The app/worker image cannot import
+  # feast (#307), so the Celery materialize beats are structural no-ops — this
+  # service is the real scheduled materialize. Shares the feast_registry volume
+  # (reads the registry `feast` applies; writes feature values to Redis) and
+  # mounts the materialization config read-only for its cadence.
+  feast-materializer:
+    build:
+      context: .
+      dockerfile: Dockerfile.feast
+    container_name: e2i_feast_materializer
+    restart: unless-stopped
+    logging: *default-logging
+    entrypoint: ["/materializer-entrypoint.sh"]
+    volumes:
+      - ../feature_repo:/feast-src:ro
+      - feast_registry:/feast/data
+      # Cadence + per-view config (read-only). #556: the in-sidecar materializer
+      # cannot read config/ from the app image (not mounted there), so mount it
+      # directly here.
+      - ../config/feast_materialization.yaml:/feast/feast_materialization.yaml:ro
+    environment:
+      - FEAST_OFFLINE_STORE_TYPE=file
+      - FEAST_ONLINE_STORE_TYPE=redis
+      - FEAST_REDIS_HOST=redis
+      - FEAST_REDIS_PORT=6379
+      - SUPABASE_POSTGRES_PASSWORD=${SUPABASE_POSTGRES_PASSWORD:?SUPABASE_POSTGRES_PASSWORD must be set}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+    healthcheck:
+      # Flag unhealthy if the loop heartbeat goes stale (hung loop). Threshold is
+      # one interval (default 6h) + 1h buffer = 25200s; a crash-loop is already
+      # visible via container restarts. Tune via MATERIALIZER_MAX_HEARTBEAT_AGE_SECONDS.
+      # $$ escapes a literal $ for compose (so it is not interpolated); the
+      # MAX_HEARTBEAT_AGE_SECONDS default (25200s = 6h interval + 1h buffer) is a
+      # real compose variable and stays single-$.
+      test:
+        - "CMD-SHELL"
+        - "test -f /tmp/materializer_heartbeat && [ $$(( $$(date -u +%s) - $$(cat /tmp/materializer_heartbeat) )) -lt ${MATERIALIZER_MAX_HEARTBEAT_AGE_SECONDS:-25200} ]"
+      interval: 5m
+      timeout: 10s
+      retries: 3
+      start_period: 30m
+    networks:
+      - e2i_network
+      - mlops_network
+      - supabase-network  # Reach supabase-db (Postgres offline store)
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    depends_on:
+      redis:
+        condition: service_healthy
+      # Wait for the serving sidecar to apply the registry before the first
+      # materialize (materialize-only relies on `feast`'s apply on the shared volume).
+      feast:
+        condition: service_healthy
+    labels:
+      - "e2i.service=mlops"
+      - "e2i.component=feast-materializer"
+
   # Opik - LLM & Agent Observability
   # Real Opik requires 7+ services (MySQL, ClickHouse, ZooKeeper, MinIO, etc.)
   # Defined in docker-compose.opik.yml as a separate overlay file
