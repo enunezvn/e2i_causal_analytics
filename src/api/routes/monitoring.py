@@ -23,7 +23,7 @@ Version: 4.1.0
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
@@ -1425,6 +1425,61 @@ def _retraining_job_to_response(
     )
 
 
+def _retraining_decision_to_response(model_id: str, decision: Any) -> "RetrainingDecisionResponse":
+    """Map a domain ``RetrainingDecision`` to the API response.
+
+    The domain dataclass (``src.services.retraining_trigger.RetrainingDecision``)
+    exposes ``should_retrain``/``reason``/``confidence``/``details``/
+    ``requires_approval`` — NOT the API surface's ``reasons``/``trigger_factors``/
+    ``cooldown_active``/``cooldown_ends_at``/``recommended_action``. This helper
+    derives the API fields from the real ones, replacing the per-field
+    ``decision.reasons  # type: ignore[attr-defined]`` reads that referenced
+    attributes the dataclass never had (they passed only against MagicMock test
+    doubles; against the real service they 500 with AttributeError — #547).
+
+    Cooldown is sourced from the real cooldown branch of the service's
+    ``evaluate_retraining_need``: ``details['blocked_reason'] == 'cooldown_period'``
+    with ``details['last_retraining']`` (ISO string) + ``details['cooldown_hours']``.
+    ``cooldown_ends_at`` is derived with the service's own formula
+    (``last_retraining + cooldown_hours``); if either field is absent or
+    unparseable it is left ``None`` rather than fabricated.
+    """
+    reasons = [decision.reason.value] if decision.reason else []
+
+    details = decision.details or {}
+    cooldown_active = details.get("blocked_reason") == "cooldown_period"
+    cooldown_ends_at: Optional[datetime] = None
+    if cooldown_active:
+        last_retraining = details.get("last_retraining")
+        cooldown_hours = details.get("cooldown_hours")
+        if last_retraining is not None and cooldown_hours is not None:
+            try:
+                cooldown_ends_at = datetime.fromisoformat(last_retraining) + timedelta(
+                    hours=cooldown_hours
+                )
+            except (TypeError, ValueError):
+                cooldown_ends_at = None
+
+    if decision.should_retrain:
+        if decision.requires_approval:
+            recommended_action = "Trigger retraining (requires approval)"
+        else:
+            recommended_action = "Auto-trigger retraining"
+    else:
+        recommended_action = "Continue monitoring"
+
+    return RetrainingDecisionResponse(
+        model_id=model_id,
+        should_retrain=decision.should_retrain,
+        confidence=decision.confidence,
+        reasons=reasons,
+        trigger_factors=details,
+        cooldown_active=cooldown_active,
+        cooldown_ends_at=cooldown_ends_at,
+        recommended_action=recommended_action,
+    )
+
+
 @router.post(
     "/retraining/evaluate/{model_id}",
     response_model=RetrainingDecisionResponse,
@@ -1449,16 +1504,7 @@ async def evaluate_retraining_need(model_id: str) -> RetrainingDecisionResponse:
         service = get_retraining_trigger_service()
         decision = await service.evaluate_retraining_need(model_id)
 
-        return RetrainingDecisionResponse(
-            model_id=model_id,
-            should_retrain=decision.should_retrain,
-            confidence=decision.confidence,
-            reasons=decision.reasons,  # type: ignore[attr-defined]
-            trigger_factors=decision.trigger_factors,  # type: ignore[attr-defined]
-            cooldown_active=decision.cooldown_active,  # type: ignore[attr-defined]
-            cooldown_ends_at=decision.cooldown_ends_at,  # type: ignore[attr-defined]
-            recommended_action=decision.recommended_action,  # type: ignore[attr-defined]
-        )
+        return _retraining_decision_to_response(model_id, decision)
 
     except Exception as e:
         logger.error(f"Failed to evaluate retraining need: {e}")

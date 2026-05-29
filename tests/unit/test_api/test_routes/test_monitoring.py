@@ -961,21 +961,32 @@ class TestEvaluateRetrainingNeed:
     """Test POST /monitoring/retraining/evaluate/{model_id} endpoint."""
 
     def test_evaluate_needs_retraining(self, client):
-        """Test evaluating a model that needs retraining."""
-        mock_decision = MagicMock()
-        mock_decision.should_retrain = True
-        mock_decision.confidence = 0.85
-        mock_decision.reasons = ["High data drift", "Performance degradation"]
-        mock_decision.trigger_factors = {"drift_score": 0.72, "accuracy_drop": 0.08}
-        mock_decision.cooldown_active = False
-        mock_decision.cooldown_ends_at = None
-        mock_decision.recommended_action = "Trigger retraining"
+        """Test evaluating a model that needs retraining (real dataclass)."""
+        from src.services.retraining_trigger import RetrainingDecision, TriggerReason
+
+        decision = RetrainingDecision(
+            should_retrain=True,
+            reason=TriggerReason.DATA_DRIFT,
+            confidence=0.85,
+            drift_score=0.72,
+            performance_score=0.91,
+            details={
+                "data_drift_score": 0.72,
+                "model_drift_score": 0.1,
+                "concept_drift_score": 0.0,
+                "performance_current": 0.91,
+                "performance_baseline": 0.99,
+                "performance_drop": 0.08,
+                "features_with_drift": 3,
+            },
+            requires_approval=True,
+        )
 
         with patch(
             "src.services.retraining_trigger.get_retraining_trigger_service"
         ) as mock_get_service:
             service = AsyncMock()
-            service.evaluate_retraining_need.return_value = mock_decision
+            service.evaluate_retraining_need.return_value = decision
             mock_get_service.return_value = service
 
             response = client.post("/monitoring/retraining/evaluate/propensity_v2.1.0")
@@ -985,24 +996,39 @@ class TestEvaluateRetrainingNeed:
         assert data["model_id"] == "propensity_v2.1.0"
         assert data["should_retrain"] is True
         assert data["confidence"] == 0.85
-        assert len(data["reasons"]) == 2
+        assert data["reasons"] == ["data_drift"]
+        assert data["trigger_factors"]["features_with_drift"] == 3
+        assert data["cooldown_active"] is False
+        assert data["cooldown_ends_at"] is None
+        assert data["recommended_action"] == "Trigger retraining (requires approval)"
 
     def test_evaluate_no_retraining_needed(self, client):
-        """Test evaluating a model that doesn't need retraining."""
-        mock_decision = MagicMock()
-        mock_decision.should_retrain = False
-        mock_decision.confidence = 0.95
-        mock_decision.reasons = []
-        mock_decision.trigger_factors = {}
-        mock_decision.cooldown_active = False
-        mock_decision.cooldown_ends_at = None
-        mock_decision.recommended_action = "Continue monitoring"
+        """Test evaluating a model that doesn't need retraining (real dataclass)."""
+        from src.services.retraining_trigger import RetrainingDecision
+
+        decision = RetrainingDecision(
+            should_retrain=False,
+            reason=None,
+            confidence=0.0,
+            drift_score=0.05,
+            performance_score=0.97,
+            details={
+                "data_drift_score": 0.05,
+                "model_drift_score": 0.0,
+                "concept_drift_score": 0.0,
+                "performance_current": 0.97,
+                "performance_baseline": 0.98,
+                "performance_drop": 0.01,
+                "features_with_drift": 0,
+            },
+            requires_approval=True,
+        )
 
         with patch(
             "src.services.retraining_trigger.get_retraining_trigger_service"
         ) as mock_get_service:
             service = AsyncMock()
-            service.evaluate_retraining_need.return_value = mock_decision
+            service.evaluate_retraining_need.return_value = decision
             mock_get_service.return_value = service
 
             response = client.post("/monitoring/retraining/evaluate/propensity_v2.1.0")
@@ -1010,6 +1036,93 @@ class TestEvaluateRetrainingNeed:
         assert response.status_code == 200
         data = response.json()
         assert data["should_retrain"] is False
+        assert data["reasons"] == []
+        assert data["cooldown_active"] is False
+        assert data["recommended_action"] == "Continue monitoring"
+
+    def test_evaluate_with_real_retraining_decision(self, client):
+        """Real ``RetrainingDecision`` must map to the response without
+        AttributeError (the bug fixed in #547): the endpoint previously read
+        five attributes the dataclass never defined (reasons, trigger_factors,
+        cooldown_active, cooldown_ends_at, recommended_action), passing only
+        against MagicMock doubles. Auto-trigger (no approval required) path."""
+        from src.services.retraining_trigger import RetrainingDecision, TriggerReason
+
+        decision = RetrainingDecision(
+            should_retrain=True,
+            reason=TriggerReason.DATA_DRIFT,
+            confidence=0.92,
+            drift_score=0.92,
+            performance_score=0.88,
+            details={
+                "data_drift_score": 0.92,
+                "model_drift_score": 0.3,
+                "concept_drift_score": 0.1,
+                "performance_current": 0.88,
+                "performance_baseline": 0.95,
+                "performance_drop": 0.07,
+                "features_with_drift": 5,
+            },
+            requires_approval=False,
+        )
+
+        with patch(
+            "src.services.retraining_trigger.get_retraining_trigger_service"
+        ) as mock_get_service:
+            service = AsyncMock()
+            service.evaluate_retraining_need.return_value = decision
+            mock_get_service.return_value = service
+
+            response = client.post("/monitoring/retraining/evaluate/propensity_v2.1.0")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["model_id"] == "propensity_v2.1.0"
+        assert data["should_retrain"] is True
+        assert data["confidence"] == 0.92
+        assert data["reasons"] == ["data_drift"]
+        assert data["trigger_factors"] == decision.details
+        assert data["cooldown_active"] is False
+        assert data["cooldown_ends_at"] is None
+        assert data["recommended_action"] == "Auto-trigger retraining"
+
+    def test_evaluate_cooldown_active(self, client):
+        """When the service returns a cooldown decision, ``cooldown_active`` is
+        derived from ``details['blocked_reason'] == 'cooldown_period'`` and
+        ``cooldown_ends_at`` from real ``last_retraining`` + ``cooldown_hours``."""
+        from src.services.retraining_trigger import RetrainingDecision
+
+        last_retraining = datetime(2026, 5, 28, 12, 0, tzinfo=timezone.utc)
+        decision = RetrainingDecision(
+            should_retrain=False,
+            reason=None,
+            confidence=0.0,
+            drift_score=0.6,
+            performance_score=0.9,
+            details={
+                "blocked_reason": "cooldown_period",
+                "last_retraining": last_retraining.isoformat(),
+                "cooldown_hours": 24,
+            },
+        )
+
+        with patch(
+            "src.services.retraining_trigger.get_retraining_trigger_service"
+        ) as mock_get_service:
+            service = AsyncMock()
+            service.evaluate_retraining_need.return_value = decision
+            mock_get_service.return_value = service
+
+            response = client.post("/monitoring/retraining/evaluate/propensity_v2.1.0")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["should_retrain"] is False
+        assert data["reasons"] == []
+        assert data["cooldown_active"] is True
+        expected_end = last_retraining + timedelta(hours=24)
+        assert datetime.fromisoformat(data["cooldown_ends_at"]) == expected_end
+        assert data["recommended_action"] == "Continue monitoring"
 
 
 class TestTriggerRetraining:
