@@ -17,6 +17,7 @@ from src.api.routes.monitoring import (
     AlertStatus,
     DriftSeverity,
     DriftType,
+    _validation_auc_from_metrics,
     router,
 )
 
@@ -1302,24 +1303,310 @@ class TestGetRetrainingStatus:
         assert response.status_code == 404
 
 
+class TestValidationAucFromMetrics:
+    """Unit tests for the #546 validation-AUC extraction helper."""
+
+    def test_prefers_roc_auc_then_falls_through_keys(self):
+        assert _validation_auc_from_metrics({"roc_auc": 0.91, "auc": 0.5}) == 0.91
+        assert _validation_auc_from_metrics({"auc_roc": 0.88}) == 0.88
+        assert _validation_auc_from_metrics({"auc": 0.7}) == 0.7
+        assert _validation_auc_from_metrics({"val_auc": 0.66}) == 0.66
+
+    def test_ignores_non_finite_and_non_numeric_and_bool(self):
+        assert _validation_auc_from_metrics({}) is None
+        assert _validation_auc_from_metrics({"roc_auc": float("nan")}) is None
+        assert _validation_auc_from_metrics({"roc_auc": float("inf")}) is None
+        assert _validation_auc_from_metrics({"roc_auc": "0.9"}) is None
+        # bool is a subclass of int but must not count as a metric
+        assert _validation_auc_from_metrics({"roc_auc": True}) is None
+
+
+class _FakeTrainingRunRepo:
+    """Real-ish MLTrainingRunRepository stand-in (#546).
+
+    Holds a single real ``MLTrainingRun`` keyed by mlflow_run_id and resolves it
+    via ``get_by_mlflow_run_id`` exactly like the real async repo — NOT a blanket
+    MagicMock that would paper over a missing/invalid lookup.
+    """
+
+    def __init__(self, run):
+        self._run = run
+
+    def __call__(self, _client):  # constructed as MLTrainingRunRepository(client)
+        return self
+
+    async def get_by_mlflow_run_id(self, mlflow_run_id):
+        if self._run is not None and self._run.mlflow_run_id == mlflow_run_id:
+            return self._run
+        return None
+
+
+def _make_training_run(mlflow_run_id="abc123def456", *, status="finished", auc=0.89):
+    """Build a real MLTrainingRun with a recorded validation AUC."""
+    from src.repositories.ml_experiment import MLTrainingRun
+
+    return MLTrainingRun(
+        run_name="retrain-run",
+        mlflow_run_id=mlflow_run_id,
+        algorithm="xgboost",
+        status=status,
+        validation_metrics={"roc_auc": auc} if auc is not None else {},
+    )
+
+
+def _make_completed_job():
+    """Build a completed-job stand-in shaped for _retraining_job_to_response."""
+    job = MagicMock()
+    job.job_id = "retrain-job-123"
+    job.model_version = "propensity_v2.1.0"
+    job.status = MagicMock(value="completed")
+    job.trigger_reason = MagicMock(value="data_drift")
+    job.triggered_at = datetime.now(timezone.utc) - timedelta(hours=2)
+    job.triggered_by = "api_user"
+    job.approved_at = datetime.now(timezone.utc) - timedelta(hours=2)
+    job.started_at = datetime.now(timezone.utc) - timedelta(hours=1)
+    job.completed_at = datetime.now(timezone.utc)
+    job.performance_before = 0.82
+    job.performance_after = 0.89
+    job.notes = "Successfully improved"
+    return job
+
+
+def _patch_provenance(run):
+    """Patch the provenance gate's dependencies to resolve `run` (or None).
+
+    Patches the async client factory (no real Supabase) and the repo class with a
+    real-ish fake keyed by mlflow_run_id.
+    """
+    return (
+        patch(
+            "src.memory.services.factories.get_async_supabase_client",
+            AsyncMock(return_value=MagicMock()),
+        ),
+        patch(
+            "src.repositories.ml_experiment.MLTrainingRunRepository",
+            _FakeTrainingRunRepo(run),
+        ),
+    )
+
+
 class TestCompleteRetraining:
     """Test POST /monitoring/retraining/{job_id}/complete endpoint."""
 
-    def test_complete_retraining_success(self, client):
-        """Test completing retraining successfully."""
+    def test_complete_retraining_not_found(self, client):
+        """Test completing non-existent retraining job (run resolves; job does not)."""
+        run = _make_training_run(auc=0.89)
+        client_patch, repo_patch = _patch_provenance(run)
+        with (
+            patch(
+                "src.services.retraining_trigger.get_retraining_trigger_service"
+            ) as mock_get_service,
+            client_patch,
+            repo_patch,
+        ):
+            service = AsyncMock()
+            service.complete_retraining.return_value = None
+            mock_get_service.return_value = service
+
+            response = client.post(
+                "/monitoring/retraining/nonexistent/complete",
+                json={
+                    "performance_after": 0.89,
+                    "success": True,
+                    "mlflow_run_id": "abc123def456",
+                },
+            )
+
+        assert response.status_code == 404
+
+    def test_complete_success_without_provenance_is_rejected(self, client):
+        """#546: a SUCCESS completion with no provenance pointer must be rejected.
+
+        Before the provenance gate, an admin caller could complete a job with any
+        plausible-but-fake ``performance_after`` (e.g. 0.999) and NO evidence it
+        came from a real run — the service would persist status=completed. The gate
+        must reject (4xx) such a request and persist NOTHING.
+        """
+        with patch(
+            "src.services.retraining_trigger.get_retraining_trigger_service"
+        ) as mock_get_service:
+            service = AsyncMock()
+            service.complete_retraining.return_value = _make_completed_job()
+            mock_get_service.return_value = service
+
+            response = client.post(
+                "/monitoring/retraining/retrain-job-123/complete",
+                json={
+                    "performance_after": 0.999,
+                    "success": True,
+                    # no mlflow_run_id -> no provenance
+                },
+            )
+
+        # Rejected with 4xx and the service is never asked to persist.
+        assert response.status_code == 422, response.text
+        assert "provenance" in response.json()["detail"].lower()
+        service.complete_retraining.assert_not_called()
+
+    def test_complete_success_with_invalid_metric_is_rejected(self, client):
+        """#546: a SUCCESS completion with an out-of-range metric is rejected.
+
+        Even with a provenance pointer, a non-finite or out-of-[0,1] AUC cannot
+        have come from a real validation run, so persist nothing.
+        """
+        with patch(
+            "src.services.retraining_trigger.get_retraining_trigger_service"
+        ) as mock_get_service:
+            service = AsyncMock()
+            mock_get_service.return_value = service
+
+            response = client.post(
+                "/monitoring/retraining/retrain-job-123/complete",
+                json={
+                    "performance_after": 1.5,  # AUC can't exceed 1.0
+                    "success": True,
+                    "mlflow_run_id": "abc123def456",
+                },
+            )
+
+        assert response.status_code == 422, response.text
+        service.complete_retraining.assert_not_called()
+
+    def test_complete_success_run_not_found_is_rejected(self, client):
+        """#546: provenance pointer that resolves to NO training run -> 422.
+
+        An invented mlflow_run_id must not certify a success completion.
+        """
+        client_patch, repo_patch = _patch_provenance(None)  # repo returns None
+        with (
+            patch(
+                "src.services.retraining_trigger.get_retraining_trigger_service"
+            ) as mock_get_service,
+            client_patch,
+            repo_patch,
+        ):
+            service = AsyncMock()
+            mock_get_service.return_value = service
+
+            response = client.post(
+                "/monitoring/retraining/retrain-job-123/complete",
+                json={
+                    "performance_after": 0.89,
+                    "success": True,
+                    "mlflow_run_id": "invented-run-id",
+                },
+            )
+
+        assert response.status_code == 422, response.text
+        assert "no training run found" in response.json()["detail"].lower()
+        service.complete_retraining.assert_not_called()
+
+    def test_complete_success_run_not_finished_is_rejected(self, client):
+        """#546: a run that is not 'finished' cannot certify a success completion."""
+        run = _make_training_run(status="running", auc=0.89)
+        client_patch, repo_patch = _patch_provenance(run)
+        with (
+            patch(
+                "src.services.retraining_trigger.get_retraining_trigger_service"
+            ) as mock_get_service,
+            client_patch,
+            repo_patch,
+        ):
+            service = AsyncMock()
+            mock_get_service.return_value = service
+
+            response = client.post(
+                "/monitoring/retraining/retrain-job-123/complete",
+                json={
+                    "performance_after": 0.89,
+                    "success": True,
+                    "mlflow_run_id": "abc123def456",
+                },
+            )
+
+        assert response.status_code == 422, response.text
+        assert "finished" in response.json()["detail"].lower()
+        service.complete_retraining.assert_not_called()
+
+    def test_complete_success_metric_mismatch_is_rejected(self, client):
+        """#546: submitted metric must MATCH the run's recorded validation AUC."""
+        run = _make_training_run(auc=0.89)  # real run recorded 0.89
+        client_patch, repo_patch = _patch_provenance(run)
+        with (
+            patch(
+                "src.services.retraining_trigger.get_retraining_trigger_service"
+            ) as mock_get_service,
+            client_patch,
+            repo_patch,
+        ):
+            service = AsyncMock()
+            mock_get_service.return_value = service
+
+            response = client.post(
+                "/monitoring/retraining/retrain-job-123/complete",
+                json={
+                    "performance_after": 0.95,  # caller inflates beyond tolerance
+                    "success": True,
+                    "mlflow_run_id": "abc123def456",
+                },
+            )
+
+        assert response.status_code == 422, response.text
+        assert "does not match" in response.json()["detail"].lower()
+        service.complete_retraining.assert_not_called()
+
+    def test_complete_success_with_matching_finished_run_persists(self, client):
+        """#546: SUCCESS + finished run whose validation AUC matches -> 200 + persisted."""
+        run = _make_training_run(auc=0.89)
+        client_patch, repo_patch = _patch_provenance(run)
+        with (
+            patch(
+                "src.services.retraining_trigger.get_retraining_trigger_service"
+            ) as mock_get_service,
+            client_patch,
+            repo_patch,
+        ):
+            service = AsyncMock()
+            service.complete_retraining.return_value = _make_completed_job()
+            mock_get_service.return_value = service
+
+            response = client.post(
+                "/monitoring/retraining/retrain-job-123/complete",
+                json={
+                    "performance_after": 0.89,  # matches the run within tol
+                    "success": True,
+                    "mlflow_run_id": "abc123def456",
+                    "notes": "Successfully improved",
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["status"] == "completed"
+        assert data["performance_after"] == 0.89
+        # The provenance pointer is threaded through to the service.
+        _, kwargs = service.complete_retraining.call_args
+        assert kwargs["mlflow_run_id"] == "abc123def456"
+
+    def test_complete_failure_unchanged(self, client):
+        """#546 non-breaking: a FAILURE completion still works with no provenance.
+
+        The provenance dependencies are NOT patched here — the gate must not even
+        attempt a run lookup for success=False.
+        """
         mock_job = MagicMock()
         mock_job.job_id = "retrain-job-123"
         mock_job.model_version = "propensity_v2.1.0"
-        mock_job.status = MagicMock(value="completed")
+        mock_job.status = MagicMock(value="failed")
         mock_job.trigger_reason = MagicMock(value="data_drift")
         mock_job.triggered_at = datetime.now(timezone.utc) - timedelta(hours=2)
         mock_job.triggered_by = "api_user"
-        mock_job.approved_at = datetime.now(timezone.utc) - timedelta(hours=2)
+        mock_job.approved_at = None
         mock_job.started_at = datetime.now(timezone.utc) - timedelta(hours=1)
         mock_job.completed_at = datetime.now(timezone.utc)
         mock_job.performance_before = 0.82
-        mock_job.performance_after = 0.89
-        mock_job.notes = "Successfully improved"
+        mock_job.performance_after = None
+        mock_job.notes = "Run failed"
 
         with patch(
             "src.services.retraining_trigger.get_retraining_trigger_service"
@@ -1331,35 +1618,14 @@ class TestCompleteRetraining:
             response = client.post(
                 "/monitoring/retraining/retrain-job-123/complete",
                 json={
-                    "performance_after": 0.89,
-                    "success": True,
-                    "notes": "Successfully improved",
+                    "performance_after": 0.0,
+                    "success": False,
+                    # no mlflow_run_id, no plausible metric -> still allowed
                 },
             )
 
-        assert response.status_code == 200
-        data = response.json()
-        assert data["status"] == "completed"
-        assert data["performance_after"] == 0.89
-
-    def test_complete_retraining_not_found(self, client):
-        """Test completing non-existent retraining job."""
-        with patch(
-            "src.services.retraining_trigger.get_retraining_trigger_service"
-        ) as mock_get_service:
-            service = AsyncMock()
-            service.complete_retraining.return_value = None
-            mock_get_service.return_value = service
-
-            response = client.post(
-                "/monitoring/retraining/nonexistent/complete",
-                json={
-                    "performance_after": 0.89,
-                    "success": True,
-                },
-            )
-
-        assert response.status_code == 404
+        assert response.status_code == 200, response.text
+        service.complete_retraining.assert_called_once()
 
 
 class TestRollbackRetraining:

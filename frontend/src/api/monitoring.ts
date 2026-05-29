@@ -519,11 +519,16 @@ export async function getRetrainingStatus(
  * @param request - Completion details
  * @returns Updated retraining job
  *
+ * On a success completion (`success: true`) the backend requires `mlflow_run_id`
+ * (the run that produced `performance_after`) and an in-range metric; otherwise
+ * it rejects the request (#546). Failure completions need no provenance.
+ *
  * @example
  * ```typescript
  * const job = await completeRetraining('job-uuid-123', {
  *   performance_after: 0.92,
  *   success: true,
+ *   mlflow_run_id: 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6',
  *   notes: 'Model retrained successfully'
  * });
  * ```

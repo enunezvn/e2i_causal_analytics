@@ -425,6 +425,12 @@ export interface CompleteRetrainingRequest {
   success?: boolean;
   /** Additional notes */
   notes?: string;
+  /**
+   * MLflow run ID that produced `performance_after`. REQUIRED by the backend on
+   * a success completion (`success: true`) so the metric points at a real run
+   * (#546); ignored for failure/abort completions.
+   */
+  mlflow_run_id?: string;
 }
 
 /**

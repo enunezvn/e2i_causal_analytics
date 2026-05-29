@@ -661,6 +661,8 @@ class RetrainingHistoryRepository(BaseRepository[RetrainingHistoryRecord]):
         record_id: str,
         performance_after: float,
         success: bool = True,
+        *,
+        mlflow_run_id: Optional[str] = None,
     ) -> Optional[RetrainingHistoryRecord]:
         """
         Complete a retraining run.
@@ -669,20 +671,32 @@ class RetrainingHistoryRepository(BaseRepository[RetrainingHistoryRecord]):
             record_id: Retraining record UUID
             performance_after: Performance after retraining
             success: Whether retraining was successful
+            mlflow_run_id: Provenance pointer to the MLflow run that produced
+                ``performance_after`` (#546). When supplied it is merged into the
+                record's ``training_config`` (under ``mlflow_run_id``) so a
+                completed metric remains auditable back to its run; the existing
+                config is preserved.
 
         Returns:
             Updated record
         """
         status = "completed" if success else "failed"
 
-        return await self.update(
-            record_id,
-            {
-                "status": status,
-                "performance_after": performance_after,
-                "completed_at": datetime.now(timezone.utc).isoformat(),
-            },
-        )
+        updates: Dict[str, Any] = {
+            "status": status,
+            "performance_after": performance_after,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        if mlflow_run_id:
+            existing = await self.get_by_id(record_id)
+            if not existing:
+                return None
+            training_config = dict(existing.training_config or {})
+            training_config["mlflow_run_id"] = mlflow_run_id
+            updates["training_config"] = training_config
+
+        return await self.update(record_id, updates)
 
     async def rollback_retraining(
         self,

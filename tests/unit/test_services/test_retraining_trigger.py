@@ -694,6 +694,41 @@ class TestRetrainingTriggerService:
             assert job.performance_after == 0.88
 
     @pytest.mark.asyncio
+    async def test_complete_retraining_forwards_provenance(
+        self, retraining_service: RetrainingTriggerService
+    ):
+        """#546: the mlflow_run_id provenance pointer is forwarded to the repo."""
+        mock_record = MockRetrainingRecord(
+            id="job-126b",
+            old_model_version="propensity_v2.1.0",
+            new_model_version="propensity_v2.1.0_retrained_20250101",
+            trigger_reason="manual",
+            status="completed",
+            created_at=datetime.now(timezone.utc) - timedelta(hours=2),
+            completed_at=datetime.now(timezone.utc),
+            performance_before=0.82,
+            performance_after=0.88,
+        )
+
+        with patch(
+            "src.repositories.drift_monitoring.RetrainingHistoryRepository"
+        ) as mock_repo_cls:
+            mock_repo = MagicMock()
+            mock_repo.complete_retraining = AsyncMock(return_value=mock_record)
+            mock_repo.get_by_id = AsyncMock(return_value=mock_record)
+            mock_repo_cls.return_value = mock_repo
+
+            await retraining_service.complete_retraining(
+                job_id="job-126b",
+                performance_after=0.88,
+                success=True,
+                mlflow_run_id="run-abc-123",
+            )
+
+            _, kwargs = mock_repo.complete_retraining.call_args
+            assert kwargs["mlflow_run_id"] == "run-abc-123"
+
+    @pytest.mark.asyncio
     async def test_complete_retraining_failure(self, retraining_service: RetrainingTriggerService):
         """Test completing retraining with failure."""
         mock_record = MockRetrainingRecord(
