@@ -1292,6 +1292,14 @@ class TestFeatureStatisticsNoFabricatedRecency:
     @pytest.mark.asyncio
     async def test_get_feature_statistics_returns_none_recency_without_real_source(self):
         client = FeastClient()
+        # Bypass initialize(): the app/CI image cannot `import feast` (feast 0.43.0
+        # pins tenacity<9, prod uses tenacity==9.1.2; #307), and initialize()
+        # re-raises that ImportError by design. We are not testing init here — we
+        # are asserting the recency contract of the statistics path, so mark the
+        # client initialized and leave _store=None. With supabase_client=None and
+        # no embedded store, _compute_feature_statistics takes a placeholder branch
+        # and MUST return last_updated=None (never a fabricated now()).
+        client._initialized = True
         stats = await client.get_feature_statistics(
             feature_view="hcp_conversion_features",
             feature_name="engagement_score",
