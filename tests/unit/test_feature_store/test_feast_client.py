@@ -1190,6 +1190,51 @@ class TestOnlineFeaturesRemote:
         assert result == {"fv__feat": [None]}
 
     @pytest.mark.asyncio
+    async def test_remote_fails_loud_on_feature_names_results_length_mismatch(self):
+        """A 200 response whose feature_names/results lengths disagree RAISES (not silent partial data)."""
+        client = FeastClient(config=FeastConfig(server_url="http://feast:6566"))
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json = MagicMock(
+            return_value={
+                "metadata": {"feature_names": ["fv__feat"]},
+                "results": [],  # 1 name, 0 result columns -> malformed
+            }
+        )
+        cm, _ = _remote_cm(mock_response)
+
+        with patch("src.feature_store.feast_client.httpx.AsyncClient", return_value=cm):
+            with pytest.raises(FeastError):
+                await client.get_online_features(
+                    entity_rows=[{"hcp_id": "1"}],
+                    feature_refs=["fv:feat"],
+                )
+
+    @pytest.mark.asyncio
+    async def test_remote_fails_loud_on_row_count_mismatch(self):
+        """A column whose values length != number of requested entity rows RAISES."""
+        client = FeastClient(config=FeastConfig(server_url="http://feast:6566"))
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json = MagicMock(
+            return_value={
+                "metadata": {"feature_names": ["fv__feat"]},
+                # 1 value/status but 2 entity rows were requested -> malformed
+                "results": [{"values": [0.85], "statuses": ["PRESENT"]}],
+            }
+        )
+        cm, _ = _remote_cm(mock_response)
+
+        with patch("src.feature_store.feast_client.httpx.AsyncClient", return_value=cm):
+            with pytest.raises(FeastError):
+                await client.get_online_features(
+                    entity_rows=[{"hcp_id": "1"}, {"hcp_id": "2"}],
+                    feature_refs=["fv:feat"],
+                )
+
+    @pytest.mark.asyncio
     async def test_remote_fails_loud_on_sidecar_error(self):
         """A sidecar transport error RAISES FeastError — it must NOT silently degrade to the custom store."""
         import httpx

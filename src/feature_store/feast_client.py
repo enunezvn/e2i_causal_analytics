@@ -70,7 +70,9 @@ def _expand_env_vars(text: str) -> str:
     return re.sub(pattern, replace_var, text)
 
 
-def _remote_response_to_flat(response_json: Dict[str, Any]) -> Dict[str, List[Any]]:
+def _remote_response_to_flat(
+    response_json: Dict[str, Any], expected_rows: int
+) -> Dict[str, List[Any]]:
     """Flatten a Feast feature-server ``/get-online-features`` response.
 
     The feature server returns ``MessageToDict`` of a ``GetOnlineFeaturesResponse``
@@ -81,22 +83,49 @@ def _remote_response_to_flat(response_json: Dict[str, Any]) -> Dict[str, List[An
     is a drop-in: ``{feature_name: [value_per_row, ...]}``. A non-``PRESENT`` status
     maps to ``None`` (no stale/garbage value forwarded). Contract verified against
     ``feast.infra.online_stores.remote.RemoteOnlineStore.online_read``.
+
+    Fails LOUD (raises :class:`FeastError`) on a structurally malformed 200 response
+    — non-list ``feature_names``/``results``, a ``results``/``feature_names`` length
+    mismatch, or a column whose ``values``/``statuses`` length differs from the number
+    of requested entity rows. Like the rest of the remote path, a bad-but-200 sidecar
+    response must not flow downstream as usable, real-looking Feast features (#532);
+    Feast's own ``online_read`` is likewise strict (it index-errors on mismatch).
     """
-    metadata = response_json.get("metadata") or {}
-    feature_names: List[str] = metadata.get("feature_names") or []
-    results: List[Dict[str, Any]] = response_json.get("results") or []
+    metadata = response_json.get("metadata")
+    feature_names = metadata.get("feature_names") if isinstance(metadata, dict) else None
+    results = response_json.get("results")
+
+    if not isinstance(feature_names, list) or not isinstance(results, list):
+        raise FeastError(
+            "Malformed Feast feature-server response: expected list "
+            "'metadata.feature_names' and 'results' "
+            f"(got {type(feature_names).__name__} / {type(results).__name__})"
+        )
+    if len(results) != len(feature_names):
+        raise FeastError(
+            "Malformed Feast feature-server response: "
+            f"{len(feature_names)} feature_names but {len(results)} result columns"
+        )
 
     flat: Dict[str, List[Any]] = {}
     for index, name in enumerate(feature_names):
-        if index >= len(results):
-            flat[name] = []
-            continue
-        column = results[index] or {}
-        values = column.get("values") or []
-        statuses = column.get("statuses") or []
+        column = results[index]
+        values = column.get("values") if isinstance(column, dict) else None
+        statuses = column.get("statuses") if isinstance(column, dict) else None
+        if not isinstance(values, list) or not isinstance(statuses, list):
+            raise FeastError(
+                f"Malformed Feast feature-server response: column '{name}' is "
+                "missing list 'values'/'statuses'"
+            )
+        if len(values) != expected_rows or len(statuses) != expected_rows:
+            raise FeastError(
+                f"Malformed Feast feature-server response: column '{name}' has "
+                f"{len(values)} values / {len(statuses)} statuses for "
+                f"{expected_rows} requested entity rows"
+            )
         flat[name] = [
-            value if (row < len(statuses) and statuses[row] == "PRESENT") else None
-            for row, value in enumerate(values)
+            value if status == "PRESENT" else None
+            for value, status in zip(values, statuses, strict=True)
         ]
     return flat
 
@@ -460,7 +489,7 @@ class FeastClient:
         except httpx.HTTPError as exc:
             raise FeastError(f"Feast online-features request to {url} failed: {exc}") from exc
 
-        return _remote_response_to_flat(response_json)
+        return _remote_response_to_flat(response_json, len(entity_rows))
 
     async def _get_online_features_fallback(
         self,
