@@ -48,20 +48,43 @@ INTERVAL_SECONDS=$(( INTERVAL_HOURS * 3600 ))
 echo "[materializer] online-store materialize loop: every ${INTERVAL_HOURS}h (${INTERVAL_SECONDS}s)"
 
 # Heartbeat for the container healthcheck: a hung loop (process alive but not
-# cycling) is otherwise invisible. Written at startup and after every cycle; the
-# healthcheck flags the container unhealthy if the heartbeat goes older than one
-# interval + buffer. A crash-loop is already visible via the container restarting.
+# cycling) is otherwise invisible. The healthcheck flags the container unhealthy
+# if the heartbeat goes older than one interval + buffer. Per #556 M1, the
+# heartbeat is NOT written until the FIRST materialize succeeds — so a container
+# that has never populated Redis does not report healthy. A crash-loop is already
+# visible via the container restarting.
 HEARTBEAT=/tmp/materializer_heartbeat
-date -u +%s > "$HEARTBEAT"
+LOCK=/feast/data/.registry.lock
+INITIAL_RETRY_SECONDS=60
 
-while true; do
+# One materialize cycle under the shared registry lock (#556 H2: serialize
+# against the feast service's `apply` on the shared feast_registry volume; Feast's
+# file registry is not safe for concurrent writers).
+materialize_once() {
     NOW="$(date -u +%Y-%m-%dT%H:%M:%S)"
     echo "[materializer] feast materialize-incremental ${NOW}"
-    if feast --chdir /feast materialize-incremental "${NOW}"; then
+    flock "$LOCK" feast --chdir /feast materialize-incremental "${NOW}"
+}
+
+# #556 M1: retry the FIRST cycle with short backoff (not a full interval) and do
+# not mark healthy until it succeeds — otherwise a slow-to-start offline store
+# leaves Redis cold for a full interval while the healthcheck reports green.
+until materialize_once; do
+    echo "[materializer] WARNING: initial materialize failed; retrying in ${INITIAL_RETRY_SECONDS}s (Redis still cold; healthcheck stays red until first success)" >&2
+    sleep "$INITIAL_RETRY_SECONDS"
+done
+echo "[materializer] initial materialize succeeded"
+date -u +%s > "$HEARTBEAT"
+
+# Steady state: Redis is populated; a transient per-cycle failure is logged and
+# retried next cycle. The heartbeat advances each cycle (liveness), since the
+# store was already populated by the initial success.
+while true; do
+    sleep "${INTERVAL_SECONDS}"
+    if materialize_once; then
         echo "[materializer] cycle complete"
     else
-        echo "[materializer] WARNING: materialize-incremental failed this cycle; will retry after sleep" >&2
+        echo "[materializer] WARNING: materialize-incremental failed this cycle; will retry next cycle" >&2
     fi
     date -u +%s > "$HEARTBEAT"
-    sleep "${INTERVAL_SECONDS}"
 done

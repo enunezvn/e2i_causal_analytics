@@ -453,6 +453,35 @@ class TestCheckFeatureFreshness:
         assert "hcp_conversion_features:engagement_score" in result["stale_features"]
         assert len(result["recommendations"]) > 0
 
+    @pytest.mark.asyncio
+    async def test_check_freshness_null_last_updated_fails_closed(self):
+        """#556: get_feature_statistics no longer fabricates last_updated=now(); when
+        recency is unknown it returns last_updated=None. The freshness check must
+        treat that as unverifiable (fresh=False), NOT compute age against a fake
+        'now' and report fresh — that fabricated-now was the silent mock that
+        defeated the gate."""
+        mock_fs_client = MagicMock()
+        mock_feast_client = MagicMock(spec=FeastClient)
+        mock_feast_client.initialize = AsyncMock()
+        stats = FeatureStatistics(
+            feature_view="hcp_conversion_features",
+            feature_name="engagement_score",
+            count=1000,
+            null_count=0,
+            last_updated=None,  # recency unknown — must NOT be treated as fresh
+        )
+        mock_feast_client.get_feature_statistics = AsyncMock(return_value=stats)
+
+        adapter = FeatureAnalyzerAdapter(mock_fs_client, feast_client=mock_feast_client)
+
+        result = await adapter.check_feature_freshness(
+            feature_refs=["hcp_conversion_features:engagement_score"],
+            max_staleness_hours=24.0,
+        )
+
+        assert result["fresh"] is False
+        assert "hcp_conversion_features:engagement_score" in result["stale_features"]
+
 
 class TestSyncFeaturesToFeast:
     """Test feature sync to Feast."""

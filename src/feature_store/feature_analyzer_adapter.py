@@ -722,11 +722,17 @@ class FeatureAnalyzerAdapter:
                             f"(last updated {age_hours:.1f} hours ago)"
                         )
                 else:
-                    # #556: no statistics → freshness unverifiable → fail closed.
+                    # #556: no real recency signal (stats absent, or last_updated
+                    # is None because get_feature_statistics no longer fabricates
+                    # now()) → freshness unverifiable → fail closed rather than
+                    # silently passing. Real per-source recency is a tracked follow-up.
                     result["feature_ages"][feature_ref] = None
                     result["fresh"] = False
                     result["stale_features"].append(feature_ref)
-                    result["recommendations"].append(f"No statistics available for {feature_ref}")
+                    result["recommendations"].append(
+                        f"Freshness unverifiable for {feature_ref} (no recency signal); "
+                        "set ALLOW_STALE_FEAST=1 to proceed, or wait for real-recency support"
+                    )
 
             except Exception as e:
                 # #556: an errored freshness lookup is unverifiable → fail closed.

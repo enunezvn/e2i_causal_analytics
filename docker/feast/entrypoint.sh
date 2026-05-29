@@ -36,7 +36,12 @@ echo "[entrypoint] feast version: $(feast version)"
 # Block 6B-infra-4.
 feast version | grep -q "0.43.0" || { echo "[entrypoint] FATAL: Feast SDK version drift (expected 0.43.0)"; exit 1; }
 echo "[entrypoint] feast apply (skip source validation)..."
-feast --chdir /feast apply --skip-source-validation
+# #556: serialize registry writes against the feast-materializer. Both share the
+# feast_registry volume (/feast/data); flock on a lockfile there ensures `apply`
+# (here, on every serve-container start/restart) and the materializer's
+# `materialize-incremental` never write the file-based registry concurrently
+# (Feast's local registry is not safe for concurrent writers).
+flock /feast/data/.registry.lock feast --chdir /feast apply --skip-source-validation
 
 echo "[entrypoint] starting feast serve on 0.0.0.0:6566"
 exec feast --chdir /feast serve --host 0.0.0.0 --port 6566

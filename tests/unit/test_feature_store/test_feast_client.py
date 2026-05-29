@@ -1278,3 +1278,27 @@ class TestOnlineFeaturesRemote:
             assert client._remote_base_url == "http://feast:6566"
         finally:
             module._client = None
+
+
+class TestFeatureStatisticsNoFabricatedRecency:
+    """#556 anti-mocking: get_feature_statistics must not fabricate last_updated=now().
+
+    A freshness check compares now() to stats.last_updated; if last_updated is itself
+    a fabricated now(), age is ~0 and the check ALWAYS reports fresh — silently
+    defeating the QC gate. When real recency cannot be determined the stat paths must
+    return last_updated=None (unverifiable), not a fabricated timestamp.
+    """
+
+    @pytest.mark.asyncio
+    async def test_get_feature_statistics_returns_none_recency_without_real_source(self):
+        client = FeastClient()
+        stats = await client.get_feature_statistics(
+            feature_view="hcp_conversion_features",
+            feature_name="engagement_score",
+            supabase_client=None,
+        )
+        assert stats is not None
+        assert stats.last_updated is None, (
+            "last_updated must be None when no real recency was computed — never a "
+            "fabricated datetime.now() (#556)"
+        )
