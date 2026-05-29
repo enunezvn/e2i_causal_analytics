@@ -255,11 +255,19 @@ def check_feature_freshness(
         stale_count = len(result.get("stale_features", []))
         fresh_count = len(result.get("fresh_features", []))
 
+        error_count = len(result.get("errors", []))
         if fresh:
             logger.info(f"All {fresh_count} feature views are fresh")
         else:
+            # #556: surface BOTH stale and unverifiable (error) views — an
+            # all-unverifiable run has stale_count==0 but is still not fresh, and
+            # "Found 0 stale" alone would be misleading.
             stale_names = [f["feature_view"] for f in result.get("stale_features", [])]
-            logger.warning(f"Found {stale_count} stale feature view(s): {stale_names}")
+            error_names = [e["feature_view"] for e in result.get("errors", [])]
+            logger.warning(
+                f"Feature freshness FAILED: {stale_count} stale {stale_names}, "
+                f"{error_count} unverifiable {error_names}"
+            )
 
             if alert_on_stale:
                 # Could integrate with alerting system here
@@ -281,8 +289,16 @@ def _send_staleness_alert(freshness_result: Dict[str, Any]) -> None:
         return
 
     stale = freshness_result.get("stale_features", [])
-    if not stale:
+    # #556 (H4): an all-unverifiable run is fresh=False with an EMPTY
+    # stale_features list and the offending views in `errors`. Alert on EITHER —
+    # returning early on empty stale_features would re-suppress exactly the
+    # alert H3 made fresh=False to surface.
+    errors = freshness_result.get("errors", [])
+    if not stale and not errors:
         return
+
+    stale_views = [s["feature_view"] for s in stale]
+    error_views = [e["feature_view"] for e in errors]
 
     channels = alerting.get("channels", [])
     for channel in channels:
@@ -292,15 +308,15 @@ def _send_staleness_alert(freshness_result: Dict[str, Any]) -> None:
             level = channel.get("level", "warning")
             log_func = getattr(logger, level, logger.warning)
             log_func(
-                f"ALERT: {len(stale)} stale feature view(s) detected. "
-                f"Views: {[s['feature_view'] for s in stale]}"
+                f"ALERT: feature freshness FAILED — {len(stale)} stale {stale_views}, "
+                f"{len(errors)} unverifiable {error_views}"
             )
 
         # Placeholder for other channel types
         # elif channel_type == "slack":
-        #     _send_slack_alert(channel, stale)
+        #     _send_slack_alert(channel, stale, errors)
         # elif channel_type == "pagerduty":
-        #     _send_pagerduty_alert(channel, stale)
+        #     _send_pagerduty_alert(channel, stale, errors)
 
 
 @celery_app.task(bind=True, name="src.tasks.materialize_feature_view")
