@@ -450,6 +450,9 @@ class TestFeatureFreshness:
         # Should have errors list
         assert len(result["errors"]) == 1
         assert "Stats error" in result["errors"][0]["error"]
+        # #556: a view whose freshness errored is unverifiable — the report must
+        # NOT claim fresh (that would suppress the scheduled staleness alert).
+        assert result["fresh"] is False
 
     @pytest.mark.asyncio
     async def test_check_freshness_no_stats_available(self):
@@ -468,6 +471,9 @@ class TestFeatureFreshness:
         assert result["status"] == "completed"
         assert len(result["errors"]) == 1
         assert "No statistics available" in result["errors"][0]["error"]
+        # #556: no recency signal (last_updated None) is unverifiable → not fresh,
+        # so the scheduled freshness alert fires instead of being suppressed.
+        assert result["fresh"] is False
 
 
 class TestJobLifecycle:
