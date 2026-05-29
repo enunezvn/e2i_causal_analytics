@@ -29,6 +29,7 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+import httpx
 import pandas as pd
 
 if TYPE_CHECKING:
@@ -67,6 +68,66 @@ def _expand_env_vars(text: str) -> str:
         return value
 
     return re.sub(pattern, replace_var, text)
+
+
+def _remote_response_to_flat(
+    response_json: Dict[str, Any], expected_rows: int
+) -> Dict[str, List[Any]]:
+    """Flatten a Feast feature-server ``/get-online-features`` response.
+
+    The feature server returns ``MessageToDict`` of a ``GetOnlineFeaturesResponse``
+    proto (Feast 0.43.0): ``metadata.feature_names`` is a plain list of names and
+    ``results[i]`` is the column for ``feature_names[i]``, with ``values`` (raw JSON
+    scalars) and ``statuses`` (``"PRESENT"`` / else) aligned by entity-row index.
+    This matches the embedded ``OnlineResponse.to_dict()`` shape so the remote path
+    is a drop-in: ``{feature_name: [value_per_row, ...]}``. A non-``PRESENT`` status
+    maps to ``None`` (no stale/garbage value forwarded). Contract verified against
+    ``feast.infra.online_stores.remote.RemoteOnlineStore.online_read``.
+
+    Fails LOUD (raises :class:`FeastError`) on a structurally malformed 200 response
+    — non-list ``feature_names``/``results``, a ``results``/``feature_names`` length
+    mismatch, or a column whose ``values``/``statuses`` length differs from the number
+    of requested entity rows. Like the rest of the remote path, a bad-but-200 sidecar
+    response must not flow downstream as usable, real-looking Feast features (#532);
+    Feast's own ``online_read`` is likewise strict (it index-errors on mismatch).
+    """
+    metadata = response_json.get("metadata")
+    feature_names = metadata.get("feature_names") if isinstance(metadata, dict) else None
+    results = response_json.get("results")
+
+    if not isinstance(feature_names, list) or not isinstance(results, list):
+        raise FeastError(
+            "Malformed Feast feature-server response: expected list "
+            "'metadata.feature_names' and 'results' "
+            f"(got {type(feature_names).__name__} / {type(results).__name__})"
+        )
+    if len(results) != len(feature_names):
+        raise FeastError(
+            "Malformed Feast feature-server response: "
+            f"{len(feature_names)} feature_names but {len(results)} result columns"
+        )
+
+    flat: Dict[str, List[Any]] = {}
+    for index, name in enumerate(feature_names):
+        column = results[index]
+        values = column.get("values") if isinstance(column, dict) else None
+        statuses = column.get("statuses") if isinstance(column, dict) else None
+        if not isinstance(values, list) or not isinstance(statuses, list):
+            raise FeastError(
+                f"Malformed Feast feature-server response: column '{name}' is "
+                "missing list 'values'/'statuses'"
+            )
+        if len(values) != expected_rows or len(statuses) != expected_rows:
+            raise FeastError(
+                f"Malformed Feast feature-server response: column '{name}' has "
+                f"{len(values)} values / {len(statuses)} statuses for "
+                f"{expected_rows} requested entity rows"
+            )
+        flat[name] = [
+            value if status == "PRESENT" else None
+            for value, status in zip(values, statuses, strict=True)
+        ]
+    return flat
 
 
 # Feature repo path - relative to project root
@@ -108,6 +169,17 @@ class FeastConfig(BaseModel):
     cache_ttl_seconds: int = Field(default=300, description="Cache TTL for feature statistics")
     timeout_seconds: float = Field(default=30.0, description="Request timeout")
     max_retries: int = Field(default=3, description="Max retries for failed requests")
+    server_url: Optional[str] = Field(
+        default=None,
+        description=(
+            "Feast feature-server base URL (e.g. http://feast:6566). When set, "
+            "online features are fetched over HTTP from the e2i_feast sidecar "
+            "instead of an embedded FeatureStore — required in the app image, "
+            "where `import feast` is unavailable (feast 0.43.0 pins tenacity<9, "
+            "irreconcilable with the prod tenacity==9.1.2). Wired from FEAST_URL "
+            "by get_feast_client(). See #532."
+        ),
+    )
 
 
 class FeatureStatistics(BaseModel):
@@ -209,6 +281,8 @@ class FeastClient:
         self._store: Optional[FeatureStore] = None
         self._initialized = False
         self._custom_store: Optional[FeatureStoreClient] = None  # Fallback custom store
+        # Set in remote (HTTP sidecar) mode — see initialize().  #532
+        self._remote_base_url: Optional[str] = None
         self._stats_cache: Dict[str, FeatureStatistics] = {}
         self._stats_cache_time: Dict[str, datetime] = {}
         self._temp_dir: Optional[str] = None  # Temp directory for expanded config
@@ -230,6 +304,18 @@ class FeastClient:
         Pre-processes feature_store.yaml to expand environment variables.
         """
         if self._initialized:
+            return
+
+        # Remote (HTTP sidecar) mode: when a feature-server URL is configured,
+        # online features are fetched over HTTP from the e2i_feast sidecar rather
+        # than an embedded FeatureStore. This is the production path — the app
+        # image cannot `import feast` (feast 0.43.0 pins tenacity<9, prod uses
+        # tenacity==9.1.2). No feast import and no network call here: the URL is
+        # recorded and used lazily by get_online_features().  #532
+        if self.config.server_url:
+            self._remote_base_url = self.config.server_url.rstrip("/")
+            self._initialized = True
+            logger.info(f"Feast client initialized in remote mode: {self._remote_base_url}")
             return
 
         try:
@@ -331,6 +417,12 @@ class FeastClient:
         if not feature_refs:
             raise ValueError("feature_refs cannot be empty")
 
+        # Remote (HTTP sidecar) path — the production online-feature path.  #532
+        if self._remote_base_url:
+            return await self._get_online_features_remote(
+                entity_rows, feature_refs, full_feature_names
+            )
+
         try:
             if self._store:
                 # Use Feast online store
@@ -359,6 +451,45 @@ class FeastClient:
                     entity_rows, feature_refs, full_feature_names
                 )
             raise
+
+    async def _get_online_features_remote(
+        self,
+        entity_rows: List[Dict[str, Any]],
+        feature_refs: List[str],
+        full_feature_names: bool,
+    ) -> Dict[str, List[Any]]:
+        """Fetch online features over HTTP from the Feast feature-server sidecar.
+
+        POSTs to ``{server_url}/get-online-features`` with the columnar request the
+        feature server expects (``entities`` transposed from row-oriented
+        ``entity_rows``), then flattens the response to the embedded
+        ``to_dict()`` shape. Fails LOUD on any transport/HTTP error: the
+        production online path must not silently degrade to the custom Supabase
+        store (the silent ``feature_source='feast_online'`` mislabel was #532).
+        """
+        # Transpose row-oriented entity_rows -> columnar entities, the shape the
+        # feature server's GetOnlineFeaturesRequest expects.
+        entities: Dict[str, List[Any]] = {}
+        for row in entity_rows:
+            for key, value in row.items():
+                entities.setdefault(key, []).append(value)
+
+        payload = {
+            "entities": entities,
+            "features": feature_refs,
+            "full_feature_names": full_feature_names,
+        }
+        url = f"{self._remote_base_url}/get-online-features"
+
+        try:
+            async with httpx.AsyncClient(timeout=self.config.timeout_seconds) as client:
+                response = await client.post(url, json=payload)
+                response.raise_for_status()
+                response_json = response.json()
+        except httpx.HTTPError as exc:
+            raise FeastError(f"Feast online-features request to {url} failed: {exc}") from exc
+
+        return _remote_response_to_flat(response_json, len(entity_rows))
 
     async def _get_online_features_fallback(
         self,
@@ -1406,6 +1537,10 @@ async def get_feast_client(config: Optional[FeastConfig] = None) -> FeastClient:
     """
     global _client
     if _client is None:
+        if config is None:
+            # Default config wires the production remote path from FEAST_URL
+            # (None when unset -> embedded mode, preserving prior behavior). #532
+            config = FeastConfig(server_url=os.getenv("FEAST_URL"))
         _client = FeastClient(config=config)
         await _client.initialize()
     return _client
