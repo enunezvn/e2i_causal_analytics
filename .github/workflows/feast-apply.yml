@@ -57,7 +57,14 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install pytest
-          pytest tests/unit/test_feature_repo/test_data_sources_columns_exist.py -q
+          # Run the hermetic guard in ISOLATION from the repo's pytest config:
+          #   --noconftest    -> skip tests/conftest.py (it imports pytest_asyncio,
+          #                      not installed in this lean job)
+          #   -o addopts=""   -> drop pyproject's forced "-n 4 --dist=loadscope"
+          #                      (pytest-xdist not installed here)
+          # The guard is pure-stdlib + pytest; it needs neither plugin.
+          pytest tests/unit/test_feature_repo/test_data_sources_columns_exist.py \
+            --noconftest -o addopts="" -p no:cacheprovider
 
       - name: Verify CI Feast version matches production container
         # Production runs `feastdev/feature-server:0.43.0` (see
