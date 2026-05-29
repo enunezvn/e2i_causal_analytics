@@ -1,10 +1,10 @@
 """Phase D (D4): Celery wiring for the live retraining trigger.
 
-  - execute_model_retraining runs a full training pipeline → must be routed to
-    the heavy `ml` queue (worker_heavy), not the default queue.
-  - the drift-monitoring beat entry must reference a task that actually exists
-    (the prior `src.tasks.monitor_model_drift` was a dangling ref that would
-    crash beat at fire time).
+- execute_model_retraining runs a full training pipeline → must be routed to
+  the heavy `ml` queue (worker_heavy), not the default queue.
+- the drift-monitoring beat entry must reference a task that actually exists
+  (the prior `src.tasks.monitor_model_drift` was a dangling ref that would
+  crash beat at fire time).
 """
 
 from __future__ import annotations

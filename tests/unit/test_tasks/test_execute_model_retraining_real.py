@@ -86,7 +86,9 @@ def test_extract_auc_reads_auc_roc_alias() -> None:
 
 
 def test_extract_auc_returns_none_when_absent() -> None:
-    assert _extract_validation_auc(SimpleNamespace(status="completed", training_result=None)) is None
+    assert (
+        _extract_validation_auc(SimpleNamespace(status="completed", training_result=None)) is None
+    )
     assert (
         _extract_validation_auc(
             SimpleNamespace(status="completed", training_result={"validation_metrics": {}})
@@ -131,9 +133,7 @@ async def test_real_retraining_success_writes_real_metric() -> None:
             return_value=service,
         ),
     ):
-        out = await _execute_real_retraining(
-            "rt-1", "v1", "v2", dict(_FULL_COHORT)
-        )
+        out = await _execute_real_retraining("rt-1", "v1", "v2", dict(_FULL_COHORT))
 
     assert out["status"] == "completed"
     assert out["performance_after"] == 0.661

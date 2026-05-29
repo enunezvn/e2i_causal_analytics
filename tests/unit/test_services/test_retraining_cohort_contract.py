@@ -45,9 +45,7 @@ async def test_trigger_retraining_threads_cohort_into_training_config() -> None:
     }
 
     with (
-        patch(
-            "src.repositories.drift_monitoring.DriftHistoryRepository", return_value=drift_repo
-        ),
+        patch("src.repositories.drift_monitoring.DriftHistoryRepository", return_value=drift_repo),
         patch(
             "src.repositories.drift_monitoring.RetrainingHistoryRepository",
             return_value=retrain_repo,
