@@ -918,27 +918,6 @@ class TwinRepository:
 # store so a job created in one process is found + updated in another and
 # re-read by the first. Table: ``database/ml/029_twin_retraining_jobs.sql``.
 # --------------------------------------------------------------------------- #
-def _resolve_default_supabase_client() -> Any:
-    """Resolve the process-shared Supabase client, or ``None`` if unconfigured.
-
-    ``get_supabase()`` (``src/api/dependencies/supabase_client.py``) is the
-    app-wide, env-driven singleton — the SAME client the API and a Celery worker
-    both resolve from identical ``SUPABASE_*`` env. Binding a bare
-    ``TwinRetrainingJobRepository()`` to it is the linchpin that lets the worker
-    and the API share one durable job store with no explicit wiring. Imported
-    lazily so importing this module never drags in the API/HTTP stack, and so an
-    unconfigured/test env (no creds) simply yields ``None`` → an inert repo
-    rather than an error.
-    """
-    try:
-        from src.api.dependencies.supabase_client import get_supabase
-
-        return get_supabase()
-    except Exception:  # noqa: BLE001 — never let client resolution break a repo
-        logger.debug("Supabase client unavailable; TwinRetrainingJobRepository is inert")
-        return None
-
-
 class TwinRetrainingJobRecord(BaseModel):
     """Row for the ``twin_retraining_jobs`` table (durable twin-retraining job).
 
@@ -968,20 +947,44 @@ class TwinRetrainingJobRepository(BaseRepository[TwinRetrainingJobRecord]):
     """Durable, shared CRUD store for twin retraining jobs.
 
     Mirrors ``RetrainingHistoryRepository``. Delegates reads/updates to
-    ``BaseRepository`` (keyed on the ``id`` column). When constructed with no
-    explicit client it binds the process-shared ``get_supabase()`` singleton, so
-    a job created in the API process is found + updated by a Celery worker and
-    re-read by the API. With no client configured it is inert (no-op writes,
-    ``None`` reads) — never an error.
+    ``BaseRepository`` (keyed on the ``id`` column), which ``await``s
+    ``.execute()`` — so this needs the ASYNC Supabase client. When constructed
+    with no explicit client it lazily binds the process-shared
+    ``get_async_supabase_client()`` singleton on first async use, so a job
+    created in the API process is found + updated by a Celery worker and re-read
+    by the API (both processes resolve the SAME env-driven client). With no
+    client configured it is inert (no-op writes, ``None`` reads) — never an error.
     """
 
     table_name = "twin_retraining_jobs"
     model_class = TwinRetrainingJobRecord
 
     def __init__(self, supabase_client: Any = None):
-        if supabase_client is None:
-            supabase_client = _resolve_default_supabase_client()
         super().__init__(supabase_client)
+        # True once resolution has been attempted (an explicit client counts).
+        self._client_resolved = supabase_client is not None
+
+    async def _ensure_async_client(self) -> None:
+        """Lazily bind the process-shared ASYNC Supabase client.
+
+        ``BaseRepository`` ``await``s ``.execute()``, which requires the async
+        client (``create_async_client`` via ``get_async_supabase_client()``), NOT
+        the sync ``get_supabase()``. Resolved once and cached; stays inert
+        (``client`` ``None``) when Supabase is unconfigured so reads/writes no-op
+        rather than raise. Both the API and the Celery worker resolve the SAME
+        env-driven cached client — that shared binding is what makes a job
+        created in one process visible in the other.
+        """
+        if self._client_resolved:
+            return
+        self._client_resolved = True
+        try:
+            from src.memory.services.factories import get_async_supabase_client
+
+            self.client = await get_async_supabase_client()
+        except Exception:  # noqa: BLE001 — unconfigured/unavailable → stay inert
+            logger.debug("Async Supabase client unavailable; TwinRetrainingJobRepository is inert")
+            self.client = None
 
     @staticmethod
     def _serialize(record: TwinRetrainingJobRecord) -> Dict[str, Any]:
@@ -1003,6 +1006,7 @@ class TwinRetrainingJobRepository(BaseRepository[TwinRetrainingJobRecord]):
         training_config: Dict[str, Any],
     ) -> TwinRetrainingJobRecord:
         """Persist a newly-triggered job. Returns the record even when inert."""
+        await self._ensure_async_client()
         record = TwinRetrainingJobRecord(
             id=job_id,
             model_id=model_id,
@@ -1018,6 +1022,7 @@ class TwinRetrainingJobRepository(BaseRepository[TwinRetrainingJobRecord]):
 
     async def get_job(self, job_id: str) -> Optional[TwinRetrainingJobRecord]:
         """Fetch a job by id (``None`` if absent or no client)."""
+        await self._ensure_async_client()
         return await self.get_by_id(job_id)
 
     async def complete_job(
@@ -1033,13 +1038,18 @@ class TwinRetrainingJobRepository(BaseRepository[TwinRetrainingJobRecord]):
         The caller MUST have certified ``fidelity_after`` as a real finite
         validation metric before calling with ``success=True`` (the #548
         fail-closed contract lives in the task); this method only persists.
+        ``new_model_id`` / ``fidelity_after`` are written ONLY on ``success=True``
+        — a non-success completion records the failed status WITHOUT a metric,
+        preserving the #548 invariant (no fabricated metric on a failed job).
         """
+        await self._ensure_async_client()
         updates: Dict[str, Any] = {
             "status": "completed" if success else "failed",
-            "new_model_id": new_model_id,
-            "fidelity_after": fidelity_after,
             "completed_at": datetime.now(timezone.utc).isoformat(),
         }
+        if success:
+            updates["new_model_id"] = new_model_id
+            updates["fidelity_after"] = fidelity_after
         return await self.update(job_id, updates)
 
     async def fail_job(
@@ -1049,6 +1059,7 @@ class TwinRetrainingJobRepository(BaseRepository[TwinRetrainingJobRecord]):
         error_message: str,
     ) -> Optional[TwinRetrainingJobRecord]:
         """Mark a job FAILED with the reason, writing NO fidelity metric (#548)."""
+        await self._ensure_async_client()
         updates: Dict[str, Any] = {
             "status": "failed",
             "error_message": error_message,
@@ -1063,6 +1074,7 @@ class TwinRetrainingJobRepository(BaseRepository[TwinRetrainingJobRecord]):
         reason: str,
     ) -> Optional[TwinRetrainingJobRecord]:
         """Mark a job CANCELLED with the reason."""
+        await self._ensure_async_client()
         updates: Dict[str, Any] = {
             "status": "cancelled",
             "error_message": f"Cancelled: {reason}",

@@ -20,8 +20,12 @@ CREATE TABLE IF NOT EXISTS twin_retraining_jobs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
     -- The twin model being retrained, and the new model produced on success.
-    -- SET NULL on delete so an archived/removed model never orphans job history.
-    model_id UUID REFERENCES digital_twin_models(model_id) ON DELETE SET NULL,
+    -- model_id has NO ON DELETE action (NO ACTION, mirroring ml_retraining_history):
+    -- a model with retraining history cannot be hard-deleted, so model_id stays
+    -- non-NULL — matching the required TwinRetrainingJobRecord.model_id field.
+    -- new_model_id is nullable (only set on a successful completion) and SET NULL
+    -- on delete so removing a retrained model never orphans the job row.
+    model_id UUID REFERENCES digital_twin_models(model_id),
     new_model_id UUID REFERENCES digital_twin_models(model_id) ON DELETE SET NULL,
 
     -- Why retraining was triggered (TwinTriggerReason).

@@ -472,13 +472,18 @@ class TwinRetrainingService:
         Returns:
             Updated job, or None if the job is unknown to BOTH stores.
         """
-        # Update the in-process copy if THIS process created the job.
+        # Update the in-process copy if THIS process created the job. A metric
+        # (new_model_id / fidelity_after) is recorded ONLY on success — a
+        # non-success completion is a failure and writes NO metric (#548).
         job = self._pending_jobs.get(job_id)
         if job is not None:
-            job.new_model_id = new_model_id
-            job.fidelity_after = fidelity_after
             job.completed_at = datetime.now(timezone.utc)
-            job.status = TwinRetrainingStatus.COMPLETED if success else TwinRetrainingStatus.FAILED
+            if success:
+                job.new_model_id = new_model_id
+                job.fidelity_after = fidelity_after
+                job.status = TwinRetrainingStatus.COMPLETED
+            else:
+                job.status = TwinRetrainingStatus.FAILED
 
         # Update the durable, shared record (the cross-process path).
         if self.job_repository is not None:
@@ -489,15 +494,16 @@ class TwinRetrainingService:
                 success=success,
             )
             if record is not None:
-                logger.info(
-                    f"Completed retraining job {job_id} (durable): "
-                    f"fidelity_after={fidelity_after}, success={success}"
-                )
+                logger.info(f"Completed retraining job {job_id} (durable): success={success}")
                 return job if job is not None else self._job_from_record(record)
-            # Durable update matched nothing (inert client or unknown job).
-            if job is not None:
-                return job
-            logger.warning(f"Retraining job not found (durable + in-process): {job_id}")
+            # A durable store WAS wired but did not record the completion (inert
+            # client or unknown job). Success REQUIRES a durable record — do NOT
+            # mask an unrecorded write with the in-process copy (#549 codex HIGH):
+            # reporting success here would be a false success. Fail closed.
+            logger.warning(
+                f"Durable completion not recorded for job {job_id} "
+                "(store inert or job unknown); not reporting success"
+            )
             return None
 
         # Legacy in-process-only path (no durable store wired).

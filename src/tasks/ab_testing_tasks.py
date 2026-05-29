@@ -1078,7 +1078,6 @@ async def _execute_real_twin_retraining(
     Returns:
         Result dict (real ``validation_r2`` on success; failure reason otherwise).
     """
-    from src.api.dependencies.supabase_client import get_supabase
     from src.digital_twin.models.twin_models import Brand, TwinModelConfig, TwinType
     from src.digital_twin.retraining_service import get_twin_retraining_service
     from src.digital_twin.twin_repository import TwinModelRepository
@@ -1111,9 +1110,18 @@ async def _execute_real_twin_retraining(
         return await _mark_failed(str(e))
 
     # Locate the saved model row to rebuild the trainer's identity/feature set.
-    # Bind the process-shared Supabase client so the lookup AND the durable
-    # save_model below actually hit the DB in a real worker process (#549).
-    repo = TwinModelRepository(supabase_client=get_supabase())
+    # Bind the process-shared ASYNC Supabase client (TwinModelRepository awaits
+    # .execute(), so it needs the async client — NOT the sync get_supabase) so
+    # the lookup AND the durable save_model below actually hit the DB in a real
+    # worker process (#549). Unconfigured env → None → inert repo → the run fails
+    # closed (model not found / completion unrecorded) rather than faking success.
+    try:
+        from src.memory.services.factories import get_async_supabase_client
+
+        twin_db_client = await get_async_supabase_client()
+    except Exception:  # noqa: BLE001 — unconfigured/unavailable → inert repo → fail closed
+        twin_db_client = None
+    repo = TwinModelRepository(supabase_client=twin_db_client)
     try:
         from uuid import UUID
 

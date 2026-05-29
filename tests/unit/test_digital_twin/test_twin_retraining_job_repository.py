@@ -137,28 +137,45 @@ async def test_two_repo_instances_sharing_store_see_same_job(fake_supabase) -> N
 # --------------------------------------------------------------------------- #
 # Client wiring — the linchpin that makes cross-process sharing work
 # --------------------------------------------------------------------------- #
-def test_bare_repo_defaults_to_shared_supabase_singleton() -> None:
-    """A bare ``TwinRetrainingJobRepository()`` must resolve the process-shared
-    ``get_supabase()`` client, so a worker and the API both bind the SAME DB
-    without explicit wiring."""
+@pytest.mark.asyncio
+async def test_bare_repo_lazily_binds_async_supabase_client(fake_supabase) -> None:
+    """A bare ``TwinRetrainingJobRepository()`` lazily binds the process-shared
+    ``get_async_supabase_client()`` (the ASYNC client ``BaseRepository`` awaits)
+    on first async use — so the API and a Celery worker share the SAME store with
+    no explicit wiring, AND the repo works against the real async-client shape
+    (a sync ``get_supabase()`` client would raise on ``await .execute()``)."""
     from src.digital_twin.twin_repository import TwinRetrainingJobRepository
 
-    sentinel = object()
-    with patch("src.api.dependencies.supabase_client.get_supabase", return_value=sentinel):
+    async def _fake_async_client():
+        return fake_supabase
+
+    with patch("src.memory.services.factories.get_async_supabase_client", _fake_async_client):
         repo = TwinRetrainingJobRepository()
-    assert repo.client is sentinel
+        assert repo.client is None  # not resolved until first async use
+        await repo.create_job(
+            job_id="j",
+            model_id="m",
+            trigger_reason="manual",
+            status="pending",
+            fidelity_before=0.0,
+            training_config={},
+        )
+        assert repo.client is fake_supabase  # lazily bound + usable
+        got = await repo.get_job("j")
+        assert got is not None and got.id == "j"
 
 
-def test_no_client_is_inert_not_an_error() -> None:
-    """In an unconfigured env (no Supabase creds) the repo is inert: get_job
-    returns None and create_job returns the unsaved record — never raises."""
+@pytest.mark.asyncio
+async def test_no_client_is_inert_not_an_error() -> None:
+    """Unconfigured env (``get_async_supabase_client`` raises) → inert repo:
+    get_job returns None and create_job returns the unsaved record, never raises."""
     from src.digital_twin.twin_repository import TwinRetrainingJobRepository
 
-    repo = TwinRetrainingJobRepository(supabase_client=None)
-    # Force the unconfigured state regardless of ambient env/singleton.
-    repo.client = None
+    async def _raise():
+        raise RuntimeError("Supabase not configured")
 
-    async def _exercise() -> None:
+    with patch("src.memory.services.factories.get_async_supabase_client", _raise):
+        repo = TwinRetrainingJobRepository()
         rec = await repo.create_job(
             job_id="job-x",
             model_id="m",
@@ -169,7 +186,3 @@ def test_no_client_is_inert_not_an_error() -> None:
         )
         assert rec.id == "job-x"  # record returned even when not persisted
         assert await repo.get_job("job-x") is None  # inert read
-
-    import asyncio
-
-    asyncio.run(_exercise())

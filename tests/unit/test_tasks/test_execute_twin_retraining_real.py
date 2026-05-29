@@ -28,6 +28,22 @@ import pandas as pd
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_async_supabase():
+    """Keep the worker's get_async_supabase_client() resolution hermetic.
+
+    #549 made _execute_real_twin_retraining resolve the ASYNC Supabase client to
+    bind TwinModelRepository. TwinModelRepository is patched per-test (so the
+    client value is unused), but the resolution call itself must not touch a real
+    network — return None (→ inert repo, which the patch overrides anyway)."""
+
+    async def _none():
+        return None
+
+    with patch("src.memory.services.factories.get_async_supabase_client", _none):
+        yield
+
+
 # --------------------------------------------------------------------------- #
 # Bug repro: the task must exist and be importable from the path the service
 # already imports it from.

@@ -130,6 +130,58 @@ async def test_complete_returns_none_when_job_truly_unknown(fake_supabase) -> No
 
 
 @pytest.mark.asyncio
+async def test_complete_fails_closed_when_durable_store_inert() -> None:
+    """#549 codex HIGH #2: when a durable job store IS wired but the durable write
+    does not record it (inert / unconfigured store), complete_retraining must NOT
+    mask the failure with the in-process job — it returns None (fail closed), so a
+    worker never reports a false 'completed' without a durable record."""
+    from src.digital_twin.twin_repository import TwinRetrainingJobRepository
+
+    async def _raise():
+        raise RuntimeError("Supabase not configured")
+
+    with patch("src.memory.services.factories.get_async_supabase_client", _raise):
+        service = _service(TwinRetrainingJobRepository())  # wired but client never resolves
+        model_id = uuid4()
+        job = await service.trigger_retraining(model_id, TwinTriggerReason.MANUAL)
+        # The job IS in THIS instance's in-process dict...
+        assert job.job_id in service._pending_jobs
+        # ...but the durable store could not record it → success is NOT reported.
+        result = await service.complete_retraining(
+            job.job_id, new_model_id="m", fidelity_after=0.9, success=True
+        )
+        assert result is None
+
+
+@pytest.mark.asyncio
+async def test_complete_with_success_false_writes_no_metric(fake_supabase) -> None:
+    """#549 codex HIGH #3: complete_retraining(success=False) records the failed
+    status but writes NO fidelity_after / new_model_id — the #548 invariant (a
+    non-success completion must never surface a metric), enforced in-memory AND
+    in the durable record."""
+    from src.digital_twin.twin_repository import TwinRetrainingJobRepository
+
+    repo = TwinRetrainingJobRepository(supabase_client=fake_supabase)
+    service = _service(repo)
+    model_id = uuid4()
+    job = await service.trigger_retraining(model_id, TwinTriggerReason.MANUAL)
+
+    result = await service.complete_retraining(
+        job.job_id, new_model_id="should-not-persist", fidelity_after=0.99, success=False
+    )
+    assert result is not None
+    assert result.status == TwinRetrainingStatus.FAILED
+    assert result.fidelity_after is None
+    assert result.new_model_id is None
+
+    durable = await repo.get_job(job.job_id)
+    assert durable is not None
+    assert durable.status == "failed"
+    assert durable.fidelity_after is None
+    assert durable.new_model_id is None
+
+
+@pytest.mark.asyncio
 async def test_fail_retraining_records_durably_without_metric(fake_supabase) -> None:
     """fail_retraining persists status=failed + reason across the boundary and
     writes NO fidelity metric (the #548 fail-closed invariant)."""
