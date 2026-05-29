@@ -183,32 +183,47 @@ jobs:
             # #528-A ordered rollout — a FRESH online store BEFORE the prod-target API
             # serves. The flip makes the fail-loud #532 Feast read path authoritative,
             # so serving against a stale/empty store would return null features or 503.
-            # Recreate the feast sidecar + materializer FIRST and wait for the
-            # materializer to report HEALTHY — its heartbeat healthcheck only passes
-            # after a successful materialize (docker/feast/materializer-entrypoint.sh
-            # writes the heartbeat after its first successful run) — and only THEN flip
+            # Recreate the feast sidecar + materializer FIRST, wait until the materializer
+            # has completed a FRESH materialize in THIS deploy, and only THEN flip
             # api/workers/scheduler to the prod target. A single `up -d` of everything
             # gated solely on API health would let the prod API serve a stale store.
+            #
+            # Freshness signal: docker/feast/materializer-entrypoint.sh writes
+            # /tmp/materializer_heartbeat (unix seconds) ONLY after its first successful
+            # materialize, and --force-recreate clears that tmpfs — so a heartbeat whose
+            # value is >= this deploy's start time proves a materialize just succeeded.
+            # We poll the file directly (via docker exec), NOT the Docker health status:
+            # the materializer healthcheck interval is 5m, so the status would not tick
+            # to "healthy" within the wait window (a false-negative gate failure).
+            GATE_START=$(date -u +%s)
             $COMPOSE_CMD up -d $BUILD_FLAG --no-deps --force-recreate feast feast-materializer
 
-            echo "==> Waiting for feast-materializer to report a fresh store (healthy heartbeat)..."
+            echo "==> Waiting for feast-materializer to complete a fresh materialize..."
             MAT_FRESH=false
             for i in $(seq 1 60); do
-              MAT_STATUS=$(docker inspect -f '{{ .State.Health.Status }}' e2i_feast_materializer 2>/dev/null || echo "starting")
-              if [ "$MAT_STATUS" = "healthy" ]; then
+              HB=$(docker exec e2i_feast_materializer cat /tmp/materializer_heartbeat 2>/dev/null || echo 0)
+              case "$HB" in ''|*[!0-9]*) HB=0 ;; esac
+              if [ "$HB" -ge "$GATE_START" ]; then
                 MAT_FRESH=true
-                echo "==> feast-materializer healthy on attempt ${i} — online store materialized"
+                echo "==> feast-materializer completed a fresh materialize on attempt ${i} (heartbeat ${HB})"
                 break
               fi
-              sleep 5
+              sleep 10
             done
             if [ "$MAT_FRESH" = false ]; then
-              # Fail loud WITHOUT flipping the API: api/workers/scheduler are untouched
-              # so far (still on the pre-deploy container), so prod keeps serving the old
-              # version rather than a prod-target API over a stale/empty store.
-              echo "==> feast-materializer did not become healthy in time — refusing to flip"
-              echo "==> the prod-target API onto a stale/empty online store. Deploy FAILED."
+              # The store is NOT proven fresh. The app services were NOT flipped (still on
+              # their pre-deploy containers), but `feast` itself was just recreated at
+              # NEW_SHA and the still-serving old API depends on it
+              # (FEAST_URL=http://feast:6566). Roll feast + feast-materializer back to
+              # PREV_SHA so the old API keeps the known-good Feast it ran against, then
+              # fail loud.
+              echo "==> feast-materializer did not complete a fresh materialize in time."
+              echo "==> Rolling feast + feast-materializer back to ${PREV_SHA:0:7} (app services were"
+              echo "==> never flipped — they keep serving the pre-deploy version). Deploy FAILED."
               docker logs --tail 50 e2i_feast_materializer 2>&1 || true
+              git checkout "$PREV_SHA"
+              COMPOSE_CMD="docker compose -f docker/docker-compose.yml -f $(pick_overlay)"
+              $COMPOSE_CMD up -d --build --no-deps --force-recreate feast feast-materializer
               exit 1
             fi
 

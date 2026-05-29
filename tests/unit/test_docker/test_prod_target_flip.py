@@ -265,30 +265,50 @@ def test_recreate_set_includes_feast_and_materializer():
 def test_ordered_rollout_materializes_before_prod_api_serves():
     """Fresh store BEFORE the prod-target API serves (round-3 HIGH-B stale-serve race).
 
-    The rollout must recreate feast + feast-materializer FIRST, wait for the
-    materializer to be healthy (its heartbeat healthcheck fires only after a
-    successful materialize), and only THEN recreate api/workers/scheduler. A single
-    ``up -d`` of everything gated solely on API health would let the prod API serve a
-    stale store.
+    The rollout must, IN ORDER: recreate feast + feast-materializer, poll the
+    materializer heartbeat FILE and compare it to this deploy's start (a fresh
+    materialize THIS deploy — not the Docker 5m health status), and only THEN recreate
+    api/workers/scheduler. Asserts the concrete shell constructs in order so a rewrite
+    that drops the gate cannot pass on incidental comment text.
     """
-    # Scope to the forward path (the rollback also names these services).
+    # Scope to the forward path (the API-health rollback also names these services).
     forward, _, _rb = _deploy_script().partition('if [ "$HEALTHY" = false ]')
     feast_idx = forward.find("--force-recreate feast feast-materializer")
-    # The app-services recreate uses a `\`-continuation, so match its service list.
+    probe_idx = forward.find("docker exec e2i_feast_materializer cat /tmp/materializer_heartbeat")
+    fresh_cmp_idx = forward.find('-ge "$GATE_START"')
     app_idx = forward.find("api frontend worker_light worker_medium scheduler")
-    assert feast_idx != -1, (
-        "deploy must recreate feast + feast-materializer first (ordered rollout)"
+    assert feast_idx != -1, "deploy must recreate feast + feast-materializer first"
+    assert probe_idx != -1, (
+        "deploy must poll the materializer heartbeat file (not Docker health status)"
+    )
+    assert fresh_cmp_idx != -1, (
+        "deploy must compare the heartbeat to this deploy's start (fresh THIS deploy)"
     )
     assert app_idx != -1, "deploy must recreate the prod-target app services"
-    assert feast_idx < app_idx, (
-        "feast + feast-materializer must be recreated BEFORE the prod-target api (stale-serve race)"
+    assert feast_idx < probe_idx < app_idx, (
+        "ordered rollout must gate on a fresh materialize BETWEEN the feast recreate and the app flip"
     )
-    # A health-wait on the materializer (its heartbeat = a completed materialize) must
-    # sit between the two recreates — the freshness gate before the flip.
-    between = forward[feast_idx:app_idx]
-    assert ("healthy" in between) or ("wait" in between.lower()), (
-        "an ordered rollout must wait for feast-materializer health (fresh store) before flipping the API"
+    assert fresh_cmp_idx < app_idx, "the freshness comparison must gate the app flip"
+
+
+def test_materialize_gate_failure_is_fail_loud_and_rolls_feast_back():
+    """A failed freshness gate must NOT flip the API and MUST roll feast back.
+
+    On gate failure the app services are untouched (still pre-deploy), but `feast`
+    was just recreated at NEW_SHA and the still-serving old API depends on it
+    (FEAST_URL=http://feast:6566). So the failure branch must roll feast +
+    feast-materializer back to PREV_SHA, then exit non-zero — never silently leave a
+    broken/new Feast under the old API.
+    """
+    script = _deploy_script()
+    marker = 'if [ "$MAT_FRESH" = false ]; then'
+    assert marker in script, "missing the materialize-gate failure branch"
+    branch = script.split(marker, 1)[1].split("# Store is fresh", 1)[0]
+    assert 'git checkout "$PREV_SHA"' in branch, "gate failure must check out PREV_SHA"
+    assert "--force-recreate feast feast-materializer" in branch, (
+        "gate failure must recreate feast + materializer at PREV_SHA (restore the Feast the old API uses)"
     )
+    assert "exit 1" in branch, "gate failure must fail the deploy loudly"
 
 
 # --------------------------------------------------------------------------- #
