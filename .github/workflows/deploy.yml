@@ -357,6 +357,19 @@ jobs:
               exit 1
             fi
 
+            # Post-deploy prune (only reached when the health check passed). The
+            # rebuild above re-tags :latest onto a new image and orphans the prior
+            # build; under BuildKit those layers stay pinned by the build cache, so
+            # `docker image prune` alone frees ~0 bytes — the builder-cache prune is
+            # what actually reclaims them. Without this, dangling builds + build cache
+            # grew to 100% disk on 2026-05-29 (~33x 19.4GB orphaned images + 146GB
+            # build cache). Dangling/cache-only (never -a): no live or tagged image
+            # and no running container is touched. Best-effort (|| true) so a prune
+            # hiccup never fails an otherwise-successful deploy.
+            echo "==> Post-deploy prune (dangling images + build cache)"
+            docker image prune -f || true
+            docker builder prune -f || true
+
       - name: Deployment summary
         if: always()
         env:
