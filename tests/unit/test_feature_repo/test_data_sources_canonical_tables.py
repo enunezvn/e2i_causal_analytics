@@ -16,6 +16,7 @@ shape that PR #2 verification requires before it touches Feast.
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -185,4 +186,49 @@ class TestEventTimestampWiring:
             f"{name}_source.timestamp_field must be 'event_timestamp' "
             f"(got {src.timestamp_field!r}); Feast point-in-time joins "
             f"depend on this exact name."
+        )
+
+
+class TestSchemaDriftFix556:
+    """#556: pin the source-query drift fixes so they cannot silently regress."""
+
+    def test_business_metrics_source_drops_territory_and_brand_id(self, sources):
+        """territory_id / brand_id were never added to canonical business_metrics
+        (migration 033 made it per-HCP). Selecting them broke materialize()."""
+        query = sources["business_metrics"].query
+        # word-boundary so hcp_brand_id (still selected) doesn't match brand_id
+        assert not re.search(r"\bterritory_id\b", query), (
+            "business_metrics_source must not reference territory_id; it does not "
+            "exist on the per-HCP canonical business_metrics (#556)."
+        )
+        assert not re.search(r"(?<!hcp_)\bbrand_id\b", query), (
+            "business_metrics_source must not reference a standalone brand_id; "
+            "only the generated hcp_brand_id exists on canonical business_metrics (#556)."
+        )
+
+    def test_patient_journey_source_maps_to_canonical_columns(self, sources):
+        """The FV fields therapy_start_date / days_on_therapy / churn_risk_score
+        must alias the real canonical columns, not select nonexistent ones."""
+        query = sources["patient_journey"].query
+        assert "journey_start_date AS therapy_start_date" in query
+        assert "COALESCE(journey_duration_days, 0) AS days_on_therapy" in query
+        assert "COALESCE(risk_score, 0) AS churn_risk_score" in query
+        # therapy_start_date must appear only as the alias target, never selected
+        # as a bare (nonexistent) canonical column.
+        assert "therapy_start_date" in query and not re.search(
+            r"^\s*therapy_start_date\s*,?\s*$", query, re.MULTILINE
+        ), "therapy_start_date must be an alias of journey_start_date, not a bare column."
+
+    def test_market_dynamics_online_disabled_pending_real_source(self):
+        """market_dynamics_features is (territory, brand)-keyed but sourced from
+        the per-HCP business_metrics, which cannot supply those join keys after
+        #556. Online serving must stay off until a real source exists."""
+        from features.market_features import (  # type: ignore[import-not-found]
+            market_dynamics_fv,
+        )
+
+        assert market_dynamics_fv.online is False, (
+            "market_dynamics_features must keep online=False until a per-"
+            "(territory, brand) source exists; the per-HCP business_metrics_source "
+            "lacks territory_id/brand_id join keys (#556)."
         )
