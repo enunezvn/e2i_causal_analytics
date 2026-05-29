@@ -1051,3 +1051,177 @@ class TestHistoricalFeaturesOuterExceptionPath:
         assert isinstance(result, pd.DataFrame)
         # _fallback_used flag set in the fallback path
         assert client._fallback_used is True
+
+
+def _remote_cm(mock_response):
+    """Build a mock ``httpx.AsyncClient(...)`` context manager whose ``.post``
+    returns ``mock_response``. Returns ``(context_manager, mock_client)``."""
+    mock_client = MagicMock()
+    mock_client.post = AsyncMock(return_value=mock_response)
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=mock_client)
+    cm.__aexit__ = AsyncMock(return_value=None)
+    return cm, mock_client
+
+
+class TestOnlineFeaturesRemote:
+    """Online features via the Feast feature-server HTTP sidecar (#532 Option 1).
+
+    The app image cannot ``import feast`` (feast 0.43.0 pins ``tenacity<9``,
+    irreconcilable with the prod ``tenacity==9.1.2``), so when ``FEAST_URL`` is
+    configured the client fetches online features over HTTP from the
+    ``e2i_feast`` sidecar's ``POST /get-online-features`` endpoint instead of an
+    embedded ``FeatureStore``.
+    """
+
+    def test_config_server_url_default_none(self):
+        """server_url defaults to None — embedded mode unless explicitly configured."""
+        assert FeastConfig().server_url is None
+
+    @pytest.mark.asyncio
+    async def test_initialize_remote_mode_works_without_feast(self, monkeypatch):
+        """Remote mode initializes even when feast is unimportable (the app-image condition)."""
+        import builtins
+
+        real_import = builtins.__import__
+
+        def no_feast(name, *args, **kwargs):
+            if name == "feast" or name.startswith("feast."):
+                raise ImportError("No module named 'feast'")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", no_feast)
+
+        client = FeastClient(config=FeastConfig(server_url="http://feast:6566"))
+        await client.initialize()
+
+        assert client._initialized is True
+        assert client._store is None
+        assert client._remote_base_url == "http://feast:6566"
+
+    @pytest.mark.asyncio
+    async def test_remote_posts_columnar_request(self):
+        """entity_rows (row-oriented) transpose to columnar `entities`; POST to /get-online-features."""
+        client = FeastClient(config=FeastConfig(server_url="http://feast:6566/"))
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json = MagicMock(
+            return_value={
+                "metadata": {"feature_names": ["hcp_conversion_features__engagement_score"]},
+                "results": [{"values": [0.85, 0.42], "statuses": ["PRESENT", "PRESENT"]}],
+            }
+        )
+        cm, mock_client = _remote_cm(mock_response)
+
+        with patch("src.feature_store.feast_client.httpx.AsyncClient", return_value=cm):
+            await client.get_online_features(
+                entity_rows=[
+                    {"hcp_id": "123", "brand_id": "remibrutinib"},
+                    {"hcp_id": "456", "brand_id": "fabhalta"},
+                ],
+                feature_refs=["hcp_conversion_features:engagement_score"],
+                full_feature_names=True,
+            )
+
+        call = mock_client.post.call_args
+        # trailing slash on server_url is normalized to a single join
+        assert call.args[0] == "http://feast:6566/get-online-features"
+        body = call.kwargs["json"]
+        assert body["features"] == ["hcp_conversion_features:engagement_score"]
+        assert body["full_feature_names"] is True
+        assert body["entities"] == {
+            "hcp_id": ["123", "456"],
+            "brand_id": ["remibrutinib", "fabhalta"],
+        }
+
+    @pytest.mark.asyncio
+    async def test_remote_parses_response_to_flat_dict(self):
+        """The feature-server proto-dict response flattens to {feature_name: [values]} (drop-in with embedded to_dict())."""
+        client = FeastClient(config=FeastConfig(server_url="http://feast:6566"))
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json = MagicMock(
+            return_value={
+                "metadata": {
+                    "feature_names": ["hcp_id", "hcp_conversion_features__engagement_score"]
+                },
+                "results": [
+                    {"values": ["123"], "statuses": ["PRESENT"]},
+                    {"values": [0.85], "statuses": ["PRESENT"]},
+                ],
+            }
+        )
+        cm, _ = _remote_cm(mock_response)
+
+        with patch("src.feature_store.feast_client.httpx.AsyncClient", return_value=cm):
+            result = await client.get_online_features(
+                entity_rows=[{"hcp_id": "123"}],
+                feature_refs=["hcp_conversion_features:engagement_score"],
+            )
+
+        assert result == {
+            "hcp_id": ["123"],
+            "hcp_conversion_features__engagement_score": [0.85],
+        }
+
+    @pytest.mark.asyncio
+    async def test_remote_not_found_status_maps_to_none(self):
+        """A non-PRESENT status yields None for that cell (no stale/garbage value forwarded)."""
+        client = FeastClient(config=FeastConfig(server_url="http://feast:6566"))
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json = MagicMock(
+            return_value={
+                "metadata": {"feature_names": ["fv__feat"]},
+                "results": [{"values": [None], "statuses": ["NOT_FOUND"]}],
+            }
+        )
+        cm, _ = _remote_cm(mock_response)
+
+        with patch("src.feature_store.feast_client.httpx.AsyncClient", return_value=cm):
+            result = await client.get_online_features(
+                entity_rows=[{"hcp_id": "999"}],
+                feature_refs=["fv:feat"],
+            )
+
+        assert result == {"fv__feat": [None]}
+
+    @pytest.mark.asyncio
+    async def test_remote_fails_loud_on_sidecar_error(self):
+        """A sidecar transport error RAISES FeastError — it must NOT silently degrade to the custom store."""
+        import httpx
+
+        client = FeastClient(config=FeastConfig(server_url="http://feast:6566"))
+        # Attach a custom store to prove the remote path does NOT silently fall
+        # back to it on error (that silent mislabel was the #532 bug).
+        client._custom_store = MagicMock()
+
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock(side_effect=httpx.ConnectError("connection refused"))
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=mock_client)
+        cm.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("src.feature_store.feast_client.httpx.AsyncClient", return_value=cm):
+            with pytest.raises(FeastError):
+                await client.get_online_features(
+                    entity_rows=[{"hcp_id": "123"}],
+                    feature_refs=["fv:feat"],
+                )
+
+    @pytest.mark.asyncio
+    async def test_get_feast_client_wires_feast_url_env(self, monkeypatch):
+        """get_feast_client() with no explicit config reads FEAST_URL into config.server_url (prod wiring)."""
+        import src.feature_store.feast_client as module
+
+        module._client = None
+        monkeypatch.setenv("FEAST_URL", "http://feast:6566")
+        try:
+            client = await get_feast_client()
+            assert client.config.server_url == "http://feast:6566"
+            assert client._remote_base_url == "http://feast:6566"
+        finally:
+            module._client = None
