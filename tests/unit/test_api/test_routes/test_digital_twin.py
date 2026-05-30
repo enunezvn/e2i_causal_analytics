@@ -958,3 +958,93 @@ async def test_fidelity_history_no_records(mock_twin_repository):
 
     assert result.total_validations == 0
     assert result.average_fidelity_score is None
+
+
+# =============================================================================
+# TESTS - Priority 1 OOM bounding: heavy-compute slot
+# =============================================================================
+
+
+@pytest.fixture
+def _heavy_compute_one_slot(monkeypatch):
+    """Bound heavy compute to a single in-flight op and reset the limiter."""
+    monkeypatch.setenv("HEAVY_COMPUTE_MAX_CONCURRENCY", "1")
+    import src.api.dependencies.compute as compute_mod
+
+    compute_mod._reset_limiter_cache_for_tests()
+    yield compute_mod
+    compute_mod._reset_limiter_cache_for_tests()
+
+
+@pytest.mark.asyncio
+async def test_run_simulation_rejects_when_heavy_compute_saturated(
+    mock_twin_generator, mock_simulation_engine, mock_twin_repository, _heavy_compute_one_slot
+):
+    """When the per-worker heavy-compute slot is exhausted, /simulate must reject
+    fast (HeavyComputeSaturated) instead of running another ~1.3 GiB simulation
+    that could OOM-kill the container. Exercises the REAL limiter (not mocked)."""
+    from src.api.dependencies.compute import HeavyComputeSaturated
+    from src.api.routes.digital_twin import (
+        BrandEnum,
+        InterventionConfigRequest,
+        SimulateRequest,
+        TwinTypeEnum,
+        run_simulation,
+    )
+
+    # Occupy the single slot to simulate a concurrent in-flight heavy request.
+    limiter = _heavy_compute_one_slot.get_heavy_compute_limiter()
+    limiter.acquire()
+
+    request = SimulateRequest(
+        intervention=InterventionConfigRequest(
+            intervention_type="email_campaign",
+            duration_weeks=8,
+        ),
+        brand=BrandEnum.REMIBRUTINIB,
+        twin_type=TwinTypeEnum.HCP,
+        twin_count=1000,
+    )
+    user = {"user_id": "test_user", "role": "operator"}
+
+    with pytest.raises(HeavyComputeSaturated):
+        await run_simulation(request, user)
+
+    # The simulation must NOT have run while saturated.
+    mock_simulation_engine.simulate.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_simulation_succeeds_when_slot_available(
+    mock_twin_generator, mock_simulation_engine, mock_twin_repository, _heavy_compute_one_slot
+):
+    """With a free slot, /simulate runs through the real slot + bounded executor
+    and returns the unchanged success response shape."""
+    from src.api.routes.digital_twin import (
+        BrandEnum,
+        InterventionConfigRequest,
+        SimulateRequest,
+        TwinTypeEnum,
+        run_simulation,
+    )
+
+    request = SimulateRequest(
+        intervention=InterventionConfigRequest(
+            intervention_type="email_campaign",
+            duration_weeks=8,
+        ),
+        brand=BrandEnum.REMIBRUTINIB,
+        twin_type=TwinTypeEnum.HCP,
+        twin_count=1000,
+    )
+    user = {"user_id": "test_user", "role": "operator"}
+
+    result = await run_simulation(request, user)
+
+    assert result.twin_count == 1000
+    assert result.simulated_ate == 0.075
+    assert result.recommendation.value == "deploy"
+
+    # The slot must be released after a successful run (in_flight back to 0).
+    limiter = _heavy_compute_one_slot.get_heavy_compute_limiter()
+    assert limiter.in_flight == 0

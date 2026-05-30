@@ -174,8 +174,12 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 # Production command
+# OOM guard: 2 workers, not 4 — each inline-heavy request (digital-twin
+# simulate / SHAP explain) peaks ~1.3 GiB, and 4 concurrent peaked ~5.2 GiB,
+# tripping the 5G api cgroup. Paired with the per-worker heavy-compute slot in
+# src/api/dependencies/compute.py.
 CMD ["gunicorn", "src.api.main:app", \
-     "--workers", "4", \
+     "--workers", "2", \
      "--worker-class", "uvicorn.workers.UvicornWorker", \
      "--bind", "0.0.0.0:8000", \
      "--timeout", "120", \
