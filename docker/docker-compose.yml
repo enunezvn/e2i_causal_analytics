@@ -657,10 +657,11 @@ services:
     command: >
       celery -A src.workers.celery_app worker
       --loglevel=INFO
-      --concurrency=4
+      --concurrency=2
       --queues=default,quick,api
       --prefetch-multiplier=2
       --max-tasks-per-child=100
+      --max-memory-per-child=524288
       --hostname=worker_light@%h
     healthcheck:
       test: ["CMD", "celery", "-A", "src.workers.celery_app", "inspect", "ping"]
@@ -672,7 +673,13 @@ services:
       resources:
         limits:
           cpus: '2'
-          memory: 1G
+          # #565: each prefork child loads the full autodiscovered app (~400MB);
+          # a faithful c=2 boot probe of this image peaked at 905MB / idled at
+          # 607MB. 1.5G clears that boot spike (the all-children + healthcheck +
+          # page-cache transient) so the cgroup OOM-killer cannot fire. Steady
+          # use stays ~607MB (limits are ceilings, not reservations), bounded by
+          # --max-tasks-per-child=100. Was 1G @ --concurrency=4 → OOM-churn.
+          memory: 1.5G
         reservations:
           cpus: '1'
           memory: 512M
@@ -854,7 +861,12 @@ services:
       redis:
         condition: service_healthy
       worker_light:
-        condition: service_healthy
+        # #565: celery-beat only PUBLISHES scheduled tasks to the redis broker — it
+        # does not need a HEALTHY worker_light. A service_healthy edge let a flapping
+        # worker_light (OOM-churn / slow inspect-ping) strand the scheduler in
+        # "Created" and red the deploy (compose `up` exit 1, no rollback path).
+        # service_started keeps the start-ordering without coupling beat to worker health.
+        condition: service_started
     labels:
       - "e2i.service=application"
       - "e2i.component=scheduler"
