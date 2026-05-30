@@ -37,6 +37,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[3]
 BASE_COMPOSE = REPO_ROOT / "docker" / "docker-compose.yml"
 DEV_COMPOSE = REPO_ROOT / "docker" / "docker-compose.dev.yml"
+SECURE_COMPOSE = REPO_ROOT / "docker" / "docker-compose.secure.yml"
 DOCKERFILE = REPO_ROOT / "docker" / "Dockerfile"
 DEPLOY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "deploy.yml"
 
@@ -594,4 +595,79 @@ def test_materialization_config_enumerates_all_online_views():
     md = (cfg.get("feature_views") or {}).get("market_dynamics_features") or {}
     assert md.get("enabled") is False, (
         "market_dynamics_features must be enabled=False in the config (#556)"
+    )
+
+
+# =============================================================================
+# Priority 1 OOM bounding - api gunicorn worker count
+# =============================================================================
+# Each inline-heavy API request (digital-twin simulate, SHAP explain) peaks at
+# ~1.3 GiB. With the api cgroup capped at 5G, 4 gunicorn workers each running one
+# heavy request concurrently peaked at ~5.2 GiB and OOM-killed e2i_api. Halving
+# the api worker count to 2 (combined with the per-worker heavy-compute slot in
+# src/api/dependencies/compute.py) keeps the worst-case concurrent heavy peak
+# (2 workers x 1 in-flight heavy op ~= 2.6 GiB) safely under the 5G cap. These
+# guards pin the worker count at 2 across both compose files and the baked
+# Dockerfile CMD so the OOM regression cannot silently return.
+
+
+def _api_command_str(compose_path: Path) -> str:
+    api = _services(_load(compose_path)).get("api")
+    assert api, f"api service must exist in {compose_path.name}"
+    cmd = api.get("command", "")
+    if isinstance(cmd, list):
+        cmd = " ".join(str(c) for c in cmd)
+    return cmd
+
+
+def test_api_command_uses_two_workers_base_compose():
+    cmd = _api_command_str(BASE_COMPOSE)
+    assert re.search(r"--workers\s+2\b", cmd), (
+        f"api gunicorn command must use --workers 2 (OOM bound); got {cmd!r}"
+    )
+    assert not re.search(r"--workers\s+4\b", cmd), (
+        "api gunicorn command must NOT use --workers 4 (OOM regression class)"
+    )
+
+
+def test_api_command_uses_two_workers_secure_compose():
+    cmd = _api_command_str(SECURE_COMPOSE)
+    assert re.search(r"--workers\s+2\b", cmd), (
+        f"secure api gunicorn command must use --workers 2; got {cmd!r}"
+    )
+    assert not re.search(r"--workers\s+4\b", cmd), (
+        "secure api gunicorn command must NOT use --workers 4"
+    )
+
+
+def test_api_env_workers_is_two_base_compose():
+    """The redundant WORKERS env var (mapping-style in docker-compose.yml) must
+    advertise 2, matching the gunicorn --workers flag."""
+    api = _services(_load(BASE_COMPOSE)).get("api") or {}
+    env = api.get("environment") or {}
+    assert isinstance(env, dict), "docker-compose.yml api environment is mapping-style"
+    assert str(env.get("WORKERS")) == "2", (
+        f"WORKERS env must be 2 to match --workers 2; got {env.get('WORKERS')!r}"
+    )
+
+
+def test_api_env_workers_is_two_secure_compose():
+    """The redundant WORKERS env var (list-style in docker-compose.secure.yml)
+    must advertise 2."""
+    api = _services(_load(SECURE_COMPOSE)).get("api") or {}
+    env = api.get("environment") or []
+    # secure.yml uses list-style env entries (``- WORKERS=4``).
+    entries = env if isinstance(env, list) else [f"{k}={v}" for k, v in env.items()]
+    worker_entries = [e for e in entries if str(e).startswith("WORKERS=")]
+    assert worker_entries, f"secure api must declare a WORKERS env entry; got {entries!r}"
+    for e in worker_entries:
+        assert e == "WORKERS=2", f"secure api WORKERS env must be 2; got {e!r}"
+
+
+def test_dockerfile_cmd_uses_two_workers():
+    """The baked production CMD JSON array must request exactly 2 workers, not 4."""
+    text = DOCKERFILE.read_text()
+    assert '"--workers", "2"' in text, 'Dockerfile CMD must use ["--workers", "2"] (OOM bound)'
+    assert '"--workers", "4"' not in text, (
+        'Dockerfile CMD must NOT use ["--workers", "4"] (OOM regression class)'
     )

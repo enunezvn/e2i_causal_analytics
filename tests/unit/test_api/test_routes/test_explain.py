@@ -1333,3 +1333,181 @@ class TestEdgeCases:
         assert numeric["bool_true"] == 1.0
         assert numeric["bool_false"] == 0.0
         assert numeric["none"] == 0.0
+
+
+# =============================================================================
+# Priority 1 OOM bounding: heavy-compute slot on SHAP endpoints
+# =============================================================================
+
+
+@pytest.fixture
+def _heavy_compute_one_slot(monkeypatch):
+    """Bound heavy compute to a single in-flight op and reset the limiter."""
+    monkeypatch.setenv("HEAVY_COMPUTE_MAX_CONCURRENCY", "1")
+    import src.api.dependencies.compute as compute_mod
+
+    compute_mod._reset_limiter_cache_for_tests()
+    yield compute_mod
+    compute_mod._reset_limiter_cache_for_tests()
+
+
+class TestExplainHeavyComputeBounding:
+    """SHAP endpoints must hold a single heavy-compute slot per request."""
+
+    @pytest.mark.asyncio
+    async def test_explain_prediction_rejects_when_saturated(
+        self, sample_explain_request, mock_user, _heavy_compute_one_slot
+    ):
+        """A saturated heavy-compute slot must reject /explain/predict fast
+        (HeavyComputeSaturated) instead of running more SHAP compute."""
+        from src.api.dependencies.compute import HeavyComputeSaturated
+
+        limiter = _heavy_compute_one_slot.get_heavy_compute_limiter()
+        limiter.acquire()  # occupy the single slot
+
+        with patch("src.api.routes.explain.get_shap_service") as mock_get_service:
+            mock_service = AsyncMock()
+            mock_get_service.return_value = mock_service
+
+            with pytest.raises(HeavyComputeSaturated):
+                await explain_prediction(sample_explain_request, BackgroundTasks(), mock_user)
+
+            # No SHAP compute may run while saturated.
+            mock_service.compute_shap.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_explain_prediction_releases_slot_on_success(
+        self, sample_explain_request, mock_user, _heavy_compute_one_slot
+    ):
+        """The slot must be released after a successful prediction, leaving the
+        response shape unchanged."""
+        with patch("src.api.routes.explain.get_shap_service") as mock_get_service:
+            mock_service = AsyncMock()
+            mock_service.get_features = AsyncMock(return_value={"feat1": 1.0})
+            mock_service.get_prediction = AsyncMock(
+                return_value={
+                    "prediction_class": "high_propensity",
+                    "prediction_probability": 0.78,
+                    "model_version_id": "v2.3.1",
+                }
+            )
+            mock_service.compute_shap = AsyncMock(
+                return_value={
+                    "base_value": 0.42,
+                    "contributions": [
+                        FeatureContribution(
+                            feature_name="feat1",
+                            feature_value=1.0,
+                            shap_value=0.15,
+                            contribution_direction="positive",
+                            contribution_rank=1,
+                        )
+                    ],
+                    "shap_sum": 0.36,
+                }
+            )
+            mock_service.generate_narrative = AsyncMock(return_value="narrative")
+            mock_service.store_audit_record = AsyncMock(return_value=True)
+            mock_get_service.return_value = mock_service
+
+            response = await explain_prediction(
+                sample_explain_request, BackgroundTasks(), mock_user
+            )
+
+            assert response.prediction_probability == 0.78
+            assert len(response.top_features) == 1
+
+            limiter = _heavy_compute_one_slot.get_heavy_compute_limiter()
+            assert limiter.in_flight == 0
+
+    @pytest.mark.asyncio
+    async def test_explain_batch_rejects_when_saturated(self, mock_user, _heavy_compute_one_slot):
+        """A saturated slot must reject the batch endpoint fast."""
+        from src.api.dependencies.compute import HeavyComputeSaturated
+
+        limiter = _heavy_compute_one_slot.get_heavy_compute_limiter()
+        limiter.acquire()
+
+        requests = [
+            ExplainRequest(patient_id=f"PAT-{i}", model_type=ModelType.PROPENSITY) for i in range(3)
+        ]
+        batch_request = BatchExplainRequest(requests=requests, parallel=True)
+
+        with pytest.raises(HeavyComputeSaturated):
+            await explain_batch(batch_request, BackgroundTasks(), mock_user)
+
+    @pytest.mark.asyncio
+    async def test_explain_batch_holds_single_slot_for_whole_batch(
+        self, mock_user, _heavy_compute_one_slot
+    ):
+        """With max concurrency 1, the batch must hold ONE slot for the whole fan-out
+        (its inner per-item explain_prediction calls must NOT each try to re-acquire,
+        which would self-reject every item). Proven by a successful 3-item batch under
+        a 1-slot limit."""
+        from src.api.routes.explain import ExplainResponse
+
+        requests = [
+            ExplainRequest(patient_id=f"PAT-{i}", model_type=ModelType.PROPENSITY) for i in range(3)
+        ]
+        batch_request = BatchExplainRequest(requests=requests, parallel=True)
+
+        async def mock_explain(*args, **kwargs):
+            return ExplainResponse(
+                explanation_id="test-123",
+                request_timestamp=datetime.now(timezone.utc),
+                patient_id="P******",
+                model_type=ModelType.PROPENSITY,
+                model_version_id="v1",
+                prediction_class="high",
+                prediction_probability=0.8,
+                top_features=[],
+                shap_sum=0.3,
+                computation_time_ms=100.0,
+                audit_stored=False,
+            )
+
+        with patch("src.api.routes.explain.explain_prediction", side_effect=mock_explain):
+            response = await explain_batch(batch_request, BackgroundTasks(), mock_user)
+
+        assert response.successful == 3
+        assert response.failed == 0
+
+        limiter = _heavy_compute_one_slot.get_heavy_compute_limiter()
+        assert limiter.in_flight == 0
+
+    @pytest.mark.asyncio
+    async def test_explain_batch_inner_real_explain_does_not_self_reject(
+        self, mock_user, _heavy_compute_one_slot
+    ):
+        """The REAL inner explain_prediction must NOT re-acquire a slot when invoked
+        from within a batch that already holds one (max concurrency 1). Exercises the
+        actual explain_prediction body (only the SHAP *service* is mocked), proving the
+        batch's single slot is shared, not contended item-by-item."""
+        requests = [
+            ExplainRequest(patient_id=f"PAT-{i}", model_type=ModelType.PROPENSITY) for i in range(2)
+        ]
+        batch_request = BatchExplainRequest(requests=requests, parallel=True)
+
+        with patch("src.api.routes.explain.get_shap_service") as mock_get_service:
+            mock_service = AsyncMock()
+            mock_service.get_features = AsyncMock(return_value={"feat1": 1.0})
+            mock_service.get_prediction = AsyncMock(
+                return_value={
+                    "prediction_class": "high",
+                    "prediction_probability": 0.8,
+                    "model_version_id": "v1",
+                }
+            )
+            mock_service.compute_shap = AsyncMock(
+                return_value={"base_value": 0.5, "contributions": [], "shap_sum": 0.3}
+            )
+            mock_get_service.return_value = mock_service
+
+            response = await explain_batch(batch_request, BackgroundTasks(), mock_user)
+
+        # Both items succeed under a 1-slot limit -> the inner calls reused the batch slot.
+        assert response.successful == 2
+        assert response.failed == 0
+
+        limiter = _heavy_compute_one_slot.get_heavy_compute_limiter()
+        assert limiter.in_flight == 0

@@ -712,6 +712,8 @@ async def explain_prediction(
     """
     import time
 
+    from src.api.dependencies.compute import heavy_compute_slot
+
     start_time = time.time()
 
     # Get service instance
@@ -719,76 +721,88 @@ async def explain_prediction(
 
     explanation_id = f"EXPL-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{uuid.uuid4().hex[:8]}"
 
-    try:
-        # 1. Get features (from request or Feast)
-        features = request.features
-        if features is None:
-            features = await service.get_features(request.patient_id, request.model_type)
+    # SHAP compute is the heavy, ~1.3 GiB part of this request. Hold ONE
+    # per-worker heavy-compute slot for the whole request (OOM guard). The slot
+    # is acquired on entering the context manager, BEFORE the try below, so a
+    # saturated slot raises HeavyComputeSaturated (mapped to 503 + Retry-After by
+    # the app exception handler) instead of being swallowed into a 500. SHAP
+    # already runs in its own thread pool, so we hold the slot here rather than
+    # offloading via run_in_bounded_executor. reuse_if_held=True lets the batch
+    # endpoint hold a single slot for its whole fan-out without each inner call
+    # contending for (and self-rejecting on) a second slot.
+    async with heavy_compute_slot(reuse_if_held=True):
+        try:
+            # 1. Get features (from request or Feast)
+            features = request.features
+            if features is None:
+                features = await service.get_features(request.patient_id, request.model_type)
 
-        # 2. Get prediction from BentoML
-        prediction = await service.get_prediction(
-            features=features,
-            model_type=request.model_type,
-            model_version_id=request.model_version_id,
-        )
-
-        # 3. Compute SHAP values
-        shap_result = await service.compute_shap(
-            features=features,
-            model_type=request.model_type,
-            model_version_id=prediction["model_version_id"],
-            top_k=request.top_k,
-        )
-
-        # 4. Generate narrative (if requested)
-        narrative = None
-        if request.format == ExplanationFormat.NARRATIVE:
-            narrative = await service.generate_narrative(
-                patient_id=request.patient_id,
-                prediction=prediction,
-                contributions=shap_result["contributions"],
-            )
-
-        # 5. Store audit record (async background task)
-        audit_stored = False
-        if request.store_for_audit:
-            background_tasks.add_task(
-                service.store_audit_record,
-                explanation_id=explanation_id,
-                patient_id=request.patient_id,
-                model_type=request.model_type.value,
-                model_version_id=prediction["model_version_id"],
+            # 2. Get prediction from BentoML
+            prediction = await service.get_prediction(
                 features=features,
-                shap_values={c.feature_name: c.shap_value for c in shap_result["contributions"]},
-                prediction=prediction,
+                model_type=request.model_type,
+                model_version_id=request.model_version_id,
             )
-            audit_stored = True
 
-        computation_time_ms = (time.time() - start_time) * 1000
+            # 3. Compute SHAP values
+            shap_result = await service.compute_shap(
+                features=features,
+                model_type=request.model_type,
+                model_version_id=prediction["model_version_id"],
+                top_k=request.top_k,
+            )
 
-        # Mask patient_id in response to protect PII (Phase 3 security enhancement)
-        # Original patient_id is preserved in audit records for authorized access
-        masked_patient_id = mask_identifier(request.patient_id)
+            # 4. Generate narrative (if requested)
+            narrative = None
+            if request.format == ExplanationFormat.NARRATIVE:
+                narrative = await service.generate_narrative(
+                    patient_id=request.patient_id,
+                    prediction=prediction,
+                    contributions=shap_result["contributions"],
+                )
 
-        return ExplainResponse(
-            explanation_id=explanation_id,
-            request_timestamp=datetime.now(timezone.utc),
-            patient_id=masked_patient_id,
-            model_type=request.model_type,
-            model_version_id=prediction["model_version_id"],
-            prediction_class=prediction["prediction_class"],
-            prediction_probability=prediction["prediction_probability"],
-            base_value=shap_result["base_value"] if request.include_base_value else None,
-            top_features=shap_result["contributions"],
-            shap_sum=shap_result["shap_sum"],
-            narrative_explanation=narrative,
-            computation_time_ms=round(computation_time_ms, 2),
-            audit_stored=audit_stored,
-        )
+            # 5. Store audit record (async background task)
+            audit_stored = False
+            if request.store_for_audit:
+                background_tasks.add_task(
+                    service.store_audit_record,
+                    explanation_id=explanation_id,
+                    patient_id=request.patient_id,
+                    model_type=request.model_type.value,
+                    model_version_id=prediction["model_version_id"],
+                    features=features,
+                    shap_values={
+                        c.feature_name: c.shap_value for c in shap_result["contributions"]
+                    },
+                    prediction=prediction,
+                )
+                audit_stored = True
 
-    except Exception as e:
-        logger.error(f"Explanation failed for patient {request.patient_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Explanation failed: {str(e)}") from e
+            computation_time_ms = (time.time() - start_time) * 1000
+
+            # Mask patient_id in response to protect PII (Phase 3 security enhancement)
+            # Original patient_id is preserved in audit records for authorized access
+            masked_patient_id = mask_identifier(request.patient_id)
+
+            return ExplainResponse(
+                explanation_id=explanation_id,
+                request_timestamp=datetime.now(timezone.utc),
+                patient_id=masked_patient_id,
+                model_type=request.model_type,
+                model_version_id=prediction["model_version_id"],
+                prediction_class=prediction["prediction_class"],
+                prediction_probability=prediction["prediction_probability"],
+                base_value=shap_result["base_value"] if request.include_base_value else None,
+                top_features=shap_result["contributions"],
+                shap_sum=shap_result["shap_sum"],
+                narrative_explanation=narrative,
+                computation_time_ms=round(computation_time_ms, 2),
+                audit_stored=audit_stored,
+            )
+
+        except Exception as e:
+            logger.error(f"Explanation failed for patient {request.patient_id}: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Explanation failed: {str(e)}") from e
 
 
 @router.post(
@@ -806,29 +820,46 @@ async def explain_batch(
     """
     Batch explanation endpoint for multiple patients.
     """
-    import asyncio
     import time
+
+    from src.api.dependencies.compute import heavy_compute_slot
 
     start_time = time.time()
     batch_id = f"BATCH-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{uuid.uuid4().hex[:8]}"
 
-    explanations = []
-    errors = []
+    explanations: list[ExplainResponse] = []
+    errors: list[dict[str, Any]] = []
 
     async def process_single(req: ExplainRequest) -> Optional[ExplainResponse]:
         try:
+            # The enclosing batch already holds the heavy-compute slot; the inner
+            # explain_prediction reuses it (reuse_if_held=True) rather than
+            # contending for a second slot.
             return await explain_prediction(req, background_tasks)
         except HTTPException as e:
             # Mask patient_id in error responses to protect PII
             errors.append({"patient_id": mask_identifier(req.patient_id), "error": e.detail})
             return None
 
-    if request.parallel:
-        results = await asyncio.gather(
-            *[process_single(req) for req in request.requests], return_exceptions=True
+    # Hold ONE heavy-compute slot for the whole batch fan-out (OOM guard). An
+    # empty batch does no heavy work, so skip slot acquisition (avoids rejecting
+    # a trivial empty request under load). If saturated, heavy_compute_slot()
+    # raises HeavyComputeSaturated on enter -> 503 + Retry-After.
+    if not request.requests:
+        total_time_ms = (time.time() - start_time) * 1000
+        return BatchExplainResponse(
+            batch_id=batch_id,
+            total_requests=0,
+            successful=0,
+            failed=0,
+            explanations=[],
+            errors=[],
+            total_time_ms=round(total_time_ms, 2),
         )
-        explanations = [r for r in results if isinstance(r, ExplainResponse)]
-    else:
+
+    async with heavy_compute_slot():
+        # Sequential on purpose (see docstring): one slot + one SHAP at a time
+        # keeps the batch's peak memory at a single explanation's footprint.
         for req in request.requests:
             result = await process_single(req)
             if result:

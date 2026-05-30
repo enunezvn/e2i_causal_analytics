@@ -442,6 +442,11 @@ async def run_simulation(
     Returns:
         Simulation results with recommendation (deploy/skip/refine)
     """
+    from src.api.dependencies.compute import (
+        HeavyComputeSaturated,
+        heavy_compute_slot,
+        run_in_bounded_executor,
+    )
     from src.digital_twin.models.simulation_models import (
         InterventionConfig,
         PopulationFilter,
@@ -486,23 +491,32 @@ async def run_simulation(
         twin_type = TwinType(request.twin_type.value)
         brand = Brand(request.brand.value)
 
-        # Initialize generator and generate twins
+        # Initialize generator
         generator = TwinGenerator(twin_type=twin_type, brand=brand)
-        population = generator.generate(n=request.twin_count)
 
         # Get model ID (from generator or request)
         model_id = UUID(request.model_id) if request.model_id else generator.model_id or UUID(int=0)
 
-        # Run simulation
-        engine = SimulationEngine(
-            population=population,
-            model_id=model_id,  # type: ignore[call-arg]
-        )
-        result = engine.simulate(
-            intervention_config=intervention,
-            population_filter=pop_filter,
-            calculate_heterogeneity=request.calculate_heterogeneity,
-        )
+        # Twin generation + simulation are the heavy, blocking, ~1.3 GiB part of
+        # this request. Bound concurrency to one in-flight heavy op per worker
+        # (OOM guard) AND run the blocking work off the event loop so it cannot
+        # stall the worker. If the per-worker slot budget is exhausted,
+        # heavy_compute_slot() raises HeavyComputeSaturated on enter (mapped to a
+        # 503 + Retry-After by the app exception handler) — nothing is queued.
+        def _do_sim():
+            population = generator.generate(n=request.twin_count)
+            engine = SimulationEngine(
+                population=population,
+                model_id=model_id,  # type: ignore[call-arg]
+            )
+            return engine.simulate(
+                intervention_config=intervention,
+                population_filter=pop_filter,
+                calculate_heterogeneity=request.calculate_heterogeneity,
+            )
+
+        async with heavy_compute_slot():
+            result = await run_in_bounded_executor(_do_sim)
 
         # Save simulation result
         repo = TwinRepository()
@@ -537,6 +551,11 @@ async def run_simulation(
             created_at=result.created_at,
         )
 
+    except HeavyComputeSaturated:
+        # Reject fast under load — surfaced as 503 + Retry-After by the app
+        # exception handler. Must precede the broad handlers so it is not
+        # swallowed into a 500.
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

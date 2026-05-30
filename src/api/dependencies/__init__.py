@@ -30,6 +30,12 @@ from src.api.dependencies.bentoml_client import (
     BentoMLClientConfig,
     get_bentoml_client,
 )
+from src.api.dependencies.compute import (
+    HeavyComputeSaturated,
+    get_heavy_compute_limiter,
+    heavy_compute_slot,
+    run_in_bounded_executor,
+)
 from src.api.dependencies.falkordb_client import (
     close_falkordb,
     falkordb_health_check,
@@ -70,6 +76,11 @@ __all__ = [
     "BentoMLClient",
     "BentoMLClientConfig",
     "get_bentoml_client",
+    # Heavy-compute bounding (OOM guard)
+    "HeavyComputeSaturated",
+    "heavy_compute_slot",
+    "run_in_bounded_executor",
+    "get_heavy_compute_limiter",
     # Redis
     "init_redis",
     "get_redis",

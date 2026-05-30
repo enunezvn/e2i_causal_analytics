@@ -1029,6 +1029,7 @@ app.include_router(metrics_router)
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from src.api.dependencies.compute import HeavyComputeSaturated
 from src.api.errors import (
     AuthenticationError,
     AuthorizationError,
@@ -1113,6 +1114,36 @@ async def e2i_error_handler(request, exc: E2IError):
     return JSONResponse(
         status_code=exc.status_code,
         content=error_response(exc, include_debug=DEBUG_MODE),
+    )
+
+
+@app.exception_handler(HeavyComputeSaturated)
+async def heavy_compute_saturated_handler(request, exc: HeavyComputeSaturated):
+    """Map a saturated heavy-compute limiter to a 503 with Retry-After.
+
+    Priority 1 OOM guard: when a worker already has its budget of in-flight heavy
+    operations (digital-twin simulate / SHAP explain), a new heavy request is
+    rejected fast rather than queued — running it could push the api container
+    past its 5G cgroup and OOM-kill it. The client should retry shortly.
+    """
+    retry_after_seconds = 5
+    e2i_error = DependencyError(
+        dependency="heavy_compute",
+        original_error=Exception(str(exc)) if str(exc) else None,
+    )
+    logger.warning(
+        "Heavy compute capacity reached on %s: %s",
+        request.url.path,
+        exc,
+        extra={"error_id": e2i_error.error_id, "path": request.url.path},
+    )
+    body = error_response(e2i_error, include_debug=DEBUG_MODE)
+    # Make the cause explicit and actionable for the client.
+    body["message"] = "heavy compute capacity reached, retry shortly"
+    return JSONResponse(
+        status_code=503,
+        content=body,
+        headers={"Retry-After": str(retry_after_seconds)},
     )
 
 
