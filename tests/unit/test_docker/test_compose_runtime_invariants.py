@@ -255,9 +255,7 @@ def _mem_to_mb(value: object) -> float:
     m = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([KMG]?)B?", s)
     assert m, f"unparseable memory value {value!r}"
     num = float(m.group(1))
-    return {"K": num / 1024, "M": num, "G": num * 1024, "": num / (1024 * 1024)}[
-        m.group(2)
-    ]
+    return {"K": num / 1024, "M": num, "G": num * 1024, "": num / (1024 * 1024)}[m.group(2)]
 
 
 def _worker_concurrency(svc: dict) -> int:
@@ -306,9 +304,7 @@ def test_worker_light_concurrency_fits_its_cgroup():
     budget guard) before raising concurrency."""
     svc = _services(_load(BASE_COMPOSE)).get("worker_light") or {}
     conc = _worker_concurrency(svc)
-    assert conc <= 2, (
-        f"worker_light --concurrency must be <= 2 to fit its cgroup; got {conc}"
-    )
+    assert conc <= 2, f"worker_light --concurrency must be <= 2 to fit its cgroup; got {conc}"
 
 
 def test_worker_light_memory_limit_clears_measured_boot_peak():
