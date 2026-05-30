@@ -23,6 +23,10 @@ on:
       - 'docker/frontend/**'
       - 'frontend/**'
       - 'requirements.txt'
+      # The hash-pinned lock (#534) is the actual dependency source the
+      # Dockerfile installs from under --require-hashes; a lock-only change
+      # (e.g. a regenerated lock after a security bump) must rebuild + deploy.
+      - 'requirements.lock'
       - 'pyproject.toml'
       # pip path-installs baked into the image (Dockerfile: COPY patches/ ./patches/,
       # requirements.txt: ./patches/ag-ui-langgraph + ./patches/copilotkit). Kept in

@@ -58,13 +58,19 @@ WORKDIR /app
 FROM base AS dependencies
 
 # Copy dependency files
-COPY requirements.txt pyproject.toml ./
+COPY requirements.txt requirements.lock pyproject.toml ./
 COPY patches/ ./patches/
 
-# Create virtual environment and install dependencies
+# Create virtual environment and install dependencies.
+# Two steps: (1) the hash-pinned closure under --require-hashes for
+# byte-reproducible, tamper-checked rebuilds (#534); (2) the two local
+# ./patches/ packages --no-deps (a local path cannot be hashed, and
+# --require-hashes is all-or-nothing — their deps are already satisfied by
+# the locked closure). Regenerate the lock with the uv command in its header.
 RUN python -m venv /app/.venv && \
     . /app/.venv/bin/activate && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir --require-hashes -r requirements.lock && \
+    pip install --no-cache-dir --no-deps './patches/ag-ui-langgraph[fastapi]' ./patches/copilotkit
 
 # -----------------------------------------------------------------------------
 # Stage 3: Development
@@ -72,12 +78,13 @@ RUN python -m venv /app/.venv && \
 FROM base AS development
 
 # Install dev dependencies
-COPY requirements.txt pyproject.toml ./
+COPY requirements.txt requirements.lock pyproject.toml ./
 COPY patches/ ./patches/
 
 RUN python -m venv /app/.venv && \
     . /app/.venv/bin/activate && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir --require-hashes -r requirements.lock && \
+    pip install --no-cache-dir --no-deps './patches/ag-ui-langgraph[fastapi]' ./patches/copilotkit
 
 # Add venv to PATH
 ENV PATH="/app/.venv/bin:$PATH"

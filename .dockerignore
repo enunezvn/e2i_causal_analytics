@@ -76,6 +76,7 @@ dmypy.json
 docs/
 *.txt
 !requirements.txt
+!requirements.lock
 
 # -----------------------------------------------------------------------------
 # Docker
