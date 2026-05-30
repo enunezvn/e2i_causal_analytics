@@ -820,7 +820,6 @@ async def explain_batch(
     """
     Batch explanation endpoint for multiple patients.
     """
-    import asyncio
     import time
 
     from src.api.dependencies.compute import heavy_compute_slot
