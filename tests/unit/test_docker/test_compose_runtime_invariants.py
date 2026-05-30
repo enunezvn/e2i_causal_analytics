@@ -236,6 +236,13 @@ WORKER_TIERS = ("worker_light", "worker_medium", "worker_heavy")
 # for EVERY concurrent child, or an all-children spike trips the OOM-killer.
 MIN_MB_PER_FULL_APP_CHILD = 400
 
+# Measured c=2 boot peak of the worker_light image (full-app import across the
+# pool boot — faithful throwaway probe of the deployed image). The cgroup limit
+# must clear this WITH margin, or the OOM-killer fires during the all-children
+# boot/recreate spike (the deploy-time failure mode), even when the per-child
+# budget alone is satisfied (e.g. c=2 @ 800MB passes 400/child but < 905MB peak).
+WORKER_LIGHT_BOOT_PEAK_MB = 905
+
 
 def _mem_to_mb(value: object) -> float:
     """``"1G"`` / ``"512M"`` / ``1073741824`` -> megabytes."""
@@ -299,20 +306,65 @@ def test_worker_light_concurrency_fits_its_cgroup():
     )
 
 
+def test_worker_light_memory_limit_clears_measured_boot_peak():
+    """#565: worker_light's cgroup limit must exceed the measured 905 MB c=2 boot
+    peak WITH headroom (set to 1.5G). The per-child budget guard alone is not
+    enough: c=2 @ 800MB-1G passes 400/child but still OOMs on the boot/recreate
+    spike. This pins the absolute floor to the measured peak so a future shrink
+    below it is caught."""
+    svc = _services(_load(BASE_COMPOSE)).get("worker_light") or {}
+    limit = _limit_mb(svc)
+    floor = WORKER_LIGHT_BOOT_PEAK_MB * 1.25  # 905MB peak + 25% headroom ~= 1131MB
+    assert limit >= floor, (
+        f"worker_light memory limit {limit:.0f}MB must clear the measured 905MB "
+        f"boot peak + headroom (>= {floor:.0f}MB); got {limit:.0f}MB"
+    )
+
+
+def test_worker_light_recycles_children_before_cgroup_oom():
+    """#565 defense-in-depth: --max-memory-per-child must be set, BELOW the cgroup
+    limit (so a child that grows is recycled gracefully after its task instead of
+    SIGKILLed mid-task by the OOM-killer, which loses the task + forces a requeue)
+    and ABOVE normal full-app RSS (so it does not thrash-recycle). --max-tasks-
+    per-child recycles on count, not memory, so it cannot bound a pathological
+    task's RSS."""
+    svc = _services(_load(BASE_COMPOSE)).get("worker_light") or {}
+    cmd = svc.get("command", "")
+    if isinstance(cmd, list):
+        cmd = " ".join(str(c) for c in cmd)
+    m = re.search(r"--max-memory-per-child[= ](\d+)", cmd)
+    assert m, f"worker_light must set --max-memory-per-child (KB); got {cmd!r}"
+    per_child_kb = int(m.group(1))
+    limit_kb = _limit_mb(svc) * 1024
+    assert per_child_kb < limit_kb, (
+        f"--max-memory-per-child ({per_child_kb}KB) must be below the cgroup limit "
+        f"({limit_kb:.0f}KB) so a graceful recycle beats the OOM-killer"
+    )
+    assert per_child_kb >= 700 * 1024, (
+        f"--max-memory-per-child ({per_child_kb}KB) must be above normal full-app "
+        "per-child RSS (~607MB idle) to avoid thrash-recycling"
+    )
+
+
 def test_scheduler_does_not_block_on_worker_light_health():
     """#565: celery-beat (scheduler) only publishes scheduled tasks to the redis
     broker — it does NOT require a healthy worker_light. A ``service_healthy`` edge
     let a flapping worker_light strand the scheduler ('Created') and red the deploy
-    (``compose up`` exit 1, no rollback path). The edge must be ``service_started``
-    (or dropped) so beat is decoupled from worker health."""
+    (``compose up`` exit 1, no rollback path). The edge must be exactly
+    ``service_started`` (or dropped): ``service_completed_successfully`` or other
+    states would block beat indefinitely, so a loose 'not service_healthy' check is
+    not enough."""
     scheduler = _services(_load(BASE_COMPOSE)).get("scheduler") or {}
     dep = scheduler.get("depends_on") or {}
-    wl = dep.get("worker_light")
-    cond = wl.get("condition") if isinstance(wl, dict) else ("service_started" if wl is None else None)
-    assert cond != "service_healthy", (
-        "scheduler must NOT depend_on worker_light: service_healthy — beat only needs "
-        "redis; a worker_light health flap would strand the scheduler and red the "
-        f"deploy. Use service_started or drop the edge (got condition={cond!r})."
+    if "worker_light" not in dep:
+        return  # no edge at all -> beat cannot be stranded by worker_light
+    wl = dep["worker_light"]
+    cond = wl.get("condition") if isinstance(wl, dict) else None
+    assert cond == "service_started", (
+        "scheduler->worker_light must be condition: service_started (or the edge "
+        "dropped) — service_healthy stranded the scheduler on a worker OOM-flap, and "
+        "service_completed_successfully / other states would block beat forever. "
+        f"got condition={cond!r}"
     )
 
 
