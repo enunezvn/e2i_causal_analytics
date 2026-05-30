@@ -34,6 +34,7 @@ from typing import Any, Dict, List, Optional, cast
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 
 from src.api.dependencies.auth import require_analyst
+from src.api.dependencies.compute import HeavyComputeSaturated, heavy_compute_slot
 from src.api.schemas.causal import (
     AggregationMethod,
     AnalysisStatus,
@@ -173,6 +174,11 @@ async def run_hierarchical_analysis(
         _analysis_cache[analysis_id] = result
         return result
 
+    except HeavyComputeSaturated:
+        # Reject fast under load — surfaced as 503 + Retry-After by the app
+        # exception handler (OOM guard). Must precede the broad handler so it
+        # is not swallowed into a 500.
+        raise
     except Exception as e:
         logger.error(f"Hierarchical analysis failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -311,10 +317,20 @@ async def _execute_hierarchical_analysis(
         )
 
         analyzer = HierarchicalAnalyzer(config)
-        result = await asyncio.wait_for(
-            analyzer.analyze(X=X, treatment=treatment, outcome=outcome),
-            timeout=request.timeout_seconds,
-        )
+        # The EconML-within-segments fit is the genuinely heavy in-process
+        # compute here. Hold ONE per-worker heavy-compute slot for the duration
+        # so concurrent heavy requests cannot stack and OOM-kill the cgroup
+        # (OOM guard, P1b). Both callers of this helper — the sync path and the
+        # background task — route through here, so bounding it once covers both.
+        # On a saturated worker, heavy_compute_slot() raises
+        # HeavyComputeSaturated on enter (mapped to 503 + Retry-After by the app
+        # exception handler) — nothing is queued. The slot wraps the await so it
+        # is held for the whole compute, including under the wait_for timeout.
+        async with heavy_compute_slot():
+            result = await asyncio.wait_for(
+                analyzer.analyze(X=X, treatment=treatment, outcome=outcome),
+                timeout=request.timeout_seconds,
+            )
 
         # Convert to API response format
         segment_results = []
@@ -614,6 +630,12 @@ async def run_sequential_pipeline(
         _pipeline_cache[pipeline_id] = result.model_dump()
         return result
     except HTTPException:
+        raise
+    except HeavyComputeSaturated:
+        # Reject fast under load — surfaced as 503 + Retry-After by the app
+        # exception handler (OOM guard). HeavyComputeSaturated is NOT an
+        # HTTPException, so this must precede the broad handler below to avoid
+        # being swallowed into a 500.
         raise
     except Exception as e:
         logger.error(f"Sequential pipeline failed: {e}", exc_info=True)
@@ -1314,7 +1336,17 @@ async def _execute_sequential_pipeline(
         # produced a result (honest fail-close), or returns a real response
         # built from the engine's PipelineOutput when at least one library
         # succeeded. NO silent fallback to synthetic data, NO hardcoded values.
-        return await _run_real_sequential_pipeline(pipeline_id, request)
+        #
+        # The real 4-library pipeline (DoWhy/EconML/CausalML/NetworkX) is the
+        # genuinely heavy in-process compute. Bound it to ONE per-worker
+        # heavy-compute slot (OOM guard, P1b) so concurrent real pipelines
+        # cannot stack and OOM-kill the cgroup. A saturated worker raises
+        # HeavyComputeSaturated on enter (mapped to 503 + Retry-After) — nothing
+        # is queued. The demo path below does NO heavy work and is intentionally
+        # left unbounded. Both callers (sync + background task) route through
+        # here, so bounding once covers both.
+        async with heavy_compute_slot():
+            return await _run_real_sequential_pipeline(pipeline_id, request)
 
     start_time = time.time()
     stage_results: List[PipelineStageResult] = []
@@ -1413,10 +1445,17 @@ async def run_parallel_pipeline(
         # fail-close), or returns a real response from the engine's
         # PipelineOutput. NO silent fallback, NO hardcoded values.
         try:
-            return await asyncio.wait_for(
-                _run_real_parallel_pipeline(pipeline_id, request),
-                timeout=request.timeout_seconds,
-            )
+            # The real multi-library fan-out is the genuinely heavy in-process
+            # compute. Bound it to ONE per-worker heavy-compute slot (OOM guard,
+            # P1b) so concurrent real pipelines cannot stack and OOM-kill the
+            # cgroup. A saturated worker raises HeavyComputeSaturated on enter
+            # (mapped to 503 + Retry-After) — nothing is queued. The demo path
+            # below does NO heavy work and is intentionally left unbounded.
+            async with heavy_compute_slot():
+                return await asyncio.wait_for(
+                    _run_real_parallel_pipeline(pipeline_id, request),
+                    timeout=request.timeout_seconds,
+                )
         except HTTPException:
             raise
         except asyncio.TimeoutError as e:
@@ -1424,6 +1463,12 @@ async def run_parallel_pipeline(
                 status_code=408,
                 detail=f"Pipeline timed out after {request.timeout_seconds}s",
             ) from e
+        except HeavyComputeSaturated:
+            # Reject fast under load — surfaced as 503 + Retry-After by the app
+            # exception handler. HeavyComputeSaturated is NOT an HTTPException,
+            # so this must precede the broad last-resort handler below to avoid
+            # being swallowed into a 500.
+            raise
         except Exception as e:  # noqa: BLE001 - last-resort 500
             logger.error(f"Parallel pipeline failed: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail=str(e)) from e
