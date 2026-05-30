@@ -39,6 +39,13 @@ from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 
 logger = logging.getLogger(__name__)
 
+# P2 offload: max seconds the synchronous /simulate endpoint waits for the
+# worker_heavy task before returning 408. The frontend axios timeout is 30s
+# (frontend/src/lib/api-client.ts); keep this just under it so the client gets a
+# clean 408 rather than its own client-side abort. Only consulted when
+# HEAVY_OFFLOAD_ENABLED is set; the inline path is unaffected.
+_OFFLOAD_TIMEOUT_SECONDS = 28.0
+
 router = APIRouter(
     prefix="/digital-twin",
     tags=["Digital Twin"],
@@ -444,7 +451,9 @@ async def run_simulation(
     """
     from src.api.dependencies.compute import (
         HeavyComputeSaturated,
+        await_celery_result,
         heavy_compute_slot,
+        heavy_offload_enabled,
         run_in_bounded_executor,
     )
     from src.digital_twin.models.simulation_models import (
@@ -497,26 +506,69 @@ async def run_simulation(
         # Get model ID (from generator or request)
         model_id = UUID(request.model_id) if request.model_id else generator.model_id or UUID(int=0)
 
-        # Twin generation + simulation are the heavy, blocking, ~1.3 GiB part of
-        # this request. Bound concurrency to one in-flight heavy op per worker
-        # (OOM guard) AND run the blocking work off the event loop so it cannot
-        # stall the worker. If the per-worker slot budget is exhausted,
-        # heavy_compute_slot() raises HeavyComputeSaturated on enter (mapped to a
-        # 503 + Retry-After by the app exception handler) — nothing is queued.
-        def _do_sim():
-            population = generator.generate(n=request.twin_count)
-            engine = SimulationEngine(
-                population=population,
-                model_id=model_id,  # type: ignore[call-arg]
-            )
-            return engine.simulate(
-                intervention_config=intervention,
-                population_filter=pop_filter,
-                calculate_heterogeneity=request.calculate_heterogeneity,
-            )
+        if heavy_offload_enabled():
+            # P2 offload path (DARK by default): enqueue the heavy compute on
+            # worker_heavy and await the result WITHOUT blocking the event loop,
+            # preserving the synchronous HTTP contract. The task runs the SAME
+            # compute as the inline path (shared src.digital_twin.simulation_runner)
+            # and returns a JSON dict we rebuild into the SAME SimulationResult so
+            # the response extraction below is byte-identical across both paths.
+            # simulation_result_from_dict is a light helper (its heavy imports
+            # are function-local), safe to import on the API process.
+            from src.digital_twin.simulation_runner import simulation_result_from_dict
 
-        async with heavy_compute_slot():
-            result = await run_in_bounded_executor(_do_sim)
+            # Enqueue by registered task NAME via the existing send_task idiom
+            # (src/workers/celery_app.py) so importing the heavy task package —
+            # which pulls sklearn/ML libs into the API process via
+            # src/tasks/__init__ — is avoided on the offload path.
+            from src.workers.celery_app import celery_app
+
+            payload = {
+                "twin_type_value": request.twin_type.value,
+                "brand_value": request.brand.value,
+                "twin_count": request.twin_count,
+                "intervention_dict": intervention.model_dump(mode="json"),
+                "population_filter_dict": (
+                    pop_filter.model_dump(mode="json") if pop_filter is not None else None
+                ),
+                "calculate_heterogeneity": request.calculate_heterogeneity,
+                "model_id_value": str(model_id),
+            }
+            async_result = celery_app.send_task(
+                "src.tasks.simulate_population", args=[payload], queue="twins"
+            )
+            try:
+                result_dict = await await_celery_result(
+                    async_result, timeout=_OFFLOAD_TIMEOUT_SECONDS
+                )
+            except TimeoutError:
+                raise HTTPException(
+                    status_code=408,
+                    detail="Twin simulation timed out; retry shortly.",
+                )
+            result = simulation_result_from_dict(result_dict)
+        else:
+            # P1 inline path (default + fallback). Twin generation + simulation
+            # are the heavy, blocking, ~1.3 GiB part of this request. Bound
+            # concurrency to one in-flight heavy op per worker (OOM guard) AND run
+            # the blocking work off the event loop so it cannot stall the worker.
+            # If the per-worker slot budget is exhausted, heavy_compute_slot()
+            # raises HeavyComputeSaturated on enter (mapped to a 503 + Retry-After
+            # by the app exception handler) — nothing is queued.
+            def _do_sim():
+                population = generator.generate(n=request.twin_count)
+                engine = SimulationEngine(
+                    population=population,
+                    model_id=model_id,  # type: ignore[call-arg]
+                )
+                return engine.simulate(
+                    intervention_config=intervention,
+                    population_filter=pop_filter,
+                    calculate_heterogeneity=request.calculate_heterogeneity,
+                )
+
+            async with heavy_compute_slot():
+                result = await run_in_bounded_executor(_do_sim)
 
         # Save simulation result
         repo = TwinRepository()
@@ -551,6 +603,10 @@ async def run_simulation(
             created_at=result.created_at,
         )
 
+    except HTTPException:
+        # 408 timeout (offload path) must propagate unchanged, not be swallowed
+        # into a 500 by the broad handler below.
+        raise
     except HeavyComputeSaturated:
         # Reject fast under load — surfaced as 503 + Retry-After by the app
         # exception handler. Must precede the broad handlers so it is not

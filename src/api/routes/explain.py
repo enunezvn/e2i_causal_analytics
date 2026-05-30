@@ -37,6 +37,12 @@ from src.repositories.shap_analysis import ShapAnalysisRepository, get_shap_anal
 
 logger = logging.getLogger(__name__)
 
+# P2 offload: max seconds the synchronous SHAP endpoints wait for the
+# worker_heavy task before returning 408. Kept just under the frontend's 30s
+# axios timeout (frontend/src/lib/api-client.ts) so the client gets a clean 408.
+# Only consulted when HEAVY_OFFLOAD_ENABLED is set; the inline path is unaffected.
+_SHAP_OFFLOAD_TIMEOUT_SECONDS = 28.0
+
 router = APIRouter(
     prefix="/explain",
     tags=["Model Interpretability"],
@@ -515,25 +521,72 @@ class RealTimeSHAPService:
         Uses TreeExplainer for tree-based models (fast),
         KernelExplainer for others (slower).
         """
+        from src.api.dependencies.compute import (
+            await_celery_result,
+            heavy_offload_enabled,
+        )
+
         await self._ensure_initialized()
 
         # Prepare numeric features
         numeric_features = self._prepare_numeric_features(features)
 
         try:
-            # Use real SHAP explainer
-            shap_result: SHAPResult = await self.shap_explainer.compute_shap_values(
-                features=numeric_features,
-                model_type=model_type.value,
-                model_version_id=model_version_id,
-                top_k=top_k,
-            )
+            # Normalize the SHAP compute to four locals so the inline path and the
+            # P2 offload path produce an IDENTICAL response shape downstream.
+            if heavy_offload_enabled():
+                # P2 offload path (DARK by default): run the heavy SHAP compute on
+                # worker_heavy. Feature fetch / prediction / audit stay on the API
+                # (light + request-scoped); only the explainer call moves. The task
+                # runs the SAME explainer via src.mlops.shap_runner and returns a
+                # JSON dict, so the contributions built below are identical.
+                # Enqueue by registered task NAME via the existing send_task
+                # idiom (src/workers/celery_app.py) so importing the heavy task
+                # package — which pulls sklearn/ML libs into the API process via
+                # src/tasks/__init__ — is avoided on the offload path.
+                from src.workers.celery_app import celery_app
 
-            # Convert SHAPResult to API response format
+                payload = {
+                    "features": numeric_features,
+                    "model_type": model_type.value,
+                    "model_version_id": model_version_id,
+                    "top_k": top_k,
+                }
+                async_result = celery_app.send_task(
+                    "src.tasks.compute_shap_values", args=[payload], queue="shap"
+                )
+                try:
+                    shap_dict = await await_celery_result(
+                        async_result, timeout=_SHAP_OFFLOAD_TIMEOUT_SECONDS
+                    )
+                except TimeoutError:
+                    raise HTTPException(
+                        status_code=408,
+                        detail="SHAP computation timed out; retry shortly.",
+                    )
+                shap_values_map: Dict[str, float] = shap_dict["shap_values"]
+                base_value = shap_dict["base_value"]
+                explainer_type_str = shap_dict["explainer_type"]
+                computation_time_ms = shap_dict["computation_time_ms"]
+            else:
+                # P1 inline path (default + fallback): use the real SHAP explainer
+                # in-process (it offloads the CPU-bound math to its own thread pool).
+                shap_result: SHAPResult = await self.shap_explainer.compute_shap_values(
+                    features=numeric_features,
+                    model_type=model_type.value,
+                    model_version_id=model_version_id,
+                    top_k=top_k,
+                )
+                shap_values_map = shap_result.shap_values
+                base_value = shap_result.base_value
+                explainer_type_str = shap_result.explainer_type.value
+                computation_time_ms = shap_result.computation_time_ms
+
+            # Convert to API response format (identical for both paths)
             contributions = []
-            sorted_shap = sorted(
-                shap_result.shap_values.items(), key=lambda x: abs(x[1]), reverse=True
-            )[:top_k]
+            sorted_shap = sorted(shap_values_map.items(), key=lambda x: abs(x[1]), reverse=True)[
+                :top_k
+            ]
 
             for rank, (feature_name, shap_value) in enumerate(sorted_shap, 1):
                 # Map back to original feature value
@@ -549,13 +602,16 @@ class RealTimeSHAPService:
                 )
 
             return {
-                "base_value": shap_result.base_value,
+                "base_value": base_value,
                 "contributions": contributions,
-                "shap_sum": sum(shap_result.shap_values.values()),
-                "explainer_type": shap_result.explainer_type.value,
-                "computation_time_ms": shap_result.computation_time_ms,
+                "shap_sum": sum(shap_values_map.values()),
+                "explainer_type": explainer_type_str,
+                "computation_time_ms": computation_time_ms,
             }
 
+        except HTTPException:
+            # 408 offload timeout must propagate as-is (other failures -> 500 below).
+            raise
         except Exception as e:
             logger.error(f"SHAP computation failed: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail=f"SHAP computation failed: {str(e)}")
@@ -711,8 +767,9 @@ async def explain_prediction(
     Real-time prediction with SHAP explanation.
     """
     import time
+    from contextlib import nullcontext
 
-    from src.api.dependencies.compute import heavy_compute_slot
+    from src.api.dependencies.compute import heavy_compute_slot, heavy_offload_enabled
 
     start_time = time.time()
 
@@ -721,16 +778,23 @@ async def explain_prediction(
 
     explanation_id = f"EXPL-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{uuid.uuid4().hex[:8]}"
 
-    # SHAP compute is the heavy, ~1.3 GiB part of this request. Hold ONE
-    # per-worker heavy-compute slot for the whole request (OOM guard). The slot
-    # is acquired on entering the context manager, BEFORE the try below, so a
-    # saturated slot raises HeavyComputeSaturated (mapped to 503 + Retry-After by
-    # the app exception handler) instead of being swallowed into a 500. SHAP
-    # already runs in its own thread pool, so we hold the slot here rather than
-    # offloading via run_in_bounded_executor. reuse_if_held=True lets the batch
-    # endpoint hold a single slot for its whole fan-out without each inner call
-    # contending for (and self-rejecting on) a second slot.
-    async with heavy_compute_slot(reuse_if_held=True):
+    # SHAP compute is the heavy, ~1.3 GiB part of this request. On the P1 inline
+    # path (DARK default) we hold ONE per-worker heavy-compute slot for the whole
+    # request (OOM guard). The slot is acquired on entering the context manager,
+    # BEFORE the try below, so a saturated slot raises HeavyComputeSaturated
+    # (mapped to 503 + Retry-After by the app exception handler) instead of being
+    # swallowed into a 500. SHAP already runs in its own thread pool, so we hold
+    # the slot here rather than offloading via run_in_bounded_executor.
+    # reuse_if_held=True lets the batch endpoint hold a single slot for its whole
+    # fan-out without each inner call contending for (and self-rejecting on) a
+    # second slot.
+    #
+    # On the P2 offload path (flag on) the heavy SHAP runs on worker_heavy, so we
+    # must NOT hold the API's reject-fast slot for the duration of the poll —
+    # doing so would needlessly 503 concurrent requests while the API is just
+    # awaiting a remote result. Use a nullcontext in that case.
+    _slot = nullcontext() if heavy_offload_enabled() else heavy_compute_slot(reuse_if_held=True)
+    async with _slot:
         try:
             # 1. Get features (from request or Feast)
             features = request.features
@@ -800,6 +864,11 @@ async def explain_prediction(
                 audit_stored=audit_stored,
             )
 
+        except HTTPException:
+            # Status-bearing failures (e.g. the 408 SHAP offload timeout bubbling
+            # up from service.compute_shap) must propagate as-is, not be
+            # re-wrapped into a generic 500 below.
+            raise
         except Exception as e:
             logger.error(f"Explanation failed for patient {request.patient_id}: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Explanation failed: {str(e)}") from e

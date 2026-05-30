@@ -227,3 +227,67 @@ async def run_in_bounded_executor(func: Callable[..., T], *args: Any, **kwargs: 
     # run_in_executor returns Future[Any]; the callable's return type is T.
     result: T = await loop.run_in_executor(executor, call)
     return result
+
+
+# --------------------------------------------------------------------------- #
+# Priority 2 — heavy-compute offload to worker_heavy (DARK by default)
+# --------------------------------------------------------------------------- #
+# When HEAVY_OFFLOAD_ENABLED is set, the two heavy API paths (digital-twin
+# simulate, SHAP explain) enqueue the work as a Celery task on worker_heavy
+# instead of running it inline. Default OFF: behavior is byte-identical to the
+# P1 inline path (bounded executor + heavy_compute_slot). worker_heavy still
+# ships at replicas: 0, so enabling this also requires scaling worker_heavy up
+# (box headroom permitting). Read at call time so ops/tests can toggle it.
+
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
+def heavy_offload_enabled() -> bool:
+    """Whether heavy API compute should be offloaded to ``worker_heavy`` (P2).
+
+    DARK by default: unless ``HEAVY_OFFLOAD_ENABLED`` is set to a truthy value
+    (``1``/``true``/``yes``/``on``, case-insensitive) the API keeps the P1 inline
+    path. Evaluated per-request (not cached at import) so it can be flipped via
+    env without a code change.
+    """
+    return os.environ.get("HEAVY_OFFLOAD_ENABLED", "false").strip().lower() in _TRUTHY
+
+
+async def await_celery_result(
+    async_result: Any,
+    *,
+    timeout: float,
+    poll_interval: float = 0.25,
+) -> Any:
+    """Await a Celery ``AsyncResult`` WITHOUT blocking the event loop.
+
+    Polls ``async_result.ready()`` with a small ``asyncio.sleep`` (never
+    ``.get()``, which blocks the loop) so the API worker stays responsive while a
+    task runs on ``worker_heavy``. Preserves the synchronous HTTP contract:
+
+    * on timeout -> raises :class:`TimeoutError` (the route maps it to HTTP 408);
+    * on task failure -> re-raises the worker exception (the route's existing
+      ``except Exception`` maps it to HTTP 500), matching the inline path.
+
+    :param async_result: a Celery ``AsyncResult`` (or any object exposing
+        ``ready()``, ``successful()``, ``result`` and ``get()``).
+    :param timeout: max seconds to wait before raising ``TimeoutError``.
+    :param poll_interval: seconds between readiness polls.
+    :returns: the task's return value (a JSON-safe dict for the P2 tasks).
+    """
+    waited = 0.0
+    while not async_result.ready():
+        if waited >= timeout:
+            raise TimeoutError(f"heavy offload task did not complete within {timeout:.0f}s")
+        await asyncio.sleep(poll_interval)
+        waited += poll_interval
+
+    if not async_result.successful():
+        # Re-raise the worker-side exception so the route's existing handlers
+        # produce the same error response the inline path would.
+        raise (
+            async_result.result
+            if isinstance(async_result.result, BaseException)
+            else RuntimeError(str(async_result.result))
+        )
+    return async_result.result

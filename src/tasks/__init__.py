@@ -69,6 +69,16 @@ from src.tasks.feedback_loop_tasks import (
     run_full_feedback_loop,
 )
 
+# P2 heavy-compute offload (DARK by default): SHAP + twin-population simulation.
+# Importing the module fires the @celery_app.task decorators so worker_heavy
+# discovers ``src.tasks.compute_shap_values`` / ``src.tasks.simulate_population``
+# (whose names match the pre-existing task_routes entries). The API only enqueues
+# these when HEAVY_OFFLOAD_ENABLED is set; the import itself is inert.
+from src.tasks.heavy_offload_tasks import (
+    compute_shap_values,
+    simulate_population,
+)
+
 # Insight lifecycle (consolidator + sentinel dispatcher + #378 reanalysis)
 from src.tasks.insight_lifecycle_tasks import (
     consolidate_insights,
@@ -123,4 +133,7 @@ __all__ = [
     "reanalyze_finding",
     # Crystallization subsystem (#376 Phase 4)
     "crystallize_portfolio",
+    # P2 heavy-compute offload (DARK by default)
+    "compute_shap_values",
+    "simulate_population",
 ]

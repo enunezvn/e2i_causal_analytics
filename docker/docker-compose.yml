@@ -759,21 +759,24 @@ services:
       - experiment_designs:/app/data/experiment_designs
       - feature_cache:/app/data/feature_cache:ro
     tmpfs:
-      - /app/tmp:size=8G,uid=1000,gid=1000,mode=0700  # Large scratch space for heavy computation
+      # P2: right-sized for the 16GB box (was 8G). Scratch for one heavy task.
+      - /app/tmp:size=2G,uid=1000,gid=1000,mode=0700
     environment:
       <<: *common-env
       WORKER_TYPE: heavy
-      # Performance tuning for heavy tasks
-      OMP_NUM_THREADS: 16  # OpenMP threads for numpy/scipy
-      OPENBLAS_NUM_THREADS: 16  # BLAS parallelization
-      MKL_NUM_THREADS: 16  # Intel MKL if available
+      # P2: thread tuning right-sized for the 16GB/8vCPU box (was 16). Matches
+      # the cpus:'2' limit so numpy/scipy/BLAS don't oversubscribe the box.
+      OMP_NUM_THREADS: 2  # OpenMP threads for numpy/scipy
+      OPENBLAS_NUM_THREADS: 2  # BLAS parallelization
+      MKL_NUM_THREADS: 2  # Intel MKL if available
     command: >
       celery -A src.workers.celery_app worker
       --loglevel=INFO
-      --concurrency=2
+      --concurrency=1
       --queues=shap,causal,ml,twins
       --prefetch-multiplier=1
       --max-tasks-per-child=10
+      --max-memory-per-child=2097152
       --time-limit=3600
       --soft-time-limit=3300
       --hostname=worker_heavy@%h
@@ -785,13 +788,22 @@ services:
       start_period: 60s
     deploy:
       resources:
+        # P2: right-sized for the 16GB/8vCPU box (was 32G/16cpus, sized for a
+        # hypothetical big box). One heavy SHAP/twin task peaks ~1.3 GiB; 3G with
+        # c=1 leaves graceful-recycle headroom (--max-memory-per-child=2G).
         limits:
-          cpus: '16'
-          memory: 32G
+          cpus: '2'
+          memory: 3G
         reservations:
-          cpus: '8'
-          memory: 16G
-      replicas: 0  # Start with 0, scale on-demand (0-4)
+          cpus: '1'
+          memory: 2G
+      # KEEP replicas: 0 — the heavy-offload feature flag (HEAVY_OFFLOAD_ENABLED)
+      # ships DARK. The 16GB box has NO headroom to run worker_heavy yet (see the
+      # 2026-05-30 droplet memory audit: ~10.5/16GB used + 7GB swap). Enabling the
+      # offload requires scaling this up (replicas>=1) which needs box headroom or
+      # the $48 second box. Until then this stays 0 and the API uses the P1 inline
+      # path regardless of the flag.
+      replicas: 0  # Start with 0, scale on-demand (0-4) — see headroom note above
     depends_on:
       redis:
         condition: service_healthy
