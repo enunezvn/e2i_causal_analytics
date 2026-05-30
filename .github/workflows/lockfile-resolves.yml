@@ -29,6 +29,9 @@ on:
       - 'requirements-ragas.txt'
       - 'requirements-synthetic.txt'
       - 'pyproject.toml'
+      # The two ./patches/ packages install --no-deps, so a dep added to a patch
+      # without regenerating the lock must re-run the patch-dependency guard.
+      - 'patches/**'
       - 'tests/test_lockfile_resolves.py'
       - 'tests/test_requirements_lock.py'
       - '.github/workflows/lockfile-resolves.yml'
@@ -41,6 +44,9 @@ on:
       - 'requirements-ragas.txt'
       - 'requirements-synthetic.txt'
       - 'pyproject.toml'
+      # The two ./patches/ packages install --no-deps, so a dep added to a patch
+      # without regenerating the lock must re-run the patch-dependency guard.
+      - 'patches/**'
       - 'tests/test_lockfile_resolves.py'
       - 'tests/test_requirements_lock.py'
       - '.github/workflows/lockfile-resolves.yml'
@@ -105,6 +111,23 @@ jobs:
         # isn't installed in this lightweight workflow.
         run: |
           pytest tests/test_lockfile_resolves.py \
+            -v \
+            --noconftest \
+            -m "slow and integration" \
+            --override-ini="addopts=" \
+            --no-header
+
+      - name: Faithful --require-hashes install (manual dispatch only)
+        # The full per-artifact hash VERIFICATION downloads the entire locked
+        # CUDA closure (torch + nvidia-cu12, multi-GB), so it is too heavy and
+        # flake-prone for every PR. It is reachable here as a pre-merge faithful
+        # gate a maintainer can invoke on demand (e.g. after regenerating the
+        # lock), and it runs AUTOMATICALLY at every deploy via the Dockerfile's
+        # `pip install --require-hashes -r requirements.lock` build step (the
+        # faithful target environment). Set `workflow_dispatch` to run it.
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          pytest tests/test_requirements_lock.py \
             -v \
             --noconftest \
             -m "slow and integration" \

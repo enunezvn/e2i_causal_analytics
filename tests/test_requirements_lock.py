@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import tomllib
 import venv
 from pathlib import Path
 
@@ -61,6 +62,57 @@ MLFLOW_PACKAGES = {"mlflow", "mlflow-skinny", "mlflow-tracing"}
 
 _REQ_RE = re.compile(r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)==(?P<ver>[^\s;\\]+)")
 _HASH_RE = re.compile(r"^--hash=")
+
+# The local patch packages live here and declare their runtime deps in a Poetry
+# pyproject.toml. The Dockerfile installs them with --no-deps, so a dep a patch
+# adds without regenerating the lock would NOT fail the build — it would fail
+# silently at import time. These guards (test_lock_covers_patch_package_dependencies)
+# assert every dep a patch actually installs is present in the lock at a
+# satisfying version. INSTALLED_PATCH_EXTRAS records which Poetry extras the
+# Dockerfile requests: ag-ui-langgraph is installed as `[fastapi]`, copilotkit
+# with NO extra (its `crewai` optional dep is therefore not installed and not
+# expected in the lock).
+PATCH_DIRS = {
+    canonicalize_name("ag-ui-langgraph"): REPO_ROOT / "patches" / "ag-ui-langgraph",
+    canonicalize_name("copilotkit"): REPO_ROOT / "patches" / "copilotkit",
+}
+INSTALLED_PATCH_EXTRAS = {
+    canonicalize_name("ag-ui-langgraph"): {"fastapi"},
+    canonicalize_name("copilotkit"): set(),
+}
+
+
+def _caret_to_specifier(version: str) -> str:
+    """Convert a Poetry caret constraint body (e.g. ``0.1.10``) to a PEP 440
+    range. Caret allows changes that do not modify the left-most non-zero
+    component: ``^1.2.3`` -> ``>=1.2.3,<2.0.0``; ``^0.1.10`` -> ``>=0.1.10,<0.2.0``;
+    ``^0.0.3`` -> ``>=0.0.3,<0.0.4``."""
+    parts = [int(x) for x in version.split(".")]
+    parts += [0] * (3 - len(parts))
+    major, minor, patch = parts[0], parts[1], parts[2]
+    if major > 0:
+        upper = f"{major + 1}.0.0"
+    elif minor > 0:
+        upper = f"0.{minor + 1}.0"
+    else:
+        upper = f"0.0.{patch + 1}"
+    return f">={version},<{upper}"
+
+
+def _poetry_constraint_to_specifierset(constraint: str) -> SpecifierSet:
+    """Translate the subset of Poetry version syntax the patches actually use
+    (caret ``^``, and PEP 440 operators ``>= <= == != > <``, comma-joined) into a
+    ``packaging`` SpecifierSet. Raises on any unhandled form so the guard fails
+    loudly rather than silently passing an unparseable constraint."""
+    pieces = []
+    for part in (p.strip() for p in constraint.split(",")):
+        if part.startswith("^"):
+            pieces.append(_caret_to_specifier(part[1:]))
+        elif part.startswith((">=", "<=", "==", "!=", "~=", ">", "<")):
+            pieces.append(part)
+        else:
+            raise ValueError(f"unhandled Poetry version constraint: {constraint!r}")
+    return SpecifierSet(",".join(pieces))
 
 
 def _parse_lock(text: str) -> tuple[dict[str, dict], list[str]]:
@@ -177,8 +229,91 @@ def test_lock_covers_every_requirements_txt_pin() -> None:
     )
 
 
+def test_lock_covers_patch_package_dependencies() -> None:
+    """Every dep the two ./patches/ packages actually install must be present in
+    requirements.lock at a satisfying version.
+
+    The Dockerfile installs the patches with ``--no-deps`` (their deps are meant
+    to be satisfied by the hash-locked closure), so a dep a patch adds WITHOUT a
+    lock regeneration would not fail the image build — it would surface only as a
+    runtime ImportError. This guard closes that gap (the exact transitive-drift
+    class #534 targets) for the patch packages specifically.
+
+    To falsify: add a new dependency (e.g. ``respx = ">=0.20"``) to
+    ``patches/copilotkit/pyproject.toml`` without regenerating the lock — this
+    test then reports ``respx`` ABSENT from requirements.lock.
+
+    Skipped per dep: ``python`` itself, local patch-to-patch deps (copilotkit ->
+    ag-ui-langgraph, installed separately), path deps, and optional deps whose
+    Poetry extra the Dockerfile does not request (copilotkit's ``crewai``).
+    """
+    entries, _ = _parse_lock(REQS_LOCK.read_text())
+    problems: list[str] = []
+
+    for pkg_cname, patch_dir in PATCH_DIRS.items():
+        pyproject = patch_dir / "pyproject.toml"
+        assert pyproject.is_file(), f"missing patch pyproject: {pyproject}"
+        poetry = tomllib.loads(pyproject.read_text())["tool"]["poetry"]
+        deps = poetry.get("dependencies", {})
+        extras = poetry.get("extras", {})
+
+        # Canonical dep names reachable through the extras the Dockerfile requests.
+        installed_extra_deps: set[str] = set()
+        for extra in INSTALLED_PATCH_EXTRAS[pkg_cname]:
+            for dep_name in extras.get(extra, []):
+                installed_extra_deps.add(canonicalize_name(dep_name))
+
+        for name, spec in deps.items():
+            if name == "python":
+                continue
+            cname = canonicalize_name(name)
+            if cname in PATCH_PACKAGES:
+                continue  # local patch-to-patch dep, installed separately --no-deps
+
+            if isinstance(spec, dict):
+                if spec.get("path"):
+                    continue  # local path dependency, not a PyPI artifact to lock
+                optional = bool(spec.get("optional", False))
+                version = spec.get("version")
+            else:
+                optional = False
+                version = spec
+
+            if optional and cname not in installed_extra_deps:
+                continue  # optional dep whose extra the Dockerfile does not install
+
+            if cname not in entries:
+                problems.append(
+                    f"{pkg_cname}: installs '{name}' ({version or 'any'}) but it is "
+                    f"ABSENT from requirements.lock (regenerate the lock)"
+                )
+                continue
+            if version:
+                specset = _poetry_constraint_to_specifierset(str(version))
+                locked = entries[cname]["version"]
+                if locked not in specset:
+                    problems.append(
+                        f"{pkg_cname}: requires '{name}' {version} but the lock pins "
+                        f"{locked} (outside {specset})"
+                    )
+
+    assert not problems, (
+        "patch package dependencies drifted from requirements.lock — the "
+        "--no-deps patch install would fail at import time, not build time:\n"
+        + "\n".join(f"  {p}" for p in problems)
+    )
+
+
+def _dockerfile_flat() -> str:
+    """Dockerfile text with shell line-continuations collapsed, so a
+    ``pip install \\`` + newline + ``-r requirements.txt`` cannot evade a
+    single-line ``[^\\n]*`` regex (otherwise the guard would pass on a
+    multi-line regression)."""
+    return re.sub(r"\\\s*\n\s*", " ", DOCKERFILE.read_text())
+
+
 def test_dockerfile_installs_from_hash_locked_file() -> None:
-    text = DOCKERFILE.read_text()
+    text = _dockerfile_flat()
     # The two image-building stages (dependencies + development) must each
     # install the hash-locked closure, not the loose requirements.txt.
     assert "requirements.lock" in text, "Dockerfile must reference requirements.lock"
@@ -186,7 +321,8 @@ def test_dockerfile_installs_from_hash_locked_file() -> None:
         "both the `dependencies` and `development` stages must install with "
         "`pip install --require-hashes -r requirements.lock`"
     )
-    # No stage may still install the main closure from requirements.txt.
+    # No stage may still install the main closure from requirements.txt
+    # (matched on the continuation-collapsed text, so a multi-line RUN cannot hide it).
     assert not re.search(r"pip install[^\n]*-r\s+requirements\.txt", text), (
         "Dockerfile still installs from requirements.txt; the hash-locked "
         "requirements.lock must be the dependency source."
@@ -194,7 +330,7 @@ def test_dockerfile_installs_from_hash_locked_file() -> None:
 
 
 def test_dockerfile_installs_patches_no_deps() -> None:
-    text = DOCKERFILE.read_text()
+    text = _dockerfile_flat()
     # Both patch packages install --no-deps (their deps are already in the lock).
     assert text.count("--no-deps") >= 2, (
         "the two local patches must install with --no-deps in both stages"
