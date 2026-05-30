@@ -23,6 +23,11 @@ logger = logging.getLogger(__name__)
 # Track initialization state
 _otel_initialized = False
 _tracer = None
+# Holds the active TracerProvider so a per-worker re-init (gunicorn --preload
+# post_fork) can drop the stale inherited reference before rebuilding. The
+# global TracerProvider is also retrievable via opentelemetry, but tracking it
+# here keeps reinitialize_opentelemetry() self-contained and testable.
+_tracer_provider = None
 
 # Configuration from environment
 OTEL_ENABLED = os.environ.get("OTEL_ENABLED", "true").lower() in ("1", "true", "yes")
@@ -39,7 +44,7 @@ def init_opentelemetry() -> bool:
     Returns:
         True if initialization succeeded, False otherwise
     """
-    global _otel_initialized, _tracer
+    global _otel_initialized, _tracer, _tracer_provider
 
     if _otel_initialized:
         logger.debug("OpenTelemetry already initialized")
@@ -102,6 +107,7 @@ def init_opentelemetry() -> bool:
 
         # Set as global tracer provider
         trace.set_tracer_provider(provider)
+        _tracer_provider = provider
 
         # Configure propagators (W3C Trace Context + Baggage)
         propagator = CompositeHTTPPropagator(
@@ -205,6 +211,42 @@ def get_tracer(name: str = __name__):
         return trace.get_tracer(name, OTEL_SERVICE_VERSION)
     except ImportError:
         return _NoOpTracer()
+
+
+def reinitialize_opentelemetry(app=None) -> bool:
+    """Force a per-worker rebuild of the OpenTelemetry tracing pipeline.
+
+    ``init_opentelemetry`` is idempotency-guarded by the module global
+    ``_otel_initialized``. Under gunicorn ``--preload`` it runs once in the
+    master, so forked workers inherit ``_otel_initialized=True`` plus a
+    tracer provider whose ``BatchSpanProcessor`` export thread does NOT survive
+    ``fork``. A naive re-call would short-circuit, leaving the worker with no
+    live exporter.
+
+    This resets the guard and clears the inherited (stale) provider/tracer
+    references, then re-calls :func:`init_opentelemetry` so each worker builds
+    its own provider with a live export thread. It is a no-op when OTEL is
+    disabled. Intended to be called from the gunicorn ``post_fork`` hook.
+
+    Args:
+        app: Unused placeholder for symmetry with init_opentelemetry callers.
+
+    Returns:
+        True if re-initialization ran, False if OTEL is disabled.
+    """
+    global _otel_initialized, _tracer, _tracer_provider
+
+    if not OTEL_ENABLED:
+        return False
+
+    # Drop the inherited references WITHOUT calling provider.shutdown(): the
+    # inherited provider's export thread is dead post-fork, so flushing it could
+    # block or error. We simply abandon it and rebuild.
+    _otel_initialized = False
+    _tracer = None
+    _tracer_provider = None
+
+    return init_opentelemetry()
 
 
 def shutdown_opentelemetry() -> None:

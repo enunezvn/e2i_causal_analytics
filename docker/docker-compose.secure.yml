@@ -463,6 +463,7 @@ services:
       - ENABLE_HSTS=true
     command: >
       gunicorn src.api.main:app
+      --config /app/config/gunicorn.conf.py
       --workers 2
       --worker-class uvicorn.workers.UvicornWorker
       --bind 0.0.0.0:8000

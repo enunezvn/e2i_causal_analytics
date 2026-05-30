@@ -41,6 +41,36 @@ _USE_MOCK_MODELS = os.environ.get("E2I_USE_MOCK_MODELS", "false").lower() == "tr
 _executor = ThreadPoolExecutor(max_workers=4)
 
 
+def reset_executor() -> ThreadPoolExecutor:
+    """Recreate the module-global SHAP thread pool.
+
+    The module-global ``_executor`` is created at import time. Under gunicorn
+    ``--preload`` the app is imported once in the master process; worker
+    processes are then ``fork``-ed, and POSIX ``fork`` does not copy threads —
+    so the inherited ``_executor`` is dead in every worker (its worker threads
+    do not exist in the child). This must be called from the gunicorn
+    ``post_fork`` hook so each worker gets a live, usable pool.
+
+    Shuts down the inherited (dead) pool if present, then rebinds the global to
+    a fresh :class:`~concurrent.futures.ThreadPoolExecutor`. Safe to call
+    repeatedly; the previous pool is always released.
+
+    Returns:
+        The newly created executor (also assigned to the module global).
+    """
+    global _executor
+    old = _executor
+    if old is not None:
+        try:
+            # Do not wait: the inherited pool's threads do not exist post-fork,
+            # so there is nothing to join; this just releases bookkeeping state.
+            old.shutdown(wait=False)
+        except Exception:  # pragma: no cover - defensive, shutdown is best-effort
+            logger.debug("reset_executor: old pool shutdown raised", exc_info=True)
+    _executor = ThreadPoolExecutor(max_workers=4)
+    return _executor
+
+
 class ExplainerType(str, Enum):
     """Supported SHAP explainer types."""
 
