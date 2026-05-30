@@ -661,7 +661,7 @@ services:
       --queues=default,quick,api
       --prefetch-multiplier=2
       --max-tasks-per-child=100
-      --max-memory-per-child=1048576
+      --max-memory-per-child=524288
       --hostname=worker_light@%h
     healthcheck:
       test: ["CMD", "celery", "-A", "src.workers.celery_app", "inspect", "ping"]

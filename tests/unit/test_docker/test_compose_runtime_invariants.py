@@ -243,6 +243,11 @@ MIN_MB_PER_FULL_APP_CHILD = 400
 # budget alone is satisfied (e.g. c=2 @ 800MB passes 400/child but < 905MB peak).
 WORKER_LIGHT_BOOT_PEAK_MB = 905
 
+# Faithful c=2 probe split of the 607 MB idle total: ~300 MB master/shared + ~2x150 MB
+# children. Used to budget --max-memory-per-child so graceful recycle beats the OOM.
+WORKER_MASTER_OVERHEAD_MB = 300
+WORKER_LIGHT_NORMAL_CHILD_MB = 350  # threshold floor: above normal per-child ~180-250MB
+
 
 def _mem_to_mb(value: object) -> float:
     """``"1G"`` / ``"512M"`` / ``1073741824`` -> megabytes."""
@@ -334,15 +339,21 @@ def test_worker_light_recycles_children_before_cgroup_oom():
         cmd = " ".join(str(c) for c in cmd)
     m = re.search(r"--max-memory-per-child[= ](\d+)", cmd)
     assert m, f"worker_light must set --max-memory-per-child (KB); got {cmd!r}"
-    per_child_kb = int(m.group(1))
-    limit_kb = _limit_mb(svc) * 1024
-    assert per_child_kb < limit_kb, (
-        f"--max-memory-per-child ({per_child_kb}KB) must be below the cgroup limit "
-        f"({limit_kb:.0f}KB) so a graceful recycle beats the OOM-killer"
+    per_child_mb = int(m.group(1)) / 1024
+    conc = _worker_concurrency(svc)
+    limit_mb = _limit_mb(svc)
+    # codex F6-R1: worst case is ALL `conc` children at the threshold + master/shared
+    # overhead must still fit the cgroup, so a graceful recycle always precedes the
+    # OOM-killer (a raw "< cgroup limit" check ignores the sibling+master aggregate).
+    worst_case = conc * per_child_mb + WORKER_MASTER_OVERHEAD_MB
+    assert worst_case <= limit_mb, (
+        f"--max-memory-per-child {per_child_mb:.0f}MB x concurrency {conc} + "
+        f"{WORKER_MASTER_OVERHEAD_MB}MB master overhead = {worst_case:.0f}MB exceeds the "
+        f"{limit_mb:.0f}MB cgroup limit — a child could OOM before recycling"
     )
-    assert per_child_kb >= 700 * 1024, (
-        f"--max-memory-per-child ({per_child_kb}KB) must be above normal full-app "
-        "per-child RSS (~607MB idle) to avoid thrash-recycling"
+    assert per_child_mb >= WORKER_LIGHT_NORMAL_CHILD_MB, (
+        f"--max-memory-per-child {per_child_mb:.0f}MB must exceed the normal per-child "
+        f"working set (~{WORKER_LIGHT_NORMAL_CHILD_MB}MB) to avoid thrash-recycling"
     )
 
 
