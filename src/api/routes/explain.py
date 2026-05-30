@@ -834,9 +834,8 @@ async def explain_batch(
     async def process_single(req: ExplainRequest) -> Optional[ExplainResponse]:
         try:
             # The enclosing batch already holds the heavy-compute slot; the inner
-            # explain_prediction reuses it (reuse_if_held=True) rather than each
-            # item contending for a new slot. The slot's contextvar propagates
-            # into the gather() child tasks because they copy the current context.
+            # explain_prediction reuses it (reuse_if_held=True) rather than
+            # contending for a second slot.
             return await explain_prediction(req, background_tasks)
         except HTTPException as e:
             # Mask patient_id in error responses to protect PII
@@ -860,16 +859,12 @@ async def explain_batch(
         )
 
     async with heavy_compute_slot():
-        if request.parallel:
-            results = await asyncio.gather(
-                *[process_single(req) for req in request.requests], return_exceptions=True
-            )
-            explanations = [r for r in results if isinstance(r, ExplainResponse)]
-        else:
-            for req in request.requests:
-                result = await process_single(req)
-                if result:
-                    explanations.append(result)
+        # Sequential on purpose (see docstring): one slot + one SHAP at a time
+        # keeps the batch's peak memory at a single explanation's footprint.
+        for req in request.requests:
+            result = await process_single(req)
+            if result:
+                explanations.append(result)
 
     total_time_ms = (time.time() - start_time) * 1000
 
