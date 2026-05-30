@@ -28,6 +28,7 @@ the smoke depends on, and run with no Docker daemon required.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import yaml
@@ -210,6 +211,109 @@ def test_api_has_nofile_ulimit():
         assert int(nofile.get("hard", 0)) >= 65536, f"nofile hard too low: {nofile}"
     else:
         assert int(nofile) >= 65536, f"nofile too low: {nofile}"
+
+
+# --------------------------------------------------------------------------- #
+# #565 — worker_light OOM-churn: full-app prefork children must fit the cgroup
+# --------------------------------------------------------------------------- #
+# Diagnosed 2026-05-30 on the live droplet. ``celery_app.autodiscover_tasks([...])``
+# finalizes the app in the worker MASTER *before* the prefork pool forks, so every
+# child carries the fully-imported heavy task graph (shap/torch/xgboost/econml/
+# dowhy/statsmodels via src.mlops/src.causal/src.agents/...). The kernel OOM log
+# showed ``constraint=CONSTRAINT_MEMCG`` on the worker_light cgroup killing a
+# ``celery`` child at ~400 MB anon-rss / 1.7 GB VM. worker_light ran
+# ``--concurrency=4`` under a 1 GB limit (256 MB/child budget) → the 4-child
+# working set blew the cgroup → exit 137 → ``restart: unless-stopped`` loop. That
+# also failed the ``inspect ping`` healthcheck, which stranded the scheduler during
+# deploy (``compose up`` exit 1, no rollback). The ``inspect ping`` client itself is
+# light (measured ~51 MB) and is NOT the memory driver — so "lighten the
+# healthcheck" would not have fixed it. A faithful c=2 boot probe of the same image
+# peaked at 905 MB and idled at 607 MB (== worker_medium), confirming c=2 fits.
+WORKER_TIERS = ("worker_light", "worker_medium", "worker_heavy")
+
+# Measured per-child resident set of a full-app-loaded prefork worker (~400 MB
+# anon-rss in the OOM log). A tier's cgroup limit must budget at least this much
+# for EVERY concurrent child, or an all-children spike trips the OOM-killer.
+MIN_MB_PER_FULL_APP_CHILD = 400
+
+
+def _mem_to_mb(value: object) -> float:
+    """``"1G"`` / ``"512M"`` / ``1073741824`` -> megabytes."""
+    s = str(value).strip().upper()
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([KMG]?)B?", s)
+    assert m, f"unparseable memory value {value!r}"
+    num = float(m.group(1))
+    return {"K": num / 1024, "M": num, "G": num * 1024, "": num / (1024 * 1024)}[
+        m.group(2)
+    ]
+
+
+def _worker_concurrency(svc: dict) -> int:
+    cmd = svc.get("command", "")
+    if isinstance(cmd, list):
+        cmd = " ".join(str(c) for c in cmd)
+    m = re.search(r"--concurrency[= ](\d+)", cmd)
+    assert m, f"could not find --concurrency in command: {cmd!r}"
+    return int(m.group(1))
+
+
+def _limit_mb(svc: dict) -> float:
+    limits = ((svc.get("deploy") or {}).get("resources") or {}).get("limits") or {}
+    mem = limits.get("memory")
+    assert mem is not None, "worker must declare deploy.resources.limits.memory"
+    return _mem_to_mb(mem)
+
+
+def test_full_app_worker_memory_budget_covers_every_prefork_child():
+    """#565: each full-app worker tier must budget >= the measured per-child RSS
+    (~400 MB) for EVERY concurrent prefork child, else an all-children memory spike
+    trips the cgroup OOM-killer — which worker_light @ c=4/1G (256 MB/child) did."""
+    services = _services(_load(BASE_COMPOSE))
+    offenders = []
+    for tier in WORKER_TIERS:
+        svc = services.get(tier)
+        assert svc, f"{tier} must exist in the base compose"
+        conc = _worker_concurrency(svc)
+        budget_per_child = _limit_mb(svc) / conc
+        if budget_per_child < MIN_MB_PER_FULL_APP_CHILD:
+            offenders.append(
+                f"{tier}: {_limit_mb(svc):.0f}MB limit / concurrency {conc} = "
+                f"{budget_per_child:.0f}MB per child < {MIN_MB_PER_FULL_APP_CHILD}MB floor"
+            )
+    assert not offenders, (
+        "full-app worker tier(s) under-budget the per-child resident set "
+        "(#565 OOM-churn class): " + "; ".join(offenders)
+    )
+
+
+def test_worker_light_concurrency_fits_its_cgroup():
+    """#565: worker_light's prefork concurrency must be <= 2 so its full-app children
+    fit the cgroup on this memory-starved droplet (was 4 → OOM-churn). worker_medium
+    runs the same image at c=2 stable at ~608 MB; a faithful c=2 boot probe peaked
+    at 905 MB. If the box grows, raise the limit in lockstep (see the per-child
+    budget guard) before raising concurrency."""
+    svc = _services(_load(BASE_COMPOSE)).get("worker_light") or {}
+    conc = _worker_concurrency(svc)
+    assert conc <= 2, (
+        f"worker_light --concurrency must be <= 2 to fit its cgroup; got {conc}"
+    )
+
+
+def test_scheduler_does_not_block_on_worker_light_health():
+    """#565: celery-beat (scheduler) only publishes scheduled tasks to the redis
+    broker — it does NOT require a healthy worker_light. A ``service_healthy`` edge
+    let a flapping worker_light strand the scheduler ('Created') and red the deploy
+    (``compose up`` exit 1, no rollback path). The edge must be ``service_started``
+    (or dropped) so beat is decoupled from worker health."""
+    scheduler = _services(_load(BASE_COMPOSE)).get("scheduler") or {}
+    dep = scheduler.get("depends_on") or {}
+    wl = dep.get("worker_light")
+    cond = wl.get("condition") if isinstance(wl, dict) else ("service_started" if wl is None else None)
+    assert cond != "service_healthy", (
+        "scheduler must NOT depend_on worker_light: service_healthy — beat only needs "
+        "redis; a worker_light health flap would strand the scheduler and red the "
+        f"deploy. Use service_started or drop the edge (got condition={cond!r})."
+    )
 
 
 # --------------------------------------------------------------------------- #
