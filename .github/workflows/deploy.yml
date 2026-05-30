@@ -366,9 +366,17 @@ jobs:
             # build cache). Dangling/cache-only (never -a): no live or tagged image
             # and no running container is touched. Best-effort (|| true) so a prune
             # hiccup never fails an otherwise-successful deploy.
-            echo "==> Post-deploy prune (dangling images + build cache)"
-            docker image prune -f || true
-            docker builder prune -f || true
+            # #565 recurrence fix: old SHA-tagged e2i-{api,frontend,worker,scheduler}
+            # images are NOT dangling, so `docker image prune -f` (no -a) never removed
+            # them and they accumulated every deploy (~33×19.4GB orphaned images by
+            # 2026-05-29). `-a` removes images with NO associated container in ANY state,
+            # so opik (intentionally stopped — its containers still exist) and every
+            # active sidecar are protected; only truly-orphaned old-SHA images are
+            # reclaimed. The rollback path rebuilds/repulls from source and runs BEFORE
+            # this step, so dropping old SHA images cannot break a rollback.
+            echo "==> Post-deploy prune (unreferenced images + full build cache)"
+            docker image prune -a -f || true
+            docker builder prune -a -f || true
 
       - name: Deployment summary
         if: always()
