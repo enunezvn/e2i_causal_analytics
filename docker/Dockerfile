@@ -179,6 +179,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 # tripping the 5G api cgroup. Paired with the per-worker heavy-compute slot in
 # src/api/dependencies/compute.py.
 CMD ["gunicorn", "src.api.main:app", \
+     "--config", "/app/config/gunicorn.conf.py", \
      "--workers", "2", \
      "--worker-class", "uvicorn.workers.UvicornWorker", \
      "--bind", "0.0.0.0:8000", \

@@ -118,7 +118,20 @@ try:
     SENTRY_ENVIRONMENT = os.environ.get("ENVIRONMENT", "development")
     SENTRY_RELEASE = os.environ.get("SENTRY_RELEASE", "e2i-causal-analytics@4.2.0")
 
-    if SENTRY_DSN:
+    def configure_sentry() -> bool:
+        """Initialize the Sentry SDK from env, gated on SENTRY_DSN.
+
+        Factored out of the module-import path so it can be re-called per worker
+        from the gunicorn ``post_fork`` hook under ``--preload``: ``sentry_sdk``
+        spins up a background transport thread that does not survive ``fork``, so
+        a forked worker needs a fresh transport. Returns True if Sentry was
+        initialized, False when disabled (no DSN) or the SDK is unavailable.
+        """
+        if sentry_sdk is None:
+            return False
+        if not SENTRY_DSN:
+            logger.info("Sentry: DISABLED (SENTRY_DSN not set)")
+            return False
         sentry_sdk.init(
             dsn=SENTRY_DSN,
             environment=SENTRY_ENVIRONMENT,
@@ -148,12 +161,18 @@ try:
             attach_stacktrace=True,
         )
         logger.info(f"Sentry: ENABLED (env={SENTRY_ENVIRONMENT}, release={SENTRY_RELEASE})")
-    else:
-        logger.info("Sentry: DISABLED (SENTRY_DSN not set)")
+        return True
+
+    configure_sentry()
+    if not SENTRY_DSN:
         sentry_sdk = None  # type: ignore[assignment]
 except ImportError:
     logger.warning("Sentry: sentry-sdk not installed, error tracking disabled")
     sentry_sdk = None  # type: ignore[assignment]
+
+    def configure_sentry() -> bool:  # type: ignore[misc]
+        """No-op Sentry config: sentry-sdk is not installed."""
+        return False
 
 # =============================================================================
 # OPENTELEMETRY INITIALIZATION

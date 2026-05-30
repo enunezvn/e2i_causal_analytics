@@ -680,51 +680,47 @@ def test_dockerfile_cmd_uses_two_workers():
 GUNICORN_CONF_FLAG = "--config /app/config/gunicorn.conf.py"
 
 
-def test_api_command_uses_gunicorn_config(compose_config: dict) -> None:
-    """API command must pass --config /app/config/gunicorn.conf.py."""
-    command = _api_command_string(compose_config)
+def test_api_command_uses_gunicorn_config_base_compose() -> None:
+    """API command must pass --config /app/config/gunicorn.conf.py (base compose)."""
+    command = _api_command_str(BASE_COMPOSE)
     assert GUNICORN_CONF_FLAG in command, (
-        f"Expected '{GUNICORN_CONF_FLAG}' in API command, got: {command}"
+        f"Expected '{GUNICORN_CONF_FLAG}' in API command, got: {command!r}"
     )
 
 
-def test_api_command_uses_gunicorn_config_secure(
-    compose_secure_config: dict,
-) -> None:
+def test_api_command_uses_gunicorn_config_secure_compose() -> None:
     """Secure compose API command must pass --config /app/config/gunicorn.conf.py."""
-    command = _api_command_string_secure(compose_secure_config)
+    command = _api_command_str(SECURE_COMPOSE)
     assert GUNICORN_CONF_FLAG in command, (
-        f"Expected '{GUNICORN_CONF_FLAG}' in secure API command, got: {command}"
+        f"Expected '{GUNICORN_CONF_FLAG}' in secure API command, got: {command!r}"
     )
 
 
 def test_dockerfile_cmd_uses_gunicorn_config() -> None:
     """Dockerfile baked CMD must pass the gunicorn --config path."""
-    content = _read(DOCKERFILE)
+    content = DOCKERFILE.read_text()
     assert '"--config", "/app/config/gunicorn.conf.py"' in content, (
         'Expected \'"--config", "/app/config/gunicorn.conf.py"\' in Dockerfile CMD'
     )
 
 
-def test_api_command_preserves_workers_2_with_config(compose_config: dict) -> None:
+def test_api_command_preserves_workers_2_with_config_base() -> None:
     """--workers 2 must remain (config does not set workers; CLI owns it)."""
-    command = _api_command_string(compose_config)
-    assert "--workers 2" in command, (
-        f"Expected '--workers 2' preserved alongside --config, got: {command}"
+    command = _api_command_str(BASE_COMPOSE)
+    assert re.search(r"--workers\s+2\b", command), (
+        f"Expected '--workers 2' preserved alongside --config, got: {command!r}"
     )
 
 
-def test_api_command_preserves_workers_2_with_config_secure(
-    compose_secure_config: dict,
-) -> None:
-    command = _api_command_string_secure(compose_secure_config)
-    assert "--workers 2" in command, (
-        f"Expected '--workers 2' preserved in secure command, got: {command}"
+def test_api_command_preserves_workers_2_with_config_secure() -> None:
+    command = _api_command_str(SECURE_COMPOSE)
+    assert re.search(r"--workers\s+2\b", command), (
+        f"Expected '--workers 2' preserved in secure command, got: {command!r}"
     )
 
 
 def test_dockerfile_cmd_preserves_workers_2_with_config() -> None:
-    content = _read(DOCKERFILE)
+    content = DOCKERFILE.read_text()
     assert '"--workers", "2"' in content, (
         'Expected \'"--workers", "2"\' preserved in Dockerfile CMD'
     )
@@ -732,9 +728,13 @@ def test_dockerfile_cmd_preserves_workers_2_with_config() -> None:
 
 def test_dockerfile_copies_config_for_gunicorn_conf() -> None:
     """Production stage must COPY config/ so the gunicorn conf is baked in."""
-    content = _read(DOCKERFILE)
-    assert "COPY config/" in content, (
-        "Dockerfile must COPY config/ so config/gunicorn.conf.py lands in the image"
+    text = DOCKERFILE.read_text()
+    prod_split = text.split("AS production", 1)
+    assert len(prod_split) == 2, "Dockerfile has no `AS production` stage"
+    prod_region = prod_split[1]
+    assert "COPY config/" in prod_region, (
+        "production stage must COPY config/ so config/gunicorn.conf.py lands in "
+        "the read-only image (the --config path points into it)"
     )
 
 
