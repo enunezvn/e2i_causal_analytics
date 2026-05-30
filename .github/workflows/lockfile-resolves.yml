@@ -9,29 +9,40 @@ name: Lockfile Resolves
 # only included requirements.txt.
 #
 # Triggered when any requirements file or pyproject.toml changes. The
-# single test executes ``pip install --dry-run`` in a fresh tempdir
+# resolver test executes ``pip install --dry-run`` in a fresh tempdir
 # venv and asserts exit-0. Cold metadata fetch is ~60-180s.
+#
+# Also runs the #534 hash-pinned ``requirements.lock`` static guards
+# (tests/test_requirements_lock.py): fast, network-free checks that every
+# lock entry is hashed, mlflow stays pinned within its CVE range, no pin
+# drifts from requirements.txt, and the Dockerfile installs from the lock
+# under --require-hashes. The slow per-artifact hash verification downloads
+# the full CUDA closure and is left to the deploy-time image build.
 
 on:
   pull_request:
     branches: [main, develop]
     paths:
       - 'requirements.txt'
+      - 'requirements.lock'
       - 'requirements-dev.txt'
       - 'requirements-ragas.txt'
       - 'requirements-synthetic.txt'
       - 'pyproject.toml'
       - 'tests/test_lockfile_resolves.py'
+      - 'tests/test_requirements_lock.py'
       - '.github/workflows/lockfile-resolves.yml'
   push:
     branches: [main, develop]
     paths:
       - 'requirements.txt'
+      - 'requirements.lock'
       - 'requirements-dev.txt'
       - 'requirements-ragas.txt'
       - 'requirements-synthetic.txt'
       - 'pyproject.toml'
       - 'tests/test_lockfile_resolves.py'
+      - 'tests/test_requirements_lock.py'
       - '.github/workflows/lockfile-resolves.yml'
   workflow_dispatch: {}
 
@@ -64,7 +75,28 @@ jobs:
         # poisoned wheel caches from leaking into the workflow runner.
         run: |
           python -m pip install --isolated --no-cache-dir --upgrade pip
-          python -m pip install --isolated --no-cache-dir pytest==9.0.2 pytest-timeout
+          python -m pip install --isolated --no-cache-dir pytest==9.0.2 pytest-timeout packaging
+
+      - name: Run requirements.lock static guards (#534)
+        # Fast, network-free forcing functions for the hash-pinned
+        # requirements.lock: every entry hashed + no bare-path/editable/URL
+        # lines (the --require-hashes precondition), mlflow pinned to a single
+        # concrete version WITHIN its CVE-anchored range, no version drift from
+        # requirements.txt's exact pins, the local patch packages excluded, and
+        # the Dockerfile/.dockerignore wired to the lock. ``-m "not slow"``
+        # deselects the companion --require-hashes install test, which downloads
+        # the full CUDA closure (torch + nvidia-cu12, multi-GB) — that
+        # per-artifact hash VERIFICATION is exercised faithfully at image-build
+        # time by the Dockerfile's `pip install --require-hashes -r
+        # requirements.lock` on every deploy (the faithful target environment).
+        # Same --noconftest rationale as the resolver step below.
+        run: |
+          pytest tests/test_requirements_lock.py \
+            -v \
+            --noconftest \
+            -m "not slow" \
+            --override-ini="addopts=" \
+            --no-header
 
       - name: Run resolver test
         # ``--noconftest`` skips loading tests/conftest.py — the resolver
