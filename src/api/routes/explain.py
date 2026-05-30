@@ -37,6 +37,12 @@ from src.repositories.shap_analysis import ShapAnalysisRepository, get_shap_anal
 
 logger = logging.getLogger(__name__)
 
+# P2 offload: max seconds the synchronous SHAP endpoints wait for the
+# worker_heavy task before returning 408. Kept just under the frontend's 30s
+# axios timeout (frontend/src/lib/api-client.ts) so the client gets a clean 408.
+# Only consulted when HEAVY_OFFLOAD_ENABLED is set; the inline path is unaffected.
+_SHAP_OFFLOAD_TIMEOUT_SECONDS = 28.0
+
 router = APIRouter(
     prefix="/explain",
     tags=["Model Interpretability"],
@@ -515,25 +521,66 @@ class RealTimeSHAPService:
         Uses TreeExplainer for tree-based models (fast),
         KernelExplainer for others (slower).
         """
+        from src.api.dependencies.compute import (
+            await_celery_result,
+            heavy_offload_enabled,
+        )
+
         await self._ensure_initialized()
 
         # Prepare numeric features
         numeric_features = self._prepare_numeric_features(features)
 
         try:
-            # Use real SHAP explainer
-            shap_result: SHAPResult = await self.shap_explainer.compute_shap_values(
-                features=numeric_features,
-                model_type=model_type.value,
-                model_version_id=model_version_id,
-                top_k=top_k,
-            )
+            # Normalize the SHAP compute to four locals so the inline path and the
+            # P2 offload path produce an IDENTICAL response shape downstream.
+            if heavy_offload_enabled():
+                # P2 offload path (DARK by default): run the heavy SHAP compute on
+                # worker_heavy. Feature fetch / prediction / audit stay on the API
+                # (light + request-scoped); only the explainer call moves. The task
+                # runs the SAME explainer via src.mlops.shap_runner and returns a
+                # JSON dict, so the contributions built below are identical.
+                from src.tasks.heavy_offload_tasks import compute_shap_values
 
-            # Convert SHAPResult to API response format
+                payload = {
+                    "features": numeric_features,
+                    "model_type": model_type.value,
+                    "model_version_id": model_version_id,
+                    "top_k": top_k,
+                }
+                async_result = compute_shap_values.apply_async(args=[payload], queue="shap")
+                try:
+                    shap_dict = await await_celery_result(
+                        async_result, timeout=_SHAP_OFFLOAD_TIMEOUT_SECONDS
+                    )
+                except TimeoutError:
+                    raise HTTPException(
+                        status_code=408,
+                        detail="SHAP computation timed out; retry shortly.",
+                    )
+                shap_values_map: Dict[str, float] = shap_dict["shap_values"]
+                base_value = shap_dict["base_value"]
+                explainer_type_str = shap_dict["explainer_type"]
+                computation_time_ms = shap_dict["computation_time_ms"]
+            else:
+                # P1 inline path (default + fallback): use the real SHAP explainer
+                # in-process (it offloads the CPU-bound math to its own thread pool).
+                shap_result: SHAPResult = await self.shap_explainer.compute_shap_values(
+                    features=numeric_features,
+                    model_type=model_type.value,
+                    model_version_id=model_version_id,
+                    top_k=top_k,
+                )
+                shap_values_map = shap_result.shap_values
+                base_value = shap_result.base_value
+                explainer_type_str = shap_result.explainer_type.value
+                computation_time_ms = shap_result.computation_time_ms
+
+            # Convert to API response format (identical for both paths)
             contributions = []
-            sorted_shap = sorted(
-                shap_result.shap_values.items(), key=lambda x: abs(x[1]), reverse=True
-            )[:top_k]
+            sorted_shap = sorted(shap_values_map.items(), key=lambda x: abs(x[1]), reverse=True)[
+                :top_k
+            ]
 
             for rank, (feature_name, shap_value) in enumerate(sorted_shap, 1):
                 # Map back to original feature value
@@ -549,13 +596,16 @@ class RealTimeSHAPService:
                 )
 
             return {
-                "base_value": shap_result.base_value,
+                "base_value": base_value,
                 "contributions": contributions,
-                "shap_sum": sum(shap_result.shap_values.values()),
-                "explainer_type": shap_result.explainer_type.value,
-                "computation_time_ms": shap_result.computation_time_ms,
+                "shap_sum": sum(shap_values_map.values()),
+                "explainer_type": explainer_type_str,
+                "computation_time_ms": computation_time_ms,
             }
 
+        except HTTPException:
+            # 408 offload timeout must propagate as-is (other failures -> 500 below).
+            raise
         except Exception as e:
             logger.error(f"SHAP computation failed: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail=f"SHAP computation failed: {str(e)}")

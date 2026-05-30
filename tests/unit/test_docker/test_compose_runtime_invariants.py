@@ -742,3 +742,73 @@ def test_gunicorn_conf_file_committed() -> None:
     """The gunicorn config the --config flag points at must exist in the repo."""
     conf = REPO_ROOT / "config" / "gunicorn.conf.py"
     assert conf.is_file(), f"missing {conf}"
+
+def test_worker_heavy_stays_replicas_zero():
+    """worker_heavy must remain replicas: 0 — the P2 offload is dark and the box
+    has no headroom to run a heavy worker yet. Enabling it is a deliberate scale-up
+    decision, not a silent default."""
+    svc = _worker_heavy()
+    replicas = (svc.get("deploy") or {}).get("replicas")
+    assert replicas == 0, f"worker_heavy must stay replicas: 0 (P2 dark default); got {replicas!r}"
+
+def test_worker_heavy_is_right_sized_for_the_16gb_box():
+    """worker_heavy must be right-sized for the 16GB box (was 32G/16cpus). A single
+    heavy SHAP/twin task peaks ~1.3 GiB; the limit must be modest so a future
+    accidental replicas>0 cannot reserve a box-sinking 32G."""
+    svc = _worker_heavy()
+    limit_mb = _limit_mb(svc)
+    assert limit_mb <= P2_WORKER_HEAVY_MAX_MEMORY_MB, (
+        f"worker_heavy memory limit {limit_mb:.0f}MB must be <= "
+        f"{P2_WORKER_HEAVY_MAX_MEMORY_MB}MB for the 16GB box (was 32G)"
+    )
+    # Per-child budget guard (shared with the #565 floor) must still hold.
+    conc = _worker_concurrency(svc)
+    assert conc <= P2_WORKER_HEAVY_MAX_CONCURRENCY, (
+        f"worker_heavy --concurrency must be <= {P2_WORKER_HEAVY_MAX_CONCURRENCY} "
+        f"on the 16GB box; got {conc}"
+    )
+    assert limit_mb / conc >= MIN_MB_PER_FULL_APP_CHILD, (
+        f"worker_heavy {limit_mb:.0f}MB / concurrency {conc} = {limit_mb / conc:.0f}MB "
+        f"per child < {MIN_MB_PER_FULL_APP_CHILD}MB floor"
+    )
+
+def test_worker_heavy_still_consumes_the_heavy_queues():
+    """Right-sizing must not drop the queues the offload tasks route to
+    (shap/twins) — else enqueued tasks would never be consumed."""
+    svc = _worker_heavy()
+    cmd = svc.get("command", "")
+    if isinstance(cmd, list):
+        cmd = " ".join(str(c) for c in cmd)
+    m = re.search(r"--queues[= ](\S+)", cmd)
+    assert m, f"worker_heavy must declare --queues; got {cmd!r}"
+    queues = set(m.group(1).split(","))
+    assert {"shap", "twins"} <= queues, (
+        f"worker_heavy must consume the shap + twins queues (P2 offload targets); got {queues}"
+    )
+
+def test_heavy_offload_flag_not_baked_on_in_any_compose():
+    """HEAVY_OFFLOAD_ENABLED must NOT be set truthy in any compose env — the
+    offload ships DARK; enabling it is an explicit ops action, not a baked default."""
+    truthy = {"1", "true", "yes", "on"}
+    offenders = []
+    for label, compose in (
+        ("base", BASE_COMPOSE),
+        ("dev", DEV_COMPOSE),
+        ("secure", SECURE_COMPOSE),
+    ):
+        for name, svc in _services(_load(compose)).items():
+            env = svc.get("environment")
+            if env is None:
+                continue
+            if isinstance(env, dict):
+                val = env.get("HEAVY_OFFLOAD_ENABLED")
+            else:  # list-style "KEY=VALUE"
+                val = None
+                for entry in env:
+                    if str(entry).startswith("HEAVY_OFFLOAD_ENABLED="):
+                        val = str(entry).split("=", 1)[1]
+            if val is not None and str(val).strip().lower() in truthy:
+                offenders.append(f"{label}:{name}={val}")
+    assert not offenders, (
+        "HEAVY_OFFLOAD_ENABLED is baked truthy (P2 must ship dark) in: " + ", ".join(offenders)
+    )
