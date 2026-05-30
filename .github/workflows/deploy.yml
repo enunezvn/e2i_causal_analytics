@@ -196,10 +196,14 @@ jobs:
             echo "==> Pre-deploy SHA: ${PREV_SHA:0:7}"
 
             # Hard-sync to origin/main — droplet is a deploy target, not a dev box.
-            # Abort if there are uncommitted changes (someone is hot-patching live).
-            if [ -n "$(git status --porcelain)" ]; then
-              echo "ERROR: droplet has uncommitted changes; refusing to reset --hard"
-              git status --short
+            # Abort only if a TRACKED file was hot-patched live: that is the change
+            # `git reset --hard` would silently clobber, so refusing protects it.
+            # Untracked files (-uno excludes them) are NOT touched by reset --hard,
+            # so they must not block the deploy — an ops scratch file left in the
+            # checkout (e.g. an audit script) previously aborted every deploy here.
+            if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+              echo "ERROR: droplet has uncommitted changes to tracked files; refusing to reset --hard"
+              git status --short --untracked-files=no
               exit 1
             fi
             git fetch origin main
