@@ -124,7 +124,7 @@ async def test_simulate_inline_path_does_not_enqueue_when_flag_off(monkeypatch):
         patch("src.digital_twin.twin_generator.TwinGenerator") as mock_gen,
         patch("src.digital_twin.simulation_engine.SimulationEngine") as mock_engine,
         patch("src.digital_twin.twin_repository.TwinRepository") as mock_repo,
-        patch("src.tasks.heavy_offload_tasks.simulate_population.apply_async") as mock_apply,
+        patch("src.workers.celery_app.celery_app.send_task") as mock_apply,
     ):
         gen_instance = MagicMock()
         gen_instance.model_id = uuid4()
@@ -168,7 +168,7 @@ async def test_simulate_offload_path_enqueues_and_builds_same_response(
         patch("src.digital_twin.simulation_engine.SimulationEngine") as mock_engine,
         patch("src.digital_twin.twin_repository.TwinRepository") as mock_repo,
         patch(
-            "src.tasks.heavy_offload_tasks.simulate_population.apply_async",
+            "src.workers.celery_app.celery_app.send_task",
             return_value=fake_async,
         ) as mock_apply,
     ):
@@ -183,6 +183,9 @@ async def test_simulate_offload_path_enqueues_and_builds_same_response(
         result = await run_simulation(_twin_request(), {"role": "operator"})
 
     mock_apply.assert_called_once()
+    # FIX 2: enqueued by registered task NAME via send_task (NOT a task-object
+    # import, which would pull sklearn into the API process via src.tasks.__init__)
+    assert mock_apply.call_args.args[0] == "src.tasks.simulate_population"
     # routed to the twins queue
     assert mock_apply.call_args.kwargs.get("queue") == "twins"
     # inline heavy compute must NOT have run on the offload path
@@ -212,7 +215,7 @@ async def test_simulate_offload_timeout_returns_408(monkeypatch, _no_eager_celer
         patch("src.digital_twin.simulation_engine.SimulationEngine"),
         patch("src.digital_twin.twin_repository.TwinRepository"),
         patch(
-            "src.tasks.heavy_offload_tasks.simulate_population.apply_async",
+            "src.workers.celery_app.celery_app.send_task",
             return_value=fake_async,
         ),
         patch.object(dt_mod, "_OFFLOAD_TIMEOUT_SECONDS", 0.05),
@@ -262,7 +265,7 @@ async def test_compute_shap_inline_when_flag_off(monkeypatch):
 
     svc, explainer = _shap_service()
 
-    with patch("src.tasks.heavy_offload_tasks.compute_shap_values.apply_async") as mock_apply:
+    with patch("src.workers.celery_app.celery_app.send_task") as mock_apply:
         out = await svc.compute_shap(
             features={"f1": 1.0, "f2": 2.0},
             model_type=ModelType.PROPENSITY,
@@ -298,7 +301,7 @@ async def test_compute_shap_offload_enqueues_and_same_shape(monkeypatch, _no_eag
     }
 
     with patch(
-        "src.tasks.heavy_offload_tasks.compute_shap_values.apply_async",
+        "src.workers.celery_app.celery_app.send_task",
         return_value=fake_async,
     ) as mock_apply:
         out = await svc.compute_shap(
@@ -309,6 +312,9 @@ async def test_compute_shap_offload_enqueues_and_same_shape(monkeypatch, _no_eag
         )
 
     mock_apply.assert_called_once()
+    # FIX 2: enqueued by registered task NAME via send_task (NOT a task-object
+    # import, which would pull sklearn into the API process via src.tasks.__init__)
+    assert mock_apply.call_args.args[0] == "src.tasks.compute_shap_values"
     assert mock_apply.call_args.kwargs.get("queue") == "shap"
     explainer.compute_shap_values.assert_not_awaited()  # offloaded, not inline
     # SAME response shape as inline
@@ -332,7 +338,7 @@ async def test_compute_shap_offload_timeout_returns_408(monkeypatch, _no_eager_c
 
     with (
         patch(
-            "src.tasks.heavy_offload_tasks.compute_shap_values.apply_async",
+            "src.workers.celery_app.celery_app.send_task",
             return_value=fake_async,
         ),
         patch.object(explain_mod, "_SHAP_OFFLOAD_TIMEOUT_SECONDS", 0.05),
@@ -346,3 +352,192 @@ async def test_compute_shap_offload_timeout_returns_408(monkeypatch, _no_eager_c
             )
 
     assert exc.value.status_code == 408
+
+
+# =============================================================================
+# FIX 2 — routes must NOT import the heavy task package on the offload path.
+# src/tasks/__init__ imports ab_testing_tasks -> TwinGenerator (sklearn); a
+# `from src.tasks.heavy_offload_tasks import ...` would pull heavy ML libs into
+# the API process, defeating P2's memory isolation. The routes must enqueue by
+# registered task NAME via celery_app.send_task instead.
+# =============================================================================
+
+
+def test_explain_route_does_not_import_heavy_task_package():
+    from src.api.routes import explain
+
+    text = open(explain.__file__).read()
+    assert "from src.tasks.heavy_offload_tasks import" not in text, (
+        "explain route must enqueue via celery_app.send_task, not import the heavy task package"
+    )
+    assert "send_task(" in text and "src.tasks.compute_shap_values" in text, (
+        "explain route must enqueue the SHAP task by registered name via send_task"
+    )
+
+
+def test_digital_twin_route_does_not_import_heavy_task_package():
+    from src.api.routes import digital_twin
+
+    text = open(digital_twin.__file__).read()
+    assert "from src.tasks.heavy_offload_tasks import" not in text, (
+        "twin route must enqueue via celery_app.send_task, not import the heavy task package"
+    )
+    assert "send_task(" in text and "src.tasks.simulate_population" in text, (
+        "twin route must enqueue the population task by registered name via send_task"
+    )
+
+
+# =============================================================================
+# FIX 1 + FIX 3 — explain_prediction endpoint behavior.
+#
+# FIX 1: a 408 bubbling up from service.compute_shap (the offload timeout) must
+#        propagate as 408, not be re-wrapped into a generic 500.
+# FIX 3: the reject-fast heavy_compute_slot is held ONLY on the inline
+#        (flag-off / DARK default) path; on the flag-on offload path it must NOT
+#        be held (the heavy SHAP runs on worker_heavy, so holding the API slot
+#        would needlessly 503 concurrent requests).
+# =============================================================================
+
+
+def _explain_service_for_route():
+    """A RealTimeSHAPService whose feature/predict deps are stubbed so the route
+    reaches the compute_shap step."""
+    from src.api.routes.explain import RealTimeSHAPService
+
+    svc = RealTimeSHAPService(
+        bentoml_client=AsyncMock(),
+        shap_explainer=AsyncMock(),
+        shap_repo=MagicMock(),
+        feast_client=AsyncMock(),
+    )
+    svc._initialized = True
+    svc.get_prediction = AsyncMock(
+        return_value={
+            "model_version_id": "v1",
+            "prediction_class": "adopter",
+            "prediction_probability": 0.9,
+        }
+    )
+    return svc
+
+
+def _explain_request():
+    from src.api.routes.explain import ExplainRequest, ModelType
+
+    return ExplainRequest(
+        patient_id="P-1",
+        model_type=ModelType.PROPENSITY,
+        features={"f1": 1.0},
+    )
+
+
+@pytest.mark.asyncio
+async def test_explain_prediction_propagates_408_not_500(monkeypatch):
+    """FIX 1: a 408 raised by service.compute_shap (the offload timeout) must surface from
+    the explain_prediction endpoint as 408, NOT be re-wrapped into a generic 500 by the
+    endpoint's outer ``except Exception`` handler."""
+    from fastapi import BackgroundTasks
+
+    from src.api.routes import explain
+
+    monkeypatch.setenv("HEAVY_OFFLOAD_ENABLED", "true")  # offload path; nullcontext slot
+
+    svc = _explain_service_for_route()
+
+    async def _raise_408(**kwargs):
+        raise HTTPException(status_code=408, detail="SHAP computation timed out; retry shortly.")
+
+    svc.compute_shap = _raise_408
+
+    async def _get_svc():
+        return svc
+
+    monkeypatch.setattr(explain, "get_shap_service", _get_svc)
+
+    with pytest.raises(HTTPException) as exc:
+        await explain.explain_prediction(_explain_request(), BackgroundTasks(), user={"sub": "t"})
+
+    assert exc.value.status_code == 408, "408 offload timeout must propagate, not become 500"
+
+
+def _saturate_slot():
+    import src.api.dependencies.compute as compute
+
+    compute._reset_limiter_cache_for_tests()
+    compute.get_heavy_compute_limiter().acquire()  # consume the single slot
+
+
+@pytest.mark.asyncio
+async def test_explain_prediction_holds_slot_when_flag_off(monkeypatch):
+    """FIX 3 (DARK default): a saturated slot must 503 (HeavyComputeSaturated) here, and
+    the heavy compute_shap must NOT run (the slot rejects before the body)."""
+    from fastapi import BackgroundTasks
+
+    from src.api.dependencies.compute import HeavyComputeSaturated
+    from src.api.routes import explain
+
+    monkeypatch.delenv("HEAVY_OFFLOAD_ENABLED", raising=False)
+
+    svc = _explain_service_for_route()
+    compute_shap_ran = {"v": False}
+
+    async def _spy_compute_shap(**kwargs):
+        compute_shap_ran["v"] = True
+        return {}
+
+    svc.compute_shap = _spy_compute_shap
+
+    async def _get_svc():
+        return svc
+
+    monkeypatch.setattr(explain, "get_shap_service", _get_svc)
+
+    _saturate_slot()
+
+    with pytest.raises(HeavyComputeSaturated):
+        await explain.explain_prediction(_explain_request(), BackgroundTasks(), user={"sub": "t"})
+
+    assert compute_shap_ran["v"] is False, "the heavy body must not run when the slot rejects"
+
+
+@pytest.mark.asyncio
+async def test_explain_prediction_does_not_require_slot_when_flag_on(monkeypatch):
+    """FIX 3 (flag on): a saturated slot must NOT block; the request reaches the heavy
+    body (compute_shap) because the offload path uses nullcontext, not the slot."""
+    from fastapi import BackgroundTasks
+
+    from src.api.dependencies.compute import HeavyComputeSaturated
+    from src.api.routes import explain
+
+    monkeypatch.setenv("HEAVY_OFFLOAD_ENABLED", "1")
+
+    svc = _explain_service_for_route()
+    compute_shap_ran = {"v": False}
+
+    async def _spy_compute_shap(**kwargs):
+        compute_shap_ran["v"] = True
+        return {
+            "base_value": 0.4,
+            "contributions": [],
+            "shap_sum": 0.0,
+            "explainer_type": "TreeExplainer",
+            "computation_time_ms": 10.0,
+        }
+
+    svc.compute_shap = _spy_compute_shap
+
+    async def _get_svc():
+        return svc
+
+    monkeypatch.setattr(explain, "get_shap_service", _get_svc)
+
+    _saturate_slot()  # slot is full; with the flag on this must be irrelevant
+
+    try:
+        await explain.explain_prediction(_explain_request(), BackgroundTasks(), user={"sub": "t"})
+    except HeavyComputeSaturated:  # pragma: no cover - the regression we guard against
+        raise AssertionError("flag-on offload path must NOT acquire the reject-fast slot")
+    except HTTPException:
+        pass  # response-model shaping may fail on the empty stub; not what we assert here
+
+    assert compute_shap_ran["v"] is True, "flag-on path must reach the heavy body (slot not held)"

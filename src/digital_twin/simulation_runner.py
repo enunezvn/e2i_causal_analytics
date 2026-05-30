@@ -92,7 +92,8 @@ def simulation_result_to_dict(result: "Any") -> Dict[str, Any]:
     Uses pydantic ``model_dump(mode="json")`` so UUIDs/datetimes/enums become
     JSON primitives (the Celery result backend serializer is ``json``).
     """
-    return result.model_dump(mode="json")
+    out: Dict[str, Any] = result.model_dump(mode="json")
+    return out
 
 
 def simulation_result_from_dict(data: Dict[str, Any]) -> "Any":

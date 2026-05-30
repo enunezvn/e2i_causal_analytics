@@ -743,6 +743,22 @@ def test_gunicorn_conf_file_committed() -> None:
     conf = REPO_ROOT / "config" / "gunicorn.conf.py"
     assert conf.is_file(), f"missing {conf}"
 
+
+# P2 worker_heavy right-sizing bounds for the 16GB box (was 32G/16cpus). A single
+# heavy SHAP/twin task peaks ~1.3 GiB; cap the declared limit so a future accidental
+# replicas>0 cannot reserve a box-sinking allocation. Concurrency stays low so each
+# full-app prefork child clears the shared #565 per-child floor (MIN_MB_PER_FULL_APP_CHILD).
+P2_WORKER_HEAVY_MAX_MEMORY_MB = 4096
+P2_WORKER_HEAVY_MAX_CONCURRENCY = 2
+
+
+def _worker_heavy() -> dict:
+    """The base-compose worker_heavy service (the P2 offload target)."""
+    svc = _services(_load(BASE_COMPOSE)).get("worker_heavy")
+    assert svc, "worker_heavy service must exist in the base compose (P2 offload target)"
+    return svc
+
+
 def test_worker_heavy_stays_replicas_zero():
     """worker_heavy must remain replicas: 0 — the P2 offload is dark and the box
     has no headroom to run a heavy worker yet. Enabling it is a deliberate scale-up
@@ -750,6 +766,7 @@ def test_worker_heavy_stays_replicas_zero():
     svc = _worker_heavy()
     replicas = (svc.get("deploy") or {}).get("replicas")
     assert replicas == 0, f"worker_heavy must stay replicas: 0 (P2 dark default); got {replicas!r}"
+
 
 def test_worker_heavy_is_right_sized_for_the_16gb_box():
     """worker_heavy must be right-sized for the 16GB box (was 32G/16cpus). A single
@@ -772,6 +789,7 @@ def test_worker_heavy_is_right_sized_for_the_16gb_box():
         f"per child < {MIN_MB_PER_FULL_APP_CHILD}MB floor"
     )
 
+
 def test_worker_heavy_still_consumes_the_heavy_queues():
     """Right-sizing must not drop the queues the offload tasks route to
     (shap/twins) — else enqueued tasks would never be consumed."""
@@ -785,6 +803,7 @@ def test_worker_heavy_still_consumes_the_heavy_queues():
     assert {"shap", "twins"} <= queues, (
         f"worker_heavy must consume the shap + twins queues (P2 offload targets); got {queues}"
     )
+
 
 def test_heavy_offload_flag_not_baked_on_in_any_compose():
     """HEAVY_OFFLOAD_ENABLED must NOT be set truthy in any compose env — the

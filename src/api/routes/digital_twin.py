@@ -513,8 +513,15 @@ async def run_simulation(
             # compute as the inline path (shared src.digital_twin.simulation_runner)
             # and returns a JSON dict we rebuild into the SAME SimulationResult so
             # the response extraction below is byte-identical across both paths.
+            # simulation_result_from_dict is a light helper (its heavy imports
+            # are function-local), safe to import on the API process.
             from src.digital_twin.simulation_runner import simulation_result_from_dict
-            from src.tasks.heavy_offload_tasks import simulate_population
+
+            # Enqueue by registered task NAME via the existing send_task idiom
+            # (src/workers/celery_app.py) so importing the heavy task package —
+            # which pulls sklearn/ML libs into the API process via
+            # src/tasks/__init__ — is avoided on the offload path.
+            from src.workers.celery_app import celery_app
 
             payload = {
                 "twin_type_value": request.twin_type.value,
@@ -527,7 +534,9 @@ async def run_simulation(
                 "calculate_heterogeneity": request.calculate_heterogeneity,
                 "model_id_value": str(model_id),
             }
-            async_result = simulate_population.apply_async(args=[payload], queue="twins")
+            async_result = celery_app.send_task(
+                "src.tasks.simulate_population", args=[payload], queue="twins"
+            )
             try:
                 result_dict = await await_celery_result(
                     async_result, timeout=_OFFLOAD_TIMEOUT_SECONDS
