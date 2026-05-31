@@ -280,6 +280,7 @@ jobs:
         run: |
           pytest \
             tests/unit/test_causal_engine/ \
+            tests/unit/test_data_preparer/ \
             tests/unit/test_digital_twin/ \
             tests/unit/test_docker/ \
             tests/unit/test_docs/ \
