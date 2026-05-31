@@ -103,11 +103,30 @@ class DataQualityCalculator(KPICalculatorBase):
                 error=str(e),
             )
 
+    # WS1 data-quality metrics where a LOWER value is better, so the threshold
+    # direction must invert (target < warning < critical are "bad" bounds going up):
+    #   DQ-006 geographic gap (dimensionless), DQ-007 data lag (query days / thresholds
+    #   days — unit-consistent).
+    # Declared explicitly (mirrors ModelPerformance/BrandSpecific) because the base
+    # KPICalculatorBase._is_lower_better name-heuristic misses "Geographic
+    # Consistency" (#577). Without this, a gap value was scored higher-is-better —
+    # e.g. the real 0.1049 geographic gap reported GOOD when it is CRITICAL (> 0.10).
+    #
+    # DQ-009 (time-to-release) is ALSO lower-is-better but is deliberately EXCLUDED:
+    # its registered query returns DAYS (avg_ttr_hours/24.0) while kpi_definitions.yaml
+    # configures the thresholds in HOURS (target 24 / warning 48 / critical 72) — a
+    # pre-existing unit mismatch that would make a lower-is-better evaluation falsely
+    # GOOD (2.0 days <= 24). Fixing that requires a unit decision + value change for an
+    # out-of-#577-scope metric, so it is tracked as a follow-up (#580) rather than
+    # side-fixed here. Until then DQ-009 keeps its pre-existing (untouched) evaluation.
+    _LOWER_IS_BETTER_IDS = {"WS1-DQ-006", "WS1-DQ-007"}
+
     def _evaluate_status(self, kpi: KPIMetadata, value: float | None) -> KPIStatus:
-        """Evaluate KPI value against thresholds."""
+        """Evaluate KPI value against thresholds (direction-aware)."""
         if value is None or kpi.threshold is None:
             return KPIStatus.UNKNOWN
-        return kpi.threshold.evaluate(value)
+        lower_is_better = kpi.id in self._LOWER_IS_BETTER_IDS
+        return kpi.threshold.evaluate(value, lower_is_better=lower_is_better)
 
     def _calc_source_coverage_patients(self, context: dict[str, Any]) -> float:
         """Calculate WS1-DQ-001: Source Coverage - Patients.
@@ -123,10 +142,20 @@ class DataQualityCalculator(KPICalculatorBase):
     def _calc_source_coverage_hcps(self, context: dict[str, Any]) -> float:
         """Calculate WS1-DQ-002: Source Coverage - HCPs.
 
-        Formula: covered_hcps / reference_hcps
+        Formula: covered_hcps / reference_universe(universe_type='hcp').target_count
+
+        #577: wired to real data as a GLOBAL coverage ratio. Numerator = distinct
+        HCPs with ``hcp_profiles.coverage_status = true``; denominator =
+        ``SUM(reference_universe.target_count)`` for ``universe_type='hcp'``.
+        No brand param: hcp_profiles has no brand column, so the numerator is not
+        brand-attributable — banding only the denominator by brand would yield an
+        incoherent ratio (global covered HCPs over one brand's universe). Per-brand
+        HCP coverage needs a brand-attributable coverage source (future).
         """
-        context.get("brand")
-        raise RuntimeError("KPI WS1-DQ-002 unavailable: reference_hcps table does not exist (#574)")
+        result = self._execute_query("data_quality_source_coverage_hcps", [])
+        if result and result[0]["total"] > 0:
+            return float(result[0]["covered"] / result[0]["total"])
+        return 0.0
 
     def _calc_cross_source_match(self, context: dict[str, Any]) -> float:
         """Calculate WS1-DQ-003: Cross-source Match Rate.
@@ -161,11 +190,22 @@ class DataQualityCalculator(KPICalculatorBase):
     def _calc_geographic_consistency(self, context: dict[str, Any]) -> float:
         """Calculate WS1-DQ-006: Geographic Consistency.
 
-        Formula: consistent_geo_records / total_geo_records
+        Formula: max_region(|share_source - share_universe|) — the maximum
+        absolute gap between the source's regional distribution and the
+        reference universe's regional distribution (lower is better).
+
+        #577: wired to the authoritative formula (config/kpi_definitions.yaml +
+        docs/data/06-KPI-REFERENCE.md). Source share = patient_journeys by
+        geographic_region; universe share = reference_universe(universe_type=
+        'patient') by region. The pre-#574 stub joined a non-existent
+        agent_activities.hcp_id AND measured region self-consistency (the wrong
+        metric); this implements the documented share-gap instead.
         """
-        raise RuntimeError(
-            "KPI WS1-DQ-006 unavailable: agent_activities has no hcp_id column for the join (#574)"
-        )
+        brand = context.get("brand")
+        result = self._execute_query("data_quality_geographic_consistency", [brand])
+        if result and result[0]["max_gap"] is not None:
+            return float(result[0]["max_gap"])
+        return 0.0
 
     def _calc_data_lag(self, context: dict[str, Any]) -> float:
         """Calculate WS1-DQ-007: Data Lag (Median).
