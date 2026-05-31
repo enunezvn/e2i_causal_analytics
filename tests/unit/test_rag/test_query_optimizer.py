@@ -12,27 +12,16 @@ Tests cover:
 """
 
 import asyncio
-import sys
 import time
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import pytest
 
-# Stub deps ONLY for the import below, then RESTORE sys.modules so these
-# MagicMocks don't leak into co-located test modules under pytest-xdist
-# loadscope (#555). query_optimizer binds its references at import, so it keeps
-# the stubs.
-_STUBBED_MODULES = {"anthropic": MagicMock(), "tenacity": MagicMock()}
-_SAVED_MODULES = {name: sys.modules.get(name) for name in _STUBBED_MODULES}
-sys.modules.update(_STUBBED_MODULES)
-
+# query_optimizer imports cleanly with the real anthropic/tenacity installed;
+# its tests patch at the function level. Stubbing them in sys.modules at import
+# time (without restoring) leaked MagicMocks into co-located test modules under
+# pytest-xdist loadscope (#555). No stubbing needed — import directly.
 from src.rag.query_optimizer import QueryOptimizer
-
-for _name, _orig in _SAVED_MODULES.items():
-    if _orig is not None:
-        sys.modules[_name] = _orig
-    else:
-        sys.modules.pop(_name, None)
 
 # =============================================================================
 # Test Initialization

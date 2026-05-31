@@ -10,19 +10,15 @@ Tests cover:
 - Factory function
 """
 
-import sys
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-# Stub the heavy memory dep ONLY for the import below, then RESTORE sys.modules
-# so the MagicMock doesn't leak into co-located test modules (e.g.
-# tests/unit/test_memory/*) under pytest-xdist loadscope (#555). memory_adapters
-# binds its reference at import, so it keeps the stub.
-_SAVED_PROC = sys.modules.get("src.memory.procedural_memory")
-sys.modules["src.memory.procedural_memory"] = MagicMock()
-
+# memory_adapters imports cleanly without stubbing src.memory.procedural_memory;
+# its tests patch at the adapter level. Stubbing it in sys.modules at import time
+# (without restoring) leaked a MagicMock into co-located test modules under
+# pytest-xdist loadscope (#555). No stubbing needed — import directly.
 from src.rag.memory_adapters import (
     CollectedSignal,
     EpisodicMemoryAdapter,
@@ -35,12 +31,6 @@ from src.rag.memory_adapters import (
     SignalCollectorProtocol,
     create_memory_adapters,
 )
-
-# Restore the real module now that memory_adapters has imported the stub.
-if _SAVED_PROC is not None:
-    sys.modules["src.memory.procedural_memory"] = _SAVED_PROC
-else:
-    sys.modules.pop("src.memory.procedural_memory", None)
 
 # =============================================================================
 # Test Protocols

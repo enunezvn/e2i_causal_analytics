@@ -10,20 +10,18 @@ Tests cover:
 """
 
 import asyncio
-import sys
 import uuid
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-# Stub opik_connector ONLY for the import below, then RESTORE sys.modules so the
-# MagicMock doesn't leak into co-located test modules (e.g.
+# opik_integration imports cleanly without stubbing src.mlops.opik_connector
+# (it resolves the connector lazily via get_opik_connector, which tests patch).
+# Stubbing it in sys.modules at import time (without restoring) leaked a
+# MagicMock into co-located test modules (e.g.
 # tests/unit/test_mlops/test_opik_connector.py) under pytest-xdist loadscope
-# (#555). opik_integration binds its reference at import, so it keeps the stub.
-_SAVED_OPIK = sys.modules.get("src.mlops.opik_connector")
-sys.modules["src.mlops.opik_connector"] = MagicMock()
-
+# (#555). No stubbing needed — import directly.
 from src.rag.opik_integration import (
     CombinedEvaluationResult,
     EvaluationTraceContext,
@@ -31,11 +29,6 @@ from src.rag.opik_integration import (
     log_ragas_scores_to_opik,
     log_rubric_scores_to_opik,
 )
-
-if _SAVED_OPIK is not None:
-    sys.modules["src.mlops.opik_connector"] = _SAVED_OPIK
-else:
-    sys.modules.pop("src.mlops.opik_connector", None)
 
 # =============================================================================
 # Test EvaluationTraceContext

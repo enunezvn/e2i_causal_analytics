@@ -17,25 +17,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-# Stub external deps ONLY for the import below, then RESTORE sys.modules. Leaving
-# these MagicMocks (esp. openai/mlflow, imported widely) in sys.modules leaks
-# them into co-located test modules under pytest-xdist loadscope, breaking their
-# service/embedding mocking (#555). evaluation binds its references at the import
-# below, so it keeps the stubs after sys.modules is restored.
-mock_ragas = MagicMock()
-mock_ragas.__spec__ = MagicMock()  # Fix for importlib.util.find_spec check
-_STUBBED_MODULES = {
-    "ragas": mock_ragas,
-    "ragas.metrics": MagicMock(),
-    "ragas.llms": MagicMock(),
-    "ragas.embeddings": MagicMock(),
-    "datasets": MagicMock(),
-    "openai": MagicMock(),
-    "mlflow": MagicMock(),
-}
-_SAVED_MODULES = {name: sys.modules.get(name) for name in _STUBBED_MODULES}
-sys.modules.update(_STUBBED_MODULES)
-
+# evaluation imports cleanly (it imports ragas/datasets/openai lazily inside
+# _evaluate_with_ragas at runtime, and binds mlflow at module level). Import it
+# directly, and provide the optional deps PER-TEST via the autouse fixture below
+# (monkeypatch) so they exist during this module's tests but never leak into
+# co-located test modules under pytest-xdist loadscope (#555). ragas/datasets are
+# not installed in this environment, so the runtime path needs them stubbed.
 from src.rag.evaluation import (
     DEFAULT_THRESHOLDS,
     EvaluationConfig,
@@ -52,12 +39,20 @@ from src.rag.evaluation import (
     save_evaluation_dataset,
 )
 
-# Restore the real modules now that evaluation has imported the stubs.
-for _name, _orig in _SAVED_MODULES.items():
-    if _orig is not None:
-        sys.modules[_name] = _orig
-    else:
-        sys.modules.pop(_name, None)
+
+@pytest.fixture(autouse=True)
+def _stub_optional_eval_deps(monkeypatch):
+    """Make ragas/datasets/openai importable and mlflow inert for each test in
+    this module, restored automatically after each test so no MagicMock leaks
+    into other test modules under xdist loadscope (#555)."""
+    import src.rag.evaluation as _eval_mod
+
+    ragas_stub = MagicMock()
+    ragas_stub.__spec__ = MagicMock()  # for importlib.util.find_spec checks
+    monkeypatch.setitem(sys.modules, "ragas", ragas_stub)
+    for _name in ("ragas.metrics", "ragas.llms", "ragas.embeddings", "datasets", "openai"):
+        monkeypatch.setitem(sys.modules, _name, MagicMock())
+    monkeypatch.setattr(_eval_mod, "_mlflow", MagicMock(), raising=False)
 
 # =============================================================================
 # Test Data Models

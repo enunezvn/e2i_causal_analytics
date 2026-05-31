@@ -15,13 +15,15 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
-# Stub the heavy memory/connector deps ONLY for the duration of importing the
-# module under test, then RESTORE sys.modules. Leaving these MagicMocks in
-# sys.modules leaks them into co-located test modules (e.g.
-# tests/unit/test_memory/*) under pytest-xdist loadscope, so their import-site
-# patches hit a stub and the real code raises ServiceConnectionError (#555).
-# cognitive_backends binds its references at the import below, so it keeps the
-# stubs even after sys.modules is restored.
+# cognitive_backends's tests need the heavy memory backends mocked, so we stub
+# src.memory.* in sys.modules ONLY for cognitive_backends' own import, then
+# restore. Importing cognitive_backends also runs src.rag.__init__, which EAGERLY
+# imports sibling modules (memory_adapters, insight_enricher, ...) that bind
+# src.memory.* / anthropic at import — so we pre-import src.rag FIRST (with the
+# real deps) to keep those siblings uncontaminated, before stubbing. Nothing
+# leaks into co-located test modules under pytest-xdist loadscope (#555).
+import src.rag  # noqa: F401  -- force src.rag.__init__ to bind real deps before stubbing
+
 _STUBBED_MODULES = [
     "src.memory.episodic_memory",
     "src.memory.procedural_memory",
@@ -40,7 +42,7 @@ from src.rag.cognitive_backends import (
     get_cognitive_memory_backends,
 )
 
-# Restore the real modules now that cognitive_backends has imported the stubs.
+# Restore the real modules now that cognitive_backends has bound the stubs.
 for _name, _orig in _SAVED_MODULES.items():
     if _orig is not None:
         sys.modules[_name] = _orig
