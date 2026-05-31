@@ -17,7 +17,11 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
-# Mock opik connector before import
+# Stub opik_connector ONLY for the import below, then RESTORE sys.modules so the
+# MagicMock doesn't leak into co-located test modules (e.g.
+# tests/unit/test_mlops/test_opik_connector.py) under pytest-xdist loadscope
+# (#555). opik_integration binds its reference at import, so it keeps the stub.
+_SAVED_OPIK = sys.modules.get("src.mlops.opik_connector")
 sys.modules["src.mlops.opik_connector"] = MagicMock()
 
 from src.rag.opik_integration import (
@@ -27,6 +31,11 @@ from src.rag.opik_integration import (
     log_ragas_scores_to_opik,
     log_rubric_scores_to_opik,
 )
+
+if _SAVED_OPIK is not None:
+    sys.modules["src.mlops.opik_connector"] = _SAVED_OPIK
+else:
+    sys.modules.pop("src.mlops.opik_connector", None)
 
 # =============================================================================
 # Test EvaluationTraceContext

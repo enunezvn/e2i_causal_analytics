@@ -18,11 +18,21 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
-# Mock dependencies
-sys.modules["anthropic"] = MagicMock()
-sys.modules["tenacity"] = MagicMock()
+# Stub deps ONLY for the import below, then RESTORE sys.modules so these
+# MagicMocks don't leak into co-located test modules under pytest-xdist
+# loadscope (#555). query_optimizer binds its references at import, so it keeps
+# the stubs.
+_STUBBED_MODULES = {"anthropic": MagicMock(), "tenacity": MagicMock()}
+_SAVED_MODULES = {name: sys.modules.get(name) for name in _STUBBED_MODULES}
+sys.modules.update(_STUBBED_MODULES)
 
 from src.rag.query_optimizer import QueryOptimizer
+
+for _name, _orig in _SAVED_MODULES.items():
+    if _orig is not None:
+        sys.modules[_name] = _orig
+    else:
+        sys.modules.pop(_name, None)
 
 # =============================================================================
 # Test Initialization

@@ -17,16 +17,24 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-# Mock external dependencies before importing evaluation module
+# Stub external deps ONLY for the import below, then RESTORE sys.modules. Leaving
+# these MagicMocks (esp. openai/mlflow, imported widely) in sys.modules leaks
+# them into co-located test modules under pytest-xdist loadscope, breaking their
+# service/embedding mocking (#555). evaluation binds its references at the import
+# below, so it keeps the stubs after sys.modules is restored.
 mock_ragas = MagicMock()
 mock_ragas.__spec__ = MagicMock()  # Fix for importlib.util.find_spec check
-sys.modules["ragas"] = mock_ragas
-sys.modules["ragas.metrics"] = MagicMock()
-sys.modules["ragas.llms"] = MagicMock()
-sys.modules["ragas.embeddings"] = MagicMock()
-sys.modules["datasets"] = MagicMock()
-sys.modules["openai"] = MagicMock()
-sys.modules["mlflow"] = MagicMock()
+_STUBBED_MODULES = {
+    "ragas": mock_ragas,
+    "ragas.metrics": MagicMock(),
+    "ragas.llms": MagicMock(),
+    "ragas.embeddings": MagicMock(),
+    "datasets": MagicMock(),
+    "openai": MagicMock(),
+    "mlflow": MagicMock(),
+}
+_SAVED_MODULES = {name: sys.modules.get(name) for name in _STUBBED_MODULES}
+sys.modules.update(_STUBBED_MODULES)
 
 from src.rag.evaluation import (
     DEFAULT_THRESHOLDS,
@@ -43,6 +51,13 @@ from src.rag.evaluation import (
     quick_evaluate,
     save_evaluation_dataset,
 )
+
+# Restore the real modules now that evaluation has imported the stubs.
+for _name, _orig in _SAVED_MODULES.items():
+    if _orig is not None:
+        sys.modules[_name] = _orig
+    else:
+        sys.modules.pop(_name, None)
 
 # =============================================================================
 # Test Data Models

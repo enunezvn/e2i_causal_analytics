@@ -16,7 +16,11 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
-# Mock dependencies before importing
+# Stub the heavy memory dep ONLY for the import below, then RESTORE sys.modules
+# so the MagicMock doesn't leak into co-located test modules (e.g.
+# tests/unit/test_memory/*) under pytest-xdist loadscope (#555). memory_adapters
+# binds its reference at import, so it keeps the stub.
+_SAVED_PROC = sys.modules.get("src.memory.procedural_memory")
 sys.modules["src.memory.procedural_memory"] = MagicMock()
 
 from src.rag.memory_adapters import (
@@ -31,6 +35,12 @@ from src.rag.memory_adapters import (
     SignalCollectorProtocol,
     create_memory_adapters,
 )
+
+# Restore the real module now that memory_adapters has imported the stub.
+if _SAVED_PROC is not None:
+    sys.modules["src.memory.procedural_memory"] = _SAVED_PROC
+else:
+    sys.modules.pop("src.memory.procedural_memory", None)
 
 # =============================================================================
 # Test Protocols
