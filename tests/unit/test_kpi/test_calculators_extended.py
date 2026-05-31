@@ -463,6 +463,69 @@ class TestCausalMetricsCalculator:
         assert result.value is None
         assert "error" in result.metadata
 
+    # --- #577 PR2: CM-004 counterfactual (coherent do-contrast) ----------------------
+
+    @pytest.fixture
+    def counterfactual_kpi(self):
+        """Create CM-004 Counterfactual Outcome KPI."""
+        return KPIMetadata(
+            id="CM-004",
+            name="Counterfactual Outcome",
+            definition="E[Y(a') | do(A=a), X]",
+            formula="mean(counterfactual_outcome)",
+            calculation_type=CalculationType.DIRECT,
+            workstream=Workstream.CAUSAL_METRICS,
+            threshold=None,
+        )
+
+    def test_calculate_cm004_counterfactual_computes(self, calculator, counterfactual_kpi):
+        """CM-004 value = mean counterfactual outcome LEVEL; factual + contrast in metadata."""
+        calculator._execute_query = Mock(
+            return_value=[
+                {
+                    "mean_counterfactual": 0.34,
+                    "mean_factual": 0.50,
+                    "mean_effect": 0.176,
+                    "n": 626,
+                }
+            ]
+        )
+
+        result = calculator.calculate(counterfactual_kpi)
+
+        assert result.value == pytest.approx(0.34)
+        assert result.metadata.get("mean_factual") == 0.50
+        assert result.metadata.get("mean_effect") == 0.176
+        assert result.metadata.get("n") == 626
+
+    def test_calculate_cm004_forwards_prediction_type(self, calculator, counterfactual_kpi):
+        """The optional prediction_type context filter is forwarded to the query param."""
+        calculator._execute_query = Mock(
+            return_value=[
+                {"mean_counterfactual": 0.30, "mean_factual": 0.48, "mean_effect": 0.18, "n": 116}
+            ]
+        )
+
+        calculator.calculate(counterfactual_kpi, context={"prediction_type": "churn"})
+
+        calculator._execute_query.assert_called_once_with(
+            "causal_metrics_counterfactual", ["churn"]
+        )
+
+    def test_calculate_cm004_returns_none_on_empty(self, calculator, counterfactual_kpi):
+        """CM-004 fails loud (value None + error) when no counterfactual rows match — the
+        AVG-over-empty NULL row must NOT become a fabricated 0.0."""
+        calculator._execute_query = Mock(
+            return_value=[
+                {"mean_counterfactual": None, "mean_factual": None, "mean_effect": None, "n": 0}
+            ]
+        )
+
+        result = calculator.calculate(counterfactual_kpi)
+
+        assert result.value is None
+        assert "error" in result.metadata
+
 
 class TestCalculatorIntegration:
     """Integration tests across all calculators."""

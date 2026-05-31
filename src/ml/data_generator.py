@@ -634,6 +634,18 @@ class E2IDataGenerator:
                 precision = round(random.uniform(0.6, 0.9), 3)
                 recall = round(random.uniform(0.6, 0.9), 3)
 
+                # #577 PR2 (CM-004): counterfactual_outcome is a REAL do-contrast of the
+                # factual prediction — the predicted outcome under the alternative arm =
+                # factual minus the (additive) treatment effect, floored at 0 (an outcome
+                # cannot be negative). This makes the per-row contrast
+                # factual − counterfactual == treatment_effect_estimate (the coherent
+                # relationship CM-004 reports), instead of the prior independent uniform
+                # noise. Mirrors migration 048 so a fresh full regenerate stays coherent.
+                pred_value = round(random.uniform(0, 1), 4)
+                tee = round(random.uniform(0.05, 0.3), 3)
+                # scale 3 to match the counterfactual_outcome numeric(4,3) column (exact store)
+                counterfactual = round(max(0.0, pred_value - tee), 3)
+
                 self.ml_predictions.append(
                     {
                         "prediction_id": generate_id("PRED", pred_count),
@@ -645,7 +657,7 @@ class E2IDataGenerator:
                         "patient_id": pj["patient_id"],
                         "hcp_id": random.choice(self.hcp_profiles)["hcp_id"],
                         "prediction_type": random.choice(PREDICTION_TYPES),
-                        "prediction_value": round(random.uniform(0, 1), 4),
+                        "prediction_value": pred_value,
                         "prediction_class": random.choice(["high_risk", "medium_risk", "low_risk"]),
                         "confidence_score": round(random.uniform(0.5, 0.99), 4),
                         "probability_scores": {
@@ -685,11 +697,11 @@ class E2IDataGenerator:
                             "equalized_odds": round(random.uniform(0.85, 1.0), 3),
                         },
                         "explanation_text": f"Patient shows {random.choice(['elevated', 'moderate', 'low'])} risk based on {random.choice(['prior treatment history', 'comorbidity profile', 'HCP engagement patterns'])}.",
-                        "treatment_effect_estimate": round(random.uniform(0.05, 0.3), 3),
+                        "treatment_effect_estimate": tee,
                         "heterogeneous_effect": round(random.uniform(-0.1, 0.2), 3),
                         "segment_assignment": f"segment_{random.randint(1, 5)}",
                         "causal_confidence": round(random.uniform(0.6, 0.95), 3),
-                        "counterfactual_outcome": round(random.uniform(0.2, 0.8), 3),
+                        "counterfactual_outcome": counterfactual,
                         "features_available_at_prediction": {
                             "feature_count": random.randint(20, 50),
                             "feature_names": [

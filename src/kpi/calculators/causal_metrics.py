@@ -251,12 +251,38 @@ class CausalMetricsCalculator(KPICalculatorBase):
     def _calc_counterfactual(self, context: dict[str, Any]) -> dict[str, Any]:
         """Calculate CM-004: Counterfactual Outcome.
 
-        E[Y(a') | do(A=a), X] - predicted outcome under alternative treatment.
+        E[Y(a') | do(A=a), X] — the expected predicted outcome under the
+        alternative arm. ``counterfactual_outcome`` is a coherent do-contrast of
+        the factual ``prediction_value``: the factual minus the (additive)
+        ``treatment_effect_estimate``, floored at 0 (an outcome cannot be
+        negative). So the per-row contrast factual − counterfactual equals the
+        treatment effect (#577). The VALUE is the counterfactual LEVEL (mean
+        counterfactual_outcome) — distinct from CM-001 ATE (the contrast). An
+        optional ``prediction_type`` context filter ('' = all types) narrows the
+        cohort.
         """
-        raise RuntimeError(
-            "KPI counterfactual unavailable: ml_predictions lacks "
-            "treatment_received/counterfactual_treatment (#574)"
-        )
+        prediction_type = context.get("prediction_type", "") or ""
+        rows = self._execute_query("causal_metrics_counterfactual", [prediction_type])
+
+        if rows and rows[0].get("mean_counterfactual") is not None:
+            row = rows[0]
+            return {
+                "value": row["mean_counterfactual"],
+                "metadata": {
+                    "mean_factual": row.get("mean_factual"),
+                    "mean_effect": row.get("mean_effect"),  # the do-contrast (treatment effect)
+                    "n": row.get("n"),
+                    "prediction_type": prediction_type or "all",
+                    "note": (
+                        "counterfactual outcome level E[Y(a')] = mean(prediction_value − "
+                        "treatment_effect_estimate, floored at 0); the per-row contrast "
+                        "factual − counterfactual equals the treatment effect (#577)"
+                    ),
+                    "source": "ml_predictions",
+                },
+            }
+
+        return {"value": None, "metadata": {"error": "No counterfactual data available"}}
 
     def _calc_mediation_effect(self, context: dict[str, Any]) -> dict[str, Any]:
         """Calculate CM-005: Mediation Effect.
