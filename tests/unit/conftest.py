@@ -49,3 +49,28 @@ def _silence_lifecycle_monitoring_in_unit_tests(
         return
     monkeypatch.setattr(lm, "_MLFLOW_AVAILABLE", False, raising=False)
     monkeypatch.setattr(lm, "_OPIK_AVAILABLE", False, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _reset_service_client_singletons() -> None:
+    """Autouse: reset ``src.memory.services.factories`` singletons before each test.
+
+    The factory memoises clients in module globals (``_redis_client``,
+    ``_supabase_client``, ``_falkordb_client`` …) plus an ``@lru_cache`` for
+    production reuse. Those globals leak across tests: a test that initialises or
+    mocks a client (e.g. ``test_service_factories`` / ``test_embedding_fallback``,
+    which set them on purpose) pollutes a later test expecting a clean slate.
+    Under ``-n 2 --dist=loadscope`` the worker distribution decides ordering, so
+    widening the unit allowlist (#555) surfaced this as ``ServiceConnectionError``
+    / ``MagicMock can't be used in 'await'`` in ``test_memory`` / ``test_api``
+    even though each dir passes in isolation.
+
+    ``reset_all_clients()`` is the maintained reset hook; running it before every
+    test makes the singletons order-independent. Locked by
+    ``test_memory/test_service_singleton_isolation.py``.
+    """
+    try:
+        from src.memory.services.factories import reset_all_clients
+    except ImportError:
+        return
+    reset_all_clients()
