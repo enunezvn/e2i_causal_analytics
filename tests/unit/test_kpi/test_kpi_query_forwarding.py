@@ -27,6 +27,9 @@ ALL_CALCULATORS = [
 ]
 
 # MISSING-data metrics that must fail loud (no real source in the schema — #574).
+# #577 Tier A: DQ-002 source_coverage_hcps + DQ-006 geographic_consistency are now WIRED
+# to real data (reference_universe + hcp_profiles/patient_journeys) and so are no longer
+# here — they move to the FIXABLE contract (see test_577_tier_a_* + the live e2e).
 MISSING_METRICS = [
     (CausalMetricsCalculator, "_calc_causal_impact"),
     (CausalMetricsCalculator, "_calc_counterfactual"),
@@ -35,8 +38,6 @@ MISSING_METRICS = [
     (BrandSpecificCalculator, "_calc_remi_ah_uncontrolled"),
     (BrandSpecificCalculator, "_calc_fabhalta_pnh_tested"),
     (TriggerPerformanceCalculator, "_calc_action_rate_uplift"),
-    (DataQualityCalculator, "_calc_source_coverage_hcps"),
-    (DataQualityCalculator, "_calc_geographic_consistency"),
     (DataQualityCalculator, "_calc_label_quality"),
 ]
 
@@ -62,3 +63,34 @@ def test_missing_metric_fails_loud(calc_cls, method):
     calc = calc_cls(db_client=MagicMock())
     with pytest.raises(RuntimeError, match="unavailable"):
         getattr(calc, method)({"brand": "Fabhalta", "segment": None, "model_name": "m"})
+
+
+# --- #577 Tier A: DQ-002 + DQ-006 are now wired to real data (hermetic forwarding) -------
+
+
+def _calc_returning(rows):
+    """A DataQualityCalculator whose kpi_query RPC returns `rows`."""
+    client = MagicMock()
+    client.rpc.return_value.execute.return_value = MagicMock(data=rows)
+    return DataQualityCalculator(db_client=client), client
+
+
+def test_dq002_source_coverage_hcps_forwards_and_computes():
+    """WS1-DQ-002 forwards to the allowlisted query_id and computes covered/total."""
+    calc, client = _calc_returning([{"covered": 546, "total": 21240}])
+    val = calc._calc_source_coverage_hcps({"brand": None})
+    client.rpc.assert_called_once_with(
+        "kpi_query", {"query_id": "data_quality_source_coverage_hcps", "params": [None]}
+    )
+    assert abs(val - 546 / 21240) < 1e-9
+
+
+def test_dq006_geographic_consistency_forwards_and_computes():
+    """WS1-DQ-006 forwards to the allowlisted query_id and returns the max regional gap."""
+    calc, client = _calc_returning([{"max_gap": 0.1049}])
+    val = calc._calc_geographic_consistency({"brand": "Fabhalta"})
+    client.rpc.assert_called_once_with(
+        "kpi_query",
+        {"query_id": "data_quality_geographic_consistency", "params": ["Fabhalta"]},
+    )
+    assert abs(val - 0.1049) < 1e-9

@@ -123,10 +123,19 @@ class DataQualityCalculator(KPICalculatorBase):
     def _calc_source_coverage_hcps(self, context: dict[str, Any]) -> float:
         """Calculate WS1-DQ-002: Source Coverage - HCPs.
 
-        Formula: covered_hcps / reference_hcps
+        Formula: covered_hcps / reference_universe(universe_type='hcp').target_count
+
+        #577: wired to real data. Numerator = distinct HCPs with
+        ``hcp_profiles.coverage_status = true``; denominator =
+        ``SUM(reference_universe.target_count)`` for ``universe_type='hcp'``,
+        optionally brand-banded. (hcp_profiles has no brand column, so the
+        numerator is brand-agnostic — a documented proxy; see migration 045.)
         """
-        context.get("brand")
-        raise RuntimeError("KPI WS1-DQ-002 unavailable: reference_hcps table does not exist (#574)")
+        brand = context.get("brand")
+        result = self._execute_query("data_quality_source_coverage_hcps", [brand])
+        if result and result[0]["total"] > 0:
+            return float(result[0]["covered"] / result[0]["total"])
+        return 0.0
 
     def _calc_cross_source_match(self, context: dict[str, Any]) -> float:
         """Calculate WS1-DQ-003: Cross-source Match Rate.
@@ -161,11 +170,22 @@ class DataQualityCalculator(KPICalculatorBase):
     def _calc_geographic_consistency(self, context: dict[str, Any]) -> float:
         """Calculate WS1-DQ-006: Geographic Consistency.
 
-        Formula: consistent_geo_records / total_geo_records
+        Formula: max_region(|share_source - share_universe|) — the maximum
+        absolute gap between the source's regional distribution and the
+        reference universe's regional distribution (lower is better).
+
+        #577: wired to the authoritative formula (config/kpi_definitions.yaml +
+        docs/data/06-KPI-REFERENCE.md). Source share = patient_journeys by
+        geographic_region; universe share = reference_universe(universe_type=
+        'patient') by region. The pre-#574 stub joined a non-existent
+        agent_activities.hcp_id AND measured region self-consistency (the wrong
+        metric); this implements the documented share-gap instead.
         """
-        raise RuntimeError(
-            "KPI WS1-DQ-006 unavailable: agent_activities has no hcp_id column for the join (#574)"
-        )
+        brand = context.get("brand")
+        result = self._execute_query("data_quality_geographic_consistency", [brand])
+        if result and result[0]["max_gap"] is not None:
+            return float(result[0]["max_gap"])
+        return 0.0
 
     def _calc_data_lag(self, context: dict[str, Any]) -> float:
         """Calculate WS1-DQ-007: Data Lag (Median).

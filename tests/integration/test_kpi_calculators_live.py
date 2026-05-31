@@ -78,8 +78,11 @@ SPECS = [
             "_calc_completeness_pass_rate",
             "_calc_data_lag",
             "_calc_time_to_release",
+            # #577 Tier A: wired to real data (reference_universe + hcp_profiles/patient_journeys).
+            "_calc_source_coverage_hcps",
+            "_calc_geographic_consistency",
         ],
-        ["_calc_source_coverage_hcps", "_calc_geographic_consistency", "_calc_label_quality"],
+        ["_calc_label_quality"],
     ),
     (ModelPerformanceCalculator, ["_calc_shap_coverage"], []),
 ]
