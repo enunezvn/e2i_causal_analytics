@@ -22,6 +22,7 @@ import random
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, List, Optional
 
 # Try to import optional packages
@@ -643,8 +644,14 @@ class E2IDataGenerator:
                 # noise. Mirrors migration 048 so a fresh full regenerate stays coherent.
                 pred_value = round(random.uniform(0, 1), 4)
                 tee = round(random.uniform(0.05, 0.3), 3)
-                # scale 3 to match the counterfactual_outcome numeric(4,3) column (exact store)
-                counterfactual = round(max(0.0, pred_value - tee), 3)
+                # Round to scale 3 (counterfactual_outcome is numeric(4,3)) using
+                # half-away-from-zero to match Postgres ROUND() exactly, so the generator
+                # mirrors migration 048 even at .xxx5 ties (Python's round() is half-to-even
+                # and would diverge by 0.001 there).
+                _cf = (Decimal(str(pred_value)) - Decimal(str(tee))).quantize(
+                    Decimal("0.001"), rounding=ROUND_HALF_UP
+                )
+                counterfactual = float(max(Decimal("0"), _cf))
 
                 self.ml_predictions.append(
                     {

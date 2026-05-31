@@ -1,21 +1,25 @@
-"""#577 causal trio faithful e2e (PR1): CM-003 (causal_impact) computes the RIGHT
-value against the LIVE DB over the discovered causal_paths cohort — not just "runs
-without raising".
+"""#577 causal trio faithful e2e (PR1 + PR2): CM-003 (causal_impact) and CM-004
+(counterfactual) compute the RIGHT value against the LIVE DB — not just "run without
+raising".
 
 These assert MEANING (the #574 lesson):
 - CM-003 is the path-level mean causal_effect_size over discovered paths: a real
   fraction in (0,1) with a per-start_node descriptive breakdown and the anti-relabel
-  code-anchor (start_node is a discovered path SOURCE, NOT an intervention target).
-- The validation_status filter actually narrows the cohort and MOVES the value (a
-  constant/fabricated metric would not), and an impossible filter fails loud (None +
-  error) without mutating any data.
+  code-anchor (start_node is a discovered path SOURCE, NOT an intervention target). The
+  validation_status filter narrows the cohort and MOVES the value; an impossible filter
+  fails loud (None + error) without mutating data.
+- CM-004 is the counterfactual outcome LEVEL E[Y(a')] over the coherent ml_predictions
+  subset, where counterfactual_outcome = max(0, factual − treatment effect). A per-row
+  coherence proof shows the do-contrast is real (the prior independent uniform noise
+  would fail it); mean_realized_contrast is the true floor-attenuated contrast; the
+  prediction_type filter discriminates; an impossible filter fails loud.
 
-CM-004 (counterfactual) and CM-005 (mediation) are intentionally NOT covered here:
-their source columns are independent uniform noise, so they remain fail-loud pending
-a generator-coherence rework (PR2/PR3 of the causal trio).
+CM-005 (mediation) is intentionally NOT covered here: causal_chain edges still don't
+reconcile with causal_effect_size, so it remains fail-loud pending a further
+generator-coherence rework (PR3 of the causal trio).
 
-CAPABILITY-GATED: skips unless SUPABASE_* is set AND the CM-003 query_id exists
-(migration 047 applied).
+CAPABILITY-GATED: each metric's tests gate on their OWN query_id (CM-003 = migration
+047, CM-004 = migration 048); skips if SUPABASE_* unset or the migration isn't applied.
 """
 
 import os
@@ -105,8 +109,15 @@ def test_cm004_counterfactual_level_below_factual(cf_calc):
     assert md["n"] > 0
     assert md["mean_effect"] > 0
     assert out["value"] < md["mean_factual"], "counterfactual level should sit below factual"
-    # the contrast (factual − counterfactual) is the real treatment effect (clamp-attenuated).
-    assert md["mean_factual"] - out["value"] == pytest.approx(md["mean_effect"], abs=0.05)
+    # mean_realized_contrast is exactly the aggregate factual − counterfactual ...
+    assert md["mean_realized_contrast"] == pytest.approx(
+        md["mean_factual"] - out["value"], abs=1e-6
+    )
+    # ... it is a real positive contrast, floor-attenuated so it does NOT exceed the
+    # nominal mean treatment effect, yet stays close to it (only ~16% of rows clamp).
+    assert md["mean_realized_contrast"] > 0
+    assert md["mean_realized_contrast"] <= md["mean_effect"] + 1e-6
+    assert md["mean_realized_contrast"] == pytest.approx(md["mean_effect"], abs=0.05)
 
 
 def test_cm004_counterfactual_is_coherent_do_contrast(cf_calc):

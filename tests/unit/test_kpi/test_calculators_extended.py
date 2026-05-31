@@ -479,12 +479,14 @@ class TestCausalMetricsCalculator:
         )
 
     def test_calculate_cm004_counterfactual_computes(self, calculator, counterfactual_kpi):
-        """CM-004 value = mean counterfactual outcome LEVEL; factual + contrast in metadata."""
+        """CM-004 value = mean counterfactual outcome LEVEL; factual + realized contrast +
+        nominal effect in metadata."""
         calculator._execute_query = Mock(
             return_value=[
                 {
                     "mean_counterfactual": 0.34,
                     "mean_factual": 0.50,
+                    "mean_realized_contrast": 0.16,
                     "mean_effect": 0.176,
                     "n": 626,
                 }
@@ -495,6 +497,7 @@ class TestCausalMetricsCalculator:
 
         assert result.value == pytest.approx(0.34)
         assert result.metadata.get("mean_factual") == 0.50
+        assert result.metadata.get("mean_realized_contrast") == 0.16
         assert result.metadata.get("mean_effect") == 0.176
         assert result.metadata.get("n") == 626
 
@@ -502,7 +505,13 @@ class TestCausalMetricsCalculator:
         """The optional prediction_type context filter is forwarded to the query param."""
         calculator._execute_query = Mock(
             return_value=[
-                {"mean_counterfactual": 0.30, "mean_factual": 0.48, "mean_effect": 0.18, "n": 116}
+                {
+                    "mean_counterfactual": 0.30,
+                    "mean_factual": 0.48,
+                    "mean_realized_contrast": 0.18,
+                    "mean_effect": 0.18,
+                    "n": 116,
+                }
             ]
         )
 
@@ -517,7 +526,13 @@ class TestCausalMetricsCalculator:
         AVG-over-empty NULL row must NOT become a fabricated 0.0."""
         calculator._execute_query = Mock(
             return_value=[
-                {"mean_counterfactual": None, "mean_factual": None, "mean_effect": None, "n": 0}
+                {
+                    "mean_counterfactual": None,
+                    "mean_factual": None,
+                    "mean_realized_contrast": None,
+                    "mean_effect": None,
+                    "n": 0,
+                }
             ]
         )
 

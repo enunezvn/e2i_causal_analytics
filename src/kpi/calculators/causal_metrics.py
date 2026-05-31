@@ -270,13 +270,18 @@ class CausalMetricsCalculator(KPICalculatorBase):
                 "value": row["mean_counterfactual"],
                 "metadata": {
                     "mean_factual": row.get("mean_factual"),
-                    "mean_effect": row.get("mean_effect"),  # the do-contrast (treatment effect)
+                    # the TRUE realized contrast (factual − counterfactual); floor-attenuated
+                    "mean_realized_contrast": row.get("mean_realized_contrast"),
+                    # the NOMINAL mean treatment effect estimate (>= realized contrast)
+                    "mean_effect": row.get("mean_effect"),
                     "n": row.get("n"),
                     "prediction_type": prediction_type or "all",
                     "note": (
-                        "counterfactual outcome level E[Y(a')] = mean(prediction_value − "
-                        "treatment_effect_estimate, floored at 0); the per-row contrast "
-                        "factual − counterfactual equals the treatment effect (#577)"
+                        "counterfactual outcome level E[Y(a')] = mean(counterfactual_outcome), "
+                        "where counterfactual = max(0, prediction_value − treatment_effect_estimate). "
+                        "mean_realized_contrast (= factual − counterfactual) equals the treatment "
+                        "effect on unclamped rows and is floor-attenuated (<= mean_effect) on the "
+                        "rows where the effect exceeds the factual (#577)"
                     ),
                     "source": "ml_predictions",
                 },
