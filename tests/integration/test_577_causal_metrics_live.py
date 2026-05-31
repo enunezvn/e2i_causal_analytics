@@ -1,6 +1,6 @@
-"""#577 causal trio faithful e2e (PR1 + PR2): CM-003 (causal_impact) and CM-004
-(counterfactual) compute the RIGHT value against the LIVE DB — not just "run without
-raising".
+"""#577 causal trio faithful e2e (PR1 + PR2 + PR3): CM-003 (causal_impact), CM-004
+(counterfactual), and CM-005 (mediation_effect) compute the RIGHT value against the LIVE
+DB — not just "run without raising".
 
 These assert MEANING (the #574 lesson):
 - CM-003 is the path-level mean causal_effect_size over discovered paths: a real
@@ -13,13 +13,15 @@ These assert MEANING (the #574 lesson):
   coherence proof shows the do-contrast is real (the prior independent uniform noise
   would fail it); mean_realized_contrast is the true floor-attenuated contrast; the
   prediction_type filter discriminates; an impossible filter fails loud.
+- CM-005 is the proportion mediated = mean(indirect/total) over the coherent
+  decomposition: direct + indirect == causal_effect_size for every path (reconciliation
+  proof), no-mediator paths contribute 0, mediated paths carry real positive proportions
+  grounded in the chain edge magnitudes, and the distribution spans a real range (not the
+  degenerate pure-chain constant).
 
-CM-005 (mediation) is intentionally NOT covered here: causal_chain edges still don't
-reconcile with causal_effect_size, so it remains fail-loud pending a further
-generator-coherence rework (PR3 of the causal trio).
-
-CAPABILITY-GATED: each metric's tests gate on their OWN query_id (CM-003 = migration
-047, CM-004 = migration 048); skips if SUPABASE_* unset or the migration isn't applied.
+CAPABILITY-GATED: each metric's tests gate on their OWN query_id (CM-003 = migration 047,
+CM-004 = migration 048, CM-005 = migration 049); skips if SUPABASE_* unset or the
+migration isn't applied.
 """
 
 import os
@@ -164,3 +166,83 @@ def test_cm004_returns_none_on_empty_cohort(cf_calc):
     out = cf_calc._calc_counterfactual({"prediction_type": "__no_such_type__"})
     assert out["value"] is None
     assert "error" in out["metadata"]
+
+
+# --- #577 PR3: CM-005 mediation_effect (coherent decomposition) --------------------------
+
+
+@pytest.fixture
+def med_calc():
+    c = CausalMetricsCalculator()
+    if c.db_client is None:
+        pytest.skip("no Supabase client")
+    try:
+        c.db_client.rpc(
+            "kpi_query", {"query_id": "causal_metrics_mediation", "params": []}
+        ).execute()
+    except Exception as e:
+        pytest.skip(f"#577 mediation query unavailable (migration 049 not applied?): {e}")
+    return c
+
+
+def test_cm005_mediation_is_real_proportion(med_calc):
+    """CM-005 = proportion mediated = mean(indirect/total): a real fraction in (0,1) with
+    indirect/direct means in metadata."""
+    out = med_calc._calc_mediation_effect({})
+    assert out["value"] is not None
+    assert 0.0 < out["value"] < 1.0, f"proportion mediated out of range: {out['value']}"
+    md = out["metadata"]
+    assert md["n_paths"] > 0
+    assert md["mean_indirect"] >= 0
+    assert md["mean_direct"] > 0
+    assert "mediator" in md.get("note", "").lower()
+
+
+def test_cm005_decomposition_reconciles_and_zero_without_mediators(med_calc):
+    """Decisive coherence proof: direct + indirect == total (causal_effect_size) for EVERY
+    path — the decomposition is real, not a free-floating formula — and paths with NO
+    mediators have indirect == 0 (no mediation channel) while paths WITH mediators have
+    indirect > 0."""
+    resp = (
+        med_calc.db_client.table("causal_paths")
+        .select("causal_effect_size,direct_effect,indirect_effect,mediators_identified")
+        .not_.is_("indirect_effect", "null")
+        .limit(2000)
+        .execute()
+    )
+    rows = resp.data
+    assert rows, "expected decomposed causal_paths rows"
+    saw_mediated = False
+    saw_unmediated = False
+    for r in rows:
+        total = float(r["causal_effect_size"])
+        direct = float(r["direct_effect"])
+        indirect = float(r["indirect_effect"])
+        assert abs(direct + indirect - total) < 0.001, f"decomposition does not reconcile: {r}"
+        k = len(r["mediators_identified"] or [])
+        if k == 0:
+            assert indirect == 0, f"no-mediator path has nonzero indirect: {r}"
+            saw_unmediated = True
+        else:
+            assert indirect > 0, f"mediated path has zero indirect: {r}"
+            saw_mediated = True
+    assert saw_mediated and saw_unmediated
+
+
+def test_cm005_proportion_mediated_varies(med_calc):
+    """proportion mediated is NOT a degenerate constant (the pure-chain trap that would make
+    it always 1) — across paths it spans a real range grounded in the edge magnitudes:
+    no-mediator paths sit at 0, mediated paths carry real positive proportions."""
+    resp = (
+        med_calc.db_client.table("causal_paths")
+        .select("causal_effect_size,indirect_effect")
+        .not_.is_("indirect_effect", "null")
+        .gt("causal_effect_size", 0)
+        .limit(2000)
+        .execute()
+    )
+    props = [float(r["indirect_effect"]) / float(r["causal_effect_size"]) for r in resp.data]
+    assert props, "expected proportion-mediated values"
+    assert min(props) == 0.0  # the no-mediator paths contribute 0
+    assert max(props) > 0.2  # some paths carry substantial mediation
+    assert max(props) - min(props) > 0.1  # a genuine spread, not a constant

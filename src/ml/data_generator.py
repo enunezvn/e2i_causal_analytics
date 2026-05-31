@@ -18,6 +18,7 @@ Features:
 
 import hashlib
 import json
+import math
 import random
 import uuid
 from dataclasses import dataclass
@@ -1000,34 +1001,53 @@ class E2IDataGenerator:
             path_length = random.randint(2, 5)
             nodes = random.sample(path_nodes, path_length)
 
+            edges = [
+                {
+                    "from": nodes[j],
+                    "to": nodes[j + 1],
+                    "effect": round(random.uniform(0.1, 0.5), 3),
+                }
+                for j in range(len(nodes) - 1)
+            ]
+            mediators = nodes[1:-1]
+            effect_size = round(random.uniform(0.05, 0.4), 3)
+
+            # #577 PR3 (CM-005): coherent direct/indirect decomposition (total =
+            # causal_effect_size). The indirect channel is the serial path coefficient
+            # through the mediators = the PRODUCT of the chain edge effects (0 when there are
+            # no mediators); the direct channel is a synthesized X->Y magnitude. proportion =
+            # indirect/(indirect+direct) is grounded in the edge MAGNITUDES (not the mediator
+            # count); indirect_effect = total*proportion and direct_effect = total - indirect,
+            # so they sum to total exactly. Mirrors migration 049 at the FORMULA level (the
+            # direct channel is random here vs deterministic-hashtext in the migration, so
+            # per-row values legitimately differ — fresh paths are new draws anyway).
+            med_mag = math.prod(e["effect"] for e in edges) if mediators else 0.0
+            direct_mag = random.uniform(0.10, 0.30)
+            proportion = med_mag / (med_mag + direct_mag) if (med_mag + direct_mag) > 0 else 0.0
+            indirect_effect = round(effect_size * proportion, 4)
+            direct_effect = round(effect_size - indirect_effect, 4)
+
             self.causal_paths.append(
                 {
                     "path_id": generate_id("CP", i),
                     "discovery_date": discovery_date.isoformat(),
                     "causal_chain": {
                         "nodes": nodes,
-                        "edges": [
-                            {
-                                "from": nodes[j],
-                                "to": nodes[j + 1],
-                                "effect": round(random.uniform(0.1, 0.5), 3),
-                            }
-                            for j in range(len(nodes) - 1)
-                        ],
+                        "edges": edges,
                     },
                     "start_node": nodes[0],
                     "end_node": nodes[-1],
                     "intermediate_nodes": nodes[1:-1],
                     "path_length": path_length,
-                    "causal_effect_size": round(random.uniform(0.05, 0.4), 3),
+                    "causal_effect_size": effect_size,
                     "confidence_level": round(random.uniform(0.7, 0.95), 3),
                     "method_used": random.choice(methods),
                     "confounders_controlled": random.sample(
                         ["age", "region", "comorbidities", "prior_treatment"], random.randint(1, 3)
                     ),
-                    "mediators_identified": (
-                        [nodes[i] for i in range(1, len(nodes) - 1)] if len(nodes) > 2 else []
-                    ),
+                    "mediators_identified": mediators,
+                    "direct_effect": direct_effect,
+                    "indirect_effect": indirect_effect,
                     "interaction_effects": {
                         "interactions": [
                             {"vars": ["A", "B"], "effect": round(random.uniform(-0.1, 0.2), 3)}

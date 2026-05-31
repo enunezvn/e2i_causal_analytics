@@ -541,6 +541,76 @@ class TestCausalMetricsCalculator:
         assert result.value is None
         assert "error" in result.metadata
 
+    # --- #577 PR3: CM-005 mediation_effect (coherent decomposition) -------------------
+
+    @pytest.fixture
+    def mediation_kpi(self):
+        """Create CM-005 Mediation Effect KPI."""
+        return KPIMetadata(
+            id="CM-005",
+            name="Mediation Effect",
+            definition="indirect_effect / total_effect",
+            formula="AVG(indirect_effect / causal_effect_size)",
+            calculation_type=CalculationType.DIRECT,
+            workstream=Workstream.CAUSAL_METRICS,
+            threshold=None,
+        )
+
+    def test_calculate_cm005_mediation_computes(self, calculator, mediation_kpi):
+        """CM-005 value = mean proportion mediated; indirect/direct means in metadata."""
+        calculator._execute_query = Mock(
+            return_value=[
+                {
+                    "proportion_mediated": 0.127,
+                    "n_paths": 50,
+                    "mean_indirect": 0.03,
+                    "mean_direct": 0.20,
+                }
+            ]
+        )
+
+        result = calculator.calculate(mediation_kpi)
+
+        assert result.value == pytest.approx(0.127)
+        assert result.metadata.get("n_paths") == 50
+        assert result.metadata.get("mean_indirect") == 0.03
+        assert result.metadata.get("mean_direct") == 0.20
+
+    def test_calculate_cm005_queries_mediation(self, calculator, mediation_kpi):
+        """CM-005 reads the no-param mediation query (max_params 0)."""
+        calculator._execute_query = Mock(
+            return_value=[
+                {
+                    "proportion_mediated": 0.1,
+                    "n_paths": 50,
+                    "mean_indirect": 0.02,
+                    "mean_direct": 0.2,
+                }
+            ]
+        )
+
+        calculator.calculate(mediation_kpi)
+
+        calculator._execute_query.assert_called_once_with("causal_metrics_mediation", [])
+
+    def test_calculate_cm005_returns_none_on_empty(self, calculator, mediation_kpi):
+        """CM-005 fails loud (value None + error) when no paths exist — never fabricates 0."""
+        calculator._execute_query = Mock(
+            return_value=[
+                {
+                    "proportion_mediated": None,
+                    "n_paths": 0,
+                    "mean_indirect": None,
+                    "mean_direct": None,
+                }
+            ]
+        )
+
+        result = calculator.calculate(mediation_kpi)
+
+        assert result.value is None
+        assert "error" in result.metadata
+
 
 class TestCalculatorIntegration:
     """Integration tests across all calculators."""
