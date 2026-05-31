@@ -103,11 +103,21 @@ class DataQualityCalculator(KPICalculatorBase):
                 error=str(e),
             )
 
+    # WS1 data-quality metrics where a LOWER value is better, so the threshold
+    # direction must invert (target < warning < critical are "bad" bounds going up):
+    #   DQ-006 geographic gap, DQ-007 data lag (days), DQ-009 time-to-release (days).
+    # Declared explicitly (mirrors ModelPerformance/BrandSpecific) because the base
+    # KPICalculatorBase._is_lower_better name-heuristic misses "Geographic
+    # Consistency" and "Time-to-Release" (#577). Without this, a gap/lag value was
+    # scored higher-is-better — e.g. a 0.10 geographic gap reported GOOD, not WARNING.
+    _LOWER_IS_BETTER_IDS = {"WS1-DQ-006", "WS1-DQ-007", "WS1-DQ-009"}
+
     def _evaluate_status(self, kpi: KPIMetadata, value: float | None) -> KPIStatus:
-        """Evaluate KPI value against thresholds."""
+        """Evaluate KPI value against thresholds (direction-aware)."""
         if value is None or kpi.threshold is None:
             return KPIStatus.UNKNOWN
-        return kpi.threshold.evaluate(value)
+        lower_is_better = kpi.id in self._LOWER_IS_BETTER_IDS
+        return kpi.threshold.evaluate(value, lower_is_better=lower_is_better)
 
     def _calc_source_coverage_patients(self, context: dict[str, Any]) -> float:
         """Calculate WS1-DQ-001: Source Coverage - Patients.
@@ -125,14 +135,15 @@ class DataQualityCalculator(KPICalculatorBase):
 
         Formula: covered_hcps / reference_universe(universe_type='hcp').target_count
 
-        #577: wired to real data. Numerator = distinct HCPs with
-        ``hcp_profiles.coverage_status = true``; denominator =
-        ``SUM(reference_universe.target_count)`` for ``universe_type='hcp'``,
-        optionally brand-banded. (hcp_profiles has no brand column, so the
-        numerator is brand-agnostic — a documented proxy; see migration 045.)
+        #577: wired to real data as a GLOBAL coverage ratio. Numerator = distinct
+        HCPs with ``hcp_profiles.coverage_status = true``; denominator =
+        ``SUM(reference_universe.target_count)`` for ``universe_type='hcp'``.
+        No brand param: hcp_profiles has no brand column, so the numerator is not
+        brand-attributable — banding only the denominator by brand would yield an
+        incoherent ratio (global covered HCPs over one brand's universe). Per-brand
+        HCP coverage needs a brand-attributable coverage source (future).
         """
-        brand = context.get("brand")
-        result = self._execute_query("data_quality_source_coverage_hcps", [brand])
+        result = self._execute_query("data_quality_source_coverage_hcps", [])
         if result and result[0]["total"] > 0:
             return float(result[0]["covered"] / result[0]["total"])
         return 0.0

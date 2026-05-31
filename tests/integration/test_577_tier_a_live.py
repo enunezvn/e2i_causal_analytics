@@ -28,8 +28,9 @@ def calc():
         pytest.skip("no Supabase client")
     try:
         # DQ-002's own registry id must exist (migration 045 applied), else skip.
+        # DQ-002 takes no params (global ratio), so probe with an empty param list.
         c.db_client.rpc(
-            "kpi_query", {"query_id": "data_quality_source_coverage_hcps", "params": [None]}
+            "kpi_query", {"query_id": "data_quality_source_coverage_hcps", "params": []}
         ).execute()
     except Exception as e:
         pytest.skip(
