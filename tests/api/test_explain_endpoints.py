@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 from src.api.main import app
 from src.api.routes.explain import FeatureContribution
+from src.api.utils.data_masking import mask_identifier
 
 client = TestClient(app)
 
@@ -135,7 +136,10 @@ class TestExplainPrediction:
         assert response.status_code == 200
         data = response.json()
         assert "explanation_id" in data
-        assert data["patient_id"] == "PAT-2024-001234"
+        # patient_id is PII-masked in the response (security enhancement); the
+        # raw value is preserved only in audit records. (This assertion silently
+        # rotted while tests/api/ was unwired from CI.)
+        assert data["patient_id"] == mask_identifier("PAT-2024-001234")
         assert data["model_type"] == "propensity"
         assert "prediction_class" in data
         assert "prediction_probability" in data
@@ -286,7 +290,10 @@ class TestBatchExplanation:
 
         assert response.status_code == 200
         data = response.json()
-        assert data["successful"] >= 0
+        # One request, mocked service succeeds -> exactly one successful explanation.
+        assert data["total_requests"] == 1
+        assert data["successful"] == 1
+        assert data["failed"] == 0
 
     def test_batch_explanation_handles_errors(self, mock_shap_service):
         """Should handle partial failures gracefully."""
@@ -322,8 +329,11 @@ class TestBatchExplanation:
 
         assert response.status_code == 200
         data = response.json()
-        # Should have some errors
-        assert "errors" in data
+        # First request succeeds; the second fails in compute_shap -> 1 ok / 1 error.
+        assert data["total_requests"] == 2
+        assert data["successful"] == 1
+        assert data["failed"] == 1
+        assert len(data["errors"]) == 1
 
 
 class TestExplanationHistory:
@@ -352,7 +362,8 @@ class TestExplanationHistory:
 
         assert response.status_code == 200
         data = response.json()
-        assert data["patient_id"] == "PAT-2024-001234"
+        # patient_id is PII-masked in the response. (Rotted while unwired from CI.)
+        assert data["patient_id"] == mask_identifier("PAT-2024-001234")
         assert "total_explanations" in data
         assert "explanations" in data
 
@@ -485,3 +496,63 @@ class TestExplainHealthCheck:
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "degraded"
+
+
+# =============================================================================
+# #532 - FAIL-LOUD ON FEAST UNAVAILABILITY (no silent fabricated features)
+# =============================================================================
+
+
+class TestExplainFailLoud:
+    """The explain route must fail loud when server-side feature retrieval is
+    unavailable, NEVER fabricate plausible feature values into a real SHAP
+    explanation / regulatory-audit record (#532 silent-degradation contract)."""
+
+    def test_explain_predict_fails_loud_when_features_unavailable(self, mock_shap_service):
+        """When the server-side feature fetch fails (503), the route surfaces 503
+        and does NOT compute SHAP or store an audit record over fabricated data."""
+        from fastapi import HTTPException
+
+        mock_shap_service.get_features = AsyncMock(
+            side_effect=HTTPException(status_code=503, detail="Feature store lookup failed")
+        )
+
+        with patch(
+            "src.api.routes.explain.get_shap_service",
+            new=AsyncMock(return_value=mock_shap_service),
+        ):
+            response = client.post(
+                "/api/explain/predict",
+                json={
+                    "patient_id": "PAT-2024-001234",
+                    "model_type": "propensity",
+                    "store_for_audit": True,
+                },
+            )
+
+        assert response.status_code == 503
+        # No explanation computed and no audit record persisted over fake inputs.
+        mock_shap_service.compute_shap.assert_not_called()
+        mock_shap_service.store_audit_record.assert_not_called()
+
+    async def test_service_get_features_fails_loud_on_feast_error(self):
+        """RealTimeSHAPService.get_features raises 503 (it does NOT return the
+        fabricated _get_default_features) when the Feast online lookup fails.
+
+        Lives here (tests/api/, CI-collected) rather than the CI-ignored unit
+        tests/unit/.../test_explain.py, so the #532 anti-silent-degradation
+        contract for the explain path is actually enforced in CI.
+        """
+        from fastapi import HTTPException
+
+        from src.api.routes.explain import ModelType, RealTimeSHAPService
+
+        feast = MagicMock()
+        feast.get_online_features = AsyncMock(side_effect=Exception("sidecar down"))
+        service = RealTimeSHAPService(feast_client=feast, shap_explainer=MagicMock())
+        service._initialized = True
+
+        with pytest.raises(HTTPException) as exc_info:
+            await service.get_features("PAT-2024-001234", ModelType.PROPENSITY)
+
+        assert exc_info.value.status_code == 503

@@ -464,6 +464,11 @@ class FeastClient:
             else:
                 raise RuntimeError("No feature store available")
 
+        except FeastFallbackError:
+            # Propagate production-mode fallback errors without re-routing
+            # (mirrors get_historical_features). A second fallback attempt would
+            # just raise again and double-log the production-policy violation.
+            raise
         except Exception as e:
             logger.error(f"Error getting online features: {e}")
             if self.config.enable_fallback and self._custom_store:
@@ -518,7 +523,24 @@ class FeastClient:
         feature_refs: List[str],
         full_feature_names: bool,
     ) -> Dict[str, List[Any]]:
-        """Fallback implementation using custom feature store."""
+        """Fallback implementation using custom feature store.
+
+        Raises:
+            FeastFallbackError: When ``ENVIRONMENT`` is set to ``production``
+                (case-insensitive). The online fallback is forbidden in
+                production because it silently serves custom-store (Supabase)
+                data that the predictions route cannot distinguish from a real
+                Feast online fetch — it would be mislabeled
+                ``feature_source='feast_online'`` (#532). Configure Feast (set
+                ``FEAST_URL`` for the sidecar) or unset ``ENVIRONMENT``. Mirrors
+                the ``_get_historical_features_fallback`` guard.
+            RuntimeError: When no custom store is available.
+        """
+        if os.environ.get("ENVIRONMENT", "").lower() == "production":
+            raise FeastFallbackError(
+                "Feast online features unavailable; fallback is forbidden in production. "
+                "Configure Feast (FEAST_URL) or unset ENVIRONMENT."
+            )
         if not self._custom_store:
             raise RuntimeError("Custom store not available for fallback")
 

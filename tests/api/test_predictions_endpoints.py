@@ -10,7 +10,7 @@ Endpoints covered:
 """
 
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -394,7 +394,15 @@ class TestSinglePrediction:
         )
 
         assert response.status_code == 503
-        assert "Circuit breaker" in response.json()["detail"]
+        # The app's exception handler maps the route's 503 (RuntimeError / open
+        # circuit breaker) into a generic DependencyError envelope
+        # ({"error": "DependencyError", "message": "Dependency 'service' is
+        # unavailable", ...}); it does NOT surface the "Circuit breaker open"
+        # detail, and uses an E2IError envelope, not FastAPI's {"detail": ...}.
+        # Assert the load-bearing contract: 503 + service-unavailable. (This
+        # assertion silently rotted while tests/api/ was unwired from CI.)
+        body = response.json()
+        assert "unavailable" in str(body.get("message") or body.get("detail") or body).lower()
 
     def test_predict_internal_error(self, mock_bentoml_client):
         """Should return 500 for other prediction failures."""
@@ -407,7 +415,92 @@ class TestSinglePrediction:
         )
 
         assert response.status_code == 500
-        assert "Prediction failed" in response.json()["detail"]
+        body = response.json()
+        assert "prediction failed" in str(body.get("message") or body.get("detail") or body).lower()
+
+    def test_predict_does_not_label_feast_online_on_fallback_error(
+        self, mock_bentoml_client, mock_feast_client
+    ):
+        """#532 route-intrinsic honesty: when the FeastClient refuses to serve a
+        custom-store fallback (it raises FeastFallbackError — the production guard
+        for the embedded online fallback), the route surfaces 503 and must NOT tag
+        the response feature_source='feast_online'. The route never labels data it
+        did not actually fetch from the Feast online store.
+        """
+        from src.feature_store.feast_client import FeastFallbackError
+
+        mock_feast_client.get_online_features = AsyncMock(
+            side_effect=FeastFallbackError(
+                "Feast online features unavailable; fallback is forbidden in production."
+            )
+        )
+        app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
+
+        response = client.post(
+            "/api/models/predict/propensity",
+            json={"features": {}, "entity_id": "PAT-2024-0001"},
+        )
+
+        assert response.status_code == 503
+        mock_bentoml_client.predict.assert_not_called()
+        assert "feast_online" not in str(response.json()).lower()
+
+    def test_predict_entity_id_fails_loud_when_sidecar_unreachable(
+        self, monkeypatch, mock_bentoml_client
+    ):
+        """#532 end-to-end on the no-feast app image: with ``import feast``
+        unavailable and a remote FEAST_URL configured, an entity_id prediction
+        whose sidecar fetch fails must return 503 — never a silent fallback
+        mislabeled feast_online, and BentoML must not be invoked.
+
+        Exercises the REAL FeastClient remote path (only the httpx transport is
+        mocked) — the route->client->fail-loud seam that the importorskip-gated
+        live smoke (tests/integration/test_feast_remote_online_smoke.py) cannot
+        cover in CI.
+        """
+        import builtins
+
+        import httpx
+
+        from src.feature_store.feast_client import FeastClient, FeastConfig
+
+        # Faithfully simulate the production app image: feast cannot be imported.
+        real_import = builtins.__import__
+
+        def _no_feast_import(name, *args, **kwargs):
+            if name == "feast" or name.startswith("feast."):
+                raise ImportError("No module named 'feast' (app image)")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", _no_feast_import)
+
+        # Real remote-mode client: records FEAST_URL, never imports feast.
+        real_client = FeastClient(config=FeastConfig(server_url="http://feast:6566"))
+
+        async def _resolver():
+            return real_client
+
+        monkeypatch.setattr("src.api.routes.predictions._resolve_feast_client", _resolver)
+
+        # Sidecar unreachable: the POST raises a transport error (mirrors the
+        # proven mock in test_feast_client.py::test_remote_fails_loud_on_sidecar_error).
+        mock_httpx_client = MagicMock()
+        mock_httpx_client.post = AsyncMock(side_effect=httpx.ConnectError("connection refused"))
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=mock_httpx_client)
+        cm.__aexit__ = AsyncMock(return_value=None)
+
+        app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
+
+        with patch("src.feature_store.feast_client.httpx.AsyncClient", return_value=cm):
+            response = client.post(
+                "/api/models/predict/propensity",
+                json={"features": {}, "entity_id": "PAT-2024-0001"},
+            )
+
+        assert response.status_code == 503
+        mock_bentoml_client.predict.assert_not_called()
+        assert "feast_online" not in str(response.json()).lower()
 
 
 class TestBatchPrediction:

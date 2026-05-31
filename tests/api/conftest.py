@@ -22,6 +22,13 @@ from fastapi.testclient import TestClient
 # This must be done before any imports that load the auth module
 os.environ["E2I_TESTING_MODE"] = "1"
 
+# Disable rate limiting BEFORE importing the app. src/api/main.py reads
+# DISABLE_RATE_LIMITING at app-creation (import) time; the root tests/conftest.py
+# sets it later (inside pytest_configure), AFTER this module already imports
+# ``app`` below — so without setting it here the RateLimitMiddleware stays live
+# and accumulates 429s across the suite's requests within a single process.
+os.environ["DISABLE_RATE_LIMITING"] = "1"
+
 # Now import the app (auth module will see TESTING_MODE=True)
 from src.api.main import app  # noqa: E402
 
