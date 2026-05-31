@@ -22,6 +22,7 @@ import random
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, List, Optional
 
 # Try to import optional packages
@@ -634,6 +635,25 @@ class E2IDataGenerator:
                 precision = round(random.uniform(0.6, 0.9), 3)
                 recall = round(random.uniform(0.6, 0.9), 3)
 
+                # #577 PR2 (CM-004): counterfactual_outcome is a REAL do-contrast of the
+                # factual prediction — the predicted outcome under the alternative arm =
+                # factual minus the (additive) treatment effect, floored at 0 (an outcome
+                # cannot be negative). So the per-row contrast factual − counterfactual
+                # equals treatment_effect_estimate on UNCLAMPED rows and is floor-attenuated
+                # (= prediction_value) where the effect exceeds the factual — replacing the
+                # prior independent uniform noise. Mirrors migration 048 so a fresh full
+                # regenerate stays coherent.
+                pred_value = round(random.uniform(0, 1), 4)
+                tee = round(random.uniform(0.05, 0.3), 3)
+                # Round to scale 3 (counterfactual_outcome is numeric(4,3)) using
+                # half-away-from-zero to match Postgres ROUND() exactly, so the generator
+                # mirrors migration 048 even at .xxx5 ties (Python's round() is half-to-even
+                # and would diverge by 0.001 there).
+                _cf = (Decimal(str(pred_value)) - Decimal(str(tee))).quantize(
+                    Decimal("0.001"), rounding=ROUND_HALF_UP
+                )
+                counterfactual = float(max(Decimal("0"), _cf))
+
                 self.ml_predictions.append(
                     {
                         "prediction_id": generate_id("PRED", pred_count),
@@ -645,7 +665,7 @@ class E2IDataGenerator:
                         "patient_id": pj["patient_id"],
                         "hcp_id": random.choice(self.hcp_profiles)["hcp_id"],
                         "prediction_type": random.choice(PREDICTION_TYPES),
-                        "prediction_value": round(random.uniform(0, 1), 4),
+                        "prediction_value": pred_value,
                         "prediction_class": random.choice(["high_risk", "medium_risk", "low_risk"]),
                         "confidence_score": round(random.uniform(0.5, 0.99), 4),
                         "probability_scores": {
@@ -685,11 +705,11 @@ class E2IDataGenerator:
                             "equalized_odds": round(random.uniform(0.85, 1.0), 3),
                         },
                         "explanation_text": f"Patient shows {random.choice(['elevated', 'moderate', 'low'])} risk based on {random.choice(['prior treatment history', 'comorbidity profile', 'HCP engagement patterns'])}.",
-                        "treatment_effect_estimate": round(random.uniform(0.05, 0.3), 3),
+                        "treatment_effect_estimate": tee,
                         "heterogeneous_effect": round(random.uniform(-0.1, 0.2), 3),
                         "segment_assignment": f"segment_{random.randint(1, 5)}",
                         "causal_confidence": round(random.uniform(0.6, 0.95), 3),
-                        "counterfactual_outcome": round(random.uniform(0.2, 0.8), 3),
+                        "counterfactual_outcome": counterfactual,
                         "features_available_at_prediction": {
                             "feature_count": random.randint(20, 50),
                             "feature_names": [

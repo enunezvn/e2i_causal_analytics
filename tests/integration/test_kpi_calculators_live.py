@@ -31,17 +31,19 @@ CTX = {"brand": "Fabhalta", "segment": None, "model_name": "default_model"}
 
 # (calculator class, fixable _calc methods, missing _calc methods)
 SPECS = [
-    # #577 PR1: CM-003 (_calc_causal_impact) is WIRED (honest descriptive aggregate over
-    # causal_paths.causal_effect_size). Its faithful e2e lives in
-    # test_577_causal_metrics_live.py — which capability-gates on its OWN query_id
-    # (causal_metrics_causal_impact, migration 047). Keeping it out of this shared list
-    # (which gates only on the 044-era causal_metrics_ate) avoids a FAIL (vs skip) on a
-    # 044-but-not-047 target. CM-004/005 remain fail-loud (source columns are uniform
-    # noise; honest wiring needs a generator-coherence rework — PR2/PR3 of the trio).
+    # #577 PR1/PR2: CM-003 (_calc_causal_impact) + CM-004 (_calc_counterfactual) are WIRED.
+    # CM-003 = honest descriptive aggregate over causal_paths.causal_effect_size; CM-004 =
+    # mean counterfactual LEVEL after a generator-coherence rework (counterfactual_outcome =
+    # factual − treatment effect, floored). Their faithful e2es live in
+    # test_577_causal_metrics_live.py — which capability-gates on their OWN query_ids
+    # (migrations 047/048). Keeping them out of this shared list (which gates only on the
+    # 044-era causal_metrics_ate) avoids a FAIL (vs skip) on a 044-but-not-048 target.
+    # CM-005 (_calc_mediation_effect) remains fail-loud — causal_chain edges don't reconcile
+    # with causal_effect_size; honest wiring needs a further generator rework (PR3).
     (
         CausalMetricsCalculator,
         ["_calc_ate", "_calc_cate"],
-        ["_calc_counterfactual", "_calc_mediation_effect"],
+        ["_calc_mediation_effect"],
     ),
     (
         BusinessImpactCalculator,

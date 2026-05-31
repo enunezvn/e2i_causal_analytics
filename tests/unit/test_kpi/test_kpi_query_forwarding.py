@@ -30,15 +30,16 @@ ALL_CALCULATORS = [
 # #577 Tier A: DQ-002 source_coverage_hcps + DQ-006 geographic_consistency are now WIRED
 # to real data (reference_universe + hcp_profiles/patient_journeys) and so are no longer
 # here — they move to the FIXABLE contract (see test_577_tier_a_* + the live e2e).
-# #577 PR1: CM-003 _calc_causal_impact is now WIRED as an honest descriptive aggregate
-# (mean causal_effect_size over discovered paths; query causal_metrics_causal_impact) and
-# so is no longer here — its meaning e2e lives in test_577_causal_metrics_live.py.
-# CM-004 _calc_counterfactual + CM-005 _calc_mediation_effect REMAIN fail-loud: their source
-# columns are independent uniform noise (no factual/counterfactual relationship; causal_chain
-# edges don't reconcile with causal_effect_size), so wiring them honestly requires a generator
-# coherence rework first (tracked as PR2/PR3 of the causal trio).
+# #577 PR1: CM-003 _calc_causal_impact is WIRED as an honest descriptive aggregate
+# (mean causal_effect_size over discovered paths; query causal_metrics_causal_impact).
+# #577 PR2: CM-004 _calc_counterfactual is WIRED after a generator-coherence rework that
+# makes counterfactual_outcome a real do-contrast of the factual (factual − treatment
+# effect, floored at 0; query causal_metrics_counterfactual). Both meaning e2es live in
+# test_577_causal_metrics_live.py.
+# CM-005 _calc_mediation_effect REMAINS fail-loud: causal_chain edges still don't reconcile
+# with causal_effect_size, so an honest mediation decomposition needs a further generator
+# rework (tracked as PR3 of the causal trio).
 MISSING_METRICS = [
-    (CausalMetricsCalculator, "_calc_counterfactual"),
     (CausalMetricsCalculator, "_calc_mediation_effect"),
     (BusinessImpactCalculator, "_calc_patient_touch_rate"),
     (TriggerPerformanceCalculator, "_calc_action_rate_uplift"),
