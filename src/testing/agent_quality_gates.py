@@ -301,27 +301,22 @@ def _validate_experiment_designer(output: dict[str, Any]) -> tuple[bool, str]:
 
 
 def _validate_experiment_monitor(output: dict[str, Any]) -> tuple[bool, str]:
-    """Experiment monitor must summarize what it checked and back any alert with content.
+    """Experiment monitor must summarize every completed run and back any alert.
 
-    Mirrors the conditional-requirement style of ``_validate_drift_monitor``:
-    a completed pass that actually examined experiments has to explain what it
-    found, and any alert it raises must carry substance (no empty placeholders).
+    Mirrors the conditional-requirement style of ``_validate_drift_monitor``: a
+    completed/success pass must always describe what it did — even a
+    0-experiment run has to report the empty check rather than emit an empty
+    summary — and any alert it raises must carry substance (no empty
+    placeholders).
     """
     status = _safe_get(output, "status", "")
-    experiments_checked = _safe_get(output, "experiments_checked", 0)
 
-    # A completed monitoring pass that examined experiments must explain itself.
-    if (
-        status in ("completed", "success")
-        and isinstance(experiments_checked, int)
-        and experiments_checked > 0
-    ):
+    # A completed monitoring pass must explain itself, including the
+    # no-active-experiments case (report the empty check, not an empty string).
+    if status in ("completed", "success"):
         summary = _safe_get(output, "monitor_summary", "")
         if not summary or not str(summary).strip():
-            return (
-                False,
-                f"Monitored {experiments_checked} experiment(s) but monitor_summary is empty",
-            )
+            return (False, "Completed monitor run but monitor_summary is empty")
 
     # Alerts, when present, must carry content (no empty/placeholder entries).
     alerts = _safe_get(output, "alerts", [])

@@ -61,24 +61,45 @@ def _load_workflow() -> dict:
     return yaml.safe_load(WORKFLOW.read_text())
 
 
-def _test_run_blocks(workflow: dict) -> list[str]:
-    """Shell bodies of every job step that runs ``tests/unit/`` directories.
+# The aggregate gate every PR-blocking job feeds into. A test dir only counts as
+# "covered" if it runs in a job REQUIRED by this gate — a dir run by an unwired or
+# skipped job would not block a merge, so counting it would reopen the #555
+# false-green (codex review).
+CI_SUCCESS_JOB = "ci-success"
 
-    A dir is "covered" if ANY backend-tests job runs it — the coverage unit job,
+
+def _required_jobs(workflow: dict) -> set[str]:
+    """Job names required by the ``ci-success`` aggregate gate."""
+    needs = workflow.get("jobs", {}).get(CI_SUCCESS_JOB, {}).get("needs", [])
+    if isinstance(needs, str):
+        needs = [needs]
+    return set(needs)
+
+
+def _test_run_blocks(workflow: dict) -> list[str]:
+    """Shell bodies of test steps that run ``tests/unit/`` dirs, restricted to
+    jobs REQUIRED by ``ci-success``.
+
+    A dir is "covered" if it runs in any required job — the coverage unit job,
     the serviceless ``heavy-unit-tests`` job (test_causal_engine /
-    test_digital_twin), or any future test job. The guard therefore unions the
-    whole-dir args across every job rather than keying on a single step.
+    test_digital_twin), or any future test job wired into ``ci-success.needs``.
+    The guard unions the whole-dir args across those jobs; a job NOT in the
+    required set is ignored, because its failures cannot block a merge.
     """
+    required = _required_jobs(workflow)
     blocks: list[str] = []
-    for job in workflow.get("jobs", {}).values():
+    for job_name, job in workflow.get("jobs", {}).items():
+        if job_name not in required:
+            continue
         for step in job.get("steps", []):
             run = step.get("run", "") or ""
             if "tests/unit/" in run:
                 blocks.append(run)
     if not blocks:
         raise AssertionError(
-            "Could not locate any pytest step running tests/unit/ in "
-            "backend-tests.yml — the CI-coverage guard cannot parse the allowlist."
+            "Could not locate any pytest step running tests/unit/ in a job "
+            f"required by '{CI_SUCCESS_JOB}' in backend-tests.yml — the "
+            "CI-coverage guard cannot parse the allowlist."
         )
     return blocks
 
@@ -159,7 +180,26 @@ def test_dir_run_in_any_job_counts_as_covered() -> None:
             "heavy-unit-tests": {"steps": [{"run": "pytest \\\n  tests/unit/bar/ \\\n  -n 2"}]},
             # a job that touches no tests/unit dir must contribute nothing
             "lint": {"steps": [{"run": "ruff check src/ tests/"}]},
+            "ci-success": {"needs": ["unit-tests", "heavy-unit-tests", "lint"]},
         }
     }
     covered = _run_whole_dirs(_test_run_blocks(workflow))
     assert covered == {"foo", "bar"}
+
+
+def test_dir_run_only_in_non_required_job_is_not_covered() -> None:
+    """A dir run only by a job NOT in ``ci-success.needs`` does not count.
+
+    Such a job does not gate a merge, so a failing test there is invisible to the
+    required check — counting it would reopen the exact #555 false-green this
+    guard prevents (codex review)."""
+    workflow = {
+        "jobs": {
+            "unit-tests": {"steps": [{"run": "pytest \\\n  tests/unit/foo/ \\\n  --cov=src"}]},
+            "stray-tests": {"steps": [{"run": "pytest \\\n  tests/unit/baz/ \\\n  -n 2"}]},
+            "ci-success": {"needs": ["unit-tests"]},
+        }
+    }
+    covered = _run_whole_dirs(_test_run_blocks(workflow))
+    assert covered == {"foo"}
+    assert "baz" not in covered

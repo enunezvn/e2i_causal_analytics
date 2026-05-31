@@ -290,6 +290,32 @@ class TestExperimentMonitorValidator:
         is_valid, _reason = _validate_experiment_monitor(output)
         assert is_valid is True
 
+    def test_completed_zero_experiments_without_summary_fails(self):
+        """Even a 0-experiment completed run must say so — empty summary is invalid.
+
+        This is the Tier0 no-active-experiments path; an empty monitor_summary
+        there is a degenerate output, not a valid 'nothing to report' (codex).
+        """
+        output = {
+            "status": "completed",
+            "experiments_checked": 0,
+            "monitor_summary": "",
+            "alerts": [],
+        }
+        is_valid, _reason = _validate_experiment_monitor(output)
+        assert is_valid is False
+
+    def test_zero_experiments_with_summary_passes(self):
+        """A 0-experiment run that explicitly reports the empty check is valid."""
+        output = {
+            "status": "completed",
+            "experiments_checked": 0,
+            "monitor_summary": "No active experiments to monitor",
+            "alerts": [],
+        }
+        is_valid, _reason = _validate_experiment_monitor(output)
+        assert is_valid is True
+
 
 @pytest.mark.unit
 class TestExperimentDesignerValidator:
