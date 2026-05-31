@@ -105,12 +105,21 @@ class DataQualityCalculator(KPICalculatorBase):
 
     # WS1 data-quality metrics where a LOWER value is better, so the threshold
     # direction must invert (target < warning < critical are "bad" bounds going up):
-    #   DQ-006 geographic gap, DQ-007 data lag (days), DQ-009 time-to-release (days).
+    #   DQ-006 geographic gap (dimensionless), DQ-007 data lag (query days / thresholds
+    #   days — unit-consistent).
     # Declared explicitly (mirrors ModelPerformance/BrandSpecific) because the base
     # KPICalculatorBase._is_lower_better name-heuristic misses "Geographic
-    # Consistency" and "Time-to-Release" (#577). Without this, a gap/lag value was
-    # scored higher-is-better — e.g. a 0.10 geographic gap reported GOOD, not WARNING.
-    _LOWER_IS_BETTER_IDS = {"WS1-DQ-006", "WS1-DQ-007", "WS1-DQ-009"}
+    # Consistency" (#577). Without this, a gap value was scored higher-is-better —
+    # e.g. the real 0.1049 geographic gap reported GOOD when it is CRITICAL (> 0.10).
+    #
+    # DQ-009 (time-to-release) is ALSO lower-is-better but is deliberately EXCLUDED:
+    # its registered query returns DAYS (avg_ttr_hours/24.0) while kpi_definitions.yaml
+    # configures the thresholds in HOURS (target 24 / warning 48 / critical 72) — a
+    # pre-existing unit mismatch that would make a lower-is-better evaluation falsely
+    # GOOD (2.0 days <= 24). Fixing that requires a unit decision + value change for an
+    # out-of-#577-scope metric, so it is tracked as a follow-up (#580) rather than
+    # side-fixed here. Until then DQ-009 keeps its pre-existing (untouched) evaluation.
+    _LOWER_IS_BETTER_IDS = {"WS1-DQ-006", "WS1-DQ-007"}
 
     def _evaluate_status(self, kpi: KPIMetadata, value: float | None) -> KPIStatus:
         """Evaluate KPI value against thresholds (direction-aware)."""
