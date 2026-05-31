@@ -58,6 +58,12 @@ def _run(state: dict) -> dict:
     return asyncio.run(adaptive_validity_check(state))
 
 
+# First test on the worker pays the one-time module-import cost (~16s for the
+# adaptive_validity_check node + sklearn/dspy transitive deps); under the
+# heavy-unit-tests lane's -n2 contention that plus the call can approach the
+# global timeout. The thread timeout method cannot interrupt a blocking C call,
+# so an expiry aborts the whole session — give a generous override (#583).
+@pytest.mark.timeout(300)
 def test_node_returns_required_keys():
     """Node returns the documented state-update keys."""
     rng = np.random.default_rng(0)
@@ -3222,6 +3228,10 @@ def test_issue_194_adversarial_input_real_leak_stays_high():
     assert ad["remediation"] == "drop"
 
 
+# 200-permutation null distribution over n=10k synthetic cohort (~32s local,
+# 2-4x under CI -n2): override the global thread timeout to avoid a session
+# abort (#583); this stays on-PR per the heavy-unit-tests lane.
+@pytest.mark.timeout(300)
 def test_issue_194_layer5_benign_fpr_at_n_10k_under_one_percent():
     """Layer 5 acceptance criterion: FPR ≤ 1% on benign weak predictors at n=10000.
 
@@ -3287,6 +3297,9 @@ def test_issue_194_layer5_benign_fpr_at_n_10k_under_one_percent():
     )
 
 
+# Permutation-based TPR check (~13s local, may exceed the 60s lane timeout
+# under CI -n2 contention): override the global thread timeout (#583).
+@pytest.mark.timeout(300)
 def test_issue_194_layer5_tpr_preserved_on_injected_leaks_at_n_2000():
     """End-to-end Layer 5 acceptance criterion (companion to FPR test):
     TPR on injected leak patterns at n=2000 stays at 100% — joint check
@@ -3366,6 +3379,10 @@ def test_issue_194_floor_constant_pinned_to_calibrated_value():
     )
 
 
+# The n=50000 variant runs a 200-permutation null over a 50k-row cohort
+# (~35s local, 2-4x under CI -n2): override the global thread timeout so an
+# expiry on the largest cohort cannot abort the whole session (#583).
+@pytest.mark.timeout(300)
 @pytest.mark.parametrize("n", [1000, 5000, 10000, 50000])
 def test_issue_194_joint_check_holds_across_cohort_sizes(n: int):
     """Codex pass-1 question (a): the joint check must hold the FPR

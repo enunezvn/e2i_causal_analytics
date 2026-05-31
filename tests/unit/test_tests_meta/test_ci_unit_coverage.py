@@ -44,15 +44,15 @@ UNIT_DIR = REPO_ROOT / "tests" / "unit"
 # ---------------------------------------------------------------------------
 INTENTIONALLY_EXCLUDED: dict[str, str] = {
     # Populated from a CI-faithful (dead-port, serviceless) audit during #555.
-    # The remaining two dirs are NOT clean unit tests — they hard-abort a
-    # serviceless session (heavy in-test ML training: xgboost cross-validation,
-    # 200x-permutation adversarial tests) AND make direct un-mocked mlflow /
-    # get_supabase calls. They need a heavy+service-provisioned CI lane and
-    # per-test triage; could not be validated serviceless or locally (the
-    # C-call timeouts are uninterruptible; live Supabase would mutate the prod
-    # DB). Tracked in #583 — move into that job's allowlist once it is green.
-    "test_agents": "Heavyweight + service-dependent; needs the service-provisioned lane in #583.",
-    "test_data_preparer": "Heavyweight + service-dependent; needs the service-provisioned lane in #583.",
+    # test_data_preparer was moved into the heavy-unit-tests lane in #583 (its
+    # only blocker was 5 slow sklearn-permutation tests busting the 30s thread
+    # timeout — no real service deps; per-test @pytest.mark.timeout overrides
+    # fixed it). test_agents remains deferred to #583 PR2: 308 files with heavy
+    # in-test ML training (xgboost/LightGBM + Optuna HPO, 5-fold CV, 200x
+    # permutation tests) that risk busting the thread timeout. Whether it also
+    # needs service provisioning is under validation (a serviceless run is the
+    # decisive test) — move into the appropriate job's allowlist once green.
+    "test_agents": "Heavyweight ML-training tests; deferred to #583 PR2 pending a serviceless validation run.",
 }
 
 
