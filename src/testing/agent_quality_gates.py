@@ -300,6 +300,36 @@ def _validate_experiment_designer(output: dict[str, Any]) -> tuple[bool, str]:
     return (True, "Passed semantic validation")
 
 
+def _validate_experiment_monitor(output: dict[str, Any]) -> tuple[bool, str]:
+    """Experiment monitor must summarize every completed run and back any alert.
+
+    Mirrors the conditional-requirement style of ``_validate_drift_monitor``: a
+    completed/success pass must always describe what it did — even a
+    0-experiment run has to report the empty check rather than emit an empty
+    summary — and any alert it raises must carry substance (no empty
+    placeholders).
+    """
+    status = _safe_get(output, "status", "")
+
+    # A completed monitoring pass must explain itself, including the
+    # no-active-experiments case (report the empty check, not an empty string).
+    if status in ("completed", "success"):
+        summary = _safe_get(output, "monitor_summary", "")
+        if not summary or not str(summary).strip():
+            return (False, "Completed monitor run but monitor_summary is empty")
+
+    # Alerts, when present, must carry content (no empty/placeholder entries).
+    alerts = _safe_get(output, "alerts", [])
+    if alerts:
+        if not isinstance(alerts, list):
+            return (False, f"alerts must be a list, got {type(alerts).__name__}")
+        for i, alert in enumerate(alerts):
+            if not alert or (isinstance(alert, dict) and not any(alert.values())):
+                return (False, f"alerts[{i}] is empty - each alert must carry content")
+
+    return (True, "Passed semantic validation")
+
+
 def _validate_health_score(output: dict[str, Any]) -> tuple[bool, str]:
     """Health score must provide diagnostic details for low component scores."""
     component_score = _safe_get(output, "component_health_score", 1.0)
@@ -772,6 +802,7 @@ AGENT_QUALITY_GATES: dict[str, AgentQualityGate] = {
             "monitor_summary": {"type": "str", "not_null": True},
         },
         "fail_on_status": ["error", "failed"],
+        "semantic_validator": _validate_experiment_monitor,
     },
 }
 

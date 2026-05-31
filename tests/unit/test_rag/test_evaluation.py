@@ -17,17 +17,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-# Mock external dependencies before importing evaluation module
-mock_ragas = MagicMock()
-mock_ragas.__spec__ = MagicMock()  # Fix for importlib.util.find_spec check
-sys.modules["ragas"] = mock_ragas
-sys.modules["ragas.metrics"] = MagicMock()
-sys.modules["ragas.llms"] = MagicMock()
-sys.modules["ragas.embeddings"] = MagicMock()
-sys.modules["datasets"] = MagicMock()
-sys.modules["openai"] = MagicMock()
-sys.modules["mlflow"] = MagicMock()
-
+# evaluation imports cleanly (it imports ragas/datasets/openai lazily inside
+# _evaluate_with_ragas at runtime, and binds mlflow at module level). Import it
+# directly, and provide the optional deps PER-TEST via the autouse fixture below
+# (monkeypatch) so they exist during this module's tests but never leak into
+# co-located test modules under pytest-xdist loadscope (#555). ragas/datasets are
+# not installed in this environment, so the runtime path needs them stubbed.
 from src.rag.evaluation import (
     DEFAULT_THRESHOLDS,
     EvaluationConfig,
@@ -43,6 +38,22 @@ from src.rag.evaluation import (
     quick_evaluate,
     save_evaluation_dataset,
 )
+
+
+@pytest.fixture(autouse=True)
+def _stub_optional_eval_deps(monkeypatch):
+    """Make ragas/datasets/openai importable and mlflow inert for each test in
+    this module, restored automatically after each test so no MagicMock leaks
+    into other test modules under xdist loadscope (#555)."""
+    import src.rag.evaluation as _eval_mod
+
+    ragas_stub = MagicMock()
+    ragas_stub.__spec__ = MagicMock()  # for importlib.util.find_spec checks
+    monkeypatch.setitem(sys.modules, "ragas", ragas_stub)
+    for _name in ("ragas.metrics", "ragas.llms", "ragas.embeddings", "datasets", "openai"):
+        monkeypatch.setitem(sys.modules, _name, MagicMock())
+    monkeypatch.setattr(_eval_mod, "_mlflow", MagicMock(), raising=False)
+
 
 # =============================================================================
 # Test Data Models

@@ -15,11 +15,24 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
-# Mock dependencies before importing
-sys.modules["src.memory.episodic_memory"] = MagicMock()
-sys.modules["src.memory.procedural_memory"] = MagicMock()
-sys.modules["src.memory.semantic_memory"] = MagicMock()
-sys.modules["src.rag.memory_connector"] = MagicMock()
+# cognitive_backends's tests need the heavy memory backends mocked, so we stub
+# src.memory.* in sys.modules ONLY for cognitive_backends' own import, then
+# restore. Importing cognitive_backends also runs src.rag.__init__, which EAGERLY
+# imports sibling modules (memory_adapters, insight_enricher, ...) that bind
+# src.memory.* / anthropic at import — so we pre-import src.rag FIRST (with the
+# real deps) to keep those siblings uncontaminated, before stubbing. Nothing
+# leaks into co-located test modules under pytest-xdist loadscope (#555).
+import src.rag  # noqa: F401  -- force src.rag.__init__ to bind real deps before stubbing
+
+_STUBBED_MODULES = [
+    "src.memory.episodic_memory",
+    "src.memory.procedural_memory",
+    "src.memory.semantic_memory",
+    "src.rag.memory_connector",
+]
+_SAVED_MODULES = {name: sys.modules.get(name) for name in _STUBBED_MODULES}
+for _name in _STUBBED_MODULES:
+    sys.modules[_name] = MagicMock()
 
 from src.rag.cognitive_backends import (
     EpisodicMemoryBackend,
@@ -28,6 +41,13 @@ from src.rag.cognitive_backends import (
     SignalCollector,
     get_cognitive_memory_backends,
 )
+
+# Restore the real modules now that cognitive_backends has bound the stubs.
+for _name, _orig in _SAVED_MODULES.items():
+    if _orig is not None:
+        sys.modules[_name] = _orig
+    else:
+        sys.modules.pop(_name, None)
 
 # =============================================================================
 # Test EpisodicMemoryBackend

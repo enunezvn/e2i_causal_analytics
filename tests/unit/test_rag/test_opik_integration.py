@@ -10,16 +10,18 @@ Tests cover:
 """
 
 import asyncio
-import sys
 import uuid
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-# Mock opik connector before import
-sys.modules["src.mlops.opik_connector"] = MagicMock()
-
+# opik_integration imports cleanly without stubbing src.mlops.opik_connector
+# (it resolves the connector lazily via get_opik_connector, which tests patch).
+# Stubbing it in sys.modules at import time (without restoring) leaked a
+# MagicMock into co-located test modules (e.g.
+# tests/unit/test_mlops/test_opik_connector.py) under pytest-xdist loadscope
+# (#555). No stubbing needed — import directly.
 from src.rag.opik_integration import (
     CombinedEvaluationResult,
     EvaluationTraceContext,

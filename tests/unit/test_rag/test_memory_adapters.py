@@ -10,15 +10,15 @@ Tests cover:
 - Factory function
 """
 
-import sys
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-# Mock dependencies before importing
-sys.modules["src.memory.procedural_memory"] = MagicMock()
-
+# memory_adapters imports cleanly without stubbing src.memory.procedural_memory;
+# its tests patch at the adapter level. Stubbing it in sys.modules at import time
+# (without restoring) leaked a MagicMock into co-located test modules under
+# pytest-xdist loadscope (#555). No stubbing needed — import directly.
 from src.rag.memory_adapters import (
     CollectedSignal,
     EpisodicMemoryAdapter,
