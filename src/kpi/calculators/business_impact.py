@@ -150,11 +150,31 @@ class BusinessImpactCalculator(KPICalculatorBase):
     def _calc_patient_touch_rate(self, context: dict[str, Any]) -> float:
         """Calculate WS3-BI-003: Patient Touch Rate.
 
-        Percentage of eligible patients with trigger-driven touchpoint.
+        Fraction of code-anchored ELIGIBLE patients with a trigger-driven
+        touchpoint. Eligibility is DERIVED from the real primary_diagnosis_code
+        (membership in the brand's qualifying ICD-10 set, via the
+        v_patient_eligibility view), NOT a blanket is_eligible flag — which does
+        not exist; that absence was the #574 fail-loud reason — and NOT the
+        ~93%-NULL journey_status. A "touch" is a trigger that was actually
+        DELIVERED (delivery_status IN ('delivered','viewed')); pending/failed/
+        expired triggers never reached anyone, so counting any trigger would be
+        the degenerate ~99.5% relabel #574 forbids.
+
+        #577: returns the FRACTION touched/eligible in [0,1] (the division is
+        done in SQL — sibling parity with conversion_rate / hcp_coverage). $1 is
+        an optional brand filter ('' => all brands). Fails loud when there is no
+        eligible cohort (NULLIF -> NULL touch_rate); a genuine 0.0 (cohort exists
+        but none delivered-touched) is a legitimate value and is returned, not
+        raised.
         """
-        raise RuntimeError(
-            "KPI patient_touch_rate unavailable: patient_journeys has no is_eligible column (#574)"
-        )
+        brand = context.get("brand") or ""
+        result = self._execute_query("business_impact_patient_touch_rate", [brand])
+        if not result or result[0].get("touch_rate") is None:
+            raise RuntimeError(
+                "KPI WS3-BI-003 unavailable: no code-anchored eligible patient cohort "
+                "(apply the #577 patient-touch view + registry, migration 050)"
+            )
+        return float(result[0]["touch_rate"])
 
     def _calc_hcp_coverage(self, context: dict[str, Any]) -> float:
         """Calculate WS3-BI-004: HCP Coverage.

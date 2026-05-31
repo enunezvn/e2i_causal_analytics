@@ -37,8 +37,12 @@ ALL_CALCULATORS = [
 #   PR3 CM-005 _calc_mediation_effect — coherent decomposition (indirect_effect grounded in the
 #       product of the causal_chain edge magnitudes; direct = total − indirect; proportion
 #       mediated = indirect/total).
+# #577 WS3-BI-003 _calc_patient_touch_rate is now WIRED (meaning e2e in
+# test_577_patient_touch_live.py): fraction of code-anchored ELIGIBLE patients
+# (primary_diagnosis_code in the brand's qualifying ICD-10 set, via v_patient_eligibility —
+# NOT the absent is_eligible flag #574) with >=1 DELIVERED trigger (delivery_status IN
+# ('delivered','viewed') — an actual touchpoint, NOT the degenerate any-trigger=99.5% relabel).
 MISSING_METRICS = [
-    (BusinessImpactCalculator, "_calc_patient_touch_rate"),
     (TriggerPerformanceCalculator, "_calc_action_rate_uplift"),
     (DataQualityCalculator, "_calc_label_quality"),
 ]
@@ -173,3 +177,51 @@ def test_br003_fails_loud_on_empty_eligible_cohort():
     calc, _ = _brand_calc_returning([{"tested_rate": None}])
     with pytest.raises(RuntimeError, match="unavailable"):
         calc._calc_fabhalta_pnh_tested({"brand": "Fabhalta"})
+
+
+# --- #577 WS3-BI-003: patient_touch_rate wired (code-anchored eligible + delivered touch) ----
+
+
+def _bi_calc_returning(rows):
+    """A BusinessImpactCalculator whose kpi_query RPC returns `rows`."""
+    client = MagicMock()
+    client.rpc.return_value.execute.return_value = MagicMock(data=rows)
+    return BusinessImpactCalculator(db_client=client), client
+
+
+def test_patient_touch_rate_forwards_and_computes():
+    """WS3-BI-003 forwards the optional brand filter to the allowlist id and returns the
+    touch-rate FRACTION (the division is done in SQL; sibling parity with conversion_rate)."""
+    calc, client = _bi_calc_returning([{"touch_rate": 0.9074}])
+    val = calc._calc_patient_touch_rate({"brand": "Fabhalta"})
+    client.rpc.assert_called_once_with(
+        "kpi_query",
+        {"query_id": "business_impact_patient_touch_rate", "params": ["Fabhalta"]},
+    )
+    assert abs(val - 0.9074) < 1e-9
+
+
+def test_patient_touch_rate_no_brand_binds_empty_sentinel():
+    """No brand in context -> the empty-string sentinel (all brands). Locks the optional-param
+    idiom AND the EXACT max_params=1 arity (always exactly one element, never [])."""
+    calc, client = _bi_calc_returning([{"touch_rate": 0.9074}])
+    calc._calc_patient_touch_rate({})
+    client.rpc.assert_called_once_with(
+        "kpi_query",
+        {"query_id": "business_impact_patient_touch_rate", "params": [""]},
+    )
+
+
+def test_patient_touch_rate_fails_loud_on_empty_eligible_cohort():
+    """No code-anchored eligible cohort (NULLIF -> NULL touch_rate) -> fail loud, NOT a
+    fabricated 0.0."""
+    calc, _ = _bi_calc_returning([{"touch_rate": None}])
+    with pytest.raises(RuntimeError, match="unavailable"):
+        calc._calc_patient_touch_rate({"brand": "Fabhalta"})
+
+
+def test_patient_touch_rate_genuine_zero_is_returned_not_raised():
+    """A genuine 0.0 (eligible cohort exists, but none delivered-touched) is a LEGITIMATE
+    value and must be returned, never raised."""
+    calc, _ = _bi_calc_returning([{"touch_rate": 0.0}])
+    assert calc._calc_patient_touch_rate({"brand": "Fabhalta"}) == 0.0
