@@ -16,6 +16,7 @@ from src.testing.agent_quality_gates import (
     _validate_causal_impact,
     _validate_drift_monitor,
     _validate_experiment_designer,
+    _validate_experiment_monitor,
     _validate_explainer,
     _validate_feedback_learner,
     _validate_gap_analyzer,
@@ -239,6 +240,55 @@ class TestDriftMonitorValidator:
         }
         is_valid, reason = _validate_drift_monitor(output)
         assert is_valid is False
+
+
+@pytest.mark.unit
+class TestExperimentMonitorValidator:
+    """Test _validate_experiment_monitor semantic validator."""
+
+    def test_completed_with_summary_passes(self):
+        """A completed monitoring pass with a summary is valid."""
+        output = {
+            "status": "completed",
+            "experiments_checked": 2,
+            "monitor_summary": "2 active experiments, no SRM detected",
+            "alerts": [],
+        }
+        is_valid, _reason = _validate_experiment_monitor(output)
+        assert is_valid is True
+
+    def test_checked_experiments_without_summary_fails(self):
+        """Monitoring experiments but emitting no summary is invalid."""
+        output = {
+            "status": "completed",
+            "experiments_checked": 3,
+            "monitor_summary": "",
+            "alerts": [],
+        }
+        is_valid, _reason = _validate_experiment_monitor(output)
+        assert is_valid is False
+
+    def test_empty_alert_entry_fails(self):
+        """An alert without any content is invalid."""
+        output = {
+            "status": "completed",
+            "experiments_checked": 1,
+            "monitor_summary": "checked",
+            "alerts": [{}],
+        }
+        is_valid, _reason = _validate_experiment_monitor(output)
+        assert is_valid is False
+
+    def test_substantive_alert_passes(self):
+        """A substantive alert alongside a clean summary is valid."""
+        output = {
+            "status": "completed",
+            "experiments_checked": 1,
+            "monitor_summary": "1 experiment flagged for SRM",
+            "alerts": [{"type": "SRM", "severity": "high", "experiment_id": "exp-1"}],
+        }
+        is_valid, _reason = _validate_experiment_monitor(output)
+        assert is_valid is True
 
 
 @pytest.mark.unit

@@ -47,6 +47,9 @@ class Tier0StateContract(TypedDict, total=False):
     model_candidate: NotRequired[Any]
     alternative_candidates: NotRequired[list]
     deployment_manifest: NotRequired[Dict[str, Any]]
+    # v5 Gate C1: regulatory deployment manifest surfaced by validate_promotion
+    # (scripts/run_tier0_test.py emits ``regulatory_deployment_manifest``).
+    regulatory_deployment_manifest: NotRequired[Dict[str, Any]]
 
     # Pipeline outputs.
     qc_report: NotRequired[Dict[str, Any]]
@@ -55,6 +58,9 @@ class Tier0StateContract(TypedDict, total=False):
     class_imbalance_info: NotRequired[Dict[str, Any]]
     success_criteria: NotRequired[Dict[str, Any]]
     success_criteria_met: NotRequired[bool]
+    # Per-criterion evaluation detail (run_tier0_test emits ``success_criteria_results``
+    # from the v3 audit / bake-off winner).
+    success_criteria_results: NotRequired[Dict[str, Any]]
     gate_passed: NotRequired[bool]
     pipeline_halted: NotRequired[bool]
     halt_reason: NotRequired[str]
@@ -84,6 +90,9 @@ class Tier0StateContract(TypedDict, total=False):
     leakage_added_features: NotRequired[list]
     leakage_remediation_reasoning: NotRequired[Any]
     leakage_remediation_viable: NotRequired[bool]
+    # Adaptive validity (Layer 4): per-feature Layer-1 verdicts captured by
+    # run_pipeline (scripts/run_tier0_test.py emits ``adaptive_verdicts``).
+    adaptive_verdicts: NotRequired[list]
 
     # Evaluator outputs (Block 5/6).
     accuracy_analysis: NotRequired[Dict[str, Any]]
