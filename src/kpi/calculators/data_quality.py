@@ -115,15 +115,7 @@ class DataQualityCalculator(KPICalculatorBase):
         Formula: covered_patients / reference_patients
         """
         brand = context.get("brand")
-        query = """
-            SELECT
-                COUNT(DISTINCT pj.patient_id) as covered,
-                COUNT(DISTINCT ru.patient_id) as total
-            FROM patient_journeys pj
-            FULL OUTER JOIN reference_universe ru ON pj.patient_id = ru.patient_id
-            WHERE ($1::text IS NULL OR pj.brand = $1 OR ru.brand = $1)
-        """
-        result = self._execute_query(query, [brand])
+        result = self._execute_query("data_quality_source_coverage_patients", [brand])
         if result and result[0]["total"] > 0:
             return float(result[0]["covered"] / result[0]["total"])
         return 0.0
@@ -133,27 +125,15 @@ class DataQualityCalculator(KPICalculatorBase):
 
         Formula: covered_hcps / reference_hcps
         """
-        brand = context.get("brand")
-        query = """
-            SELECT
-                COUNT(DISTINCT aa.hcp_id) as covered,
-                COUNT(DISTINCT ru.hcp_id) as total
-            FROM agent_activities aa
-            FULL OUTER JOIN reference_hcps ru ON aa.hcp_id = ru.hcp_id
-            WHERE ($1::text IS NULL OR aa.brand = $1 OR ru.brand = $1)
-        """
-        result = self._execute_query(query, [brand])
-        if result and result[0]["total"] > 0:
-            return float(result[0]["covered"] / result[0]["total"])
-        return 0.0
+        context.get("brand")
+        raise RuntimeError("KPI WS1-DQ-002 unavailable: reference_hcps table does not exist (#574)")
 
     def _calc_cross_source_match(self, context: dict[str, Any]) -> float:
         """Calculate WS1-DQ-003: Cross-source Match Rate.
 
         Uses v_kpi_cross_source_match view.
         """
-        query = "SELECT match_rate FROM v_kpi_cross_source_match LIMIT 1"
-        result = self._execute_query(query, [])
+        result = self._execute_query("data_quality_cross_source_match", [])
         if result:
             return float(result[0]["match_rate"])
         return 0.0
@@ -163,8 +143,7 @@ class DataQualityCalculator(KPICalculatorBase):
 
         Uses v_kpi_stacking_lift view.
         """
-        query = "SELECT lift_score FROM v_kpi_stacking_lift LIMIT 1"
-        result = self._execute_query(query, [])
+        result = self._execute_query("data_quality_stacking_lift", [])
         if result:
             return float(result[0]["lift_score"])
         return 1.0  # Neutral lift
@@ -174,18 +153,7 @@ class DataQualityCalculator(KPICalculatorBase):
 
         Formula: records_passing_completeness / total_records
         """
-        query = """
-            SELECT
-                AVG(CASE
-                    WHEN patient_id IS NOT NULL
-                    AND brand IS NOT NULL
-                    AND event_date IS NOT NULL
-                    THEN 1.0 ELSE 0.0
-                END) as pass_rate
-            FROM patient_journeys
-            WHERE created_at >= NOW() - INTERVAL '30 days'
-        """
-        result = self._execute_query(query, [])
+        result = self._execute_query("data_quality_completeness_pass_rate", [])
         if result:
             return result[0]["pass_rate"] or 0.0
         return 0.0
@@ -195,21 +163,9 @@ class DataQualityCalculator(KPICalculatorBase):
 
         Formula: consistent_geo_records / total_geo_records
         """
-        query = """
-            SELECT
-                AVG(CASE
-                    WHEN hcp_region IS NOT NULL
-                    AND hcp_region = patient_region
-                    THEN 1.0 ELSE 0.0
-                END) as consistency_rate
-            FROM patient_journeys pj
-            JOIN agent_activities aa ON pj.hcp_id = aa.hcp_id
-            WHERE pj.created_at >= NOW() - INTERVAL '30 days'
-        """
-        result = self._execute_query(query, [])
-        if result:
-            return result[0]["consistency_rate"] or 0.0
-        return 0.0
+        raise RuntimeError(
+            "KPI WS1-DQ-006 unavailable: agent_activities has no hcp_id column for the join (#574)"
+        )
 
     def _calc_data_lag(self, context: dict[str, Any]) -> float:
         """Calculate WS1-DQ-007: Data Lag (Median).
@@ -217,8 +173,7 @@ class DataQualityCalculator(KPICalculatorBase):
         Uses v_kpi_data_lag view.
         Returns median lag in days (lower is better).
         """
-        query = "SELECT median_lag_days FROM v_kpi_data_lag LIMIT 1"
-        result = self._execute_query(query, [])
+        result = self._execute_query("data_quality_data_lag", [])
         if result:
             return float(result[0]["median_lag_days"])
         return 0.0
@@ -229,11 +184,9 @@ class DataQualityCalculator(KPICalculatorBase):
         Uses v_kpi_label_quality view.
         Returns inter-annotator agreement score.
         """
-        query = "SELECT iaa_score FROM v_kpi_label_quality LIMIT 1"
-        result = self._execute_query(query, [])
-        if result:
-            return float(result[0]["iaa_score"])
-        return 0.0
+        raise RuntimeError(
+            "KPI WS1-DQ-008 unavailable: no iaa_score source column available (#574)"
+        )
 
     def _calc_time_to_release(self, context: dict[str, Any]) -> float:
         """Calculate WS1-DQ-009: Time-to-Release (TTR).
@@ -241,19 +194,22 @@ class DataQualityCalculator(KPICalculatorBase):
         Uses v_kpi_time_to_release view.
         Returns median time in days (lower is better).
         """
-        query = "SELECT median_ttr_days FROM v_kpi_time_to_release LIMIT 1"
-        result = self._execute_query(query, [])
+        result = self._execute_query("data_quality_time_to_release", [])
         if result:
             return float(result[0]["median_ttr_days"])
         return 0.0
 
-    def _execute_query(self, query: str, params: list[Any]) -> list[dict[str, Any]] | None:
-        """Execute a SQL query via Supabase RPC and return rows.
+    def _execute_query(self, query_id: str, params: list[Any]) -> list[dict[str, Any]] | None:
+        """Run a vetted KPI statement via the `kpi_query` allowlist RPC.
+
+        #574: the calculators no longer build raw SQL. `query_id` selects a
+        pre-vetted statement from `kpi_query_registry`; `params` bind to its
+        `$1..$N` placeholders. This replaces the now-dead `execute_sql` RPC.
 
         F-007 iter-2 (#421): the prior implementation caught all exceptions
         and returned `None`, which callers translated into `0.0` (e.g.,
-        `_calc_source_coverage_patients` line 129 returns `0.0` when result is
-        None). That cascaded user-visible "0%" KPI values from silent Supabase
+        `_calc_source_coverage_patients` returns `0.0` when result is None).
+        That cascaded user-visible "0%" KPI values from silent Supabase
         failures — RPC unreachable, missing function, auth error all looked
         identical to "no rows", which looked identical to "perfectly zero".
 
@@ -268,8 +224,9 @@ class DataQualityCalculator(KPICalculatorBase):
         0.0%" is correct; "RPC failed" should NOT silently become "0.0%").
 
         Args:
-            query: SQL query string with $1, $2, etc. placeholders.
-            params: Query parameters.
+            query_id: Registry id of a vetted statement in
+                `kpi_query_registry` (its `$1..$N` placeholders bind `params`).
+            params: Query parameters bound to `$1..$N`.
 
         Returns:
             List of result rows as dictionaries (possibly empty).
@@ -285,11 +242,9 @@ class DataQualityCalculator(KPICalculatorBase):
             raise RuntimeError(
                 "DataQualityCalculator has no Supabase client; cannot execute KPI query"
             )
-        # NOTE: this calculator delegates to `rpc("execute_sql", ...)`. The
-        # broader codebase pattern uses `client.table(name).select(...)`.
-        # That divergence is tracked separately; this minimal fix only
-        # closes the silent-failure path.
-        response = self.db_client.rpc("execute_sql", {"query": query}).execute()
+        response = self.db_client.rpc(
+            "kpi_query", {"query_id": query_id, "params": params}
+        ).execute()
         data = getattr(response, "data", None)
         if data is None:
             return []

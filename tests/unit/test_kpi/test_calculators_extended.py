@@ -249,24 +249,16 @@ class TestBrandSpecificCalculator:
         """Test calculator supports Brand-Specific KPIs."""
         assert calculator.supports(remi_uncontrolled_kpi) is True
 
-    def test_calculate_remi_uncontrolled_good(self, calculator, remi_uncontrolled_kpi):
-        """Test Remi uncontrolled with good result (lower is better)."""
-        calculator._execute_query = Mock(return_value=[{"uncontrolled_pct": 0.35}])
-
+    def test_calculate_remi_uncontrolled_unavailable(self, calculator, remi_uncontrolled_kpi):
+        """#574: BR-001 (AH-uncontrolled %) is UNAVAILABLE — 'antihistamine' is not a valid
+        event_type/brand category in the schema, so the metric cannot be computed without
+        misrepresenting it. It must FAIL LOUD (value=None + error), never a fabricated value
+        (the prior force-fit remapped it to Remibrutinib patients, inverting the metric)."""
         result = calculator.calculate(remi_uncontrolled_kpi)
 
-        assert result.value == 0.35
-        assert result.status == KPIStatus.GOOD
-        assert result.metadata.get("lower_is_better") is True
-
-    def test_calculate_remi_uncontrolled_critical(self, calculator, remi_uncontrolled_kpi):
-        """Test Remi uncontrolled in critical zone (too high)."""
-        calculator._execute_query = Mock(return_value=[{"uncontrolled_pct": 0.65}])
-
-        result = calculator.calculate(remi_uncontrolled_kpi)
-
-        assert result.value == 0.65
-        assert result.status == KPIStatus.CRITICAL
+        assert result.value is None
+        assert result.error is not None
+        assert "unavailable" in result.error.lower()
 
     def test_calculate_kisqali_adoption_good(self, calculator, kisqali_adoption_kpi):
         """Test Kisqali adoption with good result (lower days is better)."""

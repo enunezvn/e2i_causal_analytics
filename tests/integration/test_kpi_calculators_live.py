@@ -1,0 +1,118 @@
+"""#574 faithful end-to-end: every rewired KPI calculator metric runs against the LIVE
+DB through the kpi_query allowlist RPC.
+
+- FIXABLE metrics must execute without raising (value may be 0.0/None for empty windows)
+  — this catches column-alias mismatches between the registry SQL and the calculator's
+  result handling, bad query_ids, and param-arity errors.
+- MISSING metrics must FAIL LOUD (raise) — never a fabricated value.
+
+CAPABILITY-GATED: skips unless SUPABASE_* is set AND the kpi_query RPC exists (migration
+044 applied), e.g. CI without the migration skips.
+"""
+
+import os
+
+import pytest
+
+from src.kpi.calculators.brand_specific import BrandSpecificCalculator
+from src.kpi.calculators.business_impact import BusinessImpactCalculator
+from src.kpi.calculators.causal_metrics import CausalMetricsCalculator
+from src.kpi.calculators.data_quality import DataQualityCalculator
+from src.kpi.calculators.model_performance import ModelPerformanceCalculator
+from src.kpi.calculators.trigger_performance import TriggerPerformanceCalculator
+
+HAS_SUPABASE = bool(os.getenv("SUPABASE_URL")) and bool(os.getenv("SUPABASE_ANON_KEY"))
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(not HAS_SUPABASE, reason="SUPABASE_* not set"),
+]
+
+CTX = {"brand": "Fabhalta", "segment": None, "model_name": "default_model"}
+
+# (calculator class, fixable _calc methods, missing _calc methods)
+SPECS = [
+    (
+        CausalMetricsCalculator,
+        ["_calc_ate", "_calc_cate"],
+        ["_calc_causal_impact", "_calc_counterfactual", "_calc_mediation_effect"],
+    ),
+    (
+        BusinessImpactCalculator,
+        [
+            "_calc_mau",
+            "_calc_wau",
+            "_calc_hcp_coverage",
+            "_calc_trx",
+            "_calc_nrx",
+            "_calc_nbrx",
+            "_calc_trx_share",
+            "_calc_conversion_rate",
+            "_calc_roi",
+        ],
+        ["_calc_patient_touch_rate"],
+    ),
+    (
+        BrandSpecificCalculator,
+        ["_calc_remi_intent_delta", "_calc_kisqali_dx_adoption", "_calc_kisqali_oncologist_reach"],
+        ["_calc_remi_ah_uncontrolled", "_calc_fabhalta_pnh_tested"],
+    ),
+    (
+        TriggerPerformanceCalculator,
+        [
+            "_calc_trigger_precision",
+            "_calc_trigger_recall",
+            "_calc_acceptance_rate",
+            "_calc_false_alert_rate",
+            "_calc_override_rate",
+            "_calc_lead_time",
+            "_calc_change_fail_rate",
+        ],
+        ["_calc_action_rate_uplift"],
+    ),
+    (
+        DataQualityCalculator,
+        [
+            "_calc_source_coverage_patients",
+            "_calc_cross_source_match",
+            "_calc_stacking_lift",
+            "_calc_completeness_pass_rate",
+            "_calc_data_lag",
+            "_calc_time_to_release",
+        ],
+        ["_calc_source_coverage_hcps", "_calc_geographic_consistency", "_calc_label_quality"],
+    ),
+    (ModelPerformanceCalculator, ["_calc_shap_coverage"], []),
+]
+
+
+def _make(calc_cls):
+    calc = calc_cls()
+    if calc.db_client is None:
+        pytest.skip("no Supabase client")
+    try:
+        calc.db_client.rpc("kpi_query", {"query_id": "causal_metrics_ate", "params": []}).execute()
+    except Exception as e:
+        pytest.skip(f"kpi_query RPC unavailable (migration 044 not applied?): {e}")
+    return calc
+
+
+_FIXABLE = [(c, m) for (c, fix, _miss) in SPECS for m in fix]
+_MISSING = [(c, m) for (c, _fix, miss) in SPECS for m in miss]
+
+
+@pytest.mark.parametrize(
+    "calc_cls,method", _FIXABLE, ids=[f"{c.__name__}.{m}" for c, m in _FIXABLE]
+)
+def test_fixable_metric_runs(calc_cls, method):
+    calc = _make(calc_cls)
+    # Must not raise (column-alias / query_id / param errors would raise here).
+    getattr(calc, method)(dict(CTX))
+
+
+@pytest.mark.parametrize(
+    "calc_cls,method", _MISSING, ids=[f"{c.__name__}.{m}" for c, m in _MISSING]
+)
+def test_missing_metric_fails_loud(calc_cls, method):
+    calc = _make(calc_cls)
+    with pytest.raises(Exception):
+        getattr(calc, method)(dict(CTX))

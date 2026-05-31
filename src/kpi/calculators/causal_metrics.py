@@ -112,16 +112,7 @@ class CausalMetricsCalculator(KPICalculatorBase):
         E[Y(1) - Y(0)] - average effect of treatment on outcome.
         """
         # Try from stored predictions first
-        query = """
-            SELECT
-                AVG(treatment_effect_estimate) as ate,
-                STDDEV(treatment_effect_estimate) as ate_std,
-                COUNT(*) as n_samples
-            FROM ml_predictions
-            WHERE treatment_effect_estimate IS NOT NULL
-            AND prediction_timestamp >= NOW() - INTERVAL '30 days'
-        """
-        result = self._execute_query(query, [])
+        result = self._execute_query("causal_metrics_ate", [])
         if result and result[0].get("ate") is not None:
             ate = result[0]["ate"]
             ate_std = result[0].get("ate_std", 0.0)
@@ -177,23 +168,7 @@ class CausalMetricsCalculator(KPICalculatorBase):
         E[Y(1) - Y(0) | X=x] - treatment effect by segment.
         """
         segment = context.get("segment")
-        segment_filter = "AND segment_assignment = $1" if segment else ""
-
-        query = f"""
-            SELECT
-                segment_assignment,
-                AVG(heterogeneous_effect) as cate,
-                STDDEV(heterogeneous_effect) as cate_std,
-                COUNT(*) as n_samples
-            FROM ml_predictions
-            WHERE heterogeneous_effect IS NOT NULL
-            AND prediction_timestamp >= NOW() - INTERVAL '30 days'
-            {segment_filter}
-            GROUP BY segment_assignment
-            ORDER BY AVG(heterogeneous_effect) DESC
-        """
-        params = [segment] if segment else []
-        result = self._execute_query(query, params)
+        result = self._execute_query("causal_metrics_cate", [segment])
 
         if result and len(result) > 0:
             if segment:
@@ -231,141 +206,41 @@ class CausalMetricsCalculator(KPICalculatorBase):
 
         Estimated causal effect size from causal paths table.
         """
-        intervention = context.get("intervention")
-        intervention_filter = "AND intervention_name = $1" if intervention else ""
-
-        query = f"""
-            SELECT
-                intervention_name,
-                AVG(causal_effect_size) as effect_size,
-                AVG(confidence_level) as avg_confidence,
-                COUNT(*) as n_paths
-            FROM causal_paths
-            WHERE validated = true
-            {intervention_filter}
-            GROUP BY intervention_name
-            ORDER BY AVG(causal_effect_size) DESC
-            LIMIT 10
-        """
-        params = [intervention] if intervention else []
-        result = self._execute_query(query, params)
-
-        if result and len(result) > 0:
-            if intervention:
-                row = result[0]
-                return {
-                    "value": row["effect_size"],
-                    "metadata": {
-                        "intervention": row["intervention_name"],
-                        "confidence": row["avg_confidence"],
-                        "n_paths": row["n_paths"],
-                    },
-                }
-            else:
-                # Return top interventions
-                return {
-                    "value": result[0]["effect_size"],
-                    "metadata": {
-                        "top_interventions": [
-                            {
-                                "intervention": r["intervention_name"],
-                                "effect_size": r["effect_size"],
-                                "confidence": r["avg_confidence"],
-                            }
-                            for r in result
-                        ]
-                    },
-                }
-
-        return {"value": None, "metadata": {"error": "No causal impact data available"}}
+        raise RuntimeError(
+            "KPI causal_impact unavailable: causal_paths has no intervention_name column (#574)"
+        )
 
     def _calc_counterfactual(self, context: dict[str, Any]) -> dict[str, Any]:
         """Calculate CM-004: Counterfactual Outcome.
 
         E[Y(a') | do(A=a), X] - predicted outcome under alternative treatment.
         """
-        patient_id = context.get("patient_id")
-        if not patient_id:
-            return {"value": None, "metadata": {"error": "patient_id required"}}
-
-        query = """
-            SELECT
-                counterfactual_outcome,
-                actual_outcome,
-                treatment_received,
-                counterfactual_treatment,
-                (counterfactual_outcome - actual_outcome) as outcome_delta
-            FROM ml_predictions
-            WHERE patient_id = $1
-            AND counterfactual_outcome IS NOT NULL
-            ORDER BY prediction_timestamp DESC
-            LIMIT 1
-        """
-        result = self._execute_query(query, [patient_id])
-
-        if result and len(result) > 0:
-            row = result[0]
-            return {
-                "value": row["counterfactual_outcome"],
-                "metadata": {
-                    "actual_outcome": row["actual_outcome"],
-                    "treatment_received": row["treatment_received"],
-                    "counterfactual_treatment": row["counterfactual_treatment"],
-                    "outcome_delta": row["outcome_delta"],
-                },
-            }
-
-        return {"value": None, "metadata": {"error": "No counterfactual data for patient"}}
+        raise RuntimeError(
+            "KPI counterfactual unavailable: ml_predictions lacks "
+            "treatment_received/counterfactual_treatment (#574)"
+        )
 
     def _calc_mediation_effect(self, context: dict[str, Any]) -> dict[str, Any]:
         """Calculate CM-005: Mediation Effect.
 
         indirect_effect / total_effect - proportion mediated.
         """
-        treatment = context.get("treatment")
-        outcome = context.get("outcome")
-        treatment_filter = "WHERE treatment = $1 AND outcome = $2" if treatment and outcome else ""
+        raise RuntimeError(
+            "KPI mediation_effect unavailable: causal_paths lacks "
+            "direct/indirect/total_effect decomposition (#574)"
+        )
 
-        query = f"""
-            SELECT
-                treatment,
-                outcome,
-                mediators_identified,
-                pathway_details,
-                indirect_effect,
-                direct_effect,
-                total_effect,
-                indirect_effect / NULLIF(total_effect, 0) as proportion_mediated
-            FROM causal_paths
-            {treatment_filter if treatment_filter else "WHERE true"}
-            AND total_effect IS NOT NULL
-            ORDER BY validated DESC, created_at DESC
-            LIMIT 5
+    def _execute_query(self, query_id: str, params: list[Any]) -> list[dict[str, Any]] | None:
+        """Run a vetted statement from kpi_query_registry by id.
+
+        The statement identified by ``query_id`` is looked up in the
+        kpi_query_registry and executed by the ``kpi_query`` RPC; ``params``
+        bind to its positional placeholders ($1..$N).
         """
-        params = [treatment, outcome] if treatment and outcome else []
-        result = self._execute_query(query, params)
-
-        if result and len(result) > 0:
-            row = result[0]
-            return {
-                "value": row.get("proportion_mediated"),
-                "metadata": {
-                    "treatment": row["treatment"],
-                    "outcome": row["outcome"],
-                    "mediators": row.get("mediators_identified"),
-                    "indirect_effect": row.get("indirect_effect"),
-                    "direct_effect": row.get("direct_effect"),
-                    "total_effect": row.get("total_effect"),
-                    "pathway_details": row.get("pathway_details"),
-                },
-            }
-
-        return {"value": None, "metadata": {"error": "No mediation data available"}}
-
-    def _execute_query(self, query: str, params: list[Any]) -> list[dict[str, Any]] | None:
-        """Execute a SQL query and return results."""
         try:
-            response = self.db_client.rpc("execute_sql", {"query": query}).execute()
+            response = self.db_client.rpc(
+                "kpi_query", {"query_id": query_id, "params": params}
+            ).execute()
             return response.data  # type: ignore[no-any-return]
         except Exception:
             return None

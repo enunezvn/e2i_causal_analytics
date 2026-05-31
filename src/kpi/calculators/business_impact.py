@@ -121,23 +121,12 @@ class BusinessImpactCalculator(KPICalculatorBase):
         Uses v_kpi_active_users view if available.
         """
         # Try view first
-        query = """
-            SELECT mau
-            FROM v_kpi_active_users
-            ORDER BY calculated_at DESC
-            LIMIT 1
-        """
-        result = self._execute_query(query, [])
+        result = self._execute_query("business_impact_mau_view", [])
         if result and result[0].get("mau") is not None:
             return float(result[0]["mau"])
 
         # Fall back to direct calculation
-        query = """
-            SELECT COUNT(DISTINCT user_id) as mau
-            FROM user_sessions
-            WHERE session_start >= NOW() - INTERVAL '30 days'
-        """
-        result = self._execute_query(query, [])
+        result = self._execute_query("business_impact_mau_fallback", [])
         if result and result[0].get("mau") is not None:
             return float(result[0]["mau"])
         return 0.0
@@ -148,23 +137,12 @@ class BusinessImpactCalculator(KPICalculatorBase):
         Unique users with at least one session in past 7 days.
         """
         # Try view first
-        query = """
-            SELECT wau
-            FROM v_kpi_active_users
-            ORDER BY calculated_at DESC
-            LIMIT 1
-        """
-        result = self._execute_query(query, [])
+        result = self._execute_query("business_impact_wau_view", [])
         if result and result[0].get("wau") is not None:
             return float(result[0]["wau"])
 
         # Fall back to direct calculation
-        query = """
-            SELECT COUNT(DISTINCT user_id) as wau
-            FROM user_sessions
-            WHERE session_start >= NOW() - INTERVAL '7 days'
-        """
-        result = self._execute_query(query, [])
+        result = self._execute_query("business_impact_wau_fallback", [])
         if result and result[0].get("wau") is not None:
             return float(result[0]["wau"])
         return 0.0
@@ -174,40 +152,16 @@ class BusinessImpactCalculator(KPICalculatorBase):
 
         Percentage of eligible patients with trigger-driven touchpoint.
         """
-        query = """
-            WITH eligible AS (
-                SELECT COUNT(DISTINCT patient_id) as total
-                FROM patient_journeys
-                WHERE is_eligible = true
-            ),
-            touched AS (
-                SELECT COUNT(DISTINCT t.patient_id) as total
-                FROM triggers t
-                INNER JOIN patient_journeys pj ON pj.patient_id = t.patient_id
-                WHERE pj.is_eligible = true
-                AND t.fired_at >= NOW() - INTERVAL '30 days'
-            )
-            SELECT touched.total::float / NULLIF(eligible.total, 0) as touch_rate
-            FROM eligible, touched
-        """
-        result = self._execute_query(query, [])
-        if result and result[0].get("touch_rate") is not None:
-            return float(result[0]["touch_rate"])
-        return 0.0
+        raise RuntimeError(
+            "KPI patient_touch_rate unavailable: patient_journeys has no is_eligible column (#574)"
+        )
 
     def _calc_hcp_coverage(self, context: dict[str, Any]) -> float:
         """Calculate WS3-BI-004: HCP Coverage.
 
         Percentage of priority HCPs with active engagement.
         """
-        query = """
-            SELECT
-                COUNT(CASE WHEN coverage_status = 'covered' THEN 1 END)::float /
-                NULLIF(COUNT(CASE WHEN priority_tier <= 2 THEN 1 END), 0)
-                as coverage
-            FROM hcp_profiles
-        """
-        result = self._execute_query(query, [])
+        result = self._execute_query("business_impact_hcp_coverage", [])
         if result and result[0].get("coverage") is not None:
             return float(result[0]["coverage"])
         return 0.0
@@ -218,17 +172,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
         Total prescription volume. No threshold (volume metric).
         """
         brand = context.get("brand")
-        brand_filter = "AND brand = $1" if brand else ""
-
-        query = f"""
-            SELECT COUNT(*) as trx
-            FROM treatment_events
-            WHERE event_type = 'prescription'
-            AND event_date >= NOW() - INTERVAL '30 days'
-            {brand_filter}
-        """
-        params = [brand] if brand else []
-        result = self._execute_query(query, params)
+        result = self._execute_query("business_impact_trx", [brand])
         if result and result[0].get("trx") is not None:
             return float(result[0]["trx"])
         return 0.0
@@ -239,18 +183,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
         First-time prescriptions for a patient. No threshold (volume metric).
         """
         brand = context.get("brand")
-        brand_filter = "AND brand = $1" if brand else ""
-
-        query = f"""
-            SELECT COUNT(*) as nrx
-            FROM treatment_events
-            WHERE event_type = 'prescription'
-            AND sequence_number = 1
-            AND event_date >= NOW() - INTERVAL '30 days'
-            {brand_filter}
-        """
-        params = [brand] if brand else []
-        result = self._execute_query(query, params)
+        result = self._execute_query("business_impact_nrx", [brand])
         if result and result[0].get("nrx") is not None:
             return float(result[0]["nrx"])
         return 0.0
@@ -265,19 +198,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
         if not brand:
             return 0.0
 
-        query = """
-            WITH first_brand AS (
-                SELECT patient_id, MIN(event_date) as first_date
-                FROM treatment_events
-                WHERE event_type = 'prescription'
-                AND brand = $1
-                GROUP BY patient_id
-            )
-            SELECT COUNT(*) as nbrx
-            FROM first_brand
-            WHERE first_date >= NOW() - INTERVAL '30 days'
-        """
-        result = self._execute_query(query, [brand])
+        result = self._execute_query("business_impact_nbrx", [brand])
         if result and result[0].get("nbrx") is not None:
             return float(result[0]["nbrx"])
         return 0.0
@@ -291,24 +212,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
         if not brand:
             return 0.0
 
-        query = """
-            WITH category AS (
-                SELECT COUNT(*) as total
-                FROM treatment_events
-                WHERE event_type = 'prescription'
-                AND event_date >= NOW() - INTERVAL '30 days'
-            ),
-            brand_rx AS (
-                SELECT COUNT(*) as total
-                FROM treatment_events
-                WHERE event_type = 'prescription'
-                AND brand = $1
-                AND event_date >= NOW() - INTERVAL '30 days'
-            )
-            SELECT brand_rx.total::float / NULLIF(category.total, 0) as share
-            FROM category, brand_rx
-        """
-        result = self._execute_query(query, [brand])
+        result = self._execute_query("business_impact_trx_share", [brand])
         if result and result[0].get("share") is not None:
             return float(result[0]["share"])
         return 0.0
@@ -318,25 +222,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
 
         Percentage of triggers resulting in prescription.
         """
-        query = """
-            WITH triggered AS (
-                SELECT COUNT(DISTINCT trigger_id) as total
-                FROM triggers
-                WHERE fired_at >= NOW() - INTERVAL '30 days'
-            ),
-            converted AS (
-                SELECT COUNT(DISTINCT t.trigger_id) as total
-                FROM triggers t
-                INNER JOIN treatment_events te ON te.patient_id = t.patient_id
-                WHERE t.fired_at >= NOW() - INTERVAL '30 days'
-                AND te.event_type = 'prescription'
-                AND te.event_date >= t.fired_at
-                AND te.event_date <= t.fired_at + INTERVAL '30 days'
-            )
-            SELECT converted.total::float / NULLIF(triggered.total, 0) as conversion_rate
-            FROM triggered, converted
-        """
-        result = self._execute_query(query, [])
+        result = self._execute_query("business_impact_conversion_rate", [])
         if result and result[0].get("conversion_rate") is not None:
             return float(result[0]["conversion_rate"])
         return 0.0
@@ -347,33 +233,28 @@ class BusinessImpactCalculator(KPICalculatorBase):
         Value generated per dollar invested.
         """
         # Try business_metrics table first
-        query = """
-            SELECT AVG(roi) as avg_roi
-            FROM business_metrics
-            WHERE metric_date >= NOW() - INTERVAL '30 days'
-            AND roi IS NOT NULL
-        """
-        result = self._execute_query(query, [])
+        result = self._execute_query("business_impact_roi_business_metrics", [])
         if result and result[0].get("avg_roi") is not None:
             return float(result[0]["avg_roi"])
 
         # Try agent_activities table
-        query = """
-            SELECT AVG(roi_estimate) as avg_roi
-            FROM agent_activities
-            WHERE activity_timestamp >= NOW() - INTERVAL '30 days'
-            AND roi_estimate IS NOT NULL
-        """
-        result = self._execute_query(query, [])
+        result = self._execute_query("business_impact_roi_agent_activities", [])
         if result and result[0].get("avg_roi") is not None:
             return float(result[0]["avg_roi"])
 
         return 0.0
 
-    def _execute_query(self, query: str, params: list[Any]) -> list[dict[str, Any]] | None:
-        """Execute a SQL query and return results."""
+    def _execute_query(self, query_id: str, params: list[Any]) -> list[dict[str, Any]] | None:
+        """Execute a vetted KPI query by id and return results.
+
+        Runs a pre-vetted statement from the kpi_query_registry via the
+        kpi_query allowlist RPC, identified by query_id. The params list
+        binds positionally to $1..$N in the registered statement.
+        """
         try:
-            response = self.db_client.rpc("execute_sql", {"query": query}).execute()
+            response = self.db_client.rpc(
+                "kpi_query", {"query_id": query_id, "params": params}
+            ).execute()
             return response.data  # type: ignore[no-any-return]
         except Exception:
             return None

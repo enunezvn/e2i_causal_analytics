@@ -203,14 +203,7 @@ class ModelPerformanceCalculator(KPICalculatorBase):
           - db_query_returned_empty: query returned no rows OR `coverage` was
             NULL (zero-denominator window).
         """
-        query = """
-            SELECT
-                COUNT(CASE WHEN shap_values IS NOT NULL THEN 1 END)::float /
-                NULLIF(COUNT(*), 0) as coverage
-            FROM predictions p
-            WHERE p.created_at >= NOW() - INTERVAL '30 days'
-        """
-        result, db_error = self._execute_query(query, [])
+        result, db_error = self._execute_query("model_performance_shap_coverage", [])
         if db_error is not None:
             return None, f"db_query_failed:{db_error}"
         # `_execute_query` succeeded but may have returned [] or a row with
@@ -232,13 +225,12 @@ class ModelPerformanceCalculator(KPICalculatorBase):
         """
         model_name = context.get("model_name", "default_model")
 
-        query = """
-            SELECT AVG(psi_value) as avg_psi
-            FROM feature_drift_metrics
-            WHERE model_name = $1
-            AND measured_at >= NOW() - INTERVAL '7 days'
-        """
-        sql_result, sql_error = self._execute_query(query, [model_name])
+        # #574: the SQL leg's source table `feature_drift_metrics` does not exist in the
+        # schema (no drift-metrics pipeline was ever provisioned), so there is deliberately
+        # NO registry entry for it — `kpi_query` returns an "unknown query_id" error, which
+        # the SQL leg records as unavailable (never fabricated) and falls back to MLflow.
+        # The two-leg fail-closed contract (and its tests) is preserved.
+        sql_result, sql_error = self._execute_query("model_performance_feature_drift", [model_name])
 
         # First leg: SQL succeeded with a real PSI.
         if sql_result:
@@ -307,16 +299,19 @@ class ModelPerformanceCalculator(KPICalculatorBase):
             return None, f"mlflow_exception:{type(e).__name__}:{msg}"
 
     def _execute_query(
-        self, query: str, params: list[Any]
+        self, query_id: str, params: list[Any]
     ) -> tuple[list[dict[str, Any]] | None, str | None]:
-        """Execute a SQL query and return `(rows, error)`.
+        """Run a vetted read-only KPI statement via the kpi_query allowlist RPC (#574).
 
-        Exactly one of the two is non-None:
+        `query_id` indexes a statement in `kpi_query_registry`; `params` bind its
+        $1..$N placeholders. Returns `(rows, error)` — exactly one is non-None:
           - `(<rows>, None)` on success (rows may be `[]`).
           - `(None, "<ExceptionClass>:<msg[:200]>")` on any execution failure.
         """
         try:
-            response = self.db_client.rpc("execute_sql", {"query": query}).execute()
+            response = self.db_client.rpc(
+                "kpi_query", {"query_id": query_id, "params": params}
+            ).execute()
             return response.data, None  # type: ignore[no-any-return]
         except Exception as e:
             msg = str(e)[:200]

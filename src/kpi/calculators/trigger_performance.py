@@ -115,14 +115,7 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
 
         Percentage of fired triggers resulting in positive outcome.
         """
-        query = """
-            SELECT
-                COUNT(CASE WHEN outcome_tracked AND outcome_value > 0 THEN 1 END)::float /
-                NULLIF(COUNT(CASE WHEN outcome_tracked THEN 1 END), 0) as precision
-            FROM triggers
-            WHERE fired_at >= NOW() - INTERVAL '30 days'
-        """
-        result = self._execute_query(query, [])
+        result = self._execute_query("trigger_performance_precision", [])
         if result and result[0].get("precision") is not None:
             return float(result[0]["precision"])
         return 0.0
@@ -132,30 +125,7 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
 
         Percentage of positive outcomes preceded by a trigger.
         """
-        query = """
-            WITH positive_outcomes AS (
-                SELECT DISTINCT patient_id
-                FROM treatment_events
-                WHERE event_type IN ('prescription', 'conversion')
-                AND event_date >= NOW() - INTERVAL '30 days'
-            ),
-            trigger_preceded AS (
-                SELECT DISTINCT po.patient_id
-                FROM positive_outcomes po
-                INNER JOIN triggers t ON t.patient_id = po.patient_id
-                WHERE t.fired_at < (
-                    SELECT MIN(event_date) FROM treatment_events te
-                    WHERE te.patient_id = po.patient_id
-                    AND te.event_type IN ('prescription', 'conversion')
-                )
-            )
-            SELECT
-                COUNT(DISTINCT tp.patient_id)::float /
-                NULLIF(COUNT(DISTINCT po.patient_id), 0) as recall
-            FROM positive_outcomes po
-            LEFT JOIN trigger_preceded tp ON tp.patient_id = po.patient_id
-        """
-        result = self._execute_query(query, [])
+        result = self._execute_query("trigger_performance_recall", [])
         if result and result[0].get("recall") is not None:
             return float(result[0]["recall"])
         return 0.0
@@ -165,45 +135,17 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
 
         Incremental action rate vs control group.
         """
-        query = """
-            WITH rates AS (
-                SELECT
-                    control_group_flag,
-                    COUNT(CASE WHEN action_taken THEN 1 END)::float /
-                    NULLIF(COUNT(*), 0) as action_rate
-                FROM triggers
-                WHERE fired_at >= NOW() - INTERVAL '30 days'
-                GROUP BY control_group_flag
-            )
-            SELECT
-                COALESCE(
-                    (
-                        (SELECT action_rate FROM rates WHERE NOT control_group_flag) -
-                        (SELECT action_rate FROM rates WHERE control_group_flag)
-                    ) /
-                    NULLIF((SELECT action_rate FROM rates WHERE control_group_flag), 0),
-                    0
-                ) as uplift
-        """
-        result = self._execute_query(query, [])
-        if result and result[0].get("uplift") is not None:
-            return float(result[0]["uplift"])
-        return 0.0
+        raise RuntimeError(
+            "KPI WS2-TR-003 action_rate_uplift unavailable: triggers has no "
+            "control_group_flag column to compute uplift vs control (#574)"
+        )
 
     def _calc_acceptance_rate(self, context: dict[str, Any]) -> float:
         """Calculate WS2-TR-004: Acceptance Rate.
 
         Percentage of delivered triggers accepted by reps.
         """
-        query = """
-            SELECT
-                COUNT(CASE WHEN acceptance_status = 'accepted' THEN 1 END)::float /
-                NULLIF(COUNT(CASE WHEN acceptance_status IS NOT NULL THEN 1 END), 0)
-                as acceptance_rate
-            FROM triggers
-            WHERE fired_at >= NOW() - INTERVAL '30 days'
-        """
-        result = self._execute_query(query, [])
+        result = self._execute_query("trigger_performance_acceptance_rate", [])
         if result and result[0].get("acceptance_rate") is not None:
             return float(result[0]["acceptance_rate"])
         return 0.0
@@ -214,14 +156,7 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         Percentage of triggers marked as false positives.
         Lower is better.
         """
-        query = """
-            SELECT
-                COUNT(CASE WHEN false_positive_flag THEN 1 END)::float /
-                NULLIF(COUNT(*), 0) as false_alert_rate
-            FROM triggers
-            WHERE fired_at >= NOW() - INTERVAL '30 days'
-        """
-        result = self._execute_query(query, [])
+        result = self._execute_query("trigger_performance_false_alert_rate", [])
         if result and result[0].get("false_alert_rate") is not None:
             return float(result[0]["false_alert_rate"])
         return 0.0
@@ -232,15 +167,7 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         Percentage of triggers overridden by users.
         Lower is better.
         """
-        query = """
-            SELECT
-                COUNT(CASE WHEN acceptance_status = 'overridden' THEN 1 END)::float /
-                NULLIF(COUNT(CASE WHEN acceptance_status IS NOT NULL THEN 1 END), 0)
-                as override_rate
-            FROM triggers
-            WHERE fired_at >= NOW() - INTERVAL '30 days'
-        """
-        result = self._execute_query(query, [])
+        result = self._execute_query("trigger_performance_override_rate", [])
         if result and result[0].get("override_rate") is not None:
             return float(result[0]["override_rate"])
         return 0.0
@@ -251,15 +178,7 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         Median days between trigger and outcome.
         Lower is better.
         """
-        query = """
-            SELECT
-                PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY lead_time_days)
-                as median_lead_time
-            FROM triggers
-            WHERE lead_time_days IS NOT NULL
-            AND fired_at >= NOW() - INTERVAL '30 days'
-        """
-        result = self._execute_query(query, [])
+        result = self._execute_query("trigger_performance_lead_time", [])
         if result and result[0].get("median_lead_time") is not None:
             return float(result[0]["median_lead_time"])
         return 0.0
@@ -268,39 +187,23 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         """Calculate WS2-TR-008: Change-Fail Rate (CFR).
 
         Percentage of trigger changes that resulted in worse outcomes.
-        Uses v_kpi_change_fail_rate view if available.
         Lower is better.
         """
-        # Try view first
-        query = """
-            SELECT avg_cfr as cfr
-            FROM v_kpi_change_fail_rate
-            WHERE calculated_at >= NOW() - INTERVAL '7 days'
-            ORDER BY calculated_at DESC
-            LIMIT 1
-        """
-        result = self._execute_query(query, [])
-        if result and result[0].get("cfr") is not None:
-            return float(result[0]["cfr"])
-
-        # Fall back to direct calculation
-        query = """
-            SELECT
-                COUNT(CASE WHEN change_failed THEN 1 END)::float /
-                NULLIF(COUNT(CASE WHEN previous_trigger_id IS NOT NULL THEN 1 END), 0)
-                as cfr
-            FROM triggers
-            WHERE fired_at >= NOW() - INTERVAL '30 days'
-        """
-        result = self._execute_query(query, [])
+        result = self._execute_query("trigger_performance_cfr", [])
         if result and result[0].get("cfr") is not None:
             return float(result[0]["cfr"])
         return 0.0
 
-    def _execute_query(self, query: str, params: list[Any]) -> list[dict[str, Any]] | None:
-        """Execute a SQL query and return results."""
+    def _execute_query(self, query_id: str, params: list[Any]) -> list[dict[str, Any]] | None:
+        """Execute a vetted KPI query via the kpi_query allowlist RPC.
+
+        Runs the statement registered under ``query_id`` in
+        ``kpi_query_registry``; ``params`` bind to ``$1..$N`` in that statement.
+        """
         try:
-            response = self.db_client.rpc("execute_sql", {"query": query}).execute()
+            response = self.db_client.rpc(
+                "kpi_query", {"query_id": query_id, "params": params}
+            ).execute()
             return response.data  # type: ignore[no-any-return]
         except Exception:
             return None
