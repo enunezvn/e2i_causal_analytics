@@ -169,6 +169,19 @@ class TestBusinessImpactCalculator:
             threshold=KPIThreshold(target=0.08, warning=0.05, critical=0.02),
         )
 
+    @pytest.fixture
+    def touch_rate_kpi(self):
+        """Create a patient touch rate KPI (a [0,1] fraction; higher is better)."""
+        return KPIMetadata(
+            id="WS3-BI-003",
+            name="Patient Touch Rate",
+            definition="Fraction of eligible patients with a delivered trigger-driven touchpoint",
+            formula="delivered_touched_eligible / eligible",
+            calculation_type=CalculationType.DERIVED,
+            workstream=Workstream.WS3_BUSINESS,
+            threshold=KPIThreshold(target=0.40, warning=0.30, critical=0.20),
+        )
+
     def test_supports_business_workstream(self, calculator, mau_kpi):
         """Test calculator supports WS3 Business KPIs."""
         assert calculator.supports(mau_kpi) is True
@@ -208,6 +221,44 @@ class TestBusinessImpactCalculator:
 
         assert result.value == 0.10
         assert result.status == KPIStatus.GOOD
+
+    def test_calculate_patient_touch_rate_good(self, calculator, touch_rate_kpi):
+        """WS3-BI-003 returns the FRACTION (sibling parity with conversion_rate); the live
+        0.9074 is GOOD against target 0.40."""
+        calculator._execute_query = Mock(return_value=[{"touch_rate": 0.9074}])
+
+        result = calculator.calculate(touch_rate_kpi)
+
+        assert result.value == 0.9074
+        assert result.status == KPIStatus.GOOD
+
+    def test_patient_touch_rate_scale_guard(self, calculator, touch_rate_kpi):
+        """Anti-mis-scale regression-lock (#577): the value is a [0,1] FRACTION evaluated
+        against the [0,1] threshold, NOT 100*ratio. Under the percentage-scale bug every
+        value would be GOOD (90.74 >= 0.40) and 0.25 vs 0.15 would be indistinguishable —
+        these band assertions would then fail. Higher-is-better bands: >=0.40 GOOD,
+        0.20<=v<0.40 WARNING, <0.20 CRITICAL."""
+        for value, expected in [
+            (0.9074, KPIStatus.GOOD),
+            (0.35, KPIStatus.WARNING),
+            (0.25, KPIStatus.WARNING),
+            (0.15, KPIStatus.CRITICAL),
+        ]:
+            calculator._execute_query = Mock(return_value=[{"touch_rate": value}])
+            result = calculator.calculate(touch_rate_kpi)
+            assert result.value == value
+            assert result.status == expected, f"{value} -> {result.status} (expected {expected})"
+
+    def test_patient_touch_rate_fails_loud_on_empty_cohort(self, calculator, touch_rate_kpi):
+        """No eligible cohort (NULLIF -> NULL) -> KPIResult carries the error, value None
+        (no fabricated 0.0)."""
+        calculator._execute_query = Mock(return_value=[{"touch_rate": None}])
+
+        result = calculator.calculate(touch_rate_kpi)
+
+        assert result.value is None
+        assert result.status == KPIStatus.UNKNOWN
+        assert result.error is not None and "unavailable" in result.error
 
 
 class TestBrandSpecificCalculator:

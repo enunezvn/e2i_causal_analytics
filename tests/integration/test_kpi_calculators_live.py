@@ -44,6 +44,11 @@ SPECS = [
         ["_calc_ate", "_calc_cate"],
         [],
     ),
+    # #577 WS3-BI-003: _calc_patient_touch_rate is wired to a code-anchored eligibility
+    # view + delivered-touch over real data, but its faithful e2e lives in
+    # test_577_patient_touch_live.py — which capability-gates on its OWN query_id
+    # (migration 050). Keeping it out of this shared list (which gates only on the
+    # 044-era causal_metrics_ate) avoids a FAIL (vs skip) on a 044-but-not-050 target.
     (
         BusinessImpactCalculator,
         [
@@ -57,7 +62,7 @@ SPECS = [
             "_calc_conversion_rate",
             "_calc_roi",
         ],
-        ["_calc_patient_touch_rate"],
+        [],
     ),
     (
         BrandSpecificCalculator,
