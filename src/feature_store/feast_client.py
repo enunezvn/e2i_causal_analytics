@@ -136,6 +136,20 @@ FEATURE_REPO_PATH = Path(__file__).parent.parent.parent / "feature_repo"
 # Config path
 FEAST_CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "feast_materialization.yaml"
 
+# #559: per-source-table RAW timestamp column to MAX() for genuine recency. Keyed by the
+# source table name (the unit that resolves in the statistics path). Feast's
+# ``timestamp_field`` is ``event_timestamp`` for every source, but several of those are
+# GENERATED columns derived from a raw base column (migration 033); we MAX() the raw base
+# column so recency reflects the freshest underlying data point. Column + type verified
+# live against the prod-equivalent Supabase. See FeastClient._infer_timestamp_column.
+_TABLE_TIMESTAMP_COLUMNS: Dict[str, str] = {
+    "business_metrics": "metric_date",  # DATE
+    "patient_journeys": "journey_start_date",  # DATE
+    "triggers": "trigger_timestamp",  # TIMESTAMPTZ (finer than derived trigger_date)
+    "hcp_profiles": "updated_at",  # TIMESTAMPTZ (real, not generated)
+    "territory_metrics": "metric_date",  # DATE
+}
+
 
 class FeastError(Exception):
     """Base class for Feast-specific errors raised by this module.
@@ -890,6 +904,20 @@ class FeastClient:
         Returns:
             FeatureStatistics with computed values.
         """
+        # #559: the freshness adapter calls get_feature_statistics with NO supabase_client
+        # (the prod path). Resolve the shared sync Supabase client so the real recency
+        # query (_query_max_recency) actually runs — otherwise recency stays None and the
+        # registrar/QC freshness gate is permanently fail-closed (the bug #559 fixes).
+        # get_supabase() returns None when Supabase is unavailable → recency None → honest
+        # fail-closed (never fabricated). Lazy import keeps the API import graph light.
+        if supabase_client is None:
+            try:
+                from src.api.dependencies.supabase_client import get_supabase
+
+                supabase_client = get_supabase()
+            except Exception as e:  # pragma: no cover - defensive
+                logger.debug(f"Could not resolve default Supabase client for stats: {e}")
+
         # Map feature views to source tables
         feature_view_tables = self._materialization_config.get("feature_views", {})
         view_config = feature_view_tables.get(feature_view, {})
@@ -963,6 +991,89 @@ class FeastClient:
         }
         return mappings.get(feature_view)
 
+    def _infer_timestamp_column(self, table_name: str) -> Optional[str]:
+        """Map a source table to the RAW base column to MAX() for genuine recency (#559).
+
+        Feast's ``timestamp_field`` is ``event_timestamp`` for every source, but several
+        of those are GENERATED columns derived from a raw base column (migration 033). We
+        MAX() the raw base column so recency reflects the freshest underlying data point.
+        Column + type verified live against the prod-equivalent Supabase:
+
+        - business_metrics  -> metric_date          (DATE)
+        - patient_journeys  -> journey_start_date   (DATE)
+        - triggers          -> trigger_timestamp    (TIMESTAMPTZ; finer than derived trigger_date)
+        - hcp_profiles      -> updated_at           (TIMESTAMPTZ; real, not generated)
+        - territory_metrics -> metric_date          (DATE)
+
+        For DATE columns the resulting recency is day-granular (documented; acceptable).
+        Returns ``None`` for any unmapped table → recency genuinely unknown →
+        ``last_updated`` stays ``None`` (never a fabricated ``datetime.now()``).
+        """
+        return _TABLE_TIMESTAMP_COLUMNS.get(table_name)
+
+    @staticmethod
+    def _parse_recency_value(raw: Any) -> Optional[datetime]:
+        """Coerce a queried MAX(<timestamp col>) value into a tz-aware UTC datetime (#559).
+
+        Handles the shapes PostgREST can return: a ``datetime`` (already typed), an
+        ISO-8601 ``str`` (TIMESTAMPTZ), or a bare ``YYYY-MM-DD`` ``str`` (a DATE column →
+        day-granular recency at UTC midnight). Naive datetimes are assumed UTC. Returns
+        ``None`` when the value is missing or unparseable (recency genuinely unknown —
+        never fabricate now()).
+        """
+        if raw is None:
+            return None
+        if isinstance(raw, datetime):
+            return raw if raw.tzinfo is not None else raw.replace(tzinfo=timezone.utc)
+        if isinstance(raw, str):
+            text = raw.strip()
+            if not text:
+                return None
+            # fromisoformat() accepts 'Z' on 3.11+, but normalize defensively.
+            normalized = text[:-1] + "+00:00" if text.endswith("Z") else text
+            try:
+                parsed = datetime.fromisoformat(normalized)
+            except ValueError:
+                logger.debug(f"Could not parse recency value as datetime: {raw!r}")
+                return None
+            return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+        logger.debug(f"Unexpected recency value type {type(raw)!r}: {raw!r}")
+        return None
+
+    async def _query_max_recency(self, client, table_name: str) -> Optional[datetime]:
+        """Genuine recency = ``MAX(<raw timestamp column>)`` for ``table_name`` (#559).
+
+        Issued over PostgREST as ``select(<col>).order(<col> desc, nullslast).limit(1)`` —
+        NOT via an ``execute_sql`` RPC (that function does not exist in the target
+        Supabase; verified live, which is why the stats query below silently degrades to a
+        count-only fallback). The timestamp column is the raw base column (see
+        ``_infer_timestamp_column``), distinct from the feature ``column_name`` used for
+        value statistics. Returns ``None`` when the table has no mapped timestamp column
+        (recency genuinely unknown) or when the query fails — never a fabricated now().
+        """
+        timestamp_column = self._infer_timestamp_column(table_name)
+        if not timestamp_column:
+            logger.debug(f"No timestamp column mapped for table {table_name}; recency=None")
+            return None
+
+        try:
+            result = await asyncio.to_thread(
+                lambda: client.table(table_name)
+                .select(timestamp_column)
+                .order(timestamp_column, desc=True, nullsfirst=False)
+                .limit(1)
+                .execute()
+            )
+        except Exception as e:
+            # Recency unverifiable → None (fail closed downstream), never fabricate.
+            logger.warning(f"Recency query for {table_name}.{timestamp_column} failed: {e}")
+            return None
+
+        rows = getattr(result, "data", None)
+        if rows:
+            return self._parse_recency_value(rows[0].get(timestamp_column))
+        return None
+
     async def _query_statistics_from_supabase(
         self,
         client,
@@ -983,6 +1094,14 @@ class FeastClient:
         Returns:
             FeatureStatistics with computed values.
         """
+        # #559: genuine recency = MAX(<raw timestamp column>) for this source table,
+        # issued as a SEPARATE PostgREST query (the timestamp column is NOT the feature
+        # column_name, and the execute_sql RPC the stats query below uses does not exist in
+        # the target Supabase). Computed once and shared by every return path below. None
+        # when the table has no mapped timestamp column or the query fails (recency
+        # genuinely unknown → never fabricate now()).
+        last_updated = await self._query_max_recency(client, table_name)
+
         # Build SQL for statistics computation
         stats_query = f"""
             SELECT
@@ -1014,7 +1133,7 @@ class FeastClient:
                     max_value=float(row["max_val"]) if row.get("max_val") else None,
                     mean_value=float(row["mean_val"]) if row.get("mean_val") else None,
                     stddev_value=float(row["stddev_val"]) if row.get("stddev_val") else None,
-                    last_updated=None,  # #556: no real recency signal computed; None=unverifiable (never fabricate now())
+                    last_updated=last_updated,  # #559: real MAX(<timestamp col>) or None if unknown
                 )
         except Exception as e:
             # Try simpler count-only query if stats query fails
@@ -1031,18 +1150,19 @@ class FeastClient:
                     feature_name=column_name,
                     count=total_count,
                     null_count=0,
-                    last_updated=None,  # #556: no real recency signal computed; None=unverifiable (never fabricate now())
+                    last_updated=last_updated,  # #559: real MAX(<timestamp col>) or None if unknown
                 )
             except Exception as count_error:
                 logger.warning(f"Count query also failed: {count_error}")
 
-        # Return placeholder if all queries fail
+        # Return placeholder if all queries fail. Recency may still be known even when the
+        # value-stats queries fail, so preserve last_updated (None if also unknown). #559
         return FeatureStatistics(
             feature_view=feature_view,
             feature_name=column_name,
             count=0,
             null_count=0,
-            last_updated=None,  # #556: no real recency signal computed; None=unverifiable (never fabricate now())
+            last_updated=last_updated,  # #559: real MAX(<timestamp col>) or None if unknown
         )
 
     async def _compute_stats_from_feast(

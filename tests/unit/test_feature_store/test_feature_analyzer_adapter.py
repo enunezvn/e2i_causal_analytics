@@ -567,6 +567,67 @@ class TestFactoryFunction:
         assert adapter.enable_feast is False
 
 
+class TestRealRecencyFreshnessEndToEnd559:
+    """#559: a REAL MAX(<timestamp col>) flows through a REAL FeastClient into the REAL
+    ``adapter.check_feature_freshness`` (fresh vs stale), with NO stubbing of
+    ``get_feature_statistics``. The adapter calls ``get_feature_statistics`` WITHOUT a
+    ``supabase_client`` (the prod path), so the stats path must self-resolve the shared
+    client via ``get_supabase()`` for recency to fire. We patch ``get_supabase`` to a mock
+    answering the real two-mechanism shape: a PostgREST ``.order().limit()`` recency query
+    and the count-only fallback (the ``execute_sql`` stats RPC fails, as it does live).
+    This proves the always-fail-closed chain is broken by a GENUINE signal, not a
+    fabricated one.
+    """
+
+    @staticmethod
+    def _supabase_mock(recency: datetime) -> MagicMock:
+        sb = MagicMock()
+        # Real recency mechanism: .table(t).select(col).order(col, desc, nullslast).limit(1)
+        rec_res = MagicMock()
+        rec_res.data = [{"updated_at": recency.isoformat()}]
+        (
+            sb.table.return_value.select.return_value.order.return_value.limit.return_value.execute.return_value
+        ) = rec_res
+        # The execute_sql stats RPC does not exist in the target Supabase → it fails →
+        # the count-only PostgREST fallback runs. Recency must still be threaded through.
+        sb.rpc.return_value.execute.side_effect = RuntimeError("execute_sql does not exist")
+        count_res = MagicMock()
+        count_res.count = 1000
+        sb.table.return_value.select.return_value.limit.return_value.execute.return_value = (
+            count_res
+        )
+        return sb
+
+    async def _run(self, recency: datetime, monkeypatch) -> dict:
+        feast_client = FeastClient()
+        # app/CI image cannot `import feast` (tenacity pin, #307); we are not testing init.
+        feast_client._initialized = True
+        monkeypatch.setattr(
+            "src.api.dependencies.supabase_client.get_supabase",
+            lambda: self._supabase_mock(recency),
+        )
+        adapter = FeatureAnalyzerAdapter(MagicMock(), feast_client=feast_client)
+        adapter._feast_initialized = True  # skip real feast init in _ensure_feast_initialized
+        return await adapter.check_feature_freshness(
+            feature_refs=["hcp_conversion_features:engagement_score"],
+            max_staleness_hours=24.0,
+        )
+
+    @pytest.mark.asyncio
+    async def test_recent_real_recency_reports_fresh(self, monkeypatch):
+        result = await self._run(datetime.now(timezone.utc) - timedelta(hours=2), monkeypatch)
+        assert result["fresh"] is True
+        assert result["stale_features"] == []
+        age = result["feature_ages"]["hcp_conversion_features:engagement_score"]
+        assert age is not None and 0 <= age < 24
+
+    @pytest.mark.asyncio
+    async def test_old_real_recency_reports_stale(self, monkeypatch):
+        result = await self._run(datetime.now(timezone.utc) - timedelta(hours=72), monkeypatch)
+        assert result["fresh"] is False
+        assert "hcp_conversion_features:engagement_score" in result["stale_features"]
+
+
 class TestTypeMapping:
     """Test Python to feature type mapping."""
 

@@ -1296,17 +1296,255 @@ class TestFeatureStatisticsNoFabricatedRecency:
         # pins tenacity<9, prod uses tenacity==9.1.2; #307), and initialize()
         # re-raises that ImportError by design. We are not testing init here — we
         # are asserting the recency contract of the statistics path, so mark the
-        # client initialized and leave _store=None. With supabase_client=None and
-        # no embedded store, _compute_feature_statistics takes a placeholder branch
-        # and MUST return last_updated=None (never a fabricated now()).
+        # client initialized and leave _store=None.
         client._initialized = True
-        stats = await client.get_feature_statistics(
-            feature_view="hcp_conversion_features",
-            feature_name="engagement_score",
-            supabase_client=None,
-        )
+        # #559: _compute_feature_statistics now self-resolves the shared sync Supabase
+        # client via get_supabase() when none is passed. To assert the "no real recency
+        # available" contract hermetically (and not depend on ambient SUPABASE_* env), we
+        # force get_supabase() to None: no client → no source query → recency genuinely
+        # unknown → last_updated MUST be None (never a fabricated now()).
+        with patch(
+            "src.api.dependencies.supabase_client.get_supabase", return_value=None
+        ):
+            stats = await client.get_feature_statistics(
+                feature_view="hcp_conversion_features",
+                feature_name="engagement_score",
+                supabase_client=None,
+            )
         assert stats is not None
         assert stats.last_updated is None, (
             "last_updated must be None when no real recency was computed — never a "
             "fabricated datetime.now() (#556)"
         )
+
+
+class TestRealRecencySignal559:
+    """#559: ``check_feature_freshness`` must reflect REAL data age.
+
+    Recency = ``MAX(<raw source timestamp column>)`` for the feature view's source
+    table, computed via PostgREST (``.table().select().order().limit()``) — NOT the
+    ``execute_sql`` RPC, which does NOT exist in the target Supabase (verified live;
+    the pre-existing stats query silently 404s and degrades to a count-only fallback).
+    When a source table / timestamp column cannot be resolved, recency is ``None``
+    (genuinely unknown → fail-closed downstream) — never a fabricated ``now()``.
+    """
+
+    # ---------------- cycle 1: per-table raw timestamp-column mapping ----------------
+    def test_infer_timestamp_column_maps_live_verified_columns(self):
+        """Mapping matches columns verified to exist in the live DB (correct types)."""
+        c = FeastClient()
+        assert c._infer_timestamp_column("hcp_profiles") == "updated_at"
+        assert c._infer_timestamp_column("triggers") == "trigger_timestamp"
+        assert c._infer_timestamp_column("business_metrics") == "metric_date"
+        assert c._infer_timestamp_column("patient_journeys") == "journey_start_date"
+        assert c._infer_timestamp_column("territory_metrics") == "metric_date"
+
+    def test_infer_timestamp_column_unmapped_returns_none(self):
+        assert FeastClient()._infer_timestamp_column("not_a_real_table") is None
+
+    # ---------------- cycle 2: recency value parsing ----------------
+    def test_parse_recency_value_aware_datetime_passthrough(self):
+        aware = datetime(2026, 5, 20, 14, 30, tzinfo=timezone.utc)
+        assert FeastClient._parse_recency_value(aware) == aware
+
+    def test_parse_recency_value_naive_datetime_assumed_utc(self):
+        parsed = FeastClient._parse_recency_value(datetime(2026, 5, 20, 14, 30))
+        assert parsed == datetime(2026, 5, 20, 14, 30, tzinfo=timezone.utc)
+        assert parsed.tzinfo is not None
+
+    def test_parse_recency_value_iso_string_with_offset(self):
+        assert FeastClient._parse_recency_value("2026-05-20T14:30:00+00:00") == datetime(
+            2026, 5, 20, 14, 30, tzinfo=timezone.utc
+        )
+
+    def test_parse_recency_value_z_suffix(self):
+        assert FeastClient._parse_recency_value("2026-05-20T14:30:00Z") == datetime(
+            2026, 5, 20, 14, 30, tzinfo=timezone.utc
+        )
+
+    def test_parse_recency_value_bare_date_is_utc_midnight(self):
+        parsed = FeastClient._parse_recency_value("2026-05-25")
+        assert (parsed.year, parsed.month, parsed.day) == (2026, 5, 25)
+        assert parsed.tzinfo is not None
+
+    def test_parse_recency_value_none_empty_and_garbage_return_none(self):
+        assert FeastClient._parse_recency_value(None) is None
+        assert FeastClient._parse_recency_value("") is None
+        assert FeastClient._parse_recency_value("   ") is None
+        assert FeastClient._parse_recency_value("not-a-date") is None
+        assert FeastClient._parse_recency_value(12345) is None
+
+    # ---------------- cycle 3: _query_max_recency uses PostgREST, not execute_sql ----
+    @pytest.mark.asyncio
+    async def test_query_max_recency_uses_postgrest_order_limit_not_rpc(self):
+        c = FeastClient()
+        client = MagicMock()
+        result = MagicMock()
+        result.data = [{"updated_at": "2026-04-28T12:40:31.906808+00:00"}]
+        (
+            client.table.return_value.select.return_value.order.return_value.limit.return_value.execute.return_value
+        ) = result
+
+        recency = await c._query_max_recency(client, "hcp_profiles")
+
+        assert recency == datetime(2026, 4, 28, 12, 40, 31, 906808, tzinfo=timezone.utc)
+        client.table.assert_called_once_with("hcp_profiles")
+        client.table.return_value.select.assert_called_once_with("updated_at")
+        client.table.return_value.select.return_value.order.assert_called_once_with(
+            "updated_at", desc=True, nullsfirst=False
+        )
+        client.table.return_value.select.return_value.order.return_value.limit.assert_called_once_with(
+            1
+        )
+        # the dead execute_sql RPC must NEVER be used for recency (the #559 regression)
+        client.rpc.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_query_max_recency_unmapped_table_issues_no_query(self):
+        c = FeastClient()
+        client = MagicMock()
+        recency = await c._query_max_recency(client, "some_unmapped_table")
+        assert recency is None
+        client.table.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_query_max_recency_query_failure_returns_none(self):
+        c = FeastClient()
+        client = MagicMock()
+        (
+            client.table.return_value.select.return_value.order.return_value.limit.return_value.execute.side_effect
+        ) = RuntimeError("boom")
+        assert await c._query_max_recency(client, "triggers") is None
+
+    @pytest.mark.asyncio
+    async def test_query_max_recency_empty_result_returns_none(self):
+        c = FeastClient()
+        client = MagicMock()
+        result = MagicMock()
+        result.data = []
+        (
+            client.table.return_value.select.return_value.order.return_value.limit.return_value.execute.return_value
+        ) = result
+        assert await c._query_max_recency(client, "hcp_profiles") is None
+
+    # ---------------- cycle 4: _query_statistics_from_supabase threads recency --------
+    @pytest.mark.asyncio
+    async def test_stats_threads_recency_on_primary_query_path(self):
+        c = FeastClient()
+        dt = datetime(2026, 4, 28, 12, 0, tzinfo=timezone.utc)
+        stats_row = {
+            "total_count": 100,
+            "non_null_count": 100,
+            "null_count": 0,
+            "min_val": 0.0,
+            "max_val": 1.0,
+            "mean_val": 0.5,
+            "stddev_val": 0.1,
+        }
+        client = MagicMock()
+        client.rpc.return_value.execute.return_value = MagicMock(data=[stats_row])
+        with patch.object(c, "_query_max_recency", AsyncMock(return_value=dt)):
+            stats = await c._query_statistics_from_supabase(
+                client=client,
+                table_name="hcp_profiles",
+                column_name="engagement_score",
+                feature_view="hcp_conversion_features",
+            )
+        assert stats.count == 100
+        assert stats.last_updated == dt
+
+    @pytest.mark.asyncio
+    async def test_stats_threads_recency_on_countonly_fallback(self):
+        """When the primary stats query fails (execute_sql dead), recency still flows
+        through the count-only fallback path."""
+        c = FeastClient()
+        dt = datetime(2026, 4, 28, 12, 0, tzinfo=timezone.utc)
+        client = MagicMock()
+        client.rpc.return_value.execute.side_effect = RuntimeError("execute_sql missing")
+        count_res = MagicMock()
+        count_res.count = 4242
+        client.table.return_value.select.return_value.limit.return_value.execute.return_value = (
+            count_res
+        )
+        with patch.object(c, "_query_max_recency", AsyncMock(return_value=dt)):
+            stats = await c._query_statistics_from_supabase(
+                client=client,
+                table_name="triggers",
+                column_name="conversion_flag",
+                feature_view="trigger_features",
+            )
+        assert stats.count == 4242
+        assert stats.last_updated == dt
+
+    @pytest.mark.asyncio
+    async def test_stats_recency_none_preserves_stats(self):
+        """Recency genuinely unknown → last_updated None, but the stats survive."""
+        c = FeastClient()
+        stats_row = {
+            "total_count": 7,
+            "non_null_count": 7,
+            "null_count": 0,
+            "min_val": 0.0,
+            "max_val": 1.0,
+            "mean_val": 0.5,
+            "stddev_val": 0.1,
+        }
+        client = MagicMock()
+        client.rpc.return_value.execute.return_value = MagicMock(data=[stats_row])
+        with patch.object(c, "_query_max_recency", AsyncMock(return_value=None)):
+            stats = await c._query_statistics_from_supabase(
+                client=client,
+                table_name="hcp_profiles",
+                column_name="x",
+                feature_view="hcp_conversion_features",
+            )
+        assert stats.count == 7
+        assert stats.last_updated is None
+
+    # ---------------- cycle 5: _compute_feature_statistics self-resolves client -------
+    @pytest.mark.asyncio
+    async def test_compute_stats_self_resolves_get_supabase_when_no_client(self):
+        """The adapter calls get_feature_statistics with NO supabase_client. The stats
+        path must self-resolve the shared sync client (get_supabase) so recency fires —
+        otherwise the freshness gate is permanently fail-closed (the #559 trap)."""
+        c = FeastClient()
+        c._initialized = True
+        dt = datetime(2026, 4, 28, 12, 0, tzinfo=timezone.utc)
+        resolved = FeatureStatistics(
+            feature_view="hcp_conversion_features",
+            feature_name="engagement_score",
+            count=5,
+            null_count=0,
+            last_updated=dt,
+        )
+        with (
+            patch(
+                "src.api.dependencies.supabase_client.get_supabase",
+                return_value=MagicMock(),
+            ),
+            patch.object(
+                c, "_query_statistics_from_supabase", AsyncMock(return_value=resolved)
+            ) as q,
+        ):
+            stats = await c._compute_feature_statistics(
+                feature_view="hcp_conversion_features",
+                feature_name="engagement_score",
+            )
+        q.assert_awaited_once()
+        assert stats is not None
+        assert stats.last_updated == dt
+
+    @pytest.mark.asyncio
+    async def test_compute_stats_get_supabase_none_fails_closed_no_fabrication(self):
+        """get_supabase() unavailable → recency genuinely unknown → last_updated None
+        (honest fail-closed), never a fabricated now()."""
+        c = FeastClient()
+        c._initialized = True
+        c._store = None
+        with patch("src.api.dependencies.supabase_client.get_supabase", return_value=None):
+            stats = await c._compute_feature_statistics(
+                feature_view="hcp_conversion_features",
+                feature_name="engagement_score",
+            )
+        assert stats is not None
+        assert stats.last_updated is None
