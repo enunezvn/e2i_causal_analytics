@@ -55,16 +55,23 @@ SET search_path = public, pg_temp
 AS $func$
 DECLARE
     stmt text;
+    expected_n int;
     param_arr text[];
     n int;
     wrapped text;
 BEGIN
-    SELECT r.sql INTO stmt
+    SELECT r.sql, r.max_params INTO stmt, expected_n
       FROM public.kpi_query_registry r
      WHERE r.query_id = kpi_query.query_id;
 
     IF stmt IS NULL THEN
         RAISE EXCEPTION 'kpi_query: unknown query_id %', query_id USING ERRCODE = '22023';
+    END IF;
+
+    -- params must be a JSON array (reject objects/scalars that would bind wrong).
+    IF params IS NOT NULL AND jsonb_typeof(params) <> 'array' THEN
+        RAISE EXCEPTION 'kpi_query: params must be a JSON array (got %)', jsonb_typeof(params)
+            USING ERRCODE = '22023';
     END IF;
 
     -- Bind $1..$N positionally from the jsonb array (text-typed; statements cast as needed).
@@ -73,6 +80,12 @@ BEGIN
       FROM jsonb_array_elements(COALESCE(params, '[]'::jsonb)) WITH ORDINALITY AS t(elem, ord);
     param_arr := COALESCE(param_arr, ARRAY[]::text[]);
     n := COALESCE(array_length(param_arr, 1), 0);
+
+    -- Enforce the registry's declared arity (no wrong-count binding).
+    IF n <> expected_n THEN
+        RAISE EXCEPTION 'kpi_query: % expects % param(s), got %', query_id, expected_n, n
+            USING ERRCODE = '22023';
+    END IF;
 
     -- stmt is a TRUSTED, registry-vetted statement (not client SQL): safe to wrap.
     wrapped := format('SELECT row_to_json(_sub) FROM (%s) AS _sub', stmt);

@@ -116,3 +116,21 @@ def test_missing_metric_fails_loud(calc_cls, method):
     calc = _make(calc_cls)
     with pytest.raises(Exception):
         getattr(calc, method)(dict(CTX))
+
+
+def test_kpi_query_rejects_unknown_id():
+    """The allowlist boundary: an unregistered query_id is rejected (no arbitrary run)."""
+    calc = _make(BusinessImpactCalculator)
+    with pytest.raises(Exception):
+        calc.db_client.rpc(
+            "kpi_query", {"query_id": "definitely_not_registered", "params": []}
+        ).execute()
+
+
+def test_kpi_query_rejects_wrong_arity():
+    """Param count must match the registry's declared max_params."""
+    calc = _make(BusinessImpactCalculator)
+    with pytest.raises(Exception):
+        calc.db_client.rpc(
+            "kpi_query", {"query_id": "causal_metrics_ate", "params": ["unexpected"]}
+        ).execute()

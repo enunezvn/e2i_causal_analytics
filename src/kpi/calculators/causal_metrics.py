@@ -237,10 +237,11 @@ class CausalMetricsCalculator(KPICalculatorBase):
         kpi_query_registry and executed by the ``kpi_query`` RPC; ``params``
         bind to its positional placeholders ($1..$N).
         """
-        try:
-            response = self.db_client.rpc(
-                "kpi_query", {"query_id": query_id, "params": params}
-            ).execute()
-            return response.data  # type: ignore[no-any-return]
-        except Exception:
-            return None
+        # #574: do NOT swallow RPC failures into None — callers convert None -> 0.0,
+        # fabricating a zero KPI on a dead/misconfigured backend. Let exceptions propagate
+        # to calculate(), which surfaces them as KPIResult(error=...). A successful query
+        # with no rows still returns [] (a genuine empty, not an error).
+        response = self.db_client.rpc(
+            "kpi_query", {"query_id": query_id, "params": params}
+        ).execute()
+        return response.data  # type: ignore[no-any-return]
