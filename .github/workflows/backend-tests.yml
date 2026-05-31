@@ -188,8 +188,28 @@ jobs:
             tests/unit/security/ \
             tests/unit/observability/ \
             tests/unit/test_data/ \
-            tests/unit/test_feature_store/test_feast_client.py \
-            tests/unit/test_feature_repo/test_data_sources_columns_exist.py \
+            tests/unit/test_docker/ \
+            tests/unit/test_docs/ \
+            tests/unit/test_etl/ \
+            tests/unit/test_feature_repo/ \
+            tests/unit/test_feature_store/ \
+            tests/unit/test_governance/ \
+            tests/unit/test_gunicorn/ \
+            tests/unit/test_lifecycle/ \
+            tests/unit/test_ml/ \
+            tests/unit/test_mlops/ \
+            tests/unit/test_observability/ \
+            tests/unit/test_ontology/ \
+            tests/unit/test_optimization/ \
+            tests/unit/test_rag/ \
+            tests/unit/test_security/ \
+            tests/unit/test_serving/ \
+            tests/unit/test_skills/ \
+            tests/unit/test_synthetic/ \
+            tests/unit/test_tasks/ \
+            tests/unit/test_testing/ \
+            tests/unit/test_tests_meta/ \
+            tests/unit/test_tool_registry/ \
             tests/api/test_predictions_endpoints.py \
             tests/api/test_explain_endpoints.py \
             --ignore=tests/unit/test_api/test_chatbot_tools.py \
@@ -230,6 +250,51 @@ jobs:
           name: backend-coverage
           path: coverage.xml
           retention-days: 14
+
+  heavy-unit-tests:
+    name: Heavy Unit Tests
+    runs-on: ubuntu-latest
+    needs: lint
+    # Serviceless, like the unit lane, but split into its own job because these
+    # dirs are slow (test_digital_twin ~8min, test_causal_engine ~5min serial):
+    # bundling them into unit-tests would blow its 20-min cap. They pass with no
+    # service containers (verified serviceless, #555). 60s per-test timeout for
+    # the heavier ML/causal fits on slower CI runners.
+    timeout-minutes: 20
+    env:
+      E2I_TESTING_MODE: 'true'
+      SUPABASE_URL: 'http://localhost:54321'
+      SUPABASE_KEY: 'test-key'
+      REDIS_URL: 'redis://localhost:6379'
+      # FALKORDB_URL intentionally unset (issue #183) — no FalkorDB service here.
+      MLFLOW_TRACKING_URI: 'http://localhost:5000'
+      OPIK_URL: 'http://localhost:5173'
+      ANTHROPIC_API_KEY: 'test-key'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest-xdist pytest-timeout pytest-asyncio
+
+      - name: Run heavy unit tests
+        run: |
+          pytest \
+            tests/unit/test_causal_engine/ \
+            tests/unit/test_digital_twin/ \
+            -n 2 \
+            --dist=loadscope \
+            --timeout=60 \
+            -v --tb=short
 
   integration-tests:
     name: Integration Tests
@@ -400,7 +465,7 @@ jobs:
   ci-success:
     name: Backend CI Success
     runs-on: ubuntu-latest
-    needs: [lint, type-check, unit-tests, integration-tests]
+    needs: [lint, type-check, unit-tests, heavy-unit-tests, integration-tests]
     if: always()
     steps:
       - name: Check all jobs passed
@@ -415,6 +480,10 @@ jobs:
           fi
           if [[ "${{ needs.unit-tests.result }}" != "success" ]]; then
             echo "Unit tests failed"
+            exit 1
+          fi
+          if [[ "${{ needs.heavy-unit-tests.result }}" != "success" ]]; then
+            echo "Heavy unit tests failed"
             exit 1
           fi
           if [[ "${{ needs.integration-tests.result }}" != "success" ]]; then

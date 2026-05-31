@@ -2,9 +2,9 @@
 
 Every ``tests/unit/<dir>/`` directory that contains test files must be either:
 
-* **RUN** by the ``backend-tests.yml`` unit job — i.e. it appears as a
-  whole-directory positional argument (``tests/unit/<dir>/``) in the
-  ``Run unit tests with coverage`` step; **or**
+* **RUN** by *any* ``backend-tests.yml`` job — i.e. it appears as a whole-
+  directory positional argument (``tests/unit/<dir>/``) in the unit-tests step
+  OR in the serviceless ``heavy-unit-tests`` job (or any future test job); **or**
 * **DOCUMENTED** in :data:`INTENTIONALLY_EXCLUDED` with a non-empty reason.
 
 Background
@@ -43,38 +43,61 @@ UNIT_DIR = REPO_ROOT / "tests" / "unit"
 # reader can tell whether the exclusion is still warranted.
 # ---------------------------------------------------------------------------
 INTENTIONALLY_EXCLUDED: dict[str, str] = {
-    # Populated in the green step from a CI-faithful (feast-blocked,
-    # serviceless) audit of each excluded directory.
+    # Populated from a CI-faithful (dead-port, serviceless) audit during #555.
+    # The remaining two dirs are NOT clean unit tests — they hard-abort a
+    # serviceless session (heavy in-test ML training: xgboost cross-validation,
+    # 200x-permutation adversarial tests) AND make direct un-mocked mlflow /
+    # get_supabase calls. They need a heavy+service-provisioned CI lane and
+    # per-test triage; could not be validated serviceless or locally (the
+    # C-call timeouts are uninterruptible; live Supabase would mutate the prod
+    # DB). Tracked in #583 — move into that job's allowlist once it is green.
+    "test_agents": "Heavyweight + service-dependent; needs the service-provisioned lane in #583.",
+    "test_data_preparer": "Heavyweight + service-dependent; needs the service-provisioned lane in #583.",
 }
 
 
-def _unit_job_run_block() -> str:
-    """Return the shell body of the unit-test job's pytest step."""
-    data = yaml.safe_load(WORKFLOW.read_text())
-    for job in data.get("jobs", {}).values():
+def _load_workflow() -> dict:
+    """Parse the backend-tests workflow YAML."""
+    return yaml.safe_load(WORKFLOW.read_text())
+
+
+def _test_run_blocks(workflow: dict) -> list[str]:
+    """Shell bodies of every job step that runs ``tests/unit/`` directories.
+
+    A dir is "covered" if ANY backend-tests job runs it — the coverage unit job,
+    the serviceless ``heavy-unit-tests`` job (test_causal_engine /
+    test_digital_twin), or any future test job. The guard therefore unions the
+    whole-dir args across every job rather than keying on a single step.
+    """
+    blocks: list[str] = []
+    for job in workflow.get("jobs", {}).values():
         for step in job.get("steps", []):
             run = step.get("run", "") or ""
-            if "tests/unit/" in run and "--cov" in run:
-                return run
-    raise AssertionError(
-        "Could not locate the unit-test pytest step (tests/unit/ + --cov) "
-        "in backend-tests.yml — the CI-coverage guard cannot parse the allowlist."
-    )
+            if "tests/unit/" in run:
+                blocks.append(run)
+    if not blocks:
+        raise AssertionError(
+            "Could not locate any pytest step running tests/unit/ in "
+            "backend-tests.yml — the CI-coverage guard cannot parse the allowlist."
+        )
+    return blocks
 
 
 _WHOLE_DIR_RE = re.compile(r"^tests/unit/([A-Za-z0-9_]+)/\s*\\?$")
 
 
-def _run_whole_dirs(run_block: str) -> set[str]:
-    """Directories run as whole-dir positional args (not --ignore, not a file)."""
+def _run_whole_dirs(run_blocks: list[str]) -> set[str]:
+    """Dirs run as whole-dir positional args across all given run blocks
+    (skipping ``--ignore`` carve-outs and single-file args)."""
     whole: set[str] = set()
-    for line in run_block.splitlines():
-        s = line.strip()
-        if s.startswith("--ignore"):
-            continue
-        m = _WHOLE_DIR_RE.match(s)
-        if m:
-            whole.add(m.group(1))
+    for run_block in run_blocks:
+        for line in run_block.splitlines():
+            s = line.strip()
+            if s.startswith("--ignore"):
+                continue
+            m = _WHOLE_DIR_RE.match(s)
+            if m:
+                whole.add(m.group(1))
     return whole
 
 
@@ -91,7 +114,7 @@ def _existing_test_dirs() -> set[str]:
 
 def test_every_unit_dir_is_run_or_documented() -> None:
     existing = _existing_test_dirs()
-    run_whole = _run_whole_dirs(_unit_job_run_block())
+    run_whole = _run_whole_dirs(_test_run_blocks(_load_workflow()))
     documented = set(INTENTIONALLY_EXCLUDED)
     uncovered = sorted(existing - run_whole - documented)
     assert not uncovered, (
@@ -103,7 +126,7 @@ def test_every_unit_dir_is_run_or_documented() -> None:
 
 
 def test_no_dir_is_both_run_and_excluded() -> None:
-    run_whole = _run_whole_dirs(_unit_job_run_block())
+    run_whole = _run_whole_dirs(_test_run_blocks(_load_workflow()))
     overlap = sorted(run_whole & set(INTENTIONALLY_EXCLUDED))
     assert not overlap, (
         f"dirs are both run by CI and listed as excluded: {overlap}. "
@@ -123,3 +146,20 @@ def test_no_stale_exclusions() -> None:
 def test_all_exclusions_have_reasons() -> None:
     blank = sorted(d for d, reason in INTENTIONALLY_EXCLUDED.items() if not reason.strip())
     assert not blank, f"INTENTIONALLY_EXCLUDED entries missing a reason: {blank}"
+
+
+def test_dir_run_in_any_job_counts_as_covered() -> None:
+    """A dir run by ANY backend-tests job counts as covered — not only the
+    coverage unit job. Heavy dirs (test_causal_engine, test_digital_twin) run in
+    a separate serviceless ``heavy-unit-tests`` job, so the guard must union the
+    whole-dir args across every job that runs ``tests/unit/`` (issue #555)."""
+    workflow = {
+        "jobs": {
+            "unit-tests": {"steps": [{"run": "pytest \\\n  tests/unit/foo/ \\\n  --cov=src"}]},
+            "heavy-unit-tests": {"steps": [{"run": "pytest \\\n  tests/unit/bar/ \\\n  -n 2"}]},
+            # a job that touches no tests/unit dir must contribute nothing
+            "lint": {"steps": [{"run": "ruff check src/ tests/"}]},
+        }
+    }
+    covered = _run_whole_dirs(_test_run_blocks(workflow))
+    assert covered == {"foo", "bar"}
