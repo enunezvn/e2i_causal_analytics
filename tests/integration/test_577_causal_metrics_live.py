@@ -24,6 +24,7 @@ CM-004 = migration 048, CM-005 = migration 049); skips if SUPABASE_* unset or th
 migration isn't applied.
 """
 
+import math
 import os
 
 import pytest
@@ -246,3 +247,34 @@ def test_cm005_proportion_mediated_varies(med_calc):
     assert min(props) == 0.0  # the no-mediator paths contribute 0
     assert max(props) > 0.2  # some paths carry substantial mediation
     assert max(props) - min(props) > 0.1  # a genuine spread, not a constant
+
+
+def test_cm005_indirect_is_grounded_in_edge_product(med_calc):
+    """Anti-fabrication grounding proof: indirect_effect is derived from the PRODUCT of the
+    causal_chain edge magnitudes — NOT a mediator-count or arbitrary formula. For each
+    mediated path, recompute med = product(edge.effect); the implied synthesized direct
+    channel direct_mag = med * (total - indirect) / indirect must fall in the generated
+    [0.10, 0.30] range. A count-based or arbitrary decomposition would land outside it."""
+    resp = (
+        med_calc.db_client.table("causal_paths")
+        .select("causal_chain,causal_effect_size,indirect_effect,mediators_identified")
+        .not_.is_("indirect_effect", "null")
+        .limit(2000)
+        .execute()
+    )
+    checked = 0
+    for r in resp.data:
+        if len(r["mediators_identified"] or []) == 0:
+            continue
+        total = float(r["causal_effect_size"])
+        indirect = float(r["indirect_effect"])
+        assert indirect > 0
+        med = math.prod(float(e["effect"]) for e in r["causal_chain"]["edges"])
+        implied_direct = med * (total - indirect) / indirect
+        # synthesized direct channel is uniform [0.10, 0.30]; small margin for the scale-4
+        # rounding of indirect_effect. A count/arbitrary decomposition would miss this.
+        assert 0.08 <= implied_direct <= 0.32, (
+            f"indirect not grounded in the edge product: {r} -> implied_direct={implied_direct}"
+        )
+        checked += 1
+    assert checked > 0

@@ -298,9 +298,10 @@ class CausalMetricsCalculator(KPICalculatorBase):
         causal_effect_size; indirect_effect is the serial-mediation effect through
         the identified mediators, grounded in the PRODUCT of the causal_chain edge
         magnitudes (the textbook serial path coefficient); direct_effect = total −
-        indirect (the X→Y effect not flowing through the mediators), so
-        direct + indirect = total exactly. Paths with no mediators contribute a
-        proportion of 0 (no mediation channel) (#577).
+        indirect is a SYNTHESIZED residual allocation for the direct X→Y channel
+        (which is NOT an observed edge in causal_chain), so direct + indirect =
+        total exactly. Paths with no mediators contribute a proportion of 0 (no
+        mediation channel) (#577).
         """
         rows = self._execute_query("causal_metrics_mediation", [])
 
@@ -316,8 +317,9 @@ class CausalMetricsCalculator(KPICalculatorBase):
                         "proportion mediated = mean(indirect_effect / causal_effect_size) "
                         "over discovered paths; indirect_effect is the serial-mediation effect "
                         "through the identified mediators (grounded in the product of the "
-                        "causal_chain edge magnitudes), direct_effect = total − indirect; "
-                        "paths with no mediators contribute 0 (#577)"
+                        "causal_chain edge magnitudes); direct_effect = total − indirect is a "
+                        "SYNTHESIZED residual allocation for the direct X→Y channel (not an "
+                        "observed edge in causal_chain); paths with no mediators contribute 0 (#577)"
                     ),
                     "source": "causal_paths",
                 },
