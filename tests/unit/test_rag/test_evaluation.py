@@ -54,6 +54,7 @@ def _stub_optional_eval_deps(monkeypatch):
         monkeypatch.setitem(sys.modules, _name, MagicMock())
     monkeypatch.setattr(_eval_mod, "_mlflow", MagicMock(), raising=False)
 
+
 # =============================================================================
 # Test Data Models
 # =============================================================================
