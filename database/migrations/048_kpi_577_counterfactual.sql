@@ -50,7 +50,8 @@ UPDATE public.ml_predictions
 
 -- (B) Register the read-only CM-004 statement (allowlist; executed only via kpi_query).
 --     $1 = optional prediction_type filter ('' => all types). Reports the counterfactual
---     LEVEL plus the factual mean and the contrast (= mean treatment effect) for context.
+--     LEVEL plus the factual mean and the floor-attenuated realized contrast (which equals
+--     the treatment effect only on unclamped rows) for context.
 -- The WHERE clause matches the migration's coherent subset EXACTLY (counterfactual_outcome
 -- + prediction_value + treatment_effect_estimate all NOT NULL) so no row with a stale,
 -- non-reseeded counterfactual_outcome can leak into the aggregate. mean_realized_contrast =
