@@ -32,6 +32,7 @@ from src.api.dependencies.bentoml_client import BentoMLClient, get_bentoml_clien
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 from src.api.utils.data_masking import mask_identifier
 from src.feature_store.feast_client import FeastClient, get_feast_client
+from src.feature_store.online_feature_presence import missing_or_null_feature_fields
 from src.mlops.shap_explainer_realtime import RealTimeSHAPExplainer, SHAPResult
 from src.repositories.shap_analysis import ShapAnalysisRepository, get_shap_analysis_repository
 
@@ -426,7 +427,31 @@ class RealTimeSHAPService:
             )
 
             # Convert list values to single values (since we're querying one patient)
-            return {k: v[0] if v else None for k, v in features_dict.items()}
+            features = {k: v[0] if v else None for k, v in features_dict.items()}
+
+            # #576 anti-null-trap guard: a Feast 200 can carry PRESENT-but-null
+            # values (verified live for a single-key lookup against a
+            # composite-keyed patient view). This route feeds a regulatory-audit
+            # SHAP record, so a null/incomplete vector must FAIL LOUD (503) — it
+            # must NOT be explained and persisted as a real, audit-grade record
+            # (#532/#576). Distinct from the feast-error path below: here the
+            # lookup SUCCEEDS but returns nulls, which an exception guard misses.
+            missing = missing_or_null_feature_fields(features, feature_refs)
+            if missing:
+                logger.error(
+                    "Feast returned null/missing required features %s for "
+                    "patient=%s (model=%s); refusing to build a SHAP/audit "
+                    "record over an incomplete vector (#576).",
+                    missing,
+                    mask_identifier(patient_id),
+                    model_type.value,
+                )
+                raise HTTPException(
+                    status_code=503,
+                    detail="Feature store returned incomplete features",
+                )
+
+            return features
 
         except HTTPException:
             raise

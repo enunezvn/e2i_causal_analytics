@@ -27,6 +27,7 @@ from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 from src.feature_store.feast_client import FeastClient, get_feast_client
 from src.feature_store.model_feature_refs import MODEL_FEATURE_REFS as _MODEL_FEATURE_REFS
 from src.feature_store.model_feature_refs import feature_refs_for_model as _feature_refs_for_model
+from src.feature_store.online_feature_presence import missing_or_null_feature_fields
 
 logger = logging.getLogger(__name__)
 
@@ -265,13 +266,6 @@ async def predict(
                 )
                 # Collapse list-per-feature shape to single-row dict (one entity).
                 features_payload = {k: (v[0] if v else None) for k, v in feast_response.items()}
-                feature_source = FEATURE_SOURCE_FEAST_ONLINE
-                logger.info(
-                    "Fetched %d Feast features for entity_id=%s (model=%s)",
-                    len(features_payload),
-                    request.entity_id,
-                    model_name,
-                )
             except Exception as e:
                 logger.error(
                     "Feast online lookup failed for entity_id=%s, model=%s: %s",
@@ -283,6 +277,36 @@ async def predict(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail=f"Feature store lookup failed: {e}",
                 )
+
+            # #576 anti-null-trap guard: a Feast 200 can carry PRESENT-but-null
+            # values (verified live — a single-key patient lookup against a
+            # composite-keyed view returns nulls, not an error). Labeling that
+            # feature_source='feast_online' feeds the model a null vector while
+            # presenting it as real — the #532 harm that no exception catches.
+            # Fail loud instead of mislabeling. Placed OUTSIDE the lookup ``try``
+            # so this 503 is not re-wrapped by the broad ``except Exception``.
+            missing = missing_or_null_feature_fields(features_payload, feature_refs)
+            if missing:
+                logger.error(
+                    "Feast returned null/missing required features %s for "
+                    "entity_id=%s (model=%s); refusing to label "
+                    "feature_source='feast_online' over an incomplete vector (#576).",
+                    missing,
+                    request.entity_id,
+                    model_name,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Feature store returned incomplete features",
+                )
+
+            feature_source = FEATURE_SOURCE_FEAST_ONLINE
+            logger.info(
+                "Fetched %d Feast features for entity_id=%s (model=%s)",
+                len(features_payload),
+                request.entity_id,
+                model_name,
+            )
 
         # Build input data for BentoML
         input_data: Dict[str, Any] = {
