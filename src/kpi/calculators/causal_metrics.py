@@ -293,12 +293,39 @@ class CausalMetricsCalculator(KPICalculatorBase):
     def _calc_mediation_effect(self, context: dict[str, Any]) -> dict[str, Any]:
         """Calculate CM-005: Mediation Effect.
 
-        indirect_effect / total_effect - proportion mediated.
+        Proportion mediated = mean(indirect_effect / causal_effect_size) over the
+        discovered causal paths. The decomposition is coherent: total =
+        causal_effect_size; indirect_effect is the serial-mediation effect through
+        the identified mediators, grounded in the PRODUCT of the causal_chain edge
+        magnitudes (the textbook serial path coefficient); direct_effect = total −
+        indirect is a SYNTHESIZED residual allocation for the direct X→Y channel
+        (which is NOT an observed edge in causal_chain), so direct + indirect =
+        total exactly. Paths with no mediators contribute a proportion of 0 (no
+        mediation channel) (#577).
         """
-        raise RuntimeError(
-            "KPI mediation_effect unavailable: causal_paths lacks "
-            "direct/indirect/total_effect decomposition (#574)"
-        )
+        rows = self._execute_query("causal_metrics_mediation", [])
+
+        if rows and rows[0].get("proportion_mediated") is not None:
+            row = rows[0]
+            return {
+                "value": row["proportion_mediated"],
+                "metadata": {
+                    "n_paths": row.get("n_paths"),
+                    "mean_indirect": row.get("mean_indirect"),
+                    "mean_direct": row.get("mean_direct"),
+                    "note": (
+                        "proportion mediated = mean(indirect_effect / causal_effect_size) "
+                        "over discovered paths; indirect_effect is the serial-mediation effect "
+                        "through the identified mediators (grounded in the product of the "
+                        "causal_chain edge magnitudes); direct_effect = total − indirect is a "
+                        "SYNTHESIZED residual allocation for the direct X→Y channel (not an "
+                        "observed edge in causal_chain); paths with no mediators contribute 0 (#577)"
+                    ),
+                    "source": "causal_paths",
+                },
+            }
+
+        return {"value": None, "metadata": {"error": "No mediation data available"}}
 
     def _execute_query(self, query_id: str, params: list[Any]) -> list[dict[str, Any]] | None:
         """Run a vetted statement from kpi_query_registry by id.
