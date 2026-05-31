@@ -654,5 +654,14 @@ class TestExplainFailLoud:
         assert body["audit_stored"] is True
         # The REAL get_features guard ran against the (non-null) Feast response.
         feast.get_online_features.assert_awaited_once()
+        # The prediction + SHAP legs actually executed (not bypassed) ...
+        service.get_prediction.assert_awaited_once()
+        service.compute_shap.assert_awaited_once()
+        # ... and the SHAP/prediction results flow into the response (guards
+        # against a 200 that skips compute_shap and returns a placeholder shape).
+        assert body["shap_sum"] == mock_shap_result["shap_sum"]
+        assert len(body["top_features"]) == len(mock_shap_result["contributions"])
+        assert body["prediction_class"] == mock_prediction["prediction_class"]
+        assert body["prediction_probability"] == mock_prediction["prediction_probability"]
         # The audit record was scheduled and executed (TestClient runs bg tasks).
         service.store_audit_record.assert_awaited_once()
