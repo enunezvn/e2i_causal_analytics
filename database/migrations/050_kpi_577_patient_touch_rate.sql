@@ -62,8 +62,10 @@
 -- ELIGIBLE = primary_diagnosis_code in the brand-qualifying ICD-10 set (the 7
 -- EMITTED codes). has_delivered_touch = patient has >=1 trigger that actually
 -- reached them. brand is carried as a column so the registry query can apply an
--- optional brand band. (Verified: zero multi-brand eligible patients, so the
--- DISTINCT yields one row per eligible patient_id; live = 2700 rows.)
+-- optional brand band. (Live: zero multi-brand eligible patients, so the DISTINCT
+-- yields one row per eligible patient_id = 2700 rows. The registry query (B) still
+-- collapses to patient-level before counting, so a future multi-brand patient
+-- cannot double-count the denominator.)
 CREATE OR REPLACE VIEW public.v_patient_eligibility AS
 SELECT DISTINCT
     pj.patient_id,
@@ -89,8 +91,13 @@ GRANT SELECT ON public.v_patient_eligibility TO service_role;
 -- (047/048/049 standard); the param is ALWAYS a non-null TEXT, never NULL.
 -- max_params = 1 is the EXACT required arity (the kpi_query RPC raises on a
 -- count mismatch) — the calculator always passes exactly one element.
+-- The CTE collapses to patient-level (GROUP BY patient_id, bool_or over the
+-- brand-independent touch flag) BEFORE counting, so the denominator is distinct
+-- ELIGIBLE PATIENTS — never patient×brand pairs. On current data this is a no-op
+-- (one eligible row per patient; rate unchanged at 0.9074), but it makes the
+-- metric robust if a patient ever becomes eligible for multiple brands.
 INSERT INTO public.kpi_query_registry (query_id, sql, max_params, note) VALUES
-    ('business_impact_patient_touch_rate', $kpi$WITH elig AS (SELECT patient_id, has_delivered_touch FROM public.v_patient_eligibility WHERE ($1 = '' OR brand::text = $1)) SELECT COUNT(*) FILTER (WHERE has_delivered_touch)::float / NULLIF(COUNT(*), 0) AS touch_rate FROM elig$kpi$, 1, $note$WS3-BI-003 patient_touch_rate: FRACTION of code-anchored ELIGIBLE patients (primary_diagnosis_code in the brand-qualifying ICD-10 set, via v_patient_eligibility — NOT the absent is_eligible flag #574, NOT a brand-label match) who have >=1 DELIVERED trigger (delivery_status IN ('delivered','viewed') — an actual touchpoint; pending/failed/expired excluded, so NOT the degenerate any-trigger=99.5% relabel). $1 = optional brand filter ('' = all brands; e.g. 'Fabhalta'). Returns touch_rate as a [0,1] fraction (sibling parity with conversion_rate/hcp_coverage); NULL (fail-loud) when the eligible denominator is empty; a genuine 0.0 is legitimate. Live: overall 2450/2700=0.9074, Fabhalta 0.8944, Kisqali 0.9150, Remibrutinib 0.9129.$note$)
+    ('business_impact_patient_touch_rate', $kpi$WITH elig AS (SELECT patient_id, bool_or(has_delivered_touch) AS has_delivered_touch FROM public.v_patient_eligibility WHERE ($1 = '' OR brand::text = $1) GROUP BY patient_id) SELECT COUNT(*) FILTER (WHERE has_delivered_touch)::float / NULLIF(COUNT(*), 0) AS touch_rate FROM elig$kpi$, 1, $note$WS3-BI-003 patient_touch_rate: FRACTION of code-anchored ELIGIBLE patients (primary_diagnosis_code in the brand-qualifying ICD-10 set, via v_patient_eligibility — NOT the absent is_eligible flag #574, NOT a brand-label match) who have >=1 DELIVERED trigger (delivery_status IN ('delivered','viewed') — an actual touchpoint; pending/failed/expired excluded, so NOT the degenerate any-trigger=99.5% relabel). $1 = optional brand filter ('' = all brands; e.g. 'Fabhalta'). Returns touch_rate as a [0,1] fraction (sibling parity with conversion_rate/hcp_coverage); NULL (fail-loud) when the eligible denominator is empty; a genuine 0.0 is legitimate. Live: overall 2450/2700=0.9074, Fabhalta 0.8944, Kisqali 0.9150, Remibrutinib 0.9129.$note$)
 ON CONFLICT (query_id) DO UPDATE SET sql = EXCLUDED.sql, max_params = EXCLUDED.max_params, note = EXCLUDED.note;
 
 -- PostgREST caches the schema; reload so the registered query_id is callable immediately.
