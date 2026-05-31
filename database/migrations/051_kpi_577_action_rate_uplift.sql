@@ -96,7 +96,7 @@ ALTER TABLE public.triggers ADD COLUMN IF NOT EXISTS control_group_flag boolean;
 --     Independent of the outcome and of any covariate => a legitimate randomized
 --     assignment. Live-verified: n_control=1222, n_treatment=3134 (0.2805 control).
 UPDATE public.triggers
-   SET control_group_flag = (abs(hashtext(trigger_id || 'arm')) % 100) < 28;
+   SET control_group_flag = (abs(hashtext(trigger_id || 'arm')::bigint) % 100) < 28;
 
 -- (C) Arm-conditioned action_taken reseed over ALL 4356 rows (idempotent /
 --     re-runnable). Treatment P(action present)=0.38, control P=0.30 => a real
@@ -107,10 +107,10 @@ UPDATE public.triggers
 --     only seed the data, they are NOT the returned value.
 UPDATE public.triggers
    SET action_taken = CASE
-       WHEN (abs(hashtext(trigger_id || 'act')) % 100)
+       WHEN (abs(hashtext(trigger_id || 'act')::bigint) % 100)
             < (CASE WHEN control_group_flag THEN 30 ELSE 38 END)
        THEN (ARRAY['called_patient', 'scheduled_visit', 'sent_info'])[
-                1 + (abs(hashtext(trigger_id || 'verb')) % 3)]
+                1 + (abs(hashtext(trigger_id || 'verb')::bigint) % 3)]
        ELSE NULL END;
 
 -- (D) Register the read-only WS2-TR-003 statement (allowlist; executed only via

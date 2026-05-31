@@ -418,6 +418,20 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
         else:
             brands_list = list(self._random_choice([b.value for b in Brand], n))
 
+        # #577 WS2-TR-003: randomized control-arm holdout + arm-conditioned action_taken
+        # (mirrors _generate_trigger_record + migration 051). control_group_flag=True =>
+        # CONTROL (NBA withheld); False => TREATMENT (NBA shown). Treatment draws a higher
+        # P(action present) than control so a real incrementality signal exists.
+        control_group_flags = self._rng.random(n) < 0.28
+        action_present = self._rng.random(n) < np.where(control_group_flags, 0.30, 0.38)
+        action_choices = self._rng.choice(
+            ["called_patient", "scheduled_visit", "sent_info"], size=n
+        )
+        action_taken_vals: list[str | None] = [
+            str(choice) if present else None
+            for present, choice in zip(action_present, action_choices, strict=False)
+        ]
+
         return pd.DataFrame(
             {
                 "patient_id": patient_ids,
@@ -446,5 +460,7 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
                 ],
                 "brand": brands_list,
                 "brand_id": brands_list,
+                "action_taken": action_taken_vals,
+                "control_group_flag": control_group_flags.tolist(),
             }
         )
