@@ -31,10 +31,17 @@ CTX = {"brand": "Fabhalta", "segment": None, "model_name": "default_model"}
 
 # (calculator class, fixable _calc methods, missing _calc methods)
 SPECS = [
+    # #577 PR1: CM-003 (_calc_causal_impact) is WIRED (honest descriptive aggregate over
+    # causal_paths.causal_effect_size). Its faithful e2e lives in
+    # test_577_causal_metrics_live.py — which capability-gates on its OWN query_id
+    # (causal_metrics_causal_impact, migration 047). Keeping it out of this shared list
+    # (which gates only on the 044-era causal_metrics_ate) avoids a FAIL (vs skip) on a
+    # 044-but-not-047 target. CM-004/005 remain fail-loud (source columns are uniform
+    # noise; honest wiring needs a generator-coherence rework — PR2/PR3 of the trio).
     (
         CausalMetricsCalculator,
         ["_calc_ate", "_calc_cate"],
-        ["_calc_causal_impact", "_calc_counterfactual", "_calc_mediation_effect"],
+        ["_calc_counterfactual", "_calc_mediation_effect"],
     ),
     (
         BusinessImpactCalculator,

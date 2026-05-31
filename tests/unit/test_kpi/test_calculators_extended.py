@@ -394,6 +394,75 @@ class TestCausalMetricsCalculator:
         assert result.value == 0.25
         assert result.metadata.get("segment") == "high_risk"
 
+    # --- #577 PR1: CM-003 causal_impact (honest descriptive aggregate) ---------------
+
+    @pytest.fixture
+    def causal_impact_kpi(self):
+        """Create CM-003 Causal Impact KPI."""
+        return KPIMetadata(
+            id="CM-003",
+            name="Causal Impact",
+            definition="Average strength of discovered causal effects",
+            formula="AVG(causal_effect_size)",
+            calculation_type=CalculationType.DIRECT,
+            workstream=Workstream.CAUSAL_METRICS,
+            threshold=None,
+        )
+
+    def test_calculate_cm003_causal_impact_computes(self, calculator, causal_impact_kpi):
+        """CM-003 = path-level mean causal_effect_size, with a start_node breakdown.
+
+        The value is the path-weighted mean SUM(effect*n)/SUM(n), so a per-node
+        breakdown reduces to the simple across-paths average.
+        """
+        calculator._execute_query = Mock(
+            return_value=[
+                {
+                    "start_node": "Cost_Reduction",
+                    "effect": 0.30,
+                    "n_paths": 10,
+                    "avg_confidence": 0.85,
+                },
+                {
+                    "start_node": "Treatment_Response",
+                    "effect": 0.20,
+                    "n_paths": 10,
+                    "avg_confidence": 0.80,
+                },
+            ]
+        )
+
+        result = calculator.calculate(causal_impact_kpi)
+
+        assert result.value == pytest.approx(0.25)
+        assert result.metadata.get("n_paths") == 20
+        assert len(result.metadata["breakdown"]) == 2
+        # Anti-relabel code-anchor (#574): start_node is a discovered path SOURCE, not a do()-target.
+        assert "intervention target" in result.metadata.get("note", "").lower()
+
+    def test_calculate_cm003_forwards_validation_status(self, calculator, causal_impact_kpi):
+        """The optional validation_status context filter is forwarded to the query param."""
+        calculator._execute_query = Mock(
+            return_value=[
+                {"start_node": "X", "effect": 0.21, "n_paths": 11, "avg_confidence": 0.83}
+            ]
+        )
+
+        calculator.calculate(causal_impact_kpi, context={"validation_status": "validated"})
+
+        calculator._execute_query.assert_called_once_with(
+            "causal_metrics_causal_impact", ["validated"]
+        )
+
+    def test_calculate_cm003_returns_none_on_empty(self, calculator, causal_impact_kpi):
+        """CM-003 fails loud (value None + error) when no causal paths exist — never fabricates 0."""
+        calculator._execute_query = Mock(return_value=[])
+
+        result = calculator.calculate(causal_impact_kpi)
+
+        assert result.value is None
+        assert "error" in result.metadata
+
 
 class TestCalculatorIntegration:
     """Integration tests across all calculators."""

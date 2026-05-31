@@ -204,11 +204,49 @@ class CausalMetricsCalculator(KPICalculatorBase):
     def _calc_causal_impact(self, context: dict[str, Any]) -> dict[str, Any]:
         """Calculate CM-003: Causal Impact.
 
-        Estimated causal effect size from causal paths table.
+        The average strength of the discovered causal effects in causal_paths:
+        the path-level mean of ``causal_effect_size``. This is a DESCRIPTIVE
+        aggregate over discovered pathways — NOT the effect of intervening on a
+        variable. ``start_node`` is the discovered path SOURCE (where a chain
+        begins), not a do()-style intervention target; it is surfaced only as a
+        descriptive breakdown in metadata (#574/#577). An optional
+        ``validation_status`` context filter ('' = all paths; e.g. 'validated' =
+        audited only) narrows the cohort.
         """
-        raise RuntimeError(
-            "KPI causal_impact unavailable: causal_paths has no intervention_name column (#574)"
-        )
+        validation_status = context.get("validation_status", "") or ""
+        rows = self._execute_query("causal_metrics_causal_impact", [validation_status])
+
+        if rows:
+            total_n = sum((r.get("n_paths") or 0) for r in rows)
+            if total_n > 0:
+                # Path-level (across-paths) mean: SUM(effect_i * n_i) / SUM(n_i).
+                value = (
+                    sum((r.get("effect") or 0.0) * (r.get("n_paths") or 0) for r in rows) / total_n
+                )
+                return {
+                    "value": value,
+                    "metadata": {
+                        "n_paths": total_n,
+                        "validation_status": validation_status or "all",
+                        "breakdown": [
+                            {
+                                "start_node": r.get("start_node"),
+                                "effect": r.get("effect"),
+                                "n_paths": r.get("n_paths"),
+                                "avg_confidence": r.get("avg_confidence"),
+                            }
+                            for r in rows
+                        ],
+                        "note": (
+                            "mean causal_effect_size across discovered causal paths; "
+                            "start_node is the discovered path source, NOT an intervention "
+                            "target (#574)"
+                        ),
+                        "source": "causal_paths",
+                    },
+                }
+
+        return {"value": None, "metadata": {"error": "No causal_paths data available"}}
 
     def _calc_counterfactual(self, context: dict[str, Any]) -> dict[str, Any]:
         """Calculate CM-004: Counterfactual Outcome.
