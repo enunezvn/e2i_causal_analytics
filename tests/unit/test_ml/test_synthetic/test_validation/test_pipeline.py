@@ -445,9 +445,16 @@ class TestQuickValidate:
             "table1": pd.DataFrame({"id": [1, 2, 3]}),
         }
 
-        # Mock successful validation
+        # Mock successful validation. gx_result MUST be set explicitly to None
+        # (not left as an auto-Mock): quick_validate(verbose=True) prints
+        # get_combined_summary(results), which does
+        # ``result.gx_result.success_rate * 100``. An unconfigured Mock there
+        # raises ``TypeError: unsupported operand type(s) for *: 'Mock' and 'int'``
+        # (#555 — this is the mock-wiring bug that the missing CI coverage hid).
         mock_result = Mock()
         mock_result.is_valid = True
+        mock_result.pandera_valid = True
+        mock_result.gx_result = None
 
         mock_validate_pipeline.return_value = ({"table1": mock_result}, {})
 
@@ -482,8 +489,13 @@ class TestQuickValidate:
         """Test quick_validate passes DGP type."""
         datasets = {"table1": pd.DataFrame({"id": [1, 2, 3]})}
 
+        # quick_validate defaults to verbose=True, which prints
+        # get_combined_summary(results); gx_result must be None so the summary
+        # does not try ``Mock * 100`` (#555 mock-wiring bug).
         mock_result = Mock()
         mock_result.is_valid = True
+        mock_result.pandera_valid = True
+        mock_result.gx_result = None
         mock_validate_pipeline.return_value = ({"table1": mock_result}, {})
 
         quick_validate(datasets, dgp_type=DGPType.CONFOUNDED)
