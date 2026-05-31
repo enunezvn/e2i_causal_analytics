@@ -36,6 +36,18 @@ except ImportError:
 
 import numpy as np
 
+from src.ml.synthetic.clinical_codes import (
+    ANTIHISTAMINE_ATC_CLASS,
+    ANTIHISTAMINES,
+    BRAND_DIAGNOSIS,
+    BRAND_DRUG_CLASS,
+    PNH_FLOW_EVENT_SUBTYPE,
+    PNH_FLOW_LOINC,
+    PNH_TESTED_PREVALENCE,
+    UAS7_ASSAY,
+    UAS7_UNCONTROLLED_PREVALENCE,
+)
+
 # Set random seeds for reproducibility
 random.seed(42)
 np.random.seed(42)
@@ -383,6 +395,14 @@ class E2IDataGenerator:
             state = random.choice(STATES_BY_REGION[region])
             journey_end = journey_start + timedelta(days=random.randint(30, 180))
 
+            # #577: brand-aligned REAL ICD-10 (canonical: clinical_codes.BRAND_DIAGNOSIS),
+            # replacing the brand-blind mangled `ICD10_{...}` placeholder. Brand is chosen
+            # next, so resolve the dx from that brand.
+            pj_brand = random.choice(TARGET_BRANDS)
+            dx = BRAND_DIAGNOSIS[pj_brand]
+            primary_diagnosis_code = random.choice(dx["icd10"])  # type: ignore[arg-type]
+            primary_diagnosis_desc = dx["desc"]
+
             # Source tracking (NEW for WS1 gaps)
             primary_source = random.choice(DATA_SOURCES)
             num_sources_matched = random.randint(1, 3)
@@ -410,19 +430,12 @@ class E2IDataGenerator:
                     ),
                     "journey_stage": random.choice(JOURNEY_STAGES),
                     "journey_status": random.choice(JOURNEY_STATUSES),
-                    "primary_diagnosis_code": f"ICD10_{random.choice(['C50', 'D89', 'L40', 'M05'])}",
-                    "primary_diagnosis_desc": random.choice(
-                        [
-                            "Breast Cancer",
-                            "Autoimmune Disorder",
-                            "Psoriasis",
-                            "Rheumatoid Arthritis",
-                        ]
-                    ),
+                    "primary_diagnosis_code": primary_diagnosis_code,
+                    "primary_diagnosis_desc": primary_diagnosis_desc,
                     "secondary_diagnosis_codes": [
                         f"ICD10_{random.randint(100, 999)}" for _ in range(random.randint(0, 3))
                     ],
-                    "brand": random.choice(TARGET_BRANDS),
+                    "brand": pj_brand,
                     "age_group": random.choice(["18-34", "35-49", "50-64", "65+"]),
                     "gender": random.choice(["M", "F"]),
                     "geographic_region": region,
@@ -480,8 +493,13 @@ class E2IDataGenerator:
                         "brand": pj["brand"],
                         "drug_ndc": f"NDC{random.randint(10000, 99999)}",
                         "drug_name": f"{pj['brand']}_Drug",
-                        "drug_class": random.choice(
-                            ["BTK Inhibitor", "Complement Inhibitor", "CDK4/6 Inhibitor"]
+                        # #577: brand-conditioned mechanism class (was a brand-blind
+                        # random.choice that produced e.g. Fabhalta|BTK Inhibitor).
+                        "drug_class": BRAND_DRUG_CLASS.get(
+                            pj["brand"],
+                            random.choice(
+                                ["BTK Inhibitor", "Complement Inhibitor", "CDK4/6 Inhibitor"]
+                            ),
                         ),
                         "dosage": f"{random.choice([50, 100, 200, 400])}mg",
                         "duration_days": random.randint(7, 90),
@@ -524,6 +542,72 @@ class E2IDataGenerator:
                         "data_source": pj["data_source"],
                         "source_timestamp": pj["source_timestamp"],
                         # ML Split tracking
+                        "data_split": pj["data_split"],
+                        "split_config_id": self.split_config_id,
+                        "created_at": datetime.now().isoformat(),
+                    }
+                )
+                event_count += 1
+
+            # #577: emit the brand-specific clinical concepts the KPI calculators need,
+            # using REAL codes (clinical_codes). Mirrors migration 046 so a fresh full
+            # regenerate yields the same computable cohort. Remibrutinib (CSU) -> one
+            # prior baseline-antihistamine prescription (ATC R06A + RxCUI) carrying a UAS7
+            # reading (uncontrolled = UAS7>=7, ~UAS7_UNCONTROLLED_PREVALENCE); Fabhalta
+            # (PNH) -> a flow-cytometry lab_test with a real PNH LOINC for
+            # ~PNH_TESTED_PREVALENCE of patients (the rest stay untested -> real ratio).
+            brand = pj["brand"]
+            if brand == "Remibrutinib":
+                uncontrolled = random.random() < UAS7_UNCONTROLLED_PREVALENCE
+                uas7_value = random.randint(7, 42) if uncontrolled else random.randint(0, 6)
+                antihistamine = random.choice(ANTIHISTAMINES)
+                self.treatment_events.append(
+                    {
+                        "treatment_event_id": generate_id("TE", event_count),
+                        "patient_journey_id": pj["patient_journey_id"],
+                        "patient_id": pj["patient_id"],
+                        "hcp_id": random.choice(self.hcp_profiles)["hcp_id"],
+                        "event_date": (
+                            journey_start - timedelta(days=random.randint(1, 180))
+                        ).isoformat(),
+                        "event_type": "prescription",
+                        "event_subtype": "baseline_antihistamine",
+                        "brand": brand,
+                        "drug_name": antihistamine["name"],
+                        "drug_ndc": f"RXCUI{antihistamine['rxcui']}",
+                        "drug_class": ANTIHISTAMINE_ATC_CLASS,
+                        "days_from_diagnosis": -random.randint(1, 180),
+                        "loinc_codes": [],
+                        "lab_values": {"assay": UAS7_ASSAY, "value": uas7_value, "unit": "score"},
+                        "sequence_number": 0,
+                        "data_source": pj["data_source"],
+                        "source_timestamp": pj["source_timestamp"],
+                        "data_split": pj["data_split"],
+                        "split_config_id": self.split_config_id,
+                        "created_at": datetime.now().isoformat(),
+                    }
+                )
+                event_count += 1
+            elif brand == "Fabhalta" and random.random() < PNH_TESTED_PREVALENCE:
+                self.treatment_events.append(
+                    {
+                        "treatment_event_id": generate_id("TE", event_count),
+                        "patient_journey_id": pj["patient_journey_id"],
+                        "patient_id": pj["patient_id"],
+                        "hcp_id": random.choice(self.hcp_profiles)["hcp_id"],
+                        "event_date": journey_start.isoformat(),
+                        "event_type": "lab_test",
+                        "event_subtype": PNH_FLOW_EVENT_SUBTYPE,
+                        "brand": brand,
+                        "loinc_codes": [random.choice(PNH_FLOW_LOINC)],
+                        "lab_values": {
+                            "assay": "PNH_clone",
+                            "value": round(random.uniform(0, 95), 2),
+                            "unit": "%",
+                        },
+                        "sequence_number": 0,
+                        "data_source": pj["data_source"],
+                        "source_timestamp": pj["source_timestamp"],
                         "data_split": pj["data_split"],
                         "split_config_id": self.split_config_id,
                         "created_at": datetime.now().isoformat(),

@@ -249,11 +249,24 @@ class TestBrandSpecificCalculator:
         """Test calculator supports Brand-Specific KPIs."""
         assert calculator.supports(remi_uncontrolled_kpi) is True
 
-    def test_calculate_remi_uncontrolled_unavailable(self, calculator, remi_uncontrolled_kpi):
-        """#574: BR-001 (AH-uncontrolled %) is UNAVAILABLE — 'antihistamine' is not a valid
-        event_type/brand category in the schema, so the metric cannot be computed without
-        misrepresenting it. It must FAIL LOUD (value=None + error), never a fabricated value
-        (the prior force-fit remapped it to Remibrutinib patients, inverting the metric)."""
+    def test_calculate_remi_uncontrolled_computes(self, calculator, remi_uncontrolled_kpi):
+        """#577: BR-001 is now wired to the real CSU cohort (ATC R06A antihistamine events
+        carrying a UAS7 reading). With data it computes the uncontrolled fraction; lower is
+        better, so 0.30 (<= target 0.40) is GOOD."""
+        calculator._execute_query = Mock(return_value=[{"uncontrolled_rate": 0.30}])
+
+        result = calculator.calculate(remi_uncontrolled_kpi)
+
+        assert result.value == 0.30
+        assert result.status == KPIStatus.GOOD
+
+    def test_calculate_remi_uncontrolled_fails_loud_on_empty(
+        self, calculator, remi_uncontrolled_kpi
+    ):
+        """#577 (preserves the #574 discipline): an empty antihistamine cohort must FAIL
+        LOUD (value=None + 'unavailable'), never a fabricated 0% 'fully controlled'."""
+        calculator._execute_query = Mock(return_value=[{"uncontrolled_rate": None}])
+
         result = calculator.calculate(remi_uncontrolled_kpi)
 
         assert result.value is None

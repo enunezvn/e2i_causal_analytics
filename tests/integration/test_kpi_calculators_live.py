@@ -54,8 +54,13 @@ SPECS = [
     (
         BrandSpecificCalculator,
         ["_calc_remi_intent_delta", "_calc_kisqali_dx_adoption", "_calc_kisqali_oncologist_reach"],
-        ["_calc_remi_ah_uncontrolled", "_calc_fabhalta_pnh_tested"],
+        [],
     ),
+    # #577 Tier 2: BR-001 (_calc_remi_ah_uncontrolled) + BR-003 (_calc_fabhalta_pnh_tested)
+    # are wired to a real generated cohort, but their faithful e2e lives in
+    # test_577_brand_specific_live.py — which capability-gates on their OWN query_ids
+    # (migration 046). Keeping them out of this shared list (which gates only on the
+    # 044-era causal_metrics_ate) avoids a FAIL (vs skip) on a 044-but-not-046 target.
     (
         TriggerPerformanceCalculator,
         [
