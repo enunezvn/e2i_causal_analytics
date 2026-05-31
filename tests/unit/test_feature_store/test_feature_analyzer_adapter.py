@@ -582,9 +582,19 @@ class TestRealRecencyFreshnessEndToEnd559:
     @staticmethod
     def _supabase_mock(recency: datetime) -> MagicMock:
         sb = MagicMock()
-        # Real recency mechanism: .table(t).select(col).order(col, desc, nullslast).limit(1)
+        # Real recency mechanism: .table(t).select(col).order(col, desc, nullslast).limit(1).
+        # Key by every mapped timestamp column so the row is correct regardless of which
+        # source table the feature view resolves to (hcp_conversion_features → business_metrics
+        # → metric_date, etc.) — _query_max_recency reads rows[0].get(<selected column>).
         rec_res = MagicMock()
-        rec_res.data = [{"updated_at": recency.isoformat()}]
+        rec_res.data = [
+            {
+                "updated_at": recency.isoformat(),
+                "metric_date": recency.isoformat(),
+                "trigger_timestamp": recency.isoformat(),
+                "journey_start_date": recency.isoformat(),
+            }
+        ]
         (
             sb.table.return_value.select.return_value.order.return_value.limit.return_value.execute.return_value
         ) = rec_res

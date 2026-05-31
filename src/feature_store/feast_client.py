@@ -972,18 +972,34 @@ class FeastClient:
         )
 
     def _infer_source_table(self, feature_view: str) -> Optional[str]:
-        """Infer source table name from feature view name.
+        """Infer the offline source table backing a feature view.
 
-        Convention mappings:
-        - hcp_conversion_features -> hcp_profiles
-        - patient_journey_features -> patient_journeys
-        - trigger_features -> triggers
-        - market_features -> business_metrics
+        AUTHORITATIVE for every real Feast FeatureView name: each entry below is the table
+        that FeatureView's Feast source actually reads FROM, cross-referenced to
+        ``feature_repo/features/*.py`` (``source=...``) and ``feature_repo/data_sources.py``
+        (the ``FROM`` clause). This matters because #559 issues ``MAX(<timestamp>)`` against
+        the resolved table — a wrong table yields a real-but-WRONG recency. Notably
+        ``hcp_conversion_features`` and ``hcp_engagement_features`` source from
+        ``business_metrics_source`` (NOT hcp_profiles).
+
+        The short, non-canonical aliases (``hcp_features``/``patient_features``/etc.) are
+        best-effort fallbacks for logical names used by non-Feast callers
+        (prediction_synthesizer ``default_feature_view``, shap_explainer_realtime); they are
+        not real FeatureViews and are kept for backward compatibility.
         """
         mappings = {
-            "hcp_conversion_features": "hcp_profiles",
+            # Real Feast FeatureView names (authoritative — see feature_repo/features/*.py)
+            "hcp_conversion_features": "business_metrics",  # source=business_metrics_source
+            "hcp_engagement_features": "business_metrics",  # source=business_metrics_source
+            "hcp_profile_features": "hcp_profiles",  # source=hcp_profiles_source
+            "patient_journey_features": "patient_journeys",  # source=patient_journey_source
+            "patient_adherence_features": "patient_journeys",  # source=patient_journey_source
+            "trigger_effectiveness_features": "triggers",  # source=triggers_source
+            "trigger_response_features": "triggers",  # source=triggers_source
+            "territory_performance_features": "territory_metrics",  # source=territory_metrics_source
+            "market_dynamics_features": "business_metrics",  # source=business_metrics_source
+            # Backward-compat aliases (logical names used by non-Feast callers)
             "hcp_features": "hcp_profiles",
-            "patient_journey_features": "patient_journeys",
             "patient_features": "patient_journeys",
             "trigger_features": "triggers",
             "market_features": "business_metrics",

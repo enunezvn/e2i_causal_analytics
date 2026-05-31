@@ -1303,9 +1303,7 @@ class TestFeatureStatisticsNoFabricatedRecency:
         # available" contract hermetically (and not depend on ambient SUPABASE_* env), we
         # force get_supabase() to None: no client → no source query → recency genuinely
         # unknown → last_updated MUST be None (never a fabricated now()).
-        with patch(
-            "src.api.dependencies.supabase_client.get_supabase", return_value=None
-        ):
+        with patch("src.api.dependencies.supabase_client.get_supabase", return_value=None):
             stats = await client.get_feature_statistics(
                 feature_view="hcp_conversion_features",
                 feature_name="engagement_score",
@@ -1341,6 +1339,27 @@ class TestRealRecencySignal559:
 
     def test_infer_timestamp_column_unmapped_returns_none(self):
         assert FeastClient()._infer_timestamp_column("not_a_real_table") is None
+
+    def test_infer_source_table_authoritative_feature_view_mapping(self):
+        """#559: every real Feast FeatureView name must resolve to the table its Feast
+        source actually reads from (cross-referenced to feature_repo/features/*.py +
+        feature_repo/data_sources.py) — otherwise recency is a real-but-WRONG MAX from the
+        wrong table. In particular hcp_conversion_features and hcp_engagement_features
+        source from business_metrics_source (NOT hcp_profiles)."""
+        c = FeastClient()
+        expected = {
+            "hcp_conversion_features": "business_metrics",
+            "hcp_engagement_features": "business_metrics",
+            "hcp_profile_features": "hcp_profiles",
+            "patient_journey_features": "patient_journeys",
+            "patient_adherence_features": "patient_journeys",
+            "trigger_effectiveness_features": "triggers",
+            "trigger_response_features": "triggers",
+            "territory_performance_features": "territory_metrics",
+            "market_dynamics_features": "business_metrics",
+        }
+        for fv, table in expected.items():
+            assert c._infer_source_table(fv) == table, f"{fv} must resolve to {table}"
 
     # ---------------- cycle 2: recency value parsing ----------------
     def test_parse_recency_value_aware_datetime_passthrough(self):
