@@ -163,6 +163,22 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
 
         brand_value = patient.get("brand", Brand.REMIBRUTINIB.value)
 
+        # #577 WS2-TR-003: randomized control-arm holdout + arm-conditioned
+        # action_taken. This generator is the LOADER OF RECORD for triggers (via
+        # scripts/load_synthetic_data.py), so it must mirror migration 051 +
+        # data_generator.py or a fresh load reverts action_taken to all-NULL and
+        # re-breaks the metric. control_group_flag=True => CONTROL (NBA withheld);
+        # False => TREATMENT (NBA shown). Treatment draws a higher P(action
+        # present) than control so a real incrementality signal exists; the
+        # registry query COMPUTES the realized uplift — these P's only seed data.
+        control_group_flag = bool(self._rng.random() < 0.28)
+        p_action = 0.30 if control_group_flag else 0.38
+        action_taken = (
+            str(self._rng.choice(["called_patient", "scheduled_visit", "sent_info"]))
+            if self._rng.random() < p_action
+            else None
+        )
+
         return {
             "patient_id": patient.get("patient_id", ""),
             "hcp_id": patient.get("hcp_id", ""),
@@ -183,6 +199,8 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
             "recommended_action": self._generate_recommended_action(trigger_type),
             "brand": brand_value,
             "brand_id": brand_value,
+            "action_taken": action_taken,
+            "control_group_flag": control_group_flag,
         }
 
     def _select_trigger_type(

@@ -74,6 +74,11 @@ SPECS = [
     # test_577_brand_specific_live.py — which capability-gates on their OWN query_ids
     # (migration 046). Keeping them out of this shared list (which gates only on the
     # 044-era causal_metrics_ate) avoids a FAIL (vs skip) on a 044-but-not-046 target.
+    # #577 WS2-TR-003: _calc_action_rate_uplift is wired to a randomized control-arm holdout
+    # + arm-conditioned action_taken, but its faithful e2e lives in
+    # test_577_action_rate_uplift_live.py — which capability-gates on its OWN query_id
+    # (migration 051). Keeping it out of this shared list (which gates only on the
+    # 044-era causal_metrics_ate) avoids a FAIL (vs skip) on a 044-but-not-051 target.
     (
         TriggerPerformanceCalculator,
         [
@@ -85,7 +90,7 @@ SPECS = [
             "_calc_lead_time",
             "_calc_change_fail_rate",
         ],
-        ["_calc_action_rate_uplift"],
+        [],
     ),
     (
         DataQualityCalculator,

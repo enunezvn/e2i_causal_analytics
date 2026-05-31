@@ -770,6 +770,20 @@ class E2IDataGenerator:
                     else None
                 )
 
+                # #577 WS2-TR-003: randomized control-arm holdout + arm-conditioned
+                # action_taken (mirrors migration 051 as the durable source-of-truth).
+                # control_group_flag=True => CONTROL (NBA withheld); False => TREATMENT
+                # (NBA shown). The treatment arm draws a higher P(action present) than
+                # control, so a real incrementality signal exists; the registry query
+                # COMPUTES the realized uplift — these P's only seed coherent data.
+                control_group_flag = random.random() < 0.28
+                p_action = 0.30 if control_group_flag else 0.38
+                action_taken = (
+                    random.choice(["called_patient", "scheduled_visit", "sent_info"])
+                    if random.random() < p_action
+                    else None
+                )
+
                 self.triggers.append(
                     {
                         "trigger_id": trigger_id,
@@ -799,9 +813,8 @@ class E2IDataGenerator:
                             if view_timestamp and random.random() > 0.4
                             else None
                         ),
-                        "action_taken": random.choice(
-                            ["called_patient", "scheduled_visit", "sent_info", None]
-                        ),
+                        "action_taken": action_taken,
+                        "control_group_flag": control_group_flag,
                         "action_timestamp": (
                             (view_timestamp + timedelta(days=random.randint(1, 7))).isoformat()
                             if view_timestamp and random.random() > 0.5

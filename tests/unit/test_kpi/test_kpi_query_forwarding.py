@@ -42,8 +42,12 @@ ALL_CALCULATORS = [
 # (primary_diagnosis_code in the brand's qualifying ICD-10 set, via v_patient_eligibility —
 # NOT the absent is_eligible flag #574) with >=1 DELIVERED trigger (delivery_status IN
 # ('delivered','viewed') — an actual touchpoint, NOT the degenerate any-trigger=99.5% relabel).
+# #577 WS2-TR-003 _calc_action_rate_uplift is now WIRED (meaning e2e in
+# test_577_action_rate_uplift_live.py): the REALIZED relative uplift
+# (action_rate_treatment − action_rate_control)/action_rate_control over a randomized
+# control_group_flag holdout, where "action" = action_taken IS NOT NULL (a rep BEHAVIOR
+# measurable in BOTH arms — NOT acceptance_status, which is treatment-only).
 MISSING_METRICS = [
-    (TriggerPerformanceCalculator, "_calc_action_rate_uplift"),
     (DataQualityCalculator, "_calc_label_quality"),
 ]
 
@@ -225,3 +229,52 @@ def test_patient_touch_rate_genuine_zero_is_returned_not_raised():
     value and must be returned, never raised."""
     calc, _ = _bi_calc_returning([{"touch_rate": 0.0}])
     assert calc._calc_patient_touch_rate({"brand": "Fabhalta"}) == 0.0
+
+
+# --- #577 WS2-TR-003: action_rate_uplift wired (randomized control arm + arm-conditioned action) ---
+
+
+def _trigger_calc_returning(rows):
+    """A TriggerPerformanceCalculator whose kpi_query RPC returns `rows`."""
+    client = MagicMock()
+    client.rpc.return_value.execute.return_value = MagicMock(data=rows)
+    return TriggerPerformanceCalculator(db_client=client), client
+
+
+def test_action_rate_uplift_forwards_and_computes():
+    """WS2-TR-003 forwards to the allowlist id (no param — global treatment-vs-control ratio)
+    and returns the realized RELATIVE uplift fraction (computed per-arm in SQL)."""
+    calc, client = _trigger_calc_returning(
+        [{"action_rate_uplift": 0.2751, "treatment_rate": 0.3861, "control_rate": 0.3028}]
+    )
+    val = calc._calc_action_rate_uplift({})
+    client.rpc.assert_called_once_with(
+        "kpi_query",
+        {"query_id": "trigger_performance_action_rate_uplift", "params": []},
+    )
+    assert abs(val - 0.2751) < 1e-9
+
+
+def test_action_rate_uplift_fails_loud_on_empty_arm():
+    """Either arm empty -> NULL uplift (or no row) -> fail loud, NOT a fabricated 0.0."""
+    calc, _ = _trigger_calc_returning([{"action_rate_uplift": None}])
+    with pytest.raises(RuntimeError, match="unavailable"):
+        calc._calc_action_rate_uplift({})
+
+
+def test_action_rate_uplift_fails_loud_on_empty_result():
+    """An empty CROSS JOIN (an arm has zero rows) returns [] -> the `not result` guard must
+    fire and raise 'unavailable', never IndexError on result[0]."""
+    calc, _ = _trigger_calc_returning([])
+    with pytest.raises(RuntimeError, match="unavailable"):
+        calc._calc_action_rate_uplift({})
+
+
+def test_action_rate_uplift_genuine_zero_and_negative_are_returned_not_raised():
+    """A genuine 0.0 (both arms populated, equal action rates -> no lift) and a NEGATIVE
+    uplift (treatment worse than control) are legitimate realized values — returned, not
+    raised (the negative reads CRITICAL downstream via the higher-is-better bands)."""
+    calc, _ = _trigger_calc_returning([{"action_rate_uplift": 0.0}])
+    assert calc._calc_action_rate_uplift({}) == 0.0
+    calc, _ = _trigger_calc_returning([{"action_rate_uplift": -0.05}])
+    assert calc._calc_action_rate_uplift({}) == -0.05
