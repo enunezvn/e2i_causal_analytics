@@ -556,3 +556,112 @@ class TestExplainFailLoud:
             await service.get_features("PAT-2024-001234", ModelType.PROPENSITY)
 
         assert exc_info.value.status_code == 503
+
+    async def test_service_get_features_fails_loud_when_all_features_null(self):
+        """#576: get_features must raise 503 when Feast returns a 200 whose
+        required feature values are ALL null (the composite-key-absent /
+        empty-store trap, verified live for PAT_000191 single-key) — NOT return
+        a null vector that would drive a real SHAP / regulatory-audit record.
+
+        This is distinct from the feast-error case above: here the lookup
+        SUCCEEDS but yields nulls, which the prior fail-loud guard (exceptions
+        only) did not catch.
+        """
+        from fastapi import HTTPException
+
+        from src.api.routes.explain import ModelType, RealTimeSHAPService
+
+        feast = MagicMock()
+        feast.get_online_features = AsyncMock(
+            return_value={
+                "patient_id": ["PAT-2024-001234"],
+                "days_since_last_hcp_visit": [None],
+                "total_hcp_interactions_90d": [None],
+                "therapy_adherence_score": [None],
+            }
+        )
+        service = RealTimeSHAPService(feast_client=feast, shap_explainer=MagicMock())
+        service._initialized = True
+
+        with pytest.raises(HTTPException) as exc_info:
+            await service.get_features("PAT-2024-001234", ModelType.PROPENSITY)
+
+        assert exc_info.value.status_code == 503
+
+    async def test_service_get_features_succeeds_when_features_present(self):
+        """Honest success path at the service level: a fully-present non-null
+        Feast response is returned as-is (the guard must not over-fire)."""
+        from src.api.routes.explain import ModelType, RealTimeSHAPService
+
+        feast = MagicMock()
+        feast.get_online_features = AsyncMock(
+            return_value={
+                "patient_id": ["PAT-2024-001234"],
+                "days_since_last_hcp_visit": [12.0],
+                "total_hcp_interactions_90d": [5.0],
+                "therapy_adherence_score": [0.83],
+            }
+        )
+        service = RealTimeSHAPService(feast_client=feast, shap_explainer=MagicMock())
+        service._initialized = True
+
+        features = await service.get_features("PAT-2024-001234", ModelType.PROPENSITY)
+        assert features["days_since_last_hcp_visit"] == 12.0
+        assert features["therapy_adherence_score"] == 0.83
+
+    def test_explain_predict_success_through_real_get_features_guard(
+        self, mock_shap_result, mock_prediction
+    ):
+        """End-to-end happy path through a REAL RealTimeSHAPService: the real
+        get_features guard passes on a non-null Feast response, then prediction,
+        SHAP, and the audit record proceed. Only the heavy external collaborators
+        (BentoML prediction, SHAP compute, audit repo) are mocked — get_features
+        and its #576 guard run for real. Locks the integration the guard fronts
+        (codex LOW: prior success test was service-level only)."""
+        from src.api.routes.explain import RealTimeSHAPService
+
+        feast = MagicMock()
+        feast.get_online_features = AsyncMock(
+            return_value={
+                "patient_id": ["PAT-2024-001234"],
+                "days_since_last_hcp_visit": [12.0],
+                "total_hcp_interactions_90d": [5.0],
+                "therapy_adherence_score": [0.83],
+            }
+        )
+        service = RealTimeSHAPService(feast_client=feast, shap_explainer=MagicMock())
+        service._initialized = True
+        # Replace ONLY the heavy external collaborators; get_features stays REAL.
+        service.get_prediction = AsyncMock(return_value=mock_prediction)
+        service.compute_shap = AsyncMock(return_value=mock_shap_result)
+        service.store_audit_record = AsyncMock(return_value=True)
+
+        with patch(
+            "src.api.routes.explain.get_shap_service",
+            new=AsyncMock(return_value=service),
+        ):
+            response = client.post(
+                "/api/explain/predict",
+                json={
+                    "patient_id": "PAT-2024-001234",
+                    "model_type": "propensity",
+                    "store_for_audit": True,
+                },
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["audit_stored"] is True
+        # The REAL get_features guard ran against the (non-null) Feast response.
+        feast.get_online_features.assert_awaited_once()
+        # The prediction + SHAP legs actually executed (not bypassed) ...
+        service.get_prediction.assert_awaited_once()
+        service.compute_shap.assert_awaited_once()
+        # ... and the SHAP/prediction results flow into the response (guards
+        # against a 200 that skips compute_shap and returns a placeholder shape).
+        assert body["shap_sum"] == mock_shap_result["shap_sum"]
+        assert len(body["top_features"]) == len(mock_shap_result["contributions"])
+        assert body["prediction_class"] == mock_prediction["prediction_class"]
+        assert body["prediction_probability"] == mock_prediction["prediction_probability"]
+        # The audit record was scheduled and executed (TestClient runs bg tasks).
+        service.store_audit_record.assert_awaited_once()

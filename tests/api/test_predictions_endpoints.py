@@ -702,3 +702,138 @@ class TestModelsStatus:
         data = response.json()
         # With 3 default models: healthy_count + unhealthy_count = total_models
         assert data["healthy_count"] + data["unhealthy_count"] == data["total_models"]
+
+
+# =============================================================================
+# #576 - ANTI-NULL-TRAP GUARD (predictions route)
+#
+# A Feast feature-server 200 response can carry PRESENT-but-null values
+# (verified LIVE against the prod sidecar: a single-key patient lookup against
+# patient_journey_features returns status=PRESENT with value=null when the
+# composite key is absent or the online store is empty). Labeling such a
+# response feature_source='feast_online' feeds null features to the model while
+# presenting them as real — the exact #532 harm. The route MUST fail loud (503)
+# instead of mislabeling. A real 0/0.0 is a legitimate value and is NOT a
+# violation (the COALESCE-0 source-masking concern is a data-layer issue).
+# =============================================================================
+
+
+class TestPredictFeastNullGuard:
+    """POST /api/models/predict/{model} must not label a null Feast response feast_online."""
+
+    def test_predict_feast_all_null_returns_503(self, mock_bentoml_client, mock_feast_client):
+        """All required Feast feature values null -> 503, never feast_online,
+        BentoML never invoked (no prediction over a null vector)."""
+        mock_feast_client.get_online_features = AsyncMock(
+            return_value={
+                "patient_id": ["PAT-2024-0001"],  # entity key echoed back; must be ignored
+                "days_since_last_hcp_visit": [None],
+                "total_hcp_interactions_90d": [None],
+                "therapy_adherence_score": [None],
+            }
+        )
+        app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
+
+        response = client.post(
+            "/api/models/predict/propensity",
+            json={"features": {}, "entity_id": "PAT-2024-0001"},
+        )
+
+        assert response.status_code == 503
+        mock_bentoml_client.predict.assert_not_called()
+
+    def test_predict_feast_partial_null_required_field_returns_503(
+        self, mock_bentoml_client, mock_feast_client
+    ):
+        """A REQUIRED served feature being null (while others are present) is
+        still fail-loud: a partial/mixed null vector must not be labeled real.
+        Pins the live PAT_000191 finding (days_on_therapy real, adherence_rate null)."""
+        mock_feast_client.get_online_features = AsyncMock(
+            return_value={
+                "patient_id": ["PAT-2024-0001"],
+                "days_since_last_hcp_visit": [12.0],  # present + real
+                "total_hcp_interactions_90d": [None],  # REQUIRED but null
+                "therapy_adherence_score": [0.83],
+            }
+        )
+        app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
+
+        response = client.post(
+            "/api/models/predict/propensity",
+            json={"features": {}, "entity_id": "PAT-2024-0001"},
+        )
+
+        assert response.status_code == 503
+        mock_bentoml_client.predict.assert_not_called()
+
+    def test_predict_feast_all_present_nonnull_sets_feast_online(
+        self, mock_bentoml_client, mock_feast_client
+    ):
+        """The honest success path: all required features present + non-null ->
+        200, feature_source='feast_online', prediction served. (default mock_feast_client
+        returns the three propensity fields non-null.)"""
+        app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
+
+        response = client.post(
+            "/api/models/predict/propensity",
+            json={"features": {}, "entity_id": "PAT-2024-0001"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["feature_source"] == "feast_online"
+        mock_bentoml_client.predict.assert_called_once()
+
+    def test_predict_feast_zero_value_is_not_treated_as_null(
+        self, mock_bentoml_client, mock_feast_client
+    ):
+        """A real 0.0 is a legitimate feature value, NOT a null -> the guard must
+        NOT fire on it (else we'd 503 on perfectly valid zero-valued features)."""
+        mock_feast_client.get_online_features = AsyncMock(
+            return_value={
+                "patient_id": ["PAT-2024-0001"],
+                "days_since_last_hcp_visit": [0.0],
+                "total_hcp_interactions_90d": [0.0],
+                "therapy_adherence_score": [0.0],
+            }
+        )
+        app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
+
+        response = client.post(
+            "/api/models/predict/propensity",
+            json={"features": {}, "entity_id": "PAT-2024-0001"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["feature_source"] == "feast_online"
+
+
+class TestOnlineFeaturePresenceHelper:
+    """Pure helper that backs the #576 anti-null-trap guard."""
+
+    def test_required_feature_fields_strips_view_prefix(self):
+        from src.feature_store.online_feature_presence import required_feature_fields
+
+        refs = [
+            "patient_journey_features:days_on_therapy",
+            "patient_journey_features:adherence_rate",
+        ]
+        assert required_feature_fields(refs) == ["days_on_therapy", "adherence_rate"]
+
+    def test_required_feature_fields_skips_wildcard(self):
+        from src.feature_store.online_feature_presence import required_feature_fields
+
+        assert required_feature_fields(["v:*"]) == []
+
+    def test_missing_or_null_flags_null_and_absent_not_zero(self):
+        from src.feature_store.online_feature_presence import missing_or_null_feature_fields
+
+        refs = ["v:a", "v:b", "v:c", "v:d"]
+        # a present+real, b null, c absent, d real-zero. patient_id echo ignored.
+        payload = {"patient_id": "X", "a": 1.0, "b": None, "d": 0.0}
+        assert set(missing_or_null_feature_fields(payload, refs)) == {"b", "c"}
+
+    def test_all_present_nonnull_returns_empty(self):
+        from src.feature_store.online_feature_presence import missing_or_null_feature_fields
+
+        refs = ["v:a", "v:b"]
+        assert missing_or_null_feature_fields({"a": 1.0, "b": 0.0}, refs) == []
