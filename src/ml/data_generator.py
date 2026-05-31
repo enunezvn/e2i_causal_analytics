@@ -638,10 +638,11 @@ class E2IDataGenerator:
                 # #577 PR2 (CM-004): counterfactual_outcome is a REAL do-contrast of the
                 # factual prediction — the predicted outcome under the alternative arm =
                 # factual minus the (additive) treatment effect, floored at 0 (an outcome
-                # cannot be negative). This makes the per-row contrast
-                # factual − counterfactual == treatment_effect_estimate (the coherent
-                # relationship CM-004 reports), instead of the prior independent uniform
-                # noise. Mirrors migration 048 so a fresh full regenerate stays coherent.
+                # cannot be negative). So the per-row contrast factual − counterfactual
+                # equals treatment_effect_estimate on UNCLAMPED rows and is floor-attenuated
+                # (= prediction_value) where the effect exceeds the factual — replacing the
+                # prior independent uniform noise. Mirrors migration 048 so a fresh full
+                # regenerate stays coherent.
                 pred_value = round(random.uniform(0, 1), 4)
                 tee = round(random.uniform(0.05, 0.3), 3)
                 # Round to scale 3 (counterfactual_outcome is numeric(4,3)) using

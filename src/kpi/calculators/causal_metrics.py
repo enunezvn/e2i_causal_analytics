@@ -256,10 +256,11 @@ class CausalMetricsCalculator(KPICalculatorBase):
         the factual ``prediction_value``: the factual minus the (additive)
         ``treatment_effect_estimate``, floored at 0 (an outcome cannot be
         negative). So the per-row contrast factual − counterfactual equals the
-        treatment effect (#577). The VALUE is the counterfactual LEVEL (mean
-        counterfactual_outcome) — distinct from CM-001 ATE (the contrast). An
-        optional ``prediction_type`` context filter ('' = all types) narrows the
-        cohort.
+        treatment effect on UNCLAMPED rows, and is floor-attenuated (smaller, =
+        prediction_value) where the effect exceeds the factual (#577). The VALUE
+        is the counterfactual LEVEL (mean counterfactual_outcome) — distinct from
+        CM-001 ATE (the contrast). An optional ``prediction_type`` context filter
+        ('' = all types) narrows the cohort.
         """
         prediction_type = context.get("prediction_type", "") or ""
         rows = self._execute_query("causal_metrics_counterfactual", [prediction_type])
