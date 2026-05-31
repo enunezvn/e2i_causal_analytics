@@ -210,14 +210,22 @@ class TestRealTimeSHAPService:
         mock_feast_client.get_online_features.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_get_features_fallback_on_error(self, shap_service, mock_feast_client):
-        """Test fallback to default features when Feast fails."""
+    async def test_get_features_fails_loud_on_error(self, shap_service, mock_feast_client):
+        """#532: a Feast lookup failure must FAIL LOUD, not silently substitute
+        fabricated default features.
+
+        The old behavior returned ``_get_default_features()`` (hardcoded plausible
+        values like therapy_adherence_score=0.72) which then drove a real SHAP
+        explanation and a persistable regulatory-audit record — fabricated data
+        presented as real. The route must surface this as a 503 instead.
+        """
         mock_feast_client.get_online_features.side_effect = Exception("Feast error")
 
-        features = await shap_service.get_features("PAT-123", ModelType.PROPENSITY)
+        with pytest.raises(HTTPException) as exc_info:
+            await shap_service.get_features("PAT-123", ModelType.PROPENSITY)
 
-        assert "days_since_last_hcp_visit" in features
-        assert features["days_since_last_hcp_visit"] == 45  # Default value
+        assert exc_info.value.status_code == 503
+        assert "feature store" in str(exc_info.value.detail).lower()
 
     def test_get_feature_refs_for_model_propensity(self, shap_service):
         """Test feature refs for propensity model."""

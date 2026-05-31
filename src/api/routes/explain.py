@@ -395,28 +395,51 @@ class RealTimeSHAPService:
         self._initialized = True
 
     async def get_features(self, patient_id: str, model_type: ModelType) -> Dict[str, Any]:
-        """Retrieve features from Feast feature store."""
+        """Retrieve features from the Feast feature store.
+
+        Fails LOUD when Feast is unavailable. This route feeds a regulatory-audit
+        SHAP explanation, so it must NOT silently substitute fabricated default
+        features (the #532 silent-degradation contract) — that would present
+        invented patient data as a real, audit-grade explanation. Mirrors the
+        predictions route, which returns 503 on a Feast lookup failure.
+
+        Raises:
+            HTTPException: 503 when the Feast client is unavailable or the
+                online-feature lookup fails.
+        """
         await self._ensure_initialized()
 
-        if self.feast_client:
-            try:
-                # Map model type to feature refs
-                feature_refs = self._get_feature_refs_for_model(model_type)
+        if self.feast_client is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Feature store unavailable: Feast client not initialized",
+            )
 
-                features_dict = await self.feast_client.get_online_features(
-                    entity_rows=[{"patient_id": patient_id}],
-                    feature_refs=feature_refs,
-                    full_feature_names=False,
-                )
+        try:
+            # Map model type to feature refs
+            feature_refs = self._get_feature_refs_for_model(model_type)
 
-                # Convert list values to single values (since we're querying one patient)
-                return {k: v[0] if v else None for k, v in features_dict.items()}
+            features_dict = await self.feast_client.get_online_features(
+                entity_rows=[{"patient_id": patient_id}],
+                feature_refs=feature_refs,
+                full_feature_names=False,
+            )
 
-            except Exception as e:
-                logger.warning(f"Feast feature retrieval failed, using fallback: {e}")
+            # Convert list values to single values (since we're querying one patient)
+            return {k: v[0] if v else None for k, v in features_dict.items()}
 
-        # Fallback: return default features for demonstration
-        return self._get_default_features()
+        except HTTPException:
+            raise
+        except Exception as e:
+            # Mask the patient_id in logs to match the PII-masking this route
+            # enforces on responses (a Feast outage must not leak raw IDs to logs).
+            logger.error(
+                f"Feast feature retrieval failed for patient={mask_identifier(patient_id)}: {e}"
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=f"Feature store lookup failed: {e}",
+            ) from e
 
     def _get_feature_refs_for_model(self, model_type: ModelType) -> List[str]:
         """Get feature references for a model type.
@@ -437,7 +460,12 @@ class RealTimeSHAPService:
         return list(MODEL_FEATURE_REFS.get(model_type.value, []))
 
     def _get_default_features(self) -> Dict[str, Any]:
-        """Default features for fallback/testing."""
+        """Static default features for unit tests only.
+
+        NOT a production fallback: ``get_features`` fails loud (HTTP 503) when
+        Feast is unavailable rather than substituting these fabricated values
+        into a real SHAP explanation / regulatory-audit record (#532).
+        """
         return {
             "days_since_last_hcp_visit": 45,
             "total_hcp_interactions_90d": 12,

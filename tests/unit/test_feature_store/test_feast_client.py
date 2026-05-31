@@ -860,6 +860,49 @@ class TestProductionFallbackRaises:
                 feature_refs=["hcp_view:engagement_score"],
             )
 
+    @pytest.mark.asyncio
+    async def test_online_fallback_raises_in_production(self, monkeypatch):
+        """#532: the ONLINE-features custom-store fallback must ALSO fail loud in
+        production, mirroring the historical-features guard.
+
+        Otherwise the embedded path silently serves custom-store (Supabase) data
+        for online features, and the predictions route would tag it
+        ``feature_source='feast_online'`` — the exact #532 mislabel. The route
+        cannot distinguish a real Feast fetch from a fallback, so the honesty
+        guard belongs here at the client.
+        """
+        monkeypatch.setenv("ENVIRONMENT", "production")
+
+        client = FeastClient(config=FeastConfig(enable_fallback=True))
+        client._initialized = True
+        client._store = None
+        client._remote_base_url = None
+        client._custom_store = MagicMock()
+
+        with pytest.raises(FeastFallbackError):
+            await client.get_online_features(
+                entity_rows=[{"patient_id": "PAT-1"}],
+                feature_refs=["hcp_conversion_features:engagement_score"],
+            )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("env_value", ["PRODUCTION", "Production", "production"])
+    async def test_online_fallback_raises_case_insensitive(self, monkeypatch, env_value):
+        """ENVIRONMENT check for the online fallback is case-insensitive too."""
+        monkeypatch.setenv("ENVIRONMENT", env_value)
+
+        client = FeastClient(config=FeastConfig(enable_fallback=True))
+        client._initialized = True
+        client._store = None
+        client._remote_base_url = None
+        client._custom_store = MagicMock()
+
+        with pytest.raises(FeastFallbackError):
+            await client.get_online_features(
+                entity_rows=[{"patient_id": "PAT-1"}],
+                feature_refs=["hcp_conversion_features:engagement_score"],
+            )
+
 
 class TestFreshnessDefaultsToStaleOnException:
     """Test that get_feature_freshness defaults to stale on exception."""
