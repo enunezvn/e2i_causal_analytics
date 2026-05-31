@@ -106,6 +106,57 @@ class TestTriggerPerformanceCalculator:
         assert result.value == 35.0
         assert result.status == KPIStatus.CRITICAL
 
+    @pytest.fixture
+    def action_rate_uplift_kpi(self):
+        """Create an action rate uplift KPI (a relative-uplift fraction; higher is better)."""
+        return KPIMetadata(
+            id="WS2-TR-003",
+            name="Action Rate Uplift",
+            definition="Incremental action rate vs control group",
+            formula="(action_rate_treatment - action_rate_control) / action_rate_control",
+            calculation_type=CalculationType.DERIVED,
+            workstream=Workstream.WS2_TRIGGERS,
+            threshold=KPIThreshold(target=0.15, warning=0.10, critical=0.05),
+        )
+
+    def test_calculate_action_rate_uplift_good(self, calculator, action_rate_uplift_kpi):
+        """WS2-TR-003 returns the realized RELATIVE uplift as a bare fraction (NOT 100×ratio,
+        NOT an absolute difference); the live ~0.2751 is GOOD against target 0.15, and the
+        metric is HIGHER-is-better (not in the lower_is_better set)."""
+        calculator._execute_query = Mock(return_value=[{"action_rate_uplift": 0.2751}])
+
+        result = calculator.calculate(action_rate_uplift_kpi)
+
+        assert result.value == 0.2751
+        assert result.status == KPIStatus.GOOD
+        assert result.metadata.get("lower_is_better") is False
+
+    def test_action_rate_uplift_band_and_scale_guard(self, calculator, action_rate_uplift_kpi):
+        """Higher-is-better bands (anti-mis-scale lock): >=0.15 GOOD; [0.05,0.15) WARNING;
+        <0.05 CRITICAL — including a NEGATIVE uplift (treatment worse than control). Under a
+        100×ratio mis-scale every value would be GOOD and a negative indistinguishable."""
+        for value, expected in [
+            (0.2751, KPIStatus.GOOD),
+            (0.12, KPIStatus.WARNING),
+            (0.04, KPIStatus.CRITICAL),
+            (-0.05, KPIStatus.CRITICAL),
+        ]:
+            calculator._execute_query = Mock(return_value=[{"action_rate_uplift": value}])
+            result = calculator.calculate(action_rate_uplift_kpi)
+            assert result.value == value
+            assert result.status == expected, f"{value} -> {result.status} (expected {expected})"
+
+    def test_action_rate_uplift_fails_loud_on_empty_arm(self, calculator, action_rate_uplift_kpi):
+        """An empty treatment/control arm (NULL uplift) -> KPIResult carries the error, value
+        None (no fabricated 0.0)."""
+        calculator._execute_query = Mock(return_value=[{"action_rate_uplift": None}])
+
+        result = calculator.calculate(action_rate_uplift_kpi)
+
+        assert result.value is None
+        assert result.status == KPIStatus.UNKNOWN
+        assert result.error is not None and "unavailable" in result.error
+
     def test_calculate_unknown_kpi_returns_error(self, calculator):
         """Test calculator returns error for unknown KPI ID."""
         kpi = KPIMetadata(

@@ -133,12 +133,33 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
     def _calc_action_rate_uplift(self, context: dict[str, Any]) -> float:
         """Calculate WS2-TR-003: Action Rate Uplift.
 
-        Incremental action rate vs control group.
+        Incremental (RELATIVE) action rate of the TREATMENT arm (NBA shown,
+        control_group_flag=false) over the CONTROL arm (NBA withheld,
+        control_group_flag=true):
+            (action_rate_treatment - action_rate_control) / action_rate_control
+        where each arm's action_rate = fraction of triggers with action_taken
+        IS NOT NULL. "Action" is action_taken (a rep BEHAVIOR measurable in BOTH
+        arms); acceptance_status is deliberately NOT used — it is treatment-only
+        (you cannot accept a withheld NBA) and is already the outcome of
+        WS2-TR-004/006 (see #577 migration 051).
+
+        #577: the per-arm aggregation and the relative division are done in SQL;
+        this returns the realized RELATIVE uplift as a bare float (a fraction —
+        NOT a percentage, NOT an absolute difference). Fails loud when EITHER arm
+        is empty (no row, or NULL uplift) — that was the #574 fail-loud reason
+        (no control_group_flag column existed). A genuine 0.0 (both arms populated
+        with equal action rates → no lift) is a legitimate value and is returned,
+        not raised; a negative uplift (treatment worse than control) is likewise
+        returned (it reads CRITICAL via the higher-is-better bands).
         """
-        raise RuntimeError(
-            "KPI WS2-TR-003 action_rate_uplift unavailable: triggers has no "
-            "control_group_flag column to compute uplift vs control (#574)"
-        )
+        result = self._execute_query("trigger_performance_action_rate_uplift", [])
+        if not result or result[0].get("action_rate_uplift") is None:
+            raise RuntimeError(
+                "KPI WS2-TR-003 action_rate_uplift unavailable: no populated "
+                "treatment/control arm to contrast (apply the #577 control-arm "
+                "migration 051)"
+            )
+        return float(result[0]["action_rate_uplift"])
 
     def _calc_acceptance_rate(self, context: dict[str, Any]) -> float:
         """Calculate WS2-TR-004: Acceptance Rate.

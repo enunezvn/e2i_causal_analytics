@@ -139,6 +139,11 @@ TABLE_COLUMNS = {
         "delivery_channel",
         "delivery_status",
         "acceptance_status",
+        # #577 WS2-TR-003: persist the arm + action so a fresh synthetic load stays
+        # coherent for action_rate_uplift (else the loader strips them and the
+        # registry query's `WHERE control_group_flag IS NOT NULL` finds empty arms).
+        "action_taken",
+        "control_group_flag",
         "outcome_tracked",
         "outcome_value",
         "trigger_reason",

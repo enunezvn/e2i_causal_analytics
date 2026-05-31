@@ -161,6 +161,16 @@ class TestTableColumns:
         for col in required:
             assert col in TABLE_COLUMNS["triggers"]
 
+    def test_triggers_whitelist_carries_action_rate_uplift_columns(self):
+        """#577 WS2-TR-003: the batch loader filters each DataFrame to TABLE_COLUMNS
+        before upsert (batch_loader: `df[columns_to_load]`). If action_taken /
+        control_group_flag are not whitelisted, a fresh synthetic load silently drops
+        them and the action_rate_uplift registry query (WHERE control_group_flag IS NOT
+        NULL) finds empty arms -> fail-loud. Regression-lock both columns into the
+        whitelist so the coherent arm rework survives a fresh load."""
+        for col in ("action_taken", "control_group_flag"):
+            assert col in TABLE_COLUMNS["triggers"], f"{col} missing from triggers whitelist"
+
 
 class TestBatchLoader:
     """Test suite for BatchLoader."""
