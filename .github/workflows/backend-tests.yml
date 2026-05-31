@@ -188,25 +188,15 @@ jobs:
             tests/unit/security/ \
             tests/unit/observability/ \
             tests/unit/test_data/ \
-            tests/unit/test_docker/ \
-            tests/unit/test_docs/ \
             tests/unit/test_etl/ \
             tests/unit/test_feature_repo/ \
-            tests/unit/test_feature_store/ \
-            tests/unit/test_governance/ \
             tests/unit/test_gunicorn/ \
             tests/unit/test_lifecycle/ \
-            tests/unit/test_ml/ \
-            tests/unit/test_mlops/ \
             tests/unit/test_observability/ \
-            tests/unit/test_ontology/ \
             tests/unit/test_optimization/ \
-            tests/unit/test_rag/ \
-            tests/unit/test_security/ \
             tests/unit/test_serving/ \
             tests/unit/test_skills/ \
             tests/unit/test_synthetic/ \
-            tests/unit/test_tasks/ \
             tests/unit/test_testing/ \
             tests/unit/test_tests_meta/ \
             tests/unit/test_tool_registry/ \
@@ -291,6 +281,16 @@ jobs:
           pytest \
             tests/unit/test_causal_engine/ \
             tests/unit/test_digital_twin/ \
+            tests/unit/test_docker/ \
+            tests/unit/test_docs/ \
+            tests/unit/test_feature_store/ \
+            tests/unit/test_governance/ \
+            tests/unit/test_ml/ \
+            tests/unit/test_mlops/ \
+            tests/unit/test_ontology/ \
+            tests/unit/test_rag/ \
+            tests/unit/test_security/ \
+            tests/unit/test_tasks/ \
             -n 2 \
             --dist=loadscope \
             --timeout=60 \
