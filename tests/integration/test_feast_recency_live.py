@@ -4,12 +4,18 @@ prod-equivalent Supabase.
 This codifies the premise the unit tests (which mock the Supabase client) cannot prove:
 that the PostgREST ``.order().limit()`` recency mechanism actually returns a real,
 tz-aware datetime from the target DB — and that the ``execute_sql`` RPC is NOT required
-(it does not exist in the target Supabase). It SKIPS when Supabase is not configured
-(e.g. CI without a DB), so it is a local/staging repeatability guard, not a CI gate.
+(it does not exist in the target Supabase). It SKIPS when Supabase is not configured.
+
+NOTE on CI: the CI integration shards DO set SUPABASE_* (to a reachable but UNSEEDED
+local instance), so this file must not assume Supabase is absent. The data-dependent
+"real recency exists" assertion therefore skips when the source table is empty/absent —
+it is a populated-DB (local self-contained / staging) repeatability guard, not a CI gate.
+The always-safe invariants (None-or-tz-aware-and-not-future) run everywhere.
 
 Run against the local self-contained Supabase with SUPABASE_URL + SUPABASE_ANON_KEY set.
 """
 
+import asyncio
 import os
 from datetime import datetime, timezone
 
@@ -59,9 +65,28 @@ async def test_query_max_recency_invariants(live_client, table):
 
 async def test_hcp_profiles_has_real_recency(live_client):
     """The premise the mock unit tests cannot prove: a REAL recency signal flows through
-    the PostgREST mechanism for the canonically-populated hcp_profiles table."""
+    the PostgREST mechanism for a populated hcp_profiles table.
+
+    Skips when hcp_profiles is empty or not present (e.g. CI's unseeded integration
+    Supabase) — the assertion is only meaningful against a populated DB. This is the
+    faithful guard for local self-contained / staging environments.
+    """
+    try:
+        count_res = await asyncio.to_thread(
+            lambda: live_client.table("hcp_profiles")
+            .select("updated_at", count="exact")
+            .limit(0)
+            .execute()
+        )
+        row_count = getattr(count_res, "count", 0) or 0
+    except Exception as e:  # table missing / unreachable in this environment
+        pytest.skip(f"hcp_profiles not queryable here: {e}")
+
+    if row_count == 0:
+        pytest.skip("hcp_profiles is empty in this environment (no seeded feast data)")
+
     recency = await FeastClient()._query_max_recency(live_client, "hcp_profiles")
-    assert recency is not None, "hcp_profiles must yield a real MAX(updated_at), not None"
+    assert recency is not None, "populated hcp_profiles must yield a real MAX(updated_at)"
     assert recency.tzinfo is not None
 
 
