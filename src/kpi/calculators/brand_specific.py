@@ -105,14 +105,23 @@ class BrandSpecificCalculator(KPICalculatorBase):
     def _calc_remi_ah_uncontrolled(self, context: dict[str, Any]) -> float:
         """Calculate BR-001: Remi - AH Uncontrolled %.
 
-        Percentage of antihistamine patients with uncontrolled symptoms.
+        Percentage of antihistamine(R06A)-treated CSU patients whose disease remains
+        uncontrolled (UAS7 >= 7, the EAACI/GA2LEN guideline cutoff, PMID 34536239).
         Lower is better (more controlled = good).
+
+        #577: computed over the generated CSU cohort (baseline_antihistamine events
+        carrying a UAS7 reading). The UAS7 cutoff is passed as the bound param so it
+        is explicit/auditable. Fails loud if there is no antihistamine-treated cohort
+        (an empty denominator must NOT become a fabricated 0% "fully controlled").
         """
-        raise RuntimeError(
-            "KPI BR-001 unavailable: 'antihistamine' is not a valid "
-            "event_type/brand category; metric cannot be computed without "
-            "misrepresenting it (#574)"
-        )
+        threshold = context.get("uas7_uncontrolled_threshold", 7)
+        result = self._execute_query("brand_specific_remi_ah_uncontrolled", [threshold])
+        if not result or result[0].get("uncontrolled_rate") is None:
+            raise RuntimeError(
+                "KPI BR-001 unavailable: no antihistamine-treated CSU cohort "
+                "(apply the #577 brand-specific seed, migration 046)"
+            )
+        return float(result[0]["uncontrolled_rate"])
 
     def _calc_remi_intent_delta(self, context: dict[str, Any]) -> float:
         """Calculate BR-002: Remi - Intent-to-Prescribe Δ.
@@ -134,11 +143,21 @@ class BrandSpecificCalculator(KPICalculatorBase):
     def _calc_fabhalta_pnh_tested(self, context: dict[str, Any]) -> float:
         """Calculate BR-003: Fabhalta - % PNH Tested.
 
-        Percentage of eligible patients tested for PNH.
+        Percentage of PNH-eligible (ICD-10 D59.5) patients who received a PNH
+        flow-cytometry diagnostic test (lab_test carrying a real PNH LOINC).
+
+        #577: eligibility is DERIVED from the real D59.5 diagnosis (not a blanket
+        is_eligible flag); the numerator counts genuine PNH-flow lab events. Fails
+        loud if there is no D59.5-eligible cohort; a genuine 0.0 (cohort exists but
+        none tested) is a legitimate value.
         """
-        raise RuntimeError(
-            "KPI BR-003 unavailable: patient_journeys has no is_eligible column (#574)"
-        )
+        result = self._execute_query("brand_specific_fabhalta_pnh_tested", [])
+        if not result or result[0].get("tested_rate") is None:
+            raise RuntimeError(
+                "KPI BR-003 unavailable: no PNH-eligible (D59.5) cohort "
+                "(apply the #577 brand-specific seed, migration 046)"
+            )
+        return float(result[0]["tested_rate"])
 
     def _calc_kisqali_dx_adoption(self, context: dict[str, Any]) -> float:
         """Calculate BR-004: Kisqali - Dx Adoption.

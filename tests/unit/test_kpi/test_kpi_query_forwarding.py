@@ -35,8 +35,6 @@ MISSING_METRICS = [
     (CausalMetricsCalculator, "_calc_counterfactual"),
     (CausalMetricsCalculator, "_calc_mediation_effect"),
     (BusinessImpactCalculator, "_calc_patient_touch_rate"),
-    (BrandSpecificCalculator, "_calc_remi_ah_uncontrolled"),
-    (BrandSpecificCalculator, "_calc_fabhalta_pnh_tested"),
     (TriggerPerformanceCalculator, "_calc_action_rate_uplift"),
     (DataQualityCalculator, "_calc_label_quality"),
 ]
@@ -126,3 +124,48 @@ def test_dq006_status_is_lower_is_better():
     # Guard the direction itself: under the (wrong) higher-is-better default, 0.04
     # would be CRITICAL — the fix flips it to GOOD.
     assert kpi.threshold.evaluate(0.04, lower_is_better=False) == KPIStatus.CRITICAL
+
+
+# --- #577 Tier 2 (brand-specific): BR-001 + BR-003 wired to a real generated cohort ----
+
+
+def _brand_calc_returning(rows):
+    """A BrandSpecificCalculator whose kpi_query RPC returns `rows`."""
+    client = MagicMock()
+    client.rpc.return_value.execute.return_value = MagicMock(data=rows)
+    return BrandSpecificCalculator(db_client=client), client
+
+
+def test_br001_remi_ah_uncontrolled_forwards_and_computes():
+    """BR-001 forwards the UAS7 cutoff and returns the uncontrolled rate from real rows."""
+    calc, client = _brand_calc_returning([{"uncontrolled_rate": 0.45}])
+    val = calc._calc_remi_ah_uncontrolled({"brand": "Remibrutinib"})
+    # Passes the guideline UAS7>=7 cutoff (PMID 34536239) as the bound param.
+    client.rpc.assert_called_once_with(
+        "kpi_query", {"query_id": "brand_specific_remi_ah_uncontrolled", "params": [7]}
+    )
+    assert abs(val - 0.45) < 1e-9
+
+
+def test_br001_fails_loud_on_empty_cohort():
+    """No antihistamine-treated cohort -> fail loud (NOT a fabricated 0% 'controlled')."""
+    calc, _ = _brand_calc_returning([{"uncontrolled_rate": None}])
+    with pytest.raises(RuntimeError, match="unavailable"):
+        calc._calc_remi_ah_uncontrolled({"brand": "Remibrutinib"})
+
+
+def test_br003_fabhalta_pnh_tested_forwards_and_computes():
+    """BR-003 forwards to the allowlist id and returns tested/eligible."""
+    calc, client = _brand_calc_returning([{"tested_rate": 0.65}])
+    val = calc._calc_fabhalta_pnh_tested({"brand": "Fabhalta"})
+    client.rpc.assert_called_once_with(
+        "kpi_query", {"query_id": "brand_specific_fabhalta_pnh_tested", "params": []}
+    )
+    assert abs(val - 0.65) < 1e-9
+
+
+def test_br003_fails_loud_on_empty_eligible_cohort():
+    """No D59.5-eligible cohort -> fail loud (NOT a fabricated rate)."""
+    calc, _ = _brand_calc_returning([{"tested_rate": None}])
+    with pytest.raises(RuntimeError, match="unavailable"):
+        calc._calc_fabhalta_pnh_tested({"brand": "Fabhalta"})

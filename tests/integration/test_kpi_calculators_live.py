@@ -53,8 +53,16 @@ SPECS = [
     ),
     (
         BrandSpecificCalculator,
-        ["_calc_remi_intent_delta", "_calc_kisqali_dx_adoption", "_calc_kisqali_oncologist_reach"],
-        ["_calc_remi_ah_uncontrolled", "_calc_fabhalta_pnh_tested"],
+        [
+            "_calc_remi_intent_delta",
+            "_calc_kisqali_dx_adoption",
+            "_calc_kisqali_oncologist_reach",
+            # #577 Tier 2: wired to a real generated cohort (antihistamine R06A events +
+            # UAS7 readings; PNH D59.5 cohort + real flow-cytometry LOINC).
+            "_calc_remi_ah_uncontrolled",
+            "_calc_fabhalta_pnh_tested",
+        ],
+        [],
     ),
     (
         TriggerPerformanceCalculator,
