@@ -463,10 +463,109 @@ jobs:
             --timeout=60 \
             -v --tb=short
 
+  agents-tests:
+    name: Agents Unit Tests
+    runs-on: ubuntu-latest
+    needs: lint
+    # tests/unit/test_agents/ (308 files) needs a service-provisioned lane
+    # (#583 PR2). Unlike test_data_preparer (serviceless, #583 PR1), several
+    # agent tests dynamically exercise UN-mocked mlflow.* calls — e.g.
+    # causal_impact mlflow_tracker.start_analysis_run -> get_experiment_by_name
+    # — that retry-backoff-hang against a dead tracking URI and, under
+    # pyproject's timeout_method="thread", abort the WHOLE pytest session. A
+    # real MLflow server (SQLite backend so the model registry that
+    # model_deployer exercises is supported) plus a Redis service resolve it.
+    # Heavy in-test ML training (xgboost/LightGBM + Optuna HPO, 5-fold CV,
+    # 200x-permutation adversarial tests) runs ON-PR here under a generous
+    # per-test timeout rather than being deferred to slow-tests.yml.
+    timeout-minutes: 25
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      E2I_TESTING_MODE: 'true'
+      SUPABASE_URL: 'http://localhost:54321'
+      SUPABASE_KEY: 'test-key'
+      SUPABASE_ANON_KEY: 'test-key'
+      REDIS_URL: 'redis://localhost:6379'
+      # FALKORDB_URL intentionally unset — no FalkorDB service container; the
+      # conftest treats an empty FALKORDB_URL as UNCONFIGURED (no noisy probe).
+      MLFLOW_TRACKING_URI: 'http://localhost:5000'
+      OPIK_URL: 'http://localhost:5173'
+      ANTHROPIC_API_KEY: 'test-key'
+      OPENAI_API_KEY: 'test-key'
+      # Pin BLAS/OpenMP thread counts to 1 — deterministic FP reductions and
+      # lower memory/CPU contention for the in-test ML training under -n2.
+      OMP_NUM_THREADS: '1'
+      MKL_NUM_THREADS: '1'
+      OPENBLAS_NUM_THREADS: '1'
+      NUMEXPR_NUM_THREADS: '1'
+      # Agent tests with real-cohort fixtures skip cleanly when the data is
+      # absent (no CSU/Optum files on the runner).
+      ALLOW_MISSING_REAL_DATA: '1'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest-cov pytest-xdist pytest-timeout pytest-asyncio
+
+      # Real MLflow tracking server (SQLite backend → supports the model
+      # registry exercised by model_deployer's registry_manager). Mirrors the
+      # integration lane; lifetime = job duration.
+      - name: Start MLflow tracking server
+        run: |
+          mkdir -p /tmp/mlflow-artifacts
+          mlflow server \
+            --host 0.0.0.0 \
+            --port 5000 \
+            --backend-store-uri sqlite:///mlflow.db \
+            --default-artifact-root /tmp/mlflow-artifacts \
+            > /tmp/mlflow-server.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:5000/ > /dev/null 2>&1; then
+              echo "MLflow server ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "MLflow server failed to start; tail of log:"
+          tail -50 /tmp/mlflow-server.log
+          exit 1
+
+      # Run the full test_agents tree. NO ``-m "not slow"`` — per #583 the
+      # heavy ML-training tests run on-PR here (user decision). --timeout=180
+      # gives ample headroom for the slowest (Optuna HPO / 200x-permutation)
+      # under -n2 contention while still bounding any unexpected hang.
+      - name: Run agent unit tests
+        run: |
+          pytest \
+            tests/unit/test_agents/ \
+            -n 2 \
+            --dist=loadscope \
+            --timeout=180 \
+            -v --tb=short
+
   ci-success:
     name: Backend CI Success
     runs-on: ubuntu-latest
-    needs: [lint, type-check, unit-tests, heavy-unit-tests, integration-tests]
+    needs: [lint, type-check, unit-tests, heavy-unit-tests, integration-tests, agents-tests]
     if: always()
     steps:
       - name: Check all jobs passed
@@ -489,6 +588,10 @@ jobs:
           fi
           if [[ "${{ needs.integration-tests.result }}" != "success" ]]; then
             echo "Integration tests failed"
+            exit 1
+          fi
+          if [[ "${{ needs.agents-tests.result }}" != "success" ]]; then
+            echo "Agent unit tests failed"
             exit 1
           fi
           echo "All backend CI jobs passed!"
