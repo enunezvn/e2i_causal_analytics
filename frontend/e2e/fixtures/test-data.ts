@@ -83,10 +83,10 @@ export const KPI_CATEGORIES = {
 // ============================================================================
 
 export const AGENT_TIERS = {
-  TIER_0: { number: 0, name: 'Foundation', agents: ['scope_definer', 'data_preparer', 'feature_analyzer', 'model_selector', 'model_trainer', 'model_deployer', 'observability_connector'] },
+  TIER_0: { number: 0, name: 'Foundation', agents: ['scope_definer', 'cohort_constructor', 'data_preparer', 'feature_analyzer', 'model_selector', 'model_trainer', 'model_deployer', 'observability_connector'] },
   TIER_1: { number: 1, name: 'Orchestration', agents: ['orchestrator', 'tool_composer'] },
   TIER_2: { number: 2, name: 'Causal', agents: ['causal_impact', 'gap_analyzer', 'heterogeneous_optimizer'] },
-  TIER_3: { number: 3, name: 'Monitoring', agents: ['drift_monitor', 'experiment_designer', 'health_score'] },
+  TIER_3: { number: 3, name: 'Monitoring', agents: ['drift_monitor', 'experiment_designer', 'experiment_monitor', 'health_score'] },
   TIER_4: { number: 4, name: 'ML', agents: ['prediction_synthesizer', 'resource_optimizer'] },
   TIER_5: { number: 5, name: 'Learning', agents: ['explainer', 'feedback_learner'] },
 } as const

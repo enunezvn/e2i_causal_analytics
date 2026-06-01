@@ -281,8 +281,8 @@ TIER 2: Causal Analytics (3 agents)
   gap_analyzer (ROI opportunity)
   heterogeneous_optimizer (CATE estimation)
 
-TIER 3: Monitoring (3 agents)
-  drift_monitor, experiment_designer (digital twin), health_score
+TIER 3: Monitoring (4 agents)
+  drift_monitor, experiment_designer (digital twin), experiment_monitor, health_score
 
 TIER 4: Predictions (2 agents)
   prediction_synthesizer, resource_optimizer
@@ -480,7 +480,7 @@ Available markers: `unit`, `integration`, `e2e`, `slow`, `requires_redis`, `requ
 # Tier 0: Full ML pipeline (generates 1500 patients, caches output)
 .venv/bin/python scripts/run_tier0_test.py
 
-# Tier 1-5: Test all 12 agents using cached Tier 0 output
+# Tier 1-5: Test all 13 agents using cached Tier 0 output
 .venv/bin/python scripts/run_tier1_5_test.py
 
 # Run specific tiers

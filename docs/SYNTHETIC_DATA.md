@@ -355,7 +355,7 @@ Output is cached to `scripts/tier0_output_cache/latest.pkl` for reuse by Tier 1-
 
 ### Agent Validation: Tier 1-5 Pipeline
 
-**Tier 1-5** (`scripts/run_tier1_5_test.py`) tests all 12 downstream agents using cached Tier 0 output.
+**Tier 1-5** (`scripts/run_tier1_5_test.py`) tests all 13 downstream agents using cached Tier 0 output.
 
 The `Tier0OutputMapper` (`src/testing/tier0_output_mapper.py`) adapts the Tier 0 state dictionary to each agent's expected input format:
 
@@ -367,7 +367,7 @@ causal_input = mapper.map_to_causal_impact()      # Tier 2
 gap_input = mapper.map_to_gap_analyzer()           # Tier 2
 drift_input = mapper.map_to_drift_monitor()        # Tier 3
 explainer_input = mapper.map_to_explainer()        # Tier 5
-# ... 12 agents total
+# ... 13 agents total
 ```
 
 **tier0_data passthrough pattern**: The mapper passes `tier0_data=df` to agents. Each agent node's `_get_data()` method checks `state.get("tier0_data")` FIRST, then tries Supabase, then falls back to mock data. This ensures agents use real synthetic data in testing.
@@ -560,7 +560,7 @@ Output is cached to `scripts/tier0_output_cache/latest.pkl`.
 ### Tier 1-5: Agent Tests
 
 ```bash
-# Test all 12 agents using cached tier0 output
+# Test all 13 agents using cached tier0 output
 .venv/bin/python scripts/run_tier1_5_test.py
 ```
 
@@ -637,9 +637,9 @@ The synthetic golden set uses four hand-specified DAGs (`A1_confounder_heavy`, `
 | `src/ml/synthetic/validators/causal_validator.py` | ATE recovery validation with DoWhy refutation tests |
 | `src/ml/synthetic/validators/split_validator.py` | Split integrity, leakage detection, cross-dataset consistency |
 | `src/ml/synthetic/validation/pipeline.py` | Pandera + Great Expectations pipeline orchestration |
-| `src/testing/tier0_output_mapper.py` | Maps Tier 0 state to agent-specific inputs (12 agents) |
+| `src/testing/tier0_output_mapper.py` | Maps Tier 0 state to agent-specific inputs (13 agents) |
 | `src/testing/contract_validator.py` | TypedDict schema validation for agent outputs |
-| `src/testing/agent_quality_gates.py` | Per-agent semantic quality checks (12 validators) |
+| `src/testing/agent_quality_gates.py` | Per-agent semantic quality checks (13 validators) |
 | `src/testing/data_source_validator.py` | Mock data detection and data source enforcement |
 
 ### Digital Twin

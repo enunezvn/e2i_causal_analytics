@@ -2,7 +2,7 @@
 E2I Causal Analytics - FastAPI Application
 ==========================================
 
-Main FastAPI application with 18-agent orchestration layer.
+Main FastAPI application with 21-agent orchestration layer.
 
 Components:
 -----------
@@ -412,7 +412,7 @@ openapi_tags = [
     },
     {
         "name": "Agent Orchestration",
-        "description": "Manage the 18-agent architecture: status, dispatch, and tier information.",
+        "description": "Manage the 21-agent architecture: status, dispatch, and tier information.",
     },
     {
         "name": "Analytics",

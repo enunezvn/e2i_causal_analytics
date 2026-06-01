@@ -72,7 +72,7 @@ flowchart LR
         T0[Tier 0: ML Foundation<br/>8 agents]
         T1[Tier 1: Coordination<br/>2 agents]
         T2[Tier 2: Causal Analytics<br/>3 agents]
-        T3[Tier 3: Monitoring<br/>3 agents]
+        T3[Tier 3: Monitoring<br/>4 agents]
         T4[Tier 4: Predictions<br/>2 agents]
         T5[Tier 5: Self-Improvement<br/>3 agents]
     end

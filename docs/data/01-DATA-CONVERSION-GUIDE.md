@@ -541,7 +541,7 @@ After loading data, verify:
 ## Next Steps
 
 1. **Run Tier 0 test**: `.venv/bin/python scripts/run_tier0_test.py` — uses your loaded data
-2. **Run Tier 1–5 tests**: `.venv/bin/python scripts/run_tier1_5_test.py` — tests all 12 agents
+2. **Run Tier 1–5 tests**: `.venv/bin/python scripts/run_tier1_5_test.py` — tests all 13 agents
 3. **Seed knowledge graph**: `FALKORDB_HOST=localhost FALKORDB_PORT=6381 .venv/bin/python scripts/seed_falkordb.py`
 4. **Materialize features**: `cd feature_repo && feast materialize-incremental $(date -u +%Y-%m-%dT%H:%M:%S)`
 

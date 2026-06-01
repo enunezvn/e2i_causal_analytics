@@ -13,7 +13,7 @@ Endpoints:
 Integration Points:
 - AuditChainService for chain operations
 - Supabase for persistence
-- All 18 agents emit audit entries
+- All Tier 1-5 agents with a LangGraph workflow emit audit entries via the audit_init genesis block
 
 Author: E2I Causal Analytics Team
 Version: 4.1.0

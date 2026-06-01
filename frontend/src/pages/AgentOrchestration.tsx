@@ -89,13 +89,13 @@ const TIER_METRICS: TierMetrics[] = [
   { tier: 0, name: 'ML Foundation', activeAgents: 6, totalAgents: 8, avgResponseTime: 450, successRate: 98.5, tasksCompleted: 234 },
   { tier: 1, name: 'Orchestration', activeAgents: 2, totalAgents: 2, avgResponseTime: 120, successRate: 99.8, tasksCompleted: 1205 },
   { tier: 2, name: 'Causal Analytics', activeAgents: 3, totalAgents: 3, avgResponseTime: 2800, successRate: 94.2, tasksCompleted: 156 },
-  { tier: 3, name: 'Monitoring', activeAgents: 3, totalAgents: 3, avgResponseTime: 350, successRate: 99.1, tasksCompleted: 892 },
+  { tier: 3, name: 'Monitoring', activeAgents: 3, totalAgents: 4, avgResponseTime: 350, successRate: 99.1, tasksCompleted: 892 },
   { tier: 4, name: 'ML Predictions', activeAgents: 2, totalAgents: 2, avgResponseTime: 180, successRate: 97.6, tasksCompleted: 445 },
   { tier: 5, name: 'Self-Improvement', activeAgents: 2, totalAgents: 2, avgResponseTime: 560, successRate: 96.3, tasksCompleted: 78 },
 ];
 
 const ORCHESTRATION_STATS: OrchestrationStats = {
-  totalAgents: 20,
+  totalAgents: 21,
   activeAgents: 18,
   processingAgents: 3,
   errorAgents: 0,
@@ -290,7 +290,7 @@ export default function AgentOrchestration() {
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Agent Orchestration</h1>
           <p className="text-muted-foreground">
-            Monitor and manage the 20-agent tiered orchestration system
+            Monitor and manage the 21-agent tiered orchestration system
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -353,7 +353,7 @@ export default function AgentOrchestration() {
               <CardHeader>
                 <CardTitle>Tier Architecture</CardTitle>
                 <CardDescription>
-                  6-tier hierarchy with 18 specialized agents
+                  6-tier hierarchy with 21 specialized agents
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -464,7 +464,7 @@ export default function AgentOrchestration() {
                   <CardDescription>
                     {selectedTier !== null
                       ? `Showing Tier ${selectedTier} agents`
-                      : 'All 20 agents across 6 tiers'}
+                      : 'All 21 agents across 6 tiers'}
                   </CardDescription>
                 </div>
                 <div className="flex items-center gap-2">

@@ -60,7 +60,7 @@ export interface AgenticMethodologyProps {
 const ARCHITECTURE_STATS: ArchitectureStat[] = [
   { value: '4', label: 'Processing Layers' },
   { value: '6', label: 'Agent Tiers' },
-  { value: '18', label: 'Specialized Agents' },
+  { value: '21', label: 'Specialized Agents' },
   { value: '28', label: 'Database Tables' },
 ];
 
@@ -82,7 +82,7 @@ const PROCESSING_LAYERS: ProcessingLayer[] = [
   {
     emoji: '🤖',
     title: 'Layer 3: 21-Agent 6-Tier Orchestration',
-    description: 'LangGraph state management • Priority-based routing • 13 Standard + 3 Hybrid + 2 Deep agents',
+    description: 'LangGraph state management • Priority-based routing • 15 Standard + 4 Hybrid + 2 Deep agents',
     colorClass: 'bg-purple-50',
     borderColor: 'border-purple-500',
   },
@@ -99,13 +99,14 @@ const TIERS: Tier[] = [
   {
     number: 0,
     title: 'ML Foundation',
-    agentCount: '7 Agents',
+    agentCount: '8 Agents',
     bgColor: 'bg-pink-50',
     borderColor: 'border-pink-500',
     badgeColor: 'bg-gradient-to-r from-pink-500 to-rose-500',
     badge: 'NEW IN V4',
     agents: [
       { emoji: '📋', name: 'scope_definer', type: 'Standard', sla: '5s', description: 'Problem scope, success criteria' },
+      { emoji: '👥', name: 'cohort_constructor', type: 'Standard', sla: '120s', description: 'Patient cohort construction, eligibility rules' },
       { emoji: '🔍', name: 'data_preparer', type: 'Standard', sla: '60s', description: 'QC gating, Great Expectations' },
       { emoji: '🎯', name: 'model_selector', type: 'Standard', sla: '120s', description: 'Algorithm evaluation, MLflow' },
       { emoji: '⚙️', name: 'model_trainer', type: 'Standard', description: 'Split enforcement, Optuna' },
@@ -117,12 +118,13 @@ const TIERS: Tier[] = [
   {
     number: 1,
     title: 'Coordination',
-    agentCount: '1 Agent • Routes & Synthesizes',
+    agentCount: '2 Agents • Routes & Synthesizes',
     bgColor: 'bg-violet-50',
     borderColor: 'border-violet-500',
     badgeColor: 'bg-violet-500',
     agents: [
       { emoji: '🎯', name: 'orchestrator', type: 'Standard', description: 'Never performs analysis. Coordinates all agents, dynamic routing, multi-step planning, response synthesis. Entry point for all queries.' },
+      { emoji: '🔧', name: 'tool_composer', type: 'Hybrid', description: 'Multi-faceted query decomposition, tool orchestration' },
     ],
   },
   {
@@ -141,13 +143,14 @@ const TIERS: Tier[] = [
   {
     number: 3,
     title: 'Monitoring & Experimentation',
-    agentCount: '3 Agents',
+    agentCount: '4 Agents',
     bgColor: 'bg-emerald-50',
     borderColor: 'border-emerald-500',
     badgeColor: 'bg-emerald-500',
     agents: [
       { emoji: '⚠️', name: 'drift_monitor', type: 'Standard', description: 'Feature drift detection, degradation alerts' },
       { emoji: '🧪', name: 'experiment_designer', type: 'Hybrid', description: 'Power analysis, test design, experimental learning' },
+      { emoji: '🔬', name: 'experiment_monitor', type: 'Standard', description: 'A/B experiment monitoring: SRM detection, interim analysis, enrollment health' },
       { emoji: '💚', name: 'health_score', type: 'Standard', description: 'System health metrics, Pareto scoring' },
     ],
   },
@@ -248,7 +251,7 @@ export const AgenticMethodology: React.FC<AgenticMethodologyProps> = ({ classNam
           </span>
         </h2>
         <p className="text-sm text-gray-500 mt-2 max-w-2xl mx-auto">
-          Complete 20-agent, 6-tier architecture with ML Foundation, Tri-Memory system, causal validation workflow, and MLOps integration.
+          Complete 21-agent, 6-tier architecture with ML Foundation, Tri-Memory system, causal validation workflow, and MLOps integration.
         </p>
       </div>
 
@@ -307,11 +310,11 @@ export const AgenticMethodology: React.FC<AgenticMethodologyProps> = ({ classNam
         <div className="flex flex-wrap gap-4 text-sm">
           <div className="flex items-center gap-2">
             <div className="w-3 h-3 rounded bg-gray-400"></div>
-            <span><strong>Standard:</strong> Rule-based, deterministic (13 agents)</span>
+            <span><strong>Standard:</strong> Rule-based, deterministic (15 agents)</span>
           </div>
           <div className="flex items-center gap-2">
             <div className="w-3 h-3 rounded bg-purple-500"></div>
-            <span><strong>Hybrid:</strong> ML + LLM integration (3 agents)</span>
+            <span><strong>Hybrid:</strong> ML + LLM integration (4 agents)</span>
           </div>
           <div className="flex items-center gap-2">
             <div className="w-3 h-3 rounded bg-indigo-500"></div>

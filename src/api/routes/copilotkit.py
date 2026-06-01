@@ -1711,7 +1711,7 @@ E2I_COPILOT_SYSTEM_PROMPT = """You are the E2I Analytics Assistant, an intellige
 You help users with:
 1. **KPI Analysis** - TRx, NRx, market share, conversion rates, patient starts
 2. **Causal Analysis** - Understanding WHY metrics change and what drives performance
-3. **Agent System** - Information about the 18-agent tiered architecture
+3. **Agent System** - Information about the 21-agent tiered architecture
 4. **Recommendations** - AI-powered suggestions for HCP targeting and market access
 5. **Insights Search** - Finding trends, causal paths, and historical patterns
 
@@ -2474,11 +2474,11 @@ def generate_e2i_response(query: str) -> str:
     # Agent-related queries
     if any(kw in query_lower for kw in ["agent", "status", "tier", "orchestrator"]):
         return (
-            "The E2I platform uses an 18-agent tiered architecture:\n\n"
-            "- **Tier 0**: ML Foundation (7 agents)\n"
+            "The E2I platform uses a 21-agent tiered architecture:\n\n"
+            "- **Tier 0**: ML Foundation (8 agents)\n"
             "- **Tier 1**: Orchestration (2 agents)\n"
             "- **Tier 2**: Causal Analytics (3 agents)\n"
-            "- **Tier 3**: Monitoring (3 agents)\n"
+            "- **Tier 3**: Monitoring (4 agents)\n"
             "- **Tier 4**: ML Predictions (2 agents)\n"
             "- **Tier 5**: Self-Improvement (2 agents)\n\n"
             "Use the **getAgentStatus** action to see which agents are currently active."
@@ -2522,7 +2522,7 @@ def generate_e2i_response(query: str) -> str:
     return (
         "I'm the E2I Analytics Assistant. I can help you with:\n\n"
         "1. **KPI Analysis** - Get metrics for pharmaceutical brands\n"
-        "2. **Agent Status** - Check the 18-agent system status\n"
+        "2. **Agent Status** - Check the 21-agent system status\n"
         "3. **Causal Analysis** - Run causal impact analyses\n"
         "4. **Recommendations** - Get AI-powered suggestions\n"
         "5. **Insights Search** - Find trends and causal paths\n\n"

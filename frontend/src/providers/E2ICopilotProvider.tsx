@@ -181,7 +181,7 @@ const AGENT_REGISTRY: Record<string, AgentRegistryEntry> = {
     actions: ['analyze_cate', 'segment_rank'],
     icon: '🎯',
   },
-  // Tier 3: Monitoring (3 agents)
+  // Tier 3: Monitoring (4 agents)
   'drift-monitor': {
     id: 'drift-monitor',
     name: 'Drift Monitor',
@@ -197,6 +197,14 @@ const AGENT_REGISTRY: Record<string, AgentRegistryEntry> = {
     type: 'planning',
     actions: ['design_experiment', 'power_analysis'],
     icon: '🧪',
+  },
+  'experiment-monitor': {
+    id: 'experiment-monitor',
+    name: 'Experiment Monitor',
+    tier: 3,
+    type: 'monitoring',
+    actions: ['monitor_experiment', 'detect_srm'],
+    icon: '🔬',
   },
   'health-score': {
     id: 'health-score',
@@ -656,7 +664,7 @@ const CopilotHooksInner: React.FC = () => {
 
   // 3. Agent tier hierarchy
   useCopilotReadable({
-    description: 'E2I agent tier hierarchy with 20 agents across 6 tiers',
+    description: 'E2I agent tier hierarchy with 21 agents across 6 tiers',
     value: context?.agents || [],
   });
 

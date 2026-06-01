@@ -7,7 +7,7 @@ Provides LangGraph-compatible tools for the E2I chatbot agent:
 - agent_routing_tool: Route to specific tier agents (keyword-based)
 - conversation_memory_tool: Retrieve chat history
 - document_retrieval_tool: Hybrid RAG search
-- orchestrator_tool: Execute queries through the full 18-agent orchestrator system
+- orchestrator_tool: Execute queries through the full 21-agent orchestrator system
 - tool_composer_tool: Process multi-faceted queries via Tool Composer pipeline
 
 Adapted from Pydantic AI patterns to LangGraph @tool decorators.
@@ -259,7 +259,7 @@ class OrchestratorToolInput(BaseModel):
     """Input schema for orchestrator_tool."""
 
     query: str = Field(
-        description="The query to process through the E2I orchestrator and 18-agent system"
+        description="The query to process through the E2I orchestrator and 21-agent system"
     )
     target_agent: Optional[str] = Field(
         default=None,
@@ -553,7 +553,7 @@ async def e2i_data_query_tool(
     This tool provides unified access to ALL E2I analytics data including:
     - KPIs: TRx, NRx, market share, conversion rates
     - Causal chains: Discovered cause-effect relationships
-    - Agent analyses: Outputs from the 18-agent system
+    - Agent analyses: Outputs from the 21-agent system
     - Triggers: Alerts and explanations for metric changes
     - Experiments: A/B test designs and results
     - Predictions: ML model predictions
@@ -687,11 +687,11 @@ async def agent_routing_tool(
     """
     Route a query to the appropriate E2I agent tier using DSPy.
 
-    The E2I system has 18 agents organized in 6 tiers:
+    The E2I system has 21 agents organized in 6 tiers:
     - Tier 0: ML Foundation (scope_definer, data_preparer, feature_analyzer, etc.)
     - Tier 1: Orchestration (orchestrator, tool_composer)
     - Tier 2: Causal Analytics (causal_impact, gap_analyzer, heterogeneous_optimizer)
-    - Tier 3: Monitoring (drift_monitor, experiment_designer, health_score)
+    - Tier 3: Monitoring (drift_monitor, experiment_designer, experiment_monitor, health_score)
     - Tier 4: Predictions (prediction_synthesizer, resource_optimizer)
     - Tier 5: Learning (explainer, feedback_learner)
 
@@ -987,13 +987,13 @@ async def orchestrator_tool(
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Execute a query through the E2I orchestrator and 18-agent system.
+    Execute a query through the E2I orchestrator and 21-agent system.
 
     This tool provides access to the full E2I multi-agent architecture:
     - Tier 0: ML Foundation (data prep, feature analysis, model training)
     - Tier 1: Orchestration (orchestrator, tool_composer)
     - Tier 2: Causal Analytics (causal_impact, gap_analyzer, heterogeneous_optimizer)
-    - Tier 3: Monitoring (drift_monitor, experiment_designer, health_score)
+    - Tier 3: Monitoring (drift_monitor, experiment_designer, experiment_monitor, health_score)
     - Tier 4: Predictions (prediction_synthesizer, resource_optimizer)
     - Tier 5: Learning (explainer, feedback_learner)
 

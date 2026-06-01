@@ -245,7 +245,7 @@ const AGENT_TIER_STATS = [
   { tier: 0, name: 'ML Foundation', agents: 8, active: 6, color: 'bg-slate-500' },
   { tier: 1, name: 'Orchestration', agents: 2, active: 2, color: 'bg-purple-500' },
   { tier: 2, name: 'Causal Analytics', agents: 3, active: 3, color: 'bg-blue-500' },
-  { tier: 3, name: 'Monitoring', agents: 3, active: 3, color: 'bg-amber-500' },
+  { tier: 3, name: 'Monitoring', agents: 4, active: 3, color: 'bg-amber-500' },
   { tier: 4, name: 'ML Predictions', agents: 2, active: 2, color: 'bg-emerald-500' },
   { tier: 5, name: 'Self-Improvement', agents: 2, active: 2, color: 'bg-rose-500' },
 ];
@@ -722,7 +722,7 @@ function Home() {
                     <Sparkles className="h-5 w-5" />
                     Agent Insights
                   </CardTitle>
-                  <CardDescription>Recent recommendations from the 20-agent system</CardDescription>
+                  <CardDescription>Recent recommendations from the 21-agent system</CardDescription>
                 </div>
                 <Button variant="ghost" size="sm" onClick={() => navigate('/monitoring')}>
                   View All
@@ -832,7 +832,7 @@ function Home() {
               </div>
               <div className="flex items-center justify-center gap-2 mt-4 pt-3 border-t text-sm">
                 <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-                <span>15/19 agents active</span>
+                <span>15/21 agents active</span>
               </div>
             </CardContent>
           </Card>

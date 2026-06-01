@@ -32,7 +32,7 @@ class AgentTier(Enum):
     Tier 0: ML Foundation (scope_definer, data_preparer, model_selector, etc.)
     Tier 1: Coordination (orchestrator)
     Tier 2: Causal Analytics (causal_impact, gap_analyzer, heterogeneous_optimizer)
-    Tier 3: Monitoring (drift_monitor, experiment_designer, health_score)
+    Tier 3: Monitoring (drift_monitor, experiment_designer, experiment_monitor, health_score)
     Tier 4: ML Predictions (prediction_synthesizer, resource_optimizer)
     Tier 5: Self-Improvement (explainer, feedback_learner)
     """

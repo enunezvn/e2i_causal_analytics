@@ -241,7 +241,7 @@ describe('E2ICopilotProvider', () => {
       expect(screen.getByTestId('detail-level')).toHaveTextContent('detailed');
     });
 
-    it('provides sample agents (20 agents)', () => {
+    it('provides sample agents (21 agents)', () => {
       render(
         <CopilotKitWrapper enabled={false}>
           <E2ICopilotProvider>
@@ -250,7 +250,7 @@ describe('E2ICopilotProvider', () => {
         </CopilotKitWrapper>
       );
 
-      expect(screen.getByTestId('agent-count')).toHaveTextContent('20');
+      expect(screen.getByTestId('agent-count')).toHaveTextContent('21');
     });
 
     it('provides default chat state (closed)', () => {
@@ -422,7 +422,7 @@ describe('CopilotHooksConnector', () => {
       call[0]?.description?.includes('agent tier hierarchy')
     );
     expect(agentsCall).toBeDefined();
-    expect(agentsCall![0].value.length).toBe(20);
+    expect(agentsCall![0].value.length).toBe(21);
 
     // Check preferences readable
     const prefsCall = mockUseCopilotReadable.mock.calls.find((call) =>
@@ -691,7 +691,7 @@ describe('Type Exports', () => {
 // =============================================================================
 
 describe('Agent Data', () => {
-  it('provides all 20 agents across 6 tiers', () => {
+  it('provides all 21 agents across 6 tiers', () => {
     render(
       <CopilotKitWrapper enabled={false}>
         <E2ICopilotProvider>
@@ -700,7 +700,7 @@ describe('Agent Data', () => {
       </CopilotKitWrapper>
     );
 
-    expect(screen.getByTestId('agent-count')).toHaveTextContent('20');
+    expect(screen.getByTestId('agent-count')).toHaveTextContent('21');
   });
 
   it('agents have correct tier distribution', () => {
@@ -726,8 +726,8 @@ describe('Agent Data', () => {
     expect(tierCounts[1]).toBe(2);
     // Tier 2: 3 agents (Causal Analytics)
     expect(tierCounts[2]).toBe(3);
-    // Tier 3: 3 agents (Monitoring) - drift-monitor, experiment-designer, health-score
-    expect(tierCounts[3]).toBe(3);
+    // Tier 3: 4 agents (Monitoring) - drift-monitor, experiment-designer, experiment-monitor, health-score
+    expect(tierCounts[3]).toBe(4);
     // Tier 4: 2 agents (ML Predictions)
     expect(tierCounts[4]).toBe(2);
     // Tier 5: 1 agent (Self-Improvement) - explainer only, feedback-learner may be elsewhere

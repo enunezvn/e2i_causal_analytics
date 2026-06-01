@@ -1,7 +1,7 @@
 """GEPA Optimizer Factory for E2I Agents.
 
 This module provides factory functions to create configured GEPA optimizers
-for different agent types in the E2I 18-agent 6-tier architecture.
+for different agent types in the E2I 21-agent 6-tier architecture.
 
 GEPA (Generative Evolutionary Prompting with AI) provides:
 - 10%+ performance improvement over MIPROv2

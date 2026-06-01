@@ -111,7 +111,7 @@ This document validates that the orchestrator agent implementation conforms to a
 | `fallback_agent` | str | ❌ No | ✅ Validated | `state.py:89` |
 
 **Intent to Agent Mapping**:
-All 10 intents mapped correctly in `nodes/router.py:21-112`
+All 11 intents mapped correctly in `nodes/router.py:21-112`
 
 | Intent | Primary Agent | Priority | Timeout | Fallback | Status |
 |--------|--------------|----------|---------|----------|--------|
@@ -125,13 +125,14 @@ All 10 intents mapped correctly in `nodes/router.py:21-112`
 | system_health | health_score | 1 | 5000ms | None | ✅ |
 | drift_check | drift_monitor | 1 | 10000ms | None | ✅ |
 | feedback | feedback_learner | 1 | 30000ms | None | ✅ |
+| experiment_monitor | experiment_monitor | 1 | 15000ms | None | ✅ |
 
 **Timeout Configuration** (per tier):
 Validated against contract (lines 368-377):
 - ✅ Tier 0: Not applicable (orchestrator is Tier 1)
 - ✅ Tier 1: N/A (can't call self)
 - ✅ Tier 2: 20-30s (causal_impact:30s, gap_analyzer:20s, heterogeneous_optimizer:25s)
-- ✅ Tier 3: 5-60s (health_score:5s, drift_monitor:10s, experiment_designer:60s)
+- ✅ Tier 3: 5-60s (health_score:5s, drift_monitor:10s, experiment_monitor:15s, experiment_designer:60s)
 - ✅ Tier 4: 15-20s (prediction_synthesizer:15s, resource_optimizer:20s)
 - ✅ Tier 5: 30-45s (explainer:45s, feedback_learner:30s)
 

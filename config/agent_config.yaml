@@ -501,7 +501,7 @@ agents:
 
     routing:
       intent_threshold: 0.7
-      max_agents_per_query: 5  # Increased for 18-agent system
+      max_agents_per_query: 5  # Increased for 21-agent system
       enable_parallel_execution: true
       fallback_agent: explainer
       tier_priority_routing: true  # V4: Route by tier priority
