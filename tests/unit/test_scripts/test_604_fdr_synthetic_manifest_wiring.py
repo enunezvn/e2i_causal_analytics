@@ -11,7 +11,9 @@ FDR-disable mitigation. Real ``--data-dir`` runs are unchanged (FDR on, no
 immunity, no synthetic manifest injection).
 
 These unit-test the three pure resolvers that are the single points of behavior
-change — faithful without running the full pipeline.
+change, plus two integration tests that spy on step_2_data_preparer to prove the
+``run_pipeline`` wiring (the partial ``--step 2`` path and the immunity/effective-
+manifest coupling) — faithful without running the heavy downstream pipeline.
 """
 
 from __future__ import annotations
@@ -51,21 +53,27 @@ def test_fdr_enabled_for_real_runs() -> None:
 # ── declared-safe FULL immunity: legacy fixtures only ──
 
 
-def test_declared_safe_full_immunity_on_for_legacy_fixtures() -> None:
-    """Legacy synthetic fixtures get full declared-safe immunity (manifest is
-    leak-free by construction) so a σ-band-high legit predictor is routed to
-    review instead of auto-dropped."""
+def test_declared_safe_full_immunity_requires_synthetic_manifest() -> None:
+    """#604 + codex round-2: full immunity is granted IFF the run is a real-cohort-
+    free legacy fixture AND its EFFECTIVE feature manifest is the leak-free-by-
+    construction 'synthetic' one — never merely because the regime is a legacy name.
+
+    This closes two holes: (a) an operator `--feature-manifest-source optum/csu`
+    override on a legacy regime (no --data-dir) makes the node consult a fallible
+    real-cohort manifest → immunity must be withheld; (b) an explicit `--feature-
+    manifest-source synthetic` on a REAL `--data-dir` run must still be denied
+    immunity (real data, fallible)."""
+    # legacy fixture + synthetic manifest → immunity ON
     for regime in ("default", "adverse", "clean"):
-        assert _resolve_declared_safe_full_immunity(regime, None) is True
-
-
-def test_declared_safe_full_immunity_off_for_scenario_and_real() -> None:
-    """Immunity must NOT apply to scenario_* (FDR off there anyway) nor to real
-    cohorts (the real-cohort defensive 'overwhelming evidence still drops'
-    behavior is preserved)."""
-    assert _resolve_declared_safe_full_immunity("scenario_a", None) is False
-    assert _resolve_declared_safe_full_immunity("default", "/some/real/cohort") is False
-    assert _resolve_declared_safe_full_immunity("clean", "/some/real/cohort") is False
+        assert _resolve_declared_safe_full_immunity(regime, None, "synthetic") is True
+    # legacy fixture + operator override to a real manifest → immunity OFF
+    assert _resolve_declared_safe_full_immunity("clean", None, "optum") is False
+    assert _resolve_declared_safe_full_immunity("clean", None, "csu") is False
+    # real --data-dir run, even with a 'synthetic' override → immunity OFF
+    assert _resolve_declared_safe_full_immunity("clean", "/some/real/cohort", "synthetic") is False
+    # scenario_* / no manifest → immunity OFF
+    assert _resolve_declared_safe_full_immunity("scenario_a", None, None) is False
+    assert _resolve_declared_safe_full_immunity("clean", None, None) is False
 
 
 # ── synthetic manifest source threaded for legacy fixtures only ──
@@ -129,3 +137,37 @@ def test_step2_only_run_wires_synthetic_manifest_into_scope(monkeypatch) -> None
     assert captured["adaptive_fdr_enabled"] is True
     assert captured["adaptive_declared_safe_full_immunity"] is True
     assert captured["scope_spec"].get("feature_manifest_source") == "synthetic"
+
+
+def test_step2_override_to_real_manifest_withholds_immunity(monkeypatch) -> None:
+    """#604 codex round-2: a legacy regime with an explicit --feature-manifest-source
+    override (no --data-dir) must pass the OVERRIDE manifest to the node AND withhold
+    full immunity — the override manifest is a fallible real-cohort attestation, not
+    the leak-free synthetic one, so the σ!=high "overwhelming evidence" backstop must
+    stay in force."""
+    import asyncio
+
+    import scripts.run_tier0_test as rt
+
+    captured: dict = {}
+
+    async def _spy(experiment_id, scope_spec, sample_df, **kwargs):
+        captured["scope_spec"] = scope_spec
+        captured["immunity"] = kwargs.get("adaptive_declared_safe_full_immunity")
+        return {"gate_passed": False, "qc_report": {"gate_passed": False}}
+
+    monkeypatch.setattr(rt, "step_2_data_preparer", _spy)
+    asyncio.run(
+        rt.run_pipeline(
+            step=2,
+            regime="clean",
+            data_dir=None,
+            feature_manifest_source="optum",
+            n_total=60,
+            seed=42,
+        )
+    )
+    # the operator override reaches the node...
+    assert captured["scope_spec"].get("feature_manifest_source") == "optum"
+    # ...but immunity is withheld because the effective manifest is not 'synthetic'.
+    assert captured["immunity"] is False

@@ -4341,19 +4341,33 @@ def _resolve_adaptive_fdr_enabled(regime: str, data_dir: str | None) -> bool:
     return not is_unwired_scenario_fixture
 
 
-def _resolve_declared_safe_full_immunity(regime: str, data_dir: str | None) -> bool:
+def _resolve_declared_safe_full_immunity(
+    regime: str, data_dir: str | None, manifest_source: str | None
+) -> bool:
     """#604: resolve the per-run declared-safe FULL-immunity switch.
 
-    True ONLY for legacy synthetic fixture GENERATION (``_LEGACY_REGIMES`` with no
-    real ``data_dir``), where the synthetic manifest is leak-free BY CONSTRUCTION
-    so a Layer-1 declared-safe (knowable_at<=index) feature must not be auto-dropped
-    for being strongly outcome-correlated. Real cohorts (``data_dir`` truthy) and
-    the ``scenario_*`` family keep immunity OFF — real runs because their manifest
-    is a fallible attestation (the σ!=high "overwhelming evidence" backstop stays),
-    scenario_* because FDR is disabled there anyway. Genuine undeclared leaks always
-    drop (immunity is gated on declared-safe in the node).
+    True ONLY when ALL hold: (a) no real cohort supplied (``not data_dir``), (b) the
+    regime is a legacy synthetic fixture (``_LEGACY_REGIMES``), AND (c) the EFFECTIVE
+    feature manifest the node will consult is the ``"synthetic"`` one. Condition (c)
+    (codex round-2) couples immunity to the manifest actually used rather than the
+    regime name alone: an operator ``--feature-manifest-source csu/optum`` override
+    on a legacy regime makes the node consult a fallible real-cohort manifest, so
+    immunity is withheld; and an explicit ``--feature-manifest-source synthetic`` on
+    a REAL ``--data-dir`` run is denied by (a). The synthetic manifest is leak-free
+    BY CONSTRUCTION, so a Layer-1 declared-safe feature there must not be auto-dropped
+    for being strongly outcome-correlated. Real cohorts and ``scenario_*`` keep
+    immunity OFF (real runs preserve the σ!=high "overwhelming evidence" backstop;
+    scenario_* has FDR disabled anyway). Genuine undeclared leaks always drop
+    (immunity is additionally gated on declared-safe in the node).
+
+    ``manifest_source`` is the EFFECTIVE source already resolved onto ``scope_spec``
+    by ``_apply_synthetic_manifest_source`` (i.e. exactly what the node reads).
     """
-    return not data_dir and regime in _LEGACY_REGIMES
+    return (
+        not data_dir
+        and regime in _LEGACY_REGIMES
+        and manifest_source == "synthetic"
+    )
 
 
 def _resolve_synthetic_manifest_source(
@@ -5052,8 +5066,11 @@ async def run_pipeline(
                 # retains the #594 wholesale FDR-disable. Real --data-dir/RWD runs
                 # keep FDR ON, immunity OFF — see the three resolvers.
                 adaptive_fdr_enabled=_resolve_adaptive_fdr_enabled(regime, data_dir),
+                # codex round-2: gate immunity on the EFFECTIVE manifest source
+                # (set on scope_spec just above), so an operator csu/optum override
+                # on a legacy regime correctly withholds immunity.
                 adaptive_declared_safe_full_immunity=_resolve_declared_safe_full_immunity(
-                    regime, data_dir
+                    regime, data_dir, scope_spec.get("feature_manifest_source")
                 ),
                 data_dir=data_dir,
             )
