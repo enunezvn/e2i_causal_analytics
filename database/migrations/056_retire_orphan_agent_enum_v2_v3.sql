@@ -18,15 +18,13 @@
 -- v2/v3 enum taxonomy (model_evaluator/model_monitor/data_quality_monitor/
 -- risk_assessor) rather than promote it, since no column ever adopted it.
 --
--- Forward-only, idempotent. None of these are ALTER TYPE ADD VALUE, so a single
--- transaction is fine.
+-- Forward-only, idempotent. No script-level BEGIN/COMMIT: scripts/run_migrations.sh
+-- runs psql with --single-transaction, which owns the outer transaction (issue #186).
 --
 -- NOTE: deploy skips migrations -> APPLY MANUALLY to the deployed Supabase, e.g.:
 --   docker exec -i <supabase-db-container> psql -U postgres -d postgres \
 --     < database/migrations/056_retire_orphan_agent_enum_v2_v3.sql
 -- ============================================================================
-
-BEGIN;
 
 -- 1-2: drop the unread shadow columns on agent_registry (created by mig 029).
 ALTER TABLE IF EXISTS agent_registry DROP COLUMN IF EXISTS name_v3;
@@ -42,8 +40,6 @@ DROP FUNCTION IF EXISTS map_tier_v1_to_v2(TEXT);
 DROP TYPE IF EXISTS agent_name_type_v3;
 DROP TYPE IF EXISTS agent_tier_type_v2;
 DROP TYPE IF EXISTS agent_name_type_v2;
-
-COMMIT;
 
 -- ============================================================================
 -- VERIFICATION (run after migration):
