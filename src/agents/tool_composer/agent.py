@@ -4,6 +4,7 @@ Orchestrates multi-faceted queries by decomposing, planning, executing,
 and synthesizing results from multiple agent capabilities.
 """
 
+import json
 import logging
 import time
 from datetime import datetime, timezone
@@ -13,6 +14,82 @@ from .composer import ToolComposer, ToolComposerIntegration
 from .models.composition_models import CompositionResult
 
 logger = logging.getLogger(__name__)
+
+# Phase-appropriate canned payloads for the opt-in MARKED mock used in the
+# keyless Tier 1-5 harness (#606). The composition pipeline calls the LLM three
+# times (decompose -> plan -> synthesize) and parses .content as JSON with a
+# DIFFERENT shape each time; a single canned blob can't satisfy all three. These
+# mirror the proven shapes in tests/unit/test_agents/test_tool_composer/conftest
+# (which pass the unit suite). NOT used in prod (gated on E2I_ALLOW_MOCK_LLM +
+# no key); output carries mock_response_for_dev_only=True via MarkedMockChatLLM.
+_MOCK_DECOMPOSITION_JSON = json.dumps(
+    {
+        "reasoning": "Mock decomposition for keyless harness",
+        "sub_questions": [
+            {
+                "id": "sq_1",
+                "question": "What is the causal effect of hcp_visits on discontinuation?",
+                "intent": "CAUSAL",
+                "entities": ["hcp_visits", "discontinuation_flag"],
+                "depends_on": [],
+            },
+            {
+                "id": "sq_2",
+                "question": "How does the effect vary by prior_treatments?",
+                "intent": "COMPARATIVE",
+                "entities": ["prior_treatments"],
+                "depends_on": ["sq_1"],
+            },
+        ],
+    }
+)
+_MOCK_PLANNING_JSON = json.dumps(
+    {
+        "reasoning": "Mock planning for keyless harness",
+        "tool_mappings": [
+            {
+                "sub_question_id": "sq_1",
+                "tool_name": "causal_effect_estimator",
+                "confidence": 0.9,
+                "reasoning": "Matches causal intent",
+            },
+            {
+                "sub_question_id": "sq_2",
+                "tool_name": "cate_analyzer",
+                "confidence": 0.85,
+                "reasoning": "Analyzes heterogeneity",
+            },
+        ],
+        "execution_steps": [
+            {
+                "step_id": "step_1",
+                "sub_question_id": "sq_1",
+                "tool_name": "causal_effect_estimator",
+                "input_mapping": {"treatment": "hcp_visits", "outcome": "discontinuation_flag"},
+                "depends_on_steps": [],
+            },
+            {
+                "step_id": "step_2",
+                "sub_question_id": "sq_2",
+                "tool_name": "cate_analyzer",
+                "input_mapping": {"effect": "$step_1.effect", "dimension": "prior_treatments"},
+                "depends_on_steps": ["step_1"],
+            },
+        ],
+        "parallel_groups": [["step_1"], ["step_2"]],
+    }
+)
+_MOCK_SYNTHESIS_JSON = json.dumps(
+    {
+        "answer": "Mock synthesis: hcp_visits shows a causal association with discontinuation.",
+        "confidence": 0.85,
+        "supporting_data": {"effect_size": 0.12},
+        "citations": ["step_1", "step_2"],
+        "caveats": ["Synthetic mock output for keyless CI (no real LLM)."],
+        "failed_components": [],
+        "reasoning": "Mock combined reasoning",
+    }
+)
 
 
 # ============================================================================
@@ -224,8 +301,18 @@ class ToolComposerAgent:
                         "(E2I_ALLOW_MOCK_LLM); output carries "
                         "mock_response_for_dev_only=True (#606)."
                     )
+                    # Phase-aware: decompose -> plan -> synthesize each parse a
+                    # different JSON shape; return the right canned payload per
+                    # phase (keyword match on the system prompt; "synth" before
+                    # "tool" since synthesis prompts mention tools).
                     self.llm_client = MarkedMockChatLLM(
-                        '{"subtasks": [], "plan": [], "result": "mock composition"}'
+                        _MOCK_SYNTHESIS_JSON,
+                        phase_responses=[
+                            ("decomposition", _MOCK_DECOMPOSITION_JSON),
+                            ("synth", _MOCK_SYNTHESIS_JSON),
+                            ("planning", _MOCK_PLANNING_JSON),
+                            ("tool", _MOCK_PLANNING_JSON),
+                        ],
                     )
 
             self._composer = ToolComposer(

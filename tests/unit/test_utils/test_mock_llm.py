@@ -57,6 +57,30 @@ def test_marked_mock_chat_llm_marks_its_response():
     assert llm.with_structured_output(object) is llm
 
 
+def test_marked_mock_phase_responses_select_by_message_content():
+    """Multi-phase agents (tool_composer) get a phase-appropriate payload chosen
+    from the message text; first matching keyword wins, else the default."""
+
+    class _Msg:
+        def __init__(self, content):
+            self.content = content
+
+    llm = MarkedMockChatLLM(
+        "DEFAULT",
+        phase_responses=[
+            ("decomposition", "DECOMP"),
+            ("synth", "SYNTH"),
+            ("planning", "PLAN"),
+            ("tool", "PLAN"),
+        ],
+    )
+    assert asyncio.run(llm.ainvoke([_Msg("Decomposition system prompt")])).content == "DECOMP"
+    # "synth" must win over "tool" even though synthesis prompts mention tools
+    assert asyncio.run(llm.ainvoke([_Msg("Synthesis: combine the tools")])).content == "SYNTH"
+    assert asyncio.run(llm.ainvoke([_Msg("Planning: map tools")])).content == "PLAN"
+    assert asyncio.run(llm.ainvoke([_Msg("nothing relevant")])).content == "DEFAULT"
+
+
 # ---------------------------------------------------------------------------
 # experiment_designer / design_reasoning
 # ---------------------------------------------------------------------------

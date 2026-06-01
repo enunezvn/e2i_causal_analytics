@@ -180,6 +180,10 @@ jobs:
           # flag + no key they use a clearly-marked mock (mock_response_for_dev_only
           # =True); without it a missing key fails loud. NOT set in prod deploy.
           E2I_ALLOW_MOCK_LLM: "1"
+          # experiment_designer's validity_audit node predates the shared util and
+          # uses its own #471 opt-in flag for its MARKED MockValidityLLM; set it
+          # too so experiment_designer runs fully keyless (#606 item C).
+          EXPERIMENT_DESIGNER_USE_MOCK_LLM: "1"
         # Monitored-alarm-only on AGENT / contract failures (issue #600
         # maintainer decision). A committed tier0 fixture
         # (scripts/tier0_output_cache/latest.pkl) flips restore-cache.found to

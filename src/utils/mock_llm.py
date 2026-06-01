@@ -76,15 +76,44 @@ class MarkedMockChatLLM:
 
     mock_response_for_dev_only = True
 
-    def __init__(self, canned_content: str, model_name: str = "marked-mock-llm"):
+    def __init__(
+        self,
+        canned_content: str,
+        model_name: str = "marked-mock-llm",
+        phase_responses: "list[tuple[str, str]] | None" = None,
+    ):
         self._content = canned_content
         self.model_name = model_name
+        # Optional multi-phase support: an ordered list of (keyword, content).
+        # When set, ainvoke/invoke scan the call's message text (LangChain
+        # SystemMessage/HumanMessage ``.content``) and return the content for the
+        # FIRST matching keyword, else ``canned_content``. This lets multi-call
+        # agents (e.g. tool_composer's decompose -> plan -> synthesize) receive a
+        # phase-appropriate canned payload from a single mock. Order matters
+        # (e.g. match "synth" before "tool", since synthesis prompts mention tools).
+        self._phase_responses = phase_responses or []
+
+    def _select(self, args: Any, kwargs: Any) -> str:
+        if not self._phase_responses:
+            return self._content
+        text_parts: list[str] = []
+        for value in list(args) + list(kwargs.values()):
+            if isinstance(value, (list, tuple)):
+                for item in value:
+                    text_parts.append(str(getattr(item, "content", "")))
+            else:
+                text_parts.append(str(getattr(value, "content", value)))
+        text = " ".join(text_parts).lower()
+        for keyword, content in self._phase_responses:
+            if keyword.lower() in text:
+                return content
+        return self._content
 
     async def ainvoke(self, *args: Any, **kwargs: Any) -> MarkedMockResponse:
-        return MarkedMockResponse(self._content)
+        return MarkedMockResponse(self._select(args, kwargs))
 
     def invoke(self, *args: Any, **kwargs: Any) -> MarkedMockResponse:
-        return MarkedMockResponse(self._content)
+        return MarkedMockResponse(self._select(args, kwargs))
 
     def bind(self, **kwargs: Any) -> "MarkedMockChatLLM":
         return self
