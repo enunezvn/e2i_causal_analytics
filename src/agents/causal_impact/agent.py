@@ -264,6 +264,16 @@ class CausalImpactAgent(SkillsMixin):
             "outcome_var": input_data["outcome_var"],  # REQUIRED
             "confounders": input_data["confounders"],  # REQUIRED
             "data_source": input_data["data_source"],  # REQUIRED
+            # Honor an explicitly-passed DataFrame (e.g. the Tier 1-5 harness or
+            # any programmatic caller injecting data directly): seed the cache the
+            # estimation node reads (estimation.py -> data_cache["estimation_data"]).
+            # Inert in prod, where callers omit "data" and the connector path
+            # populates the cache instead (#606).
+            "data_cache": (
+                {"estimation_data": input_data["data"]}
+                if input_data.get("data") is not None
+                else {}
+            ),
             # Optional input fields
             "mediators": input_data.get("mediators", []),
             "effect_modifiers": input_data.get("effect_modifiers", []),

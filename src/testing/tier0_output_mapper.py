@@ -625,7 +625,15 @@ class Tier0OutputMapper:
             "time_horizon": "30d",
             "models_to_use": None,  # Use all available
             "ensemble_method": "weighted",
-            "include_context": True,
+            # The Tier 1-5 harness has no external context-enrichment services
+            # (feature-importance / accuracy / trend / online-feature stores), so
+            # requesting context would make context_enricher fail-closed ("all 5
+            # dependencies failed" -> status=failed) — a false alarm, not a real
+            # regression. Skip context here (like --skip-observability); the
+            # ensemble prediction from the real model clients is still validated.
+            # Harness-scoped mapper choice; the prod contract (fail when context
+            # is requested but unavailable) is unchanged. (#606 item D)
+            "include_context": False,
             "query": f"Predict discontinuation risk for patient {sample_entity_id}",
             "session_id": self.state["experiment_id"],
             # Note: deployment_manifest and trained_model are passed to agent constructor
