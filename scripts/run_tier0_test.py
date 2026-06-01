@@ -2085,6 +2085,7 @@ async def step_2_data_preparer(
     sample_df: pd.DataFrame,
     *,
     skip_leakage_check: bool = False,
+    adaptive_fdr_enabled: bool = True,
     data_dir: str | None = None,
 ) -> dict[str, Any]:
     """Step 2: Load and prepare data with QC.
@@ -2183,6 +2184,9 @@ async def step_2_data_preparer(
         "data_source": data_source,
         "brand": CONFIG.brand,
         "skip_leakage_check": skip_leakage_check,
+        # #594: drives adaptive_validity_check's FDR firing switch. False on
+        # synthetic FIXTURE regimes (set by the caller) → static σ-band fallback.
+        "adaptive_fdr_enabled": adaptive_fdr_enabled,
     }
 
     print_input_section(
@@ -4278,6 +4282,43 @@ _VALID_REGIMES: Tuple[str, ...] = (
 _LEGACY_REGIMES: frozenset[str] = frozenset({"default", "adverse", "clean"})
 
 
+def _is_synthetic_fixture_regime(regime: str) -> bool:
+    """Whether *regime* is a clinically-grounded SYNTHETIC fixture with no real
+    leakage by construction.
+
+    Two families qualify: the synthetic_v2 scenario regimes
+    (``_SCENARIO_REGIME_TO_NAME``) and the legacy ``ml_patients()`` regimes
+    (``_LEGACY_REGIMES`` = default/adverse/clean). Both carry features
+    deliberately correlated with the outcome (designed signal, NOT leakage), so
+    the Layer-3 FDR confident-set firing driver (#538) false-positively flags and
+    auto-drops legitimate features (e.g. ``days_on_therapy``/``prior_treatments``
+    on the clean/adverse fixtures) — which degrades val_AUC below band and, post
+    #556 fail-closed Feast, halts at the QC gate. The tier0 runner therefore
+    disables that FDR firing for these regimes (``adaptive_fdr_enabled=False``),
+    falling back to the static σ-band that still catches genuine leaks
+    (e.g. ``journey_status``) WITHOUT over-dropping (#594).
+
+    ``rwd_realistic`` and real ``--data-source`` runs are NOT fixtures — the FDR
+    driver stays ON there (validated on the Optum cohort).
+    """
+    return regime in _SCENARIO_REGIME_TO_NAME or regime in _LEGACY_REGIMES
+
+
+def _resolve_adaptive_fdr_enabled(regime: str, data_dir: str | None) -> bool:
+    """Resolve the per-run FDR firing switch for the data-preparer.
+
+    FDR firing stays ON everywhere EXCEPT synthetic fixture GENERATION. The
+    fixture classification (``_is_synthetic_fixture_regime``) must be conjoined
+    with "no real cohort supplied": ``run_pipeline`` loads REAL data whenever
+    ``data_dir`` is truthy and IGNORES ``regime`` for generation, yet ``--regime``
+    defaults to ``"default"`` (a legacy fixture regime). Without the ``data_dir``
+    guard a real ``--data-dir`` run with the default regime would silently disable
+    the leakage detector on a real cohort (#594 review). Real runs keep FDR ON.
+    """
+    is_synthetic_fixture_run = not data_dir and _is_synthetic_fixture_regime(regime)
+    return not is_synthetic_fixture_run
+
+
 def _regime_kwargs(regime: str, *, seed: int = 42) -> Dict[str, Any]:
     """Translate a regime name into kwargs for ``ml_patients()``.
 
@@ -4913,6 +4954,16 @@ async def run_pipeline(
                 # journey_status="active" sentinel that confuses the LLM
                 # remediator. See step_2_data_preparer docstring.
                 skip_leakage_check=(regime in _SCENARIO_REGIME_TO_NAME),
+                # #594: SYNTHETIC FIXTURE generation (scenario + legacy
+                # default/adverse/clean, and NO real --data-dir) carries designed
+                # outcome-correlated signal that the Layer-3 FDR firing driver
+                # (#538) false-positively auto-drops (days_on_therapy/
+                # prior_treatments), degrading val_AUC below band / halting the QC
+                # gate. Disable FDR for fixture generation → the static σ-band
+                # still catches genuine leaks (journey_status) without
+                # over-dropping. Real --data-dir/RWD runs keep FDR ON regardless of
+                # the (ignored) regime name — see _resolve_adaptive_fdr_enabled.
+                adaptive_fdr_enabled=_resolve_adaptive_fdr_enabled(regime, data_dir),
                 data_dir=data_dir,
             )
             state["qc_report"] = result.get("qc_report", {"gate_passed": True})

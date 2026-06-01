@@ -146,6 +146,11 @@ def test_synthetic_e2e_scenario_a_pins_7dim_baseline(tmp_path: Path) -> None:
     json_out = tmp_path / "tier0_baseline_invariant.json"
     env = os.environ.copy()
     env["TIER0_E2E_JSON_OUT"] = str(json_out)
+    # #594: synthetic e2e has NO live Feast store. Post #556 the freshness check
+    # FAILS CLOSED when Feast is unavailable → all features read stale → the
+    # registrar QC gate hard-blocks training → empty validation_metrics. The
+    # #556 escape hatch ALLOW_STALE_FEAST=1 is correct for these no-Feast tests.
+    env["ALLOW_STALE_FEAST"] = "1"
 
     cmd = [
         sys.executable,
