@@ -47,9 +47,14 @@ ALL_CALCULATORS = [
 # (action_rate_treatment − action_rate_control)/action_rate_control over a randomized
 # control_group_flag holdout, where "action" = action_taken IS NOT NULL (a rep BEHAVIOR
 # measurable in BOTH arms — NOT acceptance_status, which is treatment-only).
-MISSING_METRICS = [
-    (DataQualityCalculator, "_calc_label_quality"),
-]
+# #577 WS1-DQ-008 _calc_label_quality is now WIRED (meaning e2e in
+# test_577_label_quality_live.py): the corpus-level GENERALIZED Fleiss κ (Fleiss 1971,
+# per-subject n_i) over a coherent LATENT-TRUTH reseed of ml_annotations (each iaa_group
+# co-rates ONE subject; annotators agree with the latent truth ~92% of the time → a
+# realistic substantial κ, NOT the prior independent-noise κ≈0).
+# => Every metric #574 left fail-loud is now wired; MISSING_METRICS is empty (feature_drift
+#    WS1-MP-009 is tuple-returning and tracked separately, not in this forwarding list).
+MISSING_METRICS: list[tuple[type, str]] = []
 
 
 @pytest.mark.parametrize("calc_cls", ALL_CALCULATORS)
@@ -65,8 +70,11 @@ def test_execute_query_forwards_to_kpi_query_allowlist(calc_cls):
     assert client.rpc.call_args.args[0] == "kpi_query"
 
 
+@pytest.mark.skipif(not MISSING_METRICS, reason="all #574 fail-loud metrics now wired (#577)")
 @pytest.mark.parametrize(
-    "calc_cls,method", MISSING_METRICS, ids=[f"{c.__name__}.{m}" for c, m in MISSING_METRICS]
+    "calc_cls,method",
+    MISSING_METRICS or [(None, None)],
+    ids=[f"{c.__name__}.{m}" for c, m in MISSING_METRICS] or ["none"],
 )
 def test_missing_metric_fails_loud(calc_cls, method):
     """No-source metrics must raise (fail loud), never return a fabricated 0.0/default."""
@@ -278,3 +286,145 @@ def test_action_rate_uplift_genuine_zero_and_negative_are_returned_not_raised():
     assert calc._calc_action_rate_uplift({}) == 0.0
     calc, _ = _trigger_calc_returning([{"action_rate_uplift": -0.05}])
     assert calc._calc_action_rate_uplift({}) == -0.05
+
+
+# --- #577 WS1-DQ-008: label_quality wired (generalized Fleiss κ over coherent annotations) --
+
+
+def _grp(p, n, u):
+    """A per-iaa_group registry row (category counts + rater total)."""
+    return {"n_positive": p, "n_negative": n, "n_uncertain": u, "n_raters": p + n + u}
+
+
+def test_label_quality_forwards_to_allowlist():
+    """WS1-DQ-008 forwards to the allowlisted query_id with no params (corpus-level pooled κ)."""
+    calc, client = _calc_returning([_grp(3, 0, 0), _grp(2, 1, 0), _grp(0, 0, 3)])
+    calc._calc_label_quality({})
+    client.rpc.assert_called_once_with(
+        "kpi_query", {"query_id": "data_quality_label_quality", "params": []}
+    )
+
+
+def test_label_quality_matches_statsmodels_on_fixed_n():
+    """ANTI-FABRICATION PARITY: the hand-rolled generalized Fleiss κ MUST equal the vetted
+    statsmodels.fleiss_kappa on a fixed-n subset (where classic Fleiss applies)."""
+    sm = pytest.importorskip("statsmodels.stats.inter_rater")
+    import numpy as np
+
+    # 5 groups, all n_raters=4 (fixed-n => statsmodels applies), concentrated agreement.
+    rows = [_grp(4, 0, 0), _grp(3, 1, 0), _grp(0, 4, 0), _grp(0, 0, 4), _grp(2, 1, 1)]
+    calc, _ = _calc_returning(rows)
+    val = calc._calc_label_quality({})
+    table = np.array([[r["n_positive"], r["n_negative"], r["n_uncertain"]] for r in rows])
+    assert abs(val - sm.fleiss_kappa(table, method="fleiss")) < 1e-9
+
+
+def test_label_quality_substantial_when_concordant_near_zero_when_noise():
+    """The metric DISCRIMINATES real agreement from chance: a concordant corpus yields a
+    substantial κ (>0.6); a genuinely-random (independent) corpus yields κ ≈ 0 (|κ|<0.15).
+
+    NOTE chance ≠ a fixed [1,1,1] split: an even split is *maximal* within-group
+    disagreement (κ→−0.5). True chance is INDEPENDENT random labels averaged over many
+    groups, which is what the live independent-noise data gave (κ=0.0174)."""
+    import numpy as np
+
+    concordant = [_grp(4, 0, 0)] * 8 + [_grp(0, 4, 0)] * 8 + [_grp(0, 0, 4)] * 8
+    calc, _ = _calc_returning(concordant)
+    assert calc._calc_label_quality({}) > 0.6
+    # Each of 60 groups: 3 raters drawn INDEPENDENTLY at random over 3 categories => the
+    # corpus agreement is at chance => κ ≈ 0 (the null the latent-truth rework rises above).
+    rng = np.random.default_rng(0)
+    noise = []
+    for _ in range(60):
+        labels = rng.integers(0, 3, size=3)
+        noise.append(_grp(*(int((labels == c).sum()) for c in range(3))))
+    calc, _ = _calc_returning(noise)
+    assert abs(calc._calc_label_quality({})) < 0.15
+
+
+def test_label_quality_fails_loud_on_no_groups():
+    """No iaa_groups (empty result) -> fail loud BEFORE numpy (the `if not result` guard;
+    np.array([]).sum(axis=1) would otherwise AxisError, not the 'unavailable' contract)."""
+    calc, _ = _calc_returning([])
+    with pytest.raises(RuntimeError, match="unavailable"):
+        calc._calc_label_quality({})
+
+
+def test_label_quality_genuine_low_or_negative_returned_not_raised():
+    """A real worse-than-chance corpus yields a NEGATIVE κ — a legitimate realized statistic,
+    returned not raised (mirrors the patient_touch/action_uplift genuine-value precedent)."""
+    # Maximal within-group disagreement at n=3 over 3 categories => κ < 0.
+    calc, _ = _calc_returning([_grp(1, 1, 1)] * 6)
+    val = calc._calc_label_quality({})
+    assert isinstance(val, float)
+    assert val < 0.05  # at/below chance, returned (not raised)
+
+
+def test_label_quality_degenerate_single_category_is_one():
+    """A corpus where every rating is the SAME single category (P_e==1.0, 0/0 undefined) is
+    defined as perfect-but-degenerate agreement = 1.0, not NaN/raise."""
+    calc, _ = _calc_returning([_grp(3, 0, 0), _grp(4, 0, 0), _grp(2, 0, 0)])
+    assert calc._calc_label_quality({}) == 1.0
+
+
+def test_label_quality_shuffle_disproof_collapses_kappa():
+    """SHUFFLE DISPROOF (the decisive anti-fabrication coherence proof): a coherent corpus
+    has substantial κ, but permuting the same labels across groups (destroying the latent-truth
+    structure) collapses κ to ≈0 — so κ responds ONLY to real agreement, it is not a constant."""
+    import numpy as np
+
+    rng = np.random.default_rng(0)
+    # 30 groups of 4 raters each, 90% concordant with a per-group latent truth.
+    coherent_rows = []
+    flat = []  # the full pool of individual labels, for the shuffle
+    for _ in range(30):
+        truth = int(rng.integers(0, 3))
+        labels = [truth if rng.random() < 0.9 else int(rng.integers(0, 3)) for _ in range(4)]
+        flat.extend(labels)
+        counts = [labels.count(c) for c in range(3)]
+        coherent_rows.append(_grp(*counts))
+    calc, _ = _calc_returning(coherent_rows)
+    k_coherent = calc._calc_label_quality({})
+    assert k_coherent > 0.6, f"coherent κ should be substantial, got {k_coherent}"
+
+    rng.shuffle(flat)
+    shuffled_rows = []
+    for i in range(30):
+        labels = flat[i * 4 : (i + 1) * 4]
+        counts = [labels.count(c) for c in range(3)]
+        shuffled_rows.append(_grp(*counts))
+    calc, _ = _calc_returning(shuffled_rows)
+    k_shuffled = calc._calc_label_quality({})
+    assert abs(k_shuffled) < 0.2, f"shuffled κ should collapse to ≈0, got {k_shuffled}"
+    assert k_coherent - k_shuffled > 0.4
+
+
+def test_dq008_status_is_higher_is_better():
+    """WS1-DQ-008 (IAA κ) is HIGHER-is-better (the inverse of the DQ-006 gap): a high κ is
+    GOOD, a low κ is CRITICAL. It must NOT be in _LOWER_IS_BETTER_IDS, else a strong agreement
+    would be mis-scored CRITICAL. Bands target=0.85, warning=0.70, critical=0.60; the live
+    0.7565 reads WARNING (substantial, below the high 0.85 target — honestly disclosed)."""
+    from src.kpi.models import (
+        CalculationType,
+        KPIMetadata,
+        KPIStatus,
+        KPIThreshold,
+        Workstream,
+    )
+
+    calc = DataQualityCalculator(db_client=MagicMock())
+    kpi = KPIMetadata(
+        id="WS1-DQ-008",
+        name="Label Quality (IAA)",
+        definition="inter-annotator agreement",
+        formula="fleiss_kappa",
+        calculation_type=CalculationType.DIRECT,
+        workstream=Workstream.WS1_DATA_QUALITY,
+        threshold=KPIThreshold(target=0.85, warning=0.70, critical=0.60),
+    )
+    assert "WS1-DQ-008" not in DataQualityCalculator._LOWER_IS_BETTER_IDS
+    assert calc._evaluate_status(kpi, 0.90) == KPIStatus.GOOD  # >= target
+    assert calc._evaluate_status(kpi, 0.7565) == KPIStatus.WARNING  # critical <= v < target
+    assert calc._evaluate_status(kpi, 0.50) == KPIStatus.CRITICAL  # < critical
+    # Under the (wrong) lower-is-better direction, 0.90 would be CRITICAL — guard the flip.
+    assert kpi.threshold.evaluate(0.90, lower_is_better=True) == KPIStatus.CRITICAL
