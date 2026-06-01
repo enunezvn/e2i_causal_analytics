@@ -446,13 +446,22 @@ def test_feature_drift_sql_success_does_not_consult_mlflow():
 
 def test_feature_drift_null_avg_psi_falls_through_to_fail_loud():
     """Empty/unseeded ml_drift_history -> AVG over 0 rows is SQL NULL -> the SQL leg records
-    null_avg_psi, MLflow (no client) is unavailable, and the calculator returns the tuple
-    (None, combined_error) naming BOTH legs — fail-CLOSED, never a fabricated PSI."""
-    calc, _ = _mp_calc_returning([{"avg_psi": None}])
+    null_avg_psi, the MLflow leg has no versions, and the calculator returns the tuple
+    (None, combined_error) naming BOTH legs — fail-CLOSED, never a fabricated PSI.
+
+    The mlflow_client is INJECTED (returning no versions) so the MLflow leg fails closed WITHOUT
+    a real network call — otherwise the lazy `MlflowClient()` would connect to MLFLOW_TRACKING_URI
+    (set in CI), and the thread-method pytest timeout cannot preempt that blocking socket -> hang.
+    Mirrors the existing TestFeatureDriftUnavailability fixture's mlflow stubbing."""
+    client = MagicMock()
+    client.rpc.return_value.execute.return_value = MagicMock(data=[{"avg_psi": None}])
+    mlflow_client = MagicMock()
+    mlflow_client.get_latest_versions.return_value = []  # no versions -> model_not_found, NO network
+    calc = ModelPerformanceCalculator(db_client=client, mlflow_client=mlflow_client)
     value, error = calc._calc_feature_drift({"model_name": "m"})
     assert value is None
     assert "sql_leg=db_query_returned_empty:null_avg_psi" in error
-    assert "mlflow_leg=" in error
+    assert "mlflow_leg=model_not_found:m" in error
 
 
 def test_dq008_status_is_higher_is_better():
