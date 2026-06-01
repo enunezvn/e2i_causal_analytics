@@ -165,6 +165,15 @@ jobs:
         env:
           E2I_TESTING_MODE: "true"
           DISABLE_PANDERA_IMPORT_WARNING: "True"
+          # Sanctioned mock-allowed test context (#606 item A), matching the
+          # agents-tests lane (backend-tests.yml). The harness instantiates each
+          # agent generically and can't inject a connector, so without this flag
+          # heterogeneous_optimizer's CATEEstimatorNode raises at construction
+          # ("MockDataConnector fallback is disabled"). The agent still runs on
+          # the REAL tier0 fixture data (tier0_data passthrough); the mock
+          # connector only satisfies the eager constructor and is never queried.
+          # NOT set in production deploy config, so prod stays fail-closed.
+          E2I_ALLOW_MOCK_CONNECTOR: "1"
         # Monitored-alarm-only on AGENT / contract failures (issue #600
         # maintainer decision). A committed tier0 fixture
         # (scripts/tier0_output_cache/latest.pkl) flips restore-cache.found to
