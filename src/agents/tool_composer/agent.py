@@ -209,10 +209,24 @@ class ToolComposerAgent:
                     self.llm_client = get_standard_llm()
                     logger.info("Initialized default LLM client from factory")
                 except Exception as e:
-                    raise RuntimeError(
-                        "ToolComposerAgent requires an LLM client. "
-                        "Provide llm_client in __init__ or set ANTHROPIC_API_KEY."
-                    ) from e
+                    # Keyless contexts (Tier 1-5 harness, #606): fall back to an
+                    # opt-in MARKED mock only when E2I_ALLOW_MOCK_LLM is set;
+                    # otherwise stay fail-loud (prod never gets a silent mock).
+                    from src.utils.mock_llm import MarkedMockChatLLM, mock_llm_allowed
+
+                    if not mock_llm_allowed():
+                        raise RuntimeError(
+                            "ToolComposerAgent requires an LLM client. "
+                            "Provide llm_client in __init__ or set ANTHROPIC_API_KEY."
+                        ) from e
+                    logger.warning(
+                        "tool_composer: no LLM key — using MARKED mock "
+                        "(E2I_ALLOW_MOCK_LLM); output carries "
+                        "mock_response_for_dev_only=True (#606)."
+                    )
+                    self.llm_client = MarkedMockChatLLM(
+                        '{"subtasks": [], "plan": [], "result": "mock composition"}'
+                    )
 
             self._composer = ToolComposer(
                 llm_client=self.llm_client,

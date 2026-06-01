@@ -91,3 +91,19 @@ class MarkedMockChatLLM:
 
     def with_structured_output(self, *args: Any, **kwargs: Any) -> "MarkedMockChatLLM":
         return self
+
+
+def llm_or_marked_mock(factory: Any, canned: str, **factory_kwargs: Any) -> Any:
+    """Call an ``llm_factory`` function; on a missing-key ``ValueError`` return a
+    MARKED mock IFF ``E2I_ALLOW_MOCK_LLM`` is set, else re-raise (fail-loud).
+
+    ``factory`` is e.g. ``get_chat_llm`` / ``get_fast_llm`` / ``get_standard_llm``;
+    ``canned`` is the agent-appropriate, parser-valid content the mock returns.
+    Passing the factory in keeps this util free of llm_factory imports.
+    """
+    try:
+        return factory(**factory_kwargs)
+    except ValueError:
+        if not mock_llm_allowed():
+            raise
+        return MarkedMockChatLLM(canned)

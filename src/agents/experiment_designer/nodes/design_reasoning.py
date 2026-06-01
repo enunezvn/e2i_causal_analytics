@@ -23,7 +23,7 @@ from src.agents.experiment_designer.state import (
     TreatmentDefinition,
 )
 from src.utils.llm_factory import get_chat_llm, get_fast_llm, get_llm_provider
-from src.utils.mock_llm import MarkedMockChatLLM, mock_llm_allowed
+from src.utils.mock_llm import llm_or_marked_mock
 
 logger = logging.getLogger(__name__)
 
@@ -69,33 +69,6 @@ _CANNED_DESIGN_JSON = json.dumps(
 )
 
 
-def _chat_llm_or_marked_mock(canned: str, **factory_kwargs: Any) -> Any:
-    """Real chat LLM, or an opt-in MARKED mock when no key + E2I_ALLOW_MOCK_LLM.
-
-    Preserves fail-loud: without the opt-in flag a missing key re-raises.
-    """
-    try:
-        return get_chat_llm(**factory_kwargs)
-    except ValueError:
-        if not mock_llm_allowed():
-            raise
-        logger.warning(
-            "design_reasoning: no LLM key — using MARKED mock (E2I_ALLOW_MOCK_LLM); "
-            "output carries mock_response_for_dev_only=True (#606)."
-        )
-        return MarkedMockChatLLM(canned)
-
-
-def _fast_llm_or_marked_mock(canned: str, **factory_kwargs: Any) -> Any:
-    """Real fast LLM, or an opt-in MARKED mock when no key + E2I_ALLOW_MOCK_LLM."""
-    try:
-        return get_fast_llm(**factory_kwargs)
-    except ValueError:
-        if not mock_llm_allowed():
-            raise
-        return MarkedMockChatLLM(canned)
-
-
 def _get_opik_connector():
     """Lazy import of OpikConnector to avoid circular imports."""
     try:
@@ -137,11 +110,11 @@ class DesignReasoningNode:
         # to an opt-in MARKED mock only when no key is configured AND
         # E2I_ALLOW_MOCK_LLM is set (keyless Tier 1-5 harness, #606); otherwise a
         # missing key fails loud as before.
-        self.llm = _chat_llm_or_marked_mock(
-            _CANNED_DESIGN_JSON, model_tier="reasoning", max_tokens=8192, timeout=120
+        self.llm = llm_or_marked_mock(
+            get_chat_llm, _CANNED_DESIGN_JSON, model_tier="reasoning", max_tokens=8192, timeout=120
         )
-        self.fallback_llm = _fast_llm_or_marked_mock(
-            _CANNED_DESIGN_JSON, max_tokens=4096, timeout=60
+        self.fallback_llm = llm_or_marked_mock(
+            get_fast_llm, _CANNED_DESIGN_JSON, max_tokens=4096, timeout=60
         )
 
     async def execute(self, state: ExperimentDesignState) -> ExperimentDesignState:

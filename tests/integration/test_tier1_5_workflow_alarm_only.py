@@ -60,6 +60,17 @@ def test_run_harness_allows_mock_connector():
     )
 
 
+def test_run_harness_allows_mock_llm():
+    """#606 item C: the run-harness step must set E2I_ALLOW_MOCK_LLM=1 so the
+    LLM-dependent agents (orchestrator, experiment_designer, tool_composer) use a
+    MARKED mock instead of raising at construction in the keyless CI. Prod (no
+    flag) stays fail-loud."""
+    env = _step("run-harness").get("env") or {}
+    assert str(env.get("E2I_ALLOW_MOCK_LLM")) == "1", (
+        f"run-harness must set E2I_ALLOW_MOCK_LLM=1 (issue #606 item C); got env={env!r}"
+    )
+
+
 def test_committed_fixture_makes_harness_run_on_prs():
     """Headline #600 fix: the committed fixture exists (so restore-cache reports
     found=true and the harness runs), and the run step still positively gates on
