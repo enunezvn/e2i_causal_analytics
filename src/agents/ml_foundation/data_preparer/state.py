@@ -133,6 +133,17 @@ class DataPreparerState(BaseAgentSchema):
     # via ``extra``) because BaseAgentSchema is ``extra="ignore"``. ``bool`` (not
     # Optional) so the model default is True, never None → no silent FDR-off.
     adaptive_fdr_enabled: bool = True
+    # #604: per-run switch granting Layer-1 declared-safe features FULL immunity
+    # from the FDR auto-drop (routed to review even when their σ-band reached
+    # high). Set True ONLY for synthetic FIXTURE runs (run_tier0_test
+    # ._resolve_declared_safe_full_immunity), where the manifest is leak-free by
+    # construction so the legit designed predictors (days_on_therapy/...) must not
+    # be dropped for being strongly outcome-correlated. Default False → real
+    # cohorts keep the "overwhelming evidence still drops" defensive backstop, and
+    # genuine undeclared leaks always drop (immunity is gated on declared-safe).
+    # Declared (not relied on via ``extra``) because BaseAgentSchema is
+    # ``extra="ignore"``; ``bool`` (not Optional) so the model default is False.
+    adaptive_declared_safe_full_immunity: bool = False
 
     # Phase 1 of causal-role propagation (Issue #237 reframe). Typed
     # list of ``RoleAttribution`` rows (see
