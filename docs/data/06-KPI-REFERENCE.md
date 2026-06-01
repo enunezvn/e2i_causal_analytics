@@ -309,14 +309,16 @@ SELECT iaa_score FROM v_kpi_label_quality LIMIT 1
 | **Helper View** | `v_kpi_time_to_release` |
 | **Target** | <= 24 hours |
 | **Warning** | > 24 hours and <= 48 hours |
-| **Critical** | > 72 hours |
+| **Critical** | > 72 hours (declared SLA ceiling — see status-banding note) |
 
 **Note**: V3 schema addition. Uses the `etl_pipeline_metrics` table.
+
+**Status banding (lower-is-better)**: the direction-aware evaluator (`KPIThreshold.evaluate`) reports **GOOD** for `<= 24h`, **WARNING** for `> 24h and <= 48h`, and **CRITICAL** for `> 48h`. The configured `critical: 72h` is the declared SLA ceiling but is **not** a distinct evaluator band — for lower-is-better KPIs the evaluator uses only the `target` and `warning` thresholds, so any value above the warning bound (48h) is CRITICAL. The same convention applies to the other lower-is-better data-quality KPIs (DQ-006, DQ-007). (#580)
 
 **Calculator**: `DataQualityCalculator._calc_time_to_release`
 
 ```sql
-SELECT median_ttr_days FROM v_kpi_time_to_release LIMIT 1
+SELECT avg_ttr_hours FROM v_kpi_time_to_release LIMIT 1
 ```
 
 ---
@@ -1374,7 +1376,7 @@ Eight Postgres views pre-compute KPI aggregations for performance. These are def
 
 **`v_kpi_label_quality`** -- Groups annotations by `iaa_group_id` and computes agreement within each group, then averages across groups. Returns `iaa_score`.
 
-**`v_kpi_time_to_release`** -- Computes median TTR from `etl_pipeline_metrics`. Returns `median_ttr_days` and breakdowns by pipeline name.
+**`v_kpi_time_to_release`** -- Computes the average TTR (in hours) from `etl_pipeline_metrics`. Returns `avg_ttr_hours` and min/max breakdowns by pipeline name.
 
 **`v_kpi_change_fail_rate`** -- Filters triggers with non-null `previous_trigger_id` (indicating a change) and computes the failure rate. Returns `avg_cfr` with a `calculated_at` timestamp.
 

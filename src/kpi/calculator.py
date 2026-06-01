@@ -437,7 +437,7 @@ class KPICalculator:
             "rate",
             "pass_rate",
             "consistency_rate",
-            "median_ttr_days",
+            "avg_ttr_hours",  # #580: TTR registry row returns hours (was median_ttr_days)
             "median_lag_days",
         )
         for canonical in canonical_keys:
