@@ -179,11 +179,11 @@ if DSPY_AVAILABLE:
         """
         Route user queries to the appropriate E2I tier agent.
 
-        The E2I system has 18 agents organized in 6 tiers:
-        - Tier 0: ML Foundation (scope_definer, data_preparer, feature_analyzer, model_selector, model_trainer, model_deployer, observability_connector)
+        The E2I system has 21 agents organized in 6 tiers:
+        - Tier 0: ML Foundation (scope_definer, data_preparer, feature_analyzer, model_selector, model_trainer, model_deployer, observability_connector, cohort_constructor)
         - Tier 1: Orchestration (orchestrator, tool_composer)
         - Tier 2: Causal Analytics (causal_impact, gap_analyzer, heterogeneous_optimizer)
-        - Tier 3: Monitoring (drift_monitor, experiment_designer, health_score)
+        - Tier 3: Monitoring (drift_monitor, experiment_designer, experiment_monitor, health_score)
         - Tier 4: Predictions (prediction_synthesizer, resource_optimizer)
         - Tier 5: Learning (explainer, feedback_learner)
 
@@ -193,6 +193,7 @@ if DSPY_AVAILABLE:
         - heterogeneous_optimizer: Segment-level analysis, CATE estimation, heterogeneous effects
         - drift_monitor: Detects data drift, model drift, anomalies, distribution shifts
         - experiment_designer: Designs A/B tests, experiments, trials, hypothesis testing
+        - experiment_monitor: Monitors running A/B experiments for SRM, interim analysis, enrollment health
         - health_score: System health metrics, performance scores, status checks
         - prediction_synthesizer: Future predictions, forecasts, trend projections
         - resource_optimizer: Resource allocation, optimization recommendations
@@ -211,7 +212,7 @@ if DSPY_AVAILABLE:
         )
 
         primary_agent: str = dspy.OutputField(
-            desc="Primary agent to route to. Must be one of: causal_impact, gap_analyzer, heterogeneous_optimizer, drift_monitor, experiment_designer, health_score, prediction_synthesizer, resource_optimizer, explainer, feedback_learner"
+            desc="Primary agent to route to. Must be one of: causal_impact, gap_analyzer, heterogeneous_optimizer, drift_monitor, experiment_designer, experiment_monitor, health_score, prediction_synthesizer, resource_optimizer, explainer, feedback_learner"
         )
         secondary_agents: str = dspy.OutputField(
             desc="Comma-separated list of secondary agents that may be helpful (can be empty)"

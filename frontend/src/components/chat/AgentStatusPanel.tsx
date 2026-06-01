@@ -2,7 +2,7 @@
  * Agent Status Panel Component
  * ============================
  *
- * Displays the status of all 18 E2I agents organized by tier.
+ * Displays the status of all 21 E2I agents organized by tier.
  * Shows real-time status indicators and capabilities.
  *
  * @module components/chat/AgentStatusPanel

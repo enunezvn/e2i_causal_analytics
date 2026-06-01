@@ -72,7 +72,7 @@ export function AIAgentInsights() {
         </div>
         <Badge variant="outline" className="text-sm">
           <Sparkles className="h-4 w-4 mr-1" />
-          18 Agents Active
+          21 Agents Active
         </Badge>
       </div>
 

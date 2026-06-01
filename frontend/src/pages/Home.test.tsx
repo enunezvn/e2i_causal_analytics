@@ -226,7 +226,7 @@ describe('Home', () => {
       renderWithAllProviders(<Home />);
 
       expect(screen.getByText('Agent Insights')).toBeInTheDocument();
-      expect(screen.getByText(/Recent recommendations from the 20-agent system/)).toBeInTheDocument();
+      expect(screen.getByText(/Recent recommendations from the 21-agent system/)).toBeInTheDocument();
     });
 
     it('displays sample insights', () => {
@@ -303,7 +303,7 @@ describe('Home', () => {
     it('shows active agent summary', () => {
       renderWithAllProviders(<Home />);
 
-      expect(screen.getByText('15/19 agents active')).toBeInTheDocument();
+      expect(screen.getByText('15/21 agents active')).toBeInTheDocument();
     });
   });
 

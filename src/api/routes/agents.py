@@ -5,7 +5,7 @@ E2I Agent Orchestration API
 FastAPI endpoints for agent status monitoring and orchestration.
 
 Endpoints:
-- GET /agents/status: Get status of all 20 agents in the tier hierarchy
+- GET /agents/status: Get status of all 21 agents in the tier hierarchy
 
 Author: E2I Causal Analytics Team
 Version: 4.2.0
@@ -90,7 +90,7 @@ class AgentStatusResponse(BaseModel):
 # SAMPLE DATA
 # =============================================================================
 
-# Default agent configuration matching the 20-agent tier hierarchy
+# Default agent configuration matching the 21-agent tier hierarchy
 AGENT_REGISTRY = [
     # Tier 0 - ML Foundation (8 agents)
     AgentInfo(
@@ -199,7 +199,7 @@ AGENT_REGISTRY = [
         last_activity=None,
         capabilities=["cate_analysis", "segment_optimization", "econml"],
     ),
-    # Tier 3 - Monitoring (3 agents)
+    # Tier 3 - Monitoring (4 agents)
     AgentInfo(
         id="drift-monitor",
         name="Drift Monitor",
@@ -215,6 +215,14 @@ AGENT_REGISTRY = [
         status=AgentStatusEnum.ACTIVE,
         last_activity=None,
         capabilities=["ab_testing", "sample_size", "power_analysis"],
+    ),
+    AgentInfo(
+        id="experiment-monitor",
+        name="Experiment Monitor",
+        tier=3,
+        status=AgentStatusEnum.ACTIVE,
+        last_activity=None,
+        capabilities=["experiment_monitoring", "srm_detection", "interim_analysis"],
     ),
     AgentInfo(
         id="health-score",
@@ -276,7 +284,7 @@ async def get_agent_status() -> AgentStatusResponse:
     """
     Get status of all agents in the orchestration system.
 
-    Returns the current status of all 18 agents across 6 tiers,
+    Returns the current status of all 21 agents across 6 tiers,
     including their capabilities and activity timestamps.
     """
     agents = AGENT_REGISTRY

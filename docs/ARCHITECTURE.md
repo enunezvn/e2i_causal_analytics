@@ -238,6 +238,7 @@ graph TB
     subgraph "TIER 3: Monitoring"
         DM[drift_monitor<br/><10s]
         ED[experiment_designer<br/>Variable]
+        EM[experiment_monitor<br/><15s]
         HS[health_score<br/><5s]
     end
 
@@ -256,6 +257,7 @@ graph TB
     OR -->|classify + route| HO
     OR -->|classify + route| DM
     OR -->|classify + route| ED
+    OR -->|classify + route| EM
     OR -->|classify + route| HS
     OR -->|classify + route| PS
     OR -->|classify + route| RO
@@ -276,6 +278,7 @@ The orchestrator uses a linear workflow: `audit_init` -> `classify_intent` -> `r
 | `performance_gap` | gap_analyzer | 20s | 2 |
 | `segment_analysis` | heterogeneous_optimizer | 25s | 2 |
 | `experiment_design` | experiment_designer | 60s | 3 |
+| `experiment_monitor` | experiment_monitor | 15s | 3 |
 | `prediction` | prediction_synthesizer | 15s | 4 |
 | `resource_allocation` | resource_optimizer | 20s | 4 |
 | `explanation` | explainer | 45s | 5 |
@@ -301,7 +304,7 @@ All agents share common patterns:
 
 | Route Group | Prefix | Key Endpoints | Auth Level |
 |------------|--------|---------------|------------|
-| agents | `/api/agents/` | Status of all 20 agents | - |
+| agents | `/api/agents/` | Status of all 21 agents | - |
 | analytics | `/api/analytics/` | Dashboard, agent metrics, trends | AUTH/ANALYST |
 | audit | `/api/audit/` | Workflow audit chain, verification | AUTH |
 | causal | `/api/causal/` | Hierarchical CATE, pipeline, validation | ANALYST |

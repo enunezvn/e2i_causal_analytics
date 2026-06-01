@@ -94,7 +94,7 @@ const TIER_CONFIG: Record<AgentTier, TierConfig> = {
     color: 'text-blue-600',
     bgColor: 'bg-blue-100 dark:bg-blue-900/30',
     borderColor: 'border-blue-300 dark:border-blue-700',
-    agents: ['Drift Monitor', 'Experiment Designer', 'Health Score'],
+    agents: ['Drift Monitor', 'Experiment Designer', 'Experiment Monitor', 'Health Score'],
   },
   4: {
     name: 'ML Predictions',

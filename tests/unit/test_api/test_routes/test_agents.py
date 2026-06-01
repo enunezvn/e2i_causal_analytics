@@ -191,9 +191,9 @@ class TestAgentStatusResponse:
 class TestAgentRegistry:
     """Tests for the agent registry."""
 
-    def test_registry_has_20_agents(self):
-        """Test that registry contains 20 agents."""
-        assert len(AGENT_REGISTRY) == 20
+    def test_registry_has_21_agents(self):
+        """Test that registry contains 21 agents."""
+        assert len(AGENT_REGISTRY) == 21
 
     def test_tier_0_has_8_agents(self):
         """Test that Tier 0 (ML Foundation) has 8 agents."""
@@ -210,10 +210,10 @@ class TestAgentRegistry:
         tier_2 = [a for a in AGENT_REGISTRY if a.tier == 2]
         assert len(tier_2) == 3
 
-    def test_tier_3_has_3_agents(self):
-        """Test that Tier 3 (Monitoring) has 3 agents."""
+    def test_tier_3_has_4_agents(self):
+        """Test that Tier 3 (Monitoring) has 4 agents."""
         tier_3 = [a for a in AGENT_REGISTRY if a.tier == 3]
-        assert len(tier_3) == 3
+        assert len(tier_3) == 4
 
     def test_tier_4_has_2_agents(self):
         """Test that Tier 4 (ML Predictions) has 2 agents."""
@@ -254,6 +254,7 @@ class TestAgentRegistry:
             "heterogeneous-optimizer",
             "drift-monitor",
             "experiment-designer",
+            "experiment-monitor",
             "health-score",
             "prediction-synthesizer",
             "resource-optimizer",
@@ -290,12 +291,12 @@ class TestGetAgentStatusEndpoint:
         assert "timestamp" in data
 
     def test_response_agent_count(self, test_client):
-        """Test that response contains 20 agents."""
+        """Test that response contains 21 agents."""
         response = test_client.get("/agents/status")
         data = response.json()
 
-        assert data["total_agents"] == 20
-        assert len(data["agents"]) == 20
+        assert data["total_agents"] == 21
+        assert len(data["agents"]) == 21
 
     def test_response_counts_are_valid(self, test_client):
         """Test that status counts are non-negative and sum correctly."""

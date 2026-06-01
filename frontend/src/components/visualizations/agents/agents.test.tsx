@@ -99,9 +99,11 @@ describe('TierOverview', () => {
     // Multiple tiers have 2 agents (Tier 1, 4, 5)
     const twoAgentsTexts = screen.getAllByText('2 agents');
     expect(twoAgentsTexts.length).toBe(3);
-    // Tier 2 and 3 have 3 agents each
+    // Tier 2 has 3 agents
     const threeAgentsTexts = screen.getAllByText('3 agents');
-    expect(threeAgentsTexts.length).toBe(2);
+    expect(threeAgentsTexts.length).toBe(1);
+    // Tier 3 has 4 agents (drift, experiment-designer, experiment-monitor, health)
+    expect(screen.getByText('4 agents')).toBeInTheDocument();
   });
 
   it('highlights active tier', () => {
