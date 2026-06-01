@@ -58,8 +58,13 @@ class TestAgentNameEnum:
     def test_all_tiers_covered(self):
         """Test all tiers have at least one agent."""
         all_agents = list(AgentNameEnum)
-        # 7 (Tier0) + 2 (Tier1) + 3 (Tier2) + 3 (Tier3) + 2 (Tier4) + 2 (Tier5) = 19
-        assert len(all_agents) == 19
+        # 8 (Tier0) + 2 (Tier1) + 3 (Tier2) + 4 (Tier3) + 2 (Tier4) + 2 (Tier5) = 21
+        assert len(all_agents) == 21
+
+    def test_cohort_constructor_and_experiment_monitor_present(self):
+        """Tier-0 cohort_constructor + Tier-3 experiment_monitor must be valid agent names (#607)."""
+        assert AgentNameEnum("cohort_constructor") is not None
+        assert AgentNameEnum("experiment_monitor") is not None
 
     def test_invalid_agent_raises(self):
         """Test invalid agent name raises ValueError."""

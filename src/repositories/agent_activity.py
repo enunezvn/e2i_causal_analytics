@@ -22,7 +22,7 @@ class AgentActivityRepository(BaseRepository):
 
     Table schema:
     - activity_id (PK)
-    - agent_name (agent_name_type_v2)
+    - agent_name (VARCHAR(50); roster = AGENT_REGISTRY_CONFIG, 21 agents)
     - agent_tier (workstream_type)
     - activity_timestamp (TIMESTAMPTZ)
     - workstream (workstream_type)

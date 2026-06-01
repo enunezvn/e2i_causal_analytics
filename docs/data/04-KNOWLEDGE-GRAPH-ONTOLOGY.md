@@ -228,11 +228,11 @@ Agent entity for provenance tracking.
 
 | Tier | Agents |
 |------|--------|
-| 0 — ML Foundation | `scope_definer`, `data_preparer`, `model_selector`, `model_trainer`, `model_evaluator`, `model_deployer`, `model_monitor` |
+| 0 — ML Foundation | `scope_definer`, `cohort_constructor`, `data_preparer`, `feature_analyzer`, `model_selector`, `model_trainer`, `model_deployer`, `observability_connector` |
 | 1 — Coordination | `orchestrator`, `tool_composer` |
-| 2 — Causal Analytics | `causal_impact`, `heterogeneous_optimizer`, `gap_analyzer`, `experiment_designer` |
-| 3 — Monitoring | `drift_monitor`, `data_quality_monitor`, `health_score` |
-| 4 — Prediction | `prediction_synthesizer`, `risk_assessor`, `resource_optimizer` |
+| 2 — Causal Analytics | `causal_impact`, `heterogeneous_optimizer`, `gap_analyzer` |
+| 3 — Monitoring | `drift_monitor`, `experiment_designer`, `experiment_monitor`, `health_score` |
+| 4 — Prediction | `prediction_synthesizer`, `resource_optimizer` |
 | 5 — Self-Improvement | `explainer`, `feedback_learner` |
 
 ---

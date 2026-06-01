@@ -102,10 +102,11 @@ class E2IRegion(str, Enum):
 
 
 class E2IAgentName(str, Enum):
-    """E2I 18-agent architecture names (6 tiers)."""
+    """E2I 21-agent architecture names (6 tiers)."""
 
-    # Tier 0: ML Foundation (7 agents)
+    # Tier 0: ML Foundation (8 agents)
     SCOPE_DEFINER = "scope_definer"
+    COHORT_CONSTRUCTOR = "cohort_constructor"
     DATA_PREPARER = "data_preparer"
     FEATURE_ANALYZER = "feature_analyzer"
     MODEL_SELECTOR = "model_selector"
@@ -119,9 +120,10 @@ class E2IAgentName(str, Enum):
     CAUSAL_IMPACT = "causal_impact"
     GAP_ANALYZER = "gap_analyzer"
     HETEROGENEOUS_OPTIMIZER = "heterogeneous_optimizer"
-    # Tier 3: Monitoring & Experimentation (3 agents)
+    # Tier 3: Monitoring & Experimentation (4 agents)
     DRIFT_MONITOR = "drift_monitor"
     EXPERIMENT_DESIGNER = "experiment_designer"
+    EXPERIMENT_MONITOR = "experiment_monitor"
     HEALTH_SCORE = "health_score"
     # Tier 4: ML Predictions (2 agents)
     PREDICTION_SYNTHESIZER = "prediction_synthesizer"
@@ -129,7 +131,7 @@ class E2IAgentName(str, Enum):
     # Tier 5: Self-Improvement (2 agents)
     FEEDBACK_LEARNER = "feedback_learner"
     EXPLAINER = "explainer"
-    # Legacy (kept for backwards compatibility)
+    # Legacy (DEPRECATED, NOT a current agent; retained for backwards-compat with existing memory rows)
     FAIRNESS_GUARDIAN = "fairness_guardian"
 
 

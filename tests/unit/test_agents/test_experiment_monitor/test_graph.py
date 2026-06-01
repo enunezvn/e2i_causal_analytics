@@ -46,6 +46,7 @@ class TestGraphCreation:
             else:
                 node_ids.append(str(node))
 
+        assert "audit_init" in node_ids
         assert "health_checker" in node_ids
         assert "srm_detector" in node_ids
         assert "interim_analyzer" in node_ids
@@ -53,14 +54,14 @@ class TestGraphCreation:
         assert "alert_generator" in node_ids
 
     def test_graph_has_correct_entry_point(self):
-        """Test that health_checker is the entry point."""
+        """Test that audit_init is the entry point (audit-chain genesis, #607)."""
         graph = create_experiment_monitor_graph()
         structure = graph.get_graph()
 
         # Find edges from __start__
         start_edges = [e for e in structure.edges if e.source == "__start__"]
         assert len(start_edges) == 1
-        assert start_edges[0].target == "health_checker"
+        assert start_edges[0].target == "audit_init"
 
     def test_graph_has_sequential_edges(self):
         """Test that nodes are connected sequentially."""
@@ -71,6 +72,7 @@ class TestGraphCreation:
         edges = {e.source: e.target for e in structure.edges}
 
         # Verify sequential flow
+        assert edges.get("audit_init") == "health_checker"
         assert edges.get("health_checker") == "srm_detector"
         assert edges.get("srm_detector") == "interim_analyzer"
         assert edges.get("interim_analyzer") == "fidelity_checker"
@@ -205,8 +207,8 @@ class TestGraphExecution:
 class TestNodeCount:
     """Tests for node count in the graph."""
 
-    def test_graph_has_five_nodes(self):
-        """Test that graph has exactly 5 processing nodes."""
+    def test_graph_has_six_nodes(self):
+        """Test that graph has exactly 6 processing nodes (incl. audit_init, #607)."""
         graph = create_experiment_monitor_graph()
         structure = graph.get_graph()
 
@@ -220,15 +222,15 @@ class TestNodeCount:
 
         # Filter out __start__ and __end__
         processing_nodes = [n for n in node_names if n not in ["__start__", "__end__"]]
-        assert len(processing_nodes) == 5
+        assert len(processing_nodes) == 6
 
-    def test_graph_has_six_edges(self):
-        """Test that graph has exactly 6 edges (including start/end)."""
+    def test_graph_has_seven_edges(self):
+        """Test that graph has exactly 7 edges (including start/end + audit_init, #607)."""
         graph = create_experiment_monitor_graph()
         structure = graph.get_graph()
 
-        # __start__ -> health_checker -> srm_detector -> interim_analyzer -> fidelity_checker -> alert_generator -> __end__
-        assert len(structure.edges) == 6
+        # __start__ -> audit_init -> health_checker -> srm_detector -> interim_analyzer -> fidelity_checker -> alert_generator -> __end__
+        assert len(structure.edges) == 7
 
 
 class TestGraphWithRealNodes:

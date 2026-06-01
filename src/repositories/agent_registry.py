@@ -1,7 +1,7 @@
 """
 Agent Registry Repository.
 
-Handles the 11 V3 agents with tier assignments.
+Handles the agent_registry table (21-agent roster; source of truth = src/agents/factory.py AGENT_REGISTRY_CONFIG).
 """
 
 from typing import Any, Dict, List, Optional, cast
@@ -13,10 +13,11 @@ class AgentRegistryRepository(BaseRepository):
     """
     Repository for agent_registry table.
 
-    V3 agents (11 total):
-    - Tier 1: orchestrator
+    Roster: 21 agents (source of truth = src/agents/factory.py AGENT_REGISTRY_CONFIG):
+    - Tier 0: scope_definer, cohort_constructor, data_preparer, feature_analyzer, model_selector, model_trainer, model_deployer, observability_connector
+    - Tier 1: orchestrator, tool_composer
     - Tier 2: causal_impact, gap_analyzer, heterogeneous_optimizer
-    - Tier 3: experiment_designer, drift_monitor, health_score
+    - Tier 3: drift_monitor, experiment_designer, experiment_monitor, health_score
     - Tier 4: prediction_synthesizer, resource_optimizer
     - Tier 5: explainer, feedback_learner
 

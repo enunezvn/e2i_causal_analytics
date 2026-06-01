@@ -6,7 +6,7 @@ Seeds the FalkorDB knowledge graph with E2I domain entities and relationships:
 - Brands (Remibrutinib, Fabhalta, Kisqali)
 - Regions (northeast, south, midwest, west)
 - KPIs (TRx, NRx, market share, etc.)
-- Agents (18 agents in 6 tiers)
+- Agents (demo subset; full roster = 21 per src/agents/factory.py)
 - Causal relationships between entities
 
 Part of Phase 2, Checkpoint 2.3.
@@ -24,7 +24,7 @@ import logging
 import os
 import sys
 from datetime import datetime, timezone
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -32,8 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.rag.config import FalkorDBConfig
 
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
@@ -45,7 +44,12 @@ logger = logging.getLogger(__name__)
 BRANDS = [
     {"name": "Remibrutinib", "type": "BTK_inhibitor", "indication": "CSU", "launch_year": 2024},
     {"name": "Fabhalta", "type": "Factor_B_inhibitor", "indication": "PNH", "launch_year": 2023},
-    {"name": "Kisqali", "type": "CDK4_6_inhibitor", "indication": "HR_HER2_breast_cancer", "launch_year": 2017},
+    {
+        "name": "Kisqali",
+        "type": "CDK4_6_inhibitor",
+        "indication": "HR_HER2_breast_cancer",
+        "launch_year": 2017,
+    },
 ]
 
 REGIONS = [
@@ -57,28 +61,104 @@ REGIONS = [
 
 # Core KPIs - streamlined for meaningful connections
 KPIS = [
-    {"name": "TRx", "display_name": "Total Prescriptions", "category": "volume", "description": "Total prescription volume"},
-    {"name": "NRx", "display_name": "New Prescriptions", "category": "volume", "description": "New patient prescriptions"},
-    {"name": "Market_Share", "display_name": "Market Share", "category": "market", "description": "Brand share of therapeutic market"},
-    {"name": "HCP_Reach", "display_name": "HCP Reach", "category": "engagement", "description": "Percentage of target HCPs engaged"},
-    {"name": "Conversion_Rate", "display_name": "Conversion Rate", "category": "funnel", "description": "Rate of diagnosis to prescription"},
-    {"name": "Patient_Retention", "display_name": "Patient Retention", "category": "loyalty", "description": "Patients continuing therapy"},
+    {
+        "name": "TRx",
+        "display_name": "Total Prescriptions",
+        "category": "volume",
+        "description": "Total prescription volume",
+    },
+    {
+        "name": "NRx",
+        "display_name": "New Prescriptions",
+        "category": "volume",
+        "description": "New patient prescriptions",
+    },
+    {
+        "name": "Market_Share",
+        "display_name": "Market Share",
+        "category": "market",
+        "description": "Brand share of therapeutic market",
+    },
+    {
+        "name": "HCP_Reach",
+        "display_name": "HCP Reach",
+        "category": "engagement",
+        "description": "Percentage of target HCPs engaged",
+    },
+    {
+        "name": "Conversion_Rate",
+        "display_name": "Conversion Rate",
+        "category": "funnel",
+        "description": "Rate of diagnosis to prescription",
+    },
+    {
+        "name": "Patient_Retention",
+        "display_name": "Patient Retention",
+        "category": "loyalty",
+        "description": "Patients continuing therapy",
+    },
 ]
 
 # HCPs - Using supported node type "HCP"
 HCPS = [
-    {"name": "Dr. Sarah Chen", "specialty": "Oncologist", "region": "Northeast", "tier": "KOL", "npi": "1234567890"},
-    {"name": "Dr. Michael Roberts", "specialty": "Oncologist", "region": "South", "tier": "High", "npi": "1234567891"},
-    {"name": "Dr. Emily Watson", "specialty": "Hematologist", "region": "West", "tier": "KOL", "npi": "1234567892"},
-    {"name": "Dr. James Miller", "specialty": "Dermatologist", "region": "Northeast", "tier": "High", "npi": "1234567893"},
-    {"name": "Dr. Lisa Park", "specialty": "Nephrologist", "region": "Midwest", "tier": "Medium", "npi": "1234567894"},
-    {"name": "Dr. David Kim", "specialty": "Hematologist", "region": "South", "tier": "High", "npi": "1234567895"},
+    {
+        "name": "Dr. Sarah Chen",
+        "specialty": "Oncologist",
+        "region": "Northeast",
+        "tier": "KOL",
+        "npi": "1234567890",
+    },
+    {
+        "name": "Dr. Michael Roberts",
+        "specialty": "Oncologist",
+        "region": "South",
+        "tier": "High",
+        "npi": "1234567891",
+    },
+    {
+        "name": "Dr. Emily Watson",
+        "specialty": "Hematologist",
+        "region": "West",
+        "tier": "KOL",
+        "npi": "1234567892",
+    },
+    {
+        "name": "Dr. James Miller",
+        "specialty": "Dermatologist",
+        "region": "Northeast",
+        "tier": "High",
+        "npi": "1234567893",
+    },
+    {
+        "name": "Dr. Lisa Park",
+        "specialty": "Nephrologist",
+        "region": "Midwest",
+        "tier": "Medium",
+        "npi": "1234567894",
+    },
+    {
+        "name": "Dr. David Kim",
+        "specialty": "Hematologist",
+        "region": "South",
+        "tier": "High",
+        "npi": "1234567895",
+    },
 ]
 
 # Patients - Using supported node type "Patient"
 PATIENTS = [
-    {"name": "Patient_A001", "condition": "HR_HER2_breast_cancer", "stage": "first_line", "region": "Northeast"},
-    {"name": "Patient_A002", "condition": "HR_HER2_breast_cancer", "stage": "second_line", "region": "South"},
+    {
+        "name": "Patient_A001",
+        "condition": "HR_HER2_breast_cancer",
+        "stage": "first_line",
+        "region": "Northeast",
+    },
+    {
+        "name": "Patient_A002",
+        "condition": "HR_HER2_breast_cancer",
+        "stage": "second_line",
+        "region": "South",
+    },
     {"name": "Patient_B001", "condition": "PNH", "stage": "maintenance", "region": "West"},
     {"name": "Patient_B002", "condition": "PNH", "stage": "first_line", "region": "Midwest"},
     {"name": "Patient_C001", "condition": "CSU", "stage": "first_line", "region": "Northeast"},
@@ -88,27 +168,87 @@ PATIENTS = [
 # Treatments - Using supported node type "Treatment"
 TREATMENTS = [
     {"name": "Kisqali_Regimen", "brand": "Kisqali", "line": "first_line", "duration_weeks": 24},
-    {"name": "Kisqali_Maintenance", "brand": "Kisqali", "line": "maintenance", "duration_weeks": 52},
+    {
+        "name": "Kisqali_Maintenance",
+        "brand": "Kisqali",
+        "line": "maintenance",
+        "duration_weeks": 52,
+    },
     {"name": "Fabhalta_Therapy", "brand": "Fabhalta", "line": "first_line", "duration_weeks": 26},
-    {"name": "Remibrutinib_Treatment", "brand": "Remibrutinib", "line": "first_line", "duration_weeks": 12},
+    {
+        "name": "Remibrutinib_Treatment",
+        "brand": "Remibrutinib",
+        "line": "first_line",
+        "duration_weeks": 12,
+    },
 ]
 
 # CausalPaths - Discovered causal relationships
 CAUSAL_PATHS = [
-    {"name": "HCP_Engagement_to_NRx", "description": "HCP engagement drives new prescriptions", "effect_size": 0.35, "confidence": 0.92},
-    {"name": "NRx_to_Market_Share", "description": "New prescriptions increase market share", "effect_size": 0.45, "confidence": 0.88},
-    {"name": "Retention_to_TRx", "description": "Patient retention sustains total prescriptions", "effect_size": 0.52, "confidence": 0.95},
-    {"name": "Regional_Access_to_Conversion", "description": "Regional formulary access improves conversion", "effect_size": 0.28, "confidence": 0.85},
+    {
+        "name": "HCP_Engagement_to_NRx",
+        "description": "HCP engagement drives new prescriptions",
+        "effect_size": 0.35,
+        "confidence": 0.92,
+    },
+    {
+        "name": "NRx_to_Market_Share",
+        "description": "New prescriptions increase market share",
+        "effect_size": 0.45,
+        "confidence": 0.88,
+    },
+    {
+        "name": "Retention_to_TRx",
+        "description": "Patient retention sustains total prescriptions",
+        "effect_size": 0.52,
+        "confidence": 0.95,
+    },
+    {
+        "name": "Regional_Access_to_Conversion",
+        "description": "Regional formulary access improves conversion",
+        "effect_size": 0.28,
+        "confidence": 0.85,
+    },
 ]
 
 # Agents - Streamlined to key agents
 AGENTS = [
-    {"name": "orchestrator", "tier": 1, "category": "coordination", "description": "Routes queries to specialist agents"},
-    {"name": "causal_impact", "tier": 2, "category": "causal", "description": "Estimates causal effects of interventions"},
-    {"name": "gap_analyzer", "tier": 2, "category": "causal", "description": "Identifies ROI opportunities in data"},
-    {"name": "experiment_designer", "tier": 3, "category": "monitoring", "description": "Designs A/B tests and experiments"},
-    {"name": "prediction_synthesizer", "tier": 4, "category": "prediction", "description": "Generates ML-based forecasts"},
-    {"name": "explainer", "tier": 5, "category": "self_improvement", "description": "Provides natural language explanations"},
+    {
+        "name": "orchestrator",
+        "tier": 1,
+        "category": "coordination",
+        "description": "Routes queries to specialist agents",
+    },
+    {
+        "name": "causal_impact",
+        "tier": 2,
+        "category": "causal",
+        "description": "Estimates causal effects of interventions",
+    },
+    {
+        "name": "gap_analyzer",
+        "tier": 2,
+        "category": "causal",
+        "description": "Identifies ROI opportunities in data",
+    },
+    {
+        "name": "experiment_designer",
+        "tier": 3,
+        "category": "monitoring",
+        "description": "Designs A/B tests and experiments",
+    },
+    {
+        "name": "prediction_synthesizer",
+        "tier": 4,
+        "category": "prediction",
+        "description": "Generates ML-based forecasts",
+    },
+    {
+        "name": "explainer",
+        "tier": 5,
+        "category": "self_improvement",
+        "description": "Provides natural language explanations",
+    },
 ]
 
 # =============================================================================
@@ -117,102 +257,594 @@ AGENTS = [
 
 RELATIONSHIPS = [
     # === HCP -> Brand (PRESCRIBES) ===
-    {"from_type": "HCP", "from_name": "Dr. Sarah Chen", "to_type": "Brand", "to_name": "Kisqali", "rel_type": "PRESCRIBES", "weight": 0.9},
-    {"from_type": "HCP", "from_name": "Dr. Michael Roberts", "to_type": "Brand", "to_name": "Kisqali", "rel_type": "PRESCRIBES", "weight": 0.85},
-    {"from_type": "HCP", "from_name": "Dr. Emily Watson", "to_type": "Brand", "to_name": "Fabhalta", "rel_type": "PRESCRIBES", "weight": 0.88},
-    {"from_type": "HCP", "from_name": "Dr. Emily Watson", "to_type": "Brand", "to_name": "Kisqali", "rel_type": "PRESCRIBES", "weight": 0.7},
-    {"from_type": "HCP", "from_name": "Dr. James Miller", "to_type": "Brand", "to_name": "Remibrutinib", "rel_type": "PRESCRIBES", "weight": 0.92},
-    {"from_type": "HCP", "from_name": "Dr. Lisa Park", "to_type": "Brand", "to_name": "Fabhalta", "rel_type": "PRESCRIBES", "weight": 0.8},
-    {"from_type": "HCP", "from_name": "Dr. David Kim", "to_type": "Brand", "to_name": "Fabhalta", "rel_type": "PRESCRIBES", "weight": 0.85},
-    {"from_type": "HCP", "from_name": "Dr. David Kim", "to_type": "Brand", "to_name": "Kisqali", "rel_type": "PRESCRIBES", "weight": 0.75},
-
+    {
+        "from_type": "HCP",
+        "from_name": "Dr. Sarah Chen",
+        "to_type": "Brand",
+        "to_name": "Kisqali",
+        "rel_type": "PRESCRIBES",
+        "weight": 0.9,
+    },
+    {
+        "from_type": "HCP",
+        "from_name": "Dr. Michael Roberts",
+        "to_type": "Brand",
+        "to_name": "Kisqali",
+        "rel_type": "PRESCRIBES",
+        "weight": 0.85,
+    },
+    {
+        "from_type": "HCP",
+        "from_name": "Dr. Emily Watson",
+        "to_type": "Brand",
+        "to_name": "Fabhalta",
+        "rel_type": "PRESCRIBES",
+        "weight": 0.88,
+    },
+    {
+        "from_type": "HCP",
+        "from_name": "Dr. Emily Watson",
+        "to_type": "Brand",
+        "to_name": "Kisqali",
+        "rel_type": "PRESCRIBES",
+        "weight": 0.7,
+    },
+    {
+        "from_type": "HCP",
+        "from_name": "Dr. James Miller",
+        "to_type": "Brand",
+        "to_name": "Remibrutinib",
+        "rel_type": "PRESCRIBES",
+        "weight": 0.92,
+    },
+    {
+        "from_type": "HCP",
+        "from_name": "Dr. Lisa Park",
+        "to_type": "Brand",
+        "to_name": "Fabhalta",
+        "rel_type": "PRESCRIBES",
+        "weight": 0.8,
+    },
+    {
+        "from_type": "HCP",
+        "from_name": "Dr. David Kim",
+        "to_type": "Brand",
+        "to_name": "Fabhalta",
+        "rel_type": "PRESCRIBES",
+        "weight": 0.85,
+    },
+    {
+        "from_type": "HCP",
+        "from_name": "Dr. David Kim",
+        "to_type": "Brand",
+        "to_name": "Kisqali",
+        "rel_type": "PRESCRIBES",
+        "weight": 0.75,
+    },
     # === HCP -> Region (PRACTICES_IN) ===
-    {"from_type": "HCP", "from_name": "Dr. Sarah Chen", "to_type": "Region", "to_name": "Northeast", "rel_type": "PRACTICES_IN", "weight": 1.0},
-    {"from_type": "HCP", "from_name": "Dr. Michael Roberts", "to_type": "Region", "to_name": "South", "rel_type": "PRACTICES_IN", "weight": 1.0},
-    {"from_type": "HCP", "from_name": "Dr. Emily Watson", "to_type": "Region", "to_name": "West", "rel_type": "PRACTICES_IN", "weight": 1.0},
-    {"from_type": "HCP", "from_name": "Dr. James Miller", "to_type": "Region", "to_name": "Northeast", "rel_type": "PRACTICES_IN", "weight": 1.0},
-    {"from_type": "HCP", "from_name": "Dr. Lisa Park", "to_type": "Region", "to_name": "Midwest", "rel_type": "PRACTICES_IN", "weight": 1.0},
-    {"from_type": "HCP", "from_name": "Dr. David Kim", "to_type": "Region", "to_name": "South", "rel_type": "PRACTICES_IN", "weight": 1.0},
-
+    {
+        "from_type": "HCP",
+        "from_name": "Dr. Sarah Chen",
+        "to_type": "Region",
+        "to_name": "Northeast",
+        "rel_type": "PRACTICES_IN",
+        "weight": 1.0,
+    },
+    {
+        "from_type": "HCP",
+        "from_name": "Dr. Michael Roberts",
+        "to_type": "Region",
+        "to_name": "South",
+        "rel_type": "PRACTICES_IN",
+        "weight": 1.0,
+    },
+    {
+        "from_type": "HCP",
+        "from_name": "Dr. Emily Watson",
+        "to_type": "Region",
+        "to_name": "West",
+        "rel_type": "PRACTICES_IN",
+        "weight": 1.0,
+    },
+    {
+        "from_type": "HCP",
+        "from_name": "Dr. James Miller",
+        "to_type": "Region",
+        "to_name": "Northeast",
+        "rel_type": "PRACTICES_IN",
+        "weight": 1.0,
+    },
+    {
+        "from_type": "HCP",
+        "from_name": "Dr. Lisa Park",
+        "to_type": "Region",
+        "to_name": "Midwest",
+        "rel_type": "PRACTICES_IN",
+        "weight": 1.0,
+    },
+    {
+        "from_type": "HCP",
+        "from_name": "Dr. David Kim",
+        "to_type": "Region",
+        "to_name": "South",
+        "rel_type": "PRACTICES_IN",
+        "weight": 1.0,
+    },
     # === Patient -> HCP (TREATED_BY) ===
-    {"from_type": "Patient", "from_name": "Patient_A001", "to_type": "HCP", "to_name": "Dr. Sarah Chen", "rel_type": "TREATED_BY", "weight": 1.0},
-    {"from_type": "Patient", "from_name": "Patient_A002", "to_type": "HCP", "to_name": "Dr. Michael Roberts", "rel_type": "TREATED_BY", "weight": 1.0},
-    {"from_type": "Patient", "from_name": "Patient_B001", "to_type": "HCP", "to_name": "Dr. Emily Watson", "rel_type": "TREATED_BY", "weight": 1.0},
-    {"from_type": "Patient", "from_name": "Patient_B002", "to_type": "HCP", "to_name": "Dr. Lisa Park", "rel_type": "TREATED_BY", "weight": 1.0},
-    {"from_type": "Patient", "from_name": "Patient_C001", "to_type": "HCP", "to_name": "Dr. James Miller", "rel_type": "TREATED_BY", "weight": 1.0},
-    {"from_type": "Patient", "from_name": "Patient_C002", "to_type": "HCP", "to_name": "Dr. David Kim", "rel_type": "TREATED_BY", "weight": 1.0},
-
+    {
+        "from_type": "Patient",
+        "from_name": "Patient_A001",
+        "to_type": "HCP",
+        "to_name": "Dr. Sarah Chen",
+        "rel_type": "TREATED_BY",
+        "weight": 1.0,
+    },
+    {
+        "from_type": "Patient",
+        "from_name": "Patient_A002",
+        "to_type": "HCP",
+        "to_name": "Dr. Michael Roberts",
+        "rel_type": "TREATED_BY",
+        "weight": 1.0,
+    },
+    {
+        "from_type": "Patient",
+        "from_name": "Patient_B001",
+        "to_type": "HCP",
+        "to_name": "Dr. Emily Watson",
+        "rel_type": "TREATED_BY",
+        "weight": 1.0,
+    },
+    {
+        "from_type": "Patient",
+        "from_name": "Patient_B002",
+        "to_type": "HCP",
+        "to_name": "Dr. Lisa Park",
+        "rel_type": "TREATED_BY",
+        "weight": 1.0,
+    },
+    {
+        "from_type": "Patient",
+        "from_name": "Patient_C001",
+        "to_type": "HCP",
+        "to_name": "Dr. James Miller",
+        "rel_type": "TREATED_BY",
+        "weight": 1.0,
+    },
+    {
+        "from_type": "Patient",
+        "from_name": "Patient_C002",
+        "to_type": "HCP",
+        "to_name": "Dr. David Kim",
+        "rel_type": "TREATED_BY",
+        "weight": 1.0,
+    },
     # === Patient -> Treatment (RECEIVES) ===
-    {"from_type": "Patient", "from_name": "Patient_A001", "to_type": "Treatment", "to_name": "Kisqali_Regimen", "rel_type": "RECEIVES", "weight": 1.0},
-    {"from_type": "Patient", "from_name": "Patient_A002", "to_type": "Treatment", "to_name": "Kisqali_Maintenance", "rel_type": "RECEIVES", "weight": 1.0},
-    {"from_type": "Patient", "from_name": "Patient_B001", "to_type": "Treatment", "to_name": "Fabhalta_Therapy", "rel_type": "RECEIVES", "weight": 1.0},
-    {"from_type": "Patient", "from_name": "Patient_B002", "to_type": "Treatment", "to_name": "Fabhalta_Therapy", "rel_type": "RECEIVES", "weight": 1.0},
-    {"from_type": "Patient", "from_name": "Patient_C001", "to_type": "Treatment", "to_name": "Remibrutinib_Treatment", "rel_type": "RECEIVES", "weight": 1.0},
-    {"from_type": "Patient", "from_name": "Patient_C002", "to_type": "Treatment", "to_name": "Remibrutinib_Treatment", "rel_type": "RECEIVES", "weight": 1.0},
-
+    {
+        "from_type": "Patient",
+        "from_name": "Patient_A001",
+        "to_type": "Treatment",
+        "to_name": "Kisqali_Regimen",
+        "rel_type": "RECEIVES",
+        "weight": 1.0,
+    },
+    {
+        "from_type": "Patient",
+        "from_name": "Patient_A002",
+        "to_type": "Treatment",
+        "to_name": "Kisqali_Maintenance",
+        "rel_type": "RECEIVES",
+        "weight": 1.0,
+    },
+    {
+        "from_type": "Patient",
+        "from_name": "Patient_B001",
+        "to_type": "Treatment",
+        "to_name": "Fabhalta_Therapy",
+        "rel_type": "RECEIVES",
+        "weight": 1.0,
+    },
+    {
+        "from_type": "Patient",
+        "from_name": "Patient_B002",
+        "to_type": "Treatment",
+        "to_name": "Fabhalta_Therapy",
+        "rel_type": "RECEIVES",
+        "weight": 1.0,
+    },
+    {
+        "from_type": "Patient",
+        "from_name": "Patient_C001",
+        "to_type": "Treatment",
+        "to_name": "Remibrutinib_Treatment",
+        "rel_type": "RECEIVES",
+        "weight": 1.0,
+    },
+    {
+        "from_type": "Patient",
+        "from_name": "Patient_C002",
+        "to_type": "Treatment",
+        "to_name": "Remibrutinib_Treatment",
+        "rel_type": "RECEIVES",
+        "weight": 1.0,
+    },
     # === Patient -> Region (LOCATED_IN) ===
-    {"from_type": "Patient", "from_name": "Patient_A001", "to_type": "Region", "to_name": "Northeast", "rel_type": "LOCATED_IN", "weight": 1.0},
-    {"from_type": "Patient", "from_name": "Patient_A002", "to_type": "Region", "to_name": "South", "rel_type": "LOCATED_IN", "weight": 1.0},
-    {"from_type": "Patient", "from_name": "Patient_B001", "to_type": "Region", "to_name": "West", "rel_type": "LOCATED_IN", "weight": 1.0},
-    {"from_type": "Patient", "from_name": "Patient_B002", "to_type": "Region", "to_name": "Midwest", "rel_type": "LOCATED_IN", "weight": 1.0},
-    {"from_type": "Patient", "from_name": "Patient_C001", "to_type": "Region", "to_name": "Northeast", "rel_type": "LOCATED_IN", "weight": 1.0},
-    {"from_type": "Patient", "from_name": "Patient_C002", "to_type": "Region", "to_name": "South", "rel_type": "LOCATED_IN", "weight": 1.0},
-
+    {
+        "from_type": "Patient",
+        "from_name": "Patient_A001",
+        "to_type": "Region",
+        "to_name": "Northeast",
+        "rel_type": "LOCATED_IN",
+        "weight": 1.0,
+    },
+    {
+        "from_type": "Patient",
+        "from_name": "Patient_A002",
+        "to_type": "Region",
+        "to_name": "South",
+        "rel_type": "LOCATED_IN",
+        "weight": 1.0,
+    },
+    {
+        "from_type": "Patient",
+        "from_name": "Patient_B001",
+        "to_type": "Region",
+        "to_name": "West",
+        "rel_type": "LOCATED_IN",
+        "weight": 1.0,
+    },
+    {
+        "from_type": "Patient",
+        "from_name": "Patient_B002",
+        "to_type": "Region",
+        "to_name": "Midwest",
+        "rel_type": "LOCATED_IN",
+        "weight": 1.0,
+    },
+    {
+        "from_type": "Patient",
+        "from_name": "Patient_C001",
+        "to_type": "Region",
+        "to_name": "Northeast",
+        "rel_type": "LOCATED_IN",
+        "weight": 1.0,
+    },
+    {
+        "from_type": "Patient",
+        "from_name": "Patient_C002",
+        "to_type": "Region",
+        "to_name": "South",
+        "rel_type": "LOCATED_IN",
+        "weight": 1.0,
+    },
     # === Treatment -> Brand (USES) ===
-    {"from_type": "Treatment", "from_name": "Kisqali_Regimen", "to_type": "Brand", "to_name": "Kisqali", "rel_type": "USES", "weight": 1.0},
-    {"from_type": "Treatment", "from_name": "Kisqali_Maintenance", "to_type": "Brand", "to_name": "Kisqali", "rel_type": "USES", "weight": 1.0},
-    {"from_type": "Treatment", "from_name": "Fabhalta_Therapy", "to_type": "Brand", "to_name": "Fabhalta", "rel_type": "USES", "weight": 1.0},
-    {"from_type": "Treatment", "from_name": "Remibrutinib_Treatment", "to_type": "Brand", "to_name": "Remibrutinib", "rel_type": "USES", "weight": 1.0},
-
+    {
+        "from_type": "Treatment",
+        "from_name": "Kisqali_Regimen",
+        "to_type": "Brand",
+        "to_name": "Kisqali",
+        "rel_type": "USES",
+        "weight": 1.0,
+    },
+    {
+        "from_type": "Treatment",
+        "from_name": "Kisqali_Maintenance",
+        "to_type": "Brand",
+        "to_name": "Kisqali",
+        "rel_type": "USES",
+        "weight": 1.0,
+    },
+    {
+        "from_type": "Treatment",
+        "from_name": "Fabhalta_Therapy",
+        "to_type": "Brand",
+        "to_name": "Fabhalta",
+        "rel_type": "USES",
+        "weight": 1.0,
+    },
+    {
+        "from_type": "Treatment",
+        "from_name": "Remibrutinib_Treatment",
+        "to_type": "Brand",
+        "to_name": "Remibrutinib",
+        "rel_type": "USES",
+        "weight": 1.0,
+    },
     # === Brand -> KPI (TRACKS) ===
-    {"from_type": "Brand", "from_name": "Kisqali", "to_type": "KPI", "to_name": "TRx", "rel_type": "TRACKS", "weight": 0.95},
-    {"from_type": "Brand", "from_name": "Kisqali", "to_type": "KPI", "to_name": "Market_Share", "rel_type": "TRACKS", "weight": 0.9},
-    {"from_type": "Brand", "from_name": "Fabhalta", "to_type": "KPI", "to_name": "TRx", "rel_type": "TRACKS", "weight": 0.9},
-    {"from_type": "Brand", "from_name": "Fabhalta", "to_type": "KPI", "to_name": "NRx", "rel_type": "TRACKS", "weight": 0.85},
-    {"from_type": "Brand", "from_name": "Remibrutinib", "to_type": "KPI", "to_name": "NRx", "rel_type": "TRACKS", "weight": 0.92},
-    {"from_type": "Brand", "from_name": "Remibrutinib", "to_type": "KPI", "to_name": "Conversion_Rate", "rel_type": "TRACKS", "weight": 0.88},
-
+    {
+        "from_type": "Brand",
+        "from_name": "Kisqali",
+        "to_type": "KPI",
+        "to_name": "TRx",
+        "rel_type": "TRACKS",
+        "weight": 0.95,
+    },
+    {
+        "from_type": "Brand",
+        "from_name": "Kisqali",
+        "to_type": "KPI",
+        "to_name": "Market_Share",
+        "rel_type": "TRACKS",
+        "weight": 0.9,
+    },
+    {
+        "from_type": "Brand",
+        "from_name": "Fabhalta",
+        "to_type": "KPI",
+        "to_name": "TRx",
+        "rel_type": "TRACKS",
+        "weight": 0.9,
+    },
+    {
+        "from_type": "Brand",
+        "from_name": "Fabhalta",
+        "to_type": "KPI",
+        "to_name": "NRx",
+        "rel_type": "TRACKS",
+        "weight": 0.85,
+    },
+    {
+        "from_type": "Brand",
+        "from_name": "Remibrutinib",
+        "to_type": "KPI",
+        "to_name": "NRx",
+        "rel_type": "TRACKS",
+        "weight": 0.92,
+    },
+    {
+        "from_type": "Brand",
+        "from_name": "Remibrutinib",
+        "to_type": "KPI",
+        "to_name": "Conversion_Rate",
+        "rel_type": "TRACKS",
+        "weight": 0.88,
+    },
     # === KPI -> KPI (CAUSES / AFFECTS) - Causal Chain ===
-    {"from_type": "KPI", "from_name": "HCP_Reach", "to_type": "KPI", "to_name": "NRx", "rel_type": "CAUSES", "weight": 0.75},
-    {"from_type": "KPI", "from_name": "NRx", "to_type": "KPI", "to_name": "TRx", "rel_type": "CAUSES", "weight": 0.9},
-    {"from_type": "KPI", "from_name": "TRx", "to_type": "KPI", "to_name": "Market_Share", "rel_type": "CAUSES", "weight": 0.85},
-    {"from_type": "KPI", "from_name": "Conversion_Rate", "to_type": "KPI", "to_name": "NRx", "rel_type": "CAUSES", "weight": 0.8},
-    {"from_type": "KPI", "from_name": "Patient_Retention", "to_type": "KPI", "to_name": "TRx", "rel_type": "AFFECTS", "weight": 0.7},
-
+    {
+        "from_type": "KPI",
+        "from_name": "HCP_Reach",
+        "to_type": "KPI",
+        "to_name": "NRx",
+        "rel_type": "CAUSES",
+        "weight": 0.75,
+    },
+    {
+        "from_type": "KPI",
+        "from_name": "NRx",
+        "to_type": "KPI",
+        "to_name": "TRx",
+        "rel_type": "CAUSES",
+        "weight": 0.9,
+    },
+    {
+        "from_type": "KPI",
+        "from_name": "TRx",
+        "to_type": "KPI",
+        "to_name": "Market_Share",
+        "rel_type": "CAUSES",
+        "weight": 0.85,
+    },
+    {
+        "from_type": "KPI",
+        "from_name": "Conversion_Rate",
+        "to_type": "KPI",
+        "to_name": "NRx",
+        "rel_type": "CAUSES",
+        "weight": 0.8,
+    },
+    {
+        "from_type": "KPI",
+        "from_name": "Patient_Retention",
+        "to_type": "KPI",
+        "to_name": "TRx",
+        "rel_type": "AFFECTS",
+        "weight": 0.7,
+    },
     # === Region -> KPI (INFLUENCES) ===
-    {"from_type": "Region", "from_name": "Northeast", "to_type": "KPI", "to_name": "Market_Share", "rel_type": "INFLUENCES", "weight": 0.6},
-    {"from_type": "Region", "from_name": "South", "to_type": "KPI", "to_name": "HCP_Reach", "rel_type": "INFLUENCES", "weight": 0.55},
-    {"from_type": "Region", "from_name": "West", "to_type": "KPI", "to_name": "Conversion_Rate", "rel_type": "INFLUENCES", "weight": 0.5},
-    {"from_type": "Region", "from_name": "Midwest", "to_type": "KPI", "to_name": "Patient_Retention", "rel_type": "INFLUENCES", "weight": 0.45},
-
+    {
+        "from_type": "Region",
+        "from_name": "Northeast",
+        "to_type": "KPI",
+        "to_name": "Market_Share",
+        "rel_type": "INFLUENCES",
+        "weight": 0.6,
+    },
+    {
+        "from_type": "Region",
+        "from_name": "South",
+        "to_type": "KPI",
+        "to_name": "HCP_Reach",
+        "rel_type": "INFLUENCES",
+        "weight": 0.55,
+    },
+    {
+        "from_type": "Region",
+        "from_name": "West",
+        "to_type": "KPI",
+        "to_name": "Conversion_Rate",
+        "rel_type": "INFLUENCES",
+        "weight": 0.5,
+    },
+    {
+        "from_type": "Region",
+        "from_name": "Midwest",
+        "to_type": "KPI",
+        "to_name": "Patient_Retention",
+        "rel_type": "INFLUENCES",
+        "weight": 0.45,
+    },
     # === CausalPath -> KPI (EXPLAINS) ===
-    {"from_type": "CausalPath", "from_name": "HCP_Engagement_to_NRx", "to_type": "KPI", "to_name": "NRx", "rel_type": "EXPLAINS", "weight": 0.92},
-    {"from_type": "CausalPath", "from_name": "NRx_to_Market_Share", "to_type": "KPI", "to_name": "Market_Share", "rel_type": "EXPLAINS", "weight": 0.88},
-    {"from_type": "CausalPath", "from_name": "Retention_to_TRx", "to_type": "KPI", "to_name": "TRx", "rel_type": "EXPLAINS", "weight": 0.95},
-    {"from_type": "CausalPath", "from_name": "Regional_Access_to_Conversion", "to_type": "KPI", "to_name": "Conversion_Rate", "rel_type": "EXPLAINS", "weight": 0.85},
-
+    {
+        "from_type": "CausalPath",
+        "from_name": "HCP_Engagement_to_NRx",
+        "to_type": "KPI",
+        "to_name": "NRx",
+        "rel_type": "EXPLAINS",
+        "weight": 0.92,
+    },
+    {
+        "from_type": "CausalPath",
+        "from_name": "NRx_to_Market_Share",
+        "to_type": "KPI",
+        "to_name": "Market_Share",
+        "rel_type": "EXPLAINS",
+        "weight": 0.88,
+    },
+    {
+        "from_type": "CausalPath",
+        "from_name": "Retention_to_TRx",
+        "to_type": "KPI",
+        "to_name": "TRx",
+        "rel_type": "EXPLAINS",
+        "weight": 0.95,
+    },
+    {
+        "from_type": "CausalPath",
+        "from_name": "Regional_Access_to_Conversion",
+        "to_type": "KPI",
+        "to_name": "Conversion_Rate",
+        "rel_type": "EXPLAINS",
+        "weight": 0.85,
+    },
     # === Agent -> KPI (ANALYZES / MONITORS) ===
-    {"from_type": "Agent", "from_name": "causal_impact", "to_type": "KPI", "to_name": "TRx", "rel_type": "ANALYZES", "weight": 0.95},
-    {"from_type": "Agent", "from_name": "causal_impact", "to_type": "KPI", "to_name": "Market_Share", "rel_type": "ANALYZES", "weight": 0.9},
-    {"from_type": "Agent", "from_name": "gap_analyzer", "to_type": "KPI", "to_name": "Conversion_Rate", "rel_type": "ANALYZES", "weight": 0.88},
-    {"from_type": "Agent", "from_name": "gap_analyzer", "to_type": "KPI", "to_name": "HCP_Reach", "rel_type": "ANALYZES", "weight": 0.85},
-    {"from_type": "Agent", "from_name": "prediction_synthesizer", "to_type": "KPI", "to_name": "NRx", "rel_type": "PREDICTS", "weight": 0.92},
-    {"from_type": "Agent", "from_name": "prediction_synthesizer", "to_type": "KPI", "to_name": "Patient_Retention", "rel_type": "PREDICTS", "weight": 0.87},
-    {"from_type": "Agent", "from_name": "experiment_designer", "to_type": "KPI", "to_name": "Conversion_Rate", "rel_type": "ANALYZES", "weight": 0.82},
-    {"from_type": "Agent", "from_name": "experiment_designer", "to_type": "KPI", "to_name": "NRx", "rel_type": "ANALYZES", "weight": 0.78},
-    {"from_type": "Agent", "from_name": "explainer", "to_type": "KPI", "to_name": "TRx", "rel_type": "EXPLAINS", "weight": 0.9},
-    {"from_type": "Agent", "from_name": "explainer", "to_type": "KPI", "to_name": "Market_Share", "rel_type": "EXPLAINS", "weight": 0.88},
-
+    {
+        "from_type": "Agent",
+        "from_name": "causal_impact",
+        "to_type": "KPI",
+        "to_name": "TRx",
+        "rel_type": "ANALYZES",
+        "weight": 0.95,
+    },
+    {
+        "from_type": "Agent",
+        "from_name": "causal_impact",
+        "to_type": "KPI",
+        "to_name": "Market_Share",
+        "rel_type": "ANALYZES",
+        "weight": 0.9,
+    },
+    {
+        "from_type": "Agent",
+        "from_name": "gap_analyzer",
+        "to_type": "KPI",
+        "to_name": "Conversion_Rate",
+        "rel_type": "ANALYZES",
+        "weight": 0.88,
+    },
+    {
+        "from_type": "Agent",
+        "from_name": "gap_analyzer",
+        "to_type": "KPI",
+        "to_name": "HCP_Reach",
+        "rel_type": "ANALYZES",
+        "weight": 0.85,
+    },
+    {
+        "from_type": "Agent",
+        "from_name": "prediction_synthesizer",
+        "to_type": "KPI",
+        "to_name": "NRx",
+        "rel_type": "PREDICTS",
+        "weight": 0.92,
+    },
+    {
+        "from_type": "Agent",
+        "from_name": "prediction_synthesizer",
+        "to_type": "KPI",
+        "to_name": "Patient_Retention",
+        "rel_type": "PREDICTS",
+        "weight": 0.87,
+    },
+    {
+        "from_type": "Agent",
+        "from_name": "experiment_designer",
+        "to_type": "KPI",
+        "to_name": "Conversion_Rate",
+        "rel_type": "ANALYZES",
+        "weight": 0.82,
+    },
+    {
+        "from_type": "Agent",
+        "from_name": "experiment_designer",
+        "to_type": "KPI",
+        "to_name": "NRx",
+        "rel_type": "ANALYZES",
+        "weight": 0.78,
+    },
+    {
+        "from_type": "Agent",
+        "from_name": "explainer",
+        "to_type": "KPI",
+        "to_name": "TRx",
+        "rel_type": "EXPLAINS",
+        "weight": 0.9,
+    },
+    {
+        "from_type": "Agent",
+        "from_name": "explainer",
+        "to_type": "KPI",
+        "to_name": "Market_Share",
+        "rel_type": "EXPLAINS",
+        "weight": 0.88,
+    },
     # === Agent -> CausalPath (DISCOVERED) ===
-    {"from_type": "Agent", "from_name": "causal_impact", "to_type": "CausalPath", "to_name": "HCP_Engagement_to_NRx", "rel_type": "DISCOVERED", "weight": 1.0},
-    {"from_type": "Agent", "from_name": "causal_impact", "to_type": "CausalPath", "to_name": "NRx_to_Market_Share", "rel_type": "DISCOVERED", "weight": 1.0},
-    {"from_type": "Agent", "from_name": "causal_impact", "to_type": "CausalPath", "to_name": "Retention_to_TRx", "rel_type": "DISCOVERED", "weight": 1.0},
-    {"from_type": "Agent", "from_name": "gap_analyzer", "to_type": "CausalPath", "to_name": "Regional_Access_to_Conversion", "rel_type": "DISCOVERED", "weight": 1.0},
-
+    {
+        "from_type": "Agent",
+        "from_name": "causal_impact",
+        "to_type": "CausalPath",
+        "to_name": "HCP_Engagement_to_NRx",
+        "rel_type": "DISCOVERED",
+        "weight": 1.0,
+    },
+    {
+        "from_type": "Agent",
+        "from_name": "causal_impact",
+        "to_type": "CausalPath",
+        "to_name": "NRx_to_Market_Share",
+        "rel_type": "DISCOVERED",
+        "weight": 1.0,
+    },
+    {
+        "from_type": "Agent",
+        "from_name": "causal_impact",
+        "to_type": "CausalPath",
+        "to_name": "Retention_to_TRx",
+        "rel_type": "DISCOVERED",
+        "weight": 1.0,
+    },
+    {
+        "from_type": "Agent",
+        "from_name": "gap_analyzer",
+        "to_type": "CausalPath",
+        "to_name": "Regional_Access_to_Conversion",
+        "rel_type": "DISCOVERED",
+        "weight": 1.0,
+    },
     # === Agent -> Brand (MONITORS) ===
-    {"from_type": "Agent", "from_name": "orchestrator", "to_type": "Brand", "to_name": "Kisqali", "rel_type": "MONITORS", "weight": 1.0},
-    {"from_type": "Agent", "from_name": "orchestrator", "to_type": "Brand", "to_name": "Fabhalta", "rel_type": "MONITORS", "weight": 1.0},
-    {"from_type": "Agent", "from_name": "orchestrator", "to_type": "Brand", "to_name": "Remibrutinib", "rel_type": "MONITORS", "weight": 1.0},
+    {
+        "from_type": "Agent",
+        "from_name": "orchestrator",
+        "to_type": "Brand",
+        "to_name": "Kisqali",
+        "rel_type": "MONITORS",
+        "weight": 1.0,
+    },
+    {
+        "from_type": "Agent",
+        "from_name": "orchestrator",
+        "to_type": "Brand",
+        "to_name": "Fabhalta",
+        "rel_type": "MONITORS",
+        "weight": 1.0,
+    },
+    {
+        "from_type": "Agent",
+        "from_name": "orchestrator",
+        "to_type": "Brand",
+        "to_name": "Remibrutinib",
+        "rel_type": "MONITORS",
+        "weight": 1.0,
+    },
 ]
 
 # Legacy variables for backward compatibility (not used in new seeding)
@@ -225,6 +857,7 @@ CAUSAL_RELATIONSHIPS = RELATIONSHIPS  # Alias for backward compatibility
 # HELPERS
 # =============================================================================
 
+
 def get_timestamp() -> str:
     """Get current UTC timestamp as ISO string (FalkorDB-compatible)."""
     return datetime.now(timezone.utc).isoformat()
@@ -233,6 +866,7 @@ def get_timestamp() -> str:
 # =============================================================================
 # CYPHER QUERY GENERATORS
 # =============================================================================
+
 
 def generate_clear_query() -> str:
     """Generate query to clear all nodes and relationships."""
@@ -437,6 +1071,7 @@ def generate_verification_queries() -> Dict[str, str]:
 # EXECUTION
 # =============================================================================
 
+
 class FalkorDBSeeder:
     """Seeds the FalkorDB knowledge graph with E2I domain data."""
 
@@ -449,16 +1084,16 @@ class FalkorDBSeeder:
     def connect(self) -> bool:
         """Connect to FalkorDB."""
         if self.dry_run:
-            logger.info("[DRY RUN] Would connect to FalkorDB at %s:%d",
-                       self.config.host, self.config.port)
+            logger.info(
+                "[DRY RUN] Would connect to FalkorDB at %s:%d", self.config.host, self.config.port
+            )
             return True
 
         try:
             from falkordb import FalkorDB
+
             self.client = FalkorDB(
-                host=self.config.host,
-                port=self.config.port,
-                password=self.config.password
+                host=self.config.host, port=self.config.port, password=self.config.password
             )
             self.graph = self.client.select_graph(self.config.graph_name)
             logger.info("Connected to FalkorDB graph: %s", self.config.graph_name)
@@ -618,40 +1253,30 @@ def main():
     parser = argparse.ArgumentParser(
         description="Seed FalkorDB knowledge graph with E2I domain data"
     )
+    parser.add_argument("--dry-run", action="store_true", help="Print queries without executing")
     parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Print queries without executing"
-    )
-    parser.add_argument(
-        "--clear-first",
-        action="store_true",
-        help="Clear existing data before seeding"
+        "--clear-first", action="store_true", help="Clear existing data before seeding"
     )
     parser.add_argument(
         "--host",
         default=os.getenv("FALKORDB_HOST", "localhost"),
-        help="FalkorDB host (default: localhost)"
+        help="FalkorDB host (default: localhost)",
     )
     parser.add_argument(
         "--port",
         type=int,
         default=int(os.getenv("FALKORDB_PORT", "6381")),
-        help="FalkorDB port (default: 6381)"
+        help="FalkorDB port (default: 6381)",
     )
     parser.add_argument(
         "--graph-name",
         default=os.getenv("FALKORDB_GRAPH_NAME", "e2i_causal"),
-        help="Graph name (default: e2i_causal)"
+        help="Graph name (default: e2i_causal)",
     )
 
     args = parser.parse_args()
 
-    config = FalkorDBConfig(
-        host=args.host,
-        port=args.port,
-        graph_name=args.graph_name
-    )
+    config = FalkorDBConfig(host=args.host, port=args.port, graph_name=args.graph_name)
 
     seeder = FalkorDBSeeder(config, dry_run=args.dry_run)
 

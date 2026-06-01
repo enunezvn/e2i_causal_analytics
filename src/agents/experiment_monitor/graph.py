@@ -3,7 +3,7 @@
 This module assembles the LangGraph workflow for the experiment monitor agent.
 
 Workflow: Sequential execution through all monitoring nodes
-    START → health_checker → srm_detector → interim_analyzer → fidelity_checker → alert_generator → END
+    START → audit_init → health_checker → srm_detector → interim_analyzer → fidelity_checker → alert_generator → END
 
 Tier: 3 (Monitoring)
 """
@@ -11,6 +11,7 @@ Tier: 3 (Monitoring)
 from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
+from src.agents.base.audit_chain_mixin import create_workflow_initializer
 from src.agents.experiment_monitor.nodes import (
     AlertGeneratorNode,
     FidelityCheckerNode,
@@ -19,12 +20,14 @@ from src.agents.experiment_monitor.nodes import (
     SRMDetectorNode,
 )
 from src.agents.experiment_monitor.state import ExperimentMonitorState
+from src.utils.audit_chain import AgentTier
 
 
 def create_experiment_monitor_graph() -> CompiledStateGraph:
     """Create the experiment monitor agent graph.
 
     Workflow:
+        0. audit_init: Initialize audit chain workflow (genesis block)
         1. health_checker: Check experiment health, enrollment rates, and stale data
         2. srm_detector: Detect sample ratio mismatch
         3. interim_analyzer: Check for interim analysis triggers
@@ -37,6 +40,9 @@ def create_experiment_monitor_graph() -> CompiledStateGraph:
     # Initialize graph
     workflow = StateGraph(ExperimentMonitorState)
 
+    # Create audit workflow initializer (genesis block of the tamper-evident chain)
+    audit_initializer = create_workflow_initializer("experiment_monitor", AgentTier.MONITORING)
+
     # Initialize nodes
     health_checker_node = HealthCheckerNode()
     srm_detector_node = SRMDetectorNode()
@@ -45,14 +51,16 @@ def create_experiment_monitor_graph() -> CompiledStateGraph:
     alert_generator_node = AlertGeneratorNode()
 
     # Add nodes to graph
+    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain
     workflow.add_node("health_checker", health_checker_node.execute)  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("srm_detector", srm_detector_node.execute)  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("interim_analyzer", interim_analyzer_node.execute)  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("fidelity_checker", fidelity_checker_node.execute)  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("alert_generator", alert_generator_node.execute)  # type: ignore[type-var,arg-type,call-overload]
 
-    # Define sequential workflow
-    workflow.set_entry_point("health_checker")
+    # Define sequential workflow starting with audit initialization
+    workflow.set_entry_point("audit_init")
+    workflow.add_edge("audit_init", "health_checker")
     workflow.add_edge("health_checker", "srm_detector")
     workflow.add_edge("srm_detector", "interim_analyzer")
     workflow.add_edge("interim_analyzer", "fidelity_checker")

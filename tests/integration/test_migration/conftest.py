@@ -36,7 +36,7 @@ EXPECTED_COUNTS = {
     "auth_tables": 20,
     # Row counts
     "auth_users": 6,
-    "agent_registry": 11,
+    "agent_registry": 13,  # #607 mig 057 adds tool_composer + experiment_monitor
     "causal_paths": 50,
     "agent_tier_mapping": 21,
 }
