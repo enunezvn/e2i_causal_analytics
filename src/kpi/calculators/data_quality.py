@@ -114,14 +114,15 @@ class DataQualityCalculator(KPICalculatorBase):
     # Consistency" (#577). Without this, a gap value was scored higher-is-better —
     # e.g. the real 0.1049 geographic gap reported GOOD when it is CRITICAL (> 0.10).
     #
-    # DQ-009 (time-to-release) is ALSO lower-is-better but is deliberately EXCLUDED:
-    # its registered query returns DAYS (avg_ttr_hours/24.0) while kpi_definitions.yaml
-    # configures the thresholds in HOURS (target 24 / warning 48 / critical 72) — a
-    # pre-existing unit mismatch that would make a lower-is-better evaluation falsely
-    # GOOD (2.0 days <= 24). Fixing that requires a unit decision + value change for an
-    # out-of-#577-scope metric, so it is tracked as a follow-up (#580) rather than
-    # side-fixed here. Until then DQ-009 keeps its pre-existing (untouched) evaluation.
-    _LOWER_IS_BETTER_IDS = {"WS1-DQ-006", "WS1-DQ-007"}
+    # DQ-009 (time-to-release) is ALSO lower-is-better and is now INCLUDED (#580). It was
+    # previously excluded only because its registry query returned DAYS (avg_ttr_hours/24.0
+    # AS median_ttr_days) while kpi_definitions.yaml WS1-DQ-009 declares unit HOURS with
+    # thresholds 24/48/72 (hours) — a unit mismatch that scored the value against the wrong
+    # units. Migration 054 re-registered the row to return avg_ttr_hours (HOURS, the honest
+    # name for the view's AVG(time_to_release_hours)); _calc_time_to_release now reads that
+    # hours key, so DQ-009 is unit-consistent and evaluated lower-is-better here. Both legs
+    # (drop /24.0 + add to this set) must stay together — either alone re-breaks the unit.
+    _LOWER_IS_BETTER_IDS = {"WS1-DQ-006", "WS1-DQ-007", "WS1-DQ-009"}
 
     def _evaluate_status(self, kpi: KPIMetadata, value: float | None) -> KPIStatus:
         """Evaluate KPI value against thresholds (direction-aware)."""
@@ -304,12 +305,17 @@ class DataQualityCalculator(KPICalculatorBase):
     def _calc_time_to_release(self, context: dict[str, Any]) -> float:
         """Calculate WS1-DQ-009: Time-to-Release (TTR).
 
-        Uses v_kpi_time_to_release view.
-        Returns median time in days (lower is better).
+        Uses v_kpi_time_to_release view. Returns the average time-to-release in
+        HOURS (lower is better), matching the kpi_definitions.yaml WS1-DQ-009 unit
+        and thresholds (target 24 / warning 48 / critical 72, hours). #580: the
+        registry row returns ``avg_ttr_hours`` (the view's AVG(time_to_release_hours))
+        — previously ``(avg_ttr_hours / 24.0) AS median_ttr_days``, which both
+        converted to days (mismatching the hour thresholds) and mislabeled an AVG
+        as a 'median'.
         """
         result = self._execute_query("data_quality_time_to_release", [])
         if result:
-            return float(result[0]["median_ttr_days"])
+            return float(result[0]["avg_ttr_hours"])
         return 0.0
 
     def _execute_query(self, query_id: str, params: list[Any]) -> list[dict[str, Any]] | None:

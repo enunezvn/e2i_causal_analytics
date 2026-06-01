@@ -150,6 +150,69 @@ def test_dq006_status_is_lower_is_better():
     assert kpi.threshold.evaluate(0.04, lower_is_better=False) == KPIStatus.CRITICAL
 
 
+# --- #580 WS1-DQ-009 Time-to-Release: unit fix (registry returns HOURS, lower-is-better) ---
+
+
+def test_dq009_time_to_release_forwards_and_returns_hours():
+    """WS1-DQ-009 forwards to the allowlisted query_id (no params) and returns the
+    average TTR in HOURS. #580: the registry row now returns ``avg_ttr_hours`` (the
+    view's AVG(time_to_release_hours)) instead of the old ``(avg_ttr_hours / 24.0) AS
+    median_ttr_days`` — a double misnomer (an AVG mislabeled 'median', in days while
+    the WS1-DQ-009 unit/thresholds are hours). The calculator must read the hours key."""
+    calc, client = _calc_returning([{"avg_ttr_hours": 36.0}])
+    val = calc._calc_time_to_release({})
+    client.rpc.assert_called_once_with(
+        "kpi_query", {"query_id": "data_quality_time_to_release", "params": []}
+    )
+    assert abs(val - 36.0) < 1e-9
+
+
+def test_dq009_status_is_lower_is_better_hours():
+    """WS1-DQ-009 (TTR) is lower-is-better in HOURS (#580). With the registry returning
+    hours, DQ-009 joins _LOWER_IS_BETTER_IDS so it is scored against the yaml hour
+    thresholds (target=24 / warning=48 / critical=72). Bands per KPIThreshold.evaluate's
+    lower_is_better branch — which reads ONLY target & warning: ``v <= 24`` GOOD,
+    ``24 < v <= 48`` WARNING, ``v > 48`` CRITICAL. (critical=72 is inert for this
+    direction; any v > 48 is already CRITICAL — there is NO band transition at 72.)"""
+    from src.kpi.models import (
+        CalculationType,
+        KPIMetadata,
+        KPIStatus,
+        KPIThreshold,
+        Workstream,
+    )
+
+    calc = DataQualityCalculator(db_client=MagicMock())
+    kpi = KPIMetadata(
+        id="WS1-DQ-009",
+        name="Time-to-Release (TTR)",
+        definition="Hours from source data timestamp to pipeline completion",
+        formula="run_completed_at - source_data_timestamp",
+        calculation_type=CalculationType.DIRECT,
+        workstream=Workstream.WS1_DATA_QUALITY,
+        threshold=KPIThreshold(target=24, warning=48, critical=72),
+        unit="hours",
+    )
+    # The fix must register DQ-009 as lower-is-better (else the hours value is scored
+    # higher-is-better against hour thresholds — exactly backwards).
+    assert "WS1-DQ-009" in DataQualityCalculator._LOWER_IS_BETTER_IDS
+    # Boundary table (anchored on evaluate() logic, NOT a flaky live value):
+    assert calc._evaluate_status(kpi, 24.0) == KPIStatus.GOOD  # v <= target (inclusive)
+    assert calc._evaluate_status(kpi, 24.01) == KPIStatus.WARNING  # target < v <= warning
+    assert calc._evaluate_status(kpi, 48.0) == KPIStatus.WARNING  # == warning (inclusive)
+    assert calc._evaluate_status(kpi, 48.01) == KPIStatus.CRITICAL  # > warning
+    # critical=72 is inert for lower-is-better: 72 is CRITICAL because 72 > 48, NOT
+    # because of any band edge at 72.
+    assert calc._evaluate_status(kpi, 72.0) == KPIStatus.CRITICAL  # > warning
+    assert calc._evaluate_status(kpi, 58.59) == KPIStatus.CRITICAL  # live avg (> warning)
+    # Direction guard: under the (wrong) higher-is-better default the meaning inverts —
+    # a fast 12h pipeline would be flagged CRITICAL and a degraded 60h one GOOD. The fix
+    # makes fast=GOOD and slow=CRITICAL.
+    assert calc._evaluate_status(kpi, 12.0) == KPIStatus.GOOD
+    assert kpi.threshold.evaluate(12.0, lower_is_better=False) == KPIStatus.CRITICAL
+    assert kpi.threshold.evaluate(60.0, lower_is_better=False) == KPIStatus.GOOD
+
+
 # --- #577 Tier 2 (brand-specific): BR-001 + BR-003 wired to a real generated cohort ----
 
 
