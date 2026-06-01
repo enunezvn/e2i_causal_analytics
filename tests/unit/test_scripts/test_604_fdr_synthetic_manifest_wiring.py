@@ -91,3 +91,41 @@ def test_synthetic_manifest_source_none_for_scenario_and_real() -> None:
     (which resolve csu/optum via the RWD path)."""
     assert _resolve_synthetic_manifest_source("scenario_a", None, None) is None
     assert _resolve_synthetic_manifest_source("default", "/some/real/cohort", None) is None
+
+
+# ── partial-run (--step 2) wiring: the manifest source must reach Step 2 even
+#    when the Step-1 block (which normally injects it) is skipped (codex MEDIUM) ──
+
+
+def test_step2_only_run_wires_synthetic_manifest_into_scope(monkeypatch) -> None:
+    """#604 regression: a partial ``--step 2`` legacy-fixture run must still pass
+    ``feature_manifest_source='synthetic'`` to step_2_data_preparer. Otherwise FDR
+    is ON and immunity is granted but the manifest is absent → layer_1_declared_safe
+    stays False → the legit columns are over-dropped (immunity ineffective).
+
+    Spies on step_2_data_preparer to capture the scope_spec it receives, then halts
+    the pipeline (gate_passed=False) so no heavier downstream step runs.
+    """
+    import asyncio
+
+    import scripts.run_tier0_test as rt
+
+    captured: dict = {}
+
+    async def _spy(experiment_id, scope_spec, sample_df, **kwargs):
+        captured["scope_spec"] = scope_spec
+        captured["adaptive_fdr_enabled"] = kwargs.get("adaptive_fdr_enabled")
+        captured["adaptive_declared_safe_full_immunity"] = kwargs.get(
+            "adaptive_declared_safe_full_immunity"
+        )
+        # Halt: a blocked QC gate sets pipeline_halted, skipping all later work.
+        return {"gate_passed": False, "qc_report": {"gate_passed": False}}
+
+    monkeypatch.setattr(rt, "step_2_data_preparer", _spy)
+    asyncio.run(rt.run_pipeline(step=2, regime="clean", n_total=60, seed=42))
+
+    # The legacy fixture (FDR on + immunity on) MUST also receive the synthetic
+    # manifest, or the immunity has nothing to protect.
+    assert captured["adaptive_fdr_enabled"] is True
+    assert captured["adaptive_declared_safe_full_immunity"] is True
+    assert captured["scope_spec"].get("feature_manifest_source") == "synthetic"

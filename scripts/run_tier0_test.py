@@ -4377,6 +4377,23 @@ def _resolve_synthetic_manifest_source(
     return None
 
 
+def _apply_synthetic_manifest_source(
+    scope_spec: Dict[str, Any], regime: str, data_dir: str | None, override: str | None
+) -> None:
+    """#604: thread the resolved feature-manifest source onto ``scope_spec``.
+
+    Shared by the Step-1 AND Step-2 blocks of ``run_pipeline`` so a partial
+    ``--step 2`` run wires the synthetic manifest identically to a full run — the
+    Step-1 injection is skipped when ``steps_to_run == [2]``, which would otherwise
+    leave a legacy fixture with FDR on + immunity granted but NO manifest, so
+    ``layer_1_declared_safe`` stays False and the legit columns are over-dropped.
+    Idempotent: re-applying with the same inputs yields the same value.
+    """
+    resolved = _resolve_synthetic_manifest_source(regime, data_dir, override)
+    if resolved is not None:
+        scope_spec["feature_manifest_source"] = resolved
+
+
 def _regime_kwargs(regime: str, *, seed: int = 42) -> Dict[str, Any]:
     """Translate a regime name into kwargs for ``ml_patients()``.
 
@@ -4914,11 +4931,10 @@ async def run_pipeline(
             # resolves to the 'synthetic' manifest so the legit pre-index columns
             # (days_on_therapy/hcp_visits/prior_treatments) clear Layer 1 and the
             # declared-safe full-immunity carve-out can protect them under FDR-on.
-            effective_manifest_source = _resolve_synthetic_manifest_source(
-                regime, data_dir, feature_manifest_source
+            # Shared with the Step-2 block so a partial --step 2 run wires it too.
+            _apply_synthetic_manifest_source(
+                state["scope_spec"], regime, data_dir, feature_manifest_source
             )
-            if effective_manifest_source is not None:
-                state["scope_spec"]["feature_manifest_source"] = effective_manifest_source
             # Block 5B (#10): auto-inject the unit-shape placeholder cost
             # matrix when the caller has not explicitly opted out via
             # ``--no-demo-cost-matrix``. This closes Block 5's verification
@@ -5010,6 +5026,12 @@ async def run_pipeline(
         if 2 in steps_to_run:
             step_start = time.time()
             scope_spec = state.get("scope_spec", {"problem_type": CONFIG.problem_type})
+            # #604: make Step 2 self-sufficient for partial (--step 2) runs — the
+            # Step-1 block that injects the manifest source is skipped when Step 2
+            # runs alone. Idempotent in the full-pipeline path (Step 1 already set it).
+            _apply_synthetic_manifest_source(
+                scope_spec, regime, data_dir, feature_manifest_source
+            )
             result = await step_2_data_preparer(
                 experiment_id,
                 scope_spec,
