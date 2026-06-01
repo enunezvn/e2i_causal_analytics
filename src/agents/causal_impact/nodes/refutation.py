@@ -217,6 +217,19 @@ def _reconstruct_dowhy_artifacts(
     dowhy_method = _resolve_dowhy_method(estimation_result)
 
     try:
+        # Mirror production's treatment preprocessing (estimation.py:170-174): a
+        # non-integer (continuous) treatment is binarized at its MEDIAN before
+        # the estimator is fit, so the reported ATE is the effect of the
+        # BINARIZED treatment. Reconstruct on the same transform so refuters
+        # critique the SAME estimand. Without this, a continuous treatment would
+        # be reconstructed as continuous — a different model whose ATE could
+        # coincidentally land within tolerance, refuting a different estimate
+        # than the one on screen (silent-wrong). #583 follow-up (codex HIGH).
+        treatment_values = data[treatment]
+        if not bool((treatment_values == treatment_values.astype(int)).all()):
+            data = data.copy()
+            data[treatment] = (treatment_values > treatment_values.median()).astype(int)
+
         # Forest-based CATE estimators (CausalForestDML, DRLearner) REQUIRE
         # effect modifiers X — econml raises "does not support X=None" without
         # them. The estimation path fits these with X=W=features
@@ -263,11 +276,12 @@ def _reconstruct_dowhy_artifacts(
         # internally will reconstruct here as non-binary; the ATE-tolerance guard
         # below then fails closed rather than refuting a mis-specified model — a
         # fail-safe, not silent-wrong.)
+        _raw_seed = estimation_result.get("random_state")
         init_params: Dict[str, Any] = {
-            "random_state": int(estimation_result.get("random_state", 42)),
+            "random_state": 42 if _raw_seed is None else int(_raw_seed),
         }
         if "DRLearner" not in dowhy_method:
-            init_params["discrete_treatment"] = data[treatment].nunique() == 2
+            init_params["discrete_treatment"] = bool(data[treatment].nunique() == 2)
         estimate = model.estimate_effect(
             identified_estimand,
             method_name=dowhy_method,
