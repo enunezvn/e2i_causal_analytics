@@ -1188,6 +1188,7 @@ def _apply_fdr_firing_override(
     is_confident: bool,
     fdr_q: float,
     layer_1_declared_safe: bool = False,
+    declared_safe_full_immunity: bool = False,
 ) -> dict[str, Any]:
     """Re-decide the auto-fire (HIGH) tier from the FDR confident set.
 
@@ -1228,6 +1229,20 @@ def _apply_fdr_firing_override(
     fires high/drop. NOT-declared-safe features (post-index / no manifest
     clearance — i.e. real leaks like ``treatment_initiated``) are unaffected.
 
+    Full immunity (#604), ``declared_safe_full_immunity=True``. When the run's
+    manifest is leak-free BY CONSTRUCTION (a synthetic fixture — never a real
+    cohort), the "overwhelming evidence still drops" backstop above is the wrong
+    default: the fixture's legit predictors are outcome-correlated by design and
+    routinely exceed the inflated σ-band (days_on_therapy/prior_treatments hit
+    σ-band high on the legacy ml_patients fixtures). Temporal admissibility, not
+    statistical strength, defines (non-)leakage (Kaufman 2012; VanderWeele 2019),
+    so a manifest-declared pre-index feature on a trusted-manifest run is routed
+    to review regardless of σ-band severity. This flag is set ONLY for synthetic
+    fixtures (run_tier0_test._resolve_declared_safe_full_immunity); real cohorts
+    leave it False so their fallible-manifest backstop is preserved. Immunity is
+    still gated on ``layer_1_declared_safe`` — genuine undeclared leaks always
+    drop.
+
     Applied to the MARGINAL verdict BEFORE the opt-in ablation MAX-rule combine,
     so the joint-model ablation signal (which catches interaction-only leaks the
     marginal permutation cannot) can still escalate a not-confident feature on
@@ -1245,12 +1260,35 @@ def _apply_fdr_firing_override(
             ``knowable_at <= index_date`` (Layer 1 cleared it as pre-index). When
             True, an FDR confident-set membership alone does NOT auto-drop the
             feature unless the σ-band independently reached high.
+        declared_safe_full_immunity: True only on synthetic-fixture runs (manifest
+            leak-free by construction). When True, a declared-safe FDR-confident
+            feature is routed to review even if its σ-band reached high (#604).
+            Default False preserves the real-cohort backstop.
     """
     out = dict(adv_input)
     out["fdr_confident"] = bool(is_confident)
     sigma_severity = out.get("severity")
     base_evidence = out.get("evidence", "")
-    if is_confident and layer_1_declared_safe and sigma_severity != "high":
+    if is_confident and layer_1_declared_safe and declared_safe_full_immunity:
+        # #604 full immunity: this run's manifest is leak-free BY CONSTRUCTION
+        # (synthetic fixture), so a Layer-1 declared-safe (knowable_at<=index)
+        # feature is admissible regardless of how strongly it predicts the target
+        # — temporal precedence overrides statistical strength (the canonical
+        # leakage definition: admissibility, not correlation strength). Route an
+        # FDR-confident declared-safe feature to review EVEN IF its σ-band reached
+        # high. Scoped to fixture runs only; real cohorts (where the manifest is a
+        # fallible attestation) keep the σ!=high "overwhelming evidence" backstop
+        # below. NOT-declared-safe features (genuine leaks) never reach this branch.
+        out["severity"] = "moderate"
+        out["severity_pre_joint_check"] = "moderate"
+        out["remediation"] = "ambiguous"
+        out["evidence"] = (
+            f"{base_evidence} [FDR firing driver: BH-confident at q={fdr_q:.3g} "
+            f"but Layer-1 declared-safe (knowable_at<=index) AND manifest fully "
+            f"trusted (synthetic fixture) → full immunity, declined auto-drop "
+            f"regardless of σ-band {sigma_severity!r}; routed to review]"
+        )
+    elif is_confident and layer_1_declared_safe and sigma_severity != "high":
         # FDR-confident BUT Layer-1 declared-safe (pre-index) AND the σ-band —
         # which already applied the 1.5x declared-safe inflation in
         # ``hblp_classify`` — did not itself reach high. Honor that prior: do
@@ -3366,17 +3404,26 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
     # faithfully on the Optum initiation REAL cohort (caught the real
     # treatment_initiated leak; zero false positives on its 39 legit features).
     # It is NOT false-positive-free in general — on the clinically-grounded
-    # SYNTHETIC fixtures (legacy clean/adverse + scenario_* regimes), whose
-    # features are deliberately outcome-correlated by construction, this driver
-    # over-drops legitimate features (days_on_therapy/prior_treatments, #594).
-    # The tier0 runner therefore disables FDR firing for synthetic fixture
-    # GENERATION only (run_tier0_test._resolve_adaptive_fdr_enabled); real runs
-    # keep it ON. The synthetic-fixture over-drop ROOT cause is tracked as a
-    # residual gap (see §5 of
-    # docs/results/tier0_evaluation_current_state_20260515.md) and still needs a
-    # dedicated GitHub issue.
+    # SYNTHETIC fixtures, whose features are deliberately outcome-correlated by
+    # construction, this driver over-drops legitimate predictors
+    # (days_on_therapy/hcp_visits/prior_treatments, #594). #604 RESOLUTION: for
+    # the LEGACY ml_patients fixtures (default/adverse/clean) the runner now keeps
+    # FDR ON and protects those legit columns via the synthetic-manifest
+    # declared-safe carve-out granted FULL immunity (manifest leak-free by
+    # construction; see ``adaptive_declared_safe_full_immunity`` below). The
+    # scenario_* (synthetic_v2) family — different columns, not in the must-pass
+    # CI lane — retains the #594 FDR-disable mitigation
+    # (run_tier0_test._resolve_adaptive_fdr_enabled). Real runs keep FDR ON with
+    # immunity OFF (the σ!=high "overwhelming evidence" backstop stays for the
+    # fallible real-cohort manifest).
     # ------------------------------------------------------------------
     fdr_enabled = bool(state.get("adaptive_fdr_enabled", True))
+    # #604: full declared-safe immunity — set ONLY on synthetic-fixture runs
+    # (run_tier0_test._resolve_declared_safe_full_immunity), where the manifest is
+    # leak-free by construction, so a σ-band-high declared-safe legit predictor is
+    # routed to review instead of auto-dropped. Default False → real runs keep the
+    # "overwhelming evidence still drops" defensive contract unchanged.
+    declared_safe_full_immunity = bool(state.get("adaptive_declared_safe_full_immunity", False))
     _fdr_q = state.get("adaptive_fdr_q")
     fdr_q = float(_fdr_q) if _fdr_q is not None else DEFAULT_FDR_Q
     _fdr_cap = state.get("adaptive_fdr_max_permutations")
@@ -3566,6 +3613,7 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
                 is_confident=feat in confident_features,
                 fdr_q=fdr_q,
                 layer_1_declared_safe=layer_1_declared_safe,
+                declared_safe_full_immunity=declared_safe_full_immunity,
             )
 
         # Issue #196 — Phase 3.3 Layer-3 ablation MAX-rule combination.

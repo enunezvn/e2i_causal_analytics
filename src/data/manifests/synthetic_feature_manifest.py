@@ -1,10 +1,21 @@
-"""Synthetic feature manifest — v5 Gate C2 engineering CI sanity-check.
+"""Synthetic feature manifest — declared-safe contracts for synthetic fixtures.
 
-This manifest is INTENTIONALLY narrow. It exists ONLY so the
-``synthetic_rwd_realistic`` regime can declare its ``borderline_genuine``
-injected feature as ``knowable_at=index_date`` (Layer 1 declared-safe),
-which is what unlocks the HBLP variance-relaxation contrast at the
-[5σ, 7.5σ] band.
+This manifest declares the synthetic-fixture columns that are KNOWN to be
+pre-index legitimate predictors (knowable_at=index_date, Layer 1 declared-safe),
+so the leakage detector does not false-positively drop them. It serves two
+fixture families:
+
+1. The ``synthetic_rwd_realistic`` regime's ``borderline_genuine`` injected
+   feature — declaring it ``knowable_at=index_date`` unlocks the v5 Gate C2 HBLP
+   variance-relaxation contrast at the [5σ, 7.5σ] band.
+2. (Issue #604) the legacy ``ml_patients()`` fixtures' designed predictors
+   (``days_on_therapy``/``hcp_visits``/``prior_treatments``) — declaring them
+   pre-index lets the FDR carve-out (with synthetic-fixture full immunity) route
+   them to review instead of auto-dropping the legit signal (#594 over-drop fix).
+
+It remains a SYNTHETIC manifest: these declarations are correct BY CONSTRUCTION
+(the generators emit these columns at index by design), NOT RWD positive
+evidence. A real cohort registers against the CSU or Optum manifest instead.
 
 This is a v5 Gate C2 ENGINEERING CI SANITY-CHECK — NOT RWD positive
 evidence (v5 plan §2 C2 + codex pass-3 MEDIUM-7). The synthetic generator
@@ -46,6 +57,19 @@ from src.data.feature_contract import FeatureContract, KnowableAt
 # (repositories depend on data contracts, not the reverse).
 BORDERLINE_GENUINE_FEATURE_NAME = "borderline_genuine_feature"
 
+# Issue #604: the legacy ``ml_patients()`` fixtures (default/adverse/clean) emit
+# three pre-index patient features that carry DESIGNED outcome-correlation by
+# construction (sample_data.py ml_patients risk model, lines 649-658):
+# ``days_on_therapy`` / ``hcp_visits`` / ``prior_treatments`` (emitted at
+# sample_data.py:689-691). The Layer-3 FDR confident-set firing driver (#538)
+# false-positively flags these legit confounders as leaks and auto-drops them,
+# degrading synthetic val_AUC below band (#594). Declaring them ``knowable_at <=
+# index`` here makes ``layer_1_declared_safe=True`` for them, so the FDR carve-out
+# (granted full immunity on synthetic-fixture runs, where this manifest is
+# leak-free by construction) routes them to review instead of dropping. They are
+# NOT leaks: each is a baseline/treatment-history covariate measured at index.
+_LEGACY_FIXTURE_PREDICTOR_NAMES = ("days_on_therapy", "hcp_visits", "prior_treatments")
+
 _SYNTHETIC_FEATURES = [
     FeatureContract(
         name=BORDERLINE_GENUINE_FEATURE_NAME,
@@ -57,6 +81,15 @@ _SYNTHETIC_FEATURES = [
         # chain validation that checks input existence (codex pass-1 LOW).
         derivation_inputs=(),
     ),
+    *[
+        FeatureContract(
+            name=name,
+            knowable_at=KnowableAt(reference="index_date"),
+            source="derived",
+            derivation_inputs=(),
+        )
+        for name in _LEGACY_FIXTURE_PREDICTOR_NAMES
+    ],
 ]
 
 

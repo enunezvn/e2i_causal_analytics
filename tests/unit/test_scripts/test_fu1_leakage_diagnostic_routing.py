@@ -141,15 +141,18 @@ def test_594_legacy_synthetic_regimes_are_fixture_regimes():
     degrading the clean-regime val_AUC below band and (post #556 fail-closed Feast)
     halting at ``qc_gate_blocked`` → empty ``validation_metrics``.
 
-    The tier0 runner therefore classifies these as fixture regimes and disables the
-    FDR firing for them (``adaptive_fdr_enabled=False`` → static σ-band fallback,
-    which still catches genuine leaks like ``journey_status`` WITHOUT over-dropping).
-    ``rwd_realistic`` and real ``--data-source`` runs must NOT be classified as
+    The runner uses this fixture classification for several behaviors (leakage-output
+    routing, the ``scenario_*`` FDR-disable, and the #604 legacy-fixture manifest
+    wiring). #604 update: the legacy fixtures KEEP FDR ON (their legit predictors are
+    protected by the synthetic-manifest declared-safe full-immunity carve-out, not by
+    disabling the detector); only the ``scenario_*`` family retains the #594
+    wholesale FDR-disable. ``rwd_realistic`` and real ``--data-source`` runs are NOT
     fixtures — the FDR driver stays ON there (validated on the Optum cohort).
 
     This unit-tests the single point of the classification decision
-    (``_is_synthetic_fixture_regime``); the end-to-end FDR-disable is exercised by
-    the synthetic-regime e2e tests in the slow-tests lane.
+    (``_is_synthetic_fixture_regime``); the per-regime FDR-switch contract is pinned
+    in test_604_fdr_synthetic_manifest_wiring.py and the end-to-end behavior by the
+    synthetic-regime e2e tests in the slow-tests lane.
     """
     from scripts.run_tier0_test import (  # noqa: PLC0415
         _LEGACY_REGIMES,
@@ -174,19 +177,27 @@ def test_594_legacy_synthetic_regimes_are_fixture_regimes():
 
 
 def test_594_fdr_stays_on_for_real_data_runs_even_with_fixture_regime_name():
-    """#594 production-safety guard: FDR firing must be disabled ONLY for
-    SYNTHETIC fixture GENERATION (no real --data-dir).
+    """#594 production-safety guard (still in force after #604): a real
+    ``--data-dir`` run keeps FDR ON regardless of the (ignored) ``--regime`` name.
 
     ``--regime`` defaults to ``"default"`` (a legacy fixture regime), but when
     ``--data-dir`` is supplied run_pipeline loads a REAL cohort and IGNORES the
-    regime for data generation. So a real ``--data-dir`` run with the default
-    regime must NOT silently disable the FDR leakage detector — the fixture
-    classification has to be conjoined with "no real data supplied".
+    regime for data generation. So a real ``--data-dir`` run must NOT silently
+    disable the FDR leakage detector — the fixture-disable is conjoined with "no
+    real data supplied".
+
+    #604 update: the FDR-disable now applies ONLY to the ``scenario_*`` family.
+    The legacy ml_patients fixtures (default/adverse/clean) keep FDR ON — their
+    legit predictors are protected by the synthetic-manifest declared-safe
+    full-immunity carve-out instead of by disabling the detector. (The full new
+    resolver contract is pinned in test_604_fdr_synthetic_manifest_wiring.py.)
     """
     from scripts.run_tier0_test import _resolve_adaptive_fdr_enabled  # noqa: PLC0415
 
-    # Synthetic fixture GENERATION (no data_dir) → FDR OFF (σ-band fallback).
-    assert _resolve_adaptive_fdr_enabled("clean", None) is False
+    # #604: legacy fixture GENERATION (no data_dir) now keeps FDR ON (manifest
+    # carve-out protects the legit columns).
+    assert _resolve_adaptive_fdr_enabled("clean", None) is True
+    # scenario_* fixture GENERATION still disables FDR (retained #594 mitigation).
     assert _resolve_adaptive_fdr_enabled("scenario_b", None) is False
 
     # Real cohort run (data_dir supplied) → FDR ON regardless of the (ignored)

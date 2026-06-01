@@ -2100,6 +2100,7 @@ async def step_2_data_preparer(
     *,
     skip_leakage_check: bool = False,
     adaptive_fdr_enabled: bool = True,
+    adaptive_declared_safe_full_immunity: bool = False,
     data_dir: str | None = None,
 ) -> dict[str, Any]:
     """Step 2: Load and prepare data with QC.
@@ -2201,6 +2202,10 @@ async def step_2_data_preparer(
         # #594: drives adaptive_validity_check's FDR firing switch. False on
         # synthetic FIXTURE regimes (set by the caller) → static σ-band fallback.
         "adaptive_fdr_enabled": adaptive_fdr_enabled,
+        # #604: grants declared-safe features full immunity from FDR auto-drop on
+        # legacy synthetic fixtures (manifest leak-free by construction). False on
+        # real runs preserves the "overwhelming evidence still drops" backstop.
+        "adaptive_declared_safe_full_immunity": adaptive_declared_safe_full_immunity,
     }
 
     print_input_section(
@@ -4321,16 +4326,55 @@ def _is_synthetic_fixture_regime(regime: str) -> bool:
 def _resolve_adaptive_fdr_enabled(regime: str, data_dir: str | None) -> bool:
     """Resolve the per-run FDR firing switch for the data-preparer.
 
-    FDR firing stays ON everywhere EXCEPT synthetic fixture GENERATION. The
-    fixture classification (``_is_synthetic_fixture_regime``) must be conjoined
-    with "no real cohort supplied": ``run_pipeline`` loads REAL data whenever
-    ``data_dir`` is truthy and IGNORES ``regime`` for generation, yet ``--regime``
-    defaults to ``"default"`` (a legacy fixture regime). Without the ``data_dir``
-    guard a real ``--data-dir`` run with the default regime would silently disable
-    the leakage detector on a real cohort (#594 review). Real runs keep FDR ON.
+    FDR firing stays ON everywhere EXCEPT synthetic ``scenario_*`` fixture
+    GENERATION. #604: the LEGACY ``ml_patients()`` fixtures (default/adverse/clean)
+    now keep FDR ON — their legit pre-index predictors are protected by the
+    synthetic-manifest declared-safe carve-out with FULL immunity
+    (``_resolve_declared_safe_full_immunity`` + ``_resolve_synthetic_manifest_source``),
+    not by disabling the detector. The ``scenario_*`` (synthetic_v2) family is
+    NOT manifest-wired and is not in the must-pass CI lane, so it retains the #594
+    wholesale FDR-disable mitigation. The ``data_dir`` guard preserves the #594
+    production-safety contract: a real ``--data-dir`` run (which IGNORES the
+    possibly-fixture ``--regime`` name) keeps FDR ON.
     """
-    is_synthetic_fixture_run = not data_dir and _is_synthetic_fixture_regime(regime)
-    return not is_synthetic_fixture_run
+    is_unwired_scenario_fixture = not data_dir and regime in _SCENARIO_REGIME_TO_NAME
+    return not is_unwired_scenario_fixture
+
+
+def _resolve_declared_safe_full_immunity(regime: str, data_dir: str | None) -> bool:
+    """#604: resolve the per-run declared-safe FULL-immunity switch.
+
+    True ONLY for legacy synthetic fixture GENERATION (``_LEGACY_REGIMES`` with no
+    real ``data_dir``), where the synthetic manifest is leak-free BY CONSTRUCTION
+    so a Layer-1 declared-safe (knowable_at<=index) feature must not be auto-dropped
+    for being strongly outcome-correlated. Real cohorts (``data_dir`` truthy) and
+    the ``scenario_*`` family keep immunity OFF — real runs because their manifest
+    is a fallible attestation (the σ!=high "overwhelming evidence" backstop stays),
+    scenario_* because FDR is disabled there anyway. Genuine undeclared leaks always
+    drop (immunity is gated on declared-safe in the node).
+    """
+    return not data_dir and regime in _LEGACY_REGIMES
+
+
+def _resolve_synthetic_manifest_source(
+    regime: str, data_dir: str | None, override: str | None
+) -> str | None:
+    """#604: resolve the feature-manifest source for legacy synthetic fixtures.
+
+    A legacy synthetic fixture run (``_LEGACY_REGIMES``, no real ``data_dir``) with
+    no explicit override resolves to the ``"synthetic"`` manifest, so
+    ``lookup_feature_contract`` clears the legit pre-index columns
+    (days_on_therapy/hcp_visits/prior_treatments) and ``layer_1_declared_safe``
+    becomes True for them — the precondition for the immunity carve-out. An explicit
+    ``override`` (e.g. an operator-supplied ``--feature-manifest-source``) ALWAYS
+    wins. The ``scenario_*`` family and real runs return None here (real runs resolve
+    csu/optum via the separate RWD path in ``_resolve_feature_manifest_source``).
+    """
+    if override is not None:
+        return override
+    if not data_dir and regime in _LEGACY_REGIMES:
+        return "synthetic"
+    return None
 
 
 def _regime_kwargs(regime: str, *, seed: int = 42) -> Dict[str, Any]:
@@ -4866,8 +4910,15 @@ async def run_pipeline(
             # Pre-fix this was never set on RWD runs, so post-index columns
             # fell through to Layer 3 (statistical) instead of being caught
             # deterministically by Layer 1 manifest contracts.
-            if feature_manifest_source is not None:
-                state["scope_spec"]["feature_manifest_source"] = feature_manifest_source
+            # #604: for legacy synthetic fixtures with no explicit override, this
+            # resolves to the 'synthetic' manifest so the legit pre-index columns
+            # (days_on_therapy/hcp_visits/prior_treatments) clear Layer 1 and the
+            # declared-safe full-immunity carve-out can protect them under FDR-on.
+            effective_manifest_source = _resolve_synthetic_manifest_source(
+                regime, data_dir, feature_manifest_source
+            )
+            if effective_manifest_source is not None:
+                state["scope_spec"]["feature_manifest_source"] = effective_manifest_source
             # Block 5B (#10): auto-inject the unit-shape placeholder cost
             # matrix when the caller has not explicitly opted out via
             # ``--no-demo-cost-matrix``. This closes Block 5's verification
@@ -4968,16 +5019,20 @@ async def run_pipeline(
                 # journey_status="active" sentinel that confuses the LLM
                 # remediator. See step_2_data_preparer docstring.
                 skip_leakage_check=(regime in _SCENARIO_REGIME_TO_NAME),
-                # #594: SYNTHETIC FIXTURE generation (scenario + legacy
-                # default/adverse/clean, and NO real --data-dir) carries designed
-                # outcome-correlated signal that the Layer-3 FDR firing driver
-                # (#538) false-positively auto-drops (days_on_therapy/
-                # prior_treatments), degrading val_AUC below band / halting the QC
-                # gate. Disable FDR for fixture generation → the static σ-band
-                # still catches genuine leaks (journey_status) without
-                # over-dropping. Real --data-dir/RWD runs keep FDR ON regardless of
-                # the (ignored) regime name — see _resolve_adaptive_fdr_enabled.
+                # #594/#604: the Layer-3 FDR firing driver (#538) false-positively
+                # auto-drops the designed outcome-correlated predictors
+                # (days_on_therapy/hcp_visits/prior_treatments) on synthetic
+                # fixtures. #604: for the LEGACY ml_patients fixtures FDR stays ON
+                # and those legit columns are protected by the synthetic-manifest
+                # declared-safe carve-out with FULL immunity (set just below +
+                # the 'synthetic' manifest threaded at the scope_spec block above).
+                # scenario_* (synthetic_v2, different columns, not in must-pass CI)
+                # retains the #594 wholesale FDR-disable. Real --data-dir/RWD runs
+                # keep FDR ON, immunity OFF — see the three resolvers.
                 adaptive_fdr_enabled=_resolve_adaptive_fdr_enabled(regime, data_dir),
+                adaptive_declared_safe_full_immunity=_resolve_declared_safe_full_immunity(
+                    regime, data_dir
+                ),
                 data_dir=data_dir,
             )
             state["qc_report"] = result.get("qc_report", {"gate_passed": True})

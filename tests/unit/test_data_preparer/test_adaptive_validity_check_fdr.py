@@ -350,3 +350,148 @@ def test_node_adaptive_escalates_regardless_of_skip_leakage_check():
         "adaptive_validity_check must escalate the leak regardless of "
         "skip_leakage_check (which gates only the legacy name-based detector)"
     )
+
+
+# ---------------------------------------------------------------------------
+# #604: declared-safe FULL immunity (scoped to manifest-trusted synthetic
+# fixtures). The σ-band-high case the existing carve-out abdicates on — a
+# DESIGNED-legit synthetic predictor whose 1.5x-inflated σ-band still reaches
+# high — must be routed to review (NOT auto-dropped) when the run grants full
+# immunity, because the synthetic manifest is leak-free BY CONSTRUCTION. Real
+# runs (immunity off) keep the "overwhelming evidence still drops" behavior.
+# ---------------------------------------------------------------------------
+
+
+def test_fdr_override_declared_safe_full_immunity_routes_sigma_high_to_review():
+    """With full immunity, a declared-safe + FDR-confident feature whose σ-band
+    ALREADY reached high is routed to review (moderate/ambiguous), NOT dropped —
+    the synthetic manifest's temporal precedence overrides statistical strength."""
+    import importlib
+
+    mod = importlib.import_module(MOD)
+    adv = _adv_input(
+        severity="high",
+        severity_pre_joint_check="high",
+        remediation="drop",
+        z_score=15.0,
+        actual_auc=0.95,
+        delta_auc=0.45,
+        delta_auc_below_floor=False,
+    )
+    out = mod._apply_fdr_firing_override(
+        adv,
+        is_confident=True,
+        fdr_q=0.10,
+        layer_1_declared_safe=True,
+        declared_safe_full_immunity=True,
+    )
+    assert out["severity"] == "moderate"
+    assert out["remediation"] == "ambiguous"
+    assert out["fdr_confident"] is True
+    assert "immunity" in out["evidence"].lower()
+
+
+def test_fdr_override_full_immunity_defaults_off_preserves_sigma_high_drop():
+    """Backward compatibility / real-cohort safety: WITHOUT the immunity flag, a
+    declared-safe feature whose σ-band reached high STILL drops (the 61f500ca
+    'overwhelming evidence' defensive contract is preserved by default)."""
+    import importlib
+
+    mod = importlib.import_module(MOD)
+    adv = _adv_input(
+        severity="high",
+        severity_pre_joint_check="high",
+        remediation="drop",
+        z_score=15.0,
+        actual_auc=0.95,
+        delta_auc=0.45,
+        delta_auc_below_floor=False,
+    )
+    out = mod._apply_fdr_firing_override(
+        adv, is_confident=True, fdr_q=0.10, layer_1_declared_safe=True
+    )
+    assert out["severity"] == "high"
+    assert out["remediation"] == "drop"
+
+
+def test_fdr_override_full_immunity_not_declared_safe_still_drops():
+    """Scope guard: full immunity applies ONLY to declared-safe features. A
+    NOT-declared-safe feature (genuine leak / no manifest clearance) still fires
+    high/drop even when the run grants immunity — detection is not blinded."""
+    import importlib
+
+    mod = importlib.import_module(MOD)
+    adv = _adv_input(
+        severity="high",
+        severity_pre_joint_check="high",
+        remediation="drop",
+        z_score=15.0,
+        actual_auc=0.95,
+        delta_auc=0.45,
+        delta_auc_below_floor=False,
+    )
+    out = mod._apply_fdr_firing_override(
+        adv,
+        is_confident=True,
+        fdr_q=0.10,
+        layer_1_declared_safe=False,
+        declared_safe_full_immunity=True,
+    )
+    assert out["severity"] == "high"
+    assert out["remediation"] == "drop"
+
+
+def _legit_and_leak_df(n: int = 400, seed: int = 0) -> pd.DataFrame:
+    """A strong DESIGNED-legit predictor (σ-band high, manifest-declarable) plus a
+    genuine undeclared leak and noise. ``days_on_therapy`` is a registered
+    synthetic-manifest column; ``leak_x`` is a near-perfect outcome proxy that is
+    NOT in any manifest."""
+    rng = np.random.default_rng(seed)
+    y = rng.integers(0, 2, n)
+    return pd.DataFrame(
+        {
+            # strong legit predictor: ~3σ class separation → σ-band high, BH-confident
+            "days_on_therapy": y * 3.0 + rng.normal(0, 1.0, n),
+            # near-perfect genuine leak (post-outcome proxy), NOT manifest-declared
+            "leak_x": y.astype(float) + rng.normal(0, 0.01, n),
+            "noise_a": rng.standard_normal(n),
+            "y": y,
+        }
+    )
+
+
+def test_node_synthetic_immunity_keeps_strong_legit_drops_genuine_leak():
+    """#604 core assertion (faithful node-level): under FDR-on + the synthetic
+    manifest + full immunity, a σ-band-high DESIGNED-legit predictor is BH-confident
+    yet survives (routed to review), while a genuine undeclared leak still drops."""
+    state = _make_state(_legit_and_leak_df(), "y")
+    state["scope_spec"]["feature_manifest_source"] = "synthetic"
+    state["adaptive_fdr_enabled"] = True
+    state["adaptive_declared_safe_full_immunity"] = True
+    result = _run(state)
+    fdr = result.get("leakage_fdr")
+    assert fdr is not None and fdr["active"] is True
+    flagged = set(result["adaptive_flagged_features"])
+    # the legit strong predictor IS FDR-confident (immunity does not change confidence)
+    assert "days_on_therapy" in fdr["confident_features"]
+    # but immunity routes it to review → it does NOT enter the dropped set
+    assert "days_on_therapy" not in flagged
+    # the genuine undeclared leak still drops (detection not blinded)
+    assert "leak_x" in flagged
+
+
+def test_node_synthetic_without_immunity_strong_legit_still_drops():
+    """Proves the immunity flag is load-bearing: the same σ-band-high legit
+    predictor, with the manifest but WITHOUT immunity, is still auto-dropped — the
+    existing σ!=high carve-out abdicates on it. (This is the #604 over-drop.)"""
+    state = _make_state(_legit_and_leak_df(), "y")
+    state["scope_spec"]["feature_manifest_source"] = "synthetic"
+    state["adaptive_fdr_enabled"] = True
+    # no immunity flag → defaults False
+    result = _run(state)
+    flagged = set(result["adaptive_flagged_features"])
+    assert "days_on_therapy" in flagged, (
+        "without full immunity the σ-band-high legit predictor must still drop "
+        "(σ!=high carve-out abdicates) — this is the bug #604 immunity fixes"
+    )
+    assert "leak_x" in flagged

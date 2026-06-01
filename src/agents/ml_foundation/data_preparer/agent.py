@@ -146,6 +146,12 @@ class DataPreparerAgent:
             # driven by the caller (the tier0 runner disables it for synthetic
             # FIXTURE regimes). Default True (FDR ON) preserves production behavior.
             "adaptive_fdr_enabled": input_data.get("adaptive_fdr_enabled", True),
+            # #604: carry the per-run declared-safe full-immunity switch into the
+            # state. Default False (immunity OFF) preserves real-cohort behavior;
+            # the tier0 runner sets it True only for legacy synthetic fixtures.
+            "adaptive_declared_safe_full_immunity": input_data.get(
+                "adaptive_declared_safe_full_immunity", False
+            ),
         }
 
         # Execute the graph with optional Opik tracing
