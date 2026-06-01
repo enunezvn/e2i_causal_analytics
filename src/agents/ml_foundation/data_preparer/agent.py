@@ -141,6 +141,11 @@ class DataPreparerAgent:
             "adaptive_structural_decider_enabled": input_data.get(
                 "adaptive_structural_decider_enabled", False
             ),
+            # #594: carry the per-run FDR firing-driver switch into the state so
+            # adaptive_validity_check's state.get("adaptive_fdr_enabled", True) is
+            # driven by the caller (the tier0 runner disables it for synthetic
+            # FIXTURE regimes). Default True (FDR ON) preserves production behavior.
+            "adaptive_fdr_enabled": input_data.get("adaptive_fdr_enabled", True),
         }
 
         # Execute the graph with optional Opik tracing

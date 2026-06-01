@@ -151,6 +151,12 @@ def _run_tier0_e2e(
     json_out = tmp_path / f"tier0_{regime}_seed{seed}_n{n_total or 'default'}.json"
     env = os.environ.copy()
     env["TIER0_E2E_JSON_OUT"] = str(json_out)
+    # #594: synthetic e2e has NO live Feast store. Post #556 the freshness check
+    # FAILS CLOSED when Feast is unavailable → all features read stale → the
+    # registrar QC gate hard-blocks training → empty validation_metrics →
+    # "roc_auc missing". ALLOW_STALE_FEAST=1 is the #556 escape hatch for these
+    # intentional no-Feast environments.
+    env["ALLOW_STALE_FEAST"] = "1"
 
     cmd = [
         sys.executable,

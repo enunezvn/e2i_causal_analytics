@@ -156,6 +156,13 @@ def _run_tier0_subprocess(regime: str, tmp_path: Path) -> dict[str, Any]:
     json_out = tmp_path / f"tier0_{regime}.json"
     env = os.environ.copy()
     env["TIER0_E2E_JSON_OUT"] = str(json_out)
+    # #594: synthetic e2e has NO live Feast store (CI provisions none, and the
+    # repo ships only feature_store.yaml.tmpl). Post #556 the freshness check
+    # FAILS CLOSED when Feast is unavailable → every feature reads stale → the
+    # registrar QC gate hard-blocks training → empty validation_metrics →
+    # "roc_auc missing". ALLOW_STALE_FEAST=1 is the #556-sanctioned escape hatch
+    # for exactly these intentional no-Feast environments.
+    env["ALLOW_STALE_FEAST"] = "1"
 
     cmd = [
         sys.executable,

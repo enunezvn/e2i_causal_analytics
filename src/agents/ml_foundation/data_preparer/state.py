@@ -122,6 +122,17 @@ class DataPreparerState(BaseAgentSchema):
     # silently dropped, so a future Phase-3 ramp could not enable it. See
     # .claude/plans/layer4-phase2-layerB-20260528.md §2.5.
     adaptive_structural_decider_enabled: Optional[bool] = None
+    # #594: per-run switch for the Layer-3 FDR confident-set firing driver (#538).
+    # Default True = FDR ON (matches the node default at adaptive_validity_check
+    # ``state.get("adaptive_fdr_enabled", True)``; validated on real cohorts). The
+    # tier0 synthetic-test runner sets this False for synthetic FIXTURE regimes
+    # (scenario + legacy clean/adverse/default), whose deliberately
+    # outcome-correlated features the FDR driver false-positively auto-drops —
+    # falling back to the static σ-band so genuine leaks (e.g. journey_status) are
+    # still caught WITHOUT over-dropping legitimate signal. Declared (not relied on
+    # via ``extra``) because BaseAgentSchema is ``extra="ignore"``. ``bool`` (not
+    # Optional) so the model default is True, never None → no silent FDR-off.
+    adaptive_fdr_enabled: bool = True
 
     # Phase 1 of causal-role propagation (Issue #237 reframe). Typed
     # list of ``RoleAttribution`` rows (see
