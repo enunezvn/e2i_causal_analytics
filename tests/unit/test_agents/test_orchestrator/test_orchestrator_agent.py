@@ -295,7 +295,11 @@ class TestOrchestratorWithRealAgents:
         """Test orchestrator dispatching to registered agent."""
         # Create mock agent
         mock_agent = MagicMock()
-        mock_agent.analyze = AsyncMock(
+        # Dispatcher invokes the agent via AGENT_METHOD_MAP, which is ".run"
+        # since the #252 unification (commit 0c2d751f) — not the legacy
+        # ".analyze". A bare MagicMock would auto-create .run and return an
+        # unconfigured mock, so configure .run explicitly (#583 stale-test fix).
+        mock_agent.run = AsyncMock(
             return_value={
                 "narrative": "Real agent analysis result",
                 "recommendations": ["Action 1", "Action 2"],
@@ -311,7 +315,7 @@ class TestOrchestratorWithRealAgents:
         result = await orchestrator.run(input_data)
 
         # Verify agent was called
-        assert mock_agent.analyze.called
+        assert mock_agent.run.called
 
         # Verify output includes agent result
         assert result["status"] == "completed"
@@ -323,7 +327,7 @@ class TestOrchestratorWithRealAgents:
         """Test orchestrator with multiple registered agents."""
         # Create mock agents
         mock_causal = MagicMock()
-        mock_causal.analyze = AsyncMock(
+        mock_causal.run = AsyncMock(
             return_value={
                 "narrative": "Causal analysis",
                 "recommendations": ["Rec 1"],
@@ -332,7 +336,7 @@ class TestOrchestratorWithRealAgents:
         )
 
         mock_gap = MagicMock()
-        mock_gap.analyze = AsyncMock(
+        mock_gap.run = AsyncMock(
             return_value={
                 "narrative": "Gap analysis",
                 "recommendations": ["Rec 2"],
@@ -351,7 +355,7 @@ class TestOrchestratorWithRealAgents:
         result = await orchestrator.run(input_data)
 
         # Should call causal_impact
-        assert mock_causal.analyze.called
+        assert mock_causal.run.called
         assert result["status"] == "completed"
 
 

@@ -25,7 +25,12 @@ def base_state() -> CausalImpactState:
         "treatment_var": "hcp_engagement_level",
         "outcome_var": "patient_conversion_rate",
         "confounders": ["geographic_region", "hcp_specialty"],
-        "data_source": "test_data",
+        # "synthetic" opts into the synthetic-data fallback: the estimation
+        # node fails closed when data_source is neither real data nor an
+        # explicit "synthetic" opt-in (anti-fabrication guard, commit 198067ac
+        # / #416-#417). Real estimators still run against seeded synthetic
+        # data — this is not a mock; #583 surfaced this stale fixture.
+        "data_source": "synthetic",
         "causal_graph": {
             "nodes": ["hcp_engagement_level", "patient_conversion_rate", "geographic_region"],
             "edges": [

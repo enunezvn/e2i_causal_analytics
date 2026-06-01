@@ -510,6 +510,13 @@ jobs:
       # Agent tests with real-cohort fixtures skip cleanly when the data is
       # absent (no CSU/Optum files on the runner).
       ALLOW_MISSING_REAL_DATA: '1'
+      # Opt into the synthetic mock-data fallback for the heterogeneous_optimizer
+      # / cate_estimator nodes. F-013 gates that fallback behind this flag (or
+      # ENVIRONMENT in {dev,test,...}) so production NEVER silently fabricates;
+      # a test lane is a sanctioned mock-allowed context. The fail-closed tests
+      # (test_cate_estimator_fail_closed.py) set their own env via patch.dict,
+      # so this lane-global value does not affect them.
+      E2I_ALLOW_MOCK_CONNECTOR: '1'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -549,14 +556,18 @@ jobs:
           tail -50 /tmp/mlflow-server.log
           exit 1
 
-      # Run the full test_agents tree. NO ``-m "not slow"`` — per #583 the
-      # heavy ML-training tests run on-PR here (user decision). --timeout=180
-      # gives ample headroom for the slowest (Optuna HPO / 200x-permutation)
-      # under -n2 contention while still bounding any unexpected hang.
+      # Run test_agents with ``-m "not slow"`` (same convention as the
+      # integration lane). #583: most heavy ML-training tests (xgboost/LightGBM
+      # + Optuna HPO, 200x-permutation) run on-PR here under the generous
+      # --timeout=180. The exception is the causal_impact refutation suite,
+      # which re-fits a real CausalForestDML ~16x per test (~40+ min total) and
+      # cannot fit the 25-min cap — it is @pytest.mark.slow and runs off-PR via
+      # slow-tests.yml (must-pass), so coverage is preserved, not skipped.
       - name: Run agent unit tests
         run: |
           pytest \
             tests/unit/test_agents/ \
+            -m "not slow" \
             -n 2 \
             --dist=loadscope \
             --timeout=180 \

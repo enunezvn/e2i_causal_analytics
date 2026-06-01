@@ -217,19 +217,37 @@ def _reconstruct_dowhy_artifacts(
     dowhy_method = _resolve_dowhy_method(estimation_result)
 
     try:
+        # Forest-based CATE estimators (CausalForestDML, DRLearner) REQUIRE
+        # effect modifiers X — econml raises "does not support X=None" without
+        # them. The estimation path fits these with X=W=features
+        # (segment_cate.py: model.fit(outcome, treatment, X=X_clean, W=X_clean)),
+        # so mirror that here by reusing the confounders as effect modifiers.
+        # When there are no confounders we pass None and let the fail-closed
+        # wrapper surface the genuine "needs X" error rather than fabricating.
         model = CausalModel(
             data=data,
             treatment=treatment,
             outcome=outcome,
             common_causes=common_causes,
+            effect_modifiers=common_causes if common_causes else None,
         )
         identified_estimand = model.identify_effect(proceed_when_unidentifiable=True)
         # Build the estimate using the SAME method that produced the reported
         # ATE (resolved above). Refuters now critique the actual reported
         # estimate, not a separately-fitted linear regression.
+        # DoWhy 0.14 + EconML 0.16: for a string econml method_name, DoWhy's
+        # EconML wrapper does ``estimator_class(**kwargs["init_params"])`` with a
+        # *direct* key access (dowhy/causal_estimators/econml.py), so omitting
+        # method_params raises ``KeyError: 'init_params'`` and the whole
+        # reconstruction fails (#583: this regression was latent because
+        # test_agents never ran in CI). Pass empty init/fit params → DoWhy
+        # re-fits with default EconML hyperparameters, which is exactly what the
+        # reconstructed-vs-reported ATE tolerance check below already accounts
+        # for (see the "DoWhy re-fits with default EconML hyperparameters" note).
         estimate = model.estimate_effect(
             identified_estimand,
             method_name=dowhy_method,
+            method_params={"init_params": {}, "fit_params": {}},
             test_significance=False,
         )
     except Exception as exc:  # noqa: BLE001 — fail-closed wrapper
