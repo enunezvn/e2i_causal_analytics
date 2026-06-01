@@ -797,8 +797,8 @@ class TestAgentInterface:
 class TestGraphNodeCount:
     """Tests to verify graph structure."""
 
-    def test_graph_has_exactly_five_processing_nodes(self):
-        """Verify the graph has exactly 5 processing nodes."""
+    def test_graph_has_exactly_six_processing_nodes(self):
+        """Verify the graph has exactly 6 processing nodes (incl. audit_init, #607)."""
         graph = create_experiment_monitor_graph()
         structure = graph.get_graph()
 
@@ -811,7 +811,8 @@ class TestGraphNodeCount:
 
         # Filter out __start__ and __end__
         processing_nodes = [n for n in node_names if n not in ["__start__", "__end__"]]
-        assert len(processing_nodes) == 5
+        assert len(processing_nodes) == 6
+        assert "audit_init" in processing_nodes
         assert "health_checker" in processing_nodes
         assert "srm_detector" in processing_nodes
         assert "interim_analyzer" in processing_nodes
@@ -819,13 +820,14 @@ class TestGraphNodeCount:
         assert "alert_generator" in processing_nodes
 
     def test_graph_edges_form_linear_chain(self):
-        """Verify edges form linear chain: start -> health -> srm -> interim -> fidelity -> alert -> end."""
+        """Verify edges form linear chain: start -> audit_init -> health -> srm -> interim -> fidelity -> alert -> end (#607)."""
         graph = create_experiment_monitor_graph()
         structure = graph.get_graph()
 
         edges = {e.source: e.target for e in structure.edges}
 
-        assert edges["__start__"] == "health_checker"
+        assert edges["__start__"] == "audit_init"
+        assert edges["audit_init"] == "health_checker"
         assert edges["health_checker"] == "srm_detector"
         assert edges["srm_detector"] == "interim_analyzer"
         assert edges["interim_analyzer"] == "fidelity_checker"
