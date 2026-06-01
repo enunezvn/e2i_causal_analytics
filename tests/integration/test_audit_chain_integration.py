@@ -433,6 +433,7 @@ class TestAllTiersCoverage:
         # Tier 3 - Monitoring
         from src.agents.drift_monitor.graph import create_drift_monitor_graph
         from src.agents.experiment_designer.graph import create_experiment_designer_graph
+        from src.agents.experiment_monitor.graph import create_experiment_monitor_graph
 
         # Tier 5 - Self-Improvement
         from src.agents.explainer.graph import build_explainer_graph
@@ -460,6 +461,7 @@ class TestAllTiersCoverage:
             # Tier 3 - Monitoring
             "drift_monitor": create_drift_monitor_graph(),
             "experiment_designer": create_experiment_designer_graph(),
+            "experiment_monitor": create_experiment_monitor_graph(),
             "health_score": build_health_score_graph(),
             # Tier 4 - ML Predictions
             "prediction_synthesizer": build_prediction_synthesizer_graph(),

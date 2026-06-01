@@ -35,6 +35,7 @@ class AgentNameEnum(str, Enum):
     MODEL_TRAINER = "model_trainer"
     MODEL_DEPLOYER = "model_deployer"
     OBSERVABILITY_CONNECTOR = "observability_connector"
+    COHORT_CONSTRUCTOR = "cohort_constructor"
 
     # Tier 1: Coordination
     ORCHESTRATOR = "orchestrator"
@@ -48,6 +49,7 @@ class AgentNameEnum(str, Enum):
     # Tier 3: Monitoring & Experimentation
     DRIFT_MONITOR = "drift_monitor"
     EXPERIMENT_DESIGNER = "experiment_designer"
+    EXPERIMENT_MONITOR = "experiment_monitor"
     HEALTH_SCORE = "health_score"
 
     # Tier 4: ML & Predictions

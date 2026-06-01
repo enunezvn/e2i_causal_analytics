@@ -26,12 +26,13 @@ class TestVocabularyAgentSync:
         # Tier 0 agents as defined in production vocabulary (ML Foundation)
         tier_0_agents = [
             "scope_definer",
+            "cohort_constructor",
             "data_preparer",
+            "feature_analyzer",
             "model_selector",
             "model_trainer",
-            "model_evaluator",
             "model_deployer",
-            "model_monitor",
+            "observability_connector",
         ]
 
         for agent in tier_0_agents:
@@ -54,12 +55,11 @@ class TestVocabularyAgentSync:
         """Test that vocabulary includes all Tier 2 causal analytics agents."""
         agent_names = [name.lower() for name in vocabulary_registry.get_agent_names()]
 
-        # Tier 2: Causal Analytics (4 agents) - includes experiment_designer
+        # Tier 2: Causal Analytics (3 agents)
         tier_2_agents = [
             "causal_impact",
             "gap_analyzer",
             "heterogeneous_optimizer",
-            "experiment_designer",
         ]
 
         for agent in tier_2_agents:
@@ -71,9 +71,13 @@ class TestVocabularyAgentSync:
         """Test that vocabulary includes all Tier 3 monitoring agents."""
         agent_names = [name.lower() for name in vocabulary_registry.get_agent_names()]
 
-        # Tier 3: Monitoring (3 agents) - CORRECTED: includes health_score
-        # Per E2I MLOps Implementation Plan v1.1, health_score is Tier 3
-        tier_3_agents = ["drift_monitor", "data_quality_monitor", "health_score"]
+        # Tier 3: Monitoring (4 agents) - drift, experiment design+monitoring, health (#607)
+        tier_3_agents = [
+            "drift_monitor",
+            "experiment_designer",
+            "experiment_monitor",
+            "health_score",
+        ]
 
         for agent in tier_3_agents:
             assert any(agent in name for name in agent_names), (
@@ -84,14 +88,32 @@ class TestVocabularyAgentSync:
         """Test that vocabulary includes all Tier 4 ML prediction agents."""
         agent_names = [name.lower() for name in vocabulary_registry.get_agent_names()]
 
-        # Tier 4: Prediction (3 agents) - CORRECTED: includes resource_optimizer
-        # Per E2I MLOps Implementation Plan v1.1, resource_optimizer is Tier 4
-        tier_4_agents = ["prediction_synthesizer", "risk_assessor", "resource_optimizer"]
+        # Tier 4: Prediction (2 agents) (#607)
+        tier_4_agents = ["prediction_synthesizer", "resource_optimizer"]
 
         for agent in tier_4_agents:
             assert any(agent in name for name in agent_names), (
                 f"Tier 4 agent '{agent}' not found in vocabulary"
             )
+
+    def test_vocabulary_realigned_to_code_registry(self, vocabulary_registry):
+        """#607: vocabulary must include experiment_monitor + cohort_constructor and NO retired non-agent names."""
+        names = {name.lower() for name in vocabulary_registry.get_agent_names()}
+        assert any("experiment_monitor" in n for n in names), (
+            "experiment_monitor missing from vocabulary"
+        )
+        assert any("cohort_constructor" in n for n in names), (
+            "cohort_constructor missing from vocabulary"
+        )
+        retired = {
+            "data_quality_monitor",
+            "model_monitor",
+            "model_evaluator",
+            "risk_assessor",
+            "fairness_guardian",
+        }
+        leaked = {r for r in retired if any(r in n for n in names)}
+        assert not leaked, f"retired non-agent names still in vocabulary: {leaked}"
 
     def test_vocabulary_has_all_tier_5_agents(self, vocabulary_registry):
         """Test that vocabulary includes all Tier 5 self-improvement agents."""

@@ -242,54 +242,54 @@ payer_categories:
 
 
 # =============================================================================
-# SECTION 2: AGENT ARCHITECTURE (18 Agents, 6 Tiers)
+# SECTION 2: AGENT ARCHITECTURE (21 Agents, 6 Tiers)
 # =============================================================================
 
 agent_tiers:
   description: "Agent tier hierarchy"
   values:
-    - tier_0_ml_foundation    # 7 agents - ML lifecycle
-    - tier_1_coordination     # 1 agent  - Orchestrator
-    - tier_2_causal           # 4 agents - Causal analytics
-    - tier_3_monitoring       # 2 agents - Drift & data quality
+    - tier_0_ml_foundation    # 8 agents - ML lifecycle
+    - tier_1_coordination     # 2 agents - Orchestrator + Tool Composer
+    - tier_2_causal           # 3 agents - Causal analytics
+    - tier_3_monitoring       # 4 agents - Drift, experiments & health
     - tier_4_prediction       # 2 agents - ML predictions
     - tier_5_self_improvement # 2 agents - Learning & feedback
 
 agents:
-  description: "All 18 agents with tier assignments"
+  description: "All 21 agents with tier assignments"
 
-  # Tier 0: ML Foundation (7 agents)
+  # Tier 0: ML Foundation (8 agents)
   tier_0_ml_foundation:
     - scope_definer
+    - cohort_constructor
     - data_preparer
+    - feature_analyzer
     - model_selector
     - model_trainer
-    - model_evaluator
     - model_deployer
-    - model_monitor
+    - observability_connector
 
   # Tier 1: Coordination (2 agents)
   tier_1_coordination:
     - orchestrator
     - tool_composer
 
-  # Tier 2: Causal Analytics (4 agents)
+  # Tier 2: Causal Analytics (3 agents)
   tier_2_causal:
     - causal_impact
     - heterogeneous_optimizer
     - gap_analyzer
-    - experiment_designer
 
-  # Tier 3: Monitoring (3 agents)
+  # Tier 3: Monitoring (4 agents)
   tier_3_monitoring:
     - drift_monitor
-    - data_quality_monitor
+    - experiment_designer
+    - experiment_monitor
     - health_score
 
-  # Tier 4: Prediction (3 agents)
+  # Tier 4: Prediction (2 agents)
   tier_4_prediction:
     - prediction_synthesizer
-    - risk_assessor
     - resource_optimizer
 
   # Tier 5: Self-Improvement (2 agents)

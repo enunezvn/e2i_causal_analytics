@@ -83,7 +83,7 @@ DROP FUNCTION IF EXISTS get_preprocessing_stats CASCADE;
 DROP FUNCTION IF EXISTS assign_patient_split CASCADE;
 DROP FUNCTION IF EXISTS update_updated_at CASCADE;
 
-DROP TYPE IF EXISTS agent_name_type_v2 CASCADE;
+-- agent_name_type_v2 retired (#607, mig 056) — orphan enum, never a column type.
 DROP TYPE IF EXISTS agent_tier_type CASCADE;
 DROP TYPE IF EXISTS workstream_type CASCADE;
 DROP TYPE IF EXISTS agent_name_type CASCADE;
@@ -203,25 +203,9 @@ CREATE TYPE agent_tier_type AS ENUM (
     'self_improvement'    -- Tier 5: explainer, feedback_learner
 );
 
--- Agent names (V2 - 11-agent integrated architecture)
-CREATE TYPE agent_name_type_v2 AS ENUM (
-    -- Tier 1: Coordination
-    'orchestrator',
-    -- Tier 2: Causal Analytics
-    'causal_impact',
-    'gap_analyzer',
-    'heterogeneous_optimizer',
-    -- Tier 3: Monitoring & Experimentation
-    'drift_monitor',
-    'experiment_designer',
-    'health_score',
-    -- Tier 4: ML & Predictions
-    'prediction_synthesizer',
-    'resource_optimizer',
-    -- Tier 5: Self-Improvement
-    'explainer',
-    'feedback_learner'
-);
+-- agent_name_type_v2 enum RETIRED (#607, mig 056): it was an orphan never used as a
+-- column type (agent_name columns are VARCHAR(50)). Production roster source-of-truth
+-- = src/agents/factory.py AGENT_REGISTRY_CONFIG (21 agents).
 
 -- Workstream types
 CREATE TYPE workstream_type AS ENUM (

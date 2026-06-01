@@ -183,39 +183,39 @@ def db_enum_values():
     Values based on actual vocabulary from domain_vocabulary.yaml v5.0.
 
     Tier assignments per E2I MLOps Implementation Plan v1.1:
-    - Tier 0: ML Foundation (7 agents)
+    - Tier 0: ML Foundation (8 agents)
     - Tier 1: Coordination (2 agents)
-    - Tier 2: Causal (4 agents)
-    - Tier 3: Monitoring (3 agents) - includes health_score
-    - Tier 4: Prediction (3 agents) - includes resource_optimizer
+    - Tier 2: Causal (3 agents)
+    - Tier 3: Monitoring (4 agents)
+    - Tier 4: Prediction (2 agents)
     - Tier 5: Self-Improvement (2 agents)
     """
     return {
         "agent_tier": ["tier_0", "tier_1", "tier_2", "tier_3", "tier_4", "tier_5"],
         "agent_name": [
-            # Tier 0: ML Foundation (7 agents)
+            # Tier 0: ML Foundation (8 agents)
             "scope_definer",
+            "cohort_constructor",
             "data_preparer",
+            "feature_analyzer",
             "model_selector",
             "model_trainer",
-            "model_evaluator",
             "model_deployer",
-            "model_monitor",
+            "observability_connector",
             # Tier 1: Coordination (2 agents)
             "orchestrator",
             "tool_composer",
-            # Tier 2: Causal (4 agents)
+            # Tier 2: Causal (3 agents)
             "causal_impact",
-            "heterogeneous_optimizer",
             "gap_analyzer",
-            "experiment_designer",
-            # Tier 3: Monitoring (3 agents) - CORRECTED: health_score belongs here
+            "heterogeneous_optimizer",
+            # Tier 3: Monitoring (4 agents) (#607)
             "drift_monitor",
-            "data_quality_monitor",
+            "experiment_designer",
+            "experiment_monitor",
             "health_score",
-            # Tier 4: Prediction (3 agents) - CORRECTED: resource_optimizer belongs here
+            # Tier 4: Prediction (2 agents)
             "prediction_synthesizer",
-            "risk_assessor",
             "resource_optimizer",
             # Tier 5: Self-Improvement (2 agents)
             "explainer",

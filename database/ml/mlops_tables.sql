@@ -30,6 +30,10 @@ ALTER TYPE agent_name_enum ADD VALUE IF NOT EXISTS 'prediction_synthesizer';
 ALTER TYPE agent_name_enum ADD VALUE IF NOT EXISTS 'resource_optimizer';
 ALTER TYPE agent_name_enum ADD VALUE IF NOT EXISTS 'explainer';
 ALTER TYPE agent_name_enum ADD VALUE IF NOT EXISTS 'feedback_learner';
+-- #607: Tier-0 cohort_constructor + Tier-3 experiment_monitor
+-- (mirrors database/migrations/055_add_missing_agents_to_agent_name_enum.sql).
+ALTER TYPE agent_name_enum ADD VALUE IF NOT EXISTS 'cohort_constructor';
+ALTER TYPE agent_name_enum ADD VALUE IF NOT EXISTS 'experiment_monitor';
 
 -- Create agent tier enum
 DO $$ BEGIN
