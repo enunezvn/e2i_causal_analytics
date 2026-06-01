@@ -309,18 +309,32 @@ def test_materialize_gate_failure_is_fail_loud_and_rolls_feast_back():
     marker = 'if [ "$MAT_FRESH" = false ]; then'
     assert marker in script, "missing the materialize-gate failure branch"
     branch = script.split(marker, 1)[1].split("# Store is fresh", 1)[0]
-    assert 'git checkout "$PREV_SHA"' in branch, "gate failure must check out PREV_SHA"
-    assert "--force-recreate feast feast-materializer" in branch, (
-        "gate failure must recreate feast + materializer at PREV_SHA (restore the Feast the old API uses)"
+    # Since #563 the rollback is delegated to a single rollback_to_prev() helper. The
+    # gate-failure branch must roll feast + materializer back via the helper, THEN exit 1.
+    assert "rollback_to_prev feast feast-materializer" in branch, (
+        "gate failure must roll feast + materializer back to PREV_SHA via rollback_to_prev"
     )
     assert "exit 1" in branch, "gate failure must fail the deploy loudly"
     # Order matters: the feast rollback must run BEFORE exit 1 — else `exit 1` would
     # be dead-code-before-rollback, leaving the new/broken Feast under the old API.
-    checkout_idx = branch.index('git checkout "$PREV_SHA"')
-    up_idx = branch.index("--force-recreate feast feast-materializer", checkout_idx)
-    exit_idx = branch.index("exit 1", up_idx)
-    assert checkout_idx < up_idx < exit_idx, (
-        "gate failure must checkout PREV_SHA, then recreate feast, THEN exit 1 (rollback before exit)"
+    rb_idx = branch.index("rollback_to_prev feast feast-materializer")
+    exit_idx = branch.index("exit 1", rb_idx)
+    assert rb_idx < exit_idx, (
+        "gate failure must roll feast back, THEN exit 1 (rollback before exit)"
+    )
+    # The helper itself preserves the rollback semantics: checkout PREV_SHA, THEN
+    # force-recreate the services it is handed (restore the Feast the old API uses).
+    import re as _re
+
+    helper_m = _re.search(r"rollback_to_prev\(\)\s*\{(.*?)\n\s*\}", script, _re.DOTALL)
+    assert helper_m, "rollback_to_prev() helper definition not found"
+    helper = helper_m.group(1)
+    assert 'git checkout "$PREV_SHA"' in helper, "rollback_to_prev must check out PREV_SHA"
+    assert "--force-recreate" in helper and '"$@"' in helper, (
+        "rollback_to_prev must force-recreate the services passed to it"
+    )
+    assert helper.index('git checkout "$PREV_SHA"') < helper.index("--force-recreate"), (
+        "helper must checkout PREV_SHA THEN force-recreate (rollback before recreate)"
     )
 
 

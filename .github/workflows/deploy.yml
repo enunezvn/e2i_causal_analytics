@@ -191,6 +191,30 @@ jobs:
               fi
             }
 
+            # Roll the named services back to PREV_SHA; the caller then `exit 1`s.
+            # Shared by all three failure paths (the feast recreate, the app-services flip,
+            # and the health check) so the rollback contract lives in ONE place — previously
+            # the two inline copies drifted (one carried --renew-anon-volumes, the other did
+            # not). Every step is BEST-EFFORT (`|| echo WARN`) so `set -e` can NEVER abort
+            # mid-rollback before the caller's `exit 1`; this is the #563 load-bearing
+            # guarantee for the double-fault case, where the rollback `up` hits the SAME
+            # OOM-prone build that triggered the rollback and is itself likely to fail. The
+            # guards live INSIDE the helper so its behavior is identical whether it is called
+            # bare or in a condition. Recompute COMPOSE_CMD after the checkout so the overlay
+            # matches the PREV_SHA tree (a pre-flip commit falls back to the dev overlay).
+            # --build + --renew-anon-volumes: a pre-flip PREV_SHA may still carry the
+            # /app/.venv anon-volume mask on the app services, so renew repopulates it from a
+            # freshly rebuilt PREV_SHA image; it is a harmless no-op for feast/feast-materializer
+            # (named volume + read-only bind mount only — no anonymous volume). Correctness
+            # over speed on the failure path.
+            rollback_to_prev() {
+              git checkout "$PREV_SHA" \
+                || echo "==> WARN: rollback checkout to ${PREV_SHA:0:7} failed"
+              COMPOSE_CMD="docker compose -f docker/docker-compose.yml $(pick_overlay)"
+              $COMPOSE_CMD up -d --build --no-deps --force-recreate --renew-anon-volumes "$@" \
+                || echo "==> WARN: rollback 'up' failed — droplet may be in a PARTIAL state; manual intervention required"
+            }
+
             cd "$PROJECT_DIR"
             PREV_SHA=$(git rev-parse HEAD)
             echo "==> Pre-deploy SHA: ${PREV_SHA:0:7}"
@@ -295,7 +319,15 @@ jobs:
             # the materializer healthcheck interval is 5m, so the status would not tick
             # to "healthy" within the wait window (a false-negative gate failure).
             GATE_START=$(date -u +%s)
-            $COMPOSE_CMD up -d $BUILD_FLAG --no-deps --force-recreate feast feast-materializer
+            # #563: guard the feast forward-recreate. If THIS `up` fails, set -e would
+            # otherwise abort BEFORE the materializer gate's rollback below (that gate fires
+            # on the heartbeat poll, not on a failed `up`), stranding a half-recreated feast
+            # that the still-old API points at via FEAST_URL. Roll feast back and fail loud.
+            if ! $COMPOSE_CMD up -d $BUILD_FLAG --no-deps --force-recreate feast feast-materializer; then
+              echo "==> feast/feast-materializer recreate at ${NEW_SHA:0:7} failed — rolling back to ${PREV_SHA:0:7}. Deploy FAILED."
+              rollback_to_prev feast feast-materializer
+              exit 1
+            fi
 
             echo "==> Waiting for feast-materializer to complete a fresh materialize..."
             MAT_FRESH=false
@@ -320,16 +352,24 @@ jobs:
               echo "==> Rolling feast + feast-materializer back to ${PREV_SHA:0:7} (app services were"
               echo "==> never flipped — they keep serving the pre-deploy version). Deploy FAILED."
               docker logs --tail 50 e2i_feast_materializer 2>&1 || true
-              git checkout "$PREV_SHA"
-              COMPOSE_CMD="docker compose -f docker/docker-compose.yml $(pick_overlay)"
-              $COMPOSE_CMD up -d --build --no-deps --force-recreate feast feast-materializer
+              rollback_to_prev feast feast-materializer
               exit 1
             fi
 
             # Store is fresh — now flip the app services to the prod target, using the
             # GHCR-pulled images (--no-build) or a local build on fallback (#528-B).
-            $COMPOSE_CMD up -d $APP_BUILD_FLAG --no-deps --force-recreate \
-              api frontend worker_light worker_medium scheduler
+            # #563: guard the flip. If this `up` fails (e.g. the #528-B GHCR pull-fallback
+            # takes a local --build and the OOM-prone React build dies), set -e would abort
+            # BEFORE the health-check rollback below, stranding feast at NEW_SHA (recreated
+            # above) while the still-old API points at it via FEAST_URL=http://feast:6566 —
+            # the same store/app incoherence the materializer-gate rollback guards. So roll
+            # BOTH feast and the app services back to PREV_SHA, then fail loud.
+            if ! $COMPOSE_CMD up -d $APP_BUILD_FLAG --no-deps --force-recreate \
+                 api frontend worker_light worker_medium scheduler; then
+              echo "==> App-services flip failed — rolling back feast + app services to ${PREV_SHA:0:7}. Deploy FAILED."
+              rollback_to_prev feast feast-materializer api frontend worker_light worker_medium scheduler
+              exit 1
+            fi
 
             # Health check
             echo "==> Waiting for health check..."
@@ -344,22 +384,15 @@ jobs:
             done
 
             if [ "$HEALTHY" = false ]; then
-              echo "==> Health check failed — rolling back to ${PREV_SHA:0:7}"
-              git checkout "$PREV_SHA"
-              # PREV_SHA may predate the frontend prod image / slim overlay — recompute
-              # COMPOSE_CMD so the rollback uses the overlay that commit needs (pick_overlay
-              # echoes the full `-f <file>` flag, or empty when the frontend has a prod
-              # stage). Rolling back to a pre-flip commit therefore REVERTS the flip
-              # (falls back to docker-compose.dev.yml: dev target, --reload, recoverable).
-              COMPOSE_CMD="docker compose -f docker/docker-compose.yml $(pick_overlay)"
-              echo "==> Rollback compose overlay: $(pick_overlay) (empty = base prod only)"
-              # Rollback rebuilds from PREV_SHA AND renews anonymous volumes: the
-              # rolled-back commit may predate this hotfix and still carry the
-              # /app/.venv mask, so renewing repopulates the venv from the freshly
-              # rebuilt PREV_SHA image instead of reusing a stale anon volume.
-              # Correctness over speed on the failure path.
-              $COMPOSE_CMD up -d --build --no-deps --force-recreate --renew-anon-volumes \
-                api frontend worker_light worker_medium scheduler
+              echo "==> Health check failed — rolling back app services to ${PREV_SHA:0:7}"
+              # Unchanged pre-#563 semantics: recreate ONLY the app services at PREV_SHA.
+              # feast/feast-materializer materialized fresh and passed their gate, and the
+              # app DID flip, so only the just-flipped app tier reverts (feast stays at
+              # NEW_SHA). rollback_to_prev recomputes the overlay for the PREV_SHA tree
+              # (a pre-flip commit falls back to docker-compose.dev.yml: dev target,
+              # --reload, recoverable) and rebuilds with --renew-anon-volumes (PREV_SHA may
+              # predate the /app/.venv anon-volume-mask removal).
+              rollback_to_prev api frontend worker_light worker_medium scheduler
               sleep 10
               echo "==> Rollback complete. Deploy FAILED."
               exit 1
