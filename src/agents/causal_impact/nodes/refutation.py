@@ -242,28 +242,36 @@ def _reconstruct_dowhy_artifacts(
         # reconstruction fails (this regression was latent because test_agents
         # never ran in CI — #583).
         #
-        # Mirror the two production-estimator init params that materially affect
-        # the reconstructed ATE (src/causal_engine/energy_score/estimator_selector.py:
-        # ``discrete_treatment=is_binary`` with ``is_binary = len(unique(treatment)) == 2``,
-        # and ``random_state=rs`` defaulting to 42). Without discrete_treatment a
-        # binary 0/1 treatment is modeled as CONTINUOUS, systematically
-        # under-estimating the ATE and tripping the reconstructed-vs-reported
-        # tolerance check below; without a fixed random_state the forest ATE
-        # varies run-to-run, making that check flaky near its boundary. (#583
-        # follow-up: caught by slow-tests on test_repository_failure_handled,
-        # ATE 0.3968 vs reported 0.5000 > 0.1 tol.) These mirror the estimator
-        # that produced the reported ATE, so refuters critique the SAME model.
-        treatment_is_binary = data[treatment].nunique() == 2
+        # Mirror the production-estimator init params that materially affect the
+        # reconstructed ATE (src/causal_engine/energy_score/estimator_selector.py:
+        # ``discrete_treatment=is_binary`` and ``random_state=rs`` defaulting to
+        # 42). Without discrete_treatment a binary 0/1 treatment is modeled as
+        # CONTINUOUS, systematically under-estimating the ATE and tripping the
+        # reconstructed-vs-reported tolerance check below; without a fixed
+        # random_state the forest ATE varies run-to-run, making that check flaky
+        # near its boundary. (#583 follow-up: caught by slow-tests on
+        # test_repository_failure_handled, ATE 0.3968 vs 0.5000 > 0.1 tol; with
+        # these params the reconstruction lands at 0.4219, within tolerance and
+        # deterministic.) These mirror the estimator that produced the reported
+        # ATE, so refuters critique the SAME model.
+        #
+        # init_params are estimator-specific: DRLearner is inherently a
+        # discrete-treatment learner and its econml-0.16 __init__ does NOT accept
+        # a ``discrete_treatment`` kwarg (passing it raises TypeError), so we add
+        # ``discrete_treatment`` only for CausalForestDML / LinearDML. All three
+        # accept ``random_state``. (Continuous treatments that production binarizes
+        # internally will reconstruct here as non-binary; the ATE-tolerance guard
+        # below then fails closed rather than refuting a mis-specified model — a
+        # fail-safe, not silent-wrong.)
+        init_params: Dict[str, Any] = {
+            "random_state": int(estimation_result.get("random_state", 42)),
+        }
+        if "DRLearner" not in dowhy_method:
+            init_params["discrete_treatment"] = data[treatment].nunique() == 2
         estimate = model.estimate_effect(
             identified_estimand,
             method_name=dowhy_method,
-            method_params={
-                "init_params": {
-                    "discrete_treatment": treatment_is_binary,
-                    "random_state": 42,
-                },
-                "fit_params": {},
-            },
+            method_params={"init_params": init_params, "fit_params": {}},
             test_significance=False,
         )
     except Exception as exc:  # noqa: BLE001 — fail-closed wrapper
