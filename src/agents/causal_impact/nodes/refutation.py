@@ -239,15 +239,31 @@ def _reconstruct_dowhy_artifacts(
         # EconML wrapper does ``estimator_class(**kwargs["init_params"])`` with a
         # *direct* key access (dowhy/causal_estimators/econml.py), so omitting
         # method_params raises ``KeyError: 'init_params'`` and the whole
-        # reconstruction fails (#583: this regression was latent because
-        # test_agents never ran in CI). Pass empty init/fit params → DoWhy
-        # re-fits with default EconML hyperparameters, which is exactly what the
-        # reconstructed-vs-reported ATE tolerance check below already accounts
-        # for (see the "DoWhy re-fits with default EconML hyperparameters" note).
+        # reconstruction fails (this regression was latent because test_agents
+        # never ran in CI — #583).
+        #
+        # Mirror the two production-estimator init params that materially affect
+        # the reconstructed ATE (src/causal_engine/energy_score/estimator_selector.py:
+        # ``discrete_treatment=is_binary`` with ``is_binary = len(unique(treatment)) == 2``,
+        # and ``random_state=rs`` defaulting to 42). Without discrete_treatment a
+        # binary 0/1 treatment is modeled as CONTINUOUS, systematically
+        # under-estimating the ATE and tripping the reconstructed-vs-reported
+        # tolerance check below; without a fixed random_state the forest ATE
+        # varies run-to-run, making that check flaky near its boundary. (#583
+        # follow-up: caught by slow-tests on test_repository_failure_handled,
+        # ATE 0.3968 vs reported 0.5000 > 0.1 tol.) These mirror the estimator
+        # that produced the reported ATE, so refuters critique the SAME model.
+        treatment_is_binary = data[treatment].nunique() == 2
         estimate = model.estimate_effect(
             identified_estimand,
             method_name=dowhy_method,
-            method_params={"init_params": {}, "fit_params": {}},
+            method_params={
+                "init_params": {
+                    "discrete_treatment": treatment_is_binary,
+                    "random_state": 42,
+                },
+                "fit_params": {},
+            },
             test_significance=False,
         )
     except Exception as exc:  # noqa: BLE001 — fail-closed wrapper
