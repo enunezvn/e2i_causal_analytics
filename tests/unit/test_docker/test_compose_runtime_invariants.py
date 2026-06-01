@@ -391,9 +391,13 @@ def test_forward_deploy_drops_renew_anon_volumes():
     """
     text = DEPLOY_WORKFLOW.read_text()
     assert "rollback_to_prev()" in text, "the #563 rollback helper must exist"
+    # Coalesce shell line-continuations so a forward `up` split across physical lines is
+    # ONE logical command — else a --renew-anon-volumes on a continuation line (after the
+    # build-flag line) would slip past a per-physical-line scan.
+    logical = re.sub(r"\\\n\s*", " ", text)
     forward_ups = [
         ln
-        for ln in text.splitlines()
+        for ln in logical.splitlines()
         if "up -d" in ln and ("$BUILD_FLAG" in ln or "$APP_BUILD_FLAG" in ln)
     ]
     assert forward_ups, (
