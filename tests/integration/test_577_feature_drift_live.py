@@ -134,6 +134,39 @@ def test_feature_drift_baseline_equals_feature_distributions(calc):
         assert abs(float(r["baseline_std"]) - dist[f]["std"]) < 1e-6
 
 
+def test_feature_drift_latest_run_scoping_excludes_older_runs(calc):
+    """REGRESSION LOCK (codex MEDIUM): ml_drift_history is a HISTORY table that accumulates runs,
+    so the KPI scopes to current_end=MAX(current_end). An OLDER-window high-PSI run must NOT
+    dilute the KPI. Self-protecting: the injected row uses an older current_end, so even if the
+    finally-cleanup failed, the scoping itself keeps it out of the real KPI."""
+    before, err = calc._calc_feature_drift({"model_name": "default_model"})
+    assert err is None and before is not None
+    sentinel = "stale_run_regression_test"
+    injected = {
+        "model_id": None,
+        "drift_type": "data",
+        "feature_name": "age",
+        "test_type": "psi",
+        "test_statistic": 0.99,  # alarmingly high — would wreck a lifetime average
+        "threshold": 0.10,
+        "drift_detected": True,
+        "severity": "low",
+        "baseline_start": "2024-01-01T00:00:00+00:00",
+        "baseline_end": "2024-02-01T00:00:00+00:00",
+        "current_start": "2024-02-01T00:00:00+00:00",
+        "current_end": "2024-03-01T00:00:00+00:00",  # far OLDER than the seed's NOW() window
+        "detected_by": sentinel,
+    }
+    try:
+        calc.db_client.table("ml_drift_history").insert(injected).execute()
+        after, _ = calc._calc_feature_drift({"model_name": "default_model"})
+        assert abs(after - before) < 1e-9, (
+            f"older high-PSI run leaked into the KPI: {before} -> {after} (latest-run scoping broken)"
+        )
+    finally:
+        calc.db_client.table("ml_drift_history").delete().eq("detected_by", sentinel).execute()
+
+
 def test_feature_drift_status_is_lower_is_better_good(calc):
     """End-to-end banding: the full calculate() path yields a GOOD status under YAML
     lower-is-better bands (avg ~0.094 <= target 0.10), exercising the tuple unwrap +

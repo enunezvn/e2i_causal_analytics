@@ -238,17 +238,31 @@ INSERT INTO ml_drift_history (
 
 -- ============================================================================
 -- (D) Register the read-only WS1-MP-009 statement (allowlist; via kpi_query).
---     Returns ONE row with avg_psi = AVG(test_statistic) over the per-feature
---     PSI rows (test_type='psi' AND drift_type='data'). max_params=0 (corpus-level
---     aggregate; model_id is NULL -- no honest per-model band -- same rationale as
---     model_performance_shap_coverage and data_quality_label_quality). The
---     calculator's SQL-leg call MUST be `[]` to match arity 0 (see same-PR
---     model_performance.py change) or kpi_query raises an arity error. Starts with
---     SELECT to satisfy the registry read-only CHECK. Column AS avg_psi matches the
---     calculator's sql_result[0].get("avg_psi") at model_performance.py:237.
+--     Returns ONE row with avg_psi = AVG(test_statistic) over the LATEST RUN's
+--     per-feature PSI rows (test_type='psi' AND drift_type='data'). max_params=0
+--     (corpus-level aggregate; model_id is NULL -- no honest per-model band -- same
+--     rationale as model_performance_shap_coverage and data_quality_label_quality).
+--
+--     LATEST-RUN SCOPING (`current_end = (SELECT MAX(current_end) ...)`): ml_drift_history
+--     is a HISTORY table (created_at + baseline/current windows) designed to ACCUMULATE
+--     drift runs over time, and the data_generator load path emits its own psi/data rows.
+--     A bare `AVG(... WHERE psi/data)` would average the ENTIRE history -> the KPI's name
+--     ("current feature drift") would silently become a lifetime average as runs/reloads
+--     accumulate. Scoping to MAX(current_end) makes the metric truthfully report the MOST
+--     RECENT run (all 5 seeded rows share one txn's NOW() current_end, so they ARE one run),
+--     correctly excludes older/accumulated runs, and future-proofs: when a real drift
+--     pipeline writes rows, the KPI reads ITS latest run rather than a stale seed. This is
+--     stronger + more honest than scoping to the seed's detected_by sentinel (which would
+--     permanently ignore real drift data). Empty table -> MAX is NULL -> matches no rows ->
+--     AVG over 0 rows is NULL -> fail-closed (preserved).
+--
+--     The calculator's SQL-leg call MUST be `[]` to match arity 0 (see same-PR
+--     model_performance.py change) or kpi_query raises an arity error. Starts with SELECT
+--     to satisfy the registry read-only CHECK. Column AS avg_psi matches the calculator's
+--     sql_result[0].get("avg_psi") at model_performance.py:237.
 -- ============================================================================
 INSERT INTO public.kpi_query_registry (query_id, sql, max_params, note) VALUES
-    ('model_performance_feature_drift', $kpi$SELECT AVG(test_statistic)::float AS avg_psi FROM ml_drift_history WHERE test_type = 'psi' AND drift_type = 'data'$kpi$, 0, $note$WS1-MP-009 feature_drift (PSI): AVG(test_statistic) over per-feature PSI rows in ml_drift_history (test_type='psi', drift_type='data'). PSI = sum_b (q_b - p_b) ln(q_b/p_b), COMPUTED (mig 053 / data_generator) from a stored baseline Gaussian (=ml_preprocessing_metadata.feature_distributions) vs a deterministic drifted current, K=10 Gaussian-CDF bins. max_params=0 (corpus aggregate; model_id NULL -> no per-model band; same as shap_coverage/label_quality). LOWER-is-better (YAML target 0.10/warning 0.20). FAIL-LOUD: empty (0 rows) -> avg_psi NULL -> calculator SQL leg null_avg_psi -> MLflow fallback -> fail-closed. Live post-seed avg_psi=0.094332 (GOOD); no-drift seed -> 0.0.$note$)
+    ('model_performance_feature_drift', $kpi$SELECT AVG(test_statistic)::float AS avg_psi FROM ml_drift_history WHERE test_type = 'psi' AND drift_type = 'data' AND current_end = (SELECT MAX(current_end) FROM ml_drift_history WHERE test_type = 'psi' AND drift_type = 'data')$kpi$, 0, $note$WS1-MP-009 feature_drift (PSI): AVG(test_statistic) over the LATEST RUN's per-feature PSI rows in ml_drift_history (test_type='psi', drift_type='data', scoped to current_end=MAX(current_end) so accumulated/older runs do NOT dilute it). PSI = sum_b (q_b - p_b) ln(q_b/p_b), COMPUTED (mig 053 / data_generator) from a stored baseline Gaussian (=ml_preprocessing_metadata.feature_distributions) vs a deterministic drifted current, K=10 Gaussian-CDF bins. max_params=0 (corpus aggregate; model_id NULL -> no per-model band; same as shap_coverage/label_quality). LOWER-is-better (YAML target 0.10/warning 0.20). FAIL-LOUD: empty (0 rows) -> avg_psi NULL -> calculator SQL leg null_avg_psi -> MLflow fallback -> fail-closed. Live post-seed avg_psi=0.094332 (GOOD); no-drift seed -> 0.0.$note$)
 ON CONFLICT (query_id) DO UPDATE SET sql = EXCLUDED.sql, max_params = EXCLUDED.max_params, note = EXCLUDED.note;
 
 -- PostgREST caches the schema; reload so the registered query_id is callable immediately.
