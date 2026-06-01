@@ -58,6 +58,27 @@ INTENTIONALLY_EXCLUDED: dict[str, str] = {
     # one or the other).
 }
 
+# ---------------------------------------------------------------------------
+# Registry of ROOT-LEVEL ``tests/unit/test_*.py`` files intentionally NOT run.
+# file name -> reason (must be non-empty).
+#
+# Root-level files are invisible to the whole-dir allowlist matching (the unit
+# job lists ``tests/unit/<dir>/`` positionals, never bare ``tests/unit/``), so
+# they get their own run-or-documented guard. A root file that is neither run as
+# a single-file positional in a required job nor listed here fails the guard —
+# the same #555 silent-rot class, one directory level up.
+# ---------------------------------------------------------------------------
+INTENTIONALLY_EXCLUDED_FILES: dict[str, str] = {
+    "test_cognitive_simple.py": (
+        "Manual cognitive-cycle smoke SCRIPT, not a pytest module: it defines "
+        "zero test functions and is run via `python tests/unit/test_cognitive_"
+        "simple.py` (its `__main__` calls asyncio.run(main())). It needs a live "
+        "Anthropic API key + Supabase + FalkorDB. pytest collects 0 items from "
+        "it (EXIT=5), so wiring it into a lane would run nothing. Kept as a "
+        "developer smoke; wire it only if it gains real serviceless test fns."
+    ),
+}
+
 
 def _load_workflow() -> dict:
     """Parse the backend-tests workflow YAML."""
@@ -206,3 +227,130 @@ def test_dir_run_only_in_non_required_job_is_not_covered() -> None:
     covered = _run_whole_dirs(_test_run_blocks(workflow))
     assert covered == {"foo"}
     assert "baz" not in covered
+
+
+# ---------------------------------------------------------------------------
+# Root-level tests/unit/*.py coverage guard (issue #583 follow-up).
+#
+# The dir guard above only sees subdirectories. Ten root-level
+# ``tests/unit/test_*.py`` files (incl. ``test_ml_foundation_schemas.py``, the
+# 95-test DataPreparerState contract that backend-tests.yml names only in a
+# COMMENT) were collected by no lane. This guard closes that one-level-up hole.
+# ---------------------------------------------------------------------------
+
+# Single-file positional like ``tests/unit/test_ml_foundation_schemas.py`` or
+# ``tests/unit/test_ml_foundation_schemas.py \`` (trailing line continuation).
+_SINGLE_FILE_RE = re.compile(r"^tests/unit/(test_[A-Za-z0-9_]+\.py)\s*\\?$")
+
+# A bare ``tests/unit/`` whole-tree positional would also cover every root file.
+_WHOLE_UNIT_TREE_RE = re.compile(r"^tests/unit/\s*\\?$")
+
+
+def _run_single_files(run_blocks: list[str]) -> set[str]:
+    """Root-level ``tests/unit/*.py`` files run as single-file positional args
+    across the given run blocks (skipping ``--ignore`` carve-outs).
+
+    If a block runs the whole ``tests/unit/`` tree as a bare positional, every
+    existing root file counts as covered.
+    """
+    files: set[str] = set()
+    for run_block in run_blocks:
+        for line in run_block.splitlines():
+            s = line.strip()
+            if s.startswith("--ignore"):
+                continue
+            if _WHOLE_UNIT_TREE_RE.match(s):
+                return _existing_root_test_files()
+            m = _SINGLE_FILE_RE.match(s)
+            if m:
+                files.add(m.group(1))
+    return files
+
+
+def _existing_root_test_files() -> set[str]:
+    """Immediate ``tests/unit/test_*.py`` files (depth 1). These are invisible
+    to the whole-dir allowlist matching and so need their own guard."""
+    return {p.name for p in UNIT_DIR.glob("test_*.py") if p.is_file()}
+
+
+def test_every_root_unit_file_is_run_or_documented() -> None:
+    existing = _existing_root_test_files()
+    run_files = _run_single_files(_test_run_blocks(_load_workflow()))
+    documented = set(INTENTIONALLY_EXCLUDED_FILES)
+    uncovered = sorted(existing - run_files - documented)
+    assert not uncovered, (
+        "root-level tests/unit/*.py files neither run by a required CI job nor "
+        f"documented as intentionally excluded: {uncovered}. Add each file as a "
+        "single-file positional to the backend-tests.yml unit allowlist, or add "
+        "it to INTENTIONALLY_EXCLUDED_FILES in this file with a reason."
+    )
+
+
+def test_no_root_file_is_both_run_and_excluded() -> None:
+    run_files = _run_single_files(_test_run_blocks(_load_workflow()))
+    overlap = sorted(run_files & set(INTENTIONALLY_EXCLUDED_FILES))
+    assert not overlap, (
+        f"root files are both run by CI and listed as excluded: {overlap}. "
+        "Remove them from INTENTIONALLY_EXCLUDED_FILES."
+    )
+
+
+def test_no_stale_file_exclusions() -> None:
+    existing = _existing_root_test_files()
+    stale = sorted(set(INTENTIONALLY_EXCLUDED_FILES) - existing)
+    assert not stale, (
+        f"INTENTIONALLY_EXCLUDED_FILES names files that no longer exist: {stale}. "
+        "Remove the stale entries."
+    )
+
+
+def test_all_file_exclusions_have_reasons() -> None:
+    blank = sorted(
+        f for f, reason in INTENTIONALLY_EXCLUDED_FILES.items() if not reason.strip()
+    )
+    assert not blank, f"INTENTIONALLY_EXCLUDED_FILES entries missing a reason: {blank}"
+
+
+def test_single_file_positional_counts_as_covered() -> None:
+    """A root file run as a single-file positional in a required job counts."""
+    workflow = {
+        "jobs": {
+            "unit-tests": {
+                "steps": [{"run": "pytest \\\n  tests/unit/test_foo.py \\\n  --cov=src"}]
+            },
+            "ci-success": {"needs": ["unit-tests"]},
+        }
+    }
+    covered = _run_single_files(_test_run_blocks(workflow))
+    assert covered == {"test_foo.py"}
+
+
+def test_bare_unit_tree_positional_covers_all_root_files() -> None:
+    """A bare ``tests/unit/`` positional covers every existing root file."""
+    workflow = {
+        "jobs": {
+            "unit-tests": {"steps": [{"run": "pytest \\\n  tests/unit/ \\\n  --cov=src"}]},
+            "ci-success": {"needs": ["unit-tests"]},
+        }
+    }
+    covered = _run_single_files(_test_run_blocks(workflow))
+    assert covered == _existing_root_test_files()
+
+
+def test_root_file_only_in_non_required_job_is_not_covered() -> None:
+    """A root file run only by a job NOT in ``ci-success.needs`` does not count
+    — same merge-invisibility reasoning as the dir guard."""
+    workflow = {
+        "jobs": {
+            "unit-tests": {
+                "steps": [{"run": "pytest \\\n  tests/unit/test_foo.py \\\n  --cov=src"}]
+            },
+            "stray": {
+                "steps": [{"run": "pytest \\\n  tests/unit/test_bar.py \\\n  -n 2"}]
+            },
+            "ci-success": {"needs": ["unit-tests"]},
+        }
+    }
+    covered = _run_single_files(_test_run_blocks(workflow))
+    assert covered == {"test_foo.py"}
+    assert "test_bar.py" not in covered

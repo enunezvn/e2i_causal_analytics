@@ -445,7 +445,7 @@ def test_qc_report_schema_round_trips() -> None:
         timeliness_score=0.85,
         expectation_results=[{"expectation": "no_nulls", "result": "passed"}],
         failed_expectations=[],
-        warnings=["timeliness_below_threshold"],
+        warnings=[{"expectation_type": "timeliness_below_threshold"}],
         remediation_steps=[],
         blocking_issues=[],
         row_count=10000,
@@ -943,15 +943,15 @@ def test_qc_report_schema_declares_consumer_contract_fields() -> None:
     schema = QCReportSchema(
         qc_passed=True,
         qc_errors=["err1", "err2"],
-        qc_warnings=["warn1"],
+        qc_warnings=[{"expectation_type": "warn1"}],
     )
     assert schema.qc_passed is True
     assert schema.qc_errors == ["err1", "err2"]
-    assert schema.qc_warnings == ["warn1"]
+    assert schema.qc_warnings == [{"expectation_type": "warn1"}]
     # Dict-shim access (consumer pattern at qc_gate_checker.py:30-46).
     assert schema["qc_passed"] is True
     assert schema.get("qc_errors", []) == ["err1", "err2"]
-    assert schema.get("qc_warnings", []) == ["warn1"]
+    assert schema.get("qc_warnings", []) == [{"expectation_type": "warn1"}]
 
 
 def test_qc_report_schema_consumer_fields_default_to_none() -> None:
@@ -988,7 +988,7 @@ def test_model_trainer_state_qc_report_validates_typed_schema() -> None:
             "overall_score": 0.92,
             "qc_passed": True,
             "qc_errors": [],
-            "qc_warnings": ["minor_correlation"],
+            "qc_warnings": [{"expectation_type": "minor_correlation"}],
         },
     )
 
@@ -999,7 +999,7 @@ def test_model_trainer_state_qc_report_validates_typed_schema() -> None:
     # Consumer-pattern reads (qc_gate_checker.py:30-46).
     assert state.qc_report.get("qc_passed", False) is True
     assert state.qc_report.get("qc_errors", []) == []
-    assert state.qc_report.get("qc_warnings", []) == ["minor_correlation"]
+    assert state.qc_report.get("qc_warnings", []) == [{"expectation_type": "minor_correlation"}]
 
 
 def test_model_selector_state_qc_report_validates_typed_schema() -> None:
@@ -1031,12 +1031,12 @@ def test_qc_report_schema_round_trips_through_json_d22() -> None:
         overall_score=0.87,
         qc_passed=True,
         qc_errors=[],
-        qc_warnings=["w1"],
+        qc_warnings=[{"expectation_type": "w1"}],
     )
     dumped = original.model_dump()
     restored = QCReportSchema.model_validate(dumped)
     assert restored.qc_passed is True
-    assert restored.qc_warnings == ["w1"]
+    assert restored.qc_warnings == [{"expectation_type": "w1"}]
 
 
 def test_qc_report_schema_consumer_contract_qc_gate_blocks_when_qc_passed_false() -> None:
