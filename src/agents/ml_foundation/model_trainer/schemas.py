@@ -22,11 +22,14 @@ consumer access via ``config["low"]`` works through the dict-shim on
 
 from __future__ import annotations
 
+import logging
 from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 
 from pydantic import AliasChoices, ConfigDict, Field, model_validator
 
 from src.agents.ml_foundation._pydantic_utils import BaseAgentSchema
+
+logger = logging.getLogger(__name__)
 
 
 class MetricsSchema(BaseAgentSchema):
@@ -199,9 +202,27 @@ class MetricsSchema(BaseAgentSchema):
                 # self) because trainer nodes may populate metrics
                 # in a later phase. A future tightening can convert
                 # this to a raise.
+                #
+                # Gap G14: emit a NON-FATAL warning (no raise, behavior
+                # unchanged) so the #594 "validation_metrics emptied upstream"
+                # shape surfaces at the schema boundary instead of only at a
+                # downstream band assertion.
+                logger.warning(
+                    "MetricsSchema has problem_type=%s but NO metrics populated "
+                    "— the #594 empty-metrics shape. Permitted (scaffolding-"
+                    "permissive, not enforced) but surfaced here (gap G14).",
+                    self.problem_type,
+                )
                 return self
 
         if self.problem_type == "regression":
+            if not any_regression and not any_classification:
+                logger.warning(
+                    "MetricsSchema has problem_type=regression but NO metrics "
+                    "populated — the #594 empty-metrics shape. Permitted "
+                    "(scaffolding-permissive, not enforced) but surfaced here "
+                    "(gap G14)."
+                )
             # Same permissive stance for regression.
             return self
 
