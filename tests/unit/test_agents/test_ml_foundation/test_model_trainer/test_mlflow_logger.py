@@ -532,3 +532,29 @@ async def test_logs_rich_evaluation_artifacts(mock_mlflow_connector):
     assert "calibration_analysis.json" in names
     assert "cv_results.json" in names
     assert "model_eval_ablation.json" in names
+
+
+@pytest.mark.asyncio
+async def test_metricsschema_test_metrics_logs_roc_auc_and_primary(mock_mlflow_connector):
+    """When test_metrics is a MetricsSchema (ModelTrainerState coerces it), its
+    canonical `auc_roc` dump key is mirrored to `roc_auc` so split logging +
+    primary_metric stay consistent with the producer/dict shape (codex review)."""
+    from src.agents.ml_foundation.model_trainer.schemas import MetricsSchema
+
+    state = {
+        "trained_model": MockModel(),
+        "experiment_id": "exp_g9c",
+        "algorithm_name": "RandomForest",
+        "problem_type": "binary_classification",
+        "enable_mlflow": True,
+        "test_metrics": MetricsSchema(roc_auc=0.88, problem_type="binary_classification"),
+    }
+    with patch(
+        "src.mlops.mlflow_connector.get_mlflow_connector",
+        return_value=mock_mlflow_connector,
+    ):
+        await log_to_mlflow(state)
+    mock_run = mock_mlflow_connector.start_run.return_value
+    logged = _collect_logged_metrics(mock_run)
+    assert logged.get("test_roc_auc") == 0.88, "MetricsSchema auc_roc must mirror to roc_auc"
+    assert logged.get("primary_metric") == 0.88

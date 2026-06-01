@@ -6,9 +6,12 @@ reached humans through a test-only env-gated JSON dump — the tier0 console
 summary printed a different, simpler ``deployment_manifest`` (id/env/status/
 endpoint) and never the compliance artifact (gap G6). Separately, which quality
 gates actually *enforce* promotion vs. merely *advise* lived only in scattered
-code comments (gap G12): only ``minimum_auc`` (Gate N1) can block a deploy; the
-honest-AUC band, permutation-anchored AUC floor, Layer-3 ablation, and the T2.6a
-signal/calibration/CV bands are advisory pending T2.6c graduation.
+code comments (gap G12): only ``minimum_auc`` (Gate N1) is ENFORCED — and it
+gates ``regulatory_eligible``, NOT model promotion directly (``promotion_allowed``
+is governed separately by success_criteria + deployment-path/shadow-mode
+validation). The honest-AUC band, permutation-anchored AUC floor, Layer-3
+ablation, and the T2.6a signal/calibration/CV bands are advisory pending T2.6c
+graduation — they mutate neither ``regulatory_eligible`` nor ``promotion_allowed``.
 
 This module renders both as a markdown/console report so the always-printed
 tier0 summary (and a durable markdown file) surface them. Pure functions — no
@@ -21,18 +24,23 @@ from typing import Any, Dict, List, Optional, Tuple
 
 # Advisory-vs-enforced gate map (gap G12). The ONLY enforced regulatory gate is
 # minimum_auc (registry_manager.py: N1_REQUIRED_REGULATORY_GATES == ["minimum_auc"]).
-# Everything else is computed for observability and explicitly does NOT mutate
-# promotion_allowed — this is the documented T2.6c data-snooping discipline
-# (advisory until an untouched cohort + signoff graduates them to enforcement),
-# NOT a bug. Surfacing the map makes the distinction auditable in one place.
+# IMPORTANT (audit accuracy): Gate N1 gates ``regulatory_eligible``, NOT model
+# promotion directly — registry_manager.py:29-30 ("the deployer MUST evaluate
+# before granting regulatory_eligible=True"). ``promotion_allowed`` is decided
+# separately (success_criteria + deployment-path / shadow-mode validation).
+# Everything else is computed for observability and explicitly mutates neither
+# regulatory_eligible nor promotion_allowed — the documented T2.6c data-snooping
+# discipline (advisory until an untouched cohort + signoff), NOT a bug.
 #
 # (gate, status, note)
 ADVISORY_VS_ENFORCED: Tuple[Tuple[str, str, str], ...] = (
     (
         "minimum_auc",
         "ENFORCED",
-        "Gate N1 — the only gate that can deny promotion "
-        "(registry_manager.py: N1_REQUIRED_REGULATORY_GATES).",
+        "Gate N1 — the only ENFORCED regulatory-eligibility gate: denies "
+        "regulatory_eligible=True (registry_manager.py: "
+        "N1_REQUIRED_REGULATORY_GATES). It does NOT directly deny model "
+        "promotion; promotion_allowed is governed separately.",
     ),
     (
         "honest_auc_band",
@@ -80,6 +88,13 @@ def _fmt(value: Any) -> str:
 
 def _enforcement_map_lines() -> List[str]:
     lines = ["## Gate enforcement map (advisory vs enforced)", ""]
+    lines.append(
+        "_ENFORCED here means Gate N1 regulatory **eligibility** "
+        "(`regulatory_eligible`), not model promotion — `promotion_allowed` is "
+        "decided separately by success_criteria + deployment-path/shadow-mode "
+        "validation. Advisory signals mutate neither._"
+    )
+    lines.append("")
     lines.append("| Gate | Status | Note |")
     lines.append("|---|---|---|")
     for gate, status, note in ADVISORY_VS_ENFORCED:

@@ -96,7 +96,15 @@ def _to_plain_dict(value: Any) -> Dict[str, Any]:
     model_dump = getattr(value, "model_dump", None)
     if callable(model_dump):
         try:
-            return cast(Dict[str, Any], model_dump())
+            dumped = cast(Dict[str, Any], model_dump())
+            # MetricsSchema's canonical AUC field is `auc_roc` (roc_auc is an
+            # INPUT alias), so model_dump() emits `auc_roc`. But _log_split_metrics
+            # logs `<split>_<key>` and _get_primary_metric keys off `roc_auc` (the
+            # producer/plain-dict shape that validation_metrics uses). Mirror it so
+            # split keys stay consistent across splits and primary_metric resolves.
+            if "auc_roc" in dumped and "roc_auc" not in dumped:
+                dumped = {**dumped, "roc_auc": dumped["auc_roc"]}
+            return dumped
         except Exception:
             pass
     items = getattr(value, "items", None)
@@ -599,12 +607,18 @@ async def _log_additional_artifacts(run: Any, state: Dict[str, Any]) -> None:
     # audit them without re-running the evaluator (gap G9). Each is dumped as
     # its own JSON artifact via the existing temp-file → log_artifact pattern
     # (the connector run object exposes no log_dict).
+    #
+    # NB (codex review): net_benefit_grid + decision_curve_data are NOT top-level
+    # state keys — the evaluator nests them inside test_metrics
+    # (evaluator.py:2028/2086). net_benefit_grid is a declared MetricsSchema field
+    # so it survives coercion and is captured in evaluation_summary.json above;
+    # decision_curve_data is NOT a declared field, so MetricsSchema coercion
+    # (extra="ignore") drops it before this node — surfacing it needs a schema-
+    # declaration fix upstream, not a logger change. Hence neither is listed here.
     rich_artifacts = (
         ("calibration_analysis", "calibration_analysis.json"),
         ("cv_results", "cv_results.json"),
         ("model_eval_ablation", "model_eval_ablation.json"),
-        ("decision_curve_data", "decision_curve_data.json"),
-        ("net_benefit_grid", "net_benefit_grid.json"),
     )
     for state_key, artifact_name in rich_artifacts:
         block = state.get(state_key)
