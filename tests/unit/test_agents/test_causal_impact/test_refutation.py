@@ -10,6 +10,7 @@ outcome_var / confounders so reconstruction succeeds; otherwise the node
 fail-closes with ``RefutationError``.
 """
 
+import copy
 from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
@@ -18,6 +19,41 @@ import pytest
 
 from src.agents.causal_impact.nodes.refutation import RefutationNode, refute_causal_estimate
 from src.agents.causal_impact.state import CausalImpactState, EstimationResult
+
+
+@pytest.fixture(autouse=True)
+def _fast_refuter_sims(monkeypatch):
+    """#583: cap DoWhy refuter simulation counts for these unit tests.
+
+    Every test here drives the REAL refutation path — reconstruct a DoWhy
+    CausalModel, fit the EconML CausalForestDML, then run the placebo /
+    random-common-cause / data-subset / bootstrap refuters. The default
+    config (RefutationRunner.DEFAULT_CONFIG) runs 100-simulation bootstrap and
+    placebo refuters, each of which RE-FITS the causal forest — minutes per
+    test (a single test exceeded 7 min uncapped). These are unit tests of
+    refutation WIRING + result structure + pass/block scoring, not statistical
+    power, so a small simulation count exercises the same code path in seconds
+    and keeps the suite viable on-PR. Production is unchanged (still 100).
+    """
+    from src.causal_engine.refutation_runner import RefutationRunner
+
+    fast = copy.deepcopy(RefutationRunner.DEFAULT_CONFIG)
+    for section in ("placebo_treatment", "data_subset", "bootstrap"):
+        if section in fast:
+            for key in ("num_simulations", "num_subsets", "num_bootstraps"):
+                if key in fast[section]:
+                    fast[section][key] = 5
+    monkeypatch.setattr(RefutationRunner, "DEFAULT_CONFIG", fast)
+
+
+# #583: this whole module is @pytest.mark.slow. Every meaningful test drives
+# the REAL refutation path, which re-fits an EconML CausalForestDML (with
+# GridSearch nuisance models) ~16x per test (base estimate + each refuter) —
+# minutes per test, ~40+ min for the module, even with the simulation cap
+# above. That cannot fit the on-PR agents-tests 25-min cap, so these run
+# off-PR via slow-tests.yml (`-m slow`, 90-min budget, must-pass) — coverage
+# preserved, not silently skipped. The agents-tests lane runs `-m "not slow"`.
+pytestmark = pytest.mark.slow
 
 
 def _make_estimation_data(
