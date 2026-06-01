@@ -384,14 +384,33 @@ def test_forward_deploy_drops_renew_anon_volumes():
 
     The rollback path MAY keep it: rollback can target a pre-hotfix commit that
     still carries the mask, where renewing the anon volume from the rebuilt image
-    is the faithful behavior. So the prohibition is scoped to the forward path.
+    is the faithful behavior. Since #563 the rollback lives in a single
+    rollback_to_prev() helper (defined near the top of the script), so the
+    prohibition is scoped to the FORWARD service-recreate ``up``s — the ones gated by
+    ``$BUILD_FLAG`` / ``$APP_BUILD_FLAG`` — not the helper.
     """
     text = DEPLOY_WORKFLOW.read_text()
-    marker = 'if [ "$HEALTHY" = false ]'
-    assert marker in text, "deploy.yml rollback guard not found — structure changed"
-    forward, _, _rollback = text.partition(marker)
-    assert "--renew-anon-volumes" not in forward, (
-        "forward deploy must not use --renew-anon-volumes once the /app/.venv mask is removed"
+    assert "rollback_to_prev()" in text, "the #563 rollback helper must exist"
+    # Coalesce shell line-continuations so a forward `up` split across physical lines is
+    # ONE logical command — else a --renew-anon-volumes on a continuation line (after the
+    # build-flag line) would slip past a per-physical-line scan.
+    logical = re.sub(r"\\\n\s*", " ", text)
+    forward_ups = [
+        ln
+        for ln in logical.splitlines()
+        if "up -d" in ln and ("$BUILD_FLAG" in ln or "$APP_BUILD_FLAG" in ln)
+    ]
+    assert forward_ups, (
+        "forward recreate `up`s ($BUILD_FLAG/$APP_BUILD_FLAG) not found — structure changed"
+    )
+    for ln in forward_ups:
+        assert "--renew-anon-volumes" not in ln, (
+            "forward deploy must not use --renew-anon-volumes once the /app/.venv mask "
+            "is removed: " + ln.strip()
+        )
+    # The rollback path MAY keep it (pre-flip .venv-mask targets) — assert it survives.
+    assert "--renew-anon-volumes" in text, (
+        "rollback must still renew anon volumes for a pre-flip rollback target"
     )
 
 
