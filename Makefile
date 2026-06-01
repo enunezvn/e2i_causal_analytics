@@ -96,7 +96,10 @@ test-cov:
 	@echo "  - XML: coverage.xml (for CI/CD)"
 
 # Tier 1-5 agent integration harness. Requires a cached Tier 0 state at
-# scripts/tier0_output_cache/latest.pkl — generate with:
+# scripts/tier0_output_cache/latest.pkl. A small, sanitized fixture is committed
+# there (issue #600) so CI runs the 13 agents on every PR; refresh it with:
+#   python scripts/generate_tier0_fixture.py
+# For a full real local cache instead, use:
 #   python scripts/run_tier1_5_test.py --run-tier0-first
 # CI uses --skip-observability so Opik isn't required.
 tier1-5-test:

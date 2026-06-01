@@ -32,12 +32,19 @@ jobs:
     name: Tier 1-5 agent harness
     runs-on: ubuntu-22.04
     timeout-minutes: 30
-    # Hard-fail mode (flipped 2026-05-16 per issue #263) — the dispatcher
-    # wrapped-input fix landed in PR #275 (commit ac68ae41), and the
-    # boot-stack + install-deps steps have been stable on consecutive
-    # runs. Graceful-skip on missing tier0 cache is still honoured via
-    # ``steps.restore-cache.outputs.found`` ``if:`` gating below — that's
-    # a legitimate skip path, not a soft-fail.
+    # Hard-fail mode for INFRA (flipped 2026-05-16 per issue #263) — the
+    # dispatcher wrapped-input fix landed in PR #275 (commit ac68ae41), and the
+    # boot-stack + install-deps steps have been stable on consecutive runs.
+    # Graceful-skip on missing tier0 cache is still honoured via
+    # ``steps.restore-cache.outputs.found`` ``if:`` gating below — that's a
+    # legitimate skip path, not a soft-fail.
+    #
+    # As of issue #600 a committed tier0 fixture
+    # (scripts/tier0_output_cache/latest.pkl) makes the run-harness step
+    # actually execute the 13 agents on every relevant PR. Per the maintainer
+    # decision, an AGENT / contract failure is a MONITORED ALARM (non-blocking
+    # ::warning + results artifact), not a PR block — see the run-harness step.
+    # INFRA failures (boot-stack / install-deps) remain hard-fail (#263).
 
     env:
       # CI-only dummy passwords. docker-compose.yml uses ${VAR:?msg} syntax
@@ -158,8 +165,33 @@ jobs:
         env:
           E2I_TESTING_MODE: "true"
           DISABLE_PANDERA_IMPORT_WARNING: "True"
+        # Monitored-alarm-only on AGENT / contract failures (issue #600
+        # maintainer decision). A committed tier0 fixture
+        # (scripts/tier0_output_cache/latest.pkl) flips restore-cache.found to
+        # true, so the harness now actually RUNS the 13 agents on every
+        # relevant PR instead of graceful-skipping. An agent / contract
+        # regression is surfaced as a NON-BLOCKING ::warning + the results
+        # artifact — it does not block the PR. Infra failures
+        # (boot-stack / install-deps) still hard-fail per #263 and gate this
+        # step via the if: above, so the exit 0 below can ONLY ever mask an
+        # agent failure, never an infra failure.
+        #
+        # The #263 forcing test forbids continue-on-error on every step, so
+        # alarm-only is implemented in-shell: capture make's exit code and
+        # exit 0 on the agent-failure branch. We deliberately do NOT use
+        # ``set -e`` (it would abort before the ::warning + exit 0). The
+        # harness keeps its own non-zero exit (main() sys.exit), so
+        # ``make tier1-5-test`` stays hard-fail for local / other-workflow use.
         run: |
-          make tier1-5-test
+          set -uo pipefail
+          rc=0
+          make tier1-5-test || rc=$?
+          echo "harness_rc=${rc}" >> "$GITHUB_OUTPUT"
+          if [ "${rc}" -ne 0 ]; then
+            echo "::warning title=Tier 1-5 agent/contract regression (non-blocking)::make tier1-5-test exited ${rc}. One or more Tier 1-5 agents failed contract / quality-gate validation. This is a MONITORED ALARM (issue #600 maintainer decision) and does NOT block the PR. See the uploaded tier1-5-results-* artifact (docs/results/tier1_5_pipeline_latest.json) for per-agent detail."
+            exit 0
+          fi
+          echo "All Tier 1-5 agents passed contract + quality-gate validation."
 
       - name: Summarize skip reasons
         id: summarize-skip

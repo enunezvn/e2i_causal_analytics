@@ -188,7 +188,14 @@ implementation_plan.json
 project_index.json
 
 # Script caches
-scripts/tier0_output_cache/
+# NB: use ``dir/*`` (not ``dir/``) so git still descends into the directory and
+# the negation below can re-include the one committed file — a bare ``dir/``
+# excludes the whole tree and makes ``!dir/file`` a no-op.
+scripts/tier0_output_cache/*
+# Exception: the committed Tier-0 fixture that lets the Tier 1-5 harness CI run
+# the 13 agents on every PR (issue #600). Everything else in this dir
+# (timestamped tier0_state_*.pkl, local-regen symlinks) stays ignored.
+!scripts/tier0_output_cache/latest.pkl
 .cache/
 
 # Internal / private docs

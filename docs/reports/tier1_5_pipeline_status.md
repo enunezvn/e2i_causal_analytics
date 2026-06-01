@@ -21,11 +21,14 @@ requested dimensions exist in the codebase today:
 - **Reporting** — the harness emits results three ways: rich console output, a JSON results
   file, and a timestamped markdown run report.
 
-The one **load-bearing caveat**: the CI harness only actually *executes the agents* when a
-Tier 0 cache (`scripts/tier0_output_cache/latest.pkl`) is present, and that path is
-gitignored, so it is never committed. In normal PR CI the harness takes its graceful-skip
-branch. Hard-fail mode is real, but absent a committed cache it bites only
-pip-install / docker-compose infra regressions — **not** agent or contract correctness. See
+The one **load-bearing caveat** (Finding 1) was that the CI harness only actually *executed
+the agents* when a Tier 0 cache (`scripts/tier0_output_cache/latest.pkl`) was present, and
+that path was gitignored so it was never committed — in normal PR CI the harness took its
+graceful-skip branch. **Resolved in issue #600**: a small, sanitized Tier-0 fixture is now
+committed at that path (built deterministically by `scripts/generate_tier0_fixture.py`), so
+the harness executes all 13 agents on every relevant PR. Per the maintainer decision, an
+agent/contract failure is a **monitored alarm** (non-blocking `::warning` + results
+artifact), while infra failures still hard-fail (#263). See
 [§6, Finding 1](#finding-1--ci-harness-skips-agent-execution-headline).
 
 ---
@@ -198,21 +201,27 @@ as a CI gate.
 
 These are reported, not fixed — this report makes no code/CI/doc changes.
 
-### Finding 1 — CI harness skips agent execution (headline)
+### Finding 1 — CI harness skips agent execution (headline) — ✅ RESOLVED (#600)
 
-- **What:** The workflow only runs the agents when `scripts/tier0_output_cache/latest.pkl`
-  exists; the run/skip is gated on `steps.restore-cache.outputs.found`
-  (`.github/workflows/tier1-5-test.yml:138`-181). That cache path is **gitignored**
-  (`.gitignore:191` → `scripts/tier0_output_cache/`), so it is never committed.
-- **Why it matters:** On a normal PR the harness takes the graceful-skip branch and emits a
-  `::notice` instead of executing the 13 agents. Hard-fail mode (#263) therefore protects only
-  pip-install / docker-compose infra regressions — agent and contract correctness are **not**
-  exercised in CI unless a cache is committed or the job is dispatched in an environment that
-  produces one.
-- **Suggested follow-up:** Either (a) commit a small, sanitized tier0 cache fixture and
-  un-ignore that one file, or (b) add a CI step that runs `run_tier0_test.py` to generate the
-  cache before the harness (heavier), or (c) document the skip explicitly as intended and rely
-  on a scheduled/self-hosted run. Decision belongs to the maintainer.
+- **What (original):** The workflow only ran the agents when
+  `scripts/tier0_output_cache/latest.pkl` existed; the run/skip was gated on
+  `steps.restore-cache.outputs.found` (`.github/workflows/tier1-5-test.yml`). That cache path
+  was **gitignored** (`scripts/tier0_output_cache/`), so it was never committed.
+- **Why it mattered:** On a normal PR the harness took the graceful-skip branch and emitted a
+  `::notice` instead of executing the 13 agents. Hard-fail mode (#263) therefore protected only
+  pip-install / docker-compose infra regressions — agent and contract correctness were **not**
+  exercised in CI.
+- **Resolution (#600, option a):** A small, sanitized Tier-0 fixture is now committed at
+  `scripts/tier0_output_cache/latest.pkl` (un-ignored via a `!`-exception; built
+  deterministically by `scripts/generate_tier0_fixture.py` — the refresh mechanism). The fixture
+  carries a real-generator `eligible_df` + realistic scalar metrics + a tiny `LogisticRegression`
+  (no version-fragile fitted preprocessor/encoder; ~130 KB). `restore-cache.found` is now `true`
+  on every relevant PR, so the harness executes all 13 agents. Per the maintainer decision,
+  agent/contract failures are a **monitored alarm** — the run-harness step captures `make`'s exit
+  code and emits a non-blocking `::warning` + the results artifact (it does **not** block the PR);
+  infra failures still hard-fail (#263). Contract pinned by
+  `tests/unit/test_scripts/test_tier0_fixture.py` and
+  `tests/integration/test_tier1_5_workflow_alarm_only.py`.
 
 ### Finding 2 — Doc drift: "12" vs 13 agents
 
