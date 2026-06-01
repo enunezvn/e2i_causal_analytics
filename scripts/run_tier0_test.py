@@ -1325,6 +1325,20 @@ def print_detailed_summary(
         print(f"  • Status: {deployment_manifest.get('status', 'N/A')}")
         print(f"  • Endpoint: {deployment_manifest.get('endpoint_url', 'N/A')}")
 
+    # Regulatory authorization manifest + advisory-vs-enforced gate map (gaps
+    # G6/G12). Always printed so the compliance artifact the deployer computes
+    # (frozen SHA256 payload + Gate-N1 audit) is visible in the run output — it
+    # previously reached humans only via a test-only env-gated JSON, while the
+    # console printed the simpler deployment_manifest above.
+    from src.agents.ml_foundation.model_deployer.regulatory_report import (
+        format_regulatory_report,
+    )
+
+    print(f"\n{'=' * 70}")
+    print("REGULATORY AUTHORIZATION")
+    print(f"{'=' * 70}\n")
+    print(format_regulatory_report(state.get("regulatory_deployment_manifest")))
+
     print(f"\n{'=' * 70}")
 
 
@@ -7132,6 +7146,20 @@ async def run_pipeline(
         e2e_path = Path(e2e_out)
         e2e_path.parent.mkdir(parents=True, exist_ok=True)
         e2e_path.write_text(json.dumps(artifact, indent=2, default=str))
+
+        # Durable markdown twin of the regulatory authorization manifest +
+        # advisory-vs-enforced gate map (gaps G6/G12), written alongside the
+        # JSON so an operator capturing tier0 output also gets a human/audit-
+        # readable compliance report (the console summary prints the same).
+        try:
+            from src.agents.ml_foundation.model_deployer.regulatory_report import (
+                format_regulatory_report,
+            )
+
+            report_md = format_regulatory_report(state.get("regulatory_deployment_manifest"))
+            e2e_path.with_suffix(".regulatory.md").write_text(report_md)
+        except Exception as report_exc:  # best-effort artifact; never fail the run
+            print(f"WARN: failed to write regulatory report markdown: {report_exc}")
 
     return state
 
