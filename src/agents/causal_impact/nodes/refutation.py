@@ -22,6 +22,8 @@ import math
 import time
 from typing import Any, Dict, List, Optional, Tuple, cast
 
+import numpy as np
+
 from src.agents.causal_impact.state import (
     CausalImpactState,
     RefutationResults,
@@ -217,6 +219,23 @@ def _reconstruct_dowhy_artifacts(
     dowhy_method = _resolve_dowhy_method(estimation_result)
 
     try:
+        # Mirror production's treatment preprocessing (estimation.py:170-174): a
+        # non-integer (continuous) treatment is binarized at its MEDIAN before
+        # the estimator is fit, so the reported ATE is the effect of the
+        # BINARIZED treatment. Reconstruct on the same transform so refuters
+        # critique the SAME estimand. Without this, a continuous treatment would
+        # be reconstructed as continuous — a different model whose ATE could
+        # coincidentally land within tolerance, refuting a different estimate
+        # than the one on screen (silent-wrong). #583 follow-up (codex HIGH).
+        # Use the SAME NumPy ops as production (estimation.py:170-172) so the
+        # integer-vs-continuous decision and the median split are byte-identical
+        # (incl. how a NaN treatment fails — there it raises in estimation
+        # before any estimate exists; here it fail-closes via the wrapper).
+        treatment_arr = data[treatment].to_numpy()
+        if not np.array_equal(treatment_arr, treatment_arr.astype(int)):
+            data = data.copy()
+            data[treatment] = (treatment_arr > np.median(treatment_arr)).astype(int)
+
         # Forest-based CATE estimators (CausalForestDML, DRLearner) REQUIRE
         # effect modifiers X — econml raises "does not support X=None" without
         # them. The estimation path fits these with X=W=features
@@ -239,15 +258,40 @@ def _reconstruct_dowhy_artifacts(
         # EconML wrapper does ``estimator_class(**kwargs["init_params"])`` with a
         # *direct* key access (dowhy/causal_estimators/econml.py), so omitting
         # method_params raises ``KeyError: 'init_params'`` and the whole
-        # reconstruction fails (#583: this regression was latent because
-        # test_agents never ran in CI). Pass empty init/fit params → DoWhy
-        # re-fits with default EconML hyperparameters, which is exactly what the
-        # reconstructed-vs-reported ATE tolerance check below already accounts
-        # for (see the "DoWhy re-fits with default EconML hyperparameters" note).
+        # reconstruction fails (this regression was latent because test_agents
+        # never ran in CI — #583).
+        #
+        # Mirror the production-estimator init params that materially affect the
+        # reconstructed ATE (src/causal_engine/energy_score/estimator_selector.py:
+        # ``discrete_treatment=is_binary`` and ``random_state=rs`` defaulting to
+        # 42). Without discrete_treatment a binary 0/1 treatment is modeled as
+        # CONTINUOUS, systematically under-estimating the ATE and tripping the
+        # reconstructed-vs-reported tolerance check below; without a fixed
+        # random_state the forest ATE varies run-to-run, making that check flaky
+        # near its boundary. (#583 follow-up: caught by slow-tests on
+        # test_repository_failure_handled, ATE 0.3968 vs 0.5000 > 0.1 tol; with
+        # these params the reconstruction lands at 0.4219, within tolerance and
+        # deterministic.) These mirror the estimator that produced the reported
+        # ATE, so refuters critique the SAME model.
+        #
+        # init_params are estimator-specific: DRLearner is inherently a
+        # discrete-treatment learner and its econml-0.16 __init__ does NOT accept
+        # a ``discrete_treatment`` kwarg (passing it raises TypeError), so we add
+        # ``discrete_treatment`` only for CausalForestDML / LinearDML. All three
+        # accept ``random_state``. (Continuous treatments that production binarizes
+        # internally will reconstruct here as non-binary; the ATE-tolerance guard
+        # below then fails closed rather than refuting a mis-specified model — a
+        # fail-safe, not silent-wrong.)
+        _raw_seed = estimation_result.get("random_state")
+        init_params: Dict[str, Any] = {
+            "random_state": 42 if _raw_seed is None else int(_raw_seed),
+        }
+        if "DRLearner" not in dowhy_method:
+            init_params["discrete_treatment"] = bool(data[treatment].nunique() == 2)
         estimate = model.estimate_effect(
             identified_estimand,
             method_name=dowhy_method,
-            method_params={"init_params": {}, "fit_params": {}},
+            method_params={"init_params": init_params, "fit_params": {}},
             test_significance=False,
         )
     except Exception as exc:  # noqa: BLE001 — fail-closed wrapper
