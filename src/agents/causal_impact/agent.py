@@ -347,7 +347,11 @@ class CausalImpactAgent(SkillsMixin):
         # Build output with contract field names
         output: CausalImpactOutput = {
             "query_id": state.get("query_id", "unknown"),
-            "status": "completed",
+            # Honest status (#606): report "failed" when estimation produced no
+            # ATE (e.g. an EstimationError was caught upstream) instead of masking
+            # it as "completed" with ate_estimate=None. Previously this was
+            # hardcoded "completed", so a failed analysis looked successful.
+            "status": ("completed" if estimation_result.get("ate") is not None else "failed"),
             # Core results
             "causal_narrative": interpretation.get("narrative", "Analysis completed successfully."),
             "ate_estimate": estimation_result.get("ate"),  # type: ignore[typeddict-item]

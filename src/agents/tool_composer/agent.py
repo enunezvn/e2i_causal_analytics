@@ -65,7 +65,13 @@ _MOCK_PLANNING_JSON = json.dumps(
                 "step_id": "step_1",
                 "sub_question_id": "sq_1",
                 "tool_name": "causal_effect_estimator",
-                "input_mapping": {"treatment": "hcp_visits", "outcome": "discontinuation_flag"},
+                "input_mapping": {
+                    "treatment": "hcp_visits",
+                    "outcome": "discontinuation_flag",
+                    # Pull the real tier0 fixture DataFrame the harness threads via
+                    # context so causal_effect_estimator runs on REAL data (#606).
+                    "estimation_data": "$context.estimation_data",
+                },
                 "depends_on_steps": [],
             },
             {

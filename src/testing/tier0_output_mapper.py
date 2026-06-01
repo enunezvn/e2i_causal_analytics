@@ -270,6 +270,7 @@ class Tier0OutputMapper:
         ToolComposer handles MULTI_FACETED queries requiring multiple tools.
         """
         brand = self.state.get("scope_spec", {}).get("brand", "Kisqali")
+        df = self.state["eligible_df"]
         return {
             "query": (
                 f"Compare the causal impact of HCP visits vs prior treatments "
@@ -282,6 +283,14 @@ class Tier0OutputMapper:
                 "segment_ranker",
                 "gap_calculator",
             ],
+            # Thread the real tier0 fixture DataFrame to the executor context so
+            # the planned fail-closed tools (causal_effect_estimator) run on REAL
+            # data via a `$context.estimation_data` reference in the plan — not a
+            # fabricated tool output (#606 item: genuine tool execution).
+            "context": {
+                "estimation_data": df,
+                "experiment_id": self.state["experiment_id"],
+            },
         }
 
     # =========================================================================
@@ -306,7 +315,15 @@ class Tier0OutputMapper:
         )
         outcome_var = "discontinuation_flag" if "discontinuation_flag" in df.columns else "outcome"
 
-        confounders = [f for f in features if f not in {treatment_var, outcome_var}]
+        # Only pass NUMERIC confounders: dowhy/econml estimation cannot consume
+        # categorical string columns (age_group, geographic_region) and raises an
+        # EstimationError, which surfaced as causal_impact's ate_estimate=None in
+        # the keyless harness (#606). Categorical adjustment would need encoding
+        # the agent doesn't do on this path.
+        _numeric_cols = set(df.select_dtypes(include="number").columns)
+        confounders = [
+            f for f in features if f not in {treatment_var, outcome_var} and f in _numeric_cols
+        ]
 
         return {
             "query": f"What is the causal effect of {treatment_var} on {outcome_var}?",
