@@ -3360,9 +3360,21 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
     # budget to that feasibility floor up to a cap, (b) fall back to the static
     # σ-band when a cohort is too wide for the cap (never a silently-empty set),
     # and (c) score every Layer-3-eligible feature ONCE at that budget so the
-    # confident set is known before any feature is classified. Default-ON
-    # (validated faithfully on the Optum initiation cohort: caught the real
-    # treatment_initiated leak, zero false positives on 39 legit features).
+    # confident set is known before any feature is classified. Default-ON.
+    #
+    # Validation scope (gap G4 — be precise, do not over-claim): validated
+    # faithfully on the Optum initiation REAL cohort (caught the real
+    # treatment_initiated leak; zero false positives on its 39 legit features).
+    # It is NOT false-positive-free in general — on the clinically-grounded
+    # SYNTHETIC fixtures (legacy clean/adverse + scenario_* regimes), whose
+    # features are deliberately outcome-correlated by construction, this driver
+    # over-drops legitimate features (days_on_therapy/prior_treatments, #594).
+    # The tier0 runner therefore disables FDR firing for synthetic fixture
+    # GENERATION only (run_tier0_test._resolve_adaptive_fdr_enabled); real runs
+    # keep it ON. The synthetic-fixture over-drop ROOT cause is tracked as a
+    # residual gap (see §5 of
+    # docs/results/tier0_evaluation_current_state_20260515.md) and still needs a
+    # dedicated GitHub issue.
     # ------------------------------------------------------------------
     fdr_enabled = bool(state.get("adaptive_fdr_enabled", True))
     _fdr_q = state.get("adaptive_fdr_q")

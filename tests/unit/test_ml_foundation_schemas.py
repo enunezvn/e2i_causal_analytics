@@ -445,7 +445,7 @@ def test_qc_report_schema_round_trips() -> None:
         timeliness_score=0.85,
         expectation_results=[{"expectation": "no_nulls", "result": "passed"}],
         failed_expectations=[],
-        warnings=["timeliness_below_threshold"],
+        warnings=[{"expectation_type": "timeliness_below_threshold"}],
         remediation_steps=[],
         blocking_issues=[],
         row_count=10000,
@@ -943,15 +943,15 @@ def test_qc_report_schema_declares_consumer_contract_fields() -> None:
     schema = QCReportSchema(
         qc_passed=True,
         qc_errors=["err1", "err2"],
-        qc_warnings=["warn1"],
+        qc_warnings=[{"expectation_type": "warn1"}],
     )
     assert schema.qc_passed is True
     assert schema.qc_errors == ["err1", "err2"]
-    assert schema.qc_warnings == ["warn1"]
+    assert schema.qc_warnings == [{"expectation_type": "warn1"}]
     # Dict-shim access (consumer pattern at qc_gate_checker.py:30-46).
     assert schema["qc_passed"] is True
     assert schema.get("qc_errors", []) == ["err1", "err2"]
-    assert schema.get("qc_warnings", []) == ["warn1"]
+    assert schema.get("qc_warnings", []) == [{"expectation_type": "warn1"}]
 
 
 def test_qc_report_schema_consumer_fields_default_to_none() -> None:
@@ -988,7 +988,7 @@ def test_model_trainer_state_qc_report_validates_typed_schema() -> None:
             "overall_score": 0.92,
             "qc_passed": True,
             "qc_errors": [],
-            "qc_warnings": ["minor_correlation"],
+            "qc_warnings": [{"expectation_type": "minor_correlation"}],
         },
     )
 
@@ -999,7 +999,7 @@ def test_model_trainer_state_qc_report_validates_typed_schema() -> None:
     # Consumer-pattern reads (qc_gate_checker.py:30-46).
     assert state.qc_report.get("qc_passed", False) is True
     assert state.qc_report.get("qc_errors", []) == []
-    assert state.qc_report.get("qc_warnings", []) == ["minor_correlation"]
+    assert state.qc_report.get("qc_warnings", []) == [{"expectation_type": "minor_correlation"}]
 
 
 def test_model_selector_state_qc_report_validates_typed_schema() -> None:
@@ -1031,12 +1031,12 @@ def test_qc_report_schema_round_trips_through_json_d22() -> None:
         overall_score=0.87,
         qc_passed=True,
         qc_errors=[],
-        qc_warnings=["w1"],
+        qc_warnings=[{"expectation_type": "w1"}],
     )
     dumped = original.model_dump()
     restored = QCReportSchema.model_validate(dumped)
     assert restored.qc_passed is True
-    assert restored.qc_warnings == ["w1"]
+    assert restored.qc_warnings == [{"expectation_type": "w1"}]
 
 
 def test_qc_report_schema_consumer_contract_qc_gate_blocks_when_qc_passed_false() -> None:
@@ -1585,3 +1585,55 @@ def test_model_trainer_state_test_metrics_accepts_realistic_evaluator_output() -
     # MetricsSchema field. If this assertion fires, the producer has drifted
     # and the schema needs a new field (NOT a `# type: ignore` workaround).
     assert len(state.test_metrics.model_extra or {}) == 0
+
+
+# ============================================================================
+# Gap G14: empty metrics for a stated problem_type is the #594 "validation_
+# metrics emptied upstream" shape. The subset invariant stays permissive
+# (intentional scaffold, pinned below), but now emits a non-fatal WARNING so
+# the condition surfaces at the schema boundary instead of only downstream.
+# ============================================================================
+
+
+def test_empty_metrics_for_stated_problem_type_warns(caplog):
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        MetricsSchema(problem_type="binary_classification")
+    assert any("no metrics" in r.message.lower() for r in caplog.records), (
+        "empty metrics for a stated problem_type must emit a non-fatal WARNING (G14)."
+    )
+
+
+def test_empty_metrics_for_regression_warns(caplog):
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        MetricsSchema(problem_type="regression")
+    assert any("no metrics" in r.message.lower() for r in caplog.records)
+
+
+def test_populated_metrics_for_stated_problem_type_does_not_warn(caplog):
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        MetricsSchema(problem_type="binary_classification", auc_roc=0.8)
+    assert not any("no metrics" in r.message.lower() for r in caplog.records), (
+        "metrics present → no empty-metrics warning."
+    )
+
+
+def test_no_problem_type_does_not_warn(caplog):
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        MetricsSchema()
+    assert not any("no metrics" in r.message.lower() for r in caplog.records)
+
+
+def test_empty_metrics_for_stated_problem_type_still_validates(caplog):
+    """The invariant stays PERMISSIVE (intentional scaffold): empty metrics for
+    a stated problem_type must still construct, only now with a warning."""
+    schema = MetricsSchema(problem_type="binary_classification")
+    assert schema.problem_type == "binary_classification"
+    assert schema.auc_roc is None

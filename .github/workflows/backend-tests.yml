@@ -200,6 +200,15 @@ jobs:
             tests/unit/test_testing/ \
             tests/unit/test_tests_meta/ \
             tests/unit/test_tool_registry/ \
+            tests/unit/test_converter_schema.py \
+            tests/unit/test_cost_matrix_injection.py \
+            tests/unit/test_csu_converter_masking.py \
+            tests/unit/test_data_source_validator.py \
+            tests/unit/test_ml_foundation_schemas.py \
+            tests/unit/test_ragas_smoke_workflow.py \
+            tests/unit/test_ragas_workflow_timeout.py \
+            tests/unit/test_sampling_frame_gate.py \
+            tests/unit/test_workflows_yaml_parse.py \
             tests/api/test_predictions_endpoints.py \
             tests/api/test_explain_endpoints.py \
             --ignore=tests/unit/test_api/test_chatbot_tools.py \

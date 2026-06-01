@@ -82,6 +82,61 @@ def _get_training_run_repository():
         return None
 
 
+def _to_plain_dict(value: Any) -> Dict[str, Any]:
+    """Coerce a metrics value to a plain dict for logging.
+
+    ``test_metrics`` is typed ``MetricsSchema`` on ModelTrainerState (pydantic,
+    coerced on assignment), while train/validation metrics are plain dicts;
+    both must reduce to a dict for MLflow logging + JSON serialization.
+    """
+    if not value:
+        return {}
+    if isinstance(value, dict):
+        return value
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        try:
+            dumped = cast(Dict[str, Any], model_dump())
+            # MetricsSchema's canonical AUC field is `auc_roc` (roc_auc is an
+            # INPUT alias), so model_dump() emits `auc_roc`. But _log_split_metrics
+            # logs `<split>_<key>` and _get_primary_metric keys off `roc_auc` (the
+            # producer/plain-dict shape that validation_metrics uses). Mirror it so
+            # split keys stay consistent across splits and primary_metric resolves.
+            if "auc_roc" in dumped and "roc_auc" not in dumped:
+                dumped = {**dumped, "roc_auc": dumped["auc_roc"]}
+            return dumped
+        except Exception:
+            pass
+    items = getattr(value, "items", None)
+    if callable(items):
+        try:
+            return dict(items())
+        except Exception:
+            pass
+    return {}
+
+
+def _resolve_evaluation_metrics(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Return the split-metrics bundle (train/validation/test/holdout).
+
+    The evaluator writes these as TOP-LEVEL state keys (``evaluate_model``
+    returns ``{**metrics_result, ...}``); the legacy ``evaluation_metrics``
+    wrapper is never written in production (grep: only read, never assigned in
+    src/). Prefer an explicit wrapper when a caller supplies one (older callers
+    / tests), else assemble it from the top-level keys so split metrics, the
+    primary metric, and the summary artifact are actually logged (gap G9).
+    """
+    explicit = state.get("evaluation_metrics")
+    if explicit:
+        return cast(Dict[str, Any], explicit)
+    assembled: Dict[str, Any] = {}
+    for key in ("train_metrics", "validation_metrics", "test_metrics", "holdout_metrics"):
+        plain = _to_plain_dict(state.get(key))
+        if plain:
+            assembled[key] = plain
+    return assembled
+
+
 async def log_to_mlflow(state: Dict[str, Any]) -> Dict[str, Any]:
     """Log training run to MLflow.
 
@@ -141,8 +196,9 @@ async def log_to_mlflow(state: Dict[str, Any]) -> Dict[str, Any]:
     hpo_best_trial = state.get("hpo_best_trial")  # Best trial number
     feast_fallback_used = state.get("feast_fallback_used", False)
 
-    # Evaluation metrics
-    evaluation_metrics = state.get("evaluation_metrics", {})
+    # Evaluation metrics. Production writes these as TOP-LEVEL state keys, not
+    # under an `evaluation_metrics` wrapper (gap G9) — resolve both shapes.
+    evaluation_metrics = _resolve_evaluation_metrics(state)
     train_metrics = evaluation_metrics.get("train_metrics", {})
     validation_metrics = evaluation_metrics.get("validation_metrics", {})
     test_metrics = evaluation_metrics.get("test_metrics", {})
@@ -527,8 +583,10 @@ async def _log_additional_artifacts(run: Any, state: Dict[str, Any]) -> None:
         except Exception as e:
             logger.warning(f"Failed to log confusion matrix: {e}")
 
-    # Log evaluation summary
-    evaluation_metrics = state.get("evaluation_metrics", {})
+    # Log evaluation summary. Resolve the production top-level-key shape (gap
+    # G9) so the summary isn't silently empty (the `evaluation_metrics` wrapper
+    # is never written in src/).
+    evaluation_metrics = _resolve_evaluation_metrics(state)
     if evaluation_metrics:
         try:
             with tempfile.NamedTemporaryFile(
@@ -541,6 +599,42 @@ async def _log_additional_artifacts(run: Any, state: Dict[str, Any]) -> None:
                 await run.log_artifact(f.name, "evaluation_summary.json")
         except Exception as e:
             logger.warning(f"Failed to log evaluation summary: {e}")
+
+    # Log the rich nested evaluation blocks the evaluator computes as TOP-LEVEL
+    # state keys (calibration curve + ECE, cross-validation per-fold values,
+    # Layer-3 per-feature ablation). These are NOT part of the per-split metrics
+    # scalars, so without this they never reach MLflow and dashboards can't
+    # audit them without re-running the evaluator (gap G9). Each is dumped as
+    # its own JSON artifact via the existing temp-file → log_artifact pattern
+    # (the connector run object exposes no log_dict).
+    #
+    # NB (codex review): net_benefit_grid + decision_curve_data are NOT top-level
+    # state keys — the evaluator nests them inside test_metrics
+    # (evaluator.py:2028/2086). net_benefit_grid is a declared MetricsSchema field
+    # so it survives coercion and is captured in evaluation_summary.json above;
+    # decision_curve_data is NOT a declared field, so MetricsSchema coercion
+    # (extra="ignore") drops it before this node — surfacing it needs a schema-
+    # declaration fix upstream, not a logger change. Hence neither is listed here.
+    rich_artifacts = (
+        ("calibration_analysis", "calibration_analysis.json"),
+        ("cv_results", "cv_results.json"),
+        ("model_eval_ablation", "model_eval_ablation.json"),
+    )
+    for state_key, artifact_name in rich_artifacts:
+        block = state.get(state_key)
+        if not block:
+            continue
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                suffix=".json",
+                delete=False,
+            ) as f:
+                json.dump(block, f, indent=2, default=str)
+                f.flush()
+                await run.log_artifact(f.name, artifact_name)
+        except Exception as e:
+            logger.warning(f"Failed to log {artifact_name}: {e}")
 
 
 def _get_framework(algorithm_name: str) -> str:

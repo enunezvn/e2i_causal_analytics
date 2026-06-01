@@ -445,3 +445,116 @@ class TestBusinessUtilityTag:
         assert result["mlflow_status"] == "success"
         call_kwargs = mock_mlflow_connector.start_run.call_args[1]
         assert call_kwargs["tags"]["business_utility"] == "N/A"
+
+
+# ============================================================================
+# Gap G9: production writes evaluation metrics as TOP-LEVEL state keys, not
+# under an `evaluation_metrics` wrapper (which is never written in src/), so
+# split metrics + rich artifacts must be logged from the real state shape.
+# ============================================================================
+
+
+def _collect_logged_metrics(mock_run) -> dict:
+    """Flatten every run.log_metrics(dict) call into one dict."""
+    logged: dict = {}
+    for call in mock_run.log_metrics.call_args_list:
+        payload = call.args[0] if call.args else call.kwargs.get("metrics", {})
+        if isinstance(payload, dict):
+            logged.update(payload)
+    return logged
+
+
+def _collect_artifact_names(mock_run) -> list:
+    """Second positional arg of every run.log_artifact(path, name) call."""
+    names = []
+    for call in mock_run.log_artifact.call_args_list:
+        if len(call.args) > 1:
+            names.append(call.args[1])
+        elif "artifact_path" in call.kwargs:
+            names.append(call.kwargs["artifact_path"])
+    return names
+
+
+@pytest.mark.asyncio
+async def test_logs_split_metrics_from_top_level_state_keys(mock_mlflow_connector):
+    """No `evaluation_metrics` wrapper (production shape): split metrics live as
+    top-level state keys. They must still be logged to MLflow (gap G9)."""
+    state = {
+        "trained_model": MockModel(),
+        "experiment_id": "exp_g9",
+        "algorithm_name": "RandomForest",
+        "problem_type": "binary_classification",
+        "enable_mlflow": True,
+        # Production shape — top-level keys, no `evaluation_metrics` wrapper:
+        "validation_metrics": {"roc_auc": 0.91, "mcc": 0.40},
+        "test_metrics": {"roc_auc": 0.89, "accuracy": 0.85},
+    }
+    with patch(
+        "src.mlops.mlflow_connector.get_mlflow_connector",
+        return_value=mock_mlflow_connector,
+    ):
+        await log_to_mlflow(state)
+
+    mock_run = mock_mlflow_connector.start_run.return_value
+    logged = _collect_logged_metrics(mock_run)
+    assert logged.get("validation_roc_auc") == 0.91, (
+        "split metrics from top-level validation_metrics must be logged "
+        "(the evaluation_metrics wrapper the logger read is never written)."
+    )
+    assert logged.get("test_roc_auc") == 0.89
+    # Primary metric should resolve from the real test metrics, not None.
+    assert "primary_metric" in logged
+
+
+@pytest.mark.asyncio
+async def test_logs_rich_evaluation_artifacts(mock_mlflow_connector):
+    """Calibration / CV / Layer-3 ablation blocks (top-level state keys,
+    computed by the evaluator) must be logged as MLflow artifacts (gap G9)."""
+    state = {
+        "trained_model": MockModel(),
+        "experiment_id": "exp_g9b",
+        "algorithm_name": "RandomForest",
+        "problem_type": "binary_classification",
+        "enable_mlflow": True,
+        "validation_metrics": {"roc_auc": 0.9},
+        "calibration_analysis": {"ece": 0.03, "calibration_curve": [[0.1, 0.12]]},
+        "cv_results": {"cv_roc_auc_mean": 0.9, "cv_roc_auc_values": [0.88, 0.91, 0.9]},
+        "model_eval_ablation": {"ran": True, "flagged_features": ["f_leaky"]},
+    }
+    with patch(
+        "src.mlops.mlflow_connector.get_mlflow_connector",
+        return_value=mock_mlflow_connector,
+    ):
+        await log_to_mlflow(state)
+
+    mock_run = mock_mlflow_connector.start_run.return_value
+    names = _collect_artifact_names(mock_run)
+    assert "calibration_analysis.json" in names
+    assert "cv_results.json" in names
+    assert "model_eval_ablation.json" in names
+
+
+@pytest.mark.asyncio
+async def test_metricsschema_test_metrics_logs_roc_auc_and_primary(mock_mlflow_connector):
+    """When test_metrics is a MetricsSchema (ModelTrainerState coerces it), its
+    canonical `auc_roc` dump key is mirrored to `roc_auc` so split logging +
+    primary_metric stay consistent with the producer/dict shape (codex review)."""
+    from src.agents.ml_foundation.model_trainer.schemas import MetricsSchema
+
+    state = {
+        "trained_model": MockModel(),
+        "experiment_id": "exp_g9c",
+        "algorithm_name": "RandomForest",
+        "problem_type": "binary_classification",
+        "enable_mlflow": True,
+        "test_metrics": MetricsSchema(roc_auc=0.88, problem_type="binary_classification"),
+    }
+    with patch(
+        "src.mlops.mlflow_connector.get_mlflow_connector",
+        return_value=mock_mlflow_connector,
+    ):
+        await log_to_mlflow(state)
+    mock_run = mock_mlflow_connector.start_run.return_value
+    logged = _collect_logged_metrics(mock_run)
+    assert logged.get("test_roc_auc") == 0.88, "MetricsSchema auc_roc must mirror to roc_auc"
+    assert logged.get("primary_metric") == 0.88

@@ -196,3 +196,38 @@ def test_594_fdr_stays_on_for_real_data_runs_even_with_fixture_regime_name():
 
     # Non-fixture synthetic regime → FDR ON.
     assert _resolve_adaptive_fdr_enabled("rwd_realistic", None) is True
+
+
+def test_594_every_valid_regime_is_classified_as_fixture():
+    """Predicate-completeness guard (gap G5): EVERY regime in the argparse
+    source-of-truth ``_VALID_REGIMES`` must be classified as a synthetic fixture
+    by ``_is_synthetic_fixture_regime`` — otherwise it silently keeps the #538
+    FDR firing driver ON and re-fires the #594 over-drop (val_AUC below band).
+
+    This is NON-tautological (unlike the loops in
+    ``test_594_legacy_synthetic_regimes_are_fixture_regimes``, which iterate the
+    classifier's own source sets): it cross-checks the SEPARATE
+    ``_VALID_REGIMES`` tuple (consumed by argparse) against
+    ``_LEGACY_REGIMES`` + ``_SCENARIO_REGIME_TO_NAME``. Adding a new regime to
+    ``_VALID_REGIMES`` without registering it in one of those sets trips this
+    test — closing the maintainer footgun the code comment at ~line 4279 warns
+    about.
+    """
+    from scripts.run_tier0_test import (  # noqa: PLC0415
+        _VALID_REGIMES,
+        _is_synthetic_fixture_regime,
+    )
+
+    for regime in _VALID_REGIMES:
+        assert _is_synthetic_fixture_regime(regime), (
+            f"regime {regime!r} is in _VALID_REGIMES but is NOT classified a "
+            "synthetic fixture — the #538 FDR firing driver would stay ON and "
+            "re-fire the #594 over-drop. Register it in _LEGACY_REGIMES or "
+            "_SCENARIO_REGIME_TO_NAME (or exclude it from _VALID_REGIMES if it "
+            "is a real-data regime)."
+        )
+
+    # Teeth: an unregistered fixture-looking name is NOT classified — proving a
+    # new _VALID_REGIMES entry missing from the source sets WOULD trip the loop.
+    assert not _is_synthetic_fixture_regime("clean2_unregistered")
+    assert not _is_synthetic_fixture_regime("scenario_zzz")

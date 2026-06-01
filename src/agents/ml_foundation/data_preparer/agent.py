@@ -296,8 +296,13 @@ class DataPreparerAgent:
             if duration > self.sla_seconds:
                 logger.warning(f"SLA violation: {duration:.2f}s > {self.sla_seconds}s")
 
-            # Persist QC report to database
-            await self._persist_qc_report(output["qc_report"], input_data["data_source"])
+            # Persist QC report to database (forward the canonical leakage
+            # verdict so the DQ row reflects it — gap G7).
+            await self._persist_qc_report(
+                output["qc_report"],
+                input_data["data_source"],
+                leakage_detected=bool(final_state.get("leakage_detected", False)),
+            )
 
             return output
 
@@ -305,12 +310,22 @@ class DataPreparerAgent:
             logger.error(f"Data preparation failed: {e}", exc_info=True)
             raise RuntimeError(f"Data preparation failed: {str(e)}") from e
 
-    async def _persist_qc_report(self, qc_report: Dict[str, Any], data_source: str) -> None:
+    async def _persist_qc_report(
+        self,
+        qc_report: Dict[str, Any],
+        data_source: str,
+        leakage_detected: bool = False,
+    ) -> None:
         """Persist QC report to database.
 
         Args:
             qc_report: QC report dictionary
             data_source: Data source table name
+            leakage_detected: The run's canonical leakage verdict (from
+                ``leakage_detector``). Persisted to the ml_data_quality_reports
+                row so a detected leak is not silently stored as False — the
+                row's ``leakage_detected`` column is read by
+                ``check_data_quality_gate`` and downstream consumers (gap G7).
         """
         try:
             repo = _get_dq_repository()
@@ -336,6 +351,10 @@ class DataPreparerAgent:
                 "uniqueness_score": qc_report.get("uniqueness_score"),
                 "consistency_score": qc_report.get("consistency_score"),
                 "timeliness_score": qc_report.get("timeliness_score"),
+                # Persist the real leakage verdict (gap G7). store_result defaults
+                # this column to False, so omitting it fabricated leakage_detected
+                # =False on every row even when the detector flagged a leak.
+                "leakage_detected": bool(leakage_detected),
                 "data_split": "train",  # QC runs on train split
                 "training_run_id": None,  # Set by model_trainer if applicable
             }

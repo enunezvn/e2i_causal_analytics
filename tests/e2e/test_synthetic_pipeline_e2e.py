@@ -44,6 +44,14 @@ except ImportError:
     DOWHY_AVAILABLE = False
 
 
+# Heavy synthetic-pipeline e2e (generate → validate → load → train → recover ATE
+# vs ground truth). Marked slow so the scheduled slow-tests Job A
+# (`pytest tests/ -m slow`) collects + runs the ATE-recovery within_tolerance
+# gate. Previously this file ran in NO CI lane (gap G2). Verified green
+# serviceless: 15 tests ~20s, much lighter than the 7-agent test_tier0_e2e.
+pytestmark = pytest.mark.slow
+
+
 # ============================================================================
 # TEST DATA STRUCTURES
 # ============================================================================
