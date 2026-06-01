@@ -1193,10 +1193,18 @@ class E2IDataGenerator:
         for pj in self.patient_journeys[:50]:  # Annotate subset
             iaa_group_id = str(uuid.uuid4())
             num_annotators = random.randint(2, 4)
+            # #577 WS1-DQ-008: ONE annotation_type + ONE latent true label per IAA group so
+            # all raters CO-RATE THE SAME subject (the IAA precondition — previously the type
+            # was drawn per-annotator, so raters labeled different items and "agreement" was
+            # meaningless). Each annotator then agrees with the group truth ~92% of the time,
+            # else emits one of the other categories -> a realistic substantial Fleiss κ.
+            # Mirrors migration 052 (the authoritative reseed for the served DB); this
+            # generator is the coherent mirror for a from-scratch regenerate — coherent-
+            # equivalent, NOT byte-identical (unseeded module-level random here).
+            annotation_type = random.choice(annotation_types)
+            true_label = random.choice(["positive", "negative", "uncertain"])
 
             for annotator_idx in range(num_annotators):
-                annotation_type = random.choice(annotation_types)
-
                 self.ml_annotations.append(
                     {
                         "annotation_id": str(uuid.uuid4()),
@@ -1206,7 +1214,17 @@ class E2IDataGenerator:
                         "annotator_id": f"ANN_{annotator_idx:03d}",
                         "annotator_role": random.choice(annotator_roles),
                         "annotation_value": {
-                            "label": random.choice(["positive", "negative", "uncertain"]),
+                            "label": (
+                                true_label
+                                if random.random() < 0.92
+                                else random.choice(
+                                    [
+                                        c
+                                        for c in ["positive", "negative", "uncertain"]
+                                        if c != true_label
+                                    ]
+                                )
+                            ),
                             "confidence": round(random.uniform(0.7, 0.99), 2),
                             "notes": f"Annotation notes for {annotation_type}",
                         },
