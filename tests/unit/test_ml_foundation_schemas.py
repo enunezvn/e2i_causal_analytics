@@ -1600,9 +1600,9 @@ def test_empty_metrics_for_stated_problem_type_warns(caplog):
 
     with caplog.at_level(logging.WARNING):
         MetricsSchema(problem_type="binary_classification")
-    assert any(
-        "no metrics" in r.message.lower() for r in caplog.records
-    ), "empty metrics for a stated problem_type must emit a non-fatal WARNING (G14)."
+    assert any("no metrics" in r.message.lower() for r in caplog.records), (
+        "empty metrics for a stated problem_type must emit a non-fatal WARNING (G14)."
+    )
 
 
 def test_empty_metrics_for_regression_warns(caplog):
@@ -1618,9 +1618,9 @@ def test_populated_metrics_for_stated_problem_type_does_not_warn(caplog):
 
     with caplog.at_level(logging.WARNING):
         MetricsSchema(problem_type="binary_classification", auc_roc=0.8)
-    assert not any(
-        "no metrics" in r.message.lower() for r in caplog.records
-    ), "metrics present → no empty-metrics warning."
+    assert not any("no metrics" in r.message.lower() for r in caplog.records), (
+        "metrics present → no empty-metrics warning."
+    )
 
 
 def test_no_problem_type_does_not_warn(caplog):

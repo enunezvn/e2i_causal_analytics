@@ -45,8 +45,7 @@ ADVISORY_VS_ENFORCED: Tuple[Tuple[str, str, str], ...] = (
     (
         "honest_auc_band",
         "ADVISORY",
-        "Cohort-derived honest AUC band; observability-only, does not block "
-        "(T2.6c-pending).",
+        "Cohort-derived honest AUC band; observability-only, does not block (T2.6c-pending).",
     ),
     (
         "permutation_anchored_auc",
@@ -56,8 +55,7 @@ ADVISORY_VS_ENFORCED: Tuple[Tuple[str, str, str], ...] = (
     (
         "layer3_ablation",
         "ADVISORY",
-        "Per-OHE-category leakage ablation (model_eval_ablation); default-off, "
-        "advisory.",
+        "Per-OHE-category leakage ablation (model_eval_ablation); default-off, advisory.",
     ),
     (
         "signal_genuineness",
@@ -131,8 +129,9 @@ def format_regulatory_report(manifest: Optional[Dict[str, Any]]) -> str:
     lines.append(f"- Authorization status (T2.6c): **{status}**")
     if reasons:
         lines.append(f"  - reasons: {'; '.join(str(r) for r in reasons)}")
-    lines.append(f"- Cohort: {manifest.get('cohort', 'n/a')} "
-                 f"(in C1 scope: {manifest.get('in_c1_scope')})")
+    lines.append(
+        f"- Cohort: {manifest.get('cohort', 'n/a')} (in C1 scope: {manifest.get('in_c1_scope')})"
+    )
     lines.append(
         f"- Held-out AUC: {_fmt(manifest.get('roc_auc'))} "
         f"| honest band: {_fmt(manifest.get('honest_auc_band'))} "

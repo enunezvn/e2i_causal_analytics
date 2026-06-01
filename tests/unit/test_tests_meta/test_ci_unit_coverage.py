@@ -305,9 +305,7 @@ def test_no_stale_file_exclusions() -> None:
 
 
 def test_all_file_exclusions_have_reasons() -> None:
-    blank = sorted(
-        f for f, reason in INTENTIONALLY_EXCLUDED_FILES.items() if not reason.strip()
-    )
+    blank = sorted(f for f, reason in INTENTIONALLY_EXCLUDED_FILES.items() if not reason.strip())
     assert not blank, f"INTENTIONALLY_EXCLUDED_FILES entries missing a reason: {blank}"
 
 
@@ -345,9 +343,7 @@ def test_root_file_only_in_non_required_job_is_not_covered() -> None:
             "unit-tests": {
                 "steps": [{"run": "pytest \\\n  tests/unit/test_foo.py \\\n  --cov=src"}]
             },
-            "stray": {
-                "steps": [{"run": "pytest \\\n  tests/unit/test_bar.py \\\n  -n 2"}]
-            },
+            "stray": {"steps": [{"run": "pytest \\\n  tests/unit/test_bar.py \\\n  -n 2"}]},
             "ci-success": {"needs": ["unit-tests"]},
         }
     }
