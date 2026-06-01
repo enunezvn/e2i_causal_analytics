@@ -23,8 +23,77 @@ from src.agents.experiment_designer.state import (
     TreatmentDefinition,
 )
 from src.utils.llm_factory import get_chat_llm, get_fast_llm, get_llm_provider
+from src.utils.mock_llm import MarkedMockChatLLM, mock_llm_allowed
 
 logger = logging.getLogger(__name__)
+
+# Canned, parser-valid design payload used ONLY by the opt-in marked mock
+# (E2I_ALLOW_MOCK_LLM) when no real LLM key is configured — e.g. the keyless
+# Tier 1-5 harness (#606). Mirrors the shape the design-reasoning prompt asks
+# for so execute()'s JSON parse yields a valid ExperimentDesignState. Prod
+# (no opt-in flag) never reaches this — a missing key fails loud.
+_CANNED_DESIGN_JSON = json.dumps(
+    {
+        "refined_hypothesis": "Increasing rep visit frequency increases HCP engagement",
+        "treatment_definition": {
+            "name": "increased_visits",
+            "description": "Increased visit frequency",
+            "implementation_details": "Weekly visits instead of bi-weekly",
+            "target_population": "All HCPs",
+            "dosage_or_intensity": "2x frequency",
+            "duration": "12 weeks",
+            "delivery_mechanism": "In-person rep visits",
+        },
+        "outcome_definition": {
+            "name": "engagement_score",
+            "metric_type": "continuous",
+            "measurement_method": "CRM engagement index",
+            "measurement_frequency": "weekly",
+            "baseline_value": 50.0,
+            "expected_effect_size": 0.25,
+            "minimum_detectable_effect": 0.15,
+            "is_primary": True,
+        },
+        "design_type": "RCT",
+        "design_rationale": "RCT with individual-level randomization suits this intervention",
+        "randomization_unit": "individual",
+        "randomization_method": "stratified",
+        "stratification_vars": ["territory", "specialty"],
+        "blocking_variables": ["region"],
+        "causal_assumptions": ["No unmeasured confounding", "SUTVA holds"],
+        "anticipated_confounders": [
+            {"name": "territory_size", "how_addressed": "Stratified randomization"},
+            {"name": "baseline_engagement", "how_addressed": "Covariate adjustment"},
+        ],
+    }
+)
+
+
+def _chat_llm_or_marked_mock(canned: str, **factory_kwargs: Any) -> Any:
+    """Real chat LLM, or an opt-in MARKED mock when no key + E2I_ALLOW_MOCK_LLM.
+
+    Preserves fail-loud: without the opt-in flag a missing key re-raises.
+    """
+    try:
+        return get_chat_llm(**factory_kwargs)
+    except ValueError:
+        if not mock_llm_allowed():
+            raise
+        logger.warning(
+            "design_reasoning: no LLM key — using MARKED mock (E2I_ALLOW_MOCK_LLM); "
+            "output carries mock_response_for_dev_only=True (#606)."
+        )
+        return MarkedMockChatLLM(canned)
+
+
+def _fast_llm_or_marked_mock(canned: str, **factory_kwargs: Any) -> Any:
+    """Real fast LLM, or an opt-in MARKED mock when no key + E2I_ALLOW_MOCK_LLM."""
+    try:
+        return get_fast_llm(**factory_kwargs)
+    except ValueError:
+        if not mock_llm_allowed():
+            raise
+        return MarkedMockChatLLM(canned)
 
 
 def _get_opik_connector():
@@ -64,9 +133,16 @@ class DesignReasoningNode:
         else:
             self.model_name = "claude-sonnet-4-20250514"
             self.fallback_model_name = "claude-haiku-4-20250414"
-        # Use reasoning tier for primary, fast tier for fallback
-        self.llm = get_chat_llm(model_tier="reasoning", max_tokens=8192, timeout=120)
-        self.fallback_llm = get_fast_llm(max_tokens=4096, timeout=60)
+        # Use reasoning tier for primary, fast tier for fallback. Both fall back
+        # to an opt-in MARKED mock only when no key is configured AND
+        # E2I_ALLOW_MOCK_LLM is set (keyless Tier 1-5 harness, #606); otherwise a
+        # missing key fails loud as before.
+        self.llm = _chat_llm_or_marked_mock(
+            _CANNED_DESIGN_JSON, model_tier="reasoning", max_tokens=8192, timeout=120
+        )
+        self.fallback_llm = _fast_llm_or_marked_mock(
+            _CANNED_DESIGN_JSON, max_tokens=4096, timeout=60
+        )
 
     async def execute(self, state: ExperimentDesignState) -> ExperimentDesignState:
         """Execute design reasoning.
