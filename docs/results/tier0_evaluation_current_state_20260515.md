@@ -404,8 +404,15 @@ From the closed-arc baseline doc cross-referenced against current HEAD:
 | 7 | 8 Redis-auth pytest failures in `_check_redis_service` | tz-naive/aware fixture mismatch + missing Redis | no issue |
 | 8 | Real-data ETLs for `territory_metrics.market_potential` | Reltio/Veeva sprint dependency | no issue |
 | 9 | `test_repeated_k10_*` excluded from Backend CI (OOM) | Lazy-import refactor required | `memory/repeated_k10_test_oom_followup.md` |
+| 10 | **Layer-1 contracts + Layer-5 declared-safe + #544 route-to-review are INERT in the default prod path** | `scope_definer.schemas.feature_manifest_source` defaults `None` and nothing in `src/` sets it non-None, so manifest-gated defenses only fire in operator-script runs that pass a manifest. §2 presents Layer-5 as ACHIEVED end-to-end; that is true for operator runs, not the default prod path. | gap G13 — needs prod manifest-wiring (`.claude/plans/manifest-wiring-and-live-tier0-trigger`) |
+| 11 | **Layer-3 FDR firing driver over-drops legit features on SYNTHETIC fixtures** | The #538 confident-set driver can't distinguish designed outcome-correlation (synthetic fixtures) from leakage; over-drops `days_on_therapy`/`prior_treatments` (#594). Mitigated CI-scoped (`_resolve_adaptive_fdr_enabled` disables FDR for synthetic *generation* only; real runs keep it ON); in-code comment scoped to the Optum cohort. | gap G4 — root cause still needs a dedicated GitHub issue (not yet filed) |
+| 12 | **Synthetic-regime CI metric bands are LOCAL placeholders, not CI-measured** | `test_synthetic_baseline_invariant.py` `BASELINE_CI`/`TRAIN_VAL_DELTA_MAX_CI` and `test_synthetic_cohort_growth.py` `auc_band_empirical_hpo5_ci` carry `# placeholder` (LOCAL AVX2 numbers under CI AVX512). Replacement requires a green slow-tests run (now monitored — gap G1) to capture faithful AVX512 envelopes; measured metrics are not yet surfaced on green runs. | gap G8 — blocked on a green monitored slow-tests run; cannot be produced locally (faithful-env constraint) |
+| 13 | **Real CSU/Optum empirical AUC bands are point-in-time, manual-refresh only** | Empirical pins (CSU ~[0.62,0.68], Optum floor 0.4147) were measured on the May-10 / Apr-26 cohorts; RWD is gitignored so CI cannot regression-test them. They are refreshed only via the manual runbook below (`ALLOW_MISSING_REAL_DATA` skips them in CI). | gap G15 — by design (no de-identified RWD in CI); treat numbers as point-in-time |
 
-None of these block the "model performance + leakage mitigation" goals.
+None of these block the "model performance + leakage mitigation" goals. Rows 10–13
+were surfaced by the WS1–WS4 tier0 testing/reporting review (gaps G13/G4/G8/G15);
+the testing/reporting visibility fixes (coverage guard, slow-lane alarm, MLflow
+artifact logging, regulatory-manifest surfacing) shipped in the same effort.
 
 ---
 
@@ -453,3 +460,13 @@ The Optum n=1294 cohort produces `val_AUC=0.79` on a single split but `test_AUC=
 5. **Run Optum** (if `data/rwd/Optum_Parquet/` present): `python scripts/run_optum_tier0_test.py --cohort initiation --disable-mlflow`
 6. **Verify chosen_threshold_source values** in the JSON outputs match this report's claims (`"validation"`, `"validation_cost_optimal"`, or `"validation_f1_fallback"` — never `"test"`).
 7. **Cross-check** each §2 file:line anchor still implements the cited control; refresh line numbers if they drift.
+8. **Refresh the empirical AUC bands (point-in-time — gap G15):** the real-cohort
+   bands in §4B (CSU ~[0.62, 0.68], Optum floor 0.4147) are **not** regression-tested
+   in CI — RWD is gitignored and `ALLOW_MISSING_REAL_DATA=1` skips them. They were
+   last measured on the May-10 / Apr-26 cohorts; treat them as point-in-time. To
+   refresh: re-run steps 4–5 against the current cohorts and update §4B + the band
+   constants in `tests/integration/test_csu_negative_control_20260510.py`. The
+   synthetic-regime CI bands (`test_synthetic_baseline_invariant.py`,
+   `test_synthetic_cohort_growth.py`) are still LOCAL placeholders (gap G8) —
+   replace them from a green run of the now-monitored `slow-tests.yml` lane (the
+   measured AVX512 values cannot be produced on a local AVX2 box).
