@@ -68,6 +68,10 @@ TABLE_LOAD_ORDER = [
     # ML and prediction data
     ("ml_predictions", "e2i_ml_v3_ml_predictions.json"),
     ("ml_preprocessing_metadata", "e2i_ml_v3_preprocessing_metadata.json"),
+    # #577 WS1-MP-009 feature_drift: model_id FK is nullable (seed NULLs it), so order vs the
+    # empty ml_model_registry is not load-blocking; it has 5 rows so it is NOT in the
+    # tolerate-empty allowlist (the load_all exit-code check below).
+    ("ml_drift_history", "e2i_ml_v3_ml_drift_history.json"),
     # Triggers and activities
     ("triggers", "e2i_ml_v3_triggers.json"),
     ("agent_activities", "e2i_ml_v3_agent_activities.json"),

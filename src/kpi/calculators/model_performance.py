@@ -225,12 +225,20 @@ class ModelPerformanceCalculator(KPICalculatorBase):
         """
         model_name = context.get("model_name", "default_model")
 
-        # #574: the SQL leg's source table `feature_drift_metrics` does not exist in the
-        # schema (no drift-metrics pipeline was ever provisioned), so there is deliberately
-        # NO registry entry for it — `kpi_query` returns an "unknown query_id" error, which
-        # the SQL leg records as unavailable (never fabricated) and falls back to MLflow.
-        # The two-leg fail-closed contract (and its tests) is preserved.
-        sql_result, sql_error = self._execute_query("model_performance_feature_drift", [model_name])
+        # #577 WS1-MP-009: the SQL leg is now REGISTERED + seeded (migration 053). It is a
+        # CORPUS-level aggregate — `SELECT AVG(test_statistic) AS avg_psi FROM ml_drift_history
+        # WHERE test_type='psi' AND drift_type='data'` — registered with max_params=0, so the
+        # call binds NO params. We deliberately do NOT bind `model_name` here: the calculator's
+        # model_name is a STRING but ml_drift_history keys on a UUID `model_id` (NULL in the
+        # seed — ml_model_registry has 0 rows), so a filter would be a LABEL-not-functional
+        # no-op falsely implying per-model scoping that does not exist (cf. the max_params=0
+        # siblings model_performance_shap_coverage and data_quality_label_quality). A 1-element
+        # `params` would make `kpi_query` RAISE "expects 0 param(s), got 1". A future PR that
+        # seeds real ml_model_registry rows + per-model drift can promote this to arity 1.
+        # `model_name` is still used by the MLflow fallback leg below. The two-leg fail-closed
+        # contract is preserved: empty/unseeded table -> AVG over 0 rows is NULL -> MLflow ->
+        # fail-closed UNKNOWN (never a fabricated PSI).
+        sql_result, sql_error = self._execute_query("model_performance_feature_drift", [])
 
         # First leg: SQL succeeded with a real PSI.
         if sql_result:
