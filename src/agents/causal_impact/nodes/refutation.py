@@ -22,6 +22,8 @@ import math
 import time
 from typing import Any, Dict, List, Optional, Tuple, cast
 
+import numpy as np
+
 from src.agents.causal_impact.state import (
     CausalImpactState,
     RefutationResults,
@@ -225,10 +227,14 @@ def _reconstruct_dowhy_artifacts(
         # be reconstructed as continuous — a different model whose ATE could
         # coincidentally land within tolerance, refuting a different estimate
         # than the one on screen (silent-wrong). #583 follow-up (codex HIGH).
-        treatment_values = data[treatment]
-        if not bool((treatment_values == treatment_values.astype(int)).all()):
+        # Use the SAME NumPy ops as production (estimation.py:170-172) so the
+        # integer-vs-continuous decision and the median split are byte-identical
+        # (incl. how a NaN treatment fails — there it raises in estimation
+        # before any estimate exists; here it fail-closes via the wrapper).
+        treatment_arr = data[treatment].to_numpy()
+        if not np.array_equal(treatment_arr, treatment_arr.astype(int)):
             data = data.copy()
-            data[treatment] = (treatment_values > treatment_values.median()).astype(int)
+            data[treatment] = (treatment_arr > np.median(treatment_arr)).astype(int)
 
         # Forest-based CATE estimators (CausalForestDML, DRLearner) REQUIRE
         # effect modifiers X — econml raises "does not support X=None" without
