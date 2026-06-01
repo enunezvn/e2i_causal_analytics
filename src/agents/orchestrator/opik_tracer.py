@@ -511,15 +511,21 @@ class OrchestratorOpikTracer:
                     "query_id": query_id,
                 },
             )
-            yield ctx
-
         except Exception as e:
             logger.warning(f"Failed to create orchestration trace: {e}")
-            yield OrchestrationTraceContext(
+            trace = None
+            ctx = OrchestrationTraceContext(
                 trace=None,
                 tracer=self,
                 query_id=query_id,
             )
+
+        # Single yield OUTSIDE any except (issue #606): an exception thrown into
+        # the body via __aexit__'s athrow() MUST propagate — catching it here and
+        # yielding again raises "generator didn't stop after athrow()" and masks
+        # the real error. Mirrors heterogeneous_optimizer/opik_tracer.py.
+        try:
+            yield ctx
         finally:
             if trace:
                 try:
