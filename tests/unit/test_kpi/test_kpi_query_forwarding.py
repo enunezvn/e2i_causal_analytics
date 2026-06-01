@@ -52,8 +52,12 @@ ALL_CALCULATORS = [
 # per-subject n_i) over a coherent LATENT-TRUTH reseed of ml_annotations (each iaa_group
 # co-rates ONE subject; annotators agree with the latent truth ~92% of the time → a
 # realistic substantial κ, NOT the prior independent-noise κ≈0).
-# => Every metric #574 left fail-loud is now wired; MISSING_METRICS is empty (feature_drift
-#    WS1-MP-009 is tuple-returning and tracked separately, not in this forwarding list).
+# #577 WS1-MP-009 _calc_feature_drift is now WIRED (meaning e2e in
+# test_577_feature_drift_live.py): the corpus-level AVG Population Stability Index over the
+# coherently-seeded ml_drift_history (migration 053). It is tuple-returning (value, error) and
+# fail-CLOSED (returns (None, error) -> KPIStatus.UNKNOWN), so it NEVER raises and is tracked
+# separately from this raising-forwarding list — see the dedicated forwarding/arity lock below.
+# => Every metric #574 left fail-loud is now wired; MISSING_METRICS is empty.
 MISSING_METRICS: list[tuple[type, str]] = []
 
 
@@ -397,6 +401,58 @@ def test_label_quality_shuffle_disproof_collapses_kappa():
     k_shuffled = calc._calc_label_quality({})
     assert abs(k_shuffled) < 0.2, f"shuffled κ should collapse to ≈0, got {k_shuffled}"
     assert k_coherent - k_shuffled > 0.4
+
+
+# --- #577 WS1-MP-009: feature_drift wired (corpus PSI over the seeded ml_drift_history) -----
+
+
+def _mp_calc_returning(rows):
+    """A ModelPerformanceCalculator whose kpi_query RPC returns `rows`."""
+    client = MagicMock()
+    client.rpc.return_value.execute.return_value = MagicMock(data=rows)
+    return ModelPerformanceCalculator(db_client=client), client
+
+
+def test_feature_drift_forwards_to_allowlist_with_no_params():
+    """WS1-MP-009 forwards to the allowlisted query_id with NO params (max_params=0 corpus
+    aggregate — model_id is NULL so there is no honest per-model band; same as
+    model_performance_shap_coverage / data_quality_label_quality). This LOCKS the arity:
+    the calculator passes a STRING model_name but ml_drift_history keys on a UUID model_id, so
+    binding it would be a LABEL-not-functional no-op — the SQL leg must pass []. A 1-element
+    params would make kpi_query RAISE 'expects 0 param(s), got 1' against migration 053."""
+    calc, client = _mp_calc_returning([{"avg_psi": 0.094332}])
+    value, error = calc._calc_feature_drift({"model_name": "tier0_df99c7ba"})
+    client.rpc.assert_called_once_with(
+        "kpi_query", {"query_id": "model_performance_feature_drift", "params": []}
+    )
+    # SQL leg succeeds -> tuple (value, None); MLflow is NOT consulted.
+    assert error is None
+    assert abs(value - 0.094332) < 1e-9
+
+
+def test_feature_drift_sql_success_does_not_consult_mlflow():
+    """When the SQL leg returns a real avg_psi, the tuple contract returns it and the MLflow
+    fallback is never reached (preserves the existing test_sql_succeeds_uses_db_value contract
+    now that the query_id is registered). Exercises the real RPC-forwarding SQL leg directly."""
+    client = MagicMock()
+    client.rpc.return_value.execute.return_value = MagicMock(data=[{"avg_psi": 0.13}])
+    # Poison MLflow (via the constructor param) so consulting it would surface — it must not be.
+    poisoned = MagicMock()
+    poisoned.get_latest_versions.side_effect = AssertionError("MLflow consulted on SQL success")
+    calc = ModelPerformanceCalculator(db_client=client, mlflow_client=poisoned)
+    value, error = calc._calc_feature_drift({"model_name": "m"})
+    assert (value, error) == (0.13, None)
+
+
+def test_feature_drift_null_avg_psi_falls_through_to_fail_loud():
+    """Empty/unseeded ml_drift_history -> AVG over 0 rows is SQL NULL -> the SQL leg records
+    null_avg_psi, MLflow (no client) is unavailable, and the calculator returns the tuple
+    (None, combined_error) naming BOTH legs — fail-CLOSED, never a fabricated PSI."""
+    calc, _ = _mp_calc_returning([{"avg_psi": None}])
+    value, error = calc._calc_feature_drift({"model_name": "m"})
+    assert value is None
+    assert "sql_leg=db_query_returned_empty:null_avg_psi" in error
+    assert "mlflow_leg=" in error
 
 
 def test_dq008_status_is_higher_is_better():

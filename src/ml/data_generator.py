@@ -54,6 +54,64 @@ from src.ml.synthetic.clinical_codes import (
 random.seed(42)
 np.random.seed(42)
 
+
+def _compute_feature_psi(
+    ref_mean: float,
+    ref_std: float,
+    cur_mean: float,
+    cur_std: float,
+    bins: int = 10,
+    window_std: float = 3.0,
+    eps: float = 1e-4,
+) -> float:
+    """Population Stability Index between two PARAMETRIC Gaussians (#577 WS1-MP-009).
+
+    This is the SINGLE source of the feature-drift PSI formula, shared by migration 053's
+    seeded ``ml_drift_history`` literals, the coherent generator mirror
+    (:meth:`E2IDataGenerator._generate_ml_drift_history`), and the live e2e's in-test recompute.
+
+    The reference is stored as a parametric ``{mean, std}`` per feature in
+    ``ml_preprocessing_metadata.feature_distributions`` — NOT as raw samples — so it is binned
+    via the Gaussian CDF (distinct from the sample-based :func:`calculate_psi` over histograms in
+    ``src.kpi.calculators.model_performance``).
+
+    Contract (must stay identical across migration/generator/test or PSI is not comparable):
+      - K=``bins`` equal-width bins over the SHARED edges
+        ``linspace(ref_mean - window_std*ref_std, ref_mean + window_std*ref_std, bins+1)``.
+      - Bin masses are CDF differences; the left/right tails are folded into the end bins so
+        each distribution sums to exactly 1.0. ``p`` uses the reference Gaussian, ``q`` the current.
+      - An ``eps`` floor is clipped before the log (defensive against empty bins on larger
+        shifts; inert for realistic low-moderate drift where the min bin mass ~0.008 >> eps).
+      - PSI = ``sum_b (q_b - p_b) * ln(q_b / p_b)`` — 0.0 exactly when current == reference,
+        non-negative, monotone in drift. Pure numpy + stdlib ``math.erf`` (NO scipy dependency).
+    """
+    edges = np.linspace(ref_mean - window_std * ref_std, ref_mean + window_std * ref_std, bins + 1)
+
+    def _masses(mean: float, std: float) -> np.ndarray:
+        z = (edges - mean) / std
+        cdf = np.array([0.5 * (1.0 + math.erf(v / math.sqrt(2.0))) for v in z])
+        masses = np.diff(cdf)
+        masses[0] += cdf[0]  # fold the left tail into the first bin
+        masses[-1] += 1.0 - cdf[-1]  # fold the right tail into the last bin
+        return masses
+
+    p = np.clip(_masses(ref_mean, ref_std), eps, None)
+    q = np.clip(_masses(cur_mean, cur_std), eps, None)
+    return float(np.sum((q - p) * np.log(q / p)))
+
+
+# Per-feature drift map for the coherent ml_drift_history seed (#577 WS1-MP-009): a textbook
+# low-moderate production drift (mean shift in reference-std units + a std multiplier), distinct
+# per feature, DETERMINISTIC (no RNG). MUST match migration 053's literals.
+_DRIFT_MAP: dict[str, tuple[float, float]] = {
+    "age": (0.32, 1.10),
+    "risk_score": (0.28, 0.93),
+    "days_since_dx": (0.30, 1.06),
+    "prior_rx_count": (0.30, 1.12),
+    "comorbidity_count": (0.24, 0.90),
+}
+_DRIFT_DEFAULT = (0.30, 1.05)  # any unmapped feature still drifts coherently (never KeyErrors)
+
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
@@ -248,6 +306,7 @@ class E2IDataGenerator:
         self.etl_pipeline_metrics: list[Dict[str, Any]] = []
         self.hcp_intent_surveys: list[Dict[str, Any]] = []
         self.reference_universe: list[Dict[str, Any]] = []
+        self.ml_drift_history: list[Dict[str, Any]] = []  # #577 WS1-MP-009 feature_drift (PSI)
 
         # Tracking
         self.patient_splits: dict[str, str] = {}  # patient_id -> split
@@ -275,6 +334,7 @@ class E2IDataGenerator:
         self._generate_hcp_intent_surveys()
 
         self._generate_preprocessing_metadata()
+        self._generate_ml_drift_history()
 
         print("\nGeneration complete!")
         self._print_summary()
@@ -1409,6 +1469,73 @@ class E2IDataGenerator:
             "preprocessing_pipeline_version": "3.0.0",
         }
 
+    def _generate_ml_drift_history(self):
+        """Generate the coherent ml_drift_history mirror for #577 WS1-MP-009 (feature_drift / PSI).
+
+        The SERVED DB is reseeded authoritatively by migration 053; this is the coherent MIRROR
+        so a from-scratch regenerate is ALSO coherent (the 052 source-of-truth framing). Both use
+        the SAME baseline (the feature_distributions just generated), the SAME deterministic
+        per-feature :data:`_DRIFT_MAP`, and the SAME K=10 :func:`_compute_feature_psi` — so the PSI
+        is COMPUTED, never hardcoded. They are coherent-EQUIVALENT by construction, not byte-
+        identical: the generator's baselines are seeded ``random.uniform`` draws (so they differ
+        from the live DB's stored values), which is why the live e2e asserts a RANGE + an in-test
+        recompute, never the exact float.
+
+        Each row stores its OWN rounded baseline/current mean+std and a ``test_statistic`` recomputed
+        FROM those rounded stats, so the row is self-reproducible by an auditor (anti-fabrication).
+        """
+        print("  - Generating ML drift history (PSI)...")
+
+        dist = self.preprocessing_metadata["feature_distributions"]
+        now = datetime.now()
+        baseline_start = (now - timedelta(days=60)).isoformat()
+        baseline_end = (now - timedelta(days=30)).isoformat()
+        current_start = baseline_end
+        current_end = now.isoformat()
+
+        self.ml_drift_history = []
+        for feature, stats in dist.items():
+            ref_mean = round(float(stats["mean"]), 4)
+            ref_std = round(float(stats["std"]), 4)
+            mean_shift, std_mult = _DRIFT_MAP.get(feature, _DRIFT_DEFAULT)
+            # Round the current stats FIRST, then compute PSI from the rounded values, so the
+            # stored test_statistic is reproducible from the stored mean/std (mirrors migration 053).
+            cur_mean = round(ref_mean + mean_shift * ref_std, 4)
+            cur_std = round(ref_std * std_mult, 4)
+            psi = round(_compute_feature_psi(ref_mean, ref_std, cur_mean, cur_std), 6)
+            drift_detected = psi > 0.10
+            self.ml_drift_history.append(
+                {
+                    "id": str(uuid.uuid4()),
+                    "model_id": None,  # ml_model_registry has 0 rows — honest NULL, not a fake UUID
+                    "drift_type": "data",
+                    "feature_name": feature,
+                    "test_type": "psi",
+                    "test_statistic": psi,
+                    "threshold": 0.10,  # the YAML target, not the table DEFAULT 0.05
+                    "drift_detected": drift_detected,
+                    "severity": "low" if drift_detected else "none",  # strictly below 'medium'
+                    "baseline_start": baseline_start,
+                    "baseline_end": baseline_end,
+                    "current_start": current_start,
+                    "current_end": current_end,
+                    "baseline_mean": ref_mean,
+                    "baseline_std": ref_std,
+                    "current_mean": cur_mean,
+                    "current_std": cur_std,
+                    "drift_score": psi,
+                    "raw_results": {
+                        "method": "psi_gaussian_cdf",
+                        "bins": 10,
+                        "window_std": 3,
+                        "eps": 0.0001,
+                        "mean_shift_std": mean_shift,
+                        "std_mult": std_mult,
+                    },
+                    "detected_by": "kpi_577_seed",
+                }
+            )
+
     def _print_summary(self):
         """Print generation summary."""
         # Count by split
@@ -1477,6 +1604,7 @@ class E2IDataGenerator:
         exports = {
             "e2i_ml_v3_split_registry.json": [split_registry],
             "e2i_ml_v3_preprocessing_metadata.json": [self.preprocessing_metadata],
+            "e2i_ml_v3_ml_drift_history.json": self.ml_drift_history,
             "e2i_ml_v3_reference_universe.json": self.reference_universe,
             "e2i_ml_v3_hcp_profiles.json": self.hcp_profiles,
             "e2i_ml_v3_patient_journeys.json": self.patient_journeys,

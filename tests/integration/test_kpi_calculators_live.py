@@ -113,6 +113,12 @@ SPECS = [
         # 044-but-not-052 target.
         [],
     ),
+    # #577 WS1-MP-009: _calc_feature_drift is wired to the corpus AVG PSI over the coherently-
+    # seeded ml_drift_history (migration 053), but its faithful e2e lives in
+    # test_577_feature_drift_live.py — which capability-gates on its OWN query_id
+    # (model_performance_feature_drift). Kept out of this shared list (which gates only on the
+    # 044-era causal_metrics_ate) to avoid a FAIL (vs skip) on a 044-but-not-053 target; it is
+    # also tuple-returning + fail-closed (never raises), unlike this list's raising contract.
     (ModelPerformanceCalculator, ["_calc_shap_coverage"], []),
 ]
 
