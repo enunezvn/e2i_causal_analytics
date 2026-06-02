@@ -51,9 +51,16 @@ async def save_checkpoint(state: Dict[str, Any]) -> Dict[str, Any]:
             "checkpoint_path": None,
         }
 
-    # Check if we have a trained model
+    # Check if we have a trained model.
+    # #633: checkpoint the DEPLOYED model — the calibrated estimator when
+    # post-hoc calibration was applied (evaluator promotes ``deployed_model``),
+    # else the raw ``trained_model``. Falling back to ``trained_model`` keeps
+    # every non-binary / calibration-skipped path byte-for-byte unchanged.
     trained_model = state.get("trained_model")
-    if trained_model is None:
+    model_to_checkpoint = state.get("deployed_model")
+    if model_to_checkpoint is None:
+        model_to_checkpoint = trained_model
+    if model_to_checkpoint is None:
         logger.warning("No trained model to checkpoint")
         return {
             "checkpoint_status": "skipped",
@@ -81,8 +88,8 @@ async def save_checkpoint(state: Dict[str, Any]) -> Dict[str, Any]:
         checkpoint_path = checkpoint_dir / f"{checkpoint_name}.pkl"
         metadata_path = checkpoint_dir / f"{checkpoint_name}_metadata.json"
 
-        # Save model
-        model_hash = _save_model(trained_model, checkpoint_path, framework)
+        # Save model (#633: the deployed/calibrated model when applicable)
+        model_hash = _save_model(model_to_checkpoint, checkpoint_path, framework)
 
         # Prepare metadata
         metadata = _prepare_metadata(state, checkpoint_name, model_hash)

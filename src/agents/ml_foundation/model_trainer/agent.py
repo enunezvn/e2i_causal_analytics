@@ -354,8 +354,18 @@ class ModelTrainerAgent:
             error_type = final_state.get("error_type", "unknown_error")
             raise RuntimeError(f"Training error ({error_type}): {error_msg}")
 
-        # Extract outputs from final state
-        trained_model = final_state.get("trained_model")
+        # Extract outputs from final state.
+        # #633: return the DEPLOYED model as ``trained_model`` — the calibrated
+        # estimator when post-hoc calibration was applied (evaluator promotes
+        # ``deployed_model``), else the raw model. Downstream consumers (tier0
+        # runner, deployer) treat ``output["trained_model"]`` as the artifact to
+        # ship, so it MUST be the calibrated model whose probabilities the v3
+        # gates were judged on. Falling back to the raw model keeps non-binary /
+        # calibration-skipped paths unchanged.
+        trained_model = final_state.get("deployed_model")
+        if trained_model is None:
+            trained_model = final_state.get("trained_model")
+        calibration_applied = bool(final_state.get("calibration_applied", False))
         train_metrics = final_state.get("train_metrics", {})
         validation_metrics = final_state.get("validation_metrics", {})
         test_metrics = final_state.get("test_metrics", {})
@@ -479,6 +489,9 @@ class ModelTrainerAgent:
             "training_run_id": training_run_id,
             "model_id": model_id,
             "trained_model": trained_model,
+            # #633: audit flag — True iff ``trained_model`` above is the
+            # post-hoc calibrated estimator (not the raw model).
+            "calibration_applied": calibration_applied,
             # Metrics
             "train_metrics": train_metrics,
             "validation_metrics": validation_metrics,

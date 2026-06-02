@@ -255,6 +255,17 @@ class ModelTrainerState(BaseAgentSchema):
 
     # Model Training
     trained_model: Optional[Any] = None  # Trained model (sklearn / xgboost / etc.)
+    # #633: the DEPLOYED artifact. The evaluator builds a post-hoc
+    # ``calibrated_model`` for diagnostics; when calibration is actually
+    # applied this is the genuinely better-calibrated estimator that gets
+    # MLflow-logged / checkpointed / returned (and whose probabilities the
+    # v3 calibration gates are judged on). When calibration is skipped
+    # (calibration-native algo, no val data, unapplied) the deployed model
+    # stays the raw ``trained_model``. Declared here because LangGraph drops
+    # undeclared state keys (extra="ignore"), which would silently revert
+    # downstream nodes to the raw model.
+    deployed_model: Optional[Any] = None
+    calibration_applied: Optional[bool] = None  # True iff deployed_model is calibrated
     training_duration_seconds: Optional[float] = None
     early_stopped: Optional[bool] = None
     final_epoch: Optional[int] = None
