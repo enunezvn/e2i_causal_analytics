@@ -49,6 +49,13 @@ def _run_tier0(env_overrides: Dict[str, str], regime: str) -> Dict[str, Any]:
 
     env = os.environ.copy()
     env.update(env_overrides)
+    # #594/#556: this e2e has NO live Feast store. Post #556 the freshness check
+    # FAILS CLOSED when Feast is unavailable → all features read stale → the
+    # registrar QC gate hard-blocks training → empty validation_metrics →
+    # "roc_auc missing". ALLOW_STALE_FEAST=1 is the #556 escape hatch for these
+    # intentional no-Feast environments. (#594 set this in the 3 sibling synthetic
+    # e2e helpers but missed this one — #617.)
+    env["ALLOW_STALE_FEAST"] = "1"
     env["TIER0_E2E_JSON_OUT"] = str(artifact_path)
 
     completed = subprocess.run(
