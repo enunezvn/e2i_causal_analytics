@@ -195,7 +195,7 @@ class TrainingResult(TypedDict, total=False):
 
     # Success criteria
     success_criteria_met: bool
-    success_criteria_results: Dict[str, bool]
+    success_criteria_results: Dict[str, Optional[bool]]  # value None = criterion skipped/NaN (#617)
 
     # HPO results
     best_hyperparameters: Dict[str, Any]

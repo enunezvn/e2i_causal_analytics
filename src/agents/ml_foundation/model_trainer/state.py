@@ -361,7 +361,13 @@ class ModelTrainerState(BaseAgentSchema):
 
     # Success Criteria Check
     success_criteria_met: Optional[bool] = None
-    success_criteria_results: Optional[Dict[str, bool]] = None  # Metric -> passed/failed
+    # Values are Optional[bool]: the v3 adaptive evaluator records ``None`` for a
+    # criterion that was skipped or whose metric was NaN (Option C audit
+    # contract). A ``Dict[str, bool]`` rejected those, crashing the
+    # LangGraph->Pydantic coercion with ValidationError (#617).
+    success_criteria_results: Optional[Dict[str, Optional[bool]]] = (
+        None  # Metric -> passed/failed/skipped
+    )
 
     # PR #463 Phase 2 — post-training learning-curve diagnostic.
     # Populated by the ``learning_curve`` node when
