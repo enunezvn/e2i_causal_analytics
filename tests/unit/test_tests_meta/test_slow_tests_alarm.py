@@ -154,3 +154,33 @@ def test_summary_reads_heavy_output_not_masked_result() -> None:
     assert f"needs.{HEAVY_JOB}.outputs.{HEAVY_OUTPUT}" in step_envs, (
         "summary must surface excluded-heavy-tests via its heavy_result output."
     )
+
+
+def _job_uses_checkout(job: dict) -> bool:
+    return any("actions/checkout" in str(s.get("uses", "")) for s in job.get("steps", []))
+
+
+def _job_or_steps_set_gh_repo(job: dict) -> bool:
+    """GH_REPO present at job level or on any step's env."""
+    if "GH_REPO" in (job.get("env") or {}):
+        return True
+    return any("GH_REPO" in (s.get("env") or {}) for s in job.get("steps", []))
+
+
+def test_alarm_job_can_resolve_repo() -> None:
+    """The alarm must be able to RUN, not just be wired correctly.
+
+    ``report-failure`` invokes ``gh issue list`` / ``gh issue create`` under
+    ``set -euo pipefail``. With neither an ``actions/checkout`` step (which gives
+    gh a git remote to resolve) nor an explicit ``GH_REPO`` env, gh dies with
+    ``failed to run git: fatal: not a git repository`` — and the only nightly
+    slow-tests/tier0-e2e rot alarm silently never files an issue (it failed that
+    way unnoticed for 5+ days). Require one of the two so a future edit can't
+    re-break the alarm's ability to execute (#615).
+    """
+    alarm = _jobs()[ALARM_JOB]
+    assert _job_uses_checkout(alarm) or _job_or_steps_set_gh_repo(alarm), (
+        f"{ALARM_JOB} runs gh without a repo context: add `actions/checkout` or "
+        "set `env: GH_REPO: ${{ github.repository }}` so gh can resolve the repo "
+        "(otherwise it fails 'not a git repository' and no tracking issue is filed)."
+    )
