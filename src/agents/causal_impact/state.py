@@ -238,6 +238,14 @@ class CausalImpactState(TypedDict):
     estimation_result: NotRequired[EstimationResult]
     estimation_latency_ms: NotRequired[float]
     estimation_error: NotRequired[str]
+    # Data passthrough from estimation -> refutation. The refutation node
+    # reconstructs the DoWhy CausalModel from this frame (refutation.py:520,
+    # added in 65dcf6eb). It MUST be a declared field: LangGraph's StateGraph
+    # only persists channels named in this TypedDict, so an undeclared key
+    # returned by the estimation node is dropped between nodes — refutation then
+    # fail-closes ("estimation_data passthrough is missing") and the agent
+    # returns ate=None for EVERY real query that reaches refutation (#606).
+    estimation_data: NotRequired[Any]
 
     # V4.2 Enhancement: Energy Score Configuration & Outputs
     energy_score_enabled: NotRequired[bool]  # Enable energy score selection (default: True)

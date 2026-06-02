@@ -797,16 +797,24 @@ class RefutationRunner:
 
         if use_dowhy and causal_model is not None:
             try:
+                # Pass num_simulations ONLY when configured, so prod (no key set)
+                # keeps DoWhy's own default exactly. DoWhy defaults to 100
+                # simulations here; each re-adds a random common cause and
+                # re-estimates (~1.4s on this fixture -> ~140s), which dominates
+                # the whole pipeline. Callers (e.g. the Tier 1-5 smoke harness)
+                # can bound it via ``refutation_config`` like the other tests. (#606)
+                _rcc_cfg = self.config["random_common_cause"]
+                _rcc_kwargs: Dict[str, Any] = {
+                    "method_name": "random_common_cause",
+                    "effect_strength_on_treatment": _rcc_cfg["effect_strength"],
+                    "effect_strength_on_outcome": _rcc_cfg["effect_strength"],
+                }
+                if "num_simulations" in _rcc_cfg:
+                    _rcc_kwargs["num_simulations"] = _rcc_cfg["num_simulations"]
                 refutation = causal_model.refute_estimate(
                     identified_estimand,
                     estimate,
-                    method_name="random_common_cause",
-                    effect_strength_on_treatment=self.config["random_common_cause"][
-                        "effect_strength"
-                    ],
-                    effect_strength_on_outcome=self.config["random_common_cause"][
-                        "effect_strength"
-                    ],
+                    **_rcc_kwargs,
                 )
                 refuted_effect = float(refutation.new_effect)
                 # Iter-2 codex H4: p_value must come from real refuter output.
