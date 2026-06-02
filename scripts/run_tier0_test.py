@@ -39,6 +39,7 @@ Author: E2I Causal Analytics Team
 import argparse
 import asyncio
 import json
+import math
 import os
 import signal
 import subprocess
@@ -113,6 +114,95 @@ class TestConfig:
 
 
 CONFIG = TestConfig()
+
+
+# =============================================================================
+# CHAMPION SELECTION — calibration-aware tiebreak among discrimination-ties
+# =============================================================================
+#
+# Step 5b trains the primary model_candidate plus every alternative_candidate
+# from model_selector, then must pick ONE champion to deploy. The historical
+# rule was a strict ``max(..., key=auc_roc)`` argmax. When several candidates
+# are *discrimination-tied* (their test AUCs are within measurement noise of
+# the best), a strict argmax picks an ARBITRARY tie member — which can be a
+# worse-calibrated model. Calibration quality is a genuine deployment virtue
+# (van Calster 2019): among models that rank cases equally well, the one whose
+# predicted probabilities are closest to the truth is strictly better to ship.
+#
+# Policy: select the highest-AUC candidate; then AMONG candidates whose AUC is
+# within ``_AUC_TIE_BAND`` of that maximum (a genuine discrimination tie),
+# prefer the one with the lowest deploy-calibrated calibration slope deviation
+# (``|slope - 1|``, the metric the v3 ``maximum_calibration_slope_deviation``
+# gate judges). This NEVER sacrifices discrimination (the candidate must still
+# be inside the AUC tie-band of the best) and always moves toward better
+# calibration, so it cannot regress accuracy/ranking — it only breaks ties in
+# the deployment-quality direction. Candidates lacking a finite slope
+# deviation sort last so a measurable tie member always wins over an
+# unmeasurable one.
+#
+# The band is a small absolute AUC delta: AUC differences below this are not
+# statistically meaningful at tier0 test-split sizes, so treating them as a
+# tie (and deciding on calibration instead) is the principled choice.
+_AUC_TIE_BAND = 0.01
+
+
+def _calibration_slope_deviation_of(result: dict | None) -> float:
+    """Return the deploy-calibrated calibration slope deviation for a trained
+    candidate's result dict, or ``+inf`` when it is missing / non-finite.
+
+    The evaluator writes ``calibration_slope_deviation = |slope - 1|`` into
+    ``test_metrics`` on the DEPLOYED (post-hoc calibrated, #633) probabilities,
+    which is exactly what the v3 ``maximum_calibration_slope_deviation`` gate
+    reads. Returning ``+inf`` for missing/NaN values makes such candidates sort
+    LAST in the tiebreak (a measurable tie member is always preferred), so the
+    tiebreak degrades gracefully to the legacy AUC argmax when no candidate
+    exposes a usable slope deviation.
+    """
+    if not isinstance(result, dict):
+        return float("inf")
+    tm = result.get("test_metrics")
+    if not isinstance(tm, dict):
+        return float("inf")
+    dev = tm.get("calibration_slope_deviation")
+    try:
+        dev_f = float(dev)
+    except (TypeError, ValueError):
+        return float("inf")
+    if math.isnan(dev_f) or math.isinf(dev_f):
+        return float("inf")
+    return abs(dev_f)
+
+
+def _select_champion(comparison_history: list[dict]) -> dict:
+    """Pick the champion from Step 5b candidates.
+
+    Two-stage, calibration-aware selection:
+
+    1. Find the maximum test AUC across all trained candidates.
+    2. Among candidates whose AUC is within ``_AUC_TIE_BAND`` of that maximum
+       (a genuine discrimination tie), pick the one with the lowest
+       deploy-calibrated ``calibration_slope_deviation`` (best calibration).
+
+    Stage 1 guarantees we never sacrifice discrimination; stage 2 only ever
+    decides AMONG discrimination-equals, always toward better calibration, so
+    the policy cannot regress accuracy/ranking. With a single candidate, or
+    when calibration is unavailable, this reduces to the legacy AUC argmax.
+    """
+    if not comparison_history:
+        raise ValueError("comparison_history is empty; no champion to select")
+    best_auc = max((h.get("auc_roc", 0) or 0) for h in comparison_history)
+    tied = [
+        h for h in comparison_history if (best_auc - (h.get("auc_roc", 0) or 0)) <= _AUC_TIE_BAND
+    ]
+    # Lowest slope deviation wins; ties on calibration fall back to highest AUC
+    # (then stable order) so selection stays deterministic.
+    return min(
+        tied,
+        key=lambda h: (
+            h.get("calibration_slope_deviation", float("inf")),
+            -(h.get("auc_roc", 0) or 0),
+        ),
+    )
 
 
 @dataclass
@@ -6414,6 +6504,9 @@ async def run_pipeline(
                     {
                         "algorithm": primary_algo,
                         "auc_roc": primary_auc,
+                        # Deploy-calibrated |slope-1| for the calibration-aware
+                        # tiebreak among discrimination-ties (see _select_champion).
+                        "calibration_slope_deviation": _calibration_slope_deviation_of(result),
                         "model_usefulness": model_usefulness,
                         "is_primary": True,
                     }
@@ -6515,14 +6608,22 @@ async def run_pipeline(
                             {
                                 "algorithm": alt["name"],
                                 "auc_roc": alt_auc,
+                                # Deploy-calibrated |slope-1| for the calibration-aware
+                                # tiebreak among discrimination-ties (see _select_champion).
+                                "calibration_slope_deviation": _calibration_slope_deviation_of(
+                                    alt_result
+                                ),
                                 "model_usefulness": alt_result.get("model_usefulness", "unknown"),
                                 "overfitting_severity": alt_result.get("overfitting_severity"),
                                 "is_primary": False,
                             }
                         )
 
-                    # Pick best model across all candidates by AUC
-                    best = max(comparison_history, key=lambda h: h["auc_roc"])
+                    # Pick best model across all candidates: highest AUC, with a
+                    # calibration-aware tiebreak among discrimination-ties so a
+                    # better-calibrated model wins over an AUC-equal but
+                    # worse-calibrated one (#633; see _select_champion).
+                    best = _select_champion(comparison_history)
                     if not best.get("is_primary"):
                         # An alternative won — swap it into state from cache
                         _winner = candidate_results[best["algorithm"]]
@@ -6579,7 +6680,10 @@ async def run_pipeline(
 
                 # Emit Step 5b comparison result
                 if len(comparison_history) > 1:
-                    _best = max(comparison_history, key=lambda h: h["auc_roc"])
+                    # Mirror the actual champion selection (calibration-aware
+                    # tiebreak among discrimination-ties) so the emitted winner
+                    # matches the candidate swapped into state above.
+                    _best = _select_champion(comparison_history)
                     _sorted = sorted(comparison_history, key=lambda h: h["auc_roc"], reverse=True)
                     _ranking = ", ".join(f"{h['algorithm']}={h['auc_roc']:.3f}" for h in _sorted)
                     step_results.append(
