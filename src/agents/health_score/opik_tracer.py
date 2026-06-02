@@ -485,15 +485,21 @@ class HealthScoreOpikTracer:
                     "experiment_name": experiment_name,
                 },
             )
-            yield ctx
-
         except Exception as e:
             logger.warning(f"Failed to create health check trace: {e}")
-            yield HealthCheckTraceContext(
+            trace = None
+            ctx = HealthCheckTraceContext(
                 trace=None,
                 tracer=self,
                 check_scope=check_scope,
             )
+
+        # Single yield OUTSIDE any except (issue #606): an exception thrown into
+        # the body via __aexit__'s athrow() MUST propagate — catching it here and
+        # yielding again raises "generator didn't stop after athrow()" and masks
+        # the real error. Mirrors heterogeneous_optimizer/opik_tracer.py.
+        try:
+            yield ctx
         finally:
             if trace:
                 try:

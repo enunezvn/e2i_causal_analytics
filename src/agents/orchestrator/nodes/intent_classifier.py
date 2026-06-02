@@ -32,6 +32,7 @@ from typing import Literal, cast
 
 from src.agents.multi_faceted import MULTI_FACETED_PATTERNS
 from src.utils.llm_factory import get_fast_llm, get_llm_provider
+from src.utils.mock_llm import llm_or_marked_mock
 
 from ..state import IntentClassification, OrchestratorState
 
@@ -180,8 +181,17 @@ class IntentClassifierNode:
 
     def __init__(self):
         """Initialize intent classifier with fast LLM for classification."""
-        # Use fast LLM (Haiku or gpt-4o-mini based on LLM_PROVIDER env var)
-        self.llm = get_fast_llm(max_tokens=256, timeout=2)
+        # Use fast LLM (Haiku or gpt-4o-mini based on LLM_PROVIDER env var).
+        # In keyless contexts (Tier 1-5 harness, #606) fall back to an opt-in
+        # MARKED mock (E2I_ALLOW_MOCK_LLM); prod stays fail-loud on a missing key.
+        # _llm_classify already degrades to "general" on any parse error, so the
+        # canned classification is a safe, parser-valid default.
+        self.llm = llm_or_marked_mock(
+            get_fast_llm,
+            '{"primary_intent": "general", "confidence": 0.85, "requires_multi_agent": false}',
+            max_tokens=256,
+            timeout=2,
+        )
         self._provider = get_llm_provider()
 
     async def execute(self, state: OrchestratorState) -> OrchestratorState:

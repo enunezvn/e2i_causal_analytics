@@ -9,6 +9,7 @@ import time
 from typing import Any, Dict, List
 
 from src.utils.llm_factory import get_fast_llm, get_llm_provider
+from src.utils.mock_llm import llm_or_marked_mock
 
 from .._agent_method_map import extract_narrative
 from ..state import AgentResult, OrchestratorState
@@ -38,8 +39,17 @@ class SynthesizerNode:
 
     def __init__(self):
         """Initialize synthesizer with fast LLM for synthesis."""
-        # Use fast LLM (Haiku or gpt-4o-mini based on LLM_PROVIDER env var)
-        self.llm = get_fast_llm(max_tokens=1024, timeout=5)
+        # Use fast LLM (Haiku or gpt-4o-mini based on LLM_PROVIDER env var).
+        # Keyless contexts (Tier 1-5 harness, #606) fall back to an opt-in MARKED
+        # mock (E2I_ALLOW_MOCK_LLM); prod stays fail-loud on a missing key. The
+        # synthesizer uses response.content directly as the response text, so a
+        # plain canned string is sufficient.
+        self.llm = llm_or_marked_mock(
+            get_fast_llm,
+            "Based on the analysis, here is a synthesized recommendation for the query.",
+            max_tokens=1024,
+            timeout=5,
+        )
         self._provider = get_llm_provider()
 
     async def execute(self, state: OrchestratorState) -> OrchestratorState:

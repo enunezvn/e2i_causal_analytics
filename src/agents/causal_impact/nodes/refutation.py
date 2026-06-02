@@ -718,5 +718,12 @@ async def refute_causal_estimate(
     Returns:
         Updated state with refutation_results
     """
-    node = RefutationNode(validation_repo=validation_repo)
+    # Callers may tune refutation rigor via ``parameters.refutation_config``
+    # (merged onto RefutationRunner.DEFAULT_CONFIG, per-key). This lets a smoke
+    # harness run the REAL refutation suite with fewer simulations — the full
+    # suite is ~610 dowhy re-estimations (placebo 100 + bootstrap 500 + subset
+    # 10), i.e. ~10-60 min depending on estimator, which no per-agent CI budget
+    # can hold. Omitted in prod -> None -> full DEFAULT_CONFIG (unchanged). (#606)
+    refutation_config = (state.get("parameters") or {}).get("refutation_config")
+    node = RefutationNode(config=refutation_config, validation_repo=validation_repo)
     return await node.execute(state)

@@ -4,6 +4,7 @@ Orchestrates multi-faceted queries by decomposing, planning, executing,
 and synthesizing results from multiple agent capabilities.
 """
 
+import json
 import logging
 import time
 from datetime import datetime, timezone
@@ -13,6 +14,101 @@ from .composer import ToolComposer, ToolComposerIntegration
 from .models.composition_models import CompositionResult
 
 logger = logging.getLogger(__name__)
+
+# Phase-appropriate canned payloads for the opt-in MARKED mock used in the
+# keyless Tier 1-5 harness (#606). The composition pipeline calls the LLM three
+# times (decompose -> plan -> synthesize) and parses .content as JSON with a
+# DIFFERENT shape each time; a single canned blob can't satisfy all three. These
+# mirror the proven shapes in tests/unit/test_agents/test_tool_composer/conftest
+# (which pass the unit suite). NOT used in prod (gated on E2I_ALLOW_MOCK_LLM +
+# no key); output carries mock_response_for_dev_only=True via MarkedMockChatLLM.
+_MOCK_DECOMPOSITION_JSON = json.dumps(
+    {
+        "reasoning": "Mock decomposition for keyless harness",
+        "sub_questions": [
+            {
+                "id": "sq_1",
+                "question": "What is the causal effect of hcp_visits on discontinuation?",
+                "intent": "CAUSAL",
+                "entities": ["hcp_visits", "discontinuation_flag"],
+                "depends_on": [],
+            },
+            {
+                "id": "sq_2",
+                "question": "How does the effect vary by prior_treatments?",
+                "intent": "COMPARATIVE",
+                "entities": ["prior_treatments"],
+                "depends_on": ["sq_1"],
+            },
+        ],
+    }
+)
+_MOCK_PLANNING_JSON = json.dumps(
+    {
+        "reasoning": "Mock planning for keyless harness",
+        "tool_mappings": [
+            {
+                "sub_question_id": "sq_1",
+                "tool_name": "causal_effect_estimator",
+                "confidence": 0.9,
+                "reasoning": "Matches causal intent",
+            },
+            {
+                "sub_question_id": "sq_2",
+                "tool_name": "causal_effect_estimator",
+                "confidence": 0.85,
+                "reasoning": "Second causal estimate on a different treatment",
+            },
+        ],
+        "execution_steps": [
+            {
+                "step_id": "step_1",
+                "sub_question_id": "sq_1",
+                "tool_name": "causal_effect_estimator",
+                "input_mapping": {
+                    # Binary engagement treatment (median split on hcp_visits),
+                    # added to context.estimation_data by the harness mapper. NOT
+                    # the raw hcp_visits count: every patient has >=1 visit so the
+                    # count has zero control units -> degenerate ATE (codex #606
+                    # MEDIUM). step_2 uses prior_treatments (has a 0 control group).
+                    "treatment": "high_hcp_engagement",
+                    "outcome": "discontinuation_flag",
+                    # Pull the real tier0 fixture DataFrame the harness threads via
+                    # context so causal_effect_estimator runs on REAL data (#606).
+                    "estimation_data": "$context.estimation_data",
+                },
+                "depends_on_steps": [],
+            },
+            {
+                "step_id": "step_2",
+                "sub_question_id": "sq_2",
+                # Route to the REAL causal_effect_estimator on a different
+                # treatment (not cate_analyzer, which returns hardcoded demo
+                # segments). Two real ATEs on the threaded fixture -> genuine
+                # 2/2 tool success, no fabrication (#606).
+                "tool_name": "causal_effect_estimator",
+                "input_mapping": {
+                    "treatment": "prior_treatments",
+                    "outcome": "discontinuation_flag",
+                    "estimation_data": "$context.estimation_data",
+                },
+                "depends_on_steps": [],
+            },
+        ],
+        "parallel_groups": [["step_1", "step_2"]],
+    }
+)
+_MOCK_SYNTHESIS_JSON = json.dumps(
+    {
+        "answer": "Mock synthesis: hcp_visits shows a causal association with discontinuation.",
+        "confidence": 0.85,
+        "supporting_data": {"effect_size": 0.12},
+        "citations": ["step_1", "step_2"],
+        "caveats": ["Synthetic mock output for keyless CI (no real LLM)."],
+        "failed_components": [],
+        "reasoning": "Mock combined reasoning",
+    }
+)
 
 
 # ============================================================================
@@ -209,10 +305,38 @@ class ToolComposerAgent:
                     self.llm_client = get_standard_llm()
                     logger.info("Initialized default LLM client from factory")
                 except Exception as e:
-                    raise RuntimeError(
-                        "ToolComposerAgent requires an LLM client. "
-                        "Provide llm_client in __init__ or set ANTHROPIC_API_KEY."
-                    ) from e
+                    # Keyless contexts (Tier 1-5 harness, #606): fall back to an
+                    # opt-in MARKED mock only when E2I_ALLOW_MOCK_LLM is set;
+                    # otherwise stay fail-loud (prod never gets a silent mock).
+                    from src.utils.mock_llm import MarkedMockChatLLM, mock_llm_allowed
+
+                    if not mock_llm_allowed():
+                        raise RuntimeError(
+                            "ToolComposerAgent requires an LLM client. "
+                            "Provide llm_client in __init__ or set ANTHROPIC_API_KEY."
+                        ) from e
+                    logger.warning(
+                        "tool_composer: no LLM key — using MARKED mock "
+                        "(E2I_ALLOW_MOCK_LLM); output carries "
+                        "mock_response_for_dev_only=True (#606)."
+                    )
+                    # Phase-aware: decompose -> plan -> synthesize each parse a
+                    # different JSON shape; return the right canned payload per
+                    # phase. Key on each node's ROLE-UNIQUE system-prompt phrase
+                    # ("...decomposition specialist" / "tool planning specialist"
+                    # / "...response synthesizer"). Loose keywords like "synth" /
+                    # "tool" collide because the planner embeds the tool registry,
+                    # which contains tools whose source_agent is
+                    # "prediction_synthesizer" -> "synth" hijacked the planning
+                    # call and fed it the synthesis JSON (#606).
+                    self.llm_client = MarkedMockChatLLM(
+                        _MOCK_SYNTHESIS_JSON,
+                        phase_responses=[
+                            ("decomposition specialist", _MOCK_DECOMPOSITION_JSON),
+                            ("planning specialist", _MOCK_PLANNING_JSON),
+                            ("response synthesizer", _MOCK_SYNTHESIS_JSON),
+                        ],
+                    )
 
             self._composer = ToolComposer(
                 llm_client=self.llm_client,

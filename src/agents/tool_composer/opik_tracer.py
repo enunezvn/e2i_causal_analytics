@@ -624,40 +624,46 @@ class ToolComposerOpikTracer:
             _tracer=self,
         )
 
+        # Enter the Opik context manager MANUALLY (not via `async with ... yield`)
+        # so the single yield below sits OUTSIDE any except. With the old nested
+        # `async with: yield` shape, an exception thrown into the body via
+        # __aexit__'s athrow() escaped the inner `except`, got swallowed, and fell
+        # through to a SECOND yield -> "generator didn't stop after athrow()",
+        # masking the real error. Mirrors heterogeneous_optimizer/opik_tracer.py
+        # (issue #606).
+        opik_cm = None
+        if self.is_enabled and self._should_trace():
+            try:
+                assert self._opik_connector is not None
+                opik_cm = self._opik_connector.trace_agent(
+                    agent_name="tool_composer",
+                    operation="compose",
+                    trace_id=trace_id,
+                    metadata={
+                        "pipeline": "decompose→plan→execute→synthesize",
+                        "tier": 1,
+                        **trace_metadata,
+                    },
+                    tags=["tool_composer", "composition", "tier1"],
+                    input_data={
+                        "query": query[:500],  # Truncate for Opik
+                        "context_keys": list((context or {}).keys()),
+                    },
+                )
+                trace_ctx._opik_span = await opik_cm.__aenter__()
+            except Exception as e:
+                logger.debug(f"Opik tracing failed, continuing without: {e}")
+                opik_cm = None
+
         try:
-            # Create Opik trace if enabled and sampled
-            if self.is_enabled and self._should_trace():
-                try:
-                    assert self._opik_connector is not None
-                    async with self._opik_connector.trace_agent(
-                        agent_name="tool_composer",
-                        operation="compose",
-                        trace_id=trace_id,
-                        metadata={
-                            "pipeline": "decompose→plan→execute→synthesize",
-                            "tier": 1,
-                            **trace_metadata,
-                        },
-                        tags=["tool_composer", "composition", "tier1"],
-                        input_data={
-                            "query": query[:500],  # Truncate for Opik
-                            "context_keys": list((context or {}).keys()),
-                        },
-                    ) as span:
-                        trace_ctx._opik_span = span
-                        yield trace_ctx
-                        return
-                except Exception as e:
-                    logger.debug(f"Opik tracing failed, continuing without: {e}")
-
-            # Fall through to non-traced version
+            # Single yield point - avoids "generator didn't stop after athrow()".
             yield trace_ctx
-
-        except Exception as e:
-            {"type": type(e).__name__, "message": str(e)}
-            raise
-
         finally:
+            if opik_cm is not None:
+                try:
+                    await opik_cm.__aexit__(None, None, None)
+                except Exception as e:
+                    logger.debug(f"Opik cleanup failed (non-fatal): {e}")
             # Record final timing
             end_time = datetime.now(timezone.utc)
             trace_ctx.end_time = end_time

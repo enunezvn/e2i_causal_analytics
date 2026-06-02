@@ -256,6 +256,27 @@ class CausalImpactAgent(SkillsMixin):
         Returns:
             Initial state conforming to contract
         """
+        # ``data_source == "synthetic"`` is the explicit test/dev fixture path
+        # (estimation.py:_get_data — "seeded synthetic data for tests + developer
+        # fixtures"). Default it to a FAST-but-real causal config: the OLS
+        # estimator + a bounded refutation suite. Rationale: with the
+        # estimation_data state-channel fix (#606), refutation now actually runs;
+        # the full energy-score chain + full refutation (~610 DoWhy
+        # re-estimations re-fitting CausalForestDML) take MINUTES, which is wrong
+        # for fast dev/test feedback. Real data_source paths are untouched (full
+        # rigor); an explicit caller-supplied method / refutation_config wins.
+        parameters = dict(input_data.get("parameters") or {})
+        if input_data.get("data_source") == "synthetic":
+            parameters.setdefault("method", "ols")
+            parameters.setdefault(
+                "refutation_config",
+                {
+                    "bootstrap": {"num_bootstraps": 10},
+                    "placebo_treatment": {"num_simulations": 5},
+                    "data_subset": {"num_subsets": 2},
+                    "random_common_cause": {"num_simulations": 5},
+                },
+            )
         state: CausalImpactState = {
             # Required input fields (contract)
             "query": input_data["query"],
@@ -264,6 +285,16 @@ class CausalImpactAgent(SkillsMixin):
             "outcome_var": input_data["outcome_var"],  # REQUIRED
             "confounders": input_data["confounders"],  # REQUIRED
             "data_source": input_data["data_source"],  # REQUIRED
+            # Honor an explicitly-passed DataFrame (e.g. the Tier 1-5 harness or
+            # any programmatic caller injecting data directly): seed the cache the
+            # estimation node reads (estimation.py -> data_cache["estimation_data"]).
+            # Inert in prod, where callers omit "data" and the connector path
+            # populates the cache instead (#606).
+            "data_cache": (
+                {"estimation_data": input_data["data"]}
+                if input_data.get("data") is not None
+                else {}
+            ),
             # Optional input fields
             "mediators": input_data.get("mediators", []),
             "effect_modifiers": input_data.get("effect_modifiers", []),
@@ -271,7 +302,7 @@ class CausalImpactAgent(SkillsMixin):
             "segment_filters": input_data.get("segment_filters", {}),
             "interpretation_depth": input_data.get("interpretation_depth", "standard"),
             "user_context": input_data.get("user_context", {}),
-            "parameters": input_data.get("parameters", {}),
+            "parameters": parameters,
             "time_period": input_data.get("time_period"),  # type: ignore[typeddict-item]
             "brand": input_data.get("brand"),  # type: ignore[typeddict-item]
             # Workflow state
@@ -337,7 +368,11 @@ class CausalImpactAgent(SkillsMixin):
         # Build output with contract field names
         output: CausalImpactOutput = {
             "query_id": state.get("query_id", "unknown"),
-            "status": "completed",
+            # Honest status (#606): report "failed" when estimation produced no
+            # ATE (e.g. an EstimationError was caught upstream) instead of masking
+            # it as "completed" with ate_estimate=None. Previously this was
+            # hardcoded "completed", so a failed analysis looked successful.
+            "status": ("completed" if estimation_result.get("ate") is not None else "failed"),
             # Core results
             "causal_narrative": interpretation.get("narrative", "Analysis completed successfully."),
             "ate_estimate": estimation_result.get("ate"),  # type: ignore[typeddict-item]

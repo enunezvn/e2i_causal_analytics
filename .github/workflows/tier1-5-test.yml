@@ -165,6 +165,25 @@ jobs:
         env:
           E2I_TESTING_MODE: "true"
           DISABLE_PANDERA_IMPORT_WARNING: "True"
+          # Sanctioned mock-allowed test context (#606 item A), matching the
+          # agents-tests lane (backend-tests.yml). The harness instantiates each
+          # agent generically and can't inject a connector, so without this flag
+          # heterogeneous_optimizer's CATEEstimatorNode raises at construction
+          # ("MockDataConnector fallback is disabled"). The agent still runs on
+          # the REAL tier0 fixture data (tier0_data passthrough); the mock
+          # connector only satisfies the eager constructor and is never queried.
+          # NOT set in production deploy config, so prod stays fail-closed.
+          E2I_ALLOW_MOCK_CONNECTOR: "1"
+          # Opt-in MARKED-mock LLM for the keyless harness (#606 item C). The
+          # LLM-dependent agents (orchestrator, experiment_designer, tool_composer)
+          # otherwise raise at construction ("OPENAI_API_KEY not set"). With this
+          # flag + no key they use a clearly-marked mock (mock_response_for_dev_only
+          # =True); without it a missing key fails loud. NOT set in prod deploy.
+          E2I_ALLOW_MOCK_LLM: "1"
+          # experiment_designer's validity_audit node predates the shared util and
+          # uses its own #471 opt-in flag for its MARKED MockValidityLLM; set it
+          # too so experiment_designer runs fully keyless (#606 item C).
+          EXPERIMENT_DESIGNER_USE_MOCK_LLM: "1"
         # Monitored-alarm-only on AGENT / contract failures (issue #600
         # maintainer decision). A committed tier0 fixture
         # (scripts/tier0_output_cache/latest.pkl) flips restore-cache.found to

@@ -168,3 +168,18 @@ def test_generator_reproduces_a_valid_fixture():
     # The freshly built state must carry the same required structure.
     assert isinstance(state.get("eligible_df"), pd.DataFrame)
     assert not (_FORBIDDEN_FRAGILE_KEYS & set(state))
+
+
+def test_prediction_synthesizer_mapping_skips_context():
+    """#606 item D: the harness has no external context-enrichment services, so
+    the prediction_synthesizer mapping must request include_context=False —
+    otherwise context_enricher fail-closes (all 5 deps fail) and the agent
+    reports status=failed (a false alarm). The ensemble prediction is still
+    validated; this does not relax the prod context contract."""
+    from src.testing.tier0_output_mapper import Tier0OutputMapper
+
+    mapping = Tier0OutputMapper(_load_committed_fixture()).map_to_prediction_synthesizer()
+    assert mapping.get("include_context") is False, (
+        "map_to_prediction_synthesizer must set include_context=False in the "
+        "serviceless harness (issue #606 item D)."
+    )

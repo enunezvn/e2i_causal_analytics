@@ -486,16 +486,22 @@ class PredictionSynthesizerOpikTracer:
                     "ensemble_method": ensemble_method,
                 },
             )
-            yield ctx
-
         except Exception as e:
             logger.warning(f"Failed to create synthesis trace: {e}")
-            yield SynthesisTraceContext(
+            trace = None
+            ctx = SynthesisTraceContext(
                 trace=None,
                 tracer=self,
                 entity_type=entity_type,
                 prediction_target=prediction_target,
             )
+
+        # Single yield OUTSIDE any except (issue #606): an exception thrown into
+        # the body via __aexit__'s athrow() MUST propagate — catching it here and
+        # yielding again raises "generator didn't stop after athrow()" and masks
+        # the real error. Mirrors heterogeneous_optimizer/opik_tracer.py.
+        try:
+            yield ctx
         finally:
             if trace:
                 try:
