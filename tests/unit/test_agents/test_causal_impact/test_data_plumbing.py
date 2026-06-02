@@ -108,7 +108,10 @@ def test_refutation_node_merges_partial_config():
     cfg = node.runner.config
     assert cfg["bootstrap"]["num_bootstraps"] == 25  # overridden
     assert cfg["bootstrap"]["enabled"] is True  # default preserved
-    assert cfg["placebo_treatment"]["num_simulations"] == 100  # untouched default
+    # Untouched default preserved across the per-key merge. #622 lowered the
+    # placebo default from 100 -> 30 for prod latency; the merge must leave it
+    # at the (new) default when the caller does not override it.
+    assert cfg["placebo_treatment"]["num_simulations"] == 30  # untouched default
 
 
 @pytest.mark.asyncio
