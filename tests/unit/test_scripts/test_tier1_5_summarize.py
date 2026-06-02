@@ -120,6 +120,34 @@ def test_missing_results_file_exits_one(harness, tmp_path):
     assert "not found" in summary.read_text()
 
 
+def test_empty_results_exits_one(harness, tmp_path):
+    """Fail-CLOSED on a present-but-empty results set (#616 hardening, codex L-2).
+
+    The honest gate exists to fail-closed; a results JSON with zero agent rows
+    means the harness ran no agent — it must HARD FAIL (exit 1), not slip through
+    as a vacuous 0/0 'pass'."""
+    results = _write(tmp_path, _results([]))
+    summary = tmp_path / "summary.md"
+    code = harness.summarize_results(results, "", str(summary))
+    assert code == 1
+    assert "no agent rows" in summary.read_text().lower()
+
+
+def test_allow_list_is_case_insensitive(harness, tmp_path):
+    """Allow-list matching must be case-insensitive (#616 hardening, codex M-1).
+
+    Agent names are snake_case lowercase; a maintainer typing 'Orchestrator' in
+    TIER1_5_EXPECTED_FAIL_AGENTS must still match the failing 'orchestrator'
+    instead of mis-routing it to a (confusing) hard fail."""
+    rows = [_agent("orchestrator", 1, False, error="known")]
+    results = _write(tmp_path, _results(rows))
+    summary = tmp_path / "summary.md"
+    code = harness.summarize_results(results, "Orchestrator", str(summary))
+    assert code == 0
+    text = summary.read_text()
+    assert "KNOWN-FAIL" in text
+
+
 def test_mock_data_source_rendered_as_plumbing_only(harness, tmp_path):
     """A marked-mock agent (#616 fix#2) must render as a plumbing-only PASS in
     the table, not as a plain green that hides canned reasoning."""
@@ -143,6 +171,11 @@ def test_allow_list_parsing_trims_and_ignores_blanks(harness):
     assert harness._parse_expected_fail(" a , b ,, c ") == {"a", "b", "c"}
     assert harness._parse_expected_fail("") == set()
     assert harness._parse_expected_fail(None) == set()
+    # Case-folded so matching is case-insensitive (#616 hardening, codex M-1).
+    assert harness._parse_expected_fail("Orchestrator, TOOL_COMPOSER") == {
+        "orchestrator",
+        "tool_composer",
+    }
 
 
 def test_step_summary_none_falls_back_to_stdout(harness, tmp_path, capsys):

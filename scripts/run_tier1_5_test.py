@@ -1948,10 +1948,16 @@ async def run_tests(
 
 
 def _parse_expected_fail(raw: str | None) -> set[str]:
-    """Parse the comma-separated expected-fail allow-list into a set of names."""
+    """Parse the comma-separated expected-fail allow-list into a set of names.
+
+    Names are case-folded so the allow-list matches the (snake_case lowercase)
+    agent names case-insensitively — a maintainer typo like ``Orchestrator`` must
+    still match ``orchestrator`` rather than mis-routing it to a hard fail
+    (#616 hardening, codex M-1).
+    """
     if not raw:
         return set()
-    return {name.strip() for name in raw.split(",") if name.strip()}
+    return {name.strip().lower() for name in raw.split(",") if name.strip()}
 
 
 def summarize_results(
@@ -1996,14 +2002,27 @@ def summarize_results(
         return 1
 
     rows = data.get("results") or []
+    if not rows:
+        # Fail CLOSED: a present-but-empty results set means the harness ran no
+        # agent (it always runs the full AGENT_METHOD_MAP). A vacuous 0/0 must
+        # not slip through as a pass (#616 hardening, codex L-2).
+        msg = (
+            "Tier 1-5 results JSON contains no agent rows — the harness ran no "
+            "agent; treating as a hard failure rather than a vacuous 0/0 pass"
+        )
+        print(f"::error title=Tier 1-5 empty results::{msg}")
+        _write_step_summary(step_summary_path, f"## Tier 1-5 Agent Harness\n\n❌ {msg}\n")
+        return 1
+
     summary = data.get("summary") or {}
     total = summary.get("total_agents", len(rows))
     passed = summary.get("passed", sum(1 for r in rows if r.get("success")))
 
-    # Categorise failures relative to the allow-list.
+    # Categorise failures relative to the allow-list (case-insensitive — see
+    # _parse_expected_fail, codex M-1).
     failed_rows = [r for r in rows if not r.get("success")]
-    new_failures = [r for r in failed_rows if r.get("agent_name") not in allow]
-    known_failures = [r for r in failed_rows if r.get("agent_name") in allow]
+    new_failures = [r for r in failed_rows if (r.get("agent_name") or "").lower() not in allow]
+    known_failures = [r for r in failed_rows if (r.get("agent_name") or "").lower() in allow]
 
     lines: list[str] = []
     lines.append("## Tier 1-5 Agent Harness")
@@ -2028,7 +2047,7 @@ def summarize_results(
         if success:
             result_label = "✅ PASS"
             detail = ""
-        elif name in allow:
+        elif name.lower() in allow:
             result_label = "⚠️ KNOWN-FAIL"
             detail = "expected-fail allow-list (#600 alarm)"
         else:
