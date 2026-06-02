@@ -22,6 +22,39 @@ on:
       - "config/agents/**"
       - ".github/workflows/tier1-5-test.yml"
       - "docker/docker-compose.yml"
+      # Shared SCHEMA modules the agent state/input CONTRACTS import
+      # transitively (issue #618). A Pydantic/TypedDict change in any of these
+      # can break an agent contract / the tier0 mapper without otherwise
+      # touching src/agents/** — the harness exists to catch exactly that drift,
+      # so its trigger must include them. This list was TRACED, not guessed:
+      # importing the AGENT_METHOD_MAP state_module + input_module entries
+      # pulls in schema-bearing modules from each package below (measured via a
+      # runtime import-closure scan, 2026-06-02). NOTE the issue's guessed
+      # ``src/causal/**`` does NOT exist — the real package is
+      # ``src/causal_engine/**`` (the densest schema home, incl.
+      # validation_outcome consumed by feedback_learner's contract).
+      - "src/causal_engine/**"  # 18 schema modules in the contract closure
+      - "src/data/**"           # 6 schema modules (issue-named, real)
+      - "src/ml/**"             # issue-named; small but contract-adjacent (DGP)
+      - "src/mlops/**"          # 8/10 schema modules; drift_monitor direct dep
+      - "src/repositories/**"   # 9 schema modules (validation/result row models)
+      - "src/digital_twin/**"   # 5 schema modules (twin/simulation models)
+      - "src/optimization/**"   # 10 schema modules (GEPA metric contracts)
+      - "src/rag/**"            # 10 schema modules (retrieval models/types)
+      - "src/services/**"       # 4/5 schema modules (roi/alert contracts)
+      - "src/tool_registry/**"  # 4/6 schema modules (tool I/O schemas)
+      - "src/memory/**"         # 3 schema modules (episodic/config models)
+      - "src/utils/**"          # 4 schema modules (shared util schemas)
+      - "src/skills/**"         # 2 schema modules (loader/matcher models)
+      - "src/lifecycle/**"      # 1 schema module (gate lifecycle)
+      - "src/nlp/**"            # 1 schema module (typo handler config)
+  # Weekly backstop (issue #618): the path-filtered PR trigger above is
+  # high-signal but cannot enumerate EVERY shared module that might one day be
+  # pulled into a contract's import closure. A scheduled run guarantees schema
+  # drift in ANY src/ module is still exercised at least weekly, independent of
+  # which paths a given PR happened to touch.
+  schedule:
+    - cron: "0 6 * * 1"  # Mondays 06:00 UTC
   workflow_dispatch: {}
 
 permissions:
@@ -47,6 +80,19 @@ jobs:
     # INFRA failures (boot-stack / install-deps) remain hard-fail (#263).
 
     env:
+      # Expected-fail allow-list (issue #616 fix#1). Comma-separated agent
+      # names whose harness failure is a KNOWN, accepted condition: those stay
+      # a non-blocking ::warning (the #600 monitored-alarm contract). A failure
+      # of ANY agent NOT on this list is treated as a NEW regression and HARD
+      # FAILS the honest-gate step below (exit 1) — so the green check can no
+      # longer silently mask a fresh breakage.
+      #
+      # As of #606 the keyless harness is a clean 13/13 (verified against run
+      # 26796583550: passed=13, failed=0), so the allow-list is intentionally
+      # EMPTY — every agent failure is a regression. Re-populate it (e.g.
+      # "experiment_monitor,health_score") ONLY with an issue link justifying
+      # each known-failing agent, to re-arm the #600 non-blocking path for them.
+      TIER1_5_EXPECTED_FAIL_AGENTS: ""
       # CI-only dummy passwords. docker-compose.yml uses ${VAR:?msg} syntax
       # which evaluates ALL such refs at parse time (not just for services
       # being started), so every required var must be set even though we
@@ -211,6 +257,33 @@ jobs:
             exit 0
           fi
           echo "All Tier 1-5 agents passed contract + quality-gate validation."
+
+      - name: Report agent results + enforce expected-fail allow-list
+        id: report-results
+        # Runs whenever the harness actually executed (cache present + infra OK),
+        # regardless of the alarm-only run-harness exit code (if: always()-style
+        # via the same gating the run step used). This is the HONEST signal step
+        # (issue #616): it (1) writes a per-agent pass/fail table to
+        # $GITHUB_STEP_SUMMARY so a reviewer sees "10/13", not a bare green, and
+        # (2) HARD FAILS (exit 1) if any agent NOT on TIER1_5_EXPECTED_FAIL_AGENTS
+        # failed — so a NEW regression beyond the known set can no longer hide
+        # behind the #600 alarm-only exit 0. Known/allow-listed failures stay a
+        # non-blocking ::warning, preserving the #600 contract for them.
+        #
+        # NOT continue-on-error (forbidden by #263); the exit 1 here is the
+        # intended honest-gate behaviour, distinct from the alarm-only run step.
+        if: |
+          always() &&
+          steps.install-deps.outcome == 'success' &&
+          steps.boot-stack.outputs.ok == 'true' &&
+          steps.restore-cache.outputs.found == 'true'
+        env:
+          RESULTS_JSON: docs/results/tier1_5_pipeline_latest.json
+        run: |
+          set -uo pipefail
+          python scripts/run_tier1_5_test.py --summarize "${RESULTS_JSON}" \
+            --expected-fail "${TIER1_5_EXPECTED_FAIL_AGENTS}" \
+            --step-summary "${GITHUB_STEP_SUMMARY:-/dev/stdout}"
 
       - name: Summarize skip reasons
         id: summarize-skip
