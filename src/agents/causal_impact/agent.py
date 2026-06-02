@@ -256,6 +256,27 @@ class CausalImpactAgent(SkillsMixin):
         Returns:
             Initial state conforming to contract
         """
+        # ``data_source == "synthetic"`` is the explicit test/dev fixture path
+        # (estimation.py:_get_data — "seeded synthetic data for tests + developer
+        # fixtures"). Default it to a FAST-but-real causal config: the OLS
+        # estimator + a bounded refutation suite. Rationale: with the
+        # estimation_data state-channel fix (#606), refutation now actually runs;
+        # the full energy-score chain + full refutation (~610 DoWhy
+        # re-estimations re-fitting CausalForestDML) take MINUTES, which is wrong
+        # for fast dev/test feedback. Real data_source paths are untouched (full
+        # rigor); an explicit caller-supplied method / refutation_config wins.
+        parameters = dict(input_data.get("parameters") or {})
+        if input_data.get("data_source") == "synthetic":
+            parameters.setdefault("method", "ols")
+            parameters.setdefault(
+                "refutation_config",
+                {
+                    "bootstrap": {"num_bootstraps": 10},
+                    "placebo_treatment": {"num_simulations": 5},
+                    "data_subset": {"num_subsets": 2},
+                    "random_common_cause": {"num_simulations": 5},
+                },
+            )
         state: CausalImpactState = {
             # Required input fields (contract)
             "query": input_data["query"],
@@ -281,7 +302,7 @@ class CausalImpactAgent(SkillsMixin):
             "segment_filters": input_data.get("segment_filters", {}),
             "interpretation_depth": input_data.get("interpretation_depth", "standard"),
             "user_context": input_data.get("user_context", {}),
-            "parameters": input_data.get("parameters", {}),
+            "parameters": parameters,
             "time_period": input_data.get("time_period"),  # type: ignore[typeddict-item]
             "brand": input_data.get("brand"),  # type: ignore[typeddict-item]
             # Workflow state
