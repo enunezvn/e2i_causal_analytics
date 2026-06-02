@@ -641,7 +641,19 @@ def _impute_column(df: pd.DataFrame, column: str, strategy: str) -> Tuple[pd.Dat
         df[column] = df[column].fillna(fill_value)
         return df, f"Imputed {null_count} nulls in '{column}' with mean ({fill_value:.2f})"
     elif strategy == "mode":
-        fill_value = df[column].mode().iloc[0] if not df[column].mode().empty else "UNKNOWN"
+        mode_vals = df[column].mode()
+        if not mode_vals.empty:
+            fill_value = mode_vals.iloc[0]
+        elif pd.api.types.is_numeric_dtype(df[column]):
+            # All-null NUMERIC column: mode() is empty. Injecting the string
+            # "UNKNOWN" here would flip the column to object dtype, so
+            # transform_data later raises "could not convert string to float:
+            # 'UNKNOWN'" (transformation_error) and the run crashes instead of
+            # blocking gracefully. Keep the dtype with a numeric placeholder so
+            # the QC gate can still block on the column's real issues (#617).
+            fill_value = 0
+        else:
+            fill_value = "UNKNOWN"
         df[column] = df[column].fillna(fill_value)
         return df, f"Imputed {null_count} nulls in '{column}' with mode ({fill_value})"
     else:
