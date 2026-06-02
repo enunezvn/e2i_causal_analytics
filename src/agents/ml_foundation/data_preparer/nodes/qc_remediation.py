@@ -584,6 +584,30 @@ async def _apply_automatic_remediation(
                 params = {}
 
             if action_type == "impute" and column and column in train_df.columns:
+                # #630: an all-null column has no data to impute from. The
+                # #629 dtype-safe fallback would fill it with a placeholder
+                # (numeric ``0`` / object ``"UNKNOWN"``) — semantically
+                # misleading: that constant placeholder can pass the QC gate
+                # on retry and reach model training, masking that a required
+                # feature is entirely absent from the cohort. Skip-and-report
+                # instead, leaving the column untouched (NOT dropped) so the
+                # completeness dimension keeps blocking and forces
+                # investigation rather than silently filling. This seam
+                # catches both LLM-emitted and rule-based impute actions.
+                if len(train_df) > 0 and train_df[column].isnull().all():
+                    logger.warning(
+                        "Skipping impute on column %r: column is entirely null "
+                        "(%d rows, all null). Imputing a placeholder would "
+                        "misrepresent absent data; the QC completeness gate "
+                        "should block and the column requires investigation.",
+                        column,
+                        len(train_df),
+                    )
+                    actions_taken.append(
+                        f"SKIPPED impute on {column}: all-null column, requires investigation"
+                    )
+                    continue
+
                 strategy = params.get("strategy", "median")
                 train_df, msg = _impute_column(train_df, column, strategy)
                 if validation_df is not None and column in validation_df.columns:

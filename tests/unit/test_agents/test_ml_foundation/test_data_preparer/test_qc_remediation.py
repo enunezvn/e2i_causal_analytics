@@ -211,3 +211,99 @@ class TestApplyAutomaticRemediationDefensiveCoerce:
         # Second action applied (we don't assert exact message, just that
         # something non-skipped happened).
         assert any("SKIPPED" not in a for a in actions_taken)
+
+
+class TestApplyAutomaticRemediationAllNull:
+    """#630: an all-null column must be skipped-and-reported, not imputed.
+
+    PR #629 made ``_impute_column`` dtype-safe (all-null numeric → ``0``,
+    all-null object → ``"UNKNOWN"``) so ``transform_data`` no longer crashes.
+    But filling a column that has *no data* is semantically misleading: the
+    placeholder can pass the QC gate on retry and reach model training as a
+    constant feature, masking that a required feature is entirely absent from
+    the cohort. ``_apply_automatic_remediation`` is the seam that catches both
+    LLM-emitted and rule-based ``impute`` actions, so the skip guard lives
+    there — leaving the column untouched (not dropped) so the completeness
+    dimension keeps blocking and forces investigation.
+    """
+
+    @pytest.mark.asyncio
+    async def test_all_null_numeric_column_skipped_not_zero_filled(self) -> None:
+        train_df = pd.DataFrame({"x": pd.Series([None, None, None], dtype="float64")})
+        state = {"train_df": train_df, "validation_df": None, "test_df": None}
+        actions = [{"type": "impute", "column": "x", "params": {"strategy": "mode"}}]
+
+        result = await _apply_automatic_remediation(state, actions)
+
+        assert result["success"] is True
+        out = result["train_df"]
+        # The all-null column is left untouched — NOT 0-filled.
+        assert out["x"].isnull().all(), f"all-null column was imputed: {out['x'].tolist()}"
+        assert pd.api.types.is_numeric_dtype(out["x"])
+        actions_taken = result.get("actions_taken", [])
+        assert any("SKIPPED" in a and "all-null" in a for a in actions_taken), actions_taken
+
+    @pytest.mark.asyncio
+    async def test_all_null_object_column_skipped_not_unknown_filled(self) -> None:
+        train_df = pd.DataFrame({"c": pd.Series([None, None, None], dtype="object")})
+        state = {"train_df": train_df, "validation_df": None, "test_df": None}
+        actions = [{"type": "impute", "column": "c", "params": {"strategy": "mode"}}]
+
+        result = await _apply_automatic_remediation(state, actions)
+
+        assert result["success"] is True
+        out = result["train_df"]
+        # The all-null object column is left untouched — NOT "UNKNOWN"-filled.
+        assert out["c"].isnull().all(), f"all-null column was imputed: {out['c'].tolist()}"
+        assert "UNKNOWN" not in out["c"].astype(str).tolist()
+        actions_taken = result.get("actions_taken", [])
+        assert any("SKIPPED" in a and "all-null" in a for a in actions_taken), actions_taken
+
+    @pytest.mark.asyncio
+    async def test_partial_null_column_still_imputed(self) -> None:
+        """Regression guard: a column with SOME data is still imputed."""
+        train_df = pd.DataFrame({"x": [1.0, 2.0, None, 4.0]})
+        state = {"train_df": train_df, "validation_df": None, "test_df": None}
+        actions = [{"type": "impute", "column": "x", "params": {"strategy": "median"}}]
+
+        result = await _apply_automatic_remediation(state, actions)
+
+        assert result["success"] is True
+        out = result["train_df"]
+        assert out["x"].isnull().sum() == 0, "partial-null column should still be imputed"
+        actions_taken = result.get("actions_taken", [])
+        assert any("SKIPPED" not in a for a in actions_taken)
+        assert not any("SKIPPED" in a and "all-null" in a for a in actions_taken)
+
+    @pytest.mark.asyncio
+    async def test_all_null_column_also_untouched_in_validation_and_test(self) -> None:
+        train_df = pd.DataFrame({"x": pd.Series([None, None], dtype="float64")})
+        validation_df = pd.DataFrame({"x": pd.Series([None, None], dtype="float64")})
+        test_df = pd.DataFrame({"x": pd.Series([None, None], dtype="float64")})
+        state = {"train_df": train_df, "validation_df": validation_df, "test_df": test_df}
+        actions = [{"type": "impute", "column": "x", "params": {"strategy": "mode"}}]
+
+        result = await _apply_automatic_remediation(state, actions)
+
+        assert result["success"] is True
+        assert result["train_df"]["x"].isnull().all()
+        # Splits are not silently 0-filled either (the skip short-circuits
+        # before any per-split imputation runs).
+        assert result["validation_df"]["x"].isnull().all()
+        assert result["test_df"]["x"].isnull().all()
+
+    @pytest.mark.asyncio
+    async def test_empty_dataframe_is_not_falsely_skipped(self) -> None:
+        """Guard regression: ``isnull().all()`` is vacuously True on an empty
+        Series, so the ``len(train_df) > 0`` guard must prevent a 0-row column
+        from being treated as 'all-null' and skipped. An empty-df impute falls
+        through to ``_impute_column`` as a harmless no-op — NOT a SKIPPED."""
+        train_df = pd.DataFrame({"x": pd.Series([], dtype="float64")})
+        state = {"train_df": train_df, "validation_df": None, "test_df": None}
+        actions = [{"type": "impute", "column": "x", "params": {"strategy": "median"}}]
+
+        result = await _apply_automatic_remediation(state, actions)
+
+        assert result["success"] is True
+        actions_taken = result.get("actions_taken", [])
+        assert not any("SKIPPED" in a and "all-null" in a for a in actions_taken), actions_taken
