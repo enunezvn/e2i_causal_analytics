@@ -520,6 +520,44 @@ now updated in the same commit as this doc append, per the test's own contract. 
 `success_criteria_met` boolean (False, because val_auc=0.5585 < 0.75) is preserved — the
 verdict has not changed, only the numeric snapshot.
 
+## 2026-06-02 rebaseline (#617): #594/#604 feature-retention shift
+
+`test_flag_off_reproduces_apr26_baseline_within_tolerance` had been crashing in
+slow-tests Job B for weeks (the #556 Feast fail-closed gate halted the pipeline
+before the evaluator → `KeyError 'roc_auc'`), so this snapshot drifted unnoticed.
+Once PR #625 (#617) added `ALLOW_STALE_FEAST=1` to the e2e helper the test ran,
+and the default-regime metrics had shifted because **#594/#604 disabled the
+Layer-3 FDR over-drop on synthetic fixtures** — the model now retains
+`days_on_therapy` / `prior_treatments` etc. (more signal). Per the test's own
+contract, assertions + this doc are updated atomically. Determinism: `roc_auc`
+reproduced exactly (0.6467) across multiple seeded CI runs (seed=42).
+
+### Validation-set metrics (2026-06-02 default regime)
+
+| Metric | Post-PR-#29 | 2026-06-02 (#617) | Delta |
+|--------|-------------|-------------------|-------|
+| roc_auc | 0.5585 | 0.6467 | +0.0882 |
+| pr_auc | 0.1958 | 0.2428 | +0.0470 |
+| accuracy | 0.7067 | 0.5933 | -0.1134 |
+| precision | 0.2410 | 0.2230 | -0.0180 |
+| recall | 0.4444 | 0.6889 | +0.2445 |
+| f1_score | 0.3125 | 0.3370 | +0.0245 |
+
+### Test-set metrics (2026-06-02 default regime)
+
+| Metric | Post-PR-#29 | 2026-06-02 (#617) | Delta |
+|--------|-------------|-------------------|-------|
+| roc_auc | 0.6271 | 0.7154 | +0.0883 |
+| accuracy | 0.6756 | 0.5867 | -0.0889 |
+| precision | 0.1970 | 0.2321 | +0.0351 |
+| recall | 0.3939 | 0.7879 | +0.3940 |
+| f1_score | 0.2626 | 0.3586 | +0.0960 |
+
+`success_criteria_met` remains **False** (val roc_auc 0.6467 < 0.75) — the verdict
+is unchanged; the model discriminates better but still doesn't clear the fixed
+0.75 gate. The sibling `clean`-regime test is quarantined (`xfail`) pending #633:
+its model now fails the v3 calibration / MCC / overfit gates.
+
 ## Final summary across all 32 commits
 
 This section synthesises the entire Tier-0 remediation arc from Block 0 (branch setup 2026-04-26) through the PR #2 feast-infra merge (`e2ec5c5`, 2026-04-28) that brought `main` to `05a681e`. Commit range covered: `d9907bb..05a681e` (125 commits total; 32 are Tier-0 remediation commits on `feat/tier0-mlops-hardening`; the remainder are CI fixes, PR #29/#30/#31/#32, and post-merge work that is out of Tier-0 scope).
