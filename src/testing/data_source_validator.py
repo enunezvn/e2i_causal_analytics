@@ -17,11 +17,37 @@ Detection strategies:
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# In-band marker stamped on every keyless-harness mock LLM response / client
+# (see ``src/utils/mock_llm.py``: ``MOCK_MARKER`` + ``MarkedMockChatLLM``). We
+# duplicate the literal here rather than import it so the validator stays free of
+# an agent-runtime dependency and is importable in lightweight contexts.
+MOCK_LLM_MARKER = "mock_response_for_dev_only"
+
+# Opt-in flag that authorises agents to fall back to a MARKED mock LLM when a
+# provider key is absent (#606 item C). Mirrors ``src/utils/mock_llm.MOCK_LLM_FLAG``.
+_MOCK_LLM_FLAG = "E2I_ALLOW_MOCK_LLM"
+_MOCK_LLM_TRUTHY = {"1", "true", "yes", "on"}
+
+# Provider -> the API-key env var that ``src/utils/llm_factory`` requires. When
+# the configured provider's key is absent AND the opt-in flag is set, an
+# LLM-dependent agent constructs a MARKED mock (the exact gate this mirrors).
+_PROVIDER_KEY_ENV = {
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+}
+
+# Agents whose primary "computation" is an LLM call. In the keyless harness these
+# transparently fall back to a MARKED mock LLM, so a COMPUTATIONAL "PASS" would
+# silently equate canned reasoning with real reasoning (#616). We detect the
+# mock and downgrade them to an explicit MOCK / "plumbing-only PASS".
+_LLM_DEPENDENT_AGENTS = frozenset({"orchestrator", "tool_composer", "experiment_designer"})
 
 
 class DataSourceType(Enum):
@@ -105,11 +131,6 @@ class DataSourceValidator:
             "reject_mock": False,
             "description": "Compares reference and current data from tier0",
         },
-        "experiment_designer": {
-            "acceptable": [DataSourceType.TIER0_PASSTHROUGH, DataSourceType.COMPUTATIONAL],
-            "reject_mock": False,
-            "description": "Designs experiments based on tier0 population data",
-        },
         "prediction_synthesizer": {
             "acceptable": [DataSourceType.TIER0_PASSTHROUGH],
             "reject_mock": False,
@@ -126,14 +147,30 @@ class DataSourceValidator:
             "description": "Learns from feedback stored in Supabase or tier0",
         },
         "orchestrator": {
-            "acceptable": [DataSourceType.COMPUTATIONAL],
+            # LLM-dependent (#616): in the keyless harness it falls back to a
+            # MARKED mock LLM. MOCK is therefore an ACCEPTABLE source — it still
+            # exercises the routing/synthesis plumbing — but is recorded as MOCK
+            # (a "plumbing-only PASS") so the signal stays honest. reject_mock is
+            # False because a marked dev-only mock here is expected, not a leak.
+            "acceptable": [DataSourceType.COMPUTATIONAL, DataSourceType.MOCK],
             "reject_mock": False,
-            "description": "Routes queries, no external data needed",
+            "description": "Routes queries; LLM-driven (marked-mock in keyless harness)",
         },
         "tool_composer": {
-            "acceptable": [DataSourceType.COMPUTATIONAL],
+            "acceptable": [DataSourceType.COMPUTATIONAL, DataSourceType.MOCK],
             "reject_mock": False,
-            "description": "Composes tools, no external data needed",
+            "description": "Composes tools; LLM-driven (marked-mock in keyless harness)",
+        },
+        "experiment_designer": {
+            # validity_audit node falls back to a MARKED MockValidityLLM in the
+            # keyless harness (#471/#606), surfacing the marker in agent_output.
+            "acceptable": [
+                DataSourceType.TIER0_PASSTHROUGH,
+                DataSourceType.COMPUTATIONAL,
+                DataSourceType.MOCK,
+            ],
+            "reject_mock": False,
+            "description": "Designs experiments; LLM validity-audit (marked-mock in keyless harness)",
         },
     }
 
@@ -244,12 +281,28 @@ class DataSourceValidator:
             evidence.append("resource_optimizer is computational-only agent")
             return DataSourceType.COMPUTATIONAL, evidence
         elif agent_name in ("orchestrator", "tool_composer"):
+            # LLM-driven agents (#616). In the keyless harness they fall back to a
+            # MARKED mock LLM; detect that REAL marker (not "computational"
+            # silently masking canned reasoning) and record MOCK. Falls through to
+            # COMPUTATIONAL only when no mock marker is reachable (e.g. a real key
+            # is present, or the agent ran with an injected real LLM).
+            mock_evidence = self._detect_marked_mock_llm(
+                agent_name=agent_name,
+                agent_output=agent_output,
+                execution_logs=execution_logs,
+                agent_instance=agent_instance,
+            )
+            if mock_evidence:
+                evidence.extend(mock_evidence)
+                return DataSourceType.MOCK, evidence
             evidence.append(f"{agent_name} is computational-only (routing/composition)")
             return DataSourceType.COMPUTATIONAL, evidence
         elif agent_name == "drift_monitor":
             return self._detect_drift_monitor_source(agent_output, evidence)
         elif agent_name == "experiment_designer":
-            return self._detect_experiment_designer_source(agent_output, evidence)
+            return self._detect_experiment_designer_source(
+                agent_output, execution_logs, agent_instance, evidence
+            )
         else:
             # Default: check for tier0 passthrough indicators
             return self._detect_tier0_passthrough(agent_output, evidence)
@@ -428,13 +481,30 @@ class DataSourceValidator:
     def _detect_experiment_designer_source(
         self,
         agent_output: dict[str, Any],
+        execution_logs: list[str],
+        agent_instance: Any | None,
         evidence: list[str],
     ) -> tuple[DataSourceType, list[str]]:
         """Detect data source for experiment_designer agent.
 
         Experiment designer is primarily computational (designs experiments based on
         population parameters from tier0 data). It doesn't query external databases.
+        In the keyless harness its validity_audit node uses a MARKED MockValidityLLM
+        (#471/#606) whose marker surfaces in ``agent_output`` — detect that first so
+        a canned validity audit is recorded as MOCK, not COMPUTATIONAL (#616).
         """
+        # Marked-mock LLM takes precedence: a canned validity audit must not be
+        # reported as a real computational design.
+        mock_evidence = self._detect_marked_mock_llm(
+            agent_name="experiment_designer",
+            agent_output=agent_output,
+            execution_logs=execution_logs,
+            agent_instance=agent_instance,
+        )
+        if mock_evidence:
+            evidence.extend(mock_evidence)
+            return DataSourceType.MOCK, evidence
+
         # Check for tier0 passthrough via standard fields
         if agent_output.get("tier0_experiment_id"):
             evidence.append("tier0_experiment_id present in output")
@@ -483,6 +553,141 @@ class DataSourceValidator:
                     return type(node.data_connector).__name__
 
         return None
+
+    def _detect_marked_mock_llm(
+        self,
+        agent_name: str,
+        agent_output: dict[str, Any],
+        execution_logs: list[str],
+        agent_instance: Any | None,
+    ) -> list[str]:
+        """Detect a MARKED keyless-harness mock LLM via REAL signals (#616).
+
+        Returns a non-empty evidence list IFF a genuine marked-mock indicator is
+        found; an empty list means "no mock marker reachable" (caller keeps the
+        agent's normal source). Three independent, faithful signals are checked —
+        none fabricates a marker that isn't there:
+
+        1. ``agent_output`` carries the in-band ``mock_response_for_dev_only``
+           marker (e.g. experiment_designer's validity_audit writes it into the
+           structured output dict).
+        2. ``agent_instance`` retains a live ``MarkedMockChatLLM`` (or any object
+           exposing the marker attribute) — e.g. tool_composer's ``llm_client``
+           after ``run()``.
+        3. The keyless-mock GATE the agents themselves use is active: the opt-in
+           flag ``E2I_ALLOW_MOCK_LLM`` is set AND the configured provider's API
+           key is absent — the exact condition under which ``llm_or_marked_mock``
+           / agent constructors fall back to the marked mock. This is the only
+           signal that reaches the orchestrator, whose graph nodes (and their mock
+           LLMs) are constructed transiently per-call and never retained on the
+           instance.
+        """
+        # Signal 1: marker in the output payload.
+        if self._marker_in_output(agent_output):
+            return [f"{agent_name} output carries the {MOCK_LLM_MARKER} marker (marked-mock LLM)"]
+
+        # Signal 2: live marked-mock LLM reachable on the instance.
+        if agent_instance is not None and self._instance_has_marked_mock(agent_instance):
+            return [
+                f"{agent_name} instance retains a MarkedMockChatLLM "
+                f"({MOCK_LLM_MARKER}=True) — keyless-harness mock"
+            ]
+
+        # Signal 3: marker text in captured execution logs.
+        log_text = "\n".join(execution_logs or [])
+        if MOCK_LLM_MARKER in log_text or "MarkedMockChatLLM" in log_text:
+            return [f"{agent_name} execution logs reference the marked-mock LLM"]
+
+        # Signal 4: the keyless-mock gate is active (mechanism-faithful — same
+        # gate the agent uses). Scoped to LLM-dependent agents so a missing key
+        # in an unrelated context can't mislabel a non-LLM agent.
+        if agent_name in _LLM_DEPENDENT_AGENTS and self._keyless_mock_gate_active():
+            return [
+                f"{agent_name} ran under the keyless-mock gate "
+                f"({_MOCK_LLM_FLAG} set + provider key absent) — falls back to a marked-mock LLM"
+            ]
+
+        return []
+
+    @staticmethod
+    def _marker_in_output(agent_output: dict[str, Any]) -> bool:
+        """True if the dev-only mock marker appears anywhere in the output dict.
+
+        Bounded recursion over nested dicts/lists; the marker is a simple
+        truthy ``mock_response_for_dev_only`` key wherever the agent stamped it.
+        """
+
+        def _scan(value: Any, depth: int) -> bool:
+            if depth > 4:
+                return False
+            if isinstance(value, dict):
+                if value.get(MOCK_LLM_MARKER):
+                    return True
+                return any(_scan(v, depth + 1) for v in value.values())
+            if isinstance(value, (list, tuple)):
+                return any(_scan(v, depth + 1) for v in value)
+            return False
+
+        return _scan(agent_output or {}, 0)
+
+    @staticmethod
+    def _instance_has_marked_mock(agent_instance: Any, max_depth: int = 5) -> bool:
+        """True if a live MarkedMockChatLLM (marker attribute) is reachable.
+
+        Traverses the instance's ``__dict__`` graph (bounded depth, cycle-safe).
+        Matches by the class-level ``mock_response_for_dev_only`` attribute rather
+        than importing the class, so the validator stays dependency-light. Catches
+        agents that retain the mock LLM on the instance (e.g. tool_composer's
+        ``llm_client``); agents that build/discard mock LLMs transiently per call
+        (e.g. orchestrator) are covered by the gate signal instead.
+        """
+        seen: set[int] = set()
+
+        def _scan(obj: Any, depth: int) -> bool:
+            if depth > max_depth or obj is None:
+                return False
+            oid = id(obj)
+            if oid in seen:
+                return False
+            seen.add(oid)
+            if isinstance(obj, (str, bytes, int, float, bool)):
+                return False
+            # The marker is a class/instance attribute set True on the mock LLM.
+            if getattr(obj, MOCK_LLM_MARKER, False) is True:
+                return True
+            attrs = getattr(obj, "__dict__", None)
+            if isinstance(attrs, dict):
+                for v in attrs.values():
+                    if _scan(v, depth + 1):
+                        return True
+            if isinstance(obj, dict):
+                for v in obj.values():
+                    if _scan(v, depth + 1):
+                        return True
+            if isinstance(obj, (list, tuple, set)):
+                for v in obj:
+                    if _scan(v, depth + 1):
+                        return True
+            return False
+
+        return _scan(agent_instance, 0)
+
+    @staticmethod
+    def _keyless_mock_gate_active() -> bool:
+        """True if the keyless-mock fallback gate is active in this environment.
+
+        Mirrors ``src/utils/mock_llm.mock_llm_allowed`` + the llm_factory key
+        check: the opt-in flag is truthy AND the configured provider's API key is
+        absent. Under exactly this gate an LLM-dependent agent constructs a MARKED
+        mock instead of raising — so it is a faithful proxy for the mock, not a
+        fabricated marker.
+        """
+        flag = os.environ.get(_MOCK_LLM_FLAG, "").strip().lower()
+        if flag not in _MOCK_LLM_TRUTHY:
+            return False
+        provider = os.environ.get("LLM_PROVIDER", "openai").strip().lower()
+        key_env = _PROVIDER_KEY_ENV.get(provider, "OPENAI_API_KEY")
+        return not os.environ.get(key_env)
 
     def get_requirements(self, agent_name: str) -> dict[str, Any] | None:
         """Get data source requirements for an agent."""

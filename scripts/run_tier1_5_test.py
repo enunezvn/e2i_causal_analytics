@@ -1947,6 +1947,135 @@ async def run_tests(
     return full_results
 
 
+def _parse_expected_fail(raw: str | None) -> set[str]:
+    """Parse the comma-separated expected-fail allow-list into a set of names."""
+    if not raw:
+        return set()
+    return {name.strip() for name in raw.split(",") if name.strip()}
+
+
+def summarize_results(
+    results_path: str,
+    expected_fail: str | None,
+    step_summary_path: str | None,
+) -> int:
+    """Render a per-agent table + enforce the expected-fail allow-list (#616).
+
+    Reads the harness results JSON (the same ``full_results`` the run writes to
+    ``docs/results/tier1_5_pipeline_latest.json``), writes a human-readable
+    pass/fail table to ``step_summary_path`` (``$GITHUB_STEP_SUMMARY`` in CI), and
+    returns a process exit code:
+
+    - ``0`` when every failing agent (if any) is on ``expected_fail`` — the #600
+      monitored-alarm contract is preserved for the known set.
+    - ``1`` when ANY agent NOT on ``expected_fail`` failed — a NEW regression
+      beyond the known set, which must HARD FAIL so a green check can no longer
+      silently mask it.
+    - ``1`` when the results file is missing/unreadable (the harness was expected
+      to have produced it; absence is itself a failure signal, not a pass).
+
+    This is intentionally separate from the alarm-only ``run-harness`` step: that
+    step keeps its ``::warning`` + ``exit 0`` (issue #600); this step is the
+    honest gate (issue #616).
+    """
+    allow = _parse_expected_fail(expected_fail)
+
+    path = Path(results_path)
+    if not path.exists():
+        msg = f"Tier 1-5 results JSON not found at {results_path}"
+        print(f"::error title=Tier 1-5 results missing::{msg}")
+        _write_step_summary(step_summary_path, f"## Tier 1-5 Agent Harness\n\n❌ {msg}\n")
+        return 1
+
+    try:
+        data = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError) as exc:
+        msg = f"Could not parse Tier 1-5 results JSON: {exc}"
+        print(f"::error title=Tier 1-5 results unreadable::{msg}")
+        _write_step_summary(step_summary_path, f"## Tier 1-5 Agent Harness\n\n❌ {msg}\n")
+        return 1
+
+    rows = data.get("results") or []
+    summary = data.get("summary") or {}
+    total = summary.get("total_agents", len(rows))
+    passed = summary.get("passed", sum(1 for r in rows if r.get("success")))
+
+    # Categorise failures relative to the allow-list.
+    failed_rows = [r for r in rows if not r.get("success")]
+    new_failures = [r for r in failed_rows if r.get("agent_name") not in allow]
+    known_failures = [r for r in failed_rows if r.get("agent_name") in allow]
+
+    lines: list[str] = []
+    lines.append("## Tier 1-5 Agent Harness")
+    lines.append("")
+    lines.append(f"**{passed}/{total} agents passed** (keyless smoke harness).")
+    lines.append("")
+    lines.append("| Agent | Tier | Result | Data source | Quality gate | Detail |")
+    lines.append("| --- | --- | --- | --- | --- | --- |")
+    for r in sorted(rows, key=lambda x: (x.get("tier") or 0, x.get("agent_name") or "")):
+        name = r.get("agent_name", "?")
+        tier = r.get("tier", "?")
+        success = bool(r.get("success"))
+        ds = r.get("data_source") or {}
+        detected = ds.get("detected_source", "—")
+        # Honest label: marked-mock agents are a "plumbing-only PASS".
+        if detected == "mock":
+            ds_label = "mock (plumbing-only)"
+        else:
+            ds_label = str(detected)
+        qg = r.get("quality_gate") or {}
+        qg_label = "pass" if qg.get("passed") else ("fail" if qg else "—")
+        if success:
+            result_label = "✅ PASS"
+            detail = ""
+        elif name in allow:
+            result_label = "⚠️ KNOWN-FAIL"
+            detail = "expected-fail allow-list (#600 alarm)"
+        else:
+            result_label = "❌ NEW-FAIL"
+            detail = str(r.get("error") or "see results artifact")[:80]
+        lines.append(f"| {name} | {tier} | {result_label} | {ds_label} | {qg_label} | {detail} |")
+    lines.append("")
+
+    if known_failures:
+        names = ", ".join(sorted(r.get("agent_name", "?") for r in known_failures))
+        lines.append(f"⚠️ **Known (allow-listed) failures** — non-blocking (#600): {names}")
+        lines.append("")
+    if new_failures:
+        names = ", ".join(sorted(r.get("agent_name", "?") for r in new_failures))
+        lines.append(
+            f"❌ **NEW failures (not on allow-list)** — hard-failing this check (#616): {names}"
+        )
+        lines.append("")
+        print(
+            "::error title=Tier 1-5 NEW agent regression::"
+            f"{names} failed and are NOT on TIER1_5_EXPECTED_FAIL_AGENTS. "
+            "This is a new regression and hard-fails the check (issue #616). "
+            "See the tier1-5-results artifact for per-agent detail."
+        )
+    else:
+        lines.append("✅ No new (non-allow-listed) agent failures.")
+        lines.append("")
+
+    _write_step_summary(step_summary_path, "\n".join(lines) + "\n")
+
+    return 1 if new_failures else 0
+
+
+def _write_step_summary(step_summary_path: str | None, content: str) -> None:
+    """Append ``content`` to the GitHub step summary file (or print if absent)."""
+    if not step_summary_path:
+        print(content)
+        return
+    try:
+        with open(step_summary_path, "a", encoding="utf-8") as fh:
+            fh.write(content)
+    except OSError as exc:
+        # Never let summary-writing failure mask the gate result; just log.
+        print(f"::warning::Could not write step summary to {step_summary_path}: {exc}")
+        print(content)
+
+
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(description="Run Tier 1-5 agent tests using tier0 outputs")
@@ -2013,8 +2142,43 @@ def main():
         action="store_true",
         help="Do not save results to markdown file (only print to console)",
     )
+    # Summarize-only mode (issue #616): do NOT run the harness; read an existing
+    # results JSON, emit a per-agent table to the step summary, and enforce the
+    # expected-fail allow-list. Used by the tier1-5-test.yml honest-gate step.
+    parser.add_argument(
+        "--summarize",
+        type=str,
+        default=None,
+        metavar="RESULTS_JSON",
+        help="Summarize an existing results JSON + enforce the expected-fail "
+        "allow-list, then exit (does not run the harness).",
+    )
+    parser.add_argument(
+        "--expected-fail",
+        type=str,
+        default="",
+        help="Comma-separated agents whose failure is allow-listed "
+        "(non-blocking, #600). Used only with --summarize.",
+    )
+    parser.add_argument(
+        "--step-summary",
+        type=str,
+        default=None,
+        help="Path to append the markdown summary to (e.g. $GITHUB_STEP_SUMMARY). "
+        "Used only with --summarize.",
+    )
 
     args = parser.parse_args()
+
+    # Summarize-only mode short-circuits the full harness run (issue #616).
+    if args.summarize is not None:
+        sys.exit(
+            summarize_results(
+                results_path=args.summarize,
+                expected_fail=args.expected_fail,
+                step_summary_path=args.step_summary,
+            )
+        )
 
     # Parse tiers
     tiers = None

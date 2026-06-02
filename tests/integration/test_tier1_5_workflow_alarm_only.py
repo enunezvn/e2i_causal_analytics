@@ -153,3 +153,116 @@ def test_results_artifact_upload_is_always():
     assert any((s.get("if") or "").strip().startswith("always()") for s in upload_steps), (
         "Results artifact upload must use if: always() so the alarm has evidence on failure."
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue #616 fix#1: honest signal (step summary + expected-fail allow-list)
+# ---------------------------------------------------------------------------
+
+
+def test_report_results_step_writes_github_step_summary():
+    """#616: a step must surface the per-agent table to $GITHUB_STEP_SUMMARY so a
+    reviewer sees N/13, not a bare green. Today there is NO step summary anywhere;
+    this pins the new honest-signal step."""
+    step = _step("report-results")
+    run = step.get("run") or ""
+    assert "GITHUB_STEP_SUMMARY" in run, (
+        "report-results step must write to $GITHUB_STEP_SUMMARY (issue #616 visibility)."
+    )
+    assert "--summarize" in run, (
+        "report-results must invoke the harness summarize mode to render the table."
+    )
+
+
+def test_report_results_step_enforces_expected_fail_allow_list():
+    """#616: the honest gate must consult the expected-fail allow-list so a NEW
+    failure beyond the known set flips to a hard fail. The allow-list lives in a
+    documented job env var; the step must pass it through."""
+    job = _harness_job()
+    env = job.get("env") or {}
+    assert "TIER1_5_EXPECTED_FAIL_AGENTS" in env, (
+        "harness job must declare TIER1_5_EXPECTED_FAIL_AGENTS (the expected-fail allow-list)."
+    )
+    run = _step("report-results").get("run") or ""
+    assert "--expected-fail" in run and "TIER1_5_EXPECTED_FAIL_AGENTS" in run, (
+        "report-results must forward TIER1_5_EXPECTED_FAIL_AGENTS via --expected-fail."
+    )
+
+
+def test_report_results_step_is_not_continue_on_error():
+    """#263: the honest gate must NOT be continue-on-error; its exit 1 on a NEW
+    failure is the intended hard-fail behaviour."""
+    assert _step("report-results").get("continue-on-error") is not True
+
+
+def test_report_results_runs_when_harness_ran():
+    """The honest gate must run whenever the harness actually executed
+    (cache-present + infra-OK), even if run-harness alarm-exited 0 — otherwise a
+    new failure would never reach the gate."""
+    run_if = _step("report-results").get("if") or ""
+    assert "always()" in run_if, (
+        "report-results must use always() so the alarm-only exit 0 of run-harness "
+        "does not skip the honest gate."
+    )
+    assert "steps.restore-cache.outputs.found == 'true'" in run_if
+    assert "steps.boot-stack.outputs.ok == 'true'" in run_if
+    assert "steps.install-deps.outcome == 'success'" in run_if
+
+
+# ---------------------------------------------------------------------------
+# Issue #618: trigger paths cover shared schema modules the contracts import
+# ---------------------------------------------------------------------------
+
+
+def _pr_paths() -> list[str]:
+    workflow = cast(dict[str, Any], yaml.safe_load(_WORKFLOW_PATH.read_text()))
+    # PyYAML parses the bare ``on:`` key as the boolean True.
+    on = workflow.get("on") if "on" in workflow else workflow.get(True)
+    assert isinstance(on, dict), f"Unexpected 'on' shape: {on!r}"
+    return list((on.get("pull_request") or {}).get("paths") or [])
+
+
+def test_trigger_paths_include_traced_schema_packages():
+    """#618: a Pydantic/TypedDict change in shared modules the agent contracts
+    import transitively must trigger the harness. The traced (not guessed) set
+    includes src/causal_engine (the issue's wrong src/causal), src/data, src/ml,
+    src/mlops, etc. Pin the highest-signal ones."""
+    paths = _pr_paths()
+    # The issue's ``src/causal/**`` does NOT exist; the real package is causal_engine.
+    assert "src/causal/**" not in paths, (
+        "src/causal/** is not a real package (issue #618 guess was wrong); "
+        "use src/causal_engine/** instead."
+    )
+    required = {
+        "src/causal_engine/**",
+        "src/data/**",
+        "src/ml/**",
+        "src/mlops/**",
+    }
+    missing = required - set(paths)
+    assert not missing, f"tier1-5 trigger paths missing traced schema packages: {sorted(missing)}"
+
+
+def test_trigger_still_covers_original_paths():
+    """Broadening must not drop the original high-signal triggers."""
+    paths = set(_pr_paths())
+    for original in (
+        "src/agents/**",
+        "src/testing/**",
+        "scripts/run_tier1_5_test.py",
+        "config/agents/**",
+        ".github/workflows/tier1-5-test.yml",
+        "docker/docker-compose.yml",
+    ):
+        assert original in paths, f"original trigger path dropped: {original}"
+
+
+def test_scheduled_backstop_present():
+    """#618: a scheduled backstop guarantees drift in ANY shared module is run at
+    least weekly, independent of which paths a PR touched."""
+    workflow = cast(dict[str, Any], yaml.safe_load(_WORKFLOW_PATH.read_text()))
+    on = workflow.get("on") if "on" in workflow else workflow.get(True)
+    assert isinstance(on, dict)
+    schedule = on.get("schedule")
+    assert schedule, "Expected a schedule: backstop trigger (issue #618)."
+    assert any("cron" in entry for entry in schedule)
