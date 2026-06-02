@@ -253,6 +253,22 @@ async def lifespan(app: FastAPI):
         app.state.supabase_available = supabase is not None
         if supabase:
             logger.info("Supabase client initialized")
+            # #609: wire the global audit-chain service so every Tier 1-5 agent's
+            # audit_init genesis node actually records audit_chain_entries rows.
+            # Previously set_/init_audit_chain_service were never called anywhere
+            # in src/, so get_audit_chain_service() was always None and every
+            # audit_init node was a silent no-op on the /api/* path. Reuse the
+            # client just built above (do NOT call init_audit_chain_service, which
+            # would create a second client). Lazy import keeps src.agents.base out
+            # of the API module-import path (mirrors the sentinel-loader below).
+            try:
+                from src.agents.base.audit_chain_mixin import set_audit_chain_service
+                from src.utils.audit_chain import AuditChainService
+
+                set_audit_chain_service(AuditChainService(supabase))
+                logger.info("Audit chain service wired to global singleton")
+            except Exception as e:
+                logger.warning(f"Audit chain wiring failed (non-critical): {e}")
         else:
             logger.warning("Supabase not configured - database features unavailable")
     except Exception as e:
@@ -338,7 +354,20 @@ async def lifespan(app: FastAPI):
 
     logger.info("API server ready to accept connections")
 
-    yield  # Application runs here
+    # #609: reset the audit-chain global in a finally around the application run
+    # so it is cleared even on EXCEPTIONAL shutdown and never leaks into a
+    # subsequent same-process lifespan (uvicorn --reload, tests). The remaining
+    # cleanups below run on normal shutdown only (pre-existing behavior).
+    try:
+        yield  # Application runs here
+    finally:
+        try:
+            from src.agents.base.audit_chain_mixin import set_audit_chain_service
+
+            set_audit_chain_service(None)
+            logger.info("Audit chain service reset")
+        except Exception as e:
+            logger.warning(f"Audit chain reset failed: {e}")
 
     # Shutdown
     logger.info("E2I Causal Analytics Platform - Shutting down")
