@@ -73,12 +73,29 @@ async def review_and_remediate_qc(state: DataPreparerState) -> Dict[str, Any]:
             )
 
             if remediation_result.get("success"):
+                # #632: explicitly forward the remediated frames into the
+                # state LangGraph receives. ``_apply_automatic_remediation``
+                # rebinds ``train_df`` to a NEW object for ``drop_column``
+                # (``df.drop(...)``) and ``deduplicate``
+                # (``df.drop_duplicates()``) — those copies never reach the
+                # retry pass (``run_quality_checks`` reads ``state["train_df"]``)
+                # unless we return them here. ``impute`` previously
+                # propagated only by accidental in-place mutation of the
+                # shared object; routing it through this explicit return
+                # removes that fragile dependency. The DataPreparerState
+                # schema declares all three df keys, so LangGraph will not
+                # drop them. Keys absent from the remediation result (e.g.
+                # an unset ``validation_df``/``test_df`` split) stay None,
+                # matching the input state.
                 return {
                     "remediation_status": "applied",
                     "remediation_attempts": remediation_attempts + 1,
                     "remediation_actions_taken": remediation_result.get("actions_taken", []),
                     "requires_revalidation": True,
                     "llm_analysis": analysis.get("root_cause_summary"),
+                    "train_df": remediation_result.get("train_df"),
+                    "validation_df": remediation_result.get("validation_df"),
+                    "test_df": remediation_result.get("test_df"),
                 }
             else:
                 # Remediation failed, provide guidance

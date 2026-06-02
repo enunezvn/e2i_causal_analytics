@@ -14,6 +14,8 @@ flag that the apply loop honors by skipping (fail-loud).
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, patch
+
 import pandas as pd
 import pytest
 
@@ -21,7 +23,47 @@ from src.agents.ml_foundation.data_preparer.nodes.qc_remediation import (
     _apply_automatic_remediation,
     _coerce_params_to_dict,
     _parse_remediation_action,
+    review_and_remediate_qc,
 )
+
+# Module-qualified path of the LLM-analysis seam. Patching it lets the
+# auto-remediation branch of ``review_and_remediate_qc`` run
+# deterministically without a real Anthropic call — we inject the
+# analysis dict the node would otherwise build from an LLM response.
+_ANALYZE_LLM = (
+    "src.agents.ml_foundation.data_preparer.nodes.qc_remediation._analyze_qc_failures_with_llm"
+)
+
+
+def _failing_qc_state(train_df: pd.DataFrame, **overrides: object) -> dict:
+    """Build a minimal state that routes ``review_and_remediate_qc`` into
+    the auto-remediation branch.
+
+    The node bails early when ``gate_passed`` is True / status "passed",
+    or when ``remediation_attempts`` has hit the max; this state avoids
+    both so control reaches ``_apply_automatic_remediation``.
+    """
+    state: dict = {
+        "experiment_id": "exp-632",
+        "qc_status": "failed",
+        "gate_passed": False,
+        "overall_score": 0.5,
+        "remediation_attempts": 0,
+        "train_df": train_df,
+        "validation_df": None,
+        "test_df": None,
+    }
+    state.update(overrides)
+    return state
+
+
+def _auto_remediation_analysis(actions: list[dict]) -> dict:
+    """Analysis payload that triggers the auto-remediation branch."""
+    return {
+        "can_auto_remediate": True,
+        "remediation_actions": actions,
+        "root_cause_summary": "test-injected analysis",
+    }
 
 
 class TestParseRemediationAction:
@@ -307,3 +349,133 @@ class TestApplyAutomaticRemediationAllNull:
         assert result["success"] is True
         actions_taken = result.get("actions_taken", [])
         assert not any("SKIPPED" in a and "all-null" in a for a in actions_taken), actions_taken
+
+
+class TestReviewAndRemediateQcStatePropagation:
+    """#632: the success-path return of ``review_and_remediate_qc`` must
+    carry the remediated ``train_df``/``validation_df``/``test_df`` so the
+    LangGraph retry edge (``qc_remediation`` -> ``run_quality_checks``,
+    which reads ``state["train_df"]``) re-validates the REMEDIATED frame.
+
+    Pre-fix, the success-path dict omitted these keys. ``drop_column`` and
+    ``deduplicate`` rebind ``train_df`` to a NEW ``.drop()``/
+    ``.drop_duplicates()`` copy inside ``_apply_automatic_remediation``,
+    so the state's original object is unchanged and the remediation is
+    inert on retry. ``impute`` only "worked" by accident — ``_impute_column``
+    mutates the shared object in place — which is fragile (a future
+    copy-returning refactor would silently break it too).
+
+    These tests drive the FULL node (LLM seam patched) and assert the
+    returned state dict reflects the remediation, exercising the actual
+    state hand-off to LangGraph rather than the inner helper alone.
+    """
+
+    @pytest.mark.asyncio
+    async def test_drop_column_propagates_to_returned_state(self) -> None:
+        """RED pre-fix: returned state omits ``train_df`` -> dropped
+        column is absent from the result dict, so the retry pass sees the
+        original frame with the column still present."""
+        train_df = pd.DataFrame({"keep": [1, 2, 3], "drop_me": [4, 5, 6]})
+        state = _failing_qc_state(train_df)
+        analysis = _auto_remediation_analysis(
+            [{"type": "drop_column", "column": "drop_me", "params": {}}]
+        )
+
+        with patch(_ANALYZE_LLM, new=AsyncMock(return_value=analysis)):
+            result = await review_and_remediate_qc(state)
+
+        assert result["remediation_status"] == "applied"
+        assert result["requires_revalidation"] is True
+        # The remediated frame must be in the returned state dict.
+        assert "train_df" in result, "success-path state omits train_df (#632)"
+        out = result["train_df"]
+        assert "drop_me" not in out.columns, "dropped column still present in returned state"
+        assert "keep" in out.columns
+
+    @pytest.mark.asyncio
+    async def test_deduplicate_propagates_to_returned_state(self) -> None:
+        """RED pre-fix: row reduction from ``drop_duplicates()`` (a rebind)
+        never reaches the returned state dict."""
+        train_df = pd.DataFrame({"a": [1, 1, 2, 2], "b": [9, 9, 8, 8]})
+        state = _failing_qc_state(train_df)
+        analysis = _auto_remediation_analysis(
+            [{"type": "deduplicate", "column": None, "params": {}}]
+        )
+
+        with patch(_ANALYZE_LLM, new=AsyncMock(return_value=analysis)):
+            result = await review_and_remediate_qc(state)
+
+        assert result["remediation_status"] == "applied"
+        assert "train_df" in result, "success-path state omits train_df (#632)"
+        out = result["train_df"]
+        assert len(out) == 2, f"deduplicate did not propagate; got {len(out)} rows"
+
+    @pytest.mark.asyncio
+    async def test_impute_propagates_via_explicit_return_not_just_inplace(self) -> None:
+        """Regression: ``impute`` must propagate through the EXPLICIT
+        returned state, not only by accidental in-place mutation. We assert
+        on the frame in the RESULT dict (the object LangGraph receives),
+        which after the fix is the remediated frame."""
+        train_df = pd.DataFrame({"x": [1.0, 2.0, None, 4.0]})
+        state = _failing_qc_state(train_df)
+        analysis = _auto_remediation_analysis(
+            [{"type": "impute", "column": "x", "params": {"strategy": "median"}}]
+        )
+
+        with patch(_ANALYZE_LLM, new=AsyncMock(return_value=analysis)):
+            result = await review_and_remediate_qc(state)
+
+        assert result["remediation_status"] == "applied"
+        assert "train_df" in result, "success-path state omits train_df (#632)"
+        out = result["train_df"]
+        assert out["x"].isnull().sum() == 0, (
+            "partial-null column should be imputed in returned state"
+        )
+
+    @pytest.mark.asyncio
+    async def test_all_split_frames_propagate_to_returned_state(self) -> None:
+        """drop_column across train/validation/test must propagate every
+        non-None split into the returned state dict."""
+        train_df = pd.DataFrame({"keep": [1, 2], "drop_me": [3, 4]})
+        validation_df = pd.DataFrame({"keep": [5], "drop_me": [6]})
+        test_df = pd.DataFrame({"keep": [7], "drop_me": [8]})
+        state = _failing_qc_state(train_df, validation_df=validation_df, test_df=test_df)
+        analysis = _auto_remediation_analysis(
+            [{"type": "drop_column", "column": "drop_me", "params": {}}]
+        )
+
+        with patch(_ANALYZE_LLM, new=AsyncMock(return_value=analysis)):
+            result = await review_and_remediate_qc(state)
+
+        assert "train_df" in result and "validation_df" in result and "test_df" in result
+        assert "drop_me" not in result["train_df"].columns
+        assert "drop_me" not in result["validation_df"].columns
+        assert "drop_me" not in result["test_df"].columns
+
+    @pytest.mark.asyncio
+    async def test_failed_remediation_does_not_add_df_keys(self) -> None:
+        """Reason-before-rules guard: only the SUCCESS path forwards the
+        dfs. A failed remediation returns its existing ``failed`` dict
+        unchanged — we must not blanket-inject df keys onto every path."""
+        train_df = pd.DataFrame({"x": [1, 2, 3]})
+        state = _failing_qc_state(train_df)
+        analysis = _auto_remediation_analysis(
+            [{"type": "drop_column", "column": "drop_me", "params": {}}]
+        )
+
+        # Force _apply_automatic_remediation to report failure.
+        async def _fail(_state: object, _actions: object) -> dict:
+            return {"success": False, "error": "boom", "actions_taken": []}
+
+        with (
+            patch(_ANALYZE_LLM, new=AsyncMock(return_value=analysis)),
+            patch(
+                "src.agents.ml_foundation.data_preparer.nodes.qc_remediation."
+                "_apply_automatic_remediation",
+                new=AsyncMock(side_effect=_fail),
+            ),
+        ):
+            result = await review_and_remediate_qc(state)
+
+        assert result["remediation_status"] == "failed"
+        assert "train_df" not in result
