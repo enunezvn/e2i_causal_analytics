@@ -164,8 +164,9 @@ def test_synthetic_pipeline_e2e_runs_in_slow_lane() -> None:
 
 
 def test_summary_reads_heavy_output_not_masked_result() -> None:
-    """The summary must report Job B's REAL outcome via the output, not the
-    continue-on-error-masked ``.result`` (which would always say success)."""
+    """The summary must surface Job B's heavy pytest step outcome via the
+    ``heavy_result`` output, so it can show the heavy-step result distinctly
+    from a job-level infra failure (#617 retains the output for this reason)."""
     summary = _jobs().get("summary", {})
     step_envs = " ".join(str(s.get("env", {})) for s in summary.get("steps", []))
     assert f"needs.{HEAVY_JOB}.outputs.{HEAVY_OUTPUT}" in step_envs, (

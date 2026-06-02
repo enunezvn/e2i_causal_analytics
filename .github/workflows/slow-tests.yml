@@ -291,7 +291,9 @@ jobs:
             -v --tb=short ${EXTRA_ARGS}
 
       - name: Upload artifacts on failure or cancel
-        if: always() && (failure() || cancelled() || steps.heavy.outcome == 'failure')
+        # Post-#617 the heavy step is blocking, so a heavy failure already makes
+        # failure() true; no separate steps.heavy.outcome branch is needed.
+        if: always() && (failure() || cancelled())
         uses: actions/upload-artifact@v4
         with:
           name: heavy-tests-debug-${{ github.run_id }}
@@ -546,8 +548,9 @@ jobs:
   # so its `.result` is accurate and the alarm keys off it like A/C/D. This also
   # covers a Job B INFRA failure (pip install / mlflow boot) that never reached
   # the heavy pytest step — which the heavy_result output alone would miss.
-  # `if: always()` (not `failure()`) keeps the alarm robust even if GitHub's
-  # run-level failure signal lags a single failing job.
+  # `if: always()` is required because a `needs`-dependent job is SKIPPED by
+  # default when any dependency fails; always() forces it to evaluate the `if`
+  # condition (and thus fire the alarm) even when an upstream job has failed.
   # ──────────────────────────────────────────────────────────────────
   report-failure:
     name: Report Slow Tests Failure
@@ -596,5 +599,5 @@ jobs:
             gh issue create \
               --title "Nightly slow-tests failed on ${DATE} (${SHA_SHORT})" \
               --label nightly-slow-tests-failure \
-              --body "$(printf "Nightly slow-tests failed on %s (commit \`%s\`).\n\nJob results: %s\n\nRun: %s\n\n_Auto-created by .github/workflows/slow-tests.yml. This issue will be commented on for subsequent failures and should be closed manually after the underlying problem is fixed. Job B is allowed-to-fail but is now surfaced here so it cannot rot silently (gap G1)._" "$DATE" "$SHA_SHORT" "$RESULTS" "$RUN_URL")"
+              --body "$(printf "Nightly slow-tests failed on %s (commit \`%s\`).\n\nJob results: %s\n\nRun: %s\n\n_Auto-created by .github/workflows/slow-tests.yml. This issue will be commented on for subsequent failures and should be closed manually after the underlying problem is fixed. Job B (excluded-heavy e2e) is a hard must-pass since #617 — a failure means the heavy e2e suites are broken, not an expected/allowed flake._" "$DATE" "$SHA_SHORT" "$RESULTS" "$RUN_URL")"
           fi
