@@ -152,6 +152,11 @@ class DataPreparerAgent:
             "adaptive_declared_safe_full_immunity": input_data.get(
                 "adaptive_declared_safe_full_immunity", False
             ),
+            # Per-run override for the QC overall_score blocking bar. None (the
+            # default) routes to the strict 0.80 baseline in
+            # resolve_qc_min_overall_score, preserving production behavior; a
+            # caller / PipelineConfig may supply a different bar.
+            "qc_min_overall_score": input_data.get("qc_min_overall_score"),
         }
 
         # Execute the graph with optional Opik tracing
@@ -219,6 +224,10 @@ class DataPreparerAgent:
                     "qc_passed": final_state.get("qc_passed", False),
                     "qc_errors": final_state.get("blocking_issues", []),
                     "qc_warnings": final_state.get("warnings", []),
+                    # Effective minimum overall_score bar this run enforced
+                    # (default 0.80; overridable). Carried so model_trainer's
+                    # qc_gate_checker reports the SAME bar data_preparer used.
+                    "qc_min_overall_score": final_state.get("qc_min_overall_score"),
                 },
                 "baseline_metrics": {
                     "experiment_id": experiment_id,

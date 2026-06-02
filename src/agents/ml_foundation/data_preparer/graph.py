@@ -32,6 +32,7 @@ from .nodes import (
     transform_data,
 )
 from .nodes.adaptive_validity_check import _resolve_manifest_features
+from .nodes.qc_threshold import resolve_qc_min_overall_score
 from .state import DataPreparerState
 
 logger = logging.getLogger(__name__)
@@ -504,7 +505,9 @@ async def finalize_output(state: DataPreparerState) -> Dict[str, Any]:
     The QC gate blocks downstream training if:
     - QC status is "failed"
     - There are blocking issues
-    - Overall QC score < 0.80
+    - Overall QC score < the resolved minimum bar (default 0.80; overridable
+      per-run via state, per-cohort via scope_spec, or via the
+      ``QC_MIN_OVERALL_SCORE`` env — see ``resolve_qc_min_overall_score``)
 
     Args:
         state: Current agent state
@@ -554,13 +557,17 @@ async def finalize_output(state: DataPreparerState) -> Dict[str, Any]:
             gate_passed = False
             logger.warning(f"QC gate BLOCKED: {len(blocking_issues)} blocking issues")
 
-        # CRITICAL: Gate fails if overall_score is None or below threshold
+        # CRITICAL: Gate fails if overall_score is None or below threshold.
+        # The minimum bar is resolved through the single source of truth
+        # (default 0.80, overridable via state / scope_spec / env) so the gate
+        # decision can never drift from the run_quality_checks blocking append.
+        min_overall_score = resolve_qc_min_overall_score(state)
         if overall_score is None:
             gate_passed = False
             logger.warning("QC gate BLOCKED: overall_score is None (QC checks may not have run)")
-        elif overall_score < 0.80:
+        elif overall_score < min_overall_score:
             gate_passed = False
-            logger.warning(f"QC gate BLOCKED: score {overall_score:.2f} < 0.80")
+            logger.warning(f"QC gate BLOCKED: score {overall_score:.2f} < {min_overall_score:.2f}")
 
         # === DATA READINESS ===
         train_df = state.get("train_df")
@@ -608,6 +615,10 @@ async def finalize_output(state: DataPreparerState) -> Dict[str, Any]:
             "gate_passed": gate_passed,
             "qc_passed": qc_passed,
             "qc_score": overall_score,
+            # Surface the effective bar this gate enforced so downstream
+            # consumers (model_trainer's qc_gate_checker) report the SAME
+            # threshold instead of re-deriving / hardcoding it.
+            "qc_min_overall_score": min_overall_score,
             "is_ready": is_ready,
             "total_samples": total_samples,
             "train_samples": train_samples,

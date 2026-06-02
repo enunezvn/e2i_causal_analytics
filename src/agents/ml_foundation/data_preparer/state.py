@@ -145,6 +145,20 @@ class DataPreparerState(BaseAgentSchema):
     # ``extra="ignore"``; ``bool`` (not Optional) so the model default is False.
     adaptive_declared_safe_full_immunity: bool = False
 
+    # Per-run override for the QC ``overall_score`` blocking bar (the strongest
+    # remaining hardcoded gate, historically ``0.80`` duplicated across the
+    # quality_checker blocking append + the finalize_output gate). Resolved
+    # through ``resolve_qc_min_overall_score`` (the single source of truth):
+    # default 0.80 when None (UNCHANGED baseline), else this caller-supplied
+    # bar (also overridable per-cohort via ``scope_spec["qc_min_overall_score"]``
+    # or via the ``QC_MIN_OVERALL_SCORE`` env). After finalize_output runs, this
+    # holds the EFFECTIVE bar enforced, surfaced into the qc_report so
+    # model_trainer reports the same threshold. ``Optional`` (default None) so
+    # absence routes to the strict 0.80 default, mirroring the per-run-switch
+    # convention of ``adaptive_fdr_enabled``. Declared (not relied on via
+    # ``extra``) because BaseAgentSchema is ``extra="ignore"``.
+    qc_min_overall_score: Optional[float] = None
+
     # Phase 1 of causal-role propagation (Issue #237 reframe). Typed
     # list of ``RoleAttribution`` rows (see
     # ``src.data.role_attribution.RoleAttribution`` TypedDict): one row
