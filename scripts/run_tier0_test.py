@@ -4506,16 +4506,23 @@ def _regime_kwargs(regime: str, *, seed: int = 42) -> Dict[str, Any]:
             # #633: noise_sd tuned for the v3 ``maximum_train_val_delta`` (0.03)
             # overfit gate, which is RANKING-based (train roc_auc − val roc_auc)
             # → calibration-INVARIANT → deploy-calibrated cannot touch it, so it
-            # is tuned via the fixture. The tradeoff is chaotic (faithful Job B):
-            #   * ns=0.04 → slope/intercept/ECE/MCC/AUC/recall/NB all GREEN, but
-            #     train_val_delta JUST over 0.03 (only failing gate).
-            #   * ns=0.06 → train_val_delta=0.021 (GREEN) but calibration BROKE
-            #     (slope 0.35 / ECE 0.105 / val_auc 0.923 over the 0.92 band).
-            # ns=0.05 sits between: enough regularisation to pull train_val_delta
-            # under 0.03 while keeping the deployed-calibrated slope/ECE in-gate
-            # and val roc_auc inside the Job-D band [0.80, 0.92]. Exact faithful
-            # values are asserted from CI slow-tests Job B (AVX512).
-            "noise_sd": 0.05,
+            # is tuned via the fixture. The noise knob is chaotic because it
+            # flips MODEL SELECTION (faithful Job B):
+            #   * ns=0.04 → a tree champion wins: post-hoc calibration APPLIES,
+            #     deployed-calibrated slope/intercept/ECE/MCC/AUC/recall/NB all
+            #     GREEN; only train_val_delta JUST over 0.03.
+            #   * ns=0.05 → a calibration-NATIVE champion wins (skip_post_hoc):
+            #     raw probs deployed → slope 1.25 / ECE 0.068 / intercept 0.39
+            #     all FAIL (deployed_model_is_calibrated=None).
+            #   * ns=0.06 → logistic wins: calibration applies but over-corrects
+            #     (slope 0.35 / ECE 0.105) and val_auc 0.923 busts the 0.92 band.
+            # ns=0.04 is the only regime where the deployable-calibrated tree
+            # wins; the remaining train_val_delta excess is closed by trimming
+            # signal_strength (below) rather than touching noise (which would
+            # flip the champion). Exact faithful values asserted from Job B.
+            "noise_sd": 0.04,
+            # (signal_strength tuned alongside ns to close train_val_delta while
+            #  keeping the calibration-eligible tree as champion — see above.)
             "signalize_extra_features": True,
         }
     elif regime in _SCENARIO_REGIME_TO_NAME:
