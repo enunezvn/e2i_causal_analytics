@@ -334,14 +334,42 @@ async def test_validation_errors_populated_on_failure():
 
 
 @pytest.mark.asyncio
-async def test_criteria_source_defaults_to_fixed_when_flag_unset() -> None:
-    """When ADAPTIVE_CRITERIA is unset, success_criteria is tagged 'fixed'."""
+async def test_criteria_source_defaults_to_adaptive_when_flag_unset() -> None:
+    """PRODUCTION DEFAULT (2026-06-02): ADAPTIVE_CRITERIA defaults to true,
+    so an UNSET flag now routes binary-classification scopes to the v3
+    adaptive engine. With NO pre-eval inputs on state the validator cannot
+    compute or stash adaptive thresholds, so it falls back to fixed
+    thresholds and tags the audit value ``adaptive_fallback_to_fixed`` (the
+    gap is observable). Pre-flip this test asserted ``"fixed"``; the flip
+    changes the DEFAULT, not the threshold values when state is incomplete.
+    """
     with patch.dict(os.environ, {}, clear=False):
         os.environ.pop("ADAPTIVE_CRITERIA", None)
         state = {
             "inferred_problem_type": "binary_classification",
             "performance_requirements": {},
-            "experiment_id": "exp-fixed",
+            "experiment_id": "exp-default-on",
+        }
+        result = await define_success_criteria(state)
+    sc = result["success_criteria"]
+    assert sc["criteria_source"] == "adaptive_fallback_to_fixed"
+    # Fixed thresholds still computed (the flip changes routing, not the
+    # fallback values) — the precision/F1 gates are NOT dropped on the
+    # fallback path so Apr-26 reproducibility holds when state is incomplete.
+    assert sc["minimum_auc"] == 0.75
+    assert sc["minimum_precision"] == 0.70
+    assert sc["minimum_f1"] == 0.70
+
+
+@pytest.mark.asyncio
+async def test_criteria_source_is_fixed_when_flag_explicitly_off() -> None:
+    """The explicit opt-OUT (ADAPTIVE_CRITERIA=false) still produces the
+    fixed scheme tagged ``"fixed"`` — this is the ROLLBACK switch."""
+    with patch.dict(os.environ, {"ADAPTIVE_CRITERIA": "false"}, clear=False):
+        state = {
+            "inferred_problem_type": "binary_classification",
+            "performance_requirements": {},
+            "experiment_id": "exp-optout",
         }
         result = await define_success_criteria(state)
     assert result["success_criteria"]["criteria_source"] == "fixed"
