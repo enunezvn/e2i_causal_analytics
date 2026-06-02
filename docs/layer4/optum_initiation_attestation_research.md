@@ -84,11 +84,15 @@ has now been **run on the real cohort** — converting the argument into measure
 (cheapest-disproof: the structural-preclusion claim was a hypothesis until the empirical
 signal confirmed it).
 
-**Run:** real Optum CSU biologic-initiation cohort, n=1294 (37 positive, 2.9%), faithful
-Tier-0 `--step 2` data-prep (`run_optum_tier0_test.py --cohort initiation --step 2`,
-215 s). Structural roles re-derived offline via `derive_structural_role` at current `main`;
-empirical per-feature severities taken from the run's `adaptive_verdicts`
-(Layer-1 / Layer-3 FDR); paired by `compare_structural_vs_empirical`.
+**Runs (two — same result):** real Optum CSU biologic-initiation cohort, n=1294 (37 positive, 2.9%).
+1. **`--step 2` data-prep** (`run_optum_tier0_test.py --cohort initiation --step 2`, 215 s).
+2. **FU-A — full manifest-ON pipeline** (`--cohort initiation --disable-mlflow --hpo-trials 1`,
+   165 s): step-1 scope_definer engages the `optum` manifest into `state.scope_spec`
+   (artifact `feature_manifest_source = optum`) — the exact production config (#545).
+
+Structural roles re-derived offline via `derive_structural_role` at current `main`; empirical
+per-feature severities taken from each run's `adaptive_verdicts` (Layer-1 / Layer-3 FDR);
+paired by `compare_structural_vs_empirical`.
 
 **Result — `gate_passed = True`, `missed_leaks = 0`:**
 
@@ -102,29 +106,31 @@ empirical per-feature severities taken from the run's `adaptive_verdicts`
 | `disagreements` | 0 |
 
 So **no SAFE attested feature is empirically a leak** — the structural decider's ACCEPT of
-all 110 agrees with the data-driven signal.
+all 110 agrees with the data-driven signal, **confirmed under the production manifest-ON
+config** (FU-A, `feature_manifest_source = optum`).
 
-**Honesty caveats (the measurement is conservative, not a false green):**
-1. **This run was the manifest-OFF / stricter regime.** The `--step 2`-alone path did not
-   propagate the `optum` manifest into the declared-safe path (artifact
-   `feature_manifest_source = None`; the SAFE confounders `atopy_score` / `charlson_score` /
-   `*_tested` were FDR-over-dropped and the QC completeness gate blocked — the documented
-   #594/#604 manifest-OFF signature). Declared-safe σ-inflation (manifest-ON, the production
-   path #545) can only **reduce** SAFE-feature flagging, so `missed_leaks == 0` holds *a
-   fortiori* under production manifest-ON. The stricter test passing is stronger evidence,
-   not weaker.
-2. **Coverage 80/110.** 80 SAFE features received an empirical verdict (all `info`/`moderate`);
-   ~30 were dropped pre-scan as degenerate/all-null columns (`pearsonr` is undefined on
-   constant input) and are **incapable of leaking**, so the coverage gap hides no leak.
-3. **The QC block is a data-quality artifact** (completeness, from the manifest-OFF over-drop),
-   orthogonal to the leakage crosscheck — the leakage verdicts were produced by the scan
-   before/independent of the completeness gate.
+**Honesty notes:**
+1. **Manifest-invariant for this cohort.** The two runs are byte-identical (84 verdicts,
+   79 `info` / 1 `moderate` / 4 `high`, same drops) whether the artifact reports
+   `feature_manifest_source = None` (`--step 2`-alone — state not written back) or `= optum`
+   (FU-A full run with step-1 scope_definer). Declared-safe σ-inflation has nothing to act on
+   here — every SAFE feature scores `info`/`moderate`, far below the σ-band where manifest
+   protection matters — so the gate does not depend on the manifest. (This **supersedes** the
+   earlier "manifest-OFF stricter regime, holds *a fortiori*" framing: FU-A confirms the gate
+   *directly* under production config, not by inference.)
+2. **Coverage 80/110 is a DATA-fidelity ceiling, not a config gap.** The 30 unscored SAFE
+   features are degenerate/all-null Optum-converter columns (`pearsonr` undefined on constant
+   input) — dropped pre-scan and **incapable of leaking**. FU-A confirmed this is invariant to
+   the manifest: full coverage of all 110 is unreachable without converter changes (a constant
+   column has no signal to score) and needs none (a constant column cannot leak the outcome).
+3. **The QC block is a data-quality artifact** — only 9 clean features survive the all-null
+   drops + the rare 2.9% positive rate; identical under manifest-ON and -OFF, and orthogonal to
+   the leakage crosscheck (the leakage verdicts are produced by the scan before/independent of
+   the completeness gate).
 4. **Undetectable case (unchanged):** a feature where structural ACCEPTs *and* the empirical
-   signal also misses a real leak is not detectable by this crosscheck; it is mitigated by
-   the per-feature domain review (D3) and by EnsembleVoter precedence (empirical-high wins
-   before the structural rule fires). A production manifest-ON confirmatory run would cover
-   all 110 SAFE features and match the production config exactly — optional, as it can only
-   confirm the gate.
+   signal also misses a real leak is not detectable by this crosscheck; it is mitigated by the
+   per-feature domain review (D3) and by EnsembleVoter precedence (empirical-high wins before
+   the structural rule fires).
 
 ## Still deferred (NOT in this PR)
 
