@@ -164,18 +164,6 @@ def test_flag_off_reproduces_apr26_baseline_within_tolerance() -> None:
 
 
 @pytest.mark.integration
-@pytest.mark.xfail(
-    reason=(
-        "#633: clean-regime synthetic model fails v3 calibration/MCC/overfit "
-        "gates (success_criteria_met=False; calibration_intercept≈0.65 vs 0.30, "
-        "minimum_mcc, maximum_calibration_error, maximum_train_val_delta) after "
-        "#594/#604 feature retention — a poorly-calibrated/overfit model the v3 "
-        "gates correctly catch. Quarantined so Job B can graduate to blocking; "
-        "do NOT flip the assertions to expect False (that normalizes a possible "
-        "regression). Tracked in #633."
-    ),
-    strict=False,
-)
 def test_clean_regime_with_adaptive_flag_on_v3() -> None:
     """Clean regime under v3 (Option C): MCC / NB / calibration gates fire,
     precision/F1 are dropped entirely, and the deployer-success contract

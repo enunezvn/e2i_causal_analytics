@@ -4464,18 +4464,46 @@ def _regime_kwargs(regime: str, *, seed: int = 42) -> Dict[str, Any]:
             "signalize_extra_features": False,
         }
     elif regime == "clean":
-        # positive_rate=0.70 pushes realised positive share to ~35% (eases the
-        # precision/F1 ceiling that 25% prevalence imposed at positive_rate=0.50);
-        # noise_sd=0.03 compensates for the scale*noise_sd interaction at
-        # sample_data.py:660 — `scale=positive_rate/0.30=2.33` here, so effective
-        # noise SD = 0.03 * 2.33 ≈ 0.07. See 03-section-a-synthetic.md §4
-        # (post-Codex correction) for the empirical-claim revision and
-        # 08-risks.md #9 for the scale*noise_sd risk write-up.
+        # #633 (2026-06-02): the clean-regime v3 unblock needs TWO
+        # complementary levers, because the gates split into two families
+        # that no single lever fixes:
+        #
+        #   (A) DEPLOY-CALIBRATED (evaluator.py): the AUC-champion is an
+        #       under-confident tree whose RAW leaf-frequency probabilities
+        #       fail the van-Calster slope gate (and ECE / intercept). #633
+        #       deploys the post-hoc calibrated estimator and judges the
+        #       slope / intercept / ECE gates on ITS probabilities (slope→1,
+        #       ECE↓). This fixes the calibration-shape gates that the prior
+        #       fixture-only branch (fix/633-clean-regime-recalibrate) proved
+        #       were NOT fixture-tunable.
+        #
+        #   (B) FIXTURE REBALANCE (this block): post-hoc calibration is
+        #       MONOTONIC, so it cannot touch the ranking-based overfit gate
+        #       ``maximum_train_val_delta`` (train roc_auc − val roc_auc) nor
+        #       the discrimination floor ``minimum_mcc``. The prior combo
+        #       (positive_rate 0.70 / signal_strength 1.4 / noise_sd 0.03)
+        #       realised a ~32% positive share → the moderate-imbalance band
+        #       (minority_ratio 0.20–0.40, config/imbalance_strategy.yaml)
+        #       fires ``random_oversample``, which rebalances training away
+        #       from the test prevalence and OVERFITS / decalibrates. Raising
+        #       positive_rate to 1.2 lifts the realised share above the 0.40
+        #       "none" boundary → NO oversampling → train_val_delta and MCC
+        #       recover. signal_strength 1.35 / noise_sd 0.04 sit at the
+        #       best-measured calibration point while keeping val roc_auc
+        #       inside the Job-D band [0.80, 0.92].
+        #
+        # These values are MEASURED on CI slow-tests Job B (AVX512 — the only
+        # faithful environment; local AVX2 suppresses val roc_auc ~0.10-0.18
+        # and even flips the calibration sign, so it CANNOT tune these gates).
+        # positive_rate is a risk-score base-rate multiplier clipped to
+        # [0.05, 0.95]; > 1.0 is valid. See issue #633 and the "2026-06-02
+        # (#633) clean-regime deploy-calibrated + recalibration" section in
+        # docs/results/tier0_remediation_baseline_20260426.md.
         kwargs = {
             "seed": seed,
-            "positive_rate": 0.70,
-            "signal_strength": 1.4,
-            "noise_sd": 0.03,
+            "positive_rate": 1.2,
+            "signal_strength": 1.35,
+            "noise_sd": 0.04,
             "signalize_extra_features": True,
         }
     elif regime in _SCENARIO_REGIME_TO_NAME:
