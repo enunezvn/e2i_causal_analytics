@@ -1,6 +1,23 @@
 """Success criteria definition and validation for scope_definer.
 
 This module defines measurable success criteria and validates constraints.
+
+ADAPTIVE_CRITERIA — PRODUCTION DEFAULT (flipped 2026-06-02). The v3 adaptive
+success-criteria engine (``adaptive_success_criteria()``) is now the
+platform default: ``ADAPTIVE_CRITERIA`` defaults to ``"true"``. Every
+binary-classification model-quality evaluation is governed by the v3
+contract unless a caller explicitly sets ``ADAPTIVE_CRITERIA=false``.
+
+The v3 (Option C) contract DROPS ``minimum_precision`` and ``minimum_f1``
+(Van Calster et al. 2025, Lancet Digital Health) and ADDS regime / N /
+baseline-keyed net-benefit (DCA), MCC, and calibration slope / intercept
+gates. The fixed Apr-26-baseline scheme (``minimum_auc`` /
+``minimum_precision`` / ``minimum_recall`` / ``minimum_f1``) remains
+reachable as the explicit opt-OUT path.
+
+ROLLBACK: set ``ADAPTIVE_CRITERIA=false`` to revert the entire platform to
+the fixed-threshold scheme. Full design contract at
+``.claude/plans/adaptive_success_criteria/01-design.md``.
 """
 
 import logging
@@ -48,8 +65,17 @@ def _adaptive_criteria_enabled() -> bool:
     observed (importing into a module-level constant would freeze the value
     at import time). The truthy-string set matches the project convention
     used in ``security_middleware.py`` for ``ENABLE_HSTS`` and similar flags.
+
+    PRODUCTION DEFAULT (2026-06-02): the v3 adaptive engine is now the
+    platform default — the flag defaults to ``"true"``. The v3 contract
+    therefore governs ALL binary-classification model-quality evaluation
+    unless a caller explicitly opts OUT with ``ADAPTIVE_CRITERIA=false``.
+    The opt-OUT routes back to the fixed Apr-26-baseline thresholds
+    (``minimum_auc 0.75`` / ``minimum_precision 0.70`` / ``minimum_recall
+    0.65`` / ``minimum_f1 0.70``). ROLLBACK: set ``ADAPTIVE_CRITERIA=false``
+    to revert the whole platform to the fixed scheme.
     """
-    return os.getenv("ADAPTIVE_CRITERIA", "false").strip().lower() in _TRUTHY
+    return os.getenv("ADAPTIVE_CRITERIA", "true").strip().lower() in _TRUTHY
 
 
 def adaptive_success_criteria(
