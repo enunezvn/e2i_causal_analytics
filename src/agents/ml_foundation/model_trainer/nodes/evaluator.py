@@ -1118,27 +1118,37 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
                         abs(cal_intercept) if not math.isnan(cal_intercept) else float("nan")
                     )
 
-                    # (b) Threshold-dependent metrics: re-derive the operating
-                    #     point on the calibrated VALIDATION probs (the raw
-                    #     threshold lives on the raw probability scale and is
-                    #     not transferable post-monotonic-remap), then overlay
-                    #     the calibrated test metrics at that frozen threshold.
+                    # (b) Threshold-dependent metrics: mirror the operating-
+                    #     point SEMANTICS of the raw computation
+                    #     (_compute_classification_metrics) on the calibrated
+                    #     probability scale, so the only thing that changes is
+                    #     the prob SOURCE (calibrated), not the policy:
+                    #       * imbalance_detected → primary metrics are reported
+                    #         at the validation-frozen optimal threshold, so
+                    #         re-derive it on the calibrated VAL probs (the raw
+                    #         threshold lives on the raw prob scale and is not
+                    #         transferable post-monotonic-remap).
+                    #       * balanced → raw primary metrics are at 0.5, so keep
+                    #         0.5 on the calibrated probs.
                     #     Ranking metrics (roc_auc / pr_auc) are calibration-
                     #     invariant and left untouched.
-                    cal_threshold = float(opt_thresh)
-                    if X_val_np is not None and y_val_np is not None:
-                        try:
-                            cal_val_proba = calibrated_model.predict_proba(X_val_np)
-                            cal_threshold, cal_threshold_source = _select_threshold(
-                                y_val_np, cal_val_proba, cost_matrix=None
-                            )
-                        except Exception as exc:  # pragma: no cover - defensive
-                            logger.warning(
-                                "Deployed-calibrated threshold re-derivation failed "
-                                "(%s); falling back to the raw-derived threshold %.4f.",
-                                exc,
-                                cal_threshold,
-                            )
+                    if imbalance_detected:
+                        cal_threshold = float(opt_thresh)
+                        if X_val_np is not None and y_val_np is not None:
+                            try:
+                                cal_val_proba = calibrated_model.predict_proba(X_val_np)
+                                cal_threshold, _cal_threshold_source = _select_threshold(
+                                    y_val_np, cal_val_proba, cost_matrix=None
+                                )
+                            except Exception as exc:  # pragma: no cover - defensive
+                                logger.warning(
+                                    "Deployed-calibrated threshold re-derivation failed "
+                                    "(%s); falling back to the raw-derived threshold %.4f.",
+                                    exc,
+                                    cal_threshold,
+                                )
+                    else:
+                        cal_threshold = 0.5
                     cal_pred_at_thresh = (cal_proba_pos >= cal_threshold).astype(int)
                     deployed_test_metrics = _compute_split_classification_metrics(
                         y_test_np, cal_pred_at_thresh, cal_proba
@@ -1160,8 +1170,13 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
                         if _k in deployed_test_metrics:
                             inner_test_metrics[_k] = deployed_test_metrics[_k]
                     inner_test_metrics["deployed_model_is_calibrated"] = True
-                    inner_test_metrics["chosen_threshold"] = cal_threshold
-                    metrics_result["optimal_threshold"] = cal_threshold
+                    # Only the imbalanced path uses the re-derived threshold as
+                    # the operating point; in the balanced path 0.5 is just the
+                    # raw reporting threshold, so leave the diagnostic
+                    # ``optimal_threshold`` (the Youden optimum) untouched.
+                    if imbalance_detected:
+                        inner_test_metrics["chosen_threshold"] = cal_threshold
+                        metrics_result["optimal_threshold"] = cal_threshold
                     logger.info(
                         "#633 deploying calibrated model: slope_deviation %.4f, "
                         "intercept_magnitude %.4f, threshold %.4f (gates now read "
