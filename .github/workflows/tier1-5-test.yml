@@ -30,8 +30,9 @@ on:
       # importing the AGENT_METHOD_MAP state_module + input_module entries
       # pulls in schema-bearing modules from each package below (measured via a
       # runtime import-closure scan, 2026-06-02). NOTE the issue's guessed
-      # ``src/causal/**`` does NOT exist — the real package is
-      # ``src/causal_engine/**`` (the densest schema home, incl.
+      # ``src/causal/`` is only an empty placeholder package (a bare
+      # __init__.py, no schema modules, no contract importers) — the real
+      # schema home is ``src/causal_engine/**`` (the densest, incl.
       # validation_outcome consumed by feedback_learner's contract).
       - "src/causal_engine/**"  # 18 schema modules in the contract closure
       - "src/data/**"           # 6 schema modules (issue-named, real)

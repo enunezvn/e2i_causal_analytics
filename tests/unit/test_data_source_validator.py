@@ -519,3 +519,24 @@ class TestDataSourceValidatorIntegration:
         # Should detect as tier0 passthrough based on success status
         assert result.detected_source == DataSourceType.TIER0_PASSTHROUGH
         assert result.passed
+
+
+class TestMockMarkerInSync:
+    """Guard the duplicated mock-marker constant (#616 hardening, codex L-1).
+
+    ``DataSourceValidator`` intentionally hardcodes ``MOCK_LLM_MARKER`` instead of
+    importing it from ``src.utils.mock_llm`` (to stay dependency-light). If the
+    canonical ``MOCK_MARKER`` is ever renamed/changed, all four marked-mock
+    detection signals would silently go dark (false negatives), re-opening the
+    exact #616 hole. This test fails loudly if the two drift apart.
+    """
+
+    def test_validator_marker_matches_canonical(self):
+        from src.testing.data_source_validator import MOCK_LLM_MARKER
+        from src.utils.mock_llm import MOCK_MARKER
+
+        assert MOCK_LLM_MARKER == MOCK_MARKER, (
+            "data_source_validator.MOCK_LLM_MARKER drifted from "
+            "src.utils.mock_llm.MOCK_MARKER — marked-mock detection would silently "
+            "fail. Re-sync the duplicated literal (#616)."
+        )
