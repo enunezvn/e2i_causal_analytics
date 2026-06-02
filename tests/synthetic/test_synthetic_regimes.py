@@ -37,20 +37,23 @@ invocation takes ~3-5 minutes; CI selects them via ``-m slow``.
 E2E fixture design (subprocess pattern)
 ----------------------------------------
 Both ``TestAdverseRegimeE2E`` and ``TestCleanRegimeE2E`` previously called
-``asyncio.run(run_pipeline(...))`` in-process. In CI the LLM API keys are
-placeholder ``test-key`` values; the first agent (ScopeDefinerAgent) makes
-a real Anthropic API call which returns 401, failing the fixture ~340ms
-after collection and causing all 9-10 tests in each class to show
-ERROR-at-setup.
-
-Refactored 2026-05-06 (chore/slow-tests-fixes) to use the subprocess
-pattern proved by PR #69 ``test_synthetic_baseline_invariant.py``:
+``asyncio.run(run_pipeline(...))`` in-process. Refactored 2026-05-06
+(chore/slow-tests-fixes) to the subprocess pattern proved by PR #69
+``test_synthetic_baseline_invariant.py``:
   - Fork ``python scripts/run_tier0_test.py --regime <regime> ...``
   - Set ``TIER0_E2E_JSON_OUT=<tmp_path>/result.json`` in env
   - Parse the JSON artifact, return dict
-The subprocess inherits the full process environment (including real LLM
-keys when present in CI via GitHub Actions secrets) so the fixture is
-independent of the test-session's in-process Python state.
+The enduring benefit is full process/env isolation from the test session —
+no in-process Python state leakage, a clean environment per run — and the
+subprocess inherits real LLM keys from the environment when present (CI via
+GitHub Actions secrets).
+
+Note: the tier0 synthetic path needs no real LLM keys today. ScopeDefinerAgent
+(the first agent) is ``agent_type='standard'`` — pure computation, no Anthropic
+call (see ``src/agents/ml_foundation/scope_definer/agent.py``). The original
+trigger for this refactor — placeholder ``test-key`` values causing a real
+Anthropic 401 at ScopeDefiner and ERROR-at-setup for all tests in each class —
+no longer applies; the isolation rationale above is what keeps the pattern.
 
 ``trained_model`` is a Python object and is not JSON-serialisable; the
 artifact instead carries ``trained_model_present: bool``. All assertions
