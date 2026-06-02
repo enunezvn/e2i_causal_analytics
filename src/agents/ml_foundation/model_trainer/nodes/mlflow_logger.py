@@ -165,8 +165,16 @@ async def log_to_mlflow(state: Dict[str, Any]) -> Dict[str, Any]:
             "mlflow_experiment_id": None,
         }
 
-    # Check if we have a trained model
-    trained_model = state.get("trained_model")
+    # Check if we have a trained model.
+    # #633: log the DEPLOYED model — the calibrated estimator when post-hoc
+    # calibration was applied (evaluator promotes ``deployed_model``), else the
+    # raw ``trained_model``. ``CalibratedClassifierCV`` is an sklearn classifier
+    # (is_classifier()==True) and joblib/mlflow-serializable, so the existing
+    # sklearn flavor logs it unchanged. Falling back to ``trained_model`` keeps
+    # non-binary / calibration-skipped paths byte-for-byte unchanged.
+    trained_model = state.get("deployed_model")
+    if trained_model is None:
+        trained_model = state.get("trained_model")
     if trained_model is None:
         logger.warning("No trained model to log to MLflow")
         return {
