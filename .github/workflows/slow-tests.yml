@@ -582,6 +582,18 @@ jobs:
           SHA_SHORT=$(echo "${GIT_SHA}" | cut -c1-7)
           RESULTS="A(tracked)=${JOB_A_RESULT}, C(mem/perf)=${JOB_C_RESULT}, D(regimes)=${JOB_D_RESULT}, B(heavy,blocking)=${JOB_B_RESULT}"
 
+          # Self-heal: ensure the dedup label exists BEFORE `gh issue create`.
+          # `gh issue create --label <L>` does NOT auto-create the label — if it
+          # is missing it dies "could not add label: '<L>' not found" under
+          # `set -euo pipefail`. That muted this alarm even after the GH_REPO fix
+          # (#615): the label did not exist and no workflow created it, so every
+          # scheduled-failure run red-Xed at issue creation and filed ZERO issues.
+          # `|| true` keeps it idempotent (no-op when the label already exists).
+          gh label create nightly-slow-tests-failure \
+            --color B60205 \
+            --description "Auto-filed by slow-tests.yml when a nightly slow-tests lane (incl. blocking heavy e2e) fails" \
+            2>/dev/null || true
+
           # Look for an existing open tracking issue.
           EXISTING=$(gh issue list \
             --state open \

@@ -40,6 +40,8 @@ WORKFLOW = REPO_ROOT / ".github" / "workflows" / "slow-tests.yml"
 HEAVY_JOB = "excluded-heavy-tests"
 ALARM_JOB = "report-failure"
 HEAVY_OUTPUT = "heavy_result"
+# The dedup label the alarm filters/creates issues by.
+LABEL = "nightly-slow-tests-failure"
 # Jobs whose failure must open a tracking issue.
 ALARMED_JOBS = {
     "slow-tests",
@@ -201,4 +203,49 @@ def test_alarm_job_can_resolve_repo() -> None:
         f"{ALARM_JOB} runs gh without a repo context: add `actions/checkout` or "
         "set `env: GH_REPO: ${{ github.repository }}` so gh can resolve the repo "
         "(otherwise it fails 'not a git repository' and no tracking issue is filed)."
+    )
+
+
+def _alarm_run_script() -> str:
+    """The alarm job's ``run:`` script bodies, comment lines stripped.
+
+    Comments are removed so substring/ordering assertions match the actual shell
+    commands (a ``# … gh issue create …`` comment must not be mistaken for the
+    real command)."""
+    alarm = _jobs()[ALARM_JOB]
+    body = "\n".join(str(s.get("run", "")) for s in alarm.get("steps", []))
+    return "\n".join(ln for ln in body.splitlines() if not ln.lstrip().startswith("#"))
+
+
+def test_alarm_self_heals_missing_label() -> None:
+    """The alarm must ENSURE its dedup label exists before creating an issue.
+
+    ``gh issue create --label <L>`` does NOT auto-create ``<L>`` — if the label
+    is missing it dies ``could not add label: '<L>' not found`` under
+    ``set -euo pipefail``. That is exactly how the alarm filed ZERO issues even
+    after the GH_REPO fix (#615): the ``nightly-slow-tests-failure`` label did
+    not exist in the repo and no workflow created it, so every scheduled-failure
+    run red-Xed at issue creation (proven on run 26808276990). Pin an
+    idempotent ``gh label create`` self-heal so the guarantee lives in version
+    control rather than as out-of-band repo state that can be silently deleted.
+    """
+    script = _alarm_run_script()
+    # Precondition: the alarm does create a labelled tracking issue.
+    assert "gh issue create" in script and f"--label {LABEL}" in script, (
+        "alarm should create a labelled tracking issue (precondition for this test)."
+    )
+    # Self-heal: the label must be created (idempotently) by the workflow itself.
+    assert f"gh label create {LABEL}" in script, (
+        f"{ALARM_JOB} must `gh label create {LABEL}` before `gh issue create "
+        f"--label {LABEL}`, else a missing label silently mutes the alarm "
+        "('could not add label: not found' under set -euo pipefail)."
+    )
+    # Ordering: ensure the label BEFORE the issue is created.
+    assert script.index(f"gh label create {LABEL}") < script.index("gh issue create"), (
+        "the label must be ensured BEFORE `gh issue create` so the create succeeds."
+    )
+    # Idempotency: an already-existing label must not fail the step.
+    assert "|| true" in script, (
+        "`gh label create` must be idempotent (e.g. `|| true`) so an already-"
+        "existing label doesn't fail the alarm under set -euo pipefail."
     )
