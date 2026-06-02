@@ -164,18 +164,6 @@ def test_flag_off_reproduces_apr26_baseline_within_tolerance() -> None:
 
 
 @pytest.mark.integration
-@pytest.mark.xfail(
-    reason=(
-        "#633: clean-regime synthetic model fails v3 calibration/MCC/overfit "
-        "gates (success_criteria_met=False; calibration_intercept≈0.65 vs 0.30, "
-        "minimum_mcc, maximum_calibration_error, maximum_train_val_delta) after "
-        "#594/#604 feature retention — a poorly-calibrated/overfit model the v3 "
-        "gates correctly catch. Quarantined so Job B can graduate to blocking; "
-        "do NOT flip the assertions to expect False (that normalizes a possible "
-        "regression). Tracked in #633."
-    ),
-    strict=False,
-)
 def test_clean_regime_with_adaptive_flag_on_v3() -> None:
     """Clean regime under v3 (Option C): MCC / NB / calibration gates fire,
     precision/F1 are dropped entirely, and the deployer-success contract
@@ -197,9 +185,13 @@ def test_clean_regime_with_adaptive_flag_on_v3() -> None:
     assert sc["minimum_mcc"] == pytest.approx(0.45, abs=1e-6)
     assert sc["maximum_calibration_slope_deviation"] == pytest.approx(0.15, abs=1e-6)
     assert sc["maximum_calibration_intercept_magnitude"] == pytest.approx(0.30, abs=1e-6)
-    # ECE threshold is N-dependent: 0.05 at N=1500 (runner-hardcoded),
-    # not the 0.10 from the v3 worked-example table at N=900.
+    # ECE threshold is N-dependent: 0.05 at N >= 1000 (the clean regime
+    # generates N=4000 per #633's _REGIME_N_SAMPLES), not the 0.10 from the
+    # v3 worked-example table at N=900.
     assert sc["maximum_calibration_error"] == pytest.approx(0.05, abs=0.01)
+    # train_val_delta stays on the strict 0.03 tier: fpr = feature_count / N
+    # is even smaller at N=4000 than at 1500, so the bar does NOT move — the
+    # larger cohort reduces ACTUAL overfit (#633).
     assert sc["maximum_train_val_delta"] == pytest.approx(0.03, abs=1e-6)
     # v3: precision and F1 are DROPPED entirely.
     assert "minimum_precision" not in sc
