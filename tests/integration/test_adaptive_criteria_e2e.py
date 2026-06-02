@@ -200,14 +200,30 @@ def test_clean_regime_with_adaptive_flag_on_v3() -> None:
 
     # Per-criterion outcomes at path-D values: deployer-success contract.
     res = out["success_criteria_results"]
-    assert res["minimum_auc"] is True
-    assert res["minimum_recall"] is True
-    assert res["minimum_mcc"] is True  # path-D MCC ≈ 0.50 ≥ 0.45
+    tm = out.get("test_metrics", {})
+    trm = out.get("train_metrics", {})
+    vm = out.get("validation_metrics", {})
+    _diag = (
+        "FAITHFUL clean-v3 metrics — "
+        f"results={res} | "
+        f"train_val_auc_delta={tm.get('train_val_auc_delta')} "
+        f"(train_roc_auc={trm.get('roc_auc')}, val_roc_auc={vm.get('roc_auc')}) | "
+        f"calibration_slope={tm.get('calibration_slope')} "
+        f"slope_deviation={tm.get('calibration_slope_deviation')} "
+        f"intercept_magnitude={tm.get('calibration_intercept_magnitude')} | "
+        f"calibrated_ece={tm.get('calibrated_ece')} | "
+        f"mcc={tm.get('mcc')} | recall={tm.get('recall')} | "
+        f"deployed_model_is_calibrated={tm.get('deployed_model_is_calibrated')} | "
+        f"test_roc_auc={tm.get('roc_auc')}"
+    )
+    assert res["minimum_auc"] is True, _diag
+    assert res["minimum_recall"] is True, _diag
+    assert res["minimum_mcc"] is True, _diag  # path-D MCC ≥ 0.45
     # NB at p_t=0.30 should be > 0 if model is calibrated and
     # discriminates better than treat-all.
-    assert res["minimum_net_benefit_at_p_t"] in (True, None)
-    assert res["maximum_calibration_error"] is True
-    assert res["maximum_train_val_delta"] is True
+    assert res["minimum_net_benefit_at_p_t"] in (True, None), _diag
+    assert res["maximum_calibration_error"] is True, _diag
+    assert res["maximum_train_val_delta"] is True, _diag
     # v3 (Option C) acceptance criterion: clean unblocks deployer.
     assert out["success_criteria_met"] is True, (
         "v3 (Option C) unblocks clean's deployer-success contract: AUC + "
