@@ -597,11 +597,10 @@ async def _apply_automatic_remediation(
                 if len(train_df) > 0 and train_df[column].isnull().all():
                     logger.warning(
                         "Skipping impute on column %r: column is entirely null "
-                        "(%d/%d rows). Imputing a placeholder would misrepresent "
-                        "absent data; the QC completeness gate should block and "
-                        "the column requires investigation.",
+                        "(%d rows, all null). Imputing a placeholder would "
+                        "misrepresent absent data; the QC completeness gate "
+                        "should block and the column requires investigation.",
                         column,
-                        int(train_df[column].isnull().sum()),
                         len(train_df),
                     )
                     actions_taken.append(

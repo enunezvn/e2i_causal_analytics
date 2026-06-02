@@ -291,3 +291,19 @@ class TestApplyAutomaticRemediationAllNull:
         # before any per-split imputation runs).
         assert result["validation_df"]["x"].isnull().all()
         assert result["test_df"]["x"].isnull().all()
+
+    @pytest.mark.asyncio
+    async def test_empty_dataframe_is_not_falsely_skipped(self) -> None:
+        """Guard regression: ``isnull().all()`` is vacuously True on an empty
+        Series, so the ``len(train_df) > 0`` guard must prevent a 0-row column
+        from being treated as 'all-null' and skipped. An empty-df impute falls
+        through to ``_impute_column`` as a harmless no-op — NOT a SKIPPED."""
+        train_df = pd.DataFrame({"x": pd.Series([], dtype="float64")})
+        state = {"train_df": train_df, "validation_df": None, "test_df": None}
+        actions = [{"type": "impute", "column": "x", "params": {"strategy": "median"}}]
+
+        result = await _apply_automatic_remediation(state, actions)
+
+        assert result["success"] is True
+        actions_taken = result.get("actions_taken", [])
+        assert not any("SKIPPED" in a and "all-null" in a for a in actions_taken), actions_taken
