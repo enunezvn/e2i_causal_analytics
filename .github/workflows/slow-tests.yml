@@ -558,6 +558,12 @@ jobs:
       - name: Open or update tracking issue
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # This job has NO actions/checkout, so the runner cwd is not a git
+          # repo. Without GH_REPO, `gh issue list/create` below fail with
+          # "fatal: not a git repository" under `set -euo pipefail`, silently
+          # breaking the only nightly-rot alarm (it failed that way unnoticed
+          # for 5+ days — #615). GH_REPO lets gh resolve the repo with no checkout.
+          GH_REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           GIT_SHA: ${{ github.sha }}
           JOB_A_RESULT: ${{ needs.slow-tests.result }}
