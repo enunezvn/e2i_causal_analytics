@@ -32,7 +32,10 @@ Assumptions / known gaps
    contract keys themselves are the boundary the mapper enforces.
 4. Other dicts named with the suffix ``_state`` (e.g. ``feature_state``,
    ``_rem_state``) are local to helpers and never reach the mapper, so
-   the regex deliberately matches the bare identifier ``state``.
+   the regex deliberately matches the bare identifier ``state``. The
+   lookbehind also excludes a leading ``.``, so a dotted attribute such as
+   ``self.state`` (a different object that never reaches the mapper) is not
+   matched either.
 """
 
 import re
@@ -45,18 +48,19 @@ from src.testing.tier0_output_mapper import Tier0StateContract
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 # Match: state["KEY"] = ... — bare ``state`` identifier only, so we do not pick
-# up writes against ``feature_state`` / ``_rem_state``. The (?<![A-Za-z0-9_])
-# lookbehind enforces the word boundary on the left without consuming a
-# character (so we can also match at start of line).
-_STATE_WRITE_RE = re.compile(r'(?<![A-Za-z0-9_])state\["([a-zA-Z_][a-zA-Z_0-9]*)"\]\s*=')
+# up writes against ``feature_state`` / ``_rem_state`` (alnum/underscore before
+# ``state``) nor against a dotted attribute like ``self.state`` (``.`` before
+# ``state``). The (?<![A-Za-z0-9_.]) lookbehind enforces that left boundary
+# without consuming a character (so we can also match at start of line).
+_STATE_WRITE_RE = re.compile(r'(?<![A-Za-z0-9_.])state\["([a-zA-Z_][a-zA-Z_0-9]*)"\]\s*=')
 
 # Match: state.setdefault("KEY", ...) / state.setdefault('KEY', ...) — same
-# bare-``state`` word boundary. setdefault introduces a top-level key exactly
-# like a direct write (the script uses it for ``leakage_diagnostics`` and
-# ``halt_reason``), so it must be covered or the guard silently misses an
-# undeclared key (#619).
+# bare-``state`` boundary (excludes ``feature_state`` and ``self.state``).
+# setdefault introduces a top-level key exactly like a direct write (the script
+# uses it for ``leakage_diagnostics`` and ``halt_reason``), so it must be
+# covered or the guard silently misses an undeclared key (#619).
 _STATE_SETDEFAULT_RE = re.compile(
-    r"(?<![A-Za-z0-9_])state\.setdefault\(\s*[\"']([a-zA-Z_][a-zA-Z_0-9]*)[\"']"
+    r"(?<![A-Za-z0-9_.])state\.setdefault\(\s*[\"']([a-zA-Z_][a-zA-Z_0-9]*)[\"']"
 )
 
 
@@ -84,7 +88,7 @@ def test_contract_covers_all_script_emitted_keys() -> None:
     # payload can't be regex-parsed reliably. The script doesn't use it; trip
     # loudly if that changes so a contributor extends ``_emitted_state_keys``
     # rather than the guard silently missing the new keys (#619).
-    assert not re.search(r"(?<![A-Za-z0-9_])state\.update\(", script_text), (
+    assert not re.search(r"(?<![A-Za-z0-9_.])state\.update\(", script_text), (
         "scripts/run_tier0_test.py now uses state.update(...); extend "
         "_emitted_state_keys to parse its keys so the contract guard does not "
         "silently miss them."
@@ -120,3 +124,15 @@ def test_extractor_captures_setdefault_keys() -> None:
     """
     sample = "diagnostics = state.setdefault(\"leak_diag\", {})\nstate.setdefault('halt', 'x')\n"
     assert _emitted_state_keys(sample) == {"leak_diag", "halt"}
+
+
+@pytest.mark.unit
+def test_extractor_ignores_dotted_state_attribute() -> None:
+    """The guard targets the bare pipeline ``state`` dict only. A dotted
+    attribute such as ``self.state`` (or any ``x.state``) is a different object
+    that never reaches ``Tier0OutputMapper``, so neither a direct write nor a
+    setdefault on it must be counted — the same rationale that excludes
+    ``feature_state`` / ``_rem_state`` (#619).
+    """
+    sample = 'self.state["attr_write"] = 1\nself.state.setdefault("attr_setdefault", {})\n'
+    assert _emitted_state_keys(sample) == set()
