@@ -77,12 +77,60 @@ proven separately on the labeled CSU_remibrutinib golden cohort (Phase 1, PR #54
 3. **`months_since_first_dx` and `csu_chronicity` are degenerate constants** in the current converter (no patient-level variation). Authored to their true clinical meaning (duration/chronicity drive escalation) per the authoring guide's "author the real mechanism" rule; ACCEPT regardless.
 4. **`has_nsaid_hypersensitivity`** — Asero (PMID 34284571) found NSAID hypersensitivity is independent of CSU severity/pathogenesis, weakening its `feature→Y` arm (confounder vs near-null ancestor). ACCEPT either way.
 
-## Deferred (NOT in this PR)
+## D4 empirical crosscheck — MEASURED (2026-06-02)
 
-Per the explicit scope decision: the faithful-Optum **D4 empirical crosscheck run**
-(`compare_structural_vs_empirical` on a real ~1294-patient initiation run) and the
-**cohort-scoped activation ramp**. The all-ACCEPT result + the EnsembleVoter precedence
-(an empirical-high veto wins *before* the structural rule) already guarantee
-`missed_leaks == 0`, so the heavy run would confirm a structural certainty; and activation
-on this all-ACCEPT cohort is functionally a no-op. The decider stays dark; the wiring
-(`adaptive_structural_decider_enabled`, PR #541) and the no-label crosscheck gate are in place.
+The faithful crosscheck that was previously deferred as an "argued structural certainty"
+has now been **run on the real cohort** — converting the argument into measured evidence
+(cheapest-disproof: the structural-preclusion claim was a hypothesis until the empirical
+signal confirmed it).
+
+**Run:** real Optum CSU biologic-initiation cohort, n=1294 (37 positive, 2.9%), faithful
+Tier-0 `--step 2` data-prep (`run_optum_tier0_test.py --cohort initiation --step 2`,
+215 s). Structural roles re-derived offline via `derive_structural_role` at current `main`;
+empirical per-feature severities taken from the run's `adaptive_verdicts`
+(Layer-1 / Layer-3 FDR); paired by `compare_structural_vs_empirical`.
+
+**Result — `gate_passed = True`, `missed_leaks = 0`:**
+
+| quantity | value |
+|---|---|
+| structural roles (110 SAFE) | 93 confounder + 17 instrument; **0 leak, 0 unclassifiable** (all ACCEPT) |
+| empirical verdicts | 84 total — 79 `info`, 1 `moderate`, **4 `high`** |
+| empirical `high` features | `discontinued_180d`, `persistent_at_180d`, `treatment_initiated`, `discontinuation_flag` — **all forbidden post-index targets; NONE in the SAFE set** |
+| SAFE features flagged high/critical | **0** |
+| `missed_leaks` (structural ACCEPT ∧ empirical leak) | **0** |
+| `disagreements` | 0 |
+
+So **no SAFE attested feature is empirically a leak** — the structural decider's ACCEPT of
+all 110 agrees with the data-driven signal.
+
+**Honesty caveats (the measurement is conservative, not a false green):**
+1. **This run was the manifest-OFF / stricter regime.** The `--step 2`-alone path did not
+   propagate the `optum` manifest into the declared-safe path (artifact
+   `feature_manifest_source = None`; the SAFE confounders `atopy_score` / `charlson_score` /
+   `*_tested` were FDR-over-dropped and the QC completeness gate blocked — the documented
+   #594/#604 manifest-OFF signature). Declared-safe σ-inflation (manifest-ON, the production
+   path #545) can only **reduce** SAFE-feature flagging, so `missed_leaks == 0` holds *a
+   fortiori* under production manifest-ON. The stricter test passing is stronger evidence,
+   not weaker.
+2. **Coverage 80/110.** 80 SAFE features received an empirical verdict (all `info`/`moderate`);
+   ~30 were dropped pre-scan as degenerate/all-null columns (`pearsonr` is undefined on
+   constant input) and are **incapable of leaking**, so the coverage gap hides no leak.
+3. **The QC block is a data-quality artifact** (completeness, from the manifest-OFF over-drop),
+   orthogonal to the leakage crosscheck — the leakage verdicts were produced by the scan
+   before/independent of the completeness gate.
+4. **Undetectable case (unchanged):** a feature where structural ACCEPTs *and* the empirical
+   signal also misses a real leak is not detectable by this crosscheck; it is mitigated by
+   the per-feature domain review (D3) and by EnsembleVoter precedence (empirical-high wins
+   before the structural rule fires). A production manifest-ON confirmatory run would cover
+   all 110 SAFE features and match the production config exactly — optional, as it can only
+   confirm the gate.
+
+## Still deferred (NOT in this PR)
+
+The **cohort-scoped activation ramp** (D5.1 flip `adaptive_structural_decider_enabled` for
+Optum only, D5.2 monitoring, D5.3 rollback runbook) and the **D3/D6 human domain sign-off**.
+Activation on this all-ACCEPT cohort is functionally a no-op for leak-catching (its only
+effect is replacing the LLM with the deterministic decision for these features). The decider
+stays **dark**; the wiring (`adaptive_structural_decider_enabled`, PR #541) and the no-label
+crosscheck gate are in place, and the gate is now **measured**, not argued.
