@@ -98,6 +98,39 @@ class GapAnalysis(BaseModel):
     bottom_performer: str
 
 
+class SegmentRanking(BaseModel):
+    """Output from segment ranking (consumes a CATE / gap result)."""
+
+    ranking: List[Dict[str, Any]]
+    recommended_targets: List[str]
+
+
+class ROIEstimate(BaseModel):
+    """Output from ROI estimation (consumes a gap-analysis result)."""
+
+    estimated_roi: float
+    payback_months: float
+    confidence_interval: List[float]
+    assumptions: List[str]
+
+
+class RiskScores(BaseModel):
+    """Output from risk scoring (real per-entity scores from a DataFrame)."""
+
+    scores: List[Dict[str, Any]]
+    model_version: str
+    scored_at: str
+
+
+class PropensityScores(BaseModel):
+    """Output from propensity estimation (real fitted scores from a DataFrame)."""
+
+    mean_propensity: float
+    propensity_distribution: Dict[str, float]
+    overlap_assessment: str
+    common_support: float
+
+
 class PowerCalculatorInput(BaseModel):
     """Input for power analysis"""
 
@@ -779,19 +812,82 @@ def sensitivity_analyzer(ate: float, ci_lower: float, **kwargs) -> Dict[str, Any
     output_model=CATEResults,
 )
 def cate_analyzer(treatment: str, outcome: str, segments: List[str], **kwargs) -> CATEResults:
-    """Analyze heterogeneous treatment effects by segment."""
+    """Estimate conditional average treatment effects (CATE) per segment.
+
+    Phase of GH #621 (incomplete #354 anti-mock cleanup). Replaces the
+    previous hardcoded ``high_volume_academic`` placeholder segments with a
+    real per-segment difference-in-means CATE computed from a caller-supplied
+    ``pandas.DataFrame``.
+
+    For each distinct value of the first ``segments`` column, the CATE is the
+    difference in mean ``outcome`` between the treated (``treatment``==1) and
+    control (``treatment``==0) sub-groups within that segment. ``high_responders``
+    are the segments whose CATE exceeds the cross-segment mean (positive-effect
+    responders). This is a transparent, well-posed CATE estimator on real data
+    — NOT a fabricated set of segments.
+
+    Fail-closed semantics (per CLAUDE.md anti-mocking discipline):
+    - No DataFrame supplied via the canonical kwargs keys -> ``RuntimeError``.
+    - The treatment / outcome / segment columns missing from the frame ->
+      ``RuntimeError``. The tool never substitutes a plausible-but-fake result.
+
+    Args:
+        treatment: Binary treatment column name in the supplied DataFrame.
+        outcome: Outcome column name (numeric / 0-1) in the DataFrame.
+        segments: Segmentation column names; the FIRST one is used to slice.
+        **kwargs: Must contain the DataFrame under one of
+            ``_DATAFRAME_KWARGS_KEYS`` (``data`` / ``dataframe`` /
+            ``estimation_data``).
+    """
+    df = _extract_dataframe_from_kwargs(kwargs)
+    if df is None:
+        raise RuntimeError(
+            "cate_analyzer requires a real DataFrame supplied via one of the "
+            f"kwargs keys {list(_DATAFRAME_KWARGS_KEYS)!r}; got kwargs keys="
+            f"{sorted(kwargs.keys())!r}. The tool does not fabricate segment "
+            "effects — per anti-mocking discipline, missing data must surface "
+            "as a structured error rather than a plausible-but-fake placeholder."
+        )
+    if not segments:
+        raise RuntimeError(
+            "cate_analyzer requires at least one segmentation column in "
+            "`segments`; got an empty list."
+        )
+    segment_col = segments[0]
+    for col in (treatment, outcome, segment_col):
+        if col not in df.columns:
+            raise RuntimeError(
+                f"cate_analyzer: column {col!r} not found in the supplied "
+                f"DataFrame (columns={list(df.columns)!r}). Refusing to "
+                "fabricate a result."
+            )
+
+    segment_dicts: List[Dict[str, Any]] = []
+    effect_by_segment: Dict[str, float] = {}
+    for seg_value, sub in df.groupby(segment_col, dropna=False):
+        treated = sub[sub[treatment] == 1][outcome]
+        control = sub[sub[treatment] == 0][outcome]
+        if len(treated) == 0 or len(control) == 0:
+            # No within-segment contrast available -> cannot estimate a CATE.
+            # Surface as NaN rather than fabricate (anti-mocking pattern #4).
+            cate_val = float("nan")
+        else:
+            cate_val = float(treated.mean() - control.mean())
+        name = str(seg_value)
+        segment_dicts.append({"name": name, "cate": cate_val, "n": int(len(sub))})
+        effect_by_segment[name] = cate_val
+
+    finite_effects = [v for v in effect_by_segment.values() if math.isfinite(v)]
+    threshold = (sum(finite_effects) / len(finite_effects)) if finite_effects else 0.0
+    high_responders = [
+        name
+        for name, v in effect_by_segment.items()
+        if math.isfinite(v) and v >= threshold and v > 0
+    ]
     return CATEResults(
-        segments=[
-            {"name": "high_volume_academic", "cate": 0.28, "n": 1200},
-            {"name": "community_practice", "cate": 0.08, "n": 3500},
-            {"name": "integrated_health", "cate": 0.15, "n": 2100},
-        ],
-        high_responders=["high_volume_academic", "integrated_health"],
-        effect_by_segment={
-            "high_volume_academic": 0.28,
-            "community_practice": 0.08,
-            "integrated_health": 0.15,
-        },
+        segments=segment_dicts,
+        high_responders=high_responders,
+        effect_by_segment=effect_by_segment,
     )
 
 
@@ -805,17 +901,56 @@ def cate_analyzer(treatment: str, outcome: str, segments: List[str], **kwargs) -
     ],
     output_schema="SegmentRanking",
     avg_execution_ms=1000,
+    output_model=SegmentRanking,
 )
-def segment_ranker(cate_results: Dict[str, Any], **kwargs) -> Dict[str, Any]:
-    """Rank segments by effect magnitude."""
-    return {
-        "ranking": [
-            {"rank": 1, "segment": "high_volume_academic", "score": 0.92},
-            {"rank": 2, "segment": "integrated_health", "score": 0.71},
-            {"rank": 3, "segment": "community_practice", "score": 0.34},
-        ],
-        "recommended_targets": ["high_volume_academic", "integrated_health"],
-    }
+def segment_ranker(cate_results: Dict[str, Any], **kwargs) -> SegmentRanking:
+    """Rank the segments produced by an upstream CATE / gap result.
+
+    Phase of GH #621. Replaces the hardcoded ``high_volume_academic`` ranking
+    with a real descending sort of the upstream ``effect_by_segment`` (or
+    ``entity_values`` for a gap result) the tool CONSUMES. Recommended targets
+    are the positive-effect segments. No fabricated segment names.
+
+    Fail-closed: if the upstream result carries no rankable effect map (neither
+    ``effect_by_segment`` nor ``entity_values``), raise ``RuntimeError`` rather
+    than fabricate a ranking.
+
+    Args:
+        cate_results: Output of ``cate_analyzer`` (``effect_by_segment``) or a
+            gap result (``entity_values``).
+    """
+    effect_map = None
+    if isinstance(cate_results, dict):
+        if isinstance(cate_results.get("effect_by_segment"), dict):
+            effect_map = cate_results["effect_by_segment"]
+        elif isinstance(cate_results.get("entity_values"), dict):
+            effect_map = cate_results["entity_values"]
+    if not effect_map:
+        raise RuntimeError(
+            "segment_ranker requires an upstream result carrying a non-empty "
+            "`effect_by_segment` (from cate_analyzer) or `entity_values` (from "
+            f"gap_calculator); got {cate_results!r}. Refusing to fabricate a "
+            "ranking — per anti-mocking discipline, missing upstream data must "
+            "surface as a structured error."
+        )
+
+    # Sort descending by effect; non-finite effects sort last.
+    def _sort_key(item: Tuple[str, Any]) -> float:
+        val = item[1]
+        return (
+            float(val)
+            if isinstance(val, (int, float)) and math.isfinite(float(val))
+            else float("-inf")
+        )
+
+    ordered = sorted(effect_map.items(), key=_sort_key, reverse=True)
+    ranking = [
+        {"rank": i + 1, "segment": str(name), "score": float(score)}
+        for i, (name, score) in enumerate(ordered)
+        if isinstance(score, (int, float)) and math.isfinite(float(score))
+    ]
+    recommended_targets = [r["segment"] for r in ranking if r["score"] > 0]
+    return SegmentRanking(ranking=ranking, recommended_targets=recommended_targets)
 
 
 # ============================================================================
@@ -843,13 +978,107 @@ def segment_ranker(cate_results: Dict[str, Any], **kwargs) -> Dict[str, Any]:
     output_model=GapAnalysis,
 )
 def gap_calculator(metric: str, entity_type: str, entities: List[str], **kwargs) -> GapAnalysis:
-    """Calculate performance gaps between entities."""
+    """Calculate real performance gaps between entities from a DataFrame.
+
+    Phase of GH #621. Replaces the hardcoded ``northeast/midwest`` region
+    values with real per-entity group means of ``metric`` computed from a
+    caller-supplied ``pandas.DataFrame``. The gap is the spread between the
+    top- and bottom-performing entity group. No fabricated regions/values.
+
+    Grouping column resolution (first match wins):
+    1. explicit ``group_by`` kwarg,
+    2. ``entity_type`` if it is a column,
+    3. a column named ``<entity_type>`` or ``geographic_region`` /
+       ``territory`` / ``brand`` heuristics.
+
+    When ``entities`` is non-empty, the result is restricted to those entity
+    values (real filtering — not fabrication).
+
+    Fail-closed: no DataFrame, missing metric column, or no resolvable grouping
+    column -> ``RuntimeError``.
+
+    Args:
+        metric: Numeric column to compare across entities.
+        entity_type: Logical entity type (region / territory / brand); also a
+            grouping-column hint.
+        entities: Optional subset of entity values to restrict to.
+        **kwargs: Must contain the DataFrame under one of
+            ``_DATAFRAME_KWARGS_KEYS``; may contain ``group_by``.
+    """
+    df = _extract_dataframe_from_kwargs(kwargs)
+    if df is None:
+        raise RuntimeError(
+            "gap_calculator requires a real DataFrame supplied via one of the "
+            f"kwargs keys {list(_DATAFRAME_KWARGS_KEYS)!r}; got kwargs keys="
+            f"{sorted(kwargs.keys())!r}. The tool does not fabricate entity "
+            "values — per anti-mocking discipline, missing data must surface as "
+            "a structured error rather than a plausible-but-fake placeholder."
+        )
+    if metric not in df.columns:
+        raise RuntimeError(
+            f"gap_calculator: metric column {metric!r} not found in the supplied "
+            f"DataFrame (columns={list(df.columns)!r})."
+        )
+
+    group_col = _resolve_grouping_column(df, kwargs.get("group_by"), entity_type)
+    if group_col is None:
+        raise RuntimeError(
+            "gap_calculator: could not resolve a grouping column from group_by="
+            f"{kwargs.get('group_by')!r} / entity_type={entity_type!r}; "
+            f"DataFrame columns={list(df.columns)!r}. Refusing to fabricate."
+        )
+
+    grouped = df.groupby(group_col, dropna=False)[metric].mean()
+    entity_values: Dict[str, float] = {str(k): float(v) for k, v in grouped.items()}
+    if entities:
+        wanted = {str(e) for e in entities}
+        entity_values = {k: v for k, v in entity_values.items() if k in wanted}
+    if not entity_values:
+        raise RuntimeError(
+            "gap_calculator: no entity groups matched after filtering "
+            f"entities={entities!r} on column {group_col!r}. Refusing to "
+            "fabricate."
+        )
+
+    top_performer = max(entity_values, key=lambda k: entity_values[k])
+    bottom_performer = min(entity_values, key=lambda k: entity_values[k])
+    gap = entity_values[top_performer] - entity_values[bottom_performer]
     return GapAnalysis(
-        gap=0.23,
-        entity_values={"northeast": 0.67, "midwest": 0.44, "south": 0.52, "west": 0.61},
-        top_performer="northeast",
-        bottom_performer="midwest",
+        gap=float(gap),
+        entity_values=entity_values,
+        top_performer=top_performer,
+        bottom_performer=bottom_performer,
     )
+
+
+def _resolve_grouping_column(
+    df: Any, group_by: Optional[str], entity_type: Optional[str]
+) -> Optional[str]:
+    """Resolve the column to group on for gap analysis.
+
+    Priority: explicit ``group_by`` -> ``entity_type`` as a column -> common
+    pharma entity-column heuristics that are actually present in the frame.
+    Returns ``None`` when no candidate is a real column (caller fail-closes).
+    """
+    columns = set(df.columns)
+    if group_by and group_by in columns:
+        return group_by
+    if entity_type and entity_type in columns:
+        return entity_type
+    # Heuristic mapping from the logical entity_type to likely real columns.
+    heuristics: Dict[str, Tuple[str, ...]] = {
+        "region": ("geographic_region", "region"),
+        "territory": ("territory", "geographic_region"),
+        "brand": ("brand",),
+    }
+    for candidate in heuristics.get((entity_type or "").lower(), ()):
+        if candidate in columns:
+            return candidate
+    # Last resort: any of the canonical entity columns present.
+    for candidate in ("geographic_region", "territory", "brand"):
+        if candidate in columns:
+            return candidate
+    return None
 
 
 @composable_tool(
@@ -863,15 +1092,82 @@ def gap_calculator(metric: str, entity_type: str, entities: List[str], **kwargs)
     ],
     output_schema="ROIEstimate",
     avg_execution_ms=2000,
+    output_model=ROIEstimate,
 )
-def roi_estimator(gap_analysis: Dict[str, Any], investment: float, **kwargs) -> Dict[str, Any]:
-    """Estimate ROI of closing gaps."""
-    return {
-        "estimated_roi": 3.2,
-        "payback_months": 8,
-        "confidence_interval": [2.4, 4.1],
-        "assumptions": ["Linear relationship between investment and gap closure"],
-    }
+def roi_estimator(gap_analysis: Dict[str, Any], investment: float, **kwargs) -> ROIEstimate:
+    """Estimate the ROI of closing a performance gap.
+
+    Phase of GH #621. Replaces the hardcoded ``estimated_roi=3.2`` placeholder
+    with a transparent computation from the upstream ``gap_analysis`` result
+    the tool CONSUMES, plus the proposed ``investment``.
+
+    Model (documented, deterministic — NOT a fabricated constant):
+    - ``opportunity_value`` = ``gap`` * ``n_entities`` * ``value_per_unit``,
+      where ``n_entities`` is the number of entity groups in the gap result
+      (defaults to 1 when not derivable) and ``value_per_unit`` is the optional
+      ``value_per_unit`` kwarg (default 1.0 — the gap is treated as already in
+      value units when no multiplier is given).
+    - ``estimated_roi`` = ``opportunity_value`` / ``investment``.
+    - ``payback_months`` = ``investment`` / (``opportunity_value`` / 12) when
+      the opportunity is positive (annualised), else ``inf``.
+    - ``confidence_interval`` brackets ROI by a documented +/-25% uncertainty
+      band on the opportunity value (the gap is a point estimate; we expose a
+      relative band rather than a fabricated interval).
+
+    Fail-closed: no ``gap`` in ``gap_analysis``, or non-positive ``investment``
+    -> ``RuntimeError`` (an ROI is undefined without a real gap or a real
+    investment; we refuse to fabricate one).
+
+    Args:
+        gap_analysis: Output of ``gap_calculator`` (carries ``gap`` and,
+            optionally, ``entity_values``).
+        investment: Proposed investment amount (must be > 0).
+        **kwargs: May contain ``value_per_unit`` (float multiplier converting a
+            unit of gap into monetary value).
+    """
+    if not isinstance(gap_analysis, dict) or "gap" not in gap_analysis:
+        raise RuntimeError(
+            "roi_estimator requires an upstream gap_analysis carrying a `gap` "
+            f"value (from gap_calculator); got {gap_analysis!r}. Refusing to "
+            "fabricate an ROI — per anti-mocking discipline, missing upstream "
+            "data must surface as a structured error."
+        )
+    gap_raw = gap_analysis.get("gap")
+    if not isinstance(gap_raw, (int, float)) or not math.isfinite(float(gap_raw)):
+        raise RuntimeError(f"roi_estimator: gap value is not a finite number (got {gap_raw!r}).")
+    if not isinstance(investment, (int, float)) or investment <= 0:
+        raise RuntimeError(
+            f"roi_estimator requires investment > 0; got {investment!r}. ROI is "
+            "undefined for a non-positive investment; refusing to fabricate."
+        )
+
+    gap = float(gap_raw)
+    entity_values = gap_analysis.get("entity_values")
+    n_entities = len(entity_values) if isinstance(entity_values, dict) and entity_values else 1
+    value_per_unit = kwargs.get("value_per_unit", 1.0)
+    if not isinstance(value_per_unit, (int, float)) or not math.isfinite(float(value_per_unit)):
+        value_per_unit = 1.0
+
+    opportunity_value = gap * n_entities * float(value_per_unit)
+    estimated_roi = opportunity_value / float(investment)
+    if opportunity_value > 0:
+        payback_months = float(investment) / (opportunity_value / 12.0)
+    else:
+        payback_months = float("inf")
+
+    band = 0.25  # documented +/-25% relative uncertainty on the opportunity.
+    ci_lower = (opportunity_value * (1.0 - band)) / float(investment)
+    ci_upper = (opportunity_value * (1.0 + band)) / float(investment)
+    return ROIEstimate(
+        estimated_roi=float(estimated_roi),
+        payback_months=float(payback_months),
+        confidence_interval=[float(ci_lower), float(ci_upper)],
+        assumptions=[
+            f"Opportunity value = gap ({gap:.4g}) x n_entities ({n_entities}) "
+            f"x value_per_unit ({float(value_per_unit):.4g}).",
+            "ROI = opportunity_value / investment; +/-25% band on opportunity.",
+        ],
+    )
 
 
 # ============================================================================
@@ -1034,20 +1330,131 @@ def distribution_comparator(
     ],
     output_schema="RiskScores",
     avg_execution_ms=1500,
+    output_model=RiskScores,
 )
 def risk_scorer(
     entity_type: str, risk_type: str, entity_ids: Optional[List[str]] = None, **kwargs
-) -> Dict[str, Any]:
-    """Score entities by risk."""
-    return {
-        "scores": [
-            {"entity_id": "E001", "risk_score": 0.82, "risk_tier": "high"},
-            {"entity_id": "E002", "risk_score": 0.45, "risk_tier": "medium"},
-            {"entity_id": "E003", "risk_score": 0.12, "risk_tier": "low"},
-        ],
-        "model_version": "v2.3.1",
-        "scored_at": "2024-01-15T10:30:00Z",
-    }
+) -> RiskScores:
+    """Score real entities by risk using a logistic model fit on the DataFrame.
+
+    Phase of GH #621 (the headline fix). Replaces the fabricated
+    ``E001/E002/E003`` entity IDs + hardcoded scores with REAL per-entity risk
+    scores computed from a caller-supplied ``pandas.DataFrame``:
+
+    - Fit ``sklearn.linear_model.LogisticRegression`` on the numeric feature
+      columns to predict the binary ``outcome`` column (the risk event, e.g.
+      ``discontinuation_flag``).
+    - ``risk_score`` = the model's predicted probability for each row.
+    - ``entity_id`` = the REAL value from the ``id_column`` (never a fabricated
+      ``E001``).
+    - ``risk_tier`` = low/medium/high by tertile of the predicted probabilities.
+    - ``model_version`` records the real sklearn version + a content hash of the
+      feature set (reproducible provenance, not a fabricated ``v2.3.1``).
+    - ``scored_at`` is the real UTC timestamp of this scoring run.
+
+    Fail-closed: no DataFrame, missing outcome column, fewer than 2 outcome
+    classes, or no usable numeric features -> ``RuntimeError`` (we refuse to
+    fabricate scores).
+
+    Args:
+        entity_type: Logical entity type (echoed for provenance only).
+        risk_type: Logical risk label (echoed for provenance only).
+        entity_ids: Optional subset of entity IDs to restrict scoring to.
+        **kwargs: Must contain the DataFrame under one of
+            ``_DATAFRAME_KWARGS_KEYS``; may contain ``id_column`` (default
+            ``patient_id``) and ``outcome`` (default ``discontinuation_flag``).
+    """
+    import hashlib
+    from datetime import datetime, timezone
+
+    from sklearn.linear_model import LogisticRegression
+
+    df = _extract_dataframe_from_kwargs(kwargs)
+    if df is None:
+        raise RuntimeError(
+            "risk_scorer requires a real DataFrame supplied via one of the "
+            f"kwargs keys {list(_DATAFRAME_KWARGS_KEYS)!r}; got kwargs keys="
+            f"{sorted(kwargs.keys())!r}. The tool does not fabricate entity IDs "
+            "or risk scores — per anti-mocking discipline, missing data must "
+            "surface as a structured error rather than a plausible-but-fake "
+            "placeholder (the previous placeholder body emitted synthetic "
+            "entity IDs the Tier 1-5 anti-fab gate correctly rejects)."
+        )
+
+    id_column = kwargs.get("id_column", "patient_id")
+    outcome = kwargs.get("outcome", "discontinuation_flag")
+    if outcome not in df.columns:
+        raise RuntimeError(
+            f"risk_scorer: outcome column {outcome!r} not found in the supplied "
+            f"DataFrame (columns={list(df.columns)!r})."
+        )
+    if id_column not in df.columns:
+        raise RuntimeError(
+            f"risk_scorer: id_column {id_column!r} not found in the supplied "
+            f"DataFrame (columns={list(df.columns)!r}). Refusing to fabricate "
+            "entity IDs."
+        )
+
+    work = df
+    if entity_ids:
+        wanted = {str(e) for e in entity_ids}
+        work = df[df[id_column].astype(str).isin(wanted)]
+        if len(work) == 0:
+            raise RuntimeError(
+                f"risk_scorer: no rows matched entity_ids={entity_ids!r} on "
+                f"column {id_column!r}. Refusing to fabricate."
+            )
+
+    feature_cols = [c for c in work.select_dtypes(include="number").columns if c != outcome]
+    if not feature_cols:
+        raise RuntimeError(
+            "risk_scorer: no usable numeric feature columns to fit a model "
+            f"(numeric columns minus outcome were empty; columns={list(work.columns)!r})."
+        )
+
+    y = work[outcome].astype(int)
+    if y.nunique() < 2:
+        raise RuntimeError(
+            "risk_scorer: the outcome column has fewer than 2 classes in the "
+            "supplied data; cannot fit a discriminative risk model. Refusing to "
+            "fabricate scores."
+        )
+
+    x = work[feature_cols].astype(float)
+    model = LogisticRegression(max_iter=1000)
+    model.fit(x, y)
+    # Probability of the positive (risk-event) class.
+    classes = list(model.classes_)
+    pos_idx = classes.index(1) if 1 in classes else len(classes) - 1
+    probs = model.predict_proba(x)[:, pos_idx]
+
+    # Tertile cut points for low/medium/high tiers (real distribution-based).
+    import numpy as np
+
+    q33, q66 = np.quantile(probs, [1.0 / 3.0, 2.0 / 3.0])
+
+    def _tier(p: float) -> str:
+        if p >= q66:
+            return "high"
+        if p >= q33:
+            return "medium"
+        return "low"
+
+    ids = work[id_column].astype(str).tolist()
+    scores = [
+        {"entity_id": ids[i], "risk_score": float(probs[i]), "risk_tier": _tier(float(probs[i]))}
+        for i in range(len(ids))
+    ]
+
+    import sklearn
+
+    feature_hash = hashlib.sha256(",".join(sorted(feature_cols)).encode()).hexdigest()[:8]
+    model_version = f"logreg-sklearn{sklearn.__version__}-feat{feature_hash}"
+    return RiskScores(
+        scores=scores,
+        model_version=model_version,
+        scored_at=datetime.now(timezone.utc).isoformat(),
+    )
 
 
 @composable_tool(
@@ -1061,21 +1468,113 @@ def risk_scorer(
     ],
     output_schema="PropensityScores",
     avg_execution_ms=2000,
+    output_model=PropensityScores,
 )
-def propensity_estimator(treatment: str, covariates: List[str], **kwargs) -> Dict[str, Any]:
-    """Estimate propensity scores."""
-    return {
-        "mean_propensity": 0.35,
-        "propensity_distribution": {
-            "min": 0.05,
-            "q25": 0.22,
-            "median": 0.34,
-            "q75": 0.48,
-            "max": 0.92,
+def propensity_estimator(treatment: str, covariates: List[str], **kwargs) -> PropensityScores:
+    """Estimate real propensity scores P(treatment | covariates) from a DataFrame.
+
+    Phase of GH #621. Replaces the hardcoded ``mean_propensity=0.35``
+    distribution placeholder with REAL propensity scores fit on a
+    caller-supplied ``pandas.DataFrame``:
+
+    - Fit ``LogisticRegression`` predicting the binary ``treatment`` from the
+      ``covariates`` columns.
+    - ``propensity_distribution`` reports the real min/q25/median/q75/max of the
+      fitted P(treatment=1) across all rows.
+    - ``common_support`` = fraction of rows whose propensity falls within the
+      overlapping [max(min_treated, min_control), min(max_treated, max_control)]
+      region (the real common-support overlap, not a fabricated 0.94).
+    - ``overlap_assessment`` is a label derived from ``common_support``.
+
+    Fail-closed: no DataFrame, missing treatment / covariate columns, or fewer
+    than 2 treatment classes -> ``RuntimeError``.
+
+    Args:
+        treatment: Binary treatment column name in the DataFrame.
+        covariates: Covariate column names used to model assignment.
+        **kwargs: Must contain the DataFrame under one of
+            ``_DATAFRAME_KWARGS_KEYS``.
+    """
+    import numpy as np
+    from sklearn.linear_model import LogisticRegression
+
+    df = _extract_dataframe_from_kwargs(kwargs)
+    if df is None:
+        raise RuntimeError(
+            "propensity_estimator requires a real DataFrame supplied via one of "
+            f"the kwargs keys {list(_DATAFRAME_KWARGS_KEYS)!r}; got kwargs keys="
+            f"{sorted(kwargs.keys())!r}. The tool does not fabricate propensity "
+            "scores — per anti-mocking discipline, missing data must surface as "
+            "a structured error rather than a plausible-but-fake placeholder."
+        )
+    if treatment not in df.columns:
+        raise RuntimeError(
+            f"propensity_estimator: treatment column {treatment!r} not found in "
+            f"the supplied DataFrame (columns={list(df.columns)!r})."
+        )
+    if not covariates:
+        raise RuntimeError(
+            "propensity_estimator requires at least one covariate column; got an empty list."
+        )
+    missing = [c for c in covariates if c not in df.columns]
+    if missing:
+        raise RuntimeError(
+            f"propensity_estimator: covariate columns {missing!r} not found in "
+            f"the supplied DataFrame (columns={list(df.columns)!r})."
+        )
+
+    t = df[treatment].astype(int)
+    if t.nunique() < 2:
+        raise RuntimeError(
+            "propensity_estimator: the treatment column has fewer than 2 classes; "
+            "cannot fit a propensity model. Refusing to fabricate."
+        )
+
+    x = df[covariates].astype(float)
+    model = LogisticRegression(max_iter=1000)
+    model.fit(x, t)
+    classes = list(model.classes_)
+    pos_idx = classes.index(1) if 1 in classes else len(classes) - 1
+    ps = model.predict_proba(x)[:, pos_idx]
+
+    q_min, q25, q_med, q75, q_max = (
+        float(np.min(ps)),
+        float(np.quantile(ps, 0.25)),
+        float(np.median(ps)),
+        float(np.quantile(ps, 0.75)),
+        float(np.max(ps)),
+    )
+
+    # Real common-support overlap between treated and control propensity ranges.
+    treated_ps = ps[t.to_numpy() == 1]
+    control_ps = ps[t.to_numpy() == 0]
+    overlap_lo = max(float(np.min(treated_ps)), float(np.min(control_ps)))
+    overlap_hi = min(float(np.max(treated_ps)), float(np.max(control_ps)))
+    if overlap_hi <= overlap_lo:
+        common_support = 0.0
+    else:
+        in_support = (ps >= overlap_lo) & (ps <= overlap_hi)
+        common_support = float(np.mean(in_support))
+
+    if common_support >= 0.9:
+        overlap_assessment = "good"
+    elif common_support >= 0.7:
+        overlap_assessment = "moderate"
+    else:
+        overlap_assessment = "poor"
+
+    return PropensityScores(
+        mean_propensity=float(np.mean(ps)),
+        propensity_distribution={
+            "min": q_min,
+            "q25": q25,
+            "median": q_med,
+            "q75": q75,
+            "max": q_max,
         },
-        "overlap_assessment": "good",
-        "common_support": 0.94,
-    }
+        overlap_assessment=overlap_assessment,
+        common_support=common_support,
+    )
 
 
 # ============================================================================

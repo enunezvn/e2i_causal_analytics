@@ -296,13 +296,26 @@ class Tier0OutputMapper:
         return {
             "query": (f"What is the causal effect of HCP visits on discontinuation for {brand}?"),
             "experiment_id": self.state["experiment_id"],
-            # Restrict to the real-output causal tool. Other registry tools
-            # (segment_ranker / gap_calculator) return hardcoded demo entities
-            # (E001/E002...) that the harness gate's anti-fabrication check
-            # correctly rejects — the keyless harness exercises the composition
-            # pipeline on the one tool that runs on the real fixture data (#606).
+            # #621 rewired the formerly-hardcoded registry tools to compute from
+            # a caller-supplied DataFrame and fail-closed without one (no more
+            # E001/E002 fabrication the anti-fab gate rejects). The hint now
+            # advertises the real-output tools that genuinely run on the THREADED
+            # numeric-subset fixture below: causal_effect_estimator (ATE),
+            # risk_scorer (logistic risk on numeric features), and
+            # propensity_estimator (P(treatment|covariates)). gap_calculator and
+            # cate_analyzer are intentionally OMITTED here because they require a
+            # categorical grouping/segment column (geographic_region / age_group)
+            # that the numeric-subset estimation_df below deliberately drops —
+            # advertising them would be a dishonest hint (they'd fail-closed).
+            # This list is only a planner HINT (consumed at
+            # dspy_integration.py:205 as an LLM InputField); the keyless harness
+            # uses the canned _MOCK_PLANNING_JSON which routes both steps to
+            # causal_effect_estimator, so no fabricated output can reach the gate
+            # regardless of this list.
             "available_tools": [
                 "causal_effect_estimator",
+                "risk_scorer",
+                "propensity_estimator",
             ],
             # Thread the real (numeric-subset) tier0 fixture DataFrame to the
             # executor context so the planned fail-closed causal_effect_estimator
