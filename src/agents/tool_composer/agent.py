@@ -55,9 +55,9 @@ _MOCK_PLANNING_JSON = json.dumps(
             },
             {
                 "sub_question_id": "sq_2",
-                "tool_name": "cate_analyzer",
+                "tool_name": "causal_effect_estimator",
                 "confidence": 0.85,
-                "reasoning": "Analyzes heterogeneity",
+                "reasoning": "Second causal estimate on a different treatment",
             },
         ],
         "execution_steps": [
@@ -66,7 +66,12 @@ _MOCK_PLANNING_JSON = json.dumps(
                 "sub_question_id": "sq_1",
                 "tool_name": "causal_effect_estimator",
                 "input_mapping": {
-                    "treatment": "hcp_visits",
+                    # Binary engagement treatment (median split on hcp_visits),
+                    # added to context.estimation_data by the harness mapper. NOT
+                    # the raw hcp_visits count: every patient has >=1 visit so the
+                    # count has zero control units -> degenerate ATE (codex #606
+                    # MEDIUM). step_2 uses prior_treatments (has a 0 control group).
+                    "treatment": "high_hcp_engagement",
                     "outcome": "discontinuation_flag",
                     # Pull the real tier0 fixture DataFrame the harness threads via
                     # context so causal_effect_estimator runs on REAL data (#606).
@@ -77,12 +82,20 @@ _MOCK_PLANNING_JSON = json.dumps(
             {
                 "step_id": "step_2",
                 "sub_question_id": "sq_2",
-                "tool_name": "cate_analyzer",
-                "input_mapping": {"effect": "$step_1.effect", "dimension": "prior_treatments"},
-                "depends_on_steps": ["step_1"],
+                # Route to the REAL causal_effect_estimator on a different
+                # treatment (not cate_analyzer, which returns hardcoded demo
+                # segments). Two real ATEs on the threaded fixture -> genuine
+                # 2/2 tool success, no fabrication (#606).
+                "tool_name": "causal_effect_estimator",
+                "input_mapping": {
+                    "treatment": "prior_treatments",
+                    "outcome": "discontinuation_flag",
+                    "estimation_data": "$context.estimation_data",
+                },
+                "depends_on_steps": [],
             },
         ],
-        "parallel_groups": [["step_1"], ["step_2"]],
+        "parallel_groups": [["step_1", "step_2"]],
     }
 )
 _MOCK_SYNTHESIS_JSON = json.dumps(
@@ -309,15 +322,19 @@ class ToolComposerAgent:
                     )
                     # Phase-aware: decompose -> plan -> synthesize each parse a
                     # different JSON shape; return the right canned payload per
-                    # phase (keyword match on the system prompt; "synth" before
-                    # "tool" since synthesis prompts mention tools).
+                    # phase. Key on each node's ROLE-UNIQUE system-prompt phrase
+                    # ("...decomposition specialist" / "tool planning specialist"
+                    # / "...response synthesizer"). Loose keywords like "synth" /
+                    # "tool" collide because the planner embeds the tool registry,
+                    # which contains tools whose source_agent is
+                    # "prediction_synthesizer" -> "synth" hijacked the planning
+                    # call and fed it the synthesis JSON (#606).
                     self.llm_client = MarkedMockChatLLM(
                         _MOCK_SYNTHESIS_JSON,
                         phase_responses=[
-                            ("decomposition", _MOCK_DECOMPOSITION_JSON),
-                            ("synth", _MOCK_SYNTHESIS_JSON),
-                            ("planning", _MOCK_PLANNING_JSON),
-                            ("tool", _MOCK_PLANNING_JSON),
+                            ("decomposition specialist", _MOCK_DECOMPOSITION_JSON),
+                            ("planning specialist", _MOCK_PLANNING_JSON),
+                            ("response synthesizer", _MOCK_SYNTHESIS_JSON),
                         ],
                     )
 

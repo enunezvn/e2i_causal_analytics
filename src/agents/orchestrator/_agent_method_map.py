@@ -87,7 +87,11 @@ AGENT_METHOD_MAP: Dict[str, AgentMethodSpec] = {
         agent_class="CausalImpactAgent",
         state_module="src.agents.causal_impact.state",
         state_class="CausalImpactOutput",  # Output contract, not State
-        timeout=120.0,  # estimation + refutation + sensitivity SLA
+        # estimation + refutation + sensitivity SLA. The Tier 1-5 harness mapper
+        # requests a bounded refutation suite (#606) so the real pipeline runs in
+        # ~24s locally (MEASURED) — well within this SLA even at ~2x-slower CI.
+        # Full-sim refutation (~10-60 min) is exercised by the slow-tests lane.
+        timeout=120.0,
     ),
     "gap_analyzer": AgentMethodSpec(
         method="run",

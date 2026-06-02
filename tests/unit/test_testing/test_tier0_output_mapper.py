@@ -193,6 +193,16 @@ class TestTier1Mappings:
         assert len(result["available_tools"]) > 0
         assert "causal_effect_estimator" in result["available_tools"]
 
+        # #606: the threaded estimation frame carries a BINARY engagement
+        # treatment (median split) for step_1's genuine treated/control contrast,
+        # and EXCLUDES the raw hcp_visits count (collinear with that split and
+        # degenerate on its own — zero control units).
+        est = result["context"]["estimation_data"]
+        assert "high_hcp_engagement" in est.columns
+        assert "hcp_visits" not in est.columns
+        assert {int(v) for v in est["high_hcp_engagement"].unique()} <= {0, 1}
+        assert est["high_hcp_engagement"].nunique() == 2
+
 
 @pytest.mark.unit
 class TestTier2Mappings:
@@ -215,9 +225,20 @@ class TestTier2Mappings:
         assert "experiment_id" in result
         assert "data" in result
 
-        # Check treatment and outcome vars
-        assert result["treatment_var"] in ["hcp_visits", "prior_treatments"]
+        # #606: treatment is a DERIVED BINARY indicator (median-split engagement),
+        # NOT the raw hcp_visits count — the count has 0 control units and
+        # degenerates econml/dowhy (meaningless ATE + LinearDML/DRLearner crashes).
+        assert result["treatment_var"] == "high_hcp_engagement"
         assert isinstance(result["confounders"], list)
+        assert "hcp_visits" not in result["confounders"]  # treatment basis excluded
+        # The derived treatment lives in the estimation frame and is binary with a
+        # real treated/control split.
+        tcol = result["data"][result["treatment_var"]]
+        assert {int(v) for v in tcol.unique()} <= {0, 1}
+        assert tcol.nunique() == 2
+        # Smoke-test tuning: real OLS estimator + bounded (real) refutation suite.
+        assert result["parameters"]["method"] == "ols"
+        assert "refutation_config" in result["parameters"]
 
     def test_map_to_gap_analyzer(self, mapper):
         """Test mapping to gap analyzer input."""
@@ -630,9 +651,12 @@ class TestDataFrameColumnHandling:
         """Test mapping with all expected columns present."""
         mapper = Tier0OutputMapper(sample_tier0_state)
 
-        # Should work without errors
+        # Should work without errors; treatment is the derived binary indicator (#606)
         causal_input = mapper.map_to_causal_impact()
-        assert "hcp_visits" in causal_input["treatment_var"]
+        assert causal_input["treatment_var"] == "high_hcp_engagement"
+        tcol = causal_input["data"]["high_hcp_engagement"]
+        assert {int(v) for v in tcol.unique()} <= {0, 1}
+        assert tcol.nunique() == 2
 
     def test_map_without_hcp_visits(self, sample_tier0_state):
         """Test mapping when hcp_visits column is missing."""
@@ -647,15 +671,14 @@ class TestDataFrameColumnHandling:
         mapper = Tier0OutputMapper(state)
         result = mapper.map_to_causal_impact()
 
-        # Should fall back to available feature
-        assert "treatment_var" in result
-        # Should use prior_treatments or another available feature
-        assert result["treatment_var"] in [
-            "prior_treatments",
-            "days_on_therapy",
-            "feature_1",
-            "feature_2",
-        ]
+        # treatment is ALWAYS the derived binary indicator; with hcp_visits gone it
+        # is derived from the first available numeric feature instead (#606).
+        assert result["treatment_var"] == "high_hcp_engagement"
+        tcol = result["data"]["high_hcp_engagement"]
+        assert {int(v) for v in tcol.unique()} <= {0, 1}
+        assert tcol.nunique() == 2
+        # The fallback basis is excluded from confounders (collinear with treatment).
+        assert "hcp_visits" not in result["confounders"]
 
     def test_gap_analyzer_without_geographic_region(self, sample_tier0_state):
         """Test gap analyzer without geographic_region column."""
