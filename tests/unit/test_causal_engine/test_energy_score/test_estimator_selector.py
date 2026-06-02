@@ -731,6 +731,122 @@ class TestEstimatorSelector:
 
 
 # =============================================================================
+# #622 Fast-estimator tiebreak Tests
+# =============================================================================
+
+
+def _energy(score: float) -> EnergyScoreResult:
+    """Build a minimal EnergyScoreResult carrying a specific energy_score."""
+    return EnergyScoreResult(
+        estimator_name="x",
+        energy_score=score,
+        treatment_balance_score=0.0,
+        outcome_fit_score=0.0,
+        propensity_calibration=0.0,
+        n_samples=100,
+        n_treated=50,
+        n_control=50,
+        computation_time_ms=1.0,
+    )
+
+
+def _result(est_type: EstimatorType, score: float) -> EstimatorResult:
+    """Build a successful EstimatorResult with a fixed energy score."""
+    return EstimatorResult(
+        estimator_type=est_type,
+        success=True,
+        ate=1.0,
+        cate=np.array([1.0, 1.0]),
+        energy_score_result=_energy(score),
+    )
+
+
+class TestFastEstimatorTiebreak:
+    """#622: on an energy-score tie the selector must NOT pick causal_forest.
+
+    The downstream refutation suite re-fits the selected estimator dozens of
+    times (~0.05s/re-estimation for OLS vs ~3.1s for CausalForestDML, MEASURED),
+    so a tie that lands on causal_forest turns a ~30s suite into ~35-60 min.
+    """
+
+    def _selector(self, gap: float = 0.05) -> EstimatorSelector:
+        # Empty estimator chain — we call _select_best_energy directly with
+        # crafted results, so we don't fit anything (PR-lane fast, no slow refit).
+        config = EstimatorSelectorConfig(
+            estimators=[EstimatorConfig(EstimatorType.OLS, priority=1)],
+            min_energy_score_gap=gap,
+        )
+        return EstimatorSelector(config)
+
+    def test_exact_tie_prefers_ols_not_causal_forest(self):
+        """RED before #622: all-equal energy scores fell through stable-sort to
+        the chain-priority head (causal_forest). Now OLS (fastest) must win."""
+        selector = self._selector()
+        # Chain-priority order: causal_forest first (the slow trap).
+        results = [
+            _result(EstimatorType.CAUSAL_FOREST, 0.5382),
+            _result(EstimatorType.LINEAR_DML, 0.5382),
+            _result(EstimatorType.DRLEARNER, 0.5382),
+            _result(EstimatorType.OLS, 0.5382),
+        ]
+        selected = selector._select_best_energy(results)
+        assert selected.estimator_type == EstimatorType.OLS, (
+            "On an exact energy-score tie the selector must prefer the fastest "
+            "estimator (OLS), not the chain-priority head causal_forest."
+        )
+
+    def test_within_gap_tie_prefers_faster(self):
+        """Scores within min_energy_score_gap form a tie band -> fastest wins."""
+        selector = self._selector(gap=0.05)
+        results = [
+            _result(EstimatorType.CAUSAL_FOREST, 0.500),
+            _result(EstimatorType.OLS, 0.530),  # +0.03 within gap 0.05
+        ]
+        selected = selector._select_best_energy(results)
+        assert selected.estimator_type == EstimatorType.OLS
+
+    def test_meaningfully_better_score_wins_over_speed(self):
+        """Speed must NOT override a genuinely better (lower) energy score."""
+        selector = self._selector(gap=0.05)
+        results = [
+            _result(EstimatorType.CAUSAL_FOREST, 0.300),  # clearly best
+            _result(EstimatorType.OLS, 0.500),  # 0.2 worse, outside gap
+        ]
+        selected = selector._select_best_energy(results)
+        assert selected.estimator_type == EstimatorType.CAUSAL_FOREST
+
+    def test_tie_band_picks_fastest_among_several(self):
+        """Within a wide tie band, the single fastest estimator is chosen."""
+        selector = self._selector(gap=0.10)
+        results = [
+            _result(EstimatorType.ORTHO_FOREST, 0.500),
+            _result(EstimatorType.DRLEARNER, 0.505),
+            _result(EstimatorType.LINEAR_DML, 0.510),  # rank 2
+            _result(EstimatorType.S_LEARNER, 0.515),  # rank 1 (faster than linear_dml)
+        ]
+        selected = selector._select_best_energy(results)
+        assert selected.estimator_type == EstimatorType.S_LEARNER
+
+    def test_single_estimator_unaffected(self):
+        """A single successful estimator is returned regardless of tiebreak."""
+        selector = self._selector()
+        results = [_result(EstimatorType.CAUSAL_FOREST, 0.42)]
+        selected = selector._select_best_energy(results)
+        assert selected.estimator_type == EstimatorType.CAUSAL_FOREST
+
+    def test_all_energy_uncomputed_still_prefers_fastest(self):
+        """When energy scores are all inf (uncomputed), prefer fastest, not the
+        chain-priority causal_forest head."""
+        selector = self._selector()
+        cf = EstimatorResult(estimator_type=EstimatorType.CAUSAL_FOREST, success=True, ate=1.0)
+        ols = EstimatorResult(estimator_type=EstimatorType.OLS, success=True, ate=1.0)
+        assert cf.energy_score == float("inf")
+        assert ols.energy_score == float("inf")
+        selected = selector._select_best_energy([cf, ols])
+        assert selected.estimator_type == EstimatorType.OLS
+
+
+# =============================================================================
 # select_best_estimator Convenience Function Tests
 # =============================================================================
 

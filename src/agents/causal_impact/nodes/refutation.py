@@ -364,7 +364,24 @@ def _reconstruct_dowhy_artifacts(
 class RefutationNode:
     """Runs refutation tests on causal estimates.
 
-    Performance target: <15s
+    Performance target (#622, reconciled to MEASURED reality):
+      The node runs the REAL DoWhy refutation suite, which re-fits the SAME
+      estimator that produced the reported ATE many times (placebo + bootstrap
+      + random_common_cause + data_subset). Latency is therefore dominated by
+      that estimator's per-re-estimation cost, NOT a single flat budget. The
+      old "<15s" comment was aspirational and never met — the suite was ~610
+      DoWhy re-estimations (~33s on OLS to ~35-60 min on CausalForestDML).
+      With the lowered ``RefutationRunner.DEFAULT_CONFIG`` sim counts (#622:
+      placebo 30, random_common_cause 20, bootstrap 50, data_subset 5) and the
+      energy-score fast-estimator tiebreak, the realistic SLA is:
+        * linear estimators (ols / linear regression): < ~15s
+        * meta-learners (S/T/X-learner, DRLearner): < ~60s
+        * forest/ensemble DML (causal_forest, ortho_forest) when GENUINELY
+          selected (lowest energy, not a tie): a few minutes — bounded, not
+          unbounded. The tiebreak avoids picking these on a tie.
+      Callers that need sub-second feedback (smoke tests) pass an even smaller
+      bounded ``parameters.refutation_config`` (#606), which is merged on top
+      of these defaults.
     Type: Standard (computation-heavy)
 
     This node integrates with the Causal Validation Protocol by:

@@ -61,6 +61,32 @@ class EstimatorType(str, Enum):
     OLS = "ols"
 
 
+# Relative estimation+refutation cost rank for each estimator (lower = faster).
+# Used ONLY to break ties when two estimators have statistically
+# indistinguishable energy scores (#622). The dominant downstream cost is the
+# refutation suite, which re-fits the SELECTED estimator dozens of times: the
+# refutation node reconstructs a DoWhy model using the same estimator that
+# produced the reported ATE, and MEASURED that costs ~0.05s/re-estimation for
+# the linear OLS refit vs ~3.1s for CausalForestDML (DoWhy 0.14 / EconML 0.16).
+# So when energy scores tie, picking the linear estimator turns a ~35-60 min
+# refutation suite into a ~30s one with no measured loss of estimate quality
+# (the energy scores were equal by definition). Ranks are coarse buckets:
+# closed-form / single-fit linear models are cheapest; meta-learners that fit a
+# handful of boosted models are mid; ensemble/forest DML estimators that fit
+# many trees with cross-fitting are the most expensive.
+_ESTIMATOR_SPEED_RANK: dict[EstimatorType, int] = {
+    EstimatorType.OLS: 0,
+    EstimatorType.S_LEARNER: 1,
+    EstimatorType.T_LEARNER: 1,
+    EstimatorType.X_LEARNER: 2,
+    EstimatorType.LINEAR_DML: 2,
+    EstimatorType.DML_LEARNER: 2,
+    EstimatorType.DRLEARNER: 3,
+    EstimatorType.ORTHO_FOREST: 4,
+    EstimatorType.CAUSAL_FOREST: 4,
+}
+
+
 class SelectionStrategy(str, Enum):
     """Strategy for selecting among estimators."""
 
@@ -1136,7 +1162,26 @@ class EstimatorSelector:
         )
 
     def _select_best_energy(self, results: list[EstimatorResult]) -> EstimatorResult:
-        """Select estimator with lowest energy score."""
+        """Select estimator with lowest energy score, breaking ties by speed.
+
+        #622 fast-estimator tiebreak: ``sorted(..., key=energy_score)`` is a
+        stable sort, so previously a tie (equal energy scores — e.g. all
+        estimators score 0.5382 on a degenerate fixture) fell back to the
+        estimator-chain priority order, whose first entry is ``causal_forest``,
+        the SLOWEST estimator. That made the downstream refutation suite (which
+        re-fits the selected estimator dozens of times) cost ~35-60 min on a
+        tie instead of ~30s.
+
+        We now group the candidates whose energy score is within
+        ``min_energy_score_gap`` of the global best (a statistically
+        indistinguishable "tie band") and, among that band, pick the FASTEST
+        estimator per ``_ESTIMATOR_SPEED_RANK``. When scores genuinely differ
+        by more than the gap, the lowest-energy estimator still wins outright
+        (speed never overrides a meaningfully better score). The
+        ``min_energy_score_gap`` field already existed on
+        ``EstimatorSelectorConfig`` ("Minimum gap to prefer one over another")
+        but was never wired into selection — this is its intended use.
+        """
         successful = [r for r in results if r.success]
 
         if not successful:
@@ -1152,10 +1197,45 @@ class EstimatorSelector:
                 )
             )
 
-        # Sort by energy score (lower is better)
+        # Sort by energy score (lower is better). Stable sort preserves the
+        # estimator-chain order within equal scores; we override that below.
         sorted_results = sorted(successful, key=lambda r: r.energy_score)
+        best_score = sorted_results[0].energy_score
 
-        best = sorted_results[0]
+        # Tie band: every estimator whose energy score is within
+        # ``min_energy_score_gap`` of the best. ``inf`` scores (energy not
+        # computed) never enter the band unless the best is also ``inf``.
+        gap = self.config.min_energy_score_gap
+        if np.isfinite(best_score):
+            tie_band = [r for r in sorted_results if r.energy_score - best_score <= gap]
+        else:
+            # All scores are inf (energy uncomputable): the whole successful set
+            # is one degenerate band — still prefer the fastest estimator rather
+            # than defaulting to the slow chain-priority head.
+            tie_band = list(sorted_results)
+
+        if len(tie_band) > 1:
+            # Prefer the fastest estimator in the tie band; on equal speed rank,
+            # keep the lower energy score, then the original (priority) order.
+            best = min(
+                tie_band,
+                key=lambda r: (
+                    _ESTIMATOR_SPEED_RANK.get(r.estimator_type, 99),
+                    r.energy_score,
+                ),
+            )
+            if best is not sorted_results[0]:
+                logger.info(
+                    "Energy-score tie within gap %.4f: preferring faster estimator "
+                    "%s (energy=%.4f) over %s (energy=%.4f) to bound refutation latency.",
+                    gap,
+                    best.estimator_type.value,
+                    best.energy_score,
+                    sorted_results[0].estimator_type.value,
+                    sorted_results[0].energy_score,
+                )
+        else:
+            best = sorted_results[0]
 
         # Log warning if energy score is high
         if best.energy_score > self.config.max_acceptable_energy_score:
