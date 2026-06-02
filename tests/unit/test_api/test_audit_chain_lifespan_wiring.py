@@ -144,6 +144,17 @@ async def test_lifespan_wiring_makes_agent_audit_init_emit_audit_chain_entry():
             tables = [c.args[0] for c in mock_client.table.call_args_list if c.args]
             assert "audit_chain_entries" in tables
 
+            # ...and the insert carried a well-formed genesis audit row (not just
+            # a table reference): correct agent, genesis action, matching id, and
+            # the tamper-evident hash.
+            insert_mock = mock_client.table.return_value.insert
+            assert insert_mock.called
+            payload = insert_mock.call_args.args[0]
+            assert payload["agent_name"] == "causal_impact"
+            assert payload["action_type"] == "workflow_start"
+            assert payload["workflow_id"] == str(result["audit_workflow_id"])
+            assert payload["entry_hash"]
+
 
 @pytest.mark.asyncio
 async def test_lifespan_degrades_safely_when_supabase_unavailable():
@@ -171,3 +182,24 @@ async def test_lifespan_resets_audit_service_on_shutdown():
             assert get_audit_chain_service() is not None  # wired at startup
         # Context exited -> shutdown ran.
         assert get_audit_chain_service() is None  # reset at shutdown
+
+
+@pytest.mark.asyncio
+async def test_lifespan_resets_audit_service_on_exceptional_shutdown():
+    """The audit global must be reset even when the application body raises during
+    the lifespan (exceptional shutdown) — otherwise the wired singleton leaks into
+    a subsequent same-process lifespan (uvicorn --reload, tests).
+
+    RED before the try/finally fix: the shutdown reset sits after ``yield`` outside
+    any try/finally, so an exception thrown into the lifespan skips it and the
+    global stays set.
+    """
+    mock_client = MagicMock(name="supabase_client")
+
+    with _hermetic_lifespan_io(), patch("src.api.main.init_supabase", return_value=mock_client):
+        with pytest.raises(RuntimeError, match="app crashed during run"):
+            async with main.lifespan(_fake_app()):
+                assert get_audit_chain_service() is not None  # wired at startup
+                raise RuntimeError("app crashed during run")
+        # Shutdown was exceptional, but the global must still be reset.
+        assert get_audit_chain_service() is None

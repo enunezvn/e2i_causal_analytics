@@ -354,7 +354,20 @@ async def lifespan(app: FastAPI):
 
     logger.info("API server ready to accept connections")
 
-    yield  # Application runs here
+    # #609: reset the audit-chain global in a finally around the application run
+    # so it is cleared even on EXCEPTIONAL shutdown and never leaks into a
+    # subsequent same-process lifespan (uvicorn --reload, tests). The remaining
+    # cleanups below run on normal shutdown only (pre-existing behavior).
+    try:
+        yield  # Application runs here
+    finally:
+        try:
+            from src.agents.base.audit_chain_mixin import set_audit_chain_service
+
+            set_audit_chain_service(None)
+            logger.info("Audit chain service reset")
+        except Exception as e:
+            logger.warning(f"Audit chain reset failed: {e}")
 
     # Shutdown
     logger.info("E2I Causal Analytics Platform - Shutting down")
@@ -386,16 +399,6 @@ async def lifespan(app: FastAPI):
         logger.info("Supabase client closed")
     except Exception as e:
         logger.warning(f"Supabase cleanup failed: {e}")
-
-    # #609: reset the global audit-chain service so it does not leak across app
-    # reloads / test app lifecycles (symmetric with the startup wiring above).
-    try:
-        from src.agents.base.audit_chain_mixin import set_audit_chain_service
-
-        set_audit_chain_service(None)
-        logger.info("Audit chain service reset")
-    except Exception as e:
-        logger.warning(f"Audit chain reset failed: {e}")
 
     # Cleanup Feast client
     try:
