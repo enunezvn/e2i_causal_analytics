@@ -349,6 +349,86 @@ class TestRefutationRunnerInit:
 
 
 # ============================================================================
+# #622 PROD-LATENCY DEFAULT_CONFIG TESTS
+# ============================================================================
+
+
+class TestDefaultConfigLatencyBounds:
+    """#622: DEFAULT_CONFIG sim counts must be bounded for prod latency.
+
+    The previous defaults (placebo 100, bootstrap 500, and an UNBOUNDED
+    random_common_cause that fell through to DoWhy's internal default of 100)
+    made the suite ~610 DoWhy re-estimations -> ~33s (OLS) to ~35-60 min
+    (causal_forest). MEASURED on the synthetic fixture (#622). These tests pin
+    the lowered, defensible defaults so a future bump back to the slow values
+    is caught.
+    """
+
+    def test_placebo_default_simulations_bounded(self):
+        runner = RefutationRunner()
+        assert runner.config["placebo_treatment"]["num_simulations"] == 30
+
+    def test_random_common_cause_has_bounded_num_simulations(self):
+        """The KEY fix: random_common_cause previously had NO num_simulations
+        key, so the runner never passed one and DoWhy used its internal 100
+        (~140s, the issue's named dominant cost). It must now be present and
+        bounded so it is actually passed to the refuter."""
+        runner = RefutationRunner()
+        assert "num_simulations" in runner.config["random_common_cause"]
+        assert runner.config["random_common_cause"]["num_simulations"] == 20
+
+    def test_bootstrap_default_bootstraps_bounded(self):
+        runner = RefutationRunner()
+        assert runner.config["bootstrap"]["num_bootstraps"] == 50
+
+    def test_data_subset_default_subsets_bounded(self):
+        runner = RefutationRunner()
+        assert runner.config["data_subset"]["num_subsets"] == 5
+
+    def test_random_common_cause_passes_num_simulations_to_refuter(self):
+        """The bounded num_simulations must actually reach DoWhy's refuter.
+
+        Pre-#622 the runner only forwarded num_simulations when present in
+        config; since it was absent from DEFAULT_CONFIG, the kwarg was never
+        sent and DoWhy ran its own 100-sim default. With it present, the runner
+        must forward it. We capture the kwargs the stub receives."""
+        captured: dict = {}
+
+        def refute_estimate(*_args, method_name: str, **kwargs):  # noqa: ANN001
+            captured["method_name"] = method_name
+            captured["kwargs"] = kwargs
+            return _make_refutation_result(new_effect=0.14, p_value=0.5)
+
+        stub_model = SimpleNamespace(refute_estimate=refute_estimate)
+        runner = RefutationRunner()
+        runner._run_random_common_cause_test(
+            original_effect=0.15,
+            causal_model=stub_model,
+            identified_estimand=object(),
+            estimate=object(),
+            use_dowhy=True,
+        )
+        assert captured["method_name"] == "random_common_cause"
+        assert captured["kwargs"].get("num_simulations") == 20
+
+    def test_custom_config_still_overrides_lowered_defaults(self):
+        """The #606 smoke-harness override path (per-key merge) must still win
+        over the new lowered defaults — they are merged on top, not replaced."""
+        runner = RefutationRunner(
+            config={
+                "random_common_cause": {"num_simulations": 5},
+                "bootstrap": {"num_bootstraps": 10},
+            }
+        )
+        assert runner.config["random_common_cause"]["num_simulations"] == 5
+        assert runner.config["bootstrap"]["num_bootstraps"] == 10
+        # Untouched keys retain the new lowered defaults.
+        assert runner.config["placebo_treatment"]["num_simulations"] == 30
+        # Effect strength preserved across the merge.
+        assert runner.config["random_common_cause"]["effect_strength"] == 0.1
+
+
+# ============================================================================
 # PLACEBO TEST TESTS
 # ============================================================================
 

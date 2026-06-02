@@ -101,13 +101,26 @@ class TestLegacyModeWithExplicitMethod:
 
     @pytest.mark.asyncio
     async def test_legacy_mode_with_use_energy_score_false(self, estimation_node, base_state):
-        """use_energy_score=False uses legacy path."""
+        """use_energy_score=False uses legacy path (no explicit method).
+
+        #622: with no explicit ``method``, the legacy path still runs the full
+        energy-score chain unrestricted. On THIS synthetic fixture all four
+        estimators produce an EXACT energy-score tie (energy_score_gap == 0.0,
+        verified), so the selection is decided by the tiebreak. Previously the
+        stable-sort fallthrough picked the chain-priority head ``causal_forest``
+        -> ``CausalForestDML`` (the SLOWEST estimator, whose refutation suite
+        runs ~35-60 min). The #622 fast-estimator tiebreak now prefers the
+        fastest estimator on a tie (``ols`` -> ``linear_regression``), which is
+        the whole point of the fix: a tie must NOT land on causal_forest.
+        """
         base_state["parameters"] = {"use_energy_score": False}
         result = await estimation_node.execute(base_state)
 
-        # Should use legacy path (defaults to CausalForestDML)
         assert result.get("energy_score_enabled") is False
-        assert result["estimation_result"]["method"] == "CausalForestDML"
+        # On the exact energy-score tie, the fast estimator wins (was
+        # CausalForestDML pre-#622 via stable-sort fallthrough).
+        assert result["estimation_result"]["method"] == "linear_regression"
+        assert result["estimation_result"]["selected_estimator"] == "ols"
 
     @pytest.mark.asyncio
     async def test_all_legacy_methods(self, estimation_node, base_state):

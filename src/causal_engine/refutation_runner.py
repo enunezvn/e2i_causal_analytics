@@ -322,27 +322,69 @@ class RefutationRunner:
         thresholds: Pass/fail thresholds for each test type
     """
 
-    # Default configuration for each test type
+    # Default configuration for each test type.
+    #
+    # #622 prod-latency tuning. The previous defaults (placebo 100, bootstrap
+    # 500, and random_common_cause at DoWhy's own internal default of 100 — it
+    # had NO ``num_simulations`` key, so the runner never passed one) made the
+    # full suite ~610 DoWhy re-estimations. MEASURED on the synthetic fixture
+    # (DoWhy 0.14 / EconML 0.16, see #622): each re-estimation is ~0.05s for the
+    # linear refit but ~3.1s when the energy-score selector picks
+    # CausalForestDML, so the suite ran ~33s (OLS) to ~35-60 min (causal_forest)
+    # per query, far over the node's documented SLA.
+    #
+    # We lower the per-refuter simulation counts to the smallest values that
+    # still answer each refuter's question meaningfully. The cuts trade a small
+    # amount of statistical precision for a large latency win, and each refuter
+    # only renders a coarse PASS/WARNING/FAIL decision (e.g. "did the effect
+    # move >20%?", "is the placebo p-value >0.05?"), which does not need the
+    # high-resolution null distributions the old defaults produced.
+    #
+    #   * placebo_treatment 100 -> 30: the placebo p-value is a permutation
+    #     p-value with resolution ~1/(n+1); 30 perms gives ~0.032 resolution,
+    #     comfortably finer than the 0.05 pass threshold while ~3x cheaper.
+    #   * random_common_cause add num_simulations=20: previously unbounded at
+    #     DoWhy's internal default 100. Each sim adds an independent random
+    #     confounder and re-estimates; the decision is whether the mean effect
+    #     shifts >20%. By the CLT the SE of that mean shrinks as 1/sqrt(n);
+    #     20 sims keeps the SE ~0.22x of a single draw — ample for a coarse
+    #     stability gate — at ~5x lower cost than 100.
+    #   * bootstrap 500 -> 50: a 50-resample percentile CI has acceptable
+    #     coverage error for the CI-width-ratio stability check (the refuter
+    #     compares bootstrap CI width vs original CI width, a ratio, not a
+    #     high-precision interval). This is the single biggest latency item
+    #     (MEASURED ~22s at 500 on OLS), cut ~10x.
+    #   * data_subset 10 -> 5: each subset is an independent fit on 80% of rows;
+    #     5 subsets is enough to gauge cross-subset consistency for a coarse
+    #     coverage gate, halving the cost.
+    #
+    # Callers needing full statistical rigor (e.g. an offline / slow-tests run)
+    # can still pass a richer ``config`` to ``RefutationRunner`` /
+    # ``RefutationNode`` (merged per-key onto these defaults). The Tier 1-5
+    # smoke harness already passes an even-smaller bounded config via
+    # ``parameters.refutation_config`` (#606), which still wins because it is
+    # merged on top of these defaults.
     DEFAULT_CONFIG: Dict[str, Dict[str, Any]] = {
         "placebo_treatment": {
             "enabled": True,
-            "num_simulations": 100,
+            "num_simulations": 30,
             "critical": True,  # Failure blocks estimate
         },
         "random_common_cause": {
             "enabled": True,
             "effect_strength": 0.1,
+            "num_simulations": 20,
             "critical": True,
         },
         "data_subset": {
             "enabled": True,
             "subset_fraction": 0.8,
-            "num_subsets": 10,
+            "num_subsets": 5,
             "critical": False,
         },
         "bootstrap": {
             "enabled": True,
-            "num_bootstraps": 500,
+            "num_bootstraps": 50,
             "critical": False,
         },
         "sensitivity_e_value": {
