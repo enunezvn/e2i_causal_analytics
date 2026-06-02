@@ -5,12 +5,23 @@ This module validates that data quality checks passed before training.
 
 from typing import Any, Dict
 
+from src.agents.ml_foundation.data_preparer.nodes.qc_threshold import (
+    resolve_qc_min_overall_score,
+)
+
 
 async def check_qc_gate(state: Dict[str, Any]) -> Dict[str, Any]:
     """Verify QC gate passed before allowing training.
 
     CRITICAL: This is a mandatory gate check. Training MUST NOT proceed
     if QC validation failed.
+
+    The binding decision is the upstream ``qc_report["qc_passed"]`` boolean,
+    which data_preparer already computed against the resolved minimum bar.
+    This node resolves that same bar through the single source of truth
+    (``resolve_qc_min_overall_score``) only to SURFACE it in the gate message,
+    so the threshold reported here can never drift from the one data_preparer
+    enforced.
 
     Args:
         state: ModelTrainerState with qc_report
@@ -28,11 +39,21 @@ async def check_qc_gate(state: Dict[str, Any]) -> Dict[str, Any]:
     qc_score = qc_report.get("overall_score", 0.0)
     qc_errors = qc_report.get("qc_errors", [])
 
+    # Resolve the effective minimum bar for messaging/consistency. data_preparer
+    # carries the bar it ACTUALLY enforced on the qc_report, so prefer that; the
+    # resolver coerces/validates it and falls back to the strict 0.80 default
+    # when absent. Routed through the single source of truth so the threshold
+    # reported here can never drift from the one data_preparer enforced.
+    min_overall_score = resolve_qc_min_overall_score(
+        {"qc_min_overall_score": qc_report.get("qc_min_overall_score")}
+    )
+
     if not qc_passed:
         return {
             "qc_gate_passed": False,
             "qc_gate_message": (
-                f"QC gate BLOCKED: Quality check failed with score {qc_score}. "
+                f"QC gate BLOCKED: Quality check failed with score {qc_score} "
+                f"(min {min_overall_score:.2f}). "
                 f"Errors: {', '.join(qc_errors[:3])}"
             ),
             "error": "QC gate blocked - cannot train with failed data quality",
@@ -59,5 +80,8 @@ async def check_qc_gate(state: Dict[str, Any]) -> Dict[str, Any]:
 
     return {
         "qc_gate_passed": True,
-        "qc_gate_message": (f"QC gate PASSED: Quality score {qc_score}. {warning_message}"),
+        "qc_gate_message": (
+            f"QC gate PASSED: Quality score {qc_score} "
+            f"(min {min_overall_score:.2f}). {warning_message}"
+        ),
     }

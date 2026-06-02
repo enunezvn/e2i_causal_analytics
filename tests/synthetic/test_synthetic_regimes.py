@@ -482,20 +482,19 @@ class TestCleanRegimeE2E:
 
     @pytest.mark.xfail(
         reason=(
-            "Goal #3 of pre_phase2_unblockers Task 05 (clean-regime deployer "
-            "success) is structurally infeasible until adaptive_success_criteria "
-            "lands. With criteria_validator defaults (min_precision=0.70, "
-            "min_f1=0.70) and ~32% realised positive prevalence at path-D "
-            "(positive_rate=0.70), the model achieves precision ~0.62 / f1 "
-            "~0.67 — close but capped by class balance, not AUC. Codex review "
-            "(2026-04-30) confirmed: even adaptive_success_criteria's "
-            "min_precision = min(0.70, max(0.30, 5*prevalence)) caps at 0.70 "
-            "for prevalence > 0.14, so adaptive only relaxes F1 here. See "
-            ".claude/plans/pre_phase2_unblockers/05-verify-clean-regime.md "
-            "'Goal #3 — known structural blocker' section. Re-enable this "
-            "assertion (remove the xfail) once adaptive_success_criteria's "
-            "F1 relaxation lands and verify precision can also be relaxed "
-            "via per-regime overrides."
+            "This fixture forks run_tier0_test.py with REDUCED HPO "
+            "(--hpo-trials 5), which produces a deliberately weaker clean "
+            "model that does not pass v3's calibration / MCC gates — so "
+            "success_criteria_met is not reliably True here. NOTE: the old "
+            "fixed-mode blocker this reason used to cite (min_precision=0.70 / "
+            "min_f1=0.70 capping precision by class balance) is RESOLVED: "
+            "adaptive_success_criteria v3 is now the production default "
+            "(PR #641, acaea484). The CANONICAL full-HPO clean run DOES reach "
+            "success_criteria_met=True under v3 — proven by "
+            "test_clean_regime_with_adaptive_flag_on_v3 (faithful Job B "
+            "slow-tests run 26846659332). The xfail is KEPT (strict=False) "
+            "only because this reduced-HPO fork's weaker model genuinely "
+            "fails v3 calibration/MCC; removing it would flip Job D RED."
         ),
         strict=False,
     )

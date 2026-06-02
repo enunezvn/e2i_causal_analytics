@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 
 from ..state import DataPreparerState
+from .qc_threshold import resolve_qc_min_overall_score
 
 logger = logging.getLogger(__name__)
 
@@ -145,10 +146,15 @@ async def run_quality_checks(state: DataPreparerState) -> Dict[str, Any]:
             + timeliness_score * 0.15
         )
 
-        # Check for blocking threshold
-        if overall_score < 0.80:
+        # Check for blocking threshold. The minimum bar is resolved through the
+        # single source of truth (default 0.80, overridable via state /
+        # scope_spec / QC_MIN_OVERALL_SCORE env) so it can never drift from the
+        # finalize_output gate decision.
+        min_overall_score = resolve_qc_min_overall_score(state)
+        if overall_score < min_overall_score:
             blocking_issues.append(
-                f"Overall QC score ({overall_score:.2f}) below minimum threshold (0.80)"
+                f"Overall QC score ({overall_score:.2f}) below minimum threshold "
+                f"({min_overall_score:.2f})"
             )
             remediation_steps.append("Review data quality and address failing expectations")
 
