@@ -7,10 +7,40 @@
 
 **Tally:** 78 raw findings → **37 confirmed**, 33 disputed (split verdict), 0 unverified, 8 rejected.
 
-## Status / actions taken
+## Resolution status — updated 2026-06-03 (post-merge)
 
-- ✅ **Graph public-allowlist hardening SHIPPED** (this branch, TDD): the knowledge-graph data endpoints (`/api/graph/nodes`, `/relationships`, `/stats`, `/causal-chains`) were removed from the unauthenticated public allowlist; only `/api/graph/health` remains public. Regression-pinned in `tests/unit/test_security/test_auth_gating.py` and `tests/unit/test_api/test_middleware/test_auth_middleware.py`. This closes the anonymous PHI-exposure + unauthenticated Cypher-injection reach (findings below).
-- 🔵 **Auth fail-open (originally flagged CRITICAL) — ACKNOWLEDGED INTENTIONAL, not changed.** The fail-open when Supabase is unconfigured is deliberate: a fail-closed startup guard previously prevented the app from connecting. Per owner direction, **do not** add a production startup guard here. The real exposure was the allowlist, now fixed.
+All fixes landed on `main` (`5e1c840b`) via 10 merged PRs, each adversarially reviewed + `Backend CI` green. Of the **37 confirmed** findings:
+
+- **31 FIXED** (merged — see PR map).
+- **2 PARTIAL** (merged, with a deferred completion): **C21** segment-analysis in-memory state (bounded + documented; a shared Redis/Supabase-backed store is deferred), **C31** frontend blind-cast (an opt-in `schema` runtime-validation param was added to the base client + documented; not yet wired into every call site).
+- **3 OWNER-DECISIONS — intentional, will not change:** auth fail-open when Supabase is unconfigured (**C1/C9** — a fail-closed startup guard previously broke connectivity; do NOT add a prod guard); `GET /api/monitoring/alerts` public (**C37**); `GET /api/analytics/dashboard` *public-access* aspect (**C23**). All are "public for dashboard widgets"/connectivity decisions; disproof confirmed authed users are unaffected.
+- **1 OUTSTANDING:** **C23** (MEDIUM, error-handling) — `src/api/routes/analytics.py` still swallows a DB-fetch failure and returns **zeroed metrics as if real** (`"Return empty dashboard rather than error"`). This file was not in any fix lane, so the silently-degraded behavior remains.
+
+The **33 disputed** (split-verdict) findings are **untriaged optional leads** — the review framed them as "investigate, not proven," and the fix sweep deliberately targeted only confirmed findings. The **8 rejected** were cleared.
+
+### PR map (confirmed → resolution)
+
+| PR | Findings |
+|----|----------|
+| #657 | C3 (graph public-allowlist) |
+| #659 | C10, C17, C29, C32 |
+| #660 | C12, C14, C26, C33 |
+| #661 | C15, C16, C31 *(partial)* |
+| #662 | C6, C11, C24 (copilotkit) |
+| #663 | C2, C18, C24 (cognitive), C36 |
+| #664 | C3/C7, C13 (Cypher injection), C27 |
+| #665 | C20, C21 *(partial)*, C22, C25 (experiments/causal), C28, C30, C34, C35 |
+| #666 | C4, C5, C8, C19, C25 (digital-twin) |
+| owner-decision | C1, C9, C23 *(public aspect)*, C37 |
+| **OUTSTANDING** | **C23 (analytics swallow → zeroed metrics)** |
+
+### Remaining work (recommended sequence)
+
+1. **C23 — analytics dashboard fail-open** *(confirmed MEDIUM; the one finding missed by the lanes)*: in `routes/analytics.py`, stop returning zeroed metrics on a DB-fetch failure — surface a degraded/error state so the dashboard cannot present fabricated zeros as real. Small, self-contained; TDD red-first.
+2. **Partial-fix completions** *(optional, deferred-by-design)*: **C21** — back segment-analysis state with a shared store (Redis/Supabase) if cross-worker/restart correctness matters; **C31** — wire the opt-in runtime validation into the remaining frontend client modules.
+3. **Disputed-findings triage** *(33 leads, lower confidence)*: re-verify against the now-merged code (several may already be fixed), then fix the genuinely-real ones in priority order — **security** (WS access-token in URL query string, graph WS helper sends no auth token) → **correctness** (feedback `apply_update` no-op returns APPLIED, monitoring `SNOOZE`→`ACKNOWLEDGE`, the react-query cache-key staleness cluster) → **contract/quality**.
+
+> Historical note: the original "Status / actions taken" entries (graph-allowlist shipped; auth fail-open intentional) are now folded into the resolution status above.
 
 ## Root-cause themes
 
