@@ -139,13 +139,31 @@ async def register_features_in_feast(state: DataPreparerState) -> Dict[str, Any]
         freshness_result = await _check_feature_freshness(adapter, experiment_id, required_features)
         updates["feast_freshness_check"] = freshness_result
 
+        # A --data-dir run sources its features straight from parquet, not from
+        # the Feast online store, so a stale/unreachable Feast is irrelevant to
+        # that data — the freshness gate is a feature-SERVING concern. Hard-
+        # blocking a file-sourced batch training run on Feast staleness is the
+        # same wrong-context anti-pattern the sufficiency-gate investigation
+        # surfaced (2026-06-03). For file-sourced runs the freshness result is
+        # advisory only. Genuine Feast-serving runs keep the hard block.
+        data_source = state.get("data_source")
+        is_file_sourced = isinstance(data_source, dict) and data_source.get("type") == "file_dir"
+
         # Add freshness warnings to state; default to "not fresh" when key absent.
         if freshness_result and not freshness_result.get("fresh", False):
             for recommendation in freshness_result.get("recommendations", []):
                 updates["feast_warnings"].append(f"Freshness: {recommendation}")
 
+            if is_file_sourced:
+                # File-sourced run: Feast is not the feature source -> advisory.
+                logger.info(
+                    "Feast QC gate: features stale for experiment %s but the run is "
+                    "file-sourced (data_source.type=file_dir); features come from "
+                    "parquet, not Feast — treating staleness as advisory, not blocking.",
+                    experiment_id,
+                )
             # Hard block when features are stale unless the ops escape hatch is set.
-            if os.environ.get("ALLOW_STALE_FEAST") != "1":
+            elif os.environ.get("ALLOW_STALE_FEAST") != "1":
                 updates["feast_blocked"] = True
                 updates["feast_registration_status"] = "blocked_stale_features"
                 # Append to blocking_issues so _finalize_output forces gate_passed=False.
