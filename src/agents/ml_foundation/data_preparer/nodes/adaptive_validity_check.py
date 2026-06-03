@@ -3114,6 +3114,60 @@ def _select_features(
     return cols
 
 
+_SEVERITY_RANK = {"critical": 4, "high": 3, "moderate": 2, "info": 1, "none": 0}
+
+
+def _declared_safe_immune_features(
+    candidates: set[str],
+    manifest_source: Optional[str],
+) -> set[str]:
+    """Return the candidates the cohort's FeatureContract declares pre-index.
+
+    Full manifest immunity (user decision, 2026-06-03): a feature the manifest
+    declares ``knowable_at`` pre-or-at index (Layer-1 declared-safe) is CERTIFIED
+    temporally legitimate, so the contract — not the statistical/adversarial
+    leakage layer — is the authoritative arbiter. Such a feature is exempted from
+    leakage entirely: neither strong target association (legitimate signal) nor
+    sparsity artifacts (zero_variance / perfect_class_separation false-firing on
+    rare-event columns) may flag it. A ``None`` manifest_source (synthetic /
+    unrecognized cohort) grants no immunity, preserving the opt-in safety of the
+    manifest layer; features with no contract entry stay under statistical
+    governance.
+    """
+    if not manifest_source:
+        return set()
+    from src.data.manifests import lookup_feature_contract
+
+    immune: set[str] = set()
+    for feat in candidates:
+        if not feat:
+            continue
+        contract = lookup_feature_contract(feat, manifest_source)
+        if contract is not None and contract.knowable_at.is_pre_or_at_index():
+            immune.add(feat)
+    return immune
+
+
+def _severity_from_finding_dicts(findings: list[dict[str, Any]]) -> str:
+    """Highest severity across finding dicts (handles str or LeakageSeverity).
+
+    Used to recompute leakage severity after declared-safe immunity strips
+    findings — the only sanctioned DOWNGRADE, since a contract-certified feature
+    was never a real leak.
+    """
+    best = "none"
+    best_rank = 0
+    for f in findings:
+        sev = f.get("severity")
+        sev = getattr(sev, "value", sev)
+        sev = str(sev).lower()
+        rank = _SEVERITY_RANK.get(sev, 0)
+        if rank > best_rank:
+            best_rank = rank
+            best = sev
+    return best
+
+
 async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
     """Run Layer 3 adversarial discriminator on every feature; emit verdicts.
 
@@ -3818,6 +3872,34 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
     if flagged and severity_rank.get(prior_severity, 0) < severity_rank["high"]:
         new_severity = "high"
 
+    # Full manifest immunity (user decision, 2026-06-03): a feature the cohort's
+    # FeatureContract declares pre-index (Layer-1 declared-safe) is exempted from
+    # leakage entirely — the contract is the authoritative temporal arbiter, so
+    # neither the deterministic structural checks (zero_variance /
+    # perfect_class_separation, which false-fire on sparse rare-event columns)
+    # nor the FDR adversarial discriminator (which cannot tell a strong pre-index
+    # predictor from a leak) may flag it. The 1.5x HBLP prior above is a soft
+    # nudge; this is the hard immunity. This is the ONLY sanctioned severity
+    # DOWNGRADE — a contract-certified feature was never a real leak. Statistical
+    # checks remain the arbiter only for features WITHOUT a contract.
+    immune = _declared_safe_immune_features(
+        set(merged_leaked) | {str(f.get("feature", "")) for f in merged_findings},
+        manifest_source,
+    )
+    if immune:
+        merged_leaked = [f for f in merged_leaked if f not in immune]
+        merged_findings = [f for f in merged_findings if f.get("feature") not in immune]
+        extended_flagged = [f for f in extended_flagged if f not in immune]
+        new_severity = _severity_from_finding_dicts(merged_findings)
+        logger.warning(
+            "Declared-safe immunity: exempted %d manifest pre-index feature(s) from "
+            "leakage (contract is authoritative); severity %s -> %s. Features: %s",
+            len(immune),
+            prior_severity,
+            new_severity,
+            sorted(immune),
+        )
+
     logger.info(
         "adaptive_validity_check: scored=%d flagged=%d (high) prior_severity=%s new_severity=%s",
         len(verdicts),
@@ -3847,5 +3929,9 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
     }
     if new_severity != prior_severity:
         update["leakage_severity"] = new_severity
-        update["leakage_detected"] = True
+        # leakage_detected reflects whether ACTIONABLE leakage remains. Escalation
+        # (the original path) lands on critical/high -> True; a declared-safe
+        # immunity DOWNGRADE can land on none/moderate -> False, so the gate does
+        # not report leakage for a contract-certified, now-exempted feature set.
+        update["leakage_detected"] = new_severity in ("critical", "high")
     return update

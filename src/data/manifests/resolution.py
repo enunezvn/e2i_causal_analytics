@@ -55,7 +55,16 @@ def autodetect_manifest_source(data_source: str | dict[str, Any] | None) -> set[
         return set()
     known = set(known_manifest_sources())
     parts = {p.lower() for p in Path(data_source).parts}
-    return {s for s in known if s in parts}
+    # Match a registered source when a path segment EQUALS it OR is an
+    # underscore-delimited variant of it (``optum_gap_enriched`` -> ``optum``).
+    # A gap-enriched / derived extract is still the same cohort and must consult
+    # the same FeatureContract — otherwise Layer 1 declared-safe never fires and
+    # the statistical leakage layer over-drops legitimate pre-index predictors
+    # (leakage over-drop investigation, 2026-06-03). The ``<source>_`` prefix
+    # shape (not a bare ``startswith``) prevents partial-word false positives
+    # like ``optumistic`` matching ``optum``, and preserves the M1 ambiguity
+    # contract (two distinct sources matching different segments still raises).
+    return {s for s in known if any(p == s or p.startswith(f"{s}_") for p in parts)}
 
 
 def resolve_manifest_source(

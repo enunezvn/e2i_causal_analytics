@@ -34,6 +34,17 @@ def test_known_sources_track_the_registry() -> None:
         ("/abs/data/rwd/optum/persistence", {"optum"}),
         ("data/rwd/unknown_cohort", set()),
         ("", set()),
+        # Underscore-delimited variants of a registered source resolve to that
+        # source: a gap-enriched / derived Optum extract is still Optum and must
+        # consult the Optum FeatureContract (else Layer 1 declared-safe never
+        # fires and the statistical layer over-drops legitimate pre-index
+        # predictors). See the leakage over-drop investigation, 2026-06-03.
+        ("data/rwd/optum_gap_enriched/initiation", {"optum"}),
+        ("data/rwd/csu_v2/x", {"csu"}),
+        # Guard: a partial word that merely STARTS with a source's letters but
+        # is not an underscore-delimited variant must NOT match (no false
+        # positives — only the `<source>_...` shape counts).
+        ("data/rwd/optumistic/x", set()),
     ],
 )
 def test_autodetect_from_path_segments(path: str, expected: set[str]) -> None:

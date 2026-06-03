@@ -218,6 +218,52 @@ async def test_register_features_stale_features_warning(mock_state_with_train_da
 
 
 @pytest.mark.asyncio
+async def test_stale_features_advisory_for_file_sourced_run(
+    mock_state_with_train_data, monkeypatch
+):
+    """FIX 3 (leakage over-drop investigation, 2026-06-03): a --data-dir run
+    sources its features straight from parquet, NOT from the Feast online store,
+    so a stale/unreachable Feast is irrelevant to that data. The freshness check
+    must be ADVISORY (warning) for a file-sourced run, never a hard block — even
+    without ALLOW_STALE_FEAST. (Genuine Feast-serving runs still hard-block, per
+    test_register_features_stale_features_warning.)
+    """
+    monkeypatch.delenv("ALLOW_STALE_FEAST", raising=False)
+    # Mark the run as file-sourced (features loaded from disk, not Feast).
+    mock_state_with_train_data["data_source"] = {
+        "type": "file_dir",
+        "path": "data/rwd/optum_gap_enriched/initiation",
+    }
+
+    adapter = MagicMock()
+    adapter.register_features_from_state = AsyncMock(
+        return_value={"features_registered": 2, "errors": []}
+    )
+    adapter.check_feature_freshness = AsyncMock(
+        return_value={
+            "fresh": False,
+            "stale_features": ["feature_view:feature1"],
+            "recommendations": ["Run materialization for feature_view"],
+        }
+    )
+    adapter._feast_client = None
+
+    with patch(
+        "src.agents.ml_foundation.data_preparer.nodes.feast_registrar._get_feature_analyzer_adapter",
+        return_value=adapter,
+    ):
+        result = await register_features_in_feast(mock_state_with_train_data)
+
+    # Advisory warning is still surfaced (transparency)...
+    assert any("Freshness" in w for w in result["feast_warnings"])
+    # ...but it does NOT hard-block a file-sourced run.
+    assert result.get("feast_blocked") is False
+    assert not any(
+        "Feast features stale" in issue for issue in (result.get("blocking_issues") or [])
+    )
+
+
+@pytest.mark.asyncio
 async def test_register_features_handles_exception(mock_state_with_train_data):
     """Test that exceptions are handled gracefully."""
     adapter = MagicMock()

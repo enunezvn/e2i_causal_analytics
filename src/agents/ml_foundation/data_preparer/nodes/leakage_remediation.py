@@ -218,6 +218,37 @@ async def review_and_remediate_leakage(state: DataPreparerState) -> Dict[str, An
                 f for f in analysis["recommended_feature_set"] if f not in auto_dropped
             ]
 
+        # Step 2.6 — Declared-safe immunity companion. The adaptive_validity_check
+        # node already exempts manifest-declared-safe (pre-index) features from
+        # leakage and strips them from leaked_features, but the LLM remediator
+        # reasons over ALL columns and can narratively add a contract-certified
+        # feature to its drop list anyway. Full manifest immunity (user decision,
+        # 2026-06-03) means such a feature is NEVER dropped — strip declared-safe
+        # features from the LLM drop list. Statistical governance still applies to
+        # un-contracted features. No-op when no manifest source resolved.
+        manifest_source = (state.get("scope_spec") or {}).get("feature_manifest_source")
+        if manifest_source:
+            from .adaptive_validity_check import _declared_safe_immune_features
+
+            immune = _declared_safe_immune_features(
+                set(analysis.get("features_to_drop", [])), manifest_source
+            )
+            if immune:
+                analysis["features_to_drop"] = [
+                    f for f in analysis["features_to_drop"] if f not in immune
+                ]
+                recommended = analysis.get("recommended_feature_set", [])
+                for feat in sorted(immune):
+                    if feat not in recommended:
+                        recommended.append(feat)
+                analysis["recommended_feature_set"] = recommended
+                logger.warning(
+                    "Declared-safe immunity (remediation): kept %d manifest pre-index "
+                    "feature(s) off the LLM drop list: %s",
+                    len(immune),
+                    sorted(immune),
+                )
+
         # Step 3: Apply remediation to DataFrames
         result = _apply_leakage_remediation(state, analysis)
 
