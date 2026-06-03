@@ -7,6 +7,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { http, HttpResponse } from 'msw';
 import {
   predict,
   predictBatch,
@@ -14,6 +15,9 @@ import {
   getModelInfo,
   getModelsStatus,
 } from './predictions';
+import { server } from '@/mocks/server';
+import { env } from '@/config/env';
+import { ApiValidationError } from '@/lib/api-client';
 
 describe('Predictions API Client', () => {
   describe('predict', () => {
@@ -99,6 +103,56 @@ describe('Predictions API Client', () => {
 
       expect(result).toBeDefined();
       expect(result.models.length).toBeLessThanOrEqual(2);
+    });
+  });
+
+  // ===========================================================================
+  // RESPONSE VALIDATION (C31)
+  // ===========================================================================
+  describe('response validation (C31)', () => {
+    it('getModelsStatus passes a valid response through (schema wired)', async () => {
+      const result = await getModelsStatus();
+      expect(Array.isArray(result.models)).toBe(true);
+      expect(result.total_models).toBeDefined();
+    });
+
+    it('getModelsStatus throws ApiValidationError on a malformed response', async () => {
+      server.use(
+        http.get(`${env.apiUrl}/models/status`, () =>
+          HttpResponse.json({
+            total_models: 'lots', // wrong type
+            models: 'not-an-array',
+          })
+        )
+      );
+
+      await expect(getModelsStatus()).rejects.toBeInstanceOf(ApiValidationError);
+    });
+
+    it('getModelHealth throws ApiValidationError on a malformed response', async () => {
+      server.use(
+        http.get(`${env.apiUrl}/models/:modelName/health`, () =>
+          HttpResponse.json({ status: 'healthy' }) // missing model_name/endpoint/last_check
+        )
+      );
+
+      await expect(getModelHealth('churn_model')).rejects.toBeInstanceOf(
+        ApiValidationError
+      );
+    });
+
+    it('getModelInfo passes through a BentoML /metadata payload that omits "name" (route has no response_model → intentionally NOT validated)', async () => {
+      // The backend GET /models/{name}/info route declares NO response_model: it
+      // returns the BentoML /metadata JSON verbatim, which does not guarantee a
+      // `name` key. Validating it with a `name`-required schema would false-reject
+      // a perfectly valid 200 response and break useModelInfo in production.
+      server.use(
+        http.get(`${env.apiUrl}/models/:modelName/info`, () =>
+          HttpResponse.json({ version: '1.2.0', type: 'sklearn' })
+        )
+      );
+
+      await expect(getModelInfo('churn_model')).resolves.toBeDefined();
     });
   });
 });

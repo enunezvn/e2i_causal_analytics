@@ -7,6 +7,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { http, HttpResponse } from 'msw';
 import {
   listKPIs,
   getWorkstreams,
@@ -18,6 +19,9 @@ import {
   getKPIHealth,
 } from './kpi';
 import { Workstream } from '@/types/kpi';
+import { server } from '@/mocks/server';
+import { env } from '@/config/env';
+import { ApiValidationError } from '@/lib/api-client';
 
 describe('KPI API Client', () => {
   describe('listKPIs', () => {
@@ -146,6 +150,42 @@ describe('KPI API Client', () => {
       expect(result).toBeDefined();
       expect(result.status).toBeDefined();
       expect(result.total_kpis).toBeDefined();
+    });
+  });
+
+  // ===========================================================================
+  // RESPONSE VALIDATION (C31)
+  // ===========================================================================
+  describe('response validation (C31)', () => {
+    it('listKPIs passes a valid response through (schema wired)', async () => {
+      // Default MSW handler returns a contract-valid payload (workstream: null).
+      const result = await listKPIs();
+      expect(Array.isArray(result.kpis)).toBe(true);
+      expect(result.kpis[0]?.id).toBeDefined();
+    });
+
+    it('listKPIs throws ApiValidationError on a malformed response', async () => {
+      server.use(
+        http.get(`${env.apiUrl}/kpis`, () =>
+          HttpResponse.json({
+            // `kpis` should be an array of KPI metadata; send garbage to trip Zod.
+            kpis: [{ id: 'X' }],
+            total: 'not-a-number',
+          })
+        )
+      );
+
+      await expect(listKPIs()).rejects.toBeInstanceOf(ApiValidationError);
+    });
+
+    it('getKPIHealth throws ApiValidationError on a malformed response', async () => {
+      server.use(
+        http.get(`${env.apiUrl}/kpis/health`, () =>
+          HttpResponse.json({ status: 'totally-broken' })
+        )
+      );
+
+      await expect(getKPIHealth()).rejects.toBeInstanceOf(ApiValidationError);
     });
   });
 });

@@ -16,6 +16,13 @@
  */
 
 import { get, post } from '@/lib/api-client';
+import {
+  KPIListResponseWireSchema,
+  WorkstreamListResponseWireSchema,
+  KPIMetadataWireSchema,
+  KPIResultWireSchema,
+  KPIHealthResponseWireSchema,
+} from '@/lib/api-schemas';
 import type {
   BatchKPICalculationRequest,
   BatchKPICalculationResponse,
@@ -53,10 +60,14 @@ const KPI_BASE = '/kpis';
  * ```
  */
 export async function listKPIs(params?: KPIListParams): Promise<KPIListResponse> {
-  return get<KPIListResponse>(KPI_BASE, {
-    workstream: params?.workstream,
-    causal_library: params?.causal_library,
-  });
+  return get<KPIListResponse>(
+    KPI_BASE,
+    {
+      workstream: params?.workstream,
+      causal_library: params?.causal_library,
+    },
+    { schema: KPIListResponseWireSchema }
+  );
 }
 
 /**
@@ -73,7 +84,9 @@ export async function listKPIs(params?: KPIListParams): Promise<KPIListResponse>
  * ```
  */
 export async function getWorkstreams(): Promise<WorkstreamListResponse> {
-  return get<WorkstreamListResponse>(`${KPI_BASE}/workstreams`);
+  return get<WorkstreamListResponse>(`${KPI_BASE}/workstreams`, undefined, {
+    schema: WorkstreamListResponseWireSchema,
+  });
 }
 
 // =============================================================================
@@ -93,7 +106,11 @@ export async function getWorkstreams(): Promise<WorkstreamListResponse> {
  * ```
  */
 export async function getKPIMetadata(kpiId: string): Promise<KPIMetadata> {
-  return get<KPIMetadata>(`${KPI_BASE}/${encodeURIComponent(kpiId)}/metadata`);
+  return get<KPIMetadata>(
+    `${KPI_BASE}/${encodeURIComponent(kpiId)}/metadata`,
+    undefined,
+    { schema: KPIMetadataWireSchema }
+  );
 }
 
 // =============================================================================
@@ -121,10 +138,14 @@ export async function getKPIValue(
   brand?: string,
   useCache: boolean = true
 ): Promise<KPIResult> {
-  return get<KPIResult>(`${KPI_BASE}/${encodeURIComponent(kpiId)}`, {
-    brand,
-    use_cache: useCache,
-  });
+  return get<KPIResult>(
+    `${KPI_BASE}/${encodeURIComponent(kpiId)}`,
+    {
+      brand,
+      use_cache: useCache,
+    },
+    { schema: KPIResultWireSchema }
+  );
 }
 
 /**
@@ -235,5 +256,7 @@ export async function invalidateKPICache(
  * ```
  */
 export async function getKPIHealth(): Promise<KPIHealthResponse> {
-  return get<KPIHealthResponse>(`${KPI_BASE}/health`);
+  return get<KPIHealthResponse>(`${KPI_BASE}/health`, undefined, {
+    schema: KPIHealthResponseWireSchema,
+  });
 }

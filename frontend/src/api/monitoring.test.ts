@@ -7,6 +7,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { http, HttpResponse } from 'msw';
 import {
   triggerDriftDetection,
   getDriftDetectionStatus,
@@ -30,6 +31,9 @@ import {
   triggerRetrainingSweep,
 } from './monitoring';
 import { AlertAction, DriftSeverity, TriggerReason } from '@/types/monitoring';
+import { server } from '@/mocks/server';
+import { env } from '@/config/env';
+import { ApiValidationError } from '@/lib/api-client';
 
 describe('Monitoring API Client', () => {
   describe('Drift Detection', () => {
@@ -244,6 +248,63 @@ describe('Monitoring API Client', () => {
 
       expect(result).toBeDefined();
       expect(result.task_id).toBeDefined();
+    });
+  });
+
+  // ===========================================================================
+  // RESPONSE VALIDATION (C31)
+  // ===========================================================================
+  describe('response validation (C31)', () => {
+    it('listAlerts passes a valid response through (schema wired)', async () => {
+      const result = await listAlerts();
+      expect(Array.isArray(result.alerts)).toBe(true);
+      expect(result.total_count).toBeDefined();
+    });
+
+    it('listAlerts throws ApiValidationError on a malformed response', async () => {
+      server.use(
+        http.get(`${env.apiUrl}/monitoring/alerts`, () =>
+          HttpResponse.json({ total_count: 1, active_count: 1, alerts: 'nope' })
+        )
+      );
+
+      await expect(listAlerts()).rejects.toBeInstanceOf(ApiValidationError);
+    });
+
+    it('getModelHealth throws ApiValidationError on a malformed response', async () => {
+      server.use(
+        http.get(`${env.apiUrl}/monitoring/health/:modelId`, () =>
+          HttpResponse.json({ model_id: 'm', overall_health: 'on-fire' })
+        )
+      );
+
+      await expect(getModelHealth('propensity_v2.1.0')).rejects.toBeInstanceOf(
+        ApiValidationError
+      );
+    });
+
+    it('getDriftHistory throws ApiValidationError on a malformed response', async () => {
+      server.use(
+        http.get(`${env.apiUrl}/monitoring/drift/history/:modelId`, () =>
+          HttpResponse.json({ model_id: 'm', total_records: 'x', records: {} })
+        )
+      );
+
+      await expect(
+        getDriftHistory({ model_id: 'propensity_v2.1.0' })
+      ).rejects.toBeInstanceOf(ApiValidationError);
+    });
+
+    it('listMonitoringRuns throws ApiValidationError on a malformed response', async () => {
+      server.use(
+        http.get(`${env.apiUrl}/monitoring/runs`, () =>
+          HttpResponse.json({ total_runs: 1, runs: 'not-an-array' })
+        )
+      );
+
+      await expect(listMonitoringRuns()).rejects.toBeInstanceOf(
+        ApiValidationError
+      );
     });
   });
 });
