@@ -136,11 +136,6 @@ def mock_semantic_memory():
             }
         ]
     )
-    mock.execute_cypher = MagicMock(
-        return_value=[
-            {"n": {"id": "1", "name": "Test"}},
-        ]
-    )
     mock.search_nodes = MagicMock(
         return_value=[
             {"id": "result1", "name": "Search Result", "type": "HCP", "score": 0.95},
@@ -151,7 +146,9 @@ def mock_semantic_memory():
             {"id": "result1", "name": "Search Result", "type": "HCP", "score": 0.95},
         ]
     )
-    mock.get_stats = MagicMock(
+    # The real FalkorDBSemanticMemory exposes get_graph_stats() (not get_stats);
+    # the /graph/stats route is wired to that name.
+    mock.get_graph_stats = MagicMock(
         return_value={
             "total_nodes": 100,
             "total_relationships": 250,
@@ -610,10 +607,15 @@ class TestQueryCausalChains:
 
 
 class TestExecuteCypherQuery:
-    """Test POST /graph/query endpoint."""
+    """Test POST /graph/query endpoint — raw Cypher passthrough is DISABLED.
 
-    def test_execute_cypher_query_success(self, client, mock_semantic_memory):
-        """Test successful Cypher query execution."""
+    The endpoint used to call an arbitrary-Cypher executor against a PHI graph
+    behind a trivially-bypassable keyword "read-only" filter. It now refuses
+    all requests with 501 rather than executing attacker-controlled Cypher.
+    """
+
+    def test_read_query_is_refused_not_executed(self, client, mock_semantic_memory):
+        """Even a benign read query must be refused (501), never executed."""
         with patch(
             "src.api.routes.graph._get_semantic_memory",
             new_callable=AsyncMock,
@@ -621,17 +623,15 @@ class TestExecuteCypherQuery:
         ):
             response = client.post(
                 "/graph/query",
-                json={
-                    "query": "MATCH (n) RETURN n LIMIT 10",
-                },
+                json={"query": "MATCH (n) RETURN n LIMIT 10"},
             )
 
-            assert response.status_code == status.HTTP_200_OK
-            data = response.json()
-            assert "results" in data or "records" in data
+            assert response.status_code == status.HTTP_501_NOT_IMPLEMENTED
+            # The semantic memory must NOT have been asked to run anything.
+            assert not mock_semantic_memory.method_calls
 
-    def test_execute_cypher_query_with_parameters(self, client, mock_semantic_memory):
-        """Test Cypher query with parameters."""
+    def test_write_query_is_refused(self, client, mock_semantic_memory):
+        """A write query must be refused (501) — arbitrary execution disabled."""
         with patch(
             "src.api.routes.graph._get_semantic_memory",
             new_callable=AsyncMock,
@@ -639,36 +639,30 @@ class TestExecuteCypherQuery:
         ):
             response = client.post(
                 "/graph/query",
-                json={
-                    "query": "MATCH (n) WHERE n.name = $name RETURN n",
-                    "parameters": {"name": "Test Node"},
-                },
+                json={"query": "MATCH (n) DETACH DELETE n"},
             )
 
-            assert response.status_code == status.HTTP_200_OK
+            assert response.status_code == status.HTTP_501_NOT_IMPLEMENTED
 
-    def test_execute_cypher_query_read_only_enforced(self, client, mock_semantic_memory):
-        """Test that write queries are rejected."""
+    def test_injection_style_query_is_refused(self, client, mock_semantic_memory):
+        """An injection / read-only-bypass query is refused without execution."""
         with patch(
             "src.api.routes.graph._get_semantic_memory",
             new_callable=AsyncMock,
             return_value=mock_semantic_memory,
         ):
-            # CREATE query should be rejected
+            # A query that bypasses the old substring "CREATE/DELETE" filter
+            # (no write keyword, but exfiltrates all PHI).
             response = client.post(
                 "/graph/query",
-                json={
-                    "query": "CREATE (n:Test {name: 'New Node'}) RETURN n",
-                },
+                json={"query": "MATCH (p:Patient) RETURN p", "read_only": True},
             )
 
-            assert response.status_code in [
-                status.HTTP_400_BAD_REQUEST,
-                status.HTTP_403_FORBIDDEN,
-            ]
+            assert response.status_code == status.HTTP_501_NOT_IMPLEMENTED
+            assert not mock_semantic_memory.method_calls
 
-    def test_execute_cypher_query_delete_rejected(self, client, mock_semantic_memory):
-        """Test that DELETE queries are rejected."""
+    def test_refusal_detail_does_not_leak_internals(self, client, mock_semantic_memory):
+        """The 501 detail should be a generic, actionable message (no stack)."""
         with patch(
             "src.api.routes.graph._get_semantic_memory",
             new_callable=AsyncMock,
@@ -676,68 +670,22 @@ class TestExecuteCypherQuery:
         ):
             response = client.post(
                 "/graph/query",
-                json={
-                    "query": "MATCH (n) DELETE n",
-                },
+                json={"query": "MATCH (n) RETURN n"},
             )
 
-            assert response.status_code in [
-                status.HTTP_400_BAD_REQUEST,
-                status.HTTP_403_FORBIDDEN,
-            ]
-
-    def test_execute_cypher_query_merge_rejected(self, client, mock_semantic_memory):
-        """Test that MERGE queries are rejected."""
-        with patch(
-            "src.api.routes.graph._get_semantic_memory",
-            new_callable=AsyncMock,
-            return_value=mock_semantic_memory,
-        ):
-            response = client.post(
-                "/graph/query",
-                json={
-                    "query": "MERGE (n:Test {name: 'Node'}) RETURN n",
-                },
-            )
-
-            assert response.status_code in [
-                status.HTTP_400_BAD_REQUEST,
-                status.HTTP_403_FORBIDDEN,
-            ]
+            assert response.status_code == status.HTTP_501_NOT_IMPLEMENTED
+            detail = response.json().get("detail", "")
+            assert "disabled" in detail.lower()
+            assert "Traceback" not in detail
 
     def test_execute_cypher_query_empty_query(self, client):
-        """Test Cypher query with empty query string."""
+        """Empty query string is still rejected by request validation (422)."""
         response = client.post(
             "/graph/query",
-            json={
-                "query": "",
-            },
+            json={"query": ""},
         )
 
         assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
-
-    def test_execute_cypher_query_syntax_error(self, client, mock_semantic_memory):
-        """Test Cypher query with syntax error."""
-        mock_semantic_memory.execute_cypher = MagicMock(
-            side_effect=Exception("Syntax error in query")
-        )
-
-        with patch(
-            "src.api.routes.graph._get_semantic_memory",
-            new_callable=AsyncMock,
-            return_value=mock_semantic_memory,
-        ):
-            response = client.post(
-                "/graph/query",
-                json={
-                    "query": "MATC (n) RETUR n",  # Intentional typos
-                },
-            )
-
-            assert response.status_code in [
-                status.HTTP_400_BAD_REQUEST,
-                status.HTTP_500_INTERNAL_SERVER_ERROR,
-            ]
 
 
 # =============================================================================
@@ -1384,3 +1332,119 @@ class TestGraphPagination:
                 status.HTTP_400_BAD_REQUEST,
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
             ]
+
+
+# =============================================================================
+# Error-message hygiene (Finding 3 — no internal/stack disclosure)
+# =============================================================================
+
+
+class TestErrorMessageHygiene:
+    """500 responses must return generic messages, not internal exception text."""
+
+    def test_get_node_500_does_not_leak_exception_text(self, client, mock_semantic_memory):
+        """An internal error must not echo the exception string into the body."""
+        secret = "Database password=hunter2 at 10.0.0.5"
+        mock_semantic_memory.get_node = MagicMock(side_effect=Exception(secret))
+
+        with patch(
+            "src.api.routes.graph._get_semantic_memory",
+            new_callable=AsyncMock,
+            return_value=mock_semantic_memory,
+        ):
+            response = client.get("/graph/nodes/node1")
+
+            assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+            body = response.text
+            assert secret not in body
+            assert "hunter2" not in body
+
+    def test_list_nodes_500_does_not_leak_exception_text(self, client, mock_semantic_memory):
+        """list_nodes internal error must return a generic message."""
+        secret = "internal-stack-detail-xyz"
+        mock_semantic_memory.list_nodes = MagicMock(side_effect=Exception(secret))
+
+        with patch(
+            "src.api.routes.graph._get_semantic_memory",
+            new_callable=AsyncMock,
+            return_value=mock_semantic_memory,
+        ):
+            response = client.get("/graph/nodes")
+
+            assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+            assert secret not in response.text
+
+    def test_search_500_does_not_leak_exception_text(self, client, mock_semantic_memory):
+        """search internal error must return a generic message."""
+        secret = "redis-connection-string-secret"
+        mock_semantic_memory.semantic_search = MagicMock(side_effect=Exception(secret))
+
+        with (
+            patch(
+                "src.api.routes.graph._get_graphiti_service",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch(
+                "src.api.routes.graph._get_semantic_memory",
+                new_callable=AsyncMock,
+                return_value=mock_semantic_memory,
+            ),
+        ):
+            response = client.post("/graph/search", json={"query": "anything"})
+
+            assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+            assert secret not in response.text
+
+
+# =============================================================================
+# Injection rejection at the route boundary (Findings 1 + 2 integration)
+# =============================================================================
+
+
+class TestRouteLevelInjectionRejection:
+    """A real (non-mock) semantic memory rejects injected label/type filters."""
+
+    def test_list_nodes_injection_label_rejected_with_generic_500(self, client):
+        """An injection-style entity_types value reaches the real validator and
+        is rejected (ValueError -> generic 500), never interpolated into Cypher."""
+        from src.memory.semantic_memory import FalkorDBSemanticMemory
+
+        real = FalkorDBSemanticMemory()
+        # Stub the graph driver so any *executed* query would be observable;
+        # the injection must be rejected BEFORE the driver is touched.
+        real._graph = MagicMock()
+        real._graph.query.return_value = MagicMock(result_set=[])
+
+        with patch(
+            "src.api.routes.graph._get_semantic_memory",
+            new_callable=AsyncMock,
+            return_value=real,
+        ):
+            response = client.get("/graph/nodes?entity_types=Patient' OR '1'='1")
+
+            assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+            # Poisoned label never spliced into a query sent to the driver.
+            for call in real._graph.query.call_args_list:
+                assert "OR '1'='1" not in call[0][0]
+
+    def test_list_nodes_known_label_passes_through(self, client):
+        """A known label is accepted and parameterized (no interpolation)."""
+        from src.memory.semantic_memory import FalkorDBSemanticMemory
+
+        real = FalkorDBSemanticMemory()
+        real._graph = MagicMock()
+        real._graph.query.return_value = MagicMock(result_set=[])
+
+        with patch(
+            "src.api.routes.graph._get_semantic_memory",
+            new_callable=AsyncMock,
+            return_value=real,
+        ):
+            response = client.get("/graph/nodes?entity_types=Patient")
+
+            assert response.status_code == status.HTTP_200_OK
+            # The label reached the driver as a parameter, not a literal.
+            list_call = real._graph.query.call_args_list[0]
+            assert "'Patient' IN labels(n)" not in list_call[0][0]
+            assert list_call[0][1].get("entity_types") == ["Patient"]

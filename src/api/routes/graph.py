@@ -318,8 +318,8 @@ async def list_nodes(
         )
 
     except Exception as e:
-        logger.error(f"Failed to list nodes: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to list nodes: {str(e)}") from e
+        logger.exception("Failed to list nodes")
+        raise HTTPException(status_code=500, detail="Failed to list nodes") from e
 
 
 @router.get(
@@ -348,8 +348,8 @@ async def get_node(node_id: str) -> GraphNode:
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to get node {node_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to get node: {str(e)}") from e
+        logger.exception("Failed to get node %s", node_id)
+        raise HTTPException(status_code=500, detail="Failed to get node") from e
 
 
 @router.get(
@@ -439,8 +439,8 @@ async def get_node_network(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to get network for node {node_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to get node network: {str(e)}") from e
+        logger.exception("Failed to get network for node %s", node_id)
+        raise HTTPException(status_code=500, detail="Failed to get node network") from e
 
 
 # =============================================================================
@@ -518,10 +518,8 @@ async def list_relationships(
         )
 
     except Exception as e:
-        logger.error(f"Failed to list relationships: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Failed to list relationships: {str(e)}"
-        ) from e
+        logger.exception("Failed to list relationships")
+        raise HTTPException(status_code=500, detail="Failed to list relationships") from e
 
 
 # =============================================================================
@@ -609,8 +607,8 @@ async def traverse_graph(request: TraverseRequest) -> TraverseResponse:
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Graph traversal failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Traversal failed: {str(e)}") from e
+        logger.exception("Graph traversal failed")
+        raise HTTPException(status_code=500, detail="Graph traversal failed") from e
 
 
 # =============================================================================
@@ -717,8 +715,8 @@ async def query_causal_chains(request: CausalChainRequest) -> CausalChainRespons
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Causal chain query failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Causal chain query failed: {str(e)}") from e
+        logger.exception("Causal chain query failed")
+        raise HTTPException(status_code=500, detail="Causal chain query failed") from e
 
 
 # =============================================================================
@@ -729,61 +727,41 @@ async def query_causal_chains(request: CausalChainRequest) -> CausalChainRespons
 @router.post(
     "/query",
     response_model=CypherQueryResponse,
-    summary="Execute openCypher query",
+    summary="Execute openCypher query (DISABLED)",
     operation_id="execute_cypher_query",
 )
 async def execute_cypher_query(request: CypherQueryRequest) -> CypherQueryResponse:
     """
-    Execute an openCypher query against the graph.
+    Raw openCypher query passthrough — **disabled by design**.
 
-    Supports:
-    - MATCH, RETURN, WHERE clauses
-    - Parameterized queries
-    - Read-only enforcement (default)
+    This endpoint previously called an arbitrary-Cypher executor against the
+    knowledge graph, which holds Patient/HCP PHI/PII. Executing user-supplied
+    Cypher cannot be made safe with a keyword-based "read-only" filter:
+    substring checks for ``CREATE``/``DELETE`` are trivially bypassed (e.g. a
+    property literally named ``createdAt``, ``CALL`` procedures, or comment
+    evasion), and even a perfectly read-only query is an unbounded PHI
+    exfiltration primitive.
 
-    Use FalkorDB Browser at http://localhost:3030 for interactive queries.
+    Rather than implement an arbitrary-query executor, this endpoint refuses
+    all requests with ``501 Not Implemented``. Use the purpose-built,
+    parameterized endpoints instead — ``/graph/nodes``, ``/graph/relationships``,
+    ``/graph/traverse``, ``/graph/causal-chains``, ``/graph/search`` — each of
+    which validates and parameterizes its inputs. For ad-hoc interactive
+    exploration, use the FalkorDB Browser in a trusted/admin context.
     """
-    start_time = time.time()
-
-    try:
-        # Validate read-only if enforced
-        if request.read_only:
-            query_upper = request.query.upper()
-            write_keywords = ["CREATE", "MERGE", "DELETE", "SET", "REMOVE", "DROP"]
-            for kw in write_keywords:
-                if kw in query_upper:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Write operation '{kw}' not allowed in read-only mode",
-                    )
-
-        semantic = await _get_semantic_memory()
-        if not semantic:
-            raise HTTPException(status_code=503, detail="Graph service unavailable")
-
-        # Execute query with timeout
-        results = semantic.execute_cypher(
-            query=request.query, parameters=request.parameters, timeout=request.timeout_seconds
-        )
-
-        # Extract column names from first result
-        columns = list(results[0].keys()) if results else []
-
-        latency_ms = (time.time() - start_time) * 1000
-
-        return CypherQueryResponse(
-            results=results,
-            columns=columns,
-            row_count=len(results),
-            query_latency_ms=latency_ms,
-            read_only=request.read_only,
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Cypher query failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Query execution failed: {str(e)}") from e
+    logger.warning(
+        "Rejected raw Cypher query request (endpoint disabled); read_only=%s, query_length=%d",
+        request.read_only,
+        len(request.query),
+    )
+    raise HTTPException(
+        status_code=501,
+        detail=(
+            "Raw Cypher query execution is disabled. Use the structured graph "
+            "endpoints (/graph/nodes, /graph/relationships, /graph/traverse, "
+            "/graph/causal-chains, /graph/search) instead."
+        ),
+    )
 
 
 # =============================================================================
@@ -873,8 +851,8 @@ async def add_episode(request: AddEpisodeRequest) -> AddEpisodeResponse:
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to add episode: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to add episode: {str(e)}") from e
+        logger.exception("Failed to add episode")
+        raise HTTPException(status_code=500, detail="Failed to add episode") from e
 
 
 # =============================================================================
@@ -955,8 +933,8 @@ async def search_graph(request: SearchGraphRequest) -> SearchGraphResponse:
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Graph search failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}") from e
+        logger.exception("Graph search failed")
+        raise HTTPException(status_code=500, detail="Graph search failed") from e
 
 
 # =============================================================================
@@ -1007,7 +985,7 @@ async def get_graph_stats() -> GraphStatsResponse:
                 last_updated=None,
             )
 
-        stats = semantic.get_stats()
+        stats = semantic.get_graph_stats()
         return GraphStatsResponse(
             total_nodes=stats.get("total_nodes", 0),
             total_relationships=stats.get("total_relationships", 0),
@@ -1019,8 +997,8 @@ async def get_graph_stats() -> GraphStatsResponse:
         )
 
     except Exception as e:
-        logger.error(f"Failed to get graph stats: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to get stats: {str(e)}") from e
+        logger.exception("Failed to get graph stats")
+        raise HTTPException(status_code=500, detail="Failed to get graph statistics") from e
 
 
 # =============================================================================

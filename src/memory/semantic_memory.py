@@ -65,6 +65,126 @@ LABEL_TO_E2I = {v: k for k, v in E2I_TO_LABEL.items()}
 
 
 # ============================================================================
+# CYPHER IDENTIFIER WHITELISTS (injection hardening)
+# ============================================================================
+#
+# Node labels and relationship types CANNOT be parameterized in openCypher —
+# they are part of the query structure, not values — so any user-supplied
+# label/type that reaches the WHERE clause or relationship pattern must be
+# validated against a known-good allowlist BEFORE it touches the query string.
+# These sets mirror the EntityType / RelationshipType enums in
+# ``src/api/models/graph.py`` (kept here to avoid an api->memory import cycle)
+# plus the seed-data labels actually present in the FalkorDB graph.
+
+KNOWN_NODE_LABELS: frozenset[str] = frozenset(
+    {
+        # E2I_TO_LABEL values
+        "Patient",
+        "HCP",
+        "Trigger",
+        "CausalPath",
+        "Prediction",
+        "Treatment",
+        "Experiment",
+        "AgentActivity",
+        # Additional graph / seed-data labels (mirror api EntityType enum)
+        "Brand",
+        "Region",
+        "KPI",
+        "Agent",
+        "Episode",
+        "Community",
+        "HCPSpecialty",
+        "JourneyStage",
+    }
+)
+
+KNOWN_RELATIONSHIP_TYPES: frozenset[str] = frozenset(
+    {
+        "TREATED_BY",
+        "PRESCRIBED",
+        "PRESCRIBES",
+        "CAUSES",
+        "IMPACTS",
+        "INFLUENCES",
+        "DISCOVERED",
+        "GENERATED",
+        "MENTIONS",
+        "MEMBER_OF",
+        "RELATES_TO",
+        "RECEIVED",
+        "RECEIVES",
+        "LOCATED_IN",
+        "PRACTICES_IN",
+        "MEASURED_IN",
+        "LEADS_TO",
+        "TRACKS",
+        "AFFECTS",
+        "EXPLAINS",
+        "ANALYZES",
+        "PREDICTS",
+        "MONITORS",
+        "USES",
+        # Relationship types used in graph traversal but not in the api enum
+        "SHARED_PATIENTS",
+    }
+)
+
+
+def _validate_node_labels(entity_types: List[str]) -> List[str]:
+    """
+    Validate user-supplied node labels against the known-label allowlist.
+
+    Node labels are structural in Cypher and cannot be parameterized, so the
+    only safe options are (a) reject unknown values or (b) interpolate. We
+    choose (a): any label not in :data:`KNOWN_NODE_LABELS` raises ``ValueError``
+    so a poisoned value (e.g. ``Patient' OR '1'='1``) can never be interpolated
+    into the query.
+
+    Args:
+        entity_types: Raw, user-supplied label strings.
+
+    Returns:
+        The validated labels (unchanged, but guaranteed safe to interpolate).
+
+    Raises:
+        ValueError: If any label is not a recognized node label.
+    """
+    invalid = [t for t in entity_types if t not in KNOWN_NODE_LABELS]
+    if invalid:
+        raise ValueError(
+            f"Unknown node label(s): {invalid}. Allowed labels: {sorted(KNOWN_NODE_LABELS)}"
+        )
+    return entity_types
+
+
+def _validate_relationship_types(relationship_types: List[str]) -> List[str]:
+    """
+    Validate user-supplied relationship types against the allowlist.
+
+    Relationship types are structural in Cypher and cannot be parameterized.
+    Any type not in :data:`KNOWN_RELATIONSHIP_TYPES` raises ``ValueError`` so a
+    poisoned value can never reach the ``-[r:...]->`` pattern.
+
+    Args:
+        relationship_types: Raw, user-supplied relationship-type strings.
+
+    Returns:
+        The validated relationship types (guaranteed safe to interpolate).
+
+    Raises:
+        ValueError: If any type is not a recognized relationship type.
+    """
+    invalid = [t for t in relationship_types if t not in KNOWN_RELATIONSHIP_TYPES]
+    if invalid:
+        raise ValueError(
+            f"Unknown relationship type(s): {invalid}. "
+            f"Allowed types: {sorted(KNOWN_RELATIONSHIP_TYPES)}"
+        )
+    return relationship_types
+
+
+# ============================================================================
 # SEMANTIC MEMORY CLASS
 # ============================================================================
 
@@ -827,11 +947,17 @@ class FalkorDBSemanticMemory:
         """
         # Build WHERE clauses
         where_parts = []
-        params = {}
+        params: Dict[str, Any] = {}
 
         if entity_types:
-            labels_match = " OR ".join([f"'{t}' IN labels(n)" for t in entity_types])
-            where_parts.append(f"({labels_match})")
+            # Validate against the known-label allowlist; rejects injection
+            # attempts (e.g. ``Patient' OR '1'='1``) before any interpolation.
+            _validate_node_labels(entity_types)
+            # Pass labels as a parameter and filter with a membership predicate
+            # — defense in depth so the validated values are never spliced as
+            # literals into the query string.
+            where_parts.append("any(lbl IN labels(n) WHERE lbl IN $entity_types)")
+            params["entity_types"] = entity_types
 
         if search:
             where_parts.append("(n.name CONTAINS $search OR n.id CONTAINS $search)")
@@ -866,11 +992,13 @@ class FalkorDBSemanticMemory:
     ) -> int:
         """Count nodes matching filters."""
         where_parts = []
-        params = {}
+        params: Dict[str, Any] = {}
 
         if entity_types:
-            labels_match = " OR ".join([f"'{t}' IN labels(n)" for t in entity_types])
-            where_parts.append(f"({labels_match})")
+            # Same allowlist validation + parameterized membership as list_nodes.
+            _validate_node_labels(entity_types)
+            where_parts.append("any(lbl IN labels(n) WHERE lbl IN $entity_types)")
+            params["entity_types"] = entity_types
 
         if search:
             where_parts.append("(n.name CONTAINS $search OR n.id CONTAINS $search)")
@@ -927,8 +1055,13 @@ class FalkorDBSemanticMemory:
 
         where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
 
-        # Build relationship type pattern
+        # Build relationship type pattern. Relationship types are structural in
+        # Cypher and cannot be parameterized, so we validate each against the
+        # allowlist first — rejecting injection attempts before they can reach
+        # the ``-[r:...]->`` pattern. Validated values are exact allowlist
+        # members (no quotes/spaces/brackets), so splicing them is safe.
         if relationship_types:
+            _validate_relationship_types(relationship_types)
             rel_pattern = "|".join(relationship_types)
             rel_match = f"-[r:{rel_pattern}]->"
         else:
@@ -982,6 +1115,8 @@ class FalkorDBSemanticMemory:
         where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
 
         if relationship_types:
+            # Allowlist-validate before splicing the structural rel-type pattern.
+            _validate_relationship_types(relationship_types)
             rel_pattern = "|".join(relationship_types)
             rel_match = f"-[r:{rel_pattern}]->"
         else:
@@ -1017,6 +1152,254 @@ class FalkorDBSemanticMemory:
             return node_dict
 
         return None
+
+    def _node_to_dict(self, node: Any) -> Dict[str, Any]:
+        """Normalize a FalkorDB node object into a route-friendly dict."""
+        props = dict(node.properties) if getattr(node, "properties", None) else {}
+        labels = node.labels if hasattr(node, "labels") else []
+        node_type = labels[0] if labels else props.get("type")
+        node_dict = dict(props)
+        if node_type:
+            node_dict["type"] = node_type
+        node_dict["id"] = props.get("id") or props.get("name") or str(getattr(node, "id", ""))
+        return node_dict
+
+    def traverse_from_node(
+        self,
+        start_node_id: str,
+        relationship_types: Optional[List[str]] = None,
+        direction: str = "outgoing",
+        max_depth: int = 2,
+        min_confidence: Optional[float] = None,
+        limit: int = 200,
+    ) -> Dict[str, Any]:
+        """
+        Generic variable-depth traversal from a start node.
+
+        Returns the connected subgraph as ``{"nodes": [...], "relationships":
+        [...], "max_depth_reached": int}`` — the shape the ``/graph/traverse``
+        and ``/graph/nodes/{id}/network`` (generic branch) endpoints expect.
+
+        Args:
+            start_node_id: ID (or name) of the node to traverse from.
+            relationship_types: Optional allowlist-validated rel-type filter.
+            direction: ``outgoing``, ``incoming`` or ``both`` (default outgoing).
+            max_depth: Traversal depth, clamped to 1..5 for safety.
+            min_confidence: Optional minimum edge ``confidence`` filter.
+            limit: Maximum number of paths to materialize (clamped to 1..500).
+
+        Returns:
+            Dict with deduplicated ``nodes`` and ``relationships``.
+
+        Raises:
+            ValueError: If any relationship type is not in the allowlist.
+        """
+        safe_depth = max(1, min(5, int(max_depth)))
+        safe_limit = max(1, min(500, int(limit)))
+
+        # Relationship types are structural in Cypher; validate before splice.
+        rel_filter = ""
+        if relationship_types:
+            _validate_relationship_types(relationship_types)
+            rel_filter = ":" + "|".join(relationship_types)
+
+        # Direction determines arrow orientation; both => undirected match.
+        if direction == "incoming":
+            pattern = (
+                f"path = (start {{id: $start_id}})<-[{rel_filter}*1..{safe_depth}]-(connected)"
+            )
+        elif direction == "both":
+            pattern = f"path = (start {{id: $start_id}})-[{rel_filter}*1..{safe_depth}]-(connected)"
+        else:  # outgoing (default)
+            pattern = (
+                f"path = (start {{id: $start_id}})-[{rel_filter}*1..{safe_depth}]->(connected)"
+            )
+
+        params: Dict[str, Any] = {"start_id": start_node_id}
+        where = ""
+        if min_confidence is not None:
+            where = "WHERE all(r IN relationships(path) WHERE r.confidence >= $min_confidence)"
+            params["min_confidence"] = min_confidence
+
+        query = f"""
+        MATCH {pattern}
+        {where}
+        RETURN nodes(path) as path_nodes, relationships(path) as path_rels
+        LIMIT {safe_limit}
+        """
+
+        result = self.graph.query(query, params)
+
+        nodes_by_id: Dict[str, Dict[str, Any]] = {}
+        rels_by_id: Dict[str, Dict[str, Any]] = {}
+
+        for record in result.result_set:
+            path_nodes = record[0] or []
+            path_rels = record[1] or []
+
+            for raw_node in path_nodes:
+                node_dict = self._node_to_dict(raw_node)
+                nodes_by_id[node_dict["id"]] = node_dict
+
+            for raw_rel in path_rels:
+                rel_props = dict(raw_rel.properties) if getattr(raw_rel, "properties", None) else {}
+                rel_id = str(getattr(raw_rel, "id", len(rels_by_id)))
+                rel_dict: Dict[str, Any] = dict(rel_props)
+                rel_dict["id"] = rel_id
+                rel_type = getattr(raw_rel, "relation", None) or rel_props.get("type")
+                if rel_type:
+                    rel_dict["type"] = rel_type
+                # Populate endpoint ids from the FalkorDB edge nodes when present
+                # so the route's relationship converter can wire source/target.
+                src_node = getattr(raw_rel, "src_node", None)
+                dest_node = getattr(raw_rel, "dest_node", None)
+                if src_node is not None:
+                    src_dict = self._node_to_dict(src_node)
+                    rel_dict.setdefault("source_id", src_dict["id"])
+                if dest_node is not None:
+                    dest_dict = self._node_to_dict(dest_node)
+                    rel_dict.setdefault("target_id", dest_dict["id"])
+                rels_by_id[rel_id] = rel_dict
+
+        return {
+            "nodes": list(nodes_by_id.values()),
+            "relationships": list(rels_by_id.values()),
+            "max_depth_reached": safe_depth,
+        }
+
+    def find_causal_chains(
+        self,
+        kpi_name: Optional[str] = None,
+        source_entity_id: Optional[str] = None,
+        target_entity_id: Optional[str] = None,
+        max_length: int = 4,
+        min_confidence: float = 0.5,
+    ) -> List[Dict[str, Any]]:
+        """
+        Find causal chains (CAUSES/IMPACTS paths) in the graph.
+
+        The ``/graph/causal-chains`` endpoint can scope a query by a target
+        KPI, a source entity, a target entity, or any combination. Each chain
+        is returned as ``{"nodes": [...], "relationships": [...],
+        "confidence": float}``.
+
+        Args:
+            kpi_name: Optional KPI name the chain must terminate at.
+            source_entity_id: Optional id the chain must start from.
+            target_entity_id: Optional id the chain must terminate at.
+            max_length: Max chain length, clamped to 1..10.
+            min_confidence: Minimum mean edge confidence to keep a chain.
+
+        Returns:
+            List of causal-chain dicts.
+        """
+        safe_length = max(1, min(10, int(max_length)))
+
+        start_match = "(s {id: $source_id})" if source_entity_id else "(s)"
+        if kpi_name:
+            end_match = "(t:KPI {name: $kpi_name})"
+        elif target_entity_id:
+            end_match = "(t {id: $target_id})"
+        else:
+            end_match = "(t)"
+
+        query = f"""
+        MATCH path = {start_match}-[:CAUSES|IMPACTS*1..{safe_length}]->{end_match}
+        WHERE all(r IN relationships(path) WHERE coalesce(r.confidence, 1.0) >= $min_confidence)
+        RETURN
+            [n IN nodes(path) | {{id: n.id, type: labels(n)[0]}}] as nodes,
+            [r IN relationships(path) | {{type: type(r), confidence: r.confidence}}] as rels,
+            reduce(c = 1.0, r IN relationships(path) | c * coalesce(r.confidence, 1.0)) as conf
+        LIMIT 200
+        """
+
+        params: Dict[str, Any] = {"min_confidence": min_confidence}
+        if source_entity_id:
+            params["source_id"] = source_entity_id
+        if kpi_name:
+            params["kpi_name"] = kpi_name
+        elif target_entity_id:
+            params["target_id"] = target_entity_id
+
+        result = self.graph.query(query, params)
+
+        chains = []
+        for record in result.result_set:
+            chains.append(
+                {
+                    "nodes": record[0],
+                    "relationships": record[1],
+                    "confidence": record[2] if len(record) > 2 else None,
+                }
+            )
+
+        return chains
+
+    def semantic_search(
+        self,
+        query: str,
+        entity_types: Optional[List[str]] = None,
+        k: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """
+        Property-based search across graph nodes (FalkorDB fallback for
+        ``/graph/search`` when the Graphiti semantic service is unavailable).
+
+        This is a CONTAINS match over node ``name``/``id`` — the search term is
+        passed as a parameter (never interpolated). It is intentionally simple:
+        the rich NL/vector search lives in the Graphiti service; this fallback
+        keeps the endpoint functional rather than 500-ing.
+
+        Args:
+            query: Free-text search term (parameterized).
+            entity_types: Optional allowlist-validated label filter.
+            k: Maximum number of results, clamped to 1..50.
+
+        Returns:
+            List of result dicts (id, name, type, score, properties).
+
+        Raises:
+            ValueError: If any entity type is not in the allowlist.
+        """
+        safe_k = max(1, min(50, int(k)))
+
+        where_parts = ["(n.name CONTAINS $search OR n.id CONTAINS $search)"]
+        params: Dict[str, Any] = {"search": query}
+
+        if entity_types:
+            _validate_node_labels(entity_types)
+            where_parts.append("any(lbl IN labels(n) WHERE lbl IN $entity_types)")
+            params["entity_types"] = entity_types
+
+        where_clause = " AND ".join(where_parts)
+
+        cypher = f"""
+        MATCH (n)
+        WHERE {where_clause}
+        RETURN n, labels(n)[0] as type
+        LIMIT {safe_k}
+        """
+
+        result = self.graph.query(cypher, params)
+
+        results = []
+        for record in result.result_set:
+            node = record[0]
+            node_type = record[1]
+            props = dict(node.properties) if getattr(node, "properties", None) else {}
+            node_id = props.get("id") or props.get("name") or str(getattr(node, "id", ""))
+            results.append(
+                {
+                    "id": node_id,
+                    "name": props.get("name") or node_id,
+                    "type": node_type,
+                    "score": 1.0,  # CONTAINS match is binary; no relevance score
+                    "properties": props,
+                    "relationships": [],
+                }
+            )
+
+        return results
 
 
 # ============================================================================
