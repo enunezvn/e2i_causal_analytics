@@ -298,6 +298,74 @@ class SimulationListResponse(BaseModel):
     page_size: int
 
 
+class SimulationHistoryItem(BaseModel):
+    """Summary row for the simulation-history view.
+
+    Matches the frontend ``SimulationHistoryResponse.simulations[]`` contract
+    (``frontend/src/types/digital-twin.ts``): note ``ate_estimate`` and
+    ``recommendation_type`` field names, distinct from ``SimulationListItem``.
+    """
+
+    simulation_id: str
+    created_at: datetime
+    intervention_type: str
+    brand: str
+    ate_estimate: float
+    recommendation_type: str
+
+
+class SimulationHistoryResponse(BaseModel):
+    """Response for the simulation-history endpoint (frontend contract)."""
+
+    simulations: List[SimulationHistoryItem]
+    total: int
+    offset: int
+    limit: int
+
+
+class ScenarioSimulateRequest(BaseModel):
+    """A single scenario in a comparison request.
+
+    Mirrors the deprecated-but-still-wired frontend ``SimulationRequest`` shape
+    so ``compareScenarios`` (frontend/src/api/digital-twin.ts) resolves.
+    """
+
+    intervention_type: str
+    brand: str
+    sample_size: int = Field(default=1000, ge=1)
+    duration_days: int = Field(default=90, ge=1)
+    twin_type: TwinTypeEnum = Field(default=TwinTypeEnum.HCP)
+    twin_count: int = Field(default=10000, ge=100, le=100000)
+    target_regions: List[str] = Field(default=[])
+    target_segments: List[str] = Field(default=[])
+    budget: Optional[float] = Field(default=None)
+    parameters: Dict[str, Any] = Field(default={})
+
+
+class ScenarioComparisonRequest(BaseModel):
+    """Request to compare a base scenario against alternatives."""
+
+    base_scenario: ScenarioSimulateRequest
+    alternative_scenarios: List[ScenarioSimulateRequest] = Field(default=[])
+    comparison_metrics: List[str] = Field(default=[])
+
+
+class ScenarioComparison(BaseModel):
+    """Comparison summary across scenarios."""
+
+    best_scenario_index: int
+    metric_comparison: Dict[str, List[float]]
+    summary: str
+
+
+class ScenarioComparisonResult(BaseModel):
+    """Response from a scenario comparison run."""
+
+    base_result: SimulationResponse
+    alternative_results: List[SimulationResponse]
+    comparison: ScenarioComparison
+
+
 class FidelityRecordResponse(BaseModel):
     """Fidelity validation record."""
 
@@ -408,17 +476,61 @@ async def digital_twin_health() -> DigitalTwinHealthResponse:
     """
     Health check for Digital Twin service.
 
+    Reports REAL operational stats sourced from the repository (active model
+    count, in-flight simulation count, last simulation timestamp). If the
+    repository is unreachable, the service reports ``degraded`` with zeroed
+    counts rather than fabricating hardcoded stats.
+
     Returns:
         Service health status including model availability and simulation stats.
     """
-    # Return sample health data for now
-    # In production, this would query actual model and simulation status
+    from src.digital_twin.twin_repository import TwinRepository
+
+    repo = TwinRepository()
+
+    try:
+        models = await repo.list_active_models()
+        models_available = len(models)
+    except Exception as e:  # repository / DB unreachable
+        logger.warning("Digital Twin health: failed to list active models: %s", e)
+        return DigitalTwinHealthResponse(
+            status="degraded",
+            service="digital-twin",
+            models_available=0,
+            simulations_pending=0,
+            last_simulation_at=None,
+        )
+
+    pending = 0
+    last_simulation_at: Optional[datetime] = None
+    try:
+        recent = await repo.list_simulations(limit=100)
+        in_flight = {
+            SimulationStatusEnum.PENDING.value,
+            SimulationStatusEnum.RUNNING.value,
+        }
+        pending = sum(1 for s in recent if s.get("simulation_status") in in_flight)
+        for s in recent:
+            created = s.get("created_at")
+            if isinstance(created, datetime):
+                if last_simulation_at is None or created > last_simulation_at:
+                    last_simulation_at = created
+    except Exception as e:  # simulations table unreachable — degrade gracefully
+        logger.warning("Digital Twin health: failed to list simulations: %s", e)
+        return DigitalTwinHealthResponse(
+            status="degraded",
+            service="digital-twin",
+            models_available=models_available,
+            simulations_pending=0,
+            last_simulation_at=None,
+        )
+
     return DigitalTwinHealthResponse(
         status="healthy",
         service="digital-twin",
-        models_available=3,
-        simulations_pending=0,
-        last_simulation_at=datetime.now(timezone.utc),
+        models_available=models_available,
+        simulations_pending=pending,
+        last_simulation_at=last_simulation_at,
     )
 
 
@@ -616,7 +728,7 @@ async def run_simulation(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Simulation failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Simulation failed")
 
 
 @router.get(
@@ -689,7 +801,185 @@ async def list_simulations(
 
     except Exception as e:
         logger.error(f"Failed to list simulations: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to list simulations")
+
+
+# NOTE: the literal /simulations/history and /simulations/compare routes MUST be
+# declared BEFORE the dynamic /simulations/{simulation_id} route below.
+# FastAPI matches routes in declaration order; otherwise "history"/"compare"
+# would be captured as a simulation_id and UUID(...) would raise → 500/404.
+@router.get(
+    "/simulations/history",
+    response_model=SimulationHistoryResponse,
+    summary="Simulation history",
+    operation_id="get_simulation_history",
+)
+async def get_simulation_history(
+    limit: int = Query(default=20, ge=1, le=100, description="Max records to return"),
+    offset: int = Query(default=0, ge=0, description="Pagination offset"),
+) -> SimulationHistoryResponse:
+    """
+    Return recent simulation history for the dashboard.
+
+    Sourced from the real simulation repository. Maps stored rows to the
+    frontend ``SimulationHistoryResponse`` contract (``ate_estimate`` /
+    ``recommendation_type``).
+
+    Args:
+        limit: Maximum number of records to return.
+        offset: Pagination offset.
+
+    Returns:
+        Simulation history rows with total count and pagination echo.
+    """
+    from src.digital_twin.twin_repository import TwinRepository
+
+    try:
+        repo = TwinRepository()
+        # Fetch enough rows to cover the requested window (repo returns newest
+        # first), then apply the offset/limit slice.
+        rows = await repo.list_simulations(limit=offset + limit)
+        window = rows[offset : offset + limit]
+
+        items = [
+            SimulationHistoryItem(
+                simulation_id=str(sim.get("simulation_id", "")),
+                created_at=sim.get("created_at", datetime.now(timezone.utc)),
+                intervention_type=sim.get("intervention_type", "unknown"),
+                brand=sim.get("brand", "unknown"),
+                ate_estimate=round(sim.get("simulated_ate", 0.0), 4),
+                recommendation_type=sim.get("recommendation", "refine"),
+            )
+            for sim in window
+        ]
+
+        return SimulationHistoryResponse(
+            simulations=items,
+            total=len(rows),
+            offset=offset,
+            limit=limit,
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to get simulation history: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get simulation history")
+
+
+@router.post(
+    "/simulations/compare",
+    response_model=ScenarioComparisonResult,
+    summary="Compare simulation scenarios",
+    operation_id="compare_twin_scenarios",
+)
+async def compare_scenarios(
+    request: ScenarioComparisonRequest,
+    user: Dict[str, Any] = Depends(require_operator),
+) -> ScenarioComparisonResult:
+    """
+    Run a base scenario plus alternatives and return a comparison.
+
+    Each scenario is executed through the same TwinGenerator + SimulationEngine
+    used by ``/simulate``, so results are real (not fabricated). The scenario
+    with the largest simulated ATE is reported as ``best_scenario_index`` (0 =
+    base scenario).
+
+    Args:
+        request: Base scenario and alternative scenarios to compare.
+
+    Returns:
+        Base + alternative results with a comparison summary.
+    """
+    from src.digital_twin.models.simulation_models import InterventionConfig
+    from src.digital_twin.models.twin_models import Brand, TwinType
+    from src.digital_twin.simulation_engine import SimulationEngine
+    from src.digital_twin.twin_generator import TwinGenerator
+
+    logger.info(
+        "Scenario comparison requested: base=%s alternatives=%d",
+        request.base_scenario.intervention_type,
+        len(request.alternative_scenarios),
+    )
+
+    def _run_scenario(scenario: ScenarioSimulateRequest) -> SimulationResponse:
+        intervention = InterventionConfig(
+            intervention_type=scenario.intervention_type,
+            target_regions=scenario.target_regions,
+            extra_params={
+                "brand": scenario.brand,
+                "twin_type": scenario.twin_type.value,
+                "sample_size": scenario.sample_size,
+                "duration_days": scenario.duration_days,
+                "budget": scenario.budget,
+                **scenario.parameters,
+            },
+        )
+        twin_type = TwinType(scenario.twin_type.value)
+        brand = Brand(scenario.brand)
+        generator = TwinGenerator(twin_type=twin_type, brand=brand)
+        model_id = generator.model_id or UUID(int=0)
+        population = generator.generate(n=scenario.twin_count)
+        engine = SimulationEngine(
+            population=population,
+            model_id=model_id,  # type: ignore[call-arg]
+        )
+        result = engine.simulate(intervention_config=intervention)
+
+        return SimulationResponse(
+            simulation_id=str(result.simulation_id),
+            model_id=str(result.model_id),
+            intervention_type=intervention.intervention_type,
+            brand=scenario.brand,
+            twin_type=scenario.twin_type.value,
+            twin_count=result.twin_count,
+            simulated_ate=round(result.simulated_ate, 4),
+            simulated_ci_lower=round(result.simulated_ci_lower, 4),
+            simulated_ci_upper=round(result.simulated_ci_upper, 4),
+            simulated_std_error=round(result.simulated_std_error, 4),
+            effect_size_cohens_d=result.effect_size_cohens_d,
+            statistical_power=result.statistical_power,
+            recommendation=RecommendationEnum(result.recommendation.value),
+            recommendation_rationale=result.recommendation_rationale,
+            recommended_sample_size=result.recommended_sample_size,
+            recommended_duration_weeks=result.recommended_duration_weeks,
+            simulation_confidence=round(result.simulation_confidence, 3),
+            fidelity_warning=result.fidelity_warning,
+            fidelity_warning_reason=result.fidelity_warning_reason,
+            model_fidelity_score=result.model_fidelity_score,
+            status=SimulationStatusEnum(result.status.value),
+            error_message=result.error_message,
+            execution_time_ms=result.execution_time_ms,
+            is_significant=result.is_significant(),
+            effect_direction=result.effect_direction(),
+            created_at=result.created_at,
+        )
+
+    try:
+        base_result = _run_scenario(request.base_scenario)
+        alternative_results = [_run_scenario(s) for s in request.alternative_scenarios]
+
+        all_results = [base_result, *alternative_results]
+        ates = [r.simulated_ate for r in all_results]
+        best_index = max(range(len(ates)), key=lambda i: ates[i])
+
+        comparison = ScenarioComparison(
+            best_scenario_index=best_index,
+            metric_comparison={"simulated_ate": ates},
+            summary=(
+                f"Scenario {best_index} has the largest simulated ATE ({ates[best_index]:.4f})."
+            ),
+        )
+
+        return ScenarioComparisonResult(
+            base_result=base_result,
+            alternative_results=alternative_results,
+            comparison=comparison,
+        )
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Scenario comparison failed: {e}")
+        raise HTTPException(status_code=500, detail="Scenario comparison failed")
 
 
 @router.get(
@@ -766,7 +1056,7 @@ async def get_simulation(
         raise
     except Exception as e:
         logger.error(f"Failed to get simulation: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to get simulation")
 
 
 # =============================================================================
@@ -891,7 +1181,7 @@ async def validate_simulation(
         raise
     except Exception as e:
         logger.error(f"Validation failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Validation failed")
 
 
 # =============================================================================
@@ -956,7 +1246,7 @@ async def list_models(
 
     except Exception as e:
         logger.error(f"Failed to list models: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to list models")
 
 
 @router.get(
@@ -1012,7 +1302,7 @@ async def get_model(
         raise
     except Exception as e:
         logger.error(f"Failed to get model: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to get model")
 
 
 @router.get("/models/{model_id}/fidelity", response_model=FidelityHistoryResponse)
@@ -1100,7 +1390,7 @@ async def get_model_fidelity(
 
     except Exception as e:
         logger.error(f"Failed to get fidelity history: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to get fidelity history")
 
 
 @router.get("/models/{model_id}/fidelity/report", response_model=FidelityReportResponse)
@@ -1169,4 +1459,4 @@ async def get_fidelity_report(
 
     except Exception as e:
         logger.error(f"Failed to generate fidelity report: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to generate fidelity report")

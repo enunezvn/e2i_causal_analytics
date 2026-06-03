@@ -255,6 +255,82 @@ async def test_get_component_health_includes_all_components():
     assert "falkordb" in component_names
 
 
+# -----------------------------------------------------------------------------
+# Silent-mock fix (F-010-backend follow-up): /components and /models previously
+# called _get_mock_*() UNCONDITIONALLY, presenting fabricated component/model
+# health in the dashboard as real with no flag. They must now (a) fail-closed
+# (503) on agent ImportError in production, and (b) DISCLOSE placeholder
+# provenance when mock-fallback is explicitly allowed (dev), mirroring #429.
+# -----------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_component_health_fails_closed_in_production(monkeypatch):
+    """In a fail-closed environment, /components must raise 503 rather than
+    return fabricated component health data."""
+    monkeypatch.setenv("E2I_REQUIRE_AGENT_IMPORT", "1")
+    with patch("src.agents.health_score.HealthScoreAgent", side_effect=ImportError):
+        with pytest.raises(HTTPException) as exc_info:
+            await get_component_health()
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail["error"] == "agent_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_get_component_health_discloses_placeholder_provenance(monkeypatch):
+    """When mock-fallback is explicitly allowed (dev), /components must DISCLOSE
+    that the data is placeholder/fabricated rather than presenting it as real."""
+    monkeypatch.setenv("E2I_REQUIRE_AGENT_IMPORT", "0")
+    with patch("src.agents.health_score.HealthScoreAgent", side_effect=ImportError):
+        result = await get_component_health()
+    assert result.data_provenance == "placeholder"
+    assert result.total_components > 0
+
+
+@pytest.mark.asyncio
+async def test_get_component_health_real_provenance_when_agent_available(mock_agent_result):
+    """When the real agent is available, /components must report measured
+    provenance (not placeholder)."""
+    mock_agent = MagicMock()
+    mock_agent.check_health = AsyncMock(return_value=mock_agent_result)
+    with patch("src.agents.health_score.HealthScoreAgent", return_value=mock_agent):
+        result = await get_component_health()
+    assert result.data_provenance == "measured"
+
+
+@pytest.mark.asyncio
+async def test_get_model_health_fails_closed_in_production(monkeypatch):
+    """In a fail-closed environment, /models must raise 503 rather than return
+    fabricated model accuracy/metrics."""
+    monkeypatch.setenv("E2I_REQUIRE_AGENT_IMPORT", "1")
+    with patch("src.agents.health_score.HealthScoreAgent", side_effect=ImportError):
+        with pytest.raises(HTTPException) as exc_info:
+            await get_model_health()
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail["error"] == "agent_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_get_model_health_discloses_placeholder_provenance(monkeypatch):
+    """When mock-fallback is explicitly allowed (dev), /models must DISCLOSE
+    placeholder provenance."""
+    monkeypatch.setenv("E2I_REQUIRE_AGENT_IMPORT", "0")
+    with patch("src.agents.health_score.HealthScoreAgent", side_effect=ImportError):
+        result = await get_model_health()
+    assert result.data_provenance == "placeholder"
+    assert result.total_models > 0
+
+
+@pytest.mark.asyncio
+async def test_get_model_health_real_provenance_when_agent_available(mock_agent_result):
+    """When the real agent is available, /models must report measured provenance."""
+    mock_agent = MagicMock()
+    mock_agent.check_health = AsyncMock(return_value=mock_agent_result)
+    with patch("src.agents.health_score.HealthScoreAgent", return_value=mock_agent):
+        result = await get_model_health()
+    assert result.data_provenance == "measured"
+
+
 # =============================================================================
 # ENDPOINT TESTS - get_model_health
 # =============================================================================
