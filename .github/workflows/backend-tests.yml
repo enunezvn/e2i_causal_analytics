@@ -69,6 +69,22 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
 
+      - name: Free disk space on runner
+        # The requirements.txt install (torch + CUDA, transformers, etc.)
+        # exhausts the runner's default ~14 GB free, so pip crashes with
+        # `[Errno 28] No space left on device`. Reclaim ~30 GB of unneeded
+        # preinstalled caches. docker-images is TRUE: this job is pure-python
+        # with no service container, so pruning images is safe.
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false  # keep Python toolcache used by other jobs
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
       - name: Install dependencies
         run: |
           pip install --upgrade pip
@@ -163,6 +179,22 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
+
+      - name: Free disk space on runner
+        # The requirements.txt install (torch + CUDA, transformers, etc.)
+        # exhausts the runner's default ~14 GB free, so pip crashes with
+        # `[Errno 28] No space left on device`. Reclaim ~30 GB of unneeded
+        # preinstalled caches. docker-images is TRUE: this job is pure-python
+        # with no service container, so pruning images is safe.
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false  # keep Python toolcache used by other jobs
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
 
       - name: Install dependencies
         run: |
@@ -279,6 +311,22 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
 
+      - name: Free disk space on runner
+        # The requirements.txt install (torch + CUDA, transformers, etc.)
+        # exhausts the runner's default ~14 GB free, so pip crashes with
+        # `[Errno 28] No space left on device`. Reclaim ~30 GB of unneeded
+        # preinstalled caches. docker-images is TRUE: this job is pure-python
+        # with no service container, so pruning images is safe.
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false  # keep Python toolcache used by other jobs
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
       - name: Install dependencies
         run: |
           pip install --upgrade pip
@@ -328,16 +376,13 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
-    services:
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+    # NOTE: the Redis backend is started from the Ubuntu apt package in a job
+    # step (see "Start Redis (apt, no Docker Hub pull)" below) instead of a
+    # `services:` container. A service container pulls `redis:7-alpine` from
+    # Docker Hub on every shard, and anonymous pulls hit the Docker-Hub
+    # rate-limit (`Docker pull failed`), which aborts the shard before pytest
+    # even runs. The apt package comes from the Ubuntu mirror, never touches
+    # Docker Hub, and binds the same `localhost:6379` REDIS_URL points at.
     env:
       E2I_TESTING_MODE: 'true'
       SUPABASE_URL: 'http://localhost:54321'
@@ -391,6 +436,46 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
+
+      - name: Free disk space on runner
+        # The requirements.txt install (torch + CUDA, transformers, etc.)
+        # exhausts the runner's default ~14 GB free, so pip crashes with
+        # `[Errno 28] No space left on device`. Reclaim ~30 GB of unneeded
+        # preinstalled caches. docker-images is TRUE: Redis now runs from the
+        # apt package (no service container), so no running container depends
+        # on the preinstalled images and pruning them is safe.
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false  # keep Python toolcache used by other jobs
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      # Start Redis from the Ubuntu apt package instead of a `services:`
+      # container. The container image (`redis:7-alpine`) is pulled from Docker
+      # Hub on every shard and anonymous pulls hit the Docker-Hub rate-limit
+      # (`Docker pull failed`), aborting the shard before pytest. The apt
+      # package comes from the Ubuntu mirror, never touches Docker Hub, and
+      # serves the same `redis://localhost:6379` REDIS_URL points at. If Redis
+      # were somehow unavailable, `requires_redis` tests auto-skip rather than
+      # erroring on `[Errno 111]`, so this step is best-effort but should
+      # succeed on the standard ubuntu-latest image.
+      - name: Start Redis (apt, no Docker Hub pull)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y redis-server
+          sudo service redis-server start || redis-server --daemonize yes
+          for i in $(seq 1 15); do
+            if redis-cli ping 2>/dev/null | grep -q PONG; then
+              echo "Redis ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::warning::Redis did not respond to PING within 15s; requires_redis tests will skip."
 
       - name: Install dependencies
         run: |
@@ -483,21 +568,19 @@ jobs:
     # — that retry-backoff-hang against a dead tracking URI and, under
     # pyproject's timeout_method="thread", abort the WHOLE pytest session. A
     # real MLflow server (SQLite backend so the model registry that
-    # model_deployer exercises is supported) plus a Redis service resolve it.
+    # model_deployer exercises is supported) plus a Redis backend resolve it.
     # Heavy in-test ML training (xgboost/LightGBM + Optuna HPO, 5-fold CV,
     # 200x-permutation adversarial tests) runs ON-PR here under a generous
     # per-test timeout rather than being deferred to slow-tests.yml.
+    #
+    # NOTE: Redis is started from the Ubuntu apt package in a job step (see
+    # "Start Redis (apt, no Docker Hub pull)" below) instead of a `services:`
+    # container. A service container pulls `redis:7-alpine` from Docker Hub and
+    # anonymous pulls hit the Docker-Hub rate-limit (`Docker pull failed`),
+    # aborting the job before pytest. The apt package comes from the Ubuntu
+    # mirror, never touches Docker Hub, and binds the same `localhost:6379`
+    # REDIS_URL points at.
     timeout-minutes: 25
-    services:
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
     env:
       E2I_TESTING_MODE: 'true'
       SUPABASE_URL: 'http://localhost:54321'
@@ -535,6 +618,45 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
+
+      - name: Free disk space on runner
+        # The requirements.txt install (torch + CUDA, transformers, etc.)
+        # exhausts the runner's default ~14 GB free, so pip crashes with
+        # `[Errno 28] No space left on device`. Reclaim ~30 GB of unneeded
+        # preinstalled caches. docker-images is TRUE: Redis now runs from the
+        # apt package (no service container), so no running container depends
+        # on the preinstalled images and pruning them is safe.
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false  # keep Python toolcache used by other jobs
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      # Start Redis from the Ubuntu apt package instead of a `services:`
+      # container. The container image (`redis:7-alpine`) is pulled from Docker
+      # Hub and anonymous pulls hit the Docker-Hub rate-limit (`Docker pull
+      # failed`), aborting the job before pytest. The apt package comes from
+      # the Ubuntu mirror, never touches Docker Hub, and serves the same
+      # `redis://localhost:6379` REDIS_URL points at. If Redis were somehow
+      # unavailable, `requires_redis` tests auto-skip rather than erroring on
+      # `[Errno 111]`, so this step is best-effort.
+      - name: Start Redis (apt, no Docker Hub pull)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y redis-server
+          sudo service redis-server start || redis-server --daemonize yes
+          for i in $(seq 1 15); do
+            if redis-cli ping 2>/dev/null | grep -q PONG; then
+              echo "Redis ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::warning::Redis did not respond to PING within 15s; requires_redis tests will skip."
 
       - name: Install dependencies
         run: |

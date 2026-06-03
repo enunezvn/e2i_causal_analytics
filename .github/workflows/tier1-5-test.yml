@@ -119,6 +119,25 @@ jobs:
           python-version: "3.12"
           cache: pip
 
+      - name: Free disk space on runner
+        # The runtime + dev install (torch + CUDA, transformers, scikit-learn,
+        # statsmodels, dowhy, econml, etc.) exhausts the runner's default
+        # ~14 GB free, so pip install crashes with
+        # `[Errno 28] No space left on device` mid-resolve. `jlumbroso/free-disk-space`
+        # reclaims ~30 GB by pruning preinstalled caches we don't need.
+        # docker-images is FALSE here: this job boots docker-compose (redis /
+        # falkordb / mlflow) below, and pruning images would break those
+        # running containers. tool-cache is kept (shared Python toolcache).
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false  # keep Python toolcache used by other jobs
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: false  # this job boots docker-compose; keep images
+          swap-storage: true
+
       - name: Boot Redis + FalkorDB + MLflow from docker-compose
         id: boot-stack
         # Hard-fail (#263): real compose regressions — compose-file
