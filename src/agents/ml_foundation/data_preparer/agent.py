@@ -295,6 +295,15 @@ class DataPreparerAgent:
                 "leakage_added_features": final_state.get("leakage_added_features", []),
                 "leakage_remediation_reasoning": final_state.get("leakage_remediation_reasoning"),
                 "leakage_remediation_viable": final_state.get("leakage_remediation_viable"),
+                # Gate N1 (codex-rescue HIGH-3 / N1-H3): surface the
+                # regulatory_adaptation_entry that leakage_remediation mirrored
+                # onto scope_spec, so tier_0/pipeline.py can capture it
+                # (result.regulatory_adaptation_entry) and thread it to the
+                # model_deployer's last-line-of-defense backstop. None when no
+                # leakage remediation occurred.
+                "regulatory_adaptation_entry": (final_state.get("scope_spec") or {}).get(
+                    "regulatory_adaptation_entry"
+                ),
                 # Phase 1 data-sufficiency pre-flight (sufficiency_check
                 # node). DataSufficiencyReport.model_dump() shape; see
                 # src/utils/sufficiency_schemas.py. Carries verdict +

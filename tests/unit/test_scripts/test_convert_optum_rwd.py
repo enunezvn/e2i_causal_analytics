@@ -767,3 +767,88 @@ class TestCsuLabsLoincMapping:
         # no analyte may claim a code that belongs to another analyte
         all_codes = [c for codes in CSU_LABS_LOINC.values() for c in codes]
         assert len(all_codes) == len(set(all_codes)), "LOINC codes must be unique across analytes"
+
+
+class TestPersistenceLabelLastFill:
+    """Regression guard for ``_target_persistent_at_180d`` last-fill coverage.
+
+    Persistence (``persistent_at_180d``) must mean a fill is actually *active*
+    at — or covers up to within the persistence gap of — day 180. The old gap
+    loop fell through to a bare ``return 1`` whenever no consecutive-fill gap
+    exceeded ``pers_gap``. For a single index fill (CSU biologic days_sup ~28d)
+    that loop body never runs (``range(len(bio) - 1) == range(0)``), so the
+    function wrongly returned ``persistent=1`` for a patient who only ever got
+    one early dose. That contradicts the discontinuation sibling, which (via its
+    last-fill check) labels the SAME single-fill patient ``discontinued=1``.
+
+    The fix mirrors ``_target_discontinued_180d``: after the gap loop, require
+    the last in-window fill's days_supply coverage to reach within ``pers_gap``
+    of ``target_day`` before returning 1.
+
+    Constants (CSU biologic class): PREDICTION_DAYS=180, discont_gap=90,
+    pers_gap=60. target_day = init_date + 180d.
+    """
+
+    INIT = "2020-01-01"
+    # Xolair NDC prefix "50242" -> matches ``_csu_biologic_mask``.
+    _XOLAIR_NDC = "50242021501"
+
+    def _converter_with_fills(
+        self, days_offsets: list[int], days_sup: list[int]
+    ) -> OptumDataConverter:
+        """Build a converter whose patient 1 has CSU-biologic fills at the
+        given day offsets from INIT, each with the matching days_supply."""
+        cv = _make_converter()
+        base = _ts(self.INIT)
+        cv._med_by_pat[1] = pd.DataFrame(
+            {
+                "medication_date": [base + timedelta(days=d) for d in days_offsets],
+                "code": [self._XOLAIR_NDC] * len(days_offsets),
+                "days_sup": days_sup,
+            }
+        )
+        return cv
+
+    def test_single_index_fill_is_not_persistent(self) -> None:
+        """A lone index fill (ds=28) is NOT persistence at day 180."""
+        cv = self._converter_with_fills([0], [28])
+        assert cv._target_persistent_at_180d(1, _ts(self.INIT)) == 0
+
+    def test_two_early_fills_then_none_is_not_persistent(self) -> None:
+        """Two fills at day 0 and day 30 (gap 30 < pers_gap=60) then nothing.
+
+        The gap loop sees no oversized gap, but the last fill (ds=28) ends on
+        day 58 — nowhere near day 180 — so the patient is NOT persistent.
+        """
+        cv = self._converter_with_fills([0, 30], [28, 28])
+        assert cv._target_persistent_at_180d(1, _ts(self.INIT)) == 0
+
+    def test_genuine_fills_through_day_180_is_persistent(self) -> None:
+        """Fills every ~28-30d that carry coverage to within pers_gap of day 180.
+
+        Day-160 fill (ds=28) covers up to day 188 >= 180, so Prong 1 fires
+        directly; even setting that aside, the last-fill coverage check passes.
+        """
+        offsets = [0, 30, 60, 90, 120, 150, 160]
+        cv = self._converter_with_fills(offsets, [28] * len(offsets))
+        assert cv._target_persistent_at_180d(1, _ts(self.INIT)) == 1
+
+    def test_fills_stop_before_window_with_small_gaps_is_not_persistent(self) -> None:
+        """Closely-spaced fills (all gaps < pers_gap) that stop at day 60.
+
+        Last fill day 60 (ds=28) -> coverage to day 88, well short of
+        180 - 60 = 120, so NOT persistent despite no oversized gap.
+        """
+        cv = self._converter_with_fills([0, 30, 60], [28, 28, 28])
+        assert cv._target_persistent_at_180d(1, _ts(self.INIT)) == 0
+
+    def test_label_consistency_single_fill(self) -> None:
+        """The single-fill patient must be discontinued AND not persistent.
+
+        The two labels are mutually exclusive for this cohort; the old code
+        emitted discontinued=1 and persistent=1 simultaneously.
+        """
+        cv = self._converter_with_fills([0], [28])
+        init = _ts(self.INIT)
+        assert cv._target_discontinued_180d(1, init) == 1
+        assert cv._target_persistent_at_180d(1, init) == 0

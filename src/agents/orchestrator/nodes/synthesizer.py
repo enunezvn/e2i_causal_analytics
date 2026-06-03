@@ -161,7 +161,15 @@ class SynthesizerNode:
 
         # Causal Impact interpretation
         if agent_name == "causal_impact":
-            ate = output.get("ate") or output.get("average_treatment_effect")
+            # The causal_impact agent emits its effect under the contract key
+            # ``ate_estimate`` (see CausalImpactOutput); the dispatcher passes
+            # the output through verbatim. Read the contract key first, then
+            # fall back to legacy/mock shapes.
+            ate = (
+                output.get("ate_estimate")
+                or output.get("ate")
+                or output.get("average_treatment_effect")
+            )
             p_value = output.get("p_value")
             if ate is not None:
                 interpretation["has_metrics"] = True
@@ -417,7 +425,12 @@ Be specific and quantitative. Avoid generic statements."""
         """
         metrics = []
         if agent_name == "causal_impact":
-            ate = output.get("ate") or output.get("average_treatment_effect")
+            # Contract key ``ate_estimate`` first; legacy/mock fallbacks after.
+            ate = (
+                output.get("ate_estimate")
+                or output.get("ate")
+                or output.get("average_treatment_effect")
+            )
             p_value = output.get("p_value")
             if ate is not None:
                 metrics.append(f"ATE={ate:.3f}")

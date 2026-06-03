@@ -12,9 +12,21 @@ Gate N1 (plan v4 §2): each successful remediation pass produces a
 shape matches the ``adaptation_history`` schema consumed by the model_deployer's
 ``RegulatoryEligibilityAudit`` — i.e. one row per adaptation event with the
 keys ``commit_sha``, ``justification_doc``, ``gate_name``,
-``before_threshold``, ``after_threshold``, ``timestamp``. The downstream
-deployer aggregates entries into ``validation_metrics["regulatory_eligibility_audit"]``;
-ANY entry there disqualifies ``regulatory_eligible=True`` per codex-rescue HIGH-3.
+``before_threshold``, ``after_threshold``, ``timestamp``.
+
+Handoff contract (codex-rescue HIGH-3 / N1-H3): the entry is emitted on the
+top-level ``regulatory_adaptation_entry`` state channel AND mirrored into
+``scope_spec["regulatory_adaptation_entry"]``. ``scope_spec`` is the carrier the
+tier_0 pipeline threads to the model_deployer agent, which forwards it onto its
+initial state (it does NOT splat arbitrary top-level keys). The deployer's
+last-line-of-defense backstop
+(``registry_manager._detect_leftover_adaptation_entries``) reads the entry off
+EITHER carrier and FAILS CLOSED — ``regulatory_eligible`` cannot be granted —
+whenever the entry has not been ingested into
+``validation_metrics["regulatory_eligibility_audit"]["adaptation_history"]``.
+The mirror is required because the prior contract assumed an orchestrator
+``append_adaptation`` aggregation step that never existed in any production
+path, leaving the backstop reading ``None`` and the attestation false.
 """
 
 import logging
@@ -276,8 +288,18 @@ async def review_and_remediate_leakage(state: DataPreparerState) -> Dict[str, An
                 f"added={len(result['added'])}, "
                 f"gate={adaptation_entry['gate_name']})"
             )
+            # Mirror the entry into scope_spec so it survives the agent
+            # boundary to the deployer (the deployer agent forwards scope_spec
+            # onto its initial state; see module docstring's handoff contract).
+            # Merge into the existing scope_spec rather than replace it so
+            # cohort identity (feature_manifest_source, prediction_target, ...)
+            # is preserved on the channel write.
+            updated_scope_spec = dict(state.get("scope_spec") or {})
+            updated_scope_spec["regulatory_adaptation_entry"] = adaptation_entry
             return {
                 "leakage_remediation_status": "applied",
+                # Gate N1: mirror onto scope_spec carrier (see above).
+                "scope_spec": updated_scope_spec,
                 "leakage_remediation_attempts": attempts + 1,
                 "leakage_remediated_features": result["final_features"],
                 "leakage_dropped_features": result["dropped"],

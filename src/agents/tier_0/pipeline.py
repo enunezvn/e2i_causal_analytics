@@ -153,6 +153,12 @@ class PipelineResult:
     qc_report: Optional[Dict[str, Any]] = None
     baseline_metrics: Optional[Dict[str, Any]] = None
     sufficiency_report: Optional[Dict[str, Any]] = None  # Phase 1 pre-flight verdict
+    # Gate N1 (codex-rescue HIGH-3 / N1-H3): the regulatory_adaptation_entry
+    # emitted by data_preparer's leakage_remediation node when it adaptively
+    # dropped leaked features. Threaded into the deployer (nested under
+    # scope_spec) so the deployer backstop can FAIL CLOSED on an un-ingested
+    # adaptation. ``None`` when no leakage remediation occurred.
+    regulatory_adaptation_entry: Optional[Any] = None
     model_candidate: Optional[Dict[str, Any]] = None
     training_result: Optional[Dict[str, Any]] = None
     shap_analysis: Optional[Dict[str, Any]] = None
@@ -837,6 +843,15 @@ class MLFoundationPipeline:
         # report attached to PipelineResult for downstream consumers /
         # audit-chain inspection.
         result.sufficiency_report = data_output.get("sufficiency_report")
+        # Gate N1 (codex-rescue HIGH-3 / N1-H3): capture the
+        # regulatory_adaptation_entry emitted by leakage_remediation when it
+        # adaptively dropped leaked features, so _run_model_deployment can
+        # thread it to the deployer's last-line-of-defense backstop. Read from
+        # the top-level output key first, falling back to the remediation
+        # sub-report; ``None`` when no remediation occurred.
+        result.regulatory_adaptation_entry = data_output.get(
+            "regulatory_adaptation_entry"
+        ) or (data_output.get("remediation") or {}).get("regulatory_adaptation_entry")
 
         # Check QC gate
         gate_passed = data_output.get("gate_passed", False)
@@ -1247,6 +1262,20 @@ class MLFoundationPipeline:
             self.config.target_environment,
         )
 
+        # Gate N1 (codex-rescue HIGH-3 / N1-H3): nest the leakage-remediation
+        # regulatory_adaptation_entry into scope_spec so it reaches the
+        # deployer's last-line-of-defense backstop
+        # (registry_manager._detect_leftover_adaptation_entries). scope_spec is
+        # the carrier the model_deployer agent already threads onto its initial
+        # state, so nesting here survives the agent boundary without splatting
+        # arbitrary top-level keys. We shallow-copy so result.scope_spec (shared
+        # with other stages) is not mutated in place.
+        deployer_scope_spec = dict(result.scope_spec) if result.scope_spec else {}
+        if result.regulatory_adaptation_entry is not None:
+            deployer_scope_spec["regulatory_adaptation_entry"] = (
+                result.regulatory_adaptation_entry
+            )
+
         # Prepare model_deployer input
         deployer_input = {
             "model_uri": training_output.get("model_artifact_uri", "simulated://model"),
@@ -1255,11 +1284,18 @@ class MLFoundationPipeline:
             "success_criteria_met": training_output.get("success_criteria_met", False),
             "deployment_name": f"{result.experiment_id}_deployment",
             "target_environment": target_env,
-            # Thread the full scope_spec (carrying feature_manifest_source) so
-            # the deployer's regulatory_deployment_manifest can record which
-            # cohort manifest gated the model at promotion time. Previously
-            # omitted, so the deployer fell back to a flat None.
-            "scope_spec": result.scope_spec,
+            # Thread the full scope_spec (carrying feature_manifest_source +,
+            # when leakage remediation occurred, the regulatory_adaptation_entry)
+            # so the deployer's regulatory_deployment_manifest can record which
+            # cohort manifest gated the model at promotion time and the backstop
+            # can fail closed on an un-ingested adaptation. Previously omitted,
+            # so the deployer fell back to a flat None.
+            "scope_spec": deployer_scope_spec,
+            # Gate N1: also pass the entry on the top-level deployer channel for
+            # standalone / future orchestrator ingestion. (The agent currently
+            # forwards scope_spec, not arbitrary top-level keys; this is
+            # forward-compatible and harmless.)
+            "regulatory_adaptation_entry": result.regulatory_adaptation_entry,
             # D1.1: thread workflow-level audit_workflow_id (see scope_input).
             "audit_workflow_id": result.audit_workflow_id,
         }

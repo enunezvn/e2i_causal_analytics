@@ -2751,7 +2751,15 @@ class OptumDataConverter:
             gap = (bio.iloc[i + 1]["medication_date"] - bio.iloc[i]["medication_date"]).days
             if gap > pers_gap:
                 return 0
-        return 1
+        # No oversized inter-fill gap — but the fills must also extend to near
+        # day 180. Mirror ``_target_discontinued_180d``: require the last
+        # in-window fill's days_supply coverage to reach within pers_gap of
+        # target_day. (A single early fill never enters the gap loop and would
+        # otherwise fall through to a spurious persistent=1.)
+        last = bio.iloc[-1]
+        ds = rwdc.safe_int(last.get("days_sup")) or 0
+        last_end = last["medication_date"] + timedelta(days=ds)
+        return int(last_end >= target_day - timedelta(days=pers_gap))
 
     # ------------------------------------------------------------------ #
     # Issue #157 PR C — treatment_response proxy derivation               #

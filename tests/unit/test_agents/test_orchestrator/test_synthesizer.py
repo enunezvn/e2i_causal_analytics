@@ -328,6 +328,100 @@ class TestExtractResponse:
         ]
 
 
+class TestCausalImpactStrategicInterpretation:
+    """Regression tests for causal_impact ATE key contract (FINDING #3).
+
+    The causal_impact agent emits its effect under the contract key
+    ``ate_estimate`` (see ``CausalImpactOutput`` / ``causal_impact/agent.py``),
+    NOT ``ate`` or ``average_treatment_effect``. The dispatcher passes the agent
+    output through verbatim (no key remap), so the synthesizer must read
+    ``ate_estimate`` or the quantified strategic ATE summary / key-metrics
+    string is silently never produced.
+    """
+
+    def test_strategic_interpretation_reads_ate_estimate(self):
+        """_build_strategic_interpretation must produce metrics from ate_estimate."""
+        synthesizer = SynthesizerNode()
+
+        # Shape mirrors a real CausalImpactOutput (contract key ``ate_estimate``).
+        output = {
+            "ate_estimate": 0.12,
+            "p_value": 0.01,
+            "statistical_significance": True,
+        }
+
+        interpretation = synthesizer._build_strategic_interpretation("causal_impact", output)
+
+        # RED on buggy code: ate is falsy -> has_metrics stays False, summary empty.
+        assert interpretation["has_metrics"] is True
+        assert "positive effect of 12.0%" in interpretation["strategic_summary"]
+        assert "statistically significant" in interpretation["strategic_summary"]
+        # Positive, significant effect -> scale-up action list.
+        assert any("Scale the successful intervention" in a for a in interpretation["actions"])
+
+    def test_key_metrics_str_reads_ate_estimate(self):
+        """_extract_key_metrics_str must include ATE from ate_estimate."""
+        synthesizer = SynthesizerNode()
+
+        output = {
+            "ate_estimate": -0.0765,
+            "p_value": 0.0056,
+            "statistical_significance": True,
+        }
+
+        metrics_str = synthesizer._extract_key_metrics_str("causal_impact", output)
+
+        # RED on buggy code: ate falsy -> "ATE=" never appended.
+        # (-0.0765 formats to -0.076 under :.3f due to binary float repr.)
+        assert "ATE=-0.076" in metrics_str
+        assert "p=0.0056" in metrics_str
+
+    def test_extract_response_enhances_with_ate_estimate(self):
+        """End-to-end: a causal_impact result keyed ate_estimate gets a strategic summary."""
+        synthesizer = SynthesizerNode()
+
+        result = {
+            "agent_name": "causal_impact",
+            "success": True,
+            "result": {
+                "causal_narrative": "Treatment raised conversions.",
+                "ate_estimate": 0.12,
+                "p_value": 0.01,
+                "statistical_significance": True,
+                "confidence": 0.9,
+            },
+        }
+
+        extracted = synthesizer._extract_response(result)
+
+        # RED on buggy code: no Strategic Implications block because has_metrics False.
+        assert "Strategic Implications" in extracted["response"]
+        assert "positive effect of 12.0%" in extracted["response"]
+
+    def test_legacy_ate_key_still_works(self):
+        """Fallback: legacy/mock shapes using ``ate`` must still produce metrics."""
+        synthesizer = SynthesizerNode()
+
+        interpretation = synthesizer._build_strategic_interpretation(
+            "causal_impact", {"ate": 0.12, "p_value": 0.01}
+        )
+
+        assert interpretation["has_metrics"] is True
+        assert "positive effect of 12.0%" in interpretation["strategic_summary"]
+
+    def test_absent_ate_produces_no_metrics(self):
+        """When ATE is genuinely absent, behaviour is unchanged (no metrics)."""
+        synthesizer = SynthesizerNode()
+
+        interpretation = synthesizer._build_strategic_interpretation(
+            "causal_impact", {"p_value": 0.01}
+        )
+
+        assert interpretation["has_metrics"] is False
+        assert interpretation["strategic_summary"] == ""
+        assert synthesizer._extract_key_metrics_str("causal_impact", {"p_value": 0.01}) == "p=0.0100"
+
+
 class TestSynthesizeMultiple:
     """Test _synthesize_multiple method."""
 
