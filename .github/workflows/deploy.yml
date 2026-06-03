@@ -239,13 +239,14 @@ jobs:
             COMPOSE_CMD="docker compose -f docker/docker-compose.yml $(pick_overlay)"
             echo "==> Compose overlay: $(pick_overlay) (empty = base prod only)"
 
-            # Run migrations only when the DB URL is present in the deploy env;
-            # run_migrations.sh hard-exits otherwise, which `set -e` would abort on.
-            if [ -n "${SUPABASE_DB_URL:-}" ]; then
-              bash scripts/run_migrations.sh
-            else
-              echo "==> Skipping migrations: SUPABASE_DB_URL unset"
-            fi
+            # Apply DB migrations. run_migrations.sh auto-detects the connection:
+            # SUPABASE_DB_URL when set (CI/remote), else `docker exec` into the
+            # supabase-db container. The droplet's self-hosted Supabase exposes
+            # no SUPABASE_DB_URL (REST creds only), so this step USED to skip
+            # every deploy — leaving database/memory/ (lifecycle/sentinels/
+            # crystallization) and database/migrations/ backlogs unapplied. The
+            # runner now covers both dirs and tracks via public.schema_migrations.
+            bash scripts/run_migrations.sh
 
             # The /app/.venv anon-volume mask is gone, so a forward recreate carries
             # the image's current deps; the anon-volume renewal flag is not needed here.
