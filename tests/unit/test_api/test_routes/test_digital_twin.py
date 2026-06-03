@@ -112,7 +112,7 @@ def mock_twin_repository():
             "simulation_status": "completed",
             "created_at": datetime.now(timezone.utc),
         }
-        instance.list_simulations.return_value = [mock_sim]
+        instance.simulations.list_simulations.return_value = [mock_sim]
 
         # For get_simulation
         mock_result = MagicMock()
@@ -286,7 +286,7 @@ async def test_digital_twin_health_counts_pending(mock_twin_repository):
     """Pending simulation count must reflect repository data."""
     from src.api.routes.digital_twin import digital_twin_health
 
-    mock_twin_repository.list_simulations.return_value = [
+    mock_twin_repository.simulations.list_simulations.return_value = [
         {"simulation_id": str(uuid4()), "simulation_status": "pending"},
         {"simulation_id": str(uuid4()), "simulation_status": "running"},
         {"simulation_id": str(uuid4()), "simulation_status": "completed"},
@@ -355,7 +355,7 @@ async def test_get_simulation_history_repo_error_is_generic(mock_twin_repository
     """Repository failure must NOT leak raw exception text in the 5xx detail."""
     from src.api.routes.digital_twin import get_simulation_history
 
-    mock_twin_repository.list_simulations.side_effect = Exception("SECRET-DSN-LEAK")
+    mock_twin_repository.simulations.list_simulations.side_effect = Exception("SECRET-DSN-LEAK")
 
     with pytest.raises(HTTPException) as exc_info:
         await get_simulation_history(limit=10, offset=0)
@@ -668,7 +668,7 @@ async def test_list_simulations_pagination(mock_twin_repository):
                 "created_at": datetime.now(timezone.utc),
             }
         )
-    mock_twin_repository.list_simulations.return_value = sims
+    mock_twin_repository.simulations.list_simulations.return_value = sims
 
     result = await list_simulations(brand=None, model_id=None, status=None, page=2, page_size=2)
 
@@ -1078,7 +1078,7 @@ async def test_list_simulations_empty(mock_twin_repository):
     """Test listing when no simulations exist."""
     from src.api.routes.digital_twin import list_simulations
 
-    mock_twin_repository.list_simulations.return_value = []
+    mock_twin_repository.simulations.list_simulations.return_value = []
 
     result = await list_simulations(brand=None, model_id=None, status=None, page=1, page_size=20)
 

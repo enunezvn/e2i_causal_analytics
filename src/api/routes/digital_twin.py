@@ -504,7 +504,7 @@ async def digital_twin_health() -> DigitalTwinHealthResponse:
     pending = 0
     last_simulation_at: Optional[datetime] = None
     try:
-        recent = await repo.list_simulations(limit=100)
+        recent = await repo.simulations.list_simulations(limit=100)
         in_flight = {
             SimulationStatusEnum.PENDING.value,
             SimulationStatusEnum.RUNNING.value,
@@ -766,7 +766,7 @@ async def list_simulations(
         # Convert status to SimulationStatus enum if provided
         status_enum = SimulationStatus(status.value) if status else None
 
-        simulations = await repo.list_simulations(  # type: ignore[attr-defined]
+        simulations = await repo.simulations.list_simulations(
             model_id=UUID(model_id) if model_id else None,
             brand=brand.value if brand else None,
             status=status_enum,
@@ -838,7 +838,7 @@ async def get_simulation_history(
         repo = TwinRepository()
         # Fetch enough rows to cover the requested window (repo returns newest
         # first), then apply the offset/limit slice.
-        rows = await repo.list_simulations(limit=offset + limit)
+        rows = await repo.simulations.list_simulations(limit=offset + limit)
         window = rows[offset : offset + limit]
 
         items = [
