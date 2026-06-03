@@ -637,6 +637,11 @@ export const ChatResponseSchema = z.object({
 //   - Heavy async causal pipelines (hierarchical/sequential/parallel responses)
 //     and graph node/relationship list shapes have large, more volatile schemas;
 //     deferred to keep the wire schemas faithful and low-maintenance.
+//   - `getModelInfo` (GET /models/{name}/info): the backend route has NO
+//     response_model — it passes the BentoML /metadata payload through verbatim,
+//     so `name` is not contract-guaranteed. A wire schema would false-reject
+//     valid responses; wire it once the backend anchors the route with a
+//     response_model.
 
 // ----- KPI -----
 
@@ -726,19 +731,6 @@ export const ModelEndpointHealthWireSchema = z.object({
   endpoint: z.string(),
   last_check: z.string(),
   error: z.string().nullable().optional(),
-});
-
-/** Faithful mirror of `ModelInfoResponse` (types/predictions.ts). */
-export const ModelInfoResponseWireSchema = z.object({
-  name: z.string(),
-  version: z.string().nullable().optional(),
-  type: z.string().nullable().optional(),
-  description: z.string().nullable().optional(),
-  input_schema: z.record(z.string(), z.unknown()).nullable().optional(),
-  output_schema: z.record(z.string(), z.unknown()).nullable().optional(),
-  trained_at: z.string().nullable().optional(),
-  metrics: z.record(z.string(), z.number()).nullable().optional(),
-  metadata: z.record(z.string(), z.unknown()).nullable().optional(),
 });
 
 /** Faithful mirror of `ModelsStatusResponse` (types/predictions.ts). */

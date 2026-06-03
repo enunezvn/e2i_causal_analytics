@@ -140,5 +140,19 @@ describe('Predictions API Client', () => {
         ApiValidationError
       );
     });
+
+    it('getModelInfo passes through a BentoML /metadata payload that omits "name" (route has no response_model → intentionally NOT validated)', async () => {
+      // The backend GET /models/{name}/info route declares NO response_model: it
+      // returns the BentoML /metadata JSON verbatim, which does not guarantee a
+      // `name` key. Validating it with a `name`-required schema would false-reject
+      // a perfectly valid 200 response and break useModelInfo in production.
+      server.use(
+        http.get(`${env.apiUrl}/models/:modelName/info`, () =>
+          HttpResponse.json({ version: '1.2.0', type: 'sklearn' })
+        )
+      );
+
+      await expect(getModelInfo('churn_model')).resolves.toBeDefined();
+    });
   });
 });
