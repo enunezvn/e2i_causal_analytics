@@ -1131,3 +1131,81 @@ class TestTransformDataSafetyDropIndependentOfExcludedFeatures:
         transformations = result.get("transformations_applied") or []
         drop_entries = [t for t in transformations if t.get("type") == "drop_unhashable_columns"]
         assert drop_entries == []
+
+
+class TestPredictionTargetKeySeparation:
+    """The target must be separated via the canonical ``prediction_target`` key.
+
+    Regression for the data_transformer target-key bug: this node read
+    ``scope_spec['target_column']`` — a key the harness, scope_builder,
+    baseline_computer and sufficiency_check never set (they use the canonical
+    ``prediction_target``). When only ``prediction_target`` was present, the
+    target was NOT separated, so the binary target column was swept through
+    StandardScaler and mean-centred to ~0; baseline_computer then read
+    ``target_rate`` ≈ 0 and sufficiency_check fired a false 'zero positive
+    cases' HARD_FAIL on every real ``--data-dir`` run.
+
+    The fix reads ``prediction_target`` (canonical) with a fallback to the
+    legacy ``target_column`` for backward compatibility.
+    """
+
+    def _binary_train(self) -> pd.DataFrame:
+        # 8 rows, 2 positives — a rare-ish binary target plus one feature.
+        return pd.DataFrame(
+            {
+                "feat": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+                "y": [0, 0, 0, 0, 0, 0, 1, 1],
+            }
+        )
+
+    @pytest.mark.asyncio
+    async def test_canonical_prediction_target_is_separated_and_not_scaled(self):
+        """With only ``prediction_target`` set, the target is split out (y_train
+        populated, absent from X_train) and its raw values are preserved."""
+        state = {
+            "experiment_id": "exp_prediction_target_key",
+            "scope_spec": {
+                # canonical key ONLY — NO legacy 'target_column'
+                "prediction_target": "y",
+                "scaling_method": "standard",
+                "encoding_method": "label",
+                "imputation_strategy": "mean",
+                "extract_datetime_features": False,
+            },
+            "train_df": self._binary_train(),
+        }
+
+        result = await transform_data(state)
+
+        assert result.get("error") is None
+        # Target separated into y_train (not left None).
+        assert result["y_train"] is not None, "target not separated; y_train is None"
+        # Target NOT swept into the scaled feature matrix.
+        assert "y" not in result["X_train"].columns, "target leaked into X_train"
+        # Raw target preserved (NOT StandardScaler'd to mean ~0): still {0, 1}.
+        y_train = result["y_train"]
+        assert sorted(int(v) for v in pd.unique(y_train)) == [0, 1]
+        assert int(y_train.sum()) == 2
+
+    @pytest.mark.asyncio
+    async def test_legacy_target_column_key_still_honored(self):
+        """Backward compatibility: a scope that sets only the legacy
+        ``target_column`` (no ``prediction_target``) must still separate."""
+        state = {
+            "experiment_id": "exp_legacy_target_column_key",
+            "scope_spec": {
+                "target_column": "y",  # legacy key only
+                "scaling_method": "standard",
+                "encoding_method": "label",
+                "imputation_strategy": "mean",
+                "extract_datetime_features": False,
+            },
+            "train_df": self._binary_train(),
+        }
+
+        result = await transform_data(state)
+
+        assert result.get("error") is None
+        assert result["y_train"] is not None
+        assert "y" not in result["X_train"].columns
+        assert int(result["y_train"].sum()) == 2

@@ -60,7 +60,16 @@ async def transform_data(state: DataPreparerState) -> Dict[str, Any]:
 
         # Get configuration from scope_spec
         scope_spec = state.get("scope_spec", {})
-        target_column = scope_spec.get("target_column")
+        # The canonical scope key is ``prediction_target`` — it is what the
+        # harness (run_tier0_test), scope_builder, baseline_computer and
+        # sufficiency_check all set/read. The legacy ``target_column`` alias is
+        # still honored as a fallback for older callers/fixtures. Reading ONLY
+        # ``target_column`` (the prior bug) meant that on every real run — where
+        # the scope sets ``prediction_target`` and never ``target_column`` — the
+        # target was not separated here, so the binary target column was swept
+        # through StandardScaler (mean-centred to ~0) and later misread by
+        # baseline_computer/sufficiency_check as a zero-event cohort.
+        target_column = scope_spec.get("prediction_target") or scope_spec.get("target_column")
         # `excluded_features` is the canonical scope-declared list; the
         # legacy `exclude_columns` runtime override is still honored for
         # backward compatibility, but emits a DeprecationWarning when
