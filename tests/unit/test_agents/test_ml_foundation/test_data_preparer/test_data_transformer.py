@@ -1209,3 +1209,32 @@ class TestPredictionTargetKeySeparation:
         assert result["y_train"] is not None
         assert "y" not in result["X_train"].columns
         assert int(result["y_train"].sum()) == 2
+
+    @pytest.mark.asyncio
+    async def test_canonical_key_wins_when_both_keys_set(self):
+        """When both keys are present with different values, the canonical
+        ``prediction_target`` wins (pins the ``or`` precedence so a refactor
+        can't silently flip it)."""
+        df = self._binary_train()
+        df["legacy_y"] = df["y"]  # same values, different name
+        state = {
+            "experiment_id": "exp_both_keys",
+            "scope_spec": {
+                "prediction_target": "y",  # canonical — should win
+                "target_column": "legacy_y",  # legacy — should lose
+                "scaling_method": "standard",
+                "encoding_method": "label",
+                "imputation_strategy": "mean",
+                "extract_datetime_features": False,
+            },
+            "train_df": df,
+        }
+
+        result = await transform_data(state)
+
+        assert result.get("error") is None
+        # The canonical target 'y' is the one separated out.
+        assert "y" not in result["X_train"].columns
+        # The legacy-named column was NOT treated as the target.
+        assert "legacy_y" in result["X_train"].columns
+        assert int(result["y_train"].sum()) == 2
