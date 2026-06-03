@@ -376,10 +376,11 @@ gh pr create --title "feat: description" --body "## Summary\n..."
 
 ### PR Requirements
 
-1. All CI checks must pass (lint, type-check, unit tests, integration tests)
-2. At least 1 approval required
-3. CODEOWNERS review required (@enunez)
-4. Stale reviews auto-dismissed on new pushes
+1. The two required status checks must pass: **Backend CI Success** and **Tier 1-5 agent harness**
+2. **0 approvals required** (solo-dev repo) - there is no CODEOWNERS gate and stale reviews are not auto-dismissed
+3. Merge policy: **always preserve history** via `--merge` merge-commits, **never squash** (branch protection keeps `required_linear_history=false` so merge commits stay legal)
+
+> **Footgun**: both required checks are **path-filtered** (they only run when matching paths change), so a docs-only or scripts-only PR can stall waiting for a check that never reports. Because `enforce_admins=false`, an admin can override-merge such a PR. See `scripts/setup_branch_protection.sh` for the full applied policy and rationale.
 
 ### Code Style
 

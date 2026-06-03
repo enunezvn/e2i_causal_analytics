@@ -21,6 +21,7 @@ E2I Causal Analytics is a 21-agent, 6-tier pharmaceutical drug adoption analysis
 | **05** | [Feature Store Reference](05-FEATURE-STORE-REFERENCE.md) | ML engineers | Feast configuration — 5 primary + 3 composite entities, 5 data sources, 9 feature views, 48 features, materialization and serving. |
 | **06** | [KPI Reference](06-KPI-REFERENCE.md) | Analysts, product managers | All 46 KPIs across 6 workstreams with formulas, thresholds (target/warning/critical), source tables, and calculator references. |
 | **07** | [Supporting Schemas](07-SUPPORTING-SCHEMAS.md) | Platform engineers | Memory (7 tables), RAG (2 tables + HNSW indexes), Chat (6+ tables with RLS), Audit (SHA-256 hash chain). |
+| **08** | [Leakage Detection Contract](08-LEAKAGE-DETECTION-CONTRACT.md) | ML engineers, MLOps | Tier-0 adaptive temporal-validity leakage ensemble — the sigma-band + issue-#194 joint clamp, the Layer-3 FDR confident set + permutation feasibility floor, declared-safe full manifest immunity (#648), manifest auto-detection, and the cosmetic-console / Feast-advisory caveats. |
 | --- | [CSV Templates](templates/README.md) | Data engineers | 5 ready-to-use CSV templates with example rows: `hcp_profiles`, `patient_journeys`, `treatment_events`, `business_metrics`, `triggers`. |
 
 ---
@@ -169,6 +170,7 @@ docs/data/
 ├── 05-FEATURE-STORE-REFERENCE.md        # Feast features
 ├── 06-KPI-REFERENCE.md                  # 46 KPIs
 ├── 07-SUPPORTING-SCHEMAS.md             # Memory, RAG, Chat, Audit
+├── 08-LEAKAGE-DETECTION-CONTRACT.md     # Tier-0 adaptive temporal-validity leakage contract
 └── templates/
     ├── README.md                        # Template usage guide
     ├── hcp_profiles.csv                 # 5 example HCP rows
