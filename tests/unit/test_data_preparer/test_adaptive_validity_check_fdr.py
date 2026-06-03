@@ -481,17 +481,28 @@ def test_node_synthetic_immunity_keeps_strong_legit_drops_genuine_leak():
 
 
 def test_node_synthetic_without_immunity_strong_legit_still_drops():
-    """Proves the immunity flag is load-bearing: the same σ-band-high legit
-    predictor, with the manifest but WITHOUT immunity, is still auto-dropped — the
-    existing σ!=high carve-out abdicates on it. (This is the #604 over-drop.)"""
+    """FIX 2 (2026-06-03) supersedes the #604 per-verdict immunity flag for the
+    synthetic manifest case: the new post-aggregation manifest immunity exempts
+    manifest-declared pre-index features from leakage unconditionally, regardless of
+    whether ``adaptive_declared_safe_full_immunity`` is set. ``days_on_therapy`` is
+    declared pre-index in the synthetic manifest (knowable_at=index_date), so FIX 2
+    strips it from ``adaptive_flagged_features`` even without the old flag.
+    The #604 flag is now redundant for this scenario (though harmless if set).
+    The genuine post-index leak (leak_x) is still correctly flagged and dropped.
+    """
     state = _make_state(_legit_and_leak_df(), "y")
     state["scope_spec"]["feature_manifest_source"] = "synthetic"
     state["adaptive_fdr_enabled"] = True
-    # no immunity flag → defaults False
+    # no adaptive_declared_safe_full_immunity flag -> FIX 2 post-aggregation
+    # immunity still protects days_on_therapy (supersedes old per-verdict flag).
     result = _run(state)
     flagged = set(result["adaptive_flagged_features"])
-    assert "days_on_therapy" in flagged, (
-        "without full immunity the σ-band-high legit predictor must still drop "
-        "(σ!=high carve-out abdicates) — this is the bug #604 immunity fixes"
+    # FIX 2: declared-safe pre-index features are exempt from leakage even
+    # without adaptive_declared_safe_full_immunity=True.
+    assert "days_on_therapy" not in flagged, (
+        "FIX 2 post-aggregation immunity must protect manifest-declared pre-index "
+        "features (days_on_therapy, knowable_at=index_date in synthetic manifest) "
+        "from leakage regardless of the adaptive_declared_safe_full_immunity flag"
     )
+    # Genuine post-index leak is still correctly flagged.
     assert "leak_x" in flagged
