@@ -179,7 +179,13 @@ export function useSegmentResults(
   options?: Omit<UseQueryOptions<SegmentResultsResponse, ApiError>, 'queryKey' | 'queryFn'>
 ) {
   return useQuery<SegmentResultsResponse, ApiError>({
-    queryKey: queryKeys.experiments.segmentResults(experimentId, segments.join(',')),
+    // Normalise segment ORDER for the cache key so ['a','b'] and ['b','a']
+    // (which return the same data) share one entry. Copy before sorting so the
+    // caller's array — and the order passed to the fetcher below — is untouched.
+    queryKey: queryKeys.experiments.segmentResults(
+      experimentId,
+      [...segments].sort().join(',')
+    ),
     queryFn: () => getSegmentResults(experimentId, segments),
     enabled: !!experimentId && segments.length > 0,
     staleTime: 2 * 60 * 1000,
@@ -587,8 +593,21 @@ export function useTriggerMonitoring(
 
   return useMutation<MonitorResponse, ApiError, TriggerMonitorRequest>({
     mutationFn: (request) => triggerMonitoring(request),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.experiments.all() });
+    onSuccess: (_data, request) => {
+      const ids = request.experiment_ids;
+      if (ids && ids.length > 0) {
+        // Monitoring only updates health + alerts for the targeted experiments,
+        // so invalidate exactly those sub-keys per id instead of blowing away
+        // the entire experiments namespace (assignments, results, etc.).
+        for (const id of ids) {
+          queryClient.invalidateQueries({ queryKey: queryKeys.experiments.health(id) });
+          queryClient.invalidateQueries({ queryKey: queryKeys.experiments.alerts(id) });
+        }
+      } else {
+        // No ids => all active experiments may have been monitored; fall back
+        // to the namespace-wide invalidation.
+        queryClient.invalidateQueries({ queryKey: queryKeys.experiments.all() });
+      }
     },
     ...options,
   });

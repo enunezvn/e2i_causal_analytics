@@ -131,8 +131,21 @@ export const queryClient = createQueryClient();
 let isTabVisible = typeof document !== 'undefined' ? !document.hidden : true;
 
 /**
- * Handle visibility change events
- * Pauses refetch intervals when tab is hidden, resumes when visible
+ * Handle visibility change events.
+ *
+ * Background-polling pause is handled automatically by TanStack Query's
+ * built-in `focusManager`: `refetchInterval` only fires while the tab is
+ * focused (see queryObserver: it gates interval refetches on
+ * `options.refetchIntervalInBackground || focusManager.isFocused()`, and
+ * `refetchIntervalInBackground` defaults to `false`). The focusManager
+ * already listens to `visibilitychange`, so polling is paused when the tab
+ * is hidden and resumes on return without any work here.
+ *
+ * This handler therefore does NOT cancel queries on hide (which would only
+ * abort an in-flight fetch — a one-shot, not a "pause" — and could drop a
+ * load the user wants on return). It only: (1) tracks tab visibility for
+ * `isTabCurrentlyVisible()`, (2) logs in dev, and (3) on return-to-visible
+ * in production, nudges already-stale queries to refetch.
  */
 function handleVisibilityChange(): void {
   const wasVisible = isTabVisible;
@@ -143,10 +156,11 @@ function handleVisibilityChange(): void {
   }
 
   if (!isTabVisible) {
-    // Tab became hidden - cancel in-flight queries to save bandwidth
-    // Note: We don't cancel mutations, only queries
+    // Tab became hidden. Interval polling is paused by TanStack's
+    // focusManager (refetchIntervalInBackground defaults to false); nothing
+    // to cancel here. In-flight, non-interval fetches are left to complete.
     if (env.isDev) {
-      console.debug('[Query] Tab hidden - pausing background refetches');
+      console.debug('[Query] Tab hidden - background polling paused by focusManager');
     }
   } else if (wasVisible === false && isTabVisible) {
     // Tab became visible again - invalidate stale queries to refetch
@@ -360,8 +374,16 @@ export const queryKeys = {
     all: () => [...queryKeys.all, 'digital-twin'] as const,
     simulation: (simulationId: string) =>
       [...queryKeys.digitalTwin.all(), 'simulation', simulationId] as const,
-    history: (brand?: string) =>
-      [...queryKeys.digitalTwin.all(), 'history', brand ?? 'all'] as const,
+    // NOTE: the base ['…', 'history'] prefix (no params) is used for
+    // partial-match invalidation; the parameterised form folds in
+    // limit/offset so paginated reads do not collide in the cache.
+    history: (params?: { limit?: number; offset?: number }) =>
+      [
+        ...queryKeys.digitalTwin.all(),
+        'history',
+        params?.limit ?? 20,
+        params?.offset ?? 0,
+      ] as const,
     health: () => [...queryKeys.digitalTwin.all(), 'health'] as const,
   },
 
