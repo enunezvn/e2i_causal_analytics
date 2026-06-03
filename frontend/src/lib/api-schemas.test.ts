@@ -22,6 +22,12 @@ import {
   ApiValidationError,
   schemaRegistry,
   getSchema,
+  // C31 wire schemas
+  KPIListResponseWireSchema,
+  ModelsStatusResponseWireSchema,
+  AlertListResponseWireSchema,
+  CausalHealthResponseWireSchema,
+  GraphHealthResponseWireSchema,
 } from './api-schemas';
 
 // =============================================================================
@@ -433,6 +439,173 @@ describe('Validation Utilities', () => {
     it('should return schema via getSchema', () => {
       const schema = getSchema('kpi.list');
       expect(schema).toBe(KPIListResponseSchema);
+    });
+  });
+});
+
+// =============================================================================
+// WIRE SCHEMA TESTS (C31 — faithful response contracts)
+// =============================================================================
+
+describe('Wire Schemas (C31)', () => {
+  describe('KPIListResponseWireSchema', () => {
+    it('accepts the real /kpis payload (workstream sent as null)', () => {
+      const payload = {
+        kpis: [
+          {
+            id: 'WS1-DQ-001',
+            name: 'Data Completeness',
+            definition: 'Percentage of complete records',
+            formula: 'COUNT(complete) / COUNT(*) * 100',
+            calculation_type: 'direct',
+            workstream: 'ws1_data_quality',
+            tables: ['hcp_data'],
+            columns: ['*'],
+            threshold: { target: 95, warning: 90, critical: 80 },
+            unit: '%',
+            frequency: 'daily',
+            primary_causal_library: 'none',
+          },
+        ],
+        total: 1,
+        workstream: null,
+        causal_library: null,
+      };
+      // This is exactly the shape the legacy KPIListResponseSchema REJECTS
+      // (workstream: null) — proving the wire schema is the faithful contract.
+      const result = KPIListResponseWireSchema.safeParse(payload);
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects a malformed payload (kpis missing required field)', () => {
+      const bad = {
+        kpis: [{ id: 'X', name: 'only-id-and-name' }],
+        total: 1,
+      };
+      const result = KPIListResponseWireSchema.safeParse(bad);
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe('ModelsStatusResponseWireSchema', () => {
+    it('accepts the real /models/status payload', () => {
+      const payload = {
+        total_models: 1,
+        healthy_count: 1,
+        unhealthy_count: 0,
+        models: [
+          {
+            model_name: 'churn_model',
+            status: 'healthy',
+            endpoint: 'http://localhost:3000/models/churn',
+            last_check: new Date().toISOString(),
+          },
+        ],
+        timestamp: new Date().toISOString(),
+      };
+      const result = ModelsStatusResponseWireSchema.safeParse(payload);
+      expect(result.success).toBe(true);
+    });
+
+    it('throws ApiValidationError via validateApiResponse on bad counts', () => {
+      const bad = {
+        total_models: 'one', // wrong type
+        healthy_count: 1,
+        unhealthy_count: 0,
+        models: [],
+        timestamp: new Date().toISOString(),
+      };
+      expect(() =>
+        validateApiResponse(
+          ModelsStatusResponseWireSchema,
+          bad,
+          '/models/status',
+          { logErrors: false, throwOnError: true }
+        )
+      ).toThrow(ApiValidationError);
+    });
+  });
+
+  describe('AlertListResponseWireSchema', () => {
+    it('accepts the real /monitoring/alerts payload', () => {
+      const payload = {
+        total_count: 1,
+        active_count: 1,
+        alerts: [
+          {
+            id: 'alert_001',
+            model_version: 'propensity_v2.1.0',
+            alert_type: 'drift',
+            severity: 'high',
+            title: 'High drift detected',
+            description: 'Feature shows significant drift',
+            status: 'active',
+            triggered_at: new Date().toISOString(),
+          },
+        ],
+      };
+      const result = AlertListResponseWireSchema.safeParse(payload);
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects when alerts is not an array', () => {
+      const bad = { total_count: 0, active_count: 0, alerts: 'none' };
+      const result = AlertListResponseWireSchema.safeParse(bad);
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe('CausalHealthResponseWireSchema', () => {
+    it('accepts a valid causal health payload', () => {
+      const payload = {
+        status: 'healthy',
+        libraries_available: { dowhy: true, econml: true },
+        estimators_loaded: 12,
+        pipeline_orchestrator_ready: true,
+        hierarchical_analyzer_ready: true,
+        analysis_count_24h: 5,
+      };
+      const result = CausalHealthResponseWireSchema.safeParse(payload);
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects when libraries_available has non-boolean values', () => {
+      const bad = {
+        status: 'healthy',
+        libraries_available: { dowhy: 'yes' },
+        estimators_loaded: 1,
+        pipeline_orchestrator_ready: true,
+        hierarchical_analyzer_ready: true,
+        analysis_count_24h: 0,
+      };
+      const result = CausalHealthResponseWireSchema.safeParse(bad);
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe('GraphHealthResponseWireSchema', () => {
+    it('accepts the real /graph/health payload', () => {
+      const payload = {
+        status: 'healthy',
+        graphiti: 'connected',
+        falkordb: 'connected',
+        websocket_connections: 3,
+        timestamp: new Date().toISOString(),
+      };
+      const result = GraphHealthResponseWireSchema.safeParse(payload);
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects an out-of-enum status', () => {
+      const bad = {
+        status: 'on-fire',
+        graphiti: 'connected',
+        falkordb: 'connected',
+        websocket_connections: 0,
+        timestamp: new Date().toISOString(),
+      };
+      const result = GraphHealthResponseWireSchema.safeParse(bad);
+      expect(result.success).toBe(false);
     });
   });
 });

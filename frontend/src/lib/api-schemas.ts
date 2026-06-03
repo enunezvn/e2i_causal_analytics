@@ -587,6 +587,280 @@ export const ChatResponseSchema = z.object({
 });
 
 // =============================================================================
+// WIRE SCHEMAS (C31 — opt-in response validation for per-client GET reads)
+// =============================================================================
+//
+// These schemas FAITHFULLY mirror the canonical response interfaces in
+// `frontend/src/types/*` (which themselves track the FastAPI backend schemas)
+// and the shapes returned by the MSW mocks in `frontend/src/mocks`.
+//
+// They are intentionally SEPARATE from the older `*ResponseSchema` exports
+// above: a number of those legacy schemas were aspirational and DO NOT match
+// the live contract (e.g. `PredictionSchema` uses `prediction_id` /
+// `predicted_value` while the real `/models/predict` response uses
+// `model_name` / `prediction` / `latency_ms`; `KPIListResponseSchema.workstream`
+// is non-nullable while the backend sends `null`). Wiring those legacy schemas
+// would FALSELY reject correct responses. The `*WireSchema` set below is the
+// validated contract that the per-domain clients (`src/api/*.ts`) opt into via
+// the base client's `schema` parameter.
+//
+// Field nullability rule: fields the backend/mock may send as `null` use
+// `.nullable()`; fields that may be absent use `.optional()`. We keep object
+// schemas permissive about EXTRA keys (Zod's default is to strip unknown keys,
+// not reject them) so additive backend changes never break the UI — only
+// missing/mis-typed REQUIRED fields trip validation, which is the drift we want
+// to catch.
+
+// ----- KPI -----
+
+/** Faithful mirror of `KPIThreshold` (types/kpi.ts). */
+export const KPIThresholdWireSchema = z.object({
+  target: z.number().optional(),
+  warning: z.number().optional(),
+  critical: z.number().optional(),
+});
+
+/** Faithful mirror of `KPIMetadata` (types/kpi.ts). */
+export const KPIMetadataWireSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  definition: z.string(),
+  formula: z.string(),
+  calculation_type: z.string(),
+  workstream: z.string(),
+  tables: z.array(z.string()),
+  columns: z.array(z.string()),
+  view: z.string().nullable().optional(),
+  threshold: KPIThresholdWireSchema.nullable().optional(),
+  unit: z.string().nullable().optional(),
+  frequency: z.string(),
+  primary_causal_library: z.string(),
+  brand: z.string().nullable().optional(),
+  note: z.string().nullable().optional(),
+});
+
+/** Faithful mirror of `KPIResult` (types/kpi.ts). */
+export const KPIResultWireSchema = z.object({
+  kpi_id: z.string(),
+  value: z.number().nullable().optional(),
+  status: z.string(),
+  calculated_at: z.string(),
+  cached: z.boolean(),
+  cache_expires_at: z.string().nullable().optional(),
+  error: z.string().nullable().optional(),
+  causal_library_used: z.string().nullable().optional(),
+  confidence_interval: z.array(z.number()).nullable().optional(),
+  p_value: z.number().nullable().optional(),
+  effect_size: z.number().nullable().optional(),
+  metadata: z.record(z.string(), z.unknown()),
+});
+
+/** Faithful mirror of `KPIListResponse` (types/kpi.ts). `workstream`/`causal_library` are sent as `null` by the backend when unset. */
+export const KPIListResponseWireSchema = z.object({
+  kpis: z.array(KPIMetadataWireSchema),
+  total: z.number().int().nonnegative(),
+  workstream: z.string().nullable().optional(),
+  causal_library: z.string().nullable().optional(),
+});
+
+/** Faithful mirror of `WorkstreamInfo` (types/kpi.ts). */
+export const WorkstreamInfoWireSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  kpi_count: z.number().int().nonnegative(),
+  description: z.string().nullable().optional(),
+});
+
+/** Faithful mirror of `WorkstreamListResponse` (types/kpi.ts). */
+export const WorkstreamListResponseWireSchema = z.object({
+  workstreams: z.array(WorkstreamInfoWireSchema),
+  total: z.number().int().nonnegative(),
+});
+
+/** Faithful mirror of `KPIHealthResponse` (types/kpi.ts). */
+export const KPIHealthResponseWireSchema = z.object({
+  status: z.enum(['healthy', 'degraded', 'unhealthy']),
+  registry_loaded: z.boolean(),
+  total_kpis: z.number().int().nonnegative(),
+  cache_enabled: z.boolean(),
+  cache_size: z.number().int().nonnegative(),
+  database_connected: z.boolean(),
+  workstreams_available: z.array(z.string()),
+  last_calculation: z.string().nullable().optional(),
+  error: z.string().nullable().optional(),
+});
+
+// ----- PREDICTIONS -----
+
+/** Faithful mirror of `ModelEndpointHealth` (types/predictions.ts). */
+export const ModelEndpointHealthWireSchema = z.object({
+  model_name: z.string(),
+  status: z.string(),
+  endpoint: z.string(),
+  last_check: z.string(),
+  error: z.string().nullable().optional(),
+});
+
+/** Faithful mirror of `ModelInfoResponse` (types/predictions.ts). */
+export const ModelInfoResponseWireSchema = z.object({
+  name: z.string(),
+  version: z.string().nullable().optional(),
+  type: z.string().nullable().optional(),
+  description: z.string().nullable().optional(),
+  input_schema: z.record(z.string(), z.unknown()).nullable().optional(),
+  output_schema: z.record(z.string(), z.unknown()).nullable().optional(),
+  trained_at: z.string().nullable().optional(),
+  metrics: z.record(z.string(), z.number()).nullable().optional(),
+  metadata: z.record(z.string(), z.unknown()).nullable().optional(),
+});
+
+/** Faithful mirror of `ModelsStatusResponse` (types/predictions.ts). */
+export const ModelsStatusResponseWireSchema = z.object({
+  total_models: z.number().int().nonnegative(),
+  healthy_count: z.number().int().nonnegative(),
+  unhealthy_count: z.number().int().nonnegative(),
+  models: z.array(ModelEndpointHealthWireSchema),
+  timestamp: z.string(),
+});
+
+// ----- MONITORING -----
+
+/** Faithful mirror of `AlertItem` (types/monitoring.ts). */
+export const AlertItemWireSchema = z.object({
+  id: z.string(),
+  model_version: z.string(),
+  alert_type: z.string(),
+  severity: z.string(),
+  title: z.string(),
+  description: z.string(),
+  status: z.string(),
+  triggered_at: z.string(),
+  acknowledged_at: z.string().nullable().optional(),
+  acknowledged_by: z.string().nullable().optional(),
+  resolved_at: z.string().nullable().optional(),
+  resolved_by: z.string().nullable().optional(),
+});
+
+/** Faithful mirror of `AlertListResponse` (types/monitoring.ts). */
+export const AlertListResponseWireSchema = z.object({
+  total_count: z.number().int().nonnegative(),
+  active_count: z.number().int().nonnegative(),
+  alerts: z.array(AlertItemWireSchema),
+});
+
+/** Faithful mirror of `DriftHistoryItem` (types/monitoring.ts). */
+export const DriftHistoryItemWireSchema = z.object({
+  id: z.string(),
+  model_version: z.string(),
+  feature_name: z.string(),
+  drift_type: z.string(),
+  drift_score: z.number(),
+  severity: z.string(),
+  detected_at: z.string(),
+  baseline_start: z.string(),
+  baseline_end: z.string(),
+  current_start: z.string(),
+  current_end: z.string(),
+});
+
+/** Faithful mirror of `DriftHistoryResponse` (types/monitoring.ts). */
+export const DriftHistoryResponseWireSchema = z.object({
+  model_id: z.string(),
+  total_records: z.number().int().nonnegative(),
+  records: z.array(DriftHistoryItemWireSchema),
+});
+
+/** Faithful mirror of `MonitoringRunItem` (types/monitoring.ts). */
+export const MonitoringRunItemWireSchema = z.object({
+  id: z.string(),
+  model_version: z.string(),
+  run_type: z.string(),
+  started_at: z.string(),
+  completed_at: z.string().nullable().optional(),
+  features_checked: z.number().int().nonnegative(),
+  drift_detected_count: z.number().int().nonnegative(),
+  alerts_generated: z.number().int().nonnegative(),
+  duration_ms: z.number(),
+  error_message: z.string().nullable().optional(),
+});
+
+/** Faithful mirror of `MonitoringRunsResponse` (types/monitoring.ts). */
+export const MonitoringRunsResponseWireSchema = z.object({
+  model_id: z.string().nullable().optional(),
+  total_runs: z.number().int().nonnegative(),
+  runs: z.array(MonitoringRunItemWireSchema),
+});
+
+/** Faithful mirror of `ModelHealthSummary` (types/monitoring.ts). */
+export const ModelHealthSummaryWireSchema = z.object({
+  model_id: z.string(),
+  overall_health: z.enum(['healthy', 'warning', 'critical']),
+  last_check: z.string().nullable().optional(),
+  drift_score: z.number(),
+  active_alerts: z.number().int().nonnegative(),
+  last_retrained: z.string().nullable().optional(),
+  performance_trend: z.enum(['stable', 'improving', 'degrading']),
+  recommendations: z.array(z.string()),
+});
+
+// ----- CAUSAL -----
+
+/** Faithful mirror of `CausalHealthResponse` (types/causal.ts). */
+export const CausalHealthResponseWireSchema = z.object({
+  status: z.string(),
+  libraries_available: z.record(z.string(), z.boolean()),
+  estimators_loaded: z.number().int().nonnegative(),
+  pipeline_orchestrator_ready: z.boolean(),
+  hierarchical_analyzer_ready: z.boolean(),
+  last_analysis: z.string().nullable().optional(),
+  analysis_count_24h: z.number().int().nonnegative(),
+  average_latency_ms: z.number().nullable().optional(),
+  error: z.string().nullable().optional(),
+});
+
+/** Faithful mirror of `EstimatorInfo` (types/causal.ts). */
+export const EstimatorInfoWireSchema = z.object({
+  name: z.string(),
+  library: z.string(),
+  estimator_type: z.string(),
+  description: z.string(),
+  best_for: z.array(z.string()),
+  parameters: z.array(z.string()),
+  supports_confidence_intervals: z.boolean(),
+  supports_heterogeneous_effects: z.boolean(),
+});
+
+/** Faithful mirror of `EstimatorListResponse` (types/causal.ts). */
+export const EstimatorListResponseWireSchema = z.object({
+  estimators: z.array(EstimatorInfoWireSchema),
+  total: z.number().int().nonnegative(),
+  by_library: z.record(z.string(), z.array(z.string())),
+});
+
+// ----- GRAPH -----
+
+/** Faithful mirror of `GraphHealthResponse` (types/graph.ts). */
+export const GraphHealthResponseWireSchema = z.object({
+  status: z.enum(['healthy', 'degraded']),
+  graphiti: z.enum(['connected', 'unavailable']),
+  falkordb: z.enum(['connected', 'unavailable']),
+  websocket_connections: z.number().int().nonnegative(),
+  timestamp: z.string(),
+});
+
+/** Faithful mirror of `GraphStatsResponse` (types/graph.ts). */
+export const GraphStatsResponseWireSchema = z.object({
+  total_nodes: z.number().int().nonnegative(),
+  total_relationships: z.number().int().nonnegative(),
+  nodes_by_type: z.record(z.string(), z.number()),
+  relationships_by_type: z.record(z.string(), z.number()),
+  total_episodes: z.number().int().nonnegative(),
+  total_communities: z.number().int().nonnegative(),
+  last_updated: z.string().nullable().optional(),
+  timestamp: z.string(),
+});
+
+// =============================================================================
 // VALIDATION UTILITIES
 // =============================================================================
 
