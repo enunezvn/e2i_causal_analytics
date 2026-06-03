@@ -383,6 +383,49 @@ class TestCreateCVObjective:
 
         assert callable(objective)
 
+    def test_cv_objective_uses_shuffled_stratified_kfold(
+        self, classification_data, mock_optuna_trial
+    ):
+        """GAP 2: the classification CV objective must pass an explicit
+        StratifiedKFold(shuffle=True, random_state=42) to cross_val_score, not a
+        bare int (which yields an unshuffled default)."""
+        from sklearn.ensemble import RandomForestClassifier
+        from sklearn.model_selection import StratifiedKFold
+
+        X_train, y_train, X_val, y_val = classification_data
+        X = np.vstack([X_train, X_val])
+        y = np.concatenate([y_train, y_val])
+        search_space = {"n_estimators": {"type": "int", "low": 10, "high": 20}}
+
+        objective = OptunaOptimizer.create_cv_objective(
+            model_class=RandomForestClassifier,
+            X=X,
+            y=y,
+            search_space=search_space,
+            problem_type="binary_classification",
+            cv_folds=3,
+        )
+
+        captured = {}
+
+        def _capture(model, X, y, cv=None, scoring=None, n_jobs=None):
+            captured["cv"] = cv
+            return np.array([0.8, 0.81, 0.79])
+
+        with patch("src.mlops.optuna_optimizer.cross_val_score", side_effect=_capture):
+            try:
+                objective(mock_optuna_trial)
+            except optuna.TrialPruned:
+                # Pruning fires AFTER cross_val_score (the mock trial reports an
+                # intermediate value); the cv splitter is already captured.
+                pass
+
+        cv = captured["cv"]
+        assert isinstance(cv, StratifiedKFold)
+        assert cv.shuffle is True
+        assert cv.random_state == 42
+        assert cv.n_splits == 3
+
     def test_create_cv_objective_with_fixed_params(self, classification_data):
         """Test CV objective with fixed parameters."""
         X_train, y_train, X_val, y_val = classification_data

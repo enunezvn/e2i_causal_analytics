@@ -244,6 +244,56 @@ class TestRunCrossValidation:
         # ROC-AUC is between 0 and 1
         assert 0.0 <= cv_metrics["mean"] <= 1.0
 
+    def test_classification_cv_uses_shuffled_stratified_kfold(self):
+        """GAP 2: classification CV must pass an explicit StratifiedKFold(shuffle=True,
+        random_state=42) rather than a bare int (which yields an UNSHUFFLED default)."""
+        from unittest.mock import patch
+
+        from sklearn.model_selection import StratifiedKFold
+
+        captured = {}
+
+        def _capture(model, X, y, cv=None, scoring=None, n_jobs=None):
+            captured["cv"] = cv
+            return np.array([0.7, 0.71, 0.72])
+
+        model = _create_model_instance("RandomForest", "sklearn", {}, "binary_classification")
+        X = np.arange(120, dtype=float).reshape(30, 4)
+        y = np.array([0, 1] * 15)
+        with patch("sklearn.model_selection.cross_val_score", side_effect=_capture):
+            _run_cross_validation(model, X, y, "binary_classification", cv_folds=3)
+
+        cv = captured["cv"]
+        assert isinstance(cv, StratifiedKFold)
+        assert cv.shuffle is True
+        assert cv.random_state == 42
+        assert cv.n_splits == 3
+
+    def test_regression_cv_uses_kfold_not_stratified(self):
+        """GAP 2: regression must NOT use StratifiedKFold (would break on continuous
+        targets) — explicit KFold(shuffle=True, random_state=42)."""
+        from unittest.mock import patch
+
+        from sklearn.model_selection import KFold, StratifiedKFold
+
+        captured = {}
+
+        def _capture(model, X, y, cv=None, scoring=None, n_jobs=None):
+            captured["cv"] = cv
+            return np.array([1.0, 1.1, 0.9])
+
+        model = _create_model_instance("Ridge", "sklearn", {}, "regression")
+        X = np.arange(120, dtype=float).reshape(30, 4)
+        y = np.arange(30, dtype=float)
+        with patch("sklearn.model_selection.cross_val_score", side_effect=_capture):
+            _run_cross_validation(model, X, y, "regression", cv_folds=3)
+
+        cv = captured["cv"]
+        assert not isinstance(cv, StratifiedKFold)
+        assert isinstance(cv, KFold)
+        assert cv.shuffle is True
+        assert cv.random_state == 42
+
 
 @pytest.mark.asyncio
 class TestBenchmarkAlgorithm:

@@ -272,7 +272,17 @@ class DataSplitter:
             n = len(stratum_df)
 
             if n < 3:
-                # Too few samples, put all in training
+                # Too few samples, put all in training. Warn loudly: this stratum
+                # (often a rare minority class) will be ABSENT from
+                # val/test/holdout, which makes ROC-AUC/recall undefined
+                # downstream. The split_enforcer class-presence guard hard-blocks
+                # on the resulting single-class split.
+                logger.warning(
+                    "Stratum %r has only %d sample(s) (<3) — assigned entirely to "
+                    "train; validation/test/holdout will lack this stratum.",
+                    stratum_value,
+                    n,
+                )
                 train_dfs.append(stratum_df)
                 continue
 

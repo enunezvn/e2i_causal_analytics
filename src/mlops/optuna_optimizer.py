@@ -30,7 +30,7 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
 )
-from sklearn.model_selection import cross_val_score
+from sklearn.model_selection import KFold, StratifiedKFold, cross_val_score
 
 logger = logging.getLogger(__name__)
 
@@ -473,6 +473,15 @@ class OptunaOptimizer:
             else:
                 scoring = "neg_root_mean_squared_error"
 
+        # Explicit, shuffled CV splitter. A bare `cv=int` yields sklearn's
+        # UNSHUFFLED default; StratifiedKFold(shuffle=True) keeps rare classes in
+        # every fold for classification, regression uses KFold. Fixed seed (42)
+        # matches the codebase convention for reproducible folds.
+        if problem_type in ["binary_classification", "multiclass_classification"]:
+            cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=42)
+        else:
+            cv = KFold(n_splits=cv_folds, shuffle=True, random_state=42)
+
         fixed_params = fixed_params or {}
 
         def objective(trial: optuna.Trial) -> float:
@@ -492,7 +501,7 @@ class OptunaOptimizer:
                     model,
                     X,
                     y,
-                    cv=cv_folds,
+                    cv=cv,
                     scoring=scoring,
                     n_jobs=-1,
                 )

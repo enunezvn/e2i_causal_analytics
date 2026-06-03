@@ -605,3 +605,112 @@ class TestCheckTemporalOrdering:
         warnings = _check_temporal_ordering(train_data, validation_data, test_data, "timestamp")
 
         assert len(warnings) == 0
+
+
+@pytest.mark.asyncio
+class TestClassPresenceGuard:
+    """Rare-event guard: a non-empty CLASSIFICATION split that is missing a
+    class present elsewhere in the dataset (e.g. a 0-positive val/test split on a
+    ~2.9%-positive cohort) must FAIL FAST at split validation, instead of
+    silently producing undefined ROC-AUC / recall downstream. Classification
+    only — a no-op for regression (continuous y must never be flagged)."""
+
+    def _split(self, y):
+        n = len(y)
+        return {"X": pd.DataFrame({"f": range(n)}), "y": pd.Series(y), "row_count": n}
+
+    def _state(self, *, train_y, val_y, test_y, problem_type="binary_classification"):
+        state = {
+            "train_ratio": 0.60,
+            "validation_ratio": 0.20,
+            "test_ratio": 0.15,
+            "holdout_ratio": 0.05,
+            "train_samples": len(train_y),
+            "validation_samples": len(val_y),
+            "test_samples": len(test_y),
+            "holdout_samples": 50,
+            "total_samples": len(train_y) + len(val_y) + len(test_y) + 50,
+            "train_data": self._split(train_y),
+            "validation_data": self._split(val_y),
+            "test_data": self._split(test_y),
+        }
+        if problem_type is not None:
+            state["problem_type"] = problem_type
+        return state
+
+    async def test_single_class_validation_split_blocks(self):
+        """A 0-positive validation split (all class 0) hard-blocks."""
+        state = self._state(
+            train_y=[0] * 50 + [1] * 10,  # both classes
+            val_y=[0] * 20,  # SINGLE class — missing class 1
+            test_y=[0] * 12 + [1] * 3,  # both classes
+        )
+
+        result = await enforce_splits(state)
+
+        assert result["split_ratios_valid"] is False
+        assert result.get("error_type") == "split_validation_error"
+        assert any(
+            "validation" in w.lower() and "class" in w.lower() for w in result["leakage_warnings"]
+        ), result["leakage_warnings"]
+
+    async def test_single_class_test_split_blocks(self):
+        """A single-class TEST split hard-blocks and names the test split."""
+        state = self._state(
+            train_y=[0] * 50 + [1] * 10,
+            val_y=[0] * 16 + [1] * 4,
+            test_y=[1] * 15,  # SINGLE class — missing class 0
+        )
+
+        result = await enforce_splits(state)
+
+        assert result["split_ratios_valid"] is False
+        assert any("test" in w.lower() and "class" in w.lower() for w in result["leakage_warnings"])
+
+    async def test_all_classes_present_passes(self):
+        """When every split carries both classes, the guard does not fire."""
+        state = self._state(
+            train_y=[0] * 50 + [1] * 10,
+            val_y=[0] * 16 + [1] * 4,
+            test_y=[0] * 12 + [1] * 3,
+        )
+
+        result = await enforce_splits(state)
+
+        assert result["split_ratios_valid"] is True
+        assert not any("class" in w.lower() for w in result["leakage_warnings"])
+
+    async def test_regression_is_a_noop(self):
+        """For regression, a split with a single distinct continuous value (or
+        any value set) must NEVER be flagged as 'missing a class'."""
+        state = self._state(
+            train_y=[float(i) for i in range(60)],  # many distinct continuous values
+            val_y=[3.14] * 20,  # one distinct value — would look 'single-class'
+            test_y=[float(i) for i in range(15)],
+            problem_type="regression",
+        )
+
+        result = await enforce_splits(state)
+
+        assert result["split_ratios_valid"] is True
+        assert not any("class" in w.lower() for w in result["leakage_warnings"])
+
+    async def test_no_split_data_is_backcompat_noop(self):
+        """Without split data dicts, behavior is unchanged (existing contract)."""
+        state = {
+            "train_ratio": 0.60,
+            "validation_ratio": 0.20,
+            "test_ratio": 0.15,
+            "holdout_ratio": 0.05,
+            "train_samples": 600,
+            "validation_samples": 200,
+            "test_samples": 150,
+            "holdout_samples": 50,
+            "total_samples": 1000,
+            "problem_type": "binary_classification",
+        }
+
+        result = await enforce_splits(state)
+
+        assert result["split_ratios_valid"] is True
+        assert not any("class" in w.lower() for w in result["leakage_warnings"])
