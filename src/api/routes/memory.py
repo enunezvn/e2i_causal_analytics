@@ -17,9 +17,15 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.api.dependencies.auth import (
+    UserRole,
+    get_user_brands,
+    has_role,
+    require_viewer,
+)
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 from src.memory.episodic_memory import (
     E2IEntityReferences,
@@ -52,6 +58,35 @@ router = APIRouter(
         500: {"model": ErrorResponse, "description": "Internal server error"},
     },
 )
+
+
+# =============================================================================
+# AUTHORIZATION HELPERS (security review finding #4)
+# =============================================================================
+#
+# REASON-BEFORE-RULES note: ``episodic_memories`` is the agents' tri-memory
+# store. It has NO per-end-user ownership column — the tenant boundary that
+# already exists in the data is ``brand`` (with ``region``/``agent_name`` as
+# secondary scopes). So we scope episodic reads/writes by the caller's brand
+# grants, mirroring the per-tenant pattern in ``routes/sentinels.py``, rather
+# than inventing a user_id column that the schema doesn't have. PHI/PII
+# references (patient_id, hcp_id) are accepted on write but never echoed in
+# responses (``EpisodicMemoryResponse`` omits them).
+
+
+def _is_admin(user: Dict[str, Any]) -> bool:
+    """Cross-brand admin (or holder of the ``'all'`` brand grant)."""
+    return has_role(user, UserRole.ADMIN) or "all" in set(get_user_brands(user))
+
+
+def _brand_allowed(user: Dict[str, Any], brand: Optional[str]) -> bool:
+    """True if the caller may read/write memories for ``brand``."""
+    if _is_admin(user):
+        return True
+    if brand is None:
+        # Unbranded memories are not tenant-scoped; allow for any auth'd user.
+        return True
+    return brand in set(get_user_brands(user))
 
 
 # =============================================================================
@@ -278,7 +313,10 @@ class SemanticPathResponse(BaseModel):
     summary="Search memory systems",
     operation_id="search_memory",
 )
-async def search_memory(request: MemorySearchRequest) -> MemorySearchResponse:
+async def search_memory(
+    request: MemorySearchRequest,
+    user: Dict[str, Any] = Depends(require_viewer),
+) -> MemorySearchResponse:
     """
     Execute hybrid search across memory systems.
 
@@ -331,8 +369,9 @@ async def search_memory(request: MemorySearchRequest) -> MemorySearchResponse:
         )
 
     except Exception as e:
-        logger.error(f"Memory search failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Memory search failed: {str(e)}") from e
+        # FINDING #3: generic client message; full detail logged server-side.
+        logger.error(f"Memory search failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Memory search failed") from e
 
 
 @router.post(
@@ -342,14 +381,26 @@ async def search_memory(request: MemorySearchRequest) -> MemorySearchResponse:
     operation_id="create_episodic_memory",
 )
 async def create_episodic_memory(
-    memory: EpisodicMemoryInput, background_tasks: BackgroundTasks
+    memory: EpisodicMemoryInput,
+    background_tasks: BackgroundTasks,
+    user: Dict[str, Any] = Depends(require_viewer),
 ) -> EpisodicMemoryResponse:
     """
     Insert a new episodic memory.
 
     Creates an embedding and stores in Supabase with pgvector.
     Used to capture significant interactions for future retrieval.
+
+    Authorization (finding #4): a non-admin caller may only write into a
+    brand they hold a grant for. PHI/PII references (patient_id, hcp_id) are
+    accepted but never echoed in the response.
     """
+    # FINDING #4: enforce brand grant BEFORE writing.
+    if not _brand_allowed(user, memory.brand):
+        raise HTTPException(
+            status_code=403,
+            detail=f"no grant for brand={memory.brand!r}",
+        )
     try:
         # Build E2I entity references
         e2i_refs = E2IEntityReferences(
@@ -384,11 +435,12 @@ async def create_episodic_memory(
             metadata=memory.metadata or {},
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Episodic memory insertion failed: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Failed to create episodic memory: {str(e)}"
-        ) from e
+        # FINDING #3: generic client message; full detail logged server-side.
+        logger.error(f"Episodic memory insertion failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to create episodic memory") from e
 
 
 @router.get(
@@ -403,13 +455,34 @@ async def list_episodic_memories(
     agent_name: Optional[str] = None,
     brand: Optional[str] = None,
     session_id: Optional[str] = None,
+    user: Dict[str, Any] = Depends(require_viewer),
 ) -> List[EpisodicMemoryResponse]:
     """
     List recent episodic memories ordered by occurrence time (most recent first).
 
     Supports filtering by event type, agent, brand, and session.
+
+    Authorization (finding #4): a non-admin caller's results are scoped to
+    their brand grants. Requesting an out-of-grant ``?brand`` returns an
+    empty list (existence not disclosed); omitting ``?brand`` restricts to
+    the caller's first granted brand. Admins may query any brand.
     """
     try:
+        # FINDING #4: scope the brand filter to the caller's grants.
+        if not _is_admin(user):
+            allowed_brands = get_user_brands(user)
+            if brand is not None:
+                if brand not in set(allowed_brands):
+                    # Defensive empty list — don't leak other-brand existence.
+                    return []
+            elif allowed_brands:
+                # No brand param: restrict to the caller's grant. The data
+                # layer filters by a single brand, so pin to the first grant
+                # rather than returning unscoped cross-brand rows.
+                brand = allowed_brands[0]
+            # No grants + no brand param: nothing tenant-scoped is visible,
+            # but unbranded agent memories remain readable (brand stays None).
+
         rows = await get_recent_memories(
             limit=limit,
             event_types=[event_type] if event_type else None,
@@ -434,9 +507,12 @@ async def list_episodic_memories(
             for r in rows
         ]
 
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Failed to list episodic memories: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to list memories: {str(e)}") from e
+        # FINDING #3: generic client message; full detail logged server-side.
+        logger.error(f"Failed to list episodic memories: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to list memories") from e
 
 
 @router.get(
@@ -445,14 +521,25 @@ async def list_episodic_memories(
     summary="Get episodic memory",
     operation_id="get_episodic_memory",
 )
-async def get_episodic_memory_endpoint(memory_id: str) -> EpisodicMemoryResponse:
+async def get_episodic_memory_endpoint(
+    memory_id: str,
+    user: Dict[str, Any] = Depends(require_viewer),
+) -> EpisodicMemoryResponse:
     """
     Retrieve a specific episodic memory by ID.
+
+    Authorization (finding #4): a non-admin caller can only read a memory
+    whose ``brand`` they are granted; otherwise 404 (existence not disclosed).
     """
     try:
         result = await get_memory_by_id(memory_id)
 
         if not result:
+            raise HTTPException(status_code=404, detail=f"Episodic memory {memory_id} not found")
+
+        # FINDING #4: brand-membership check. Return 404 (not 403) so the
+        # response doesn't confirm a memory exists to an unauthorized caller.
+        if not _brand_allowed(user, result.get("brand")):
             raise HTTPException(status_code=404, detail=f"Episodic memory {memory_id} not found")
 
         return EpisodicMemoryResponse(
@@ -470,8 +557,9 @@ async def get_episodic_memory_endpoint(memory_id: str) -> EpisodicMemoryResponse
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to retrieve episodic memory: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to retrieve memory: {str(e)}") from e
+        # FINDING #3: generic client message; full detail logged server-side.
+        logger.error(f"Failed to retrieve episodic memory: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to retrieve memory") from e
 
 
 @router.post(
@@ -482,6 +570,7 @@ async def get_episodic_memory_endpoint(memory_id: str) -> EpisodicMemoryResponse
 )
 async def record_procedural_feedback(
     request: ProceduralFeedbackRequest,
+    user: Dict[str, Any] = Depends(require_viewer),
 ) -> ProceduralFeedbackResponse:
     """
     Record outcome feedback for a procedural memory.
@@ -525,8 +614,9 @@ async def record_procedural_feedback(
         )
 
     except Exception as e:
-        logger.error(f"Failed to record procedural feedback: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to record feedback: {str(e)}") from e
+        # FINDING #3: generic client message; full detail logged server-side.
+        logger.error(f"Failed to record procedural feedback: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to record feedback") from e
 
 
 @router.get(
@@ -541,6 +631,7 @@ async def query_semantic_paths(
     relationship_type: str = "causal_path",
     max_depth: int = 3,
     min_confidence: float = 0.5,
+    user: Dict[str, Any] = Depends(require_viewer),
 ) -> SemanticPathResponse:
     """
     Query semantic graph for causal paths.
@@ -579,8 +670,9 @@ async def query_semantic_paths(
         )
 
     except Exception as e:
-        logger.error(f"Semantic path query failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Path query failed: {str(e)}") from e
+        # FINDING #3: generic client message; full detail logged server-side.
+        logger.error(f"Semantic path query failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Path query failed") from e
 
 
 # =============================================================================
@@ -593,7 +685,9 @@ async def query_semantic_paths(
     summary="Get memory statistics",
     operation_id="get_memory_stats",
 )
-async def get_memory_stats() -> Dict[str, Any]:
+async def get_memory_stats(
+    user: Dict[str, Any] = Depends(require_viewer),
+) -> Dict[str, Any]:
     """
     Get statistics about the memory systems.
 
@@ -644,5 +738,6 @@ async def get_memory_stats() -> Dict[str, Any]:
             "last_updated": datetime.now(timezone.utc).isoformat(),
         }
     except Exception as e:
-        logger.error(f"Failed to get memory stats: {e}")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        # FINDING #3: generic client message; full detail logged server-side.
+        logger.error(f"Failed to get memory stats: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to get memory stats") from e
