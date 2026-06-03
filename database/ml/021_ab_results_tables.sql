@@ -304,8 +304,13 @@ CREATE INDEX IF NOT EXISTS idx_ab_fidelity_grade ON ab_fidelity_comparisons(fide
 -- SECTION 3: SUPPORTING FUNCTIONS
 -- ============================================
 
--- Function to calculate fidelity grade from score
-CREATE OR REPLACE FUNCTION calculate_fidelity_grade(p_fidelity_score FLOAT)
+-- Function to calculate fidelity grade from score.
+-- Renamed 2026-06-03 from calculate_fidelity_grade -> ab_calculate_fidelity_grade:
+-- the canonical calculate_fidelity_grade(double precision) is defined by
+-- ml/012_digital_twin_tables.sql, returns the fidelity_grade ENUM, and is used by
+-- twin_fidelity_tracking triggers. This A/B variant grades a 0-1 score (higher is
+-- better) and returns varchar, so it must not clobber the twin function.
+CREATE OR REPLACE FUNCTION ab_calculate_fidelity_grade(p_fidelity_score FLOAT)
 RETURNS VARCHAR(20) AS $$
 BEGIN
     IF p_fidelity_score IS NULL THEN
@@ -396,11 +401,12 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION set_fidelity_grade()
 RETURNS TRIGGER AS $$
 BEGIN
-    NEW.fidelity_grade := calculate_fidelity_grade(NEW.fidelity_score);
+    NEW.fidelity_grade := ab_calculate_fidelity_grade(NEW.fidelity_score);
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS tr_fidelity_grade ON ab_fidelity_comparisons;
 CREATE TRIGGER tr_fidelity_grade
     BEFORE INSERT OR UPDATE OF fidelity_score ON ab_fidelity_comparisons
     FOR EACH ROW
@@ -446,6 +452,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS tr_prediction_errors ON ab_fidelity_comparisons;
 CREATE TRIGGER tr_prediction_errors
     BEFORE INSERT OR UPDATE OF predicted_effect, actual_effect ON ab_fidelity_comparisons
     FOR EACH ROW

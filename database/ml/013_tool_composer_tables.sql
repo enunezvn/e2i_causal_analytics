@@ -36,26 +36,31 @@
 -- ============================================================================
 
 -- Routing patterns for query classification
+DO $$ BEGIN
 CREATE TYPE routing_pattern AS ENUM (
     'SINGLE_AGENT',           -- Route to single primary agent
     'PARALLEL_DELEGATION',    -- Route to multiple independent agents
     'TOOL_COMPOSER',          -- Use Tool Composer for dependent multi-domain
     'CLARIFICATION_NEEDED'    -- Query too ambiguous, request clarification
 );
+EXCEPTION WHEN duplicate_object THEN null; END $$;
 
 COMMENT ON TYPE routing_pattern IS 'Query routing patterns determined by Orchestrator classifier';
 
 -- Dependency types between sub-questions
+DO $$ BEGIN
 CREATE TYPE dependency_type AS ENUM (
     'REFERENCE_CHAIN',        -- Pronoun/phrase references earlier result ("that", "those")
     'CONDITIONAL',            -- Conditional logic ("if X then Y")
     'LOGICAL_SEQUENCE',       -- Natural ordering required (cause → effect → intervention)
     'ENTITY_TRANSFORMATION'   -- Entity filtered/transformed by earlier step
 );
+EXCEPTION WHEN duplicate_object THEN null; END $$;
 
 COMMENT ON TYPE dependency_type IS 'Types of data dependencies between decomposed sub-questions';
 
 -- Tool capability categories (maps to agent domains)
+DO $$ BEGIN
 CREATE TYPE tool_category AS ENUM (
     'CAUSAL',                 -- Causal Impact Agent tools
     'SEGMENTATION',           -- Heterogeneous Optimizer tools
@@ -64,10 +69,12 @@ CREATE TYPE tool_category AS ENUM (
     'PREDICTION',             -- Prediction Synthesizer tools
     'MONITORING'              -- Drift Monitor tools
 );
+EXCEPTION WHEN duplicate_object THEN null; END $$;
 
 COMMENT ON TYPE tool_category IS 'Tool categories mapping to agent capability domains';
 
 -- Composition execution status
+DO $$ BEGIN
 CREATE TYPE composition_status AS ENUM (
     'PENDING',                -- Composition queued
     'DECOMPOSING',            -- Phase 1: Breaking down query
@@ -78,6 +85,7 @@ CREATE TYPE composition_status AS ENUM (
     'FAILED',                 -- Error during execution
     'TIMEOUT'                 -- Exceeded time limit
 );
+EXCEPTION WHEN duplicate_object THEN null; END $$;
 
 COMMENT ON TYPE composition_status IS 'Status of a tool composition execution';
 
@@ -90,7 +98,7 @@ COMMENT ON TYPE composition_status IS 'Status of a tool composition execution';
 -- Table: tool_registry
 -- Purpose: Central registry of tools exposed by agents for composition
 -- ----------------------------------------------------------------------------
-CREATE TABLE tool_registry (
+CREATE TABLE IF NOT EXISTS tool_registry (
     tool_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     
     -- Tool identification
@@ -123,9 +131,9 @@ CREATE TABLE tool_registry (
     ))
 );
 
-CREATE INDEX idx_tool_registry_category ON tool_registry(category);
-CREATE INDEX idx_tool_registry_agent ON tool_registry(source_agent);
-CREATE INDEX idx_tool_registry_composable ON tool_registry(composable) WHERE composable = true;
+CREATE INDEX IF NOT EXISTS idx_tool_registry_category ON tool_registry(category);
+CREATE INDEX IF NOT EXISTS idx_tool_registry_agent ON tool_registry(source_agent);
+CREATE INDEX IF NOT EXISTS idx_tool_registry_composable ON tool_registry(composable) WHERE composable = true;
 
 COMMENT ON TABLE tool_registry IS 'Central registry of composable tools exposed by agents';
 COMMENT ON COLUMN tool_registry.input_schema IS 'JSON Schema defining tool input parameters';
@@ -137,7 +145,7 @@ COMMENT ON COLUMN tool_registry.composable IS 'Whether tool can be used by Tool 
 -- Table: tool_dependencies
 -- Purpose: Define which tools can consume output from other tools
 -- ----------------------------------------------------------------------------
-CREATE TABLE tool_dependencies (
+CREATE TABLE IF NOT EXISTS tool_dependencies (
     dependency_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     
     -- Relationship
@@ -157,8 +165,8 @@ CREATE TABLE tool_dependencies (
     CONSTRAINT unique_dependency UNIQUE (consumer_tool_id, producer_tool_id)
 );
 
-CREATE INDEX idx_tool_deps_consumer ON tool_dependencies(consumer_tool_id);
-CREATE INDEX idx_tool_deps_producer ON tool_dependencies(producer_tool_id);
+CREATE INDEX IF NOT EXISTS idx_tool_deps_consumer ON tool_dependencies(consumer_tool_id);
+CREATE INDEX IF NOT EXISTS idx_tool_deps_producer ON tool_dependencies(producer_tool_id);
 
 COMMENT ON TABLE tool_dependencies IS 'Defines tool input/output compatibility for composition';
 COMMENT ON COLUMN tool_dependencies.transform_expression IS 'Optional transformation for output→input mapping';
@@ -168,7 +176,7 @@ COMMENT ON COLUMN tool_dependencies.transform_expression IS 'Optional transforma
 -- Table: classification_logs
 -- Purpose: Audit trail of query classification decisions
 -- ----------------------------------------------------------------------------
-CREATE TABLE classification_logs (
+CREATE TABLE IF NOT EXISTS classification_logs (
     classification_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     
     -- Query information
@@ -207,14 +215,14 @@ CREATE TABLE classification_logs (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_classification_logs_pattern ON classification_logs(routing_pattern);
-CREATE INDEX idx_classification_logs_created ON classification_logs(created_at DESC);
-CREATE INDEX idx_classification_logs_session ON classification_logs(session_id);
-CREATE INDEX idx_classification_logs_hash ON classification_logs(query_hash);
-CREATE INDEX idx_classification_logs_feedback ON classification_logs(was_correct) WHERE was_correct IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_classification_logs_pattern ON classification_logs(routing_pattern);
+CREATE INDEX IF NOT EXISTS idx_classification_logs_created ON classification_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_classification_logs_session ON classification_logs(session_id);
+CREATE INDEX IF NOT EXISTS idx_classification_logs_hash ON classification_logs(query_hash);
+CREATE INDEX IF NOT EXISTS idx_classification_logs_feedback ON classification_logs(was_correct) WHERE was_correct IS NOT NULL;
 
 -- GIN index for JSONB searches
-CREATE INDEX idx_classification_logs_domains ON classification_logs USING GIN (domain_mapping);
+CREATE INDEX IF NOT EXISTS idx_classification_logs_domains ON classification_logs USING GIN (domain_mapping);
 
 COMMENT ON TABLE classification_logs IS 'Audit trail of Orchestrator query classification decisions';
 COMMENT ON COLUMN classification_logs.query_hash IS 'SHA-256 hash for finding similar queries';
@@ -225,7 +233,7 @@ COMMENT ON COLUMN classification_logs.was_correct IS 'Feedback: NULL=pending, tr
 -- Table: composer_episodes
 -- Purpose: Episodic memory for tool compositions (learning from experience)
 -- ----------------------------------------------------------------------------
-CREATE TABLE composer_episodes (
+CREATE TABLE IF NOT EXISTS composer_episodes (
     episode_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     composition_id VARCHAR(100) NOT NULL UNIQUE,
     
@@ -274,19 +282,19 @@ CREATE TABLE composer_episodes (
 );
 
 -- Standard indexes
-CREATE INDEX idx_composer_episodes_status ON composer_episodes(status);
-CREATE INDEX idx_composer_episodes_created ON composer_episodes(created_at DESC);
-CREATE INDEX idx_composer_episodes_session ON composer_episodes(session_id);
-CREATE INDEX idx_composer_episodes_success ON composer_episodes(success) WHERE success IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_composer_episodes_status ON composer_episodes(status);
+CREATE INDEX IF NOT EXISTS idx_composer_episodes_created ON composer_episodes(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_composer_episodes_session ON composer_episodes(session_id);
+CREATE INDEX IF NOT EXISTS idx_composer_episodes_success ON composer_episodes(success) WHERE success IS NOT NULL;
 
 -- Vector similarity index for finding similar past compositions
-CREATE INDEX idx_composer_episodes_embedding ON composer_episodes 
+CREATE INDEX IF NOT EXISTS idx_composer_episodes_embedding ON composer_episodes 
     USING ivfflat (query_embedding vector_cosine_ops) 
     WITH (lists = 100);
 
 -- GIN indexes for JSONB queries
-CREATE INDEX idx_composer_episodes_plan ON composer_episodes USING GIN (tool_plan);
-CREATE INDEX idx_composer_episodes_subq ON composer_episodes USING GIN (sub_questions);
+CREATE INDEX IF NOT EXISTS idx_composer_episodes_plan ON composer_episodes USING GIN (tool_plan);
+CREATE INDEX IF NOT EXISTS idx_composer_episodes_subq ON composer_episodes USING GIN (sub_questions);
 
 COMMENT ON TABLE composer_episodes IS 'Episodic memory for tool compositions - enables learning from experience';
 COMMENT ON COLUMN composer_episodes.query_embedding IS 'Vector embedding for similarity search (1536-dim)';
@@ -297,7 +305,7 @@ COMMENT ON COLUMN composer_episodes.parallelizable_groups IS 'Groups of tools th
 -- Table: composition_steps
 -- Purpose: Individual step execution records within a composition
 -- ----------------------------------------------------------------------------
-CREATE TABLE composition_steps (
+CREATE TABLE IF NOT EXISTS composition_steps (
     step_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     
     -- Parent composition
@@ -336,9 +344,9 @@ CREATE TABLE composition_steps (
     CONSTRAINT unique_step_in_episode UNIQUE (episode_id, step_number)
 );
 
-CREATE INDEX idx_composition_steps_episode ON composition_steps(episode_id);
-CREATE INDEX idx_composition_steps_tool ON composition_steps(tool_id);
-CREATE INDEX idx_composition_steps_status ON composition_steps(status);
+CREATE INDEX IF NOT EXISTS idx_composition_steps_episode ON composition_steps(episode_id);
+CREATE INDEX IF NOT EXISTS idx_composition_steps_tool ON composition_steps(tool_id);
+CREATE INDEX IF NOT EXISTS idx_composition_steps_status ON composition_steps(status);
 
 COMMENT ON TABLE composition_steps IS 'Individual tool execution steps within a composition';
 COMMENT ON COLUMN composition_steps.depends_on_steps IS 'Step numbers this step depends on';
@@ -349,7 +357,7 @@ COMMENT ON COLUMN composition_steps.serves_sub_question IS 'Which sub-question t
 -- Table: tool_performance
 -- Purpose: Track tool execution performance for optimization
 -- ----------------------------------------------------------------------------
-CREATE TABLE tool_performance (
+CREATE TABLE IF NOT EXISTS tool_performance (
     performance_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     
     -- Tool reference
@@ -374,10 +382,10 @@ CREATE TABLE tool_performance (
     executed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_tool_performance_tool ON tool_performance(tool_id);
-CREATE INDEX idx_tool_performance_executed ON tool_performance(executed_at DESC);
-CREATE INDEX idx_tool_performance_context ON tool_performance(context_type);
-CREATE INDEX idx_tool_performance_success ON tool_performance(success);
+CREATE INDEX IF NOT EXISTS idx_tool_performance_tool ON tool_performance(tool_id);
+CREATE INDEX IF NOT EXISTS idx_tool_performance_executed ON tool_performance(executed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tool_performance_context ON tool_performance(context_type);
+CREATE INDEX IF NOT EXISTS idx_tool_performance_success ON tool_performance(success);
 
 -- Partitioning by month for performance (if table grows large)
 -- Note: Uncomment and adjust for production use
@@ -396,31 +404,49 @@ COMMENT ON COLUMN tool_performance.context_type IS 'Category of usage context fo
 -- View: v_composition_success_rate
 -- Purpose: Success rates by query pattern and complexity
 -- ----------------------------------------------------------------------------
+-- Reconciled 2026-06-03 to the working deployed definition: a set-returning
+-- function (jsonb_array_elements_text) cannot be called inside an aggregate on
+-- PG15, so the per-step expansion is moved into a CTE, then jsonb_agg(DISTINCT)
+-- collects step names. Aggregates are cast ::numeric for the 2-arg round().
 CREATE OR REPLACE VIEW v_composition_success_rate AS
-SELECT 
-    DATE_TRUNC('day', created_at) AS day,
-    status,
+WITH tools_extracted AS (
+    SELECT
+        episode_id,
+        created_at,
+        status,
+        success,
+        total_latency_ms,
+        tool_plan,
+        jsonb_array_elements_text(
+            CASE WHEN tool_plan ? 'steps'
+                 THEN (tool_plan->'steps')
+                 ELSE '[]'::jsonb
+            END
+        ) AS tool_name
+    FROM composer_episodes
+    WHERE created_at > NOW() - INTERVAL '30 days'
+      AND tool_plan IS NOT NULL
+)
+SELECT
+    DATE_TRUNC('day', ce.created_at) AS day,
+    ce.status,
     COUNT(*) AS total_compositions,
-    COUNT(*) FILTER (WHERE success = true) AS successful,
-    COUNT(*) FILTER (WHERE success = false) AS failed,
-    COUNT(*) FILTER (WHERE success IS NULL) AS pending_feedback,
+    COUNT(*) FILTER (WHERE ce.success = true) AS successful,
+    COUNT(*) FILTER (WHERE ce.success = false) AS failed,
+    COUNT(*) FILTER (WHERE ce.success IS NULL) AS pending_feedback,
     ROUND(
-        COUNT(*) FILTER (WHERE success = true)::NUMERIC / 
-        NULLIF(COUNT(*) FILTER (WHERE success IS NOT NULL), 0) * 100, 
+        COUNT(*) FILTER (WHERE ce.success = true)::NUMERIC /
+        NULLIF(COUNT(*) FILTER (WHERE ce.success IS NOT NULL), 0) * 100,
         2
     ) AS success_rate_pct,
-    ROUND(AVG(total_latency_ms), 2) AS avg_latency_ms,
-    ROUND(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY total_latency_ms), 2) AS p95_latency_ms,
-    jsonb_agg(DISTINCT jsonb_array_elements_text(
-        CASE WHEN tool_plan ? 'steps' 
-             THEN (tool_plan->'steps') 
-             ELSE '[]'::jsonb 
-        END
-    )) FILTER (WHERE tool_plan IS NOT NULL) AS tools_used
-FROM composer_episodes
-WHERE created_at > NOW() - INTERVAL '30 days'
-GROUP BY DATE_TRUNC('day', created_at), status
-ORDER BY day DESC, status;
+    ROUND(AVG(ce.total_latency_ms)::numeric, 2) AS avg_latency_ms,
+    ROUND(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY ce.total_latency_ms)::numeric, 2) AS p95_latency_ms,
+    jsonb_agg(DISTINCT te.tool_name) FILTER (WHERE te.tool_name IS NOT NULL) AS tools_used
+FROM composer_episodes ce
+LEFT JOIN tools_extracted te ON ce.episode_id = te.episode_id
+WHERE ce.created_at > NOW() - INTERVAL '30 days'
+GROUP BY DATE_TRUNC('day', ce.created_at), ce.status
+ORDER BY day DESC, ce.status;
 
 COMMENT ON VIEW v_composition_success_rate IS 'Daily composition success metrics for monitoring';
 
@@ -442,11 +468,11 @@ SELECT
         NULLIF(COUNT(*), 0) * 100, 
         2
     ) AS success_rate_pct,
-    ROUND(AVG(tp.latency_ms), 2) AS avg_latency_ms,
-    ROUND(STDDEV(tp.latency_ms), 2) AS stddev_latency_ms,
-    ROUND(PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY tp.latency_ms), 2) AS p50_latency_ms,
-    ROUND(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY tp.latency_ms), 2) AS p95_latency_ms,
-    ROUND(PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY tp.latency_ms), 2) AS p99_latency_ms,
+    ROUND(AVG(tp.latency_ms)::numeric, 2) AS avg_latency_ms,
+    ROUND(STDDEV(tp.latency_ms)::numeric, 2) AS stddev_latency_ms,
+    ROUND(PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY tp.latency_ms)::numeric, 2) AS p50_latency_ms,
+    ROUND(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY tp.latency_ms)::numeric, 2) AS p95_latency_ms,
+    ROUND(PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY tp.latency_ms)::numeric, 2) AS p99_latency_ms,
     MAX(tp.executed_at) AS last_executed_at,
     MODE() WITHIN GROUP (ORDER BY tp.error_type) FILTER (WHERE tp.error_type IS NOT NULL) AS most_common_error
 FROM tool_registry tr
@@ -476,8 +502,8 @@ SELECT
         NULLIF(COUNT(*) FILTER (WHERE was_correct IS NOT NULL), 0) * 100, 
         2
     ) AS accuracy_pct,
-    ROUND(AVG(confidence), 3) AS avg_confidence,
-    ROUND(AVG(classification_latency_ms), 2) AS avg_latency_ms,
+    ROUND(AVG(confidence)::numeric, 3) AS avg_confidence,
+    ROUND(AVG(classification_latency_ms)::numeric, 2) AS avg_latency_ms,
     COUNT(*) FILTER (WHERE used_llm_layer = true) AS used_llm_count
 FROM classification_logs
 WHERE created_at > NOW() - INTERVAL '30 days'
@@ -855,7 +881,8 @@ INSERT INTO tool_registry (name, description, category, source_agent, input_sche
         }
     }'::jsonb,
     true
-);
+)
+ON CONFLICT (name) DO NOTHING;
 
 
 -- ============================================================================
@@ -896,41 +923,51 @@ BEGIN
     -- Insert dependencies
     -- refutation_runner consumes from causal_effect_estimator
     INSERT INTO tool_dependencies (consumer_tool_id, producer_tool_id, output_field, input_field)
-    VALUES (v_refutation_id, v_causal_effect_id, NULL, 'causal_result');
+    VALUES (v_refutation_id, v_causal_effect_id, NULL, 'causal_result')
+    ON CONFLICT (consumer_tool_id, producer_tool_id) DO NOTHING;
 
     -- sensitivity_analyzer consumes from causal_effect_estimator
     INSERT INTO tool_dependencies (consumer_tool_id, producer_tool_id, output_field, input_field)
-    VALUES (v_sensitivity_id, v_causal_effect_id, NULL, 'causal_result');
+    VALUES (v_sensitivity_id, v_causal_effect_id, NULL, 'causal_result')
+    ON CONFLICT (consumer_tool_id, producer_tool_id) DO NOTHING;
 
     -- cate_analyzer can consume from causal_effect_estimator (optional)
     INSERT INTO tool_dependencies (consumer_tool_id, producer_tool_id, output_field, input_field)
-    VALUES (v_cate_id, v_causal_effect_id, NULL, 'causal_result');
+    VALUES (v_cate_id, v_causal_effect_id, NULL, 'causal_result')
+    ON CONFLICT (consumer_tool_id, producer_tool_id) DO NOTHING;
 
     -- segment_ranker consumes from cate_analyzer
     INSERT INTO tool_dependencies (consumer_tool_id, producer_tool_id, output_field, input_field)
-    VALUES (v_segment_ranker_id, v_cate_id, NULL, 'cate_result');
+    VALUES (v_segment_ranker_id, v_cate_id, NULL, 'cate_result')
+    ON CONFLICT (consumer_tool_id, producer_tool_id) DO NOTHING;
 
     -- roi_estimator consumes from gap_calculator
     INSERT INTO tool_dependencies (consumer_tool_id, producer_tool_id, output_field, input_field)
-    VALUES (v_roi_est_id, v_gap_calc_id, NULL, 'gap_result');
+    VALUES (v_roi_est_id, v_gap_calc_id, NULL, 'gap_result')
+    ON CONFLICT (consumer_tool_id, producer_tool_id) DO NOTHING;
 
     -- power_calculator can consume from causal_effect_estimator
     INSERT INTO tool_dependencies (consumer_tool_id, producer_tool_id, output_field, input_field)
-    VALUES (v_power_calc_id, v_causal_effect_id, 'ate', 'effect_size');
+    VALUES (v_power_calc_id, v_causal_effect_id, 'ate', 'effect_size')
+    ON CONFLICT (consumer_tool_id, producer_tool_id) DO NOTHING;
 
     -- power_calculator can also consume from cate_analyzer
     INSERT INTO tool_dependencies (consumer_tool_id, producer_tool_id, output_field, input_field)
-    VALUES (v_power_calc_id, v_cate_id, 'effect_by_segment', 'effect_size');
+    VALUES (v_power_calc_id, v_cate_id, 'effect_by_segment', 'effect_size')
+    ON CONFLICT (consumer_tool_id, producer_tool_id) DO NOTHING;
 
     -- counterfactual_simulator can consume from multiple sources
     INSERT INTO tool_dependencies (consumer_tool_id, producer_tool_id, output_field, input_field)
-    VALUES (v_counterfactual_id, v_causal_effect_id, NULL, 'causal_model');
+    VALUES (v_counterfactual_id, v_causal_effect_id, NULL, 'causal_model')
+    ON CONFLICT (consumer_tool_id, producer_tool_id) DO NOTHING;
 
     INSERT INTO tool_dependencies (consumer_tool_id, producer_tool_id, output_field, input_field)
-    VALUES (v_counterfactual_id, v_cate_id, 'high_responders', 'target_population');
+    VALUES (v_counterfactual_id, v_cate_id, 'high_responders', 'target_population')
+    ON CONFLICT (consumer_tool_id, producer_tool_id) DO NOTHING;
 
     INSERT INTO tool_dependencies (consumer_tool_id, producer_tool_id, output_field, input_field)
-    VALUES (v_counterfactual_id, v_gap_calc_id, 'bottom_performers', 'target_population');
+    VALUES (v_counterfactual_id, v_gap_calc_id, 'bottom_performers', 'target_population')
+    ON CONFLICT (consumer_tool_id, producer_tool_id) DO NOTHING;
 
 END $$;
 
@@ -1011,20 +1048,19 @@ COMMENT ON FUNCTION find_similar_compositions IS 'Finds similar successful compo
 -- Function: get_tool_execution_order
 -- Purpose: Topologically sort tools based on dependencies
 -- ----------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION get_tool_execution_order(
-    p_tool_names TEXT[]
-)
-RETURNS TABLE (
-    execution_order INTEGER,
-    tool_name VARCHAR(100),
-    depends_on TEXT[]
-) AS $$
-WITH RECURSIVE tool_deps AS (
+-- Reconciled 2026-06-03 to the deployed-working definition: an aggregate
+-- (array_agg) is not allowed in a recursive CTE's recursive term, so the
+-- recursion only walks the graph and a separate CTE aggregates depends_on.
+CREATE OR REPLACE FUNCTION public.get_tool_execution_order(p_tool_names text[])
+ RETURNS TABLE(execution_order integer, tool_name character varying, depends_on text[])
+ LANGUAGE sql
+AS $function$
+WITH RECURSIVE tool_graph AS (
     -- Base case: tools with no dependencies
     SELECT 
         tr.name::VARCHAR(100) AS tool_name,
         0 AS depth,
-        ARRAY[]::TEXT[] AS depends_on
+        tr.name::VARCHAR(100) AS path_tool
     FROM tool_registry tr
     WHERE tr.name = ANY(p_tool_names)
       AND NOT EXISTS (
@@ -1039,23 +1075,42 @@ WITH RECURSIVE tool_deps AS (
     -- Recursive case: tools depending on already-processed tools
     SELECT 
         tr.name::VARCHAR(100),
-        td.depth + 1,
-        array_agg(DISTINCT producer.name)::TEXT[]
+        tg.depth + 1,
+        tr.name::VARCHAR(100)
     FROM tool_registry tr
     JOIN tool_dependencies dep ON tr.tool_id = dep.consumer_tool_id
     JOIN tool_registry producer ON dep.producer_tool_id = producer.tool_id
-    JOIN tool_deps td ON producer.name::VARCHAR(100) = td.tool_name
+    JOIN tool_graph tg ON producer.name::VARCHAR(100) = tg.tool_name
     WHERE tr.name = ANY(p_tool_names)
       AND producer.name = ANY(p_tool_names)
-    GROUP BY tr.name, td.depth
+      AND tr.name::VARCHAR(100) != tg.path_tool  -- Prevent cycles
+),
+tool_depths AS (
+    SELECT 
+        tool_name,
+        MAX(depth) AS max_depth
+    FROM tool_graph
+    GROUP BY tool_name
+),
+tool_deps_agg AS (
+    SELECT 
+        td.tool_name,
+        ARRAY_AGG(DISTINCT producer.name ORDER BY producer.name)::TEXT[] AS depends_on
+    FROM tool_depths td
+    LEFT JOIN tool_registry tr ON tr.name = td.tool_name
+    LEFT JOIN tool_dependencies dep ON tr.tool_id = dep.consumer_tool_id
+    LEFT JOIN tool_registry producer ON dep.producer_tool_id = producer.tool_id
+        AND producer.name = ANY(p_tool_names)
+    GROUP BY td.tool_name
 )
 SELECT 
-    ROW_NUMBER() OVER (ORDER BY depth, tool_name)::INTEGER AS execution_order,
-    tool_name,
-    depends_on
-FROM tool_deps
-ORDER BY depth, tool_name;
-$$ LANGUAGE sql;
+    ROW_NUMBER() OVER (ORDER BY td.max_depth, td.tool_name)::INTEGER AS execution_order,
+    td.tool_name,
+    COALESCE(tda.depends_on, ARRAY[]::TEXT[]) AS depends_on
+FROM tool_depths td
+LEFT JOIN tool_deps_agg tda ON td.tool_name = tda.tool_name
+ORDER BY td.max_depth, td.tool_name;
+$function$;
 
 COMMENT ON FUNCTION get_tool_execution_order IS 'Returns topologically sorted execution order for given tools';
 
@@ -1075,6 +1130,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trg_tool_registry_updated ON tool_registry;
 CREATE TRIGGER trg_tool_registry_updated
     BEFORE UPDATE ON tool_registry
     FOR EACH ROW
@@ -1134,6 +1190,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trg_log_step_performance ON composition_steps;
 CREATE TRIGGER trg_log_step_performance
     AFTER UPDATE ON composition_steps
     FOR EACH ROW
