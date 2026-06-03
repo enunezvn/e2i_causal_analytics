@@ -215,6 +215,52 @@ class TestRedisBackend:
             # Verify key format
             mock_pipe.incr.assert_called_once_with("ratelimit:client-123")
 
+    def test_redis_sets_ttl_only_on_first_increment(self):
+        """Finding 4 (lockout): TTL must be set ONLY when the key is created.
+
+        The previous impl called ``EXPIRE`` on every request, refreshing the TTL
+        each time, so under sustained traffic the window never rolled over →
+        permanent lockout. EXPIRE must be issued only when ``INCR`` returns 1
+        (the key was just created), and skipped on subsequent increments so the
+        original window expires on schedule.
+        """
+        mock_redis = MagicMock()
+        mock_redis.ping.return_value = True
+        mock_pipe = MagicMock()
+        mock_redis.pipeline.return_value = mock_pipe
+
+        with patch("redis.from_url") as mock_from_url:
+            mock_from_url.return_value = mock_redis
+            backend = RedisBackend()
+
+            # First request: INCR -> 1, key is new. EXPIRE must be set.
+            mock_pipe.execute.return_value = [1]
+            backend.is_rate_limited("client-1", limit=10, window=60)
+            assert mock_pipe.expire.call_count == 1
+            mock_pipe.expire.assert_called_with("ratelimit:client-1", 60)
+
+            # Second request: INCR -> 2, key already exists. EXPIRE must NOT be
+            # re-issued (otherwise the TTL keeps resetting and never expires).
+            mock_pipe.reset_mock()
+            mock_pipe.execute.return_value = [2]
+            backend.is_rate_limited("client-1", limit=10, window=60)
+            assert mock_pipe.expire.call_count == 0
+
+    def test_redis_still_enforces_limit_with_conditional_ttl(self):
+        """The conditional-TTL change must not break limit enforcement."""
+        mock_redis = MagicMock()
+        mock_redis.ping.return_value = True
+        mock_pipe = MagicMock()
+        mock_pipe.execute.return_value = [11]  # over the limit of 10
+        mock_redis.pipeline.return_value = mock_pipe
+
+        with patch("redis.from_url") as mock_from_url:
+            mock_from_url.return_value = mock_redis
+            backend = RedisBackend()
+            is_limited, remaining = backend.is_rate_limited("client-1", limit=10, window=60)
+            assert is_limited is True
+            assert remaining == 0
+
 
 @pytest.mark.unit
 class TestRateLimitMiddleware:
@@ -629,6 +675,63 @@ class TestRateLimitMiddleware:
 
         assert limit == 60
         assert window == 60
+
+    @staticmethod
+    def _make_request(path, ip="203.0.113.50", method="GET"):
+        req = MagicMock(spec=Request)
+        req.url.path = path
+        req.method = method
+        req.client = MagicMock()
+        req.client.host = ip
+        req.headers = {}
+        req.state = MagicMock()
+        req.state.user_id = None
+        return req
+
+    @pytest.mark.asyncio
+    async def test_distinct_api_endpoints_have_independent_buckets(self):
+        """Finding 3 (HIGH abuse): one noisy /api/* endpoint must not throttle
+        a different /api/* endpoint for the same client.
+
+        Previously the bucket key used only the FIRST path segment
+        (``path.split('/')[1]``), so every ``/api/...`` route collapsed into one
+        ``api`` bucket — exhausting ``/api/foo`` would 429 ``/api/bar`` too.
+        Buckets must be scoped per endpoint (or per route-group), so the second
+        endpoint stays available.
+        """
+        app = MagicMock()
+        middleware = RateLimitMiddleware(app, use_redis=False, default_limit=2, default_window=60)
+
+        call_next = AsyncMock(return_value=Response())
+
+        foo = self._make_request("/api/foo")
+        bar = self._make_request("/api/bar")
+
+        # Exhaust the limit on /api/foo (2 allowed, 3rd is 429).
+        assert (await middleware.dispatch(foo, call_next)).status_code != 429
+        assert (await middleware.dispatch(foo, call_next)).status_code != 429
+        assert (await middleware.dispatch(foo, call_next)).status_code == 429
+
+        # /api/bar (same client) must still be served — it is a different bucket.
+        resp_bar = await middleware.dispatch(bar, call_next)
+        assert resp_bar.status_code != 429, (
+            "a different /api endpoint was throttled by the noisy one — buckets "
+            "are not scoped per endpoint"
+        )
+
+    @pytest.mark.asyncio
+    async def test_same_endpoint_still_shares_bucket(self):
+        """Repeated calls to the SAME endpoint must still share a counter
+        (the per-endpoint scoping must not accidentally make every request its
+        own bucket)."""
+        app = MagicMock()
+        middleware = RateLimitMiddleware(app, use_redis=False, default_limit=2, default_window=60)
+        call_next = AsyncMock(return_value=Response())
+
+        foo = self._make_request("/api/foo")
+        assert (await middleware.dispatch(foo, call_next)).status_code != 429
+        assert (await middleware.dispatch(foo, call_next)).status_code != 429
+        assert (await middleware.dispatch(foo, call_next)).status_code == 429
 
     @pytest.mark.asyncio
     async def test_copilotkit_chat_rate_limit_enforced(self):

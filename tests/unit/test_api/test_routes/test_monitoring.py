@@ -162,7 +162,11 @@ class TestTriggerDriftDetection:
         assert len(data["features_with_drift"]) == 2
 
     def test_trigger_drift_sync_mode_failure(self, client):
-        """Test drift detection failure in sync mode returns 500."""
+        """Test drift detection failure in sync mode returns 500.
+
+        Finding 2: the raw exception text must NOT be echoed to the client;
+        a generic message is returned instead (the real text is logged).
+        """
         with patch(
             "src.tasks.drift_monitoring_tasks.run_drift_detection",
             side_effect=RuntimeError("Detection failed"),
@@ -177,7 +181,8 @@ class TestTriggerDriftDetection:
             )
 
         assert response.status_code == 500
-        assert "Detection failed" in response.json()["detail"]
+        assert "Detection failed" not in response.json()["detail"]
+        assert response.json()["detail"] == "Internal server error"
 
     def test_trigger_drift_with_feature_filter(self, client):
         """Test triggering drift detection with specific features."""
@@ -1688,6 +1693,139 @@ class TestRetrainingSweep:
 # =============================================================================
 # ENUM AND MODEL TESTS
 # =============================================================================
+
+
+class TestComputeEndpointAuthorization:
+    """Security: mutating/compute monitoring endpoints must require >= operator.
+
+    Finding 1 (MEDIUM privilege): the POST drift/performance/sweep endpoints
+    queue Celery compute jobs. Before the fix they required only authentication
+    (or nothing at all), so any VIEWER could trigger expensive background work.
+
+    Intent (auth.py): OPERATOR "manage experiments ... digital twin" — the
+    operational tier. Peer monitoring/operational routes (sentinels, experiments,
+    feedback, digital_twin) gate mutating ops with ``require_operator``; the
+    retraining lifecycle in this same module already uses ``require_admin``.
+    Drift detection / performance recording / production sweep are operational
+    monitoring compute → OPERATOR, consistent with sentinels.py.
+
+    We override ``require_auth`` with a VIEWER user so the real
+    ``require_operator`` dependency runs against a low-privilege principal and
+    must reject with 403.
+    """
+
+    @staticmethod
+    def _viewer_user():
+        return {
+            "id": "viewer-1",
+            "email": "viewer@example.com",
+            "app_metadata": {"role": "viewer"},
+        }
+
+    @staticmethod
+    def _operator_user():
+        return {
+            "id": "operator-1",
+            "email": "operator@example.com",
+            "app_metadata": {"role": "operator"},
+        }
+
+    def _override(self, app, user):
+        from src.api.dependencies.auth import require_auth
+
+        app.dependency_overrides[require_auth] = lambda: user
+
+    @pytest.mark.parametrize(
+        ("method", "url", "json_body", "params"),
+        [
+            (
+                "post",
+                "/monitoring/drift/detect",
+                {"model_id": "m1", "time_window": "7d"},
+                {"async_mode": True},
+            ),
+            (
+                "post",
+                "/monitoring/performance/record",
+                {"model_id": "m1", "predictions": [1, 0], "actuals": [1, 0]},
+                {"async_mode": True},
+            ),
+            (
+                "post",
+                "/monitoring/sweep/production",
+                None,
+                {"time_window": "7d"},
+            ),
+        ],
+    )
+    def test_viewer_forbidden_on_compute_endpoints(
+        self, app, client, method, url, json_body, params
+    ):
+        """A VIEWER must receive 403 on compute/queue endpoints."""
+        self._override(app, self._viewer_user())
+        try:
+            resp = getattr(client, method)(url, json=json_body, params=params)
+        finally:
+            app.dependency_overrides.clear()
+        assert resp.status_code == 403, resp.text
+
+    def test_operator_allowed_on_drift_detect(self, app, client):
+        """An OPERATOR passes the gate (reaches the handler, queues a task)."""
+        self._override(app, self._operator_user())
+        mock_task = MagicMock()
+        mock_task.id = "task-op"
+        try:
+            with patch("src.tasks.drift_monitoring_tasks.run_drift_detection") as mock_run:
+                mock_run.delay.return_value = mock_task
+                resp = client.post(
+                    "/monitoring/drift/detect",
+                    params={"async_mode": True},
+                    json={"model_id": "m1", "time_window": "7d"},
+                )
+        finally:
+            app.dependency_overrides.clear()
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "queued"
+
+
+class TestErrorDetailDoesNotLeakInternals:
+    """Security: 500 responses must not echo raw internal exception text.
+
+    Finding 2 (LOW info-disclosure): handlers previously returned
+    ``detail=str(e)`` which can surface stack/driver internals, table names,
+    connection strings, etc. The handler must log server-side and return a
+    generic client-facing message.
+    """
+
+    def test_drift_sync_failure_returns_generic_detail(self, client):
+        secret = "DB password=hunter2 at host db.internal:5432"
+        with patch(
+            "src.tasks.drift_monitoring_tasks.run_drift_detection",
+            side_effect=RuntimeError(secret),
+        ):
+            resp = client.post(
+                "/monitoring/drift/detect",
+                params={"async_mode": False},
+                json={"model_id": "m1", "time_window": "7d"},
+            )
+        assert resp.status_code == 500
+        detail = resp.json()["detail"]
+        assert "hunter2" not in detail
+        assert "db.internal" not in detail
+        assert detail == "Internal server error"
+
+    def test_latest_drift_server_error_returns_generic_detail(self, client):
+        secret = "psycopg2.OperationalError: relation drift_history secret-table"
+        with patch("src.repositories.drift_monitoring.DriftHistoryRepository") as MockRepo:
+            mock_repo = AsyncMock()
+            mock_repo.get_latest_drift_status.side_effect = RuntimeError(secret)
+            MockRepo.return_value = mock_repo
+            resp = client.get("/monitoring/drift/latest/m1")
+        assert resp.status_code == 500
+        detail = resp.json()["detail"]
+        assert "secret-table" not in detail
+        assert "psycopg2" not in detail
+        assert detail == "Internal server error"
 
 
 class TestEnums:
