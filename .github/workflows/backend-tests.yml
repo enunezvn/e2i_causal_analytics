@@ -581,6 +581,21 @@ jobs:
     # mirror, never touches Docker Hub, and binds the same `localhost:6379`
     # REDIS_URL points at.
     timeout-minutes: 25
+    # Sharded 3 ways via pytest-split (mirrors the integration-tests lane):
+    # each shard runs ~1/3 of tests/unit/test_agents/ with leaner, shorter-
+    # lived xdist workers. Before sharding, the single job hung at ~98% on
+    # ~75% of runs — pyproject's timeout_method="thread" can't interrupt a
+    # native/GIL-holding stall, and a worker alive ~17min over ~6400 tests
+    # bloats memory until a tail test (loadscope-grouped
+    # test_explainer/test_narrative_generator) stalls past the 25-min cap.
+    # Sharding caps per-worker test count → no tail-hang + ~3x faster wall.
+    # fail-fast:false so one shard's failure still lets the others report;
+    # ci-success gates on needs.agents-tests.result (the matrix aggregate),
+    # so the required check is unaffected by the per-shard job-name suffixes.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     env:
       E2I_TESTING_MODE: 'true'
       SUPABASE_URL: 'http://localhost:54321'
@@ -662,7 +677,7 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest-cov pytest-xdist pytest-timeout pytest-asyncio
+          pip install pytest-cov pytest-xdist pytest-timeout pytest-asyncio pytest-split
 
       # Real MLflow tracking server (SQLite backend → supports the model
       # registry exercised by model_deployer's registry_manager). Mirrors the
@@ -699,6 +714,8 @@ jobs:
           pytest \
             tests/unit/test_agents/ \
             -m "not slow" \
+            --splits 3 \
+            --group ${{ matrix.shard }} \
             -n 2 \
             --dist=loadscope \
             --timeout=180 \
