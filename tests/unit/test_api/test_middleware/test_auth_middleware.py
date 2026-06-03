@@ -135,6 +135,35 @@ class TestIsPublicPath:
         assert _is_public_path("POST", "/api/copilotkit/info") is True
 
     # =========================================================================
+    # Graph endpoints — PHI hardening.
+    #
+    # Only the ``/api/graph/health`` probe stays public. The data
+    # endpoints (``/nodes``, ``/relationships``, ``/stats``,
+    # ``/causal-chains``) were public "for demo visualization" but:
+    #   1. return Patient/HCP graph nodes + relationships (PHI/PII),
+    #      cross-tenant, to any anonymous caller; and
+    #   2. forward user-supplied ``entity_types`` / ``relationship_types``
+    #      into a layer that string-interpolates them into Cypher
+    #      (``src/memory/semantic_memory.py``) — an UNAUTHENTICATED
+    #      Cypher-injection surface.
+    # They now require a JWT. The frontend graph client already sends
+    # ``Authorization: Bearer`` via the shared apiClient
+    # (``frontend/src/lib/api-client.ts``), so authenticated users see no
+    # change; only anonymous access is removed.
+    # =========================================================================
+
+    def test_graph_health_is_public(self):
+        """Graph health probe stays public (no PHI, dashboard liveness)."""
+        assert _is_public_path("GET", "/api/graph/health") is True
+
+    def test_graph_data_endpoints_require_auth(self):
+        """Graph data endpoints are NOT public (PHI/PII + Cypher injection)."""
+        assert _is_public_path("GET", "/api/graph/nodes") is False
+        assert _is_public_path("GET", "/api/graph/relationships") is False
+        assert _is_public_path("GET", "/api/graph/stats") is False
+        assert _is_public_path("POST", "/api/graph/causal-chains") is False
+
+    # =========================================================================
     # Protected paths
     # =========================================================================
 
