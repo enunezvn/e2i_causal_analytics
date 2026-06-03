@@ -21,6 +21,7 @@ Brand enforcement
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -175,7 +176,10 @@ async def list_sentinels(
         return []
     if enabled_only:
         query = query.eq("enabled", True)
-    rows = (query.execute().data) or []
+    # Finding 4: the supabase client is sync — offload the blocking .execute()
+    # to a worker thread so it doesn't stall the event loop.
+    result = await asyncio.to_thread(query.execute)
+    rows = (result.data) or []
     return [
         SentinelResponse(
             sentinel_id=str(r["sentinel_id"]),
@@ -198,9 +202,10 @@ async def get_sentinel(
     user: Dict[str, Any] = Depends(require_auth),
 ) -> SentinelResponse:
     client = get_supabase_client()
-    rows = (
-        client.table("sentinels").select("*").eq("sentinel_id", sentinel_id).limit(1).execute().data
-    ) or []
+    # Finding 4: offload the sync supabase .execute() off the event loop.
+    query = client.table("sentinels").select("*").eq("sentinel_id", sentinel_id).limit(1)
+    result = await asyncio.to_thread(query.execute)
+    rows = (result.data) or []
     if not rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="sentinel not found")
     r = rows[0]
@@ -237,13 +242,30 @@ async def update_sentinel(
     payload: SentinelUpdateRequest,
     user: Dict[str, Any] = Depends(require_operator),
 ) -> SentinelResponse:
-    """Enable/disable a sentinel."""
+    """Enable/disable a sentinel.
+
+    Finding 3 (cross-brand IDOR): brand membership is enforced BEFORE the
+    mutation. Previously the UPDATE ran first and only the read-back would
+    404, so any Operator could enable/disable another tenant's sentinel.
+    ``get_sentinel`` fetches the row and 404s when its brand is not in the
+    caller's grant set (admins bypass), so we call it first as the
+    authorization gate — and only mutate once it succeeds.
+    """
     if payload.enabled is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="no updatable fields")
+
+    # Authorization gate: 404s for missing OR out-of-grant rows (info-leak
+    # defense), and runs BEFORE any mutation.
+    await get_sentinel(sentinel_id, user=user)
+
     client = get_supabase_client()
-    client.table("sentinels").update({"enabled": payload.enabled}).eq(
-        "sentinel_id", sentinel_id
-    ).execute()
+    # Finding 4: offload the sync supabase .execute() off the event loop.
+    update_query = (
+        client.table("sentinels")
+        .update({"enabled": payload.enabled})
+        .eq("sentinel_id", sentinel_id)
+    )
+    await asyncio.to_thread(update_query.execute)
     result: SentinelResponse = await get_sentinel(sentinel_id, user=user)
     return result
 
@@ -253,5 +275,17 @@ async def delete_sentinel(
     sentinel_id: str,
     user: Dict[str, Any] = Depends(require_operator),
 ) -> None:
+    """Delete a sentinel.
+
+    Finding 3 (cross-brand IDOR): like update, brand membership is enforced
+    BEFORE the DELETE. ``get_sentinel`` is the authorization gate — it 404s
+    for missing or out-of-grant rows (admins bypass) — and only then do we
+    run the delete.
+    """
+    # Authorization gate: 404s for missing OR out-of-grant rows, BEFORE delete.
+    await get_sentinel(sentinel_id, user=user)
+
     client = get_supabase_client()
-    client.table("sentinels").delete().eq("sentinel_id", sentinel_id).execute()
+    # Finding 4: offload the sync supabase .execute() off the event loop.
+    delete_query = client.table("sentinels").delete().eq("sentinel_id", sentinel_id)
+    await asyncio.to_thread(delete_query.execute)

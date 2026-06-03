@@ -281,3 +281,313 @@ async def test_get_sentinel_admin_can_read_any_brand() -> None:
 
     assert result.sentinel_id == "s-1"
     assert result.brand == "Brand-Y"
+
+
+# =============================================================================
+# Finding 3 — cross-brand IDOR on PATCH (update) / DELETE
+# =============================================================================
+#
+# update_sentinel / delete_sentinel used require_operator but never checked
+# brand membership (unlike get_sentinel). Worse, update_sentinel ran the
+# UPDATE before any read-back, so an Operator with only Brand-X could
+# enable/disable or delete a Brand-Y sentinel. The mutation must be GATED by
+# a brand-membership check that fetches the row FIRST and 404s when the row's
+# brand is not in the caller's grant set — and the mutation must NOT run.
+
+
+def _mutation_tracking_db(*rows: Dict[str, Any]) -> MagicMock:
+    """Supabase mock that records whether update()/delete() were invoked.
+
+    select()/update()/delete() all return a chainable object supporting
+    .eq()/.select()/.limit()/.execute(); execute() yields the given rows.
+    ``db.update_called`` / ``db.delete_called`` flip True when those verbs run.
+    """
+    db = MagicMock()
+    db.update_called = False
+    db.delete_called = False
+
+    chain = MagicMock()
+    chain.select.return_value = chain
+    chain.eq.return_value = chain
+    chain.limit.return_value = chain
+    chain.in_.return_value = chain
+    chain.execute.return_value = MagicMock(data=list(rows))
+
+    def _update(*_a: Any, **_k: Any) -> MagicMock:
+        db.update_called = True
+        return chain
+
+    def _delete(*_a: Any, **_k: Any) -> MagicMock:
+        db.delete_called = True
+        return chain
+
+    chain.update.side_effect = _update
+    chain.delete.side_effect = _delete
+    db.table.return_value = chain
+    return db
+
+
+@pytest.mark.asyncio
+async def test_update_sentinel_rejects_out_of_grant_brand_before_mutating() -> None:
+    """Operator with only Brand-X must NOT be able to disable a Brand-Y
+    sentinel. Expect 404 (info-leak defense, same as get) AND no UPDATE run.
+    """
+    from fastapi import HTTPException
+
+    from src.api.routes.sentinels import SentinelUpdateRequest, update_sentinel
+
+    out_of_grant_row = {
+        "sentinel_id": "s-1",
+        "name": "by-sentinel",
+        "pattern_type": "freshness",
+        "action_type": "notify",
+        "brand": "Brand-Y",
+        "region": None,
+        "enabled": True,
+        "last_fired_at": None,
+        "fire_count": 0,
+    }
+    db = _mutation_tracking_db(out_of_grant_row)
+    with patch("src.api.routes.sentinels.get_supabase_client", return_value=db):
+        with pytest.raises(HTTPException) as excinfo:
+            await update_sentinel(
+                "s-1",
+                payload=SentinelUpdateRequest(enabled=False),
+                user=_operator_brand_x(),
+            )
+
+    assert excinfo.value.status_code == 404, (
+        f"out-of-grant update must 404 (got {excinfo.value.status_code})"
+    )
+    assert db.update_called is False, "UPDATE must NOT run for an out-of-grant sentinel"
+
+
+@pytest.mark.asyncio
+async def test_delete_sentinel_rejects_out_of_grant_brand_before_mutating() -> None:
+    """Operator with only Brand-X must NOT delete a Brand-Y sentinel.
+    Expect 404 AND no DELETE run.
+    """
+    from fastapi import HTTPException
+
+    from src.api.routes.sentinels import delete_sentinel
+
+    out_of_grant_row = {
+        "sentinel_id": "s-1",
+        "name": "by-sentinel",
+        "pattern_type": "freshness",
+        "action_type": "notify",
+        "brand": "Brand-Y",
+        "region": None,
+        "enabled": True,
+        "last_fired_at": None,
+        "fire_count": 0,
+    }
+    db = _mutation_tracking_db(out_of_grant_row)
+    with patch("src.api.routes.sentinels.get_supabase_client", return_value=db):
+        with pytest.raises(HTTPException) as excinfo:
+            await delete_sentinel("s-1", user=_operator_brand_x())
+
+    assert excinfo.value.status_code == 404
+    assert db.delete_called is False, "DELETE must NOT run for an out-of-grant sentinel"
+
+
+@pytest.mark.asyncio
+async def test_update_sentinel_missing_row_404_no_mutation() -> None:
+    """Updating a non-existent sentinel returns 404 and runs no UPDATE."""
+    from fastapi import HTTPException
+
+    from src.api.routes.sentinels import SentinelUpdateRequest, update_sentinel
+
+    db = _mutation_tracking_db()  # no rows
+    with patch("src.api.routes.sentinels.get_supabase_client", return_value=db):
+        with pytest.raises(HTTPException) as excinfo:
+            await update_sentinel(
+                "missing",
+                payload=SentinelUpdateRequest(enabled=True),
+                user=_operator_brand_x(),
+            )
+
+    assert excinfo.value.status_code == 404
+    assert db.update_called is False
+
+
+@pytest.mark.asyncio
+async def test_delete_sentinel_missing_row_404_no_mutation() -> None:
+    """Deleting a non-existent sentinel returns 404 and runs no DELETE."""
+    from fastapi import HTTPException
+
+    from src.api.routes.sentinels import delete_sentinel
+
+    db = _mutation_tracking_db()  # no rows
+    with patch("src.api.routes.sentinels.get_supabase_client", return_value=db):
+        with pytest.raises(HTTPException) as excinfo:
+            await delete_sentinel("missing", user=_operator_brand_x())
+
+    assert excinfo.value.status_code == 404
+    assert db.delete_called is False
+
+
+@pytest.mark.asyncio
+async def test_update_sentinel_in_grant_operator_can_disable() -> None:
+    """Operator with Brand-X grant CAN disable a Brand-X sentinel (UPDATE runs)."""
+    from src.api.routes.sentinels import SentinelUpdateRequest, update_sentinel
+
+    in_grant_row = {
+        "sentinel_id": "s-1",
+        "name": "bx-sentinel",
+        "pattern_type": "freshness",
+        "action_type": "notify",
+        "brand": "Brand-X",
+        "region": None,
+        "enabled": False,
+        "last_fired_at": None,
+        "fire_count": 0,
+    }
+    db = _mutation_tracking_db(in_grant_row)
+    with patch("src.api.routes.sentinels.get_supabase_client", return_value=db):
+        result = await update_sentinel(
+            "s-1",
+            payload=SentinelUpdateRequest(enabled=False),
+            user=_operator_brand_x(),
+        )
+
+    assert db.update_called is True, "UPDATE must run for an in-grant sentinel"
+    assert result.sentinel_id == "s-1"
+    assert result.brand == "Brand-X"
+
+
+@pytest.mark.asyncio
+async def test_delete_sentinel_in_grant_operator_can_delete() -> None:
+    """Operator with Brand-X grant CAN delete a Brand-X sentinel (DELETE runs)."""
+    from src.api.routes.sentinels import delete_sentinel
+
+    in_grant_row = {
+        "sentinel_id": "s-1",
+        "name": "bx-sentinel",
+        "pattern_type": "freshness",
+        "action_type": "notify",
+        "brand": "Brand-X",
+        "region": None,
+        "enabled": True,
+        "last_fired_at": None,
+        "fire_count": 0,
+    }
+    db = _mutation_tracking_db(in_grant_row)
+    with patch("src.api.routes.sentinels.get_supabase_client", return_value=db):
+        await delete_sentinel("s-1", user=_operator_brand_x())
+
+    assert db.delete_called is True, "DELETE must run for an in-grant sentinel"
+
+
+@pytest.mark.asyncio
+async def test_admin_can_update_any_brand_sentinel() -> None:
+    """Admin retains cross-brand mutation on update_sentinel."""
+    from src.api.routes.sentinels import SentinelUpdateRequest, update_sentinel
+
+    row = {
+        "sentinel_id": "s-1",
+        "name": "by-sentinel",
+        "pattern_type": "freshness",
+        "action_type": "notify",
+        "brand": "Brand-Y",
+        "region": None,
+        "enabled": False,
+        "last_fired_at": None,
+        "fire_count": 0,
+    }
+    db = _mutation_tracking_db(row)
+    with patch("src.api.routes.sentinels.get_supabase_client", return_value=db):
+        result = await update_sentinel(
+            "s-1",
+            payload=SentinelUpdateRequest(enabled=False),
+            user=_admin_user(),
+        )
+
+    assert db.update_called is True
+    assert result.brand == "Brand-Y"
+
+
+# =============================================================================
+# Finding 4 — sync supabase .execute() inside async handlers blocks the loop
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_handlers_offload_blocking_execute_to_thread() -> None:
+    """The async sentinel handlers must not call the sync supabase chain's
+    blocking ``.execute()`` directly on the event loop; they must offload it
+    via ``asyncio.to_thread``. Falsifiability: patch ``asyncio.to_thread`` and
+    assert it was used to run the DB work for list/get/update/delete.
+    """
+    import asyncio
+
+    from src.api.routes.sentinels import (
+        SentinelUpdateRequest,
+        delete_sentinel,
+        get_sentinel,
+        list_sentinels,
+        update_sentinel,
+    )
+
+    row = {
+        "sentinel_id": "s-1",
+        "name": "bx-sentinel",
+        "pattern_type": "freshness",
+        "action_type": "notify",
+        "brand": "Brand-X",
+        "region": None,
+        "enabled": True,
+        "last_fired_at": None,
+        "fire_count": 0,
+    }
+
+    real_to_thread = asyncio.to_thread
+
+    async def _counting_to_thread(fn, *a, **k):
+        _counting_to_thread.calls += 1
+        return await real_to_thread(fn, *a, **k)
+
+    _counting_to_thread.calls = 0
+
+    # list_sentinels
+    with (
+        patch("src.api.routes.sentinels.get_supabase_client", return_value=_make_db_with_rows(row)),
+        patch("src.api.routes.sentinels.asyncio.to_thread", side_effect=_counting_to_thread),
+    ):
+        await list_sentinels(brand="Brand-X", enabled_only=True, user=_operator_brand_x())
+    assert _counting_to_thread.calls >= 1, "list_sentinels must offload .execute via to_thread"
+
+    # get_sentinel
+    _counting_to_thread.calls = 0
+    with (
+        patch("src.api.routes.sentinels.get_supabase_client", return_value=_make_db_with_rows(row)),
+        patch("src.api.routes.sentinels.asyncio.to_thread", side_effect=_counting_to_thread),
+    ):
+        await get_sentinel("s-1", user=_operator_brand_x())
+    assert _counting_to_thread.calls >= 1, "get_sentinel must offload .execute via to_thread"
+
+    # update_sentinel (read + update)
+    _counting_to_thread.calls = 0
+    with (
+        patch(
+            "src.api.routes.sentinels.get_supabase_client",
+            return_value=_mutation_tracking_db(row),
+        ),
+        patch("src.api.routes.sentinels.asyncio.to_thread", side_effect=_counting_to_thread),
+    ):
+        await update_sentinel(
+            "s-1", payload=SentinelUpdateRequest(enabled=True), user=_operator_brand_x()
+        )
+    assert _counting_to_thread.calls >= 1, "update_sentinel must offload .execute via to_thread"
+
+    # delete_sentinel (read + delete)
+    _counting_to_thread.calls = 0
+    with (
+        patch(
+            "src.api.routes.sentinels.get_supabase_client",
+            return_value=_mutation_tracking_db(row),
+        ),
+        patch("src.api.routes.sentinels.asyncio.to_thread", side_effect=_counting_to_thread),
+    ):
+        await delete_sentinel("s-1", user=_operator_brand_x())
+    assert _counting_to_thread.calls >= 1, "delete_sentinel must offload .execute via to_thread"
