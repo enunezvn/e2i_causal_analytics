@@ -14,6 +14,7 @@ Author: E2I Causal Analytics Team
 Version: 1.0.0
 """
 
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -389,6 +390,63 @@ class TestBentoMLClient:
             assert "predictions" in result
             # Verify endpoint
             assert "predict_batch" in mock_post.call_args.args[0]
+
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_predict_batch_rejects_when_circuit_open(self):
+        """predict_batch must honor the per-endpoint circuit breaker.
+
+        Consistency fix: predict() guards on the breaker but predict_batch()
+        previously bypassed it, so a saturated/failing backend would still be
+        hammered by batch traffic. With the breaker forced open, predict_batch
+        must reject fast without issuing an HTTP call.
+        """
+        client = BentoMLClient(BentoMLClientConfig())
+
+        # Force the model's breaker open.
+        client._get_circuit_breaker("churn_model").state = CircuitState.OPEN
+        client._get_circuit_breaker("churn_model").last_failure_time = time.time()
+
+        with patch.object(httpx.AsyncClient, "post", new_callable=AsyncMock) as mock_post:
+            with pytest.raises(RuntimeError, match="Circuit breaker open"):
+                await client.predict_batch("churn_model", [{"features": [[0.1]]}])
+            mock_post.assert_not_called()
+
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_predict_batch_records_success_on_breaker(self):
+        """A successful batch call resets the breaker's failure count."""
+        client = BentoMLClient(BentoMLClientConfig())
+        cb = client._get_circuit_breaker("churn_model")
+        cb.failure_count = 2  # prior transient failures
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"predictions": [[0.8]]}
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(httpx.AsyncClient, "post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_response
+            await client.predict_batch("churn_model", [{"features": [[0.1]]}])
+
+        assert cb.failure_count == 0
+
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_get_model_info_rejects_when_circuit_open(self):
+        """get_model_info must honor the per-endpoint circuit breaker."""
+        client = BentoMLClient(BentoMLClientConfig())
+
+        client._get_circuit_breaker("churn_model").state = CircuitState.OPEN
+        client._get_circuit_breaker("churn_model").last_failure_time = time.time()
+
+        with patch.object(httpx.AsyncClient, "get", new_callable=AsyncMock) as mock_get:
+            with pytest.raises(RuntimeError, match="Circuit breaker open"):
+                await client.get_model_info("churn_model")
+            mock_get.assert_not_called()
 
         await client.close()
 

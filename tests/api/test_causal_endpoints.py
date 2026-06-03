@@ -216,6 +216,34 @@ class TestRunHierarchicalAnalysis:
 
         assert response.status_code == 422
 
+    def test_hierarchical_analysis_500_does_not_leak_exception(self, hierarchical_analysis_request):
+        """A 500 from the sync path must NOT echo the raw exception text.
+
+        Finding #7 (exception-text leakage): the broad ``except Exception``
+        handler used ``detail=str(e)``. It now logs server-side and returns a
+        generic detail so internal paths / library / table names are not leaked.
+        """
+        secret = "psycopg2.OperationalError: FATAL db-internal.prod:5432 password authentication"
+        with patch(
+            "src.api.routes.causal._execute_hierarchical_analysis",
+            new=AsyncMock(side_effect=RuntimeError(secret)),
+        ):
+            response = client.post(
+                "/api/causal/hierarchical/analyze",
+                json=hierarchical_analysis_request,
+            )
+
+        assert response.status_code == 500
+        # This app renders 500s via the E2IError envelope
+        # ({"error","message",...}), not FastAPI's default {"detail"}. Assert
+        # the security property envelope-agnostically: the raw exception text
+        # must not appear anywhere in the response body, and only the generic
+        # message is surfaced.
+        body = response.text
+        assert secret not in body
+        assert "db-internal.prod" not in body
+        assert "Internal server error" in body
+
 
 class TestGetHierarchicalAnalysis:
     """Tests for GET /causal/hierarchical/{analysis_id}."""

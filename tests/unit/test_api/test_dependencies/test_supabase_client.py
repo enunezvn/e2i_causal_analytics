@@ -310,20 +310,79 @@ class TestSupabaseClient:
 
     @pytest.mark.asyncio
     async def test_supabase_health_check_query_error(self):
-        """Test Supabase health check handles query errors gracefully."""
+        """API-level (non-transport) errors mean PostgREST IS reachable.
+
+        ``rpc("", {})`` / a missing-table select raise PostgREST/API errors when
+        the HTTP round-trip succeeds — that confirms reachability, so the check
+        is healthy. Only a transport-level failure is unhealthy (covered below).
+        """
         from src.api.dependencies.supabase_client import supabase_health_check
 
         mock_client = MagicMock()
-        # Simulate query failure but connection works
-        mock_client.table.side_effect = Exception("Query failed")
+        # API-level failure (HTTP responded) — connection works.
+        mock_client.rpc.side_effect = Exception("PGRST202: function not found")
+        mock_client.table.side_effect = Exception("PGRST205: relation does not exist")
 
         with patch("src.api.dependencies.supabase_client.get_supabase") as mock_get:
             mock_get.return_value = mock_client
 
             result = await supabase_health_check()
 
-            # Should still complete (errors are caught in nested try/except)
-            assert result["status"] in ["healthy", "unhealthy"]
+            assert result["status"] == "healthy"
+            assert result["connected"] is True
+
+    @pytest.mark.asyncio
+    async def test_supabase_health_check_fails_closed_on_transport_error(self):
+        """FAIL CLOSED: when the round-trip cannot be made, report unhealthy.
+
+        Regression guard (HIGH finding): the check previously swallowed BOTH
+        probe failures and still returned ``healthy`` — a down/unreachable
+        Postgres/PostgREST would pass readiness. A transport-level error
+        (httpx.ConnectError, TimeoutError, OSError) on every probe MUST yield
+        ``unhealthy`` so the readiness probe correctly fails.
+        """
+        import httpx
+
+        from src.api.dependencies.supabase_client import supabase_health_check
+
+        mock_client = MagicMock()
+        # Every probe fails at the transport layer (server unreachable).
+        mock_client.rpc.side_effect = httpx.ConnectError("Connection refused")
+        mock_client.table.side_effect = httpx.ConnectError("Connection refused")
+
+        with patch("src.api.dependencies.supabase_client.get_supabase") as mock_get:
+            mock_get.return_value = mock_client
+
+            result = await supabase_health_check()
+
+            assert result["status"] == "unhealthy"
+            assert "error" in result
+
+    @pytest.mark.asyncio
+    async def test_supabase_health_check_runs_blocking_probe_off_event_loop(self):
+        """The blocking PostgREST round-trip must run via asyncio.to_thread.
+
+        supabase-py's client is synchronous; calling it directly blocks the
+        event loop. The check must offload it. We assert asyncio.to_thread is
+        invoked during the health check.
+        """
+        from src.api.dependencies.supabase_client import supabase_health_check
+
+        mock_client = MagicMock()
+        mock_client.rpc.return_value.execute.return_value = None
+
+        real_to_thread = __import__("asyncio").to_thread
+
+        with patch("src.api.dependencies.supabase_client.get_supabase") as mock_get:
+            mock_get.return_value = mock_client
+            with patch(
+                "src.api.dependencies.supabase_client.asyncio.to_thread",
+                side_effect=real_to_thread,
+            ) as mock_to_thread:
+                result = await supabase_health_check()
+
+            assert mock_to_thread.called
+            assert result["status"] == "healthy"
 
     def test_supabase_logging_success(self, caplog):
         """Test Supabase client logs success messages."""

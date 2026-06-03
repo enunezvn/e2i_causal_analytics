@@ -508,3 +508,54 @@ class TestAuthUtilityFunctions:
 
         with patch("src.api.dependencies.auth.TESTING_MODE", False):
             assert is_testing_mode() is False
+
+
+@pytest.mark.unit
+class TestStartupSecretWarnings:
+    """Startup warning accuracy for missing auth secrets (LOW finding fix)."""
+
+    def test_jwt_secret_warning_does_not_claim_verification_disabled(self):
+        """Missing SUPABASE_JWT_SECRET must NOT claim JWT verification is disabled.
+
+        The current verification path (verify_supabase_token -> Supabase
+        get_user) does not consume SUPABASE_JWT_SECRET, so its absence does not
+        turn verification off. The warning must reflect that — phrasing it as
+        optional, never as "verification will be disabled".
+        """
+        from src.api.dependencies.auth import _warn_missing_auth_secrets
+
+        with patch("src.api.dependencies.auth.SUPABASE_URL", "https://test.supabase.co"):
+            with patch("src.api.dependencies.auth.SUPABASE_ANON_KEY", "anon-key"):
+                with patch("src.api.dependencies.auth.SUPABASE_JWT_SECRET", ""):
+                    messages = _warn_missing_auth_secrets()
+
+        jwt_msgs = [m for m in messages if "SUPABASE_JWT_SECRET" in m]
+        assert len(jwt_msgs) == 1
+        # Inaccurate claim must be gone.
+        assert "JWT verification will be disabled" not in jwt_msgs[0]
+        # Accurate posture must be stated.
+        assert "optional" in jwt_msgs[0].lower()
+        assert "does not disable jwt verification" in jwt_msgs[0].lower()
+
+    def test_missing_url_and_anon_key_still_warn_auth_disabled(self):
+        """Missing URL / ANON_KEY (the real auth-disabling condition) still warn."""
+        from src.api.dependencies.auth import _warn_missing_auth_secrets
+
+        with patch("src.api.dependencies.auth.SUPABASE_URL", ""):
+            with patch("src.api.dependencies.auth.SUPABASE_ANON_KEY", ""):
+                with patch("src.api.dependencies.auth.SUPABASE_JWT_SECRET", "secret"):
+                    messages = _warn_missing_auth_secrets()
+
+        joined = " ".join(messages)
+        assert "SUPABASE_URL is not set" in joined
+        assert "SUPABASE_ANON_KEY is not set" in joined
+        assert "auth will be disabled" in joined
+
+    def test_all_configured_emits_no_warnings(self):
+        """Fully configured auth emits no startup warnings."""
+        from src.api.dependencies.auth import _warn_missing_auth_secrets
+
+        with patch("src.api.dependencies.auth.SUPABASE_URL", "https://test.supabase.co"):
+            with patch("src.api.dependencies.auth.SUPABASE_ANON_KEY", "anon-key"):
+                with patch("src.api.dependencies.auth.SUPABASE_JWT_SECRET", "secret"):
+                    assert _warn_missing_auth_secrets() == []

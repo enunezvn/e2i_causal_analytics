@@ -340,16 +340,30 @@ class BentoMLClient:
             await self.initialize()
 
         endpoint_url = self.config.get_endpoint_url(model_name)
+        circuit = self._get_circuit_breaker(model_name)
+
+        # Route batch traffic through the same per-endpoint breaker as predict()
+        # so a failing/saturated backend is not hammered by batch requests.
+        if not circuit.can_execute():
+            raise RuntimeError(
+                f"Circuit breaker open for model '{model_name}'. Service may be unavailable."
+            )
 
         start_time = time.time()
 
-        assert self._client is not None
-        response = await self._client.post(
-            f"{endpoint_url}/predict_batch",
-            json={"instances": batch_data},
-            timeout=timeout or self.config.timeout * 2,  # Longer timeout for batch
-        )
-        response.raise_for_status()
+        try:
+            assert self._client is not None
+            response = await self._client.post(
+                f"{endpoint_url}/predict_batch",
+                json={"instances": batch_data},
+                timeout=timeout or self.config.timeout * 2,  # Longer timeout for batch
+            )
+            response.raise_for_status()
+        except (httpx.HTTPStatusError, httpx.RequestError):
+            circuit.record_failure()
+            raise
+
+        circuit.record_success()
 
         results = response.json()
         latency_ms = (time.time() - start_time) * 1000
@@ -415,13 +429,26 @@ class BentoMLClient:
             await self.initialize()
 
         endpoint_url = self.config.get_endpoint_url(model_name)
+        circuit = self._get_circuit_breaker(model_name)
 
-        assert self._client is not None
-        response = await self._client.get(
-            f"{endpoint_url}/metadata",
-            timeout=5.0,
-        )
-        response.raise_for_status()
+        # Honor the per-endpoint breaker for consistency with predict().
+        if not circuit.can_execute():
+            raise RuntimeError(
+                f"Circuit breaker open for model '{model_name}'. Service may be unavailable."
+            )
+
+        try:
+            assert self._client is not None
+            response = await self._client.get(
+                f"{endpoint_url}/metadata",
+                timeout=5.0,
+            )
+            response.raise_for_status()
+        except (httpx.HTTPStatusError, httpx.RequestError):
+            circuit.record_failure()
+            raise
+
+        circuit.record_success()
         return response.json()  # type: ignore[no-any-return]
 
     async def _backoff(self, attempt: int) -> None:

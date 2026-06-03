@@ -177,10 +177,11 @@ async def test_run_segment_analysis_sync_mode_exception(sample_request, mock_use
     """Test run_segment_analysis handles exceptions in sync mode."""
     background_tasks = BackgroundTasks()
 
+    secret = "Test error leaking internal path /srv/app/db.py:42"
     with patch("src.api.routes.segments._execute_segment_analysis") as mock_execute:
-        mock_execute.side_effect = RuntimeError("Test error")
+        mock_execute.side_effect = RuntimeError(secret)
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(HTTPException) as exc_info:
             await run_segment_analysis(
                 request=sample_request,
                 background_tasks=background_tasks,
@@ -188,7 +189,11 @@ async def test_run_segment_analysis_sync_mode_exception(sample_request, mock_use
                 user=mock_user,
             )
 
-        assert "Segment analysis failed" in str(exc_info.value)
+        # Generic detail returned; raw exception text NOT leaked (finding #7).
+        assert exc_info.value.status_code == 500
+        assert "Segment analysis failed" in str(exc_info.value.detail)
+        assert secret not in str(exc_info.value.detail)
+        assert "/srv/app/db.py" not in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
@@ -900,3 +905,69 @@ def test_generate_mock_response_warning(sample_request):
 
     assert len(result.warnings) > 0
     assert "mock data" in result.warnings[0].lower()
+
+
+# =============================================================================
+# IN-MEMORY STORE BOUNDING (finding #4 — prevent unbounded growth)
+# =============================================================================
+
+
+class TestBoundedAnalysesStore:
+    """The process-local analyses store must be bounded to avoid unbounded
+    memory growth (it is an intentional, documented placeholder for a future
+    Supabase backing — see the module comment — but it must not leak)."""
+
+    def test_store_evicts_oldest_when_over_capacity(self):
+        from src.api.routes.segments import (
+            SegmentAnalysisResponse,
+            _BoundedAnalysesStore,
+        )
+
+        store = _BoundedAnalysesStore(max_entries=3)
+        for i in range(5):
+            store[f"seg_{i}"] = SegmentAnalysisResponse(
+                analysis_id=f"seg_{i}",
+                status=AnalysisStatus.COMPLETED,
+                timestamp=datetime.now(timezone.utc),
+            )
+
+        # Only the most-recent max_entries survive.
+        assert len(store) == 3
+        # Oldest two evicted.
+        assert "seg_0" not in store
+        assert "seg_1" not in store
+        # Newest retained.
+        assert "seg_2" in store
+        assert "seg_3" in store
+        assert "seg_4" in store
+
+    def test_reassigning_existing_key_does_not_grow(self):
+        from src.api.routes.segments import (
+            SegmentAnalysisResponse,
+            _BoundedAnalysesStore,
+        )
+
+        store = _BoundedAnalysesStore(max_entries=2)
+        for i in range(2):
+            store[f"seg_{i}"] = SegmentAnalysisResponse(
+                analysis_id=f"seg_{i}",
+                status=AnalysisStatus.PENDING,
+                timestamp=datetime.now(timezone.utc),
+            )
+        # Update an existing key (e.g. PENDING -> COMPLETED on completion).
+        store["seg_0"] = SegmentAnalysisResponse(
+            analysis_id="seg_0",
+            status=AnalysisStatus.COMPLETED,
+            timestamp=datetime.now(timezone.utc),
+        )
+
+        assert len(store) == 2
+        assert store["seg_0"].status == AnalysisStatus.COMPLETED
+        assert "seg_1" in store
+
+    def test_module_store_is_bounded_instance(self):
+        """The live module-level store is a bounded instance, not a plain dict."""
+        from src.api.routes.segments import _analyses_store, _BoundedAnalysesStore
+
+        assert isinstance(_analyses_store, _BoundedAnalysesStore)
+        assert _analyses_store.max_entries > 0

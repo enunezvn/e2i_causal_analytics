@@ -304,11 +304,17 @@ class TestRandomizeUnits:
         assert data["randomization_method"] == "block"
 
     def test_randomization_service_error(self):
-        """Should return 500 on service error."""
+        """Should return 500 on service error WITHOUT leaking the raw exception.
+
+        Finding #7 (exception-text leakage): the broad ``except Exception``
+        handler used ``detail=str(e)``, echoing internal error text — which can
+        expose stack-internal paths, table/column names, and library versions —
+        straight to the client. The handler now logs the exception server-side
+        and returns only a generic detail.
+        """
+        secret = "Database connection failed at host db-internal.prod:5432"
         mock_service = MagicMock()
-        mock_service.stratified_randomize = AsyncMock(
-            side_effect=Exception("Database connection failed")
-        )
+        mock_service.stratified_randomize = AsyncMock(side_effect=Exception(secret))
 
         with patch(
             "src.services.randomization.RandomizationService",
@@ -323,6 +329,15 @@ class TestRandomizeUnits:
             )
 
         assert response.status_code == 500
+        # This app renders 500s via the E2IError envelope
+        # ({"error","message",...}), not FastAPI's default {"detail"}. Assert
+        # the security property envelope-agnostically: the raw exception text
+        # must not appear anywhere in the response body, and only the generic
+        # message is surfaced.
+        body = response.text
+        assert secret not in body
+        assert "db-internal.prod" not in body
+        assert "Internal server error" in body
 
 
 class TestGetAssignments:

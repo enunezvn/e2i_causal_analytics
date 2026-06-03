@@ -75,6 +75,12 @@ from src.causal_engine.pipeline.state import (
 
 logger = logging.getLogger(__name__)
 
+# Generic 5xx detail. Raw exception text MUST NOT be echoed to clients: it can
+# leak stack-internal paths, library/module names, table/column names, and other
+# information useful to an attacker. The full exception is logged server-side
+# (with exc_info) instead; the client receives only this opaque message.
+_GENERIC_500_DETAIL = "Internal server error"
+
 router = APIRouter(
     prefix="/causal",
     tags=["Causal Inference"],
@@ -181,7 +187,7 @@ async def run_hierarchical_analysis(
         raise
     except Exception as e:
         logger.error(f"Hierarchical analysis failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_GENERIC_500_DETAIL) from e
 
 
 @router.get(
@@ -220,7 +226,10 @@ async def _run_hierarchical_analysis_task(
         result = await _execute_hierarchical_analysis(analysis_id, request)
         _analysis_cache[analysis_id] = result
     except Exception as e:
-        logger.error(f"Background hierarchical analysis failed: {e}")
+        # Log the raw error server-side (with traceback); the cached FAILED
+        # record is later returned to clients, so it must carry only a generic
+        # message, not raw exception text.
+        logger.error(f"Background hierarchical analysis failed: {e}", exc_info=True)
         _analysis_cache[analysis_id] = HierarchicalAnalysisResponse(
             analysis_id=analysis_id,
             status=AnalysisStatus.FAILED,
@@ -236,7 +245,7 @@ async def _run_hierarchical_analysis_task(
             latency_ms=0,
             created_at=datetime.now(timezone.utc),
             warnings=[],
-            errors=[str(e)],
+            errors=["Analysis failed due to an internal error."],
         )
 
 
@@ -419,10 +428,13 @@ async def _execute_hierarchical_analysis(
             detail=f"Analysis timed out after {request.timeout_seconds}s",
         )
     except ImportError as e:
+        # Log the specific missing module server-side for ops; do NOT echo the
+        # internal dependency name to clients.
+        logger.error(f"Segment analysis dependency unavailable: {e}", exc_info=True)
         raise HTTPException(
             status_code=503,
-            detail=f"Required library not available: {e}",
-        )
+            detail="A required analysis dependency is currently unavailable.",
+        ) from e
 
 
 # =============================================================================
@@ -639,7 +651,7 @@ async def run_sequential_pipeline(
         raise
     except Exception as e:
         logger.error(f"Sequential pipeline failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_GENERIC_500_DETAIL) from e
 
 
 async def _run_sequential_pipeline_task(
@@ -652,7 +664,10 @@ async def _run_sequential_pipeline_task(
         result = await _execute_sequential_pipeline(pipeline_id, request, demo_mode=demo_mode)
         _pipeline_cache[pipeline_id] = result.model_dump()
     except Exception as e:
-        logger.error(f"Background sequential pipeline failed: {e}")
+        # Log the raw error server-side (with traceback); the cached FAILED
+        # record is later returned to clients, so it must carry only a generic
+        # message, not raw exception text.
+        logger.error(f"Background sequential pipeline failed: {e}", exc_info=True)
         _pipeline_cache[pipeline_id] = SequentialPipelineResponse(
             pipeline_id=pipeline_id,
             status=AnalysisStatus.FAILED,
@@ -666,7 +681,7 @@ async def _run_sequential_pipeline_task(
             effect_estimate_variance=None,
             total_latency_ms=0,
             created_at=datetime.now(timezone.utc),
-            warnings=[str(e)],
+            warnings=["Pipeline failed due to an internal error."],
         ).model_dump()
 
 
@@ -1471,7 +1486,7 @@ async def run_parallel_pipeline(
             raise
         except Exception as e:  # noqa: BLE001 - last-resort 500
             logger.error(f"Parallel pipeline failed: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=str(e)) from e
+            raise HTTPException(status_code=500, detail=_GENERIC_500_DETAIL) from e
 
     try:
         # Run all libraries in parallel
@@ -1560,7 +1575,7 @@ async def run_parallel_pipeline(
         ) from e
     except Exception as e:
         logger.error(f"Parallel pipeline failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail=_GENERIC_500_DETAIL) from e
 
 
 async def _run_library_analysis(

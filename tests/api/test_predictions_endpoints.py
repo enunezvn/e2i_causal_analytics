@@ -201,6 +201,54 @@ class TestSinglePrediction:
         assert "lower" in data["prediction_interval"]
         assert "upper" in data["prediction_interval"]
 
+    def test_predict_preserves_falsy_zero_prediction(self, mock_bentoml_client):
+        """A legitimate prediction value of 0.0 must NOT be dropped by an ``or``.
+
+        Regression guard: the route built the response with
+        ``result.get("prediction") or result.get("predictions", [None])[0]``.
+        With ``or``, a falsy-but-valid scalar (0, 0.0, False) short-circuits to
+        the ``predictions`` fallback (or None), corrupting the response. A
+        binary classifier emitting class 0, or a regressor emitting exactly
+        0.0, is a real, common case for pharma uplift/propensity models.
+        """
+        mock_bentoml_client.predict = AsyncMock(
+            return_value={
+                "prediction": 0.0,
+                # If the buggy ``or`` runs, it falls through to predictions[0]
+                # which would yield the WRONG value (0.99), proving the bug.
+                "predictions": [0.99],
+                "confidence": 0.5,
+                "_metadata": {"latency_ms": 1.0},
+            }
+        )
+        app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
+        response = client.post(
+            "/api/models/predict/churn_model",
+            json={"features": {"x": 1}},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["prediction"] == 0.0
+
+    def test_predict_falls_back_to_predictions_when_prediction_absent(self, mock_bentoml_client):
+        """When ``prediction`` key is missing entirely, fall back to predictions[0]."""
+        mock_bentoml_client.predict = AsyncMock(
+            return_value={
+                "predictions": [0.73],
+                "confidence": 0.8,
+                "_metadata": {"latency_ms": 1.0},
+            }
+        )
+        app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
+        response = client.post(
+            "/api/models/predict/churn_model",
+            json={"features": {"x": 1}},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["prediction"] == 0.73
+
     def test_predict_with_entity_id(self, mock_bentoml_client, mock_feast_client):
         """Should accept entity_id for feature store lookup."""
         app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client

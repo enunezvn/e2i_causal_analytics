@@ -335,7 +335,15 @@ async def predict(
         # a downstream value.
         return PredictionResponse(
             model_name=model_name,
-            prediction=result.get("prediction") or result.get("predictions", [None])[0],
+            prediction=(
+                # Explicit None check: a legitimate falsy prediction (0, 0.0,
+                # False — e.g. binary class 0 or a regressor emitting exactly
+                # 0.0) must NOT be dropped by an ``or`` short-circuit. Only fall
+                # back to ``predictions[0]`` when ``prediction`` is truly absent.
+                result.get("prediction")
+                if result.get("prediction") is not None
+                else result.get("predictions", [None])[0]
+            ),
             confidence=result.get("confidence"),
             probabilities=result.get("probabilities"),
             prediction_interval=result.get("prediction_interval"),
