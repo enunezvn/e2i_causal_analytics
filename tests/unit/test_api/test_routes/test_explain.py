@@ -741,6 +741,22 @@ class TestExplainBatchEndpoint:
             assert len(response.errors) == 1
 
 
+def _admin_user() -> dict:
+    """Admin user dict — cross-scope access (mirrors auth get_user_role admin)."""
+    return {"id": "u-admin", "app_metadata": {"role": "admin"}}
+
+
+def _rep_user_for_hcps(*hcps: str) -> dict:
+    """Non-admin (viewer) user scoped to the given HCP grants.
+
+    Mirrors the ``app_metadata.brands`` convention read by ``get_user_brands``,
+    applied to HCP grants. The SHAP audit rows scope by ``hcp_id`` per
+    migration ``database/ml/011_realtime_shap_audit.sql`` RLS (field reps see
+    only explanations whose ``hcp_id`` is in their assignment set).
+    """
+    return {"id": "u-rep", "app_metadata": {"role": "viewer", "hcps": list(hcps)}}
+
+
 class TestGetExplanationHistoryEndpoint:
     """Tests for /explain/history/{patient_id} endpoint."""
 
@@ -770,7 +786,7 @@ class TestGetExplanationHistoryEndpoint:
             mock_repo.client.table.return_value = chain
             mock_get_repo.return_value = mock_repo
 
-            response = await get_explanation_history("PAT-123")
+            response = await get_explanation_history("PAT-123", user=_admin_user())
 
             # Patient ID should be masked
             assert "patient_id" in response
@@ -785,21 +801,30 @@ class TestGetExplanationHistoryEndpoint:
             mock_repo.client = None
             mock_get_repo.return_value = mock_repo
 
-            response = await get_explanation_history("PAT-123")
+            response = await get_explanation_history("PAT-123", user=_admin_user())
 
             assert response["total_explanations"] == 0
             assert "not available" in response["message"]
 
     @pytest.mark.asyncio
-    async def test_get_history_error(self):
-        """Test history retrieval error handling."""
+    async def test_get_history_error_raises_500_without_leaking_internals(self):
+        """Finding 2 (swallow): an unexpected error must NOT return HTTP 200 with
+        the raw internal error string in the body. It must raise a 500 with a
+        generic message; the internal detail is logged server-side only.
+
+        Previously this caught all exceptions and returned
+        ``{"error": "DB error", "total_explanations": 0, ...}`` at HTTP 200 —
+        masking failures from the client and leaking internals.
+        """
         with patch("src.api.routes.explain.get_shap_analysis_repository") as mock_get_repo:
-            mock_get_repo.side_effect = Exception("DB error")
+            mock_get_repo.side_effect = Exception("secret-db-internal-detail")
 
-            response = await get_explanation_history("PAT-123")
+            with pytest.raises(HTTPException) as exc_info:
+                await get_explanation_history("PAT-123", user=_admin_user())
 
-            assert response["total_explanations"] == 0
-            assert "error" in response
+            assert exc_info.value.status_code == 500
+            # Generic message — the raw internal error must NOT be surfaced.
+            assert "secret-db-internal-detail" not in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
     async def test_get_history_filters_by_patient_id(self):
@@ -825,7 +850,7 @@ class TestGetExplanationHistoryEndpoint:
             mock_repo.client.table.return_value = chain
             mock_get_repo.return_value = mock_repo
 
-            await get_explanation_history("PAT-FILTER-ME")
+            await get_explanation_history("PAT-FILTER-ME", user=_admin_user())
 
             # Verify .eq("patient_id", ...) was called with the actual patient_id
             eq_calls = [
@@ -886,7 +911,7 @@ class TestGetExplanationHistoryEndpoint:
             mock_repo.client.table.return_value = chain
             mock_get_repo.return_value = mock_repo
 
-            response = await get_explanation_history("PAT-001")
+            response = await get_explanation_history("PAT-001", user=_admin_user())
 
             assert "explanations" in response
             assert response["total_explanations"] == 1
@@ -962,7 +987,7 @@ class TestGetExplanationHistoryEndpoint:
             mock_repo.client.table.return_value = chain
             mock_get_repo.return_value = mock_repo
 
-            resp = await get_explanation_history("PAT-X")
+            resp = await get_explanation_history("PAT-X", user=_admin_user())
             item = resp["explanations"][0]
             directions = {
                 f["feature_name"]: f["contribution_direction"] for f in item["top_features"]
@@ -1012,7 +1037,9 @@ class TestGetExplanationHistoryEndpoint:
             mock_repo.client.table.return_value = chain
             mock_get_repo.return_value = mock_repo
 
-            resp = await get_explanation_history("PAT-Y", model_type=ModelType.PROPENSITY)
+            resp = await get_explanation_history(
+                "PAT-Y", model_type=ModelType.PROPENSITY, user=_admin_user()
+            )
             # Filter must be applied client-side, not pushed into supabase.
             eq_keys = [c.args[0] for c in chain.eq.call_args_list if c.args]
             assert "model_type" not in eq_keys, (
@@ -1047,11 +1074,144 @@ class TestGetExplanationHistoryEndpoint:
             mock_repo.client.table.return_value = chain
             mock_get_repo.return_value = mock_repo
 
-            response = await get_explanation_history("PAT-async")
+            response = await get_explanation_history("PAT-async", user=_admin_user())
             assert response["total_explanations"] == 0
             assert "error" not in response, (
                 f"endpoint did not await async execute (fell into error path): {response!r}"
             )
+
+
+class TestGetExplanationHistoryAuthorization:
+    """Finding 1 (BOLA/IDOR): /explain/history/{patient_id} must require auth
+    AND enforce object-level authorization so one authenticated user cannot
+    read another patient's SHAP explanation (prediction class/prob + signed
+    feature contributions).
+
+    Authorization model (matches the documented RLS in
+    ``database/ml/011_realtime_shap_audit.sql``): admins see all rows; a
+    non-admin sees only rows whose ``hcp_id`` is in their grant set.
+    """
+
+    @staticmethod
+    def _repo_with_rows(*rows):
+        """Build a mocked async SHAP repo whose query chain returns ``rows``."""
+        from unittest.mock import MagicMock
+
+        mock_repo = MagicMock()
+        mock_repo.client = MagicMock()
+        mock_repo.table_name = "ml_shap_analyses"
+        chain = MagicMock()
+        chain.select.return_value = chain
+        chain.eq.return_value = chain
+        chain.order.return_value = chain
+        chain.limit.return_value = chain
+        chain.execute.return_value = MagicMock(data=list(rows))
+        mock_repo.client.table.return_value = chain
+        return mock_repo
+
+    def test_route_depends_on_require_auth(self):
+        """The route must carry a route-level auth dependency (mirror the two
+        sibling routes explain_prediction/explain_batch). Falsifiability:
+        inspect the signature for a ``user`` param defaulting to
+        ``Depends(require_auth)``.
+        """
+        import inspect as _inspect
+
+        from fastapi.params import Depends as DependsClass
+
+        from src.api.dependencies.auth import require_auth
+        from src.api.routes.explain import get_explanation_history
+
+        sig = _inspect.signature(get_explanation_history)
+        assert "user" in sig.parameters, "get_explanation_history must take a user param"
+        default = sig.parameters["user"].default
+        assert isinstance(default, DependsClass), (
+            f"user param must default to Depends(require_auth), got {default!r}"
+        )
+        assert default.dependency is require_auth, (
+            f"user dependency must be require_auth, got {default.dependency!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_non_admin_cannot_read_out_of_scope_patient(self):
+        """A non-admin field rep with HCP-1 grant must NOT receive a row whose
+        hcp_id is HCP-2 (cross-patient/cross-HCP IDOR). The out-of-scope row is
+        filtered out — the caller sees zero explanations.
+        """
+        out_of_scope = {
+            "id": "r1",
+            "explanation_id": "EXPL-OTHER",
+            "patient_id": "PAT-OTHER",
+            "hcp_id": "HCP-2",
+            "prediction_class": "high_propensity",
+            "prediction_probability": 0.91,
+            "local_shap_values": {"f1": 0.42},
+        }
+        with patch("src.api.routes.explain.get_shap_analysis_repository") as mock_get_repo:
+            mock_get_repo.return_value = self._repo_with_rows(out_of_scope)
+
+            resp = await get_explanation_history("PAT-OTHER", user=_rep_user_for_hcps("HCP-1"))
+
+        assert resp["total_explanations"] == 0, (
+            f"out-of-scope row leaked to non-owning rep: {resp!r}"
+        )
+        assert resp["explanations"] == []
+
+    @pytest.mark.asyncio
+    async def test_non_admin_can_read_in_scope_patient(self):
+        """A non-admin rep CAN read a row whose hcp_id is in their grant set."""
+        in_scope = {
+            "id": "r1",
+            "explanation_id": "EXPL-MINE",
+            "patient_id": "PAT-MINE",
+            "hcp_id": "HCP-1",
+            "prediction_class": "high_propensity",
+            "prediction_probability": 0.77,
+            "local_shap_values": {"f1": 0.2},
+        }
+        with patch("src.api.routes.explain.get_shap_analysis_repository") as mock_get_repo:
+            mock_get_repo.return_value = self._repo_with_rows(in_scope)
+
+            resp = await get_explanation_history("PAT-MINE", user=_rep_user_for_hcps("HCP-1"))
+
+        assert resp["total_explanations"] == 1
+        assert resp["explanations"][0]["explanation_id"] == "EXPL-MINE"
+
+    @pytest.mark.asyncio
+    async def test_admin_can_read_any_patient(self):
+        """Admin retains cross-scope read (mirrors RLS admin_access policy)."""
+        any_row = {
+            "id": "r1",
+            "explanation_id": "EXPL-ANY",
+            "patient_id": "PAT-ANY",
+            "hcp_id": "HCP-99",
+            "local_shap_values": {"f1": 0.1},
+        }
+        with patch("src.api.routes.explain.get_shap_analysis_repository") as mock_get_repo:
+            mock_get_repo.return_value = self._repo_with_rows(any_row)
+
+            resp = await get_explanation_history("PAT-ANY", user=_admin_user())
+
+        assert resp["total_explanations"] == 1
+        assert resp["explanations"][0]["explanation_id"] == "EXPL-ANY"
+
+    @pytest.mark.asyncio
+    async def test_user_with_all_grant_can_read_any_patient(self):
+        """A non-admin role carrying the cross-scope ``'all'`` grant sees all
+        rows (mirrors the get_user_brands ``'all'`` convention)."""
+        any_row = {
+            "id": "r1",
+            "explanation_id": "EXPL-ALL",
+            "patient_id": "PAT-ANY",
+            "hcp_id": "HCP-99",
+            "local_shap_values": {"f1": 0.1},
+        }
+        with patch("src.api.routes.explain.get_shap_analysis_repository") as mock_get_repo:
+            mock_get_repo.return_value = self._repo_with_rows(any_row)
+
+            resp = await get_explanation_history("PAT-ANY", user=_rep_user_for_hcps("all"))
+
+        assert resp["total_explanations"] == 1
 
 
 class TestListExplainableModelsEndpoint:

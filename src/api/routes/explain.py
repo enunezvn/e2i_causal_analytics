@@ -298,6 +298,53 @@ def _normalize_history_row(row: Dict[str, Any], masked_patient_id: str) -> Dict[
     }
 
 
+def _get_user_hcps(user: Dict[str, Any]) -> List[str]:
+    """Extract the caller's HCP-assignment grants from the user dict.
+
+    The ``ml_shap_analyses`` rows are scoped by ``hcp_id`` — the documented
+    object-level authorization model (``database/ml/011_realtime_shap_audit.sql``
+    RLS): a field rep may only see explanations whose ``hcp_id`` is in their
+    assignment set; admins / data scientists see all.
+
+    Look-up order mirrors ``src.api.dependencies.auth.get_user_brands`` (which
+    reads ``app_metadata.brands``), applied to HCP grants:
+
+    1. ``app_metadata.hcps`` (Supabase convention)
+    2. top-level ``hcps`` field
+    3. Empty list when neither is set
+
+    ``['all']`` means cross-scope access (treated like an admin grant).
+    """
+    hcps = user.get("app_metadata", {}).get("hcps")
+    if hcps is None:
+        hcps = user.get("hcps", [])
+    if isinstance(hcps, str):
+        return [hcps]
+    return list(hcps or [])
+
+
+def _caller_can_view_row(user: Dict[str, Any], row: Dict[str, Any]) -> bool:
+    """Object-level authorization for a single ``ml_shap_analyses`` row.
+
+    Returns True when the caller is allowed to view this explanation:
+
+    * Admins (role ADMIN) — cross-scope, mirrors the RLS ``admin_access`` policy.
+    * Callers carrying the cross-scope ``'all'`` HCP grant.
+    * Otherwise the row's ``hcp_id`` must be in the caller's HCP grant set.
+
+    A row with no ``hcp_id`` is only visible to admins / ``'all'`` callers — a
+    scoped caller has no grant that could match it, so it stays hidden
+    (fail-closed; an explanation must not leak to a rep who can't be tied to it).
+    """
+    from src.api.dependencies.auth import UserRole, has_role
+
+    allowed_hcps = set(_get_user_hcps(user))
+    if has_role(user, UserRole.ADMIN) or "all" in allowed_hcps:
+        return True
+    row_hcp = row.get("hcp_id")
+    return bool(row_hcp) and row_hcp in allowed_hcps
+
+
 async def _get_latest_versions_by_model_type() -> Dict[str, Optional[str]]:
     """Look up the latest ``model_version`` for each ``model_name`` in the
     registry, keyed by the matching ``ModelType.value``.
@@ -1010,6 +1057,7 @@ async def get_explanation_history(
     patient_id: str,
     model_type: Optional[ModelType] = None,
     limit: int = 10,
+    user: Dict[str, Any] = Depends(require_auth),
 ) -> Dict[str, Any]:
     """
     Retrieve historical explanations for a patient.
@@ -1018,6 +1066,18 @@ async def get_explanation_history(
     - Audit trail review
     - Understanding prediction evolution over time
     - Debugging model behavior
+
+    Authorization (Finding 1 — BOLA/IDOR): this route returns a patient's
+    SHAP explanation (prediction class/prob + signed feature contributions),
+    so it requires authentication (``Depends(require_auth)``, mirroring the
+    sibling ``/predict`` and ``/predict/batch`` routes) AND enforces
+    object-level authorization. The global auth middleware authenticates the
+    caller but does NOT authorize them per-object — without the per-row
+    ``hcp_id`` scope check below, any authenticated user could read any
+    patient's explanation by passing the raw path ``patient_id``.
+    Admins / ``'all'``-grant callers see every row; a scoped caller only sees
+    rows whose ``hcp_id`` is in their grant set (RLS model in
+    ``database/ml/011_realtime_shap_audit.sql``).
     """
     # Mask patient_id in all responses to protect PII
     masked_patient_id = mask_identifier(patient_id)
@@ -1059,6 +1119,13 @@ async def get_explanation_history(
             result = result_or_coro
 
         rows = result.data if result.data else []
+        # Object-level authorization (Finding 1 — BOLA/IDOR): drop rows the
+        # caller is not entitled to see BEFORE normalization, so an
+        # out-of-scope patient's explanation is never returned. The brand/
+        # tenant scope used elsewhere has no column on this table; the rows
+        # carry ``hcp_id``, which is the scope the schema's RLS uses, so we
+        # authorize per-row on ``hcp_id`` (admins / ``'all'`` callers bypass).
+        rows = [r for r in rows if _caller_can_view_row(user, r)]
         # Optional client-side ``model_type`` filter (see note above on why
         # this is not pushed into the supabase query).
         if model_type is not None:
@@ -1071,14 +1138,25 @@ async def get_explanation_history(
             "explanations": explanations,
         }
 
+    except HTTPException:
+        # Status-bearing failures (e.g. an auth/authorization error) must
+        # propagate as-is, not be re-wrapped into the generic 500 below.
+        raise
     except Exception as e:
-        logger.error(f"Error retrieving explanation history: {e}")
-        return {
-            "patient_id": masked_patient_id,
-            "total_explanations": 0,
-            "explanations": [],
-            "error": str(e),
-        }
+        # Finding 2 (swallow): do NOT return HTTP 200 with the internal error
+        # string in the body. Log the detail server-side and raise a proper
+        # 500 with a generic message so the client sees a real failure and no
+        # internals leak. ``mask_identifier`` keeps the patient_id out of logs.
+        logger.error(
+            "Error retrieving explanation history for patient=%s: %s",
+            masked_patient_id,
+            e,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to retrieve explanation history",
+        ) from e
 
 
 @router.get(
