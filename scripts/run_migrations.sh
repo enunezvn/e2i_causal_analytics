@@ -33,21 +33,18 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 DB_CONTAINER="${SUPABASE_DB_CONTAINER:-supabase-db}"
 DRY_RUN=false
 
-# EVERY database/ subdir holding SQL migrations, applied in dependency order.
-# The old runner only scanned database/migrations/, so database/memory/ (+ the
-# other schema dirs) silently never deployed. database/migrations/ keeps the
-# bare "" tracking prefix to preserve its existing schema_migrations history;
-# every other dir is namespaced "<dir>/". Adding a new database/<dir>/ here is
-# all it takes for the deploy to pick it up — no dir is ever silently missed.
+# Migration directories applied in order. SCOPED to database/migrations/ +
+# database/memory/: those two are fully reconciled and tracked. The other schema
+# dirs (core, ml, causal, chat, rag, audit) are INTENTIONALLY excluded until the
+# droplet's inconsistent partial-migration state is cleanly reconciled — several
+# are half-applied (e.g. an enum exists but its table does not), which would
+# abort the deploy here. See the reconciliation plan in
+# docs/reports/memory-system-review-20260603.md. Adding a dir back is a one-line
+# change once that dir is reconciled + baselined (the runner already supports it
+# via the "<dir>/" prefix convention and --baseline).
 MIGRATION_DIRS=(
-  "$PROJECT_ROOT/database/core::core/"
-  "$PROJECT_ROOT/database/ml::ml/"
-  "$PROJECT_ROOT/database/causal::causal/"
   "$PROJECT_ROOT/database/migrations::"
   "$PROJECT_ROOT/database/memory::memory/"
-  "$PROJECT_ROOT/database/chat::chat/"
-  "$PROJECT_ROOT/database/rag::rag/"
-  "$PROJECT_ROOT/database/audit::audit/"
 )
 
 BASELINE=false
