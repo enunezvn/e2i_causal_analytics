@@ -216,9 +216,7 @@ class TestRunHierarchicalAnalysis:
 
         assert response.status_code == 422
 
-    def test_hierarchical_analysis_500_does_not_leak_exception(
-        self, hierarchical_analysis_request
-    ):
+    def test_hierarchical_analysis_500_does_not_leak_exception(self, hierarchical_analysis_request):
         """A 500 from the sync path must NOT echo the raw exception text.
 
         Finding #7 (exception-text leakage): the broad ``except Exception``
@@ -236,10 +234,15 @@ class TestRunHierarchicalAnalysis:
             )
 
         assert response.status_code == 500
-        detail = response.json()["detail"]
-        assert detail == "Internal server error"
-        assert secret not in detail
-        assert "db-internal.prod" not in detail
+        # This app renders 500s via the E2IError envelope
+        # ({"error","message",...}), not FastAPI's default {"detail"}. Assert
+        # the security property envelope-agnostically: the raw exception text
+        # must not appear anywhere in the response body, and only the generic
+        # message is surfaced.
+        body = response.text
+        assert secret not in body
+        assert "db-internal.prod" not in body
+        assert "Internal server error" in body
 
 
 class TestGetHierarchicalAnalysis:
