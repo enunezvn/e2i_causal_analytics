@@ -8,6 +8,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import axios, { AxiosError, InternalAxiosRequestConfig, AxiosHeaders } from 'axios';
+import { z } from 'zod';
 
 // Import the actual type from api-client
 import type { ApiErrorResponse } from './api-client';
@@ -52,6 +53,7 @@ vi.mock('@/config/env', () => ({
 // Import after mocks
 import {
   ApiError,
+  ApiValidationError,
   apiClient,
   get,
   post,
@@ -422,6 +424,104 @@ describe('Request Helpers', () => {
 
       expect(apiClient.delete).toHaveBeenCalledWith('/users/1', undefined);
       expect(result).toEqual(responseData);
+    });
+  });
+});
+
+// =============================================================================
+// OPT-IN RUNTIME VALIDATION TESTS (schema param on base helpers)
+// =============================================================================
+
+describe('Request Helpers - opt-in runtime validation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const UserSchema = z.object({
+    id: z.number(),
+    name: z.string(),
+  });
+
+  describe('get with schema', () => {
+    it('returns parsed data when the response matches the schema', async () => {
+      vi.mocked(apiClient.get).mockResolvedValueOnce({
+        data: { id: 1, name: 'Valid' },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config: {} as InternalAxiosRequestConfig,
+      });
+
+      const result = await get('/users/1', undefined, { schema: UserSchema });
+
+      expect(result).toEqual({ id: 1, name: 'Valid' });
+    });
+
+    it('throws ApiValidationError when the response is malformed', async () => {
+      // Backend contract drift: `id` arrives as a string instead of a number.
+      vi.mocked(apiClient.get).mockResolvedValueOnce({
+        data: { id: 'not-a-number', name: 123 },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config: {} as InternalAxiosRequestConfig,
+      });
+
+      await expect(
+        get('/users/1', undefined, { schema: UserSchema })
+      ).rejects.toThrow(ApiValidationError);
+    });
+
+    it('skips validation entirely when no schema is supplied (back-compat)', async () => {
+      const malformed = { id: 'not-a-number', name: 123 };
+      vi.mocked(apiClient.get).mockResolvedValueOnce({
+        data: malformed,
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config: {} as InternalAxiosRequestConfig,
+      });
+
+      // No schema -> blind cast, no throw (existing behavior preserved).
+      const result = await get('/users/1');
+      expect(result).toEqual(malformed);
+    });
+  });
+
+  describe('post with schema', () => {
+    it('throws ApiValidationError when the response is malformed', async () => {
+      vi.mocked(apiClient.post).mockResolvedValueOnce({
+        data: { id: 'bad' },
+        status: 201,
+        statusText: 'Created',
+        headers: {},
+        config: {} as InternalAxiosRequestConfig,
+      });
+
+      await expect(
+        post('/users', { name: 'x' }, { schema: UserSchema })
+      ).rejects.toThrow(ApiValidationError);
+    });
+
+    it('still forwards params alongside the schema', async () => {
+      vi.mocked(apiClient.post).mockResolvedValueOnce({
+        data: { id: 1, name: 'ok' },
+        status: 201,
+        statusText: 'Created',
+        headers: {},
+        config: {} as InternalAxiosRequestConfig,
+      });
+
+      await post('/users', { name: 'x' }, {
+        params: { dry_run: true },
+        schema: UserSchema,
+      });
+
+      expect(apiClient.post).toHaveBeenCalledWith(
+        '/users',
+        { name: 'x' },
+        { params: { dry_run: true } }
+      );
     });
   });
 });

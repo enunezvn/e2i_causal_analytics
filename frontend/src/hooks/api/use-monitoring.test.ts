@@ -572,6 +572,113 @@ describe('useUpdateAlert', () => {
     expect(setQueryDataSpy).toHaveBeenCalled();
     expect(invalidateSpy).toHaveBeenCalled();
   });
+
+  it('optimistically updates param-suffixed alerts list caches', async () => {
+    // useAlerts stores lists under PARAM-SUFFIXED keys, e.g.
+    //   ['e2i','monitoring','alerts', model_id, status, severity, limit]
+    // The optimistic update must target those real cache entries, not the bare
+    // `alerts()` key (which is rarely populated). We mount useAlerts so the
+    // suffixed cache is created with a live observer (faithful to production —
+    // a list view is rendered alongside the update action).
+    const { wrapper, queryClient } = createWrapper();
+
+    // Key produced by useAlerts({ status: AlertStatus.ACTIVE }) — only `status`
+    // is set, the rest are undefined (matching the hook's queryKey shape).
+    const suffixedKey = [
+      'e2i',
+      'monitoring',
+      'alerts',
+      undefined, // model_id
+      AlertStatus.ACTIVE, // status
+      undefined, // severity
+      undefined, // limit
+    ];
+    vi.mocked(monitoringApi.listAlerts).mockResolvedValue({
+      total_count: 1,
+      active_count: 1,
+      alerts: [{ ...mockAlertItem, status: AlertStatus.ACTIVE }],
+    });
+
+    // Keep the mutation pending so we observe the OPTIMISTIC state (onMutate),
+    // before onSettled invalidation runs.
+    let resolveUpdate!: (value: AlertItem) => void;
+    vi.mocked(monitoringApi.updateAlert).mockImplementationOnce(
+      () => new Promise<AlertItem>((resolve) => { resolveUpdate = resolve; })
+    );
+
+    const { result } = renderHook(
+      () => {
+        const list = useAlerts({ status: AlertStatus.ACTIVE });
+        const update = useUpdateAlert();
+        return { list, update };
+      },
+      { wrapper }
+    );
+
+    // Wait for the list to populate the param-suffixed cache.
+    await waitFor(() => expect(result.current.list.isSuccess).toBe(true));
+
+    result.current.update.mutate({
+      alertId: 'alert_001',
+      request: { action: AlertAction.ACKNOWLEDGE, user_id: 'user_123' },
+    });
+
+    // Optimistic update should have rewritten the param-suffixed list cache.
+    await waitFor(() => {
+      const cached = queryClient.getQueryData<AlertListResponse>(suffixedKey);
+      expect(cached?.alerts[0]?.status).toBe(AlertStatus.ACKNOWLEDGED);
+      expect(cached?.active_count).toBe(0);
+    });
+
+    // Let the mutation finish so React Query can clean up.
+    resolveUpdate({ ...mockAlertItem, status: AlertStatus.ACKNOWLEDGED });
+    await waitFor(() => expect(result.current.update.isSuccess).toBe(true));
+  });
+
+  it('rolls back param-suffixed alerts list caches on error', async () => {
+    const { wrapper, queryClient } = createWrapper();
+    const suffixedKey = [
+      'e2i',
+      'monitoring',
+      'alerts',
+      undefined,
+      AlertStatus.ACTIVE,
+      undefined,
+      undefined,
+    ];
+    vi.mocked(monitoringApi.listAlerts).mockResolvedValue({
+      total_count: 1,
+      active_count: 1,
+      alerts: [{ ...mockAlertItem, status: AlertStatus.ACTIVE }],
+    });
+
+    vi.mocked(monitoringApi.updateAlert).mockRejectedValueOnce(
+      new Error('update failed')
+    );
+
+    const { result } = renderHook(
+      () => {
+        const list = useAlerts({ status: AlertStatus.ACTIVE });
+        const update = useUpdateAlert();
+        return { list, update };
+      },
+      { wrapper }
+    );
+
+    await waitFor(() => expect(result.current.list.isSuccess).toBe(true));
+
+    result.current.update.mutate({
+      alertId: 'alert_001',
+      request: { action: AlertAction.ACKNOWLEDGE, user_id: 'user_123' },
+    });
+
+    await waitFor(() => expect(result.current.update.isError).toBe(true));
+
+    // After rollback the suffixed list cache is restored to its pre-mutation state.
+    const cached = queryClient.getQueryData<AlertListResponse>(suffixedKey);
+    expect(cached?.alerts[0]?.status).toBe(AlertStatus.ACTIVE);
+    expect(cached?.active_count).toBe(1);
+  });
 });
 
 // =============================================================================

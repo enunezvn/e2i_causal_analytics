@@ -313,13 +313,40 @@ export function useAlert(
  * });
  * ```
  */
+/**
+ * Context captured during the optimistic update for rollback on error.
+ *
+ * `previousAlertsLists` snapshots EVERY param-suffixed alerts-list cache entry
+ * (see {@link useAlerts}, which stores lists under
+ * `[...alerts(), model_id, status, severity, limit]`), not just the bare
+ * `alerts()` key — otherwise the optimistic update would miss the real cache
+ * entries and the UI would show stale alert statuses.
+ */
+interface UpdateAlertContext {
+  previousAlert: AlertItem | undefined;
+  previousAlertsLists: Array<[readonly unknown[], AlertListResponse | undefined]>;
+}
+
+/**
+ * Type guard distinguishing an alerts-LIST cache entry (AlertListResponse) from
+ * an individual-ALERT cache entry (AlertItem). Both live under the
+ * `[...alerts()]` key prefix, so a prefix match alone is ambiguous.
+ */
+function isAlertListResponse(value: unknown): value is AlertListResponse {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    Array.isArray((value as AlertListResponse).alerts)
+  );
+}
+
 export function useUpdateAlert(
   options?: Omit<
     UseMutationOptions<
       AlertItem,
       ApiError,
       { alertId: string; request: AlertActionRequest },
-      { previousAlert: AlertItem | undefined; previousAlerts: AlertListResponse | undefined }
+      UpdateAlertContext
     >,
     'mutationFn'
   >
@@ -330,13 +357,15 @@ export function useUpdateAlert(
     AlertItem,
     ApiError,
     { alertId: string; request: AlertActionRequest },
-    { previousAlert: AlertItem | undefined; previousAlerts: AlertListResponse | undefined }
+    UpdateAlertContext
   >({
     mutationFn: ({ alertId, request }) => updateAlert(alertId, request),
 
     // Optimistic update: Immediately update the alert before the server responds
     onMutate: async (variables) => {
-      // Cancel any outgoing refetches to prevent overwriting our optimistic update
+      // Cancel any outgoing refetches to prevent overwriting our optimistic
+      // update. cancelQueries matches by key PREFIX, so a single call covers
+      // all param-suffixed alerts lists; the individual alert is cancelled too.
       await queryClient.cancelQueries({
         queryKey: queryKeys.monitoring.alert(variables.alertId),
       });
@@ -344,13 +373,20 @@ export function useUpdateAlert(
         queryKey: queryKeys.monitoring.alerts(),
       });
 
-      // Snapshot the previous value for rollback
+      // Snapshot the previous individual alert for rollback
       const previousAlert = queryClient.getQueryData<AlertItem>(
         queryKeys.monitoring.alert(variables.alertId)
       );
-      const previousAlerts = queryClient.getQueryData<AlertListResponse>(
-        queryKeys.monitoring.alerts()
-      );
+
+      // Snapshot EVERY alerts-list cache entry under the alerts() prefix. The
+      // `alert(id)` cache shares this prefix, so filter to list responses only.
+      const previousAlertsLists = queryClient
+        .getQueriesData<AlertListResponse>({
+          queryKey: queryKeys.monitoring.alerts(),
+        })
+        .filter(([, data]) => isAlertListResponse(data)) as Array<
+        [readonly unknown[], AlertListResponse | undefined]
+      >;
 
       // Determine new status based on action
       const statusMap: Record<string, AlertStatus> = {
@@ -381,8 +417,14 @@ export function useUpdateAlert(
         );
       }
 
-      // Optimistically update alerts list
-      if (previousAlerts) {
+      // Optimistically update EVERY param-suffixed alerts list cache entry.
+      for (const [queryKey, previousAlerts] of previousAlertsLists) {
+        if (!previousAlerts) continue;
+        const targetWasActive = previousAlerts.alerts.some(
+          (alert) =>
+            alert.id === variables.alertId &&
+            alert.status === AlertStatus.ACTIVE
+        );
         const optimisticAlerts: AlertListResponse = {
           ...previousAlerts,
           alerts: previousAlerts.alerts.map((alert) =>
@@ -401,16 +443,18 @@ export function useUpdateAlert(
                 }
               : alert
           ),
+          // Only decrement when this alert was actually counted as active and
+          // is transitioning away from ACTIVE — keeps the count correct per list.
           active_count:
-            newStatus !== AlertStatus.ACTIVE
-              ? previousAlerts.active_count - 1
+            targetWasActive && newStatus !== AlertStatus.ACTIVE
+              ? Math.max(0, previousAlerts.active_count - 1)
               : previousAlerts.active_count,
         };
-        queryClient.setQueryData(queryKeys.monitoring.alerts(), optimisticAlerts);
+        queryClient.setQueryData(queryKey, optimisticAlerts);
       }
 
       // Return context with the snapshotted values
-      return { previousAlert, previousAlerts };
+      return { previousAlert, previousAlertsLists };
     },
 
     // Rollback on error
@@ -421,11 +465,10 @@ export function useUpdateAlert(
           context.previousAlert
         );
       }
-      if (context?.previousAlerts) {
-        queryClient.setQueryData(
-          queryKeys.monitoring.alerts(),
-          context.previousAlerts
-        );
+      // Restore every previously-snapshotted alerts-list cache entry.
+      for (const [queryKey, previousAlerts] of context?.previousAlertsLists ??
+        []) {
+        queryClient.setQueryData(queryKey, previousAlerts);
       }
     },
 
@@ -437,7 +480,9 @@ export function useUpdateAlert(
       );
     },
 
-    // Always refetch after error or success to ensure consistency
+    // Always refetch after error or success to ensure consistency.
+    // invalidateQueries matches by key prefix, so this covers all
+    // param-suffixed alerts lists.
     onSettled: () => {
       queryClient.invalidateQueries({
         queryKey: queryKeys.monitoring.alerts(),
