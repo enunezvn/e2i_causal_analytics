@@ -300,10 +300,52 @@ class SegmentHealthResponse(BaseModel):
 
 
 # =============================================================================
-# IN-MEMORY STORAGE (replace with Supabase in production)
+# IN-MEMORY STORAGE
 # =============================================================================
+#
+# NOTE: This is an intentional, scaffolded placeholder for a future Supabase
+# (or Redis) backing store. It is therefore PROCESS-LOCAL and has the known
+# limitations that come with that:
+#   - State is LOST on process restart / redeploy.
+#   - State is NOT shared across Uvicorn/Gunicorn workers (a GET may land on a
+#     different worker than the POST that created the analysis and 404).
+# These are acceptable for the current single-worker / dev-and-demo posture;
+# durable cross-worker persistence is tracked as future work.
+#
+# What is NOT acceptable is UNBOUNDED growth: a plain dict would accumulate
+# every analysis for the life of the process and is a slow memory leak / DoS
+# vector. The store below is therefore bounded with simple insertion-order
+# (FIFO) eviction so memory stays capped.
 
-_analyses_store: Dict[str, SegmentAnalysisResponse] = {}
+# Maximum number of analyses retained in the process-local store.
+ANALYSES_STORE_MAX_ENTRIES = 1000
+
+
+class _BoundedAnalysesStore(Dict[str, SegmentAnalysisResponse]):
+    """A dict that evicts the oldest entry once it exceeds ``max_entries``.
+
+    Preserves the full ``dict`` interface used by the route handlers
+    (``in``, ``[]``, ``.values()``, ``.clear()``) while capping memory. Python
+    dicts preserve insertion order, so ``next(iter(self))`` is the oldest key.
+    Re-assigning an existing key updates in place and does NOT grow the store.
+    """
+
+    def __init__(self, *args: Any, max_entries: int = ANALYSES_STORE_MAX_ENTRIES) -> None:
+        super().__init__(*args)
+        self.max_entries = max_entries
+
+    def __setitem__(self, key: str, value: SegmentAnalysisResponse) -> None:
+        super().__setitem__(key, value)
+        while len(self) > self.max_entries:
+            oldest_key = next(iter(self))
+            # Guard against evicting the key we just inserted (cannot happen
+            # while max_entries >= 1, but keeps the loop provably terminating).
+            if oldest_key == key:
+                break
+            del self[oldest_key]
+
+
+_analyses_store: _BoundedAnalysesStore = _BoundedAnalysesStore()
 
 
 # =============================================================================

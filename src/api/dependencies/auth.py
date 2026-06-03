@@ -73,22 +73,49 @@ SUPABASE_JWT_SECRET = os.environ.get("SUPABASE_JWT_SECRET", "")
 # Testing mode - bypasses authentication for integration/e2e tests
 TESTING_MODE = os.environ.get("E2I_TESTING_MODE", "").lower() in ("true", "1", "yes")
 
-# Warn at startup if critical auth secrets are missing (skip in test mode)
-if not TESTING_MODE:
-    _auth_logger = logging.getLogger(__name__)
-    if not SUPABASE_JWT_SECRET:
-        _auth_logger.warning(
-            "SUPABASE_JWT_SECRET is not set — JWT verification will be disabled. "
-            "Set this in .env for production."
-        )
+def _warn_missing_auth_secrets() -> List[str]:
+    """Emit startup warnings for missing auth secrets and return the messages.
+
+    Returns the list of warnings emitted (empty if all configured). Returning
+    them — rather than only logging — makes the messages assertable in tests.
+
+    Accuracy note (LOW finding fix): token verification in this module runs
+    through ``verify_supabase_token`` -> Supabase ``client.auth.get_user()``,
+    which needs SUPABASE_URL + SUPABASE_ANON_KEY. It does NOT use
+    SUPABASE_JWT_SECRET, so the absence of that secret does not disable JWT
+    verification. The old message ("JWT verification will be disabled") was
+    therefore inaccurate; SUPABASE_JWT_SECRET is currently optional/unused on
+    this path, and the real "auth disabled" condition is missing URL/ANON_KEY.
+    """
+    messages: List[str] = []
     if not SUPABASE_URL:
-        _auth_logger.warning(
+        messages.append(
             "SUPABASE_URL is not set — auth will be disabled. Set this in .env for production."
         )
     if not SUPABASE_ANON_KEY:
-        _auth_logger.warning(
+        messages.append(
             "SUPABASE_ANON_KEY is not set — auth will be disabled. Set this in .env for production."
         )
+    if not SUPABASE_JWT_SECRET:
+        # Informational only: this secret is not consumed by the current
+        # get_user()-based verification path, so its absence does not turn
+        # verification off. Phrase it as optional, not as "verification disabled".
+        messages.append(
+            "SUPABASE_JWT_SECRET is not set. It is optional for the current "
+            "Supabase get_user() verification path (which uses SUPABASE_URL + "
+            "SUPABASE_ANON_KEY) and does NOT disable JWT verification. Set it "
+            "only if you add local HS256 signature verification."
+        )
+
+    _auth_logger = logging.getLogger(__name__)
+    for message in messages:
+        _auth_logger.warning(message)
+    return messages
+
+
+# Warn at startup if critical auth secrets are missing (skip in test mode)
+if not TESTING_MODE:
+    _warn_missing_auth_secrets()
 _ENVIRONMENT = os.environ.get("ENVIRONMENT", "development")
 if TESTING_MODE and _ENVIRONMENT == "production":
     import warnings

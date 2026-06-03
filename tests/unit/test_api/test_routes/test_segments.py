@@ -900,3 +900,69 @@ def test_generate_mock_response_warning(sample_request):
 
     assert len(result.warnings) > 0
     assert "mock data" in result.warnings[0].lower()
+
+
+# =============================================================================
+# IN-MEMORY STORE BOUNDING (finding #4 — prevent unbounded growth)
+# =============================================================================
+
+
+class TestBoundedAnalysesStore:
+    """The process-local analyses store must be bounded to avoid unbounded
+    memory growth (it is an intentional, documented placeholder for a future
+    Supabase backing — see the module comment — but it must not leak)."""
+
+    def test_store_evicts_oldest_when_over_capacity(self):
+        from src.api.routes.segments import (
+            SegmentAnalysisResponse,
+            _BoundedAnalysesStore,
+        )
+
+        store = _BoundedAnalysesStore(max_entries=3)
+        for i in range(5):
+            store[f"seg_{i}"] = SegmentAnalysisResponse(
+                analysis_id=f"seg_{i}",
+                status=AnalysisStatus.COMPLETED,
+                timestamp=datetime.now(timezone.utc),
+            )
+
+        # Only the most-recent max_entries survive.
+        assert len(store) == 3
+        # Oldest two evicted.
+        assert "seg_0" not in store
+        assert "seg_1" not in store
+        # Newest retained.
+        assert "seg_2" in store
+        assert "seg_3" in store
+        assert "seg_4" in store
+
+    def test_reassigning_existing_key_does_not_grow(self):
+        from src.api.routes.segments import (
+            SegmentAnalysisResponse,
+            _BoundedAnalysesStore,
+        )
+
+        store = _BoundedAnalysesStore(max_entries=2)
+        for i in range(2):
+            store[f"seg_{i}"] = SegmentAnalysisResponse(
+                analysis_id=f"seg_{i}",
+                status=AnalysisStatus.PENDING,
+                timestamp=datetime.now(timezone.utc),
+            )
+        # Update an existing key (e.g. PENDING -> COMPLETED on completion).
+        store["seg_0"] = SegmentAnalysisResponse(
+            analysis_id="seg_0",
+            status=AnalysisStatus.COMPLETED,
+            timestamp=datetime.now(timezone.utc),
+        )
+
+        assert len(store) == 2
+        assert store["seg_0"].status == AnalysisStatus.COMPLETED
+        assert "seg_1" in store
+
+    def test_module_store_is_bounded_instance(self):
+        """The live module-level store is a bounded instance, not a plain dict."""
+        from src.api.routes.segments import _analyses_store, _BoundedAnalysesStore
+
+        assert isinstance(_analyses_store, _BoundedAnalysesStore)
+        assert _analyses_store.max_entries > 0

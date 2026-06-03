@@ -10,6 +10,7 @@ Author: E2I Causal Analytics Team
 Version: 4.2.0
 """
 
+import asyncio
 import logging
 import os
 from typing import Any, Dict, Optional
@@ -143,9 +144,62 @@ def close_supabase() -> None:
         logger.info("Supabase connection closed")
 
 
+# Transport-level failures mean the PostgREST/Postgres round-trip could NOT be
+# made (server down, DNS, refused, timed out) -> genuinely unhealthy. Any other
+# exception (a PostgREST/API error such as "function not found" or "relation
+# does not exist") means the HTTP round-trip SUCCEEDED -> the service is
+# reachable -> healthy. This is the distinction the old fail-open code lacked.
+_TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (
+    ConnectionError,
+    TimeoutError,
+    OSError,
+)
+
+
+def _probe_postgrest_reachable(client: Any) -> None:
+    """Blocking PostgREST reachability probe (run via asyncio.to_thread).
+
+    Returns normally if the service is reachable. Raises a transport error only
+    when EVERY probe fails at the transport layer (server unreachable).
+
+    Two probes are attempted because the empty-name RPC may legitimately return
+    a PostgREST API error even when the server is up; a second select probe then
+    confirms reachability. An API-level error from either probe is treated as
+    "reachable" (the round-trip completed) and swallowed.
+    """
+    try:
+        import httpx
+
+        transport_errors: tuple[type[BaseException], ...] = (
+            *_TRANSPORT_ERRORS,
+            httpx.TransportError,
+        )
+    except Exception:  # httpx should always be present, but degrade gracefully
+        transport_errors = _TRANSPORT_ERRORS
+
+    try:
+        client.rpc("", {}).execute()
+        return  # Round-trip completed.
+    except transport_errors:
+        # Transport-level failure on probe 1 — try the second probe before
+        # concluding the service is unreachable.
+        client.table("_health_check_noop").select("*").limit(0).execute()
+        return  # If probe 2's round-trip completes, the service is reachable.
+    except Exception:
+        # API-level error (e.g. PGRST function/relation not found): the HTTP
+        # round-trip succeeded, so PostgREST is reachable -> healthy.
+        return
+
+
 async def supabase_health_check() -> Dict[str, Any]:
     """
-    Check Supabase health status via lightweight connectivity test.
+    Check Supabase health status via a real PostgREST connectivity probe.
+
+    Fails CLOSED: if the round-trip to PostgREST/Postgres cannot be made, the
+    status is ``unhealthy`` (the previous implementation incorrectly reported
+    ``healthy`` even when the server was unreachable). The blocking supabase-py
+    client call is offloaded to a worker thread so it does not block the event
+    loop.
 
     Returns:
         Dict with status and connection info
@@ -166,18 +220,9 @@ async def supabase_health_check() -> Dict[str, Any]:
 
         start = time.time()
 
-        # Lightweight connectivity test using PostgREST endpoint
-        # This avoids depending on any specific table existing
-        try:
-            client.rpc("", {}).execute()
-        except Exception:
-            # RPC with empty name may fail, but the HTTP round-trip
-            # confirms PostgREST is reachable. Try a HEAD-style probe
-            # by selecting from a system-level endpoint.
-            try:
-                client.table("_health_check_noop").select("*").limit(0).execute()
-            except Exception:
-                pass
+        # Run the synchronous PostgREST probe off the event loop. A transport
+        # error propagates here -> caught below -> unhealthy (fail closed).
+        await asyncio.to_thread(_probe_postgrest_reachable, client)
 
         latency_ms = (time.time() - start) * 1000
 

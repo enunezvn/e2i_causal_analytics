@@ -30,44 +30,80 @@ MIN_PRESERVE_START = 4
 MIN_PRESERVE_END = 4
 MASK_CHAR = "*"
 
+# A short, human-readable label prefix such as ``PAT-``, ``HCP-``, ``ID-``.
+# Bounded to <= 6 letters so that long all-letter blocks (e.g. a UUID head that
+# happens to be all hex-letters) are NOT mistaken for a label and exposed.
+_LABEL_PREFIX_RE = re.compile(r"^([A-Za-z]{1,6})-")
+
+# UUID (8-4-4-4-12 hex). Such identifiers carry no safe "prefix" — the leading
+# block is just as sensitive as the rest, so they are masked head-to-tail.
+_UUID_RE = re.compile(
+    r"^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$"
+)
+
+
+def _mask_all_but_last(value: str, preserve_end: int) -> str:
+    """Mask every character except the last ``preserve_end`` (the safe default).
+
+    For PHI/PII the conservative posture is to expose only a short trailing
+    window for human reference and hide everything before it (no leading window).
+    """
+    if len(value) <= preserve_end:
+        # Too short to keep a full trailing window without exposing most of it:
+        # keep at most the final character.
+        if len(value) <= 1:
+            return value
+        return MASK_CHAR * (len(value) - 1) + value[-1]
+    return MASK_CHAR * (len(value) - preserve_end) + value[-preserve_end:]
+
 
 def mask_identifier(value: str, preserve_end: int = 4) -> str:
-    """Mask an identifier value, preserving a prefix pattern and last N chars.
+    """Mask an identifier value, preserving a label prefix and last N chars.
+
+    Masking strategy (PII hardening):
+    - Labelled IDs (``PAT-…``, ``HCP-…``): keep the short label prefix and the
+      last N chars; mask the body in between.
+    - UUIDs: no safe prefix — mask all but the last N chars.
+    - Numeric / SSN / opaque IDs (no label prefix): mask all but the last N
+      chars (NO leading window — the head is the sensitive part).
+    - Very short IDs: keep at most the final character.
 
     Args:
         value: The identifier string to mask
         preserve_end: Number of characters to preserve at the end
 
     Returns:
-        Masked string with middle portion replaced by asterisks
+        Masked string exposing at most a label prefix + the last N characters.
 
     Examples:
         >>> mask_identifier("PAT-2024-001234")
-        'PAT-****-1234'
+        'PAT-*******1234'
         >>> mask_identifier("HCP-NE-5678")
-        'HCP-**-5678'
-        >>> mask_identifier("short", preserve_end=4)
-        's****'
+        'HCP-***5678'
+        >>> mask_identifier("12345678901234")
+        '**********1234'
     """
     if not value or not isinstance(value, str):
         return value
 
-    # Handle very short strings
+    # Handle very short strings — expose at most the final character.
     if len(value) <= preserve_end + MIN_PRESERVE_START:
-        # For short strings, mask everything except first char
         if len(value) <= 1:
             return value
-        return value[0] + MASK_CHAR * (len(value) - 1)
+        return MASK_CHAR * (len(value) - 1) + value[-1]
 
-    # Find prefix pattern (letters/digits followed by dash)
-    # Common patterns: PAT-xxxx, HCP-xx, ID-xxx
-    prefix_match = re.match(r"^([A-Za-z]+)-", value)
+    # UUIDs carry no safe prefix: mask head-to-tail. Checked BEFORE the label
+    # prefix so an all-hex-letter UUID head is never exposed as a "label".
+    if _UUID_RE.match(value):
+        return _mask_all_but_last(value, preserve_end)
 
+    # Short human-readable label prefix (PAT-, HCP-, ID-, ...).
+    prefix_match = _LABEL_PREFIX_RE.match(value)
     if prefix_match:
         prefix = prefix_match.group(1) + "-"
         rest = value[len(prefix) :]
 
-        # Preserve last N characters of the rest
+        # Preserve last N characters of the rest; mask everything before them.
         if len(rest) <= preserve_end:
             masked_rest = MASK_CHAR * len(rest)
         else:
@@ -75,14 +111,10 @@ def mask_identifier(value: str, preserve_end: int = 4) -> str:
             masked_rest = MASK_CHAR * masked_portion_len + rest[-preserve_end:]
 
         return prefix + masked_rest
-    else:
-        # No prefix pattern - mask middle portion
-        masked_len = len(value) - MIN_PRESERVE_START - preserve_end
-        if masked_len <= 0:
-            # Just mask middle char
-            mid = len(value) // 2
-            return value[:mid] + MASK_CHAR + value[mid + 1 :]
-        return value[:MIN_PRESERVE_START] + MASK_CHAR * masked_len + value[-preserve_end:]
+
+    # No label prefix (numeric, SSN, opaque): mask all but the trailing window.
+    # NO leading window — the head of an MRN/SSN/account number is sensitive.
+    return _mask_all_but_last(value, preserve_end)
 
 
 def mask_pii(

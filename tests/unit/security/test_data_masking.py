@@ -76,12 +76,20 @@ class TestMaskIdentifier:
         assert mask_identifier(None) is None
 
     def test_mask_without_prefix_pattern(self):
-        """Test masking string without hyphen prefix pattern."""
+        """Test masking string without hyphen prefix pattern.
+
+        PII hardening: identifiers WITHOUT a letter prefix (raw numeric IDs,
+        UUIDs, SSNs) must NOT expose a leading window — only the last N chars
+        are preserved. The previous behavior preserved the first 4 chars too,
+        leaking 8 of 14 digits of an MRN/account number.
+        """
         result = mask_identifier("12345678901234")
-        # Should mask middle portion
-        assert result.startswith("1234")
+        # Leading digits must be masked (no leading window).
+        assert not result.startswith("1234")
+        assert result.startswith("*")
         assert result.endswith("1234")
-        assert "*" in result
+        # Everything except the last 4 chars is masked.
+        assert result == "*" * 10 + "1234"
 
     def test_mask_with_multiple_segments(self):
         """Test masking ID with multiple hyphen-separated segments."""
@@ -90,6 +98,82 @@ class TestMaskIdentifier:
         assert result.endswith("1234")
         # Middle segments should be masked
         assert "US" not in result or "*" in result
+
+
+class TestMaskIdentifierSensitiveFormats:
+    """PII hardening for short / numeric / UUID / SSN identifiers.
+
+    These formats have NO letter-prefix, so they previously fell into the
+    branch that preserved a LEADING 4-char window — exposing far more than the
+    intended ``last N`` characters. For PHI/PII a leak of the first 4 digits of
+    an MRN or 8 chars of a UUID is unacceptable. The hardened behavior masks
+    everything except the last N chars for these formats.
+    """
+
+    def _masked_body(self, raw: str, masked: str, keep: int = 4) -> str:
+        """Return the portion of the original that must be hidden (sans last N)."""
+        return raw[:-keep]
+
+    def test_numeric_mrn_only_last_four_visible(self):
+        """A 14-digit numeric MRN exposes only its last 4 digits."""
+        result = mask_identifier("12345678901234")
+        assert result.endswith("1234")
+        # None of the hidden leading digits appear in the masked output.
+        assert "1234567890" not in result
+        assert result == "*" * 10 + "1234"
+
+    def test_ssn_only_last_four_visible(self):
+        """An SSN (dashes but no letter prefix) exposes only the last 4."""
+        result = mask_identifier("123-45-6789")
+        assert result.endswith("6789")
+        # The leading segments (the truly sensitive part) must be masked.
+        assert "123-45" not in result
+        assert not result.startswith("123")
+
+    def test_uuid_only_last_four_visible(self):
+        """A UUID (starts with a hex digit, no letter prefix) hides the head."""
+        uuid = "550e8400-e29b-41d4-a716-446655440000"
+        result = mask_identifier(uuid)
+        assert result.endswith("0000")
+        # The first block must NOT leak.
+        assert "550e8400" not in result
+        assert not result.startswith("550e")
+
+    def test_uuid_with_leading_letter_block_is_not_treated_as_prefix(self):
+        """A hex UUID beginning with a letter must not expose its first block.
+
+        ``f47ac10b-...`` would match the ``^[A-Za-z]+-`` prefix rule and expose
+        the entire ``f47ac10b`` first block. UUIDs must be masked head-to-tail.
+        """
+        uuid = "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+        result = mask_identifier(uuid)
+        assert result.endswith("d479")
+        assert "f47ac10b" not in result
+        assert not result.startswith("f47ac10b")
+
+    def test_short_numeric_id_aggressively_masked(self):
+        """A short numeric ID keeps length but exposes at most the last char."""
+        result = mask_identifier("12345")
+        assert len(result) == 5
+        assert result.endswith("5")
+        # No multi-digit leading window.
+        assert not result.startswith("1234")
+
+    def test_no_format_change_for_prefixed_ids(self):
+        """Hardening must not regress the canonical prefixed-ID behavior.
+
+        The letter-prefix path preserves the prefix + last 4 and masks the rest
+        of the body (the secure invariant the rest of the suite relies on).
+        """
+        pat = mask_identifier("PAT-2024-001234")
+        assert pat.startswith("PAT-")
+        assert pat.endswith("1234")
+        assert "2024" not in pat  # body masked
+
+        hcp = mask_identifier("HCP-NE-5678")
+        assert hcp.startswith("HCP-")
+        assert hcp.endswith("5678")
+        assert "NE" not in hcp  # body masked
 
 
 class TestMaskPii:
