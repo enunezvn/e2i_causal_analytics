@@ -74,12 +74,21 @@ PUBLIC_PATHS: List[Tuple[str, str]] = [
     ("GET", "/api/resources/health"),
     # Segment analysis health - public
     ("GET", "/api/segments/health"),
-    # Graph endpoints - public for demo visualization
+    # Graph endpoints — ONLY the health probe is public.
+    #
+    # The DATA endpoints (/nodes, /relationships, /stats, /causal-chains)
+    # were previously public "for demo visualization" but (1) return
+    # Patient/HCP graph nodes + relationships (PHI/PII) cross-tenant to any
+    # anonymous caller, and (2) forward user-supplied entity_types /
+    # relationship_types into a Cypher string-interpolation in
+    # src/memory/semantic_memory.py — an unauthenticated Cypher-injection
+    # surface. They now fall through to the default JWT-required branch.
+    # The frontend graph client already sends Authorization: Bearer via the
+    # shared apiClient (frontend/src/lib/api-client.ts) and the dashboard
+    # sits behind a ProtectedRoute login wall, so authenticated users see
+    # no change — only anonymous access is removed. Regression-pinned in
+    # tests/unit/test_security/test_auth_gating.py.
     ("GET", "/api/graph/health"),
-    ("GET", "/api/graph/nodes"),
-    ("GET", "/api/graph/relationships"),
-    ("GET", "/api/graph/stats"),
-    ("POST", "/api/graph/causal-chains"),
     # Monitoring endpoints - public for dashboard widgets
     ("GET", "/api/monitoring/alerts"),
     # Analytics dashboard - public for dashboard widgets

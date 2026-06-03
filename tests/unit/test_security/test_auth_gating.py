@@ -729,6 +729,67 @@ def test_copilotkit_public_path_patterns_does_not_contain_catchall() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Graph endpoint allowlist regression pin (PHI hardening)
+#
+# The knowledge-graph DATA endpoints were public "for demo visualization"
+# but (1) return Patient/HCP nodes + relationships (PHI/PII) cross-tenant
+# to any anonymous caller, and (2) forward user-supplied ``entity_types`` /
+# ``relationship_types`` into a Cypher string-interpolation in
+# ``src/memory/semantic_memory.py`` — an UNAUTHENTICATED Cypher-injection
+# surface. Only ``/api/graph/health`` stays public.
+#
+# The frontend graph client sends ``Authorization: Bearer`` via the shared
+# apiClient (``frontend/src/lib/api-client.ts``) and the dashboard sits
+# behind a ``ProtectedRoute`` login wall, so authenticated users observe no
+# change — only anonymous access is removed.
+# ---------------------------------------------------------------------------
+
+_GRAPH_DATA_ENTRIES = {
+    ("GET", "/api/graph/nodes"),
+    ("GET", "/api/graph/relationships"),
+    ("GET", "/api/graph/stats"),
+    ("POST", "/api/graph/causal-chains"),
+}
+
+
+def test_graph_data_endpoints_not_in_public_paths() -> None:
+    """REGRESSION PIN — graph DATA endpoints MUST NOT be in ``PUBLIC_PATHS``.
+
+    They return PHI/PII (Patient/HCP nodes + edges) and expose an
+    unauthenticated Cypher-injection surface. Matches on the bare path
+    (any method) so a future ``("*", ...)`` re-add is also caught.
+    """
+    from src.api.middleware.auth_middleware import PUBLIC_PATHS
+
+    graph_data_paths = {path for _method, path in _GRAPH_DATA_ENTRIES}
+    leaked = [(method, path) for method, path in PUBLIC_PATHS if path in graph_data_paths]
+    assert not leaked, (
+        f"Graph DATA endpoints re-appeared in PUBLIC_PATHS: {leaked!r}. "
+        f"These expose Patient/HCP PHI/PII and an unauthenticated Cypher "
+        f"injection surface (entity_types/relationship_types are string-"
+        f"interpolated into Cypher in src/memory/semantic_memory.py). They "
+        f"MUST require a JWT. Only /api/graph/health may be public."
+    )
+
+
+def test_graph_data_endpoints_require_auth_via_is_public_path() -> None:
+    """The public-path resolver treats graph DATA endpoints as protected."""
+    from src.api.middleware.auth_middleware import _is_public_path
+
+    for method, path in _GRAPH_DATA_ENTRIES:
+        assert _is_public_path(method, path) is False, (
+            f"{method} {path} must require auth (PHI/PII + Cypher injection)."
+        )
+
+
+def test_graph_health_remains_public() -> None:
+    """The graph health probe stays public (no PHI; dashboard liveness)."""
+    from src.api.middleware.auth_middleware import _is_public_path
+
+    assert _is_public_path("GET", "/api/graph/health") is True
+
+
+# ---------------------------------------------------------------------------
 # Handler-dispatch end-to-end tests (#399 codex iter-1 M-finding closure)
 #
 # What's heavy here: building a FastAPI app via ``add_copilotkit_routes``
