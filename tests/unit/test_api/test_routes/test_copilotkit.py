@@ -121,7 +121,13 @@ class TestChatRequest:
             )
 
     def test_request_requires_user_id(self):
-        """Test that user_id is required."""
+        """Test that user_id is required.
+
+        IDOR fix: user_id remains a required body field for backward
+        compatibility, but it is NON-AUTHORITATIVE — the server derives the
+        caller's identity from the authenticated token and 403s on mismatch.
+        See TestChatIdentityFromToken.
+        """
         with pytest.raises(ValueError):
             ChatRequest(
                 query="Test query",
@@ -572,7 +578,11 @@ class TestChatEndpoint:
         assert data["conversation_title"].endswith("...")
 
     def test_chat_error_handling(self, test_client):
-        """Test chat error handling."""
+        """Test chat error handling.
+
+        The internal exception text must NOT be leaked to the client
+        (Finding 3). Only a generic error message is returned.
+        """
         with patch(
             "src.api.routes.chatbot_graph.run_chatbot",
             new_callable=AsyncMock,
@@ -582,7 +592,7 @@ class TestChatEndpoint:
                 "/copilotkit/chat",
                 json={
                     "query": "Test query",
-                    "user_id": "user-123",
+                    "user_id": "test-user-id",
                     "request_id": "req-456",
                 },
             )
@@ -590,7 +600,9 @@ class TestChatEndpoint:
         assert response.status_code == 200  # Endpoint returns 200 with error in body
         data = response.json()
         assert data["success"] is False
-        assert "Database connection error" in data["error"]
+        # Internal detail must not leak; a generic message is returned instead.
+        assert "Database connection error" not in data["error"]
+        assert data["error"]
 
     def test_chat_with_brand_context(self, test_client):
         """Test chat with brand context."""
@@ -1054,3 +1066,220 @@ class TestCopilotKitIntegration:
         data = response.json()
         assert data["success"] is False
         assert "Invalid rating" in data["error"]
+
+
+# =============================================================================
+# Security fixes (API code review)
+# =============================================================================
+
+
+class TestChatIdentityFromToken:
+    """Finding 1 [HIGH IDOR]: chat identity must come from the authenticated
+    token, NOT the request body. A caller must not be able to pass an
+    arbitrary ``user_id`` to impersonate another user / read their
+    sessions and memory.
+    """
+
+    def _client_with_user(self, user):
+        """Build a test client whose ``require_viewer`` returns ``user``."""
+        from src.api.dependencies.auth import require_viewer
+        from src.api.routes.copilotkit import router
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[require_viewer] = lambda: user
+        return TestClient(app)
+
+    def test_chat_uses_token_identity_not_body_user_id(self):
+        """run_chatbot must receive the authenticated user id, never the body value."""
+        token_user = {"id": "real-token-user", "app_metadata": {"role": "admin"}}
+        client = self._client_with_user(token_user)
+
+        with patch(
+            "src.api.routes.chatbot_graph.run_chatbot",
+            new_callable=AsyncMock,
+            return_value={"response_text": "ok", "session_id": "s1"},
+        ) as mock_run:
+            response = client.post(
+                "/copilotkit/chat",
+                json={
+                    "query": "Show my sessions",
+                    # Attacker tries to impersonate another user via the body.
+                    "user_id": "victim-user",
+                    "request_id": "req-1",
+                },
+            )
+
+        assert response.status_code == 200
+        call_kwargs = mock_run.call_args.kwargs
+        # The downstream call must use the TOKEN identity, not the body value.
+        assert call_kwargs["user_id"] == "real-token-user"
+        assert call_kwargs["user_id"] != "victim-user"
+
+    def test_chat_mismatched_body_user_id_rejected_in_production(self):
+        """In production (TESTING_MODE off), a body user_id that disagrees with
+        the token identity is an impersonation attempt and must be rejected 403.
+        """
+        token_user = {"id": "real-token-user", "app_metadata": {"role": "admin"}}
+        client = self._client_with_user(token_user)
+
+        with (
+            patch("src.api.routes.copilotkit.TESTING_MODE", False),
+            patch(
+                "src.api.routes.chatbot_graph.run_chatbot",
+                new_callable=AsyncMock,
+                return_value={"response_text": "ok", "session_id": "s1"},
+            ) as mock_run,
+        ):
+            response = client.post(
+                "/copilotkit/chat",
+                json={
+                    "query": "Show victim sessions",
+                    "user_id": "victim-user",
+                    "request_id": "req-1",
+                },
+            )
+
+        assert response.status_code == 403
+        mock_run.assert_not_called()
+
+    def test_chat_matching_body_user_id_allowed(self):
+        """A body user_id that matches the token identity is allowed (compat)."""
+        token_user = {"id": "real-token-user", "app_metadata": {"role": "admin"}}
+        client = self._client_with_user(token_user)
+
+        with (
+            patch("src.api.routes.copilotkit.TESTING_MODE", False),
+            patch(
+                "src.api.routes.chatbot_graph.run_chatbot",
+                new_callable=AsyncMock,
+                return_value={"response_text": "ok", "session_id": "s1"},
+            ) as mock_run,
+        ):
+            response = client.post(
+                "/copilotkit/chat",
+                json={
+                    "query": "Show my sessions",
+                    "user_id": "real-token-user",
+                    "request_id": "req-1",
+                },
+            )
+
+        assert response.status_code == 200
+        assert mock_run.call_args.kwargs["user_id"] == "real-token-user"
+
+    def test_stream_chat_uses_token_identity_not_body_user_id(self):
+        """The streaming endpoint must also derive identity from the token."""
+        token_user = {"id": "real-token-user", "app_metadata": {"role": "admin"}}
+        client = self._client_with_user(token_user)
+
+        async def _fake_stream(*args, **kwargs):
+            # Record the user_id the stream was invoked with, then yield nothing.
+            _fake_stream.seen_user_id = kwargs.get("user_id")
+            if False:  # pragma: no cover - generator with no yields
+                yield {}
+
+        with patch(
+            "src.api.routes.chatbot_graph.stream_chatbot",
+            side_effect=_fake_stream,
+        ):
+            response = client.post(
+                "/copilotkit/chat/stream",
+                json={
+                    "query": "Show my sessions",
+                    "user_id": "victim-user",
+                    "request_id": "req-1",
+                },
+            )
+            # Consume the streaming body so the generator actually runs.
+            _ = response.text
+
+        assert response.status_code == 200
+        assert getattr(_fake_stream, "seen_user_id", None) == "real-token-user"
+
+
+class TestPlaceholderActionProvenance:
+    """Finding 2 [HIGH silent-mock]: get_recommendations / search_insights are
+    scaffolded placeholders returning fabricated pharma numbers. They must not
+    silently present fake values as real AI analysis. They are gated behind a
+    feature flag (default OFF -> fail closed) and, when enabled for dev, carry
+    explicit provenance markers so the UI can disclose they are placeholders.
+    """
+
+    @pytest.mark.asyncio
+    async def test_get_recommendations_fails_closed_by_default(self, monkeypatch):
+        from src.api.routes import copilotkit
+
+        monkeypatch.delenv("E2I_ENABLE_PLACEHOLDER_ACTIONS", raising=False)
+        result = await copilotkit.get_recommendations("Kisqali")
+
+        # Must NOT present fabricated recommendations as real data by default.
+        assert result.get("data_source") in ("unavailable", "not_implemented")
+        assert not result.get("recommendations")
+        assert result.get("success") is False
+
+    @pytest.mark.asyncio
+    async def test_get_recommendations_placeholder_is_disclosed_when_enabled(self, monkeypatch):
+        from src.api.routes import copilotkit
+
+        monkeypatch.setenv("E2I_ENABLE_PLACEHOLDER_ACTIONS", "1")
+        result = await copilotkit.get_recommendations("Kisqali")
+
+        # When enabled for dev, the provenance MUST be explicitly marked so the
+        # UI cannot mistake placeholder advice for real analysis.
+        assert result.get("data_source") == "placeholder"
+        assert result.get("is_placeholder") is True
+        assert "placeholder" in (result.get("disclaimer") or "").lower()
+
+    @pytest.mark.asyncio
+    async def test_search_insights_fails_closed_by_default(self, monkeypatch):
+        from src.api.routes import copilotkit
+
+        monkeypatch.delenv("E2I_ENABLE_PLACEHOLDER_ACTIONS", raising=False)
+        result = await copilotkit.search_insights("HCP engagement")
+
+        assert result.get("data_source") in ("unavailable", "not_implemented")
+        assert not result.get("results")
+        assert result.get("success") is False
+
+    @pytest.mark.asyncio
+    async def test_search_insights_placeholder_is_disclosed_when_enabled(self, monkeypatch):
+        from src.api.routes import copilotkit
+
+        monkeypatch.setenv("E2I_ENABLE_PLACEHOLDER_ACTIONS", "1")
+        result = await copilotkit.search_insights("HCP engagement")
+
+        assert result.get("data_source") == "placeholder"
+        assert result.get("is_placeholder") is True
+        assert "placeholder" in (result.get("disclaimer") or "").lower()
+
+
+class TestChatErrorDoesNotLeakInternals:
+    """Finding 3 [MEDIUM info-disclosure]: the chat error field must not leak
+    internal exception text to the client.
+    """
+
+    def test_chat_error_returns_generic_message(self, test_client):
+        with patch(
+            "src.api.routes.chatbot_graph.run_chatbot",
+            new_callable=AsyncMock,
+            side_effect=Exception("psql://secret:pw@db: relation does not exist"),
+        ):
+            response = test_client.post(
+                "/copilotkit/chat",
+                json={
+                    "query": "Test query",
+                    "user_id": "test-user-id",
+                    "request_id": "req-456",
+                },
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is False
+        # Internal exception text must NOT be present in the client response.
+        assert "psql" not in (data.get("error") or "")
+        assert "secret" not in (data.get("error") or "")
+        assert "relation does not exist" not in (data.get("error") or "")
+        # A generic message should be returned instead.
+        assert data["error"]
