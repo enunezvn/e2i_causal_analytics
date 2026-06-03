@@ -786,3 +786,198 @@ class TestEdgeCases:
 
         assert "Unknown" in result["nodes_by_type"]
         assert result["nodes_by_type"]["Unknown"] == 10
+
+
+# ============================================================================
+# CYPHER INJECTION HARDENING TESTS (Finding 2)
+# ============================================================================
+
+
+class TestListNodesInjectionHardening:
+    """list_nodes / count_nodes must not interpolate raw user labels into Cypher."""
+
+    def test_list_nodes_known_label_not_interpolated_raw(self, semantic_memory, mock_graph):
+        """A known label filter must be passed via a parameter, never an f-string literal."""
+        mock_graph.query.return_value.result_set = []
+
+        semantic_memory.list_nodes(entity_types=["Patient"])
+
+        call_args = mock_graph.query.call_args
+        query = call_args[0][0]
+        params = call_args[0][1]
+        # The literal `'Patient' IN labels(n)` interpolation pattern must be gone.
+        assert "'Patient' IN labels(n)" not in query
+        # The label value must instead reach the query through parameters.
+        assert params.get("entity_types") == ["Patient"]
+
+    def test_list_nodes_rejects_injection_label(self, semantic_memory, mock_graph):
+        """An injection-style entity_type must be rejected, not interpolated."""
+        mock_graph.query.return_value.result_set = []
+
+        with pytest.raises(ValueError):
+            semantic_memory.list_nodes(entity_types=["Patient' OR '1'='1"])
+
+        # The poisoned value must never have reached the graph driver.
+        for call in mock_graph.query.call_args_list:
+            assert "OR '1'='1" not in call[0][0]
+
+    def test_count_nodes_rejects_injection_label(self, semantic_memory, mock_graph):
+        """count_nodes must apply the same whitelist as list_nodes."""
+        mock_graph.query.return_value.result_set = [[0]]
+
+        with pytest.raises(ValueError):
+            semantic_memory.count_nodes(entity_types=["Patient'} RETURN n //"])
+
+        for call in mock_graph.query.call_args_list:
+            assert "RETURN n //" not in call[0][0]
+
+    def test_list_nodes_no_filter_still_works(self, semantic_memory, mock_graph):
+        """No entity_types filter should still produce a valid MATCH (n) query."""
+        mock_graph.query.return_value.result_set = []
+
+        semantic_memory.list_nodes()
+
+        query = mock_graph.query.call_args[0][0]
+        assert "MATCH (n)" in query
+
+
+class TestListRelationshipsInjectionHardening:
+    """list_relationships / count_relationships must not interpolate raw rel types."""
+
+    def test_list_relationships_rejects_injection_type(self, semantic_memory, mock_graph):
+        """An injection-style relationship_type must be rejected, not interpolated."""
+        mock_graph.query.return_value.result_set = []
+
+        with pytest.raises(ValueError):
+            semantic_memory.list_relationships(
+                relationship_types=["CAUSES]->(x) DETACH DELETE x //"]
+            )
+
+        for call in mock_graph.query.call_args_list:
+            assert "DETACH DELETE" not in call[0][0]
+
+    def test_count_relationships_rejects_injection_type(self, semantic_memory, mock_graph):
+        """count_relationships must apply the same whitelist as list_relationships."""
+        mock_graph.query.return_value.result_set = [[0]]
+
+        with pytest.raises(ValueError):
+            semantic_memory.count_relationships(relationship_types=["CAUSES`|`MALICIOUS"])
+
+        for call in mock_graph.query.call_args_list:
+            assert "MALICIOUS" not in call[0][0]
+
+    def test_list_relationships_known_types_build_pattern(self, semantic_memory, mock_graph):
+        """Known relationship types should still build a valid -[r:A|B]-> pattern."""
+        mock_graph.query.return_value.result_set = []
+
+        semantic_memory.list_relationships(relationship_types=["CAUSES", "IMPACTS"])
+
+        query = mock_graph.query.call_args[0][0]
+        assert "-[r:CAUSES|IMPACTS]->" in query
+
+
+# ============================================================================
+# NEW GRAPH-API METHODS (Finding 1) — methods the routes call
+# ============================================================================
+
+
+class TestTraverseFromNode:
+    """traverse_from_node generic subgraph traversal (used by /traverse and network)."""
+
+    def test_traverse_returns_nodes_and_relationships(self, semantic_memory, mock_graph):
+        """traverse_from_node should return a {nodes, relationships} subgraph dict."""
+        start_node = MagicMock()
+        start_node.labels = ["Trigger"]
+        start_node.properties = {"id": "trigger_001", "name": "Peer Influence"}
+        connected = MagicMock()
+        connected.labels = ["HCP"]
+        connected.properties = {"id": "hcp_001", "name": "Dr. Chen"}
+        rel = MagicMock()
+        rel.id = 99
+        rel.properties = {"confidence": 0.8}
+        # path returns nodes list and relationships list per record
+        mock_graph.query.return_value.result_set = [
+            [[start_node, connected], [rel]],
+        ]
+
+        result = semantic_memory.traverse_from_node(start_node_id="trigger_001", max_depth=2)
+
+        assert "nodes" in result
+        assert "relationships" in result
+        ids = {n["id"] for n in result["nodes"]}
+        assert "trigger_001" in ids and "hcp_001" in ids
+
+    def test_traverse_clamps_depth(self, semantic_memory, mock_graph):
+        """Depth must be sanitized into the variable-length bound, not injected."""
+        mock_graph.query.return_value.result_set = []
+
+        semantic_memory.traverse_from_node(start_node_id="n1", max_depth=99)
+
+        query = mock_graph.query.call_args[0][0]
+        # Clamped to max 5; the raw 99 must not appear.
+        assert "*1..5" in query
+        assert "99" not in query
+
+    def test_traverse_rejects_injection_relationship_type(self, semantic_memory, mock_graph):
+        """Relationship-type filters in traversal must be whitelisted."""
+        mock_graph.query.return_value.result_set = []
+
+        with pytest.raises(ValueError):
+            semantic_memory.traverse_from_node(
+                start_node_id="n1", relationship_types=["CAUSES]->() DELETE n //"]
+            )
+
+
+class TestFindCausalChains:
+    """find_causal_chains (used by /causal-chains fallback)."""
+
+    def test_find_causal_chains_by_kpi(self, semantic_memory, mock_graph):
+        """find_causal_chains should return chain dicts with nodes/relationships."""
+        mock_graph.query.return_value.result_set = [
+            [
+                [{"id": "cp_1", "type": "CausalPath"}, {"id": "kpi_trx", "type": "KPI"}],
+                [{"type": "IMPACTS", "conf": 0.9}],
+            ]
+        ]
+
+        result = semantic_memory.find_causal_chains(kpi_name="TRx", max_length=3)
+
+        assert isinstance(result, list)
+        assert len(result) == 1
+        assert "nodes" in result[0]
+        assert "relationships" in result[0]
+
+    def test_find_causal_chains_by_source(self, semantic_memory, mock_graph):
+        """find_causal_chains should accept a source entity id."""
+        mock_graph.query.return_value.result_set = []
+
+        result = semantic_memory.find_causal_chains(source_entity_id="entity_1", max_length=2)
+
+        assert result == []
+
+
+class TestSemanticSearch:
+    """semantic_search (used by /search fallback)."""
+
+    def test_semantic_search_parameterizes_query(self, semantic_memory, mock_graph):
+        """The search term must be passed as a parameter, not interpolated."""
+        node = MagicMock()
+        node.labels = ["HCP"]
+        node.properties = {"id": "hcp_001", "name": "Dr. Chen"}
+        mock_graph.query.return_value.result_set = [[node, "HCP"]]
+
+        results = semantic_memory.semantic_search(query="Chen", k=5)
+
+        call_args = mock_graph.query.call_args
+        query = call_args[0][0]
+        params = call_args[0][1]
+        assert "Chen" not in query  # not interpolated
+        assert params.get("search") == "Chen"
+        assert len(results) == 1
+
+    def test_semantic_search_rejects_injection_entity_type(self, semantic_memory, mock_graph):
+        """entity_types filter on search must be whitelisted."""
+        mock_graph.query.return_value.result_set = []
+
+        with pytest.raises(ValueError):
+            semantic_memory.semantic_search(query="x", entity_types=["HCP' OR '1'='1"])
