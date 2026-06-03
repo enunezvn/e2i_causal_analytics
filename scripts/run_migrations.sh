@@ -33,20 +33,35 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 DB_CONTAINER="${SUPABASE_DB_CONTAINER:-supabase-db}"
 DRY_RUN=false
 
-# Migration directories applied in this order. database/memory/ holds the
-# agentic-memory + lifecycle/sentinel/crystallization schema that the old
-# runner never scanned (it only looked at database/migrations/).
+# EVERY database/ subdir holding SQL migrations, applied in dependency order.
+# The old runner only scanned database/migrations/, so database/memory/ (+ the
+# other schema dirs) silently never deployed. database/migrations/ keeps the
+# bare "" tracking prefix to preserve its existing schema_migrations history;
+# every other dir is namespaced "<dir>/". Adding a new database/<dir>/ here is
+# all it takes for the deploy to pick it up — no dir is ever silently missed.
 MIGRATION_DIRS=(
+  "$PROJECT_ROOT/database/core::core/"
+  "$PROJECT_ROOT/database/ml::ml/"
+  "$PROJECT_ROOT/database/causal::causal/"
   "$PROJECT_ROOT/database/migrations::"
   "$PROJECT_ROOT/database/memory::memory/"
+  "$PROJECT_ROOT/database/chat::chat/"
+  "$PROJECT_ROOT/database/rag::rag/"
+  "$PROJECT_ROOT/database/audit::audit/"
 )
 
+BASELINE=false
 for arg in "$@"; do
   case $arg in
     --dry-run) DRY_RUN=true ;;
+    --baseline) BASELINE=true ;;
     --help|-h)
-      echo "Usage: $0 [--dry-run]"
-      echo "  --dry-run  List pending migrations without applying"
+      echo "Usage: $0 [--dry-run] [--baseline]"
+      echo "  --dry-run   List pending migrations without applying"
+      echo "  --baseline  Record every present migration as applied WITHOUT running it."
+      echo "              One-time adoption of tracking on an already-migrated DB so"
+      echo "              future deploys only apply genuinely-new files. Run this AFTER"
+      echo "              applying any known-pending backlog (else it marks those skipped)."
       exit 0
       ;;
   esac
@@ -110,6 +125,13 @@ apply_dir() {
     PENDING=$((PENDING + 1))
     if [ "$DRY_RUN" = true ]; then
       echo -e "${YELLOW}[PENDING]${NC} $key"
+      continue
+    fi
+
+    if [ "$BASELINE" = true ]; then
+      run_psql -q -c "INSERT INTO public.schema_migrations(filename) VALUES ('${key//\'/\'\'}') ON CONFLICT DO NOTHING;" >/dev/null
+      echo -e "${YELLOW}[BASELINED]${NC} $key"
+      APPLIED_COUNT=$((APPLIED_COUNT + 1))
       continue
     fi
 
