@@ -229,7 +229,7 @@ from copilotkit.integrations.fastapi import (
 from copilotkit.langgraph import copilotkit_emit_message, copilotkit_emit_state
 from copilotkit.langgraph_agui_agent import LangGraphAGUIAgent as _LangGraphAGUIAgent
 from copilotkit.sdk import COPILOTKIT_SDK_VERSION
-from fastapi import APIRouter, Depends, FastAPI, Request
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
@@ -1517,19 +1517,74 @@ async def run_causal_analysis(
     }
 
 
+# Disclaimer surfaced on every placeholder response so the chat UI / caller
+# cannot mistake scaffolded sample data for real AI-generated analysis.
+_PLACEHOLDER_DISCLAIMER = (
+    "PLACEHOLDER / NOT YET IMPLEMENTED — these are illustrative sample values, "
+    "NOT real analysis. Do not use for decisions."
+)
+
+
+def _placeholder_actions_enabled() -> bool:
+    """Whether the scaffolded placeholder copilot actions may return sample data.
+
+    These actions (``getRecommendations``, ``searchInsights``) are scaffolded
+    placeholders awaiting a real backend (intent: the actions are a requested
+    feature, but the data layer is not wired yet — see commit 2662a2c0 which
+    added them as part of the initial CopilotKit integration). Their hardcoded
+    pharma numbers (``+15% TRx lift``, ``confidence 0.85`` ...) are plausible
+    enough to be mistaken for real causal output.
+
+    Mirrors the ``E2I_ENABLE_SIMULATED_FALLBACK`` pattern already used by
+    ``run_causal_analysis``: DEFAULT OFF so the production chat fails closed
+    rather than presenting fabricated advice as real analysis. When explicitly
+    enabled for dev/demo, the responses carry an unmistakable provenance marker
+    (``data_source="placeholder"`` + ``is_placeholder`` + ``disclaimer``).
+    """
+    return os.getenv("E2I_ENABLE_PLACEHOLDER_ACTIONS", "0").lower() in ("1", "true", "yes")
+
+
 async def get_recommendations(brand: str, context: Optional[str] = None) -> Dict[str, Any]:
     """
     Get AI-powered recommendations for a brand.
+
+    SCAFFOLDED PLACEHOLDER (no real backend yet). Fails closed by default so
+    the chat never presents fabricated recommendations as real AI analysis.
+    Set ``E2I_ENABLE_PLACEHOLDER_ACTIONS=1`` to surface clearly-marked sample
+    data for dev/demo. Once a real recommendations service exists, wire it here.
 
     Args:
         brand: Brand to get recommendations for
         context: Optional context about what kind of recommendations are needed
 
     Returns:
-        Dictionary with recommendations
+        Dictionary with recommendations (or a fail-closed envelope by default)
     """
-    logger.info(f"[CopilotKit] Generating recommendations for {brand}")
+    logger.info(f"[CopilotKit] get_recommendations requested for {brand}")
 
+    if not _placeholder_actions_enabled():
+        # Fail closed: do NOT return fabricated recommendations in production.
+        logger.warning(
+            "[CopilotKit] get_recommendations is a placeholder and "
+            "E2I_ENABLE_PLACEHOLDER_ACTIONS is OFF — returning not_implemented"
+        )
+        return {
+            "brand": brand,
+            "context": context or "General recommendations",
+            "success": False,
+            "recommendations": [],
+            "data_source": "not_implemented",
+            "error": (
+                "Recommendations are not yet available (no recommendations "
+                "service is wired). This feature is under development."
+            ),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    logger.warning(
+        "[CopilotKit] E2I_ENABLE_PLACEHOLDER_ACTIONS enabled — "
+        "returning PLACEHOLDER recommendations (sample data, not real analysis)"
+    )
     recommendations = [
         {
             "priority": "high",
@@ -1558,6 +1613,11 @@ async def get_recommendations(brand: str, context: Optional[str] = None) -> Dict
         "brand": brand,
         "context": context or "General recommendations",
         "recommendations": recommendations,
+        # Provenance markers: the UI MUST surface these so users cannot mistake
+        # placeholder advice for real AI-generated analysis.
+        "data_source": "placeholder",
+        "is_placeholder": True,
+        "disclaimer": _PLACEHOLDER_DISCLAIMER,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -1566,16 +1626,45 @@ async def search_insights(query: str, brand: Optional[str] = None) -> Dict[str, 
     """
     Search for insights in the E2I knowledge base.
 
+    SCAFFOLDED PLACEHOLDER (no real knowledge-base search yet). Fails closed by
+    default so the chat never presents fabricated insights as real results. Set
+    ``E2I_ENABLE_PLACEHOLDER_ACTIONS=1`` to surface clearly-marked sample data
+    for dev/demo. Once a real insights/search backend exists, wire it here.
+
     Args:
         query: Search query
         brand: Optional brand filter
 
     Returns:
-        Dictionary with search results
+        Dictionary with search results (or a fail-closed envelope by default)
     """
-    logger.info(f"[CopilotKit] Searching insights: {query}")
+    logger.info(f"[CopilotKit] search_insights requested: {query}")
 
-    # Simulated search results
+    if not _placeholder_actions_enabled():
+        # Fail closed: do NOT return fabricated insights in production.
+        logger.warning(
+            "[CopilotKit] search_insights is a placeholder and "
+            "E2I_ENABLE_PLACEHOLDER_ACTIONS is OFF — returning not_implemented"
+        )
+        return {
+            "query": query,
+            "brand_filter": brand,
+            "success": False,
+            "results": [],
+            "total_results": 0,
+            "data_source": "not_implemented",
+            "error": (
+                "Insights search is not yet available (no knowledge-base "
+                "search service is wired). This feature is under development."
+            ),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+    logger.warning(
+        "[CopilotKit] E2I_ENABLE_PLACEHOLDER_ACTIONS enabled — "
+        "returning PLACEHOLDER insights (sample data, not real results)"
+    )
+    # Sample (placeholder) search results — illustrative only.
     results = [
         {
             "type": "causal_path",
@@ -1605,6 +1694,11 @@ async def search_insights(query: str, brand: Optional[str] = None) -> Dict[str, 
         "brand_filter": brand,
         "results": results,
         "total_results": len(results),
+        # Provenance markers: the UI MUST surface these so users cannot mistake
+        # placeholder insights for real search results.
+        "data_source": "placeholder",
+        "is_placeholder": True,
+        "disclaimer": _PLACEHOLDER_DISCLAIMER,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -3021,7 +3115,15 @@ class ChatRequest(BaseModel):
     """
 
     query: str = Field(..., description="User's query text")
-    user_id: str = Field(..., description="User UUID")
+    user_id: str = Field(
+        ...,
+        description=(
+            "NON-AUTHORITATIVE. Retained for backward compatibility only. The "
+            "server derives the caller's identity from the authenticated token; "
+            "this value is ignored for identity and, if it does not match the "
+            "token identity, the request is rejected (403)."
+        ),
+    )
     request_id: Optional[str] = Field(
         default=None,
         description="Unique request identifier (auto-extracted from X-Request-ID header if not provided)",
@@ -3057,7 +3159,62 @@ class ChatResponse(BaseModel):
     routing_rationale: Optional[str] = None
 
 
-async def _stream_chat_response(request: ChatRequest) -> AsyncGenerator[str, None]:
+# Generic, client-safe error message for the chat endpoints. Internal
+# exception detail is logged server-side, never returned to the caller
+# (Finding 3 — info disclosure).
+_GENERIC_CHAT_ERROR = "An internal error occurred while processing your request. Please try again."
+
+
+def _resolve_chat_identity(authenticated_user: Dict[str, Any], body_user_id: Optional[str]) -> str:
+    """Resolve the authoritative chat identity from the authenticated token.
+
+    Finding 1 [HIGH IDOR]: ``ChatRequest.user_id`` was a required request-body
+    field used as the caller's identity (session ownership, message persistence,
+    cross-user memory). A caller could pass any ``user_id`` and impersonate
+    another user. The body value is therefore NON-AUTHORITATIVE — the identity
+    is always taken from the authenticated token (``require_viewer`` →
+    ``user["id"]``).
+
+    For backward compatibility the body may still carry ``user_id``; if it is
+    present and disagrees with the token identity it is treated as an
+    impersonation attempt and rejected with 403 (skipped in testing mode, which
+    deliberately bypasses real auth).
+
+    Args:
+        authenticated_user: The user dict from ``require_viewer``.
+        body_user_id: The (optional, non-authoritative) ``user_id`` from the body.
+
+    Returns:
+        The authoritative user id to use for all downstream calls.
+
+    Raises:
+        HTTPException: 403 if a mismatching body ``user_id`` is supplied
+            (production only).
+    """
+    token_user_id = (authenticated_user or {}).get("id")
+    if not token_user_id:
+        # Should not happen behind require_viewer, but fail closed if it does.
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authenticated user identity is missing.",
+        )
+
+    if body_user_id and body_user_id != token_user_id and not TESTING_MODE:
+        logger.warning(
+            "[Chatbot] Rejected user_id mismatch (possible impersonation): "
+            "body user_id does not match authenticated identity"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Request user_id does not match the authenticated user.",
+        )
+
+    return token_user_id
+
+
+async def _stream_chat_response(
+    request: ChatRequest, authenticated_user_id: str
+) -> AsyncGenerator[str, None]:
     """
     Generate SSE stream for chatbot response.
 
@@ -3077,12 +3234,13 @@ async def _stream_chat_response(request: ChatRequest) -> AsyncGenerator[str, Non
     try:
         from src.api.routes.chatbot_graph import stream_chatbot
 
-        # Yield session_id first
+        # Yield session_id first. Identity is the AUTHENTICATED user id
+        # (Finding 1 — never trust request.user_id for identity).
         session_id = request.session_id
         if not session_id:
             import uuid
 
-            session_id = f"{request.user_id}~{uuid.uuid4()}"
+            session_id = f"{authenticated_user_id}~{uuid.uuid4()}"
 
         yield f"data: {json.dumps({'type': 'session_id', 'data': session_id})}\n\n"
 
@@ -3103,7 +3261,7 @@ async def _stream_chat_response(request: ChatRequest) -> AsyncGenerator[str, Non
         # Stream through chatbot workflow
         async for state_update in stream_chatbot(
             query=request.query,
-            user_id=request.user_id,
+            user_id=authenticated_user_id,
             request_id=request.request_id or "unknown",
             session_id=session_id,
             brand_context=request.brand_context or "",
@@ -3187,8 +3345,9 @@ async def _stream_chat_response(request: ChatRequest) -> AsyncGenerator[str, Non
 
     except Exception as e:
         execution_time_ms = round((time.time() - start_time) * 1000, 2)
-        logger.error(f"Streaming chat error after {execution_time_ms}ms: {e}")
-        yield f"data: {json.dumps({'type': 'error', 'data': str(e)})}\n\n"
+        # Finding 3: log internal detail server-side, return a generic message.
+        logger.error(f"Streaming chat error after {execution_time_ms}ms: {e}", exc_info=True)
+        yield f"data: {json.dumps({'type': 'error', 'data': _GENERIC_CHAT_ERROR})}\n\n"
 
 
 @router.post("/chat/stream", summary="Stream chatbot response", operation_id="stream_chat")
@@ -3224,19 +3383,22 @@ async def stream_chat(
             "brand_context": "Kisqali"  // Optional
         }
     """
+    # Finding 1: derive identity from the authenticated token, never the body.
+    authenticated_user_id = _resolve_chat_identity(_user, chat_request.user_id)
+
     # Phase 1 G08: Use middleware request_id if not provided in body
     effective_request_id = chat_request.request_id or get_request_id() or "unknown"
 
     logger.info(
         f"[Chatbot] Streaming request: query={chat_request.query[:50]}..., "
-        f"user={chat_request.user_id}, request_id={effective_request_id}"
+        f"user={authenticated_user_id}, request_id={effective_request_id}"
     )
 
     # Update the request with the effective request_id
     chat_request.request_id = effective_request_id
 
     return StreamingResponse(
-        _stream_chat_response(chat_request),
+        _stream_chat_response(chat_request, authenticated_user_id),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -3284,13 +3446,18 @@ async def chat(
     """
     import time
 
+    # Finding 1: derive identity from the authenticated token, never the body.
+    # (Outside the try/except so a 403 propagates instead of being swallowed
+    # into a 200 error body.)
+    authenticated_user_id = _resolve_chat_identity(_user, chat_request.user_id)
+
     # Phase 1 G08: Use middleware request_id if not provided in body
     effective_request_id = chat_request.request_id or get_request_id() or "unknown"
     chat_request.request_id = effective_request_id
 
     logger.info(
         f"[Chatbot] Chat request: query={chat_request.query[:50]}..., "
-        f"user={chat_request.user_id}, request_id={effective_request_id}"
+        f"user={authenticated_user_id}, request_id={effective_request_id}"
     )
 
     # Start timing for execution_time_ms
@@ -3301,7 +3468,7 @@ async def chat(
 
         result = await run_chatbot(
             query=chat_request.query,
-            user_id=chat_request.user_id,
+            user_id=authenticated_user_id,
             request_id=chat_request.request_id or "unknown",
             session_id=chat_request.session_id or "",
             brand_context=chat_request.brand_context or "",
@@ -3359,12 +3526,14 @@ async def chat(
     except Exception as e:
         # Calculate execution time even on error
         execution_time_ms = (time.time() - start_time) * 1000
-        logger.error(f"Chat error after {execution_time_ms:.1f}ms: {e}")
+        # Finding 3: log internal detail server-side, return a generic message
+        # to the client (no exception text / connection strings leaked).
+        logger.error(f"Chat error after {execution_time_ms:.1f}ms: {e}", exc_info=True)
         return ChatResponse(
             success=False,
             session_id=chat_request.session_id or "",
             response="",
-            error=str(e),
+            error=_GENERIC_CHAT_ERROR,
             execution_time_ms=round(execution_time_ms, 2),
         )
 
