@@ -136,6 +136,8 @@ docs/results/*
 !docs/results/training_serving_skew_*.md
 # Optum cohort re-validation evidence (close-out arc regression detection)
 !docs/results/optum_initiation_revalidation_*.md
+# Optum vs synthetic cohort forensics (LOINC re-mapping authority; cited by OPTUM_CONVERSION.md + convert_optum_rwd.py)
+!docs/results/tier0_cohort_comparison_*.md
 # Phase 5.2 dry-run scale-machinery evidence (synthetic boundaries)
 !docs/results/phase5p2_scale_machinery_*.md
 # Gate N3 methodology sign-off templates + dated artifacts (Tier 1A governance)

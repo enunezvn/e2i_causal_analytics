@@ -287,15 +287,30 @@ COMORBIDITY_CODES: dict[str, tuple[str, ...]] = {
     "angioedema": ("T783",),
 }
 
+# Analyte -> LOINC codes. Codes were corrected on 2026-06-03 after a forensic
+# trace of the Optum lab extract (`tst_desc` cross-check) found three analytes
+# pointing at the WRONG test. Each entry now lists the canonical LOINC plus the
+# variant codes actually observed in the Optum drop, so the feature both reads
+# correctly and populates on real data. See
+# docs/results/tier0_cohort_comparison_optum_vs_synthetic_20260603.md
+# (Root-cause forensics) and TestCsuLabsLoincMapping.
 CSU_LABS_LOINC: dict[str, tuple[str, ...]] = {
-    "ige_total": ("19113-0", "2683-2"),
-    "eosinophil": ("6206-7",),
-    "crp": ("1988-5",),
-    "tpo_ab": ("3051-0", "3053-6"),
-    "free_t4": ("3024-7",),
-    "tsh": ("3016-3",),
-    "ana": ("14741-9",),
-    "cbc": ("26453-1",),
+    "ige_total": ("19113-0", "2683-2"),  # 'IMMUNOGLOBULIN E, TOTAL' (verified correct)
+    # 711-2 / 26444-0 = absolute eosinophil count.
+    # (was 6206-7 = Peanut IgE 'F013-IGE PEANUT' — wrong analyte.)
+    "eosinophil": ("711-2", "26444-0"),
+    "crp": ("1988-5",),  # 'C-REACTIVE PROTEIN' (verified correct)
+    # 8099-8 canonical thyroid-peroxidase Ab; 8099-4 / 56477-3 = Optum-extract variants.
+    # (was 3051-0 / 3053-6 = Free / Total T3 — wrong analyte.)
+    "tpo_ab": ("8099-8", "8099-4", "56477-3"),
+    "free_t4": ("3024-7",),  # 'T4, FREE' (verified correct)
+    "tsh": ("3016-3",),  # 'TSH' (verified correct)
+    # 42254-3 'ANA SCREEN, IFA' / 5048-4 'ANA TITER' / 8061-4 'ANA DIRECT'.
+    # (was 14741-9 — zero rows in the extract and not an antinuclear-antibody code.)
+    "ana": ("42254-3", "5048-4", "8061-4"),
+    # 58410-2 = CBC panel; 57021-8 = 'CBC WITH DIFF'.
+    # (was 26453-1 = RBC — wrong analyte.)
+    "cbc": ("58410-2", "57021-8"),
 }
 
 # --------------------------------------------------------------------------- #

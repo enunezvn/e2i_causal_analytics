@@ -14,6 +14,7 @@ import pandas as pd
 import pytest
 
 from scripts.convert_optum_rwd import (
+    CSU_LABS_LOINC,
     DEFAULT_ENROLLMENT_REGIME,
     ENROLLMENT_POST_DAYS,
     ENROLLMENT_PRE_DAYS,
@@ -679,3 +680,90 @@ class TestEnrollmentRegimeBifurcation:
         steps = dict(cv._attrition)
         regime_key = "initiation: enrollment_regime=research (pre=180d, post=90d)"
         assert regime_key in steps
+
+
+class TestCsuLabsLoincMapping:
+    """Regression guard for the ``CSU_LABS_LOINC`` analyte -> LOINC map.
+
+    A 2026-06-03 forensic trace of the Optum extract found three entries pointing
+    at the WRONG analyte (verified against the raw ``lab.parquet`` ``tst_desc``):
+
+      - ``eosinophil`` -> ``6206-7``  is actually Peanut IgE ('F013-IGE PEANUT')
+      - ``tpo_ab``     -> ``3051-0``/``3053-6`` are actually Free / Total T3
+      - ``cbc``        -> ``26453-1`` is actually RBC
+
+    plus ``ana`` -> ``14741-9`` which has zero rows in the extract. The fix
+    repoints each name at codes that genuinely identify that analyte (canonical
+    LOINC + the variants observed in the Optum drop). These tests exercise the
+    real ``_lab_features`` code path, not just the constant.
+    """
+
+    @staticmethod
+    def _lab_row(loinc: str, day: str, rslt: float = 1.0, abnl: str = "") -> dict:
+        return {"loinc_cd": loinc, "fst_dt": _ts(day), "rslt_nbr": rslt, "abnl_cd": abnl}
+
+    def test_eosinophil_matches_true_count_not_peanut_ige(self) -> None:
+        cv = _make_converter()
+        lab_w = pd.DataFrame(
+            [
+                self._lab_row("711-2", "2020-01-01", rslt=0.4),  # absolute eosinophils
+                self._lab_row("6206-7", "2020-02-01", rslt=99.0),  # peanut IgE — NOT eosinophil
+            ]
+        )
+        tested, last, _ = cv._lab_features(lab_w, CSU_LABS_LOINC["eosinophil"])
+        assert tested is True
+        assert last == pytest.approx(0.4)  # the 711-2 value, not the peanut-IgE 99.0
+        only_peanut = pd.DataFrame([self._lab_row("6206-7", "2020-01-01")])
+        assert cv._lab_features(only_peanut, CSU_LABS_LOINC["eosinophil"])[0] is False
+
+    def test_tpo_ab_matches_thyroid_peroxidase_not_t3(self) -> None:
+        cv = _make_converter()
+        lab_w = pd.DataFrame(
+            [
+                self._lab_row("8099-4", "2020-01-01", rslt=12.0),  # thyroid peroxidase Ab
+                self._lab_row("3051-0", "2020-02-01", rslt=3.1),  # free T3 — NOT tpo_ab
+            ]
+        )
+        tested, last, _ = cv._lab_features(lab_w, CSU_LABS_LOINC["tpo_ab"])
+        assert tested is True
+        assert last == pytest.approx(12.0)
+        only_t3 = pd.DataFrame(
+            [self._lab_row("3051-0", "2020-01-01"), self._lab_row("3053-6", "2020-01-02")]
+        )
+        assert cv._lab_features(only_t3, CSU_LABS_LOINC["tpo_ab"])[0] is False
+
+    def test_cbc_matches_panel_not_rbc(self) -> None:
+        cv = _make_converter()
+        lab_w = pd.DataFrame(
+            [
+                self._lab_row("58410-2", "2020-01-01"),  # CBC panel
+                self._lab_row("26453-1", "2020-02-01"),  # RBC — NOT cbc
+            ]
+        )
+        assert cv._lab_features(lab_w, CSU_LABS_LOINC["cbc"])[0] is True
+        only_rbc = pd.DataFrame([self._lab_row("26453-1", "2020-01-01")])
+        assert cv._lab_features(only_rbc, CSU_LABS_LOINC["cbc"])[0] is False
+
+    def test_ana_matches_real_antinuclear_codes(self) -> None:
+        cv = _make_converter()
+        lab_w = pd.DataFrame([self._lab_row("42254-3", "2020-01-01")])  # 'ANA SCREEN, IFA'
+        assert cv._lab_features(lab_w, CSU_LABS_LOINC["ana"])[0] is True
+        only_absent = pd.DataFrame([self._lab_row("14741-9", "2020-01-01")])
+        assert cv._lab_features(only_absent, CSU_LABS_LOINC["ana"])[0] is False
+
+    def test_verified_correct_entries_unchanged(self) -> None:
+        # free_t4 / tsh / crp / ige_total were verified correct — must stay intact
+        assert CSU_LABS_LOINC["free_t4"] == ("3024-7",)
+        assert CSU_LABS_LOINC["tsh"] == ("3016-3",)
+        assert "1988-5" in CSU_LABS_LOINC["crp"]
+        assert "19113-0" in CSU_LABS_LOINC["ige_total"]
+
+    def test_known_mislabeled_codes_purged_and_codes_unique(self) -> None:
+        assert "6206-7" not in CSU_LABS_LOINC["eosinophil"]
+        assert "3051-0" not in CSU_LABS_LOINC["tpo_ab"]
+        assert "3053-6" not in CSU_LABS_LOINC["tpo_ab"]
+        assert "26453-1" not in CSU_LABS_LOINC["cbc"]
+        assert "14741-9" not in CSU_LABS_LOINC["ana"]
+        # no analyte may claim a code that belongs to another analyte
+        all_codes = [c for codes in CSU_LABS_LOINC.values() for c in codes]
+        assert len(all_codes) == len(set(all_codes)), "LOINC codes must be unique across analytes"
