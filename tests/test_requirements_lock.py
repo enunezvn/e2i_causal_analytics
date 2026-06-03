@@ -142,6 +142,15 @@ def _parse_lock(text: str) -> tuple[dict[str, dict], list[str]]:
             entries[name] = {"version": m.group("ver"), "hashes": []}
             current = name
             continue
+        # uv's ``--emit-index-url`` writes ``--index-url`` / ``--extra-index-url``
+        # directives into the lock. They are REQUIRED so ``pip install
+        # --require-hashes`` can find the pytorch CPU wheel (``torch==2.9.1+cpu``
+        # lives only on download.pytorch.org/whl/cpu, not PyPI). These are index
+        # directives, not requirements, and do not break ``--require-hashes`` —
+        # skip them (an editable / bare path / VCS line is still an anomaly).
+        if line.startswith(("--index-url", "--extra-index-url")):
+            current = None
+            continue
         # Anything else at requirement position is an anomaly.
         anomalies.append(line)
         current = None
