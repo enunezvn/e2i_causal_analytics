@@ -849,9 +849,9 @@ class MLFoundationPipeline:
         # thread it to the deployer's last-line-of-defense backstop. Read from
         # the top-level output key first, falling back to the remediation
         # sub-report; ``None`` when no remediation occurred.
-        result.regulatory_adaptation_entry = data_output.get(
-            "regulatory_adaptation_entry"
-        ) or (data_output.get("remediation") or {}).get("regulatory_adaptation_entry")
+        result.regulatory_adaptation_entry = data_output.get("regulatory_adaptation_entry") or (
+            data_output.get("remediation") or {}
+        ).get("regulatory_adaptation_entry")
 
         # Check QC gate
         gate_passed = data_output.get("gate_passed", False)
@@ -1272,9 +1272,7 @@ class MLFoundationPipeline:
         # with other stages) is not mutated in place.
         deployer_scope_spec = dict(result.scope_spec) if result.scope_spec else {}
         if result.regulatory_adaptation_entry is not None:
-            deployer_scope_spec["regulatory_adaptation_entry"] = (
-                result.regulatory_adaptation_entry
-            )
+            deployer_scope_spec["regulatory_adaptation_entry"] = result.regulatory_adaptation_entry
 
         # Prepare model_deployer input
         deployer_input = {

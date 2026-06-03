@@ -419,7 +419,9 @@ class TestCausalImpactStrategicInterpretation:
 
         assert interpretation["has_metrics"] is False
         assert interpretation["strategic_summary"] == ""
-        assert synthesizer._extract_key_metrics_str("causal_impact", {"p_value": 0.01}) == "p=0.0100"
+        assert (
+            synthesizer._extract_key_metrics_str("causal_impact", {"p_value": 0.01}) == "p=0.0100"
+        )
 
 
 class TestSynthesizeMultiple:

@@ -1003,9 +1003,7 @@ class TestN1H3StateContractRoundTrip:
         state = _roundtrip_state(scope_spec=scope_spec)
 
         # Faithfulness guard: scope_spec carrier survived the round-trip.
-        assert (
-            state["scope_spec"]["regulatory_adaptation_entry"] == _LEFTOVER_ENTRY
-        )
+        assert state["scope_spec"]["regulatory_adaptation_entry"] == _LEFTOVER_ENTRY
         # And the top-level channel is empty — proving the scope_spec carrier
         # alone drives the backstop.
         assert state.get("regulatory_adaptation_entry") is None
