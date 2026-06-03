@@ -204,6 +204,26 @@ class ModelDeployerState(BaseAgentSchema):
     regulatory_eligible: bool = False
     adapted_regulatory_candidate: bool = False
 
+    # === REGULATORY ADAPTATION HANDOFF (Gate N1 — codex-rescue HIGH-3 / N1-H3) ===
+    #
+    # ``leakage_remediation`` (data_preparer) emits a
+    # ``regulatory_adaptation_entry`` per remediation pass — the record of a
+    # post-hoc feature-set relaxation that disqualifies ``regulatory_eligible``.
+    # The deployer's last-line-of-defense backstop
+    # (``registry_manager._detect_leftover_adaptation_entries``) reads this
+    # payload off state to FAIL CLOSED when the entry was never ingested into
+    # the audit's ``adaptation_history`` (a broken orchestrator handoff).
+    #
+    # This field MUST be declared here: ``StateGraph(ModelDeployerState)`` +
+    # ``BaseAgentSchema``'s ``extra="ignore"`` drops any undeclared key at every
+    # channel boundary (see scope_spec/feature_manifest_source above for the
+    # same lesson). Without the declaration the backstop always read ``None``
+    # and a leakage-remediated model could be granted ``regulatory_eligible=True``
+    # with a false "clean threshold history" attestation. Accepts either a
+    # single entry dict or a list of entries (batched orchestrator ingestion) —
+    # the backstop normalizes both shapes.
+    regulatory_adaptation_entry: Optional[Any] = None
+
     # === COHORT IDENTITY (Plan v5 §2 Gate C1 — 2026-05-11) ===
     #
     # ``scope_spec`` carries the upstream scope_definer / data_preparer's

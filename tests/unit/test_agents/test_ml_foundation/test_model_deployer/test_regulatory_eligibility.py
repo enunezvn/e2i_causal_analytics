@@ -26,6 +26,7 @@ Test coverage maps to the spec's required tests 3, 4, 5, 6:
 from __future__ import annotations
 
 from typing import Any, Dict
+from uuid import uuid4
 
 import pytest
 
@@ -34,6 +35,7 @@ from src.agents.ml_foundation.model_deployer.nodes.registry_manager import (
     _evaluate_regulatory_eligibility,
     validate_promotion,
 )
+from src.agents.ml_foundation.model_deployer.state import ModelDeployerState
 
 # --------------------------------------------------------------------------- #
 # Module-level fixtures                                                       #
@@ -895,3 +897,144 @@ class TestN1M2MalformedMetricHandling:
         # promotion_allowed for staging is signal-only — eligibility
         # denial doesn't block.
         assert result["promotion_allowed"] is True
+
+
+# --------------------------------------------------------------------------- #
+# Gate N1 regression (state-contract / regulatory-integrity):                 #
+# the backstop must be ABLE TO FIRE through the real LangGraph channel        #
+# boundary. The other N1-H3 tests above pass a raw dict straight to           #
+# ``validate_promotion`` — they bypass ``ModelDeployerState`` validation, so  #
+# they passed even while ``regulatory_adaptation_entry`` was UNDECLARED on    #
+# the state and ``extra="ignore"`` silently dropped it on every real run.     #
+# These tests exercise the field through ``ModelDeployerState(...).model_dump #
+# ()`` (the faithful channel round-trip) so a regression that re-drops the    #
+# field is caught.                                                            #
+# --------------------------------------------------------------------------- #
+
+
+def _roundtrip_state(
+    *,
+    regulatory_adaptation_entry: Any = None,
+    scope_spec: Dict[str, Any] | None = None,
+    audit: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    """Build deployer state the way LangGraph does: construct the typed
+    ``ModelDeployerState`` (which applies ``extra="ignore"`` at the channel
+    boundary) and ``model_dump()`` it back to the dict the nodes consume.
+
+    ``success_criteria`` is not a declared ModelDeployerState field (the nodes
+    read it off raw state), so it is added after the dump — mirroring how the
+    runtime threads success criteria alongside the validated channel."""
+    kwargs: Dict[str, Any] = {
+        "audit_workflow_id": uuid4(),
+        "current_stage": "None",
+        "target_environment": "staging",
+        "validation_metrics": {
+            "roc_auc": 0.80,
+            "regulatory_eligibility_audit": audit or {},
+        },
+    }
+    if regulatory_adaptation_entry is not None:
+        kwargs["regulatory_adaptation_entry"] = regulatory_adaptation_entry
+    if scope_spec is not None:
+        kwargs["scope_spec"] = scope_spec
+    state = ModelDeployerState(**kwargs).model_dump()
+    state["success_criteria"] = {"minimum_auc": 0.75}
+    return state
+
+
+_LEFTOVER_ENTRY: Dict[str, Any] = {
+    "commit_sha": "abc123",
+    "justification_doc": "data_preparer/leakage_remediation",
+    "gate_name": "leakage_remediation_feature_drop",
+    "before_threshold": {"leaked_features_count": 2, "dropped_features": ["f1", "f2"]},
+    "after_threshold": {"remediated_features_count": 3, "added_features": ["g1"]},
+    "timestamp": "2026-06-03T00:00:00",
+}
+
+
+class TestN1H3StateContractRoundTrip:
+    """The backstop must survive the ModelDeployerState channel boundary."""
+
+    def test_regulatory_adaptation_entry_survives_state_validation(self) -> None:
+        """Declared field round-trips through ModelDeployerState. Pre-fix the
+        field was undeclared and ``extra="ignore"`` dropped it (the
+        deployer backstop then always read ``None``)."""
+        state = ModelDeployerState(
+            audit_workflow_id=uuid4(),
+            regulatory_adaptation_entry=_LEFTOVER_ENTRY,
+        )
+        # Guard against vacuous test: the field must really be carried.
+        assert state.regulatory_adaptation_entry == _LEFTOVER_ENTRY
+        dumped = state.model_dump()
+        assert "regulatory_adaptation_entry" in dumped
+        assert dumped["regulatory_adaptation_entry"] == _LEFTOVER_ENTRY
+
+    @pytest.mark.asyncio
+    async def test_leftover_entry_blocks_eligibility_through_roundtrip(self) -> None:
+        """A leakage-remediated model whose adaptation entry was NOT ingested
+        into adaptation_history must NOT be granted regulatory_eligible=True
+        when state is built via the faithful channel round-trip. Pre-fix the
+        round-trip dropped the entry and eligibility was wrongly granted."""
+        state = _roundtrip_state(regulatory_adaptation_entry=_LEFTOVER_ENTRY)
+
+        # Faithfulness guard: the round-trip really preserved the entry.
+        assert state.get("regulatory_adaptation_entry") == _LEFTOVER_ENTRY
+
+        result = await validate_promotion(state)
+
+        assert result["regulatory_eligible"] is False
+        assert result["adapted_regulatory_candidate"] is True
+        assert "regulatory_leftover_adaptation_entries" in result
+        assert result["regulatory_leftover_adaptation_entries"] == [_LEFTOVER_ENTRY]
+        failures = result["regulatory_eligibility_failures"]
+        assert any("leftover regulatory_adaptation_entry" in f for f in failures)
+
+    @pytest.mark.asyncio
+    async def test_leftover_entry_in_scope_spec_blocks_eligibility(self) -> None:
+        """The deployer agent threads scope_spec (not arbitrary top-level keys)
+        onto its initial state. The pipeline therefore nests the adaptation
+        entry under scope_spec — the backstop must read it from that carrier
+        and fail closed."""
+        scope_spec = {
+            "feature_manifest_source": "optum",
+            "regulatory_adaptation_entry": _LEFTOVER_ENTRY,
+        }
+        state = _roundtrip_state(scope_spec=scope_spec)
+
+        # Faithfulness guard: scope_spec carrier survived the round-trip.
+        assert state["scope_spec"]["regulatory_adaptation_entry"] == _LEFTOVER_ENTRY
+        # And the top-level channel is empty — proving the scope_spec carrier
+        # alone drives the backstop.
+        assert state.get("regulatory_adaptation_entry") is None
+
+        result = await validate_promotion(state)
+
+        assert result["regulatory_eligible"] is False
+        assert result["adapted_regulatory_candidate"] is True
+        assert result["regulatory_leftover_adaptation_entries"] == [_LEFTOVER_ENTRY]
+
+    @pytest.mark.asyncio
+    async def test_same_entry_on_both_carriers_reported_once(self) -> None:
+        """The same entry threaded via BOTH the top-level channel and
+        scope_spec must be de-duplicated (reported as a single leftover)."""
+        scope_spec = {"regulatory_adaptation_entry": _LEFTOVER_ENTRY}
+        state = _roundtrip_state(
+            regulatory_adaptation_entry=_LEFTOVER_ENTRY,
+            scope_spec=scope_spec,
+        )
+
+        result = await validate_promotion(state)
+
+        assert result["regulatory_eligible"] is False
+        assert len(result["regulatory_leftover_adaptation_entries"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_clean_model_still_eligible_through_roundtrip(self) -> None:
+        """No leakage remediation → no adaptation entry on either carrier →
+        eligibility is granted (no false-positive block)."""
+        state = _roundtrip_state(scope_spec={"feature_manifest_source": "optum"})
+        result = await validate_promotion(state)
+
+        assert result["regulatory_eligible"] is True
+        assert "regulatory_leftover_adaptation_entries" not in result

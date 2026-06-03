@@ -556,6 +556,20 @@ def _detect_leftover_adaptation_entries(
     ingestion: an entry already in ``adaptation_history`` is considered
     ingested regardless of position.
 
+    The payload is read from TWO carriers (a candidate found in either
+    counts):
+
+      * the top-level ``state["regulatory_adaptation_entry"]`` channel
+        (now a declared ``ModelDeployerState`` field — without that
+        declaration LangGraph's ``extra="ignore"`` dropped it and the
+        backstop silently read ``None`` on every real run); and
+      * ``state["scope_spec"]["regulatory_adaptation_entry"]`` — the
+        cohort-identity carrier the ``model_deployer`` agent already
+        threads onto its initial state (it forwards ``scope_spec`` but
+        does NOT splat arbitrary input keys). The pipeline nests the
+        data_preparer's emitted entry here so it survives the agent
+        boundary without a wider rewire.
+
     Args:
         state: the current agent state
         audit: the audit reconstructed from state's
@@ -566,28 +580,52 @@ def _detect_leftover_adaptation_entries(
         ``regulatory_adaptation_entry`` has been ingested with byte-
         for-byte canonical equality.
     """
-    raw = state.get("regulatory_adaptation_entry")
-    if raw is None:
-        return []
+    # Gather the payload from both carriers. ``scope_spec`` is the carrier
+    # that survives the model_deployer agent boundary; the top-level key is
+    # the direct channel for standalone / future orchestrator ingestion.
+    raw_sources: List[Any] = [state.get("regulatory_adaptation_entry")]
+    scope_spec = state.get("scope_spec")
+    if isinstance(scope_spec, dict):
+        raw_sources.append(scope_spec.get("regulatory_adaptation_entry"))
 
-    # Accept either a single entry dict or a list of entries (future-
-    # proof for batched orchestrator ingestion).
     candidates: List[Dict[str, Any]] = []
-    if isinstance(raw, dict):
-        candidates = [raw]
-    elif isinstance(raw, list):
-        candidates = [e for e in raw if isinstance(e, dict)]
-    else:
-        # Unknown shape — treat as malformed leftover.
-        return [{"_malformed_payload": repr(raw)}]
+    malformed: List[Dict[str, Any]] = []
+    for raw in raw_sources:
+        if raw is None:
+            continue
+        # Accept either a single entry dict or a list of entries (future-
+        # proof for batched orchestrator ingestion).
+        if isinstance(raw, dict):
+            candidates.append(raw)
+        elif isinstance(raw, list):
+            candidates.extend(e for e in raw if isinstance(e, dict))
+        else:
+            # Unknown shape — treat as malformed leftover (fail closed).
+            malformed.append({"_malformed_payload": repr(raw)})
+
+    if malformed:
+        return malformed
+
+    if not candidates:
+        return []
 
     # Codex-rescue N1-H3 pass-2 + new MED: canonical-hash matching.
     # The audit's adaptation_history entries are themselves dicts with
     # the same canonical fields (see AdaptationEntry.to_dict), so we
     # hash both sides through the same helper. A tampered candidate
-    # produces a different hash and surfaces as a leftover.
+    # produces a different hash and surfaces as a leftover. Candidates
+    # gathered from both carriers are de-duplicated by canonical hash so
+    # the same entry threaded via top-level AND scope_spec is reported
+    # once.
     ingested_hashes = {compute_canonical_entry_hash(e) for e in audit.adaptation_history}
-    leftover = [c for c in candidates if compute_canonical_entry_hash(c) not in ingested_hashes]
+    leftover: List[Dict[str, Any]] = []
+    seen_leftover: set[str] = set()
+    for c in candidates:
+        h = compute_canonical_entry_hash(c)
+        if h in ingested_hashes or h in seen_leftover:
+            continue
+        seen_leftover.add(h)
+        leftover.append(c)
     return leftover
 
 
