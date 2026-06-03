@@ -44,6 +44,12 @@ from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 
 logger = logging.getLogger(__name__)
 
+# Generic 5xx detail. Raw exception text MUST NOT be echoed to clients: it can
+# leak stack-internal paths, table/column names, library versions, and other
+# information useful to an attacker. The full exception is logged server-side
+# (with exc_info) instead; the client receives only this opaque message.
+_GENERIC_500_DETAIL = "Internal server error"
+
 router = APIRouter(
     prefix="/experiments",
     tags=["A/B Testing"],
@@ -482,8 +488,8 @@ async def randomize_units(
         )
 
     except Exception as e:
-        logger.error(f"Randomization failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Randomization failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=_GENERIC_500_DETAIL) from e
 
 
 @router.get(
@@ -540,8 +546,8 @@ async def get_assignments(
         }
 
     except Exception as e:
-        logger.error(f"Failed to get assignments: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Failed to get assignments: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=_GENERIC_500_DETAIL) from e
 
 
 # =============================================================================
@@ -602,8 +608,8 @@ async def enroll_unit(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Enrollment failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Enrollment failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=_GENERIC_500_DETAIL) from e
 
 
 @router.delete(
@@ -650,8 +656,8 @@ async def withdraw_unit(
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        logger.error(f"Withdrawal failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Withdrawal failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=_GENERIC_500_DETAIL) from e
 
 
 @router.get(
@@ -690,8 +696,8 @@ async def get_enrollment_stats(
         )
 
     except Exception as e:
-        logger.error(f"Failed to get enrollment stats: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Failed to get enrollment stats: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=_GENERIC_500_DETAIL) from e
 
 
 # =============================================================================
@@ -775,8 +781,8 @@ async def trigger_interim_analysis(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Interim analysis failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Interim analysis failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=_GENERIC_500_DETAIL) from e
 
 
 @router.get(
@@ -819,8 +825,8 @@ async def list_interim_analyses(
         }
 
     except Exception as e:
-        logger.error(f"Failed to list interim analyses: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Failed to list interim analyses: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=_GENERIC_500_DETAIL) from e
 
 
 # =============================================================================
@@ -903,8 +909,8 @@ async def get_experiment_results(
         )
 
     except Exception as e:
-        logger.error(f"Failed to get results: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Failed to get results: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=_GENERIC_500_DETAIL) from e
 
 
 @router.get(
@@ -942,8 +948,8 @@ async def get_segment_results(
         }
 
     except Exception as e:
-        logger.error(f"Failed to get segment results: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Failed to get segment results: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=_GENERIC_500_DETAIL) from e
 
 
 # =============================================================================
@@ -995,8 +1001,8 @@ async def get_srm_checks(
         }
 
     except Exception as e:
-        logger.error(f"Failed to get SRM checks: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Failed to get SRM checks: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=_GENERIC_500_DETAIL) from e
 
 
 @router.post(
@@ -1037,8 +1043,8 @@ async def run_srm_check(
         )
 
     except Exception as e:
-        logger.error(f"SRM check failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"SRM check failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=_GENERIC_500_DETAIL) from e
 
 
 # =============================================================================
@@ -1094,8 +1100,8 @@ async def get_fidelity_comparisons(
         }
 
     except Exception as e:
-        logger.error(f"Failed to get fidelity comparisons: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Failed to get fidelity comparisons: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=_GENERIC_500_DETAIL) from e
 
 
 @router.post(
@@ -1142,8 +1148,8 @@ async def update_fidelity_comparison(
         )
 
     except Exception as e:
-        logger.error(f"Fidelity comparison failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Fidelity comparison failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=_GENERIC_500_DETAIL) from e
 
 
 # =============================================================================
@@ -1256,8 +1262,8 @@ async def trigger_experiment_monitoring(
         )
 
     except Exception as e:
-        logger.error(f"Experiment monitoring failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Experiment monitoring failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=_GENERIC_500_DETAIL) from e
 
 
 @router.get(
@@ -1310,8 +1316,8 @@ async def get_experiment_health(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to get experiment health: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Failed to get experiment health: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=_GENERIC_500_DETAIL) from e
 
 
 @router.get(
@@ -1364,5 +1370,5 @@ async def get_experiment_alerts(
         }
 
     except Exception as e:
-        logger.error(f"Failed to get experiment alerts: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Failed to get experiment alerts: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=_GENERIC_500_DETAIL) from e

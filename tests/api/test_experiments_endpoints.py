@@ -304,11 +304,17 @@ class TestRandomizeUnits:
         assert data["randomization_method"] == "block"
 
     def test_randomization_service_error(self):
-        """Should return 500 on service error."""
+        """Should return 500 on service error WITHOUT leaking the raw exception.
+
+        Finding #7 (exception-text leakage): the broad ``except Exception``
+        handler used ``detail=str(e)``, echoing internal error text — which can
+        expose stack-internal paths, table/column names, and library versions —
+        straight to the client. The handler now logs the exception server-side
+        and returns only a generic detail.
+        """
+        secret = "Database connection failed at host db-internal.prod:5432"
         mock_service = MagicMock()
-        mock_service.stratified_randomize = AsyncMock(
-            side_effect=Exception("Database connection failed")
-        )
+        mock_service.stratified_randomize = AsyncMock(side_effect=Exception(secret))
 
         with patch(
             "src.services.randomization.RandomizationService",
@@ -323,6 +329,11 @@ class TestRandomizeUnits:
             )
 
         assert response.status_code == 500
+        detail = response.json()["detail"]
+        # Generic message returned; raw exception text NOT leaked.
+        assert detail == "Internal server error"
+        assert secret not in detail
+        assert "db-internal.prod" not in detail
 
 
 class TestGetAssignments:

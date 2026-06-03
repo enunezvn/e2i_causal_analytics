@@ -419,11 +419,17 @@ async def run_segment_analysis(
         # agent-import guard.
         raise
     except Exception as e:
-        logger.error(f"Segment analysis failed: {e}")
+        logger.error(f"Segment analysis failed: {e}", exc_info=True)
         response.status = AnalysisStatus.FAILED
-        response.warnings.append(str(e))
+        # Store a generic warning on the persisted FAILED record rather than the
+        # raw exception text (the record is later returned to clients via GET).
+        response.warnings.append("Segment analysis failed due to an internal error.")
         _analyses_store[analysis_id] = response
-        raise HTTPException(status_code=500, detail=f"Segment analysis failed: {e}")
+        # Do not echo raw exception text to the client (it can leak internal
+        # paths/identifiers); the full exception is logged above with exc_info.
+        raise HTTPException(
+            status_code=500, detail="Segment analysis failed due to an internal error."
+        ) from e
 
 
 @router.get(

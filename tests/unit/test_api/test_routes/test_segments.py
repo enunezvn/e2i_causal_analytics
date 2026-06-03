@@ -177,10 +177,11 @@ async def test_run_segment_analysis_sync_mode_exception(sample_request, mock_use
     """Test run_segment_analysis handles exceptions in sync mode."""
     background_tasks = BackgroundTasks()
 
+    secret = "Test error leaking internal path /srv/app/db.py:42"
     with patch("src.api.routes.segments._execute_segment_analysis") as mock_execute:
-        mock_execute.side_effect = RuntimeError("Test error")
+        mock_execute.side_effect = RuntimeError(secret)
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(HTTPException) as exc_info:
             await run_segment_analysis(
                 request=sample_request,
                 background_tasks=background_tasks,
@@ -188,7 +189,11 @@ async def test_run_segment_analysis_sync_mode_exception(sample_request, mock_use
                 user=mock_user,
             )
 
-        assert "Segment analysis failed" in str(exc_info.value)
+        # Generic detail returned; raw exception text NOT leaked (finding #7).
+        assert exc_info.value.status_code == 500
+        assert "Segment analysis failed" in str(exc_info.value.detail)
+        assert secret not in str(exc_info.value.detail)
+        assert "/srv/app/db.py" not in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
