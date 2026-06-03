@@ -14,6 +14,11 @@
  */
 
 import { get, post } from '@/lib/api-client';
+import {
+  ModelEndpointHealthWireSchema,
+  ModelInfoResponseWireSchema,
+  ModelsStatusResponseWireSchema,
+} from '@/lib/api-schemas';
 import type {
   BatchPredictionRequest,
   BatchPredictionResponse,
@@ -114,7 +119,9 @@ export async function getModelHealth(
   modelName: string
 ): Promise<ModelEndpointHealth> {
   return get<ModelEndpointHealth>(
-    `${MODELS_BASE}/${encodeURIComponent(modelName)}/health`
+    `${MODELS_BASE}/${encodeURIComponent(modelName)}/health`,
+    undefined,
+    { schema: ModelEndpointHealthWireSchema }
   );
 }
 
@@ -135,7 +142,9 @@ export async function getModelInfo(
   modelName: string
 ): Promise<ModelInfoResponse> {
   return get<ModelInfoResponse>(
-    `${MODELS_BASE}/${encodeURIComponent(modelName)}/info`
+    `${MODELS_BASE}/${encodeURIComponent(modelName)}/info`,
+    undefined,
+    { schema: ModelInfoResponseWireSchema }
   );
 }
 
@@ -157,7 +166,11 @@ export async function getModelInfo(
 export async function getModelsStatus(
   models?: string[]
 ): Promise<ModelsStatusResponse> {
-  return get<ModelsStatusResponse>(`${MODELS_BASE}/status`, {
-    models: models?.join(','),
-  });
+  return get<ModelsStatusResponse>(
+    `${MODELS_BASE}/status`,
+    {
+      models: models?.join(','),
+    },
+    { schema: ModelsStatusResponseWireSchema }
+  );
 }

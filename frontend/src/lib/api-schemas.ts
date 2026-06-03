@@ -610,6 +610,33 @@ export const ChatResponseSchema = z.object({
 // not reject them) so additive backend changes never break the UI — only
 // missing/mis-typed REQUIRED fields trip validation, which is the drift we want
 // to catch.
+//
+// HOW TO WIRE MORE ENDPOINTS (the C31 pattern):
+//   1. Add a `*WireSchema` here that mirrors the canonical interface in
+//      `frontend/src/types/<domain>.ts` (use `.nullable()` for null-able fields).
+//   2. In `src/api/<domain>.ts` import it and pass it via the base client's
+//      opt-in `schema` param, e.g.
+//        return get<Foo>('/foo', params, { schema: FooWireSchema });
+//      (For helpers without a `params` arg, pass `undefined` as the 2nd arg.)
+//   3. Add a red-first test: a malformed MSW response must throw
+//      `ApiValidationError`; a valid one must pass through parsed.
+//
+// PRIMARY GET reads currently wired: kpi (list/workstreams/metadata/value/health),
+// predictions (model health/info/status), monitoring (alerts/model-health/drift-
+// history/runs), causal (health/estimators), graph (health/stats).
+//
+// DEFERRED (intentionally not yet wired, with reasoning):
+//   - POST/PUT/PATCH/DELETE mutations: schema-param works on every helper, but
+//     C31 prioritised high-traffic GET *reads* where contract drift is most
+//     likely to surface in dashboards. Mutations can be wired with the same
+//     pattern when needed.
+//   - `src/api/analytics.ts`: it calls the raw axios `apiClient.get(...)` with
+//     the query string baked into the path, NOT the `get()` helper, so it has no
+//     `schema` opt-in. Wiring it would require a small refactor to the helper
+//     and is out of this slice's scope.
+//   - Heavy async causal pipelines (hierarchical/sequential/parallel responses)
+//     and graph node/relationship list shapes have large, more volatile schemas;
+//     deferred to keep the wire schemas faithful and low-maintenance.
 
 // ----- KPI -----
 
