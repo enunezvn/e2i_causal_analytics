@@ -26,10 +26,9 @@ Test coverage maps to the spec's required tests 3, 4, 5, 6:
 from __future__ import annotations
 
 from typing import Any, Dict
+from uuid import uuid4
 
 import pytest
-
-from uuid import uuid4
 
 from src.agents.ml_foundation.model_deployer.nodes.registry_manager import (
     N1_REQUIRED_REGULATORY_GATES,
@@ -926,15 +925,15 @@ def _roundtrip_state(
     ``success_criteria`` is not a declared ModelDeployerState field (the nodes
     read it off raw state), so it is added after the dump — mirroring how the
     runtime threads success criteria alongside the validated channel."""
-    kwargs: Dict[str, Any] = dict(
-        audit_workflow_id=uuid4(),
-        current_stage="None",
-        target_environment="staging",
-        validation_metrics={
+    kwargs: Dict[str, Any] = {
+        "audit_workflow_id": uuid4(),
+        "current_stage": "None",
+        "target_environment": "staging",
+        "validation_metrics": {
             "roc_auc": 0.80,
             "regulatory_eligibility_audit": audit or {},
         },
-    )
+    }
     if regulatory_adaptation_entry is not None:
         kwargs["regulatory_adaptation_entry"] = regulatory_adaptation_entry
     if scope_spec is not None:
