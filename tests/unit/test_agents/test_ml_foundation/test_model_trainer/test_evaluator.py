@@ -1248,3 +1248,196 @@ class TestEvaluatePermNullPromotion:
         assert "actual_auc" in perm
         assert "signal_genuine" in perm
         assert "permutation_pvalue" in perm
+
+
+# ============================================================================
+# Findings #5 + #6 — operating-point consistency in the evaluator
+# ============================================================================
+
+
+def _gen_balanced_split_optimal_below_half(
+    n: int, rng: np.random.Generator
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Build a balanced split whose validation Youden optimum lands well
+    BELOW 0.5, and where negatives carry probabilities in [optimal, 0.5)
+    so the optimal-threshold confusion matrix has false positives the 0.5
+    matrix does not — i.e. headline precision@0.5 != precision@optimal.
+
+    Returns ``(y, y_pred_at_0.5, proba_2col, proba_pos)``.
+    """
+    y = rng.integers(0, 2, n)
+    p = np.empty(n)
+    for i in range(n):
+        # positives mostly above the ~0.36 optimum (some straddle 0.5);
+        # negatives spread across [0.10, 0.48) so the optimal threshold
+        # picks up FPs that the 0.5 threshold does not.
+        p[i] = rng.uniform(0.35, 0.60) if y[i] == 1 else rng.uniform(0.10, 0.48)
+    proba = np.column_stack([1.0 - p, p])
+    pred_at_half = (p >= 0.5).astype(int)
+    return y, pred_at_half, proba, p
+
+
+def test_balanced_headline_confusion_matrix_matches_headline_precision() -> None:
+    """Findings #5: in the BALANCED path (imbalance_detected=False) the
+    headline precision/recall/f1 are reported at 0.5, so the headline
+    confusion_matrix and business_utility MUST be at 0.5 too. Before the fix
+    they were computed at the validation-tuned optimal threshold, making
+    precision recomputed from the headline confusion matrix diverge from the
+    headline precision whenever the optimal threshold != 0.5.
+    """
+    from src.agents.ml_foundation.model_trainer.nodes.evaluator import (
+        _compute_classification_metrics,
+    )
+
+    rng = np.random.default_rng(11)
+    y_tr, ytr_pred, ytr_proba, _ = _gen_balanced_split_optimal_below_half(400, rng)
+    y_val, yval_pred, yval_proba, _ = _gen_balanced_split_optimal_below_half(200, rng)
+    y_te, yte_pred, yte_proba, _ = _gen_balanced_split_optimal_below_half(200, rng)
+
+    cost_matrix = {"tp": 1.0, "fp": -1.0, "fn": -5.0, "tn": 0.0}
+    result = _compute_classification_metrics(
+        y_tr,
+        ytr_pred,
+        ytr_proba,
+        y_val,
+        yval_pred,
+        yval_proba,
+        y_te,
+        yte_pred,
+        yte_proba,
+        imbalance_detected=False,
+        cost_matrix=cost_matrix,
+    )
+
+    # Precondition: the optimal threshold is meaningfully != 0.5, otherwise
+    # the bug is unobservable and the test would be vacuous.
+    assert not math.isclose(result["optimal_threshold"], 0.5), (
+        "test fixture must produce an optimal threshold != 0.5 to exercise the bug"
+    )
+
+    test_metrics = result["test_metrics"]
+    cm = result["confusion_matrix"]
+    assert set(cm) >= {"TP", "TN", "FP", "FN"}, "expected a 2x2 confusion dict"
+
+    denom = cm["TP"] + cm["FP"]
+    precision_from_cm = cm["TP"] / denom if denom > 0 else 0.0
+    # Findings #5 core assertion: headline precision is computed at the SAME
+    # operating point as the headline confusion matrix.
+    assert precision_from_cm == pytest.approx(test_metrics["precision"], abs=1e-9)
+
+    # And recall too, from the same matrix.
+    rdenom = cm["TP"] + cm["FN"]
+    recall_from_cm = cm["TP"] / rdenom if rdenom > 0 else 0.0
+    assert recall_from_cm == pytest.approx(test_metrics["recall"], abs=1e-9)
+
+    # The dedicated dual-operating-point keys still carry BOTH points: the
+    # balanced headline equals the 0.5 metrics, and the optimal metrics are
+    # genuinely different (the optimal threshold != 0.5 here).
+    at_05 = result["test_metrics_at_05"]
+    at_optimal = result["test_metrics_at_optimal"]
+    assert at_05["precision"] == pytest.approx(test_metrics["precision"], abs=1e-9)
+    assert at_05["recall"] == pytest.approx(test_metrics["recall"], abs=1e-9)
+    assert "precision" in at_optimal and "recall" in at_optimal
+    # Sanity: the two operating points genuinely differ on this fixture, so a
+    # mismatch between headline and CM would have been observable pre-fix.
+    assert at_05["precision"] != pytest.approx(at_optimal["precision"], abs=1e-9)
+
+
+def test_imbalanced_headline_confusion_matrix_still_at_optimal() -> None:
+    """Findings #5 guard: the IMBALANCED path is UNCHANGED — its headline
+    precision/recall and headline confusion matrix are both at the
+    validation-frozen optimal threshold (the optimal metrics), and stay
+    mutually consistent.
+    """
+    from src.agents.ml_foundation.model_trainer.nodes.evaluator import (
+        _compute_classification_metrics,
+    )
+
+    rng = np.random.default_rng(11)
+    y_tr, ytr_pred, ytr_proba, _ = _gen_balanced_split_optimal_below_half(400, rng)
+    y_val, yval_pred, yval_proba, _ = _gen_balanced_split_optimal_below_half(200, rng)
+    y_te, yte_pred, yte_proba, _ = _gen_balanced_split_optimal_below_half(200, rng)
+
+    result = _compute_classification_metrics(
+        y_tr,
+        ytr_pred,
+        ytr_proba,
+        y_val,
+        yval_pred,
+        yval_proba,
+        y_te,
+        yte_pred,
+        yte_proba,
+        imbalance_detected=True,
+    )
+
+    test_metrics = result["test_metrics"]
+    cm = result["confusion_matrix"]
+    denom = cm["TP"] + cm["FP"]
+    precision_from_cm = cm["TP"] / denom if denom > 0 else 0.0
+    assert precision_from_cm == pytest.approx(test_metrics["precision"], abs=1e-9)
+    # Imbalanced headline equals the optimal-threshold metrics, not the 0.5 ones.
+    at_optimal = result["test_metrics_at_optimal"]
+    assert test_metrics["precision"] == pytest.approx(at_optimal["precision"], abs=1e-9)
+
+
+@pytest.mark.asyncio
+async def test_deployed_calibrated_imbalanced_records_youden_threshold_source() -> None:
+    """Findings #6: the deployed-calibrated imbalanced overlay re-derives the
+    operating point via ``_select_threshold`` (Youden / cost-optimal only),
+    which does NOT reproduce the raw path's F1-fallback. The overlaid metrics
+    must therefore carry the ACTUAL ``chosen_threshold_source`` returned by
+    ``_select_threshold`` (never the false ``validation_f1_fallback``), so a
+    consumer is not misled into thinking the deployed point mirrors the raw
+    ``chosen_threshold_source``.
+    """
+    np.random.seed(RANDOM_STATE)
+    n_tr, n_val, n_te = 200, 80, 80
+    # Low-signal, imbalanced-ish cohort: pushes validation MCC low so the raw
+    # path's F1-fallback CAN engage — exactly the case the deployed-calibrated
+    # overlay does not reproduce.
+    X_tr = np.random.rand(n_tr, N_FEATURES)
+    y_tr = (np.random.rand(n_tr) < 0.25).astype(int)
+    X_val = np.random.rand(n_val, N_FEATURES)
+    y_val = (np.random.rand(n_val) < 0.25).astype(int)
+    X_te = np.random.rand(n_te, N_FEATURES)
+    y_te = (np.random.rand(n_te) < 0.25).astype(int)
+
+    model = RandomForestClassifier(n_estimators=RF_N_ESTIMATORS, random_state=RANDOM_STATE)
+    model.fit(X_tr, y_tr)
+
+    state = {
+        "trained_model": model,
+        "problem_type": "binary_classification",
+        "X_train_preprocessed": X_tr,
+        "X_validation_preprocessed": X_val,
+        "X_test_preprocessed": X_te,
+        "train_data": {"y": y_tr},
+        "validation_data": {"y": y_val},
+        "test_data": {"y": y_te},
+        "success_criteria": {},
+        "imbalance_detected": True,
+        "minority_ratio": 0.25,
+    }
+
+    result = await evaluate_model(state)
+
+    # Precondition: post-hoc calibration was applied and deployed.
+    assert result.get("calibration_applied") is True
+    test_metrics = result.get("test_metrics", {})
+    assert test_metrics.get("deployed_model_is_calibrated") is True
+
+    # Findings #6 core assertion: the overlaid operating-point provenance is
+    # present and is one of the literals ``_select_threshold`` can return —
+    # the Youden / cost-optimal / default arms — NEVER the F1-fallback literal,
+    # which this overlay does not reproduce.
+    source = test_metrics.get("chosen_threshold_source")
+    assert source is not None, (
+        "deployed-calibrated overlay must record chosen_threshold_source so the "
+        "operating-point provenance is honest"
+    )
+    assert source in {"validation", "validation_cost_optimal", "default"}
+    assert source != "validation_f1_fallback"
+    # The recorded threshold is consistent with the overlaid source: it was the
+    # value used to binarise the calibrated test probabilities.
+    assert "chosen_threshold" in test_metrics

@@ -1118,26 +1118,43 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
                         abs(cal_intercept) if not math.isnan(cal_intercept) else float("nan")
                     )
 
-                    # (b) Threshold-dependent metrics: mirror the operating-
-                    #     point SEMANTICS of the raw computation
-                    #     (_compute_classification_metrics) on the calibrated
-                    #     probability scale, so the only thing that changes is
-                    #     the prob SOURCE (calibrated), not the policy:
+                    # (b) Threshold-dependent metrics: re-derive the operating
+                    #     point on the calibrated probability scale (the raw
+                    #     threshold lives on the raw prob scale and is not
+                    #     transferable post-monotonic-remap), so the only thing
+                    #     that changes is the prob SOURCE (calibrated):
                     #       * imbalance_detected → primary metrics are reported
-                    #         at the validation-frozen optimal threshold, so
-                    #         re-derive it on the calibrated VAL probs (the raw
-                    #         threshold lives on the raw prob scale and is not
-                    #         transferable post-monotonic-remap).
+                    #         at the validation-frozen threshold, re-derived on
+                    #         the calibrated VAL probs via ``_select_threshold``.
                     #       * balanced → raw primary metrics are at 0.5, so keep
                     #         0.5 on the calibrated probs.
                     #     Ranking metrics (roc_auc / pr_auc) are calibration-
                     #     invariant and left untouched.
+                    #
+                    #     Findings #6 — provenance honesty: ``_select_threshold``
+                    #     reproduces ONLY the Youden / cost-optimal arms of the
+                    #     raw policy. It does NOT reproduce the raw path's
+                    #     F1-FALLBACK (engaged when validation MCC < 0.20; see
+                    #     ``_F1_FALLBACK_MCC_THRESHOLD`` in
+                    #     ``_compute_classification_metrics``). So the deployed-
+                    #     calibrated operating point can differ from the raw one
+                    #     when the raw path used ``validation_f1_fallback``. We
+                    #     therefore record the ACTUAL source string returned by
+                    #     ``_select_threshold`` (one of ``"validation"`` /
+                    #     ``"validation_cost_optimal"`` / ``"default"``) onto the
+                    #     overlaid metrics rather than implying it mirrors the raw
+                    #     ``chosen_threshold_source``. Re-running the full
+                    #     F1-fallback policy here was deliberately NOT done: that
+                    #     logic is inline in the raw helper and duplicating it on
+                    #     the calibrated scale risks subtly diverging from the
+                    #     well-exercised raw path (DO NO HARM on a LOW finding).
+                    cal_threshold_source = "default"
                     if imbalance_detected:
                         cal_threshold = float(opt_thresh)
                         if X_val_np is not None and y_val_np is not None:
                             try:
                                 cal_val_proba = calibrated_model.predict_proba(X_val_np)
-                                cal_threshold, _cal_threshold_source = _select_threshold(
+                                cal_threshold, cal_threshold_source = _select_threshold(
                                     y_val_np, cal_val_proba, cost_matrix=None
                                 )
                             except Exception as exc:  # pragma: no cover - defensive
@@ -1174,8 +1191,13 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
                     # the operating point; in the balanced path 0.5 is just the
                     # raw reporting threshold, so leave the diagnostic
                     # ``optimal_threshold`` (the Youden optimum) untouched.
+                    # Findings #6: record the ACTUAL provenance of the deployed-
+                    # calibrated operating point (Youden / cost-optimal only —
+                    # never ``validation_f1_fallback``) so consumers don't read
+                    # it as mirroring the raw ``chosen_threshold_source``.
                     if imbalance_detected:
                         inner_test_metrics["chosen_threshold"] = cal_threshold
+                        inner_test_metrics["chosen_threshold_source"] = cal_threshold_source
                         metrics_result["optimal_threshold"] = cal_threshold
                     logger.info(
                         "#633 deploying calibrated model: slope_deviation %.4f, "
@@ -2215,19 +2237,37 @@ def _compute_classification_metrics(
     pr_auc = test_metrics.get("pr_auc")
     brier = test_metrics.get("brier_score")
 
-    # Confusion matrix at optimal threshold
-    cm = confusion_matrix(y_test, y_test_pred_optimal)
+    # Findings #5: the headline confusion_matrix / business_utility MUST be
+    # computed at the SAME operating point as the headline precision/recall/f1
+    # (the metrics selected into ``test_metrics`` just above). In the
+    # imbalanced path the headline is at the validation-frozen optimal
+    # threshold (``y_test_pred_optimal``); in the balanced path the headline
+    # is the model's default 0.5 (``y_test_pred``). Selecting the matching
+    # prediction array here keeps the headline confusion matrix and business
+    # utility consistent with the headline classification metrics. The
+    # dedicated ``test_metrics_at_05`` / ``test_metrics_at_optimal`` keys
+    # continue to carry BOTH operating points unchanged.
+    if imbalance_detected:
+        y_test_pred_headline = y_test_pred_optimal
+        headline_threshold = optimal_threshold
+    else:
+        y_test_pred_headline = y_test_pred
+        headline_threshold = 0.5
+
+    # Confusion matrix at the headline operating point
+    cm = confusion_matrix(y_test, y_test_pred_headline)
     if cm.shape == (2, 2):
         tn, fp, fn, tp = cm.ravel()
         confusion_dict = {"TP": int(tp), "TN": int(tn), "FP": int(fp), "FN": int(fn)}
     else:
         confusion_dict = {"matrix": cm.tolist()}
 
-    # Block 5 (#10): business_utility from cost_matrix at the chosen
-    # (validation-tuned) threshold. We compute it on BOTH validation and
-    # test using the same frozen threshold so the metric reported in
-    # validation_metrics matches the operating point that produced the
-    # test number — a deployment decision tool needs both.
+    # Block 5 (#10): business_utility from cost_matrix at the headline
+    # operating point. We compute it on BOTH validation and test using the
+    # same threshold so the metric reported in validation_metrics matches the
+    # operating point that produced the test number — a deployment decision
+    # tool needs both. (Findings #5: ``headline_threshold`` == the operating
+    # point of the headline metrics, NOT unconditionally the optimal one.)
     test_business_utility: Optional[float] = None
     val_business_utility: Optional[float] = None
     if cost_matrix is not None and cm.shape == (2, 2):
@@ -2236,7 +2276,7 @@ def _compute_classification_metrics(
         )
         if y_validation is not None and y_validation_proba is not None:
             y_val_proba_pos = _positive_class_proba(y_validation_proba)
-            y_val_pred_at_chosen = (y_val_proba_pos >= optimal_threshold).astype(int)
+            y_val_pred_at_chosen = (y_val_proba_pos >= headline_threshold).astype(int)
             val_cm = confusion_matrix(y_validation, y_val_pred_at_chosen)
             if val_cm.shape == (2, 2):
                 v_tn, v_fp, v_fn, v_tp = val_cm.ravel()
@@ -2247,7 +2287,7 @@ def _compute_classification_metrics(
             validation_metrics["business_utility"] = val_business_utility
         test_metrics["business_utility"] = test_business_utility
         logger.info(
-            f"business_utility (chosen_threshold={optimal_threshold:.4f}): "
+            f"business_utility (headline_threshold={headline_threshold:.4f}): "
             f"validation={val_business_utility}, test={test_business_utility}"
         )
 

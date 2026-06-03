@@ -70,7 +70,9 @@ async def run_benchmarks(state: Dict[str, Any]) -> Dict[str, Any]:
     benchmark_time = time.time() - benchmark_start_time
 
     # Re-rank based on benchmark results
-    benchmark_rankings = _rerank_by_benchmarks(candidates_to_benchmark, benchmark_results)
+    benchmark_rankings = _rerank_by_benchmarks(
+        candidates_to_benchmark, benchmark_results, problem_type=problem_type
+    )
 
     # Add remaining candidates that weren't benchmarked
     benchmarked_names = {c["name"] for c in benchmark_rankings}
@@ -289,17 +291,75 @@ def _run_cross_validation(
         return [0.5] * cv_folds, {}  # Return empty metrics on error
 
 
+def _is_loss_metric(problem_type: str) -> bool:
+    """Whether the benchmark cv_score_mean is a LOSS metric (lower = better).
+
+    Regression benchmarks report RMSE (see `_run_cross_validation`), where a
+    LOWER value is better. Classification reports roc_auc (higher = better).
+
+    Args:
+        problem_type: Problem type string
+
+    Returns:
+        True for regression (RMSE, lower=better); False for classification.
+    """
+    return "classification" not in problem_type
+
+
+def _benchmark_score_from_cv(
+    cv_mean: float,
+    cv_std: float,
+    problem_type: str,
+) -> float:
+    """Convert raw CV stats into a higher-is-better benchmark score in (0, 1].
+
+    For classification (roc_auc, higher=better) the score is the variance-
+    penalised mean clamped to [0, 1] — the original, correct behaviour.
+
+    For regression the cv_mean is an RMSE (lower=better). We map it to a
+    higher-is-better score with 1 / (1 + RMSE_effective), where the effective
+    RMSE adds a variance penalty (cv_std). This is monotonically decreasing in
+    RMSE, already bounded in (0, 1], and — crucially — does NOT clamp distinct
+    RMSE>1 values to a single 1.0 (the old clamp neutralised regression
+    benchmarking entirely).
+
+    Args:
+        cv_mean: Mean CV score (roc_auc for classification, RMSE for regression)
+        cv_std: Std of CV scores
+        problem_type: Problem type string
+
+    Returns:
+        Higher-is-better benchmark score.
+    """
+    if _is_loss_metric(problem_type):
+        # RMSE (lower=better) -> higher-is-better. Penalise variance by
+        # inflating the effective RMSE. Guard against negatives defensively.
+        effective_rmse = max(0.0, cv_mean + (0.5 * cv_std))
+        return 1.0 / (1.0 + effective_rmse)
+
+    # Classification: roc_auc (higher=better), penalise variance, clamp to [0,1].
+    benchmark_score = cv_mean - (0.5 * cv_std)
+    return max(0.0, min(1.0, benchmark_score))
+
+
 def _rerank_by_benchmarks(
     candidates: List[Dict[str, Any]],
     benchmark_results: Dict[str, Dict[str, Any]],
+    problem_type: str = "binary_classification",
 ) -> List[Dict[str, Any]]:
     """Re-rank candidates based on benchmark results.
 
     Combines original selection score (60%) with benchmark score (40%).
 
+    The benchmark score is always higher-is-better: for classification it is the
+    variance-penalised roc_auc; for regression the RMSE (lower=better) is mapped
+    to a higher-is-better score (see `_benchmark_score_from_cv`) so that the
+    candidate with the LOWER RMSE ranks first.
+
     Args:
         candidates: List of candidates
         benchmark_results: Benchmark results by algorithm name
+        problem_type: Problem type (controls RMSE-vs-roc_auc direction)
 
     Returns:
         Re-ranked candidates list
@@ -314,9 +374,7 @@ def _rerank_by_benchmarks(
                 cv_mean = result.get("cv_score_mean", 0.5)
                 cv_std = result.get("cv_score_std", 0.5)
 
-                # Penalize high variance
-                benchmark_score = cv_mean - (0.5 * cv_std)
-                benchmark_score = max(0.0, min(1.0, benchmark_score))
+                benchmark_score = _benchmark_score_from_cv(cv_mean, cv_std, problem_type)
 
                 # Combined score: 60% original + 40% benchmark
                 combined_score = (0.6 * original_score) + (0.4 * benchmark_score)
@@ -377,7 +435,15 @@ async def compare_with_baselines(state: Dict[str, Any]) -> Dict[str, Any]:
         if "error" not in primary_result:
             primary_score = primary_result.get("cv_score_mean", 0.5)
 
-    improvement = primary_score - baseline_score
+    # Improvement direction depends on the metric. For classification (roc_auc,
+    # higher=better) a higher primary score is an improvement. For regression
+    # (RMSE, lower=better) a LOWER primary score is the improvement, so flip the
+    # sign — otherwise a better (lower-RMSE) model would report a negative
+    # "improvement".
+    if _is_loss_metric(problem_type):
+        improvement = baseline_score - primary_score
+    else:
+        improvement = primary_score - baseline_score
 
     return {
         "baseline_comparison": {

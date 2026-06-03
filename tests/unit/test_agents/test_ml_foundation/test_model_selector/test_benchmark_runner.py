@@ -379,6 +379,69 @@ class TestRerankByBenchmarks:
         expected_combined = lgbm["selection_score"] * 0.8
         assert abs(lgbm["combined_score"] - expected_combined) < 0.001
 
+    def test_regression_lower_rmse_ranks_first(self):
+        """FINDING #8: regression benchmarks report RMSE (lower=better). The
+        re-rank must convert RMSE to a higher-is-better score so the candidate
+        with the LOWER RMSE ranks first. Previously cv_mean was treated as
+        higher-is-better and a [0,1] clamp collapsed typical RMSE>1 to 1.0.
+        """
+        candidates = [
+            {"name": "A_lowRMSE", "family": "linear", "selection_score": 0.50},
+            {"name": "B_highRMSE", "family": "linear", "selection_score": 0.50},
+        ]
+        # Equal heuristic score so the benchmark is the deciding factor.
+        benchmark_results = {
+            "A_lowRMSE": {"cv_score_mean": 0.2, "cv_score_std": 0.0},
+            "B_highRMSE": {"cv_score_mean": 0.8, "cv_score_std": 0.0},
+        }
+
+        reranked = _rerank_by_benchmarks(candidates, benchmark_results, problem_type="regression")
+
+        # Lower-RMSE candidate must win.
+        assert reranked[0]["name"] == "A_lowRMSE"
+        # Higher-is-better transform: lower RMSE -> higher benchmark_score.
+        a = next(c for c in reranked if c["name"] == "A_lowRMSE")
+        b = next(c for c in reranked if c["name"] == "B_highRMSE")
+        assert a["benchmark_score"] > b["benchmark_score"]
+
+    def test_regression_high_rmse_not_clamped_to_one(self):
+        """FINDING #8: a typical RMSE>1 must not collapse to benchmark_score=1.0
+        (the old max(0,min(1,...)) clamp neutralised regression benchmarking)."""
+        candidates = [
+            {"name": "C_rmse2", "family": "linear", "selection_score": 0.50},
+            {"name": "D_rmse5", "family": "linear", "selection_score": 0.50},
+        ]
+        benchmark_results = {
+            "C_rmse2": {"cv_score_mean": 2.0, "cv_score_std": 0.0},
+            "D_rmse5": {"cv_score_mean": 5.0, "cv_score_std": 0.0},
+        }
+
+        reranked = _rerank_by_benchmarks(candidates, benchmark_results, problem_type="regression")
+
+        c = next(x for x in reranked if x["name"] == "C_rmse2")
+        d = next(x for x in reranked if x["name"] == "D_rmse5")
+        # Both RMSE>1 must remain distinguishable (not both 1.0).
+        assert c["benchmark_score"] != d["benchmark_score"]
+        # Lower RMSE still wins.
+        assert reranked[0]["name"] == "C_rmse2"
+
+    def test_classification_path_unchanged(self, ranked_candidates):
+        """Classification (roc_auc, higher=better) must keep the original
+        cv_mean - 0.5*cv_std behaviour — this path is correct and untouched."""
+        benchmark_results = {
+            "XGBoost": {"cv_score_mean": 0.80, "cv_score_std": 0.02},
+            "LightGBM": {"cv_score_mean": 0.90, "cv_score_std": 0.02},
+            "RandomForest": {"cv_score_mean": 0.70, "cv_score_std": 0.02},
+        }
+
+        reranked = _rerank_by_benchmarks(
+            ranked_candidates, benchmark_results, problem_type="binary_classification"
+        )
+
+        xgb = next(c for c in reranked if c["name"] == "XGBoost")
+        # benchmark_score == cv_mean - 0.5*cv_std for classification.
+        assert abs(xgb["benchmark_score"] - (0.80 - 0.5 * 0.02)) < 1e-9
+
 
 @pytest.mark.asyncio
 class TestRunBenchmarks:
@@ -477,3 +540,45 @@ class TestCompareWithBaselines:
         result = await compare_with_baselines(state)
 
         assert "baseline_to_beat" in result
+
+    async def test_regression_improvement_sign_correct(self):
+        """FINDING #8: for regression (RMSE, lower=better), a primary with a
+        LOWER RMSE than the baseline is an IMPROVEMENT (positive). The old
+        `primary - baseline` gave the wrong sign for loss metrics."""
+        state = {
+            "primary_candidate": {"name": "Ridge"},
+            "problem_type": "regression",
+            "benchmark_results": {
+                # Ridge is the regression baseline name AND the primary here;
+                # use a distinct primary to avoid the names colliding.
+                "Lasso": {"cv_score_mean": 0.3, "cv_score_std": 0.0},
+                "Ridge": {"cv_score_mean": 0.8, "cv_score_std": 0.0},
+            },
+        }
+        # Primary = Lasso (RMSE 0.3), baseline = Ridge (RMSE 0.8).
+        state["primary_candidate"] = {"name": "Lasso"}
+
+        result = await compare_with_baselines(state)
+
+        comparison = result["baseline_comparison"]
+        # Lower primary RMSE than baseline -> positive improvement.
+        assert result["improvement_over_baseline"] > 0
+        assert comparison["improvement"] > 0
+
+    async def test_classification_improvement_sign_unchanged(self):
+        """Classification (roc_auc, higher=better): a primary with HIGHER auc
+        than baseline is an improvement (positive). Must stay correct."""
+        state = {
+            "primary_candidate": {"name": "XGBoost"},
+            "problem_type": "binary_classification",
+            "benchmark_results": {
+                "LogisticRegression": {"cv_score_mean": 0.70, "cv_score_std": 0.0},
+                "XGBoost": {"cv_score_mean": 0.85, "cv_score_std": 0.0},
+            },
+        }
+
+        result = await compare_with_baselines(state)
+
+        # Higher primary auc than baseline -> positive improvement.
+        assert result["improvement_over_baseline"] > 0
+        assert abs(result["improvement_over_baseline"] - (0.85 - 0.70)) < 1e-9

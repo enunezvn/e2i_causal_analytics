@@ -414,6 +414,59 @@ class TestSelectPrimaryCandidate:
         assert "error" in result
         assert result["error_type"] == "no_ranked_candidates_error"
 
+    async def test_select_consumes_benchmark_rankings_when_present(self):
+        """FINDING #7: when benchmark_rankings is present (benchmarks ran), the
+        primary must be benchmark_rankings[0], NOT ranked_candidates[0]. Here
+        the heuristic order prefers 'Heuristic' but the benchmark prefers
+        'Benchmarked'."""
+        state = {
+            # Heuristic-only order: Heuristic first.
+            "ranked_candidates": [
+                {"name": "Heuristic", "family": "linear", "selection_score": 0.95},
+                {"name": "Benchmarked", "family": "gradient_boosting", "selection_score": 0.90},
+            ],
+            # Benchmark-informed order: Benchmarked first (empirically better).
+            "benchmark_rankings": [
+                {
+                    "name": "Benchmarked",
+                    "family": "gradient_boosting",
+                    "selection_score": 0.90,
+                    "combined_score": 0.92,
+                    "benchmark_score": 0.95,
+                },
+                {
+                    "name": "Heuristic",
+                    "family": "linear",
+                    "selection_score": 0.95,
+                    "combined_score": 0.80,
+                    "benchmark_score": 0.60,
+                },
+            ],
+        }
+
+        result = await select_primary_candidate(state)
+
+        # Benchmark winner must be selected.
+        assert result["algorithm_name"] == "Benchmarked"
+        # Top-level combined_score / benchmark_score must be populated for the
+        # output contract (agent.py reads final_state.get("combined_score")).
+        assert result["combined_score"] == 0.92
+        assert result["benchmark_score"] == 0.95
+
+    async def test_select_falls_back_to_ranked_when_benchmarks_skipped(self):
+        """FINDING #7: when benchmark_rankings is absent (benchmarks skipped),
+        selection falls back to ranked_candidates[0]."""
+        state = {
+            "ranked_candidates": [
+                {"name": "TopHeuristic", "family": "linear", "selection_score": 0.95},
+                {"name": "Second", "family": "tree", "selection_score": 0.85},
+            ]
+        }
+
+        result = await select_primary_candidate(state)
+
+        assert result["algorithm_name"] == "TopHeuristic"
+
 
 class TestGetAlgorithmClass:
     """Test algorithm class path mapping."""

@@ -142,6 +142,47 @@ class TestRandomSplit(TestDataSplitter):
         assert result.holdout is not None
         assert len(result.holdout) > 0
 
+    @pytest.mark.parametrize("n", [7, 11, 13, 17, 23, 101, 103])
+    def test_no_tail_rows_dropped_when_holdout_zero(self, splitter, n):
+        """Regression: with the default 0-holdout config, int-truncated
+        cumulative cutoffs left rows in indices[test_end:] assigned to NO
+        split (holdout stayed None), silently dropping tail rows. Every row
+        must land in exactly one of train/val/test."""
+        df = pd.DataFrame({"id": range(n)})
+        result = splitter.random_split(df)  # default SplitConfig, holdout_ratio=0
+        assert result.holdout is None
+        total = len(result.train) + len(result.val) + len(result.test)
+        assert total == n, (
+            f"random_split dropped {n - total} tail row(s): "
+            f"train={len(result.train)} val={len(result.val)} test={len(result.test)}"
+        )
+        # No row appears twice and the union equals the original id set.
+        recovered = set(result.train["id"]) | set(result.val["id"]) | set(result.test["id"])
+        assert recovered == set(range(n))
+
+    @pytest.mark.parametrize("n", [11, 13, 23, 101])
+    def test_holdout_behavior_unchanged_when_ratio_positive(self, splitter, n):
+        """The holdout_ratio>0 path must keep partitioning train/val/test/holdout
+        without absorbing the tail into test (every row still lands exactly once)."""
+        df = pd.DataFrame({"id": range(n)})
+        config = SplitConfig(
+            train_ratio=0.5,
+            val_ratio=0.2,
+            test_ratio=0.2,
+            holdout_ratio=0.1,
+        )
+        result = splitter.random_split(df, config)
+        assert result.holdout is not None
+        total = len(result.train) + len(result.val) + len(result.test) + len(result.holdout)
+        assert total == n
+        recovered = (
+            set(result.train["id"])
+            | set(result.val["id"])
+            | set(result.test["id"])
+            | set(result.holdout["id"])
+        )
+        assert recovered == set(range(n))
+
 
 class TestTemporalSplit(TestDataSplitter):
     """Tests for temporal_split method."""
@@ -223,6 +264,29 @@ class TestStratifiedSplit(TestDataSplitter):
         )
         result = splitter.stratified_split(df, stratify_column="category")
         assert isinstance(result, SplitResult)
+
+    @pytest.mark.parametrize("per_stratum", [7, 11, 13, 17, 23])
+    def test_no_tail_rows_dropped_when_holdout_zero(self, splitter, per_stratum):
+        """Regression: stratified_split partitioned each stratum by int-truncated
+        cumulative cutoffs; with the default 0-holdout config, rows in
+        indices[test_end:] of every stratum were dropped. With strata that are
+        not clean multiples of the ratios, no row may vanish."""
+        n_per = per_stratum
+        df = pd.DataFrame(
+            {
+                "id": range(2 * n_per),
+                "category": ["A"] * n_per + ["B"] * n_per,
+            }
+        )
+        result = splitter.stratified_split(df, stratify_column="category")
+        assert result.holdout is None
+        total = len(result.train) + len(result.val) + len(result.test)
+        assert total == len(df), (
+            f"stratified_split dropped {len(df) - total} tail row(s): "
+            f"train={len(result.train)} val={len(result.val)} test={len(result.test)}"
+        )
+        recovered = set(result.train["id"]) | set(result.val["id"]) | set(result.test["id"])
+        assert recovered == set(range(2 * n_per))
 
     def test_warns_when_small_stratum_dumped_to_train(self, splitter, caplog):
         """A stratum with <3 samples is assigned entirely to train, so it is
