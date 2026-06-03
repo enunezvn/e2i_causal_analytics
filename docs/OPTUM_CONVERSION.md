@@ -53,6 +53,11 @@ chronological split verbatim, no re-splitting. All cohort-specific targets
 (`initiated_biologic_180d`, `discontinued_180d`, `persistent_at_180d`) are
 stored as columns; the tier-0 runner selects the right one per cohort.
 
+An optional HCP gap-feature enrichment pass produces a parallel output tree
+under `data/rwd/optum_gap_enriched/<cohort>/` — a complete `--data-dir` with
+the same sibling files plus `treating_hcp_*` provider columns appended to
+`patient_journeys.parquet`. See "HCP gap-feature enrichment" below.
+
 ## Cohorts
 
 | Cohort | Population | Index Date | Target | Output Dir |
@@ -92,6 +97,11 @@ CLI flags:
 | `--cohort {initiation,discontinuation,persistence,all}` | `all` | Which cohorts to build |
 | `--max-patients N` | all | Limit to first N demographics rows (pilot / CI speedup) |
 | `--pilot-audit` | off | Run `leakage_detector` on output as a §11 go/no-go gate |
+| `--enrollment-regime {production,research}` | `production` | Enrollment-window regime. `production` = 360d pre / 180d post (current behavior). `research` = 180d pre / 90d post (larger eligible cohort; requires domain-expert sign-off before downstream use). |
+| `--extract-ym YYYYMM` | inferred from `--input` dir name | Optum vendor drop month (e.g. `202604`). Drives `patient_journeys.source_timestamp` (LAST_DAY of the month at 23:59:59 UTC — worst-case lag estimate). |
+| `--comorbidity-method {quan,approx}` | `quan` | Comorbidity scoring algorithm. `quan` = Quan (2005) ICD-10 mappings + classical Charlson + van Walraven (2009) Elixhauser weights. `approx` = legacy chapter-count Elixhauser / 5-category Charlson proxies (parity testing only). |
+| `--soft-enrollment-filter` | off | Keep partial-enrollment patients (DQS-gated downstream) instead of the hard `continuous_enrollment == 1` filter. |
+| `--min-data-quality-score F` | `0.50` | Soft DQS threshold logged in attrition (not dropped). Only meaningful with `--soft-enrollment-filter`. |
 | `--dry-run` | off | Load + clean only, no cohort build, no writes |
 | `--verbose` | off | DEBUG-level logging |
 
@@ -143,6 +153,121 @@ explicitly **excluded** from non-target drug class features via
 See the `data_dictionary.csv` in each cohort output directory for the
 complete, self-documenting list with source-table provenance and null rates.
 
+## HCP gap-feature enrichment (PR #644)
+
+`scripts/enrich_cohort_with_hcp_features.py` is an OPTIONAL post-converter
+pass that appends provider-level commercial covariates (targeting decile / KOL
+influence) from the Gap-features HCP tables onto the converter's leakage-safe
+`e2i_ml_v3_patient_journeys.parquet`. It writes a parallel output tree:
+
+```
+data/rwd/optum_gap_enriched/<cohort>/
+  e2i_ml_v3_patient_journeys.parquet    # converter journeys + treating_hcp_* columns
+  <all other sibling files copied verbatim from the source cohort dir>
+```
+
+The enriched directory is a COMPLETE `--data-dir` for the tier-0 pipeline —
+the script copies `treatment_events`, `hcp_profiles`, `split_registry`,
+`data_dictionary`, and `attrition` from the source cohort dir unchanged and
+only overwrites `patient_journeys.parquet` with the enriched version.
+
+### Join key and leakage discipline
+
+- Each patient is linked to their treating prescriber(s) via the **raw Optum
+  `medication.npi`**. The script recovers the raw `patid` from the converter's
+  `patient_id` (`PAT_<patid>`). It links off raw claims because the converter's
+  own `hcp_profiles.npi` is synthetic and does NOT match the Gap HCP tables;
+  the raw de-identified provider NPIs match the Gap tables.
+- **Leakage-safe temporal filter**: a prescriber contributes only if
+  `medication_date <= the patient's converter index_date` (per-patient, against
+  the converter index — never the vendor `indexdt`). Providers seen only after
+  index are dropped.
+- The attached attributes are provider COMMERCIAL scores, not patient outcomes.
+
+### Output columns
+
+The enrichment appends exactly these columns (provider-level, leakage-safe);
+patients with no pre-index matched provider get `treating_hcp_match_count = 0`
+and nulls for the rest:
+
+| Column | Aggregation |
+|--------|-------------|
+| `treating_hcp_match_count` | count of distinct pre-index prescriber NPIs matched to HCP tables |
+| `treating_hcp_targeting_decile_max` | max targeting decile across matched providers |
+| `treating_hcp_priority_tier_best` | best (min) priority tier - tier 1 = highest |
+| `treating_hcp_is_specialist_any` | any matched provider flagged specialist |
+| `treating_hcp_kol_score_max` | max KOL score |
+| `treating_hcp_kol_score_100pt_max` | max KOL score (100-pt scale) |
+| `treating_hcp_influence_network_size_max` | max influence-network size |
+| `treating_hcp_kol_category_top` | KOL category of the patient's max-KOL provider |
+
+### What is DELIBERATELY EXCLUDED
+
+The patient-level Gap clinical/risk tables (`patient_risk_scores`, etc.) are
+**not** transplanted. They are anchored at a DIFFERENT index_date (median
+~109d later than the converter index), so their comorbidity/risk features
+would inject POST-INDEX information = target leakage, and they duplicate the
+converter's own at-index comorbidities. `Patient_journey` /
+`Treatment_response` Gap tables are post-index outcome/target data and are
+likewise excluded as features.
+
+### Temporal-currency caveat (harness-only signal)
+
+The Gap HCP scores are "current" rolling-window scores, so a provider's score
+may reflect activity AFTER the patient's index. This is acceptable for tier-0
+**harness testing** (exercising the pipeline on enriched real data) but means
+the enriched cohort is NOT a deployable clinical model — a green tier-0 result
+on this cohort must not be over-read as clinical performance.
+
+### Coverage
+
+Linkage is data-dependent. The treatment-naive `initiation` cohort has only
+~1-3% HCP linkage (few biologic prescribers pre-index) so its HCP columns are
+near-all-null (tier-0 QC will skip them); the `discontinuation` /
+`persistence` cohorts (biologic initiators) reach ~47% under the leakage-safe
+filter.
+
+### Usage
+
+```bash
+# Enrich all three cohorts (uses --cohort-root / --out-root defaults)
+python scripts/enrich_cohort_with_hcp_features.py --all
+
+# Enrich a single cohort (both --cohort-dir and --out-dir required)
+python scripts/enrich_cohort_with_hcp_features.py \
+    --cohort-dir data/rwd/optum/discontinuation \
+    --out-dir data/rwd/optum_gap_enriched/discontinuation
+```
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `--all` | off | Process all 3 cohorts under `--cohort-root` into `--out-root` |
+| `--cohort-dir DIR` | — | Single source cohort dir (requires `--out-dir`) |
+| `--out-dir DIR` | — | Single enriched output dir (requires `--cohort-dir`) |
+| `--cohort-root DIR` | `data/rwd/optum/` | Source root for `--all` |
+| `--out-root DIR` | `data/rwd/optum_gap_enriched/` | Output root for `--all` |
+| `--optum-dir DIR` | `data/rwd/Optum_Parquet/` | Raw Optum parquet (for `medication.npi`) |
+| `--gap-dir DIR` | `data/rwd/Gap features in parquet format/` | Gap HCP tables (`hcp_targeting_tier`, `KOL_influence`) |
+
+## Modelability of the gap-enriched cohort
+
+The gap-enriched Optum **initiation** cohort is genuinely UNMODELABLE: about
+1,294 patients with only ~37 positive events (events-per-variable ~0.13).
+Restoring the leakage-safe features lifts CV-AUC only from ~0.539 to ~0.556 —
+i.e. chance. This is a **concept-scoped, event-poor RAW EXTRACT limitation**,
+NOT a conversion / join / pipeline defect: the converter's same-machinery
+controls populate correctly, but the underlying raw records for the CSU
+initiation concept are too sparse to support a model.
+
+Accordingly, the tier-0 `data_sufficiency` HARD_FAIL on this cohort is the
+**correct, desired behavior** — it is not a false alarm to be bypassed. The
+HCP enrichment adds harness signal but does not change this conclusion (and
+the `initiation` HCP columns are near-all-null anyway).
+
+The authoritative analysis — including the same-machinery control proof that
+the converter is working and the empty-family root cause — is in
+`docs/results/tier0_cohort_comparison_optum_vs_synthetic_20260603.md`.
+
 ## Known approximations
 
 | Area | Approximation | Why |
@@ -156,6 +281,29 @@ complete, self-documenting list with source-table provenance and null rates.
 | `journey_stage` (issue #155 §2) | `prescribed` value NOT emitted from Optum converter | Optum claims are dispensed-only; no Rx-written signal. Reserved for cohorts with EHR Rx streams. |
 
 These are documented per-feature in `data_dictionary.csv`.
+
+### Lab LOINC provenance (corrected 2026-06-03)
+
+The `CSU_LABS_LOINC` analyte to LOINC mappings in
+`scripts/convert_optum_rwd.py` were corrected on 2026-06-03 after a
+cross-check of the extract's `tst_desc` (test-description) column found that
+three analyte keys pointed at the wrong test (and one matched zero rows). The
+corrected mappings are guarded by a behavioral `TestCsuLabsLoincMapping` test.
+
+| Analyte | Old (WRONG) code | What the old code actually was | Corrected code(s) |
+|---------|------------------|--------------------------------|-------------------|
+| `eosinophil` | `6206-7` | Peanut IgE | `711-2` / `26444-0` |
+| `tpo_ab` | `3051-0` / `3053-6` | Free / Total T3 | `8099-8` / `8099-4` / `56477-3` |
+| `cbc` | `26453-1` | RBC | `58410-2` / `57021-8` |
+| `ana` | `14741-9` | zero matching rows | `42254-3` / `5048-4` / `8061-4` |
+
+> NOTE: this correction is **pending commit** of the working-tree change to
+> `scripts/convert_optum_rwd.py` in the main workspace. It is NOT yet visible
+> on this branch — the converter here still shows the old codes at
+> `CSU_LABS_LOINC` (do not be confused by that). The fix is immaterial to
+> cohort modelability (see below); it corrects analyte labeling only. Full
+> forensics: `docs/results/tier0_cohort_comparison_optum_vs_synthetic_20260603.md`
+> (Root-cause forensics section).
 
 ## Drug-class-aware gap thresholds (issue #156 item 7)
 
@@ -393,8 +541,16 @@ the round-trip parity contract against an in-process FalkorDB fake.
 ## Related files
 
 - `scripts/convert_optum_rwd.py` — the converter itself
+- `scripts/enrich_cohort_with_hcp_features.py` - optional HCP gap-feature
+  enrichment pass (PR #644); writes `data/rwd/optum_gap_enriched/<cohort>/`
 - `scripts/run_optum_tier0_test.py` — tier-0 runner for cohort outputs
 - `scripts/rwd_common.py` — shared RWD helpers (IDs, regions, splitter, writers)
+- `data/rwd/optum_gap_enriched/<cohort>/` — HCP-enriched parallel output tree
+  (a complete tier-0 `--data-dir`; git-ignored)
+- `docs/results/tier0_cohort_comparison_optum_vs_synthetic_20260603.md` —
+  authoritative gap-enriched modelability + root-cause forensics analysis
+- `docs/model_success_criteria.md` — v3 adaptive success-criteria + QC gates
+  the tier-0 pipeline applies to these cohorts
 - `src/agents/ml_foundation/data_preparer/ingestion/` — generic file ingestion
 - `src/agents/ml_foundation/data_preparer/CONTRACT_VALIDATION.md` — documents
   the `data_source` shape used to trigger file-based ingestion
@@ -402,6 +558,17 @@ the round-trip parity contract against an in-process FalkorDB fake.
   definitions, exclusion lists, feature catalog, target derivations)
 - `.claude/plans/optum-rwd-ingestion.md` — the implementation plan this work
   executes
+
+## Feast freshness on file-sourced runs
+
+When the tier-0 pipeline consumes a cohort dir as `{"type": "file_dir"}` (the
+normal path for these converter / gap-enriched outputs), the leakage/feature
+stage's Feast freshness check is **advisory only** - it emits a warning but
+does NOT hard-block training, because features come from the parquet, not from
+the Feast online store (`feast_registrar.py`). A run without a
+`feature_store.yaml` can additionally set `ALLOW_STALE_FEAST=1` to bypass the
+staleness block. Note the hard block applies only to genuine Feast-serving
+(non-file-sourced) runs; for file-sourced runs the warning is informational.
 
 ## Troubleshooting
 
