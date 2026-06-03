@@ -565,6 +565,42 @@ class Consolidator:
         )
         return result
 
+    # --------------------------------------------------------- pagination
+
+    def _select_all_rows(
+        self,
+        build_query: Callable[[], Any],
+        *,
+        page_size: int = 1000,
+    ) -> List[Dict[str, Any]]:
+        """Fetch every row for a query, paginating past PostgREST's row cap.
+
+        PostgREST returns at most ``db-max-rows`` (default 1000) per request and
+        the deployment configures no override, so an un-ranged SELECT silently
+        truncates large candidate sets (review finding H5). Callers that need
+        the full set MUST paginate. The supabase query object is single-use, so
+        ``build_query`` is a thunk that re-creates the base query (filters
+        included) for each page; we then walk ``.range()`` windows until a short
+        page signals exhaustion.
+
+        Args:
+            build_query: zero-arg callable returning a fresh, filtered query
+                builder (without ``.range()`` / ``.execute()`` applied).
+            page_size: rows per page; must stay at or under the server cap.
+
+        Returns:
+            All matching rows across every page, in server order.
+        """
+        all_rows: List[Dict[str, Any]] = []
+        offset = 0
+        while True:
+            page = (build_query().range(offset, offset + page_size - 1).execute().data) or []
+            all_rows.extend(page)
+            if len(page) < page_size:
+                break
+            offset += page_size
+        return all_rows
+
     # ------------------------------------------------------- episodic dedup
 
     async def deduplicate_episodic(
@@ -647,19 +683,23 @@ class Consolidator:
         # Pull rows that have NOT yet been deduped (dedup_signature IS NULL).
         # Idempotency hinges on this filter: previously-deduped rows have
         # their signature set and are excluded from subsequent passes.
-        query = client.table("episodic_memories").select(
-            "memory_id, brand, region, event_type, event_subtype, "
-            "causal_path_id, agent_name, description, occurred_at, "
-            "dedup_signature, dedup_counter"
-        )
-        if brand:
-            query = query.eq("brand", brand)
-        if region:
-            query = query.eq("region", region)
-        # IS NULL filter: only candidates without a signature yet.
-        query = query.is_("dedup_signature", "null")
+        def _build_dedup_query() -> Any:
+            q = client.table("episodic_memories").select(
+                "memory_id, brand, region, event_type, event_subtype, "
+                "causal_path_id, agent_name, description, occurred_at, "
+                "dedup_signature, dedup_counter"
+            )
+            if brand:
+                q = q.eq("brand", brand)
+            if region:
+                q = q.eq("region", region)
+            # IS NULL filter: only candidates without a signature yet.
+            return q.is_("dedup_signature", "null")
+
         try:
-            rows = (query.execute().data) or []
+            # Paginate past the PostgREST row cap so a large dedup backlog is
+            # not silently truncated (review finding H5).
+            rows = self._select_all_rows(_build_dedup_query)
         except Exception as exc:
             logger.warning(f"consolidator: dedup select failed: {exc}")
             result.errors.append(f"dedup select: {exc}")
@@ -1371,13 +1411,20 @@ class Consolidator:
         # use SUM(dedup_counter) (iter-1 codex H1 fix). Falls back to
         # 1 when missing (back-compat with rows from before migration
         # 026 or test fixtures that don't seed the column).
-        query = client.table("episodic_memories").select(
-            "memory_id, brand, event_type, event_subtype, raw_content, occurred_at, dedup_counter"
-        )
-        if brand:
-            query = query.eq("brand", brand)
+        def _build_template_query() -> Any:
+            q = client.table("episodic_memories").select(
+                "memory_id, brand, event_type, event_subtype, raw_content, occurred_at, dedup_counter"
+            )
+            if brand:
+                q = q.eq("brand", brand)
+            return q
+
         try:
-            rows = (query.execute().data) or []
+            # Paginate past the PostgREST row cap: this candidate set has NO
+            # IS NULL filter, so it grows with the table and would otherwise be
+            # silently truncated, corrupting SUM(dedup_counter) cluster sizing
+            # (review finding H5).
+            rows = self._select_all_rows(_build_template_query)
         except Exception as exc:
             logger.warning(f"consolidator: procedural-template select failed: {exc}")
             return 0
