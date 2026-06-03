@@ -73,6 +73,7 @@ SUPABASE_JWT_SECRET = os.environ.get("SUPABASE_JWT_SECRET", "")
 # Testing mode - bypasses authentication for integration/e2e tests
 TESTING_MODE = os.environ.get("E2I_TESTING_MODE", "").lower() in ("true", "1", "yes")
 
+
 def _warn_missing_auth_secrets() -> List[str]:
     """Emit startup warnings for missing auth secrets and return the messages.
 
