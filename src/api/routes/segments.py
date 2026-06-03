@@ -612,10 +612,30 @@ class _DurableAnalysesStore:
         sanitized.policy_recommendations = []
         sanitized.overall_ate = None
         sanitized.heterogeneity_score = None
+        # Round-2 BUG 1: ``_has_non_finite_floats`` fires for a non-finite in ANY
+        # float field, so dropping only the CATE/policy payloads is INSUFFICIENT
+        # — a NaN/inf in any of the fields below would survive and re-poison the
+        # record (unreadable on read -> silently skipped + pruned on
+        # enumeration, vanishing from durable storage). Scrub EVERY remaining
+        # float-bearing field so the result is provably finite. The Optional
+        # ones drop to ``None``; ``confidence`` is non-Optional so it resets to
+        # the schema default ``0.0`` rather than a fabricated estimate.
+        sanitized.feature_importance = None
+        sanitized.uplift_metrics = None
+        sanitized.library_agreement_score = None
+        sanitized.expected_total_lift = None
+        sanitized.confidence = 0.0
         if "non-finite" not in " ".join(sanitized.warnings).lower():
             sanitized.warnings.append(
                 "Analysis produced non-finite (NaN/inf) estimates; marked as failed."
             )
+        # Guard against regression: the whole point of this method is to return
+        # a record that round-trips cleanly. If a future field is added that can
+        # carry a non-finite float, fail loudly here rather than silently
+        # persisting another unreadable record.
+        assert not _has_non_finite_floats(sanitized), (
+            "sanitize_non_finite left a non-finite float; record would be unreadable"
+        )
         return sanitized
 
     @staticmethod
@@ -630,23 +650,27 @@ class _DurableAnalysesStore:
             return None
 
     async def _prune_orphans(self, client: Any) -> None:
-        """Remove index members whose underlying key has expired (HIGH#3).
+        """Remove index members whose underlying key no longer exists (HIGH#3).
 
-        TTL-expired records leave their index member behind as an orphan. Those
-        orphans inflate the count used by FIFO eviction and can cause a LIVE,
-        in-TTL, under-capacity record to be evicted while a dead orphan
-        survives (data loss + spurious 404). We prune in two passes:
+        TTL-expired records (and records evicted by Redis ``maxmemory`` before
+        TTL) leave their index member behind as an orphan. Those orphans inflate
+        the count used by FIFO eviction and can cause a LIVE, in-TTL,
+        under-capacity record to be evicted while a dead orphan survives (data
+        loss + spurious 404). We prune purely by KEY EXISTENCE.
 
-        1. By score — anything older than ``now - ttl`` MUST have expired, so
-           ``zremrangebyscore`` drops it cheaply in one round-trip.
-        2. By existence — any remaining indexed id whose key does not ``exist``
-           (e.g. evicted by Redis maxmemory before TTL) is removed too.
+        Round-2 BUG 2: a previous "Pass 1" pruned by SCORE
+        (``zremrangebyscore(index, '-inf', now-ttl)``) on the assumption
+        "score <= now-ttl => expired". That assumption is FALSE once the index
+        score is frozen at CREATION time (fix #7) while every ``set()`` resets
+        the key's TTL (``ex=ttl`` on the SET). A record created > ttl ago but
+        UPDATED recently then has a LIVE key with a frozen creation score older
+        than ``now-ttl`` — and Pass-1 would delete its index member while the
+        key is alive, making it fetchable-by-id yet invisible to enumeration
+        (the exact split-brain this store exists to prevent). Key-existence is
+        the only correct signal regardless of score-vs-TTL divergence, so we
+        rely on it alone.
         """
         try:
-            cutoff = datetime.now(timezone.utc).timestamp() - self.ttl_seconds
-            # Pass 1: drop everything provably past its TTL by score.
-            await client.zremrangebyscore(_REDIS_INDEX_KEY, "-inf", cutoff)
-            # Pass 2: drop any remaining member whose key is gone.
             members = await client.zrange(_REDIS_INDEX_KEY, 0, -1)
             if not members:
                 return

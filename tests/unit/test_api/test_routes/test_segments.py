@@ -1812,3 +1812,263 @@ class TestFIFONotLRU:
         assert await store.contains("seg_0") is False  # oldest by creation
         assert await store.contains("seg_1") is True
         assert await store.contains("seg_2") is True
+
+
+# =============================================================================
+# ROUND-2 BUG 1 (MEDIUM) — write-side NaN/Inf guard must scrub EVERY float
+# field, not just the CATE/policy payloads.
+# =============================================================================
+#
+# ``_has_non_finite_floats`` fires for a non-finite in ANY float field
+# (confidence, feature_importance, uplift_metrics, library_agreement_score,
+# expected_total_lift, cate_*). But the round-1 ``_sanitize_non_finite`` only
+# cleared the CATE/policy payloads + overall_ate/heterogeneity_score. A NaN in
+# one of the OTHER float fields therefore SURVIVES sanitisation -> the persisted
+# "FAILED" record still serialises that field to JSON ``null`` ->
+# ``model_validate_json`` raises ValidationError on read -> the record is
+# silently skipped + ``zrem``'d on enumeration, vanishing from durable storage
+# (re-introducing the cross-worker 404 C21 exists to fix). The write-side
+# GUARANTEE — "a stored record is always readable back" — is broken.
+
+
+def _make_poison_resp_in_field(analysis_id, field):  # noqa: ANN001
+    """Build an otherwise-valid response with a NaN in exactly ONE float field."""
+    import math
+
+    from src.api.routes.segments import (
+        SegmentAnalysisResponse,
+        UpliftMetrics,
+    )
+
+    resp = SegmentAnalysisResponse(
+        analysis_id=analysis_id,
+        status=AnalysisStatus.COMPLETED,
+        timestamp=datetime.now(timezone.utc),
+    )
+    if field == "confidence":
+        resp.confidence = math.nan
+    elif field == "feature_importance":
+        resp.feature_importance = {"region": math.nan}
+    elif field == "uplift_metrics":
+        resp.uplift_metrics = UpliftMetrics(
+            overall_auuc=math.nan,
+            overall_qini=0.5,
+            targeting_efficiency=0.5,
+            model_type_used="random_forest",
+        )
+    elif field == "library_agreement_score":
+        resp.library_agreement_score = math.inf
+    elif field == "expected_total_lift":
+        resp.expected_total_lift = -math.inf
+    else:  # pragma: no cover - guard against typos in the parametrisation
+        raise ValueError(f"unknown field {field}")
+    return resp
+
+
+class TestSanitizeScrubsAllFloatFields:
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "confidence",
+            "feature_importance",
+            "uplift_metrics",
+            "library_agreement_score",
+            "expected_total_lift",
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_nan_in_any_float_field_round_trips_after_sanitize(self, field):
+        """A NaN in ANY float field must survive set -> get without a 500.
+
+        Round-1 only scrubbed cate/policy/overall_ate/heterogeneity_score, so a
+        NaN in ``confidence`` / ``feature_importance`` / ``uplift_metrics`` /
+        ``library_agreement_score`` / ``expected_total_lift`` persisted as an
+        unreadable record. After the fix every such record is stored as an
+        honest FAILED record that reads back cleanly.
+        """
+        from src.api.routes.segments import _DurableAnalysesStore
+
+        shared = _FakeAsyncRedis()
+
+        async def _factory():
+            return shared
+
+        store = _DurableAnalysesStore(redis_factory=_factory)
+        await store.set(f"seg_{field}", _make_poison_resp_in_field(f"seg_{field}", field))
+
+        # Must read back (no ValidationError 500) AND must be enumerable.
+        got = await store.get(f"seg_{field}")
+        assert got is not None, f"poison in {field} must remain readable, not 500"
+        assert got.status == AnalysisStatus.FAILED
+
+        listed = [v.analysis_id for v in await store.values()]
+        assert f"seg_{field}" in listed, (
+            f"poison in {field} vanished from enumeration (broken write guarantee)"
+        )
+
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "confidence",
+            "feature_importance",
+            "uplift_metrics",
+            "library_agreement_score",
+            "expected_total_lift",
+        ],
+    )
+    def test_sanitized_record_is_provably_finite_and_json_round_trips(self, field):
+        """The sanitised record must contain NO non-finite floats and must
+        re-validate from its own JSON dump."""
+        from src.api.routes.segments import (
+            SegmentAnalysisResponse,
+            _DurableAnalysesStore,
+            _has_non_finite_floats,
+        )
+
+        poison = _make_poison_resp_in_field("seg_x", field)
+        assert _has_non_finite_floats(poison) is True  # precondition
+
+        sanitized = _DurableAnalysesStore._sanitize_non_finite("seg_x", poison)
+
+        # Provably finite — the core invariant the guard must restore.
+        assert _has_non_finite_floats(sanitized) is False, (
+            f"sanitize left a non-finite float in {field}"
+        )
+        # And the JSON dump re-validates (the actual persistence round-trip).
+        dumped = sanitized.model_dump_json()
+        revalidated = SegmentAnalysisResponse.model_validate_json(dumped)
+        assert revalidated.status == AnalysisStatus.FAILED
+
+
+# =============================================================================
+# ROUND-2 BUG 2 (MEDIUM) — TTL-orphan eviction Pass-1 must not prune a LIVE
+# record whose index score is FROZEN at creation time.
+# =============================================================================
+#
+# ``_prune_orphans`` Pass-1 does ``zremrangebyscore(index, '-inf', now-ttl)`` on
+# the assumption "score <= now-ttl => key expired". Fix #7 made that assumption
+# FALSE: the index score is frozen at CREATION time, but every ``set()`` resets
+# the key TTL to ``now+ttl`` (the ``ex=self.ttl_seconds`` on the SET). So a
+# record created > ttl ago but UPDATED recently has a LIVE key whose frozen
+# creation score still satisfies ``score <= now-ttl`` -> Pass-1 deletes its
+# index member while the key is alive. Result: fetchable-by-id but INVISIBLE to
+# /policies & /health enumeration — the very split-brain the atomicity fix
+# claims to prevent. Pass-2 (key-existence) only ADDS removals; it cannot
+# restore what Pass-1 wrongly deleted.
+
+
+class _FakeClock:
+    """A single shared, injectable wall-clock used to drive BOTH the module's
+    ``datetime.now`` (creation score + Pass-1 cutoff) AND the fake-Redis TTL,
+    so the score-vs-TTL divergence under test is reproduced faithfully (one
+    clock, not two)."""
+
+    def __init__(self, redis: "_FakeAsyncRedis", start: float = 1000.0) -> None:
+        self._redis = redis
+        self._t = start
+        self._redis._now = start
+
+    def advance(self, seconds: float) -> None:
+        self._t += seconds
+        self._redis._now = self._t  # keep the Redis TTL clock in lockstep
+
+    # Mimic the slice of the ``datetime`` API the module uses:
+    #   datetime.now(timezone.utc).timestamp()
+    def now(self, tz=None):  # noqa: ANN001
+        clock = self
+
+        class _Moment:
+            def timestamp(self_inner) -> float:  # noqa: N805
+                return clock._t
+
+        return _Moment()
+
+
+class TestTTLPruneDoesNotDropLiveUpdatedRecord:
+    @pytest.mark.asyncio
+    async def test_recently_updated_old_record_stays_indexed_while_key_is_live(self, monkeypatch):
+        """The exact BUG-2 path: a record created > ttl ago but UPDATED recently
+        keeps a LIVE key (TTL reset on the update) yet a FROZEN creation score
+        older than ``now-ttl``. It must remain in the index / ``values()`` —
+        Pass-1's score-based prune must not drop it."""
+        from src.api.routes import segments as seg_mod
+        from src.api.routes.segments import (
+            _REDIS_INDEX_KEY,
+            _DurableAnalysesStore,
+        )
+
+        shared = _FakeAsyncRedis()
+        clock = _FakeClock(shared, start=1000.0)
+        # Drive the module's wall-clock (creation score + Pass-1 cutoff) from the
+        # SAME clock that controls Redis TTL expiry.
+        monkeypatch.setattr(seg_mod, "datetime", clock)
+
+        async def _factory():
+            return shared
+
+        ttl = 100
+        store = _DurableAnalysesStore(redis_factory=_factory, max_entries=10, ttl_seconds=ttl)
+
+        # Create the record at t=1000 (creation score frozen at 1000).
+        await store.set("seg_updated_old", _make_resp("seg_updated_old"))
+        creation_score = shared.zset[_REDIS_INDEX_KEY]["seg_updated_old"]
+        assert creation_score == 1000.0
+
+        # Advance WELL past the TTL relative to creation (t=1250, ttl=100), then
+        # UPDATE the record. The update resets the key TTL (alive until t=1350)
+        # but keeps the frozen creation score (1000). Pass-1 cutoff at update
+        # time = 1250 - 100 = 1150, and 1000 <= 1150 -> Pass-1 would drop it.
+        clock.advance(250)
+        await store.set(
+            "seg_updated_old", _make_resp("seg_updated_old", status=AnalysisStatus.COMPLETED)
+        )
+
+        # The key must still be alive (TTL was reset on the update).
+        assert await shared.get("segments:analysis:seg_updated_old") is not None
+
+        # BUG: Pass-1 must NOT have removed the index member of a LIVE record.
+        indexed = await shared.zrange(_REDIS_INDEX_KEY, 0, -1)
+        assert "seg_updated_old" in indexed, (
+            "Pass-1 score-prune dropped the index member of a LIVE, recently-"
+            "updated record (frozen creation score < now-ttl while key alive)"
+        )
+
+        # And it must be enumerable (the split-brain the fix exists to prevent).
+        listed = [v.analysis_id for v in await store.values()]
+        assert "seg_updated_old" in listed
+        # Still fetchable too (consistency between get and enumerate).
+        assert await store.contains("seg_updated_old") is True
+
+    @pytest.mark.asyncio
+    async def test_genuinely_expired_record_is_still_pruned(self, monkeypatch):
+        """Regression guard: removing the buggy Pass-1 must NOT stop genuinely
+        expired (dead-key) orphans from being pruned — Pass-2 (key existence)
+        still handles them."""
+        from src.api.routes import segments as seg_mod
+        from src.api.routes.segments import (
+            _REDIS_INDEX_KEY,
+            _DurableAnalysesStore,
+        )
+
+        shared = _FakeAsyncRedis()
+        clock = _FakeClock(shared, start=0.0)
+        monkeypatch.setattr(seg_mod, "datetime", clock)
+
+        async def _factory():
+            return shared
+
+        store = _DurableAnalysesStore(redis_factory=_factory, max_entries=10, ttl_seconds=50)
+
+        # A short-TTL record that we never touch again -> its key truly expires.
+        await store.set("seg_dead", _make_resp("seg_dead"))
+        clock.advance(100)  # key (TTL 50) is now genuinely expired/gone
+
+        # A fresh write triggers a prune cycle.
+        await store.set("seg_fresh", _make_resp("seg_fresh"))
+
+        # The dead orphan's index member must be gone (Pass-2 by key existence).
+        indexed = await shared.zrange(_REDIS_INDEX_KEY, 0, -1)
+        assert "seg_dead" not in indexed
+        assert "seg_fresh" in indexed
+        listed = [v.analysis_id for v in await store.values()]
+        assert listed == ["seg_fresh"]
