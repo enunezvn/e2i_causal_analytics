@@ -396,6 +396,24 @@ def _get_agent_kwargs(
             }
         return {"enable_opik": False, "enable_memory": False}
 
+    elif agent_name == "tool_composer":
+        # tool_composer: disable the planner's episodic-memory lookup in the
+        # keyless harness. SUPABASE_URL is unset, so the lookup always fails
+        # functionally — but it FIRST triggers a cold-start load of the
+        # all-MiniLM-L6-v2 fallback embedder (~144s cold vs ~2s warm). As the
+        # first agent to hit this path, tool_composer absorbs the cold start
+        # and blows the 90s per-agent timeout (the flake that forced the
+        # admin-merges). Setting use_episodic_memory=False makes
+        # ToolPlanner._check_episodic_memory short-circuit to [] BEFORE
+        # find_similar_compositions loads the embedder.
+        #
+        # The config flows: ToolComposerAgent(config=...) -> ToolComposer(config=...)
+        # -> _init_phase_handlers reads config["phases"]["plan"]["use_episodic_memory"]
+        # -> ToolPlanner(use_episodic_memory=False). This disables a
+        # NON-FUNCTIONAL lookup only; it does not mask any real failure (the
+        # agent is NOT in TIER1_5_EXPECTED_FAIL_AGENTS).
+        return {"config": {"phases": {"plan": {"use_episodic_memory": False}}}}
+
     return {}
 
 

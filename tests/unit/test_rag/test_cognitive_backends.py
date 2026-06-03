@@ -458,7 +458,11 @@ class TestProceduralMemoryBackend:
             "src.rag.cognitive_backends.insert_procedural_memory",
             side_effect=Exception("Insert failed"),
         ):
-            procedure_id = await backend.store_procedure(procedure_name="Test", tool_sequence=[])
+            procedure_id = await backend.store_procedure(
+                procedure_name="Test",
+                tool_sequence=[],
+                embedding=[0.1, 0.2, 0.3],
+            )
 
             assert procedure_id is None
 
