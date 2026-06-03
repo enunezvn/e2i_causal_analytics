@@ -297,11 +297,9 @@ corrected mappings are guarded by a behavioral `TestCsuLabsLoincMapping` test.
 | `cbc` | `26453-1` | RBC | `58410-2` / `57021-8` |
 | `ana` | `14741-9` | zero matching rows | `42254-3` / `5048-4` / `8061-4` |
 
-> NOTE: this correction is **pending commit** of the working-tree change to
-> `scripts/convert_optum_rwd.py` in the main workspace. It is NOT yet visible
-> on this branch — the converter here still shows the old codes at
-> `CSU_LABS_LOINC` (do not be confused by that). The fix is immaterial to
-> cohort modelability (see below); it corrects analyte labeling only. Full
+> NOTE: this correction was **applied 2026-06-03** in `CSU_LABS_LOINC`
+> (`scripts/convert_optum_rwd.py`). The fix is immaterial to cohort
+> modelability (see below); it corrects analyte labeling only. Full
 > forensics: `docs/results/tier0_cohort_comparison_optum_vs_synthetic_20260603.md`
 > (Root-cause forensics section).
 

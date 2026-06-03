@@ -84,7 +84,7 @@ is **folded into `docs/model_success_criteria.md`**; the 3 leakage findings coll
 ### U1 · `docs/OPTUM_CONVERSION.md` — **P0/P1** — effort M (bundle)
 - **P0** — no entry for `scripts/enrich_cohort_with_hcp_features.py` (#644) or the `optum_gap_enriched/<cohort>/` it produces (8 leakage-safe `treating_hcp_*` cols, joined off `medication.npi` with `medication_date ≤ index`; Gap clinical tables deliberately excluded as post-index; rolling-window scores ⇒ harness-only, not deployable). Add to Outputs + Related files.
 - **P1** — surface the documented **unmodelability** of the gap-enriched cohort (37 events, EPV 0.13, CV-AUC ~chance) as a genuine raw-data limit, NOT a conversion bug; link `docs/results/tier0_cohort_comparison_optum_vs_synthetic_20260603.md`.
-- **P1** — record the 2026-06-03 `CSU_LABS_LOINC` corrections (eosinophil/tpo_ab/ana/cbc were mislabeled; now extract-verified codes; guarded by `TestCsuLabsLoincMapping`). *Bump when the working-tree diff is committed.*
+- **P1** — ✅ DONE (`fix/loinc-corrections-doctrail`): recorded the 2026-06-03 `CSU_LABS_LOINC` corrections (eosinophil/tpo_ab/ana/cbc were mislabeled; now extract-verified codes; guarded by `TestCsuLabsLoincMapping`). The converter LOINC change + the cited forensics doc (`docs/results/tier0_cohort_comparison_*` now allow-listed in `.gitignore`) ship in the same change.
 - **P2** — add 3 missing converter CLI flags to the flags table: `--enrollment-regime`, `--extract-ym`, `--comorbidity-method`.
 - **P2** — document the #648 Feast advisory for `file_dir` runs + the `ALLOW_STALE_FEAST=1` escape hatch (no `feature_store.yaml`).
 
