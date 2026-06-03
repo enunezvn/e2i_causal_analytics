@@ -376,11 +376,24 @@ async def get_analytics_dashboard(
     result = await _fetch_audit_metrics(db, start_date, now, brand)
 
     if not result["success"]:
+        # Do NOT swallow the failure into a zeroed dashboard: returning all-zero
+        # metrics on a fetch error would present fabricated zeros to the client
+        # as if they were real measurements (indistinguishable from a genuinely
+        # idle period). Surface an honest degraded signal instead. This mirrors
+        # the 503 already returned above when the DB client is unavailable, and
+        # drives the frontend's existing error-render path. The endpoint stays
+        # public; only the error handling changes.
         logger.warning(f"Failed to fetch metrics: {result.get('error')}")
-        # Return empty dashboard rather than error
-        entries = []
-    else:
-        entries = result["data"]
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Analytics metrics are temporarily unavailable. The metrics "
+                "store could not be reached; no data is shown rather than "
+                "presenting fabricated zeros."
+            ),
+        )
+
+    entries = result["data"]
 
     # Aggregate metrics
     agent_metrics = _aggregate_agent_metrics(entries)
