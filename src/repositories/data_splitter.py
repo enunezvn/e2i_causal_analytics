@@ -152,11 +152,16 @@ class DataSplitter:
 
         train_df = df.iloc[indices[:train_end]].reset_index(drop=True)
         val_df = df.iloc[indices[train_end:val_end]].reset_index(drop=True)
-        test_df = df.iloc[indices[val_end:test_end]].reset_index(drop=True)
 
         holdout_df = None
         if config.holdout_ratio > 0:
+            test_df = df.iloc[indices[val_end:test_end]].reset_index(drop=True)
             holdout_df = df.iloc[indices[test_end:]].reset_index(drop=True)
+        else:
+            # No holdout requested: int-truncated cutoffs leave indices[test_end:]
+            # unassigned, which silently drops tail rows. Fold the trailing rows
+            # into the test split so every row lands in exactly one split.
+            test_df = df.iloc[indices[val_end:]].reset_index(drop=True)
 
         return SplitResult(
             train=train_df,
@@ -294,10 +299,15 @@ class DataSplitter:
 
             train_dfs.append(stratum_df.iloc[indices[:train_end]])
             val_dfs.append(stratum_df.iloc[indices[train_end:val_end]])
-            test_dfs.append(stratum_df.iloc[indices[val_end:test_end]])
 
             if config.holdout_ratio > 0:
+                test_dfs.append(stratum_df.iloc[indices[val_end:test_end]])
                 holdout_dfs.append(stratum_df.iloc[indices[test_end:]])
+            else:
+                # No holdout requested: fold the trailing rows of this stratum
+                # (otherwise dropped by int-truncated cutoffs) into test so no
+                # row is silently lost.
+                test_dfs.append(stratum_df.iloc[indices[val_end:]])
 
         train_df = pd.concat(train_dfs, ignore_index=True) if train_dfs else pd.DataFrame()
         val_df = pd.concat(val_dfs, ignore_index=True) if val_dfs else pd.DataFrame()

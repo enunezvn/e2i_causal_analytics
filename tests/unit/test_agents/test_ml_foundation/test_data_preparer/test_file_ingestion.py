@@ -230,6 +230,38 @@ class TestLoadFromFiles:
         total += len(result["holdout"]) if result["holdout"] is not None else 0
         assert total == len(df)
 
+    def test_random_fallback_produces_holdout_for_split_enforcer(self, tmp_path: Path) -> None:
+        """Finding #4(B): when neither an entity nor a date column is present,
+        the random fallback previously produced a 0-sample holdout (60/20/20),
+        which the model_trainer split_enforcer hard-fails on. It must now
+        request the 60/20/15/5 holdout-bearing contract so a non-empty holdout
+        is produced and no row is dropped."""
+        df = pd.DataFrame(
+            {
+                "patient_id": [f"PAT_{i:06d}" for i in range(40)],
+                "treatment_initiated": [i % 2 for i in range(40)],
+            }
+        )
+        p = tmp_path / "e2i_ml_v3_patient_journeys.parquet"
+        df.to_parquet(p)
+
+        result = _load_from_files(
+            {"type": "file_dir", "path": str(tmp_path)},
+            entity_column=None,  # force past the entity branch
+            date_column="nonexistent_date",  # force past the temporal branch -> random
+        )
+
+        # Holdout must be populated so split_enforcer's empty-holdout check passes.
+        assert result["holdout"] is not None
+        assert len(result["holdout"]) > 0
+        # No row is dropped across the four splits.
+        total = (
+            len(result["train"]) + len(result["val"]) + len(result["test"]) + len(result["holdout"])
+        )
+        assert total == len(df)
+        # Test split honours the 15% (not 20%) contract expected by the enforcer.
+        assert len(result["test"]) == int(len(df) * 0.15)
+
     def test_unknown_type_raises(self) -> None:
         with pytest.raises(IngestionError, match="Unknown file data_source"):
             _load_from_files(

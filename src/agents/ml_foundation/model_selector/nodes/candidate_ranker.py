@@ -239,13 +239,27 @@ def _compute_selection_score(
 async def select_primary_candidate(state: Dict[str, Any]) -> Dict[str, Any]:
     """Select primary candidate and alternatives.
 
+    Prefers the benchmark-informed order when benchmarks ran. ``run_benchmarks``
+    produces ``benchmark_rankings`` (re-ranked by the 60% heuristic / 40%
+    empirical combined_score). When benchmarks are skipped, ``benchmark_rankings``
+    is absent and we fall back to the heuristic-only ``ranked_candidates``.
+
     Args:
-        state: ModelSelectorState with ranked_candidates
+        state: ModelSelectorState with ranked_candidates and, when benchmarks
+            ran, benchmark_rankings
 
     Returns:
-        Dictionary with primary_candidate, alternative_candidates
+        Dictionary with primary_candidate, alternative_candidates and the
+        chosen candidate's combined_score / benchmark_score promoted to
+        top-level keys (the output contract read by agent.py).
     """
-    ranked = state.get("ranked_candidates", [])
+    # Consume the benchmark-informed order when present; fall back to the
+    # heuristic-only ranking when benchmarks were skipped (FINDING #7).
+    benchmark_rankings = state.get("benchmark_rankings")
+    if benchmark_rankings:
+        ranked = benchmark_rankings
+    else:
+        ranked = state.get("ranked_candidates", [])
 
     if not ranked:
         return {
@@ -273,6 +287,11 @@ async def select_primary_candidate(state: Dict[str, Any]) -> Dict[str, Any]:
         "interpretability_score": primary.get("interpretability_score", 0.5),
         "scalability_score": primary.get("scalability_score", 0.7),
         "selection_score": primary.get("selection_score", 0.5),
+        # Promote benchmark-derived scores to top-level keys so the output
+        # contract (agent.py reads final_state.get("combined_score")) is
+        # populated. None when benchmarks were skipped.
+        "combined_score": primary.get("combined_score"),
+        "benchmark_score": primary.get("benchmark_score"),
     }
 
 

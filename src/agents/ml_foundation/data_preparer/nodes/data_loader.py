@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 
 # Use direct module imports to avoid circular import with src.repositories
-from src.repositories.data_splitter import get_data_splitter
+from src.repositories.data_splitter import SplitConfig, get_data_splitter
 from src.repositories.ml_data_loader import get_ml_data_loader
 from src.repositories.sample_data import SampleDataGenerator
 
@@ -23,6 +23,26 @@ from ..ingestion import FileIngestor, IngestionError
 from ..state import DataPreparerState
 
 logger = logging.getLogger(__name__)
+
+
+def _legacy_split_config() -> SplitConfig:
+    """Build the 60/20/15/5 holdout-bearing config the model_trainer
+    ``split_enforcer`` legacy single-mode contract expects.
+
+    The plain ``random_split`` fallback otherwise defaults to 60/20/20 with a
+    0-sample holdout, which the enforcer hard-fails (``ratios_valid=False``)
+    both on the empty-holdout check and on the test-ratio drift (20% vs 15%).
+    Only the random fallback is reconciled here: it cleanly honours these
+    config ratios. The entity (hash-bucketed) and temporal (ratios computed
+    from data) fallbacks have different mechanics and are intentionally left
+    unchanged to keep the blast radius minimal.
+    """
+    return SplitConfig(
+        train_ratio=0.60,
+        val_ratio=0.20,
+        test_ratio=0.15,
+        holdout_ratio=0.05,
+    )
 
 
 async def load_data(state: DataPreparerState) -> Dict[str, Any]:
@@ -320,7 +340,9 @@ def _load_from_files(
         )
     else:
         logger.info("No entity or date column — applying random split")
-        result = splitter.random_split(df)
+        # Request the 60/20/15/5 holdout-bearing contract so the downstream
+        # split_enforcer does not hard-fail on a 0-sample holdout.
+        result = splitter.random_split(df, config=_legacy_split_config())
 
     return {
         "train": result.train,
@@ -414,7 +436,9 @@ async def _load_sample_data(
     elif entity_column and entity_column in df.columns:
         result = splitter.entity_split(df, entity_column=entity_column)
     else:
-        result = splitter.random_split(df)
+        # Request the 60/20/15/5 holdout-bearing contract so the downstream
+        # split_enforcer does not hard-fail on a 0-sample holdout.
+        result = splitter.random_split(df, config=_legacy_split_config())
 
     return {
         "train": result.train,

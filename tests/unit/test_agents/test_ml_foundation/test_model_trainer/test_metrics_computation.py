@@ -216,10 +216,25 @@ class TestBusinessUtilityFromCostMatrix:
         assert "business_utility" not in result["test_metrics"]
 
     def test_business_utility_uses_chosen_threshold_not_raw_predictions(self):
-        """business_utility must be computed at the validation-tuned chosen
-        threshold, NOT at the model's default 0.5. We verify by
-        constructing a case where shifting the threshold flips the FN/TN
-        counts and changes the utility number."""
+        """business_utility must be computed at the HEADLINE operating point,
+        NOT at raw/default predictions when the chosen threshold IS the
+        headline. In the IMBALANCED path the headline metrics are reported at
+        the validation-tuned chosen threshold, so business_utility must track
+        that chosen threshold (not the model's default 0.5).
+
+        Findings #5 update: this test originally asserted the chosen-threshold
+        behavior in the BALANCED path (``imbalance_detected=False``). But the
+        balanced-path HEADLINE precision/recall/f1 are reported at 0.5, so the
+        headline business_utility must be at 0.5 too (consistency with the
+        headline metrics) — a chosen-threshold business_utility there is the
+        very inconsistency Findings #5 fixes. The legitimate underlying intent
+        of this guard — business_utility tracks the headline operating point
+        and never silently regresses to raw predictions — is preserved by
+        exercising it in the IMBALANCED path, where the headline genuinely IS
+        the chosen threshold. (The balanced-path 0.5 contract is now covered
+        by ``test_balanced_headline_confusion_matrix_matches_headline_precision``
+        in ``test_evaluator.py``.)
+        """
         rng = np.random.default_rng(20260428)
         # Validation: positives at 0.40, negatives at 0.20 → opt around 0.30
         y_val, y_val_pred, y_val_proba = self._make_split(
@@ -245,7 +260,10 @@ class TestBusinessUtilityFromCostMatrix:
             y_test=y_test,
             y_test_pred=y_test_pred,
             y_test_proba=y_test_proba,
-            imbalance_detected=False,
+            # Findings #5: the headline business_utility tracks the chosen
+            # threshold ONLY when the chosen threshold IS the headline operating
+            # point, i.e. the imbalanced path.
+            imbalance_detected=True,
             minority_ratio=0.5,
             cost_matrix=cost_matrix,
         )
