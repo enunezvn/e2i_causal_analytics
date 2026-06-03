@@ -31,10 +31,30 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
-from src.api.dependencies.auth import require_admin
+from src.api.dependencies.auth import require_admin, require_operator
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 
 logger = logging.getLogger(__name__)
+
+# Generic client-facing message for unexpected 500s. The real exception is
+# logged server-side (Finding 2: avoid leaking internal exception text — stack
+# frames, driver errors, table/host names — to API clients).
+_GENERIC_500_DETAIL = "Internal server error"
+
+
+def _log_and_500(context: str, exc: Exception) -> HTTPException:
+    """Log the real exception server-side, return a sanitized 500 to the client.
+
+    Args:
+        context: Short server-side description of the failing operation.
+        exc: The caught exception (logged in full, never echoed to the client).
+
+    Returns:
+        An ``HTTPException(500)`` carrying only a generic, non-revealing detail.
+    """
+    logger.error("%s: %s", context, exc)
+    return HTTPException(status_code=500, detail=_GENERIC_500_DETAIL)
+
 
 router = APIRouter(
     prefix="/monitoring",
@@ -312,6 +332,7 @@ async def trigger_drift_detection(
     request: TriggerDriftDetectionRequest,
     background_tasks: BackgroundTasks,
     async_mode: bool = Query(default=True, description="Run detection asynchronously"),
+    _operator: dict = Depends(require_operator),
 ) -> DriftDetectionResponse:
     """
     Trigger drift detection for a model.
@@ -374,8 +395,7 @@ async def trigger_drift_detection(
                 detection_latency_ms=result.get("detection_latency_ms", 0),
             )
         except Exception as e:
-            logger.error(f"Drift detection failed: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            raise _log_and_500("Drift detection failed", e)
 
 
 @router.get(
@@ -484,8 +504,7 @@ async def get_latest_drift_status(
         )
 
     except Exception as e:
-        logger.error(f"Failed to get drift status: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _log_and_500("Failed to get drift status", e)
 
 
 @router.get(
@@ -555,8 +574,7 @@ async def get_drift_history(
         )
 
     except Exception as e:
-        logger.error(f"Failed to get drift history: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _log_and_500("Failed to get drift history", e)
 
 
 # =============================================================================
@@ -635,8 +653,7 @@ async def list_alerts(
         )
 
     except Exception as e:
-        logger.error(f"Failed to list alerts: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _log_and_500("Failed to list alerts", e)
 
 
 @router.get(
@@ -682,8 +699,7 @@ async def get_alert(alert_id: str) -> AlertItem:
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to get alert: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _log_and_500("Failed to get alert", e)
 
 
 @router.post(
@@ -743,8 +759,7 @@ async def update_alert(alert_id: str, request: AlertActionRequest) -> AlertItem:
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to update alert: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _log_and_500("Failed to update alert", e)
 
 
 # =============================================================================
@@ -811,8 +826,7 @@ async def list_monitoring_runs(
         )
 
     except Exception as e:
-        logger.error(f"Failed to list monitoring runs: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _log_and_500("Failed to list monitoring runs", e)
 
 
 # =============================================================================
@@ -903,8 +917,7 @@ async def get_model_health(model_id: str) -> ModelHealthSummary:
         )
 
     except Exception as e:
-        logger.error(f"Failed to get model health: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _log_and_500("Failed to get model health", e)
 
 
 # =============================================================================
@@ -995,6 +1008,7 @@ class PerformanceAlertsResponse(BaseModel):
 async def record_performance(
     request: RecordPerformanceRequest,
     async_mode: bool = Query(default=True, description="Run asynchronously"),
+    _operator: dict = Depends(require_operator),
 ) -> PerformanceRecordResponse:
     """
     Record model performance metrics.
@@ -1046,8 +1060,7 @@ async def record_performance(
                 alerts_generated=0,
             )
         except Exception as e:
-            logger.error(f"Failed to record performance: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            raise _log_and_500("Failed to record performance", e)
 
 
 @router.get(
@@ -1107,8 +1120,7 @@ async def get_performance_trend(
         )
 
     except Exception as e:
-        logger.error(f"Failed to get performance trend: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _log_and_500("Failed to get performance trend", e)
 
 
 @router.get(
@@ -1155,8 +1167,7 @@ async def get_performance_alerts(model_id: str) -> PerformanceAlertsResponse:
         )
 
     except Exception as e:
-        logger.error(f"Failed to get performance alerts: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _log_and_500("Failed to get performance alerts", e)
 
 
 @router.get(
@@ -1189,8 +1200,7 @@ async def compare_model_performance(
         return result
 
     except Exception as e:
-        logger.error(f"Failed to compare model performance: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _log_and_500("Failed to compare model performance", e)
 
 
 # =============================================================================
@@ -1205,6 +1215,7 @@ async def compare_model_performance(
 )
 async def trigger_production_sweep(
     time_window: str = Query(default="7d", description="Time window for comparison"),
+    _operator: dict = Depends(require_operator),
 ) -> Dict[str, Any]:
     """
     Trigger drift detection sweep for all production models.
@@ -1524,8 +1535,7 @@ async def evaluate_retraining_need(model_id: str) -> RetrainingDecisionResponse:
         return _retraining_decision_to_response(model_id, decision)
 
     except Exception as e:
-        logger.error(f"Failed to evaluate retraining need: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _log_and_500("Failed to evaluate retraining need", e)
 
 
 @router.post(
@@ -1582,8 +1592,7 @@ async def trigger_retraining(
         return _retraining_job_to_response(job, triggered_by=triggered_by, notes=request.notes)
 
     except Exception as e:
-        logger.error(f"Failed to trigger retraining: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _log_and_500("Failed to trigger retraining", e)
 
 
 @router.get(
@@ -1616,8 +1625,7 @@ async def get_retraining_status(job_id: str) -> RetrainingJobResponse:
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to get retraining status: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _log_and_500("Failed to get retraining status", e)
 
 
 # Validation-AUC keys, in priority order — mirrors
@@ -1784,8 +1792,7 @@ async def complete_retraining(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to complete retraining: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _log_and_500("Failed to complete retraining", e)
 
 
 @router.post(
@@ -1828,8 +1835,7 @@ async def rollback_retraining(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to rollback retraining: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _log_and_500("Failed to rollback retraining", e)
 
 
 @router.post(

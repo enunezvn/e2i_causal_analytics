@@ -99,14 +99,22 @@ class RedisBackend(RateLimitBackend):
             redis_key = f"ratelimit:{key}"
             pipe = self._redis.pipeline()
 
-            # Increment counter
+            # Increment counter (creates the key with value 1 if absent)
             pipe.incr(redis_key)
-            # Set expiry if new key
-            pipe.expire(redis_key, window)
-            # Get current value
             results = pipe.execute()
 
             current_count = results[0]
+
+            # Set the TTL ONLY when the key was just created (count == 1).
+            # Re-setting the expiry on every request would refresh the window
+            # indefinitely under sustained traffic, so it would never roll over
+            # and the client would be permanently locked out. Setting it only on
+            # creation lets the original window expire on schedule.
+            if current_count == 1:
+                expire_pipe = self._redis.pipeline()
+                expire_pipe.expire(redis_key, window)
+                expire_pipe.execute()
+
             if current_count > limit:
                 return True, 0
 
@@ -250,6 +258,25 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         return self.DEFAULT_LIMITS["default"]
 
+    def _get_bucket(self, path: str) -> str:
+        """Derive the per-endpoint rate-limit bucket from a request path.
+
+        Scopes the counter to a route-group (the first two path segments) so
+        that distinct endpoints get distinct buckets, while requests that differ
+        only by path parameters (e.g. ``/api/monitoring/health/{model_id}``)
+        share a bucket to keep key cardinality bounded.
+
+        Args:
+            path: Request URL path (e.g. ``/api/monitoring/health/m1``).
+
+        Returns:
+            Bucket identifier (e.g. ``api/monitoring``), or ``root`` for ``/``.
+        """
+        segments = [seg for seg in path.split("/") if seg]
+        if not segments:
+            return "root"
+        return "/".join(segments[:2])
+
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         """Process request with rate limiting.
 
@@ -281,8 +308,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         client_key = self._get_client_key(request)
         limit, window = self._get_limit_for_path(path, request.method)
 
-        # Create a unique key combining client and endpoint category
-        rate_key = f"{client_key}:{path.split('/')[1] if '/' in path[1:] else 'root'}"
+        # Create a unique key combining client and endpoint bucket.
+        # Bucket per route-group (first two path segments) so a noisy client on
+        # one /api/* endpoint cannot exhaust a shared counter and 429 every other
+        # /api/* endpoint. Path params (e.g. /api/monitoring/health/{id}) stay in
+        # the same group, bounding key cardinality.
+        rate_key = f"{client_key}:{self._get_bucket(path)}"
 
         # Check rate limit
         is_limited, remaining = self._backend.is_rate_limited(rate_key, limit, window)
