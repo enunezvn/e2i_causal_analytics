@@ -244,59 +244,179 @@ function createApiClient(): AxiosInstance {
 export const apiClient = createApiClient();
 
 /**
- * Type-safe GET request helper
+ * Opt-in runtime validation for the base request helpers.
+ *
+ * The base helpers below historically returned `response.data` blindly cast to
+ * the caller's generic `T` — TypeScript believed the type but nothing checked
+ * the shape at runtime, so backend contract drift went undetected. A
+ * purpose-built Zod-validating layer exists (`*Validated` helpers +
+ * `validateApiResponse`) but it requires a separate function with a different
+ * signature, so almost no call site used it.
+ *
+ * To make validation a one-line opt-in WITHOUT changing any existing call site,
+ * each helper now accepts an optional `schema` (plus the same
+ * {@link ValidatedRequestConfig} log/throw flags). When `schema` is supplied
+ * the response is validated and the PARSED, typed value is returned; when it is
+ * omitted behavior is byte-for-byte unchanged (blind cast, no throw).
+ *
+ * @example Validate the highest-value endpoints by passing a schema:
+ * ```typescript
+ * import { KPIListResponseSchema } from '@/lib/api-schemas';
+ * const kpis = await get('/kpis', { workstream: 'ws1' }, { schema: KPIListResponseSchema });
+ * // kpis is typed AND verified at runtime; malformed payloads throw ApiValidationError.
+ * ```
  */
-export async function get<T>(
+type SchemaRequestConfig<S extends ZodTypeAny> = {
+  /** Zod schema to validate the response against (opt-in). */
+  schema?: S;
+} & ValidatedRequestConfig;
+
+/**
+ * Apply a schema if one was supplied, otherwise return data unchanged.
+ * Centralises the validate-or-passthrough decision so every helper behaves
+ * identically and back-compat (no schema -> no validation) is guaranteed.
+ */
+function maybeValidate<S extends ZodTypeAny | undefined>(
+  data: unknown,
   endpoint: string,
-  params?: Record<string, unknown>
-): Promise<T> {
-  const response = await apiClient.get<T>(endpoint, { params });
-  return response.data;
+  config?: { schema?: S } & ValidatedRequestConfig
+): unknown {
+  if (!config?.schema) {
+    return data;
+  }
+  return validateApiResponse(config.schema, data, endpoint, {
+    logErrors: config.logErrors ?? env.isDev,
+    throwOnError: config.throwOnError ?? true,
+  });
 }
 
 /**
- * Type-safe POST request helper
+ * Type-safe GET request helper.
+ *
+ * Pass `options.schema` to additionally validate the response at runtime
+ * (returns the parsed value, typed as the schema's output).
  */
+export function get<S extends ZodTypeAny>(
+  endpoint: string,
+  params: Record<string, unknown> | undefined,
+  options: SchemaRequestConfig<S> & { schema: S }
+): Promise<S['_output']>;
+export function get<T>(
+  endpoint: string,
+  params?: Record<string, unknown>,
+  options?: SchemaRequestConfig<ZodTypeAny>
+): Promise<T>;
+export async function get<T>(
+  endpoint: string,
+  params?: Record<string, unknown>,
+  options?: SchemaRequestConfig<ZodTypeAny>
+): Promise<T> {
+  const response = await apiClient.get<T>(endpoint, { params });
+  return maybeValidate(response.data, endpoint, options) as T;
+}
+
+/**
+ * Type-safe POST request helper.
+ *
+ * `config` may carry `params` (forwarded to axios) and/or `schema` (opt-in
+ * runtime validation). The `schema`/validation flags are stripped before the
+ * request is sent so they never leak into the axios config.
+ */
+export function post<S extends ZodTypeAny, D = unknown>(
+  endpoint: string,
+  data: D | undefined,
+  config: { params?: Record<string, unknown> } & SchemaRequestConfig<S> & {
+      schema: S;
+    }
+): Promise<S['_output']>;
+export function post<T, D = unknown>(
+  endpoint: string,
+  data?: D,
+  config?: { params?: Record<string, unknown> } & SchemaRequestConfig<ZodTypeAny>
+): Promise<T>;
 export async function post<T, D = unknown>(
   endpoint: string,
   data?: D,
-  config?: { params?: Record<string, unknown> }
+  config?: { params?: Record<string, unknown> } & SchemaRequestConfig<ZodTypeAny>
 ): Promise<T> {
-  const response = await apiClient.post<T>(endpoint, data, config);
-  return response.data;
+  // Forward only `params` to axios; `schema`/validation flags are stripped so
+  // they never leak into the request config. Preserve the original call shape
+  // (3rd arg undefined) when no params were supplied.
+  const axiosConfig =
+    config?.params !== undefined ? { params: config.params } : undefined;
+  const response = await apiClient.post<T>(endpoint, data, axiosConfig);
+  return maybeValidate(response.data, endpoint, config) as T;
 }
 
 /**
- * Type-safe PUT request helper
+ * Type-safe PUT request helper. Pass `config.schema` for opt-in validation.
  */
+export function put<S extends ZodTypeAny, D = unknown>(
+  endpoint: string,
+  data: D | undefined,
+  config: SchemaRequestConfig<S> & { schema: S }
+): Promise<S['_output']>;
+export function put<T, D = unknown>(
+  endpoint: string,
+  data?: D,
+  config?: SchemaRequestConfig<ZodTypeAny>
+): Promise<T>;
 export async function put<T, D = unknown>(
   endpoint: string,
-  data?: D
+  data?: D,
+  config?: SchemaRequestConfig<ZodTypeAny>
 ): Promise<T> {
   const response = await apiClient.put<T>(endpoint, data);
-  return response.data;
+  return maybeValidate(response.data, endpoint, config) as T;
 }
 
 /**
- * Type-safe PATCH request helper
+ * Type-safe PATCH request helper. Pass `config.schema` for opt-in validation.
  */
+export function patch<S extends ZodTypeAny, D = unknown>(
+  endpoint: string,
+  data: D | undefined,
+  config: SchemaRequestConfig<S> & { schema: S }
+): Promise<S['_output']>;
+export function patch<T, D = unknown>(
+  endpoint: string,
+  data?: D,
+  config?: SchemaRequestConfig<ZodTypeAny>
+): Promise<T>;
 export async function patch<T, D = unknown>(
   endpoint: string,
-  data?: D
+  data?: D,
+  config?: SchemaRequestConfig<ZodTypeAny>
 ): Promise<T> {
   const response = await apiClient.patch<T>(endpoint, data);
-  return response.data;
+  return maybeValidate(response.data, endpoint, config) as T;
 }
 
 /**
- * Type-safe DELETE request helper
+ * Type-safe DELETE request helper.
+ *
+ * `config` may carry `data` (forwarded to axios) and/or `schema` (opt-in
+ * runtime validation); `schema`/validation flags are stripped before the
+ * request is sent.
  */
+export function del<S extends ZodTypeAny>(
+  endpoint: string,
+  config: { data?: unknown } & SchemaRequestConfig<S> & { schema: S }
+): Promise<S['_output']>;
+export function del<T>(
+  endpoint: string,
+  config?: { data?: unknown } & SchemaRequestConfig<ZodTypeAny>
+): Promise<T>;
 export async function del<T>(
   endpoint: string,
-  config?: { data?: unknown }
+  config?: { data?: unknown } & SchemaRequestConfig<ZodTypeAny>
 ): Promise<T> {
-  const response = await apiClient.delete<T>(endpoint, config);
-  return response.data;
+  // Forward only `data` to axios; `schema`/validation flags are stripped.
+  // Preserve the original call shape (2nd arg undefined) when no body was given.
+  const axiosConfig =
+    config?.data !== undefined ? { data: config.data } : undefined;
+  const response = await apiClient.delete<T>(endpoint, axiosConfig);
+  return maybeValidate(response.data, endpoint, config) as T;
 }
 
 /**

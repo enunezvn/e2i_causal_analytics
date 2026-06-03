@@ -578,6 +578,26 @@ class TestRAGStats:
         data = response.json()
         assert data["period_hours"] == 48
 
+    def test_get_stats_ignores_legacy_period_hours_param(self, mock_rag_service):
+        """`hours` is the canonical request param; `period_hours` is NOT read.
+
+        Pins the FE/BE contract: the frontend client (frontend/src/api/rag.ts
+        getRAGStats) sends `hours`. The legacy `period_hours` request param was
+        a silent contract mismatch — the backend never reads it, so a request
+        carrying only `period_hours` falls back to the 24h default. This test
+        guards against accidentally wiring `period_hours` as an input alias
+        (which would mask the mismatch instead of fixing it). Note the response
+        BODY still exposes a `period_hours` field — only the request param name
+        is `hours`.
+        """
+        app.dependency_overrides[get_rag_service] = lambda: mock_rag_service
+        response = client.get("/api/v1/rag/stats", params={"period_hours": 48})
+
+        assert response.status_code == 200
+        data = response.json()
+        # period_hours request param ignored -> backend default of 24h applies.
+        assert data["period_hours"] == 24
+
     def test_get_stats_includes_backend_usage(self, mock_rag_service):
         """Should include per-backend usage breakdown."""
         app.dependency_overrides[get_rag_service] = lambda: mock_rag_service

@@ -193,9 +193,15 @@ export async function getCausalPaths(
 export async function getRAGStats(
   periodHours?: number
 ): Promise<RAGStatsResponse> {
+  // The backend GET /v1/rag/stats endpoint reads the query parameter named
+  // `hours` (see src/api/routes/rag.py `get_stats(hours: int = Query(...))`,
+  // pinned by tests test_get_stats_with_hours_param / test_get_stats_custom_period).
+  // Sending `period_hours` here was silently ignored, so the backend always
+  // fell back to its 24h default. Note the *response* body field stays
+  // `period_hours` (RAGStatsResponse) — only the request param name differs.
   return get<RAGStatsResponse>(
     `${RAG_BASE}/stats`,
-    periodHours !== undefined ? { period_hours: periodHours } : undefined
+    periodHours !== undefined ? { hours: periodHours } : undefined
   );
 }
 
