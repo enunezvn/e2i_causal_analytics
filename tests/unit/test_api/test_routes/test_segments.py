@@ -39,10 +39,23 @@ from src.api.routes.segments import (
 
 @pytest.fixture(autouse=True)
 def reset_analyses_store():
-    """Clear analyses store before each test."""
+    """Reset the analyses store before each test.
+
+    The live store is the Redis-backed durable store. For unit isolation we
+    pin its Redis factory to a fast-failing stub so it deterministically uses
+    its in-process fallback (no real Redis connection / retry-backoff in unit
+    tests), and clear that fallback between tests.
+    """
+
+    async def _no_redis():
+        raise ConnectionError("unit test: no redis")
+
+    original_factory = _analyses_store._redis_factory
+    _analyses_store._redis_factory = _no_redis
     _analyses_store.clear()
     yield
     _analyses_store.clear()
+    _analyses_store._redis_factory = original_factory
 
 
 @pytest.fixture
@@ -145,7 +158,7 @@ async def test_run_segment_analysis_async_mode(sample_request, mock_user):
 
     assert result.status == AnalysisStatus.PENDING
     assert result.analysis_id.startswith("seg_")
-    assert result.analysis_id in _analyses_store
+    assert await _analyses_store.contains(result.analysis_id)
 
 
 @pytest.mark.asyncio
@@ -215,8 +228,10 @@ async def test_run_segment_analysis_stores_result(sample_request, mock_user):
             user=mock_user,
         )
 
-        assert result.analysis_id in _analyses_store
-        assert _analyses_store[result.analysis_id].status == AnalysisStatus.COMPLETED
+        assert await _analyses_store.contains(result.analysis_id)
+        stored = await _analyses_store.get(result.analysis_id)
+        assert stored is not None
+        assert stored.status == AnalysisStatus.COMPLETED
 
 
 # =============================================================================
@@ -233,7 +248,7 @@ async def test_get_segment_analysis_success():
         analysis_id=analysis_id,
         status=AnalysisStatus.COMPLETED,
     )
-    _analyses_store[analysis_id] = mock_analysis
+    await _analyses_store.set(analysis_id, mock_analysis)
 
     result = await get_segment_analysis(analysis_id)
 
@@ -283,7 +298,7 @@ async def test_list_policies_with_data():
         status=AnalysisStatus.COMPLETED,
         policy_recommendations=[mock_policy],
     )
-    _analyses_store["seg_1"] = mock_analysis
+    await _analyses_store.set("seg_1", mock_analysis)
 
     result = await list_policies(min_lift=None, min_confidence=None, limit=20)
 
@@ -317,7 +332,7 @@ async def test_list_policies_filters_by_min_lift():
         status=AnalysisStatus.COMPLETED,
         policy_recommendations=[mock_policy_high, mock_policy_low],
     )
-    _analyses_store["seg_1"] = mock_analysis
+    await _analyses_store.set("seg_1", mock_analysis)
 
     result = await list_policies(min_lift=100.0, min_confidence=None, limit=20)
 
@@ -350,7 +365,7 @@ async def test_list_policies_filters_by_min_confidence():
         status=AnalysisStatus.COMPLETED,
         policy_recommendations=[mock_policy_high, mock_policy_low],
     )
-    _analyses_store["seg_1"] = mock_analysis
+    await _analyses_store.set("seg_1", mock_analysis)
 
     result = await list_policies(min_lift=None, min_confidence=0.8, limit=20)
 
@@ -379,7 +394,7 @@ async def test_list_policies_respects_limit():
         status=AnalysisStatus.COMPLETED,
         policy_recommendations=policies,
     )
-    _analyses_store["seg_1"] = mock_analysis
+    await _analyses_store.set("seg_1", mock_analysis)
 
     result = await list_policies(min_lift=None, min_confidence=None, limit=5)
 
@@ -419,7 +434,7 @@ async def test_list_policies_sorts_by_outcome():
         status=AnalysisStatus.COMPLETED,
         policy_recommendations=policies,
     )
-    _analyses_store["seg_1"] = mock_analysis
+    await _analyses_store.set("seg_1", mock_analysis)
 
     result = await list_policies(min_lift=None, min_confidence=None, limit=20)
 
@@ -445,7 +460,7 @@ async def test_list_policies_skips_pending_analyses():
         status=AnalysisStatus.PENDING,
         policy_recommendations=[mock_policy],
     )
-    _analyses_store["seg_1"] = mock_pending
+    await _analyses_store.set("seg_1", mock_pending)
 
     result = await list_policies(min_lift=None, min_confidence=None, limit=20)
 
@@ -520,7 +535,7 @@ async def test_get_segment_health_counts_recent_analyses():
         status=AnalysisStatus.COMPLETED,
         timestamp=datetime.now(timezone.utc),
     )
-    _analyses_store["seg_1"] = recent_analysis
+    await _analyses_store.set("seg_1", recent_analysis)
 
     with patch("src.agents.heterogeneous_optimizer.HeterogeneousOptimizerAgent"):
         result = await get_segment_health()
@@ -538,7 +553,7 @@ async def test_get_segment_health_last_analysis():
         status=AnalysisStatus.COMPLETED,
         timestamp=datetime.now(timezone.utc),
     )
-    _analyses_store["seg_1"] = analysis
+    await _analyses_store.set("seg_1", analysis)
 
     with patch("src.agents.heterogeneous_optimizer.HeterogeneousOptimizerAgent"):
         result = await get_segment_health()
@@ -559,9 +574,12 @@ async def test_run_segment_analysis_task_success(sample_request, mock_agent_resu
     # Pre-populate store with pending analysis
     from src.api.routes.segments import SegmentAnalysisResponse
 
-    _analyses_store[analysis_id] = SegmentAnalysisResponse(
-        analysis_id=analysis_id,
-        status=AnalysisStatus.PENDING,
+    await _analyses_store.set(
+        analysis_id,
+        SegmentAnalysisResponse(
+            analysis_id=analysis_id,
+            status=AnalysisStatus.PENDING,
+        ),
     )
 
     with patch("src.api.routes.segments._execute_segment_analysis") as mock_execute:
@@ -573,7 +591,9 @@ async def test_run_segment_analysis_task_success(sample_request, mock_agent_resu
 
         await _run_segment_analysis_task(analysis_id, sample_request)
 
-        assert _analyses_store[analysis_id].status == AnalysisStatus.COMPLETED
+        stored = await _analyses_store.get(analysis_id)
+        assert stored is not None
+        assert stored.status == AnalysisStatus.COMPLETED
 
 
 @pytest.mark.asyncio
@@ -583,9 +603,12 @@ async def test_run_segment_analysis_task_handles_error(sample_request):
 
     from src.api.routes.segments import SegmentAnalysisResponse
 
-    _analyses_store[analysis_id] = SegmentAnalysisResponse(
-        analysis_id=analysis_id,
-        status=AnalysisStatus.PENDING,
+    await _analyses_store.set(
+        analysis_id,
+        SegmentAnalysisResponse(
+            analysis_id=analysis_id,
+            status=AnalysisStatus.PENDING,
+        ),
     )
 
     with patch("src.api.routes.segments._execute_segment_analysis") as mock_execute:
@@ -593,8 +616,10 @@ async def test_run_segment_analysis_task_handles_error(sample_request):
 
         await _run_segment_analysis_task(analysis_id, sample_request)
 
-        assert _analyses_store[analysis_id].status == AnalysisStatus.FAILED
-        assert len(_analyses_store[analysis_id].warnings) > 0
+        stored = await _analyses_store.get(analysis_id)
+        assert stored is not None
+        assert stored.status == AnalysisStatus.FAILED
+        assert len(stored.warnings) > 0
 
 
 # =============================================================================
@@ -966,8 +991,184 @@ class TestBoundedAnalysesStore:
         assert "seg_1" in store
 
     def test_module_store_is_bounded_instance(self):
-        """The live module-level store is a bounded instance, not a plain dict."""
-        from src.api.routes.segments import _analyses_store, _BoundedAnalysesStore
+        """The live module-level store wraps a bounded in-memory fallback."""
+        from src.api.routes.segments import (
+            _analyses_store,
+            _BoundedAnalysesStore,
+            _DurableAnalysesStore,
+        )
 
-        assert isinstance(_analyses_store, _BoundedAnalysesStore)
-        assert _analyses_store.max_entries > 0
+        # The live store is the durable (Redis-backed) store whose in-process
+        # fallback is the bounded dict (so memory stays capped when Redis is down).
+        assert isinstance(_analyses_store, _DurableAnalysesStore)
+        assert isinstance(_analyses_store._memory, _BoundedAnalysesStore)
+        assert _analyses_store._memory.max_entries > 0
+
+
+# =============================================================================
+# DURABLE (REDIS-BACKED) STORE — C21: durable / cross-worker shared store
+# =============================================================================
+#
+# Production runs gunicorn with --workers 2 (docker/docker-compose.yml). A
+# process-local dict means a POST handled by worker A is invisible to a GET
+# handled by worker B (legitimate 404) and ALL state is lost on redeploy. The
+# durable store backs the data in Redis (reusing the app's existing async
+# client) so it is shared across workers and survives restarts, falling back to
+# the bounded in-memory dict ONLY when Redis is unavailable (mirrors the app's
+# existing graceful-degradation posture).
+
+
+class _FakeAsyncRedis:
+    """Minimal in-process stand-in for ``redis.asyncio.Redis``.
+
+    Hand-rolled (consistent with the repo's other Redis tests, e.g.
+    ``tests/unit/test_api/test_staleness_alerts.py``) because the ``fakeredis``
+    package is not a test dependency here. Supports only the subset of commands
+    the durable store uses: string get/set/delete and a sorted-set index.
+    """
+
+    def __init__(self) -> None:
+        self.strings: dict = {}
+        self.zset: dict = {}  # member -> score
+
+    async def set(self, key, value, ex=None):  # noqa: ANN001
+        self.strings[key] = value
+
+    async def get(self, key):  # noqa: ANN001
+        return self.strings.get(key)
+
+    async def delete(self, *keys):  # noqa: ANN001
+        for k in keys:
+            self.strings.pop(k, None)
+
+    async def zadd(self, key, mapping):  # noqa: ANN001
+        self.zset.setdefault(key, {}).update(mapping)
+
+    async def zrem(self, key, *members):  # noqa: ANN001
+        z = self.zset.get(key, {})
+        for m in members:
+            z.pop(m, None)
+
+    async def zcard(self, key):  # noqa: ANN001
+        return len(self.zset.get(key, {}))
+
+    async def zrange(self, key, start, end):  # noqa: ANN001
+        members = [m for m, _ in sorted(self.zset.get(key, {}).items(), key=lambda kv: kv[1])]
+        if end == -1:
+            return members[start:]
+        return members[start : end + 1]
+
+
+def _make_resp(analysis_id, status=AnalysisStatus.COMPLETED):  # noqa: ANN001
+    from src.api.routes.segments import SegmentAnalysisResponse
+
+    return SegmentAnalysisResponse(
+        analysis_id=analysis_id,
+        status=status,
+        timestamp=datetime.now(timezone.utc),
+    )
+
+
+class TestDurableAnalysesStore:
+    """The durable store must share state across processes via Redis and fall
+    back to the bounded in-memory dict when Redis is unavailable."""
+
+    @pytest.mark.asyncio
+    async def test_cross_worker_read_via_shared_redis(self):
+        """A value written through one store instance (worker A) is readable
+        through a DIFFERENT instance sharing the same Redis (worker B)."""
+        from src.api.routes.segments import _DurableAnalysesStore
+
+        shared = _FakeAsyncRedis()
+
+        async def _factory():
+            return shared
+
+        worker_a = _DurableAnalysesStore(redis_factory=_factory)
+        worker_b = _DurableAnalysesStore(redis_factory=_factory)
+
+        resp = _make_resp("seg_shared")
+        await worker_a.set("seg_shared", resp)
+
+        # Worker B's in-memory fallback is empty; it must read from Redis.
+        assert "seg_shared" not in worker_b._memory
+        assert await worker_b.contains("seg_shared") is True
+        got = await worker_b.get("seg_shared")
+        assert got is not None
+        assert got.analysis_id == "seg_shared"
+        assert got.status == AnalysisStatus.COMPLETED
+
+    @pytest.mark.asyncio
+    async def test_values_enumerates_from_redis(self):
+        from src.api.routes.segments import _DurableAnalysesStore
+
+        shared = _FakeAsyncRedis()
+
+        async def _factory():
+            return shared
+
+        store = _DurableAnalysesStore(redis_factory=_factory)
+        await store.set("seg_1", _make_resp("seg_1"))
+        await store.set("seg_2", _make_resp("seg_2"))
+
+        values = await store.values()
+        ids = sorted(v.analysis_id for v in values)
+        assert ids == ["seg_1", "seg_2"]
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_memory_when_redis_unavailable(self):
+        """When the Redis factory fails, the store transparently uses the
+        bounded in-memory fallback (no exception bubbles to the route)."""
+        from src.api.routes.segments import _DurableAnalysesStore
+
+        async def _factory():
+            raise ConnectionError("redis down")
+
+        store = _DurableAnalysesStore(redis_factory=_factory)
+
+        await store.set("seg_local", _make_resp("seg_local"))
+        assert await store.contains("seg_local") is True
+        got = await store.get("seg_local")
+        assert got is not None and got.analysis_id == "seg_local"
+        values = await store.values()
+        assert [v.analysis_id for v in values] == ["seg_local"]
+
+    @pytest.mark.asyncio
+    async def test_falls_back_when_redis_command_errors(self):
+        """A mid-operation Redis error degrades to the in-memory fallback."""
+        from src.api.routes.segments import _DurableAnalysesStore
+
+        class _BrokenRedis(_FakeAsyncRedis):
+            async def get(self, key):  # noqa: ANN001
+                raise ConnectionError("boom")
+
+        broken = _BrokenRedis()
+
+        async def _factory():
+            return broken
+
+        store = _DurableAnalysesStore(redis_factory=_factory)
+        # set still mirrors to memory, so a subsequent failing get falls back.
+        await store.set("seg_x", _make_resp("seg_x"))
+        got = await store.get("seg_x")
+        assert got is not None and got.analysis_id == "seg_x"
+
+    @pytest.mark.asyncio
+    async def test_redis_eviction_bounds_index(self):
+        """The Redis index is FIFO-bounded so it cannot grow without limit."""
+        from src.api.routes.segments import _DurableAnalysesStore
+
+        shared = _FakeAsyncRedis()
+
+        async def _factory():
+            return shared
+
+        store = _DurableAnalysesStore(redis_factory=_factory, max_entries=3)
+        for i in range(5):
+            await store.set(f"seg_{i}", _make_resp(f"seg_{i}"))
+
+        values = await store.values()
+        ids = sorted(v.analysis_id for v in values)
+        # Oldest two evicted; newest three retained.
+        assert ids == ["seg_2", "seg_3", "seg_4"]
+        assert await store.contains("seg_0") is False

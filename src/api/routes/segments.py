@@ -25,7 +25,7 @@ Version: 4.2.0
 import logging
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Awaitable, Callable, Dict, List, Optional, cast
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
@@ -300,34 +300,52 @@ class SegmentHealthResponse(BaseModel):
 
 
 # =============================================================================
-# IN-MEMORY STORAGE
+# ANALYSES STORAGE (durable / cross-worker)
 # =============================================================================
 #
-# NOTE: This is an intentional, scaffolded placeholder for a future Supabase
-# (or Redis) backing store. It is therefore PROCESS-LOCAL and has the known
-# limitations that come with that:
-#   - State is LOST on process restart / redeploy.
-#   - State is NOT shared across Uvicorn/Gunicorn workers (a GET may land on a
-#     different worker than the POST that created the analysis and 404).
-# These are acceptable for the current single-worker / dev-and-demo posture;
-# durable cross-worker persistence is tracked as future work.
+# C21: the analyses store must be DURABLE and SHARED ACROSS WORKERS.
 #
-# What is NOT acceptable is UNBOUNDED growth: a plain dict would accumulate
-# every analysis for the life of the process and is a slow memory leak / DoS
-# vector. The store below is therefore bounded with simple insertion-order
-# (FIFO) eviction so memory stays capped.
+# Production runs gunicorn with ``--workers 2`` (docker/docker-compose.yml,
+# docker-compose.secure.yml). A process-local dict therefore has two real,
+# user-visible failures:
+#   - A POST handled by worker A is invisible to a GET handled by worker B, so
+#     a legitimate analysis 404s roughly half the time.
+#   - All state is lost on process restart / redeploy.
+#
+# The store below backs the analyses in Redis, REUSING the app's existing async
+# Redis client (``src.api.dependencies.redis_client.get_redis``, already wired
+# into the FastAPI lifespan in ``src/api/main.py``). When Redis is unavailable
+# it transparently falls back to a BOUNDED in-process dict — mirroring the
+# app's existing graceful-degradation posture (``app.state.redis_available``)
+# rather than failing the request. The fallback is FIFO-bounded so memory
+# cannot grow without limit (a plain dict would be a slow leak / DoS vector),
+# and the Redis index is bounded the same way.
 
-# Maximum number of analyses retained in the process-local store.
+# Maximum number of analyses retained (both in Redis and in the fallback dict).
 ANALYSES_STORE_MAX_ENTRIES = 1000
+
+# How long an analysis record lives in Redis. Generous relative to the 24h
+# window the health endpoint reports on, while still letting abandoned records
+# expire so the store cannot accumulate stale entries indefinitely.
+ANALYSES_STORE_TTL_SECONDS = 7 * 24 * 60 * 60
+
+# Redis key namespace.
+_REDIS_KEY_PREFIX = "segments:analysis:"
+_REDIS_INDEX_KEY = "segments:analysis:index"
+
+# Redis errors that should trigger graceful degradation rather than a 500.
+# ConnectionError/TimeoutError/OSError are the connection-level failures the
+# redis client raises; RuntimeError covers "redis not initialised".
+_REDIS_DEGRADE_ERRORS = (ConnectionError, TimeoutError, OSError, RuntimeError)
 
 
 class _BoundedAnalysesStore(Dict[str, SegmentAnalysisResponse]):
     """A dict that evicts the oldest entry once it exceeds ``max_entries``.
 
-    Preserves the full ``dict`` interface used by the route handlers
-    (``in``, ``[]``, ``.values()``, ``.clear()``) while capping memory. Python
-    dicts preserve insertion order, so ``next(iter(self))`` is the oldest key.
-    Re-assigning an existing key updates in place and does NOT grow the store.
+    Used as the in-process fallback for :class:`_DurableAnalysesStore` when
+    Redis is unavailable. Python dicts preserve insertion order, so
+    ``next(iter(self))`` is the oldest key. Re-assigning an existing key updates
+    in place and does NOT grow the store.
     """
 
     def __init__(self, *args: Any, max_entries: int = ANALYSES_STORE_MAX_ENTRIES) -> None:
@@ -345,7 +363,151 @@ class _BoundedAnalysesStore(Dict[str, SegmentAnalysisResponse]):
             del self[oldest_key]
 
 
-_analyses_store: _BoundedAnalysesStore = _BoundedAnalysesStore()
+# Type of the zero-arg async factory that yields a Redis client. Defaults to the
+# app's canonical ``get_redis`` (lazily imported to keep this module importable
+# without a live Redis and to avoid import cycles).
+RedisFactory = Callable[[], Awaitable[Any]]
+
+
+async def _default_redis_factory() -> Any:
+    """Return the app's canonical async Redis client.
+
+    Imported lazily so the module imports cleanly in environments without Redis
+    configured (tests, CLI tools); failures here are caught by the durable
+    store and trigger the in-memory fallback.
+    """
+    from src.api.dependencies.redis_client import get_redis
+
+    return await get_redis()
+
+
+class _DurableAnalysesStore:
+    """Durable, cross-worker analyses store backed by Redis.
+
+    Each analysis is stored as a JSON string under ``segments:analysis:<id>``
+    with a TTL, and indexed in a sorted set (scored by insertion time) so the
+    full collection can be enumerated (for ``/policies`` and ``/health``) and
+    FIFO-evicted once it exceeds ``max_entries``.
+
+    All methods are ``async``. When Redis is unavailable (or any command
+    fails), they transparently fall back to a bounded in-process dict so a
+    request degrades gracefully instead of 500-ing. Writes are mirrored to the
+    fallback so a later read can still succeed within the same process if Redis
+    is only intermittently reachable.
+    """
+
+    def __init__(
+        self,
+        redis_factory: Optional[RedisFactory] = None,
+        max_entries: int = ANALYSES_STORE_MAX_ENTRIES,
+        ttl_seconds: int = ANALYSES_STORE_TTL_SECONDS,
+    ) -> None:
+        self._redis_factory: RedisFactory = redis_factory or _default_redis_factory
+        self.max_entries = max_entries
+        self.ttl_seconds = ttl_seconds
+        # In-process fallback used when Redis is unavailable.
+        self._memory: _BoundedAnalysesStore = _BoundedAnalysesStore(max_entries=max_entries)
+
+    async def _redis(self) -> Optional[Any]:
+        """Return a live Redis client, or ``None`` if unavailable."""
+        try:
+            return await self._redis_factory()
+        except _REDIS_DEGRADE_ERRORS as e:
+            logger.warning(f"Segments store: Redis unavailable, using in-memory fallback: {e}")
+            return None
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning(f"Segments store: unexpected Redis factory error, degrading: {e}")
+            return None
+
+    @staticmethod
+    def _key(analysis_id: str) -> str:
+        return f"{_REDIS_KEY_PREFIX}{analysis_id}"
+
+    async def set(self, analysis_id: str, response: SegmentAnalysisResponse) -> None:
+        """Persist ``response`` under ``analysis_id`` (Redis + memory mirror)."""
+        # Always mirror to the in-process fallback first so an intermittent
+        # Redis failure on a later read can still be served in-process.
+        self._memory[analysis_id] = response
+
+        client = await self._redis()
+        if client is None:
+            return
+        try:
+            payload = response.model_dump_json()
+            await client.set(self._key(analysis_id), payload, ex=self.ttl_seconds)
+            # Index by insertion time for enumeration + FIFO eviction.
+            score = datetime.now(timezone.utc).timestamp()
+            await client.zadd(_REDIS_INDEX_KEY, {analysis_id: score})
+            await self._evict_if_needed(client, keep_id=analysis_id)
+        except _REDIS_DEGRADE_ERRORS as e:
+            logger.warning(f"Segments store: Redis write failed for {analysis_id}, degraded: {e}")
+
+    async def _evict_if_needed(self, client: Any, keep_id: str) -> None:
+        """FIFO-evict oldest entries so the Redis index stays bounded."""
+        try:
+            count = await client.zcard(_REDIS_INDEX_KEY)
+            overflow = count - self.max_entries
+            if overflow <= 0:
+                return
+            # Oldest-first members to drop.
+            oldest = await client.zrange(_REDIS_INDEX_KEY, 0, overflow - 1)
+            for member in oldest:
+                if member == keep_id:
+                    continue
+                await client.delete(self._key(member))
+                await client.zrem(_REDIS_INDEX_KEY, member)
+        except _REDIS_DEGRADE_ERRORS as e:
+            logger.warning(f"Segments store: Redis eviction failed, degraded: {e}")
+
+    async def get(self, analysis_id: str) -> Optional[SegmentAnalysisResponse]:
+        """Return the stored analysis, or ``None`` if absent."""
+        client = await self._redis()
+        if client is not None:
+            try:
+                raw = await client.get(self._key(analysis_id))
+                if raw is not None:
+                    return SegmentAnalysisResponse.model_validate_json(raw)
+                # Not in Redis — fall through to the in-process mirror (may hold
+                # a record written while Redis was briefly down).
+            except _REDIS_DEGRADE_ERRORS as e:
+                logger.warning(
+                    f"Segments store: Redis read failed for {analysis_id}, degraded: {e}"
+                )
+        return self._memory.get(analysis_id)
+
+    async def contains(self, analysis_id: str) -> bool:
+        """Return ``True`` if an analysis exists for ``analysis_id``."""
+        return (await self.get(analysis_id)) is not None
+
+    async def values(self) -> List[SegmentAnalysisResponse]:
+        """Return all stored analyses (Redis-backed, falling back to memory)."""
+        client = await self._redis()
+        if client is not None:
+            try:
+                ids = await client.zrange(_REDIS_INDEX_KEY, 0, -1)
+                results: List[SegmentAnalysisResponse] = []
+                for analysis_id in ids:
+                    raw = await client.get(self._key(analysis_id))
+                    if raw is None:
+                        # Expired record still indexed — clean up lazily.
+                        await client.zrem(_REDIS_INDEX_KEY, analysis_id)
+                        continue
+                    results.append(SegmentAnalysisResponse.model_validate_json(raw))
+                return results
+            except _REDIS_DEGRADE_ERRORS as e:
+                logger.warning(f"Segments store: Redis enumerate failed, degraded: {e}")
+        return list(self._memory.values())
+
+    def clear(self) -> None:
+        """Clear the in-process fallback (used by tests).
+
+        Note: this clears only the in-process mirror, not Redis. Tests that
+        exercise Redis behaviour use a fresh fake client per test.
+        """
+        self._memory.clear()
+
+
+_analyses_store: _DurableAnalysesStore = _DurableAnalysesStore()
 
 
 # =============================================================================
@@ -396,7 +558,7 @@ async def run_segment_analysis(
 
     if async_mode:
         # Store pending analysis
-        _analyses_store[analysis_id] = response
+        await _analyses_store.set(analysis_id, response)
 
         # Schedule background task
         background_tasks.add_task(
@@ -412,7 +574,7 @@ async def run_segment_analysis(
     try:
         result = await _execute_segment_analysis(request)
         result.analysis_id = analysis_id
-        _analyses_store[analysis_id] = result
+        await _analyses_store.set(analysis_id, result)
         return result
     except HTTPException:
         # F-010-backend (#429, codex iter-1 M1): preserve 503 from
@@ -424,7 +586,7 @@ async def run_segment_analysis(
         # Store a generic warning on the persisted FAILED record rather than the
         # raw exception text (the record is later returned to clients via GET).
         response.warnings.append("Segment analysis failed due to an internal error.")
-        _analyses_store[analysis_id] = response
+        await _analyses_store.set(analysis_id, response)
         # Do not echo raw exception text to the client (it can leak internal
         # paths/identifiers); the full exception is logged above with exc_info.
         raise HTTPException(
@@ -460,7 +622,7 @@ async def list_policies(
     all_recommendations: List[PolicyRecommendation] = []
     total_lift = 0.0
 
-    for analysis in _analyses_store.values():
+    for analysis in await _analyses_store.values():
         if analysis.status != AnalysisStatus.COMPLETED:
             continue
 
@@ -523,14 +685,13 @@ async def get_segment_health() -> SegmentHealthResponse:
 
     # Count recent analyses
     now = datetime.now(timezone.utc)
-    analyses_24h = sum(
-        1 for a in _analyses_store.values() if (now - a.timestamp).total_seconds() < 86400
-    )
+    all_analyses = await _analyses_store.values()
+    analyses_24h = sum(1 for a in all_analyses if (now - a.timestamp).total_seconds() < 86400)
 
     # Get last analysis
     last_analysis = None
-    if _analyses_store:
-        last_analysis = max(a.timestamp for a in _analyses_store.values())
+    if all_analyses:
+        last_analysis = max(a.timestamp for a in all_analyses)
 
     status = "healthy"
     if not agent_available:
@@ -568,13 +729,14 @@ async def get_segment_analysis(analysis_id: str) -> SegmentAnalysisResponse:
     Raises:
         HTTPException: If analysis not found
     """
-    if analysis_id not in _analyses_store:
+    analysis = await _analyses_store.get(analysis_id)
+    if analysis is None:
         raise HTTPException(
             status_code=404,
             detail=f"Segment analysis {analysis_id} not found",
         )
 
-    return _analyses_store[analysis_id]
+    return analysis
 
 
 # =============================================================================
@@ -590,24 +752,30 @@ async def _run_segment_analysis_task(
     try:
         logger.info(f"Starting segment analysis task {analysis_id}")
 
-        # Update status
-        if analysis_id in _analyses_store:
-            _analyses_store[analysis_id].status = AnalysisStatus.ESTIMATING
+        # Update status (read-modify-write so the change persists to the store).
+        pending = await _analyses_store.get(analysis_id)
+        if pending is not None:
+            pending.status = AnalysisStatus.ESTIMATING
+            await _analyses_store.set(analysis_id, pending)
 
         # Execute analysis
         result = await _execute_segment_analysis(request)
         result.analysis_id = analysis_id
 
         # Store result
-        _analyses_store[analysis_id] = result
+        await _analyses_store.set(analysis_id, result)
 
         logger.info(f"Segment analysis {analysis_id} completed successfully")
 
     except Exception as e:
         logger.error(f"Segment analysis {analysis_id} failed: {e}")
-        if analysis_id in _analyses_store:
-            _analyses_store[analysis_id].status = AnalysisStatus.FAILED
-            _analyses_store[analysis_id].warnings.append(str(e))
+        existing = await _analyses_store.get(analysis_id)
+        if existing is not None:
+            existing.status = AnalysisStatus.FAILED
+            # Store a generic warning rather than raw exception text (the record
+            # is later returned to clients via GET).
+            existing.warnings.append("Segment analysis failed due to an internal error.")
+            await _analyses_store.set(analysis_id, existing)
 
 
 async def _execute_segment_analysis(
