@@ -188,6 +188,28 @@ async def enforce_splits(state: Dict[str, Any]) -> Dict[str, Any]:
         if advanced_warnings:
             logger.warning(f"Advanced leakage checks found {len(advanced_warnings)} issues")
 
+        # Rare-event class-presence guard: a stratified or precomputed split can
+        # land a validation/test split with 0 of a class (acute for ~2.9%-positive
+        # cohorts), which makes ROC-AUC/recall/precision undefined and silently
+        # corrupts the downstream v3 adaptive gates. Fail fast here instead — this
+        # reuses the existing ratios_valid=False blocking path (no new wiring).
+        # Classification only; a complete no-op for regression/time_series.
+        class_presence_warnings = _check_class_presence(
+            train_data=train_data,
+            validation_data=validation_data,
+            test_data=test_data,
+            holdout_data=holdout_data,
+            problem_type=_resolve_problem_type(state),
+            repeated_mode=repeated_mode,
+        )
+        if class_presence_warnings:
+            leakage_warnings.extend(class_presence_warnings)
+            ratios_valid = False
+            logger.warning(
+                f"Class-presence guard flagged {len(class_presence_warnings)} "
+                "single-class split(s) — blocking training"
+            )
+
     # Construct validation message
     if ratios_valid:
         split_validation_message = (
@@ -280,6 +302,98 @@ def _check_advanced_leakage(
         logger.warning(f"Advanced leakage detection error: {e}")
         # Don't fail the pipeline for leakage detection errors
 
+    return warnings
+
+
+_CLASSIFICATION_PROBLEM_TYPES = {"binary_classification", "multiclass_classification"}
+
+
+def _resolve_problem_type(state: Dict[str, Any]) -> Optional[str]:
+    """Resolve problem_type from scope_spec (canonical) then state.
+
+    Returns None when unset — the class-presence guard treats a non-classification
+    (or unknown) type as a no-op, so it never false-blocks a regression / unlabeled
+    run whose continuous target would otherwise look like many 'missing classes'.
+    """
+    scope_spec = state.get("scope_spec") or {}
+    if isinstance(scope_spec, dict):
+        pt = scope_spec.get("problem_type")
+    else:
+        pt = getattr(scope_spec, "problem_type", None)
+    return pt or state.get("problem_type")
+
+
+def _check_class_presence(
+    train_data: Dict[str, Any],
+    validation_data: Dict[str, Any],
+    test_data: Dict[str, Any],
+    holdout_data: Optional[Dict[str, Any]],
+    problem_type: Optional[str],
+    repeated_mode: bool,
+) -> List[str]:
+    """Flag any non-empty CLASSIFICATION split missing a class seen elsewhere.
+
+    Rare-event guard (~2.9%-positive cohorts): a stratified or precomputed split
+    can land a validation/test split with 0 of a class. ROC-AUC / recall /
+    precision are then undefined and the v3 adaptive gates are silently corrupted
+    downstream (learning_curve, detect_class_imbalance, evaluator all defensively
+    skip single-class buckets). We fail fast here instead.
+
+    Classification only — a complete no-op for regression / time_series / unknown
+    problem types (a continuous target would otherwise be mis-read as having many
+    'missing classes'). If the WHOLE dataset is single-class, that is a data-level
+    zero-event problem owned by the sufficiency check, not a split defect, so this
+    guard stays silent.
+
+    Args:
+        train_data/validation_data/test_data/holdout_data: split dicts with 'y'.
+        problem_type: resolved problem type (None => no-op).
+        repeated_mode: True in repeated_k10 (holdout absent by contract).
+
+    Returns:
+        List of CRITICAL warning strings (empty when every split has every class).
+    """
+    if problem_type not in _CLASSIFICATION_PROBLEM_TYPES:
+        return []
+
+    candidates = [
+        ("train", train_data),
+        ("validation", validation_data),
+        ("test", test_data),
+    ]
+    if holdout_data and not repeated_mode:
+        candidates.append(("holdout", holdout_data))
+
+    per_split: Dict[str, Set[Any]] = {}
+    global_classes: Set[Any] = set()
+    for name, data in candidates:
+        if not data:
+            continue
+        y = data.get("y")
+        if y is None:
+            continue
+        labels = pd.Series(np.asarray(y).ravel()).dropna()
+        if labels.empty:
+            continue
+        classes = set(labels.unique().tolist())
+        per_split[name] = classes
+        global_classes |= classes
+
+    # Whole-dataset single-class is a zero-event data problem, not a split defect.
+    if len(global_classes) < 2:
+        return []
+
+    warnings: List[str] = []
+    for name, classes in per_split.items():
+        missing = global_classes - classes
+        if missing:
+            warnings.append(
+                f"CRITICAL: {name} split is missing class(es) "
+                f"{sorted(missing, key=str)} present elsewhere in the dataset "
+                "(rare-event split has 0 of a class) — ROC-AUC/recall/precision "
+                "would be undefined; blocking to avoid silently corrupting "
+                "downstream metrics and adaptive gates"
+            )
     return warnings
 
 

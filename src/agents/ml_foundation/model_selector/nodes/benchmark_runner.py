@@ -247,13 +247,20 @@ def _run_cross_validation(
         Tuple of (cv_scores, aggregated_metrics)
     """
     try:
-        from sklearn.model_selection import cross_val_score
+        from sklearn.model_selection import KFold, StratifiedKFold, cross_val_score
 
-        # Choose scoring metric
+        # Choose scoring metric AND an explicit, shuffled CV splitter. A bare
+        # `cv=int` yields sklearn's UNSHUFFLED default; an explicit
+        # StratifiedKFold(shuffle=True) keeps rare classes represented in every
+        # fold and a fixed seed makes folds reproducible — matching the codebase
+        # convention (random_state=42). Regression uses KFold (StratifiedKFold
+        # would break on a continuous target).
         if "classification" in problem_type:
             scoring = "roc_auc"
+            cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=42)
         else:
             scoring = "neg_mean_squared_error"
+            cv = KFold(n_splits=cv_folds, shuffle=True, random_state=42)
 
         # Convert to numpy if DataFrame
         if hasattr(X, "values"):
@@ -262,7 +269,7 @@ def _run_cross_validation(
             y = y.values
 
         # Run CV
-        cv_scores = cross_val_score(model, X, y, cv=cv_folds, scoring=scoring, n_jobs=1)
+        cv_scores = cross_val_score(model, X, y, cv=cv, scoring=scoring, n_jobs=1)
 
         # For regression, convert negative MSE to RMSE
         if scoring == "neg_mean_squared_error":

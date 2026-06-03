@@ -224,6 +224,25 @@ class TestStratifiedSplit(TestDataSplitter):
         result = splitter.stratified_split(df, stratify_column="category")
         assert isinstance(result, SplitResult)
 
+    def test_warns_when_small_stratum_dumped_to_train(self, splitter, caplog):
+        """A stratum with <3 samples is assigned entirely to train, so it is
+        ABSENT from val/test/holdout — warn loudly (the split_enforcer
+        class-presence guard then hard-blocks the resulting rare-event split)."""
+        import logging
+
+        df = pd.DataFrame(
+            {
+                "id": range(10),
+                "category": ["A"] * 5 + ["B"] * 3 + ["C"] * 2,  # C has n=2 (<3)
+            }
+        )
+        with caplog.at_level(logging.WARNING):
+            splitter.stratified_split(df, stratify_column="category")
+
+        assert any(
+            "C" in r.getMessage() and "train" in r.getMessage().lower() for r in caplog.records
+        ), [r.getMessage() for r in caplog.records]
+
 
 class TestEntitySplit(TestDataSplitter):
     """Tests for entity_split method."""
