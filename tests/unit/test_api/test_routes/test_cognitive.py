@@ -29,6 +29,7 @@ from src.api.routes.cognitive import (
     delete_session,
     get_orchestrator,
     get_session,
+    list_sessions,
     process_cognitive_query,
 )
 
@@ -106,6 +107,36 @@ def sample_query_request():
     )
 
 
+@pytest.fixture
+def admin_user():
+    """Authenticated principal with admin role (bypasses ownership checks)."""
+    return {
+        "id": "admin-001",
+        "email": "admin@e2i-analytics.com",
+        "app_metadata": {"role": "admin"},
+    }
+
+
+@pytest.fixture
+def owner_user():
+    """Authenticated principal who OWNS the mock session (user_id='test-user')."""
+    return {
+        "id": "test-user",
+        "email": "owner@e2i-analytics.com",
+        "app_metadata": {"role": "viewer"},
+    }
+
+
+@pytest.fixture
+def other_user():
+    """Authenticated principal who does NOT own the mock session."""
+    return {
+        "id": "attacker-999",
+        "email": "attacker@e2i-analytics.com",
+        "app_metadata": {"role": "viewer"},
+    }
+
+
 # =============================================================================
 # Endpoint Tests
 # =============================================================================
@@ -116,7 +147,12 @@ class TestProcessCognitiveQueryEndpoint:
 
     @pytest.mark.asyncio
     async def test_process_query_success(
-        self, sample_query_request, mock_working_memory, mock_hybrid_search, mock_orchestrator
+        self,
+        sample_query_request,
+        mock_working_memory,
+        mock_hybrid_search,
+        mock_orchestrator,
+        admin_user,
     ):
         """Test successful cognitive query processing."""
         with (
@@ -124,7 +160,9 @@ class TestProcessCognitiveQueryEndpoint:
             patch("src.api.routes.cognitive.hybrid_search", new=mock_hybrid_search),
             patch("src.api.routes.cognitive.get_orchestrator", return_value=mock_orchestrator),
         ):
-            response = await process_cognitive_query(sample_query_request, BackgroundTasks())
+            response = await process_cognitive_query(
+                sample_query_request, BackgroundTasks(), user=admin_user
+            )
 
             assert response.query == sample_query_request.query
             assert response.query_type == QueryType.CAUSAL
@@ -133,7 +171,7 @@ class TestProcessCognitiveQueryEndpoint:
 
     @pytest.mark.asyncio
     async def test_process_query_creates_new_session(
-        self, sample_query_request, mock_working_memory, mock_hybrid_search
+        self, sample_query_request, mock_working_memory, mock_hybrid_search, admin_user
     ):
         """Test query creates new session when session_id not provided."""
         with (
@@ -141,14 +179,16 @@ class TestProcessCognitiveQueryEndpoint:
             patch("src.api.routes.cognitive.hybrid_search", new=mock_hybrid_search),
             patch("src.api.routes.cognitive.get_orchestrator", return_value=None),
         ):
-            response = await process_cognitive_query(sample_query_request, BackgroundTasks())
+            response = await process_cognitive_query(
+                sample_query_request, BackgroundTasks(), user=admin_user
+            )
 
             mock_working_memory.create_session.assert_called_once()
             assert response.session_id is not None
 
     @pytest.mark.asyncio
     async def test_process_query_uses_existing_session(
-        self, sample_query_request, mock_working_memory, mock_hybrid_search
+        self, sample_query_request, mock_working_memory, mock_hybrid_search, admin_user
     ):
         """Test query uses existing session when session_id provided."""
         sample_query_request.session_id = "existing-session"
@@ -158,7 +198,9 @@ class TestProcessCognitiveQueryEndpoint:
             patch("src.api.routes.cognitive.hybrid_search", new=mock_hybrid_search),
             patch("src.api.routes.cognitive.get_orchestrator", return_value=None),
         ):
-            response = await process_cognitive_query(sample_query_request, BackgroundTasks())
+            response = await process_cognitive_query(
+                sample_query_request, BackgroundTasks(), user=admin_user
+            )
 
             assert response.session_id == "existing-session"
             # Should NOT create new session
@@ -166,7 +208,7 @@ class TestProcessCognitiveQueryEndpoint:
 
     @pytest.mark.asyncio
     async def test_process_query_without_orchestrator(
-        self, sample_query_request, mock_working_memory, mock_hybrid_search
+        self, sample_query_request, mock_working_memory, mock_hybrid_search, admin_user
     ):
         """Test query processing when orchestrator not available."""
         with (
@@ -174,29 +216,39 @@ class TestProcessCognitiveQueryEndpoint:
             patch("src.api.routes.cognitive.hybrid_search", new=mock_hybrid_search),
             patch("src.api.routes.cognitive.get_orchestrator", return_value=None),
         ):
-            response = await process_cognitive_query(sample_query_request, BackgroundTasks())
+            response = await process_cognitive_query(
+                sample_query_request, BackgroundTasks(), user=admin_user
+            )
 
             # Should use fallback response
             assert "causal" in response.response.lower()
-            assert response.confidence == 0.85
+            # FINDING #2: the degraded/placeholder path must NOT emit a
+            # fabricated 0.85 confidence. No real orchestrator ran here.
+            assert response.confidence is None
 
     @pytest.mark.asyncio
-    async def test_process_query_error_handling(self, sample_query_request, mock_working_memory):
+    async def test_process_query_error_handling(
+        self, sample_query_request, mock_working_memory, admin_user
+    ):
         """Test query processing error handling."""
         mock_working_memory.create_session.side_effect = Exception("Session error")
 
         with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory):
             with pytest.raises(HTTPException) as exc_info:
-                await process_cognitive_query(sample_query_request, BackgroundTasks())
+                await process_cognitive_query(
+                    sample_query_request, BackgroundTasks(), user=admin_user
+                )
 
             assert exc_info.value.status_code == 500
+            # FINDING #3: 500 detail must be generic, not leak str(e).
+            assert "Session error" not in str(exc_info.value.detail)
 
 
 class TestGetSessionEndpoint:
     """Tests for /cognitive/session/{session_id} endpoint."""
 
     @pytest.mark.asyncio
-    async def test_get_session_success(self, mock_working_memory):
+    async def test_get_session_success(self, mock_working_memory, admin_user):
         """Test successful session retrieval."""
         mock_working_memory.get_messages.return_value = [
             {
@@ -211,96 +263,142 @@ class TestGetSessionEndpoint:
         ]
 
         with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory):
-            response = await get_session("test-session")
+            response = await get_session("test-session", user=admin_user)
 
             assert response.context.session_id == "test-session"
             assert len(response.messages) == 1
             assert len(response.evidence_trail) == 1
 
     @pytest.mark.asyncio
-    async def test_get_session_not_found(self, mock_working_memory):
+    async def test_get_session_not_found(self, mock_working_memory, admin_user):
         """Test session not found error."""
         mock_working_memory.get_session.return_value = None
 
         with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory):
             with pytest.raises(HTTPException) as exc_info:
-                await get_session("nonexistent-session")
+                await get_session("nonexistent-session", user=admin_user)
 
             assert exc_info.value.status_code == 404
 
     @pytest.mark.asyncio
-    async def test_get_session_error(self, mock_working_memory):
+    async def test_get_session_error(self, mock_working_memory, admin_user):
         """Test session retrieval error handling."""
         mock_working_memory.get_session.side_effect = Exception("DB error")
 
         with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory):
             with pytest.raises(HTTPException) as exc_info:
-                await get_session("test-session")
+                await get_session("test-session", user=admin_user)
 
             assert exc_info.value.status_code == 500
+            # FINDING #3: 500 detail must be generic, not leak str(e).
+            assert "DB error" not in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_get_session_owner_allowed(self, mock_working_memory, owner_user):
+        """FINDING #1: the session owner can read their own session."""
+        with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory):
+            response = await get_session("test-session", user=owner_user)
+            assert response.context.session_id == "test-session"
+
+    @pytest.mark.asyncio
+    async def test_get_session_idor_blocked(self, mock_working_memory, other_user):
+        """FINDING #1 [CRITICAL IDOR]: a non-owner non-admin cannot read
+        another user's session. Must return 404 (no existence leak)."""
+        with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory):
+            with pytest.raises(HTTPException) as exc_info:
+                await get_session("test-session", user=other_user)
+
+            assert exc_info.value.status_code == 404
 
 
 class TestCreateSessionEndpoint:
     """Tests for /cognitive/session endpoint."""
 
     @pytest.mark.asyncio
-    async def test_create_session_success(self, mock_working_memory):
+    async def test_create_session_success(self, mock_working_memory, owner_user):
         """Test successful session creation."""
         request = CreateSessionRequest(
-            user_id="test-user",
+            user_id="ignored-client-value",
             brand="Kisqali",
             region="northeast",
         )
 
         with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory):
-            response = await create_session(request)
+            response = await create_session(request, user=owner_user)
 
             assert response.session_id is not None
             assert response.state == SessionState.ACTIVE
             mock_working_memory.create_session.assert_called_once()
+            # FINDING #1: session must be owned by the AUTHENTICATED caller,
+            # not the client-supplied user_id in the body.
+            _, call_kwargs = mock_working_memory.create_session.call_args
+            assert call_kwargs["user_id"] == "test-user"
 
     @pytest.mark.asyncio
-    async def test_create_session_error(self, mock_working_memory):
+    async def test_create_session_error(self, mock_working_memory, owner_user):
         """Test session creation error handling."""
         mock_working_memory.create_session.side_effect = Exception("Create error")
 
         with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory):
             with pytest.raises(HTTPException) as exc_info:
-                await create_session(CreateSessionRequest())
+                await create_session(CreateSessionRequest(), user=owner_user)
 
             assert exc_info.value.status_code == 500
+            # FINDING #3: 500 detail must be generic, not leak str(e).
+            assert "Create error" not in str(exc_info.value.detail)
 
 
 class TestDeleteSessionEndpoint:
     """Tests for DELETE /cognitive/session/{session_id} endpoint."""
 
     @pytest.mark.asyncio
-    async def test_delete_session_success(self, mock_working_memory):
+    async def test_delete_session_success(self, mock_working_memory, admin_user):
         """Test successful session deletion."""
         with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory):
-            response = await delete_session("test-session")
+            response = await delete_session("test-session", user=admin_user)
 
             assert response["session_id"] == "test-session"
             assert response["deleted"] is True
             mock_working_memory.delete_session.assert_called_once_with("test-session")
 
     @pytest.mark.asyncio
-    async def test_delete_session_error(self, mock_working_memory):
+    async def test_delete_session_error(self, mock_working_memory, admin_user):
         """Test session deletion error handling."""
         mock_working_memory.delete_session.side_effect = Exception("Delete error")
 
         with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory):
             with pytest.raises(HTTPException) as exc_info:
-                await delete_session("test-session")
+                await delete_session("test-session", user=admin_user)
 
             assert exc_info.value.status_code == 500
+            # FINDING #3: 500 detail must be generic, not leak str(e).
+            assert "Delete error" not in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_delete_session_owner_allowed(self, mock_working_memory, owner_user):
+        """FINDING #1: the session owner can delete their own session."""
+        with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory):
+            response = await delete_session("test-session", user=owner_user)
+            assert response["deleted"] is True
+            mock_working_memory.delete_session.assert_called_once_with("test-session")
+
+    @pytest.mark.asyncio
+    async def test_delete_session_idor_blocked(self, mock_working_memory, other_user):
+        """FINDING #1 [CRITICAL IDOR]: a non-owner non-admin cannot delete
+        another user's session. Must 404 and NEVER call delete_session."""
+        with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory):
+            with pytest.raises(HTTPException) as exc_info:
+                await delete_session("test-session", user=other_user)
+
+            assert exc_info.value.status_code == 404
+            mock_working_memory.delete_session.assert_not_called()
 
 
 class TestCognitiveRAGSearchEndpoint:
     """Tests for /cognitive/rag endpoint."""
 
     @pytest.mark.asyncio
-    async def test_cognitive_rag_success(self):
+    async def test_cognitive_rag_success(self, admin_user):
         """Test successful cognitive RAG search."""
         from src.api.routes.cognitive import CognitiveRAGRequest
 
@@ -322,14 +420,14 @@ class TestCognitiveRAGSearchEndpoint:
         )
 
         with patch("src.rag.causal_rag.CausalRAG", return_value=mock_rag):
-            response = await cognitive_rag_search(request)
+            response = await cognitive_rag_search(request, user=admin_user)
 
             assert response.response == "Adoption increased due to increased engagement"
             assert response.hop_count == 2
             assert "Kisqali" in response.entities
 
     @pytest.mark.asyncio
-    async def test_cognitive_rag_import_error(self):
+    async def test_cognitive_rag_import_error(self, admin_user):
         """Test cognitive RAG with import error."""
         from src.api.routes.cognitive import CognitiveRAGRequest
 
@@ -337,12 +435,12 @@ class TestCognitiveRAGSearchEndpoint:
 
         with patch("src.rag.causal_rag.CausalRAG", side_effect=ImportError("No module")):
             with pytest.raises(HTTPException) as exc_info:
-                await cognitive_rag_search(request)
+                await cognitive_rag_search(request, user=admin_user)
 
             assert exc_info.value.status_code == 503
 
     @pytest.mark.asyncio
-    async def test_cognitive_rag_value_error(self):
+    async def test_cognitive_rag_value_error(self, admin_user):
         """Test cognitive RAG with value error."""
         from src.api.routes.cognitive import CognitiveRAGRequest
 
@@ -350,7 +448,7 @@ class TestCognitiveRAGSearchEndpoint:
 
         with patch("src.rag.causal_rag.CausalRAG", side_effect=ValueError("Config error")):
             with pytest.raises(HTTPException) as exc_info:
-                await cognitive_rag_search(request)
+                await cognitive_rag_search(request, user=admin_user)
 
             assert exc_info.value.status_code == 400
 
@@ -477,7 +575,7 @@ class TestEdgeCases:
 
     @pytest.mark.asyncio
     async def test_process_query_with_empty_evidence(
-        self, sample_query_request, mock_working_memory
+        self, sample_query_request, mock_working_memory, admin_user
     ):
         """Test processing query with no evidence found."""
 
@@ -489,12 +587,16 @@ class TestEdgeCases:
             patch("src.api.routes.cognitive.hybrid_search", new=empty_search),
             patch("src.api.routes.cognitive.get_orchestrator", return_value=None),
         ):
-            response = await process_cognitive_query(sample_query_request, BackgroundTasks())
+            response = await process_cognitive_query(
+                sample_query_request, BackgroundTasks(), user=admin_user
+            )
 
             assert response.evidence is None or len(response.evidence) == 0
 
     @pytest.mark.asyncio
-    async def test_process_query_auto_detect_type(self, mock_working_memory, mock_hybrid_search):
+    async def test_process_query_auto_detect_type(
+        self, mock_working_memory, mock_hybrid_search, admin_user
+    ):
         """Test query type auto-detection."""
         request = CognitiveQueryRequest(
             query="Why did sales drop?",  # Should be detected as CAUSAL
@@ -507,12 +609,14 @@ class TestEdgeCases:
             patch("src.api.routes.cognitive.hybrid_search", new=mock_hybrid_search),
             patch("src.api.routes.cognitive.get_orchestrator", return_value=None),
         ):
-            response = await process_cognitive_query(request, BackgroundTasks())
+            response = await process_cognitive_query(request, BackgroundTasks(), user=admin_user)
 
             assert response.query_type == QueryType.CAUSAL
 
     @pytest.mark.asyncio
-    async def test_process_query_max_memory_results(self, mock_working_memory, mock_hybrid_search):
+    async def test_process_query_max_memory_results(
+        self, mock_working_memory, mock_hybrid_search, admin_user
+    ):
         """Test query with max memory results limit."""
         request = CognitiveQueryRequest(
             query="Test query",
@@ -527,8 +631,134 @@ class TestEdgeCases:
             patch("src.api.routes.cognitive.hybrid_search", new=mock_search),
             patch("src.api.routes.cognitive.get_orchestrator", return_value=None),
         ):
-            await process_cognitive_query(request, BackgroundTasks())
+            await process_cognitive_query(request, BackgroundTasks(), user=admin_user)
 
             # Verify max_memory_results was used
             # Note: hybrid_search is called with k parameter
             assert mock_search.call_count > 0
+
+
+# =============================================================================
+# Authorization / IDOR Tests (Security Review Findings #1, #2)
+# =============================================================================
+
+
+class TestProcessQueryAuthorization:
+    """FINDING #1 [CRITICAL IDOR] + #2 for POST /cognitive/query."""
+
+    @pytest.mark.asyncio
+    async def test_new_session_owned_by_token_not_body(
+        self, mock_working_memory, mock_hybrid_search, owner_user
+    ):
+        """FINDING #1: user_id is derived from the authenticated token, NOT
+        from the request body (which is ignored). A new session is created
+        under the caller's id even if the body claims another user."""
+        request = CognitiveQueryRequest(
+            query="Why did TRx drop?",
+            user_id="victim-spoofed-id",  # attacker-supplied; must be ignored
+            query_type=QueryType.CAUSAL,
+        )
+
+        with (
+            patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory),
+            patch("src.api.routes.cognitive.hybrid_search", new=mock_hybrid_search),
+            patch("src.api.routes.cognitive.get_orchestrator", return_value=None),
+        ):
+            await process_cognitive_query(request, BackgroundTasks(), user=owner_user)
+
+            _, call_kwargs = mock_working_memory.create_session.call_args
+            assert call_kwargs["user_id"] == "test-user"
+
+    @pytest.mark.asyncio
+    async def test_continue_others_session_blocked(
+        self, mock_working_memory, mock_hybrid_search, other_user
+    ):
+        """FINDING #1 [CRITICAL IDOR]: continuing an existing session you do
+        not own must be rejected with 404, and must NOT add a message."""
+        request = CognitiveQueryRequest(
+            query="leak this user's data",
+            session_id="test-session",  # owned by user_id='test-user'
+            query_type=QueryType.CAUSAL,
+        )
+
+        with (
+            patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory),
+            patch("src.api.routes.cognitive.hybrid_search", new=mock_hybrid_search),
+            patch("src.api.routes.cognitive.get_orchestrator", return_value=None),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await process_cognitive_query(request, BackgroundTasks(), user=other_user)
+
+            assert exc_info.value.status_code == 404
+            mock_working_memory.add_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_continue_own_session_allowed(
+        self, mock_working_memory, mock_hybrid_search, owner_user
+    ):
+        """FINDING #1: the owner may continue their own existing session."""
+        request = CognitiveQueryRequest(
+            query="follow-up question",
+            session_id="test-session",
+            query_type=QueryType.CAUSAL,
+        )
+
+        with (
+            patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory),
+            patch("src.api.routes.cognitive.hybrid_search", new=mock_hybrid_search),
+            patch("src.api.routes.cognitive.get_orchestrator", return_value=None),
+        ):
+            response = await process_cognitive_query(request, BackgroundTasks(), user=owner_user)
+            assert response.session_id == "test-session"
+
+    @pytest.mark.asyncio
+    async def test_degraded_path_emits_null_confidence(
+        self, sample_query_request, mock_working_memory, mock_hybrid_search, admin_user
+    ):
+        """FINDING #2: when the orchestrator runs but produces no dispatch
+        (degraded), confidence is the orchestrator's real value, not a
+        fabricated default. When NO orchestrator runs, confidence is None."""
+        # Orchestrator present but returns no dispatch and no confidence.
+        degraded_orch = MagicMock()
+        degraded_orch.run = AsyncMock(
+            return_value={"response_text": "partial", "agents_dispatched": []}
+        )
+
+        with (
+            patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory),
+            patch("src.api.routes.cognitive.hybrid_search", new=mock_hybrid_search),
+            patch("src.api.routes.cognitive.get_orchestrator", return_value=degraded_orch),
+        ):
+            response = await process_cognitive_query(
+                sample_query_request, BackgroundTasks(), user=admin_user
+            )
+            assert response.agent_used == "orchestrator_degraded"
+            # No real confidence was produced -> must not fabricate 0.85.
+            assert response.confidence is None
+
+
+class TestListSessionsAuthorization:
+    """FINDING #1 [CRITICAL IDOR] for GET /cognitive/sessions."""
+
+    @pytest.mark.asyncio
+    async def test_list_sessions_scoped_to_caller(self, mock_working_memory, other_user):
+        """A non-admin caller's list is ALWAYS scoped to their own id; the
+        client-supplied ?user_id is ignored (no cross-user enumeration)."""
+        mock_working_memory.list_sessions = AsyncMock(return_value=[])
+
+        with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory):
+            await list_sessions(user_id="someone-else", limit=50, user=other_user)
+
+            _, call_kwargs = mock_working_memory.list_sessions.call_args
+            assert call_kwargs["user_id"] == "attacker-999"
+
+    @pytest.mark.asyncio
+    async def test_list_sessions_admin_may_filter_any_user(self, mock_working_memory, admin_user):
+        """An admin may pass ?user_id to inspect any user's sessions."""
+        mock_working_memory.list_sessions = AsyncMock(return_value=[])
+
+        with patch("src.api.routes.cognitive.get_working_memory", return_value=mock_working_memory):
+            await list_sessions(user_id="some-user", limit=50, user=admin_user)
+
+            _, call_kwargs = mock_working_memory.list_sessions.call_args
+            assert call_kwargs["user_id"] == "some-user"

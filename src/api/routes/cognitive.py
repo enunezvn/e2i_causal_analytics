@@ -23,14 +23,51 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.api.dependencies.auth import (
+    UserRole,
+    has_role,
+    require_viewer,
+)
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 from src.memory.working_memory import get_working_memory
 from src.rag.retriever import hybrid_search
 
 logger = logging.getLogger(__name__)
+
+
+def _caller_id(user: Dict[str, Any]) -> Optional[str]:
+    """Return the authenticated principal's stable id.
+
+    Supabase tokens carry the user id as ``sub``; our verified-user dict
+    mirrors it as ``id`` (see ``verify_supabase_token``). Prefer ``sub`` to
+    stay forward-compatible with raw-claim consumers, fall back to ``id``.
+    """
+    return user.get("sub") or user.get("id")
+
+
+def _is_admin(user: Dict[str, Any]) -> bool:
+    """True if the caller holds ADMIN role (cross-user access)."""
+    return has_role(user, UserRole.ADMIN)
+
+
+def _assert_session_owner(session: Dict[str, Any], user: Dict[str, Any], session_id: str) -> None:
+    """Authorize the caller against a session's owner.
+
+    Sessions are user-private (they persist ``user_id``). A non-owner,
+    non-admin caller must not learn the session even exists, so we raise
+    404 (not 403) to avoid leaking existence — mirroring the per-tenant
+    pattern in ``routes/sentinels.py``.
+    """
+    if _is_admin(user):
+        return
+    owner = session.get("user_id")
+    if owner != _caller_id(user):
+        # 404, not 403: do not confirm the session exists to a non-owner.
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+
 
 # Orchestrator singleton for agent routing
 _orchestrator_instance = None
@@ -168,7 +205,15 @@ class CognitiveQueryResponse(BaseModel):
     query: str = Field(..., description="Original query")
     response: str = Field(..., description="Generated response")
     query_type: QueryType = Field(..., description="Detected or specified query type")
-    confidence: float = Field(..., ge=0.0, le=1.0, description="Response confidence")
+    confidence: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Response confidence. None on degraded/placeholder paths where no "
+            "real orchestrator analysis ran — never a fabricated default."
+        ),
+    )
     agent_used: str = Field(..., description="Primary agent that handled the query")
     evidence: Optional[List[EvidenceItem]] = Field(None, description="Evidence trail")
     phases_completed: List[CognitivePhase] = Field(..., description="Workflow phases completed")
@@ -249,7 +294,9 @@ class CreateSessionResponse(BaseModel):
     operation_id="process_cognitive_query",
 )
 async def process_cognitive_query(
-    request: CognitiveQueryRequest, background_tasks: BackgroundTasks
+    request: CognitiveQueryRequest,
+    background_tasks: BackgroundTasks,
+    user: Dict[str, Any] = Depends(require_viewer),
 ) -> CognitiveQueryResponse:
     """
     Process a query through the full cognitive workflow.
@@ -261,10 +308,18 @@ async def process_cognitive_query(
     4. **Reflect**: Store outcomes and record learning signals
 
     Returns response with evidence trail and confidence score.
+
+    Authorization: the owning ``user_id`` is derived from the authenticated
+    token, never from the request body (which is ignored to prevent
+    impersonation). Continuing an existing ``session_id`` you do not own is
+    rejected with 404.
     """
     import time
 
     start_time = time.time()
+
+    # FINDING #1: derive owner from the token; the body's user_id is ignored.
+    caller_id = _caller_id(user)
 
     try:
         working_memory = get_working_memory()
@@ -274,16 +329,25 @@ async def process_cognitive_query(
         session_id = request.session_id or str(uuid.uuid4())
 
         if not request.session_id:
-            # New session
+            # New session — owned by the authenticated caller.
             await working_memory.create_session(
                 session_id=session_id,
-                user_id=request.user_id,
+                user_id=caller_id,
                 initial_context={
                     "brand": request.brand,
                     "region": request.region,
                     **(request.metadata or {}),
                 },
             )
+        else:
+            # FINDING #1 [CRITICAL IDOR]: continuing an existing session must
+            # verify ownership BEFORE reading/appending to it. Otherwise any
+            # authenticated user could inject messages into — and read the
+            # evidence trail of — another user's session.
+            existing = await working_memory.get_session(session_id)
+            if not existing:
+                raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+            _assert_session_owner(existing, user, session_id)
 
         # Phase 1: Summarize - Get compressed context
         phases_completed.append(CognitivePhase.SUMMARIZE)
@@ -339,7 +403,11 @@ async def process_cognitive_query(
 
         # Execute via OrchestratorAgent (with fallback to placeholder)
         orchestrator = get_orchestrator()
-        response_confidence = 0.85  # Default confidence
+        # FINDING #2: confidence starts UNKNOWN (None). It is only set to a
+        # real value when the orchestrator actually produces one. The
+        # degraded/placeholder paths leave it None so the UI cannot present a
+        # fabricated 0.85 as a genuine model confidence.
+        response_confidence: Optional[float] = None
 
         if orchestrator:
             try:
@@ -347,7 +415,7 @@ async def process_cognitive_query(
                     {
                         "query": request.query,
                         "session_id": session_id,
-                        "user_id": request.user_id,
+                        "user_id": caller_id,
                         "user_context": {
                             "brand": request.brand,
                             "region": request.region,
@@ -357,11 +425,13 @@ async def process_cognitive_query(
                 )
 
                 response_text = orchestrator_result.get("response_text", "")
-                response_confidence = orchestrator_result.get("response_confidence", 0.85)
                 agents_dispatched = orchestrator_result.get("agents_dispatched", [])
 
                 if agents_dispatched:
                     agent_name = agents_dispatched[0]  # Primary agent used
+                    # Only a real dispatch yields a real confidence. Pass
+                    # through whatever the orchestrator reported (may be None).
+                    response_confidence = orchestrator_result.get("response_confidence")
                 else:
                     # Issue #251 F1+F2: the orchestrator ran but produced no
                     # dispatch. Surface that as a degraded marker — DO NOT
@@ -373,10 +443,13 @@ async def process_cognitive_query(
                     # branch trips test_cognitive_degraded_marker.py with
                     # agent_used='orchestrator' (F1 leak).
                     agent_name = "orchestrator_degraded"
+                    # FINDING #2: no real analysis ran -> leave confidence None.
+                    response_confidence = None
 
                 logger.info(
-                    f"Orchestrator processed query: agents={agents_dispatched}, "
-                    f"confidence={response_confidence:.2f}"
+                    "Orchestrator processed query: agents=%s, confidence=%s",
+                    agents_dispatched,
+                    response_confidence,
                 )
 
             except Exception as e:
@@ -387,6 +460,8 @@ async def process_cognitive_query(
                 # for GENERAL queries or 'health_score' for MONITORING. Surface
                 # the degraded marker so operators see the real failure mode.
                 agent_name = "orchestrator_degraded"
+                # FINDING #2: fallback path produced no real analysis.
+                response_confidence = None
                 response_text = _generate_placeholder_response(
                     query=request.query,
                     query_type=query_type,
@@ -394,7 +469,8 @@ async def process_cognitive_query(
                     brand=request.brand,
                 )
         else:
-            # Fallback to placeholder if orchestrator not available
+            # Fallback to placeholder if orchestrator not available.
+            # FINDING #2: placeholder path -> confidence stays None.
             response_text = _generate_placeholder_response(
                 query=request.query, query_type=query_type, evidence=evidence, brand=request.brand
             )
@@ -433,9 +509,15 @@ async def process_cognitive_query(
             },
         )
 
+    except HTTPException:
+        # Authorization / not-found decisions (e.g. cross-user 404) must
+        # propagate unchanged — not be swallowed into a generic 500.
+        raise
     except Exception as e:
-        logger.error(f"Cognitive query processing failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Query processing failed: {str(e)}") from e
+        # FINDING #3: log the detail server-side, return a generic message
+        # so internal error text (paths, stack hints) isn't disclosed.
+        logger.error(f"Cognitive query processing failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Query processing failed") from e
 
 
 @router.get(
@@ -444,7 +526,10 @@ async def process_cognitive_query(
     summary="Get cognitive session",
     operation_id="get_cognitive_session",
 )
-async def get_session(session_id: str) -> SessionResponse:
+async def get_session(
+    session_id: str,
+    user: Dict[str, Any] = Depends(require_viewer),
+) -> SessionResponse:
     """
     Get the current state of a cognitive session.
 
@@ -453,6 +538,9 @@ async def get_session(session_id: str) -> SessionResponse:
     - Message history
     - Accumulated evidence trail
     - Memory retrieval statistics
+
+    Authorization: only the session owner (or an admin) may read a session.
+    A non-owner gets 404 (existence is not disclosed).
     """
     try:
         working_memory = get_working_memory()
@@ -461,6 +549,10 @@ async def get_session(session_id: str) -> SessionResponse:
         session = await working_memory.get_session(session_id)
         if not session:
             raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+
+        # FINDING #1 [CRITICAL IDOR]: enforce ownership before returning the
+        # session's messages and evidence_trail to the caller.
+        _assert_session_owner(session, user, session_id)
 
         # Get messages
         messages_data = await working_memory.get_messages(session_id, limit=50)
@@ -508,8 +600,9 @@ async def get_session(session_id: str) -> SessionResponse:
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to retrieve session: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to retrieve session: {str(e)}") from e
+        # FINDING #3: generic client message; full detail logged server-side.
+        logger.error(f"Failed to retrieve session: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to retrieve session") from e
 
 
 @router.post(
@@ -518,7 +611,10 @@ async def get_session(session_id: str) -> SessionResponse:
     summary="Create cognitive session",
     operation_id="create_cognitive_session",
 )
-async def create_session(request: CreateSessionRequest) -> CreateSessionResponse:
+async def create_session(
+    request: CreateSessionRequest,
+    user: Dict[str, Any] = Depends(require_viewer),
+) -> CreateSessionResponse:
     """
     Create a new cognitive session.
 
@@ -529,6 +625,9 @@ async def create_session(request: CreateSessionRequest) -> CreateSessionResponse
     - Learning signals
 
     Sessions expire after 1 hour of inactivity.
+
+    Authorization: the new session is owned by the authenticated caller; the
+    request body's ``user_id`` is ignored to prevent impersonation.
     """
     try:
         working_memory = get_working_memory()
@@ -536,7 +635,8 @@ async def create_session(request: CreateSessionRequest) -> CreateSessionResponse
 
         await working_memory.create_session(
             session_id=session_id,
-            user_id=request.user_id,
+            # FINDING #1: owner = authenticated caller, NOT request.user_id.
+            user_id=_caller_id(user),
             initial_context={
                 "brand": request.brand,
                 "region": request.region,
@@ -552,8 +652,9 @@ async def create_session(request: CreateSessionRequest) -> CreateSessionResponse
         )
 
     except Exception as e:
-        logger.error(f"Failed to create session: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to create session: {str(e)}") from e
+        # FINDING #3: generic client message; full detail logged server-side.
+        logger.error(f"Failed to create session: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to create session") from e
 
 
 @router.delete(
@@ -561,12 +662,26 @@ async def create_session(request: CreateSessionRequest) -> CreateSessionResponse
     summary="Delete cognitive session",
     operation_id="delete_cognitive_session",
 )
-async def delete_session(session_id: str) -> Dict[str, Any]:
+async def delete_session(
+    session_id: str,
+    user: Dict[str, Any] = Depends(require_viewer),
+) -> Dict[str, Any]:
     """
     Delete a cognitive session and its associated data.
+
+    Authorization: only the session owner (or an admin) may delete it. A
+    non-owner gets 404 (existence is not disclosed) and the session is left
+    untouched.
     """
     try:
         working_memory = get_working_memory()
+
+        # FINDING #1 [CRITICAL IDOR]: verify ownership BEFORE deleting.
+        session = await working_memory.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+        _assert_session_owner(session, user, session_id)
+
         await working_memory.delete_session(session_id)
 
         return {
@@ -575,9 +690,12 @@ async def delete_session(session_id: str) -> Dict[str, Any]:
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Failed to delete session: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to delete session: {str(e)}") from e
+        # FINDING #3: generic client message; full detail logged server-side.
+        logger.error(f"Failed to delete session: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to delete session") from e
 
 
 @router.get(
@@ -588,15 +706,27 @@ async def delete_session(session_id: str) -> Dict[str, Any]:
 async def list_sessions(
     user_id: Optional[str] = None,
     limit: int = 50,
+    user: Dict[str, Any] = Depends(require_viewer),
 ) -> Dict[str, Any]:
     """
     List active cognitive sessions, ordered by most recent activity.
 
     Returns a lightweight summary per session (context only, no messages).
+
+    Authorization: a non-admin caller's results are ALWAYS scoped to their
+    own ``user_id``; the client-supplied ``?user_id`` is ignored (no
+    cross-user enumeration). Admins may pass ``?user_id`` to inspect any user.
     """
     try:
         working_memory = get_working_memory()
-        rows = await working_memory.list_sessions(user_id=user_id, limit=limit)
+
+        # FINDING #1 [CRITICAL IDOR]: scope to the caller unless admin.
+        if _is_admin(user):
+            effective_user_id = user_id
+        else:
+            effective_user_id = _caller_id(user)
+
+        rows = await working_memory.list_sessions(user_id=effective_user_id, limit=limit)
 
         sessions: List[Dict[str, Any]] = []
         for row in rows:
@@ -615,9 +745,12 @@ async def list_sessions(
 
         return {"sessions": sessions, "total": len(sessions)}
 
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Failed to list sessions: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to list sessions: {str(e)}") from e
+        # FINDING #3: generic client message; full detail logged server-side.
+        logger.error(f"Failed to list sessions: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to list sessions") from e
 
 
 @router.get(
@@ -625,7 +758,9 @@ async def list_sessions(
     summary="Get cognitive service status",
     operation_id="get_cognitive_status",
 )
-async def get_cognitive_status() -> Dict[str, Any]:
+async def get_cognitive_status(
+    user: Dict[str, Any] = Depends(require_viewer),
+) -> Dict[str, Any]:
     """
     Get current cognitive service status: configured agents and dependency health.
     """
@@ -647,8 +782,9 @@ async def get_cognitive_status() -> Dict[str, Any]:
         }
 
     except Exception as e:
-        logger.error(f"Failed to get cognitive status: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to get status: {str(e)}") from e
+        # FINDING #3: generic client message; full detail logged server-side.
+        logger.error(f"Failed to get cognitive status: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to get status") from e
 
 
 # =============================================================================
@@ -808,7 +944,10 @@ class CognitiveRAGResponse(BaseModel):
     summary="Cognitive RAG search",
     operation_id="cognitive_rag_search",
 )
-async def cognitive_rag_search(request: CognitiveRAGRequest) -> CognitiveRAGResponse:
+async def cognitive_rag_search(
+    request: CognitiveRAGRequest,
+    user: Dict[str, Any] = Depends(require_viewer),
+) -> CognitiveRAGResponse:
     """
     Execute DSPy-enhanced 4-phase cognitive RAG workflow.
 
@@ -871,15 +1010,21 @@ async def cognitive_rag_search(request: CognitiveRAGRequest) -> CognitiveRAGResp
         )
 
     except ImportError as e:
-        logger.error(f"Cognitive RAG import error: {e}")
+        # FINDING #3: log the offending module server-side; the client just
+        # needs to know the feature is unavailable, not the import internals.
+        logger.error(f"Cognitive RAG import error: {e}", exc_info=True)
         raise HTTPException(
-            status_code=503, detail=f"Cognitive RAG dependencies not available: {str(e)}"
+            status_code=503, detail="Cognitive RAG dependencies not available"
         ) from e
     except ValueError as e:
-        logger.error(f"Cognitive RAG configuration error: {e}")
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    except Exception as e:
-        logger.error(f"Cognitive RAG search failed: {e}", exc_info=True)
+        # FINDING #3: ValueError here is typically a misconfiguration (e.g. a
+        # missing API key); the message can leak config details, so keep the
+        # client response generic and log the specifics server-side.
+        logger.error(f"Cognitive RAG configuration error: {e}", exc_info=True)
         raise HTTPException(
-            status_code=500, detail=f"Cognitive RAG search failed: {str(e)[:200]}"
+            status_code=400, detail="Cognitive RAG request could not be processed"
         ) from e
+    except Exception as e:
+        # FINDING #3: generic client message; full detail logged server-side.
+        logger.error(f"Cognitive RAG search failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Cognitive RAG search failed") from e
