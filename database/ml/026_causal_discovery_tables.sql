@@ -13,6 +13,9 @@
 --   - Ensemble voting results
 -- =============================================================================
 
+-- Ensure the ml schema exists before any ml.* object is created
+CREATE SCHEMA IF NOT EXISTS ml;
+
 -- Enable required extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
@@ -64,7 +67,7 @@ END $$;
 -- Discovered DAG structures
 CREATE TABLE IF NOT EXISTS ml.discovered_dags (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    session_id UUID REFERENCES ml.user_sessions(id) ON DELETE SET NULL,
+    session_id UUID,  -- FK to ml.user_sessions dropped: that table has no creator on prod
 
     -- Discovery metadata
     discovery_timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -148,7 +151,7 @@ CREATE TABLE IF NOT EXISTS ml.discovered_edges (
 CREATE TABLE IF NOT EXISTS ml.driver_rankings (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     dag_id UUID REFERENCES ml.discovered_dags(id) ON DELETE CASCADE,
-    session_id UUID REFERENCES ml.user_sessions(id) ON DELETE SET NULL,
+    session_id UUID,  -- FK to ml.user_sessions dropped: that table has no creator on prod
 
     -- Target variable
     target_variable VARCHAR(255) NOT NULL,
