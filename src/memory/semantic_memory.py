@@ -34,6 +34,7 @@ Usage:
 """
 
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
@@ -184,6 +185,52 @@ def _validate_relationship_types(relationship_types: List[str]) -> List[str]:
     return relationship_types
 
 
+# A Cypher identifier: a leading letter/underscore then letters/digits/
+# underscores. Node labels, relationship types and property KEYS are structural
+# tokens that cannot be parameterized, so they are spliced into the query string;
+# constraining them to this shape makes injection (``]``, ``(``, ``{``, quotes,
+# whitespace, comment markers) impossible.
+_SAFE_CYPHER_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _validate_cypher_identifier(value: str, kind: str) -> str:
+    """Validate a structural Cypher token (label / relationship type) on WRITE.
+
+    Reason-before-rules: the WRITE methods accept OPEN-ENDED labels/relationship
+    types from agents and the LLM cognitive path (e.g. ``"SegmentEffect"``,
+    ``"Variable"``) that are deliberately NOT in the read-side closed allowlists
+    (:func:`_validate_node_labels` / :func:`_validate_relationship_types`). An
+    allowlist here would silently drop those legitimate writes while adding no
+    extra injection safety, so writes use a strict-identifier regex instead —
+    it blocks every injection payload yet preserves dynamic-but-safe tokens.
+
+    Raises:
+        ValueError: if ``value`` is not a valid Cypher identifier.
+    """
+    if not isinstance(value, str) or not _SAFE_CYPHER_IDENT.match(value):
+        raise ValueError(
+            f"Invalid {kind} {value!r}: must be a Cypher identifier "
+            f"(letters/digits/underscore, not starting with a digit)."
+        )
+    return value
+
+
+def _validate_property_keys(properties: Optional[Dict[str, Any]]) -> None:
+    """Validate that every property KEY is a safe Cypher identifier on WRITE.
+
+    Property *values* are passed as bound parameters (``$key``) and are safe;
+    the *keys*, however, are interpolated into the ``SET`` clause, so a poisoned
+    key (e.g. ``"x} ) DETACH DELETE n //"``) would be an injection vector.
+
+    Raises:
+        ValueError: if any key is not a valid Cypher identifier.
+    """
+    if not properties:
+        return
+    for key in properties:
+        _validate_cypher_identifier(str(key), "property key")
+
+
 # ============================================================================
 # SEMANTIC MEMORY CLASS
 # ============================================================================
@@ -251,7 +298,17 @@ class FalkorDBSemanticMemory:
         else:
             label = entity_type
             type_value = entity_type
+
+        # H2: validate structural tokens before they are spliced into Cypher.
+        # ``label`` may be a caller-supplied string on the str branch; property
+        # keys are interpolated into the SET clause. Values are bound params.
+        _validate_cypher_identifier(label, "node label")
+        _validate_property_keys(properties)
+
         props = properties.copy() if properties else {}
+        # The two keys added below are hardcoded identifier literals (not
+        # caller-controlled), so they need no further validation before being
+        # interpolated into the SET clause alongside the validated caller keys.
         props["e2i_entity_type"] = type_value
         props["updated_at"] = datetime.now(timezone.utc).isoformat()
 
@@ -360,6 +417,13 @@ class FalkorDBSemanticMemory:
         Returns:
             True if successful
         """
+        # H2: validate structural tokens BEFORE any graph write (including the
+        # entity-ensure calls below) so a poisoned rel_type or property key can
+        # never reach graph.query. ``rel_type`` is the live LLM-fed vector
+        # (rag/cognitive_backends passes ``relationship_type.upper()``).
+        _validate_cypher_identifier(rel_type, "relationship type")
+        _validate_property_keys(properties)
+
         # Ensure both entities exist
         self.add_e2i_entity(source_type, source_id)
         self.add_e2i_entity(target_type, target_id)
@@ -368,6 +432,9 @@ class FalkorDBSemanticMemory:
         target_label = E2I_TO_LABEL.get(target_type, "Entity")
 
         props = properties.copy() if properties else {}
+        # ``updated_at`` is a hardcoded identifier literal (not caller-controlled),
+        # so it needs no validation before interpolation alongside the validated
+        # caller keys; validation of the caller's keys ran above, before any write.
         props["updated_at"] = datetime.now(timezone.utc).isoformat()
 
         prop_items = [f"{k}: ${k}" for k in props.keys()]

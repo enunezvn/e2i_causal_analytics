@@ -21,10 +21,10 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.api.dependencies.auth import (
-    UserRole,
     get_user_brands,
-    has_role,
+    is_cross_brand_admin,
     require_viewer,
+    resolve_brand_for_read,
 )
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 from src.memory.episodic_memory import (
@@ -75,8 +75,9 @@ router = APIRouter(
 
 
 def _is_admin(user: Dict[str, Any]) -> bool:
-    """Cross-brand admin (or holder of the ``'all'`` brand grant)."""
-    return has_role(user, UserRole.ADMIN) or "all" in set(get_user_brands(user))
+    """Cross-brand admin — delegates to the canonical ``auth`` helper so the
+    admin-detection policy cannot silently drift between modules (codex MED-1)."""
+    return is_cross_brand_admin(user)
 
 
 def _brand_allowed(user: Dict[str, Any], brand: Optional[str]) -> bool:
@@ -331,14 +332,40 @@ async def search_memory(
 
     start_time = time.time()
 
+    # H1 (cross-tenant PHI reads): scope the search to the caller's brand grant.
+    # The episodic RPC treats a missing brand as "all brands", and the FalkorDB
+    # causal graph carries no brand property (so its traversal cannot be tenant-
+    # scoped) — therefore a non-admin gets (a) the episodic filter pinned to an
+    # in-grant brand and (b) the graph-traversal params dropped entirely. A
+    # cross-brand admin is unrestricted.
+    filters = dict(request.filters or {})
+    entities = request.entities
+    kpi_name = request.kpi_name
+    if not is_cross_brand_admin(user):
+        allowed, scoped_brand = resolve_brand_for_read(user, filters.get("brand"))
+        if not allowed:
+            # Defensive empty — never leak out-of-grant existence or content.
+            return MemorySearchResponse(
+                query=request.query,
+                results=[],
+                total_results=0,
+                retrieval_method=request.retrieval_method.value,
+                search_latency_ms=(time.time() - start_time) * 1000,
+            )
+        filters["brand"] = scoped_brand
+        # Graph traversal is not brand-scopable (no brand on causal-graph nodes);
+        # restrict it to cross-brand admins. Non-admins get episodic results only.
+        entities = None
+        kpi_name = None
+
     try:
         # Execute hybrid search
         results = await hybrid_search(
             query=request.query,
             k=request.k,
-            entities=request.entities,
-            kpi_name=request.kpi_name,
-            filters=request.filters,
+            entities=entities,
+            kpi_name=kpi_name,
+            filters=filters,
         )
 
         # Filter by minimum score
@@ -641,6 +668,17 @@ async def query_semantic_paths(
     - Entity relationships
     - Influence networks
     """
+    # H1 (BOLA on the causal graph): the FalkorDB causal graph carries no brand
+    # property on its nodes (verified on the live ``e2i_causal`` graph), so a
+    # traversal cannot be tenant-scoped. Until ``brand`` is added to the causal-
+    # graph nodes, restrict this endpoint to cross-brand admins (fail-closed)
+    # rather than leak another tenant's causal chains to a scoped viewer.
+    if not is_cross_brand_admin(user):
+        raise HTTPException(
+            status_code=403,
+            detail="cross-brand admin grant required for semantic path traversal",
+        )
+
     import time
 
     start_time = time.time()

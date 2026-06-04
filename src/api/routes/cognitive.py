@@ -29,7 +29,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from src.api.dependencies.auth import (
     UserRole,
     has_role,
+    is_cross_brand_admin,
     require_viewer,
+    resolve_brand_for_read,
 )
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 from src.memory.working_memory import get_working_memory
@@ -321,6 +323,28 @@ async def process_cognitive_query(
     # FINDING #1: derive owner from the token; the body's user_id is ignored.
     caller_id = _caller_id(user)
 
+    # H1 (cross-tenant PHI reads): scope memory retrieval to the caller's brand
+    # grant before it reaches hybrid_search. The episodic RPC treats a missing
+    # brand as "all brands", and the FalkorDB causal graph cannot be tenant-
+    # scoped (no brand on its nodes), so a non-admin gets the episodic filter
+    # pinned to an in-grant brand and the graph-traversal kpi dropped. An
+    # *explicit* out-of-grant brand is a deliberate cross-tenant attempt -> 403.
+    # A grant-less caller with no brand requested cannot be scoped, so we skip
+    # memory retrieval entirely (never fall through to an unscoped all-brand
+    # search) while still letting session ownership / orchestration run.
+    effective_brand = request.brand
+    graph_kpi = _extract_kpi_from_query(request.query)
+    skip_memory_retrieval = False
+    if not is_cross_brand_admin(user):
+        allowed, scoped_brand = resolve_brand_for_read(user, request.brand)
+        if not allowed:
+            if request.brand is not None:
+                raise HTTPException(status_code=403, detail="no grant for the requested brand")
+            skip_memory_retrieval = True
+        else:
+            effective_brand = scoped_brand
+        graph_kpi = None
+
     try:
         working_memory = get_working_memory()
         phases_completed = []
@@ -363,12 +387,17 @@ async def process_cognitive_query(
 
         # Phase 2: Investigate - Retrieve relevant memories
         phases_completed.append(CognitivePhase.INVESTIGATE)
-        memory_results = await hybrid_search(
-            query=request.query,
-            k=request.max_memory_results,
-            kpi_name=_extract_kpi_from_query(request.query),
-            filters=_build_filters(request.brand, request.region),
-        )
+        if skip_memory_retrieval:
+            # Grant-less caller: cannot tenant-scope, so retrieve nothing rather
+            # than run an unscoped all-brand search (H1).
+            memory_results = []
+        else:
+            memory_results = await hybrid_search(
+                query=request.query,
+                k=request.max_memory_results,
+                kpi_name=graph_kpi,
+                filters=_build_filters(effective_brand, request.region),
+            )
 
         # Build evidence items
         evidence = (
