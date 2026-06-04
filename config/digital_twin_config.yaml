@@ -73,27 +73,14 @@ simulation:
   # Enable heterogeneous effect calculation
   calculate_heterogeneity: true
 
-  # Intervention types and their effect modifiers
-  intervention_effects:
-    email_campaign:
-      base_effect: 0.08
-      channel_modifier: 1.0
-      personalization_bonus: 0.02
-    call_frequency_increase:
-      base_effect: 0.15
-      intensity_modifier: 0.1
-    sample_provision:
-      base_effect: 0.10
-      product_modifier: 1.2
-    rep_visit_frequency:
-      base_effect: 0.12
-      territory_modifier: 1.0
-    digital_engagement:
-      base_effect: 0.07
-      channel_modifier: 0.9
-    peer_influence:
-      base_effect: 0.09
-      influence_threshold: 0.7
+  # Effect engine configuration (Task 9 calibration sweep will overwrite
+  # selected_learner and min_effect_threshold with measured values).
+  effect_engine:
+    selected_learner: uplift_random_forest   # set by the Task 9 calibration sweep
+    min_effect_threshold: 0.05               # placeholder; replaced by Task 9 calibration output
+    n_estimators: 100
+    max_depth: 5
+    min_training_samples: 1000
 
   # Recommendation thresholds
   recommendations:
