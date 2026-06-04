@@ -101,8 +101,23 @@ class TestMalformedInterventionConfig:
         # Engine should complete (uses defaults for unknown interventions)
         assert result.status in [SimulationStatus.COMPLETED, SimulationStatus.FAILED]
 
-    def test_unknown_intervention_type(self, engine):
-        """Test handling of unknown intervention type."""
+    def test_unknown_intervention_type(self, population):
+        """Test handling of unknown intervention type.
+
+        The engine now fails CLOSED on unknown interventions: the provider
+        allowlist rejects any type not in the 6-type supported set, which
+        propagates to a FAILED SimulationResult with simulated_ate == 0.0.
+        """
+        from src.digital_twin.effect.estimator import TwinEffectEstimator
+        from src.digital_twin.effect.provider import SyntheticEffectDataProvider
+
+        engine = SimulationEngine(
+            population,
+            effect_provider=SyntheticEffectDataProvider(n=300, seed=42),
+            effect_estimator=TwinEffectEstimator(
+                n_estimators=20, max_depth=3, min_training_samples=100
+            ),
+        )
         config = InterventionConfig(
             intervention_type="nonexistent_intervention_xyz",
             duration_weeks=8,
@@ -110,8 +125,9 @@ class TestMalformedInterventionConfig:
 
         result = engine.simulate(config)
 
-        # Should complete with default effect parameters
-        assert result.status == SimulationStatus.COMPLETED
+        # Engine fails closed: unknown intervention type → FAILED, no fabricated ATE
+        assert result.status == SimulationStatus.FAILED
+        assert result.simulated_ate == 0.0
 
     def test_negative_duration(self):
         """Test that negative duration weeks raises ValidationError."""
@@ -189,12 +205,27 @@ class TestMissingRequiredFields:
     """Tests for handling missing or None field values."""
 
     def test_twins_with_missing_features(self, population):
-        """Test handling twins with missing feature values."""
+        """Test handling twins with missing feature values.
+
+        Twins with empty feature dicts lack the numeric covariates (decile,
+        engagement_score, etc.) that the uplift estimator requires.  When all
+        50 twins in the first batch have no features the feature-extraction
+        step cannot build a valid covariate matrix, so the engine fails CLOSED.
+        """
+        from src.digital_twin.effect.estimator import TwinEffectEstimator
+        from src.digital_twin.effect.provider import SyntheticEffectDataProvider
+
         # Modify some twins to have missing features
         for twin in population.twins[:50]:
             twin.features = {}  # Empty features dict
 
-        engine = SimulationEngine(population)
+        engine = SimulationEngine(
+            population,
+            effect_provider=SyntheticEffectDataProvider(n=300, seed=42),
+            effect_estimator=TwinEffectEstimator(
+                n_estimators=20, max_depth=3, min_training_samples=100
+            ),
+        )
         config = InterventionConfig(
             intervention_type="email_campaign",
             duration_weeks=8,
@@ -202,8 +233,8 @@ class TestMissingRequiredFields:
 
         result = engine.simulate(config)
 
-        # Should use defaults for missing features
-        assert result.status == SimulationStatus.COMPLETED
+        # Engine fails closed: twins lacking numeric covariates → FAILED, no fabricated ATE
+        assert result.status == SimulationStatus.FAILED
 
     def test_twins_with_none_propensity(self):
         """Test handling twins with None baseline propensity."""
@@ -567,12 +598,16 @@ class TestPartialTwinData:
         assert result.status == SimulationStatus.COMPLETED
 
     def test_twins_invalid_feature_types(self):
-        """Test twins with invalid feature value types raises TypeError.
+        """Test twins with invalid feature value types return a FAILED result.
 
-        Features dict accepts Any type, but invalid types (strings where
-        numbers expected) will cause TypeError during simulation when
-        comparisons or arithmetic is performed.
+        The engine no longer raises a raw TypeError.  The estimator's fit step
+        wraps numeric-type errors into an EstimationError, which the engine
+        catches and converts to a fail-closed SimulationResult with
+        status == FAILED and simulated_ate == 0.0.
         """
+        from src.digital_twin.effect.estimator import TwinEffectEstimator
+        from src.digital_twin.effect.provider import SyntheticEffectDataProvider
+
         twins = [
             DigitalTwin(
                 twin_type=TwinType.HCP,
@@ -596,16 +631,22 @@ class TestPartialTwinData:
             model_id=uuid4(),
         )
 
-        engine = SimulationEngine(population)
+        engine = SimulationEngine(
+            population,
+            effect_provider=SyntheticEffectDataProvider(n=300, seed=42),
+            effect_estimator=TwinEffectEstimator(
+                n_estimators=20, max_depth=3, min_training_samples=100
+            ),
+        )
         config = InterventionConfig(
             intervention_type="email_campaign",
             duration_weeks=8,
         )
 
-        # Invalid feature types (strings where numbers expected) cause TypeError
-        # during simulation when comparisons/arithmetic is performed
-        with pytest.raises(TypeError):
-            engine.simulate(config)
+        # Engine fails closed: invalid feature types → FAILED, no raw TypeError raised
+        result = engine.simulate(config)
+        assert result.status == SimulationStatus.FAILED
+        assert result.simulated_ate == 0.0
 
 
 # =============================================================================

@@ -74,7 +74,7 @@ class SyntheticEffectDataProvider:
             )
         if reference_covariates is not None:
             return self._frame_from_reference(reference_covariates)
-        # brand/twin_type are unused: the synthetic DGP is intervention-parameterized only.
+        # brand/twin_type unused; intervention_type is only an allowlist gate — the v1 synthetic DGP is NOT intervention-differentiated (effect magnitude = true_ate for every supported type).
         rng = np.random.default_rng(self.seed)
         n = self.n
         decile = rng.integers(1, 11, size=n).astype(float)

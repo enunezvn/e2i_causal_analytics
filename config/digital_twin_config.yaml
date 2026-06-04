@@ -82,11 +82,15 @@ simulation:
   # case fails only because the realized Bernoulli marginal is a noisy draw
   # (~0.011 at seed 42); n=6000 makes the realized effect match nominal.
   effect_engine:
-    selected_learner: uplift_random_forest   # calibrated learner (Task 9 sweep)
-    min_effect_threshold: 0.05               # 5% min-effect bar for DEPLOY
-    n_estimators: 300                        # Task 9 recovery calibration
-    max_depth: 6                             # Task 9 recovery calibration
-    min_training_samples: 1000               # Task 9 recovery calibration
+    # NOTE (v1): these are the Task-9 calibration-validated REFERENCE values.
+    # They are NOT yet read by SimulationEngine — the live engine uses
+    # TwinEffectEstimator's built-in defaults (n_estimators=100, max_depth=5).
+    # Wiring this block through to the estimator/policy is a follow-up.
+    selected_learner: uplift_random_forest
+    min_effect_threshold: 0.05
+    n_estimators: 300
+    max_depth: 6
+    min_training_samples: 1000
 
   # Recommendation thresholds
   recommendations:

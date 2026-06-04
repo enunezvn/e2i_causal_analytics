@@ -76,7 +76,12 @@ class SimulateInterventionInput(BaseModel):
         default=10000, description="Number of digital twins to simulate (100-50000)"
     )
     confidence_level: float = Field(
-        default=0.95, description="Confidence level for interval calculation (0.8-0.99)"
+        default=0.95,
+        description=(
+            "Confidence level for interval calculation (0.8-0.99). "
+            "(v1: the simulation CI is the estimator's training-evidence 95% interval; "
+            "this value is currently not applied)"
+        ),
     )
 
 
