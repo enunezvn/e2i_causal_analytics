@@ -325,7 +325,7 @@ describe('Finding 5: segment results cache key is order-insensitive', () => {
 // ===========================================================================
 
 describe('Finding 6: trigger monitoring narrows invalidation to affected sub-keys', () => {
-  it('invalidates health + alerts per experiment id, not the whole namespace', async () => {
+  it('invalidates monitoring-affected sub-keys per experiment id, not the whole namespace', async () => {
     const client = createTestQueryClient();
     const invalidateSpy = vi.spyOn(client, 'invalidateQueries');
 
@@ -341,11 +341,20 @@ describe('Finding 6: trigger monitoring narrows invalidation to affected sub-key
     const namespaceKey = queryKeys.experiments.all();
     expect(invalidatedKeys).not.toContainEqual(namespaceKey as unknown as QueryKey);
 
-    // Must invalidate health + alerts for each requested id.
-    expect(invalidatedKeys).toContainEqual(queryKeys.experiments.health('exp-1') as unknown as QueryKey);
-    expect(invalidatedKeys).toContainEqual(queryKeys.experiments.alerts('exp-1') as unknown as QueryKey);
-    expect(invalidatedKeys).toContainEqual(queryKeys.experiments.health('exp-2') as unknown as QueryKey);
-    expect(invalidatedKeys).toContainEqual(queryKeys.experiments.alerts('exp-2') as unknown as QueryKey);
+    // The monitoring sweep refreshes health, alerts, SRM, enrollment, and
+    // fidelity data server-side (check_srm/check_enrollment/check_fidelity),
+    // so all of those sub-keys must be invalidated for each requested id.
+    for (const id of ['exp-1', 'exp-2']) {
+      expect(invalidatedKeys).toContainEqual(queryKeys.experiments.health(id) as unknown as QueryKey);
+      expect(invalidatedKeys).toContainEqual(queryKeys.experiments.alerts(id) as unknown as QueryKey);
+      expect(invalidatedKeys).toContainEqual(queryKeys.experiments.srmChecks(id) as unknown as QueryKey);
+      expect(invalidatedKeys).toContainEqual(
+        queryKeys.experiments.enrollmentStats(id) as unknown as QueryKey
+      );
+      expect(invalidatedKeys).toContainEqual(
+        queryKeys.experiments.fidelityComparisons(id) as unknown as QueryKey
+      );
+    }
   });
 
   it('falls back to the experiments namespace when no ids are given', async () => {

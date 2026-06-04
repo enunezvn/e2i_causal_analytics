@@ -596,12 +596,16 @@ export function useTriggerMonitoring(
     onSuccess: (_data, request) => {
       const ids = request.experiment_ids;
       if (ids && ids.length > 0) {
-        // Monitoring only updates health + alerts for the targeted experiments,
+        // The monitoring sweep refreshes health, alerts, SRM, enrollment, and
+        // fidelity data server-side (check_srm/check_enrollment/check_fidelity),
         // so invalidate exactly those sub-keys per id instead of blowing away
         // the entire experiments namespace (assignments, results, etc.).
         for (const id of ids) {
           queryClient.invalidateQueries({ queryKey: queryKeys.experiments.health(id) });
           queryClient.invalidateQueries({ queryKey: queryKeys.experiments.alerts(id) });
+          queryClient.invalidateQueries({ queryKey: queryKeys.experiments.srmChecks(id) });
+          queryClient.invalidateQueries({ queryKey: queryKeys.experiments.enrollmentStats(id) });
+          queryClient.invalidateQueries({ queryKey: queryKeys.experiments.fidelityComparisons(id) });
         }
       } else {
         // No ids => all active experiments may have been monitored; fall back
