@@ -731,9 +731,28 @@ async def update_alert(alert_id: str, request: AlertActionRequest) -> AlertItem:
         elif request.action == AlertAction.RESOLVE:
             record = await repo.resolve_alert(alert_id, resolved_by=request.user_id or "api_user")
         elif request.action == AlertAction.SNOOZE:
-            # Snooze is acknowledge with a note
-            record = await repo.acknowledge_alert(
-                alert_id, acknowledged_by=f"snoozed_by_{request.user_id or 'api_user'}"
+            # SNOOZE is NOT YET SUPPORTED by the backend. The persistence layer
+            # (ml_monitoring_alerts.alert_status_enum, migration
+            # database/ml/017_model_monitoring_tables.sql) has no ``snoozed``
+            # status and no ``snooze_until`` column, so a real snooze — persist
+            # snooze_until + exclude snoozed-until-future alerts from the active
+            # set — is impossible WITHOUT a schema migration.
+            #
+            # Previously this branch silently masqueraded as ACKNOWLEDGE and
+            # dropped the caller-supplied ``snooze_until`` while returning a 200,
+            # so a client believed it had snoozed an alert that was actually only
+            # acknowledged (a refetch shows status='acknowledged', never
+            # 'snoozed'). That silent-but-wrong behavior is removed here: we fail
+            # honestly with 501 instead. Follow-up to implement real snooze
+            # requires a migration adding the 'snoozed' enum value + a
+            # snooze_until column, plus excluding snoozed-until-future alerts
+            # from get_active_alerts().
+            raise HTTPException(
+                status_code=501,
+                detail=(
+                    "Snooze is not supported: the alert store has no snooze "
+                    "state. Use 'acknowledge' or 'resolve'."
+                ),
             )
         else:
             raise HTTPException(status_code=400, detail=f"Unknown action: {request.action}")

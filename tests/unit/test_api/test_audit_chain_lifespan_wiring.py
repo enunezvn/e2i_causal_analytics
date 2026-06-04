@@ -203,3 +203,63 @@ async def test_lifespan_resets_audit_service_on_exceptional_shutdown():
                 raise RuntimeError("app crashed during run")
         # Shutdown was exceptional, but the global must still be reset.
         assert get_audit_chain_service() is None
+
+
+@pytest.mark.asyncio
+async def test_lifespan_runs_resource_cleanup_on_exceptional_shutdown():
+    """All resource-cleanup blocks (redis/falkordb/bentoml/supabase/feast/opik/
+    otel) must run on EXCEPTIONAL shutdown too, not just on normal shutdown.
+
+    RED before this fix: the cleanup blocks lived AFTER ``yield`` but OUTSIDE the
+    ``finally`` that held the audit-chain reset, so an exception thrown into the
+    lifespan body skipped every close()/flush() — leaking connections, sockets
+    and unflushed traces on any abnormal startup/run failure.
+
+    Each cleanup is individually try/except-wrapped, so moving them into the
+    finally cannot make shutdown crash; this test asserts they actually fire.
+    """
+    mock_client = MagicMock(name="supabase_client")
+
+    # Track the cleanup hooks we expect to fire on shutdown.
+    close_redis = AsyncMock(name="close_redis")
+    close_falkordb = AsyncMock(name="close_falkordb")
+    close_bentoml = AsyncMock(name="close_bentoml_client")
+    close_supabase = MagicMock(name="close_supabase")
+    shutdown_otel = MagicMock(name="shutdown_opentelemetry")
+
+    feast = MagicMock()
+    feast.initialize = AsyncMock()
+    feast._initialized = False
+    feast.close = AsyncMock(name="feast_close")
+    feast_cls = MagicMock(return_value=feast)
+
+    with (
+        patch("src.api.main.get_bentoml_client", new=AsyncMock()),
+        patch("src.api.main.configure_bentoml_endpoints", new=MagicMock()),
+        patch("src.api.main.init_redis", new=AsyncMock()),
+        patch("src.api.main.init_falkordb", new=AsyncMock()),
+        patch("src.api.main.get_mlflow_connector", new=MagicMock()),
+        patch("src.api.main.get_opik_connector", new=MagicMock()),
+        patch("src.api.main.FeastClient", new=feast_cls),
+        patch("src.api.main.close_bentoml_client", new=close_bentoml),
+        patch("src.api.main.close_redis", new=close_redis),
+        patch("src.api.main.close_falkordb", new=close_falkordb),
+        patch("src.api.main.close_supabase", new=close_supabase),
+        patch("src.api.main.shutdown_opentelemetry", new=shutdown_otel),
+        patch(
+            "src.memory.sentinels.config_loader.load_sentinels_from_yaml",
+            new=AsyncMock(return_value=0),
+        ),
+        patch("src.api.main.init_supabase", return_value=mock_client),
+    ):
+        with pytest.raises(RuntimeError, match="boom during run"):
+            async with main.lifespan(_fake_app()):
+                raise RuntimeError("boom during run")
+
+    # Every cleanup must have fired despite the exceptional shutdown.
+    close_redis.assert_awaited_once()
+    close_falkordb.assert_awaited_once()
+    close_bentoml.assert_awaited_once()
+    close_supabase.assert_called_once()
+    feast.close.assert_awaited_once()
+    shutdown_otel.assert_called_once()
