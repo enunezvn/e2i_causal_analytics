@@ -88,6 +88,31 @@ def mock_procedural_memory_functions():
 
 
 @pytest.fixture
+def brand_scoped_viewer():
+    """Override auth to a NON-admin viewer holding a single brand grant
+    (``BrandA``).
+
+    The default ``TEST_USER`` is a cross-brand admin, so it bypasses every
+    per-tenant gate. To exercise the L13 procedural-feedback BOLA check we must
+    authenticate as a non-admin whose grants we control.
+    """
+    from src.api.dependencies.auth import require_viewer
+
+    user = {
+        "id": "viewer-a",
+        "email": "viewer-a@e2i-analytics.com",
+        "app_metadata": {"role": "viewer", "brands": ["BrandA"]},
+    }
+
+    async def _fake_viewer():
+        return user
+
+    app.dependency_overrides[require_viewer] = _fake_viewer
+    yield user
+    app.dependency_overrides.pop(require_viewer, None)
+
+
+@pytest.fixture
 def mock_semantic_memory():
     """Mock semantic memory."""
     memory = MagicMock()
@@ -322,6 +347,120 @@ class TestProceduralFeedback:
         assert response.status_code == 200
         _, kwargs = mock_procedural_memory_functions["update"].call_args
         assert kwargs["success"] is True
+
+    # --- L13 (#694) BOLA: ownership/brand grant check ---------------------------
+
+    def test_feedback_cross_tenant_is_denied_404(
+        self, mock_procedural_memory_functions, brand_scoped_viewer
+    ):
+        """L13 (#694) BOLA: a non-admin viewer granted ``BrandA`` must NOT be
+        able to mutate a procedure scoped to ``BrandB``. The endpoint returns
+        404 (existence-hiding, matching the episodic gate) and performs NO
+        success-count mutation or DSPy learning-signal injection."""
+        mock_procedural_memory_functions["get"].return_value = {
+            "procedure_id": "proc_b",
+            "usage_count": 10,
+            "success_count": 9,
+            "applicable_brands": ["BrandB"],
+        }
+        response = client.post(
+            "/api/memory/procedural/feedback",
+            json={"procedure_id": "proc_b", "outcome": "success", "score": 0.9},
+        )
+
+        assert response.status_code == 404
+        mock_procedural_memory_functions["update"].assert_not_called()
+        mock_procedural_memory_functions["signal"].assert_not_called()
+
+    def test_feedback_in_grant_is_allowed(
+        self, mock_procedural_memory_functions, brand_scoped_viewer
+    ):
+        """A non-admin viewer may record feedback for a procedure scoped to a
+        brand they are granted."""
+        mock_procedural_memory_functions["get"].return_value = {
+            "procedure_id": "proc_a",
+            "usage_count": 10,
+            "success_count": 9,
+            "applicable_brands": ["BrandA"],
+        }
+        response = client.post(
+            "/api/memory/procedural/feedback",
+            json={"procedure_id": "proc_a", "outcome": "success", "score": 0.9},
+        )
+
+        assert response.status_code == 200
+        mock_procedural_memory_functions["update"].assert_called_once()
+
+    def test_feedback_partial_brand_overlap_is_allowed(
+        self, mock_procedural_memory_functions, brand_scoped_viewer
+    ):
+        """A procedure scoped to MULTIPLE brands is ratable as long as the
+        caller is granted at least one of them — exercises the ``any()`` overlap
+        (the grant ``BrandA`` matches the procedure's second listed brand)."""
+        mock_procedural_memory_functions["get"].return_value = {
+            "procedure_id": "proc_multi",
+            "usage_count": 8,
+            "success_count": 4,
+            "applicable_brands": ["BrandB", "BrandA"],
+        }
+        response = client.post(
+            "/api/memory/procedural/feedback",
+            json={"procedure_id": "proc_multi", "outcome": "success", "score": 0.7},
+        )
+
+        assert response.status_code == 200
+        mock_procedural_memory_functions["update"].assert_called_once()
+
+    def test_feedback_global_procedure_is_allowed(
+        self, mock_procedural_memory_functions, brand_scoped_viewer
+    ):
+        """A procedure with ``applicable_brands=['all']`` is GLOBAL and ratable
+        by any authenticated viewer, regardless of their brand grant."""
+        mock_procedural_memory_functions["get"].return_value = {
+            "procedure_id": "proc_all",
+            "usage_count": 4,
+            "success_count": 2,
+            "applicable_brands": ["all"],
+        }
+        response = client.post(
+            "/api/memory/procedural/feedback",
+            json={"procedure_id": "proc_all", "outcome": "failure", "score": 0.1},
+        )
+
+        assert response.status_code == 200
+        mock_procedural_memory_functions["update"].assert_called_once()
+
+    def test_feedback_nonexistent_procedure_is_404(
+        self, mock_procedural_memory_functions, brand_scoped_viewer
+    ):
+        """A feedback POST for a procedure that does not exist returns 404 and
+        performs no mutation (previously it silently 200'd with a null rate)."""
+        mock_procedural_memory_functions["get"].return_value = None
+        response = client.post(
+            "/api/memory/procedural/feedback",
+            json={"procedure_id": "ghost", "outcome": "success", "score": 0.9},
+        )
+
+        assert response.status_code == 404
+        mock_procedural_memory_functions["update"].assert_not_called()
+        mock_procedural_memory_functions["signal"].assert_not_called()
+
+    def test_feedback_admin_bypasses_brand_scope(self, mock_procedural_memory_functions):
+        """A cross-brand admin (the default ``TEST_USER``) may record feedback
+        for any procedure regardless of its brand scope."""
+        mock_procedural_memory_functions["get"].return_value = {
+            "procedure_id": "proc_b",
+            "usage_count": 10,
+            "success_count": 9,
+            "applicable_brands": ["BrandB"],
+        }
+        response = client.post(
+            "/api/memory/procedural/feedback",
+            json={"procedure_id": "proc_b", "outcome": "success", "score": 0.9},
+        )
+
+        assert response.status_code == 200
+        mock_procedural_memory_functions["update"].assert_called_once()
 
 
 # =============================================================================

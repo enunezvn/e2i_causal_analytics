@@ -90,6 +90,28 @@ def _brand_allowed(user: Dict[str, Any], brand: Optional[str]) -> bool:
     return brand in set(get_user_brands(user))
 
 
+def _procedure_brand_allowed(user: Dict[str, Any], applicable_brands: Optional[List[str]]) -> bool:
+    """True if the caller may record feedback for a procedure scoped to
+    ``applicable_brands``.
+
+    A procedure carries ``applicable_brands: List[str]`` rather than a single
+    ``brand``; the ``['all']`` sentinel (and an empty/absent scope) marks a
+    GLOBAL procedure that any authenticated viewer may rate. Otherwise the
+    caller must hold a grant on at least one of the procedure's brands. This
+    mirrors the episodic brand-membership gate (``_brand_allowed`` / #690
+    finding #4) so the per-tenant authZ policy stays consistent across the
+    memory routes until full RLS lands.
+    """
+    if _is_admin(user):
+        return True
+    brands = [b for b in (applicable_brands or []) if b]
+    if not brands or "all" in brands:
+        # Global / unscoped procedure — ratable by any authenticated viewer.
+        return True
+    user_brands = set(get_user_brands(user))
+    return any(b in user_brands for b in brands)
+
+
 # =============================================================================
 # ENUMS & MODELS
 # =============================================================================
@@ -614,6 +636,19 @@ async def record_procedural_feedback(
     Used by Feedback Learner for continuous improvement.
     """
     try:
+        # L13 (#694) BOLA guard: a non-admin caller could previously mutate ANY
+        # procedure's success counts and inject DSPy learning signals for it,
+        # with no ownership/brand check (cross-tenant feedback poisoning). Fetch
+        # the procedure FIRST and verify the caller holds a grant on it before
+        # any mutation. Return 404 (not 403) for both "missing" and "not
+        # entitled" so we don't disclose the existence of a procedure the caller
+        # isn't allowed to see — mirroring the episodic get gate (#690 #4).
+        target = await get_procedure_by_id(request.procedure_id)
+        if not target or not _procedure_brand_allowed(user, target.get("applicable_brands")):
+            raise HTTPException(
+                status_code=404, detail=f"Procedure {request.procedure_id} not found"
+            )
+
         # Determine success based on outcome. L13 (#694): the outcome enum
         # is validated to {success, partial, failure} at the Pydantic
         # boundary. "partial" is a DISTINCT outcome — it is NOT a full
@@ -654,6 +689,10 @@ async def record_procedural_feedback(
             message="Feedback recorded successfully",
         )
 
+    except HTTPException:
+        # Deliberate client errors (e.g. the L13 BOLA 404) must propagate
+        # unchanged — the generic handler below would otherwise mask them as 500.
+        raise
     except Exception as e:
         # FINDING #3: generic client message; full detail logged server-side.
         logger.error(f"Failed to record procedural feedback: {e}", exc_info=True)
