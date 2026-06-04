@@ -287,9 +287,7 @@ class TestProceduralFeedback:
         # The procedure outcome must NOT have been updated for an invalid value.
         mock_procedural_memory_functions["update"].assert_not_called()
 
-    def test_record_feedback_partial_is_not_full_success(
-        self, mock_procedural_memory_functions
-    ):
+    def test_record_feedback_partial_is_not_full_success(self, mock_procedural_memory_functions):
         """L13 (#694): 'partial' is a distinct outcome — it does NOT count as
         a full success, so update_procedure_outcome is called with
         success=False (same as 'failure'), but it is an accepted value (200)."""
@@ -303,9 +301,7 @@ class TestProceduralFeedback:
         _, kwargs = mock_procedural_memory_functions["update"].call_args
         assert kwargs["success"] is False
 
-    def test_record_feedback_failure_records_not_success(
-        self, mock_procedural_memory_functions
-    ):
+    def test_record_feedback_failure_records_not_success(self, mock_procedural_memory_functions):
         """'failure' is accepted and recorded as success=False."""
         response = client.post(
             "/api/memory/procedural/feedback",
@@ -316,9 +312,7 @@ class TestProceduralFeedback:
         _, kwargs = mock_procedural_memory_functions["update"].call_args
         assert kwargs["success"] is False
 
-    def test_record_feedback_success_records_success(
-        self, mock_procedural_memory_functions
-    ):
+    def test_record_feedback_success_records_success(self, mock_procedural_memory_functions):
         """'success' is accepted and recorded as success=True."""
         response = client.post(
             "/api/memory/procedural/feedback",
