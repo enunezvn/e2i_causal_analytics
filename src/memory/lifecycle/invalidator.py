@@ -159,13 +159,24 @@ async def cascade_invalidate(
                 if table:
                     pk_col = TARGET_PK[target_type]
                     try:
-                        client.table(table).update(
-                            {
-                                "invalidated_at": now_iso,
-                                "invalidation_reason": reason[:1000],  # truncate paranoia
-                            }
-                        ).eq(pk_col, target_id).is_("invalidated_at", "null").execute()
-                        result.record_hit(target_type)
+                        res = (
+                            client.table(table)
+                            .update(
+                                {
+                                    "invalidated_at": now_iso,
+                                    "invalidation_reason": reason[:1000],  # truncate paranoia
+                                }
+                            )
+                            .eq(pk_col, target_id)
+                            .is_("invalidated_at", "null")
+                            .execute()
+                        )
+                        # Only count a hit when the UPDATE actually matched a row.
+                        # An already-invalidated target (guarded by
+                        # is_("invalidated_at", "null")) matches nothing — counting
+                        # it would over-report invalidated_by_type.
+                        if res.data:
+                            result.record_hit(target_type)
                     except Exception as exc:
                         logger.exception(f"cascade: update failed for {target_type}:{target_id}")
                         result.errors.append(f"update {target_type}:{target_id}: {exc}")

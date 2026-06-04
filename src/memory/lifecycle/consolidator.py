@@ -375,9 +375,11 @@ class ConsolidationResult:
 
     Unrevertable errors (iter-2 new-H1): when BOTH the original
     mutation AND its compensating revert fail, the brand is added to
-    ``brands_with_dedup_errors`` so downstream promotion phases can
+    ``brands_with_dedup_errors`` so ``_promote_to_semantic`` can
     short-circuit instead of double-counting on the inconsistent
-    counter.
+    counter. (``_promote_to_procedural`` intentionally ignores this
+    set — procedural graduation keys off usage_count/success_rate, not
+    the dedup counter, so it cannot be double-counted by a dedup error.)
     """
 
     promoted_to_semantic: int = 0
@@ -408,8 +410,10 @@ class ConsolidationResult:
 
     def mark_brand_dedup_error(self, brand: Optional[str]) -> None:
         """Mark a brand as having an unrevertable dedup error.
-        Downstream promotion phases skip this brand to avoid
-        double-counting on the inconsistent counter."""
+        ``_promote_to_semantic`` skips this brand to avoid
+        double-counting on the inconsistent counter.
+        (``_promote_to_procedural`` ignores this set by design —
+        it keys off usage_count/success_rate, not the dedup counter.)"""
         if brand:
             self.brands_with_dedup_errors.add(brand)
 

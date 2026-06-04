@@ -1018,6 +1018,48 @@ async def test_recover_unique_violation_multi_row_counter_correctness(
     assert rows[0]["dedup_signature"] == expected_sig
 
 
+@pytest.mark.asyncio
+async def test_promote_to_procedural_ignores_brands_with_dedup_errors(
+    fake_supabase: FakeSupabase,
+) -> None:
+    """M13 (#694) characterization: ``_promote_to_procedural`` does NOT honor
+    ``brands_with_dedup_errors`` — procedural graduation keys off
+    usage_count/success_rate, not the dedup counter, so an unrevertable dedup
+    error in a brand must NOT suppress procedural promotion. This is correct by
+    design (only ``_promote_to_semantic`` short-circuits on dedup errors).
+
+    This pinning test guards against a future regression that would extend the
+    semantic short-circuit to the procedural phase.
+    """
+    from src.memory.lifecycle.consolidator import ConsolidationResult
+
+    # Seed a procedural memory that clears the usage/success thresholds.
+    fake_supabase.rows["procedural_memories"].append(
+        {
+            "procedure_id": "proc-1",
+            "procedure_name": "investigate TRx decline",
+            "applicable_brands": ["Kisqali"],
+            "success_rate": 0.95,
+            "usage_count": 10,
+        }
+    )
+
+    consolidator = Consolidator(procedural_min_usage=3, procedural_min_success_rate=0.7)
+    result = ConsolidationResult()
+    # Mark Kisqali as having an unrevertable dedup error.
+    result.mark_brand_dedup_error("Kisqali")
+    assert "Kisqali" in result.brands_with_dedup_errors
+
+    await consolidator._promote_to_procedural(result, brand="Kisqali")
+
+    # Promotion proceeded DESPITE the dedup error for the same brand.
+    assert result.promoted_to_procedural == 1
+    proc = fake_supabase.rows["procedural_memories"][0]
+    assert proc["procedure_name"].startswith("[PROC] "), (
+        "procedural promotion must fire even when the brand has a dedup error"
+    )
+
+
 def test_is_unique_violation_rejects_non_constraint_exceptions_with_unique_in_message() -> None:
     """Iter-3 new-NEW-M2: ``_is_unique_violation`` must NOT return True
     for non-DB-constraint exceptions that happen to mention "unique" in

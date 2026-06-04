@@ -39,7 +39,7 @@ import json
 import logging
 import uuid
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple, cast
 
@@ -874,8 +874,9 @@ async def count_memories_by_type(
     if brand:
         query = query.eq("brand", brand)
 
-    # Note: For date filtering, we'd need to use .gte() with a date
-    # This is simplified for now
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days_back)).isoformat()
+    query = query.gte("occurred_at", cutoff)
+
     result = query.execute()
     return result.count or 0
 

@@ -252,6 +252,43 @@ async def test_cascade_publishes_brand_scoped_signal(fake_supabase: FakeSupabase
 
 
 @pytest.mark.asyncio
+async def test_cascade_already_invalidated_target_not_double_counted(
+    fake_supabase: FakeSupabase,
+):
+    """L8 (#694): an already-invalidated target (UPDATE matches no rows due to
+    the ``is_('invalidated_at', 'null')`` guard) must NOT increment the metric.
+
+    record_hit() was previously called unconditionally, over-counting
+    invalidated_by_type for targets that were already invalidated.
+    """
+    fake_supabase.rows["insight_edges"].append(
+        {
+            "source_type": "causal_path",
+            "source_id": "cp1",
+            "target_type": "trigger",
+            "target_id": "tr1",
+            "brand": "Kisqali",
+        }
+    )
+    # Target trigger is ALREADY invalidated → UPDATE will match zero rows.
+    fake_supabase.rows["triggers"].append(
+        {"trigger_id": "tr1", "invalidated_at": "2026-01-01T00:00:00+00:00"}
+    )
+
+    result = await cascade_invalidate(
+        source_type="causal_path",
+        source_id="cp1",
+        reason="overturned again",
+        scope_brand="Kisqali",
+        publish_signal=False,
+    )
+
+    assert result.invalidated_by_type.get("trigger", 0) == 0, (
+        "already-invalidated target must not be counted as a fresh invalidation"
+    )
+
+
+@pytest.mark.asyncio
 async def test_cascade_rejects_empty_brand():
     with pytest.raises(ValueError):
         await cascade_invalidate(

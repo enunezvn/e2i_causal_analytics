@@ -57,6 +57,7 @@ def mock_supabase():
     # Chain methods
     table_mock.select.return_value = table_mock
     table_mock.eq.return_value = table_mock
+    table_mock.gte.return_value = table_mock
     table_mock.in_.return_value = table_mock
     table_mock.order.return_value = table_mock
     table_mock.limit.return_value = table_mock
@@ -761,6 +762,53 @@ class TestUtilityFunctions:
             count = await count_memories_by_type()
 
             assert count == 0
+
+    @pytest.mark.asyncio
+    async def test_count_memories_by_type_applies_days_back(self, mock_supabase):
+        """count_memories_by_type should apply a days_back cutoff via .gte('occurred_at', ...)."""
+        from datetime import datetime, timedelta, timezone
+
+        # Ensure gte() keeps the query chain
+        mock_supabase.table.return_value.gte.return_value = mock_supabase.table.return_value
+
+        with patch("src.memory.episodic_memory.get_supabase_client", return_value=mock_supabase):
+            mock_supabase.table.return_value.execute.return_value.count = 5
+
+            before = datetime.now(timezone.utc)
+            count = await count_memories_by_type(days_back=1)
+            after = datetime.now(timezone.utc)
+
+            assert count == 5
+            gte_call = mock_supabase.table.return_value.gte.call_args
+            assert gte_call is not None, "Expected .gte() to be called for date filtering"
+            assert gte_call[0][0] == "occurred_at"
+            cutoff = datetime.fromisoformat(gte_call[0][1])
+            # cutoff should be ~ now - 1 day (allow tolerance for execution time)
+            expected_lo = before - timedelta(days=1) - timedelta(seconds=5)
+            expected_hi = after - timedelta(days=1) + timedelta(seconds=5)
+            assert expected_lo <= cutoff <= expected_hi
+
+    @pytest.mark.asyncio
+    async def test_count_memories_by_type_large_days_back_older_cutoff(self, mock_supabase):
+        """A large days_back should yield a much older cutoff than a small one."""
+        from datetime import datetime
+
+        mock_supabase.table.return_value.gte.return_value = mock_supabase.table.return_value
+
+        with patch("src.memory.episodic_memory.get_supabase_client", return_value=mock_supabase):
+            mock_supabase.table.return_value.execute.return_value.count = 0
+
+            await count_memories_by_type(days_back=1)
+            cutoff_small = datetime.fromisoformat(
+                mock_supabase.table.return_value.gte.call_args[0][1]
+            )
+
+            await count_memories_by_type(days_back=365)
+            cutoff_large = datetime.fromisoformat(
+                mock_supabase.table.return_value.gte.call_args[0][1]
+            )
+
+            assert cutoff_large < cutoff_small
 
     @pytest.mark.asyncio
     async def test_sync_treatment_relationships_to_cache(self, mock_supabase):

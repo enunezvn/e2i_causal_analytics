@@ -664,6 +664,10 @@ async def _fire_action(
         and action_cfg.get("agent_name") == "notify_and_queue_reanalysis"
     )
 
+    # Track successes for THIS sentinel only (result.actions_taken is cumulative
+    # across the whole dispatcher pass, so we can't use it to decide cooldown).
+    actions_succeeded = 0
+
     for match_index, match in enumerate(matches):
         try:
             if action_type == "invalidate":
@@ -767,9 +771,16 @@ async def _fire_action(
             else:
                 continue
             result.actions_taken += 1
+            actions_succeeded += 1
         except Exception as exc:
             logger.exception(f"sentinel {sentinel_id}: action {action_type} failed on {match}")
             result.errors.append(f"{sentinel_id} action: {exc}")
+
+    # Only enter cooldown if at least one action actually succeeded. A sentinel
+    # whose every action FAILED must stay eligible so the next dispatch pass can
+    # retry, rather than being silently suppressed by a premature cooldown.
+    if actions_succeeded == 0:
+        return
 
     # Bump fire_count + last_fired_at after the loop.
     try:

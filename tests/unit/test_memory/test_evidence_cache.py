@@ -88,6 +88,22 @@ class TestEvidenceEvaluationCache:
         # Should have evicted oldest (10% = 1 entry)
         assert cache.stats["size"] <= 10
 
+    def test_cache_eviction_small_max_size(self):
+        """L4 (#694): with max_size < 10, max_size // 10 == 0 so eviction must
+        still evict at least one entry; the size cap must not be violated."""
+        max_size = 5
+        cache = EvidenceEvaluationCache(max_size=max_size, ttl_seconds=3600)
+
+        # Insert well past the cap.
+        for i in range(20):
+            cache.set(f"goal-{i}", "evidence", f"result-{i}")
+            time.sleep(0.005)  # Ensure distinct timestamps for LRU ordering
+
+        assert cache.stats["size"] <= max_size, (
+            f"size {cache.stats['size']} exceeds cap {max_size} — "
+            "eviction did nothing because max_size // 10 == 0"
+        )
+
     def test_cache_stats(self):
         """Test that stats are correctly tracked."""
         cache = EvidenceEvaluationCache(max_size=100, ttl_seconds=3600)
