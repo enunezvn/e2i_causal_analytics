@@ -1283,3 +1283,54 @@ class TestChatErrorDoesNotLeakInternals:
         assert "relation does not exist" not in (data.get("error") or "")
         # A generic message should be returned instead.
         assert data["error"]
+
+
+# =============================================================================
+# Bounded analytics query-limit tests (disputed-sweep finding #4)
+# =============================================================================
+
+
+class TestAnalyticsBoundedLimits:
+    """Out-of-range days/limit query params must be rejected with 422.
+
+    Previously these were bare ``int`` defaults (days=30/7, limit=20) with no
+    bounds, so a caller could request an arbitrarily large/zero/negative window
+    and force an unbounded scan. They are now ``Query(..., ge=1, le=N)``.
+    """
+
+    def test_feedback_stats_days_too_large(self, test_client):
+        response = test_client.get("/copilotkit/feedback/stats?days=10000")
+        assert response.status_code == 422
+
+    def test_feedback_stats_days_zero(self, test_client):
+        response = test_client.get("/copilotkit/feedback/stats?days=0")
+        assert response.status_code == 422
+
+    def test_usage_analytics_days_too_large(self, test_client):
+        response = test_client.get("/copilotkit/analytics/usage?days=10000")
+        assert response.status_code == 422
+
+    def test_agent_analytics_days_negative(self, test_client):
+        response = test_client.get("/copilotkit/analytics/agents?days=-1")
+        assert response.status_code == 422
+
+    def test_error_analytics_limit_too_large(self, test_client):
+        response = test_client.get("/copilotkit/analytics/errors?limit=100000")
+        assert response.status_code == 422
+
+    def test_error_analytics_limit_zero(self, test_client):
+        response = test_client.get("/copilotkit/analytics/errors?limit=0")
+        assert response.status_code == 422
+
+    def test_hourly_pattern_days_too_large(self, test_client):
+        response = test_client.get("/copilotkit/analytics/hourly?days=10000")
+        assert response.status_code == 422
+
+    def test_within_bounds_still_accepted(self, test_client):
+        """A within-bounds request must NOT 422 (no over-tightening)."""
+        with patch("src.repositories.get_chatbot_analytics_repository") as mock_repo:
+            mock_repo_instance = MagicMock()
+            mock_repo_instance.get_recent_errors = AsyncMock(return_value=[])
+            mock_repo.return_value = mock_repo_instance
+            response = test_client.get("/copilotkit/analytics/errors?limit=200")
+        assert response.status_code == 200

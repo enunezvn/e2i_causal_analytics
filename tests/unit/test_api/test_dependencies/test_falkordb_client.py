@@ -35,12 +35,16 @@ class TestFalkorDBClient:
 
         falkordb_module._falkordb_client = None
         falkordb_module._graph = None
+        falkordb_module._diagnostics_cache = None
+        falkordb_module._diagnostics_cached_at = 0.0
         falkordb_module._health_circuit_breaker = CircuitBreaker(
             CircuitBreakerConfig(failure_threshold=3, reset_timeout_seconds=30.0)
         )
         yield
         falkordb_module._falkordb_client = None
         falkordb_module._graph = None
+        falkordb_module._diagnostics_cache = None
+        falkordb_module._diagnostics_cached_at = 0.0
 
     @pytest.mark.asyncio
     async def test_init_falkordb_success(self):
@@ -306,20 +310,38 @@ class TestFalkorDBClient:
 
     @pytest.mark.asyncio
     async def test_falkordb_health_check_healthy(self):
-        """Test FalkorDB health check returns healthy status."""
+        """Test FalkorDB readiness check returns healthy status (reachability only)."""
         from src.api.dependencies.falkordb_client import falkordb_health_check
 
         mock_client = MagicMock()
-        mock_graph = MagicMock()
         mock_client.list_graphs.return_value = ["e2i_causal", "other_graph"]
 
-        # Mock query results for node and edge counts
-        mock_node_result = MagicMock()
-        mock_node_result.result_set = [[42]]
-        mock_edge_result = MagicMock()
-        mock_edge_result.result_set = [[15]]
+        with patch("src.api.dependencies.falkordb_client.get_falkordb") as mock_get_client:
+            mock_get_client.return_value = mock_client
 
-        mock_graph.query.side_effect = [mock_node_result, mock_edge_result]
+            result = await falkordb_health_check()
+
+            assert result["status"] == "healthy"
+            assert "latency_ms" in result
+            assert result["graphs"] == ["e2i_causal", "other_graph"]
+            assert result["current_graph"] == "e2i_causal"
+            # Readiness is reachability-only: it must NOT report node/edge counts.
+            assert "node_count" not in result
+            assert "edge_count" not in result
+
+    @pytest.mark.asyncio
+    async def test_readiness_does_not_run_count_scans(self):
+        """The readiness path must NOT issue full-graph count() scans.
+
+        RED before the fix: falkordb_health_check ran two MATCH...count(...)
+        queries on every probe, blocking the event loop. After the fix it relies
+        on list_graphs() for reachability and never touches graph.query.
+        """
+        from src.api.dependencies.falkordb_client import falkordb_health_check
+
+        mock_client = MagicMock()
+        mock_client.list_graphs.return_value = ["e2i_causal"]
+        mock_graph = MagicMock()
 
         with patch("src.api.dependencies.falkordb_client.get_falkordb") as mock_get_client:
             with patch("src.api.dependencies.falkordb_client.get_graph") as mock_get_graph:
@@ -329,11 +351,8 @@ class TestFalkorDBClient:
                 result = await falkordb_health_check()
 
                 assert result["status"] == "healthy"
-                assert "latency_ms" in result
-                assert result["graphs"] == ["e2i_causal", "other_graph"]
-                assert result["current_graph"] == "e2i_causal"
-                assert result["node_count"] == 42
-                assert result["edge_count"] == 15
+                # No count() scans were issued on the readiness path.
+                mock_graph.query.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_falkordb_health_check_not_configured(self):
@@ -364,51 +383,118 @@ class TestFalkorDBClient:
             assert "Connection failed" in result["error"]
 
     @pytest.mark.asyncio
-    async def test_falkordb_health_check_query_error_graceful(self):
-        """Test FalkorDB health check handles query errors gracefully."""
-        from src.api.dependencies.falkordb_client import falkordb_health_check
+    async def test_falkordb_diagnostics_query_error_graceful(self):
+        """Diagnostics handles query errors gracefully (reports 0 counts)."""
+        import src.api.dependencies.falkordb_client as falkordb_module
+        from src.api.dependencies.falkordb_client import falkordb_diagnostics
 
-        mock_client = MagicMock()
+        # Bypass the diagnostics cache for a deterministic scan.
+        falkordb_module._diagnostics_cache = None
+
         mock_graph = MagicMock()
-        mock_client.list_graphs.return_value = ["e2i_causal"]
         mock_graph.query.side_effect = Exception("Query failed")
 
-        with patch("src.api.dependencies.falkordb_client.get_falkordb") as mock_get_client:
-            with patch("src.api.dependencies.falkordb_client.get_graph") as mock_get_graph:
-                mock_get_client.return_value = mock_client
-                mock_get_graph.return_value = mock_graph
+        with patch("src.api.dependencies.falkordb_client.get_graph") as mock_get_graph:
+            mock_get_graph.return_value = mock_graph
 
-                result = await falkordb_health_check()
+            result = await falkordb_diagnostics(use_cache=False)
 
-                # Should still report healthy but with 0 counts
-                assert result["status"] == "healthy"
-                assert result["node_count"] == 0
-                assert result["edge_count"] == 0
+            assert result["status"] == "healthy"
+            assert result["node_count"] == 0
+            assert result["edge_count"] == 0
 
     @pytest.mark.asyncio
-    async def test_falkordb_health_check_empty_graph(self):
-        """Test FalkorDB health check handles empty graph."""
-        from src.api.dependencies.falkordb_client import falkordb_health_check
+    async def test_falkordb_diagnostics_empty_graph(self):
+        """Diagnostics handles an empty graph (0 counts)."""
+        import src.api.dependencies.falkordb_client as falkordb_module
+        from src.api.dependencies.falkordb_client import falkordb_diagnostics
 
-        mock_client = MagicMock()
+        falkordb_module._diagnostics_cache = None
+
         mock_graph = MagicMock()
-        mock_client.list_graphs.return_value = ["e2i_causal"]
-
-        # Empty result sets
         mock_result = MagicMock()
         mock_result.result_set = []
         mock_graph.query.return_value = mock_result
 
-        with patch("src.api.dependencies.falkordb_client.get_falkordb") as mock_get_client:
-            with patch("src.api.dependencies.falkordb_client.get_graph") as mock_get_graph:
-                mock_get_client.return_value = mock_client
-                mock_get_graph.return_value = mock_graph
+        with patch("src.api.dependencies.falkordb_client.get_graph") as mock_get_graph:
+            mock_get_graph.return_value = mock_graph
 
-                result = await falkordb_health_check()
+            result = await falkordb_diagnostics(use_cache=False)
 
-                assert result["status"] == "healthy"
-                assert result["node_count"] == 0
-                assert result["edge_count"] == 0
+            assert result["status"] == "healthy"
+            assert result["node_count"] == 0
+            assert result["edge_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_falkordb_diagnostics_reports_counts(self):
+        """Diagnostics runs the count() scans and returns node/edge counts."""
+        import src.api.dependencies.falkordb_client as falkordb_module
+        from src.api.dependencies.falkordb_client import falkordb_diagnostics
+
+        falkordb_module._diagnostics_cache = None
+
+        mock_graph = MagicMock()
+        mock_node_result = MagicMock()
+        mock_node_result.result_set = [[42]]
+        mock_edge_result = MagicMock()
+        mock_edge_result.result_set = [[15]]
+        mock_graph.query.side_effect = [mock_node_result, mock_edge_result]
+
+        with patch("src.api.dependencies.falkordb_client.get_graph") as mock_get_graph:
+            mock_get_graph.return_value = mock_graph
+
+            result = await falkordb_diagnostics(use_cache=False)
+
+            assert result["status"] == "healthy"
+            assert result["node_count"] == 42
+            assert result["edge_count"] == 15
+            assert result["cached"] is False
+            # Two count() scans were issued (nodes + edges).
+            assert mock_graph.query.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_falkordb_diagnostics_uses_cache(self):
+        """Diagnostics serves a cached result within the TTL (no rescan)."""
+        import time
+
+        import src.api.dependencies.falkordb_client as falkordb_module
+        from src.api.dependencies.falkordb_client import falkordb_diagnostics
+
+        falkordb_module._diagnostics_cache = {
+            "status": "healthy",
+            "current_graph": "e2i_causal",
+            "node_count": 7,
+            "edge_count": 3,
+        }
+        falkordb_module._diagnostics_cached_at = time.time()
+
+        mock_graph = MagicMock()
+
+        with patch("src.api.dependencies.falkordb_client.get_graph") as mock_get_graph:
+            mock_get_graph.return_value = mock_graph
+
+            result = await falkordb_diagnostics(use_cache=True)
+
+            assert result["node_count"] == 7
+            assert result["cached"] is True
+            # Cache hit -> no scans, and get_graph not even consulted.
+            mock_graph.query.assert_not_called()
+            mock_get_graph.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_falkordb_diagnostics_unavailable_when_no_graph(self):
+        """Diagnostics returns 'unavailable' when no graph is configured."""
+        import src.api.dependencies.falkordb_client as falkordb_module
+        from src.api.dependencies.falkordb_client import falkordb_diagnostics
+
+        falkordb_module._diagnostics_cache = None
+
+        with patch("src.api.dependencies.falkordb_client.get_graph") as mock_get_graph:
+            mock_get_graph.return_value = None
+
+            result = await falkordb_diagnostics(use_cache=False)
+
+            assert result["status"] == "unavailable"
 
     @pytest.mark.asyncio
     async def test_falkordb_logging_success(self, caplog):

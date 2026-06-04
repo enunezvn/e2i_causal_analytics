@@ -798,3 +798,86 @@ class TestEnumValidation:
                 json=hierarchical_request,
             )
             assert response.status_code == 200
+
+
+class TestDataSourceDefaultIsNeutral:
+    """Disputed-sweep finding #5: the misleading ``data_source='mock_data'``
+    default is renamed to a neutral identifier.
+
+    The old default string ``'mock_data'`` looked like a request to use fake
+    data, but NOTHING in the codebase branches on that literal (only
+    ``data_source == 'synthetic'`` triggers a special — non-mock — path in
+    src/agents/causal_impact/agent.py). The default is now ``'default'``.
+    """
+
+    def test_all_request_schemas_default_to_neutral_identifier(self):
+        from src.api.schemas.causal import (
+            CrossValidationRequest,
+            HierarchicalAnalysisRequest,
+            ParallelPipelineRequest,
+            SequentialPipelineRequest,
+        )
+
+        hier = HierarchicalAnalysisRequest(treatment_var="t", outcome_var="o")
+        assert hier.data_source == "default"
+        assert hier.data_source != "mock_data"
+
+        # Pipeline/validation schemas have required fields beyond data_source;
+        # construct the minimal valid instances.
+        from src.api.schemas.causal import CausalLibrary, PipelineStageConfig
+
+        seq = SequentialPipelineRequest(
+            treatment_var="t",
+            outcome_var="o",
+            stages=[
+                PipelineStageConfig(library=CausalLibrary.DOWHY),
+                PipelineStageConfig(library=CausalLibrary.ECONML),
+            ],
+        )
+        assert seq.data_source == "default"
+
+        par = ParallelPipelineRequest(
+            treatment_var="t",
+            outcome_var="o",
+            libraries=[CausalLibrary.DOWHY, CausalLibrary.ECONML],
+        )
+        assert par.data_source == "default"
+
+        cv = CrossValidationRequest(
+            treatment_var="t",
+            outcome_var="o",
+            primary_library=CausalLibrary.DOWHY,
+            validation_library=CausalLibrary.ECONML,
+        )
+        assert cv.data_source == "default"
+
+    def test_neutral_default_does_not_trigger_a_mock_path(self):
+        """The neutral default must not be treated like the only behavior-changing
+        data_source literal ('synthetic').
+
+        The agent's _initialize_state special-cases ONLY data_source ==
+        'synthetic' (setting a fast ols/refutation config). With 'default' (the
+        new neutral schema default) that fast-path must NOT engage — proving the
+        new default triggers no mock/special data behavior.
+        """
+        from src.agents.causal_impact.agent import CausalImpactAgent
+
+        agent = CausalImpactAgent.__new__(CausalImpactAgent)
+
+        base_input = {
+            "query": "impact?",
+            "treatment_var": "treatment",
+            "outcome_var": "outcome",
+            "confounders": [],
+        }
+
+        # 'synthetic' -> fast-path params are injected.
+        synth = agent._initialize_state({**base_input, "data_source": "synthetic"})
+        assert synth["parameters"].get("method") == "ols"
+        assert "refutation_config" in synth["parameters"]
+
+        # 'default' (the new neutral schema default) -> NO fast-path params.
+        neutral = agent._initialize_state({**base_input, "data_source": "default"})
+        assert "method" not in neutral["parameters"]
+        assert "refutation_config" not in neutral["parameters"]
+        assert neutral["data_source"] == "default"
