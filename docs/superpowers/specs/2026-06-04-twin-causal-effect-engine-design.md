@@ -29,7 +29,9 @@ A pre-screen is a **decision gate**, not a measurement instrument. Its rigor asy
 **v1 (this spec — buildable & fully testable in isolation; NO dependency on audit findings H4/H6):**
 the estimator, the synthetic data provider, heterogeneity drill-down, the CI-based recommendation policy, the calibration/validation harness, provenance labeling, and the phased test suite.
 
-**v2 (designed here, deferred):** RWD `CohortEffectDataProvider`; propensity-matched twin pairs (SMD < 0.1) in `TwinGenerator.generate_twin()`; the fidelity feedback loop (predicted vs real ATE); live-path wiring (depends on **H4** model-load + **H6** repo-client); agent-tool rewire (**H3**).
+**v2 (designed here, deferred):** RWD `CohortEffectDataProvider`; propensity-matched twin pairs (SMD < 0.1) in `TwinGenerator.generate_twin()`; the fidelity feedback loop (predicted vs real ATE); a **bootstrap high-fidelity CI mode** (config-gated, runs on the async/Celery offload path — see CI note below); live-path wiring (depends on **H4** model-load + **H6** repo-client); agent-tool rewire (**H3**).
+
+> **CI methodology (owner decision, 2026-06-04):** v1 computes the effect CI from the uplift model's **training-frame** inferential interval, recentred on the population ATE — so the interval is bounded by the labeled-data sample size (`n_train`) and does **not** collapse as more twins are simulated. A normal-approximation `ate_std/√n` fallback is used only when the model returns no CI bounds. A **bootstrap CI** (resample training data → refit → percentile interval) is strictly more rigorous but costs B× the (slow) uplift fit, which breaks the <2s pre-screen SLA and the memory-safe test lane; it is therefore deferred to a v1.1 config-gated `high_fidelity` mode on the async offload path.
 
 **Out of scope:** the twin *generation* model (`TwinGenerator.train` stays real sklearn baseline); the downstream real `causal_impact` run; the frontend fabrication (H1/H2, tracked separately in the audit).
 
