@@ -10,10 +10,18 @@ from src.digital_twin.effect.recommendation import (
 
 def _est(ate, lo, hi):
     return EffectEstimate(
-        ate=ate, ate_ci_lower=lo, ate_ci_upper=hi, att=None, atc=None,
-        per_twin_uplift=np.array([ate]), auuc=None, qini=None,
-        feature_importances=None, n_train=2000,
-        estimator_type="uplift_random_forest", data_provenance=PROVENANCE_SYNTHETIC,
+        ate=ate,
+        ate_ci_lower=lo,
+        ate_ci_upper=hi,
+        att=None,
+        atc=None,
+        per_twin_uplift=np.array([ate]),
+        auuc=None,
+        qini=None,
+        feature_importances=None,
+        n_train=2000,
+        estimator_type="uplift_random_forest",
+        data_provenance=PROVENANCE_SYNTHETIC,
     )
 
 
