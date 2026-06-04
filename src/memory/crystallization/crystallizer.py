@@ -33,6 +33,7 @@ remains boolean via ``invalidated_at IS NULL``.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import os
@@ -169,7 +170,10 @@ class Crystallizer:
         )
         if region:
             query = query.eq("region", region)
-        memories = (query.execute().data) or []
+        # Off-load the blocking Supabase HTTP call to a worker thread so the
+        # synchronous ``.execute()`` does not stall the FastAPI event loop on
+        # the operator ``/crystallize`` path (M2-supabase, #694).
+        memories = ((await asyncio.to_thread(query.execute)).data) or []
 
         # Group by (causal_path_id OR fallback grouping key). For v1 we use
         # causal_path_id as the strongest signal of "these are talking about
@@ -339,43 +343,41 @@ class Crystallizer:
         # + operator-triggered POST /crystallize) collide here; catch and
         # return ("", 0) as a skip-signal that the caller observes.
         try:
-            insert = (
-                client.table("executive_insights")
-                .insert(
-                    {
-                        "title": title[:500],
-                        "narrative": narrative,
-                        "brand": brand,
-                        "region": region,
-                        "kpi": _pick_kpi(members),
-                        "time_window_start": time_start,
-                        "time_window_end": time_end,
-                        "key_metrics": key_metrics,
-                        "crystallized_by_cycle_id": crystallized_by_cycle_id,
-                        "crystallized_by_user_id": crystallized_by_user_id,
-                        "source_count": len(members),
-                        # --- analytical (#376 §A.1-8) ---
-                        "effect_size": derived["effect_size"],
-                        "effect_ci_lower": derived["effect_ci_lower"],
-                        "effect_ci_upper": derived["effect_ci_upper"],
-                        "effect_direction": derived["effect_direction"],
-                        "cohort_size": derived["cohort_size"],
-                        "confounders_controlled": derived["confounders_controlled"],
-                        "sensitivity_checks_passed": derived["sensitivity_checks_passed"],
-                        "sensitivity_checks_failed": derived["sensitivity_checks_failed"],
-                        # --- narrative prose (#376 §A.9-10) ---
-                        "limitations": (limitations or "")[:500],
-                        "recommended_next_analysis": (recommended_next or "")[:500],
-                        # --- lineage (#376 §A.11-15) ---
-                        "provenance_chain_id": derived["provenance_chain_id"],
-                        "provenance_depth": derived["provenance_depth"],
-                        "consolidation_tier": derived["consolidation_tier"],
-                        "replication_count": derived["replication_count"],
-                        "data_version": derived["data_version"],
-                    }
-                )
-                .execute()
+            insert_query = client.table("executive_insights").insert(
+                {
+                    "title": title[:500],
+                    "narrative": narrative,
+                    "brand": brand,
+                    "region": region,
+                    "kpi": _pick_kpi(members),
+                    "time_window_start": time_start,
+                    "time_window_end": time_end,
+                    "key_metrics": key_metrics,
+                    "crystallized_by_cycle_id": crystallized_by_cycle_id,
+                    "crystallized_by_user_id": crystallized_by_user_id,
+                    "source_count": len(members),
+                    # --- analytical (#376 §A.1-8) ---
+                    "effect_size": derived["effect_size"],
+                    "effect_ci_lower": derived["effect_ci_lower"],
+                    "effect_ci_upper": derived["effect_ci_upper"],
+                    "effect_direction": derived["effect_direction"],
+                    "cohort_size": derived["cohort_size"],
+                    "confounders_controlled": derived["confounders_controlled"],
+                    "sensitivity_checks_passed": derived["sensitivity_checks_passed"],
+                    "sensitivity_checks_failed": derived["sensitivity_checks_failed"],
+                    # --- narrative prose (#376 §A.9-10) ---
+                    "limitations": (limitations or "")[:500],
+                    "recommended_next_analysis": (recommended_next or "")[:500],
+                    # --- lineage (#376 §A.11-15) ---
+                    "provenance_chain_id": derived["provenance_chain_id"],
+                    "provenance_depth": derived["provenance_depth"],
+                    "consolidation_tier": derived["consolidation_tier"],
+                    "replication_count": derived["replication_count"],
+                    "data_version": derived["data_version"],
+                }
             )
+            # Off-load the blocking insert to a worker thread (M2-supabase, #694).
+            insert = await asyncio.to_thread(insert_query.execute)
         except Exception as exc:
             # Narrow match: only treat as a duplicate-skip if the error
             # message names the specific partial-unique-index from migration
@@ -414,7 +416,7 @@ class Crystallizer:
         # idempotent across retries.
         if audit is not None:
             try:
-                client.table("crystal_narrative_audits").insert(
+                audit_query = client.table("crystal_narrative_audits").insert(
                     {
                         "insight_id": str(insight_id),
                         "narrator_model": audit.narrator_model,
@@ -427,7 +429,9 @@ class Crystallizer:
                         "output_tokens": audit.output_tokens,
                         "cost_usd": audit.cost_usd,
                     }
-                ).execute()
+                )
+                # Off-load the blocking insert to a worker thread (M2-supabase, #694).
+                await asyncio.to_thread(audit_query.execute)
             except Exception as exc:
                 # Narrow LOG-warning-on-failure shape (NOT crystallization-
                 # gating). The audit row is for offline PHI auditing; its
@@ -482,7 +486,9 @@ class Crystallizer:
             # upsert-ish: insert may fail on unique constraint if rerun; that's
             # fine because we filter incomplete crystallizations elsewhere.
             try:
-                client.table("insight_edges").insert(edge_rows).execute()
+                # Off-load the blocking insert to a worker thread (M2-supabase, #694).
+                edge_query = client.table("insight_edges").insert(edge_rows)
+                await asyncio.to_thread(edge_query.execute)
                 edges_added = len(edge_rows)
             except Exception as exc:
                 logger.warning(f"crystallizer: edge insert partially failed: {exc}")

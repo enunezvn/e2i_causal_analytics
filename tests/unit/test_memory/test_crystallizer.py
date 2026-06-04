@@ -208,6 +208,58 @@ async def test_crystallize_rejects_empty_brand():
 
 
 # =============================================================================
+# M2-supabase (#694) — blocking Supabase .execute() must run off the event
+# loop via asyncio.to_thread so the operator /crystallize path does not stall
+# the FastAPI event loop. Characterization test: assert the sync .execute()
+# calls are dispatched through asyncio.to_thread AND that the crystallizer
+# still produces the same insight + edges with the off-loop dispatch.
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_crystallize_dispatches_supabase_execute_off_loop(fake_supabase: FakeSupabase):
+    """The synchronous Supabase ``<query>.execute()`` calls (SELECT
+    candidates, INSERT executive_insight, INSERT insight_edges) must be
+    off-loaded via ``asyncio.to_thread`` so they never block the event
+    loop. We patch the crystallizer-module ``asyncio.to_thread`` with a
+    spy that still invokes the wrapped callable (so behavior is preserved)
+    and assert it was used to run the Supabase ``.execute`` callables.
+    """
+    import asyncio
+
+    _seed_episodic(
+        fake_supabase,
+        brand="Kisqali",
+        causal_path_id="cp1",
+        agents=["causal_impact", "gap_analyzer"],
+    )
+
+    real_to_thread = asyncio.to_thread
+    execute_dispatch_count = 0
+
+    async def spy_to_thread(func, /, *args, **kwargs):
+        nonlocal execute_dispatch_count
+        # The bound method we expect to be off-loaded is ``<query>.execute``.
+        if getattr(func, "__name__", "") == "execute":
+            execute_dispatch_count += 1
+        return await real_to_thread(func, *args, **kwargs)
+
+    with patch(
+        "src.memory.crystallization.crystallizer.asyncio.to_thread",
+        side_effect=spy_to_thread,
+    ):
+        result = await Crystallizer().run_for_brand("Kisqali")
+
+    # Behavior preserved: the off-loop dispatch still produces the insight
+    # + edges exactly as the synchronous path did.
+    assert result.insights_created == 1
+    assert len(fake_supabase.rows["executive_insights"]) == 1
+    # At minimum the candidate SELECT, the insight INSERT, and the edge
+    # INSERT each go through to_thread (3 .execute dispatches).
+    assert execute_dispatch_count >= 3
+
+
+# =============================================================================
 # Issue #376 — Phase 4 schema completion tests
 # =============================================================================
 
