@@ -28,7 +28,9 @@ Follow-up sessions after the initial fix sweep drove the remaining confirmed fin
 
 **Incidental:** repo-wide pip-audit was red on `aiohttp` **CVE-2026-34993** (unrelated to this review) → bumped to 3.14.0 (**#673**).
 
-**🔴 NEW finding (surfaced during the WS sweep) — FIX IN FLIGHT:** the graph-stream WebSocket `@router.websocket("/stream")` authenticated **nobody** — `ConnectionManager.connect` calls `accept()` with no token check, and WS bypasses the http-scoped auth middleware. This is the WS-channel sibling of the **C3** HTTP exposure that #657 closed (anonymous access to graph node/relationship data = PHI/PII). Fix in progress on `fix/api-ws-auth` (authenticate the handshake via the `Sec-WebSocket-Protocol` bearer the FE now sends; reject anonymous when `is_auth_enabled()`, **fail-open otherwise** per the C1/C9 owner posture). Per-tenant/brand filtering of the stream (authZ) is a tracked follow-up.
+**🟢 NEW finding (surfaced during the WS sweep) — FIXED (#681 + #684):** the graph-stream WebSocket `@router.websocket("/stream")` authenticated **nobody** — `ConnectionManager.connect` called `accept()` with no token check, and WS bypasses the http-scoped auth middleware. This is the WS-channel sibling of the **C3** HTTP exposure that #657 closed (anonymous access to graph node/relationship data = PHI/PII).
+- **Authentication (#681, MERGED):** the handshake is authenticated via the `Sec-WebSocket-Protocol` bearer the FE sends (`['bearer', base64url(jwt)]`); anonymous/invalid is rejected with `close(1008)` **before** accept; **fail-open otherwise** per the C1/C9 owner posture. base64url decode is hardened (never 500s; 8 KB bound). codex:codex-rescue ACCEPT (no bypass).
+- **Per-tenant authZ (#684, MERGED):** `episode_added` broadcasts are now scoped by **publisher-grant brand filtering** — a recipient receives an event only if their cached grants intersect the authenticated publisher's (admins / `["all"]` see all). **Fail-CLOSED authZ** when auth is on; deliver-all only for an unscoped message (auth disabled/dev) — the authN fail-open posture does NOT leak into authZ. Backend-only (`visible_brands` is a `broadcast()` param, never serialized). codex:codex-rescue ACCEPT (exhaustive truth table, no bypass). A discovery pass first established the residual exposure was metadata-only (`episode_added` ack, not PHI); a stricter **per-episode** brand is a deliberately-deferred follow-up.
 
 The **8 rejected** findings were cleared.
 
@@ -53,17 +55,24 @@ The **8 rejected** findings were cleared.
 | #677 | disputed: FE api-client (6) + C31 modules (segments/resources/memory/rag/health-score) |
 | #678 | disputed: backend snooze/lifespan/falkordb/limits/naming (5) |
 | #679 | disputed: FE websocket auth-exposure/reactivity/reconnect (4) |
-| `fix/api-ws-auth` | **NEW: graph-stream WS authentication** *(PR in flight — not yet merged)* |
+| #681 | **NEW: graph-stream WS authentication** (reject anon when auth on; fail-open otherwise) — MERGED |
+| #683 | doc-comment nits: corrected RAG route names in `api-schemas.ts` (comment-only) — MERGED |
+| #684 | **NEW: graph-stream WS per-tenant authZ** (publisher-grant brand filter; fail-closed) — MERGED |
 | owner-decision | C1, C9, C23 *(public aspect)*, C37 |
+
+*(Related, merged alongside: **#668** memory H5 consolidator pagination + M8 sentinel watch-target allowlist — from the separate `memory-system-review-20260603.md`; **#672** deploy/migration infra — parallel session.)*
 
 ### Remaining work (pending — why this report is NOT yet archived)
 
-1. **WS-auth (`fix/api-ws-auth`)** — the NEW graph-stream WebSocket authentication fix: finish the codex fixed-point review + merge.
-2. **2 doc-comment nits** — `frontend/src/lib/api-schemas.ts:1004/1005` reference wrong route names in block comments (`/v1/rag/causal-subgraph` → actual `/v1/rag/graph/{entity}`; `/v1/rag/extract` → actual `/v1/rag/entities`). The `get()` calls use the correct paths; comments only.
-3. **Per-tenant WS authZ** *(follow-up)* — once the graph-stream WS authenticates, it still broadcasts to any authed user regardless of brand/tenant; scope the stream by membership (deeper authZ).
-4. **Ops** — re-enable `deploy.yml` (temporarily disabled for this multi-session work; **prod == dev == `e2i-analytics-prod`**) and run **one coordinated deploy** of the whole stack once the parallel #672 deploy-infra work reaches a stopping point; then reap the merged fix worktrees.
+**All code findings are FIXED and MERGED.** Items 1–3 of the prior list are DONE:
+- ✅ **WS-auth** — MERGED (#681).
+- ✅ **2 doc-comment nits** (`api-schemas.ts` RAG route names) — MERGED (#683).
+- ✅ **Per-tenant WS authZ** — MERGED (#684, publisher-grant filter).
 
-**Archival status:** retained in `docs/reports/` (not archived) — items 1–4 above remain, chiefly the in-flight WS-auth fix. Archive to `docs/Archive/` once WS-auth merges, the doc-comment nits land, and the coordinated deploy is done.
+**Only an operational item remains:**
+1. **Ops — coordinated deploy.** `deploy.yml` was temporarily disabled for this multi-session work (**prod == dev == `e2i-analytics-prod`** — a push-triggered deploy `git reset --hard`s the shared main checkout). Re-enable it (`gh workflow enable deploy.yml`) and run **one coordinated `workflow_dispatch` deploy** of `origin/main` (which now carries #681/#683/#684 + the parallel #672 migration infra + #668 memory fixes) once the parallel session reaches a stopping point and the main checkout is verified clean. The merged fix worktrees have been reaped.
+
+**Archival status:** retained in `docs/reports/` (not archived) — the only open item is the operational coordinated deploy (gated on the owner). Archive to `docs/Archive/` once that deploy is done.
 
 > Historical note: the original "Status / actions taken" entries (graph-allowlist shipped; auth fail-open intentional) are now folded into the resolution status above.
 
