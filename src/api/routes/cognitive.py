@@ -339,9 +339,7 @@ async def process_cognitive_query(
         allowed, scoped_brand = resolve_brand_for_read(user, request.brand)
         if not allowed:
             if request.brand is not None:
-                raise HTTPException(
-                    status_code=403, detail="no grant for the requested brand"
-                )
+                raise HTTPException(status_code=403, detail="no grant for the requested brand")
             skip_memory_retrieval = True
         else:
             effective_brand = scoped_brand
