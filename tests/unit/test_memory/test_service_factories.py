@@ -258,6 +258,117 @@ class TestEmbeddingServices:
 
 
 # ============================================================================
+# M5a: get_embedding_service wires MemoryConfig.embeddings.model
+# ============================================================================
+
+
+class TestEmbeddingServiceConfigWiring:
+    """get_embedding_service should read embeddings.model from config.
+
+    Precedence: explicit-arg > env-var > config-value > hardcoded-default.
+    """
+
+    def setup_method(self):
+        reset_all_clients()
+        clear_config_cache()
+
+    def teardown_method(self):
+        reset_all_clients()
+        clear_config_cache()
+
+    def _model_of(self, service):
+        """Resolve the concrete OpenAI embedding model from a service."""
+        from src.memory.services.factories import (
+            FallbackEmbeddingService,
+            OpenAIEmbeddingService,
+        )
+
+        if isinstance(service, FallbackEmbeddingService):
+            primary = service._get_primary()
+            assert isinstance(primary, OpenAIEmbeddingService)
+            return primary.model
+        assert isinstance(service, OpenAIEmbeddingService)
+        return service.model
+
+    def test_uses_config_model_when_no_env_or_arg(self):
+        """With no env/arg override, the config embeddings.model is used."""
+        sentinel_model = "text-embedding-from-config-sentinel"
+
+        class _Cfg:
+            class embeddings:  # noqa: N801 - mimic dataclass attr access
+                model = sentinel_model
+
+        # Ensure no env override is present.
+        os.environ.pop("E2I_EMBEDDING_MODEL", None)
+
+        # _resolve_embedding_model imports get_config lazily from the config
+        # module, so patch it at its source.
+        with patch("src.memory.services.config.get_config", return_value=_Cfg()):
+            service = get_embedding_service("local_pilot", use_fallback=False)
+            assert self._model_of(service) == sentinel_model
+
+    @patch.dict(os.environ, {"E2I_EMBEDDING_MODEL": "text-embedding-from-env"})
+    def test_env_var_overrides_config(self):
+        """E2I_EMBEDDING_MODEL env var takes precedence over config value."""
+
+        class _Cfg:
+            class embeddings:  # noqa: N801
+                model = "text-embedding-from-config-sentinel"
+
+        with patch("src.memory.services.config.get_config", return_value=_Cfg()):
+            service = get_embedding_service("local_pilot", use_fallback=False)
+            assert self._model_of(service) == "text-embedding-from-env"
+
+    @patch.dict(os.environ, {"E2I_EMBEDDING_MODEL": "text-embedding-from-env"})
+    def test_explicit_arg_overrides_env_and_config(self):
+        """An explicit model= arg wins over env var and config value."""
+
+        class _Cfg:
+            class embeddings:  # noqa: N801
+                model = "text-embedding-from-config-sentinel"
+
+        with patch("src.memory.services.config.get_config", return_value=_Cfg()):
+            service = get_embedding_service(
+                "local_pilot", use_fallback=False, model="text-embedding-explicit-arg"
+            )
+            assert self._model_of(service) == "text-embedding-explicit-arg"
+
+
+# ============================================================================
+# M6: get_embedding_service is a cached singleton keyed on (env, use_fallback)
+# ============================================================================
+
+
+class TestEmbeddingServiceCaching:
+    """get_embedding_service must cache instances keyed on (env, use_fallback)."""
+
+    def setup_method(self):
+        reset_all_clients()
+
+    def teardown_method(self):
+        reset_all_clients()
+
+    def test_same_key_returns_same_instance(self):
+        """Two calls with the same (env, fallback) return the SAME object."""
+        a = get_embedding_service("local_pilot", use_fallback=True)
+        b = get_embedding_service("local_pilot", use_fallback=True)
+        assert a is b
+
+    def test_different_key_returns_different_instance(self):
+        """Different (env, fallback) keys produce distinct instances."""
+        a = get_embedding_service("local_pilot", use_fallback=True)
+        b = get_embedding_service("local_pilot", use_fallback=False)
+        assert a is not b
+
+    def test_reset_builds_fresh_instance(self):
+        """After reset_all_clients(), a fresh instance is built."""
+        a = get_embedding_service("local_pilot", use_fallback=True)
+        reset_all_clients()
+        b = get_embedding_service("local_pilot", use_fallback=True)
+        assert a is not b
+
+
+# ============================================================================
 # LLM SERVICE TESTS
 # ============================================================================
 
