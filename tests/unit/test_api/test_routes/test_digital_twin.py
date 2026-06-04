@@ -1202,3 +1202,143 @@ async def test_run_simulation_succeeds_when_slot_available(
     # The slot must be released after a successful run (in_flight back to 0).
     limiter = _heavy_compute_one_slot.get_heavy_compute_limiter()
     assert limiter.in_flight == 0
+
+
+# =============================================================================
+# TESTS - H6 Supabase client injection (#705 Lane 1)
+# =============================================================================
+
+
+def _fake_supabase_client():
+    """A fake async Supabase client whose .table(..).<op>(..).execute() is awaitable.
+
+    Mirrors the supabase-py async fluent API used by TwinRepository:
+        await client.table(name).insert(row).execute()
+        await client.table(name).update(updates).eq(...).select().execute()
+        await client.table(name).select(..).eq(..).execute()
+    """
+    client = MagicMock()
+    execute_result = MagicMock()
+    execute_result.data = [{"tracking_id": str(uuid4()), "actual_ate": 0.072}]
+
+    # Every fluent step returns the same chainable mock; only execute() is async.
+    chain = MagicMock()
+    for method in ("insert", "update", "select", "eq", "order", "limit", "range"):
+        getattr(chain, method).return_value = chain
+    chain.execute = AsyncMock(return_value=execute_result)
+
+    client.table = MagicMock(return_value=chain)
+    return client, chain
+
+
+@pytest.mark.asyncio
+async def test_get_twin_repo_injects_real_client():
+    """H6: _get_twin_repo builds a repo whose sub-repos all have a non-None client."""
+    from src.api.routes.digital_twin import _get_twin_repo
+
+    fake_client, _ = _fake_supabase_client()
+    with patch(
+        "src.memory.services.factories.get_async_supabase_client",
+        new=AsyncMock(return_value=fake_client),
+    ):
+        repo = await _get_twin_repo()
+
+    assert repo.simulations.client is fake_client
+    assert repo.fidelity.client is fake_client
+    assert repo.models.client is fake_client
+
+
+@pytest.mark.asyncio
+async def test_validate_reaches_db_with_injected_client():
+    """H6+H7: /validate update path reaches client.table('twin_fidelity_tracking').
+
+    No TwinRepository / FidelityTracker patch — the REAL repository + tracker are
+    used with the injected client so we prove the update actually hits the DB
+    layer via the real ``update_fidelity_validation`` coroutine.
+    """
+    from src.api.routes.digital_twin import ValidateFidelityRequest, validate_simulation
+
+    fake_client, chain = _fake_supabase_client()
+    sim_id = str(uuid4())
+
+    # Each awaited .execute() returns the next stubbed result in order:
+    chain.execute = AsyncMock(
+        side_effect=[
+            # 1) repo.get_simulation(...) -> simulation row present
+            MagicMock(data=[{"simulation_id": sim_id, "model_id": str(uuid4())}]),
+            # 2) get_fidelity_by_simulation (cache-miss read) -> no existing record
+            MagicMock(data=[]),
+            # 3) save_fidelity_record insert (record_prediction)
+            MagicMock(data=[{}]),
+            # 4) update_fidelity_validation update
+            MagicMock(data=[{"tracking_id": str(uuid4()), "actual_ate": 0.072}]),
+        ]
+    )
+
+    with patch(
+        "src.memory.services.factories.get_async_supabase_client",
+        new=AsyncMock(return_value=fake_client),
+    ):
+        request = ValidateFidelityRequest(
+            simulation_id=sim_id,
+            experiment_id=str(uuid4()),
+            actual_ate=0.072,
+            actual_ci_lower=0.048,
+            actual_ci_upper=0.096,
+            actual_sample_size=1000,
+        )
+        user = {"user_id": "test_user", "role": "operator"}
+        await validate_simulation(request, user)
+
+    # The fidelity table must have been touched (insert + update).
+    table_calls = [c.args[0] for c in fake_client.table.call_args_list if c.args]
+    assert "twin_fidelity_tracking" in table_calls
+
+
+@pytest.mark.asyncio
+async def test_simulate_save_path_uses_injected_client(
+    mock_twin_generator, mock_simulation_engine
+):
+    """H6: /simulate save path persists to twin_simulations via injected client."""
+    from src.api.routes.digital_twin import (
+        BrandEnum,
+        InterventionConfigRequest,
+        SimulateRequest,
+        TwinTypeEnum,
+        run_simulation,
+    )
+
+    fake_client, chain = _fake_supabase_client()
+
+    with patch(
+        "src.memory.services.factories.get_async_supabase_client",
+        new=AsyncMock(return_value=fake_client),
+    ):
+        request = SimulateRequest(
+            intervention=InterventionConfigRequest(
+                intervention_type="email_campaign",
+                channel="email",
+                frequency="weekly",
+                duration_weeks=8,
+            ),
+            brand=BrandEnum.REMIBRUTINIB,
+            twin_type=TwinTypeEnum.HCP,
+            twin_count=1000,
+        )
+        user = {"user_id": "test_user", "role": "operator"}
+        await run_simulation(request, user)
+
+    table_calls = [c.args[0] for c in fake_client.table.call_args_list if c.args]
+    assert "twin_simulations" in table_calls
+
+
+def test_no_bare_twin_repository_in_route_source():
+    """Regression guard (#705 H6): no client-less TwinRepository() in the route."""
+    import re
+    from pathlib import Path
+
+    import src.api.routes.digital_twin as route_mod
+
+    source = Path(route_mod.__file__).read_text()
+    # Bare zero-arg construction (client-less) must be gone everywhere.
+    assert re.search(r"TwinRepository\(\s*\)", source) is None
