@@ -17,6 +17,12 @@
  */
 
 import { get, post } from '@/lib/api-client';
+import {
+  CausalPathResponseWireSchema,
+  CausalSubgraphResponseWireSchema,
+  ExtractedEntitiesResponseWireSchema,
+  RAGHealthResponseWireSchema,
+} from '@/lib/api-schemas';
 import type {
   CausalPathResponse,
   CausalSubgraphResponse,
@@ -111,7 +117,8 @@ export async function extractEntities(
 ): Promise<ExtractedEntities> {
   return get<ExtractedEntities>(
     `${RAG_BASE}/entities`,
-    params as unknown as Record<string, unknown>
+    params as unknown as Record<string, unknown>,
+    { schema: ExtractedEntitiesResponseWireSchema }
   );
 }
 
@@ -140,7 +147,8 @@ export async function getCausalSubgraph(
 ): Promise<CausalSubgraphResponse> {
   return get<CausalSubgraphResponse>(
     `${RAG_BASE}/graph/${encodeURIComponent(entity)}`,
-    depth !== undefined ? { depth } : undefined
+    depth !== undefined ? { depth } : undefined,
+    { schema: CausalSubgraphResponseWireSchema }
   );
 }
 
@@ -165,11 +173,15 @@ export async function getCausalPaths(
   target: string,
   maxDepth?: number
 ): Promise<CausalPathResponse> {
-  return get<CausalPathResponse>(`${RAG_BASE}/causal-path`, {
-    source,
-    target,
-    max_depth: maxDepth,
-  });
+  return get<CausalPathResponse>(
+    `${RAG_BASE}/causal-path`,
+    {
+      source,
+      target,
+      max_depth: maxDepth,
+    },
+    { schema: CausalPathResponseWireSchema }
+  );
 }
 
 // =============================================================================
@@ -226,5 +238,7 @@ export async function getRAGStats(
  * ```
  */
 export async function getRAGHealth(): Promise<RAGHealthResponse> {
-  return get<RAGHealthResponse>(`${RAG_BASE}/health`);
+  return get<RAGHealthResponse>(`${RAG_BASE}/health`, undefined, {
+    schema: RAGHealthResponseWireSchema,
+  });
 }

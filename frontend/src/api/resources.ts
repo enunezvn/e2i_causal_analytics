@@ -14,6 +14,10 @@
  */
 
 import { get, post } from '@/lib/api-client';
+import {
+  ResourceHealthResponseWireSchema,
+  ScenarioListResponseWireSchema,
+} from '@/lib/api-schemas';
 import type {
   ListScenariosParams,
   OptimizationResponse,
@@ -135,10 +139,14 @@ export async function getOptimization(
 export async function listScenarios(
   params?: ListScenariosParams
 ): Promise<ScenarioListResponse> {
-  return get<ScenarioListResponse>(`${RESOURCES_BASE}/scenarios`, {
-    min_roi: params?.min_roi,
-    limit: params?.limit,
-  });
+  return get<ScenarioListResponse>(
+    `${RESOURCES_BASE}/scenarios`,
+    {
+      min_roi: params?.min_roi,
+      limit: params?.limit,
+    },
+    { schema: ScenarioListResponseWireSchema }
+  );
 }
 
 // =============================================================================
@@ -163,7 +171,9 @@ export async function listScenarios(
  * ```
  */
 export async function getResourceHealth(): Promise<ResourceHealthResponse> {
-  return get<ResourceHealthResponse>(`${RESOURCES_BASE}/health`);
+  return get<ResourceHealthResponse>(`${RESOURCES_BASE}/health`, undefined, {
+    schema: ResourceHealthResponseWireSchema,
+  });
 }
 
 // =============================================================================

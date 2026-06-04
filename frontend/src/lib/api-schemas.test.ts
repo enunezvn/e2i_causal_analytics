@@ -28,6 +28,26 @@ import {
   AlertListResponseWireSchema,
   CausalHealthResponseWireSchema,
   GraphHealthResponseWireSchema,
+  // Disputed-sweep wire schemas (segments/resources/memory/rag/health-score)
+  ApiErrorResponseSchema,
+  PolicyListResponseWireSchema,
+  SegmentHealthResponseWireSchema,
+  ScenarioListResponseWireSchema,
+  ResourceHealthResponseWireSchema,
+  EpisodicMemoryListResponseWireSchema,
+  EpisodicMemoryResponseWireSchema,
+  SemanticPathResponseWireSchema,
+  CausalSubgraphResponseWireSchema,
+  CausalPathResponseWireSchema,
+  ExtractedEntitiesResponseWireSchema,
+  RAGHealthResponseWireSchema,
+  HealthScoreResponseWireSchema,
+  ComponentHealthResponseWireSchema,
+  HealthScoreModelHealthResponseWireSchema,
+  PipelineHealthResponseWireSchema,
+  AgentHealthResponseWireSchema,
+  HealthHistoryResponseWireSchema,
+  HealthServiceStatusWireSchema,
 } from './api-schemas';
 
 // =============================================================================
@@ -606,6 +626,445 @@ describe('Wire Schemas (C31)', () => {
       };
       const result = GraphHealthResponseWireSchema.safeParse(bad);
       expect(result.success).toBe(false);
+    });
+  });
+});
+
+// =============================================================================
+// COMMON SCHEMA TESTS (finding #5 — unified ApiErrorResponse)
+// =============================================================================
+
+describe('ApiErrorResponseSchema (#5 unification)', () => {
+  it('accepts an error payload that carries suggested_action', () => {
+    const payload = {
+      error: 'NotFound',
+      message: 'Experiment not found',
+      details: { experiment_id: 'exp_x' },
+      timestamp: new Date().toISOString(),
+      suggested_action: 'Check the experiment ID and retry',
+    };
+    const result = ApiErrorResponseSchema.safeParse(payload);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.suggested_action).toBe(
+        'Check the experiment ID and retry'
+      );
+    }
+  });
+
+  it('accepts a minimal error payload (suggested_action omitted)', () => {
+    const result = ApiErrorResponseSchema.safeParse({
+      error: 'ServerError',
+      message: 'Boom',
+    });
+    expect(result.success).toBe(true);
+  });
+});
+
+// =============================================================================
+// DISPUTED-SWEEP WIRE SCHEMA TESTS (#4 — segments/resources/memory/rag/health)
+// =============================================================================
+
+describe('Wire Schemas (disputed sweep #4)', () => {
+  describe('Segments', () => {
+    it('PolicyListResponseWireSchema accepts the real /segments/policies payload', () => {
+      const payload = {
+        total_count: 1,
+        recommendations: [
+          {
+            segment: 'high_value_north',
+            current_treatment_rate: 0.3,
+            recommended_treatment_rate: 0.6,
+            expected_incremental_outcome: 1200,
+            confidence: 0.82,
+          },
+        ],
+        expected_total_lift: 1200,
+      };
+      expect(PolicyListResponseWireSchema.safeParse(payload).success).toBe(true);
+    });
+
+    it('PolicyListResponseWireSchema rejects a recommendation missing required fields', () => {
+      const bad = {
+        total_count: 1,
+        recommendations: [{ segment: 'x' }],
+        expected_total_lift: 0,
+      };
+      expect(PolicyListResponseWireSchema.safeParse(bad).success).toBe(false);
+    });
+
+    it('SegmentHealthResponseWireSchema accepts payload with null last_analysis', () => {
+      const payload = {
+        status: 'healthy',
+        agent_available: true,
+        econml_available: true,
+        causalml_available: true,
+        last_analysis: null,
+        analyses_24h: 0,
+      };
+      expect(SegmentHealthResponseWireSchema.safeParse(payload).success).toBe(
+        true
+      );
+    });
+
+    it('SegmentHealthResponseWireSchema rejects non-boolean agent_available', () => {
+      const bad = {
+        status: 'healthy',
+        agent_available: 'yes',
+        econml_available: true,
+        causalml_available: true,
+        analyses_24h: 0,
+      };
+      expect(SegmentHealthResponseWireSchema.safeParse(bad).success).toBe(false);
+    });
+  });
+
+  describe('Resources', () => {
+    it('ScenarioListResponseWireSchema accepts the real /resources/scenarios payload', () => {
+      const payload = {
+        total_count: 1,
+        scenarios: [
+          {
+            scenario_name: 'baseline',
+            total_allocation: 100000,
+            projected_outcome: 250000,
+            roi: 2.5,
+            constraint_violations: [],
+          },
+        ],
+      };
+      expect(ScenarioListResponseWireSchema.safeParse(payload).success).toBe(
+        true
+      );
+    });
+
+    it('ResourceHealthResponseWireSchema accepts payload with null last_optimization', () => {
+      const payload = {
+        status: 'healthy',
+        agent_available: true,
+        scipy_available: true,
+        last_optimization: null,
+        optimizations_24h: 3,
+      };
+      expect(ResourceHealthResponseWireSchema.safeParse(payload).success).toBe(
+        true
+      );
+    });
+
+    it('ResourceHealthResponseWireSchema rejects missing status', () => {
+      const bad = {
+        agent_available: true,
+        scipy_available: true,
+        optimizations_24h: 0,
+      };
+      expect(ResourceHealthResponseWireSchema.safeParse(bad).success).toBe(
+        false
+      );
+    });
+  });
+
+  describe('Memory', () => {
+    it('EpisodicMemoryResponseWireSchema accepts a payload with optional nulls', () => {
+      const payload = {
+        id: 'mem_1',
+        content: 'HCP responded positively',
+        event_type: 'interaction',
+        session_id: null,
+        agent_name: 'feedback_learner',
+        brand: null,
+        region: null,
+        created_at: new Date().toISOString(),
+        metadata: { source: 'live' },
+      };
+      expect(EpisodicMemoryResponseWireSchema.safeParse(payload).success).toBe(
+        true
+      );
+    });
+
+    it('EpisodicMemoryListResponseWireSchema accepts an array of memories', () => {
+      const payload = [
+        {
+          id: 'mem_1',
+          content: 'x',
+          event_type: 'interaction',
+          created_at: new Date().toISOString(),
+          metadata: {},
+        },
+      ];
+      expect(
+        EpisodicMemoryListResponseWireSchema.safeParse(payload).success
+      ).toBe(true);
+    });
+
+    it('EpisodicMemoryResponseWireSchema rejects when metadata is missing', () => {
+      const bad = {
+        id: 'mem_1',
+        content: 'x',
+        event_type: 'interaction',
+        created_at: new Date().toISOString(),
+      };
+      expect(EpisodicMemoryResponseWireSchema.safeParse(bad).success).toBe(
+        false
+      );
+    });
+
+    it('SemanticPathResponseWireSchema accepts a real semantic-paths payload', () => {
+      const payload = {
+        paths: [{ nodes: ['a', 'b'], confidence: 0.7 }],
+        total_paths: 1,
+        max_depth_searched: 3,
+        query_latency_ms: 12.5,
+        timestamp: new Date().toISOString(),
+      };
+      expect(SemanticPathResponseWireSchema.safeParse(payload).success).toBe(
+        true
+      );
+    });
+  });
+
+  describe('RAG', () => {
+    it('ExtractedEntitiesResponseWireSchema accepts the real /entities payload', () => {
+      const payload = {
+        brands: ['Kisqali'],
+        regions: ['west'],
+        kpis: ['trx'],
+        agents: [],
+        journey_stages: [],
+        time_references: ['Q3'],
+        hcp_segments: [],
+      };
+      expect(
+        ExtractedEntitiesResponseWireSchema.safeParse(payload).success
+      ).toBe(true);
+    });
+
+    it('CausalSubgraphResponseWireSchema accepts the real subgraph payload', () => {
+      const payload = {
+        entity: 'kisqali',
+        nodes: [
+          { id: 'n1', label: 'Kisqali', type: 'brand', properties: {} },
+        ],
+        edges: [
+          {
+            source: 'n1',
+            target: 'n2',
+            relationship: 'affects',
+            weight: 1.0,
+            properties: {},
+          },
+        ],
+        depth: 2,
+        node_count: 1,
+        edge_count: 1,
+        query_time_ms: 5.5,
+      };
+      expect(CausalSubgraphResponseWireSchema.safeParse(payload).success).toBe(
+        true
+      );
+    });
+
+    it('CausalPathResponseWireSchema accepts the real causal-path payload', () => {
+      const payload = {
+        source: 'hcp_engagement',
+        target: 'trx',
+        paths: [['hcp_engagement', 'awareness', 'trx']],
+        shortest_path_length: 2,
+        total_paths: 1,
+        query_time_ms: 8.2,
+      };
+      expect(CausalPathResponseWireSchema.safeParse(payload).success).toBe(true);
+    });
+
+    it('RAGHealthResponseWireSchema accepts the real /v1/rag/health payload', () => {
+      const payload = {
+        status: 'healthy',
+        timestamp: new Date().toISOString(),
+        backends: {
+          vector: {
+            status: 'healthy',
+            latency_ms: 12,
+            last_check: new Date().toISOString(),
+            consecutive_failures: 0,
+          },
+        },
+        monitoring_enabled: true,
+      };
+      expect(RAGHealthResponseWireSchema.safeParse(payload).success).toBe(true);
+    });
+
+    it('RAGHealthResponseWireSchema rejects when monitoring_enabled is missing', () => {
+      const bad = {
+        status: 'healthy',
+        timestamp: new Date().toISOString(),
+        backends: {},
+      };
+      expect(RAGHealthResponseWireSchema.safeParse(bad).success).toBe(false);
+    });
+  });
+
+  describe('Health Score', () => {
+    it('HealthScoreResponseWireSchema accepts a full check payload (scope-omitted detail arrays)', () => {
+      const payload = {
+        check_id: 'hs_1',
+        check_scope: 'full',
+        overall_health_score: 85.5,
+        health_grade: 'B',
+        component_health_score: 0.9,
+        model_health_score: 0.8,
+        pipeline_health_score: 0.85,
+        agent_health_score: 0.9,
+        component_statuses: null,
+        model_metrics: null,
+        pipeline_statuses: null,
+        agent_statuses: null,
+        critical_issues: [],
+        warnings: ['Model degraded'],
+        recommendations: [],
+        health_summary: 'System health is good.',
+        check_latency_ms: 1250,
+        timestamp: new Date().toISOString(),
+      };
+      expect(HealthScoreResponseWireSchema.safeParse(payload).success).toBe(
+        true
+      );
+    });
+
+    it('ComponentHealthResponseWireSchema accepts payload with data_provenance', () => {
+      const payload = {
+        component_health_score: 0.9,
+        total_components: 5,
+        healthy_count: 5,
+        degraded_count: 0,
+        unhealthy_count: 0,
+        components: [
+          {
+            component_name: 'database',
+            status: 'healthy',
+            latency_ms: 12,
+            last_check: new Date().toISOString(),
+          },
+        ],
+        check_latency_ms: 100,
+        data_provenance: 'measured',
+      };
+      expect(ComponentHealthResponseWireSchema.safeParse(payload).success).toBe(
+        true
+      );
+    });
+
+    it('HealthScoreModelHealthResponseWireSchema accepts payload with optional model metrics', () => {
+      const payload = {
+        model_health_score: 0.8,
+        total_models: 1,
+        healthy_count: 1,
+        degraded_count: 0,
+        unhealthy_count: 0,
+        models: [
+          {
+            model_id: 'm1',
+            model_name: 'churn',
+            accuracy: 0.91,
+            predictions_last_24h: 100,
+            error_rate: 0.01,
+            status: 'healthy',
+          },
+        ],
+        check_latency_ms: 200,
+      };
+      expect(
+        HealthScoreModelHealthResponseWireSchema.safeParse(payload).success
+      ).toBe(true);
+    });
+
+    it('PipelineHealthResponseWireSchema accepts a valid payload', () => {
+      const payload = {
+        pipeline_health_score: 0.85,
+        total_pipelines: 2,
+        healthy_count: 2,
+        stale_count: 0,
+        failed_count: 0,
+        pipelines: [
+          {
+            pipeline_name: 'etl',
+            last_run: new Date().toISOString(),
+            last_success: new Date().toISOString(),
+            rows_processed: 1000,
+            freshness_hours: 1.5,
+            status: 'healthy',
+          },
+        ],
+        check_latency_ms: 300,
+      };
+      expect(PipelineHealthResponseWireSchema.safeParse(payload).success).toBe(
+        true
+      );
+    });
+
+    it('AgentHealthResponseWireSchema accepts a valid payload', () => {
+      const payload = {
+        agent_health_score: 0.95,
+        total_agents: 13,
+        available_count: 13,
+        unavailable_count: 0,
+        agents: [
+          {
+            agent_name: 'causal_impact',
+            tier: 2,
+            available: true,
+            avg_latency_ms: 120,
+            success_rate: 0.98,
+            invocations_24h: 42,
+          },
+        ],
+        by_tier: { '0': 1, '2': 5 },
+        check_latency_ms: 400,
+      };
+      expect(AgentHealthResponseWireSchema.safeParse(payload).success).toBe(
+        true
+      );
+    });
+
+    it('HealthHistoryResponseWireSchema accepts a valid payload', () => {
+      const payload = {
+        total_checks: 1,
+        checks: [
+          {
+            check_id: 'hs_1',
+            timestamp: new Date().toISOString(),
+            overall_health_score: 85,
+            health_grade: 'B',
+            critical_issues_count: 0,
+          },
+        ],
+        avg_health_score: 85,
+        trend: 'stable',
+      };
+      expect(HealthHistoryResponseWireSchema.safeParse(payload).success).toBe(
+        true
+      );
+    });
+
+    it('HealthServiceStatusWireSchema accepts payload with null last_check', () => {
+      const payload = {
+        status: 'healthy',
+        agent_available: true,
+        last_check: null,
+        checks_24h: 0,
+        avg_check_latency_ms: 0,
+      };
+      expect(HealthServiceStatusWireSchema.safeParse(payload).success).toBe(
+        true
+      );
+    });
+
+    it('HealthServiceStatusWireSchema rejects non-boolean agent_available', () => {
+      const bad = {
+        status: 'healthy',
+        agent_available: 1,
+        checks_24h: 0,
+        avg_check_latency_ms: 0,
+      };
+      expect(HealthServiceStatusWireSchema.safeParse(bad).success).toBe(false);
     });
   });
 });

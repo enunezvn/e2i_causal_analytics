@@ -20,6 +20,7 @@ import type { ZodTypeAny } from 'zod';
 import { env, buildApiUrl } from '@/config/env';
 import { useAuthStore } from '@/stores/auth-store';
 import { validateApiResponse } from './api-schemas';
+import type { ApiErrorResponse } from './api-schemas';
 
 /**
  * Generate a UUID v4 with fallback for non-secure contexts (HTTP)
@@ -52,15 +53,14 @@ function generateUUID(): string {
 }
 
 /**
- * Standard API error response structure
+ * Standard API error response structure.
+ *
+ * Re-exported from the canonical Zod schema (`ApiErrorResponseSchema` in
+ * `./api-schemas`) so the runtime contract and the compile-time type can never
+ * diverge. Import this type from `@/lib/api-client` or `@/lib/api-schemas`;
+ * both resolve to the single schema-inferred shape.
  */
-export interface ApiErrorResponse {
-  error: string;
-  message: string;
-  details?: Record<string, unknown>;
-  timestamp?: string;
-  suggested_action?: string;
-}
+export type { ApiErrorResponse } from './api-schemas';
 
 /**
  * Custom API error class with typed error response
@@ -291,10 +291,29 @@ function maybeValidate<S extends ZodTypeAny | undefined>(
 }
 
 /**
+ * Axios `paramsSerializer` that serializes array query params as REPEATED keys
+ * (`?segments=region&segments=specialty`) rather than axios v1's default
+ * bracketed form (`?segments[]=region&segments[]=specialty`).
+ *
+ * FastAPI's `List[str] = Query(...)` parameters expect the repeated-key form;
+ * the bracketed `key[]=` form is silently ignored, so an array param sent the
+ * default way never reaches the backend. `{ indexes: null }` is axios v1's
+ * documented switch for the repeated-key encoding.
+ *
+ * Opt in per call via the `get` helper's `repeatArrayParams: true` option.
+ */
+const REPEAT_ARRAY_PARAMS_SERIALIZER = { indexes: null } as const;
+
+/**
  * Type-safe GET request helper.
  *
  * Pass `options.schema` to additionally validate the response at runtime
  * (returns the parsed value, typed as the schema's output).
+ *
+ * Pass `options.repeatArrayParams: true` when an endpoint reads a FastAPI
+ * `List[str]` query param so array values are serialized as repeated keys
+ * (`?k=a&k=b`) instead of the bracketed default (`?k[]=a&k[]=b`) that FastAPI
+ * ignores.
  */
 export function get<S extends ZodTypeAny>(
   endpoint: string,
@@ -311,7 +330,12 @@ export async function get<T>(
   params?: Record<string, unknown>,
   options?: SchemaRequestConfig<ZodTypeAny>
 ): Promise<T> {
-  const response = await apiClient.get<T>(endpoint, { params });
+  const response = await apiClient.get<T>(endpoint, {
+    params,
+    ...(options?.repeatArrayParams
+      ? { paramsSerializer: REPEAT_ARRAY_PARAMS_SERIALIZER }
+      : {}),
+  });
   return maybeValidate(response.data, endpoint, options) as T;
 }
 
@@ -444,6 +468,12 @@ export interface ValidatedRequestConfig {
   logErrors?: boolean;
   /** Throw error on validation failure (default: true) */
   throwOnError?: boolean;
+  /**
+   * Serialize array query params as repeated keys (`?k=a&k=b`) instead of the
+   * axios v1 bracketed default (`?k[]=a&k[]=b`). Required for FastAPI
+   * `List[str]` query params, which ignore the bracketed form. (GET only.)
+   */
+  repeatArrayParams?: boolean;
 }
 
 /**
