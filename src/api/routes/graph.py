@@ -18,13 +18,15 @@ import json
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 
 from src.api.dependencies.auth import (
     WS_BEARER_SUBPROTOCOL,
     authenticate_websocket,
+    get_current_user,
+    get_user_brands,
     is_auth_enabled,
 )
 from src.api.models.graph import (
@@ -77,9 +79,19 @@ class ConnectionManager:
     def __init__(self):
         self.active_connections: Dict[str, WebSocket] = {}
         self.subscriptions: Dict[str, GraphSubscription] = {}
+        # Brand grants of the AUTHENTICATED recipient on each connection, cached
+        # at connect() time so broadcast() can enforce publisher-grant authZ
+        # without re-reading the JWT. ``None`` means "unknown/unauthenticated
+        # recipient" (auth disabled at connect, or no user) -> treated as
+        # fail-closed against any SCOPED message (see _brands_allow).
+        self.connection_brands: Dict[str, Optional[List[str]]] = {}
 
     async def connect(
-        self, websocket: WebSocket, client_id: str, subprotocol: Optional[str] = None
+        self,
+        websocket: WebSocket,
+        client_id: str,
+        subprotocol: Optional[str] = None,
+        user_brands: Optional[List[str]] = None,
     ):
         # Echo ONLY a subprotocol the client actually offered. Echoing one it
         # did not offer fails the RFC 6455 handshake; passing None accepts with
@@ -89,6 +101,7 @@ class ConnectionManager:
         else:
             await websocket.accept()
         self.active_connections[client_id] = websocket
+        self.connection_brands[client_id] = user_brands
         logger.info(f"Graph WebSocket connected: {client_id}")
 
     def disconnect(self, client_id: str):
@@ -96,22 +109,69 @@ class ConnectionManager:
             del self.active_connections[client_id]
         if client_id in self.subscriptions:
             del self.subscriptions[client_id]
+        self.connection_brands.pop(client_id, None)
         logger.info(f"Graph WebSocket disconnected: {client_id}")
 
     def set_subscription(self, client_id: str, subscription: GraphSubscription):
         self.subscriptions[client_id] = subscription
 
-    async def broadcast(self, message: GraphStreamMessage):
-        """Broadcast message to all subscribed connections."""
-        for client_id, websocket in self.active_connections.items():
+    async def broadcast(
+        self, message: GraphStreamMessage, visible_brands: Optional[List[str]] = None
+    ):
+        """Broadcast a message to subscribed connections, scoped by brand grant.
+
+        Two INDEPENDENT filters compose (a connection must pass BOTH):
+
+        1. The recipient's self-chosen subscription (``_matches_subscription``).
+        2. Publisher-grant authorization (``_brands_allow``): ``visible_brands``
+           is the brand grant of the user who PRODUCED this event. A recipient
+           receives it only if their cached grants intersect it.
+
+        ``visible_brands=None`` means the message is UNSCOPED (auth disabled at
+        the producing route -> no user) and is delivered to everyone — the
+        fail-OPEN *authentication* posture. A SCOPED message (``visible_brands``
+        is a list, i.e. auth on) is fail-CLOSED: a recipient with no matching
+        grant — including one whose own grants are unknown (``None``) — gets
+        nothing. The authN fail-open posture must NOT leak into authZ.
+
+        ``visible_brands`` is a parameter only; it is never serialized into the
+        payload sent to the client (no model / frontend-schema change).
+        """
+        # Snapshot the connections: send_json awaits below can yield control and
+        # let a concurrent disconnect() mutate active_connections, which would
+        # raise "dictionary changed size during iteration" on the live iterator
+        # (outside the per-send try/except). Iterating a copy is safe.
+        for client_id, websocket in list(self.active_connections.items()):
             try:
-                # Check subscription filters
+                # Filter 1: subscription.
                 sub = self.subscriptions.get(client_id)
                 if sub and not self._matches_subscription(message, sub):
+                    continue
+                # Filter 2: publisher-grant authorization.
+                if not self._brands_allow(self.connection_brands.get(client_id), visible_brands):
                     continue
                 await websocket.send_json(message.model_dump(mode="json"))
             except Exception as e:
                 logger.error(f"Failed to send to {client_id}: {e}")
+
+    @staticmethod
+    def _brands_allow(
+        recipient_brands: Optional[List[str]], visible_brands: Optional[List[str]]
+    ) -> bool:
+        """Decide whether a recipient may receive a (possibly scoped) message.
+
+        See ``broadcast`` for the fail-open-authN / fail-closed-authZ rationale.
+        """
+        # Unscoped message (auth disabled / dev) -> deliver to all.
+        if visible_brands is None:
+            return True
+        # Authed recipient with unknown brands -> fail CLOSED.
+        if recipient_brands is None:
+            return False
+        # 'all' grant on either side matches everything (admin).
+        if "all" in recipient_brands or "all" in visible_brands:
+            return True
+        return bool(set(recipient_brands) & set(visible_brands))
 
     def _matches_subscription(self, message: GraphStreamMessage, sub: GraphSubscription) -> bool:
         """Check if message matches subscription filters."""
@@ -788,7 +848,10 @@ async def execute_cypher_query(request: CypherQueryRequest) -> CypherQueryRespon
     summary="Add knowledge episode",
     operation_id="add_graph_episode",
 )
-async def add_episode(request: AddEpisodeRequest) -> AddEpisodeResponse:
+async def add_episode(
+    request: AddEpisodeRequest,
+    user: Optional[Dict[str, Any]] = Depends(get_current_user),
+) -> AddEpisodeResponse:
     """
     Add a knowledge episode to the graph.
 
@@ -797,8 +860,19 @@ async def add_episode(request: AddEpisodeRequest) -> AddEpisodeResponse:
     - Discovers relationships
     - Links to existing graph nodes
     - Tracks temporal validity
+
+    The episode-added broadcast is scoped to the PUBLISHER's brand grants
+    (``get_user_brands(user)``) so only recipients sharing a brand (or admins
+    with the ``all`` grant) receive it. ``get_current_user`` is the OPTIONAL
+    auth dependency — it returns ``None`` (never 401s) when auth is disabled or
+    no credential is presented, which yields an UNSCOPED broadcast
+    (``visible_brands=None`` -> deliver to all), preserving dev/test fail-open
+    behaviour. (The route itself is already token-protected by the global auth
+    middleware when auth is enabled; this dependency only reads the user.)
     """
     start_time = time.time()
+    # Brand grants of the publisher; None when unauthenticated (dev fail-open).
+    visible_brands: Optional[List[str]] = get_user_brands(user) if user else None
 
     try:
         graphiti = await _get_graphiti_service()
@@ -814,7 +888,7 @@ async def add_episode(request: AddEpisodeRequest) -> AddEpisodeResponse:
 
         latency_ms = (time.time() - start_time) * 1000
 
-        # Broadcast to WebSocket subscribers
+        # Broadcast to WebSocket subscribers, scoped to the publisher's brands.
         await manager.broadcast(
             GraphStreamMessage(
                 event_type="episode_added",
@@ -825,7 +899,8 @@ async def add_episode(request: AddEpisodeRequest) -> AddEpisodeResponse:
                     "relationships_count": len(result.relationships_extracted),
                 },
                 session_id=request.session_id,
-            )
+            ),
+            visible_brands=visible_brands,
         )
 
         return AddEpisodeResponse(
@@ -1055,13 +1130,23 @@ async def graph_stream(websocket: WebSocket, client_id: Optional[str] = None):
     * ``is_auth_enabled()`` False -> accept WITHOUT a token (testing mode /
       Supabase unset), preserving dev + e2e behaviour.
 
-    NOTE (follow-up): per-tenant/brand filtering of the stream (authZ) is NOT
-    enforced here — any authenticated user currently receives all broadcasts.
-    That is a deeper concern tracked separately.
+    Authorization: publisher-grant brand filtering IS enforced (PR #684). The
+    authenticated recipient's brand grants are cached on the connection here
+    (``user_brands`` -> ``ConnectionManager.connect``) and evaluated in
+    ``ConnectionManager.broadcast`` via ``_brands_allow`` — a recipient receives
+    an ``episode_added`` event only if their grants intersect the PUBLISHER's
+    (or either side holds the ``all`` admin grant). A stricter PER-EPISODE brand
+    (vs. the publisher's grant set) is a deliberately-deferred follow-up.
     """
     client_id = client_id or f"client_{id(websocket)}"
 
     accept_subprotocol: Optional[str] = None
+    # Recipient brand grants, cached on the connection for publisher-grant authZ
+    # in ConnectionManager.broadcast. ``None`` when auth is disabled (no user) ->
+    # messages are also unscoped in that mode, so deliver-all is preserved
+    # (consistent fail-open authN); when auth is on, an authed recipient with no
+    # matching brand receives nothing (fail-closed authZ).
+    user_brands: Optional[List[str]] = None
     if is_auth_enabled():
         user = await authenticate_websocket(websocket)
         if user is None:
@@ -1069,12 +1154,15 @@ async def graph_stream(websocket: WebSocket, client_id: Optional[str] = None):
             # WITHOUT accepting (do not leak any broadcast data).
             await websocket.close(code=1008)
             return
+        user_brands = get_user_brands(user) if user else None
         # Echo the bearer subprotocol only when the client offered it.
         subprotocols = websocket.scope.get("subprotocols") or []
         if subprotocols and subprotocols[0] == WS_BEARER_SUBPROTOCOL:
             accept_subprotocol = WS_BEARER_SUBPROTOCOL
 
-    await manager.connect(websocket, client_id, subprotocol=accept_subprotocol)
+    await manager.connect(
+        websocket, client_id, subprotocol=accept_subprotocol, user_brands=user_brands
+    )
 
     try:
         while True:
