@@ -114,9 +114,11 @@ class EvidenceEvaluationCache:
             evidence_summary: Summary of evidence collected
             result: The evaluation result to cache
         """
-        # Evict oldest entries if at capacity
+        # Evict oldest entries if at capacity. Evict 10%, but always at least
+        # one entry — otherwise a small max_size (< 10) yields max_size // 10 == 0
+        # and the cap would never be enforced.
         if len(self._cache) >= self._max_size:
-            self._evict_oldest(count=self._max_size // 10)  # Evict 10%
+            self._evict_oldest(count=max(1, self._max_size // 10))
 
         key = self._make_key(goal, evidence_summary)
         self._cache[key] = (result, time.time())

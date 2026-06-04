@@ -441,3 +441,94 @@ async def test_data_drop_cooldown(fake_supabase: FakeSupabase):
     # Second dispatch immediately: cooldown blocks.
     r2 = await dispatch_sentinels()
     assert r2.fired == 0, f"expected second-pass cooldown skip, got {r2.fired}"
+
+
+# ---------------------------------------------------------------------------
+# M10 (#694): a sentinel whose every action FAILED must NOT enter cooldown.
+# Bumping last_fired_at/fire_count unconditionally would suppress retries of a
+# sentinel that never actually performed any work.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_failed_actions_do_not_enter_cooldown(fake_supabase: FakeSupabase):
+    """If all of a sentinel's actions raise, last_fired_at must stay None so the
+    sentinel remains eligible to retry on the next dispatch pass."""
+    fake_supabase.rows["sentinels"].append(
+        {
+            "sentinel_id": "s-k",
+            "name": "k-floor",
+            "pattern_type": "threshold_breach",
+            "pattern_config": {
+                "table": "causal_paths",
+                "column": "causal_effect_size",
+                "op": "<",
+                "value": 0.05,
+            },
+            "action_type": "invalidate",
+            "action_config": {"source_type": "causal_path"},
+            "brand": "Kisqali",
+            "enabled": True,
+            "fire_count": 0,
+            "last_fired_at": None,
+            "cooldown_minutes": 360,
+        }
+    )
+    fake_supabase.rows["causal_paths"].append(
+        {"path_id": "cp-k", "brand": "Kisqali", "causal_effect_size": 0.01}
+    )
+
+    async def _boom(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("invalidate failed")
+
+    with patch("src.memory.sentinels.registry.cascade_invalidate", side_effect=_boom):
+        result = await dispatch_sentinels()
+
+    # Pattern matched, so the sentinel was "fired" in the dispatcher sense...
+    assert result.fired == 1
+    # ...but every action raised, so no work was done.
+    assert result.actions_taken == 0
+    s_k = fake_supabase.rows["sentinels"][0]
+    # Cooldown must NOT have been entered: last_fired_at untouched, fire_count not bumped.
+    assert s_k["last_fired_at"] is None, "failed-only sentinel must not enter cooldown"
+    assert s_k["fire_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_successful_action_enters_cooldown(fake_supabase: FakeSupabase):
+    """Sanity: a successful action DOES bump last_fired_at/fire_count (cooldown engaged)."""
+    fake_supabase.rows["sentinels"].append(
+        {
+            "sentinel_id": "s-k",
+            "name": "k-floor",
+            "pattern_type": "threshold_breach",
+            "pattern_config": {
+                "table": "causal_paths",
+                "column": "causal_effect_size",
+                "op": "<",
+                "value": 0.05,
+            },
+            "action_type": "invalidate",
+            "action_config": {"source_type": "causal_path"},
+            "brand": "Kisqali",
+            "enabled": True,
+            "fire_count": 0,
+            "last_fired_at": None,
+            "cooldown_minutes": 360,
+        }
+    )
+    fake_supabase.rows["causal_paths"].append(
+        {"path_id": "cp-k", "brand": "Kisqali", "causal_effect_size": 0.01}
+    )
+
+    async def _ok(*args: Any, **kwargs: Any) -> None:
+        return None
+
+    with patch("src.memory.sentinels.registry.cascade_invalidate", side_effect=_ok):
+        result = await dispatch_sentinels()
+
+    assert result.fired == 1
+    assert result.actions_taken == 1
+    s_k = fake_supabase.rows["sentinels"][0]
+    assert s_k["last_fired_at"] is not None, "successful sentinel must enter cooldown"
+    assert s_k["fire_count"] == 1
