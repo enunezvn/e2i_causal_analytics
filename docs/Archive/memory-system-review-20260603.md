@@ -1,3 +1,13 @@
+> **🗄️ ARCHIVED 2026-06-04.** Close-out complete: reconciliation Steps 1–4 + Step 6 done.
+> Migrations reconciled (#676/#682/#672); embeddings verified end-to-end on prod (a real
+> episodic write persists a 1536-dim OpenAI vector; the consolidation/crystallization
+> lifecycle is scheduled — full insight-flow materializes with production traffic volume);
+> **H1** cross-tenant PHI reads + **H2** write-side Cypher injection fixed (#690); **M1**
+> embedding-dimension write guard fixed (#692). The only remaining plan step, **Step 5**
+> (invalidate producer), is deferred because it cannot be validated until `executive_insights`/
+> `insight_edges` are non-empty (production volume). All remaining items (Step 5, H4, M2–M13,
+> the LOWs, M11/M12, doc-drift, the H1 graph-brand follow-up) are tracked in **issue #694**.
+
 # E2I Memory Subsystem — Deep Code Review
 
 **Date:** 2026-06-03
