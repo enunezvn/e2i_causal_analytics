@@ -33,12 +33,14 @@ Author: E2I Causal Analytics Team
 Version: 4.3.0
 """
 
+import base64
+import binascii
 import logging
 import os
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, HTTPException, Request, WebSocket, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 
@@ -286,6 +288,67 @@ async def verify_supabase_token(token: str) -> Optional[Dict[str, Any]]:
     except Exception as e:
         logger.warning(f"Token verification failed: {e}")
         return None
+
+
+# Sentinel subprotocol the frontend sends as the FIRST offered protocol to mark
+# that the SECOND offered protocol carries a base64url-encoded bearer JWT.
+# See frontend/src/hooks/use-websocket.ts (PR #679).
+WS_BEARER_SUBPROTOCOL = "bearer"
+
+# Defense-in-depth bound on the encoded subprotocol token before we allocate a
+# buffer and decode it. Real Supabase JWTs are well under 4 KB; 8 KB is generous.
+# uvicorn's h11 parser already caps total handshake headers (~16 KB), so this is
+# belt-and-suspenders for non-uvicorn ASGI servers / proxies with larger limits.
+_MAX_SUBPROTOCOL_TOKEN_LEN = 8192
+
+
+def _decode_subprotocol_token(encoded: str) -> Optional[str]:
+    """Decode a base64url subprotocol value back into the raw JWT string.
+
+    The frontend encodes the token as ``btoa(token)`` with ``+`` -> ``-``,
+    ``/`` -> ``_`` and ``=`` padding STRIPPED (RFC 6455 subprotocol values must
+    be HTTP tokens, which forbid ``.``/``+``/``/``/``=``). This restores the
+    padding and url-safe-decodes it.
+
+    Returns the decoded JWT, or ``None`` if the value is missing, oversized, or
+    not decodable (all of which must be treated as an auth failure, never a 500).
+    """
+    if not encoded or len(encoded) > _MAX_SUBPROTOCOL_TOKEN_LEN:
+        return None
+    try:
+        # Restore the stripped '=' padding to a multiple of 4.
+        padded = encoded + "=" * (-len(encoded) % 4)
+        raw = base64.urlsafe_b64decode(padded.encode("ascii"))
+        return raw.decode("utf-8")
+    except (binascii.Error, ValueError, UnicodeDecodeError) as e:
+        logger.warning("Failed to decode WebSocket bearer subprotocol: %s", e)
+        return None
+
+
+async def authenticate_websocket(websocket: WebSocket) -> Optional[Dict[str, Any]]:
+    """Authenticate a WebSocket handshake from its offered subprotocols.
+
+    Browsers cannot set arbitrary headers on a WebSocket handshake, so the
+    bearer token is carried in ``Sec-WebSocket-Protocol`` as two values:
+    ``['bearer', base64url(jwt)]`` (see ``_decode_subprotocol_token``).
+
+    This helper ONLY verifies the token (authentication). It does NOT call
+    ``websocket.accept()`` / ``close()`` — the endpoint owns the handshake
+    lifecycle (including echoing the ``bearer`` subprotocol on accept).
+
+    Returns the verified user dict, or ``None`` when no valid bearer token was
+    offered (caller decides whether that is allowed under the fail-open posture).
+    """
+    subprotocols = websocket.scope.get("subprotocols") or []
+    if len(subprotocols) < 2 or subprotocols[0] != WS_BEARER_SUBPROTOCOL:
+        # No bearer token offered (anonymous handshake).
+        return None
+
+    token = _decode_subprotocol_token(subprotocols[1])
+    if not token:
+        return None
+
+    return await verify_supabase_token(token)
 
 
 async def get_current_user(
