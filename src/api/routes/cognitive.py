@@ -23,7 +23,7 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.api.dependencies.auth import (
@@ -705,7 +705,7 @@ async def delete_session(
 )
 async def list_sessions(
     user_id: Optional[str] = None,
-    limit: int = 50,
+    limit: int = Query(default=50, ge=1, le=200, description="Max sessions to return"),
     user: Dict[str, Any] = Depends(require_viewer),
 ) -> Dict[str, Any]:
     """

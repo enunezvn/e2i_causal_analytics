@@ -430,7 +430,7 @@ GROUP BY model_id;
 CREATE OR REPLACE VIEW ml_model_health_dashboard AS
 SELECT
     m.id as model_id,
-    m.name as model_name,
+    m.model_name as model_name,  -- prod ml_model_registry column is model_name, not name
     m.stage as model_stage,
     -- Latest drift status
     COALESCE(d.has_drift, FALSE) as has_active_drift,
@@ -484,6 +484,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trigger_monitoring_alerts_updated_at ON ml_monitoring_alerts;
 CREATE TRIGGER trigger_monitoring_alerts_updated_at
     BEFORE UPDATE ON ml_monitoring_alerts
     FOR EACH ROW
@@ -543,6 +544,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trigger_create_drift_alert ON ml_drift_history;
 CREATE TRIGGER trigger_create_drift_alert
     AFTER INSERT ON ml_drift_history
     FOR EACH ROW

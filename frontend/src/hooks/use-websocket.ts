@@ -142,6 +142,18 @@ const RECONNECTABLE_CLOSE_CODES = new Set([
   1014, // Bad Gateway
 ]);
 
+/**
+ * Encode an auth token into a value safe for use as a WebSocket subprotocol.
+ *
+ * RFC 6455 subprotocol values must be HTTP tokens (no '.', '/', '+', '=', etc.),
+ * but JWTs contain '.' and base64 padding. We base64url-encode the token so it
+ * can be carried in the Sec-WebSocket-Protocol request header instead of the URL
+ * query string (which leaks via browser history and proxy logs).
+ */
+function encodeTokenForSubprotocol(token: string): string {
+  return btoa(token).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
 // =============================================================================
 // HOOK IMPLEMENTATION
 // =============================================================================
@@ -258,15 +270,20 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
   }, [heartbeatInterval, heartbeatMessage, clearHeartbeat]);
 
   /**
-   * Calculate next reconnect delay with exponential backoff
+   * Calculate next reconnect delay with exponential backoff + jitter.
+   *
+   * Jitter (finding #4) spreads reconnection attempts across clients so a server
+   * restart does not produce a synchronized thundering herd of reconnects. We use
+   * bounded "equal jitter": the returned delay is in [base/2, base].
    */
   const getNextReconnectDelay = useCallback((): number => {
-    const delay = currentReconnectDelayRef.current;
+    const base = currentReconnectDelayRef.current;
     currentReconnectDelayRef.current = Math.min(
-      delay * backoffMultiplier,
+      base * backoffMultiplier,
       maxReconnectDelay
     );
-    return delay;
+    const jittered = base / 2 + Math.random() * (base / 2);
+    return Math.round(jittered);
   }, [backoffMultiplier, maxReconnectDelay]);
 
   /**
@@ -321,24 +338,32 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
     shouldReconnectRef.current = true;
     setState('connecting');
 
-    // Build WebSocket URL
-    let wsUrl = buildApiUrl(endpoint).replace(/^http/, 'ws');
+    // Build WebSocket URL. The auth token is NOT placed in the query string:
+    // browsers record full URLs in history and proxies/load balancers log them,
+    // so a bearer token in the query string is a credential leak (finding #1).
+    // Instead we carry the token out-of-band via the Sec-WebSocket-Protocol
+    // request header (the only header a browser lets a WebSocket client set).
+    const wsUrl = buildApiUrl(endpoint).replace(/^http/, 'ws');
 
-    // Add auth token if configured
+    // Build the subprotocol carrier for the auth token, if configured.
+    // Format: ['bearer', base64url(token)]. The first value is a sentinel a
+    // backend can select via accept(subprotocol='bearer'); the second is the
+    // encoded token (raw JWTs contain '.', which is not a valid subprotocol
+    // token character per RFC 6455, so it must be encoded).
+    let protocols: string[] | undefined;
     if (withAuth) {
       const session = useAuthStore.getState().session;
       if (session?.access_token) {
-        const separator = wsUrl.includes('?') ? '&' : '?';
-        wsUrl += `${separator}token=${encodeURIComponent(session.access_token)}`;
+        protocols = ['bearer', encodeTokenForSubprotocol(session.access_token)];
       }
     }
 
     if (env.isDev) {
-      console.debug('[WebSocket] Connecting to:', wsUrl.replace(/token=[^&]+/, 'token=***'));
+      console.debug('[WebSocket] Connecting to:', wsUrl, protocols ? '(auth via subprotocol)' : '');
     }
 
     try {
-      const ws = new WebSocket(wsUrl);
+      const ws = protocols ? new WebSocket(wsUrl, protocols) : new WebSocket(wsUrl);
 
       ws.onopen = () => {
         if (isUnmountedRef.current) {
@@ -402,11 +427,15 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
         wsRef.current = null;
         onCloseRef.current?.(event);
 
-        // Determine if we should reconnect
+        // Determine if we should reconnect (finding #4).
+        // Only reconnect on transient/infrastructure close codes in the
+        // allow-list. Auth/policy closes (1008, 1003, 4xxx) and clean closes
+        // (1000) are terminal: reconnecting would loop forever against a server
+        // that is intentionally rejecting us.
         const shouldAutoReconnect =
           autoReconnect &&
           shouldReconnectRef.current &&
-          (event.code !== 1000 || RECONNECTABLE_CLOSE_CODES.has(event.code));
+          RECONNECTABLE_CLOSE_CODES.has(event.code);
 
         if (shouldAutoReconnect) {
           scheduleReconnect();

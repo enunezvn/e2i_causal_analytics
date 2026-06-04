@@ -7,10 +7,65 @@
 
 **Tally:** 78 raw findings → **37 confirmed**, 33 disputed (split verdict), 0 unverified, 8 rejected.
 
-## Status / actions taken
+## Resolution status — updated 2026-06-04 (post-sweep)
 
-- ✅ **Graph public-allowlist hardening SHIPPED** (this branch, TDD): the knowledge-graph data endpoints (`/api/graph/nodes`, `/relationships`, `/stats`, `/causal-chains`) were removed from the unauthenticated public allowlist; only `/api/graph/health` remains public. Regression-pinned in `tests/unit/test_security/test_auth_gating.py` and `tests/unit/test_api/test_middleware/test_auth_middleware.py`. This closes the anonymous PHI-exposure + unauthenticated Cypher-injection reach (findings below).
-- 🔵 **Auth fail-open (originally flagged CRITICAL) — ACKNOWLEDGED INTENTIONAL, not changed.** The fail-open when Supabase is unconfigured is deliberate: a fail-closed startup guard previously prevented the app from connecting. Per owner direction, **do not** add a production startup guard here. The real exposure was the allowlist, now fixed.
+Follow-up sessions after the initial fix sweep drove the remaining confirmed findings to closure **and** re-triaged + fixed the disputed leads. Every fix lane was worktree-isolated, TDD red-first, and ralph-looped to a **codex:codex-rescue / adversarial fixed point** before merge. Deploy was **temporarily disabled** for this multi-session work (prod and dev are the **same** droplet — `e2i-analytics-prod`), so merges landed on `main` without firing deploys.
+
+**Confirmed findings (37): now 34 FIXED + 3 intentional owner-decisions.**
+
+- **34 FIXED** — the original 31, plus the three previously partial/outstanding:
+  - **C21** (segment-analysis durability) — **COMPLETED**: replaced the in-memory store with a Redis-backed durable store (graceful in-memory fallback, NaN/Inf-safe serialization, key-existence eviction, `/health` `storage_mode`) — **PR #674** (+ round-2 hardening; codex ACCEPT after 2 adversarial rounds).
+  - **C31** (frontend blind-cast) — **COMPLETED**: opt-in Zod runtime validation wired into the KPI/predictions/monitoring/causal/graph clients (**#671**) and segments/resources/memory/rag/health-score (**#677**). Unmodeled passthroughs (`getModelInfo`, `/memory/stats`, `/v1/rag/stats`) are deliberately **deferred** — a strict schema there would false-reject valid responses.
+  - **C23 swallow** (analytics zeroed-metrics fail-open) — **FIXED**: returns an honest **503** on metrics-fetch failure instead of fabricated zeros — **PR #670** (endpoint stays public per the owner decision; only error handling changed).
+- **3 OWNER-DECISIONS — intentional, unchanged:** auth fail-open when Supabase unconfigured (**C1/C9** — fail-closed previously broke connectivity; do NOT add a prod guard); `GET /api/monitoring/alerts` public (**C37**); `GET /api/analytics/dashboard` *public-access* aspect (**C23-public**). Disproof confirmed authed users are unaffected.
+
+**Disputed findings (33): re-triaged against merged code, then swept.**
+
+- **22 real → ALL FIXED** in 4 batches: FE react-query cache-keys (**#675**, 7), FE api-client serialization/validation/error-types (**#677**, 6), backend snooze-honesty/lifespan/falkordb/limits/naming (**#678**, 5), FE websocket auth-exposure/reactivity/reconnect (**#679**, 4). The ralph-loop caught real regressions the fix agents + CI had missed (getModelInfo false-reject, NaN-poison, TTL-orphan eviction, a missing react-query invalidation).
+- **2 already-fixed** by the first sweep (digital-twin compare/history routes #666; `delete_sentinel` 404 #660).
+- **4 false-positive** (total_count "mismatch"; graph-WS helper "no token" — it isn't the leak; ws-url no-op; audit hash-chain order).
+- **4 out-of-scope / intentional** (`feedback apply_update` placeholder; `rag` /stats+/health fail-open; health-score polling backoff; rag SearchLogger placeholder).
+
+**Incidental:** repo-wide pip-audit was red on `aiohttp` **CVE-2026-34993** (unrelated to this review) → bumped to 3.14.0 (**#673**).
+
+**🔴 NEW finding (surfaced during the WS sweep) — FIX IN FLIGHT:** the graph-stream WebSocket `@router.websocket("/stream")` authenticated **nobody** — `ConnectionManager.connect` calls `accept()` with no token check, and WS bypasses the http-scoped auth middleware. This is the WS-channel sibling of the **C3** HTTP exposure that #657 closed (anonymous access to graph node/relationship data = PHI/PII). Fix in progress on `fix/api-ws-auth` (authenticate the handshake via the `Sec-WebSocket-Protocol` bearer the FE now sends; reject anonymous when `is_auth_enabled()`, **fail-open otherwise** per the C1/C9 owner posture). Per-tenant/brand filtering of the stream (authZ) is a tracked follow-up.
+
+The **8 rejected** findings were cleared.
+
+### PR map (confirmed + disputed → resolution)
+
+| PR | Findings |
+|----|----------|
+| #657 | C3 (graph public-allowlist) |
+| #659 | C10, C17, C29, C32 |
+| #660 | C12, C14, C26, C33 |
+| #661 | C15, C16, C31 *(initial)* |
+| #662 | C6, C11, C24 (copilotkit) |
+| #663 | C2, C18, C24 (cognitive), C36 |
+| #664 | C3/C7, C13 (Cypher injection), C27 |
+| #665 | C20, C21 *(bounded)*, C22, C25 (experiments/causal), C28, C30, C34, C35 |
+| #666 | C4, C5, C8, C19, C25 (digital-twin) — also fixed disputed compare/history routes |
+| #670 | **C23 swallow** → honest 503 (analytics fail-open) |
+| #671 | **C31 completion** — FE validation (kpi/predictions/monitoring/causal/graph) |
+| #673 | aiohttp **CVE-2026-34993** bump (incidental) |
+| #674 | **C21 completion** — Redis durable store + round-2 hardening |
+| #675 | disputed: FE react-query cache-keys (7) |
+| #677 | disputed: FE api-client (6) + C31 modules (segments/resources/memory/rag/health-score) |
+| #678 | disputed: backend snooze/lifespan/falkordb/limits/naming (5) |
+| #679 | disputed: FE websocket auth-exposure/reactivity/reconnect (4) |
+| `fix/api-ws-auth` | **NEW: graph-stream WS authentication** *(PR in flight — not yet merged)* |
+| owner-decision | C1, C9, C23 *(public aspect)*, C37 |
+
+### Remaining work (pending — why this report is NOT yet archived)
+
+1. **WS-auth (`fix/api-ws-auth`)** — the NEW graph-stream WebSocket authentication fix: finish the codex fixed-point review + merge.
+2. **2 doc-comment nits** — `frontend/src/lib/api-schemas.ts:1004/1005` reference wrong route names in block comments (`/v1/rag/causal-subgraph` → actual `/v1/rag/graph/{entity}`; `/v1/rag/extract` → actual `/v1/rag/entities`). The `get()` calls use the correct paths; comments only.
+3. **Per-tenant WS authZ** *(follow-up)* — once the graph-stream WS authenticates, it still broadcasts to any authed user regardless of brand/tenant; scope the stream by membership (deeper authZ).
+4. **Ops** — re-enable `deploy.yml` (temporarily disabled for this multi-session work; **prod == dev == `e2i-analytics-prod`**) and run **one coordinated deploy** of the whole stack once the parallel #672 deploy-infra work reaches a stopping point; then reap the merged fix worktrees.
+
+**Archival status:** retained in `docs/reports/` (not archived) — items 1–4 above remain, chiefly the in-flight WS-auth fix. Archive to `docs/Archive/` once WS-auth merges, the doc-comment nits land, and the coordinated deploy is done.
+
+> Historical note: the original "Status / actions taken" entries (graph-allowlist shipped; auth fail-open intentional) are now folded into the resolution status above.
 
 ## Root-cause themes
 

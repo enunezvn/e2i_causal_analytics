@@ -225,6 +225,19 @@ class HealthScoreResponse(BaseModel):
     )
 
 
+class DataProvenance(str, Enum):
+    """Where the health data in a response came from.
+
+    ``measured`` — produced by the real Health Score agent.
+    ``placeholder`` — fabricated sample data served only because the agent is
+    unavailable AND mock-fallback is explicitly permitted (dev/test). Surfaced
+    so consumers never mistake placeholder values for real measurements.
+    """
+
+    MEASURED = "measured"
+    PLACEHOLDER = "placeholder"
+
+
 class ComponentHealthResponse(BaseModel):
     """Response for component health check."""
 
@@ -235,6 +248,10 @@ class ComponentHealthResponse(BaseModel):
     unhealthy_count: int = Field(..., description="Unhealthy component count")
     components: List[ComponentHealth] = Field(..., description="Component details")
     check_latency_ms: int = Field(..., description="Check duration")
+    data_provenance: DataProvenance = Field(
+        default=DataProvenance.MEASURED,
+        description="Whether the data is measured (real agent) or placeholder (dev fallback)",
+    )
 
 
 class ModelHealthResponse(BaseModel):
@@ -247,6 +264,10 @@ class ModelHealthResponse(BaseModel):
     unhealthy_count: int = Field(..., description="Unhealthy model count")
     models: List[ModelHealth] = Field(..., description="Model details")
     check_latency_ms: int = Field(..., description="Check duration")
+    data_provenance: DataProvenance = Field(
+        default=DataProvenance.MEASURED,
+        description="Whether the data is measured (real agent) or placeholder (dev fallback)",
+    )
 
 
 class PipelineHealthResponse(BaseModel):
@@ -415,12 +436,21 @@ async def get_component_health() -> ComponentHealthResponse:
 
     Checks: Database, Cache (Redis), Vector Store, API, Message Queue
 
+    Behavior (F-010-backend / #429 follow-up): this endpoint no longer silently
+    fabricates component health. It first verifies the Health Score agent is
+    importable. If it is, the response is tagged ``data_provenance="measured"``.
+    If the agent import fails, the request fails-closed (503) in production and
+    only serves placeholder data — clearly tagged ``data_provenance="placeholder"``
+    — when mock-fallback is explicitly permitted (dev/test).
+
     Returns:
         Component health details
     """
     import time
 
     start_time = time.time()
+
+    provenance = _resolve_health_provenance(agent_name="Health Score")
 
     components = _get_mock_component_health()
     check_latency = int((time.time() - start_time) * 1000)
@@ -439,6 +469,7 @@ async def get_component_health() -> ComponentHealthResponse:
         unhealthy_count=unhealthy,
         components=components,
         check_latency_ms=check_latency,
+        data_provenance=provenance,
     )
 
 
@@ -455,12 +486,22 @@ async def get_model_health() -> ModelHealthResponse:
 
     Checks model accuracy, latency, error rates, and prediction volume.
 
+    Behavior (F-010-backend / #429 follow-up): mirrors ``/components`` — the
+    Health Score agent must be importable for the response to be tagged
+    ``data_provenance="measured"``. A failed agent import fails-closed (503) in
+    production and only serves placeholder model metrics — tagged
+    ``data_provenance="placeholder"`` — when mock-fallback is explicitly
+    permitted (dev/test). This prevents fabricated model accuracy from being
+    presented as real in the dashboard.
+
     Returns:
         Model health details
     """
     import time
 
     start_time = time.time()
+
+    provenance = _resolve_health_provenance(agent_name="Health Score")
 
     models = _get_mock_model_health()
     check_latency = int((time.time() - start_time) * 1000)
@@ -479,6 +520,7 @@ async def get_model_health() -> ModelHealthResponse:
         unhealthy_count=unhealthy,
         models=models,
         check_latency_ms=check_latency,
+        data_provenance=provenance,
     )
 
 
@@ -674,6 +716,34 @@ async def get_service_status() -> HealthServiceStatus:
 # =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
+
+
+def _resolve_health_provenance(*, agent_name: str) -> DataProvenance:
+    """Decide the provenance of a component/model health response.
+
+    The Health Score agent is the real source of health data. If it is
+    importable, the response is ``measured``. If the import fails, this defers
+    to the #429 import guard: in a fail-closed environment
+    (``E2I_REQUIRE_AGENT_IMPORT=1`` or non-dev ``ENVIRONMENT``) it raises
+    ``HTTPException(503)`` so fabricated data is never served as real; in an
+    explicit dev/test environment it returns ``placeholder`` so callers can see
+    the data is sample data, not a measurement.
+    """
+    from src.api.utils.agent_import_guard import guard_or_raise
+
+    try:
+        from src.agents.health_score import HealthScoreAgent
+
+        # Construct (trackers off — we discard the instance) to confirm the
+        # agent is genuinely usable. A broken/partial deployment raises
+        # ImportError on construction, mirroring _execute_health_check's
+        # failure mode while staying cheap on this fast-path endpoint.
+        HealthScoreAgent(enable_mlflow=False, enable_opik=False)
+        return DataProvenance.MEASURED
+    except ImportError as e:
+        # Raises 503 in fail-closed environments; returns otherwise.
+        guard_or_raise(e, agent_name=agent_name)
+        return DataProvenance.PLACEHOLDER
 
 
 async def _execute_health_check(scope: CheckScope) -> HealthScoreResponse:

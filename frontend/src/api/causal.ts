@@ -17,6 +17,10 @@
  */
 
 import { get, post } from '@/lib/api-client';
+import {
+  CausalHealthResponseWireSchema,
+  EstimatorListResponseWireSchema,
+} from '@/lib/api-schemas';
 import type {
   CausalLibrary,
   CrossValidationRequest,
@@ -289,9 +293,13 @@ export async function runCrossValidation(
 export async function listEstimators(
   library?: CausalLibrary
 ): Promise<EstimatorListResponse> {
-  return get<EstimatorListResponse>(`${CAUSAL_BASE}/estimators`, {
-    library,
-  });
+  return get<EstimatorListResponse>(
+    `${CAUSAL_BASE}/estimators`,
+    {
+      library,
+    },
+    { schema: EstimatorListResponseWireSchema }
+  );
 }
 
 // =============================================================================
@@ -318,7 +326,9 @@ export async function listEstimators(
  * ```
  */
 export async function getCausalHealth(): Promise<CausalHealthResponse> {
-  return get<CausalHealthResponse>(`${CAUSAL_BASE}/health`);
+  return get<CausalHealthResponse>(`${CAUSAL_BASE}/health`, undefined, {
+    schema: CausalHealthResponseWireSchema,
+  });
 }
 
 // =============================================================================

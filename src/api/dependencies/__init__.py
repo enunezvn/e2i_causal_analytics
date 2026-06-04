@@ -38,6 +38,7 @@ from src.api.dependencies.compute import (
 )
 from src.api.dependencies.falkordb_client import (
     close_falkordb,
+    falkordb_diagnostics,
     falkordb_health_check,
     get_falkordb,
     get_graph,
@@ -92,6 +93,7 @@ __all__ = [
     "get_graph",
     "close_falkordb",
     "falkordb_health_check",
+    "falkordb_diagnostics",
     # Supabase
     "init_supabase",
     "get_supabase",

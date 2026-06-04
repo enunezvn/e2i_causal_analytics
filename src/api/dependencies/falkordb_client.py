@@ -11,8 +11,10 @@ Author: E2I Causal Analytics Team
 Version: 4.2.0
 """
 
+import asyncio
 import logging
 import os
+import time
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
@@ -54,6 +56,14 @@ _graph: Optional[Any] = None
 _health_circuit_breaker = CircuitBreaker(
     CircuitBreakerConfig(failure_threshold=3, reset_timeout_seconds=30.0)
 )
+
+# Cache for the (expensive) node/edge count diagnostics. Full-graph
+# ``count(n)`` / ``count(r)`` scans are O(graph) and must NOT run on the hot
+# readiness path (it's polled frequently by orchestrators). They live in
+# ``falkordb_diagnostics()`` instead, behind this short TTL cache.
+_DIAGNOSTICS_TTL_SECONDS = 60.0
+_diagnostics_cache: Optional[Dict[str, Any]] = None
+_diagnostics_cached_at: float = 0.0
 
 
 @retry(
@@ -162,13 +172,19 @@ async def close_falkordb() -> None:
 
 async def falkordb_health_check() -> Dict[str, Any]:
     """
-    Check FalkorDB health status.
+    Check FalkorDB readiness.
+
+    This is the hot readiness/liveness probe path (``/ready``). It proves
+    connectivity with a single cheap ``list_graphs()`` call and reports latency.
+
+    It deliberately does NOT run ``count(n)`` / ``count(r)`` full-graph scans:
+    those are O(graph) and would block the event loop on every probe. Node/edge
+    counts are diagnostics, not a readiness signal — they live in
+    ``falkordb_diagnostics()`` (cached, off the hot path) instead.
 
     Returns:
         Dict with status and graph info
     """
-    import time
-
     if not _health_circuit_breaker.allow_request():
         return {"status": "circuit_open"}
 
@@ -181,25 +197,11 @@ async def falkordb_health_check() -> Dict[str, Any]:
                 "error": "FalkorDB not configured",
             }
 
+        # Reachability check only — no full-graph scans on the readiness path.
+        # ``list_graphs()`` is sync (Redis round-trip), so run it off the loop.
         start = time.time()
-        graphs = client.list_graphs()
+        graphs = await asyncio.to_thread(client.list_graphs)
         latency_ms = (time.time() - start) * 1000
-
-        graph = await get_graph()
-        node_count = 0
-        edge_count = 0
-
-        if graph:
-            try:
-                result = graph.query("MATCH (n) RETURN count(n) as count")
-                if result.result_set:
-                    node_count = result.result_set[0][0]
-
-                result = graph.query("MATCH ()-[r]->() RETURN count(r) as count")
-                if result.result_set:
-                    edge_count = result.result_set[0][0]
-            except Exception:
-                pass  # Graph may be empty
 
         _health_circuit_breaker.record_success()
 
@@ -208,8 +210,6 @@ async def falkordb_health_check() -> Dict[str, Any]:
             "latency_ms": round(latency_ms, 2),
             "graphs": graphs,
             "current_graph": FALKORDB_GRAPH_NAME,
-            "node_count": node_count,
-            "edge_count": edge_count,
         }
 
     except Exception as e:
@@ -218,3 +218,65 @@ async def falkordb_health_check() -> Dict[str, Any]:
             "status": "unhealthy",
             "error": str(e),
         }
+
+
+async def falkordb_diagnostics(*, use_cache: bool = True) -> Dict[str, Any]:
+    """
+    Return FalkorDB node/edge counts for diagnostics dashboards.
+
+    This runs the expensive full-graph ``count(n)`` / ``count(r)`` scans that
+    were removed from the readiness path. It is cached for
+    ``_DIAGNOSTICS_TTL_SECONDS`` and the sync ``graph.query`` calls are run via
+    ``asyncio.to_thread(...)`` so a diagnostics caller never blocks the event
+    loop. This is NOT a readiness signal — orchestrators should poll
+    ``/ready`` (``falkordb_health_check``) instead.
+
+    Args:
+        use_cache: When True (default), return the cached counts if they are
+            still within the TTL window; otherwise force a fresh scan.
+
+    Returns:
+        Dict with ``status`` and, when healthy, ``node_count`` / ``edge_count``.
+    """
+    global _diagnostics_cache, _diagnostics_cached_at
+
+    now = time.time()
+    if (
+        use_cache
+        and _diagnostics_cache is not None
+        and (now - _diagnostics_cached_at) < _DIAGNOSTICS_TTL_SECONDS
+    ):
+        return {**_diagnostics_cache, "cached": True}
+
+    graph = await get_graph()
+    if graph is None:
+        return {"status": "unavailable", "error": "FalkorDB not configured"}
+
+    node_count = 0
+    edge_count = 0
+
+    def _scan_counts() -> tuple[int, int]:
+        nodes = 0
+        edges = 0
+        result = graph.query("MATCH (n) RETURN count(n) as count")
+        if result.result_set:
+            nodes = result.result_set[0][0]
+        result = graph.query("MATCH ()-[r]->() RETURN count(r) as count")
+        if result.result_set:
+            edges = result.result_set[0][0]
+        return nodes, edges
+
+    try:
+        node_count, edge_count = await asyncio.to_thread(_scan_counts)
+    except Exception:
+        pass  # Graph may be empty / transiently unavailable.
+
+    payload: Dict[str, Any] = {
+        "status": "healthy",
+        "current_graph": FALKORDB_GRAPH_NAME,
+        "node_count": node_count,
+        "edge_count": edge_count,
+    }
+    _diagnostics_cache = payload
+    _diagnostics_cached_at = now
+    return {**payload, "cached": False}

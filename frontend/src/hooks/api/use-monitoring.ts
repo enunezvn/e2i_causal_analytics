@@ -96,7 +96,11 @@ export function useLatestDriftStatus(
   >
 ) {
   return useQuery<DriftDetectionResponse, ApiError>({
-    queryKey: queryKeys.monitoring.driftLatest(modelId),
+    // `limit` changes how many drift results come back, so it must be part of
+    // the cache key (otherwise a limit=5 read serves a limit=25 cache entry).
+    // The mutation-side invalidation uses the bare driftLatest(modelId)
+    // prefix, which still matches these limit-suffixed keys.
+    queryKey: [...queryKeys.monitoring.driftLatest(modelId), limit] as const,
     queryFn: () => getLatestDriftStatus(modelId, limit),
     enabled: !!modelId,
     ...options,
@@ -1053,7 +1057,9 @@ export async function prefetchLatestDriftStatus(
   limit: number = 10
 ) {
   await queryClient.prefetchQuery({
-    queryKey: queryKeys.monitoring.driftLatest(modelId),
+    // Must mirror the useLatestDriftStatus read key (model + limit) so the
+    // prefetched data is actually consumed by the hook.
+    queryKey: [...queryKeys.monitoring.driftLatest(modelId), limit] as const,
     queryFn: () => getLatestDriftStatus(modelId, limit),
   });
 }

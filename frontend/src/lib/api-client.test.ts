@@ -12,6 +12,10 @@ import { z } from 'zod';
 
 // Import the actual type from api-client
 import type { ApiErrorResponse } from './api-client';
+// Finding #5: api-client must re-export the SAME schema-inferred type so the
+// runtime contract (Zod) and compile-time type can never diverge.
+import type { ApiErrorResponse as SchemaApiErrorResponse } from './api-schemas';
+import { ApiErrorResponseSchema } from './api-schemas';
 
 // Mock axios before importing the module
 vi.mock('axios', async () => {
@@ -266,6 +270,34 @@ describe('ApiError', () => {
 });
 
 // =============================================================================
+// ApiErrorResponse TYPE UNIFICATION (finding #5)
+// =============================================================================
+
+describe('ApiErrorResponse type unification (#5)', () => {
+  it('api-client re-exports the schema-inferred type (assignable both ways)', () => {
+    // Compile-time proof these two named imports resolve to the SAME type:
+    // if they diverged, one of these assignments would fail tsc.
+    const fromSchema: SchemaApiErrorResponse = {
+      error: 'x',
+      message: 'y',
+      suggested_action: 'do z',
+    };
+    const fromClient: ApiErrorResponse = fromSchema;
+    const back: SchemaApiErrorResponse = fromClient;
+    expect(back.suggested_action).toBe('do z');
+  });
+
+  it('the canonical Zod schema includes suggested_action', () => {
+    const parsed = ApiErrorResponseSchema.parse({
+      error: 'x',
+      message: 'y',
+      suggested_action: 'retry',
+    });
+    expect(parsed.suggested_action).toBe('retry');
+  });
+});
+
+// =============================================================================
 // API CLIENT CREATION TESTS
 // =============================================================================
 
@@ -334,6 +366,48 @@ describe('Request Helpers', () => {
 
       expect(apiClient.get).toHaveBeenCalledWith('/users', {
         params: { page: 1, limit: 10 },
+      });
+    });
+
+    it('does NOT add a paramsSerializer by default (back-compat)', async () => {
+      vi.mocked(apiClient.get).mockResolvedValueOnce({
+        data: [],
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config: {} as InternalAxiosRequestConfig,
+      });
+
+      await get('/x', { segments: ['region', 'specialty'] });
+
+      // The bracketed-default serialization is what FastAPI ignores; we must
+      // NOT silently change it for callers that did not opt in.
+      const callConfig = vi.mocked(apiClient.get).mock.calls[0][1];
+      expect(callConfig).toEqual({ params: { segments: ['region', 'specialty'] } });
+      expect(callConfig).not.toHaveProperty('paramsSerializer');
+    });
+
+    it('forwards paramsSerializer { indexes: null } when repeatArrayParams is set', async () => {
+      vi.mocked(apiClient.get).mockResolvedValueOnce({
+        data: [],
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config: {} as InternalAxiosRequestConfig,
+      });
+
+      await get(
+        '/x',
+        { segments: ['region', 'specialty'] },
+        { repeatArrayParams: true }
+      );
+
+      // `{ indexes: null }` is axios v1's switch for repeated-key array
+      // serialization (`?segments=region&segments=specialty`), which is the
+      // form FastAPI `List[str]` query params require.
+      expect(apiClient.get).toHaveBeenCalledWith('/x', {
+        params: { segments: ['region', 'specialty'] },
+        paramsSerializer: { indexes: null },
       });
     });
   });

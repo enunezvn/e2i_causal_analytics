@@ -13,7 +13,7 @@
  * @module hooks/use-websocket-cache-sync
  */
 
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQueryClient, type QueryKey } from '@tanstack/react-query';
 import { useGraphWebSocket, type UseWebSocketReturn } from './use-websocket';
 import { queryKeys } from '@/lib/query-client';
@@ -238,8 +238,12 @@ export function useWebSocketCacheSync(
   } = options;
 
   const queryClient = useQueryClient();
+  // Finding #2: invalidationCount and lastEvent must be REACTIVE state, not refs,
+  // so that consumers re-render when they change. We keep a ref mirror of the
+  // count for synchronous internal accumulation across debounced batches.
+  const [invalidationCount, setInvalidationCount] = useState(0);
+  const [lastEvent, setLastEvent] = useState<GraphStreamPayload | null>(null);
   const invalidationCountRef = useRef(0);
-  const lastEventRef = useRef<GraphStreamPayload | null>(null);
   const debounceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingInvalidationsRef = useRef<Set<string>>(new Set());
 
@@ -265,6 +269,8 @@ export function useWebSocketCacheSync(
     }
 
     invalidationCountRef.current += queryKeys.length;
+    // Publish the new total as reactive state so consumers re-render (finding #2).
+    setInvalidationCount(invalidationCountRef.current);
   }, [queryClient]);
 
   /**
@@ -287,7 +293,8 @@ export function useWebSocketCacheSync(
       }
 
       const event = data as GraphStreamPayload;
-      lastEventRef.current = event;
+      // Finding #2: expose the last event as reactive state so consumers re-render.
+      setLastEvent(event);
 
       if (env.isDev) {
         console.debug(`[CacheSync] Received event: ${event.event_type}`, event.payload);
@@ -321,6 +328,20 @@ export function useWebSocketCacheSync(
     connectOnMount: enabled,
   });
 
+  // Finding #3: react to `enabled` flipping AFTER mount. connectOnMount only
+  // runs once, so without this effect a false->true flip never connects (and a
+  // true->false flip never disconnects). connect() early-returns if already
+  // CONNECTING/OPEN, so calling it on every enabled change is idempotent.
+  const { connect, disconnect } = wsReturn;
+  useEffect(() => {
+    if (enabled) {
+      connect();
+    } else {
+      disconnect();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled]);
+
   // Cleanup debounce timeout on unmount
   useEffect(() => {
     return () => {
@@ -334,8 +355,8 @@ export function useWebSocketCacheSync(
 
   return {
     ...wsReturn,
-    invalidationCount: invalidationCountRef.current,
-    lastEvent: lastEventRef.current,
+    invalidationCount,
+    lastEvent,
   };
 }
 

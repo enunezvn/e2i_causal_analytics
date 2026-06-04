@@ -107,26 +107,31 @@ CREATE INDEX IF NOT EXISTS idx_chatbot_feedback_agent_rating
 -- Enable RLS
 ALTER TABLE public.chatbot_message_feedback ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS chatbot_feedback_select_own ON public.chatbot_message_feedback;
 -- Users can only see their own feedback
 CREATE POLICY chatbot_feedback_select_own ON public.chatbot_message_feedback
     FOR SELECT
     USING (computed_user_id = auth.uid());
 
+DROP POLICY IF EXISTS chatbot_feedback_insert_own ON public.chatbot_message_feedback;
 -- Users can only insert feedback for their own sessions
 CREATE POLICY chatbot_feedback_insert_own ON public.chatbot_message_feedback
     FOR INSERT
     WITH CHECK (computed_user_id = auth.uid());
 
+DROP POLICY IF EXISTS chatbot_feedback_update_own ON public.chatbot_message_feedback;
 -- Users can update their own feedback
 CREATE POLICY chatbot_feedback_update_own ON public.chatbot_message_feedback
     FOR UPDATE
     USING (computed_user_id = auth.uid());
 
+DROP POLICY IF EXISTS chatbot_feedback_delete_own ON public.chatbot_message_feedback;
 -- Users can delete their own feedback
 CREATE POLICY chatbot_feedback_delete_own ON public.chatbot_message_feedback
     FOR DELETE
     USING (computed_user_id = auth.uid());
 
+DROP POLICY IF EXISTS chatbot_feedback_service_all ON public.chatbot_message_feedback;
 -- Service role has full access (for analytics)
 CREATE POLICY chatbot_feedback_service_all ON public.chatbot_message_feedback
     FOR ALL

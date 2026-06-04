@@ -95,7 +95,9 @@ export function useSimulationHistory(
   >
 ) {
   return useQuery<SimulationHistoryResponse, ApiError>({
-    queryKey: queryKeys.digitalTwin.history(),
+    // Fold limit/offset into the key so paginated reads do not collide
+    // (first-call-wins → wrong page served on subsequent fetches).
+    queryKey: queryKeys.digitalTwin.history(params),
     queryFn: () => getSimulationHistory(params),
     staleTime: 5 * 60 * 1000, // 5 minutes
     ...options,
@@ -163,9 +165,11 @@ export function useRunSimulation(
         queryKeys.digitalTwin.simulation(data.simulation_id),
         data
       );
-      // Invalidate history to include the new simulation
+      // Invalidate ALL history pages to include the new simulation.
+      // Use the bare ['…', 'history'] prefix (no limit/offset) so the
+      // partial (prefix) match covers every paginated cache entry.
       queryClient.invalidateQueries({
-        queryKey: queryKeys.digitalTwin.history(),
+        queryKey: [...queryKeys.digitalTwin.all(), 'history'],
       });
     },
     ...options,
@@ -224,13 +228,19 @@ export function useCompareScenarios(
 /**
  * Prefetch simulation history for faster navigation.
  *
+ * The prefetch key MUST match the read key produced by
+ * {@link useSimulationHistory} for the same params, otherwise the prefetched
+ * data lands under a different cache entry and is never used.
+ *
  * @param queryClient - The query client instance
+ * @param params - Filter/pagination params (defaults to the first page)
  */
 export async function prefetchSimulationHistory(
-  queryClient: ReturnType<typeof useQueryClient>
+  queryClient: ReturnType<typeof useQueryClient>,
+  params?: { limit?: number; offset?: number }
 ) {
   await queryClient.prefetchQuery({
-    queryKey: queryKeys.digitalTwin.history(),
-    queryFn: () => getSimulationHistory({ limit: 10 }),
+    queryKey: queryKeys.digitalTwin.history(params),
+    queryFn: () => getSimulationHistory(params),
   });
 }

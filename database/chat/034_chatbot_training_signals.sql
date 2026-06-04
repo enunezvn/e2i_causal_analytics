@@ -148,6 +148,7 @@ CREATE INDEX IF NOT EXISTS idx_chatbot_training_signals_training
 -- Enable RLS
 ALTER TABLE public.chatbot_training_signals ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS chatbot_training_signals_service_all ON public.chatbot_training_signals;
 -- Service role has full access (for training and analytics)
 CREATE POLICY chatbot_training_signals_service_all ON public.chatbot_training_signals
     FOR ALL
@@ -155,6 +156,7 @@ CREATE POLICY chatbot_training_signals_service_all ON public.chatbot_training_si
     USING (true)
     WITH CHECK (true);
 
+DROP POLICY IF EXISTS chatbot_training_signals_insert ON public.chatbot_training_signals;
 -- Anonymous/authenticated can insert signals
 CREATE POLICY chatbot_training_signals_insert ON public.chatbot_training_signals
     FOR INSERT

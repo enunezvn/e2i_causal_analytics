@@ -125,6 +125,86 @@ describe('useWebSocketCacheSync', () => {
     });
   });
 
+  describe('reactive state (Finding #2)', () => {
+    it('should re-render and expose a non-zero invalidationCount after an event', () => {
+      const { result } = renderHook(() => useWebSocketCacheSync(), {
+        wrapper: createWrapper(queryClient),
+      });
+
+      expect(result.current.invalidationCount).toBe(0);
+
+      simulateWebSocketMessage({
+        event_type: 'episode_added',
+        payload: { episode_id: 'ep_react' },
+      });
+
+      // Flush the debounce so processInvalidations runs.
+      act(() => {
+        vi.advanceTimersByTime(200);
+      });
+
+      // Consumers must SEE the updated count via a re-render (state, not ref).
+      expect(result.current.invalidationCount).toBeGreaterThan(0);
+    });
+
+    it('should re-render and expose lastEvent after an event', () => {
+      const { result } = renderHook(() => useWebSocketCacheSync(), {
+        wrapper: createWrapper(queryClient),
+      });
+
+      expect(result.current.lastEvent).toBeNull();
+
+      const event: GraphStreamPayload = {
+        event_type: 'node_updated',
+        payload: { node_id: 'node_react' },
+      };
+      simulateWebSocketMessage(event);
+
+      // lastEvent is set synchronously in handleMessage; a re-render must reflect it.
+      expect(result.current.lastEvent).not.toBeNull();
+      expect(result.current.lastEvent?.event_type).toBe('node_updated');
+      expect(result.current.lastEvent?.payload.node_id).toBe('node_react');
+    });
+  });
+
+  describe('enabled flip (Finding #3)', () => {
+    it('should connect when enabled flips false -> true after mount', () => {
+      const { rerender } = renderHook(
+        ({ enabled }: { enabled: boolean }) => useWebSocketCacheSync({ enabled }),
+        {
+          wrapper: createWrapper(queryClient),
+          initialProps: { enabled: false },
+        }
+      );
+
+      mockConnect.mockClear();
+
+      act(() => {
+        rerender({ enabled: true });
+      });
+
+      expect(mockConnect).toHaveBeenCalled();
+    });
+
+    it('should disconnect when enabled flips true -> false after mount', () => {
+      const { rerender } = renderHook(
+        ({ enabled }: { enabled: boolean }) => useWebSocketCacheSync({ enabled }),
+        {
+          wrapper: createWrapper(queryClient),
+          initialProps: { enabled: true },
+        }
+      );
+
+      mockDisconnect.mockClear();
+
+      act(() => {
+        rerender({ enabled: false });
+      });
+
+      expect(mockDisconnect).toHaveBeenCalled();
+    });
+  });
+
   describe('event handling', () => {
     it('should call onEvent callback when message received', async () => {
       const onEvent = vi.fn();
@@ -194,7 +274,9 @@ describe('useWebSocketCacheSync', () => {
       });
 
       // Advance past debounce
-      vi.advanceTimersByTime(200);
+      act(() => {
+        vi.advanceTimersByTime(200);
+      });
 
       // Should invalidate multiple graph-related keys
       expect(invalidateSpy).toHaveBeenCalled();
@@ -217,7 +299,9 @@ describe('useWebSocketCacheSync', () => {
         payload: { node_id: 'node_456' },
       });
 
-      vi.advanceTimersByTime(200);
+      act(() => {
+        vi.advanceTimersByTime(200);
+      });
 
       expect(invalidateSpy).toHaveBeenCalled();
     });
@@ -247,7 +331,9 @@ describe('useWebSocketCacheSync', () => {
       expect(invalidateSpy).not.toHaveBeenCalled();
 
       // After debounce timeout
-      vi.advanceTimersByTime(150);
+      act(() => {
+        vi.advanceTimersByTime(150);
+      });
 
       // Should batch into single invalidation run
       expect(invalidateSpy).toHaveBeenCalled();
@@ -294,7 +380,9 @@ describe('useWebSocketCacheSync', () => {
         payload: {},
       });
 
-      vi.advanceTimersByTime(200);
+      act(() => {
+        vi.advanceTimersByTime(200);
+      });
 
       const calls = invalidateSpy.mock.calls;
       const invalidatedKeys = calls.map((call) => call[0]?.queryKey);
@@ -342,7 +430,11 @@ describe('useWebSocketCacheSync', () => {
           payload: {},
         });
 
-        vi.advanceTimersByTime(200);
+        // Wrapped in act(): flushing the debounce now updates reactive state
+        // (invalidationCount) via setState, which must run inside act().
+        act(() => {
+          vi.advanceTimersByTime(200);
+        });
 
         if (shouldInvalidate) {
           expect(invalidateSpy).toHaveBeenCalled();

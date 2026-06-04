@@ -16,6 +16,11 @@
  */
 
 import { get, post } from '@/lib/api-client';
+import {
+  EpisodicMemoryListResponseWireSchema,
+  EpisodicMemoryResponseWireSchema,
+  SemanticPathResponseWireSchema,
+} from '@/lib/api-schemas';
 import type {
   EpisodicMemoryInput,
   EpisodicMemoryResponse,
@@ -115,7 +120,9 @@ export async function createEpisodicMemory(
 export async function getEpisodicMemories(
   params?: Record<string, unknown>
 ): Promise<EpisodicMemoryResponse[]> {
-  return get<EpisodicMemoryResponse[]>(`${MEMORY_BASE}/episodic`, params);
+  return get<EpisodicMemoryResponse[]>(`${MEMORY_BASE}/episodic`, params, {
+    schema: EpisodicMemoryListResponseWireSchema,
+  });
 }
 
 /**
@@ -134,7 +141,9 @@ export async function getEpisodicMemory(
   memoryId: string
 ): Promise<EpisodicMemoryResponse> {
   return get<EpisodicMemoryResponse>(
-    `${MEMORY_BASE}/episodic/${encodeURIComponent(memoryId)}`
+    `${MEMORY_BASE}/episodic/${encodeURIComponent(memoryId)}`,
+    undefined,
+    { schema: EpisodicMemoryResponseWireSchema }
   );
 }
 
@@ -195,7 +204,8 @@ export async function querySemanticPaths(
 ): Promise<SemanticPathResponse> {
   return get<SemanticPathResponse>(
     `${MEMORY_BASE}/semantic/paths`,
-    request as unknown as Record<string, unknown>
+    request as unknown as Record<string, unknown>,
+    { schema: SemanticPathResponseWireSchema }
   );
 }
 

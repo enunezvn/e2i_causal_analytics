@@ -1,3 +1,4 @@
+DO $idem$ BEGIN
 -- ============================================
 -- Migration: 011_digital_twin_tables.sql
 -- Purpose: Digital Twin infrastructure for A/B test pre-screening
@@ -15,7 +16,7 @@ CREATE TYPE twin_type AS ENUM (
     'patient',       -- Patient journey twins
     'territory'      -- Geographic territory twins
 );
-
+EXCEPTION WHEN duplicate_object THEN null; END $idem$;DO $idem$ BEGIN
 -- Simulation execution status
 CREATE TYPE simulation_status AS ENUM (
     'pending',       -- Queued for execution
@@ -23,14 +24,14 @@ CREATE TYPE simulation_status AS ENUM (
     'completed',     -- Successfully finished
     'failed'         -- Execution error
 );
-
+EXCEPTION WHEN duplicate_object THEN null; END $idem$;DO $idem$ BEGIN
 -- Simulation recommendation
 CREATE TYPE simulation_recommendation AS ENUM (
     'deploy',        -- Proceed to real A/B test
     'skip',          -- Do not run experiment
     'refine'         -- Refine intervention and re-simulate
 );
-
+EXCEPTION WHEN duplicate_object THEN null; END $idem$;DO $idem$ BEGIN
 -- Fidelity assessment grade
 CREATE TYPE fidelity_grade AS ENUM (
     'excellent',     -- Prediction error < 10%
@@ -39,6 +40,7 @@ CREATE TYPE fidelity_grade AS ENUM (
     'poor',          -- Prediction error > 35%
     'unvalidated'    -- No real-world comparison yet
 );
+EXCEPTION WHEN duplicate_object THEN null; END $idem$;
 
 -- ============================================
 -- SECTION 2: CORE TABLES
@@ -46,7 +48,7 @@ CREATE TYPE fidelity_grade AS ENUM (
 
 -- Table: digital_twin_models
 -- Stores trained twin generator models with MLflow integration
-CREATE TABLE digital_twin_models (
+CREATE TABLE IF NOT EXISTS digital_twin_models (
     model_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     
     -- Model identification
@@ -114,7 +116,7 @@ CREATE TABLE digital_twin_models (
 
 -- Table: twin_simulations
 -- Stores individual simulation runs with results
-CREATE TABLE twin_simulations (
+CREATE TABLE IF NOT EXISTS twin_simulations (
     simulation_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     
     -- Model reference
@@ -216,7 +218,7 @@ CREATE TABLE twin_simulations (
 
 -- Table: twin_fidelity_tracking
 -- Tracks validation of twin predictions vs. real-world outcomes
-CREATE TABLE twin_fidelity_tracking (
+CREATE TABLE IF NOT EXISTS twin_fidelity_tracking (
     tracking_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     
     -- References
@@ -263,26 +265,26 @@ CREATE TABLE twin_fidelity_tracking (
 -- ============================================
 
 -- digital_twin_models indexes
-CREATE INDEX idx_twin_models_type ON digital_twin_models(twin_type);
-CREATE INDEX idx_twin_models_brand ON digital_twin_models(brand);
-CREATE INDEX idx_twin_models_active ON digital_twin_models(is_active) WHERE is_active = true;
-CREATE INDEX idx_twin_models_fidelity ON digital_twin_models(fidelity_score) WHERE fidelity_score IS NOT NULL;
-CREATE INDEX idx_twin_models_mlflow ON digital_twin_models(mlflow_run_id) WHERE mlflow_run_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_twin_models_type ON digital_twin_models(twin_type);
+CREATE INDEX IF NOT EXISTS idx_twin_models_brand ON digital_twin_models(brand);
+CREATE INDEX IF NOT EXISTS idx_twin_models_active ON digital_twin_models(is_active) WHERE is_active = true;
+CREATE INDEX IF NOT EXISTS idx_twin_models_fidelity ON digital_twin_models(fidelity_score) WHERE fidelity_score IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_twin_models_mlflow ON digital_twin_models(mlflow_run_id) WHERE mlflow_run_id IS NOT NULL;
 
 -- twin_simulations indexes
-CREATE INDEX idx_simulations_model ON twin_simulations(model_id);
-CREATE INDEX idx_simulations_status ON twin_simulations(simulation_status);
-CREATE INDEX idx_simulations_brand ON twin_simulations(brand);
-CREATE INDEX idx_simulations_intervention ON twin_simulations(intervention_type);
-CREATE INDEX idx_simulations_recommendation ON twin_simulations(recommendation);
-CREATE INDEX idx_simulations_created ON twin_simulations(created_at DESC);
-CREATE INDEX idx_simulations_experiment ON twin_simulations(experiment_design_id) 
+CREATE INDEX IF NOT EXISTS idx_simulations_model ON twin_simulations(model_id);
+CREATE INDEX IF NOT EXISTS idx_simulations_status ON twin_simulations(simulation_status);
+CREATE INDEX IF NOT EXISTS idx_simulations_brand ON twin_simulations(brand);
+CREATE INDEX IF NOT EXISTS idx_simulations_intervention ON twin_simulations(intervention_type);
+CREATE INDEX IF NOT EXISTS idx_simulations_recommendation ON twin_simulations(recommendation);
+CREATE INDEX IF NOT EXISTS idx_simulations_created ON twin_simulations(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_simulations_experiment ON twin_simulations(experiment_design_id) 
     WHERE experiment_design_id IS NOT NULL;
 
 -- twin_fidelity_tracking indexes
-CREATE INDEX idx_fidelity_simulation ON twin_fidelity_tracking(simulation_id);
-CREATE INDEX idx_fidelity_grade ON twin_fidelity_tracking(fidelity_grade);
-CREATE INDEX idx_fidelity_validated ON twin_fidelity_tracking(validated_at) 
+CREATE INDEX IF NOT EXISTS idx_fidelity_simulation ON twin_fidelity_tracking(simulation_id);
+CREATE INDEX IF NOT EXISTS idx_fidelity_grade ON twin_fidelity_tracking(fidelity_grade);
+CREATE INDEX IF NOT EXISTS idx_fidelity_validated ON twin_fidelity_tracking(validated_at) 
     WHERE validated_at IS NOT NULL;
 
 -- ============================================
@@ -488,6 +490,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trg_auto_grade_fidelity ON twin_fidelity_tracking;
 CREATE TRIGGER trg_auto_grade_fidelity
     BEFORE INSERT OR UPDATE OF actual_ate ON twin_fidelity_tracking
     FOR EACH ROW
@@ -511,6 +514,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trg_update_model_fidelity ON twin_fidelity_tracking;
 CREATE TRIGGER trg_update_model_fidelity
     AFTER INSERT OR UPDATE OF actual_ate ON twin_fidelity_tracking
     FOR EACH ROW
@@ -525,6 +529,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trg_twin_models_updated_at ON digital_twin_models;
 CREATE TRIGGER trg_twin_models_updated_at
     BEFORE UPDATE ON digital_twin_models
     FOR EACH ROW

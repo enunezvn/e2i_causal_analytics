@@ -2,7 +2,77 @@
 
 **Date:** 2026-06-03
 **Reviewer:** Multi-agent workflow (57 agents) + dispatcher independent verification
-**Type:** Read-only review (no code modified during the review)
+**Type:** Read-only review — the review below was read-only; the **Update** section that follows records the follow-up session's faithful (prod-droplet) verification + remediation, which **corrects several findings** (notably H3).
+
+---
+
+## ⚡ UPDATE — 2026-06-03 follow-up session (faithful verification, remediation, reconciliation plan)
+
+> The review below was performed read-only against `main`. This session verified findings in the **faithful environment** (the production droplet, via `docker exec` into `e2i_api` / `supabase-db` — **not** the host `.venv`), which corrected conclusions, and applied a large backlog of never-deployed migrations.
+
+### Faithful-environment corrections
+- **H3 (sync RedisSaver) → effectively a NON-ISSUE (LOW), superseding the HIGH below.** Inside `e2i_api`: prod Redis is plain `redis:7-alpine` (no RediSearch), so `RedisSaver.setup()` fails (`unknown command 'FT._LIST'`) and `get_langgraph_checkpointer()` silently falls back to `InMemorySaver` — the sync-saver `NotImplementedError` path is never even reached. AND conversation continuity comes from **Supabase chat repos** (`chatbot_graph.load_context_node` reloads history each turn), so the LangGraph checkpointer is **vestigial**, not load-bearing. **Do NOT apply the AsyncRedisSaver "fix"** — it also requires RediSearch.
+- **NEW (high-impact): the prod embedding service is DOWN.** `get_embedding_service()` → `FallbackEmbeddingService` raises `All embedding services unavailable`: no `OPENAI_API_KEY` is forwarded by compose (primary `OpenAIEmbeddingService` can't init), and the read-only container blocks the local fallback model. Every episodic write needs an embedding → fails → `episodic_memories` = **0 rows** → the consolidation/crystallization lifecycle has no input. **Fix queued in PR #672** (forward `OPENAI_API_KEY` via `x-common-env`); needs a container recreate/deploy to take effect.
+- **The memory lifecycle was NON-OPERATIONAL at the schema level.** The entire `database/memory/` set (014→029) — `executive_insights`, `insight_edges`, the `sentinels` table, `invalidated_at` columns, episodic `dedup_*` — was never applied to the droplet. **Root cause (2-part):** `deploy.yml` gated migrations on `SUPABASE_DB_URL` (unset on the droplet, REST-creds-only) → always skipped; AND `run_migrations.sh` only scanned `database/migrations/`, never `database/memory/`.
+
+### Staleness model — intended vs reality
+- **Intended (ARCHITECTURE.md §5):** Redis = short-term (24h-TTL working memory); Supabase + FalkorDB = long-term. Staleness disambiguated via binary `invalidated_at` (NULL = fresh) + `cascade_invalidate` over the `insight_edges` DAG + 5-min sentinel detection + reanalysis loop + confirmation-thresholded promotion (≥3 confirmations → semantic, ≥5 usages → procedural) + `max_staleness` search filter.
+- **Reality (now):** schema is deployed (this session), but (a) **no configured sentinel uses the `invalidate` action**, so `invalidated_at` is never written; (b) episodic is empty (embedding down). The staleness layer won't actuate until the embedding fix lands + an invalidate path is wired.
+
+### Remediation completed this session
+- **PR #668 (open):** H5 (consolidator pagination) + M8 (sentinel evaluator allowlist) — TDD red-first, 102 memory tests green, ruff clean.
+- **PR #672 (open):** deploy applies migrations via `docker exec supabase-db` (no `SUPABASE_DB_URL` needed) + covers `database/memory/`; forwards `OPENAI_API_KEY`. Scoped to `migrations/`+`memory/` (see reconciliation note).
+- **Droplet migrations applied + tracked** (`public.schema_migrations`, bind-mount-persistent): `database/memory/` 014→029 (+ created missing `e2i_readonly`/`e2i_service` roles from `database/audit/011`); `database/migrations/` 034→057; `database/ml/` **016 (HPO), 020 (A/B testing), 028 (cohort constructor)**.
+
+### ⚠️ Finding — the droplet migration state is INCONSISTENTLY PARTIAL
+Attempting to scour **all** `database/` dirs revealed several subsystems were never deployed AND several migrations are **half-applied** (a prior run created an enum/type but errored before its table, with no transaction wrapper). Verified by direct existence checks:
+- **Need per-migration surgery** (CORRECTED by per-object verification — earlier table-name guesses were wrong): `chat/036` user_roles is **FULLY APPLIED** (enum + `role` column + index + `role_level`/`has_role` functions all present), just untracked · `ml/013` tool_composer is **FULLY APPLIED** (all 6 tables, 4 enums, 2 triggers, 13 seed rows, 4 views, 5 functions present) but its committed file is latently broken for a fresh deploy · `ml/017` model_monitoring is **HALF-APPLIED** (`ml_drift_history` + 3 enums present; `ml_performance_metrics`/`ml_monitoring_alerts`/`ml_monitoring_runs`/`ml_retraining_history` + `alert_status_enum` MISSING) · `ml/021` ab_results is **NOT APPLIED** (collides with `ml/012`'s `calculate_fidelity_grade`) · `audit/012` security_audit_log is **NOT APPLIED** (its RLS policy references a `user_roles` table + `security_admin` role that exist **nowhere** — there is no `user_roles` table in the project; RBAC lives on `chatbot_user_profiles.role`).
+- **Superseded (intentionally NOT applied — "use new chat schema"):** `chat/001` user_profiles, `chat/008` chat_messages → replaced by `chatbot_conversations`/`chatbot_messages` (029, present).
+- **Process note (self-correction):** a regex table-name "baseline" shortcut produced **false baselines** (e.g. wrongly marked `chat/036` applied). Those records were deleted by timestamp; `schema_migrations` now reflects **only verified-applied state**. Lesson re-learned: data-driven per-object verification, never regex guesses.
+- The all-dirs scour is therefore **deferred** — PR #672 is scoped to the two clean dirs so it is mergeable and stops the deploy-skip now, without aborting the deploy on a half-applied file.
+
+### 📋 RECONCILIATION PLAN — deliberate, data-driven
+**Methodology for every item (your standing instruction):** isolated **git worktree** + **TDD red-first** (a failing test/repro asserting the target state — e.g. the table exists and the migration re-runs idempotently) + **ralph-loop** to drive to green + **codex:codex-rescue → fixed point (ACCEPT)**. No bulk automation; each migration reconciled with verified evidence in the faithful environment.
+
+1. **Reconcile the half-applied feature migrations** (one worktree each):
+   - `audit/012` + `chat/036` (**compliance — prioritize**): repair the half-applied `user_role` enum, create `user_roles`, then apply `security_audit_log`.
+   - `ml/013` tool_composer: guard/repair `routing_pattern`, create the missing tables idempotently.
+   - `ml/017` model_monitoring: resolve the missing `m.name` dependency, then create `ml_monitoring_*`.
+   - `ml/021` ab_results: reconcile the conflicting function (matching signature), then create `ab_experiment_results`/etc.
+   Red-first test per item: assert the target objects exist AND the migration is re-runnable (idempotent).
+2. **Rigorously re-baseline the remaining dirs** (core/ml/causal/chat/rag/audit) by **per-object** existence verification (every CREATE TABLE/TYPE/FUNCTION/INDEX/POLICY), not table-name regex — apply genuine gaps, baseline confirmed-applied, making each migration idempotent as it is touched.
+3. **Re-enable the all-dirs scour** in `run_migrations.sh` (one-line change) once every dir is reconciled + cleanly baselined; verify `--dry-run` reports 0 pending.
+4. **Activate embeddings:** merge #672 → deploy (forwards `OPENAI_API_KEY` + recreate) → verify `embed(...)` returns 1536-dim in `e2i_api` and an episodic write persists. Unblocks the lifecycle data flow.
+5. **Wire an invalidate path** (an `invalidate`-action sentinel or an overturn hook) so `invalidated_at` is actually written and the staleness/reanalysis loop actuates.
+6. **Open memory code fixes:** H1/H2 (route cross-tenant + Cypher write-injection) are the parallel API session's territory — now merged to `main`; **verify the gaps were actually closed**. H4 (blocking sync IO) needs a faithful load benchmark before fixing (#504 lesson).
+
+Each step verified in the faithful environment (droplet `docker exec`), evidence recorded, before "done" is claimed.
+
+### ✅ RECONCILIATION — Step 1 COMPLETE (branch `fix/reconcile-partial-migrations`, commit `57bc91dd`)
+
+All 5 partial-state migrations were reconciled with the mandated methodology — isolated git worktree + TDD red-first + ralph-loop + codex:codex-rescue. A new faithful, isolated regression harness `scripts/test_migration_idempotency.sh` (throwaway DB in the **same** PG 15.8 instance, real `vector`/`pgcrypto`/`auth.uid()`; each migration applied **twice**) drove the red→green loop. The investigation **corrected** every earlier table-name guess and uncovered real latent defects:
+
+| Migration | Droplet state (verified) | Reconciliation |
+|---|---|---|
+| `chat/036` | FULLY APPLIED, untracked | idempotent `CREATE TYPE` (DO/EXCEPTION) + `ADD COLUMN IF NOT EXISTS` + `CREATE INDEX IF NOT EXISTS` |
+| `audit/012` | NOT APPLIED; RLS policy referenced a non-existent `user_roles` table + `security_admin` role; illegal `timestamp` fn return-column | **RBAC repoint** to the real `chatbot_user_profiles.role` (reason-before-rules: the project never had a `user_roles` table); idempotent `DROP POLICY IF EXISTS`; `timestamp`→`event_timestamp` |
+| `ml/013` | FULLY APPLIED, untracked; **file latently broken for fresh deploy** | idempotent types/tables/indexes/triggers + `ON CONFLICT` seeds; fixed `round(double precision,2)` (cast `::numeric`), an SRF-in-aggregate view, and an aggregate-in-recursive-CTE function — reconciled to the **deployed-working** definitions |
+| `ml/017` | HALF-APPLIED (4 tables + `alert_status_enum` missing) | idempotent triggers; `ml_model_health_dashboard` used `m.name` but prod's column is `model_name` — fixed; re-apply fills the gap |
+| `ml/021` | NOT APPLIED | idempotent triggers; renamed `calculate_fidelity_grade`→`ab_calculate_fidelity_grade` so it no longer clobbers `ml/012`'s canonical `fidelity_grade`-enum function used by `twin_fidelity_tracking` triggers |
+
+**Two-layer verification, both GREEN:**
+1. **Fresh harness** (fresh-deploy validity + idempotency): `ALL MIGRATIONS IDEMPOTENT & COMPLETE`.
+2. **Faithful prod re-apply dry-run** — each reconciled file run inside `BEGIN … ROLLBACK` against the **real droplet** `postgres` DB (prod untouched): exit 0 for all 5. This caught two prod-only failures the fresh harness could not (the `m.name`/`model_name` drift and the `calculate_fidelity_grade` return-type collision).
+
+**Key reusable lessons:** the committed migration files had **drifted** from the deployed-working definitions (views/functions hand-fixed on prod, never back-ported) — a fresh harness proves fresh validity but NOT re-apply onto prod's drifted objects, so the `BEGIN…ROLLBACK`-on-prod dry-run is the decisive faithful test. `round(double precision, integer)` does not exist in PG; a set-returning function cannot sit inside an aggregate; an aggregate cannot appear in a recursive CTE's recursive term; `timestamp` is legal as a column name but **not** as a function return-column name.
+
+**Adversarial review (fixed point):** codex was account-blocked (`gpt-5.3-codex` not supported on a ChatGPT account), so two **independent** reviewers verified directly against prod — the resumed codex-rescue agent and a `code-reviewer` agent. Both returned **ACCEPT-WITH-NOTES, no blockers**, and converged on the same notes. Cheap high-value notes were addressed (documented the `security_admin`/inline-vs-`has_role` choice in audit/012; hardened the harness scaffold to the real `model_stage_enum`). Deferred-with-reasoning (pre-existing, out of reconciliation scope): `security_audit_log.user_id` has no UUID CHECK; 3 out-of-band `tool_registry` rows. One review claim was independently **corrected** — `v_classification_accuracy` DOES exist on prod (all 4 ml/013 views present).
+
+**✅ APPLIED to the droplet + tracked (verified):** all 5 applied atomically (`--single-transaction`), recorded in `public.schema_migrations` (`audit/012…`, `chat/036…`, `ml/013…`, `ml/017…`, `ml/021…`). Post-apply verification: `security_audit_log` + 3 policies created; ml/017's 4 missing tables + `alert_status_enum` + `ml_model_health_dashboard` created (**half-applied gap filled**); ml/021's 3 `ab_*` tables + `ab_calculate_fidelity_grade` created, and ml/012's canonical `calculate_fidelity_grade`→`fidelity_grade` **left intact** (twin triggers unaffected).
+
+**Deferred to a follow-up (NOT this PR):** re-enabling the all-dirs scour (plan step 3) — `run_migrations.sh` stays scoped to `migrations/`+`memory/` because the **rest** of the `audit/`/`chat/`/`ml/` dirs (e.g. `ml/012/014/015/018/019/022-027/029`, `audit/011`, superseded `chat/001/008`) are not yet verified-idempotent; adding a whole dir to the scour before reconciling every file in it would re-introduce the abort risk. The 5 reconciled files are now applied+tracked, so a future scour will skip them; their idempotency protects fresh deploys.
+
+---
 
 ## Snapshot
 

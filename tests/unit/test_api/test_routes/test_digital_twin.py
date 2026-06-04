@@ -112,7 +112,7 @@ def mock_twin_repository():
             "simulation_status": "completed",
             "created_at": datetime.now(timezone.utc),
         }
-        instance.list_simulations.return_value = [mock_sim]
+        instance.simulations.list_simulations.return_value = [mock_sim]
 
         # For get_simulation
         mock_result = MagicMock()
@@ -266,16 +266,168 @@ def mock_fidelity_tracker():
 
 
 @pytest.mark.asyncio
-async def test_digital_twin_health():
-    """Test Digital Twin service health check."""
+async def test_digital_twin_health_reports_real_stats(mock_twin_repository):
+    """Health must report REAL model/simulation counts from the repository,
+    not hardcoded operational stats (was: models_available=3, pending=0)."""
     from src.api.routes.digital_twin import digital_twin_health
+
+    # Repository fixture returns one active model and one (completed) simulation.
+    result = await digital_twin_health()
+
+    assert result.service == "digital-twin"
+    assert result.models_available == 1  # from mock_twin_repository.list_active_models
+    assert result.status == "healthy"
+    # No pending simulations in the fixture (status == completed).
+    assert result.simulations_pending == 0
+
+
+@pytest.mark.asyncio
+async def test_digital_twin_health_counts_pending(mock_twin_repository):
+    """Pending simulation count must reflect repository data."""
+    from src.api.routes.digital_twin import digital_twin_health
+
+    mock_twin_repository.simulations.list_simulations.return_value = [
+        {"simulation_id": str(uuid4()), "simulation_status": "pending"},
+        {"simulation_id": str(uuid4()), "simulation_status": "running"},
+        {"simulation_id": str(uuid4()), "simulation_status": "completed"},
+    ]
 
     result = await digital_twin_health()
 
-    assert result.status == "healthy"
-    assert result.service == "digital-twin"
-    assert result.models_available == 3
-    assert result.simulations_pending == 0
+    # pending + running are both "in flight" / not yet complete
+    assert result.simulations_pending == 2
+
+
+@pytest.mark.asyncio
+async def test_digital_twin_health_degraded_on_repo_failure(mock_twin_repository):
+    """If the repository is unreachable, health must report degraded WITHOUT
+    fabricating operational stats."""
+    from src.api.routes.digital_twin import digital_twin_health
+
+    mock_twin_repository.list_active_models.side_effect = Exception("db down")
+
+    result = await digital_twin_health()
+
+    assert result.status == "degraded"
+    assert result.models_available == 0
+
+
+# =============================================================================
+# TESTS - Simulation History (contract: GET /simulations/history)
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_get_simulation_history_returns_rows(mock_twin_repository):
+    """GET /simulations/history must return the frontend-contracted shape
+    (ate_estimate, recommendation_type, total/offset/limit)."""
+    from src.api.routes.digital_twin import get_simulation_history
+
+    result = await get_simulation_history(limit=10, offset=0)
+
+    assert result.total >= 1
+    assert result.limit == 10
+    assert result.offset == 0
+    assert len(result.simulations) >= 1
+    row = result.simulations[0]
+    assert hasattr(row, "ate_estimate")
+    assert hasattr(row, "recommendation_type")
+    assert hasattr(row, "simulation_id")
+
+
+@pytest.mark.asyncio
+async def test_get_simulation_history_not_shadowed_by_dynamic_route():
+    """The literal /simulations/history route MUST be registered BEFORE the
+    dynamic /simulations/{simulation_id} route, otherwise 'history' is parsed
+    as a UUID and 500s. Verify route registration order on the router."""
+    from src.api.routes.digital_twin import router
+
+    paths = [getattr(r, "path", "") for r in router.routes]
+    history_path = "/digital-twin/simulations/history"
+    dynamic_path = "/digital-twin/simulations/{simulation_id}"
+    assert history_path in paths
+    assert dynamic_path in paths
+    assert paths.index(history_path) < paths.index(dynamic_path)
+
+
+@pytest.mark.asyncio
+async def test_get_simulation_history_repo_error_is_generic(mock_twin_repository):
+    """Repository failure must NOT leak raw exception text in the 5xx detail."""
+    from src.api.routes.digital_twin import get_simulation_history
+
+    mock_twin_repository.simulations.list_simulations.side_effect = Exception("SECRET-DSN-LEAK")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_simulation_history(limit=10, offset=0)
+
+    assert exc_info.value.status_code == 500
+    assert "SECRET-DSN-LEAK" not in str(exc_info.value.detail)
+
+
+# =============================================================================
+# TESTS - Scenario Comparison (contract: POST /simulations/compare)
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_compare_scenarios_returns_result(
+    mock_twin_generator, mock_simulation_engine, mock_twin_repository
+):
+    """POST /simulations/compare must run the base + alternative scenarios and
+    return a comparison with a best_scenario_index."""
+    from src.api.routes.digital_twin import (
+        ScenarioComparisonRequest,
+        ScenarioSimulateRequest,
+        compare_scenarios,
+    )
+
+    base = ScenarioSimulateRequest(
+        intervention_type="email_campaign",
+        brand="Remibrutinib",
+    )
+    alt = ScenarioSimulateRequest(
+        intervention_type="call_frequency_increase",
+        brand="Remibrutinib",
+    )
+    request = ScenarioComparisonRequest(
+        base_scenario=base,
+        alternative_scenarios=[alt],
+    )
+    user = {"user_id": "test_user", "role": "operator"}
+
+    result = await compare_scenarios(request, user)
+
+    assert result.base_result is not None
+    assert len(result.alternative_results) == 1
+    assert hasattr(result.comparison, "best_scenario_index")
+
+
+@pytest.mark.asyncio
+async def test_compare_scenarios_error_is_generic(
+    mock_twin_generator, mock_simulation_engine, mock_twin_repository
+):
+    """Compare failure must NOT leak raw exception text in the 5xx detail."""
+    from src.api.routes.digital_twin import (
+        ScenarioComparisonRequest,
+        ScenarioSimulateRequest,
+        compare_scenarios,
+    )
+
+    mock_simulation_engine.simulate.side_effect = Exception("SECRET-COMPARE-LEAK")
+
+    request = ScenarioComparisonRequest(
+        base_scenario=ScenarioSimulateRequest(
+            intervention_type="email_campaign", brand="Remibrutinib"
+        ),
+        alternative_scenarios=[],
+    )
+    user = {"user_id": "test_user", "role": "operator"}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await compare_scenarios(request, user)
+
+    assert exc_info.value.status_code == 500
+    assert "SECRET-COMPARE-LEAK" not in str(exc_info.value.detail)
 
 
 # =============================================================================
@@ -516,7 +668,7 @@ async def test_list_simulations_pagination(mock_twin_repository):
                 "created_at": datetime.now(timezone.utc),
             }
         )
-    mock_twin_repository.list_simulations.return_value = sims
+    mock_twin_repository.simulations.list_simulations.return_value = sims
 
     result = await list_simulations(brand=None, model_id=None, status=None, page=2, page_size=2)
 
@@ -560,10 +712,10 @@ async def test_get_simulation_not_found(mock_twin_repository):
 
 @pytest.mark.asyncio
 async def test_get_simulation_error(mock_twin_repository):
-    """Test getting simulation with error."""
+    """Test getting simulation with error returns a generic 500 (no raw leak)."""
     from src.api.routes.digital_twin import get_simulation
 
-    mock_twin_repository.get_simulation.side_effect = Exception("Database error")
+    mock_twin_repository.get_simulation.side_effect = Exception("SECRET-DB-LEAK")
 
     simulation_id = str(uuid4())
 
@@ -571,6 +723,8 @@ async def test_get_simulation_error(mock_twin_repository):
         await get_simulation(simulation_id)
 
     assert exc_info.value.status_code == 500
+    # Info-disclosure fix: raw exception text must NOT reach the client.
+    assert "SECRET-DB-LEAK" not in str(exc_info.value.detail)
 
 
 # =============================================================================
@@ -924,7 +1078,7 @@ async def test_list_simulations_empty(mock_twin_repository):
     """Test listing when no simulations exist."""
     from src.api.routes.digital_twin import list_simulations
 
-    mock_twin_repository.list_simulations.return_value = []
+    mock_twin_repository.simulations.list_simulations.return_value = []
 
     result = await list_simulations(brand=None, model_id=None, status=None, page=1, page_size=20)
 

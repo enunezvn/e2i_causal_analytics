@@ -515,8 +515,15 @@ class TestUpdateAlert:
         data = response.json()
         assert data["status"] == "resolved"
 
-    def test_snooze_alert(self, client, mock_alert_record):
-        """Test snoozing an alert."""
+    def test_snooze_alert_returns_501_and_does_not_acknowledge(self, client, mock_alert_record):
+        """SNOOZE must fail honestly (501), not silently masquerade as ACKNOWLEDGE.
+
+        The backend has no snooze persistence (ml_monitoring_alerts has no
+        'snoozed' status / 'snooze_until' column), so a snooze cannot be honored.
+        Previously the branch called acknowledge_alert() and dropped the
+        caller-supplied snooze_until while returning a 200, which misled clients
+        into believing an alert was snoozed when it was only acknowledged.
+        """
         mock_alert_record.status = "acknowledged"
 
         with patch("src.repositories.drift_monitoring.MonitoringAlertRepository") as MockRepo:
@@ -533,7 +540,11 @@ class TestUpdateAlert:
                 },
             )
 
-        assert response.status_code == 200
+            # Honest failure, not a fake success.
+            assert response.status_code == 501
+            assert "snooze" in response.json()["detail"].lower()
+            # And it must NOT have silently acknowledged the alert.
+            mock_repo.acknowledge_alert.assert_not_called()
 
     def test_update_alert_not_found(self, client):
         """Test updating a non-existent alert."""

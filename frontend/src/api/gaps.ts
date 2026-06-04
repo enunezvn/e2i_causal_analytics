@@ -196,9 +196,18 @@ export async function runGapAnalysisAndWait(
   // Start analysis asynchronously
   const initial = await runGapAnalysis(request, true);
 
-  // If already complete, return immediately
-  if (initial.status === 'completed' || initial.status === 'failed') {
+  // If already complete, return immediately.
+  if (initial.status === 'completed') {
     return initial;
+  }
+
+  // An immediate failure must surface as a rejection (honoring the documented
+  // `@throws`), mirroring the poll-loop failure branch below. Returning the
+  // failed payload here would let callers treat a failed analysis as success.
+  if (initial.status === 'failed') {
+    throw new Error(
+      `Gap analysis failed: ${initial.warnings.join(', ') || 'Unknown error'}`
+    );
   }
 
   // Poll until complete or timeout

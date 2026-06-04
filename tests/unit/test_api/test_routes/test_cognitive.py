@@ -762,3 +762,32 @@ class TestListSessionsAuthorization:
 
             _, call_kwargs = mock_working_memory.list_sessions.call_args
             assert call_kwargs["user_id"] == "some-user"
+
+
+class TestListSessionsBoundedLimit:
+    """Disputed-sweep finding #4: GET /cognitive/sessions ``limit`` is bounded.
+
+    Previously ``limit: int = 50`` was unbounded — a caller could request an
+    arbitrarily large page. It is now ``Query(default=50, ge=1, le=200)``;
+    out-of-range values are rejected with 422 by FastAPI's validation layer
+    (which runs BEFORE the auth dependency, so no auth setup is required).
+    """
+
+    @pytest.fixture
+    def client(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        from src.api.routes.cognitive import router
+
+        app = FastAPI()
+        app.include_router(router)  # router already declares prefix="/cognitive"
+        return TestClient(app)
+
+    def test_limit_too_large_rejected(self, client):
+        response = client.get("/cognitive/sessions?limit=100000")
+        assert response.status_code == 422
+
+    def test_limit_zero_rejected(self, client):
+        response = client.get("/cognitive/sessions?limit=0")
+        assert response.status_code == 422

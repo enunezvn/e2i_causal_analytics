@@ -24,6 +24,7 @@ export const ApiErrorResponseSchema = z.object({
   message: z.string(),
   details: z.record(z.string(), z.unknown()).optional(),
   timestamp: z.string().optional(),
+  suggested_action: z.string().optional(),
 });
 
 // =============================================================================
@@ -584,6 +585,648 @@ export const ChatResponseSchema = z.object({
   execution_time_ms: z.number().nullable().optional(),
   intent: z.string().nullable().optional(),
   intent_confidence: z.number().nullable().optional(),
+});
+
+// =============================================================================
+// WIRE SCHEMAS (C31 — opt-in response validation for per-client GET reads)
+// =============================================================================
+//
+// These schemas FAITHFULLY mirror the canonical response interfaces in
+// `frontend/src/types/*` (which themselves track the FastAPI backend schemas)
+// and the shapes returned by the MSW mocks in `frontend/src/mocks`.
+//
+// They are intentionally SEPARATE from the older `*ResponseSchema` exports
+// above: a number of those legacy schemas were aspirational and DO NOT match
+// the live contract (e.g. `PredictionSchema` uses `prediction_id` /
+// `predicted_value` while the real `/models/predict` response uses
+// `model_name` / `prediction` / `latency_ms`; `KPIListResponseSchema.workstream`
+// is non-nullable while the backend sends `null`). Wiring those legacy schemas
+// would FALSELY reject correct responses. The `*WireSchema` set below is the
+// validated contract that the per-domain clients (`src/api/*.ts`) opt into via
+// the base client's `schema` parameter.
+//
+// Field nullability rule: fields the backend/mock may send as `null` use
+// `.nullable()`; fields that may be absent use `.optional()`. We keep object
+// schemas permissive about EXTRA keys (Zod's default is to strip unknown keys,
+// not reject them) so additive backend changes never break the UI — only
+// missing/mis-typed REQUIRED fields trip validation, which is the drift we want
+// to catch.
+//
+// HOW TO WIRE MORE ENDPOINTS (the C31 pattern):
+//   1. Add a `*WireSchema` here that mirrors the canonical interface in
+//      `frontend/src/types/<domain>.ts` (use `.nullable()` for null-able fields).
+//   2. In `src/api/<domain>.ts` import it and pass it via the base client's
+//      opt-in `schema` param, e.g.
+//        return get<Foo>('/foo', params, { schema: FooWireSchema });
+//      (For helpers without a `params` arg, pass `undefined` as the 2nd arg.)
+//   3. Add a red-first test: a malformed MSW response must throw
+//      `ApiValidationError`; a valid one must pass through parsed.
+//
+// PRIMARY GET reads currently wired: kpi (list/workstreams/metadata/value/health),
+// predictions (model health/status), monitoring (alerts/model-health/drift-
+// history/runs), causal (health/estimators), graph (health/stats), segments
+// (policies/health), resources (scenarios/health), memory (episodic list+single/
+// semantic-paths), rag (extract/causal-subgraph/causal-path/health), health-score
+// (check/quick/full/components/models/pipelines/agents/history/status).
+//
+// DEFERRED (intentionally not yet wired, with reasoning):
+//   - GET /memory/stats and GET /v1/rag/stats: both routes return
+//     `Dict[str, Any]` with NO `response_model`, so their shape is not
+//     backend-anchored. A wire schema would risk false-rejecting a valid
+//     passthrough payload (same reasoning as `getModelInfo` below).
+//   - GET/POST `SegmentAnalysisResponse` (segments) and `OptimizationResponse`
+//     (resources): large, deeply-nested, mostly-optional response shapes;
+//     deferred per the heavy/volatile-schema policy below.
+//   - POST/PUT/PATCH/DELETE mutations: schema-param works on every helper, but
+//     C31 prioritised high-traffic GET *reads* where contract drift is most
+//     likely to surface in dashboards. Mutations can be wired with the same
+//     pattern when needed.
+//   - `src/api/analytics.ts`: it calls the raw axios `apiClient.get(...)` with
+//     the query string baked into the path, NOT the `get()` helper, so it has no
+//     `schema` opt-in. Wiring it would require a small refactor to the helper
+//     and is out of this slice's scope.
+//   - Heavy async causal pipelines (hierarchical/sequential/parallel responses)
+//     and graph node/relationship list shapes have large, more volatile schemas;
+//     deferred to keep the wire schemas faithful and low-maintenance.
+//   - `getModelInfo` (GET /models/{name}/info): the backend route has NO
+//     response_model — it passes the BentoML /metadata payload through verbatim,
+//     so `name` is not contract-guaranteed. A wire schema would false-reject
+//     valid responses; wire it once the backend anchors the route with a
+//     response_model.
+
+// ----- KPI -----
+
+/** Faithful mirror of `KPIThreshold` (types/kpi.ts). */
+export const KPIThresholdWireSchema = z.object({
+  target: z.number().optional(),
+  warning: z.number().optional(),
+  critical: z.number().optional(),
+});
+
+/** Faithful mirror of `KPIMetadata` (types/kpi.ts). */
+export const KPIMetadataWireSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  definition: z.string(),
+  formula: z.string(),
+  calculation_type: z.string(),
+  workstream: z.string(),
+  tables: z.array(z.string()),
+  columns: z.array(z.string()),
+  view: z.string().nullable().optional(),
+  threshold: KPIThresholdWireSchema.nullable().optional(),
+  unit: z.string().nullable().optional(),
+  frequency: z.string(),
+  primary_causal_library: z.string(),
+  brand: z.string().nullable().optional(),
+  note: z.string().nullable().optional(),
+});
+
+/** Faithful mirror of `KPIResult` (types/kpi.ts). */
+export const KPIResultWireSchema = z.object({
+  kpi_id: z.string(),
+  value: z.number().nullable().optional(),
+  status: z.string(),
+  calculated_at: z.string(),
+  cached: z.boolean(),
+  cache_expires_at: z.string().nullable().optional(),
+  error: z.string().nullable().optional(),
+  causal_library_used: z.string().nullable().optional(),
+  confidence_interval: z.array(z.number()).nullable().optional(),
+  p_value: z.number().nullable().optional(),
+  effect_size: z.number().nullable().optional(),
+  metadata: z.record(z.string(), z.unknown()),
+});
+
+/** Faithful mirror of `KPIListResponse` (types/kpi.ts). `workstream`/`causal_library` are sent as `null` by the backend when unset. */
+export const KPIListResponseWireSchema = z.object({
+  kpis: z.array(KPIMetadataWireSchema),
+  total: z.number().int().nonnegative(),
+  workstream: z.string().nullable().optional(),
+  causal_library: z.string().nullable().optional(),
+});
+
+/** Faithful mirror of `WorkstreamInfo` (types/kpi.ts). */
+export const WorkstreamInfoWireSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  kpi_count: z.number().int().nonnegative(),
+  description: z.string().nullable().optional(),
+});
+
+/** Faithful mirror of `WorkstreamListResponse` (types/kpi.ts). */
+export const WorkstreamListResponseWireSchema = z.object({
+  workstreams: z.array(WorkstreamInfoWireSchema),
+  total: z.number().int().nonnegative(),
+});
+
+/** Faithful mirror of `KPIHealthResponse` (types/kpi.ts). */
+export const KPIHealthResponseWireSchema = z.object({
+  status: z.enum(['healthy', 'degraded', 'unhealthy']),
+  registry_loaded: z.boolean(),
+  total_kpis: z.number().int().nonnegative(),
+  cache_enabled: z.boolean(),
+  cache_size: z.number().int().nonnegative(),
+  database_connected: z.boolean(),
+  workstreams_available: z.array(z.string()),
+  last_calculation: z.string().nullable().optional(),
+  error: z.string().nullable().optional(),
+});
+
+// ----- PREDICTIONS -----
+
+/** Faithful mirror of `ModelEndpointHealth` (types/predictions.ts). */
+export const ModelEndpointHealthWireSchema = z.object({
+  model_name: z.string(),
+  status: z.string(),
+  endpoint: z.string(),
+  last_check: z.string(),
+  error: z.string().nullable().optional(),
+});
+
+/** Faithful mirror of `ModelsStatusResponse` (types/predictions.ts). */
+export const ModelsStatusResponseWireSchema = z.object({
+  total_models: z.number().int().nonnegative(),
+  healthy_count: z.number().int().nonnegative(),
+  unhealthy_count: z.number().int().nonnegative(),
+  models: z.array(ModelEndpointHealthWireSchema),
+  timestamp: z.string(),
+});
+
+// ----- MONITORING -----
+
+/** Faithful mirror of `AlertItem` (types/monitoring.ts). */
+export const AlertItemWireSchema = z.object({
+  id: z.string(),
+  model_version: z.string(),
+  alert_type: z.string(),
+  severity: z.string(),
+  title: z.string(),
+  description: z.string(),
+  status: z.string(),
+  triggered_at: z.string(),
+  acknowledged_at: z.string().nullable().optional(),
+  acknowledged_by: z.string().nullable().optional(),
+  resolved_at: z.string().nullable().optional(),
+  resolved_by: z.string().nullable().optional(),
+});
+
+/** Faithful mirror of `AlertListResponse` (types/monitoring.ts). */
+export const AlertListResponseWireSchema = z.object({
+  total_count: z.number().int().nonnegative(),
+  active_count: z.number().int().nonnegative(),
+  alerts: z.array(AlertItemWireSchema),
+});
+
+/** Faithful mirror of `DriftHistoryItem` (types/monitoring.ts). */
+export const DriftHistoryItemWireSchema = z.object({
+  id: z.string(),
+  model_version: z.string(),
+  feature_name: z.string(),
+  drift_type: z.string(),
+  drift_score: z.number(),
+  severity: z.string(),
+  detected_at: z.string(),
+  baseline_start: z.string(),
+  baseline_end: z.string(),
+  current_start: z.string(),
+  current_end: z.string(),
+});
+
+/** Faithful mirror of `DriftHistoryResponse` (types/monitoring.ts). */
+export const DriftHistoryResponseWireSchema = z.object({
+  model_id: z.string(),
+  total_records: z.number().int().nonnegative(),
+  records: z.array(DriftHistoryItemWireSchema),
+});
+
+/** Faithful mirror of `MonitoringRunItem` (types/monitoring.ts). */
+export const MonitoringRunItemWireSchema = z.object({
+  id: z.string(),
+  model_version: z.string(),
+  run_type: z.string(),
+  started_at: z.string(),
+  completed_at: z.string().nullable().optional(),
+  features_checked: z.number().int().nonnegative(),
+  drift_detected_count: z.number().int().nonnegative(),
+  alerts_generated: z.number().int().nonnegative(),
+  duration_ms: z.number(),
+  error_message: z.string().nullable().optional(),
+});
+
+/** Faithful mirror of `MonitoringRunsResponse` (types/monitoring.ts). */
+export const MonitoringRunsResponseWireSchema = z.object({
+  model_id: z.string().nullable().optional(),
+  total_runs: z.number().int().nonnegative(),
+  runs: z.array(MonitoringRunItemWireSchema),
+});
+
+/** Faithful mirror of `ModelHealthSummary` (types/monitoring.ts). */
+export const ModelHealthSummaryWireSchema = z.object({
+  model_id: z.string(),
+  overall_health: z.enum(['healthy', 'warning', 'critical']),
+  last_check: z.string().nullable().optional(),
+  drift_score: z.number(),
+  active_alerts: z.number().int().nonnegative(),
+  last_retrained: z.string().nullable().optional(),
+  performance_trend: z.enum(['stable', 'improving', 'degrading']),
+  recommendations: z.array(z.string()),
+});
+
+// ----- CAUSAL -----
+
+/** Faithful mirror of `CausalHealthResponse` (types/causal.ts). */
+export const CausalHealthResponseWireSchema = z.object({
+  status: z.string(),
+  libraries_available: z.record(z.string(), z.boolean()),
+  estimators_loaded: z.number().int().nonnegative(),
+  pipeline_orchestrator_ready: z.boolean(),
+  hierarchical_analyzer_ready: z.boolean(),
+  last_analysis: z.string().nullable().optional(),
+  analysis_count_24h: z.number().int().nonnegative(),
+  average_latency_ms: z.number().nullable().optional(),
+  error: z.string().nullable().optional(),
+});
+
+/** Faithful mirror of `EstimatorInfo` (types/causal.ts). */
+export const EstimatorInfoWireSchema = z.object({
+  name: z.string(),
+  library: z.string(),
+  estimator_type: z.string(),
+  description: z.string(),
+  best_for: z.array(z.string()),
+  parameters: z.array(z.string()),
+  supports_confidence_intervals: z.boolean(),
+  supports_heterogeneous_effects: z.boolean(),
+});
+
+/** Faithful mirror of `EstimatorListResponse` (types/causal.ts). */
+export const EstimatorListResponseWireSchema = z.object({
+  estimators: z.array(EstimatorInfoWireSchema),
+  total: z.number().int().nonnegative(),
+  by_library: z.record(z.string(), z.array(z.string())),
+});
+
+// ----- GRAPH -----
+
+/** Faithful mirror of `GraphHealthResponse` (types/graph.ts). */
+export const GraphHealthResponseWireSchema = z.object({
+  status: z.enum(['healthy', 'degraded']),
+  graphiti: z.enum(['connected', 'unavailable']),
+  falkordb: z.enum(['connected', 'unavailable']),
+  websocket_connections: z.number().int().nonnegative(),
+  timestamp: z.string(),
+});
+
+/** Faithful mirror of `GraphStatsResponse` (types/graph.ts). */
+export const GraphStatsResponseWireSchema = z.object({
+  total_nodes: z.number().int().nonnegative(),
+  total_relationships: z.number().int().nonnegative(),
+  nodes_by_type: z.record(z.string(), z.number()),
+  relationships_by_type: z.record(z.string(), z.number()),
+  total_episodes: z.number().int().nonnegative(),
+  total_communities: z.number().int().nonnegative(),
+  last_updated: z.string().nullable().optional(),
+  timestamp: z.string(),
+});
+
+// ----- SEGMENTS -----
+//
+// Backend route: src/api/routes/segments.py
+//   GET /segments/policies  -> response_model=PolicyListResponse
+//   GET /segments/health    -> response_model=SegmentHealthResponse
+// DEFERRED: GET /segments/{id} and POST /segments/analyze return
+// `SegmentAnalysisResponse`, a large, deeply-nested, mostly-optional shape
+// (per-segment CATE maps, responder profiles, uplift metrics). Per the C31
+// deferral policy for heavy/volatile schemas, it is left unwired.
+
+/** Faithful mirror of `PolicyRecommendation` (segments.py PolicyRecommendation). */
+export const PolicyRecommendationWireSchema = z.object({
+  segment: z.string(),
+  current_treatment_rate: z.number(),
+  recommended_treatment_rate: z.number(),
+  expected_incremental_outcome: z.number(),
+  confidence: z.number(),
+});
+
+/** Faithful mirror of `PolicyListResponse` (segments.py PolicyListResponse). */
+export const PolicyListResponseWireSchema = z.object({
+  total_count: z.number().int().nonnegative(),
+  recommendations: z.array(PolicyRecommendationWireSchema),
+  expected_total_lift: z.number(),
+});
+
+/** Faithful mirror of `SegmentHealthResponse` (segments.py SegmentHealthResponse). */
+export const SegmentHealthResponseWireSchema = z.object({
+  status: z.string(),
+  agent_available: z.boolean(),
+  econml_available: z.boolean(),
+  causalml_available: z.boolean(),
+  last_analysis: z.string().nullable().optional(),
+  analyses_24h: z.number().int().nonnegative(),
+});
+
+// ----- RESOURCES -----
+//
+// Backend route: src/api/routes/resource_optimizer.py
+//   GET /resources/scenarios -> response_model=ScenarioListResponse
+//   GET /resources/health    -> response_model=ResourceHealthResponse
+// DEFERRED: GET /resources/{id} and POST /resources/optimize return
+// `OptimizationResponse`, a large allocation/scenario/impact shape; deferred
+// per the C31 heavy-schema policy.
+
+/** Faithful mirror of `ScenarioResult` (resource_optimizer.py ScenarioResult). */
+export const ScenarioResultWireSchema = z.object({
+  scenario_name: z.string(),
+  total_allocation: z.number(),
+  projected_outcome: z.number(),
+  roi: z.number(),
+  constraint_violations: z.array(z.string()),
+});
+
+/** Faithful mirror of `ScenarioListResponse` (resource_optimizer.py ScenarioListResponse). */
+export const ScenarioListResponseWireSchema = z.object({
+  total_count: z.number().int().nonnegative(),
+  scenarios: z.array(ScenarioResultWireSchema),
+});
+
+/** Faithful mirror of `ResourceHealthResponse` (resource_optimizer.py ResourceHealthResponse). */
+export const ResourceHealthResponseWireSchema = z.object({
+  status: z.string(),
+  agent_available: z.boolean(),
+  scipy_available: z.boolean(),
+  last_optimization: z.string().nullable().optional(),
+  optimizations_24h: z.number().int().nonnegative(),
+});
+
+// ----- MEMORY -----
+//
+// Backend route: src/api/routes/memory.py
+//   GET /memory/episodic       -> response_model=List[EpisodicMemoryResponse]
+//   GET /memory/episodic/{id}  -> response_model=EpisodicMemoryResponse
+//   GET /memory/semantic/paths -> response_model=SemanticPathResponse
+// DEFERRED: GET /memory/stats has NO response_model (returns Dict[str, Any]),
+// so its shape is not backend-anchored — wiring a schema would risk
+// false-rejecting a valid passthrough payload. Left unwired (same reasoning
+// as C31's deferral of `getModelInfo`).
+
+/** Faithful mirror of `EpisodicMemoryResponse` (memory.py EpisodicMemoryResponse). */
+export const EpisodicMemoryResponseWireSchema = z.object({
+  id: z.string(),
+  content: z.string(),
+  event_type: z.string(),
+  session_id: z.string().nullable().optional(),
+  agent_name: z.string().nullable().optional(),
+  brand: z.string().nullable().optional(),
+  region: z.string().nullable().optional(),
+  created_at: z.string(),
+  metadata: z.record(z.string(), z.unknown()),
+});
+
+/** Faithful mirror of `List[EpisodicMemoryResponse]` (memory.py GET /episodic). */
+export const EpisodicMemoryListResponseWireSchema = z.array(
+  EpisodicMemoryResponseWireSchema
+);
+
+/** Faithful mirror of `SemanticPathResponse` (memory.py SemanticPathResponse). */
+export const SemanticPathResponseWireSchema = z.object({
+  paths: z.array(z.record(z.string(), z.unknown())),
+  total_paths: z.number().int().nonnegative(),
+  max_depth_searched: z.number().int().nonnegative(),
+  query_latency_ms: z.number(),
+  timestamp: z.string(),
+});
+
+// ----- RAG -----
+//
+// Backend route: src/api/routes/rag.py
+//   GET /v1/rag/graph/{entity} -> response_model=CausalSubgraphResponse
+//   GET /v1/rag/causal-path    -> response_model=CausalPathResponse
+//   GET /v1/rag/entities       -> response_model=ExtractedEntitiesResponse
+//   GET /v1/rag/health         -> response_model=HealthResponse
+// DEFERRED: GET /v1/rag/stats has NO response_model (returns Dict[str, Any]),
+// so it is not backend-anchored and is left unwired.
+
+/** Faithful mirror of `GraphNode` (rag.py GraphNode). */
+export const RAGGraphNodeWireSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  type: z.string(),
+  properties: z.record(z.string(), z.unknown()),
+});
+
+/** Faithful mirror of `GraphEdge` (rag.py GraphEdge). */
+export const RAGGraphEdgeWireSchema = z.object({
+  source: z.string(),
+  target: z.string(),
+  relationship: z.string(),
+  weight: z.number(),
+  properties: z.record(z.string(), z.unknown()),
+});
+
+/** Faithful mirror of `CausalSubgraphResponse` (rag.py CausalSubgraphResponse). */
+export const CausalSubgraphResponseWireSchema = z.object({
+  entity: z.string(),
+  nodes: z.array(RAGGraphNodeWireSchema),
+  edges: z.array(RAGGraphEdgeWireSchema),
+  depth: z.number().int().nonnegative(),
+  node_count: z.number().int().nonnegative(),
+  edge_count: z.number().int().nonnegative(),
+  query_time_ms: z.number(),
+});
+
+/** Faithful mirror of `CausalPathResponse` (rag.py CausalPathResponse). */
+export const CausalPathResponseWireSchema = z.object({
+  source: z.string(),
+  target: z.string(),
+  paths: z.array(z.array(z.string())),
+  shortest_path_length: z.number().int(),
+  total_paths: z.number().int().nonnegative(),
+  query_time_ms: z.number(),
+});
+
+/** Faithful mirror of `ExtractedEntitiesResponse` (rag.py ExtractedEntitiesResponse). */
+export const ExtractedEntitiesResponseWireSchema = z.object({
+  brands: z.array(z.string()),
+  regions: z.array(z.string()),
+  kpis: z.array(z.string()),
+  agents: z.array(z.string()),
+  journey_stages: z.array(z.string()),
+  time_references: z.array(z.string()),
+  hcp_segments: z.array(z.string()),
+});
+
+/** Faithful mirror of `BackendHealthStatus` (rag.py BackendHealthStatus). */
+export const RAGBackendHealthStatusWireSchema = z.object({
+  status: z.string(),
+  latency_ms: z.number(),
+  last_check: z.string(),
+  consecutive_failures: z.number().int().nonnegative(),
+  circuit_breaker_state: z.string().nullable().optional(),
+  error: z.string().nullable().optional(),
+});
+
+/** Faithful mirror of `HealthResponse` (rag.py HealthResponse). `status` is a plain backend `str`, not an enum. */
+export const RAGHealthResponseWireSchema = z.object({
+  status: z.string(),
+  timestamp: z.string(),
+  backends: z.record(z.string(), RAGBackendHealthStatusWireSchema),
+  monitoring_enabled: z.boolean(),
+});
+
+// ----- HEALTH SCORE -----
+//
+// Backend route: src/api/routes/health_score.py — every GET read is anchored
+// with a response_model:
+//   GET /health-score/check|quick|full -> HealthScoreResponse
+//   GET /health-score/components        -> ComponentHealthResponse
+//   GET /health-score/models            -> ModelHealthResponse
+//   GET /health-score/pipelines         -> PipelineHealthResponse
+//   GET /health-score/agents            -> AgentHealthResponse
+//   GET /health-score/history           -> HealthHistoryResponse
+//   GET /health-score/status            -> HealthServiceStatus
+// `data_provenance` is a backend-optional field (default "measured") absent
+// from the FE types; included as optional so a present value validates.
+
+/** Faithful mirror of `ComponentHealth` (health_score.py ComponentHealth). */
+export const ComponentHealthWireSchema = z.object({
+  component_name: z.string(),
+  status: z.string(),
+  latency_ms: z.number().int().nullable().optional(),
+  last_check: z.string(),
+  error_message: z.string().nullable().optional(),
+  details: z.record(z.string(), z.unknown()).nullable().optional(),
+});
+
+/** Faithful mirror of `ModelHealth` (health_score.py ModelHealth). */
+export const HealthScoreModelHealthWireSchema = z.object({
+  model_id: z.string(),
+  model_name: z.string(),
+  accuracy: z.number().nullable().optional(),
+  precision: z.number().nullable().optional(),
+  recall: z.number().nullable().optional(),
+  f1_score: z.number().nullable().optional(),
+  auc_roc: z.number().nullable().optional(),
+  prediction_latency_p50_ms: z.number().int().nullable().optional(),
+  prediction_latency_p99_ms: z.number().int().nullable().optional(),
+  predictions_last_24h: z.number().int().nonnegative(),
+  error_rate: z.number(),
+  status: z.string(),
+});
+
+/** Faithful mirror of `PipelineHealth` (health_score.py PipelineHealth). */
+export const PipelineHealthWireSchema = z.object({
+  pipeline_name: z.string(),
+  last_run: z.string(),
+  last_success: z.string(),
+  rows_processed: z.number().int().nonnegative(),
+  freshness_hours: z.number(),
+  status: z.string(),
+});
+
+/** Faithful mirror of `AgentHealth` (health_score.py AgentHealth). */
+export const AgentHealthWireSchema = z.object({
+  agent_name: z.string(),
+  tier: z.number().int(),
+  available: z.boolean(),
+  avg_latency_ms: z.number().int(),
+  success_rate: z.number(),
+  last_invocation: z.string().nullable().optional(),
+  invocations_24h: z.number().int().nonnegative(),
+});
+
+/** Faithful mirror of `HealthScoreResponse` (health_score.py HealthScoreResponse). */
+export const HealthScoreResponseWireSchema = z.object({
+  check_id: z.string(),
+  check_scope: z.string(),
+  overall_health_score: z.number(),
+  health_grade: z.string(),
+  component_health_score: z.number(),
+  model_health_score: z.number(),
+  pipeline_health_score: z.number(),
+  agent_health_score: z.number(),
+  component_statuses: z.array(ComponentHealthWireSchema).nullable().optional(),
+  model_metrics: z.array(HealthScoreModelHealthWireSchema).nullable().optional(),
+  pipeline_statuses: z.array(PipelineHealthWireSchema).nullable().optional(),
+  agent_statuses: z.array(AgentHealthWireSchema).nullable().optional(),
+  critical_issues: z.array(z.string()),
+  warnings: z.array(z.string()),
+  recommendations: z.array(z.string()),
+  health_summary: z.string(),
+  check_latency_ms: z.number().int(),
+  timestamp: z.string(),
+});
+
+/** Faithful mirror of `ComponentHealthResponse` (health_score.py). */
+export const ComponentHealthResponseWireSchema = z.object({
+  component_health_score: z.number(),
+  total_components: z.number().int().nonnegative(),
+  healthy_count: z.number().int().nonnegative(),
+  degraded_count: z.number().int().nonnegative(),
+  unhealthy_count: z.number().int().nonnegative(),
+  components: z.array(ComponentHealthWireSchema),
+  check_latency_ms: z.number().int(),
+  data_provenance: z.string().optional(),
+});
+
+/** Faithful mirror of `ModelHealthResponse` (health_score.py — health-score domain). */
+export const HealthScoreModelHealthResponseWireSchema = z.object({
+  model_health_score: z.number(),
+  total_models: z.number().int().nonnegative(),
+  healthy_count: z.number().int().nonnegative(),
+  degraded_count: z.number().int().nonnegative(),
+  unhealthy_count: z.number().int().nonnegative(),
+  models: z.array(HealthScoreModelHealthWireSchema),
+  check_latency_ms: z.number().int(),
+  data_provenance: z.string().optional(),
+});
+
+/** Faithful mirror of `PipelineHealthResponse` (health_score.py). */
+export const PipelineHealthResponseWireSchema = z.object({
+  pipeline_health_score: z.number(),
+  total_pipelines: z.number().int().nonnegative(),
+  healthy_count: z.number().int().nonnegative(),
+  stale_count: z.number().int().nonnegative(),
+  failed_count: z.number().int().nonnegative(),
+  pipelines: z.array(PipelineHealthWireSchema),
+  check_latency_ms: z.number().int(),
+});
+
+/** Faithful mirror of `AgentHealthResponse` (health_score.py). */
+export const AgentHealthResponseWireSchema = z.object({
+  agent_health_score: z.number(),
+  total_agents: z.number().int().nonnegative(),
+  available_count: z.number().int().nonnegative(),
+  unavailable_count: z.number().int().nonnegative(),
+  agents: z.array(AgentHealthWireSchema),
+  by_tier: z.record(z.string(), z.number().int()),
+  check_latency_ms: z.number().int(),
+});
+
+/** Faithful mirror of `HealthHistoryItem` (health_score.py HealthHistoryItem). */
+export const HealthHistoryItemWireSchema = z.object({
+  check_id: z.string(),
+  timestamp: z.string(),
+  overall_health_score: z.number(),
+  health_grade: z.string(),
+  critical_issues_count: z.number().int().nonnegative(),
+});
+
+/** Faithful mirror of `HealthHistoryResponse` (health_score.py HealthHistoryResponse). */
+export const HealthHistoryResponseWireSchema = z.object({
+  total_checks: z.number().int().nonnegative(),
+  checks: z.array(HealthHistoryItemWireSchema),
+  avg_health_score: z.number(),
+  trend: z.string(),
+});
+
+/** Faithful mirror of `HealthServiceStatus` (health_score.py HealthServiceStatus). */
+export const HealthServiceStatusWireSchema = z.object({
+  status: z.string(),
+  agent_available: z.boolean(),
+  last_check: z.string().nullable().optional(),
+  checks_24h: z.number().int().nonnegative(),
+  avg_check_latency_ms: z.number().int(),
 });
 
 // =============================================================================

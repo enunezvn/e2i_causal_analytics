@@ -17,6 +17,12 @@
  */
 
 import { get, post } from '@/lib/api-client';
+import {
+  AlertListResponseWireSchema,
+  DriftHistoryResponseWireSchema,
+  MonitoringRunsResponseWireSchema,
+  ModelHealthSummaryWireSchema,
+} from '@/lib/api-schemas';
 import type {
   AlertActionRequest,
   AlertItem,
@@ -153,7 +159,8 @@ export async function getDriftHistory(
       feature_name: params.feature_name,
       days: params.days,
       limit: params.limit,
-    }
+    },
+    { schema: DriftHistoryResponseWireSchema }
   );
 }
 
@@ -179,12 +186,16 @@ export async function getDriftHistory(
 export async function listAlerts(
   params?: AlertListParams
 ): Promise<AlertListResponse> {
-  return get<AlertListResponse>(`${MONITORING_BASE}/alerts`, {
-    model_id: params?.model_id,
-    status: params?.status,
-    severity: params?.severity,
-    limit: params?.limit,
-  });
+  return get<AlertListResponse>(
+    `${MONITORING_BASE}/alerts`,
+    {
+      model_id: params?.model_id,
+      status: params?.status,
+      severity: params?.severity,
+      limit: params?.limit,
+    },
+    { schema: AlertListResponseWireSchema }
+  );
 }
 
 /**
@@ -252,11 +263,15 @@ export async function updateAlert(
 export async function listMonitoringRuns(
   params?: MonitoringRunsParams
 ): Promise<MonitoringRunsResponse> {
-  return get<MonitoringRunsResponse>(`${MONITORING_BASE}/runs`, {
-    model_id: params?.model_id,
-    days: params?.days,
-    limit: params?.limit,
-  });
+  return get<MonitoringRunsResponse>(
+    `${MONITORING_BASE}/runs`,
+    {
+      model_id: params?.model_id,
+      days: params?.days,
+      limit: params?.limit,
+    },
+    { schema: MonitoringRunsResponseWireSchema }
+  );
 }
 
 // =============================================================================
@@ -283,7 +298,9 @@ export async function getModelHealth(
   modelId: string
 ): Promise<ModelHealthSummary> {
   return get<ModelHealthSummary>(
-    `${MONITORING_BASE}/health/${encodeURIComponent(modelId)}`
+    `${MONITORING_BASE}/health/${encodeURIComponent(modelId)}`,
+    undefined,
+    { schema: ModelHealthSummaryWireSchema }
   );
 }
 

@@ -101,6 +101,7 @@ CREATE INDEX IF NOT EXISTS idx_chatbot_opt_requests_created
 -- Enable RLS
 ALTER TABLE public.chatbot_optimization_requests ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS chatbot_opt_requests_service_all ON public.chatbot_optimization_requests;
 -- Service role has full access
 CREATE POLICY chatbot_opt_requests_service_all ON public.chatbot_optimization_requests
     FOR ALL
@@ -108,6 +109,7 @@ CREATE POLICY chatbot_opt_requests_service_all ON public.chatbot_optimization_re
     USING (true)
     WITH CHECK (true);
 
+DROP POLICY IF EXISTS chatbot_opt_requests_select ON public.chatbot_optimization_requests;
 -- Authenticated users can view optimization requests
 CREATE POLICY chatbot_opt_requests_select ON public.chatbot_optimization_requests
     FOR SELECT
@@ -324,6 +326,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS set_updated_at ON public.chatbot_optimization_requests;
 DROP TRIGGER IF EXISTS set_updated_at ON public.chatbot_optimization_requests;
 CREATE TRIGGER set_updated_at
     BEFORE UPDATE ON public.chatbot_optimization_requests
