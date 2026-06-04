@@ -21,9 +21,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.api.dependencies.auth import (
-    UserRole,
     get_user_brands,
-    has_role,
     is_cross_brand_admin,
     require_viewer,
     resolve_brand_for_read,
@@ -77,8 +75,9 @@ router = APIRouter(
 
 
 def _is_admin(user: Dict[str, Any]) -> bool:
-    """Cross-brand admin (or holder of the ``'all'`` brand grant)."""
-    return has_role(user, UserRole.ADMIN) or "all" in set(get_user_brands(user))
+    """Cross-brand admin — delegates to the canonical ``auth`` helper so the
+    admin-detection policy cannot silently drift between modules (codex MED-1)."""
+    return is_cross_brand_admin(user)
 
 
 def _brand_allowed(user: Dict[str, Any], brand: Optional[str]) -> bool:

@@ -306,6 +306,9 @@ class FalkorDBSemanticMemory:
         _validate_property_keys(properties)
 
         props = properties.copy() if properties else {}
+        # The two keys added below are hardcoded identifier literals (not
+        # caller-controlled), so they need no further validation before being
+        # interpolated into the SET clause alongside the validated caller keys.
         props["e2i_entity_type"] = type_value
         props["updated_at"] = datetime.now(timezone.utc).isoformat()
 
@@ -429,6 +432,9 @@ class FalkorDBSemanticMemory:
         target_label = E2I_TO_LABEL.get(target_type, "Entity")
 
         props = properties.copy() if properties else {}
+        # ``updated_at`` is a hardcoded identifier literal (not caller-controlled),
+        # so it needs no validation before interpolation alongside the validated
+        # caller keys; validation of the caller's keys ran above, before any write.
         props["updated_at"] = datetime.now(timezone.utc).isoformat()
 
         prop_items = [f"{k}: ${k}" for k in props.keys()]
