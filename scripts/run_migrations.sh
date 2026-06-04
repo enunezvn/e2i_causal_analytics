@@ -33,18 +33,29 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 DB_CONTAINER="${SUPABASE_DB_CONTAINER:-supabase-db}"
 DRY_RUN=false
 
-# Migration directories applied in order. SCOPED to database/migrations/ +
-# database/memory/: those two are fully reconciled and tracked. The other schema
-# dirs (core, ml, causal, chat, rag, audit) are INTENTIONALLY excluded until the
-# droplet's inconsistent partial-migration state is cleanly reconciled — several
-# are half-applied (e.g. an enum exists but its table does not), which would
-# abort the deploy here. See the reconciliation plan in
-# docs/reports/memory-system-review-20260603.md. Adding a dir back is a one-line
-# change once that dir is reconciled + baselined (the runner already supports it
-# via the "<dir>/" prefix convention and --baseline).
+# Migration directories applied in order, each as "dir::keyprefix". The keyprefix
+# namespaces the schema_migrations.filename so identically-numbered files in
+# different dirs (e.g. ml/011 vs migrations/011) never collide.
+#
+# ALL schema dirs are now in scope: the previously-deferred dirs (core, ml,
+# causal, chat, rag, audit) were reconciled to the droplet's deployed reality and
+# tracked/baselined in PR #676 + #682 (every in-scope file is idempotent and
+# already recorded in public.schema_migrations, so a deploy re-scour is a clean
+# no-op; only genuinely-new files apply). See the reconciliation plan +
+# completion notes in docs/reports/memory-system-review-20260603.md.
+#
+# SAFETY: rollback_*/*_rollback and *_validation_queries files are NOT forward
+# migrations and are excluded in apply_dir() below — a rollback util (e.g.
+# ml/rollback_023.sql) DROPs live tables and must never be auto-applied.
 MIGRATION_DIRS=(
   "$PROJECT_ROOT/database/migrations::"
   "$PROJECT_ROOT/database/memory::memory/"
+  "$PROJECT_ROOT/database/core::core/"
+  "$PROJECT_ROOT/database/ml::ml/"
+  "$PROJECT_ROOT/database/causal::causal/"
+  "$PROJECT_ROOT/database/chat::chat/"
+  "$PROJECT_ROOT/database/rag::rag/"
+  "$PROJECT_ROOT/database/audit::audit/"
 )
 
 BASELINE=false
@@ -110,9 +121,14 @@ apply_dir() {
   for migration_file in "$dir"/*.sql; do
     [ -f "$migration_file" ] || continue
     filename=$(basename "$migration_file")
-    # Skip non-migration helpers (read-only validation query bundles). .cypher
-    # files are excluded by the *.sql glob.
-    case "$filename" in *_validation_queries.sql) continue ;; esac
+    # Skip non-forward-migration files: read-only validation query bundles AND
+    # destructive rollback utilities. A rollback_*/*_rollback file DROPs live
+    # objects (e.g. ml/rollback_023.sql DROPs estimator_evaluations) and would
+    # silently destroy prod data if auto-applied. .cypher files are already
+    # excluded by the *.sql glob.
+    case "$filename" in
+      *_validation_queries.sql|rollback_*.sql|*_rollback.sql) continue ;;
+    esac
     key="${prefix}${filename}"
 
     if echo "$APPLIED" | grep -qxF "$key"; then
@@ -133,15 +149,46 @@ apply_dir() {
     fi
 
     echo -n "Applying $key ... "
-    # `ALTER TYPE ... ADD VALUE` cannot be wrapped together with usage of the
-    # new value in a single transaction, so enum migrations run un-wrapped.
-    txn="--single-transaction"
-    if grep -qiE "ALTER[[:space:]]+TYPE[[:space:]].*ADD[[:space:]]+VALUE" "$migration_file"; then
-      txn=""
+    # Decide whether this file may be wrapped in one --single-transaction. Two
+    # statement classes must NOT be wrapped:
+    #   * non-transactional DDL — `ALTER TYPE ... ADD VALUE`, `CREATE/DROP INDEX
+    #     CONCURRENTLY` — errors with "cannot run inside a transaction block".
+    #   * self-managed transactions — a file containing its own COMMIT; the
+    #     wrapper's txn is silently ENDED by that COMMIT, so an appended tracking
+    #     INSERT (or any later statement) rides outside it. We must instead apply
+    #     the body alone and record tracking SEPARATELY, only after a clean exit,
+    #     so a file that fails after its own COMMIT is left UNTRACKED (the next
+    #     deploy idempotently retries) rather than half-applied-but-recorded.
+    # Detection strips `--` line comments first so a comment mentioning these
+    # keywords does not false-trigger (a real statement's keyword precedes any
+    # `--` on its line, so stripping never hides a genuine match).
+    # Anchor on the bare word CONCURRENTLY (covers CREATE/DROP INDEX and REINDEX,
+    # single- or multi-line) — a false positive only costs per-file atomicity
+    # (harmless on idempotent files), whereas a false NEGATIVE would wrap a
+    # non-transactional statement and abort the deploy, so we err toward un-wrap.
+    tracked_inline=true
+    if sed 's/--.*$//' "$migration_file" | grep -qiE \
+         "ALTER[[:space:]]+TYPE[[:space:]].*ADD[[:space:]]+VALUE|CONCURRENTLY|^[[:space:]]*COMMIT[[:space:]]*;"; then
+      tracked_inline=false
     fi
 
-    if { cat "$migration_file"; printf "\nINSERT INTO public.schema_migrations(filename) VALUES ('%s') ON CONFLICT DO NOTHING;\n" "$key"; } \
-         | run_psql -v ON_ERROR_STOP=1 $txn -q; then
+    apply_ok=false
+    if [ "$tracked_inline" = true ]; then
+      # Normal file: body + tracking row commit (or roll back) atomically.
+      if { cat "$migration_file"; printf "\nINSERT INTO public.schema_migrations(filename) VALUES ('%s') ON CONFLICT DO NOTHING;\n" "${key//\'/\'\'}"; } \
+           | run_psql -v ON_ERROR_STOP=1 --single-transaction -q; then
+        apply_ok=true
+      fi
+    else
+      # Un-wrappable / self-managed-txn file: apply the body un-wrapped, then
+      # record tracking in a SEPARATE invocation only if the body exited clean.
+      if run_psql -v ON_ERROR_STOP=1 -q < "$migration_file"; then
+        run_psql -q -c "INSERT INTO public.schema_migrations(filename) VALUES ('${key//\'/\'\'}') ON CONFLICT DO NOTHING;" >/dev/null
+        apply_ok=true
+      fi
+    fi
+
+    if [ "$apply_ok" = true ]; then
       echo -e "${GREEN}OK${NC}"
       APPLIED_COUNT=$((APPLIED_COUNT + 1))
     else
