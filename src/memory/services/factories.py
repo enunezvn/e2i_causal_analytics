@@ -53,6 +53,36 @@ class ServiceConnectionError(Exception):
 # ============================================================================
 
 
+def validate_embedding_dimensions(
+    embedding: List[float], expected_dims: int, *, context: str = "embedding"
+) -> None:
+    """Fail fast if an embedding's width does not match the target column (M1).
+
+    Memory writes store the vector into a fixed-width ``vector(N)`` column. When
+    the primary embedding service is down, the ``FallbackEmbeddingService`` emits
+    a 384-dim local vector; pgvector then rejects the insert with a cryptic
+    dimension error that agent hooks swallow — silently dropping the write during
+    the outage. Validating up front turns that into an explicit, diagnosable
+    failure BEFORE the row reaches the database.
+
+    Args:
+        embedding: The vector about to be persisted.
+        expected_dims: The column width (e.g. ``get_config().episodic.vector_dims``).
+        context: Short label for the error message (which write path failed).
+
+    Raises:
+        ValueError: If ``embedding`` is empty or its length != ``expected_dims``.
+    """
+    actual = len(embedding) if embedding is not None else 0
+    if actual != expected_dims:
+        raise ValueError(
+            f"{context} dimension mismatch: got {actual}, expected {expected_dims}. "
+            f"Refusing to persist — a {actual}-dim vector cannot be stored in a "
+            f"vector({expected_dims}) column (the primary embedding model is likely "
+            f"unavailable and the local fallback emitted a different width)."
+        )
+
+
 class EmbeddingService(ABC):
     """Abstract base class for embedding services."""
 
