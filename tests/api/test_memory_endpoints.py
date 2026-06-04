@@ -274,6 +274,55 @@ class TestProceduralFeedback:
 
         assert response.status_code == 200
 
+    def test_record_feedback_rejects_invalid_outcome(self, mock_procedural_memory_functions):
+        """L13 (#694): an outcome outside {success, partial, failure} (incl.
+        typos like 'sucess') must 422 via Pydantic rather than being silently
+        recorded as a failure."""
+        response = client.post(
+            "/api/memory/procedural/feedback",
+            json={"procedure_id": "proc_003", "outcome": "sucess", "score": 0.9},
+        )
+
+        assert response.status_code == 422
+        # The procedure outcome must NOT have been updated for an invalid value.
+        mock_procedural_memory_functions["update"].assert_not_called()
+
+    def test_record_feedback_partial_is_not_full_success(self, mock_procedural_memory_functions):
+        """L13 (#694): 'partial' is a distinct outcome — it does NOT count as
+        a full success, so update_procedure_outcome is called with
+        success=False (same as 'failure'), but it is an accepted value (200)."""
+        response = client.post(
+            "/api/memory/procedural/feedback",
+            json={"procedure_id": "proc_004", "outcome": "partial", "score": 0.5},
+        )
+
+        assert response.status_code == 200
+        mock_procedural_memory_functions["update"].assert_called_once()
+        _, kwargs = mock_procedural_memory_functions["update"].call_args
+        assert kwargs["success"] is False
+
+    def test_record_feedback_failure_records_not_success(self, mock_procedural_memory_functions):
+        """'failure' is accepted and recorded as success=False."""
+        response = client.post(
+            "/api/memory/procedural/feedback",
+            json={"procedure_id": "proc_005", "outcome": "failure", "score": 0.1},
+        )
+
+        assert response.status_code == 200
+        _, kwargs = mock_procedural_memory_functions["update"].call_args
+        assert kwargs["success"] is False
+
+    def test_record_feedback_success_records_success(self, mock_procedural_memory_functions):
+        """'success' is accepted and recorded as success=True."""
+        response = client.post(
+            "/api/memory/procedural/feedback",
+            json={"procedure_id": "proc_006", "outcome": "success", "score": 0.95},
+        )
+
+        assert response.status_code == 200
+        _, kwargs = mock_procedural_memory_functions["update"].call_args
+        assert kwargs["success"] is True
+
 
 # =============================================================================
 # SEMANTIC PATH TESTS

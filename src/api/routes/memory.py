@@ -15,7 +15,7 @@ Version: 4.1.0
 import logging
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
@@ -235,7 +235,15 @@ class ProceduralFeedbackRequest(BaseModel):
     """Request to record procedural outcome feedback."""
 
     procedure_id: str = Field(..., description="ID of the procedure")
-    outcome: str = Field(..., description="Outcome: success, partial, failure")
+    # L13 (#694): constrain to the exact set the frontend already sends
+    # (TypeScript ``ProceduralFeedbackRequest.outcome`` =
+    # 'success' | 'partial' | 'failure', frontend/src/types/memory.ts).
+    # A free ``str`` silently treated any non-"success" value (incl. typos
+    # like "sucess") as a failure; the Literal makes invalid values 422 at
+    # the Pydantic boundary instead of corrupting a procedure's success rate.
+    outcome: Literal["success", "partial", "failure"] = Field(
+        ..., description="Outcome: success, partial, failure"
+    )
     score: float = Field(..., ge=0.0, le=1.0, description="Outcome score (0-1)")
     feedback_text: Optional[str] = Field(None, description="Optional feedback text")
     session_id: Optional[str] = Field(None, description="Session context")
@@ -606,7 +614,13 @@ async def record_procedural_feedback(
     Used by Feedback Learner for continuous improvement.
     """
     try:
-        # Determine success based on outcome
+        # Determine success based on outcome. L13 (#694): the outcome enum
+        # is validated to {success, partial, failure} at the Pydantic
+        # boundary. "partial" is a DISTINCT outcome — it is NOT a full
+        # success, so for the binary success/failure success-rate counter it
+        # is recorded as success=False (same as "failure"). This is an
+        # explicit, documented mapping, not the prior silent "anything that
+        # isn't 'success' is a failure" behavior (which also swallowed typos).
         success = request.outcome == "success"
 
         # Update procedure outcome (success/failure counts)
