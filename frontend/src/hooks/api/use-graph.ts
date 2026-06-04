@@ -253,7 +253,15 @@ export function useGraphSearch(
   };
 
   return useQuery<SearchGraphResponse, ApiError>({
-    queryKey: queryKeys.graph.search(query),
+    // Fold result-affecting params into the key so different entity_types / k /
+    // min_score do not silently share one cache entry. session_id is excluded
+    // because it does not change the result set (it is context, not a filter).
+    queryKey: [
+      ...queryKeys.graph.search(query),
+      request?.entity_types ?? null,
+      request?.k ?? null,
+      request?.min_score ?? null,
+    ] as const,
     queryFn: () => searchGraph(fullRequest),
     enabled: !!query && query.length >= 2,
     ...options,
