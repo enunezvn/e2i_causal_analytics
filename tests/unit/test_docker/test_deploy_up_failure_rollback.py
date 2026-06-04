@@ -138,6 +138,14 @@ def _prepare(tmp_path: Path) -> tuple[Path, Path]:
     (project_dir / "docker" / "frontend" / "Dockerfile").write_text(
         "FROM python:3.12-slim AS production\n"
     )
+    # #672 added `bash scripts/run_migrations.sh` to the deploy `script:` (after the
+    # `git reset --hard`, before the app-services flip). Stage a no-op stub so the
+    # hermetic rollout reaches the rollback control-flow under test — under `set -e`
+    # a missing file would abort before any app `up`/health step. This harness
+    # validates the ROLLBACK contract, not migration execution, so success is the
+    # faithful default (the real droplet always ships scripts/run_migrations.sh).
+    (project_dir / "scripts").mkdir(parents=True, exist_ok=True)
+    (project_dir / "scripts" / "run_migrations.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
 
     script = _extract_deploy_script()
     assert "${{" not in script, (
