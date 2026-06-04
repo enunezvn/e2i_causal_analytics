@@ -29,14 +29,42 @@ Usage:
     graphiti = await get_graphiti_service()
 """
 
+import hashlib
 import json
 import logging
 import os
 from abc import ABC, abstractmethod
+from collections import OrderedDict
 from functools import lru_cache
 from typing import Any, Dict, List, Literal, Optional, cast
 
 logger = logging.getLogger(__name__)
+
+# Maximum number of entries kept in each per-instance embedding cache (L17).
+# Bounds memory for long-lived services; oldest entries are evicted first.
+EMBEDDING_CACHE_MAX_ENTRIES = 1000
+
+
+def _embedding_cache_key(text: str) -> str:
+    """Stable, process-independent cache key for an embedding input (L17).
+
+    The previous implementation used the builtin ``hash(text)``, which Python
+    randomizes per-process (``PYTHONHASHSEED``) for strings — so the same text
+    produced different keys across processes/restarts and risked integer-hash
+    collisions. A SHA-256 hexdigest is deterministic and collision-resistant,
+    giving a consistent key for identical text everywhere.
+    """
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def _cache_put_bounded(
+    cache: "OrderedDict[str, List[float]]", key: str, value: List[float]
+) -> None:
+    """Insert into a bounded FIFO cache, evicting the oldest entry past the cap (L17)."""
+    cache[key] = value
+    cache.move_to_end(key)
+    while len(cache) > EMBEDDING_CACHE_MAX_ENTRIES:
+        cache.popitem(last=False)
 
 
 class ServiceConnectionError(Exception):
@@ -112,7 +140,7 @@ class OpenAIEmbeddingService(EmbeddingService):
     def __init__(self, model: str = "text-embedding-ada-002"):
         self._client = None
         self.model = model
-        self._cache: Dict[int, List[float]] = {}
+        self._cache: "OrderedDict[str, List[float]]" = OrderedDict()
 
     def _get_client(self):
         if self._client is None:
@@ -133,7 +161,7 @@ class OpenAIEmbeddingService(EmbeddingService):
 
     async def embed(self, text: str) -> List[float]:
         """Generate embedding for text with caching."""
-        cache_key = hash(text)
+        cache_key = _embedding_cache_key(text)
         if cache_key in self._cache:
             return self._cache[cache_key]
 
@@ -141,7 +169,7 @@ class OpenAIEmbeddingService(EmbeddingService):
         try:
             response = client.embeddings.create(model=self.model, input=text)
             embedding: List[float] = response.data[0].embedding
-            self._cache[cache_key] = embedding
+            _cache_put_bounded(self._cache, cache_key, embedding)
             return embedding
         except Exception as e:
             raise ServiceConnectionError("OpenAI", f"Failed to generate embedding: {e}", e) from e
@@ -215,7 +243,7 @@ class LocalEmbeddingService(EmbeddingService):
     def __init__(self, model: str = "all-MiniLM-L6-v2"):
         self._model = None
         self.model_name = model
-        self._cache: Dict[int, List[float]] = {}
+        self._cache: "OrderedDict[str, List[float]]" = OrderedDict()
 
     def _get_model(self):
         """Lazy load the sentence-transformers model."""
@@ -240,14 +268,14 @@ class LocalEmbeddingService(EmbeddingService):
 
     async def embed(self, text: str) -> List[float]:
         """Generate embedding using local model with caching."""
-        cache_key = hash(text)
+        cache_key = _embedding_cache_key(text)
         if cache_key in self._cache:
             return self._cache[cache_key]
 
         model = self._get_model()
         try:
             embedding: List[float] = model.encode(text, convert_to_numpy=True).tolist()
-            self._cache[cache_key] = embedding
+            _cache_put_bounded(self._cache, cache_key, embedding)
             return embedding
         except Exception as e:
             raise ServiceConnectionError(
@@ -283,8 +311,12 @@ class FallbackEmbeddingService(EmbeddingService):
     suboptimal results until primary is restored.
     """
 
-    def __init__(self, environment: Optional[str] = None):
+    def __init__(self, environment: Optional[str] = None, model: Optional[str] = None):
         self._environment = environment or os.environ.get("E2I_ENVIRONMENT", "local_pilot")
+        # Optional explicit model for the (OpenAI) primary; None => primary's own
+        # default. Forwarded by get_embedding_service so the configured/overridden
+        # embeddings.model reaches the primary even through the fallback wrapper (M5a).
+        self._model = model
         self._primary: Optional[EmbeddingService] = None
         self._fallback: Optional[EmbeddingService] = None
         self._using_fallback = False
@@ -296,6 +328,8 @@ class FallbackEmbeddingService(EmbeddingService):
         if self._primary is None:
             if self._environment == "aws_production":
                 self._primary = BedrockEmbeddingService()
+            elif self._model is not None:
+                self._primary = OpenAIEmbeddingService(model=self._model)
             else:
                 self._primary = OpenAIEmbeddingService()
         return self._primary
@@ -571,7 +605,8 @@ def get_redis_client():
     """
     Get Redis client for working memory.
 
-    Uses REDIS_URL environment variable or defaults to redis://localhost:6379.
+    Uses REDIS_URL environment variable or defaults to redis://localhost:6382.
+    (Port 6382 is the working-memory Redis; 6379 is FalkorDB's port family.)
     Returns a cached client for connection reuse.
 
     Returns:
@@ -850,18 +885,86 @@ def get_falkordb_client():
 # ============================================================================
 
 
+def _resolve_embedding_model(model: Optional[str]) -> str:
+    """Resolve the embedding model with full precedence (M5a).
+
+    Precedence (highest first):
+        1. explicit ``model`` argument
+        2. ``E2I_EMBEDDING_MODEL`` environment variable
+        3. ``MemoryConfig.embeddings.model`` (from config YAML)
+        4. hardcoded default ``text-embedding-ada-002``
+
+    The config layer was previously ignored entirely — ``get_embedding_service``
+    built ``OpenAIEmbeddingService()`` with its hardcoded default regardless of
+    what ``embeddings.<env>.model`` declared in ``005_memory_config.yaml``.
+    """
+    if model is not None:
+        return model
+
+    env_model = os.environ.get("E2I_EMBEDDING_MODEL")
+    if env_model:
+        return env_model
+
+    try:
+        from .config import get_config
+
+        config_model = getattr(getattr(get_config(), "embeddings", None), "model", None)
+        if config_model:
+            return cast(str, config_model)
+    except Exception as e:  # pragma: no cover - config load best-effort
+        logger.debug(f"Could not read embeddings.model from config: {e}")
+
+    return "text-embedding-ada-002"
+
+
+@lru_cache(maxsize=16)
+def _get_embedding_service_cached(
+    environment: str, use_fallback: bool, model: str
+) -> EmbeddingService:
+    """Internal cached factory - called with fully-resolved values (M6).
+
+    Cached on ``(environment, use_fallback, model)`` so repeated calls return
+    the SAME instance. This preserves the per-instance embedding cache AND the
+    ``FallbackEmbeddingService`` 5-minute primary-retry backoff, both of which
+    a fresh-per-call instance would silently defeat.
+
+    The Bedrock (``aws_production``) branch is left untouched: there is no
+    Bedrock runtime on this platform (it is vestigial), and ``model`` only
+    applies to the OpenAI/local primary.
+    """
+    logger.info(
+        f"Creating embedding service: environment={environment}, "
+        f"fallback={use_fallback}, model={model}"
+    )
+
+    if use_fallback:
+        return FallbackEmbeddingService(environment=environment, model=model)
+    elif environment == "aws_production":
+        return BedrockEmbeddingService()
+    else:
+        return OpenAIEmbeddingService(model=model)
+
+
 def get_embedding_service(
     environment: Optional[str] = None,
     use_fallback: Optional[bool] = None,
+    model: Optional[str] = None,
 ) -> EmbeddingService:
     """
     Get embedding service based on environment with optional fallback.
+
+    Returns a cached singleton keyed on the fully-resolved
+    ``(environment, use_fallback, model)`` so repeated calls reuse the same
+    instance (M6). Call ``reset_all_clients()`` to drop the cache.
 
     Args:
         environment: "local_pilot" or "aws_production". If not provided,
                      uses E2I_ENVIRONMENT env var or defaults to "local_pilot".
         use_fallback: Enable fallback chain. If not provided, uses
                       E2I_EMBEDDING_FALLBACK env var (default: true).
+        model: Embedding model name. If not provided, resolves via precedence
+               env-var > config (``embeddings.model``) > hardcoded default (M5a).
+               Only applies to the OpenAI/local primary; ignored for Bedrock.
 
     Returns:
         EmbeddingService: OpenAI, Bedrock, or FallbackEmbeddingService
@@ -869,9 +972,10 @@ def get_embedding_service(
     Environment Variables:
         E2I_ENVIRONMENT: "local_pilot" (OpenAI) or "aws_production" (Bedrock)
         E2I_EMBEDDING_FALLBACK: "true" (default) enables fallback to local model
+        E2I_EMBEDDING_MODEL: overrides the configured embedding model
 
     Examples:
-        # Default: uses env vars, fallback enabled
+        # Default: uses env vars + config, fallback enabled
         service = get_embedding_service()
 
         # Explicit: disable fallback for testing
@@ -880,20 +984,17 @@ def get_embedding_service(
         # Production: Bedrock primary with local fallback
         service = get_embedding_service(environment="aws_production")
     """
+    # Resolve all inputs BEFORE constructing the cache key so the key reflects
+    # the effective (env, fallback, model) and never None placeholders (M6).
     if environment is None:
         environment = os.environ.get("E2I_ENVIRONMENT", "local_pilot")
 
     if use_fallback is None:
         use_fallback = os.environ.get("E2I_EMBEDDING_FALLBACK", "true").lower() == "true"
 
-    logger.info(f"Creating embedding service: environment={environment}, fallback={use_fallback}")
+    resolved_model = _resolve_embedding_model(model)
 
-    if use_fallback:
-        return FallbackEmbeddingService(environment=environment)
-    elif environment == "aws_production":
-        return BedrockEmbeddingService()
-    else:
-        return OpenAIEmbeddingService()
+    return _get_embedding_service_cached(environment, use_fallback, resolved_model)
 
 
 # Embedding service singleton
@@ -901,7 +1002,11 @@ _embedding_service: Optional[EmbeddingService] = None
 
 
 def get_embedding_service_cached() -> EmbeddingService:
-    """Get cached embedding service singleton."""
+    """Get cached embedding service singleton.
+
+    Retained for backward compatibility; ``get_embedding_service`` is itself
+    cached now (M6), so this simply delegates to the default-keyed instance.
+    """
     global _embedding_service
     if _embedding_service is None:
         _embedding_service = get_embedding_service()
@@ -1131,5 +1236,6 @@ def reset_all_clients() -> None:
 
     # Clear LRU caches
     _get_llm_service_cached.cache_clear()
+    _get_embedding_service_cached.cache_clear()
 
     logger.info("All service clients have been reset")
