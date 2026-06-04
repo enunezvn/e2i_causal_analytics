@@ -72,7 +72,7 @@ The **8 rejected** findings were cleared.
 **Only an operational item remains:**
 1. **Ops — coordinated deploy.** `deploy.yml` was temporarily disabled for this multi-session work (**prod == dev == `e2i-analytics-prod`** — a push-triggered deploy `git reset --hard`s the shared main checkout). Re-enable it (`gh workflow enable deploy.yml`) and run **one coordinated `workflow_dispatch` deploy** of `origin/main` (which now carries #681/#683/#684 + the parallel #672 migration infra + #668 memory fixes) once the parallel session reaches a stopping point and the main checkout is verified clean. The merged fix worktrees have been reaped.
 
-**Archival status:** retained in `docs/reports/` (not archived) — the only open item is the operational coordinated deploy (gated on the owner). Archive to `docs/Archive/` once that deploy is done.
+**Archival status:** ✅ **ARCHIVED 2026-06-04** to `docs/Archive/`. All code findings FIXED + merged (confirmed + disputed sweeps + the NEW WS auth #681 / authZ #684 / doc nits #683), and the coordinated production deploy completed (run `26928623817`, `main @ 49875879`) — droplet verified live + `/health` healthy (e2i_api/e2i_frontend/scheduler/workers/feast recreated). `deploy.yml` re-enabled (normal auto-deploy posture restored). Nothing remains open from this review.
 
 > Historical note: the original "Status / actions taken" entries (graph-allowlist shipped; auth fail-open intentional) are now folded into the resolution status above.
 
