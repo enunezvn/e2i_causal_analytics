@@ -180,6 +180,11 @@ class SimulationResult(BaseModel):
     fidelity_warning_reason: Optional[str] = None
     model_fidelity_score: Optional[float] = None
 
+    # Provenance of the effect estimate (e.g. "synthetic_uplift_v1", "rwd_uplift").
+    # None for error/legacy results. Surfaces whether the ATE came from real or
+    # synthetic-DGP-trained uplift, per anti-mocking provenance discipline.
+    data_provenance: Optional[str] = None
+
     # Status
     status: SimulationStatus = SimulationStatus.COMPLETED
     error_message: Optional[str] = None
@@ -230,6 +235,7 @@ class SimulationResult(BaseModel):
             "execution_time_ms": self.execution_time_ms,
             "is_significant": self.is_significant(),
             "effect_direction": self.effect_direction(),
+            "data_provenance": self.data_provenance,
         }
 
 
