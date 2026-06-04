@@ -44,7 +44,7 @@ fail=0; clean=0; skipped=0
 for d in core ml causal chat rag audit; do
   for f in "$ROOT"/database/$d/*.sql; do
     [ -f "$f" ] || continue
-    case "$f" in *_validation_queries.sql) continue ;; esac
+    case "$f" in *_validation_queries.sql|*/rollback_*.sql|*_rollback.sql) continue ;; esac  # utilities, not forward migrations
     key="$d/$(basename "$f")"
     echo "$tracked" | grep -qxF "$key" && continue          # already tracked
     case " $SKIP " in *" $key "*) printf "  ${YELLOW}SKIP${NC} %s (superseded — baseline-only)\n" "$key"; skipped=$((skipped+1)); continue ;; esac

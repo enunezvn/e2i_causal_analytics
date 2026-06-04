@@ -15,6 +15,10 @@
 
 -- Ensure the ml schema exists before any ml.* object is created
 CREATE SCHEMA IF NOT EXISTS ml;
+-- USAGE on the schema is required before any table-level GRANT is exercisable
+-- (public grants USAGE to these roles by default; a new schema does not).
+GRANT USAGE ON SCHEMA ml TO authenticated;
+GRANT USAGE ON SCHEMA ml TO service_role;
 
 -- Enable required extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
