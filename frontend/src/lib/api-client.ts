@@ -593,6 +593,33 @@ export async function delValidated<T extends ZodTypeAny>(
 export { ApiValidationError } from './api-schemas';
 
 /**
+ * Resolve an HTTP(S) or root-relative API URL to an absolute WebSocket URL.
+ *
+ * - `http(s)://host/path` → `ws(s)://host/path` (scheme swap)
+ * - `/api/path` (the default production base is the *relative* `/api`) →
+ *   resolved against the page origin via `loc`, so the WebSocket constructor
+ *   never receives a relative URL.
+ *
+ * The previous `.replace(/^http/, 'ws')` was a no-op on the relative `/api`
+ * base (the string does not start with `http`), so in production it produced
+ * an invalid relative WebSocket URL.
+ */
+export function toWebSocketUrl(
+  httpUrl: string,
+  loc: { protocol: string; host: string } = window.location
+): string {
+  if (/^https:\/\//i.test(httpUrl)) {
+    return httpUrl.replace(/^https:\/\//i, 'wss://');
+  }
+  if (/^http:\/\//i.test(httpUrl)) {
+    return httpUrl.replace(/^http:\/\//i, 'ws://');
+  }
+  const scheme = loc.protocol === 'https:' ? 'wss:' : 'ws:';
+  const path = httpUrl.startsWith('/') ? httpUrl : `/${httpUrl}`;
+  return `${scheme}//${loc.host}${path}`;
+}
+
+/**
  * Create a WebSocket connection to the graph stream endpoint
  * @param onMessage - Callback for incoming messages
  * @param onError - Callback for errors
@@ -604,8 +631,9 @@ export function createGraphWebSocket(
   onError?: (error: Event) => void,
   onClose?: (event: CloseEvent) => void
 ): WebSocket {
-  // Convert HTTP URL to WebSocket URL
-  const wsUrl = buildApiUrl('/graph/stream').replace(/^http/, 'ws');
+  // Resolve to an absolute ws(s):// URL. The relative "/api" base would
+  // otherwise yield an invalid relative WebSocket URL (the old no-op).
+  const wsUrl = toWebSocketUrl(buildApiUrl('/graph/stream'));
   const ws = new WebSocket(wsUrl);
 
   ws.onmessage = (event) => {

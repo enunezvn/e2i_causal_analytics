@@ -1024,6 +1024,56 @@ describe('Wire Schemas (disputed sweep #4)', () => {
       );
     });
 
+    it('PipelineHealthResponseWireSchema preserves data_provenance (faithful mirror of backend)', () => {
+      const payload = {
+        pipeline_health_score: 0.85,
+        total_pipelines: 2,
+        healthy_count: 2,
+        stale_count: 0,
+        failed_count: 0,
+        pipelines: [
+          {
+            pipeline_name: 'etl',
+            last_run: new Date().toISOString(),
+            last_success: new Date().toISOString(),
+            rows_processed: 1000,
+            freshness_hours: 1.5,
+            status: 'healthy',
+          },
+        ],
+        check_latency_ms: 300,
+        data_provenance: 'placeholder',
+      };
+      const parsed = PipelineHealthResponseWireSchema.safeParse(payload);
+      expect(parsed.success).toBe(true);
+      expect(parsed.success && parsed.data.data_provenance).toBe('placeholder');
+    });
+
+    it('AgentHealthResponseWireSchema preserves data_provenance (faithful mirror of backend)', () => {
+      const payload = {
+        agent_health_score: 0.95,
+        total_agents: 13,
+        available_count: 13,
+        unavailable_count: 0,
+        agents: [
+          {
+            agent_name: 'causal_impact',
+            tier: 2,
+            available: true,
+            avg_latency_ms: 120,
+            success_rate: 0.98,
+            invocations_24h: 42,
+          },
+        ],
+        by_tier: { '0': 1, '2': 5 },
+        check_latency_ms: 400,
+        data_provenance: 'placeholder',
+      };
+      const parsed = AgentHealthResponseWireSchema.safeParse(payload);
+      expect(parsed.success).toBe(true);
+      expect(parsed.success && parsed.data.data_provenance).toBe('placeholder');
+    });
+
     it('HealthHistoryResponseWireSchema accepts a valid payload', () => {
       const payload = {
         total_checks: 1,

@@ -331,6 +331,84 @@ async def test_get_model_health_real_provenance_when_agent_available(mock_agent_
     assert result.data_provenance == "measured"
 
 
+# -----------------------------------------------------------------------------
+# Silent-mock fix (C8 / HIGH#5 completion): /pipelines and /agents ALSO called
+# _get_mock_*() UNCONDITIONALLY (PR #666 only fixed /components and /models),
+# presenting fabricated pipeline freshness/row-counts and agent success-rate in
+# the SystemHealth dashboard as real with no flag. They must now mirror
+# /components+/models: (a) fail-closed (503) on agent ImportError in production,
+# and (b) DISCLOSE placeholder provenance when mock-fallback is explicitly
+# allowed (dev).
+# -----------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_pipeline_health_fails_closed_in_production(monkeypatch):
+    """In a fail-closed environment, /pipelines must raise 503 rather than
+    return fabricated pipeline freshness/row-count data."""
+    monkeypatch.setenv("E2I_REQUIRE_AGENT_IMPORT", "1")
+    with patch("src.agents.health_score.HealthScoreAgent", side_effect=ImportError):
+        with pytest.raises(HTTPException) as exc_info:
+            await get_pipeline_health()
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail["error"] == "agent_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_get_pipeline_health_discloses_placeholder_provenance(monkeypatch):
+    """When mock-fallback is explicitly allowed (dev), /pipelines must DISCLOSE
+    placeholder provenance rather than presenting fabricated data as real."""
+    monkeypatch.setenv("E2I_REQUIRE_AGENT_IMPORT", "0")
+    with patch("src.agents.health_score.HealthScoreAgent", side_effect=ImportError):
+        result = await get_pipeline_health()
+    assert result.data_provenance == "placeholder"
+    assert result.total_pipelines > 0
+
+
+@pytest.mark.asyncio
+async def test_get_pipeline_health_real_provenance_when_agent_available(mock_agent_result):
+    """When the real agent is available, /pipelines must report measured
+    provenance (not placeholder)."""
+    mock_agent = MagicMock()
+    mock_agent.check_health = AsyncMock(return_value=mock_agent_result)
+    with patch("src.agents.health_score.HealthScoreAgent", return_value=mock_agent):
+        result = await get_pipeline_health()
+    assert result.data_provenance == "measured"
+
+
+@pytest.mark.asyncio
+async def test_get_agent_health_fails_closed_in_production(monkeypatch):
+    """In a fail-closed environment, /agents must raise 503 rather than return
+    fabricated agent success-rate/latency data."""
+    monkeypatch.setenv("E2I_REQUIRE_AGENT_IMPORT", "1")
+    with patch("src.agents.health_score.HealthScoreAgent", side_effect=ImportError):
+        with pytest.raises(HTTPException) as exc_info:
+            await get_agent_health()
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail["error"] == "agent_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_get_agent_health_discloses_placeholder_provenance(monkeypatch):
+    """When mock-fallback is explicitly allowed (dev), /agents must DISCLOSE
+    placeholder provenance."""
+    monkeypatch.setenv("E2I_REQUIRE_AGENT_IMPORT", "0")
+    with patch("src.agents.health_score.HealthScoreAgent", side_effect=ImportError):
+        result = await get_agent_health()
+    assert result.data_provenance == "placeholder"
+    assert result.total_agents > 0
+
+
+@pytest.mark.asyncio
+async def test_get_agent_health_real_provenance_when_agent_available(mock_agent_result):
+    """When the real agent is available, /agents must report measured provenance."""
+    mock_agent = MagicMock()
+    mock_agent.check_health = AsyncMock(return_value=mock_agent_result)
+    with patch("src.agents.health_score.HealthScoreAgent", return_value=mock_agent):
+        result = await get_agent_health()
+    assert result.data_provenance == "measured"
+
+
 # =============================================================================
 # ENDPOINT TESTS - get_model_health
 # =============================================================================

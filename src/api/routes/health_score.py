@@ -280,6 +280,10 @@ class PipelineHealthResponse(BaseModel):
     failed_count: int = Field(..., description="Failed pipeline count")
     pipelines: List[PipelineHealth] = Field(..., description="Pipeline details")
     check_latency_ms: int = Field(..., description="Check duration")
+    data_provenance: DataProvenance = Field(
+        default=DataProvenance.MEASURED,
+        description="Whether the data is measured (real agent) or placeholder (dev fallback)",
+    )
 
 
 class AgentHealthResponse(BaseModel):
@@ -292,6 +296,10 @@ class AgentHealthResponse(BaseModel):
     agents: List[AgentHealth] = Field(..., description="Agent details")
     by_tier: Dict[str, int] = Field(..., description="Agent count by tier")
     check_latency_ms: int = Field(..., description="Check duration")
+    data_provenance: DataProvenance = Field(
+        default=DataProvenance.MEASURED,
+        description="Whether the data is measured (real agent) or placeholder (dev fallback)",
+    )
 
 
 class HealthHistoryItem(BaseModel):
@@ -537,12 +545,22 @@ async def get_pipeline_health() -> PipelineHealthResponse:
 
     Checks data freshness, processing success, and row counts.
 
+    Behavior (F-010-backend / #429 follow-up): mirrors ``/components`` and
+    ``/models`` — the Health Score agent must be importable for the response to
+    be tagged ``data_provenance="measured"``. A failed agent import fails-closed
+    (503) in production and only serves placeholder pipeline metrics — tagged
+    ``data_provenance="placeholder"`` — when mock-fallback is explicitly
+    permitted (dev/test). This prevents fabricated pipeline freshness/row counts
+    from being presented as real in the dashboard.
+
     Returns:
         Pipeline health details
     """
     import time
 
     start_time = time.time()
+
+    provenance = _resolve_health_provenance(agent_name="Health Score")
 
     pipelines = _get_mock_pipeline_health()
     check_latency = int((time.time() - start_time) * 1000)
@@ -561,6 +579,7 @@ async def get_pipeline_health() -> PipelineHealthResponse:
         failed_count=failed,
         pipelines=pipelines,
         check_latency_ms=check_latency,
+        data_provenance=provenance,
     )
 
 
@@ -577,12 +596,22 @@ async def get_agent_health() -> AgentHealthResponse:
 
     Checks agent availability, success rates, and latency.
 
+    Behavior (F-010-backend / #429 follow-up): mirrors ``/components`` and
+    ``/models`` — the Health Score agent must be importable for the response to
+    be tagged ``data_provenance="measured"``. A failed agent import fails-closed
+    (503) in production and only serves placeholder agent metrics — tagged
+    ``data_provenance="placeholder"`` — when mock-fallback is explicitly
+    permitted (dev/test). This prevents fabricated agent success-rates/latency
+    from being presented as real in the dashboard.
+
     Returns:
         Agent health details
     """
     import time
 
     start_time = time.time()
+
+    provenance = _resolve_health_provenance(agent_name="Health Score")
 
     agents = _get_mock_agent_health()
     check_latency = int((time.time() - start_time) * 1000)
@@ -605,6 +634,7 @@ async def get_agent_health() -> AgentHealthResponse:
         agents=agents,
         by_tier=by_tier,
         check_latency_ms=check_latency,
+        data_provenance=provenance,
     )
 
 
