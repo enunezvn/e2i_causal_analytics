@@ -14,6 +14,10 @@
  */
 
 import { get, post } from '@/lib/api-client';
+import {
+  PolicyListResponseWireSchema,
+  SegmentHealthResponseWireSchema,
+} from '@/lib/api-schemas';
 import type {
   ListPoliciesParams,
   PolicyListResponse,
@@ -129,11 +133,15 @@ export async function getSegmentAnalysis(
 export async function listPolicies(
   params?: ListPoliciesParams
 ): Promise<PolicyListResponse> {
-  return get<PolicyListResponse>(`${SEGMENTS_BASE}/policies`, {
-    min_lift: params?.min_lift,
-    min_confidence: params?.min_confidence,
-    limit: params?.limit,
-  });
+  return get<PolicyListResponse>(
+    `${SEGMENTS_BASE}/policies`,
+    {
+      min_lift: params?.min_lift,
+      min_confidence: params?.min_confidence,
+      limit: params?.limit,
+    },
+    { schema: PolicyListResponseWireSchema }
+  );
 }
 
 // =============================================================================
@@ -158,7 +166,9 @@ export async function listPolicies(
  * ```
  */
 export async function getSegmentHealth(): Promise<SegmentHealthResponse> {
-  return get<SegmentHealthResponse>(`${SEGMENTS_BASE}/health`);
+  return get<SegmentHealthResponse>(`${SEGMENTS_BASE}/health`, undefined, {
+    schema: SegmentHealthResponseWireSchema,
+  });
 }
 
 // =============================================================================

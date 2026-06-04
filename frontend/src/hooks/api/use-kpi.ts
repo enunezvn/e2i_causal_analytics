@@ -375,7 +375,13 @@ export function useInvalidateKPICache(
  */
 export function prefetchKPIList(params?: KPIListParams): Promise<void> {
   return globalQueryClient.prefetchQuery({
-    queryKey: queryKeys.kpi.list(),
+    // Mirror the useKPIList read key EXACTLY (workstream + causal_library) so
+    // the prefetched data lands under the same cache entry the hook reads.
+    queryKey: [
+      ...queryKeys.kpi.list(),
+      params?.workstream ?? null,
+      params?.causal_library ?? null,
+    ] as const,
     queryFn: () => listKPIs(params),
     staleTime: 5 * 60 * 1000,
   });

@@ -315,9 +315,15 @@ export async function getSegmentResults(
   experimentId: string,
   segments?: string[]
 ): Promise<SegmentResultsResponse> {
+  // The backend reads `segments: List[str] = Query(...)` (routes/experiments.py
+  // get_segment_results), which expects repeated keys (`?segments=region&
+  // segments=specialty`). Without `repeatArrayParams` axios v1 serializes the
+  // array as `segments[]=...`, which FastAPI ignores — silently dropping the
+  // requested segments.
   return get<SegmentResultsResponse>(
     `${EXPERIMENTS_BASE}/${encodeURIComponent(experimentId)}/results/segments`,
-    { segments }
+    { segments },
+    { repeatArrayParams: true }
   );
 }
 

@@ -354,13 +354,19 @@ async def lifespan(app: FastAPI):
 
     logger.info("API server ready to accept connections")
 
-    # #609: reset the audit-chain global in a finally around the application run
-    # so it is cleared even on EXCEPTIONAL shutdown and never leaks into a
-    # subsequent same-process lifespan (uvicorn --reload, tests). The remaining
-    # cleanups below run on normal shutdown only (pre-existing behavior).
+    # Run the application, then ALWAYS run shutdown cleanup — on normal AND on
+    # exceptional shutdown. Every cleanup step below is already individually
+    # try/except-wrapped, so consolidating them under a single ``finally`` cannot
+    # make shutdown crash; it only guarantees connections, sockets and pending
+    # traces are released even when startup/run raises. Previously only the
+    # audit-chain reset (#609) lived in the finally and every other cleanup sat
+    # after ``yield`` outside it, so an abnormal shutdown leaked them all.
     try:
         yield  # Application runs here
     finally:
+        # #609: reset the audit-chain global first so it is cleared even on
+        # EXCEPTIONAL shutdown and never leaks into a subsequent same-process
+        # lifespan (uvicorn --reload, tests).
         try:
             from src.agents.base.audit_chain_mixin import set_audit_chain_service
 
@@ -369,61 +375,61 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"Audit chain reset failed: {e}")
 
-    # Shutdown
-    logger.info("E2I Causal Analytics Platform - Shutting down")
+        # Shutdown
+        logger.info("E2I Causal Analytics Platform - Shutting down")
 
-    # Cleanup BentoML client
-    try:
-        await close_bentoml_client()
-        logger.info("BentoML client closed")
-    except Exception as e:
-        logger.warning(f"BentoML client cleanup failed: {e}")
+        # Cleanup BentoML client
+        try:
+            await close_bentoml_client()
+            logger.info("BentoML client closed")
+        except Exception as e:
+            logger.warning(f"BentoML client cleanup failed: {e}")
 
-    # Cleanup Redis connections
-    try:
-        await close_redis()
-        logger.info("Redis connection closed")
-    except Exception as e:
-        logger.warning(f"Redis cleanup failed: {e}")
+        # Cleanup Redis connections
+        try:
+            await close_redis()
+            logger.info("Redis connection closed")
+        except Exception as e:
+            logger.warning(f"Redis cleanup failed: {e}")
 
-    # Cleanup FalkorDB connections
-    try:
-        await close_falkordb()
-        logger.info("FalkorDB connection closed")
-    except Exception as e:
-        logger.warning(f"FalkorDB cleanup failed: {e}")
+        # Cleanup FalkorDB connections
+        try:
+            await close_falkordb()
+            logger.info("FalkorDB connection closed")
+        except Exception as e:
+            logger.warning(f"FalkorDB cleanup failed: {e}")
 
-    # Cleanup Supabase client
-    try:
-        close_supabase()
-        logger.info("Supabase client closed")
-    except Exception as e:
-        logger.warning(f"Supabase cleanup failed: {e}")
+        # Cleanup Supabase client
+        try:
+            close_supabase()
+            logger.info("Supabase client closed")
+        except Exception as e:
+            logger.warning(f"Supabase cleanup failed: {e}")
 
-    # Cleanup Feast client
-    try:
-        if hasattr(app.state, "feast_client") and app.state.feast_client:
-            await app.state.feast_client.close()
-            logger.info("Feast client closed")
-    except Exception as e:
-        logger.warning(f"Feast client cleanup failed: {e}")
+        # Cleanup Feast client
+        try:
+            if hasattr(app.state, "feast_client") and app.state.feast_client:
+                await app.state.feast_client.close()
+                logger.info("Feast client closed")
+        except Exception as e:
+            logger.warning(f"Feast client cleanup failed: {e}")
 
-    # Flush Opik traces before shutdown
-    try:
-        opik_connector = get_opik_connector()
-        opik_connector.flush()
-        logger.info("Opik traces flushed")
-    except Exception as e:
-        logger.warning(f"Opik flush failed: {e}")
+        # Flush Opik traces before shutdown
+        try:
+            opik_connector = get_opik_connector()
+            opik_connector.flush()
+            logger.info("Opik traces flushed")
+        except Exception as e:
+            logger.warning(f"Opik flush failed: {e}")
 
-    # Shutdown OpenTelemetry (flush pending spans)
-    try:
-        shutdown_opentelemetry()
-        logger.info("OpenTelemetry shutdown complete")
-    except Exception as e:
-        logger.warning(f"OpenTelemetry shutdown failed: {e}")
+        # Shutdown OpenTelemetry (flush pending spans)
+        try:
+            shutdown_opentelemetry()
+            logger.info("OpenTelemetry shutdown complete")
+        except Exception as e:
+            logger.warning(f"OpenTelemetry shutdown failed: {e}")
 
-    logger.info("Shutdown complete")
+        logger.info("Shutdown complete")
 
 
 # =============================================================================

@@ -22,8 +22,10 @@ class MockWebSocket {
 
   static instances: MockWebSocket[] = [];
   static lastUrl: string | null = null;
+  static lastProtocols: string | string[] | undefined = undefined;
 
   url: string;
+  protocols: string | string[] | undefined;
   readyState: number = MockWebSocket.CONNECTING;
   onopen: ((event: Event) => void) | null = null;
   onmessage: ((event: MessageEvent) => void) | null = null;
@@ -32,9 +34,11 @@ class MockWebSocket {
   close = vi.fn();
   send = vi.fn();
 
-  constructor(url: string) {
+  constructor(url: string, protocols?: string | string[]) {
     this.url = url;
+    this.protocols = protocols;
     MockWebSocket.lastUrl = url;
+    MockWebSocket.lastProtocols = protocols;
     MockWebSocket.instances.push(this);
   }
 
@@ -166,7 +170,10 @@ describe('useWebSocket', () => {
       expect(MockWebSocket.instances.length).toBe(0);
     });
 
-    it('should include auth token in URL when withAuth is true', async () => {
+    it('should NOT leak auth token in URL query string when withAuth is true', async () => {
+      // Finding #1 [SECURITY]: bearer tokens in the WS URL query string leak via
+      // browser history / proxy logs. The backend graph_stream endpoint does not
+      // read a `token` query param, so removing it does not break auth.
       const onMessage = vi.fn();
       renderHook(() =>
         useWebSocket({
@@ -179,7 +186,61 @@ describe('useWebSocket', () => {
       await waitForConnection();
 
       expect(MockWebSocket.instances.length).toBe(1);
-      expect(MockWebSocket.lastUrl).toContain('token=test-token');
+      expect(MockWebSocket.lastUrl).not.toContain('token=');
+      expect(MockWebSocket.lastUrl).not.toContain('test-token');
+    });
+
+    it('should pass the auth token via the Sec-WebSocket-Protocol subprotocol', async () => {
+      // Finding #1: convey the token out-of-band (subprotocol) instead of the URL.
+      // The browser sends these as `Sec-WebSocket-Protocol` request headers, which
+      // are NOT recorded in browser history or typical proxy access logs.
+      const onMessage = vi.fn();
+      renderHook(() =>
+        useWebSocket({
+          endpoint: '/graph/stream',
+          onMessage,
+          withAuth: true,
+        })
+      );
+
+      await waitForConnection();
+
+      expect(MockWebSocket.instances.length).toBe(1);
+      const protocols = MockWebSocket.instances[0].protocols;
+      const flat = Array.isArray(protocols) ? protocols : protocols ? [protocols] : [];
+      // Two subprotocol values: a sentinel the backend can select, followed by the
+      // base64url-encoded token (raw JWTs contain '.' which is not a valid
+      // subprotocol token char, so it must be encoded).
+      expect(flat[0]).toBe('bearer');
+      expect(flat.length).toBe(2);
+      // base64url('test-token')
+      const expectedEncoded = btoa('test-token')
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/, '');
+      expect(flat[1]).toBe(expectedEncoded);
+    });
+
+    it('should NOT pass a subprotocol when withAuth is true but no session exists', async () => {
+      // Finding #1: only attach the carrier when there is actually a token.
+      const { useAuthStore } = await import('@/stores/auth-store');
+      vi.mocked(useAuthStore.getState).mockReturnValueOnce({
+        session: null,
+      } as ReturnType<typeof useAuthStore.getState>);
+
+      const onMessage = vi.fn();
+      renderHook(() =>
+        useWebSocket({
+          endpoint: '/graph/stream',
+          onMessage,
+          withAuth: true,
+        })
+      );
+
+      await waitForConnection();
+
+      expect(MockWebSocket.instances.length).toBe(1);
+      expect(MockWebSocket.instances[0].protocols).toBeUndefined();
     });
 
     it('should not include auth token when withAuth is false', async () => {
@@ -196,6 +257,7 @@ describe('useWebSocket', () => {
 
       expect(MockWebSocket.instances.length).toBe(1);
       expect(MockWebSocket.lastUrl).not.toContain('token=');
+      expect(MockWebSocket.instances[0].protocols).toBeUndefined();
     });
 
     it('should set state to connected when WebSocket opens', async () => {
@@ -471,6 +533,153 @@ describe('useWebSocket', () => {
 
       // Should have created a new WebSocket instance
       expect(MockWebSocket.instances.length).toBe(2);
+    });
+
+    it('should NOT reconnect on a policy-violation close (1008)', async () => {
+      // Finding #4: auth/policy closes (1008/1003/4xxx) are not in the
+      // RECONNECTABLE_CLOSE_CODES allow-list and must not trigger reconnect.
+      const onMessage = vi.fn();
+      const onReconnect = vi.fn();
+
+      const { result } = renderHook(() =>
+        useWebSocket({
+          endpoint: '/graph/stream',
+          onMessage,
+          onReconnect,
+          autoReconnect: true,
+        })
+      );
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(MockWebSocket.instances.length).toBe(1);
+
+      act(() => {
+        MockWebSocket.instances[0].simulateOpen();
+      });
+
+      act(() => {
+        MockWebSocket.instances[0].simulateClose(1008, 'Policy violation');
+      });
+
+      expect(result.current.state).toBe('disconnected');
+      expect(onReconnect).not.toHaveBeenCalled();
+    });
+
+    it('should NOT reconnect on an application close (4001)', async () => {
+      // Finding #4: 4xxx app-defined closes (e.g. auth failures) must not reconnect.
+      const onMessage = vi.fn();
+      const onReconnect = vi.fn();
+
+      const { result } = renderHook(() =>
+        useWebSocket({
+          endpoint: '/graph/stream',
+          onMessage,
+          onReconnect,
+          autoReconnect: true,
+        })
+      );
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      act(() => {
+        MockWebSocket.instances[0].simulateOpen();
+      });
+
+      act(() => {
+        MockWebSocket.instances[0].simulateClose(4001, 'Auth failed');
+      });
+
+      expect(result.current.state).toBe('disconnected');
+      expect(onReconnect).not.toHaveBeenCalled();
+    });
+
+    it('should apply bounded jitter to the reconnect backoff delay', async () => {
+      // Finding #4: backoff must carry jitter (delay/2 + random*delay/2).
+      // With Math.random -> 0, the scheduled delay is exactly delay/2 of the base.
+      const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
+      const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+
+      const onMessage = vi.fn();
+
+      renderHook(() =>
+        useWebSocket({
+          endpoint: '/graph/stream',
+          onMessage,
+          autoReconnect: true,
+          initialReconnectDelay: 1000,
+        })
+      );
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      act(() => {
+        MockWebSocket.instances[0].simulateOpen();
+      });
+
+      setTimeoutSpy.mockClear();
+
+      act(() => {
+        MockWebSocket.instances[0].simulateClose(1006, 'Abnormal closure');
+      });
+
+      // The reconnect timer should have been scheduled with the jittered delay.
+      const reconnectCall = setTimeoutSpy.mock.calls.find(
+        (call) => typeof call[1] === 'number' && call[1] !== 0
+      );
+      expect(reconnectCall).toBeDefined();
+      // base=1000, random=0 -> 1000/2 + 0 = 500
+      expect(reconnectCall?.[1]).toBe(500);
+
+      randomSpy.mockRestore();
+    });
+
+    it('should keep jittered delay within [delay/2, delay]', async () => {
+      // Finding #4: with Math.random -> ~1, delay approaches the full base value.
+      const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.999999);
+      const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+
+      const onMessage = vi.fn();
+
+      renderHook(() =>
+        useWebSocket({
+          endpoint: '/graph/stream',
+          onMessage,
+          autoReconnect: true,
+          initialReconnectDelay: 1000,
+        })
+      );
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      act(() => {
+        MockWebSocket.instances[0].simulateOpen();
+      });
+
+      setTimeoutSpy.mockClear();
+
+      act(() => {
+        MockWebSocket.instances[0].simulateClose(1006, 'Abnormal closure');
+      });
+
+      const reconnectCall = setTimeoutSpy.mock.calls.find(
+        (call) => typeof call[1] === 'number' && call[1] !== 0
+      );
+      expect(reconnectCall).toBeDefined();
+      const delay = reconnectCall?.[1] as number;
+      // base=1000 -> jittered delay in [500, 1000]
+      expect(delay).toBeGreaterThanOrEqual(500);
+      expect(delay).toBeLessThanOrEqual(1000);
+
+      randomSpy.mockRestore();
     });
 
     it('should not reconnect on normal close (1000)', async () => {

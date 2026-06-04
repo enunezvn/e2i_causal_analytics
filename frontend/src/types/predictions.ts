@@ -94,6 +94,13 @@ export interface PredictionResponse {
   model_version?: string;
   /** Prediction timestamp (ISO 8601) */
   timestamp: string;
+  /**
+   * Telemetry tag describing where the prediction's features came from:
+   * 'feast_online' when the route fetched features from the Feast online store,
+   * or 'user_provided' when the caller supplied them directly. Undefined for
+   * paths that predate this contract.
+   */
+  feature_source?: string;
 }
 
 /**

@@ -40,7 +40,8 @@ vi.mock('@/lib/query-client', () => ({
     digitalTwin: {
       all: () => ['e2i', 'digitalTwin'] as const,
       simulation: (id: string) => ['e2i', 'digitalTwin', 'simulation', id] as const,
-      history: (brand?: string) => ['e2i', 'digitalTwin', 'history', brand] as const,
+      history: (params?: { limit?: number; offset?: number }) =>
+        ['e2i', 'digitalTwin', 'history', params?.limit ?? 20, params?.offset ?? 0] as const,
       health: () => ['e2i', 'digitalTwin', 'health'] as const,
     },
   },
@@ -500,13 +501,24 @@ describe('prefetchSimulationHistory', () => {
     vi.clearAllMocks();
   });
 
-  it('prefetches simulation history', async () => {
+  it('prefetches simulation history with default (no) params, matching the hook read key', async () => {
     vi.mocked(digitalTwinApi.getSimulationHistory).mockResolvedValueOnce(mockSimulationHistoryResponse);
     const queryClient = createTestQueryClient();
 
     await prefetchSimulationHistory(queryClient);
 
-    expect(digitalTwinApi.getSimulationHistory).toHaveBeenCalledWith({ limit: 10 });
+    // No params => fetcher called with undefined so the prefetch key matches
+    // useSimulationHistory()'s default read key (limit=20, offset=0).
+    expect(digitalTwinApi.getSimulationHistory).toHaveBeenCalledWith(undefined);
+  });
+
+  it('forwards limit/offset params to the fetcher', async () => {
+    vi.mocked(digitalTwinApi.getSimulationHistory).mockResolvedValueOnce(mockSimulationHistoryResponse);
+    const queryClient = createTestQueryClient();
+
+    await prefetchSimulationHistory(queryClient, { limit: 25, offset: 50 });
+
+    expect(digitalTwinApi.getSimulationHistory).toHaveBeenCalledWith({ limit: 25, offset: 50 });
   });
 
   it('populates query cache after prefetch', async () => {

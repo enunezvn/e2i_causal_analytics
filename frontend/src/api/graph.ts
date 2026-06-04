@@ -18,6 +18,10 @@
  */
 
 import { get, post } from '@/lib/api-client';
+import {
+  GraphHealthResponseWireSchema,
+  GraphStatsResponseWireSchema,
+} from '@/lib/api-schemas';
 import type {
   AddEpisodeRequest,
   AddEpisodeResponse,
@@ -319,7 +323,9 @@ export async function searchGraph(
  * ```
  */
 export async function getGraphStats(): Promise<GraphStatsResponse> {
-  return get<GraphStatsResponse>(`${GRAPH_BASE}/stats`);
+  return get<GraphStatsResponse>(`${GRAPH_BASE}/stats`, undefined, {
+    schema: GraphStatsResponseWireSchema,
+  });
 }
 
 // =============================================================================
@@ -343,5 +349,7 @@ export async function getGraphStats(): Promise<GraphStatsResponse> {
  * ```
  */
 export async function getGraphHealth(): Promise<GraphHealthResponse> {
-  return get<GraphHealthResponse>(`${GRAPH_BASE}/health`);
+  return get<GraphHealthResponse>(`${GRAPH_BASE}/health`, undefined, {
+    schema: GraphHealthResponseWireSchema,
+  });
 }

@@ -13,7 +13,7 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 -- Table: audit_chain_entries
 -- Core hash-linked audit trail for agent actions
 -- ============================================================================
-CREATE TABLE audit_chain_entries (
+CREATE TABLE IF NOT EXISTS audit_chain_entries (
     -- Primary identification
     entry_id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     workflow_id         UUID NOT NULL,            -- Groups entries by workflow execution
@@ -59,18 +59,18 @@ CREATE TABLE audit_chain_entries (
 -- ============================================================================
 -- Indexes for common query patterns
 -- ============================================================================
-CREATE INDEX idx_audit_chain_workflow ON audit_chain_entries(workflow_id, sequence_number);
-CREATE INDEX idx_audit_chain_agent ON audit_chain_entries(agent_name, created_at);
-CREATE INDEX idx_audit_chain_created ON audit_chain_entries(created_at);
-CREATE INDEX idx_audit_chain_brand ON audit_chain_entries(brand, created_at);
-CREATE INDEX idx_audit_chain_validation ON audit_chain_entries(validation_passed, created_at);
-CREATE INDEX idx_audit_chain_tier ON audit_chain_entries(agent_tier);
+CREATE INDEX IF NOT EXISTS idx_audit_chain_workflow ON audit_chain_entries(workflow_id, sequence_number);
+CREATE INDEX IF NOT EXISTS idx_audit_chain_agent ON audit_chain_entries(agent_name, created_at);
+CREATE INDEX IF NOT EXISTS idx_audit_chain_created ON audit_chain_entries(created_at);
+CREATE INDEX IF NOT EXISTS idx_audit_chain_brand ON audit_chain_entries(brand, created_at);
+CREATE INDEX IF NOT EXISTS idx_audit_chain_validation ON audit_chain_entries(validation_passed, created_at);
+CREATE INDEX IF NOT EXISTS idx_audit_chain_tier ON audit_chain_entries(agent_tier);
 
 -- ============================================================================
 -- Table: audit_chain_verification_log
 -- Records when chain integrity was verified (for auditors)
 -- ============================================================================
-CREATE TABLE audit_chain_verification_log (
+CREATE TABLE IF NOT EXISTS audit_chain_verification_log (
     verification_id     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     verified_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
     workflow_id         UUID,                     -- NULL = full chain verification
@@ -82,9 +82,9 @@ CREATE TABLE audit_chain_verification_log (
     verification_notes  TEXT
 );
 
-CREATE INDEX idx_verification_log_workflow ON audit_chain_verification_log(workflow_id);
-CREATE INDEX idx_verification_log_date ON audit_chain_verification_log(verified_at);
-CREATE INDEX idx_verification_log_valid ON audit_chain_verification_log(chain_valid);
+CREATE INDEX IF NOT EXISTS idx_verification_log_workflow ON audit_chain_verification_log(workflow_id);
+CREATE INDEX IF NOT EXISTS idx_verification_log_date ON audit_chain_verification_log(verified_at);
+CREATE INDEX IF NOT EXISTS idx_verification_log_valid ON audit_chain_verification_log(chain_valid);
 
 -- ============================================================================
 -- Function: compute_entry_hash
@@ -243,7 +243,7 @@ $$ LANGUAGE plpgsql;
 -- View: v_audit_chain_summary
 -- Quick overview of workflows with chain status
 -- ============================================================================
-CREATE VIEW v_audit_chain_summary AS
+CREATE OR REPLACE VIEW v_audit_chain_summary AS
 SELECT
     workflow_id,
     MIN(created_at) AS workflow_start,
@@ -267,7 +267,7 @@ COMMENT ON VIEW v_audit_chain_summary IS
 -- View: v_causal_validation_chain
 -- Specialized view for Tier 2 causal agent validation chains
 -- ============================================================================
-CREATE VIEW v_causal_validation_chain AS
+CREATE OR REPLACE VIEW v_causal_validation_chain AS
 SELECT
     ace.workflow_id,
     ace.sequence_number,
@@ -295,7 +295,7 @@ COMMENT ON VIEW v_causal_validation_chain IS
 -- View: v_audit_chain_daily_stats
 -- Daily statistics for monitoring and dashboards
 -- ============================================================================
-CREATE VIEW v_audit_chain_daily_stats AS
+CREATE OR REPLACE VIEW v_audit_chain_daily_stats AS
 SELECT
     DATE(created_at) AS date,
     COUNT(DISTINCT workflow_id) AS workflows_count,

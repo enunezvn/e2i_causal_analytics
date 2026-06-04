@@ -113,8 +113,11 @@ class HierarchicalAnalysisRequest(BaseModel):
         description="Variables that modify treatment effect",
     )
     data_source: str = Field(
-        default="mock_data",
-        description="Data source identifier",
+        default="default",
+        description=(
+            "Data source identifier (a passthrough label/tag; does NOT trigger "
+            "mock data — actual records come from `filters`/`estimation_data`)"
+        ),
     )
     filters: Optional[Dict[str, Any]] = Field(
         default=None,
@@ -363,7 +366,10 @@ class SequentialPipelineRequest(BaseModel):
     treatment_var: str = Field(..., description="Treatment variable")
     outcome_var: str = Field(..., description="Outcome variable")
     covariates: List[str] = Field(default_factory=list, description="Covariate variables")
-    data_source: str = Field(default="mock_data", description="Data source")
+    data_source: str = Field(
+        default="default",
+        description="Data source label/tag (passthrough; does NOT trigger mock data)",
+    )
     filters: Optional[Dict[str, Any]] = Field(None, description="Data filters")
 
     # Pipeline configuration
@@ -475,7 +481,10 @@ class ParallelPipelineRequest(BaseModel):
     treatment_var: str = Field(..., description="Treatment variable")
     outcome_var: str = Field(..., description="Outcome variable")
     covariates: List[str] = Field(default_factory=list, description="Covariate variables")
-    data_source: str = Field(default="mock_data", description="Data source")
+    data_source: str = Field(
+        default="default",
+        description="Data source label/tag (passthrough; does NOT trigger mock data)",
+    )
     filters: Optional[Dict[str, Any]] = Field(None, description="Data filters")
 
     # Parallel configuration
@@ -569,7 +578,10 @@ class CrossValidationRequest(BaseModel):
     treatment_var: str = Field(..., description="Treatment variable")
     outcome_var: str = Field(..., description="Outcome variable")
     covariates: List[str] = Field(default_factory=list, description="Covariate variables")
-    data_source: str = Field(default="mock_data", description="Data source")
+    data_source: str = Field(
+        default="default",
+        description="Data source label/tag (passthrough; does NOT trigger mock data)",
+    )
 
     # Validation configuration
     primary_library: CausalLibrary = Field(..., description="Primary library for validation")

@@ -124,9 +124,9 @@ CREATE TABLE IF NOT EXISTS ml_experiments (
     CONSTRAINT valid_precision CHECK (minimum_precision_at_k BETWEEN 0 AND 1.0)
 );
 
-CREATE INDEX idx_ml_experiments_name ON ml_experiments(experiment_name);
-CREATE INDEX idx_ml_experiments_mlflow_id ON ml_experiments(mlflow_experiment_id);
-CREATE INDEX idx_ml_experiments_brand ON ml_experiments(brand);
+CREATE INDEX IF NOT EXISTS idx_ml_experiments_name ON ml_experiments(experiment_name);
+CREATE INDEX IF NOT EXISTS idx_ml_experiments_mlflow_id ON ml_experiments(mlflow_experiment_id);
+CREATE INDEX IF NOT EXISTS idx_ml_experiments_brand ON ml_experiments(brand);
 
 -- ============================================================================
 -- TABLE 2: ml_model_registry
@@ -177,10 +177,10 @@ CREATE TABLE IF NOT EXISTS ml_model_registry (
     CONSTRAINT valid_model_auc CHECK (auc BETWEEN 0 AND 1.0)
 );
 
-CREATE INDEX idx_ml_registry_experiment ON ml_model_registry(experiment_id);
-CREATE INDEX idx_ml_registry_name ON ml_model_registry(model_name);
-CREATE INDEX idx_ml_registry_stage ON ml_model_registry(stage);
-CREATE INDEX idx_ml_registry_champion ON ml_model_registry(is_champion) WHERE is_champion = TRUE;
+CREATE INDEX IF NOT EXISTS idx_ml_registry_experiment ON ml_model_registry(experiment_id);
+CREATE INDEX IF NOT EXISTS idx_ml_registry_name ON ml_model_registry(model_name);
+CREATE INDEX IF NOT EXISTS idx_ml_registry_stage ON ml_model_registry(stage);
+CREATE INDEX IF NOT EXISTS idx_ml_registry_champion ON ml_model_registry(is_champion) WHERE is_champion = TRUE;
 
 -- ============================================================================
 -- TABLE 3: ml_training_runs
@@ -232,10 +232,10 @@ CREATE TABLE IF NOT EXISTS ml_training_runs (
     is_best_trial BOOLEAN DEFAULT FALSE
 );
 
-CREATE INDEX idx_training_runs_experiment ON ml_training_runs(experiment_id);
-CREATE INDEX idx_training_runs_mlflow ON ml_training_runs(mlflow_run_id);
-CREATE INDEX idx_training_runs_status ON ml_training_runs(status);
-CREATE INDEX idx_training_runs_best ON ml_training_runs(is_best_trial) WHERE is_best_trial = TRUE;
+CREATE INDEX IF NOT EXISTS idx_training_runs_experiment ON ml_training_runs(experiment_id);
+CREATE INDEX IF NOT EXISTS idx_training_runs_mlflow ON ml_training_runs(mlflow_run_id);
+CREATE INDEX IF NOT EXISTS idx_training_runs_status ON ml_training_runs(status);
+CREATE INDEX IF NOT EXISTS idx_training_runs_best ON ml_training_runs(is_best_trial) WHERE is_best_trial = TRUE;
 
 -- ============================================================================
 -- TABLE 4: ml_feature_store
@@ -278,10 +278,10 @@ CREATE TABLE IF NOT EXISTS ml_feature_store (
     CONSTRAINT unique_feature_version UNIQUE(feature_name, feature_version)
 );
 
-CREATE INDEX idx_feature_store_name ON ml_feature_store(feature_name);
-CREATE INDEX idx_feature_store_group ON ml_feature_store(feature_group);
-CREATE INDEX idx_feature_store_entity ON ml_feature_store(entity_type);
-CREATE INDEX idx_feature_store_importance ON ml_feature_store(importance_rank);
+CREATE INDEX IF NOT EXISTS idx_feature_store_name ON ml_feature_store(feature_name);
+CREATE INDEX IF NOT EXISTS idx_feature_store_group ON ml_feature_store(feature_group);
+CREATE INDEX IF NOT EXISTS idx_feature_store_entity ON ml_feature_store(entity_type);
+CREATE INDEX IF NOT EXISTS idx_feature_store_importance ON ml_feature_store(importance_rank);
 
 -- ============================================================================
 -- TABLE 5: ml_data_quality_reports
@@ -334,11 +334,11 @@ CREATE TABLE IF NOT EXISTS ml_data_quality_reports (
     training_run_id UUID REFERENCES ml_training_runs(id)
 );
 
-CREATE INDEX idx_dq_reports_suite ON ml_data_quality_reports(expectation_suite_name);
-CREATE INDEX idx_dq_reports_table ON ml_data_quality_reports(table_name);
-CREATE INDEX idx_dq_reports_status ON ml_data_quality_reports(overall_status);
-CREATE INDEX idx_dq_reports_split ON ml_data_quality_reports(data_split);
-CREATE INDEX idx_dq_reports_run ON ml_data_quality_reports(training_run_id);
+CREATE INDEX IF NOT EXISTS idx_dq_reports_suite ON ml_data_quality_reports(expectation_suite_name);
+CREATE INDEX IF NOT EXISTS idx_dq_reports_table ON ml_data_quality_reports(table_name);
+CREATE INDEX IF NOT EXISTS idx_dq_reports_status ON ml_data_quality_reports(overall_status);
+CREATE INDEX IF NOT EXISTS idx_dq_reports_split ON ml_data_quality_reports(data_split);
+CREATE INDEX IF NOT EXISTS idx_dq_reports_run ON ml_data_quality_reports(training_run_id);
 
 -- ============================================================================
 -- TABLE 6: ml_shap_analyses
@@ -384,10 +384,10 @@ CREATE TABLE IF NOT EXISTS ml_shap_analyses (
     data_split data_split_type DEFAULT 'test'
 );
 
-CREATE INDEX idx_shap_model ON ml_shap_analyses(model_registry_id);
-CREATE INDEX idx_shap_type ON ml_shap_analyses(analysis_type);
-CREATE INDEX idx_shap_segment ON ml_shap_analyses(segment_name);
-CREATE INDEX idx_shap_entity ON ml_shap_analyses(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_shap_model ON ml_shap_analyses(model_registry_id);
+CREATE INDEX IF NOT EXISTS idx_shap_type ON ml_shap_analyses(analysis_type);
+CREATE INDEX IF NOT EXISTS idx_shap_segment ON ml_shap_analyses(segment_name);
+CREATE INDEX IF NOT EXISTS idx_shap_entity ON ml_shap_analyses(entity_type, entity_id);
 
 -- ============================================================================
 -- TABLE 7: ml_deployments
@@ -433,10 +433,10 @@ CREATE TABLE IF NOT EXISTS ml_deployments (
     error_rate DECIMAL(5,4)
 );
 
-CREATE INDEX idx_deployments_model ON ml_deployments(model_registry_id);
-CREATE INDEX idx_deployments_env ON ml_deployments(environment);
-CREATE INDEX idx_deployments_status ON ml_deployments(status);
-CREATE INDEX idx_deployments_active ON ml_deployments(status) WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_deployments_model ON ml_deployments(model_registry_id);
+CREATE INDEX IF NOT EXISTS idx_deployments_env ON ml_deployments(environment);
+CREATE INDEX IF NOT EXISTS idx_deployments_status ON ml_deployments(status);
+CREATE INDEX IF NOT EXISTS idx_deployments_active ON ml_deployments(status) WHERE status = 'active';
 
 -- ============================================================================
 -- TABLE 8: ml_observability_spans
@@ -490,12 +490,12 @@ CREATE TABLE IF NOT EXISTS ml_observability_spans (
     CONSTRAINT unique_span UNIQUE(trace_id, span_id)
 );
 
-CREATE INDEX idx_obs_spans_trace ON ml_observability_spans(trace_id);
-CREATE INDEX idx_obs_spans_agent ON ml_observability_spans(agent_name);
-CREATE INDEX idx_obs_spans_tier ON ml_observability_spans(agent_tier);
-CREATE INDEX idx_obs_spans_time ON ml_observability_spans(started_at);
-CREATE INDEX idx_obs_spans_status ON ml_observability_spans(status);
-CREATE INDEX idx_obs_spans_fallback ON ml_observability_spans(fallback_used) WHERE fallback_used = TRUE;
+CREATE INDEX IF NOT EXISTS idx_obs_spans_trace ON ml_observability_spans(trace_id);
+CREATE INDEX IF NOT EXISTS idx_obs_spans_agent ON ml_observability_spans(agent_name);
+CREATE INDEX IF NOT EXISTS idx_obs_spans_tier ON ml_observability_spans(agent_tier);
+CREATE INDEX IF NOT EXISTS idx_obs_spans_time ON ml_observability_spans(started_at);
+CREATE INDEX IF NOT EXISTS idx_obs_spans_status ON ml_observability_spans(status);
+CREATE INDEX IF NOT EXISTS idx_obs_spans_fallback ON ml_observability_spans(fallback_used) WHERE fallback_used = TRUE;
 
 -- ============================================================================
 -- VIEWS FOR COMMON QUERIES
@@ -616,10 +616,12 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS tr_ml_experiments_updated ON ml_experiments;
 CREATE TRIGGER tr_ml_experiments_updated
     BEFORE UPDATE ON ml_experiments
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
+DROP TRIGGER IF EXISTS tr_ml_feature_store_updated ON ml_feature_store;
 CREATE TRIGGER tr_ml_feature_store_updated
     BEFORE UPDATE ON ml_feature_store
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
@@ -639,6 +641,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS tr_single_champion ON ml_model_registry;
 CREATE TRIGGER tr_single_champion
     BEFORE INSERT OR UPDATE ON ml_model_registry
     FOR EACH ROW EXECUTE FUNCTION ensure_single_champion();

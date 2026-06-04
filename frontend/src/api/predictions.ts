@@ -14,6 +14,10 @@
  */
 
 import { get, post } from '@/lib/api-client';
+import {
+  ModelEndpointHealthWireSchema,
+  ModelsStatusResponseWireSchema,
+} from '@/lib/api-schemas';
 import type {
   BatchPredictionRequest,
   BatchPredictionResponse,
@@ -114,7 +118,9 @@ export async function getModelHealth(
   modelName: string
 ): Promise<ModelEndpointHealth> {
   return get<ModelEndpointHealth>(
-    `${MODELS_BASE}/${encodeURIComponent(modelName)}/health`
+    `${MODELS_BASE}/${encodeURIComponent(modelName)}/health`,
+    undefined,
+    { schema: ModelEndpointHealthWireSchema }
   );
 }
 
@@ -134,6 +140,12 @@ export async function getModelHealth(
 export async function getModelInfo(
   modelName: string
 ): Promise<ModelInfoResponse> {
+  // NOTE: intentionally NOT runtime-validated. The backend GET /models/{name}/info
+  // route declares no Pydantic response_model — it returns the BentoML /metadata
+  // JSON verbatim, so the shape (including whether `name` is present) is not
+  // contract-guaranteed. A `name`-required wire schema would false-reject valid
+  // 200 responses. Wire a schema here only once the backend anchors this route
+  // with a response_model. See the DEFERRED note in lib/api-schemas.ts.
   return get<ModelInfoResponse>(
     `${MODELS_BASE}/${encodeURIComponent(modelName)}/info`
   );
@@ -157,7 +169,14 @@ export async function getModelInfo(
 export async function getModelsStatus(
   models?: string[]
 ): Promise<ModelsStatusResponse> {
-  return get<ModelsStatusResponse>(`${MODELS_BASE}/status`, {
-    models: models?.join(','),
-  });
+  // The backend reads `models: Optional[List[str]] = Query(...)` (routes/
+  // predictions.py models_status), which expects repeated keys
+  // (`?models=churn_model&models=conversion_model`). A comma-joined single
+  // value would be parsed by FastAPI as one model named "churn_model,
+  // conversion_model"; `repeatArrayParams` sends the array as repeated keys.
+  return get<ModelsStatusResponse>(
+    `${MODELS_BASE}/status`,
+    { models },
+    { schema: ModelsStatusResponseWireSchema, repeatArrayParams: true }
+  );
 }

@@ -116,6 +116,7 @@ CREATE INDEX IF NOT EXISTS idx_chatbot_analytics_dashboard
 -- Enable RLS
 ALTER TABLE public.chatbot_analytics ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS chatbot_analytics_service_all ON public.chatbot_analytics;
 -- Service role has full access (for analytics aggregation)
 CREATE POLICY chatbot_analytics_service_all ON public.chatbot_analytics
     FOR ALL
@@ -123,6 +124,7 @@ CREATE POLICY chatbot_analytics_service_all ON public.chatbot_analytics
     USING (true)
     WITH CHECK (true);
 
+DROP POLICY IF EXISTS chatbot_analytics_insert_own ON public.chatbot_analytics;
 -- Anonymous/authenticated can insert their own analytics
 CREATE POLICY chatbot_analytics_insert_own ON public.chatbot_analytics
     FOR INSERT
@@ -144,7 +146,7 @@ RETURNS TABLE (
     p95_response_time_ms NUMERIC,
     error_rate NUMERIC,
     query_type_distribution JSONB,
-    top_tools_used JSONB
+    top_tools JSONB  -- reconciled to deployed column name (was top_tools_used)
 ) AS $$
 BEGIN
     RETURN QUERY

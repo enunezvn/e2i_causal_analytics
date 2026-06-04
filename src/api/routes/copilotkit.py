@@ -229,7 +229,7 @@ from copilotkit.integrations.fastapi import (
 from copilotkit.langgraph import copilotkit_emit_message, copilotkit_emit_state
 from copilotkit.langgraph_agui_agent import LangGraphAGUIAgent as _LangGraphAGUIAgent
 from copilotkit.sdk import COPILOTKIT_SDK_VERSION
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
@@ -3702,7 +3702,7 @@ async def submit_feedback(
 @router.get("/feedback/stats", summary="Get feedback statistics", operation_id="get_feedback_stats")
 async def get_feedback_stats(
     agent_name: Optional[str] = None,
-    days: int = 30,
+    days: int = Query(default=30, ge=1, le=90, description="Days of history"),
     _user: dict = Depends(require_viewer),
 ) -> Dict[str, Any]:
     """
@@ -3745,7 +3745,7 @@ async def get_feedback_stats(
 
 @router.get("/analytics/usage", summary="Get usage analytics", operation_id="get_usage_analytics")
 async def get_usage_analytics(
-    days: int = 7,
+    days: int = Query(default=7, ge=1, le=90, description="Days of history"),
     _user: dict = Depends(require_viewer),
 ) -> Dict[str, Any]:
     """
@@ -3798,7 +3798,7 @@ async def get_usage_analytics(
 @router.get("/analytics/agents", summary="Get agent analytics", operation_id="get_agent_analytics")
 async def get_agent_analytics(
     agent_name: Optional[str] = None,
-    days: int = 30,
+    days: int = Query(default=30, ge=1, le=90, description="Days of history"),
     _user: dict = Depends(require_viewer),
 ) -> Dict[str, Any]:
     """
@@ -3838,7 +3838,7 @@ async def get_agent_analytics(
 
 @router.get("/analytics/errors", summary="Get error analytics", operation_id="get_error_analytics")
 async def get_error_analytics(
-    limit: int = 20,
+    limit: int = Query(default=20, ge=1, le=200, description="Max errors to return"),
     _user: dict = Depends(require_viewer),
 ) -> Dict[str, Any]:
     """
@@ -3878,7 +3878,7 @@ async def get_error_analytics(
     "/analytics/hourly", summary="Get hourly usage pattern", operation_id="get_hourly_pattern"
 )
 async def get_hourly_pattern(
-    days: int = 7,
+    days: int = Query(default=7, ge=1, le=90, description="Days of history"),
     _user: dict = Depends(require_viewer),
 ) -> Dict[str, Any]:
     """
