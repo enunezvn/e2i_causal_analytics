@@ -192,6 +192,10 @@ ALTER TABLE security_audit_log ENABLE ROW LEVEL SECURITY;
 -- could never be applied as written (CREATE POLICY validates the referenced
 -- relation, and user_roles does not exist). Repointed to the real RBAC source
 -- so the policy is creatable and enforces the intended "admins read all" rule.
+-- (The user_role enum has no `security_admin`, so the original two-role list
+-- collapses to `admin`. An inline `cup.role = 'admin'` is used rather than the
+-- canonical has_role('admin') so the policy carries no dependency on chat/036's
+-- function during a fresh-deploy scour, where audit/ sorts before chat/.)
 -- CREATE POLICY is not idempotent, so each policy is dropped-if-exists first to
 -- make this migration safe to re-run.
 DROP POLICY IF EXISTS security_audit_admin_read ON security_audit_log;

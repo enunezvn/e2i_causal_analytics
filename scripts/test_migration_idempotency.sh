@@ -157,8 +157,11 @@ test_one "ml/013 tool_composer" "database/ml/013_tool_composer_tables.sql" \
 # ml/017_model_monitoring_tables.sql — HALF-APPLIED (drift_history + 3 enums
 #   present; 4 monitoring tables + alert_status_enum missing). FK deps required.
 # ---------------------------------------------------------------------------
+# stage is prod's model_stage_enum (not text) — scaffold it faithfully so a
+# future ml/017 change that needs the real enum can't pass on a text false-green.
 test_one "ml/017 model_monitoring" "database/ml/017_model_monitoring_tables.sql" \
-"CREATE TABLE ml_model_registry (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), model_name varchar, stage text);
+"CREATE TYPE model_stage_enum AS ENUM ('development','staging','shadow','production','archived','deprecated');
+ CREATE TABLE ml_model_registry (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), model_name varchar, stage model_stage_enum);
  CREATE TABLE ml_experiments (id uuid PRIMARY KEY DEFAULT gen_random_uuid());
  CREATE TABLE ml_deployments (id uuid PRIMARY KEY DEFAULT gen_random_uuid());
  CREATE TABLE ml_training_runs (id uuid PRIMARY KEY DEFAULT gen_random_uuid());" \
