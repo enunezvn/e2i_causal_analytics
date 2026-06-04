@@ -17,6 +17,9 @@ Follow-up sessions after the initial fix sweep drove the remaining confirmed fin
   - **C21** (segment-analysis durability) — **COMPLETED**: replaced the in-memory store with a Redis-backed durable store (graceful in-memory fallback, NaN/Inf-safe serialization, key-existence eviction, `/health` `storage_mode`) — **PR #674** (+ round-2 hardening; codex ACCEPT after 2 adversarial rounds).
   - **C31** (frontend blind-cast) — **COMPLETED**: opt-in Zod runtime validation wired into the KPI/predictions/monitoring/causal/graph clients (**#671**) and segments/resources/memory/rag/health-score (**#677**). Unmodeled passthroughs (`getModelInfo`, `/memory/stats`, `/v1/rag/stats`) are deliberately **deferred** — a strict schema there would false-reject valid responses.
   - **C23 swallow** (analytics zeroed-metrics fail-open) — **FIXED**: returns an honest **503** on metrics-fetch failure instead of fabricated zeros — **PR #670** (endpoint stays public per the owner decision; only error handling changed).
+
+> **⚠️ Correction (2026-06-04, post-archive re-verification — 16-agent Workflow + hand-check).** This closeout **over-claimed C8 / finding #5**: it credited PR #666 with all *four* health-score detail endpoints, but #666 only gated `/components`+`/models`. `/health-score/pipelines` and `/health-score/agents` kept calling `_get_mock_*()` unconditionally — returning unlabeled fabricated freshness/row-counts and agent success-rates on a prod-reachable path (rendered live by `SystemHealth.tsx`). **Completed in PR #689** (`b6b9b6c8`, merged `0474499e`): both endpoints now call `_resolve_health_provenance` (fail-closed **503** in prod on agent `ImportError`; `data_provenance="placeholder"` in dev) with a `data_provenance` field, mirroring `/components`+`/models`; +6 backend + 6 FE TDD tests; FE wire-schema parity; the vestigial `createGraphWebSocket` no-op was tidied into an exported `toWebSocketUrl()`. Deployed (run `26948475187`) and **verified live** in the `e2i_api` container (`_resolve_health_provenance` now called at 4 sites). Net: confirmed findings are now genuinely **34 FIXED + 3 owner-decisions**. See finding #5.
+
 - **3 OWNER-DECISIONS — intentional, unchanged:** auth fail-open when Supabase unconfigured (**C1/C9** — fail-closed previously broke connectivity; do NOT add a prod guard); `GET /api/monitoring/alerts` public (**C37**); `GET /api/analytics/dashboard` *public-access* aspect (**C23-public**). Disproof confirmed authed users are unaffected.
 
 **Disputed findings (33): re-triaged against merged code, then swept.**
@@ -46,7 +49,8 @@ The **8 rejected** findings were cleared.
 | #663 | C2, C18, C24 (cognitive), C36 |
 | #664 | C3/C7, C13 (Cypher injection), C27 |
 | #665 | C20, C21 *(bounded)*, C22, C25 (experiments/causal), C28, C30, C34, C35 |
-| #666 | C4, C5, C8, C19, C25 (digital-twin) — also fixed disputed compare/history routes |
+| #666 | C4, C5, **C8 *(partial: /components+/models only)***, C19, C25 (digital-twin) — also fixed disputed compare/history routes |
+| #689 | **C8 completion** — provenance-gate /health-score/pipelines + /agents (fail-closed 503 / placeholder); FE wire-schema parity; createGraphWebSocket → toWebSocketUrl |
 | #670 | **C23 swallow** → honest 503 (analytics fail-open) |
 | #671 | **C31 completion** — FE validation (kpi/predictions/monitoring/causal/graph) |
 | #673 | aiohttp **CVE-2026-34993** bump (incidental) |
@@ -72,7 +76,9 @@ The **8 rejected** findings were cleared.
 **Only an operational item remains:**
 1. **Ops — coordinated deploy.** `deploy.yml` was temporarily disabled for this multi-session work (**prod == dev == `e2i-analytics-prod`** — a push-triggered deploy `git reset --hard`s the shared main checkout). Re-enable it (`gh workflow enable deploy.yml`) and run **one coordinated `workflow_dispatch` deploy** of `origin/main` (which now carries #681/#683/#684 + the parallel #672 migration infra + #668 memory fixes) once the parallel session reaches a stopping point and the main checkout is verified clean. The merged fix worktrees have been reaped.
 
-**Archival status:** ✅ **ARCHIVED 2026-06-04** to `docs/Archive/`. All code findings FIXED + merged (confirmed + disputed sweeps + the NEW WS auth #681 / authZ #684 / doc nits #683), and the coordinated production deploy completed (run `26928623817`, `main @ 49875879`) — droplet verified live + `/health` healthy (e2i_api/e2i_frontend/scheduler/workers/feast recreated). `deploy.yml` re-enabled (normal auto-deploy posture restored). Nothing remains open from this review.
+**Archival status:** ✅ **ARCHIVED 2026-06-04** to `docs/Archive/`. All code findings FIXED + merged (confirmed + disputed sweeps + the NEW WS auth #681 / authZ #684 / doc nits #683), and the coordinated production deploy completed (run `26928623817`, `main @ 49875879`) — droplet verified live + `/health` healthy (e2i_api/e2i_frontend/scheduler/workers/feast recreated). `deploy.yml` re-enabled (normal auto-deploy posture restored).
+
+> **Correction (2026-06-04):** archival was premature — a post-archive re-verification found C8/finding #5 was only 2/4 complete (see the C8 correction note in the Resolution status section). The remaining `/pipelines`+`/agents` silent-mock was closed by **PR #689** and deployed (run `26948475187`, verified live). **With #689 merged + deployed, nothing remains open from this review.**
 
 > Historical note: the original "Status / actions taken" entries (graph-allowlist shipped; auth fail-open intentional) are now folded into the resolution status above.
 
@@ -144,6 +150,7 @@ The **8 rejected** findings were cleared.
 - **What:** GET /health-score/components, /models, /pipelines, /agents call _get_mock_component_health/_get_mock_model_health/_get_mock_pipeline_health/_get_mock_agent_health DIRECTLY and UNCONDITIONALLY. Unlike /check, /quick, /full (which route through _execute_health_check -> guard_or_raise and fail-closed in production per #429/F-010-backend), these four endpoints never invoke the real Health Score agent and never consult the import guard or any flag. They return plausible-but-fake values (model accuracy=0.89/0.82/0.72, auc_roc, postgresql latency=12ms, redis=3ms, opik DEGRADED, pipeline freshness/row counts, agent success_rate) with NO is_demo flag and NO 'mock data' warning. This is exactly the silent-prod-mock-on-a-dashboard anti-pattern the guard was built to prevent — these endpoints were simply never wired to it.
 - **Impact:** An operations dashboard consuming these endpoints in production shows fabricated model accuracy and component/pipeline/agent health that look real, masking actual outages or model degradation. Decisions (e.g. 'models are healthy') are made on invented data.
 - **Fix:** Route these four endpoints through the real Health Score agent and apply guard_or_raise (fail-closed in production) the same way _execute_health_check does, OR explicitly label the payload (is_demo/mock warning) and gate behind the same E2I_REQUIRE_AGENT_IMPORT/ENVIRONMENT policy. Do not return unlabeled fabricated health metrics on a production-reachable path.
+- **✅ RESOLVED:** `/components`+`/models` via **PR #666**; `/pipelines`+`/agents` via **PR #689** (`_resolve_health_provenance` → fail-closed 503 in prod / `data_provenance="placeholder"` in dev, plus the `data_provenance` response field) — mirroring the F-010-backend/#429 pattern. Deployed (run `26948475187`) and verified live in the `e2i_api` container.
 
 ### 6. [HIGH/security] Auth middleware fails OPEN when Supabase env is unconfigured (is_auth_enabled() == False)
 
