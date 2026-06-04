@@ -137,7 +137,11 @@ class ConnectionManager:
         ``visible_brands`` is a parameter only; it is never serialized into the
         payload sent to the client (no model / frontend-schema change).
         """
-        for client_id, websocket in self.active_connections.items():
+        # Snapshot the connections: send_json awaits below can yield control and
+        # let a concurrent disconnect() mutate active_connections, which would
+        # raise "dictionary changed size during iteration" on the live iterator
+        # (outside the per-send try/except). Iterating a copy is safe.
+        for client_id, websocket in list(self.active_connections.items()):
             try:
                 # Filter 1: subscription.
                 sub = self.subscriptions.get(client_id)
@@ -1126,9 +1130,13 @@ async def graph_stream(websocket: WebSocket, client_id: Optional[str] = None):
     * ``is_auth_enabled()`` False -> accept WITHOUT a token (testing mode /
       Supabase unset), preserving dev + e2e behaviour.
 
-    NOTE (follow-up): per-tenant/brand filtering of the stream (authZ) is NOT
-    enforced here — any authenticated user currently receives all broadcasts.
-    That is a deeper concern tracked separately.
+    Authorization: publisher-grant brand filtering IS enforced (PR #684). The
+    authenticated recipient's brand grants are cached on the connection here
+    (``user_brands`` -> ``ConnectionManager.connect``) and evaluated in
+    ``ConnectionManager.broadcast`` via ``_brands_allow`` — a recipient receives
+    an ``episode_added`` event only if their grants intersect the PUBLISHER's
+    (or either side holds the ``all`` admin grant). A stricter PER-EPISODE brand
+    (vs. the publisher's grant set) is a deliberately-deferred follow-up.
     """
     client_id = client_id or f"client_{id(websocket)}"
 

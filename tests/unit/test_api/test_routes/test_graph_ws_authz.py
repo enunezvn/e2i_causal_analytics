@@ -144,6 +144,19 @@ class TestPublisherGrantFilter:
         send.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_admin_publisher_reaches_zero_grant_recipient(self):
+        """INTENTIONAL: an admin-published event (visible=['all']) reaches an
+        authenticated recipient with an explicitly empty grant list. 'all' on
+        either side matches everything, consistent with the unscoped path
+        (visible=None) also reaching []-grant recipients. Pinned so a future
+        tightening of the fail-closed check (e.g. ``not recipient_brands``) can't
+        silently drop admin broadcasts to grant-less users."""
+        manager = ConnectionManager()
+        send = await _register(manager, "c1", user_brands=[])
+        await manager.broadcast(_make_message(), visible_brands=["all"])
+        send.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_connect_caches_brands_and_disconnect_removes_them(self):
         manager = ConnectionManager()
         await _register(manager, "c1", user_brands=["Kisqali"])
