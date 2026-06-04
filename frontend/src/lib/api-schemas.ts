@@ -1000,10 +1000,10 @@ export const SemanticPathResponseWireSchema = z.object({
 // ----- RAG -----
 //
 // Backend route: src/api/routes/rag.py
-//   GET /v1/rag/causal-subgraph -> response_model=CausalSubgraphResponse
-//   GET /v1/rag/causal-path     -> response_model=CausalPathResponse
-//   GET /v1/rag/extract         -> response_model=ExtractedEntitiesResponse
-//   GET /v1/rag/health          -> response_model=HealthResponse
+//   GET /v1/rag/graph/{entity} -> response_model=CausalSubgraphResponse
+//   GET /v1/rag/causal-path    -> response_model=CausalPathResponse
+//   GET /v1/rag/entities       -> response_model=ExtractedEntitiesResponse
+//   GET /v1/rag/health         -> response_model=HealthResponse
 // DEFERRED: GET /v1/rag/stats has NO response_model (returns Dict[str, Any]),
 // so it is not backend-anchored and is left unwired.
 
