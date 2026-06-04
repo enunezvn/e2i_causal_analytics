@@ -91,7 +91,7 @@ C4Container
         Container(scheduler, "Scheduler", "Celery Beat", "15+ periodic tasks")
 
         ContainerDb(redis, "Redis", "Redis 7.2", "Task broker, result backend, working memory, feature cache")
-        ContainerDb(falkordb, "FalkorDB", "FalkorDB v4.14.11", "Knowledge graph: 8 node types, 15 edge types")
+        ContainerDb(falkordb, "FalkorDB", "FalkorDB v4.14.11", "Knowledge graph: 8 node types, 11 edge types")
 
         Container(mlflow, "MLflow", "MLflow v3.11.1", "Experiment tracking, model registry")
         Container(bentoml, "BentoML", "Custom Python 3.12", "Model serving (churn, conversion, causal)")
@@ -406,7 +406,7 @@ graph LR
     end
 
     subgraph "FalkorDB"
-        GRAPH["Knowledge Graph<br/>8 node types, 15 edge types<br/>Cypher queries"]
+        GRAPH["Knowledge Graph<br/>8 node types, 11 edge types<br/>Cypher queries"]
     end
 
     subgraph "Feast"
@@ -455,7 +455,9 @@ graph LR
 **8 Node Types:**
 Patient, HCP, Brand, Region, KPI, CausalPath, Trigger, Agent
 
-**15 Edge Types:**
+**Edge Types** — the canonical machine-readable set is the `E2IRelationshipType`
+enum in `src/memory/graphiti_config.py` (11 types). The table below shows the
+primary commercial-graph edges (illustrative, not exhaustive):
 
 | Edge | From -> To | Key Properties |
 |------|-----------|----------------|
@@ -675,7 +677,7 @@ graph TB
     end
 
     subgraph "Lifecycle (subsystem 1)"
-        CON["Consolidator<br/>src/memory/lifecycle/<br/>consolidator.py:176"]
+        CON["Consolidator<br/>src/memory/lifecycle/<br/>consolidator.py"]
         INV["Invalidator<br/>cascade_invalidate"]
     end
 
@@ -709,27 +711,29 @@ graph TB
 
 ### 5.1 Subsystem 1 — Lifecycle (consolidation + invalidation)
 
-**Consolidator** (`src/memory/lifecycle/consolidator.py:176-233`) is a
+**Consolidator** (`src/memory/lifecycle/consolidator.py`, `Consolidator.run`) is a
 promotion engine invoked daily by the Celery beat task
-`consolidate_insights`. Its `run()` orchestrates three steps in order:
+`consolidate_insights`. Its `run()` orchestrates four steps in order:
 
 1. `deduplicate_episodic` — collapses near-duplicate episodic rows so
    promotion thresholds see effective (deduplicated) counts. Must run
    first because semantic promotion's confirmation-count threshold reads
    `SUM(dedup_counter)`.
 2. `_promote_to_semantic` — stamps `causal_paths` rows as consolidated
-   when `confirmation_count >= SEMANTIC_MIN_CONFIRMATIONS` (default `3`,
-   `src/memory/lifecycle/consolidator.py:47`).
+   when `confirmation_count >= SEMANTIC_MIN_CONFIRMATIONS` (default `3`).
 3. `_promote_to_procedural` — graduates `procedural_memories` rows when
    `usage_count >= PROCEDURAL_MIN_USAGE` (default `5`) AND success rate
    meets `PROCEDURAL_MIN_SUCCESS_RATE`.
+4. `extract_procedural_templates` — emits one reusable procedural template
+   per recurring (signature) cluster (Issue #389 §3.4); runs last because it
+   reads the deduplicated effective counts produced by step 1.
 
 **Episodic deduplication** (PR #388, migration
 `database/memory/026_episodic_dedup.sql`) adds two columns:
 
 - `dedup_signature TEXT` — deterministic hash over the key fields,
   computed by `_compute_dedup_signature`
-  (`src/memory/lifecycle/consolidator.py:58`).
+  (`src/memory/lifecycle/consolidator.py`).
 - `dedup_counter INT DEFAULT 1` — count of underlying events represented
   by the canonical row after the dedup pass.
 
@@ -821,7 +825,7 @@ Rank Fusion (RRF):
 2. **Full-text** (`FulltextBackend`) — PostgreSQL GIN index keyword
    search.
 3. **Graph** (`GraphBackend`) — FalkorDB Cypher traversal on the
-   knowledge graph (8 node types, 15 edge types).
+   knowledge graph (8 node types, 11 edge types).
 
 **Fusion algorithm**: `_apply_rrf_fusion`
 (`src/rag/hybrid_retriever.py:316-382`):
