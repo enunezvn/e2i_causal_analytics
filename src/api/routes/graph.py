@@ -22,6 +22,11 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 
+from src.api.dependencies.auth import (
+    WS_BEARER_SUBPROTOCOL,
+    authenticate_websocket,
+    is_auth_enabled,
+)
 from src.api.models.graph import (
     AddEpisodeRequest,
     AddEpisodeResponse,
@@ -73,8 +78,16 @@ class ConnectionManager:
         self.active_connections: Dict[str, WebSocket] = {}
         self.subscriptions: Dict[str, GraphSubscription] = {}
 
-    async def connect(self, websocket: WebSocket, client_id: str):
-        await websocket.accept()
+    async def connect(
+        self, websocket: WebSocket, client_id: str, subprotocol: Optional[str] = None
+    ):
+        # Echo ONLY a subprotocol the client actually offered. Echoing one it
+        # did not offer fails the RFC 6455 handshake; passing None accepts with
+        # no negotiated subprotocol (the fail-open path).
+        if subprotocol is not None:
+            await websocket.accept(subprotocol=subprotocol)
+        else:
+            await websocket.accept()
         self.active_connections[client_id] = websocket
         logger.info(f"Graph WebSocket connected: {client_id}")
 
@@ -1021,10 +1034,47 @@ async def graph_stream(websocket: WebSocket, client_id: Optional[str] = None):
         "entity_types": ["HCP", "Brand"],
         "session_ids": ["sess_123"]
     }
+
+    Authentication
+    --------------
+    The graph stream broadcasts node/relationship payloads that may contain
+    Patient/HCP PHI/PII, so it must NOT be readable by anonymous clients — this
+    is the WebSocket-channel parity for the HTTP exposure PR #657 closed (graph
+    data endpoints removed from the public allowlist). The HTTP-scoped auth
+    middleware does NOT run on a WebSocket handshake, so the handshake is
+    authenticated here.
+
+    Browsers cannot set WS headers, so the JWT is carried in
+    ``Sec-WebSocket-Protocol`` as ``['bearer', base64url(jwt)]`` (PR #679; see
+    ``frontend/src/hooks/use-websocket.ts``).
+
+    The project's auth posture is INTENTIONALLY fail-open when unconfigured:
+
+    * ``is_auth_enabled()`` True  -> a valid token is REQUIRED; an anonymous or
+      invalid handshake is rejected with close code 1008 BEFORE accept.
+    * ``is_auth_enabled()`` False -> accept WITHOUT a token (testing mode /
+      Supabase unset), preserving dev + e2e behaviour.
+
+    NOTE (follow-up): per-tenant/brand filtering of the stream (authZ) is NOT
+    enforced here — any authenticated user currently receives all broadcasts.
+    That is a deeper concern tracked separately.
     """
     client_id = client_id or f"client_{id(websocket)}"
 
-    await manager.connect(websocket, client_id)
+    accept_subprotocol: Optional[str] = None
+    if is_auth_enabled():
+        user = await authenticate_websocket(websocket)
+        if user is None:
+            # Reject anonymous/invalid handshakes with a policy-violation close
+            # WITHOUT accepting (do not leak any broadcast data).
+            await websocket.close(code=1008)
+            return
+        # Echo the bearer subprotocol only when the client offered it.
+        subprotocols = websocket.scope.get("subprotocols") or []
+        if subprotocols and subprotocols[0] == WS_BEARER_SUBPROTOCOL:
+            accept_subprotocol = WS_BEARER_SUBPROTOCOL
+
+    await manager.connect(websocket, client_id, subprotocol=accept_subprotocol)
 
     try:
         while True:
