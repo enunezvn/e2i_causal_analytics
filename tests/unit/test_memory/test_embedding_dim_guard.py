@@ -57,8 +57,26 @@ def test_helper_raises_on_mismatch() -> None:
 
 
 def test_helper_raises_on_empty() -> None:
+    # A present-but-empty list would reach pgvector as an empty vector -> reject.
     with pytest.raises(ValueError):
         validate_embedding_dimensions([], 1536)
+
+
+def test_helper_allows_none() -> None:
+    # None = caller's explicit "store no vector" choice (nullable column);
+    # NOT an M1 error. Must not raise.
+    validate_embedding_dimensions(None, 1536)
+
+
+def test_vector_dims_invariant_is_1536() -> None:
+    """The guard's expected width must track the actual vector(1536) column
+    (database/memory/001_agentic_memory_schema_v1.3.sql). Locks the invariant so
+    a config edit can't silently disable the guard (codex LOW-1)."""
+    from src.memory.services.config import get_config
+
+    cfg = get_config()
+    assert cfg.episodic.vector_dims == 1536
+    assert cfg.procedural.vector_dims == 1536
 
 
 # ---------------------------------------------------------------------------
@@ -77,6 +95,17 @@ async def test_insert_episodic_accepts_correct_dim() -> None:
     client = MagicMock()
     with patch("src.memory.episodic_memory.get_supabase_client", return_value=client):
         memory_id = await insert_episodic_memory(_episode(), GOOD)
+    assert isinstance(memory_id, str)
+    client.table.return_value.insert.return_value.execute.assert_called_once()
+
+
+async def test_insert_episodic_allows_none_embedding() -> None:
+    """Agent hooks pass embedding=None to store a memory with no vector (the
+    column is nullable). The M1 guard must NOT break that established fleet
+    pattern — only a present, wrong-width vector is rejected (codex HIGH-1)."""
+    client = MagicMock()
+    with patch("src.memory.episodic_memory.get_supabase_client", return_value=client):
+        memory_id = await insert_episodic_memory(_episode(), None)  # type: ignore[arg-type]
     assert isinstance(memory_id, str)
     client.table.return_value.insert.return_value.execute.assert_called_once()
 

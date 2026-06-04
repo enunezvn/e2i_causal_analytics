@@ -65,15 +65,24 @@ def validate_embedding_dimensions(
     the outage. Validating up front turns that into an explicit, diagnosable
     failure BEFORE the row reaches the database.
 
+    A ``None`` embedding is the caller's explicit "store no vector" choice — the
+    column is nullable and the insert path drops the key, persisting NULL. Many
+    agent memory hooks use that pattern deliberately, so it is NOT an M1 error:
+    this guard only rejects a *present* vector of the wrong width (the 384-dim
+    fallback going into a vector(1536) column). A non-None but empty list IS
+    rejected — it would reach pgvector as an empty vector and fail.
+
     Args:
-        embedding: The vector about to be persisted.
+        embedding: The vector about to be persisted (``None`` = store no vector).
         expected_dims: The column width (e.g. ``get_config().episodic.vector_dims``).
         context: Short label for the error message (which write path failed).
 
     Raises:
-        ValueError: If ``embedding`` is empty or its length != ``expected_dims``.
+        ValueError: If ``embedding`` is provided but its length != ``expected_dims``.
     """
-    actual = len(embedding) if embedding is not None else 0
+    if embedding is None:
+        return
+    actual = len(embedding)
     if actual != expected_dims:
         raise ValueError(
             f"{context} dimension mismatch: got {actual}, expected {expected_dims}. "
