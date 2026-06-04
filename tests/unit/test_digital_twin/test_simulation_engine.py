@@ -19,6 +19,8 @@ import numpy as np
 import pytest
 from pydantic import ValidationError
 
+from src.digital_twin.effect.estimator import TwinEffectEstimator
+from src.digital_twin.effect.provider import SyntheticEffectDataProvider
 from src.digital_twin.models.simulation_models import (
     InterventionConfig,
     PopulationFilter,
@@ -33,6 +35,33 @@ from src.digital_twin.models.twin_models import (
     TwinType,
 )
 from src.digital_twin.simulation_engine import SimulationEngine
+
+# These tests now drive the real uplift effect engine (a fitted UpliftRandomForest
+# per simulate() call), so they belong in the isolated heavy/slow CI lane.
+pytestmark = pytest.mark.slow
+
+
+def _fast_engine(
+    population: TwinPopulation,
+    *,
+    true_ate: float = 0.15,
+    **engine_kwargs,
+) -> SimulationEngine:
+    """Build a SimulationEngine wired to a small, fast, deterministic effect engine.
+
+    A real fit on the default provider/estimator is ~30s; the small synthetic
+    frame (n=300) + shallow forest (20 trees, depth 3) keeps each simulate() at
+    ~1-2s while preserving the seeded, deterministic contract (random_state=42).
+    """
+    return SimulationEngine(
+        population,
+        effect_provider=SyntheticEffectDataProvider(n=300, true_ate=true_ate, seed=42),
+        effect_estimator=TwinEffectEstimator(
+            n_estimators=20, max_depth=3, min_training_samples=100
+        ),
+        **engine_kwargs,
+    )
+
 
 # =============================================================================
 # FIXTURES
@@ -107,8 +136,8 @@ def small_population() -> TwinPopulation:
 
 @pytest.fixture
 def engine(sample_population) -> SimulationEngine:
-    """Create simulation engine with sample population."""
-    return SimulationEngine(sample_population)
+    """Create simulation engine with sample population (fast deterministic effect engine)."""
+    return _fast_engine(sample_population)
 
 
 @pytest.fixture
@@ -178,13 +207,6 @@ class TestSimulationEngineInit:
         assert engine.confidence_threshold == 0.85
         assert engine.model_fidelity_score == 0.92
 
-    def test_intervention_effects_defined(self):
-        """Test that intervention effects are defined."""
-        assert "email_campaign" in SimulationEngine.INTERVENTION_EFFECTS
-        assert "call_frequency_increase" in SimulationEngine.INTERVENTION_EFFECTS
-        assert "speaker_program_invitation" in SimulationEngine.INTERVENTION_EFFECTS
-        assert "sample_distribution" in SimulationEngine.INTERVENTION_EFFECTS
-
 
 # =============================================================================
 # SIMULATION EXECUTION TESTS
@@ -206,6 +228,8 @@ class TestSimulationExecution:
         assert result.simulated_ci_lower < result.simulated_ci_upper
         assert result.simulated_std_error > 0
         assert result.execution_time_ms >= 0
+        # Real effect engine stamps provenance; a fabricated ATE is never emitted.
+        assert result.data_provenance == "synthetic_uplift_v1"
 
     def test_simulate_call_frequency(self, engine, call_frequency_config):
         """Test running call frequency simulation."""
@@ -233,12 +257,17 @@ class TestSimulationExecution:
         assert len(result.recommendation_rationale) > 0
 
     def test_simulate_calculates_sample_size(self, engine, email_campaign_config):
-        """Test that simulation calculates recommended sample size."""
+        """Test that simulation calculates a positive recommended sample size.
+
+        The recommended sample size now comes from the policy's two-proportion
+        power calculation (no longer the old heuristic [100, 50000] clamp), so a
+        large estimated effect can legitimately require fewer than 100 per arm.
+        We assert the structural property: a positive integer per-arm sample size.
+        """
         result = engine.simulate(email_campaign_config)
 
         assert result.recommended_sample_size is not None
-        assert result.recommended_sample_size >= 100
-        assert result.recommended_sample_size <= 50000
+        assert result.recommended_sample_size > 0
 
     def test_simulate_sets_duration(self, engine, email_campaign_config):
         """Test that simulation preserves recommended duration."""
@@ -377,62 +406,61 @@ class TestRecommendationLogic:
     """Tests for recommendation generation logic."""
 
     def test_recommend_deploy_positive_effect(self, sample_population):
-        """Test DEPLOY recommendation for significant positive effect."""
-        # Create engine with low threshold
-        engine = SimulationEngine(sample_population, min_effect_threshold=0.01)
+        """DEPLOY when the CI lower bound clears the min-effect threshold.
 
-        # High intensity intervention likely to produce significant effect
+        Inject a known true_ate (0.2) well above the default min_effect (0.05);
+        the CI-based policy then deterministically recommends DEPLOY.
+        """
+        engine = _fast_engine(sample_population, true_ate=0.2)
+
         config = InterventionConfig(
             intervention_type="speaker_program_invitation",
             duration_weeks=12,
-            intensity_multiplier=2.0,
         )
 
         result = engine.simulate(config)
 
-        # With high intensity, should often recommend deploy
-        # (This is probabilistic due to random effects)
-        assert result.recommendation in [
-            SimulationRecommendation.DEPLOY,
-            SimulationRecommendation.REFINE,
-        ]
+        assert result.status == SimulationStatus.COMPLETED
+        assert result.recommendation == SimulationRecommendation.DEPLOY
+        assert result.simulated_ci_lower > engine.min_effect_threshold
 
     def test_recommend_skip_small_effect(self, sample_population):
-        """Test SKIP recommendation for effects below threshold."""
-        # Create engine with high threshold
-        engine = SimulationEngine(sample_population, min_effect_threshold=0.50)
+        """SKIP when the CI upper bound is below the min-effect threshold.
+
+        Inject true_ate=0.0 and raise the threshold above the (small, positive)
+        estimate's CI so the policy deterministically recommends SKIP.
+        """
+        engine = _fast_engine(sample_population, true_ate=0.0, min_effect_threshold=0.2)
 
         config = InterventionConfig(
-            intervention_type="sample_distribution",  # Small base effect
+            intervention_type="sample_distribution",
             duration_weeks=2,
-            intensity_multiplier=0.5,
         )
 
         result = engine.simulate(config)
 
-        # With low intensity and high threshold, should skip
         assert result.recommendation == SimulationRecommendation.SKIP
-        assert "below minimum threshold" in result.recommendation_rationale.lower()
+        assert result.simulated_ci_upper < engine.min_effect_threshold
+        assert "below min effect" in result.recommendation_rationale.lower()
 
     def test_recommend_refine_uncertain(self, sample_population):
-        """Test REFINE recommendation when CI includes zero."""
-        engine = SimulationEngine(sample_population, min_effect_threshold=0.01)
+        """REFINE when the CI straddles the min-effect threshold.
 
-        # Short duration, low intensity - more uncertainty
+        Inject true_ate=0.2 and set the threshold (0.25) inside the resulting CI
+        so the band straddles it; the policy then deterministically recommends
+        REFINE (gather more data).
+        """
+        engine = _fast_engine(sample_population, true_ate=0.2, min_effect_threshold=0.25)
+
         config = InterventionConfig(
             intervention_type="email_campaign",
-            duration_weeks=1,
-            intensity_multiplier=0.3,
+            duration_weeks=8,
         )
 
         result = engine.simulate(config)
 
-        # Could be any recommendation based on random effects
-        assert result.recommendation in [
-            SimulationRecommendation.DEPLOY,
-            SimulationRecommendation.SKIP,
-            SimulationRecommendation.REFINE,
-        ]
+        assert result.recommendation == SimulationRecommendation.REFINE
+        assert result.simulated_ci_lower < engine.min_effect_threshold < result.simulated_ci_upper
 
 
 # =============================================================================
@@ -445,7 +473,7 @@ class TestFidelityWarnings:
 
     def test_fidelity_warning_low_score(self, sample_population, email_campaign_config):
         """Test fidelity warning when score is low."""
-        engine = SimulationEngine(
+        engine = _fast_engine(
             sample_population,
             model_fidelity_score=0.55,  # Below 0.7 threshold
         )
@@ -458,7 +486,7 @@ class TestFidelityWarnings:
 
     def test_no_fidelity_warning_good_score(self, sample_population, email_campaign_config):
         """Test no fidelity warning when score is adequate."""
-        engine = SimulationEngine(
+        engine = _fast_engine(
             sample_population,
             model_fidelity_score=0.85,  # Above threshold
         )
@@ -470,7 +498,7 @@ class TestFidelityWarnings:
 
     def test_no_fidelity_warning_no_score(self, sample_population, email_campaign_config):
         """Test no fidelity warning when score is not set."""
-        engine = SimulationEngine(sample_population)  # No fidelity score
+        engine = _fast_engine(sample_population)  # No fidelity score
 
         result = engine.simulate(email_campaign_config)
 
@@ -491,9 +519,14 @@ class TestConfidenceScore:
 
         assert 0.0 <= result.simulation_confidence <= 1.0
 
-    def test_confidence_higher_with_more_twins(self, email_campaign_config):
-        """Test that confidence is higher with more twins."""
-        # Create small population
+    def test_confidence_bounded_regardless_of_twin_count(self, email_campaign_config):
+        """Confidence stays within [0, 1] for both small and large populations.
+
+        The new std_error/CI are training-evidence-bound (driven by the labeled
+        frame's sample size, not the twin count), so confidence no longer rises
+        with more twins. We therefore only assert the structural [0, 1] bound for
+        both sizes rather than a (no-longer-true) size-monotonicity inequality.
+        """
         small_twins = [
             DigitalTwin(
                 twin_type=TwinType.HCP,
@@ -524,15 +557,14 @@ class TestConfidenceScore:
             model_id=uuid4(),
         )
 
-        small_engine = SimulationEngine(small_pop, model_fidelity_score=0.8)
-        large_engine = SimulationEngine(large_pop, model_fidelity_score=0.8)
+        small_engine = _fast_engine(small_pop, model_fidelity_score=0.8)
+        large_engine = _fast_engine(large_pop, model_fidelity_score=0.8)
 
         small_result = small_engine.simulate(email_campaign_config)
         large_result = large_engine.simulate(email_campaign_config)
 
-        # Larger population should have higher or equal confidence
-        # (accounting for random variation)
-        assert large_result.simulation_confidence >= small_result.simulation_confidence - 0.1
+        assert 0.0 <= small_result.simulation_confidence <= 1.0
+        assert 0.0 <= large_result.simulation_confidence <= 1.0
 
 
 # =============================================================================
@@ -544,77 +576,53 @@ class TestTreatmentEffects:
     """Tests for treatment effect calculations."""
 
     def test_effect_varies_by_decile(self, sample_population, email_campaign_config):
-        """Test that effects vary by decile (higher decile = lower effect)."""
-        engine = SimulationEngine(sample_population)
+        """Decile-level heterogeneity is populated for sufficiently-sized buckets.
+
+        The synthetic DGP effect is ~constant plus mild covariate noise, so the
+        former decile-monotonic assertion no longer holds. We assert the
+        structural property the engine now guarantees: per-decile uplift stats
+        are computed (ate/std/n) for buckets meeting the min sample size.
+        """
+        engine = _fast_engine(sample_population)
         result = engine.simulate(email_campaign_config, calculate_heterogeneity=True)
 
         by_decile = result.effect_heterogeneity.by_decile
-        if "1" in by_decile and "10" in by_decile:
-            # Top decile should generally have lower effect (less room to grow)
-            # But this is probabilistic
-            assert by_decile["1"]["ate"] != by_decile["10"]["ate"]
+        assert len(by_decile) > 0
+        for _decile, stats in by_decile.items():
+            assert "ate" in stats
+            assert "n" in stats
+            assert stats["n"] >= 10
 
-    def test_effect_includes_variance(self, engine, email_campaign_config):
-        """Test that effects include variance (not all identical)."""
-        # Run simulation twice with same seed
-        np.random.seed(42)
+    def test_simulate_is_deterministic(self, engine, email_campaign_config):
+        """The seeded estimator (random_state=42) makes simulate() deterministic.
+
+        Replaces the former variance test: the effect engine is no longer
+        stochastic per call, so two identical simulate() calls are bit-identical.
+        """
         result1 = engine.simulate(email_campaign_config)
-
-        np.random.seed(42)
         result2 = engine.simulate(email_campaign_config)
 
-        # Should have similar but not necessarily identical results
-        assert abs(result1.simulated_ate - result2.simulated_ate) < 0.01
+        assert result1.simulated_ate == result2.simulated_ate
+        assert result1.simulated_ci_lower == result2.simulated_ci_lower
+        assert result1.simulated_ci_upper == result2.simulated_ci_upper
 
-    def test_intensity_multiplier_effect(self, sample_population):
-        """Test that intensity multiplier affects outcome."""
-        engine = SimulationEngine(sample_population)
+    def test_duration_flows_through_to_recommendation(self, sample_population):
+        """Duration no longer drives the effect; it flows through as the recommended duration.
 
-        low_intensity = InterventionConfig(
-            intervention_type="email_campaign",
-            duration_weeks=8,
-            intensity_multiplier=0.5,
-        )
+        The old heuristic scaled the effect by duration_weeks; the real effect
+        engine does not. Duration is now a pass-through: recommended_duration_weeks
+        equals the configured duration.
+        """
+        engine = _fast_engine(sample_population)
 
-        high_intensity = InterventionConfig(
-            intervention_type="email_campaign",
-            duration_weeks=8,
-            intensity_multiplier=2.0,
-        )
-
-        np.random.seed(42)
-        low_result = engine.simulate(low_intensity)
-
-        np.random.seed(42)
-        high_result = engine.simulate(high_intensity)
-
-        # Higher intensity should produce larger absolute effect
-        assert abs(high_result.simulated_ate) > abs(low_result.simulated_ate)
-
-    def test_duration_affects_effect(self, sample_population):
-        """Test that longer duration produces stronger effects."""
-        engine = SimulationEngine(sample_population)
-
-        short_duration = InterventionConfig(
-            intervention_type="email_campaign",
-            duration_weeks=2,
-            intensity_multiplier=1.0,
-        )
-
-        long_duration = InterventionConfig(
-            intervention_type="email_campaign",
-            duration_weeks=12,
-            intensity_multiplier=1.0,
-        )
-
-        np.random.seed(42)
-        short_result = engine.simulate(short_duration)
-
-        np.random.seed(42)
-        long_result = engine.simulate(long_duration)
-
-        # Longer duration should produce larger absolute effect
-        assert abs(long_result.simulated_ate) > abs(short_result.simulated_ate)
+        for weeks in (2, 12):
+            config = InterventionConfig(
+                intervention_type="email_campaign",
+                duration_weeks=weeks,
+            )
+            result = engine.simulate(config)
+            assert result.status == SimulationStatus.COMPLETED
+            assert result.recommended_duration_weeks == weeks
 
 
 # =============================================================================
@@ -627,7 +635,7 @@ class TestErrorHandling:
 
     def test_insufficient_twins_error(self, small_population, email_campaign_config):
         """Test error when population is too small."""
-        engine = SimulationEngine(small_population)
+        engine = _fast_engine(small_population)
 
         result = engine.simulate(email_campaign_config)
 
@@ -637,16 +645,21 @@ class TestErrorHandling:
         assert result.simulated_ate == 0.0
 
     def test_unknown_intervention_type(self, engine):
-        """Test handling of unknown intervention type."""
+        """Unknown intervention types now fail closed (no fabricated default effect).
+
+        The provider only supports its 6 known intervention types; anything else
+        raises EffectDataUnavailable, which the engine surfaces as a FAILED result
+        with a zeroed ATE rather than a completed result with heuristic defaults.
+        """
         config = InterventionConfig(
             intervention_type="unknown_intervention",
             duration_weeks=8,
         )
 
-        # Should use default effect parameters
         result = engine.simulate(config)
 
-        assert result.status == SimulationStatus.COMPLETED  # Uses defaults
+        assert result.status == SimulationStatus.FAILED
+        assert result.simulated_ate == 0.0
 
     def test_completed_at_timestamp(self, engine, email_campaign_config):
         """Test that completed_at is set for successful simulation."""
@@ -664,39 +677,31 @@ class TestConfidenceLevelParameter:
     """Tests for confidence level parameter."""
 
     def test_confidence_level_95(self, engine, email_campaign_config):
-        """Test 95% confidence level."""
+        """Test 95% confidence level produces a positive-width CI."""
         result = engine.simulate(email_campaign_config, confidence_level=0.95)
 
         ci_width_95 = result.simulated_ci_upper - result.simulated_ci_lower
         assert ci_width_95 > 0
 
-    def test_confidence_level_99(self, engine, email_campaign_config):
-        """Test 99% confidence level produces wider CI."""
-        np.random.seed(42)
-        result_95 = engine.simulate(email_campaign_config, confidence_level=0.95)
+    def test_confidence_level_is_accepted_but_does_not_drive_ci_width(
+        self, engine, email_campaign_config
+    ):
+        """confidence_level is accepted for API compatibility but no longer drives CI width.
 
-        np.random.seed(42)
+        The CI is now the estimator's training-evidence interval (bounded by the
+        labeled-frame sample size), not a width recomputed from confidence_level.
+        The former 90% < 95% < 99% width-monotonicity tests asserted removed
+        behavior; here we pin the new contract: the CI is identical regardless of
+        the requested level, and remains positive-width.
+        """
+        result_90 = engine.simulate(email_campaign_config, confidence_level=0.90)
         result_99 = engine.simulate(email_campaign_config, confidence_level=0.99)
 
-        ci_width_95 = result_95.simulated_ci_upper - result_95.simulated_ci_lower
-        ci_width_99 = result_99.simulated_ci_upper - result_99.simulated_ci_lower
+        width_90 = result_90.simulated_ci_upper - result_90.simulated_ci_lower
+        width_99 = result_99.simulated_ci_upper - result_99.simulated_ci_lower
 
-        # 99% CI should be wider than 95% CI
-        assert ci_width_99 > ci_width_95
-
-    def test_confidence_level_90(self, engine, email_campaign_config):
-        """Test 90% confidence level produces narrower CI."""
-        np.random.seed(42)
-        result_90 = engine.simulate(email_campaign_config, confidence_level=0.90)
-
-        np.random.seed(42)
-        result_95 = engine.simulate(email_campaign_config, confidence_level=0.95)
-
-        ci_width_90 = result_90.simulated_ci_upper - result_90.simulated_ci_lower
-        ci_width_95 = result_95.simulated_ci_upper - result_95.simulated_ci_lower
-
-        # 90% CI should be narrower than 95% CI
-        assert ci_width_90 < ci_width_95
+        assert width_90 > 0
+        assert width_90 == width_99
 
 
 # =============================================================================
@@ -735,81 +740,77 @@ class TestEffectModifierEdgeCases:
         )
 
     def test_extreme_low_decile(self, edge_case_population, email_campaign_config):
-        """Test handling of decile = 0 (below valid range)."""
+        """Out-of-range low decile values still yield a completed simulation."""
         for twin in edge_case_population.twins:
             twin.features["decile"] = 0  # Invalid low value
 
-        engine = SimulationEngine(edge_case_population)
+        engine = _fast_engine(edge_case_population)
         result = engine.simulate(email_campaign_config)
 
-        # Should complete with clamped decile value
+        # The effect engine consumes decile as a numeric covariate; an out-of-range
+        # value does not break the fit.
         assert result.status == SimulationStatus.COMPLETED
 
     def test_extreme_high_decile(self, edge_case_population, email_campaign_config):
-        """Test handling of decile = 11 (above valid range)."""
+        """Out-of-range high decile values still yield a completed simulation."""
         for twin in edge_case_population.twins:
             twin.features["decile"] = 11  # Invalid high value
 
-        engine = SimulationEngine(edge_case_population)
+        engine = _fast_engine(edge_case_population)
         result = engine.simulate(email_campaign_config)
 
-        # Should complete with clamped decile value
         assert result.status == SimulationStatus.COMPLETED
 
     def test_zero_engagement_score(self, edge_case_population, email_campaign_config):
-        """Test handling of zero engagement score."""
+        """Zero engagement score still yields a completed, non-zero-ATE simulation."""
         for twin in edge_case_population.twins:
             twin.features["digital_engagement_score"] = 0.0
 
-        engine = SimulationEngine(edge_case_population)
+        engine = _fast_engine(edge_case_population)
         result = engine.simulate(email_campaign_config)
 
-        # Should apply minimum multiplier (0.8)
         assert result.status == SimulationStatus.COMPLETED
         assert result.simulated_ate != 0
 
     def test_max_engagement_score(self, edge_case_population, email_campaign_config):
-        """Test handling of maximum engagement score."""
+        """Maximum engagement score still yields a completed simulation."""
         for twin in edge_case_population.twins:
             twin.features["digital_engagement_score"] = 1.0
 
-        engine = SimulationEngine(edge_case_population)
+        engine = _fast_engine(edge_case_population)
         result = engine.simulate(email_campaign_config)
 
-        # Should apply maximum multiplier (1.2)
         assert result.status == SimulationStatus.COMPLETED
 
     def test_negative_engagement_score(self, edge_case_population, email_campaign_config):
-        """Test handling of negative engagement score."""
+        """Negative engagement score still yields a completed simulation."""
         for twin in edge_case_population.twins:
             twin.features["digital_engagement_score"] = -0.5
 
-        engine = SimulationEngine(edge_case_population)
+        engine = _fast_engine(edge_case_population)
         result = engine.simulate(email_campaign_config)
 
-        # Should clamp to 0 and complete
         assert result.status == SimulationStatus.COMPLETED
 
     def test_engagement_above_one(self, edge_case_population, email_campaign_config):
-        """Test handling of engagement score above 1.0."""
+        """Engagement score above 1.0 still yields a completed simulation."""
         for twin in edge_case_population.twins:
             twin.features["digital_engagement_score"] = 1.5
 
-        engine = SimulationEngine(edge_case_population)
+        engine = _fast_engine(edge_case_population)
         result = engine.simulate(email_campaign_config)
 
-        # Should clamp to 1.0 and complete
         assert result.status == SimulationStatus.COMPLETED
 
     def test_invalid_adoption_stage(self, edge_case_population, email_campaign_config):
-        """Test handling of unknown adoption stage."""
+        """Unknown adoption stage (a string feature) is dropped; simulation completes."""
         for twin in edge_case_population.twins:
             twin.features["adoption_stage"] = "unknown_stage"
 
-        engine = SimulationEngine(edge_case_population)
+        engine = _fast_engine(edge_case_population)
         result = engine.simulate(email_campaign_config)
 
-        # Should fall back to default multiplier (1.0)
+        # Non-numeric features are not used as covariates; an unknown value is inert.
         assert result.status == SimulationStatus.COMPLETED
 
     def test_zero_intensity_multiplier(self):
@@ -827,8 +828,8 @@ class TestEffectModifierEdgeCases:
         assert "intensity_multiplier" in str(exc_info.value)
 
     def test_extreme_intensity_multiplier(self, edge_case_population):
-        """Test handling of extreme intensity multiplier."""
-        engine = SimulationEngine(edge_case_population)
+        """Extreme intensity_multiplier is inert (effect no longer depends on it); completes."""
+        engine = _fast_engine(edge_case_population)
         config = InterventionConfig(
             intervention_type="email_campaign",
             duration_weeks=8,
@@ -837,7 +838,8 @@ class TestEffectModifierEdgeCases:
 
         result = engine.simulate(config)
 
-        # Should be clamped and complete
+        # intensity_multiplier was a heuristic scalar that no longer affects the
+        # real effect engine; the simulation completes regardless of its value.
         assert result.status == SimulationStatus.COMPLETED
 
     def test_zero_duration_weeks(self):
@@ -862,7 +864,7 @@ class TestEffectModifierEdgeCases:
             twin.features["adoption_stage"] = "laggard"  # Max adoption multiplier
             twin.baseline_propensity = 1.0  # Max propensity
 
-        engine = SimulationEngine(edge_case_population)
+        engine = _fast_engine(edge_case_population)
         config = InterventionConfig(
             intervention_type="speaker_program_invitation",  # Highest base effect
             duration_weeks=52,  # Long duration
@@ -901,7 +903,7 @@ class TestBoundaryConditions:
             model_id=uuid4(),
         )
 
-        engine = SimulationEngine(population)
+        engine = _fast_engine(population)
         result = engine.simulate(email_campaign_config)
 
         assert result.status == SimulationStatus.COMPLETED
@@ -928,7 +930,7 @@ class TestBoundaryConditions:
             model_id=uuid4(),
         )
 
-        engine = SimulationEngine(population)
+        engine = _fast_engine(population)
         result = engine.simulate(email_campaign_config)
 
         assert result.status == SimulationStatus.FAILED
@@ -944,13 +946,13 @@ class TestBoundaryConditions:
             model_id=uuid4(),
         )
 
-        engine = SimulationEngine(population)
+        engine = _fast_engine(population)
         result = engine.simulate(email_campaign_config)
 
         assert result.status == SimulationStatus.FAILED
 
     def test_ci_bounds_with_uniform_population(self, email_campaign_config):
-        """Test CI calculation with very uniform population."""
+        """Test CI calculation completes with a degenerate, perfectly-uniform population."""
         # All twins identical
         twins = [
             DigitalTwin(
@@ -976,12 +978,14 @@ class TestBoundaryConditions:
             model_id=uuid4(),
         )
 
-        engine = SimulationEngine(population)
+        engine = _fast_engine(population)
         result = engine.simulate(email_campaign_config)
 
         assert result.status == SimulationStatus.COMPLETED
-        # CI should still have some width due to noise
-        assert result.simulated_ci_lower < result.simulated_ci_upper
+        # With perfectly-uniform covariates the uplift fit can collapse to a
+        # zero-width training CI, so the only guaranteed structural property is a
+        # non-negative CI width (lower <= upper); the simulation must not error.
+        assert result.simulated_ci_lower <= result.simulated_ci_upper
 
     def test_negative_ate_possible(self):
         """Test that negative treatment effects are handled correctly."""
@@ -1017,23 +1021,23 @@ class TestBoundaryConditions:
             intensity_multiplier=0.1,
         )
 
-        engine = SimulationEngine(population)
+        engine = _fast_engine(population)
         result = engine.simulate(config)
 
         # Should complete regardless of effect direction
         assert result.status == SimulationStatus.COMPLETED
 
     def test_confidence_level_extremes_80(self, sample_population, email_campaign_config):
-        """Test 80% confidence level."""
-        engine = SimulationEngine(sample_population)
+        """Test simulation accepts an 80% confidence level and completes."""
+        engine = _fast_engine(sample_population)
         result = engine.simulate(email_campaign_config, confidence_level=0.80)
 
         assert result.status == SimulationStatus.COMPLETED
         assert result.simulated_ci_lower < result.simulated_ci_upper
 
     def test_confidence_level_extremes_99(self, sample_population, email_campaign_config):
-        """Test 99% confidence level."""
-        engine = SimulationEngine(sample_population)
+        """Test simulation accepts a 99% confidence level and completes."""
+        engine = _fast_engine(sample_population)
         result = engine.simulate(email_campaign_config, confidence_level=0.99)
 
         assert result.status == SimulationStatus.COMPLETED
