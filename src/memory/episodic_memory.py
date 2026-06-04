@@ -43,7 +43,12 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple, cast
 
-from src.memory.services.factories import get_embedding_service, get_supabase_client
+from src.memory.services.config import get_config
+from src.memory.services.factories import (
+    get_embedding_service,
+    get_supabase_client,
+    validate_embedding_dimensions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -413,6 +418,12 @@ async def insert_episodic_memory(
     Returns:
         ID of inserted memory
     """
+    # M1: reject a dimension-mismatched embedding (e.g. a 384-dim fallback) before
+    # it reaches the vector(1536) column — fail fast and diagnosably, never silently.
+    validate_embedding_dimensions(
+        embedding, get_config().episodic.vector_dims, context="episodic embedding"
+    )
+
     client = get_supabase_client()
 
     memory_id = str(uuid.uuid4())
@@ -516,6 +527,12 @@ async def bulk_insert_episodic_memories(
     Returns:
         List of inserted memory IDs
     """
+    # M1: validate every embedding width up front so one mismatched (e.g. fallback
+    # 384-dim) vector cannot reach the vector(1536) column or silently drop the batch.
+    expected_dims = get_config().episodic.vector_dims
+    for _memory, embedding in memories:
+        validate_embedding_dimensions(embedding, expected_dims, context="episodic embedding")
+
     client = get_supabase_client()
     memory_ids = []
     records = []

@@ -44,7 +44,12 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, cast
 
-from src.memory.services.factories import get_embedding_service, get_supabase_client
+from src.memory.services.config import get_config
+from src.memory.services.factories import (
+    get_embedding_service,
+    get_supabase_client,
+    validate_embedding_dimensions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +194,13 @@ async def insert_procedural_memory(
     Returns:
         ID of inserted or updated procedure
     """
+    # M1: reject a dimension-mismatched trigger embedding (e.g. a 384-dim fallback)
+    # before any DB call — the similarity search below and the insert both target a
+    # vector(1536) column.
+    validate_embedding_dimensions(
+        trigger_embedding, get_config().procedural.vector_dims, context="procedural embedding"
+    )
+
     client = get_supabase_client()
 
     # Check for existing similar procedure
