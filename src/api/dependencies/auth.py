@@ -38,7 +38,7 @@ import binascii
 import logging
 import os
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import Depends, HTTPException, Request, WebSocket, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -216,6 +216,54 @@ def has_role(user: Dict[str, Any], required_role: UserRole) -> bool:
     user_level = ROLE_LEVELS.get(user_role, 0)
     required_level = ROLE_LEVELS.get(required_role, 0)
     return user_level >= required_level
+
+
+def is_cross_brand_admin(user: Dict[str, Any]) -> bool:
+    """True if the caller has cross-tenant access.
+
+    Either the ADMIN role or the ``'all'`` brand grant lets a caller read
+    across every brand. Mirrors the ``_is_admin`` helper that the memory and
+    cognitive routes use; centralized here so both route modules share one
+    definition.
+    """
+    return has_role(user, UserRole.ADMIN) or "all" in set(get_user_brands(user))
+
+
+def resolve_brand_for_read(
+    user: Dict[str, Any], requested_brand: Optional[str]
+) -> Tuple[bool, Optional[str]]:
+    """Resolve the brand a caller may filter tenant-scoped reads by (H1).
+
+    The memory-search and cognitive-query routes feed a brand into
+    ``hybrid_search``; the underlying RPC treats a *missing* brand as
+    "every brand" (``filters->>'brand' IS NULL`` matches all rows). So a
+    non-admin must ALWAYS end up with a concrete in-grant brand, or the read
+    must be denied — never left unscoped.
+
+    Returns ``(allowed, brand)``:
+
+    * cross-brand admin: ``(True, requested_brand)`` — no restriction; a
+      ``None`` request means "all brands", which only admins may do.
+    * non-admin with no grants: ``(False, None)`` — cannot tenant-scope; deny.
+    * non-admin, no brand requested: ``(True, grants[0])`` — pin to the first
+      granted brand (matches ``list_episodic_memories``; the single-brand RPC
+      cannot express a union, see review finding L11).
+    * non-admin, requested brand in grants: ``(True, requested_brand)``.
+    * non-admin, requested brand out of grants: ``(False, None)`` — deny.
+
+    Callers translate a ``False`` into a defensive-empty result (search) or a
+    403 (cognitive), per their existing info-leak conventions.
+    """
+    if is_cross_brand_admin(user):
+        return True, requested_brand
+    grants = get_user_brands(user)
+    if not grants:
+        return False, None
+    if requested_brand is None:
+        return True, grants[0]
+    if requested_brand in set(grants):
+        return True, requested_brand
+    return False, None
 
 
 # Security scheme for OpenAPI docs
