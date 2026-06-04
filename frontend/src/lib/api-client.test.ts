@@ -66,6 +66,7 @@ import {
   del,
   checkApiHealth,
   createGraphWebSocket,
+  toWebSocketUrl,
 } from './api-client';
 
 // =============================================================================
@@ -636,6 +637,40 @@ describe('checkApiHealth', () => {
 // =============================================================================
 // WEBSOCKET TESTS
 // =============================================================================
+
+describe('toWebSocketUrl', () => {
+  it('swaps an absolute http:// URL to ws://', () => {
+    expect(toWebSocketUrl('http://localhost:8000/graph/stream')).toBe(
+      'ws://localhost:8000/graph/stream'
+    );
+  });
+
+  it('swaps an absolute https:// URL to wss://', () => {
+    expect(toWebSocketUrl('https://example.com/graph/stream')).toBe(
+      'wss://example.com/graph/stream'
+    );
+  });
+
+  it('resolves a root-relative /api base against the page origin (http)', () => {
+    // The default production base is the relative "/api" — the old
+    // `.replace(/^http/, "ws")` was a no-op here and yielded a relative URL.
+    expect(
+      toWebSocketUrl('/api/graph/stream', {
+        protocol: 'http:',
+        host: 'localhost:3000',
+      })
+    ).toBe('ws://localhost:3000/api/graph/stream');
+  });
+
+  it('resolves a root-relative /api base against the page origin (https)', () => {
+    expect(
+      toWebSocketUrl('/api/graph/stream', {
+        protocol: 'https:',
+        host: 'app.example.com',
+      })
+    ).toBe('wss://app.example.com/api/graph/stream');
+  });
+});
 
 describe('createGraphWebSocket', () => {
   let mockInstance: {

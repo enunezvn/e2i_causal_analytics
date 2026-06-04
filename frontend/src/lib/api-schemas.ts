@@ -1190,6 +1190,7 @@ export const PipelineHealthResponseWireSchema = z.object({
   failed_count: z.number().int().nonnegative(),
   pipelines: z.array(PipelineHealthWireSchema),
   check_latency_ms: z.number().int(),
+  data_provenance: z.string().optional(),
 });
 
 /** Faithful mirror of `AgentHealthResponse` (health_score.py). */
@@ -1201,6 +1202,7 @@ export const AgentHealthResponseWireSchema = z.object({
   agents: z.array(AgentHealthWireSchema),
   by_tier: z.record(z.string(), z.number().int()),
   check_latency_ms: z.number().int(),
+  data_provenance: z.string().optional(),
 });
 
 /** Faithful mirror of `HealthHistoryItem` (health_score.py HealthHistoryItem). */
