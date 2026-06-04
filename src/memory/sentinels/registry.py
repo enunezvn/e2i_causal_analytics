@@ -76,6 +76,7 @@ defense-in-depth CHECK constraints (non-negative, ≤ 365 days).
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -112,6 +113,48 @@ VALID_OPS = {">", ">=", "<", "<=", "==", "!="}
 # that introduced the invalidated_at column on these tables).
 # ----------------------------------------------------------------------------
 INVALIDATION_AWARE_TABLES = {"triggers", "ml_predictions", "executive_insights"}
+
+# ----------------------------------------------------------------------------
+# Tables a ``threshold_breach`` / ``freshness`` sentinel may watch. Each one
+# carries a ``brand`` column (so the evaluator's ``.eq("brand", brand)`` tenant
+# scoping holds) and a known primary key (see ``_pk_column_for_table``). This
+# mirrors the ``INVALIDATION_AWARE_TABLES`` allowlist and closes review finding
+# M8: ``table``/``column`` are operator-supplied and interpolated into a
+# PostgREST projection, so an off-allowlist table could read PHI tables or
+# escape brand scoping.
+# ----------------------------------------------------------------------------
+THRESHOLD_WATCHABLE_TABLES = {
+    "causal_paths",
+    "triggers",
+    "ml_predictions",
+    "episodic_memories",
+    "executive_insights",
+}
+
+# A column/ts_column must be a plain SQL identifier. PostgREST's projection
+# mini-language treats ``*``, ``,``, ``(``, ``)``, ``:`` specially (resource
+# embedding ``fk(colA,colB)``, aliasing, casts); restricting to this pattern
+# blocks projection-widening / foreign-table exfiltration (review finding M8).
+_SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _validate_watch_target(table: str, column: str, *, column_field: str = "column") -> None:
+    """Reject unknown watch tables and unsafe column identifiers.
+
+    Used by both ``_validate_pattern_config`` (registration time) and the
+    ``threshold_breach``/``freshness`` evaluators (evaluation time, so sentinels
+    persisted before this guard existed are still constrained). See finding M8.
+    """
+    if table not in THRESHOLD_WATCHABLE_TABLES:
+        raise ValueError(
+            f"table {table!r} is not an allowed sentinel watch target; "
+            f"allowed tables: {sorted(THRESHOLD_WATCHABLE_TABLES)}"
+        )
+    if not isinstance(column, str) or not _SAFE_IDENTIFIER_RE.match(column):
+        raise ValueError(
+            f"{column_field} {column!r} is not a plain SQL identifier "
+            f"(letters/digits/underscore, not starting with a digit)"
+        )
 
 
 # ----------------------------------------------------------------------------
@@ -245,10 +288,12 @@ def _validate_pattern_config(pattern_type: str, cfg: Dict[str, Any]) -> None:
                 raise ValueError(f"threshold_breach requires '{key}'")
         if cfg["op"] not in VALID_OPS:
             raise ValueError(f"unsupported op {cfg['op']!r}; allowed: {VALID_OPS}")
+        _validate_watch_target(cfg["table"], cfg["column"])
     elif pattern_type == "freshness":
         for key in ("table", "ts_column", "max_age_hours"):
             if key not in cfg:
                 raise ValueError(f"freshness requires '{key}'")
+        _validate_watch_target(cfg["table"], cfg["ts_column"], column_field="ts_column")
     elif pattern_type == "drift_score":
         if "max_drift_score" not in cfg:
             raise ValueError("drift_score requires 'max_drift_score'")
@@ -329,6 +374,10 @@ async def _eval_threshold_breach(cfg: Dict[str, Any], brand: str) -> List[Dict[s
     op = cfg["op"]
     value = cfg["value"]
 
+    # Defense in depth: re-validate at evaluation time so sentinels persisted
+    # before the registration-time guard existed cannot inject (finding M8).
+    _validate_watch_target(table, column)
+
     method_name = _OP_TO_METHOD[op]
     pk_col = _pk_column_for_table(table)
     query = client.table(table).select(f"{pk_col}, brand, {column}")
@@ -347,6 +396,8 @@ async def _eval_freshness(cfg: Dict[str, Any], brand: str) -> List[Dict[str, Any
     table = cfg["table"]
     ts_column = cfg["ts_column"]
     max_age_hours = float(cfg["max_age_hours"])
+    # Defense in depth: re-validate at evaluation time (finding M8).
+    _validate_watch_target(table, ts_column, column_field="ts_column")
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=max_age_hours)).isoformat()
 
     pk_col = _pk_column_for_table(table)

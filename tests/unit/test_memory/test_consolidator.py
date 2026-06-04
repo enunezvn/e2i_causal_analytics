@@ -21,6 +21,7 @@ class _FakeQuery:
         self._gte: Dict[str, Any] = {}
         self._update_payload: Dict[str, Any] = {}
         self._mode = None  # 'select' | 'update'
+        self._range: Optional[tuple] = None  # (start, end) inclusive, PostgREST-style
 
     def select(self, cols: str, count: Optional[str] = None) -> "_FakeQuery":
         self._mode = "select"
@@ -46,6 +47,10 @@ class _FakeQuery:
             self._is_null_cols.append(col)
         return self
 
+    def range(self, start: int, end: int) -> "_FakeQuery":
+        self._range = (start, end)
+        return self
+
     def _match(self) -> List[Dict[str, Any]]:
         rows = list(self.store.rows.get(self.table_name, []))
         for col, want in self._filters.items():
@@ -58,6 +63,9 @@ class _FakeQuery:
 
     def execute(self) -> MagicMock:
         rows = self._match()
+        if self._range is not None:
+            start, end = self._range
+            rows = rows[start : end + 1]
         if self._mode == "update":
             for r in rows:
                 for orig in self.store.rows[self.table_name]:
