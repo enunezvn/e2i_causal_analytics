@@ -2,8 +2,8 @@
 Cognitive Integration Bridge
 ============================
 
-Bridges the cognitive workflow (004_cognitive_workflow.py) with production
-memory services and the API layer.
+Bridges the cognitive workflow with production memory services and the API
+layer.
 
 This module provides:
 1. CognitiveService - Main service for executing cognitive cycles
