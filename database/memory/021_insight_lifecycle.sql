@@ -233,7 +233,9 @@ COMMENT ON TABLE executive_insights IS
 -- ----------------------------------------------------------------------------
 -- Walks insight_edges upward (target -> source). Returns (is_valid, broken_at,
 -- reason). is_valid=false if ANY ancestor is invalidated_at IS NOT NULL OR
--- (for causal_paths) validation_status = 'overturned'. Logs every check to
+-- (for causal_paths) validation_status = 'overturned'. This STABLE function
+-- returns the verdict only and writes nothing; the caller
+-- (/api/middleware/insight_verifier.py) logs each check to
 -- audit_chain_verification_log with verification_method='jit_provenance'.
 --
 -- Max recursion depth defaults to 16 to keep walks bounded; in practice

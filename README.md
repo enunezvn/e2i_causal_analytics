@@ -418,7 +418,7 @@ See `config/observability.yaml` for configuration and `docs/ARCHITECTURE.md` for
 
 **Working Memory** (Redis)
 - Session state, messages, evidence board
-- TTL: 3600 seconds
+- TTL: 86400 seconds (24 hours)
 
 **Episodic Memory** (Supabase + pgvector)
 - User queries, agent actions, events
