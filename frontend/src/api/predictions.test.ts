@@ -104,6 +104,46 @@ describe('Predictions API Client', () => {
       expect(result).toBeDefined();
       expect(result.models.length).toBeLessThanOrEqual(2);
     });
+
+    it('serializes `models` as REPEATED keys, not a comma-joined string', async () => {
+      // Backend reads `models: Optional[List[str]] = Query(...)` (predictions.py
+      // models_status). A comma-joined `?models=a,b` would be parsed as ONE
+      // model named "a,b"; the array must be sent as `?models=a&models=b`.
+      let capturedUrl = '';
+      server.use(
+        http.get(`${env.apiUrl}/models/status`, ({ request }) => {
+          capturedUrl = request.url;
+          return HttpResponse.json({
+            total_models: 2,
+            healthy_count: 2,
+            unhealthy_count: 0,
+            models: [
+              {
+                model_name: 'churn_model',
+                status: 'healthy',
+                endpoint: 'http://x/churn',
+                last_check: new Date().toISOString(),
+              },
+              {
+                model_name: 'conversion_model',
+                status: 'healthy',
+                endpoint: 'http://x/conversion',
+                last_check: new Date().toISOString(),
+              },
+            ],
+            timestamp: new Date().toISOString(),
+          });
+        })
+      );
+
+      await getModelsStatus(['churn_model', 'conversion_model']);
+
+      const params = new URL(capturedUrl).searchParams.getAll('models');
+      expect(params).toEqual(['churn_model', 'conversion_model']);
+      // The old `.join(',')` bug produced a single `models=churn_model,conversion_model`.
+      expect(params).not.toEqual(['churn_model,conversion_model']);
+      expect(new URL(capturedUrl).search).not.toContain('models%5B%5D');
+    });
   });
 
   // ===========================================================================

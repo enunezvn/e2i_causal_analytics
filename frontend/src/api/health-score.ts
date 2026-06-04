@@ -15,6 +15,15 @@
  */
 
 import { get } from '@/lib/api-client';
+import {
+  AgentHealthResponseWireSchema,
+  ComponentHealthResponseWireSchema,
+  HealthHistoryResponseWireSchema,
+  HealthScoreModelHealthResponseWireSchema,
+  HealthScoreResponseWireSchema,
+  HealthServiceStatusWireSchema,
+  PipelineHealthResponseWireSchema,
+} from '@/lib/api-schemas';
 import type {
   AgentHealthResponse,
   CheckScope,
@@ -57,7 +66,11 @@ const HEALTH_SCORE_BASE = '/health-score';
 export async function runHealthCheck(
   scope: CheckScope | string = 'full'
 ): Promise<HealthScoreResponse> {
-  return get<HealthScoreResponse>(`${HEALTH_SCORE_BASE}/check`, { scope });
+  return get<HealthScoreResponse>(
+    `${HEALTH_SCORE_BASE}/check`,
+    { scope },
+    { schema: HealthScoreResponseWireSchema }
+  );
 }
 
 /**
@@ -75,7 +88,9 @@ export async function runHealthCheck(
  * ```
  */
 export async function quickHealthCheck(): Promise<HealthScoreResponse> {
-  return get<HealthScoreResponse>(`${HEALTH_SCORE_BASE}/quick`);
+  return get<HealthScoreResponse>(`${HEALTH_SCORE_BASE}/quick`, undefined, {
+    schema: HealthScoreResponseWireSchema,
+  });
 }
 
 /**
@@ -96,7 +111,9 @@ export async function quickHealthCheck(): Promise<HealthScoreResponse> {
  * ```
  */
 export async function fullHealthCheck(): Promise<HealthScoreResponse> {
-  return get<HealthScoreResponse>(`${HEALTH_SCORE_BASE}/full`);
+  return get<HealthScoreResponse>(`${HEALTH_SCORE_BASE}/full`, undefined, {
+    schema: HealthScoreResponseWireSchema,
+  });
 }
 
 // =============================================================================
@@ -119,7 +136,11 @@ export async function fullHealthCheck(): Promise<HealthScoreResponse> {
  * ```
  */
 export async function getComponentHealth(): Promise<ComponentHealthResponse> {
-  return get<ComponentHealthResponse>(`${HEALTH_SCORE_BASE}/components`);
+  return get<ComponentHealthResponse>(
+    `${HEALTH_SCORE_BASE}/components`,
+    undefined,
+    { schema: ComponentHealthResponseWireSchema }
+  );
 }
 
 /**
@@ -140,7 +161,9 @@ export async function getComponentHealth(): Promise<ComponentHealthResponse> {
  * ```
  */
 export async function getModelHealth(): Promise<ModelHealthResponse> {
-  return get<ModelHealthResponse>(`${HEALTH_SCORE_BASE}/models`);
+  return get<ModelHealthResponse>(`${HEALTH_SCORE_BASE}/models`, undefined, {
+    schema: HealthScoreModelHealthResponseWireSchema,
+  });
 }
 
 /**
@@ -161,7 +184,11 @@ export async function getModelHealth(): Promise<ModelHealthResponse> {
  * ```
  */
 export async function getPipelineHealth(): Promise<PipelineHealthResponse> {
-  return get<PipelineHealthResponse>(`${HEALTH_SCORE_BASE}/pipelines`);
+  return get<PipelineHealthResponse>(
+    `${HEALTH_SCORE_BASE}/pipelines`,
+    undefined,
+    { schema: PipelineHealthResponseWireSchema }
+  );
 }
 
 /**
@@ -182,7 +209,9 @@ export async function getPipelineHealth(): Promise<PipelineHealthResponse> {
  * ```
  */
 export async function getAgentHealth(): Promise<AgentHealthResponse> {
-  return get<AgentHealthResponse>(`${HEALTH_SCORE_BASE}/agents`);
+  return get<AgentHealthResponse>(`${HEALTH_SCORE_BASE}/agents`, undefined, {
+    schema: AgentHealthResponseWireSchema,
+  });
 }
 
 // =============================================================================
@@ -210,7 +239,11 @@ export async function getAgentHealth(): Promise<AgentHealthResponse> {
 export async function getHealthHistory(
   limit: number = 20
 ): Promise<HealthHistoryResponse> {
-  return get<HealthHistoryResponse>(`${HEALTH_SCORE_BASE}/history`, { limit });
+  return get<HealthHistoryResponse>(
+    `${HEALTH_SCORE_BASE}/history`,
+    { limit },
+    { schema: HealthHistoryResponseWireSchema }
+  );
 }
 
 // =============================================================================
@@ -234,7 +267,9 @@ export async function getHealthHistory(
  * ```
  */
 export async function getHealthServiceStatus(): Promise<HealthServiceStatus> {
-  return get<HealthServiceStatus>(`${HEALTH_SCORE_BASE}/status`);
+  return get<HealthServiceStatus>(`${HEALTH_SCORE_BASE}/status`, undefined, {
+    schema: HealthServiceStatusWireSchema,
+  });
 }
 
 // =============================================================================

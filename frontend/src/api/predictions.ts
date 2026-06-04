@@ -169,11 +169,14 @@ export async function getModelInfo(
 export async function getModelsStatus(
   models?: string[]
 ): Promise<ModelsStatusResponse> {
+  // The backend reads `models: Optional[List[str]] = Query(...)` (routes/
+  // predictions.py models_status), which expects repeated keys
+  // (`?models=churn_model&models=conversion_model`). A comma-joined single
+  // value would be parsed by FastAPI as one model named "churn_model,
+  // conversion_model"; `repeatArrayParams` sends the array as repeated keys.
   return get<ModelsStatusResponse>(
     `${MODELS_BASE}/status`,
-    {
-      models: models?.join(','),
-    },
-    { schema: ModelsStatusResponseWireSchema }
+    { models },
+    { schema: ModelsStatusResponseWireSchema, repeatArrayParams: true }
   );
 }
