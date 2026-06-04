@@ -391,6 +391,26 @@ class TestProceduralFeedback:
         assert response.status_code == 200
         mock_procedural_memory_functions["update"].assert_called_once()
 
+    def test_feedback_partial_brand_overlap_is_allowed(
+        self, mock_procedural_memory_functions, brand_scoped_viewer
+    ):
+        """A procedure scoped to MULTIPLE brands is ratable as long as the
+        caller is granted at least one of them — exercises the ``any()`` overlap
+        (the grant ``BrandA`` matches the procedure's second listed brand)."""
+        mock_procedural_memory_functions["get"].return_value = {
+            "procedure_id": "proc_multi",
+            "usage_count": 8,
+            "success_count": 4,
+            "applicable_brands": ["BrandB", "BrandA"],
+        }
+        response = client.post(
+            "/api/memory/procedural/feedback",
+            json={"procedure_id": "proc_multi", "outcome": "success", "score": 0.7},
+        )
+
+        assert response.status_code == 200
+        mock_procedural_memory_functions["update"].assert_called_once()
+
     def test_feedback_global_procedure_is_allowed(
         self, mock_procedural_memory_functions, brand_scoped_viewer
     ):
