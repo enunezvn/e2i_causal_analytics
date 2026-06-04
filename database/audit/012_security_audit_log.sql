@@ -180,28 +180,45 @@ ORDER BY timestamp DESC;
 -- RLS Policies (Enable Row Level Security)
 -- =============================================================================
 
--- Enable RLS
+-- Enable RLS (idempotent — no-op if already enabled)
 ALTER TABLE security_audit_log ENABLE ROW LEVEL SECURITY;
 
--- Admin can read all
+-- Admin can read all.
+-- RBAC reconciliation (2026-06-03): the original policy referenced a
+-- `user_roles(user_id, role)` table and a `security_admin` role that exist
+-- NOWHERE in this project — RBAC is implemented on chatbot_user_profiles.role
+-- (enum user_role: viewer<analyst<operator<admin) via chat/036_user_roles.sql,
+-- the same table/column the canonical has_role() function checks. The migration
+-- could never be applied as written (CREATE POLICY validates the referenced
+-- relation, and user_roles does not exist). Repointed to the real RBAC source
+-- so the policy is creatable and enforces the intended "admins read all" rule.
+-- (The user_role enum has no `security_admin`, so the original two-role list
+-- collapses to `admin`. An inline `cup.role = 'admin'` is used rather than the
+-- canonical has_role('admin') so the policy carries no dependency on chat/036's
+-- function during a fresh-deploy scour, where audit/ sorts before chat/.)
+-- CREATE POLICY is not idempotent, so each policy is dropped-if-exists first to
+-- make this migration safe to re-run.
+DROP POLICY IF EXISTS security_audit_admin_read ON security_audit_log;
 CREATE POLICY security_audit_admin_read ON security_audit_log
     FOR SELECT
     TO authenticated
     USING (
         EXISTS (
-            SELECT 1 FROM user_roles ur
-            WHERE ur.user_id = auth.uid()::text
-              AND ur.role IN ('admin', 'security_admin')
+            SELECT 1 FROM chatbot_user_profiles cup
+            WHERE cup.id = auth.uid()
+              AND cup.role = 'admin'
         )
     );
 
 -- Service role can insert
+DROP POLICY IF EXISTS security_audit_service_insert ON security_audit_log;
 CREATE POLICY security_audit_service_insert ON security_audit_log
     FOR INSERT
     TO service_role
     WITH CHECK (true);
 
 -- Regular users can see their own events
+DROP POLICY IF EXISTS security_audit_user_own_read ON security_audit_log;
 CREATE POLICY security_audit_user_own_read ON security_audit_log
     FOR SELECT
     TO authenticated
@@ -274,7 +291,10 @@ RETURNS TABLE (
     event_id UUID,
     event_type VARCHAR,
     severity VARCHAR,
-    timestamp TIMESTAMPTZ,
+    -- `timestamp` is non-reserved as a column name but ILLEGAL as a function
+    -- return-column name in PostgreSQL; renamed to event_timestamp so the
+    -- function is creatable (returned positionally, so the body is unchanged).
+    event_timestamp TIMESTAMPTZ,
     message TEXT,
     client_ip INET,
     endpoint VARCHAR,

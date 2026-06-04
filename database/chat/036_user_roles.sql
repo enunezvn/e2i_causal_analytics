@@ -2,11 +2,15 @@
 -- Date: 2026-01-21
 -- Description: Implements a 4-role hierarchical system: ADMIN > OPERATOR > ANALYST > VIEWER
 
--- Step 1: Create the user_role enum type
-CREATE TYPE user_role AS ENUM ('viewer', 'analyst', 'operator', 'admin');
+-- Step 1: Create the user_role enum type (idempotent — safe to re-run)
+DO $$ BEGIN
+    CREATE TYPE user_role AS ENUM ('viewer', 'analyst', 'operator', 'admin');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
 -- Step 2: Add role column to chatbot_user_profiles with default 'viewer'
-ALTER TABLE chatbot_user_profiles ADD COLUMN role user_role DEFAULT 'viewer' NOT NULL;
+ALTER TABLE chatbot_user_profiles ADD COLUMN IF NOT EXISTS role user_role DEFAULT 'viewer' NOT NULL;
 
 -- Step 3: Migrate existing admins - set role to 'admin' where is_admin is TRUE
 UPDATE chatbot_user_profiles SET role = 'admin' WHERE is_admin = TRUE;
@@ -60,7 +64,7 @@ END;
 $$;
 
 -- Step 6: Create index on role column for efficient filtering
-CREATE INDEX idx_chatbot_user_profiles_role ON chatbot_user_profiles(role);
+CREATE INDEX IF NOT EXISTS idx_chatbot_user_profiles_role ON chatbot_user_profiles(role);
 
 -- Step 7: Add comment documenting the role hierarchy
 COMMENT ON COLUMN chatbot_user_profiles.role IS 'User role for RBAC: viewer (read-only) < analyst (run analyses) < operator (manage experiments) < admin (full access)';
