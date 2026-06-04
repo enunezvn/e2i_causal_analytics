@@ -153,6 +153,23 @@ VALUES ('ml_prediction', 'T030_PRED_BAD', 'executive_insight',
 SELECT 'BAD_RESULT:' || CASE WHEN is_valid THEN 'VALID' ELSE 'STALE' END
   FROM verify_insight_chain('cccccccc-0000-0000-0000-000000000001', 'executive_insight');
 
+-- SELF: the self-check path — querying the invalidated ml_prediction directly.
+SELECT 'SELF_RESULT:' || CASE WHEN is_valid THEN 'VALID' ELSE 'STALE' END
+  FROM verify_insight_chain('T030_PRED_BAD', 'ml_prediction');
+
+-- EXEC: an executive_insight consolidated_from an INVALIDATED executive_insight.
+INSERT INTO executive_insights (insight_id, title, narrative, brand, kpi,
+                                invalidated_at, invalidation_reason)
+VALUES ('cccccccc-0000-0000-0000-000000000003', 'T030 parent', 'p', 'T030Brand',
+        'T030S2p', now(), 'recalled (test 030)');
+INSERT INTO executive_insights (insight_id, title, narrative, brand, kpi)
+VALUES ('cccccccc-0000-0000-0000-000000000004', 'T030 child', 'c', 'T030Brand', 'T030S2c');
+INSERT INTO insight_edges (source_type, source_id, target_type, target_id, edge_type, brand)
+VALUES ('executive_insight', 'cccccccc-0000-0000-0000-000000000003', 'executive_insight',
+        'cccccccc-0000-0000-0000-000000000004', 'consolidated_from', 'T030Brand');
+SELECT 'EXEC_RESULT:' || CASE WHEN is_valid THEN 'VALID' ELSE 'STALE' END
+  FROM verify_insight_chain('cccccccc-0000-0000-0000-000000000004', 'executive_insight');
+
 -- S4: control — the SAME shape but a VALID (not invalidated) prediction.
 INSERT INTO ml_predictions (prediction_id, prediction_timestamp, patient_id, model_type)
 VALUES ('T030_PRED_OK', now(), 'PAT_T030_2', 'risk_score');
@@ -201,6 +218,12 @@ def test_functional_invalidated_ml_prediction_ancestor_is_flagged() -> None:
     out = run.stdout
     assert "BAD_RESULT:STALE" in out, (
         f"invalidated ml_prediction ancestor must verify as STALE (is_valid=false); got:\n{out}"
+    )
+    assert "SELF_RESULT:STALE" in out, (
+        f"self-check on an invalidated ml_prediction must verify as STALE; got:\n{out}"
+    )
+    assert "EXEC_RESULT:STALE" in out, (
+        f"invalidated executive_insight ancestor must verify as STALE; got:\n{out}"
     )
     assert "OK_RESULT:VALID" in out, (
         f"valid ml_prediction ancestor must stay VALID (no over-flagging); got:\n{out}"
