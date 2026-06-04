@@ -62,12 +62,18 @@ class SyntheticEffectDataProvider:
         self.seed = seed
 
     def get_training_frame(
-        self, intervention_type: str, brand: str, twin_type: str
+        self,
+        intervention_type: str,
+        brand: str,
+        twin_type: str,
+        reference_covariates: pd.DataFrame | None = None,
     ) -> TrainingFrame:
         if intervention_type not in SUPPORTED_INTERVENTIONS:
             raise EffectDataUnavailable(
                 f"SyntheticEffectDataProvider: unsupported intervention '{intervention_type}'."
             )
+        if reference_covariates is not None:
+            return self._frame_from_reference(reference_covariates)
         # brand/twin_type are unused: the synthetic DGP is intervention-parameterized only.
         rng = np.random.default_rng(self.seed)
         n = self.n
@@ -98,5 +104,40 @@ class SyntheticEffectDataProvider:
             outcome_var="outcome",
             confounders=list(_CONFOUNDERS),
             effect_modifiers=["decile", "engagement_score"],
+            ground_truth_ate=self.true_ate,
+        )
+
+    def _frame_from_reference(self, reference_covariates: pd.DataFrame) -> TrainingFrame:
+        """Generate a synthetic labeled frame whose covariates are RESAMPLED from a
+        real twin population (so a synthetic-trained model scores those twins
+        in-distribution), with the known ``true_ate`` injected on a binary outcome.
+        """
+        numeric = reference_covariates.select_dtypes(include=[np.number])
+        if numeric.shape[1] == 0 or len(numeric) == 0:
+            raise EffectDataUnavailable(
+                "SyntheticEffectDataProvider: reference_covariates has no numeric columns/rows."
+            )
+        rng = np.random.default_rng(self.seed)
+        n = self.n
+        idx = rng.integers(0, len(numeric), size=n)
+        x = numeric.iloc[idx].reset_index(drop=True)
+        std = x.std(ddof=0).replace(0, 1.0)
+        x_z = (x - x.mean()) / std
+        treatment = rng.integers(0, 2, size=n)
+        # Mild covariate dependence keeps p0 within an unclipped band so the
+        # marginal treated-vs-control gap equals true_ate.
+        lin = 0.05 * x_z.mean(axis=1).to_numpy()
+        p0 = np.clip(0.35 + lin, 0.15, 0.55)
+        p = np.clip(p0 + self.true_ate * treatment, 0.01, 0.99)
+        outcome = (rng.random(n) < p).astype(int)
+        df = x.copy()
+        df["treatment"] = treatment
+        df["outcome"] = outcome
+        return TrainingFrame(
+            df=df,
+            treatment_var="treatment",
+            outcome_var="outcome",
+            confounders=list(numeric.columns),
+            effect_modifiers=[],
             ground_truth_ate=self.true_ate,
         )
