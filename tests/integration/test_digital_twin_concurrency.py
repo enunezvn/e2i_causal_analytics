@@ -21,6 +21,7 @@ from uuid import uuid4
 import numpy as np
 import pytest
 
+from src.digital_twin.effect import PROVENANCE_SYNTHETIC
 from src.digital_twin.models.simulation_models import (
     EffectHeterogeneity,
     InterventionConfig,
@@ -429,7 +430,18 @@ class TestConcurrentSimulations:
     """Tests for concurrent simulation execution."""
 
     def test_concurrent_simulations_independent(self, sample_population):
-        """Test that concurrent simulations produce independent results."""
+        """Concurrent simulations on a shared engine are isolated and uncorrupted.
+
+        The v1 effect engine is deterministic (fixed-seed synthetic provider +
+        seeded uplift estimator, with a fresh local model fit per call) and
+        ``intensity_multiplier`` is deliberately NOT a v1 effect modifier — the
+        synthetic DGP yields the known ``true_ate`` regardless of intervention
+        parameters (see the engine design note). So independence is shown by
+        isolated, individually well-formed result objects produced without
+        cross-contamination; and because the inputs are effectively equivalent,
+        by deterministic agreement across threads. A data race would instead
+        surface as corrupted, partial, or diverging values.
+        """
         import concurrent.futures
 
         engine = SimulationEngine(sample_population)
@@ -450,12 +462,22 @@ class TestConcurrentSimulations:
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
             results = list(executor.map(run_simulation, configs))
 
-        # All should complete successfully
+        # Every thread completed without crashing.
         assert all(r.status == SimulationStatus.COMPLETED for r in results)
-
-        # Results should be different due to different intensities
+        # Each call returned its own object — no shared/clobbered reference.
+        assert len({id(r) for r in results}) == 3
+        # Each result is internally complete and well-formed (no partial writes).
+        for r in results:
+            assert np.isfinite(r.simulated_ate)
+            assert r.simulated_ci_lower <= r.simulated_ate <= r.simulated_ci_upper
+            assert r.simulated_std_error >= 0
+            assert r.recommendation is not None
+            assert r.data_provenance == PROVENANCE_SYNTHETIC
+        # Deterministic engine + intensity is a v1 no-op => identical ATEs across
+        # threads. This agreement proves the concurrent runs did not corrupt one
+        # another (a race would produce diverging or garbage values).
         ates = [r.simulated_ate for r in results]
-        assert len({round(ate, 4) for ate in ates}) > 1  # Not all identical
+        assert len({round(ate, 4) for ate in ates}) == 1
 
     def test_concurrent_simulations_same_config(self, sample_population):
         """Test concurrent simulations with same config."""

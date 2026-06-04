@@ -168,7 +168,14 @@ class SimulateRequest(BaseModel):
         default=10000, ge=100, le=100000, description="Number of twins to simulate"
     )
     confidence_level: float = Field(
-        default=0.95, ge=0.8, le=0.99, description="Confidence level for CI"
+        default=0.95,
+        ge=0.8,
+        le=0.99,
+        description=(
+            "Confidence level for CI. "
+            "(v1: the simulation CI is the estimator's training-evidence 95% interval; "
+            "this value is currently not applied)"
+        ),
     )
     calculate_heterogeneity: bool = Field(
         default=True, description="Calculate heterogeneous effects"

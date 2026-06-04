@@ -125,7 +125,11 @@ dev = [
     "pytest-xdist>=3.5.0",
     "pytest-timeout>=2.3.0",
     "black>=24.8.0",
-    "ruff>=0.6.0",
+    # ruff's formatter output is version-sensitive and gated exactly in CI
+    # (ruff==0.14.10 in backend-tests.yml, requirements*.txt, .pre-commit-config.yaml).
+    # Pin it here too so a pyproject-based dev install can't drift onto a newer ruff
+    # that reformats differently and fails the lint gate. Bump all five in lockstep.
+    "ruff==0.14.10",
     "mypy>=1.11.0",
     "pre-commit>=3.7.0",
     "detect-secrets>=1.5.0",

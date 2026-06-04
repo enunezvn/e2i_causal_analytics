@@ -2,26 +2,37 @@
 Simulation Engine
 =================
 
-Executes intervention simulations on digital twin populations.
-Applies treatment effects based on intervention configuration and
-estimates counterfactual outcomes.
+Executes intervention simulations on digital twin populations using the real
+uplift effect engine (``src.digital_twin.effect``). Fail-closed: a fabricated
+ATE is never emitted; bad/insufficient data yields a FAILED result.
 
 The simulation follows these steps:
 1. Apply population filters to select relevant twins
-2. Estimate treatment effect based on intervention type
-3. Apply heterogeneous effects by subgroup
-4. Calculate aggregate statistics (ATE, CI)
-5. Generate recommendation based on thresholds
+2. Fit an uplift model on a labeled (treatment, outcome, confounders) frame
+   from the effect provider and score per-twin uplift over the population
+3. Derive heterogeneous effects from the per-twin uplift scores
+4. Use the estimate's CI-based ATE bounds
+5. Generate a DEPLOY / REFINE / SKIP recommendation from the CI-based policy
 """
 
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import List, Optional
 from uuid import uuid4
 
 import numpy as np
-from scipy import stats
+import pandas as pd
+
+from src.causal_engine.errors import EstimationError
+from src.digital_twin.effect import (
+    EffectDataProvider,
+    EffectDataUnavailable,
+    PolicyThresholds,
+    RecommendationPolicy,
+    SyntheticEffectDataProvider,
+    TwinEffectEstimator,
+)
 
 from .models.simulation_models import (
     EffectHeterogeneity,
@@ -67,38 +78,6 @@ class SimulationEngine:
         >>> print(result.recommendation)
     """
 
-    # Effect size parameters by intervention type (simplified model)
-    INTERVENTION_EFFECTS: Dict[str, Dict[str, Any]] = {
-        "email_campaign": {
-            "base_effect": 0.05,
-            "variance": 0.02,
-            "channel_multiplier": {"email": 1.0, "digital": 0.8},
-        },
-        "call_frequency_increase": {
-            "base_effect": 0.08,
-            "variance": 0.03,
-            "intensity_factor": 0.02,  # Additional effect per call
-        },
-        "speaker_program_invitation": {
-            "base_effect": 0.12,
-            "variance": 0.04,
-            "tier_multiplier": {1: 1.5, 2: 1.2, 3: 1.0, 4: 0.8, 5: 0.6},
-        },
-        "sample_distribution": {
-            "base_effect": 0.03,
-            "variance": 0.01,
-        },
-        "peer_influence_activation": {
-            "base_effect": 0.10,
-            "variance": 0.04,
-            "influence_threshold": 0.7,  # Min peer influence score
-        },
-        "digital_engagement": {
-            "base_effect": 0.06,
-            "variance": 0.02,
-        },
-    }
-
     # Thresholds for recommendations
     DEFAULT_MIN_EFFECT_THRESHOLD = 0.05  # 5% minimum effect
     DEFAULT_CONFIDENCE_THRESHOLD = 0.70
@@ -110,6 +89,8 @@ class SimulationEngine:
         confidence_threshold: float = DEFAULT_CONFIDENCE_THRESHOLD,
         model_fidelity_score: Optional[float] = None,
         cache: Optional["SimulationCache"] = None,
+        effect_provider: Optional[EffectDataProvider] = None,
+        effect_estimator: Optional[TwinEffectEstimator] = None,
     ):
         """
         Initialize simulation engine.
@@ -120,6 +101,10 @@ class SimulationEngine:
             confidence_threshold: Minimum confidence required
             model_fidelity_score: Fidelity score of generator model
             cache: Optional simulation cache for result caching
+            effect_provider: Labeled-data provider for uplift fitting
+                (defaults to the synthetic known-effect DGP). Injectable for tests.
+            effect_estimator: Uplift effect estimator (defaults to the real
+                TwinEffectEstimator). Injectable for tests.
         """
         self.population = population
         self.model_id = population.model_id
@@ -127,6 +112,8 @@ class SimulationEngine:
         self.confidence_threshold = confidence_threshold
         self.model_fidelity_score = model_fidelity_score
         self._cache = cache
+        self._effect_provider = effect_provider or SyntheticEffectDataProvider()
+        self._effect_estimator = effect_estimator or TwinEffectEstimator()
 
         logger.info(
             f"Initialized SimulationEngine with {len(population)} twins "
@@ -209,31 +196,46 @@ class SimulationEngine:
                 execution_time_ms=int((time.time() - start_time) * 1000),
             )
 
-        # Simulate treatment effects
-        treatment_effects = self._simulate_effects(
-            filtered_population.twins,
-            intervention_config,
-        )
-
-        # Calculate aggregate statistics
-        ate, ci_lower, ci_upper, std_error = self._calculate_statistics(
-            treatment_effects,
-            confidence_level,
-        )
-
-        # Calculate heterogeneous effects
-        heterogeneity = EffectHeterogeneity()
-        if calculate_heterogeneity:
-            heterogeneity = self._calculate_heterogeneity(
-                filtered_population.twins,
-                treatment_effects,
+        # Estimate the real uplift effect (fail-closed: no fabricated ATE).
+        # The provider supplies a labeled (treatment, outcome, confounders) frame;
+        # the estimator fits an uplift model on it and scores the twin population.
+        twins = filtered_population.twins
+        twin_df = pd.DataFrame([t.features for t in twins])
+        try:
+            frame = self._effect_provider.get_training_frame(
+                intervention_config.intervention_type,
+                brand=str(self.population.brand),
+                twin_type=str(self.population.twin_type),
+                reference_covariates=twin_df,
+            )
+            estimate = self._effect_estimator.estimate(frame, twin_df)
+        except (EffectDataUnavailable, EstimationError) as e:
+            return self._create_error_result(
+                intervention_config,
+                population_filter or PopulationFilter(),
+                f"Effect estimation failed: {e}",
+                execution_time_ms=int((time.time() - start_time) * 1000),
             )
 
-        # Generate recommendation
-        recommendation, rationale = self._generate_recommendation(ate, ci_lower, ci_upper, n_twins)
+        treatment_effects = list(estimate.per_twin_uplift.ravel())
+        ate = estimate.ate
+        ci_lower = estimate.ate_ci_lower
+        ci_upper = estimate.ate_ci_upper
+        # SE consistent with the training-evidence CI (CI = ate +/- 1.96*SE),
+        # so it does not shrink with the twin count.
+        std_error = float((ci_upper - ci_lower) / (2 * 1.96))
 
-        # Calculate recommended sample size for real experiment
-        recommended_n = self._calculate_recommended_sample_size(ate, std_error)
+        # Calculate heterogeneous effects from the per-twin uplift scores
+        heterogeneity = EffectHeterogeneity()
+        if calculate_heterogeneity:
+            heterogeneity = self._calculate_heterogeneity(twins, treatment_effects)
+
+        # Generate recommendation from the CI-based policy
+        baseline_rate = float(np.mean([t.baseline_propensity for t in twins]))
+        rec, rationale, recommended_n = RecommendationPolicy(
+            PolicyThresholds(min_effect=self.min_effect_threshold)
+        ).decide(estimate, baseline_rate=baseline_rate)
+        recommendation = SimulationRecommendation(rec.value)
 
         # Check fidelity warnings
         fidelity_warning = False
@@ -268,6 +270,7 @@ class SimulationEngine:
             fidelity_warning=fidelity_warning,
             fidelity_warning_reason=fidelity_warning_reason,
             model_fidelity_score=self.model_fidelity_score,
+            data_provenance=estimate.data_provenance,
             status=SimulationStatus.COMPLETED,
             execution_time_ms=execution_time_ms,
             completed_at=datetime.now(timezone.utc),
@@ -341,130 +344,6 @@ class SimulationEngine:
 
         return True
 
-    def _simulate_effects(
-        self,
-        twins: List[DigitalTwin],
-        config: InterventionConfig,
-    ) -> List[float]:
-        """Simulate treatment effect for each twin."""
-        intervention_type = config.intervention_type
-
-        # Get intervention parameters
-        params: Dict[str, Any] = self.INTERVENTION_EFFECTS.get(
-            intervention_type, {"base_effect": 0.05, "variance": 0.02}
-        )
-
-        effects = []
-        for twin in twins:
-            effect = self._calculate_individual_effect(twin, config, params)
-            effects.append(effect)
-
-        return effects
-
-    def _calculate_individual_effect(
-        self,
-        twin: DigitalTwin,
-        config: InterventionConfig,
-        params: Dict[str, Any],
-    ) -> float:
-        """Calculate treatment effect for individual twin."""
-        features = twin.features
-        base_effect = params["base_effect"]
-        variance = params["variance"]
-
-        # Apply intervention-specific modifiers
-        effect_multiplier = 1.0
-
-        # Decile-based multiplier (higher deciles = lower effect)
-        decile = features.get("decile", 5)
-        # Clamp decile to valid range [1, 10]
-        decile = max(1, min(10, decile))
-        decile_mult = 1.2 - (decile - 1) * 0.04
-        effect_multiplier *= decile_mult
-
-        # Engagement-based multiplier
-        engagement = features.get("digital_engagement_score", 0.5)
-        # Clamp engagement to valid range [0, 1]
-        engagement = max(0.0, min(1.0, engagement))
-        engagement_mult = 0.8 + 0.4 * engagement
-        effect_multiplier *= engagement_mult
-
-        # Adoption stage multiplier
-        adoption_stage = features.get("adoption_stage", "early_majority")
-        adoption_multipliers = {
-            "innovator": 0.6,  # Already adopted, less room to grow
-            "early_adopter": 0.8,
-            "early_majority": 1.0,
-            "late_majority": 1.2,
-            "laggard": 1.4,
-        }
-        adoption_mult = adoption_multipliers.get(adoption_stage, 1.0)
-        effect_multiplier *= adoption_mult
-
-        # Intensity multiplier from config (clamp to valid range)
-        intensity_mult = max(0.0, min(10.0, config.intensity_multiplier))
-        effect_multiplier *= intensity_mult
-
-        # Duration adjustment (longer = stronger, with diminishing returns)
-        # Handle edge case of zero/negative duration
-        duration_weeks = max(1, config.duration_weeks)
-        duration_factor = np.log1p(duration_weeks) / np.log1p(8)  # Normalized to 8 weeks
-        effect_multiplier *= duration_factor
-
-        # Channel-specific adjustments
-        channel_mult = 1.0
-        if "channel_multiplier" in params and config.channel:
-            channel_mult = params["channel_multiplier"].get(config.channel, 1.0)
-            effect_multiplier *= channel_mult
-
-        # Apply propensity weighting (higher propensity = more responsive)
-        propensity = max(0.0, min(1.0, twin.baseline_propensity))
-        propensity_mult = 0.8 + 0.4 * propensity
-        effect_multiplier *= propensity_mult
-
-        # Log all modifier calculations at DEBUG level
-        logger.debug(
-            f"Effect modifiers for twin {twin.twin_id}: "
-            f"base_effect={base_effect:.4f}, "
-            f"decile={decile} (mult={decile_mult:.4f}), "
-            f"engagement={engagement:.4f} (mult={engagement_mult:.4f}), "
-            f"adoption={adoption_stage} (mult={adoption_mult:.4f}), "
-            f"intensity={intensity_mult:.4f}, "
-            f"duration={duration_weeks}wk (factor={duration_factor:.4f}), "
-            f"channel={config.channel} (mult={channel_mult:.4f}), "
-            f"propensity={propensity:.4f} (mult={propensity_mult:.4f}), "
-            f"total_multiplier={effect_multiplier:.4f}"
-        )
-
-        # Calculate final effect with noise
-        effect = base_effect * effect_multiplier
-        effect += np.random.normal(0, variance)
-
-        logger.debug(
-            f"Final effect for twin {twin.twin_id}: "
-            f"effect={effect:.4f} (before_noise={base_effect * effect_multiplier:.4f})"
-        )
-
-        return float(effect)
-
-    def _calculate_statistics(
-        self,
-        effects: List[float],
-        confidence_level: float,
-    ) -> Tuple[float, float, float, float]:
-        """Calculate aggregate statistics from effects."""
-        effects_array = np.array(effects)
-
-        ate = float(np.mean(effects_array))
-        std_error = float(stats.sem(effects_array))
-
-        # Calculate confidence interval
-        z_score = stats.norm.ppf(1 - (1 - confidence_level) / 2)
-        ci_lower = ate - z_score * std_error
-        ci_upper = ate + z_score * std_error
-
-        return ate, ci_lower, ci_upper, std_error
-
     def _calculate_heterogeneity(
         self,
         twins: List[DigitalTwin],
@@ -474,10 +353,10 @@ class SimulationEngine:
         heterogeneity = EffectHeterogeneity()
 
         # Group by specialty
-        specialty_groups: Dict[str, List[float]] = {}
-        decile_groups: Dict[str, List[float]] = {}
-        region_groups: Dict[str, List[float]] = {}
-        adoption_groups: Dict[str, List[float]] = {}
+        specialty_groups: dict[str, List[float]] = {}
+        decile_groups: dict[str, List[float]] = {}
+        region_groups: dict[str, List[float]] = {}
+        adoption_groups: dict[str, List[float]] = {}
 
         for twin, effect in zip(twins, effects, strict=False):
             features = twin.features
@@ -495,7 +374,7 @@ class SimulationEngine:
             adoption_groups.setdefault(adoption, []).append(effect)
 
         # Calculate stats for each group
-        def calc_group_stats(groups: Dict[str, List[float]]) -> Dict[str, Dict[str, float]]:
+        def calc_group_stats(groups: dict[str, List[float]]) -> dict[str, dict[str, float]]:
             result = {}
             for name, group_effects in groups.items():
                 if len(group_effects) >= 10:  # Min sample size
@@ -512,78 +391,6 @@ class SimulationEngine:
         heterogeneity.by_adoption_stage = calc_group_stats(adoption_groups)
 
         return heterogeneity
-
-    def _generate_recommendation(
-        self,
-        ate: float,
-        ci_lower: float,
-        ci_upper: float,
-        n_twins: int,
-    ) -> Tuple[SimulationRecommendation, str]:
-        """Generate recommendation based on simulation results."""
-
-        # Check if effect is too small
-        if abs(ate) < self.min_effect_threshold:
-            return (
-                SimulationRecommendation.SKIP,
-                f"Simulated ATE ({ate:.4f}) below minimum threshold "
-                f"({self.min_effect_threshold}). Predicted impact insufficient "
-                f"to justify experiment costs.",
-            )
-
-        # Check if CI includes zero (not statistically significant)
-        if ci_lower <= 0 <= ci_upper:
-            return (
-                SimulationRecommendation.REFINE,
-                f"Effect not statistically significant (CI includes zero: "
-                f"[{ci_lower:.4f}, {ci_upper:.4f}]). Consider refining "
-                f"intervention design or increasing duration.",
-            )
-
-        # Check if wide confidence interval (high uncertainty)
-        ci_width = ci_upper - ci_lower
-        if ci_width > abs(ate):
-            return (
-                SimulationRecommendation.REFINE,
-                f"High uncertainty in effect estimate (CI width {ci_width:.4f} "
-                f"> ATE {abs(ate):.4f}). Consider more targeted population "
-                f"or stronger intervention.",
-            )
-
-        # Recommend deployment
-        effect_direction = "positive" if ate > 0 else "negative"
-        return (
-            SimulationRecommendation.DEPLOY,
-            f"Simulation predicts {effect_direction} effect (ATE={ate:.4f}, "
-            f"CI=[{ci_lower:.4f}, {ci_upper:.4f}]). Effect exceeds minimum "
-            f"threshold and is statistically significant. Proceed with "
-            f"real-world A/B test.",
-        )
-
-    def _calculate_recommended_sample_size(
-        self,
-        ate: float,
-        std_error: float,
-        power: float = 0.8,
-        alpha: float = 0.05,
-    ) -> int:
-        """Calculate recommended sample size for real experiment."""
-        if abs(ate) < 0.001:
-            return 10000  # Default for very small effects
-
-        # Standard sample size calculation for two-sample t-test
-        z_alpha = stats.norm.ppf(1 - alpha / 2)
-        z_beta = stats.norm.ppf(power)
-
-        # Estimate variance from simulation
-        variance = (std_error * np.sqrt(len(self.population.twins))) ** 2
-
-        n = int(2 * ((z_alpha + z_beta) ** 2) * variance / (ate**2))
-
-        # Apply minimum and maximum bounds
-        n = max(100, min(n, 50000))
-
-        return n
 
     def _calculate_simulation_confidence(
         self,
