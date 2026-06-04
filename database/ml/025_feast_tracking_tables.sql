@@ -58,10 +58,10 @@ CREATE TABLE IF NOT EXISTS ml_feast_feature_views (
 );
 
 -- Indexes for ml_feast_feature_views
-CREATE INDEX idx_feast_views_name ON ml_feast_feature_views(name);
-CREATE INDEX idx_feast_views_project ON ml_feast_feature_views(project);
-CREATE INDEX idx_feast_views_source ON ml_feast_feature_views(source_type);
-CREATE INDEX idx_feast_views_active ON ml_feast_feature_views(deleted_at)
+CREATE INDEX IF NOT EXISTS idx_feast_views_name ON ml_feast_feature_views(name);
+CREATE INDEX IF NOT EXISTS idx_feast_views_project ON ml_feast_feature_views(project);
+CREATE INDEX IF NOT EXISTS idx_feast_views_source ON ml_feast_feature_views(source_type);
+CREATE INDEX IF NOT EXISTS idx_feast_views_active ON ml_feast_feature_views(deleted_at)
     WHERE deleted_at IS NULL;
 
 -- ============================================================================
@@ -107,11 +107,11 @@ CREATE TABLE IF NOT EXISTS ml_feast_materialization_jobs (
 );
 
 -- Indexes for ml_feast_materialization_jobs
-CREATE INDEX idx_feast_jobs_view ON ml_feast_materialization_jobs(feature_view_id);
-CREATE INDEX idx_feast_jobs_view_name ON ml_feast_materialization_jobs(feature_view_name);
-CREATE INDEX idx_feast_jobs_status ON ml_feast_materialization_jobs(status);
-CREATE INDEX idx_feast_jobs_created ON ml_feast_materialization_jobs(created_at DESC);
-CREATE INDEX idx_feast_jobs_time_range ON ml_feast_materialization_jobs(start_time, end_time);
+CREATE INDEX IF NOT EXISTS idx_feast_jobs_view ON ml_feast_materialization_jobs(feature_view_id);
+CREATE INDEX IF NOT EXISTS idx_feast_jobs_view_name ON ml_feast_materialization_jobs(feature_view_name);
+CREATE INDEX IF NOT EXISTS idx_feast_jobs_status ON ml_feast_materialization_jobs(status);
+CREATE INDEX IF NOT EXISTS idx_feast_jobs_created ON ml_feast_materialization_jobs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_feast_jobs_time_range ON ml_feast_materialization_jobs(start_time, end_time);
 
 -- Note: Partial index with NOW() removed - PostgreSQL requires IMMUTABLE functions in index predicates
 -- The composite index idx_feast_jobs_created provides efficient queries for recent jobs
@@ -149,10 +149,10 @@ CREATE TABLE IF NOT EXISTS ml_feast_feature_freshness (
 );
 
 -- Indexes for ml_feast_feature_freshness
-CREATE INDEX idx_feast_freshness_view ON ml_feast_feature_freshness(feature_view_id);
-CREATE INDEX idx_feast_freshness_view_name ON ml_feast_feature_freshness(feature_view_name);
-CREATE INDEX idx_feast_freshness_time ON ml_feast_feature_freshness(recorded_at DESC);
-CREATE INDEX idx_feast_freshness_status ON ml_feast_feature_freshness(freshness_status);
+CREATE INDEX IF NOT EXISTS idx_feast_freshness_view ON ml_feast_feature_freshness(feature_view_id);
+CREATE INDEX IF NOT EXISTS idx_feast_freshness_view_name ON ml_feast_feature_freshness(feature_view_name);
+CREATE INDEX IF NOT EXISTS idx_feast_freshness_time ON ml_feast_feature_freshness(recorded_at DESC);
+CREATE INDEX IF NOT EXISTS idx_feast_freshness_status ON ml_feast_feature_freshness(freshness_status);
 
 -- Note: Partial index with NOW() removed - PostgreSQL requires IMMUTABLE functions in index predicates
 -- The composite index (feature_view_id, recorded_at) via idx_feast_freshness_time provides efficient queries

@@ -1,3 +1,4 @@
+DO $idem$ BEGIN
 -- =============================================================================
 -- ROI Calculations Table
 -- Migration: 014_roi_calculations.sql
@@ -19,7 +20,7 @@ CREATE TYPE value_driver_type AS ENUM (
     'data_quality',             -- $200/FP, $650/FN
     'drift_prevention'          -- 2x multiplier
 );
-
+EXCEPTION WHEN duplicate_object THEN null; END $idem$;DO $idem$ BEGIN
 -- Attribution levels
 CREATE TYPE attribution_level_type AS ENUM (
     'full',       -- 100% - RCT validated, sole driver
@@ -27,14 +28,14 @@ CREATE TYPE attribution_level_type AS ENUM (
     'shared',     -- 20-50% - Multiple initiatives contribute
     'minimal'     -- <20% - Minor contributor, correlation only
 );
-
+EXCEPTION WHEN duplicate_object THEN null; END $idem$;DO $idem$ BEGIN
 -- Risk levels
 CREATE TYPE risk_level_type AS ENUM (
     'low',
     'medium',
     'high'
 );
-
+EXCEPTION WHEN duplicate_object THEN null; END $idem$;DO $idem$ BEGIN
 -- Initiative types for cost estimation
 CREATE TYPE initiative_type AS ENUM (
     'data_source_integration',
@@ -45,12 +46,13 @@ CREATE TYPE initiative_type AS ENUM (
     'ab_test_implementation',
     'other'
 );
+EXCEPTION WHEN duplicate_object THEN null; END $idem$;
 
 -- -----------------------------------------------------------------------------
 -- Main ROI Calculations Table
 -- -----------------------------------------------------------------------------
 
-CREATE TABLE roi_calculations (
+CREATE TABLE IF NOT EXISTS roi_calculations (
     -- Primary Key
     calculation_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
@@ -128,7 +130,7 @@ CREATE TABLE roi_calculations (
 -- Value Driver Details Table (for itemized tracking)
 -- -----------------------------------------------------------------------------
 
-CREATE TABLE roi_value_driver_details (
+CREATE TABLE IF NOT EXISTS roi_value_driver_details (
     detail_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     calculation_id UUID NOT NULL REFERENCES roi_calculations(calculation_id) ON DELETE CASCADE,
 
@@ -157,7 +159,7 @@ CREATE TABLE roi_value_driver_details (
 -- Cost Category Details Table
 -- -----------------------------------------------------------------------------
 
-CREATE TABLE roi_cost_details (
+CREATE TABLE IF NOT EXISTS roi_cost_details (
     detail_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     calculation_id UUID NOT NULL REFERENCES roi_calculations(calculation_id) ON DELETE CASCADE,
 
@@ -182,23 +184,24 @@ CREATE TABLE roi_cost_details (
 -- Indexes
 -- -----------------------------------------------------------------------------
 
-CREATE INDEX idx_roi_calculations_initiative ON roi_calculations(initiative_name);
-CREATE INDEX idx_roi_calculations_brand ON roi_calculations(brand);
-CREATE INDEX idx_roi_calculations_workstream ON roi_calculations(workstream);
-CREATE INDEX idx_roi_calculations_calculated_at ON roi_calculations(calculated_at DESC);
-CREATE INDEX idx_roi_calculations_gap_id ON roi_calculations(gap_id) WHERE gap_id IS NOT NULL;
-CREATE INDEX idx_roi_calculations_active ON roi_calculations(is_active) WHERE is_active = TRUE;
+CREATE INDEX IF NOT EXISTS idx_roi_calculations_initiative ON roi_calculations(initiative_name);
+CREATE INDEX IF NOT EXISTS idx_roi_calculations_brand ON roi_calculations(brand);
+CREATE INDEX IF NOT EXISTS idx_roi_calculations_workstream ON roi_calculations(workstream);
+CREATE INDEX IF NOT EXISTS idx_roi_calculations_calculated_at ON roi_calculations(calculated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_roi_calculations_gap_id ON roi_calculations(gap_id) WHERE gap_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_roi_calculations_active ON roi_calculations(is_active) WHERE is_active = TRUE;
 
-CREATE INDEX idx_roi_value_details_calculation ON roi_value_driver_details(calculation_id);
-CREATE INDEX idx_roi_value_details_driver ON roi_value_driver_details(driver_type);
+CREATE INDEX IF NOT EXISTS idx_roi_value_details_calculation ON roi_value_driver_details(calculation_id);
+CREATE INDEX IF NOT EXISTS idx_roi_value_details_driver ON roi_value_driver_details(driver_type);
 
-CREATE INDEX idx_roi_cost_details_calculation ON roi_cost_details(calculation_id);
-CREATE INDEX idx_roi_cost_details_category ON roi_cost_details(category);
+CREATE INDEX IF NOT EXISTS idx_roi_cost_details_calculation ON roi_cost_details(calculation_id);
+CREATE INDEX IF NOT EXISTS idx_roi_cost_details_category ON roi_cost_details(category);
 
 -- JSONB indexes for value/cost breakdown queries
-CREATE INDEX idx_roi_calculations_value_drivers ON roi_calculations USING gin(value_by_driver);
-CREATE INDEX idx_roi_calculations_cost_breakdown ON roi_calculations USING gin(cost_breakdown);
+CREATE INDEX IF NOT EXISTS idx_roi_calculations_value_drivers ON roi_calculations USING gin(value_by_driver);
+CREATE INDEX IF NOT EXISTS idx_roi_calculations_cost_breakdown ON roi_calculations USING gin(cost_breakdown);
 
+DROP TRIGGER IF EXISTS update_roi_calculations_timestamp ON roi_calculations;
 -- -----------------------------------------------------------------------------
 -- Triggers
 -- -----------------------------------------------------------------------------
@@ -286,23 +289,29 @@ ALTER TABLE roi_calculations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE roi_value_driver_details ENABLE ROW LEVEL SECURITY;
 ALTER TABLE roi_cost_details ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Allow authenticated read roi_calculations" ON roi_calculations;
 -- Allow all authenticated users to read
 CREATE POLICY "Allow authenticated read roi_calculations" ON roi_calculations
     FOR SELECT TO authenticated USING (true);
 
+DROP POLICY IF EXISTS "Allow authenticated read roi_value_driver_details" ON roi_value_driver_details;
 CREATE POLICY "Allow authenticated read roi_value_driver_details" ON roi_value_driver_details
     FOR SELECT TO authenticated USING (true);
 
+DROP POLICY IF EXISTS "Allow authenticated read roi_cost_details" ON roi_cost_details;
 CREATE POLICY "Allow authenticated read roi_cost_details" ON roi_cost_details
     FOR SELECT TO authenticated USING (true);
 
+DROP POLICY IF EXISTS "Allow service role full access roi_calculations" ON roi_calculations;
 -- Allow service role full access
 CREATE POLICY "Allow service role full access roi_calculations" ON roi_calculations
     FOR ALL TO service_role USING (true) WITH CHECK (true);
 
+DROP POLICY IF EXISTS "Allow service role full access roi_value_driver_details" ON roi_value_driver_details;
 CREATE POLICY "Allow service role full access roi_value_driver_details" ON roi_value_driver_details
     FOR ALL TO service_role USING (true) WITH CHECK (true);
 
+DROP POLICY IF EXISTS "Allow service role full access roi_cost_details" ON roi_cost_details;
 CREATE POLICY "Allow service role full access roi_cost_details" ON roi_cost_details
     FOR ALL TO service_role USING (true) WITH CHECK (true);
 

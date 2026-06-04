@@ -1,3 +1,4 @@
+DO $idem$ BEGIN
 -- ═══════════════════════════════════════════════════════════════════
 -- E2I Causal Analytics - Data Sources Reference Table
 -- Migration: 012_data_sources.sql
@@ -15,12 +16,13 @@ CREATE TYPE source_type_enum AS ENUM (
     'specialty',   -- Specialty pharmacy data
     'registry'     -- Patient registries
 );
+EXCEPTION WHEN duplicate_object THEN null; END $idem$;
 
 -- ═══════════════════════════════════════════════════════════════════
 -- DATA SOURCES TABLE
 -- ═══════════════════════════════════════════════════════════════════
 
-CREATE TABLE data_sources (
+CREATE TABLE IF NOT EXISTS data_sources (
     -- Primary identification
     source_id TEXT PRIMARY KEY,
     source_name TEXT NOT NULL UNIQUE,
@@ -229,7 +231,8 @@ INSERT INTO data_sources (
     false,   -- Supplementary source
     10,
     'Internal patient enrollment and program participation registry'
-);
+)
+ON CONFLICT (source_id) DO NOTHING;
 
 -- ═══════════════════════════════════════════════════════════════════
 -- UPDATE EXISTING TABLES WITH FOREIGN KEY REFERENCE
@@ -261,16 +264,16 @@ $$;
 -- ═══════════════════════════════════════════════════════════════════
 
 -- Performance indexes
-CREATE INDEX idx_data_sources_type ON data_sources(source_type);
-CREATE INDEX idx_data_sources_vendor ON data_sources(vendor);
-CREATE INDEX idx_data_sources_active ON data_sources(is_active);
-CREATE INDEX idx_data_sources_primary ON data_sources(is_primary);
-CREATE INDEX idx_data_sources_priority ON data_sources(priority);
+CREATE INDEX IF NOT EXISTS idx_data_sources_type ON data_sources(source_type);
+CREATE INDEX IF NOT EXISTS idx_data_sources_vendor ON data_sources(vendor);
+CREATE INDEX IF NOT EXISTS idx_data_sources_active ON data_sources(is_active);
+CREATE INDEX IF NOT EXISTS idx_data_sources_primary ON data_sources(is_primary);
+CREATE INDEX IF NOT EXISTS idx_data_sources_priority ON data_sources(priority);
 
 -- Quality metric indexes for filtering
-CREATE INDEX idx_data_sources_coverage ON data_sources(coverage_percent) WHERE is_active = true;
-CREATE INDEX idx_data_sources_completeness ON data_sources(completeness_score) WHERE is_active = true;
-CREATE INDEX idx_data_sources_freshness ON data_sources(freshness_days) WHERE is_active = true;
+CREATE INDEX IF NOT EXISTS idx_data_sources_coverage ON data_sources(coverage_percent) WHERE is_active = true;
+CREATE INDEX IF NOT EXISTS idx_data_sources_completeness ON data_sources(completeness_score) WHERE is_active = true;
+CREATE INDEX IF NOT EXISTS idx_data_sources_freshness ON data_sources(freshness_days) WHERE is_active = true;
 
 -- ═══════════════════════════════════════════════════════════════════
 -- VIEWS
@@ -407,6 +410,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trg_data_sources_updated_at ON data_sources;
 CREATE TRIGGER trg_data_sources_updated_at
 BEFORE UPDATE ON data_sources
 FOR EACH ROW

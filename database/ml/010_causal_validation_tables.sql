@@ -1,3 +1,4 @@
+DO $idem$ BEGIN
 -- ============================================================
 -- Migration: 010_causal_validation_tables.sql
 -- Version: V4.3 (Corrected)
@@ -26,9 +27,9 @@ CREATE TYPE refutation_test_type AS ENUM (
     'bootstrap',              -- Bootstrap resampling → estimate variance
     'sensitivity_e_value'     -- E-value sensitivity → how strong unmeasured confounding must be
 );
+EXCEPTION WHEN duplicate_object THEN null; END $idem$;
 
-COMMENT ON TYPE refutation_test_type IS 'DoWhy refutation test types for causal estimate validation';
-
+COMMENT ON TYPE refutation_test_type IS 'DoWhy refutation test types for causal estimate validation';DO $idem$ BEGIN
 -- Validation status (per-test result)
 CREATE TYPE validation_status AS ENUM (
     'passed',    -- Test passed all criteria
@@ -36,18 +37,18 @@ CREATE TYPE validation_status AS ENUM (
     'warning',   -- Borderline result, recommend review
     'skipped'    -- Test not applicable or disabled
 );
+EXCEPTION WHEN duplicate_object THEN null; END $idem$;
 
-COMMENT ON TYPE validation_status IS 'Result status of individual refutation tests';
-
+COMMENT ON TYPE validation_status IS 'Result status of individual refutation tests';DO $idem$ BEGIN
 -- Gate decision (aggregate suite result)
 CREATE TYPE gate_decision AS ENUM (
     'proceed',   -- All required tests passed, confidence ≥ 0.7, safe for production
     'review',    -- Partial pass, requires expert review before use
     'block'      -- Failed required tests, do not use estimate
 );
+EXCEPTION WHEN duplicate_object THEN null; END $idem$;
 
-COMMENT ON TYPE gate_decision IS 'Aggregate decision from RefutationSuite determining if estimate can be used';
-
+COMMENT ON TYPE gate_decision IS 'Aggregate decision from RefutationSuite determining if estimate can be used';DO $idem$ BEGIN
 -- Expert review types
 CREATE TYPE expert_review_type AS ENUM (
     'dag_approval',         -- New DAG structure requires expert sign-off
@@ -55,6 +56,7 @@ CREATE TYPE expert_review_type AS ENUM (
     'quarterly_audit',      -- Scheduled periodic review
     'ad_hoc_validation'     -- On-demand expert review
 );
+EXCEPTION WHEN duplicate_object THEN null; END $idem$;
 
 COMMENT ON TYPE expert_review_type IS 'Types of domain expert validation for causal analysis';
 
@@ -63,7 +65,7 @@ COMMENT ON TYPE expert_review_type IS 'Types of domain expert validation for cau
 -- 2. CREATE causal_validations TABLE
 -- ============================================================
 
-CREATE TABLE causal_validations (
+CREATE TABLE IF NOT EXISTS causal_validations (
     -- Primary key
     validation_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     
@@ -131,7 +133,7 @@ COMMENT ON COLUMN causal_validations.outcome_variable IS 'The outcome metric bei
 -- 3. CREATE expert_reviews TABLE
 -- ============================================================
 
-CREATE TABLE expert_reviews (
+CREATE TABLE IF NOT EXISTS expert_reviews (
     -- Primary key
     review_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     
@@ -189,30 +191,30 @@ COMMENT ON COLUMN expert_reviews.supersedes_review_id IS 'If this review replace
 -- ============================================================
 
 -- causal_validations indexes
-CREATE INDEX idx_cv_estimate_id ON causal_validations(estimate_id);
-CREATE INDEX idx_cv_status ON causal_validations(status);
-CREATE INDEX idx_cv_gate_decision ON causal_validations(gate_decision);
-CREATE INDEX idx_cv_test_type ON causal_validations(test_type);
-CREATE INDEX idx_cv_created_at ON causal_validations(created_at DESC);
-CREATE INDEX idx_cv_agent_activity ON causal_validations(agent_activity_id);
-CREATE INDEX idx_cv_brand ON causal_validations(brand);
-CREATE INDEX idx_cv_treatment ON causal_validations(treatment_variable);
+CREATE INDEX IF NOT EXISTS idx_cv_estimate_id ON causal_validations(estimate_id);
+CREATE INDEX IF NOT EXISTS idx_cv_status ON causal_validations(status);
+CREATE INDEX IF NOT EXISTS idx_cv_gate_decision ON causal_validations(gate_decision);
+CREATE INDEX IF NOT EXISTS idx_cv_test_type ON causal_validations(test_type);
+CREATE INDEX IF NOT EXISTS idx_cv_created_at ON causal_validations(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_cv_agent_activity ON causal_validations(agent_activity_id);
+CREATE INDEX IF NOT EXISTS idx_cv_brand ON causal_validations(brand);
+CREATE INDEX IF NOT EXISTS idx_cv_treatment ON causal_validations(treatment_variable);
 
 -- Composite index for common query pattern
-CREATE INDEX idx_cv_estimate_gate ON causal_validations(estimate_id, gate_decision);
-CREATE INDEX idx_cv_estimate_source ON causal_validations(estimate_id, estimate_source);
+CREATE INDEX IF NOT EXISTS idx_cv_estimate_gate ON causal_validations(estimate_id, gate_decision);
+CREATE INDEX IF NOT EXISTS idx_cv_estimate_source ON causal_validations(estimate_id, estimate_source);
 
 -- expert_reviews indexes
-CREATE INDEX idx_er_dag_hash ON expert_reviews(dag_version_hash);
-CREATE INDEX idx_er_approval_status ON expert_reviews(approval_status);
-CREATE INDEX idx_er_reviewer ON expert_reviews(reviewer_id);
-CREATE INDEX idx_er_review_type ON expert_reviews(review_type);
-CREATE INDEX idx_er_brand ON expert_reviews(brand);
-CREATE INDEX idx_er_valid_until ON expert_reviews(valid_until);
-CREATE INDEX idx_er_treatment ON expert_reviews(treatment_variable);
+CREATE INDEX IF NOT EXISTS idx_er_dag_hash ON expert_reviews(dag_version_hash);
+CREATE INDEX IF NOT EXISTS idx_er_approval_status ON expert_reviews(approval_status);
+CREATE INDEX IF NOT EXISTS idx_er_reviewer ON expert_reviews(reviewer_id);
+CREATE INDEX IF NOT EXISTS idx_er_review_type ON expert_reviews(review_type);
+CREATE INDEX IF NOT EXISTS idx_er_brand ON expert_reviews(brand);
+CREATE INDEX IF NOT EXISTS idx_er_valid_until ON expert_reviews(valid_until);
+CREATE INDEX IF NOT EXISTS idx_er_treatment ON expert_reviews(treatment_variable);
 
 -- Index for finding active approvals
-CREATE INDEX idx_er_active_approvals ON expert_reviews(dag_version_hash, valid_until) 
+CREATE INDEX IF NOT EXISTS idx_er_active_approvals ON expert_reviews(dag_version_hash, valid_until) 
     WHERE approval_status = 'approved';
 
 

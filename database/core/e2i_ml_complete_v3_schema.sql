@@ -103,8 +103,7 @@ DROP TYPE IF EXISTS data_split_type CASCADE;
 -- ============================================================================
 
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-CREATE EXTENSION IF NOT EXISTS "pgcrypto";
-
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";DO $idem$ BEGIN
 -- Data split types for ML pipeline
 CREATE TYPE data_split_type AS ENUM (
     'train', 
@@ -113,7 +112,7 @@ CREATE TYPE data_split_type AS ENUM (
     'holdout', 
     'unassigned'
 );
-
+EXCEPTION WHEN duplicate_object THEN null; END $idem$;DO $idem$ BEGIN
 -- Split strategy types
 CREATE TYPE split_strategy_type AS ENUM (
     'chronological',
@@ -121,7 +120,7 @@ CREATE TYPE split_strategy_type AS ENUM (
     'rolling_window',
     'causal_holdout'
 );
-
+EXCEPTION WHEN duplicate_object THEN null; END $idem$;DO $idem$ BEGIN
 -- Brand types
 CREATE TYPE brand_type AS ENUM (
     'Remibrutinib',
@@ -130,7 +129,7 @@ CREATE TYPE brand_type AS ENUM (
     'competitor',
     'other'
 );
-
+EXCEPTION WHEN duplicate_object THEN null; END $idem$;DO $idem$ BEGIN
 -- Region types
 CREATE TYPE region_type AS ENUM (
     'northeast',
@@ -138,7 +137,7 @@ CREATE TYPE region_type AS ENUM (
     'midwest',
     'west'
 );
-
+EXCEPTION WHEN duplicate_object THEN null; END $idem$;DO $idem$ BEGIN
 -- Trigger priority types
 CREATE TYPE priority_type AS ENUM (
     'critical',
@@ -146,7 +145,7 @@ CREATE TYPE priority_type AS ENUM (
     'medium',
     'low'
 );
-
+EXCEPTION WHEN duplicate_object THEN null; END $idem$;DO $idem$ BEGIN
 -- Journey stage types.
 -- Issue #155 §2: extended from 5 legacy values to 12 (5 legacy + 7 PR #152
 -- engagement-funnel values: aware / considering / prescribed / first_fill /
@@ -166,7 +165,7 @@ CREATE TYPE journey_stage_type AS ENUM (
     'discontinued',
     'maintained'
 );
-
+EXCEPTION WHEN duplicate_object THEN null; END $idem$;DO $idem$ BEGIN
 -- Journey status types
 CREATE TYPE journey_status_type AS ENUM (
     'active',
@@ -174,7 +173,7 @@ CREATE TYPE journey_status_type AS ENUM (
     'transitioning',
     'completed'
 );
-
+EXCEPTION WHEN duplicate_object THEN null; END $idem$;DO $idem$ BEGIN
 -- Event types
 CREATE TYPE event_type AS ENUM (
     'diagnosis',
@@ -184,7 +183,7 @@ CREATE TYPE event_type AS ENUM (
     'consultation',
     'hospitalization'
 );
-
+EXCEPTION WHEN duplicate_object THEN null; END $idem$;DO $idem$ BEGIN
 -- Prediction types
 CREATE TYPE prediction_type AS ENUM (
     'trigger',
@@ -193,7 +192,7 @@ CREATE TYPE prediction_type AS ENUM (
     'churn',
     'next_best_action'
 );
-
+EXCEPTION WHEN duplicate_object THEN null; END $idem$;DO $idem$ BEGIN
 -- Agent tier types (NEW - 11-agent architecture)
 CREATE TYPE agent_tier_type AS ENUM (
     'coordination',       -- Tier 1: orchestrator
@@ -202,7 +201,7 @@ CREATE TYPE agent_tier_type AS ENUM (
     'ml_predictions',     -- Tier 4: prediction_synthesizer, resource_optimizer
     'self_improvement'    -- Tier 5: explainer, feedback_learner
 );
-
+EXCEPTION WHEN duplicate_object THEN null; END $idem$;DO $idem$ BEGIN
 -- agent_name_type_v2 enum RETIRED (#607, mig 056): it was an orphan never used as a
 -- column type (agent_name columns are VARCHAR(50)). Production roster source-of-truth
 -- = src/agents/factory.py AGENT_REGISTRY_CONFIG (21 agents).
@@ -213,12 +212,13 @@ CREATE TYPE workstream_type AS ENUM (
     'WS2',
     'WS3'
 );
+EXCEPTION WHEN duplicate_object THEN null; END $idem$;
 
 -- ============================================================================
 -- PART 2: ML SPLIT MANAGEMENT TABLES
 -- ============================================================================
 
-CREATE TABLE ml_split_registry (
+CREATE TABLE IF NOT EXISTS ml_split_registry (
     split_config_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     config_name VARCHAR(100) NOT NULL UNIQUE,
     config_version VARCHAR(20) NOT NULL DEFAULT '1.0.0',
@@ -260,7 +260,7 @@ CREATE TABLE ml_split_registry (
     )
 );
 
-CREATE TABLE ml_patient_split_assignments (
+CREATE TABLE IF NOT EXISTS ml_patient_split_assignments (
     assignment_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     split_config_id UUID NOT NULL REFERENCES ml_split_registry(split_config_id) ON DELETE CASCADE,
     patient_id VARCHAR(20) NOT NULL,
@@ -271,7 +271,7 @@ CREATE TABLE ml_patient_split_assignments (
     UNIQUE(split_config_id, patient_id)
 );
 
-CREATE TABLE ml_preprocessing_metadata (
+CREATE TABLE IF NOT EXISTS ml_preprocessing_metadata (
     metadata_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     split_config_id UUID NOT NULL REFERENCES ml_split_registry(split_config_id) ON DELETE CASCADE,
     
@@ -299,7 +299,7 @@ CREATE TABLE ml_preprocessing_metadata (
     UNIQUE(split_config_id)
 );
 
-CREATE TABLE ml_leakage_audit (
+CREATE TABLE IF NOT EXISTS ml_leakage_audit (
     audit_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     split_config_id UUID REFERENCES ml_split_registry(split_config_id) ON DELETE SET NULL,
     audit_timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -319,7 +319,7 @@ CREATE TABLE ml_leakage_audit (
 -- -----------------------------------------------------------------------------
 -- 3.1 Reference Universe (NEW - for coverage calculations)
 -- -----------------------------------------------------------------------------
-CREATE TABLE reference_universe (
+CREATE TABLE IF NOT EXISTS reference_universe (
     universe_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     universe_type VARCHAR(50) NOT NULL,  -- 'patient', 'hcp', 'territory'
     brand brand_type,
@@ -342,13 +342,13 @@ CREATE TABLE reference_universe (
 );
 
 -- Add unique constraint for lookups
-CREATE UNIQUE INDEX idx_reference_universe_lookup 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_reference_universe_lookup 
 ON reference_universe(universe_type, brand, region, specialty, effective_date);
 
 -- -----------------------------------------------------------------------------
 -- 3.2 HCP Profiles
 -- -----------------------------------------------------------------------------
-CREATE TABLE hcp_profiles (
+CREATE TABLE IF NOT EXISTS hcp_profiles (
     hcp_id VARCHAR(20) PRIMARY KEY,
     npi VARCHAR(20) UNIQUE,
     first_name VARCHAR(50),
@@ -387,7 +387,7 @@ CREATE TABLE hcp_profiles (
 -- -----------------------------------------------------------------------------
 -- 3.3 Patient Journeys (with source tracking for WS1 gaps)
 -- -----------------------------------------------------------------------------
-CREATE TABLE patient_journeys (
+CREATE TABLE IF NOT EXISTS patient_journeys (
     patient_journey_id VARCHAR(20) PRIMARY KEY,
     patient_id VARCHAR(20) NOT NULL,
     patient_hash VARCHAR(50),
@@ -449,7 +449,7 @@ CREATE TABLE patient_journeys (
 -- -----------------------------------------------------------------------------
 -- 3.4 Treatment Events
 -- -----------------------------------------------------------------------------
-CREATE TABLE treatment_events (
+CREATE TABLE IF NOT EXISTS treatment_events (
     treatment_event_id VARCHAR(30) PRIMARY KEY,
     patient_journey_id VARCHAR(20) REFERENCES patient_journeys(patient_journey_id) ON DELETE CASCADE,
     patient_id VARCHAR(20) NOT NULL,
@@ -506,7 +506,7 @@ CREATE TABLE treatment_events (
 -- -----------------------------------------------------------------------------
 -- 3.5 ML Predictions (with gaps filled)
 -- -----------------------------------------------------------------------------
-CREATE TABLE ml_predictions (
+CREATE TABLE IF NOT EXISTS ml_predictions (
     prediction_id VARCHAR(30) PRIMARY KEY,
     model_version VARCHAR(20),
     model_type VARCHAR(30),
@@ -560,7 +560,7 @@ CREATE TABLE ml_predictions (
 -- -----------------------------------------------------------------------------
 -- 3.6 Triggers (with change tracking for WS2 CFR gap)
 -- -----------------------------------------------------------------------------
-CREATE TABLE triggers (
+CREATE TABLE IF NOT EXISTS triggers (
     trigger_id VARCHAR(30) PRIMARY KEY,
     patient_id VARCHAR(20) NOT NULL,
     hcp_id VARCHAR(20) REFERENCES hcp_profiles(hcp_id),
@@ -605,7 +605,7 @@ CREATE TABLE triggers (
 -- -----------------------------------------------------------------------------
 -- 3.7 Agent Activities (with tier support)
 -- -----------------------------------------------------------------------------
-CREATE TABLE agent_activities (
+CREATE TABLE IF NOT EXISTS agent_activities (
     activity_id VARCHAR(30) PRIMARY KEY,
     agent_name VARCHAR(50),
     agent_tier agent_tier_type,  -- NEW: Tier classification
@@ -637,7 +637,7 @@ CREATE TABLE agent_activities (
 -- -----------------------------------------------------------------------------
 -- 3.8 Business Metrics
 -- -----------------------------------------------------------------------------
-CREATE TABLE business_metrics (
+CREATE TABLE IF NOT EXISTS business_metrics (
     metric_id VARCHAR(50) PRIMARY KEY,
     metric_date DATE NOT NULL,
     metric_type VARCHAR(30),
@@ -665,7 +665,7 @@ CREATE TABLE business_metrics (
 -- -----------------------------------------------------------------------------
 -- 3.9 Causal Paths
 -- -----------------------------------------------------------------------------
-CREATE TABLE causal_paths (
+CREATE TABLE IF NOT EXISTS causal_paths (
     path_id VARCHAR(20) PRIMARY KEY,
     discovery_date DATE NOT NULL,
     causal_chain JSONB NOT NULL,
@@ -697,7 +697,7 @@ CREATE TABLE causal_paths (
 -- -----------------------------------------------------------------------------
 -- 4.1 User Sessions (WS3 Active Users/MAU/WAU gap)
 -- -----------------------------------------------------------------------------
-CREATE TABLE user_sessions (
+CREATE TABLE IF NOT EXISTS user_sessions (
     session_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id VARCHAR(50) NOT NULL,
     user_email VARCHAR(255),
@@ -728,14 +728,14 @@ CREATE TABLE user_sessions (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_user_sessions_user ON user_sessions(user_id);
-CREATE INDEX idx_user_sessions_start ON user_sessions(session_start);
-CREATE INDEX idx_user_sessions_date ON user_sessions(DATE(session_start));
+CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_sessions_start ON user_sessions(session_start);
+CREATE INDEX IF NOT EXISTS idx_user_sessions_date ON user_sessions(((session_start AT TIME ZONE 'UTC')::date));
 
 -- -----------------------------------------------------------------------------
 -- 4.2 Data Source Tracking (WS1 Cross-source Match, Stacking Lift)
 -- -----------------------------------------------------------------------------
-CREATE TABLE data_source_tracking (
+CREATE TABLE IF NOT EXISTS data_source_tracking (
     tracking_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tracking_date DATE NOT NULL,
     
@@ -768,13 +768,13 @@ CREATE TABLE data_source_tracking (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_data_source_tracking_date ON data_source_tracking(tracking_date);
-CREATE INDEX idx_data_source_tracking_source ON data_source_tracking(source_name);
+CREATE INDEX IF NOT EXISTS idx_data_source_tracking_date ON data_source_tracking(tracking_date);
+CREATE INDEX IF NOT EXISTS idx_data_source_tracking_source ON data_source_tracking(source_name);
 
 -- -----------------------------------------------------------------------------
 -- 4.3 ML Annotations (WS1 Label Quality/IAA gap)
 -- -----------------------------------------------------------------------------
-CREATE TABLE ml_annotations (
+CREATE TABLE IF NOT EXISTS ml_annotations (
     annotation_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     
     -- What was annotated
@@ -804,14 +804,14 @@ CREATE TABLE ml_annotations (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_ml_annotations_entity ON ml_annotations(entity_type, entity_id);
-CREATE INDEX idx_ml_annotations_type ON ml_annotations(annotation_type);
-CREATE INDEX idx_ml_annotations_iaa ON ml_annotations(iaa_group_id) WHERE iaa_group_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_ml_annotations_entity ON ml_annotations(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_ml_annotations_type ON ml_annotations(annotation_type);
+CREATE INDEX IF NOT EXISTS idx_ml_annotations_iaa ON ml_annotations(iaa_group_id) WHERE iaa_group_id IS NOT NULL;
 
 -- -----------------------------------------------------------------------------
 -- 4.4 ETL Pipeline Metrics (WS1 Time-to-Release/TTR gap)
 -- -----------------------------------------------------------------------------
-CREATE TABLE etl_pipeline_metrics (
+CREATE TABLE IF NOT EXISTS etl_pipeline_metrics (
     pipeline_run_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     pipeline_name VARCHAR(100) NOT NULL,
     pipeline_version VARCHAR(20),
@@ -847,13 +847,13 @@ CREATE TABLE etl_pipeline_metrics (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_etl_pipeline_metrics_date ON etl_pipeline_metrics(DATE(run_start));
-CREATE INDEX idx_etl_pipeline_metrics_name ON etl_pipeline_metrics(pipeline_name);
+CREATE INDEX IF NOT EXISTS idx_etl_pipeline_metrics_date ON etl_pipeline_metrics(((run_start AT TIME ZONE 'UTC')::date));
+CREATE INDEX IF NOT EXISTS idx_etl_pipeline_metrics_name ON etl_pipeline_metrics(pipeline_name);
 
 -- -----------------------------------------------------------------------------
 -- 4.5 HCP Intent Surveys (Brand-Specific Intent-to-Prescribe Δ gap)
 -- -----------------------------------------------------------------------------
-CREATE TABLE hcp_intent_surveys (
+CREATE TABLE IF NOT EXISTS hcp_intent_surveys (
     survey_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     hcp_id VARCHAR(20) REFERENCES hcp_profiles(hcp_id),
     
@@ -882,15 +882,15 @@ CREATE TABLE hcp_intent_surveys (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_hcp_intent_surveys_hcp ON hcp_intent_surveys(hcp_id);
-CREATE INDEX idx_hcp_intent_surveys_brand ON hcp_intent_surveys(brand);
-CREATE INDEX idx_hcp_intent_surveys_date ON hcp_intent_surveys(survey_date);
+CREATE INDEX IF NOT EXISTS idx_hcp_intent_surveys_hcp ON hcp_intent_surveys(hcp_id);
+CREATE INDEX IF NOT EXISTS idx_hcp_intent_surveys_brand ON hcp_intent_surveys(brand);
+CREATE INDEX IF NOT EXISTS idx_hcp_intent_surveys_date ON hcp_intent_surveys(survey_date);
 
 -- ============================================================================
 -- PART 5: AGENT REGISTRY (11-agent architecture)
 -- ============================================================================
 
-CREATE TABLE agent_registry (
+CREATE TABLE IF NOT EXISTS agent_registry (
     agent_name VARCHAR(50) PRIMARY KEY,
     agent_tier agent_tier_type NOT NULL,
     display_name VARCHAR(100) NOT NULL,
@@ -978,49 +978,49 @@ ON CONFLICT (agent_name) DO UPDATE SET
 -- ============================================================================
 
 -- Split-based indexes
-CREATE INDEX idx_patient_journeys_split ON patient_journeys(data_split, split_config_id);
-CREATE INDEX idx_treatment_events_split ON treatment_events(data_split, split_config_id);
-CREATE INDEX idx_ml_predictions_split ON ml_predictions(data_split, split_config_id);
-CREATE INDEX idx_triggers_split ON triggers(data_split, split_config_id);
-CREATE INDEX idx_agent_activities_split ON agent_activities(data_split, split_config_id);
-CREATE INDEX idx_business_metrics_split ON business_metrics(data_split, split_config_id);
-CREATE INDEX idx_causal_paths_split ON causal_paths(data_split, split_config_id);
+CREATE INDEX IF NOT EXISTS idx_patient_journeys_split ON patient_journeys(data_split, split_config_id);
+CREATE INDEX IF NOT EXISTS idx_treatment_events_split ON treatment_events(data_split, split_config_id);
+CREATE INDEX IF NOT EXISTS idx_ml_predictions_split ON ml_predictions(data_split, split_config_id);
+CREATE INDEX IF NOT EXISTS idx_triggers_split ON triggers(data_split, split_config_id);
+CREATE INDEX IF NOT EXISTS idx_agent_activities_split ON agent_activities(data_split, split_config_id);
+CREATE INDEX IF NOT EXISTS idx_business_metrics_split ON business_metrics(data_split, split_config_id);
+CREATE INDEX IF NOT EXISTS idx_causal_paths_split ON causal_paths(data_split, split_config_id);
 
 -- Common query indexes
-CREATE INDEX idx_patient_journeys_patient ON patient_journeys(patient_id);
-CREATE INDEX idx_patient_journeys_brand ON patient_journeys(brand);
-CREATE INDEX idx_patient_journeys_region ON patient_journeys(geographic_region);
-CREATE INDEX idx_patient_journeys_dates ON patient_journeys(journey_start_date, journey_end_date);
-CREATE INDEX idx_patient_journeys_source ON patient_journeys(data_source);
+CREATE INDEX IF NOT EXISTS idx_patient_journeys_patient ON patient_journeys(patient_id);
+CREATE INDEX IF NOT EXISTS idx_patient_journeys_brand ON patient_journeys(brand);
+CREATE INDEX IF NOT EXISTS idx_patient_journeys_region ON patient_journeys(geographic_region);
+CREATE INDEX IF NOT EXISTS idx_patient_journeys_dates ON patient_journeys(journey_start_date, journey_end_date);
+CREATE INDEX IF NOT EXISTS idx_patient_journeys_source ON patient_journeys(data_source);
 
-CREATE INDEX idx_treatment_events_patient ON treatment_events(patient_id);
-CREATE INDEX idx_treatment_events_date ON treatment_events(event_date);
-CREATE INDEX idx_treatment_events_journey ON treatment_events(patient_journey_id);
-CREATE INDEX idx_treatment_events_type ON treatment_events(event_type);
+CREATE INDEX IF NOT EXISTS idx_treatment_events_patient ON treatment_events(patient_id);
+CREATE INDEX IF NOT EXISTS idx_treatment_events_date ON treatment_events(event_date);
+CREATE INDEX IF NOT EXISTS idx_treatment_events_journey ON treatment_events(patient_journey_id);
+CREATE INDEX IF NOT EXISTS idx_treatment_events_type ON treatment_events(event_type);
 
-CREATE INDEX idx_ml_predictions_patient ON ml_predictions(patient_id);
-CREATE INDEX idx_ml_predictions_timestamp ON ml_predictions(prediction_timestamp);
-CREATE INDEX idx_ml_predictions_type ON ml_predictions(prediction_type);
+CREATE INDEX IF NOT EXISTS idx_ml_predictions_patient ON ml_predictions(patient_id);
+CREATE INDEX IF NOT EXISTS idx_ml_predictions_timestamp ON ml_predictions(prediction_timestamp);
+CREATE INDEX IF NOT EXISTS idx_ml_predictions_type ON ml_predictions(prediction_type);
 
-CREATE INDEX idx_triggers_patient ON triggers(patient_id);
-CREATE INDEX idx_triggers_hcp ON triggers(hcp_id);
-CREATE INDEX idx_triggers_timestamp ON triggers(trigger_timestamp);
-CREATE INDEX idx_triggers_status ON triggers(delivery_status, acceptance_status);
-CREATE INDEX idx_triggers_change ON triggers(change_type) WHERE change_type IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_triggers_patient ON triggers(patient_id);
+CREATE INDEX IF NOT EXISTS idx_triggers_hcp ON triggers(hcp_id);
+CREATE INDEX IF NOT EXISTS idx_triggers_timestamp ON triggers(trigger_timestamp);
+CREATE INDEX IF NOT EXISTS idx_triggers_status ON triggers(delivery_status, acceptance_status);
+CREATE INDEX IF NOT EXISTS idx_triggers_change ON triggers(change_type) WHERE change_type IS NOT NULL;
 
-CREATE INDEX idx_agent_activities_agent ON agent_activities(agent_name);
-CREATE INDEX idx_agent_activities_tier ON agent_activities(agent_tier);
-CREATE INDEX idx_agent_activities_workstream ON agent_activities(workstream);
-CREATE INDEX idx_agent_activities_timestamp ON agent_activities(activity_timestamp);
+CREATE INDEX IF NOT EXISTS idx_agent_activities_agent ON agent_activities(agent_name);
+CREATE INDEX IF NOT EXISTS idx_agent_activities_tier ON agent_activities(agent_tier);
+CREATE INDEX IF NOT EXISTS idx_agent_activities_workstream ON agent_activities(workstream);
+CREATE INDEX IF NOT EXISTS idx_agent_activities_timestamp ON agent_activities(activity_timestamp);
 
-CREATE INDEX idx_business_metrics_date ON business_metrics(metric_date);
-CREATE INDEX idx_business_metrics_brand_region ON business_metrics(brand, region);
+CREATE INDEX IF NOT EXISTS idx_business_metrics_date ON business_metrics(metric_date);
+CREATE INDEX IF NOT EXISTS idx_business_metrics_brand_region ON business_metrics(brand, region);
 
-CREATE INDEX idx_patient_split_lookup ON ml_patient_split_assignments(patient_id, split_config_id);
-CREATE INDEX idx_leakage_audit_config ON ml_leakage_audit(split_config_id, audit_timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_patient_split_lookup ON ml_patient_split_assignments(patient_id, split_config_id);
+CREATE INDEX IF NOT EXISTS idx_leakage_audit_config ON ml_leakage_audit(split_config_id, audit_timestamp DESC);
 
-CREATE INDEX idx_agent_registry_tier ON agent_registry(agent_tier);
-CREATE INDEX idx_agent_registry_active ON agent_registry(is_active) WHERE is_active = TRUE;
+CREATE INDEX IF NOT EXISTS idx_agent_registry_tier ON agent_registry(agent_tier);
+CREATE INDEX IF NOT EXISTS idx_agent_registry_active ON agent_registry(is_active) WHERE is_active = TRUE;
 
 -- ============================================================================
 -- PART 7: VIEWS
@@ -1141,23 +1141,28 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS update_hcp_profiles_timestamp ON hcp_profiles;
 -- Apply to tables with updated_at
 CREATE TRIGGER update_hcp_profiles_timestamp
     BEFORE UPDATE ON hcp_profiles
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
+DROP TRIGGER IF EXISTS update_patient_journeys_timestamp ON patient_journeys;
 CREATE TRIGGER update_patient_journeys_timestamp
     BEFORE UPDATE ON patient_journeys
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
+DROP TRIGGER IF EXISTS update_triggers_timestamp ON triggers;
 CREATE TRIGGER update_triggers_timestamp
     BEFORE UPDATE ON triggers
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
+DROP TRIGGER IF EXISTS update_split_registry_timestamp ON ml_split_registry;
 CREATE TRIGGER update_split_registry_timestamp
     BEFORE UPDATE ON ml_split_registry
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
+DROP TRIGGER IF EXISTS update_agent_registry_timestamp ON agent_registry;
 CREATE TRIGGER update_agent_registry_timestamp
     BEFORE UPDATE ON agent_registry
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();

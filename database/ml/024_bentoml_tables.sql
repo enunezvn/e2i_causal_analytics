@@ -62,14 +62,14 @@ CREATE TABLE IF NOT EXISTS ml_bentoml_services (
 );
 
 -- Indexes for ml_bentoml_services
-CREATE INDEX idx_bentoml_services_name ON ml_bentoml_services(service_name);
-CREATE INDEX idx_bentoml_services_tag ON ml_bentoml_services(bento_tag);
-CREATE INDEX idx_bentoml_services_model ON ml_bentoml_services(model_registry_id);
-CREATE INDEX idx_bentoml_services_deployment ON ml_bentoml_services(deployment_id);
-CREATE INDEX idx_bentoml_services_status ON ml_bentoml_services(status);
-CREATE INDEX idx_bentoml_services_health ON ml_bentoml_services(health_status);
-CREATE INDEX idx_bentoml_services_env ON ml_bentoml_services(environment);
-CREATE INDEX idx_bentoml_services_active ON ml_bentoml_services(status)
+CREATE INDEX IF NOT EXISTS idx_bentoml_services_name ON ml_bentoml_services(service_name);
+CREATE INDEX IF NOT EXISTS idx_bentoml_services_tag ON ml_bentoml_services(bento_tag);
+CREATE INDEX IF NOT EXISTS idx_bentoml_services_model ON ml_bentoml_services(model_registry_id);
+CREATE INDEX IF NOT EXISTS idx_bentoml_services_deployment ON ml_bentoml_services(deployment_id);
+CREATE INDEX IF NOT EXISTS idx_bentoml_services_status ON ml_bentoml_services(status);
+CREATE INDEX IF NOT EXISTS idx_bentoml_services_health ON ml_bentoml_services(health_status);
+CREATE INDEX IF NOT EXISTS idx_bentoml_services_env ON ml_bentoml_services(environment);
+CREATE INDEX IF NOT EXISTS idx_bentoml_services_active ON ml_bentoml_services(status)
     WHERE status = 'active';
 
 -- ============================================================================
@@ -117,9 +117,9 @@ CREATE TABLE IF NOT EXISTS ml_bentoml_serving_metrics (
 );
 
 -- Indexes for ml_bentoml_serving_metrics
-CREATE INDEX idx_bentoml_metrics_service ON ml_bentoml_serving_metrics(service_id);
-CREATE INDEX idx_bentoml_metrics_time ON ml_bentoml_serving_metrics(recorded_at DESC);
-CREATE INDEX idx_bentoml_metrics_service_time ON ml_bentoml_serving_metrics(service_id, recorded_at DESC);
+CREATE INDEX IF NOT EXISTS idx_bentoml_metrics_service ON ml_bentoml_serving_metrics(service_id);
+CREATE INDEX IF NOT EXISTS idx_bentoml_metrics_time ON ml_bentoml_serving_metrics(recorded_at DESC);
+CREATE INDEX IF NOT EXISTS idx_bentoml_metrics_service_time ON ml_bentoml_serving_metrics(service_id, recorded_at DESC);
 
 -- Note: Partial index with NOW() removed - PostgreSQL requires IMMUTABLE functions in index predicates
 -- The composite index idx_bentoml_metrics_service_time provides efficient queries for recent metrics

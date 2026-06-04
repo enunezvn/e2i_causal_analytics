@@ -34,7 +34,7 @@ WHERE analysis_type = 'local_realtime' AND hcp_id IS NOT NULL;
 
 -- Create index for model version analysis
 CREATE INDEX IF NOT EXISTS idx_shap_model_analysis
-ON ml_shap_analyses(model_version_id, request_timestamp DESC);
+ON ml_shap_analyses(model_registry_id, request_timestamp DESC);
 
 -- Create index for performance analysis
 CREATE INDEX IF NOT EXISTS idx_shap_performance
@@ -45,129 +45,99 @@ WHERE analysis_type = 'local_realtime';
 -- View: Real-time explanation summary per patient
 -- =============================================================================
 CREATE OR REPLACE VIEW v_patient_explanation_history AS
-SELECT 
-    patient_id,
-    COUNT(*) as total_explanations,
-    COUNT(DISTINCT model_version_id) as models_used,
-    AVG(response_time_ms) as avg_response_time_ms,
-    MIN(request_timestamp) as first_explanation,
-    MAX(request_timestamp) as last_explanation,
-    -- Most common prediction
-    MODE() WITHIN GROUP (ORDER BY prediction_class) as most_common_prediction,
-    -- Average probability
-    AVG(prediction_probability) as avg_prediction_probability
-FROM ml_shap_analyses
-WHERE analysis_type = 'local_realtime'
-  AND patient_id IS NOT NULL
-GROUP BY patient_id;
+ SELECT ml_shap_analyses.patient_id,
+    count(*) AS total_explanations,
+    count(DISTINCT ml_shap_analyses.model_registry_id) AS models_used,
+    avg(ml_shap_analyses.response_time_ms) AS avg_response_time_ms,
+    min(ml_shap_analyses.request_timestamp) AS first_explanation,
+    max(ml_shap_analyses.request_timestamp) AS last_explanation,
+    mode() WITHIN GROUP (ORDER BY ml_shap_analyses.prediction_class) AS most_common_prediction,
+    avg(ml_shap_analyses.prediction_probability) AS avg_prediction_probability
+   FROM ml_shap_analyses
+  WHERE ml_shap_analyses.analysis_type::text = 'local_realtime'::text AND ml_shap_analyses.patient_id IS NOT NULL
+  GROUP BY ml_shap_analyses.patient_id;
 
 -- =============================================================================
 -- View: Real-time SHAP API performance metrics
 -- =============================================================================
 CREATE OR REPLACE VIEW v_shap_api_performance AS
-SELECT 
-    DATE_TRUNC('hour', request_timestamp) as hour,
-    model_type,
-    COUNT(*) as request_count,
-    AVG(response_time_ms) as avg_latency_ms,
-    PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY response_time_ms) as p50_latency_ms,
-    PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY response_time_ms) as p95_latency_ms,
-    PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY response_time_ms) as p99_latency_ms,
-    SUM(CASE WHEN response_time_ms > 500 THEN 1 ELSE 0 END) as slow_requests,
-    COUNT(DISTINCT patient_id) as unique_patients
-FROM ml_shap_analyses
-WHERE analysis_type = 'local_realtime'
-  AND request_timestamp >= NOW() - INTERVAL '24 hours'
-GROUP BY DATE_TRUNC('hour', request_timestamp), model_type
-ORDER BY hour DESC, model_type;
+ SELECT date_trunc('hour'::text, ml_shap_analyses.request_timestamp) AS hour,
+    ml_shap_analyses.analysis_type,
+    count(*) AS request_count,
+    avg(ml_shap_analyses.response_time_ms) AS avg_latency_ms,
+    percentile_cont(0.50::double precision) WITHIN GROUP (ORDER BY ml_shap_analyses.response_time_ms) AS p50_latency_ms,
+    percentile_cont(0.95::double precision) WITHIN GROUP (ORDER BY ml_shap_analyses.response_time_ms) AS p95_latency_ms,
+    percentile_cont(0.99::double precision) WITHIN GROUP (ORDER BY ml_shap_analyses.response_time_ms) AS p99_latency_ms,
+    sum(
+        CASE
+            WHEN ml_shap_analyses.response_time_ms > 500::double precision THEN 1
+            ELSE 0
+        END) AS slow_requests,
+    count(DISTINCT ml_shap_analyses.patient_id) AS unique_patients
+   FROM ml_shap_analyses
+  WHERE ml_shap_analyses.analysis_type::text = 'local_realtime'::text AND ml_shap_analyses.request_timestamp >= (now() - '24:00:00'::interval)
+  GROUP BY (date_trunc('hour'::text, ml_shap_analyses.request_timestamp)), ml_shap_analyses.analysis_type
+  ORDER BY (date_trunc('hour'::text, ml_shap_analyses.request_timestamp)) DESC, ml_shap_analyses.analysis_type;
 
 -- =============================================================================
 -- View: Feature importance trends (aggregate SHAP across explanations)
 -- =============================================================================
 CREATE OR REPLACE VIEW v_feature_importance_trends AS
-SELECT 
-    model_version_id,
-    DATE_TRUNC('day', request_timestamp) as day,
-    -- Extract top feature from JSONB
-    (shap_values->>'top_feature_1')::TEXT as top_feature,
-    COUNT(*) as appearance_count,
-    AVG((shap_values->>'top_feature_1_value')::FLOAT) as avg_shap_value
-FROM ml_shap_analyses
-WHERE analysis_type = 'local_realtime'
-  AND request_timestamp >= NOW() - INTERVAL '30 days'
-GROUP BY model_version_id, DATE_TRUNC('day', request_timestamp), shap_values->>'top_feature_1'
-ORDER BY day DESC, appearance_count DESC;
+ SELECT ml_shap_analyses.model_registry_id,
+    date_trunc('day'::text, ml_shap_analyses.request_timestamp) AS day,
+    ml_shap_analyses.prediction_class,
+    count(*) AS explanation_count,
+    avg(ml_shap_analyses.response_time_ms) AS avg_response_time_ms,
+    avg(ml_shap_analyses.prediction_probability) AS avg_prediction_probability,
+    count(DISTINCT ml_shap_analyses.patient_id) AS unique_patients
+   FROM ml_shap_analyses
+  WHERE ml_shap_analyses.analysis_type::text = 'local_realtime'::text AND ml_shap_analyses.request_timestamp >= (now() - '30 days'::interval)
+  GROUP BY ml_shap_analyses.model_registry_id, (date_trunc('day'::text, ml_shap_analyses.request_timestamp)), ml_shap_analyses.prediction_class
+  ORDER BY (date_trunc('day'::text, ml_shap_analyses.request_timestamp)) DESC, (count(*)) DESC;
 
 -- =============================================================================
 -- Function: Get recent explanations for a patient
 -- =============================================================================
-CREATE OR REPLACE FUNCTION get_patient_explanations(
-    p_patient_id VARCHAR(50),
-    p_limit INTEGER DEFAULT 10,
-    p_model_type VARCHAR(50) DEFAULT NULL
-)
-RETURNS TABLE (
-    explanation_id VARCHAR(50),
-    model_type VARCHAR(50),
-    model_version_id VARCHAR(100),
-    prediction_class VARCHAR(100),
-    prediction_probability FLOAT,
-    top_features JSONB,
-    request_timestamp TIMESTAMPTZ,
-    response_time_ms FLOAT
-) AS $$
+CREATE OR REPLACE FUNCTION public.get_patient_explanations(p_patient_id character varying, p_limit integer DEFAULT 10, p_analysis_type character varying DEFAULT NULL::character varying)
+ RETURNS TABLE(explanation_id character varying, analysis_type character varying, model_registry_id uuid, prediction_class character varying, prediction_probability double precision, top_features jsonb, request_timestamp timestamp with time zone, response_time_ms double precision)
+ LANGUAGE plpgsql
+AS $function$
 BEGIN
     RETURN QUERY
     SELECT 
         sa.explanation_id,
-        sa.model_type,
-        sa.model_version_id,
+        sa.analysis_type,
+        sa.model_registry_id,
         sa.prediction_class,
         sa.prediction_probability,
-        sa.shap_values as top_features,
+        sa.local_shap_values as top_features,
         sa.request_timestamp,
         sa.response_time_ms
     FROM ml_shap_analyses sa
     WHERE sa.patient_id = p_patient_id
       AND sa.analysis_type = 'local_realtime'
-      AND (p_model_type IS NULL OR sa.model_type = p_model_type)
+      AND (p_analysis_type IS NULL OR sa.analysis_type = p_analysis_type)
     ORDER BY sa.request_timestamp DESC
     LIMIT p_limit;
 END;
-$$ LANGUAGE plpgsql;
+$function$;
 
 -- =============================================================================
 -- Function: Get explanation by ID (for audit)
 -- =============================================================================
-CREATE OR REPLACE FUNCTION get_explanation_audit(
-    p_explanation_id VARCHAR(50)
-)
-RETURNS TABLE (
-    explanation_id VARCHAR(50),
-    patient_id VARCHAR(50),
-    hcp_id VARCHAR(50),
-    model_type VARCHAR(50),
-    model_version_id VARCHAR(100),
-    input_features JSONB,
-    shap_values JSONB,
-    prediction_class VARCHAR(100),
-    prediction_probability FLOAT,
-    base_value FLOAT,
-    request_timestamp TIMESTAMPTZ,
-    response_time_ms FLOAT,
-    narrative_generated BOOLEAN,
-    api_version VARCHAR(20)
-) AS $$
+CREATE OR REPLACE FUNCTION public.get_explanation_audit(p_explanation_id character varying)
+ RETURNS TABLE(explanation_id character varying, patient_id character varying, hcp_id character varying, analysis_type character varying, model_registry_id uuid, local_shap_values jsonb, prediction_class character varying, prediction_probability double precision, base_value numeric, request_timestamp timestamp with time zone, response_time_ms double precision, narrative_generated boolean, api_version character varying)
+ LANGUAGE plpgsql
+AS $function$
 BEGIN
     RETURN QUERY
     SELECT 
         sa.explanation_id,
         sa.patient_id,
         sa.hcp_id,
-        sa.model_type,
-        sa.model_version_id,
-        sa.input_features,
-        sa.shap_values,
+        sa.analysis_type,
+        sa.model_registry_id,
+        sa.local_shap_values,
         sa.prediction_class,
         sa.prediction_probability,
         sa.base_value,
@@ -178,7 +148,7 @@ BEGIN
     FROM ml_shap_analyses sa
     WHERE sa.explanation_id = p_explanation_id;
 END;
-$$ LANGUAGE plpgsql;
+$function$;
 
 -- =============================================================================
 -- RLS Policy: Restrict explanation access by user role
@@ -186,29 +156,17 @@ $$ LANGUAGE plpgsql;
 -- Enable RLS on ml_shap_analyses
 ALTER TABLE ml_shap_analyses ENABLE ROW LEVEL SECURITY;
 
--- Policy: Allow full access for admins and data scientists
-CREATE POLICY shap_admin_access ON ml_shap_analyses
-    FOR ALL
-    TO admin, data_scientist
-    USING (TRUE)
-    WITH CHECK (TRUE);
+-- Policy: anonymous role full access
+DROP POLICY IF EXISTS shap_anon_access ON ml_shap_analyses;
+CREATE POLICY shap_anon_access ON ml_shap_analyses FOR ALL TO anon USING (true) WITH CHECK (true);
 
--- Policy: Field reps can only see explanations for their assigned HCPs
-CREATE POLICY shap_field_rep_access ON ml_shap_analyses
-    FOR SELECT
-    TO field_rep
-    USING (
-        hcp_id IN (
-            SELECT hcp_id FROM user_hcp_assignments 
-            WHERE user_id = current_user_id()
-        )
-    );
+-- Policy: authenticated role full access
+DROP POLICY IF EXISTS shap_authenticated_access ON ml_shap_analyses;
+CREATE POLICY shap_authenticated_access ON ml_shap_analyses FOR ALL TO authenticated USING (true) WITH CHECK (true);
 
--- Policy: HCPs can only see their own explanations
-CREATE POLICY shap_hcp_access ON ml_shap_analyses
-    FOR SELECT
-    TO hcp_user
-    USING (hcp_id = current_user_hcp_id());
+-- Policy: service role full access
+DROP POLICY IF EXISTS shap_service_access ON ml_shap_analyses;
+CREATE POLICY shap_service_access ON ml_shap_analyses FOR ALL TO authenticated USING (true) WITH CHECK (true);
 
 -- =============================================================================
 -- Trigger: Auto-populate audit metadata
@@ -230,6 +188,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trg_shap_audit_metadata ON ml_shap_analyses;
 CREATE TRIGGER trg_shap_audit_metadata
     BEFORE INSERT ON ml_shap_analyses
     FOR EACH ROW
@@ -248,5 +207,7 @@ COMMENT ON COLUMN ml_shap_analyses.narrative_generated IS 'Whether a natural lan
 
 COMMENT ON VIEW v_patient_explanation_history IS 'Summary of all explanations generated for each patient';
 COMMENT ON VIEW v_shap_api_performance IS 'Performance metrics for the real-time SHAP API';
-COMMENT ON FUNCTION get_patient_explanations IS 'Retrieve recent explanations for a specific patient';
-COMMENT ON FUNCTION get_explanation_audit IS 'Retrieve full audit record for a specific explanation';
+-- Argument list required: get_patient_explanations is overloaded on prod
+-- (a legacy 2-arg variant also exists); a bare reference would be ambiguous.
+COMMENT ON FUNCTION get_patient_explanations(VARCHAR, INTEGER, VARCHAR) IS 'Retrieve recent explanations for a specific patient';
+COMMENT ON FUNCTION get_explanation_audit(VARCHAR) IS 'Retrieve full audit record for a specific explanation';

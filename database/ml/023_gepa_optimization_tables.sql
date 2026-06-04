@@ -1,3 +1,4 @@
+DO $idem$ BEGIN
 -- ============================================================================
 -- E2I Causal Analytics - Migration 023: GEPA Optimization Infrastructure
 -- ============================================================================
@@ -26,7 +27,7 @@ CREATE TYPE optimizer_type AS ENUM (
     'simba',                -- DSPy SIMBA
     'manual'                -- Manual prompt engineering
 );
-
+EXCEPTION WHEN duplicate_object THEN null; END $idem$;DO $idem$ BEGIN
 -- GEPA budget presets
 CREATE TYPE gepa_budget_preset AS ENUM (
     'light',    -- Quick experimentation, ~500 metric calls
@@ -34,7 +35,7 @@ CREATE TYPE gepa_budget_preset AS ENUM (
     'heavy',    -- Thorough optimization, ~4000+ metric calls
     'custom'    -- User-defined max_metric_calls
 );
-
+EXCEPTION WHEN duplicate_object THEN null; END $idem$;DO $idem$ BEGIN
 -- Agent optimization status
 CREATE TYPE optimization_status AS ENUM (
     'pending',      -- Scheduled but not started
@@ -44,7 +45,7 @@ CREATE TYPE optimization_status AS ENUM (
     'cancelled',    -- Manually cancelled
     'rolled_back'   -- Rolled back to previous version
 );
-
+EXCEPTION WHEN duplicate_object THEN null; END $idem$;DO $idem$ BEGIN
 -- A/B test variant type
 CREATE TYPE ab_test_variant AS ENUM (
     'baseline',     -- MIPROv2 or manual baseline
@@ -52,13 +53,14 @@ CREATE TYPE ab_test_variant AS ENUM (
     'gepa_v2',      -- Second GEPA iteration
     'control'       -- Unoptimized control
 );
+EXCEPTION WHEN duplicate_object THEN null; END $idem$;
 
 -- ============================================================================
 -- SECTION 2: PROMPT OPTIMIZATION RUNS TABLE
 -- ============================================================================
 -- Tracks each GEPA optimization session (analogous to ml_experiments but for prompts)
 
-CREATE TABLE prompt_optimization_runs (
+CREATE TABLE IF NOT EXISTS prompt_optimization_runs (
     -- Primary Key
     run_id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     
@@ -119,17 +121,17 @@ CREATE TABLE prompt_optimization_runs (
 );
 
 -- Indexes for common queries
-CREATE INDEX idx_prompt_opt_runs_agent ON prompt_optimization_runs(agent_name);
-CREATE INDEX idx_prompt_opt_runs_status ON prompt_optimization_runs(status);
-CREATE INDEX idx_prompt_opt_runs_created ON prompt_optimization_runs(created_at DESC);
-CREATE INDEX idx_prompt_opt_runs_optimizer ON prompt_optimization_runs(optimizer_type);
+CREATE INDEX IF NOT EXISTS idx_prompt_opt_runs_agent ON prompt_optimization_runs(agent_name);
+CREATE INDEX IF NOT EXISTS idx_prompt_opt_runs_status ON prompt_optimization_runs(status);
+CREATE INDEX IF NOT EXISTS idx_prompt_opt_runs_created ON prompt_optimization_runs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_prompt_opt_runs_optimizer ON prompt_optimization_runs(optimizer_type);
 
 -- ============================================================================
 -- SECTION 3: OPTIMIZED INSTRUCTIONS TABLE
 -- ============================================================================
 -- Stores versioned agent instructions/prompts produced by GEPA
 
-CREATE TABLE optimized_instructions (
+CREATE TABLE IF NOT EXISTS optimized_instructions (
     -- Primary Key
     instruction_id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     
@@ -170,17 +172,17 @@ CREATE TABLE optimized_instructions (
 );
 
 -- Indexes
-CREATE INDEX idx_opt_instructions_agent ON optimized_instructions(agent_name);
-CREATE INDEX idx_opt_instructions_active ON optimized_instructions(agent_name, is_active) WHERE is_active = TRUE;
-CREATE INDEX idx_opt_instructions_run ON optimized_instructions(run_id);
-CREATE UNIQUE INDEX idx_opt_instructions_hash ON optimized_instructions(instruction_hash);
+CREATE INDEX IF NOT EXISTS idx_opt_instructions_agent ON optimized_instructions(agent_name);
+CREATE INDEX IF NOT EXISTS idx_opt_instructions_active ON optimized_instructions(agent_name, is_active) WHERE is_active = TRUE;
+CREATE INDEX IF NOT EXISTS idx_opt_instructions_run ON optimized_instructions(run_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_opt_instructions_hash ON optimized_instructions(instruction_hash);
 
 -- ============================================================================
 -- SECTION 4: OPTIMIZED TOOL DESCRIPTIONS TABLE
 -- ============================================================================
 -- Stores optimized tool descriptions when enable_tool_optimization=True
 
-CREATE TABLE optimized_tool_descriptions (
+CREATE TABLE IF NOT EXISTS optimized_tool_descriptions (
     -- Primary Key
     tool_description_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     
@@ -216,15 +218,15 @@ CREATE TABLE optimized_tool_descriptions (
 );
 
 -- Indexes
-CREATE INDEX idx_tool_desc_agent ON optimized_tool_descriptions(agent_name);
-CREATE INDEX idx_tool_desc_active ON optimized_tool_descriptions(agent_name, is_active) WHERE is_active = TRUE;
+CREATE INDEX IF NOT EXISTS idx_tool_desc_agent ON optimized_tool_descriptions(agent_name);
+CREATE INDEX IF NOT EXISTS idx_tool_desc_active ON optimized_tool_descriptions(agent_name, is_active) WHERE is_active = TRUE;
 
 -- ============================================================================
 -- SECTION 5: PROMPT A/B TESTS TABLE
 -- ============================================================================
 -- Tracks A/B tests comparing GEPA vs baseline in production
 
-CREATE TABLE prompt_ab_tests (
+CREATE TABLE IF NOT EXISTS prompt_ab_tests (
     -- Primary Key
     test_id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     
@@ -271,15 +273,15 @@ CREATE TABLE prompt_ab_tests (
 );
 
 -- Indexes
-CREATE INDEX idx_ab_tests_agent ON prompt_ab_tests(agent_name);
-CREATE INDEX idx_ab_tests_status ON prompt_ab_tests(status);
+CREATE INDEX IF NOT EXISTS idx_ab_tests_agent ON prompt_ab_tests(agent_name);
+CREATE INDEX IF NOT EXISTS idx_ab_tests_status ON prompt_ab_tests(status);
 
 -- ============================================================================
 -- SECTION 6: A/B TEST OBSERVATIONS TABLE
 -- ============================================================================
 -- Individual observations for A/B test analysis
 
-CREATE TABLE prompt_ab_test_observations (
+CREATE TABLE IF NOT EXISTS prompt_ab_test_observations (
     -- Primary Key
     observation_id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     
@@ -305,9 +307,9 @@ CREATE TABLE prompt_ab_test_observations (
 );
 
 -- Indexes
-CREATE INDEX idx_ab_observations_test ON prompt_ab_test_observations(test_id);
-CREATE INDEX idx_ab_observations_variant ON prompt_ab_test_observations(test_id, variant);
-CREATE INDEX idx_ab_observations_created ON prompt_ab_test_observations(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ab_observations_test ON prompt_ab_test_observations(test_id);
+CREATE INDEX IF NOT EXISTS idx_ab_observations_variant ON prompt_ab_test_observations(test_id, variant);
+CREATE INDEX IF NOT EXISTS idx_ab_observations_created ON prompt_ab_test_observations(created_at DESC);
 
 -- ============================================================================
 -- SECTION 7: HELPER VIEWS
@@ -394,11 +396,13 @@ BEGIN
 END;
 $$ language 'plpgsql';
 
+DROP TRIGGER IF EXISTS update_prompt_optimization_runs_updated_at ON prompt_optimization_runs;
 CREATE TRIGGER update_prompt_optimization_runs_updated_at
     BEFORE UPDATE ON prompt_optimization_runs
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_prompt_ab_tests_updated_at ON prompt_ab_tests;
 CREATE TRIGGER update_prompt_ab_tests_updated_at
     BEFORE UPDATE ON prompt_ab_tests
     FOR EACH ROW
