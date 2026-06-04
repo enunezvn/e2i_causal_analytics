@@ -67,7 +67,7 @@ class EffectEstimate(BaseModel):
     per_twin_uplift: np.ndarray       # one score per twin (kept in-process; summarized for persistence)
     auuc: float | None
     qini: float | None
-    feature_importances: dict[str, float]
+    feature_importances: dict[str, float] | None
     n_train: int
     estimator_type: str               # e.g. "uplift_random_forest"
     data_provenance: str              # "synthetic_uplift_v1" | "rwd_uplift"
