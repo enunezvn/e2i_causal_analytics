@@ -700,9 +700,14 @@ class TestResponseFormats:
     """Tests for response format consistency."""
 
     def test_hierarchical_response_format(self, client, hierarchical_request):
-        """Test hierarchical analysis response format."""
+        """Test hierarchical analysis response format (demo_mode schema check).
+
+        Post-C1 the default path fails-closed with 503 without inline data; this
+        test only validates the response schema, which the labeled demo path
+        provides without requiring a real data backend.
+        """
         response = client.post(
-            "/causal/hierarchical/analyze",
+            "/causal/hierarchical/analyze?demo_mode=true",
             json=hierarchical_request,
         )
 
@@ -817,8 +822,10 @@ class TestEnumValidation:
 
         for method in valid_methods:
             hierarchical_request["segmentation_method"] = method
+            # demo_mode: this asserts enum acceptance, not real compute (post-C1
+            # the default no-data path fails-closed with 503).
             response = client.post(
-                "/causal/hierarchical/analyze",
+                "/causal/hierarchical/analyze?demo_mode=true",
                 json=hierarchical_request,
             )
             assert response.status_code == 200
@@ -829,8 +836,10 @@ class TestEnumValidation:
 
         for est_type in valid_types:
             hierarchical_request["estimator_type"] = est_type
+            # demo_mode: this asserts enum acceptance, not real compute (post-C1
+            # the default no-data path fails-closed with 503).
             response = client.post(
-                "/causal/hierarchical/analyze",
+                "/causal/hierarchical/analyze?demo_mode=true",
                 json=hierarchical_request,
             )
             assert response.status_code == 200
