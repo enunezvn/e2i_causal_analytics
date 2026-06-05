@@ -160,3 +160,18 @@ class TestLogValidationOutcomeWithStatus:
         assert result.degraded is True
         assert result.backend == "memory_fallback"
         reset_validation_outcome_store()
+
+
+class TestPackageExportsDurabilitySymbols:
+    """H11: refutation.py imports these from `src.causal_engine`, so they must
+    be re-exported from the package __init__ (not only the submodule)."""
+
+    def test_store_result_and_with_status_exported_from_package(self):
+        import src.causal_engine as ce
+
+        assert hasattr(ce, "StoreResult"), "StoreResult must be re-exported from src.causal_engine"
+        assert hasattr(ce, "log_validation_outcome_with_status"), (
+            "log_validation_outcome_with_status must be re-exported from src.causal_engine"
+        )
+        assert "StoreResult" in ce.__all__
+        assert "log_validation_outcome_with_status" in ce.__all__
