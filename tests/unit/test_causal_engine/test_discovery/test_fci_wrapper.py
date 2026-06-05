@@ -301,6 +301,50 @@ class TestFCIAdjacencyConversion:
         assert adj[1, 0] == 1
         assert edge_types.get((0, 1)) == EdgeType.UNDIRECTED
 
+    def test_parse_error_raises_not_silently_empty(self, fci):
+        """A genuine parse error inside the loop must raise, not return zeros (M-fo4)."""
+        mock_graph = MagicMock()
+        bad_matrix = MagicMock()
+        bad_matrix.__getitem__.side_effect = ValueError("corrupt PAG matrix")
+        mock_graph.graph = bad_matrix
+
+        with pytest.raises(ValueError, match="corrupt PAG matrix"):
+            fci._graph_to_adjacency_with_types(mock_graph, 3)
+
+    def test_graph_without_graph_attribute_returns_empty(self, fci):
+        """A graph object legitimately lacking `.graph` returns empty, no raise."""
+        mock_graph = MagicMock(spec=[])
+
+        adj, edge_types = fci._graph_to_adjacency_with_types(mock_graph, 3)
+
+        assert adj.shape == (3, 3)
+        assert np.all(adj == 0)
+        assert edge_types == {}
+
+
+class TestFCIDiscoveryParseFailure:
+    """M-fo4: parse failure during discover() must yield converged=False."""
+
+    @pytest.fixture
+    def fci(self):
+        return FCIAlgorithm()
+
+    def test_parse_failure_marks_result_failed(self, fci):
+        """If adjacency parsing raises, discover() returns converged=False + error."""
+        config = DiscoveryConfig()
+        df = pd.DataFrame({"A": [1.0, 2.0, 3.0], "B": [4.0, 5.0, 6.0]})
+
+        with patch.object(
+            fci,
+            "_graph_to_adjacency_with_types",
+            side_effect=ValueError("corrupt PAG matrix"),
+        ):
+            result = fci.discover(df, config)
+
+        assert result.converged is False
+        assert "error" in result.metadata
+        assert result.edge_list == []
+
 
 class TestFCIIntegrationWithRunner:
     """Test FCI integration with DiscoveryRunner."""
