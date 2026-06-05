@@ -168,6 +168,14 @@ class SelectionResult:
     energy_scores: dict[str, float] = field(default_factory=dict)
     energy_score_gap: float = 0.0  # Gap between best and second-best
 
+    # M-est3: reliability gate. ``exceeded_max_energy_score`` is True when the
+    # selected (best) estimator's energy score is above
+    # ``EstimatorSelectorConfig.max_acceptable_energy_score``. ``requires_review``
+    # is the consumer-facing signal that the selected ATE is NOT a clean valid
+    # result and must be surfaced for review rather than reported as reliable.
+    exceeded_max_energy_score: bool = False
+    requires_review: bool = False
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for logging."""
         return {
@@ -181,6 +189,8 @@ class SelectionResult:
             "total_time_ms": self.total_time_ms,
             "n_estimators_evaluated": len(self.all_results),
             "n_estimators_succeeded": sum(1 for r in self.all_results if r.success),
+            "exceeded_max_energy_score": self.exceeded_max_energy_score,
+            "requires_review": self.requires_review,
         }
 
 
@@ -1151,14 +1161,45 @@ class EstimatorSelector:
 
         total_time = (time.perf_counter() - total_start) * 1000
 
+        return self._build_selection_result(
+            selection=selection,
+            results=results,
+            total_time_ms=total_time,
+            energy_scores=energy_scores,
+            energy_score_gap=energy_score_gap,
+        )
+
+    def _build_selection_result(
+        self,
+        selection: EstimatorResult,
+        results: list[EstimatorResult],
+        total_time_ms: float,
+        energy_scores: Optional[dict[str, float]] = None,
+        energy_score_gap: float = 0.0,
+    ) -> SelectionResult:
+        """Assemble a SelectionResult and compute the M-est3 reliability gate.
+
+        ``exceeded_max_energy_score`` is True when the selected estimator's
+        energy score is above ``config.max_acceptable_energy_score`` (only the
+        warn-only branch existed before). ``requires_review`` mirrors it: a
+        breach means the selected ATE must be surfaced for review, not reported
+        as a clean valid estimate.
+        """
+        if energy_scores is None:
+            energy_scores = {r.estimator_type.value: r.energy_score for r in results if r.success}
+        exceeded = bool(
+            selection.success and selection.energy_score > self.config.max_acceptable_energy_score
+        )
         return SelectionResult(
             selected=selection,
             selection_strategy=self.config.strategy,
             all_results=results,
             selection_reason=self._get_selection_reason(selection, results),
-            total_time_ms=total_time,
+            total_time_ms=total_time_ms,
             energy_scores=energy_scores,
             energy_score_gap=energy_score_gap,
+            exceeded_max_energy_score=exceeded,
+            requires_review=exceeded,
         )
 
     def _select_best_energy(self, results: list[EstimatorResult]) -> EstimatorResult:

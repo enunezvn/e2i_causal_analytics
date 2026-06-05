@@ -443,3 +443,148 @@ class TestStatisticalSignificance:
         # If significant, p-value should be < 0.05
         if est["statistical_significance"]:
             assert est["p_value"] < 0.05
+
+
+class TestEnergyScoreReviewGate:
+    """M-est3: when the selector flags requires_review (best energy score above
+    max_acceptable), the EstimationResult must be marked requires_review=True
+    and downgraded to the 'unreliable' quality tier rather than emitted as a
+    clean, reliable ATE.
+    """
+
+    def _graph(self):
+        return {
+            "nodes": ["t", "y", "c"],
+            "edges": [("c", "t"), ("c", "y"), ("t", "y")],
+            "treatment_nodes": ["t"],
+            "outcome_nodes": ["y"],
+            "adjustment_sets": [["c"]],
+            "dag_dot": "digraph { }",
+            "confidence": 0.8,
+        }
+
+    def test_requires_review_propagates_to_estimation_result(self, monkeypatch):
+        import numpy as np
+
+        from src.agents.causal_impact.nodes.estimation import EstimationNode
+        from src.causal_engine.energy_score.estimator_selector import (
+            EstimatorResult,
+            EstimatorType,
+            SelectionResult,
+            SelectionStrategy,
+        )
+        from src.causal_engine.energy_score.score_calculator import EnergyScoreResult
+
+        node = EstimationNode()
+
+        # Craft a SUCCESSFUL but high-energy selection (breaches max_acceptable).
+        energy = EnergyScoreResult(
+            estimator_name="ols",
+            energy_score=0.95,  # well above default max_acceptable 0.8
+            treatment_balance_score=0.9,
+            outcome_fit_score=0.95,
+            propensity_calibration=0.9,
+            n_samples=100,
+            n_treated=50,
+            n_control=50,
+            computation_time_ms=1.0,
+        )
+        selected = EstimatorResult(
+            estimator_type=EstimatorType.OLS,
+            success=True,
+            ate=2.0,
+            ate_std=0.5,
+            ate_ci_lower=1.0,
+            ate_ci_upper=3.0,
+            cate=np.array([2.0, 2.0]),
+            energy_score_result=energy,
+        )
+        sr = SelectionResult(
+            selected=selected,
+            selection_strategy=SelectionStrategy.BEST_ENERGY_SCORE,
+            all_results=[selected],
+            requires_review=True,
+            exceeded_max_energy_score=True,
+            energy_scores={"ols": 0.95},
+        )
+
+        class _FakeSelector:
+            def select(self, treatment, outcome, covariates, **kw):
+                return sr
+
+        monkeypatch.setattr(node, "_get_estimator_selector", lambda *a, **k: _FakeSelector())
+
+        result, selection_dict, _latency = node._select_estimator_with_energy_score(
+            data=__import__("pandas").DataFrame(
+                {"t": [0, 1, 0, 1], "y": [1.0, 2.0, 1.5, 2.5], "c": [0.1, 0.2, 0.3, 0.4]}
+            ),
+            treatment="t",
+            outcome="y",
+            adjustment_set=["c"],
+            strategy="best_energy",
+        )
+        assert result["requires_review"] is True
+        assert result["energy_score_data"]["quality_tier"] == "unreliable"
+        assert selection_dict["requires_review"] is True
+        assert selection_dict["quality_tier"] == "unreliable"
+
+    def test_no_review_when_within_threshold(self, monkeypatch):
+        import numpy as np
+        import pandas as pd
+
+        from src.agents.causal_impact.nodes.estimation import EstimationNode
+        from src.causal_engine.energy_score.estimator_selector import (
+            EstimatorResult,
+            EstimatorType,
+            SelectionResult,
+            SelectionStrategy,
+        )
+        from src.causal_engine.energy_score.score_calculator import EnergyScoreResult
+
+        node = EstimationNode()
+        energy = EnergyScoreResult(
+            estimator_name="ols",
+            energy_score=0.20,
+            treatment_balance_score=0.2,
+            outcome_fit_score=0.2,
+            propensity_calibration=0.2,
+            n_samples=100,
+            n_treated=50,
+            n_control=50,
+            computation_time_ms=1.0,
+        )
+        selected = EstimatorResult(
+            estimator_type=EstimatorType.OLS,
+            success=True,
+            ate=2.0,
+            ate_std=0.5,
+            ate_ci_lower=1.0,
+            ate_ci_upper=3.0,
+            cate=np.array([2.0, 2.0]),
+            energy_score_result=energy,
+        )
+        sr = SelectionResult(
+            selected=selected,
+            selection_strategy=SelectionStrategy.BEST_ENERGY_SCORE,
+            all_results=[selected],
+            requires_review=False,
+            exceeded_max_energy_score=False,
+            energy_scores={"ols": 0.20},
+        )
+
+        class _FakeSelector:
+            def select(self, treatment, outcome, covariates, **kw):
+                return sr
+
+        monkeypatch.setattr(node, "_get_estimator_selector", lambda *a, **k: _FakeSelector())
+        result, selection_dict, _ = node._select_estimator_with_energy_score(
+            data=pd.DataFrame(
+                {"t": [0, 1, 0, 1], "y": [1.0, 2.0, 1.5, 2.5], "c": [0.1, 0.2, 0.3, 0.4]}
+            ),
+            treatment="t",
+            outcome="y",
+            adjustment_set=["c"],
+            strategy="best_energy",
+        )
+        assert result["requires_review"] is False
+        assert result["energy_score_data"]["quality_tier"] == "excellent"

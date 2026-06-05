@@ -80,6 +80,7 @@ class EstimationResult(TypedDict, total=False):
     energy_score_gap: NotRequired[float]  # Gap between best and second-best
     n_estimators_evaluated: NotRequired[int]  # Number of estimators tried
     n_estimators_succeeded: NotRequired[int]  # Number that succeeded
+    requires_review: NotRequired[bool]  # M-est3: energy-score breach -> review, not clean ATE
 
 
 class RefutationTest(TypedDict, total=False):

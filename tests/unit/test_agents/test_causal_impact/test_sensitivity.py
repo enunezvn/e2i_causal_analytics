@@ -89,8 +89,8 @@ class TestSensitivityNode:
         assert "robust_to_confounding" in sens
         assert isinstance(sens["robust_to_confounding"], bool)
 
-        # Robust if E-value > 2.0
-        expected_robust = sens["e_value"] > 2.0
+        # M-stat2: robustness is gated on the conservative CI E-value.
+        expected_robust = sens["e_value_ci"] > 2.0
         assert sens["robust_to_confounding"] == expected_robust
 
     @pytest.mark.asyncio
@@ -112,11 +112,11 @@ class TestSensitivityNode:
         assert "unmeasured_confounder_strength" in sens
         assert sens["unmeasured_confounder_strength"] in ["weak", "moderate", "strong"]
 
-        # Classification based on E-value
-        e_value = sens["e_value"]
-        if e_value < 1.5:
+        # M-stat2: classification keys off the conservative CI E-value.
+        e_value_ci = sens["e_value_ci"]
+        if e_value_ci < 1.5:
             assert sens["unmeasured_confounder_strength"] == "weak"
-        elif e_value < 3.0:
+        elif e_value_ci < 3.0:
             assert sens["unmeasured_confounder_strength"] == "moderate"
         else:
             assert sens["unmeasured_confounder_strength"] == "strong"
@@ -174,6 +174,68 @@ class TestSensitivityNode:
 
         assert "sensitivity_error" in result
         assert result["status"] == "failed"
+
+    @pytest.mark.asyncio
+    async def test_e_value_ci_collapses_to_one_when_ci_straddles_null(self):
+        """M-stat1: a CI straddling 0 (sign(lo) != sign(hi)) is not robust;
+        the conservative E-value-for-CI must collapse to 1.0 instead of
+        min(|lo|,|hi|) (which would falsely report > 1)."""
+        node = SensitivityNode()
+
+        estimation = {
+            "method": "CausalForestDML",
+            "ate": 0.5,
+            "ate_ci_lower": -0.3,  # CI straddles 0
+            "ate_ci_upper": 0.5,
+            "effect_size": "medium",
+            "statistical_significance": False,
+            "p_value": 0.30,
+            "sample_size": 1000,
+            "covariates_adjusted": ["geographic_region"],
+            "heterogeneity_detected": False,
+        }
+        state: CausalImpactState = {
+            "query": "test query",
+            "query_id": "test-straddle",
+            "estimation_result": estimation,
+            "status": "pending",
+        }
+
+        result = await node.execute(state)
+        sens = result["sensitivity_analysis"]
+
+        # Conservative CI E-value collapses to the null when the CI crosses 0.
+        assert sens["e_value_ci"] == 1.0
+        # Robustness gate uses the conservative CI E-value -> not robust.
+        assert sens["robust_to_confounding"] is False
+
+    @pytest.mark.asyncio
+    async def test_e_value_ci_unchanged_when_ci_does_not_straddle_null(self):
+        """Guard must not affect a one-sided CI: ci_bound = min(|lo|,|hi|)."""
+        node = SensitivityNode()
+        estimation = {
+            "method": "CausalForestDML",
+            "ate": 0.5,
+            "ate_ci_lower": 0.4,  # entirely positive
+            "ate_ci_upper": 0.6,
+            "effect_size": "medium",
+            "statistical_significance": True,
+            "p_value": 0.01,
+            "sample_size": 1000,
+            "covariates_adjusted": ["geographic_region"],
+            "heterogeneity_detected": False,
+        }
+        state: CausalImpactState = {
+            "query": "test query",
+            "query_id": "test-onesided",
+            "estimation_result": estimation,
+            "status": "pending",
+        }
+        result = await node.execute(state)
+        sens = result["sensitivity_analysis"]
+        # ci_bound = 0.4 -> exp(0.4) RR -> e_value_ci ~ 2.348
+        assert sens["e_value_ci"] == pytest.approx(2.348397071029064, rel=1e-6)
+        assert sens["e_value_ci"] > 1.0
 
 
 class TestEValueCalculation:

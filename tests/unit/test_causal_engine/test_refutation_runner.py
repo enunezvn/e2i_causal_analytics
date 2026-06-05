@@ -682,6 +682,52 @@ class TestSensitivityTest:
         # Small effects typically have low E-values
         assert result.details["e_value"] > 0
 
+    def test_run_sensitivity_test_null_crossing_ci_collapses_e_value_ci(self, runner):
+        """M-stat1: a CI straddling 0 makes the conservative e_value_ci == 1.0
+        instead of min(|lo|,|hi|) (which falsely reports > 1)."""
+        result = runner._run_sensitivity_test(
+            original_effect=0.5,
+            original_ci=(-0.3, 0.5),  # straddles 0
+        )
+        assert result.details["e_value_ci"] == 1.0
+
+    def test_run_sensitivity_test_one_sided_ci_e_value_ci_unchanged(self, runner):
+        """Guard must not affect a one-sided CI: ci_bound = min(|lo|,|hi|)."""
+        import numpy as np
+
+        result = runner._run_sensitivity_test(
+            original_effect=0.5,
+            original_ci=(0.4, 0.6),  # entirely positive, ci_bound=0.4
+        )
+        rr_ci = np.exp(0.91 * 0.4)
+        expected = rr_ci + np.sqrt(rr_ci * (rr_ci - 1))
+        assert result.details["e_value_ci"] == pytest.approx(expected, rel=1e-6)
+        assert result.details["e_value_ci"] > 1.0
+
+    def test_run_sensitivity_status_uses_conservative_ci_bound(self, runner):
+        """M-stat2: a strong point effect with a null-crossing CI must FAIL the
+        sensitivity gate, because the conservative e_value_ci collapses to 1.0
+        (< warning threshold 1.5). Previously status keyed off the point
+        e_value (~2.53 >= pass 2.0 -> spurious PASSED)."""
+        result = runner._run_sensitivity_test(
+            original_effect=0.5,  # point e_value ~ 2.53 -> would PASS on point
+            original_ci=(-0.3, 0.5),  # straddles 0 -> e_value_ci == 1.0
+        )
+        # Conservative bound drives the status.
+        assert result.details["e_value_ci"] == 1.0
+        assert result.status == RefutationStatus.FAILED
+        # Point e_value is still surfaced for transparency.
+        assert result.details["e_value"] > runner.thresholds["e_value_min"]["pass"]
+
+    def test_run_sensitivity_status_pass_on_strong_one_sided_ci(self, runner):
+        """A one-sided CI with a strong conservative bound still PASSES."""
+        result = runner._run_sensitivity_test(
+            original_effect=0.50,
+            original_ci=(0.40, 0.60),  # ci_bound=0.4 -> e_value_ci ~ 2.234 >= 2.0
+        )
+        assert result.status == RefutationStatus.PASSED
+        assert result.details["e_value_ci"] >= runner.thresholds["e_value_min"]["pass"]
+
 
 # ============================================================================
 # MOCK IMPLEMENTATIONS TESTS

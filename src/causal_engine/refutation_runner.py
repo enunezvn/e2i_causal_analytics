@@ -1229,6 +1229,10 @@ class RefutationRunner:
         # Calculate E-value using VanderWeele formula
         # E-value = RR + sqrt(RR * (RR - 1)) where RR is the relative risk
         abs_effect = abs(original_effect)
+        # M-stat1 null-crossing guard: a CI that straddles (or touches) 0 is
+        # statistically indistinguishable from the null, so the conservative
+        # E-value-for-CI must collapse to 1.0 instead of min(|lo|,|hi|).
+        ci_straddles_null = original_ci[0] <= 0.0 <= original_ci[1]
         ci_bound = min(abs(original_ci[0]), abs(original_ci[1]))
 
         # H3: standardize the effect + CI bound by the outcome SD before the
@@ -1245,26 +1249,38 @@ class RefutationRunner:
         rr = np.exp(0.91 * abs_effect)
         e_value = rr + np.sqrt(rr * (rr - 1)) if rr > 1 else 1.0
 
-        # E-value for CI bound (more conservative)
-        rr_ci = np.exp(0.91 * ci_bound)
-        e_value_ci = rr_ci + np.sqrt(rr_ci * (rr_ci - 1)) if rr_ci > 1 else 1.0
+        # E-value for CI bound (more conservative). M-stat1: a null-crossing CI
+        # collapses this to the null.
+        if ci_straddles_null:
+            e_value_ci = 1.0
+        else:
+            rr_ci = np.exp(0.91 * ci_bound)
+            e_value_ci = rr_ci + np.sqrt(rr_ci * (rr_ci - 1)) if rr_ci > 1 else 1.0
 
         threshold = self.thresholds["e_value_min"]["pass"]
         warning_threshold = self.thresholds["e_value_min"]["warning"]
 
-        # Determine status
-        if e_value >= threshold:
+        # M-stat2: the PASS/WARNING/FAILED decision uses the CONSERVATIVE CI
+        # E-value (e_value_ci), not the point estimate. A strong point effect
+        # with a wide / null-crossing CI must not wave the gate through.
+        if e_value_ci >= threshold:
             status = RefutationStatus.PASSED
-            message = f"E-value {e_value:.2f} indicates robustness to unmeasured confounding"
-            strength = "strong" if e_value >= 3.0 else "moderate"
-        elif e_value >= warning_threshold:
+            message = (
+                f"E-value (CI bound) {e_value_ci:.2f} indicates robustness to "
+                "unmeasured confounding"
+            )
+            strength = "strong" if e_value_ci >= 3.0 else "moderate"
+        elif e_value_ci >= warning_threshold:
             status = RefutationStatus.WARNING
-            message = f"E-value {e_value:.2f} suggests moderate sensitivity to confounding"
+            message = (
+                f"E-value (CI bound) {e_value_ci:.2f} suggests moderate sensitivity to confounding"
+            )
             strength = "weak"
         else:
             status = RefutationStatus.FAILED
             message = (
-                f"WARNING: Low E-value {e_value:.2f} indicates high sensitivity to confounding"
+                f"WARNING: Low E-value (CI bound) {e_value_ci:.2f} indicates high "
+                "sensitivity to confounding"
             )
             strength = "very_weak"
 

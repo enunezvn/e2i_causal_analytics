@@ -399,8 +399,16 @@ class EnergyScoreCalculator:
         outcome_std = np.std(Y) + 1e-8
         normalized_rmse = rmse / outcome_std
 
-        # Cap at 1.0
-        return float(min(normalized_rmse, 1.0))
+        # M-est2: saturating-but-MONOTONE squash into [0, 1). The previous hard
+        # ``min(normalized_rmse, 1.0)`` cap collapsed every estimator with
+        # normalized RMSE >= 1.0 to exactly 1.0, erasing all discrimination in
+        # the 0.45-weighted outcome-fit term, so poor estimators became
+        # indistinguishable. ``x / (1 + x)`` is strictly increasing on [0, inf),
+        # equals 0 at 0, and stays STRICTLY below 1.0 for every finite input
+        # (unlike ``np.tanh``, which rounds to exactly 1.0 in float64 once the
+        # argument exceeds ~19, re-introducing the collapse for wildly-off fits).
+        # This keeps poorer fits ordered across the whole range.
+        return float(normalized_rmse / (1.0 + normalized_rmse))
 
     def _compute_propensity_calibration(
         self, treatment: NDArray[np.int_], propensity_scores: NDArray[np.float64]
