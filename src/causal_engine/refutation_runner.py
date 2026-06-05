@@ -1273,8 +1273,7 @@ class RefutationRunner:
         elif e_value_ci >= warning_threshold:
             status = RefutationStatus.WARNING
             message = (
-                f"E-value (CI bound) {e_value_ci:.2f} suggests moderate sensitivity "
-                "to confounding"
+                f"E-value (CI bound) {e_value_ci:.2f} suggests moderate sensitivity to confounding"
             )
             strength = "weak"
         else:

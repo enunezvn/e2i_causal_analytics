@@ -465,6 +465,7 @@ class TestEnergyScoreReviewGate:
 
     def test_requires_review_propagates_to_estimation_result(self, monkeypatch):
         import numpy as np
+
         from src.agents.causal_impact.nodes.estimation import EstimationNode
         from src.causal_engine.energy_score.estimator_selector import (
             EstimatorResult,
@@ -530,6 +531,7 @@ class TestEnergyScoreReviewGate:
     def test_no_review_when_within_threshold(self, monkeypatch):
         import numpy as np
         import pandas as pd
+
         from src.agents.causal_impact.nodes.estimation import EstimationNode
         from src.causal_engine.energy_score.estimator_selector import (
             EstimatorResult,

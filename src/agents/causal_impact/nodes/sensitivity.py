@@ -69,8 +69,8 @@ class SensitivityNode:
             # Calculate E-values
             e_value_point = self._calculate_e_value(ate, outcome_std)
             # M-stat1: a null-crossing CI collapses the conservative bound to 1.0.
-            e_value_ci = 1.0 if ci_straddles_null else self._calculate_e_value(
-                ci_bound, outcome_std
+            e_value_ci = (
+                1.0 if ci_straddles_null else self._calculate_e_value(ci_bound, outcome_std)
             )
 
             # Interpret E-value (point estimate drives the human narrative).

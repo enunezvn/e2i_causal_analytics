@@ -1186,12 +1186,9 @@ class EstimatorSelector:
         as a clean valid estimate.
         """
         if energy_scores is None:
-            energy_scores = {
-                r.estimator_type.value: r.energy_score for r in results if r.success
-            }
+            energy_scores = {r.estimator_type.value: r.energy_score for r in results if r.success}
         exceeded = bool(
-            selection.success
-            and selection.energy_score > self.config.max_acceptable_energy_score
+            selection.success and selection.energy_score > self.config.max_acceptable_energy_score
         )
         return SelectionResult(
             selected=selection,

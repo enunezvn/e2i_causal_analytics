@@ -709,6 +709,7 @@ class TestOutcomeFitMonotoneTransform:
 
     def test_outcome_fit_strictly_increasing_above_one_and_below_one(self):
         import numpy as np
+
         from src.causal_engine.energy_score.score_calculator import (
             EnergyScoreCalculator,
             EnergyScoreConfig,
@@ -743,6 +744,7 @@ class TestOutcomeFitMonotoneTransform:
 
     def test_outcome_fit_stays_in_unit_interval(self):
         import numpy as np
+
         from src.causal_engine.energy_score.score_calculator import (
             EnergyScoreCalculator,
             EnergyScoreConfig,
