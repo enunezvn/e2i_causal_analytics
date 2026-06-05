@@ -257,7 +257,7 @@ class SplitValidator:
                     result.add_leakage(
                         LeakageInfo(
                             leakage_type="temporal_overlap",
-                            severity="warning",
+                            severity="critical",
                             description=(
                                 f"Temporal overlap between '{split1}' "
                                 f"(max: {split_dates[split1]['max']}) and '{split2}' "

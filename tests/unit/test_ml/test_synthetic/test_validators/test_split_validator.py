@@ -218,6 +218,72 @@ class TestSplitValidator:
         assert summary["total_tables"] == 1
         assert summary["total_leakages"] == 0
 
+    def test_temporal_overlap_invalidates_split(self, validator, temporal_overlap_df):
+        """M-fo5a: a detected temporal overlap is a leakage that must fail the
+        split. Previously it was recorded with severity='warning', which never
+        flipped is_valid, so chronologically-leaking splits passed validation.
+        """
+        result = validator.validate(
+            df=temporal_overlap_df,
+            entity_column="patient_id",
+            date_column="journey_start_date",
+            split_column="data_split",
+        )
+
+        temporal_leakages = [l for l in result.leakages if l.leakage_type == "temporal_overlap"]
+        assert len(temporal_leakages) > 0
+        assert all(l.severity == "critical" for l in temporal_leakages)
+        assert result.temporal_violations >= 1
+        assert result.is_valid is False
+        assert result.has_critical_leakage() is True
+
+    def test_leakage_detector_exception_fails_closed(self, valid_patient_df):
+        """M-fo5b: if the wired LeakageDetector raises, the validator must NOT
+        silently pass. The failure is recorded in errors and is_valid=False
+        (fail-closed), instead of being swallowed into a warning.
+        """
+
+        class _ExplodingDetector:
+            def detect_leakage(self, *args, **kwargs):
+                raise RuntimeError("detector boom")
+
+        validator = SplitValidator()
+        validator._leakage_detector = _ExplodingDetector()
+
+        result = validator.validate(
+            df=valid_patient_df,
+            entity_column="patient_id",
+            date_column="journey_start_date",
+            split_column="data_split",
+        )
+
+        assert result.is_valid is False
+        assert any("LeakageDetector" in e for e in result.errors)
+        assert any("detector boom" in e for e in result.errors)
+        # The failure must NOT be downgraded to a mere warning.
+        assert not any("LeakageDetector check failed" in w for w in result.warnings)
+
+    def test_validator_cluster_modules_marked_test_only(self):
+        """M-reach2: the synthetic-validator cluster has no production consumers
+        and is documented as test-only-by-design. Guard the docstring annotation
+        so it is not silently dropped.
+        """
+        import src.ml.synthetic.validators as validators_pkg
+        from src.ml.synthetic.validators import (
+            causal_validator,
+            schema_validator,
+            split_validator,
+        )
+
+        for module in (
+            validators_pkg,
+            causal_validator,
+            schema_validator,
+            split_validator,
+        ):
+            assert module.__doc__ is not None
+            assert "Test-only-by-design" in module.__doc__
+
 
 class TestSplitValidationResult:
     """Test suite for SplitValidationResult."""
