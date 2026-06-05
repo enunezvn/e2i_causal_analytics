@@ -103,3 +103,28 @@ def test_f3_preserves_newer_gepa_tables() -> None:
     assert gepa.exists(), "the newer GEPA tables (023) are the current stake — keep them"
     text = gepa.read_text(encoding="utf-8")
     assert "prompt_optimization_runs" in text and "optimized_instructions" in text
+
+
+# ---------------------------------------------------------------------------
+# F2 / F4 (S3) — dormant semantic_memory_cache sync wrappers + inert TTL retired.
+# ---------------------------------------------------------------------------
+def test_s3_dead_cache_sync_wrappers_removed() -> None:
+    epi = (_SRC / "memory" / "episodic_memory.py").read_text(encoding="utf-8")
+    sem = (_SRC / "memory" / "semantic_memory.py").read_text(encoding="utf-8")
+    assert "def sync_treatment_relationships_to_cache" not in epi, (
+        "dead sync wrapper must stay removed (audit F2/S3 — zero non-test callers; "
+        "the relationship-lookup capability is live via FalkorDB graph traversal)"
+    )
+    assert "def sync_data_layer_to_semantic_cache" not in sem, (
+        "dead sync wrapper must stay removed (audit F2/S3)"
+    )
+
+
+def test_s3_inert_cache_ttl_control_removed() -> None:
+    cfg = (_SRC / "memory" / "graphiti_config.py").read_text(encoding="utf-8")
+    assert "cache_ttl_minutes: int" not in cfg, (
+        "inert cache_ttl_minutes field must stay removed (audit F4/S3 — never enforced)"
+    )
+    assert "cache_ttl_minutes=raw_config" not in cfg, (
+        "inert cache_ttl_minutes loader must stay removed (audit F4/S3)"
+    )

@@ -114,7 +114,9 @@ class GraphitiConfig:
 
     # Cache settings
     cache_enabled: bool = True
-    cache_ttl_minutes: int = 5
+    # NOTE (audit 2026-06-05, F4): semantic_cache_ttl_minutes was an inert control
+    # (loaded but never enforced — Postgres has no auto-TTL and no eviction job
+    # existed). Removed with the dormant semantic_memory_cache sync wrappers (S3).
 
     def get_entity_label(self, entity_type: E2IEntityType) -> str:
         """Get the graph label for an entity type."""
@@ -342,9 +344,6 @@ def load_graphiti_config(config_path: Optional[Path] = None) -> GraphitiConfig:
         falkordb_port=int(os.environ.get("FALKORDB_PORT", "6379")),
         falkordb_password=os.environ.get("FALKORDB_PASSWORD"),
         cache_enabled=cache_config.get("enabled", True),
-        cache_ttl_minutes=raw_config.get("performance", {})
-        .get("cache", {})
-        .get("semantic_cache_ttl_minutes", 5),
     )
 
     logger.info(

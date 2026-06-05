@@ -879,28 +879,3 @@ async def count_memories_by_type(
 
     result = query.execute()
     return result.count or 0
-
-
-async def sync_treatment_relationships_to_cache() -> int:
-    """
-    Sync HCP-Patient treatment relationships to semantic_memory_cache.
-    Uses the sync_hcp_patient_relationships_to_cache() database function.
-
-    This should be called periodically to keep the cache updated with
-    the latest treatment relationships from the data layer.
-
-    Returns:
-        Count of synced relationships
-    """
-    client = get_supabase_client()
-
-    try:
-        result = client.rpc("sync_hcp_patient_relationships_to_cache", {}).execute()
-
-        count = result.data if isinstance(result.data, int) else 0
-        logger.info(f"Synced {count} treatment relationships to semantic cache")
-
-        return count
-    except Exception as e:
-        logger.warning(f"sync_hcp_patient_relationships_to_cache failed: {e}")
-        return 0

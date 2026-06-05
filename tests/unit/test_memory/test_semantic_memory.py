@@ -20,7 +20,6 @@ from src.memory.semantic_memory import (
     # Utility functions
     query_semantic_graph,
     reset_semantic_memory,
-    sync_data_layer_to_semantic_cache,
     sync_to_semantic_graph,
 )
 
@@ -717,19 +716,6 @@ class TestSyncToSemanticGraph:
                 assert result is True
 
         reset_semantic_memory()
-
-
-class TestSyncDataLayerToSemanticCache:
-    """Tests for sync_data_layer_to_semantic_cache function."""
-
-    @pytest.mark.asyncio
-    async def test_sync_to_cache(self, mock_supabase):
-        """sync_data_layer_to_semantic_cache should call RPC."""
-        with patch("src.memory.semantic_memory.get_supabase_client", return_value=mock_supabase):
-            result = await sync_data_layer_to_semantic_cache()
-
-        mock_supabase.rpc.assert_called_once_with("sync_hcp_patient_relationships_to_cache", {})
-        assert result == {"synced": 10}
 
 
 # ============================================================================

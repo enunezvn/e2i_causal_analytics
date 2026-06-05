@@ -242,7 +242,6 @@ class TestGraphitiConfig:
         assert config.episode_batch_size == 5
         assert config.min_confidence_for_extraction == 0.6
         assert config.cache_enabled is True
-        assert config.cache_ttl_minutes == 5
 
     def test_entity_types_default(self):
         """Test default entity types include all types."""
@@ -348,7 +347,6 @@ class TestLoadGraphitiConfig:
         assert config.graph_name == "test_semantic_graph"
         assert config.episode_batch_size == 10
         assert config.min_confidence_for_extraction == 0.7
-        assert config.cache_ttl_minutes == 10
 
     def test_load_entity_types_from_file(self, temp_config_file):
         """Test entity types are loaded from config."""
