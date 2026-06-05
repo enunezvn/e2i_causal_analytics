@@ -6,6 +6,8 @@ Validates ML-compliant data splits:
 - Temporal ordering (chronological splits)
 - Correct split ratios
 - No data leakage
+
+Test-only-by-design: imported only by tests; no production consumers.
 """
 
 import logging

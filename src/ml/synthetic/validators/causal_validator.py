@@ -5,6 +5,10 @@ Validates that causal inference pipelines can recover TRUE_ATE:
 - DoWhy refutation tests
 - ATE estimation within tolerance
 - Confounder balance verification
+
+Test-only-by-design: imported only by tests; no production consumers. The
+statsmodels-unavailable numpy fallback is an approximation, not a
+DoWhy-grade estimator.
 """
 
 import logging

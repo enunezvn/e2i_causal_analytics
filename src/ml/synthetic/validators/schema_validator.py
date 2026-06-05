@@ -6,6 +6,8 @@ Validates that generated data matches Supabase table schemas:
 - ENUM value compliance
 - NOT NULL constraints
 - Foreign key references
+
+Test-only-by-design: imported only by tests; no production consumers.
 """
 
 from dataclasses import dataclass, field
