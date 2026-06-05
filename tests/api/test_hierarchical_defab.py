@@ -234,3 +234,29 @@ class TestHierarchicalRealDataFlowsThrough:
         # The analyzer received the SUPPLIED treatment/outcome — not RNG data.
         assert captured["treatment"] == [r["promotion"] for r in records]
         assert captured["outcome"] == [r["trx"] for r in records]
+
+
+class TestNestedCIUsesTrueSE_H6:
+    """H6 - the hierarchical API handler must build SegmentEstimate.ate_std from
+    the segment ATE's TRUE standard error (cate_se), not the per-unit CATE
+    dispersion (cate_std). cate_std does not shrink with n and inflates the
+    inverse-variance weights / I^2 / tau^2, making aggregate CIs ~sqrt(n) too wide.
+    """
+
+    def test_api_handler_builds_ate_std_from_cate_se(self):
+        """Source pin: _execute_hierarchical_analysis must prefer seg.cate_se."""
+        source = inspect.getsource(causal_module._execute_hierarchical_analysis)
+        # The corrected bridge must reference cate_se as the SE source.
+        assert "seg.cate_se" in source, (
+            "H6 regression: API hierarchical handler must feed the true SE "
+            "(seg.cate_se) into SegmentEstimate.ate_std, not raw cate_std"
+        )
+        # The corrected, full expression must be present verbatim.
+        assert (
+            "ate_std=(seg.cate_se if seg.cate_se is not None else (seg.cate_std or 0.01))"
+            in source
+        ), "H6: API ate_std must be the cate_se-preferring expression"
+        # The buggy raw-dispersion bridge must be gone.
+        assert "ate_std=seg.cate_std or 0.01" not in source, (
+            "H6 regression: API handler still feeds raw cate_std as the standard error"
+        )

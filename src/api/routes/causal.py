@@ -451,7 +451,7 @@ async def _execute_hierarchical_analysis(
                     segment_id=seg.segment_id,
                     segment_name=seg.segment_name,
                     ate=seg.cate_mean,
-                    ate_std=seg.cate_std or 0.01,
+                    ate_std=(seg.cate_se if seg.cate_se is not None else (seg.cate_std or 0.01)),
                     ci_lower=seg.cate_ci_lower or seg.cate_mean - 0.1,
                     ci_upper=seg.cate_ci_upper or seg.cate_mean + 0.1,
                     sample_size=seg.n_samples,
