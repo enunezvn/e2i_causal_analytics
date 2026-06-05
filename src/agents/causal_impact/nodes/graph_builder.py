@@ -351,8 +351,11 @@ class GraphBuilderNode:
         """
         from itertools import combinations
 
-        # Guard: treatment/outcome must be present in the DAG.
-        if treatment not in dag or outcome not in dag:
+        # Guard: treatment/outcome must be present and distinct. A degenerate
+        # treatment == outcome query has no meaningful backdoor adjustment and
+        # would make nx.is_d_separator raise (non-disjoint x/y node sets), so
+        # return the trivial empty set rather than hard-failing the node.
+        if treatment not in dag or outcome not in dag or treatment == outcome:
             return [[]]
 
         # Backdoor criterion (Pearl 2009, Def. 3.3.1): a set Z is admissible iff
@@ -377,9 +380,24 @@ class GraphBuilderNode:
             if adjustment_sets:
                 return adjustment_sets
 
-        # No admissible set found at sizes <= 3: return empty set as a documented
-        # fallback (downstream estimation defaults to no adjustment).
-        return adjustment_sets if adjustment_sets else [[]]
+        if adjustment_sets:
+            return adjustment_sets
+
+        # No MINIMAL admissible set of size <= 3 d-separated treatment and
+        # outcome. Before defaulting to no adjustment (which would silently leave
+        # the estimate CONFOUNDED — the exact harm the backdoor criterion exists
+        # to prevent), try the FULL candidate set: with > 3 independent
+        # confounders the only admissible set is all of them, and any proper
+        # subset leaves a confounded path open. If the full set is admissible,
+        # return it (non-minimal but valid) rather than [[]].
+        if candidate_nodes and self._satisfies_backdoor_criterion(
+            dag, candidate_nodes, treatment, outcome
+        ):
+            return [sorted(candidate_nodes)]
+
+        # Genuinely no admissible set (e.g. an unblockable backdoor path):
+        # documented fallback to no adjustment.
+        return [[]]
 
     def _find_backdoor_paths(
         self, dag: nx.DiGraph, treatment: str, outcome: str

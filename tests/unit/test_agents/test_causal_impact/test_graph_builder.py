@@ -571,3 +571,51 @@ class TestAdjustmentSetLogic:
             f"Mediator 'M' must never be in an adjustment set, got {adjustment_sets}"
         )
         assert [] in adjustment_sets
+
+    def test_more_than_three_confounders_are_all_adjusted(self):
+        """M-gb2 regression: with > 3 independent confounders, the size-capped
+        search finds no admissible set of size <= 3, so it must fall back to the
+        full candidate set rather than returning [[]] (zero confounder control).
+
+        DAG: C1..C4 each -> T and -> O ; T -> O. The ONLY admissible backdoor set
+        is {C1,C2,C3,C4} (any proper subset leaves one confounded path open). A
+        [[]] result would silently run the estimator with NO adjustment -> a
+        plausible-but-wrong confounded ATE, the exact harm M-gb2 prevents.
+        """
+        import networkx as nx
+
+        node = GraphBuilderNode()
+
+        dag = nx.DiGraph()
+        confounders = ["C1", "C2", "C3", "C4"]
+        for c in confounders:
+            dag.add_edge(c, "T")
+            dag.add_edge(c, "O")
+        dag.add_edge("T", "O")
+
+        adjustment_sets = node._find_adjustment_sets(dag, "T", "O")
+
+        # Must NOT silently return the empty (no-adjustment) set.
+        assert adjustment_sets[0], (
+            f"> 3 confounders must yield a non-empty adjustment set, got {adjustment_sets}"
+        )
+        # The admissible set must contain every confounder.
+        assert set(confounders).issubset(set(adjustment_sets[0])), (
+            f"adjustment set must control for all confounders, got {adjustment_sets[0]}"
+        )
+
+    def test_treatment_equals_outcome_returns_trivial_set(self):
+        """M-gb2 (D2): a degenerate treatment == outcome query must return the
+        trivial empty adjustment set, not raise NetworkXError (non-disjoint node
+        sets) out of nx.is_d_separator and hard-fail the node."""
+        import networkx as nx
+
+        node = GraphBuilderNode()
+
+        dag = nx.DiGraph()
+        dag.add_edge("C", "T")
+        dag.add_edge("C", "O")
+        dag.add_edge("T", "O")
+
+        # Must not raise; trivial degenerate query yields no adjustment.
+        assert node._find_adjustment_sets(dag, "T", "T") == [[]]
