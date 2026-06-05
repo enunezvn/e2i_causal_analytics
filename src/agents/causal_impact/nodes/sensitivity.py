@@ -41,17 +41,28 @@ class SensitivityNode:
 
             ate = estimation_result["ate"]
             ate_ci_lower = estimation_result["ate_ci_lower"]
-            estimation_result["ate_ci_upper"]
+            ate_ci_upper = estimation_result["ate_ci_upper"]
+            # The CI-bound E-value is the CONSERVATIVE one — the bound CLOSEST to
+            # the null (smallest |effect|). The previous code read ate_ci_upper
+            # but discarded it and used only ate_ci_lower, which is wrong for
+            # negative/asymmetric CIs (mirrors the runner's min(|lo|,|hi|)).
+            ci_bound = min(abs(ate_ci_lower), abs(ate_ci_upper))
 
             # H3: the E-value RR approximation needs a STANDARDIZED effect, so
             # resolve the outcome SD (σ_Y) from the estimation data and divide the
             # raw ATE by it. NOTE: estimation_result["ate_std"] is the ATE's
             # standard error, NOT σ_Y, so it must NOT be used for standardization.
+            #
+            # Approximation note: this node uses ``RR ≈ exp(d)``; the pipeline
+            # runner uses the Chinn(2000) ``RR ≈ exp(0.91·d)`` SMD→OR factor. Both
+            # are valid VanderWeele-Ding approximations and BOTH are now
+            # scale-invariant (H3); the numeric E-values differ by the 0.91 factor
+            # between the two engines by design.
             outcome_std = self._resolve_outcome_std(state)
 
             # Calculate E-values
             e_value_point = self._calculate_e_value(ate, outcome_std)
-            e_value_ci = self._calculate_e_value(ate_ci_lower, outcome_std)
+            e_value_ci = self._calculate_e_value(ci_bound, outcome_std)
 
             # Interpret E-value
             interpretation = self._interpret_e_value(e_value_point)
