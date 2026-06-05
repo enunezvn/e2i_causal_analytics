@@ -321,3 +321,52 @@ class TestDetectLeakageRareEventRegression_RC1:
             "RC1 regression: detect_leakage false-flagged a legitimate cardinality-2 "
             f"sparse predictor on a rare-event cohort; got {leaked}"
         )
+
+
+class TestZeroVarianceSeverityDemotion_Fix4:
+    """Fix 4 (defense in depth): a cardinality>2 rare-event feature that still
+    trips the zero_variance HIGH branch (R1's guard only skips cardinality<=2)
+    must be emitted as MODERATE (review), not HIGH (auto-drop)."""
+
+    def test_card_gt2_rare_event_high_is_demoted_to_moderate(self):
+        rng = np.random.default_rng(0)
+        n, n_pos = 1000, 20  # pos_rate = 0.02 < 0.05
+        y = np.zeros(n, dtype=int)
+        y[rng.choice(n, size=n_pos, replace=False)] = 1
+        # Positive class is constant (std_1 == 0); negative class has values
+        # 0..4 (cardinality > 2 overall) with a different mean -> HIGH branch.
+        feat = np.where(y == 1, 5.0, rng.integers(0, 5, n).astype(float))
+        df = pd.DataFrame({"f": feat, "target": y})
+        findings = check_zero_variance_within_class(df, "target", ["f"])
+        assert len(findings) == 1, f"expected the HIGH branch to fire once, got {findings}"
+        assert findings[0].severity.value == "moderate", (
+            "Fix 4: a rare-event (pos_rate<5%) zero_variance firing must be "
+            f"demoted to MODERATE, got {findings[0].severity.value}"
+        )
+
+    def test_balanced_cohort_still_fires_high(self):
+        rng = np.random.default_rng(1)
+        n = 400
+        y = rng.integers(0, 2, n)  # ~50% prevalence
+        feat = np.where(y == 1, 5.0, rng.integers(0, 5, n).astype(float))
+        df = pd.DataFrame({"f": feat, "target": y})
+        findings = check_zero_variance_within_class(df, "target", ["f"])
+        assert findings and findings[0].severity.value == "high", (
+            "balanced cohort (~50% prevalence) zero_variance firing must remain HIGH, "
+            f"got {[f.severity.value for f in findings]}"
+        )
+
+    def test_card2_rare_event_skipped_by_r1_not_demoted(self):
+        """Boundary: a cardinality<=2 rare-event feature is SKIPPED outright by
+        R1's guard (no finding at all) — R4's MODERATE demotion only applies to
+        the cardinality>2 residual."""
+        rng = np.random.default_rng(3)
+        n, n_pos = 1000, 20
+        y = np.zeros(n, dtype=int)
+        y[rng.choice(n, size=n_pos, replace=False)] = 1
+        flag = np.zeros(n, dtype=float)
+        neg = np.where(y == 0)[0]
+        flag[rng.choice(neg, size=40, replace=False)] = 1.0  # card-2, all 1s in negatives
+        df = pd.DataFrame({"f": flag, "target": y})
+        findings = check_zero_variance_within_class(df, "target", ["f"])
+        assert findings == [], f"card<=2 rare event should be skipped by R1, got {findings}"
