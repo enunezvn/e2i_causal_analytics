@@ -93,8 +93,12 @@ class DirectLiNGAMAlgorithm(BaseDiscoveryAlgorithm):
             model = DirectLiNGAM(random_state=config.random_state)
             model.fit(X)
 
-            # Get adjacency matrix (continuous weights)
-            adj_weights = model.adjacency_matrix_
+            # Get adjacency matrix (continuous weights).
+            # H7 fix: lingam defines adjacency_matrix_ as B where x_i = Σ_j B[i,j]·x_j,
+            # so a nonzero B[i,j] means edge j → i (row = effect, column = cause).
+            # ``_adjacency_to_edge_list`` interprets A[i,j]≠0 as i → j, so B must be
+            # TRANSPOSED before conversion or every discovered edge is reversed.
+            adj_weights = model.adjacency_matrix_.T
 
             # Convert to binary adjacency using threshold
             adj_matrix = self._threshold_adjacency(adj_weights)
@@ -261,8 +265,12 @@ class ICALiNGAMAlgorithm(BaseDiscoveryAlgorithm):
             model = ICALiNGAM(random_state=config.random_state, max_iter=config.max_iter)
             model.fit(X)
 
-            # Get adjacency matrix (continuous weights)
-            adj_weights = model.adjacency_matrix_
+            # Get adjacency matrix (continuous weights).
+            # H7 fix: lingam defines adjacency_matrix_ as B where x_i = Σ_j B[i,j]·x_j,
+            # so a nonzero B[i,j] means edge j → i (row = effect, column = cause).
+            # ``_adjacency_to_edge_list`` interprets A[i,j]≠0 as i → j, so B must be
+            # TRANSPOSED before conversion or every discovered edge is reversed.
+            adj_weights = model.adjacency_matrix_.T
 
             # Convert to binary adjacency using threshold
             adj_matrix = self._threshold_adjacency(adj_weights)
