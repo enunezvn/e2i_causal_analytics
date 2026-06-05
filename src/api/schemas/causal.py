@@ -463,6 +463,23 @@ class SequentialPipelineResponse(BaseModel):
     total_latency_ms: int = Field(..., description="Total pipeline execution time")
     created_at: datetime = Field(..., description="Pipeline start timestamp")
     warnings: List[str] = Field(default_factory=list, description="Warnings")
+    robustness_validation_performed: bool = Field(
+        default=False,
+        description=(
+            "True only if refutation/sensitivity validation was actually run for "
+            "this ATE. The sequential/parallel pipeline does NOT run refutation "
+            "today (the DoWhy executor returns refutation_results={}), so this is "
+            "False: the reported effect is UNVALIDATED for robustness."
+        ),
+    )
+    robustness_warning: Optional[str] = Field(
+        default=None,
+        description=(
+            "Human-readable caveat populated when robustness_validation_performed "
+            "is False, so consumers cannot mistake an unrefuted ATE for a "
+            "validated one."
+        ),
+    )
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -554,6 +571,23 @@ class ParallelPipelineResponse(BaseModel):
     total_latency_ms: int = Field(..., description="Total execution time")
     created_at: datetime = Field(..., description="Analysis timestamp")
     warnings: List[str] = Field(default_factory=list, description="Warnings")
+    robustness_validation_performed: bool = Field(
+        default=False,
+        description=(
+            "True only if refutation/sensitivity validation was actually run for "
+            "this ATE. The parallel pipeline does NOT run refutation today (the "
+            "DoWhy executor returns refutation_results={}), so this is False: the "
+            "reported effect is UNVALIDATED for robustness."
+        ),
+    )
+    robustness_warning: Optional[str] = Field(
+        default=None,
+        description=(
+            "Human-readable caveat populated when robustness_validation_performed "
+            "is False, so consumers cannot mistake an unrefuted ATE for a "
+            "validated one."
+        ),
+    )
 
     model_config = ConfigDict(
         json_schema_extra={

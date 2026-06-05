@@ -34,6 +34,10 @@ from fastapi.testclient import TestClient
 
 from src.api.main import app
 from src.api.routes import causal as causal_module
+from src.api.schemas.causal import (
+    ParallelPipelineResponse,
+    SequentialPipelineResponse,
+)
 
 client = TestClient(app)
 
@@ -477,3 +481,52 @@ class TestNoHardcodedValuesInWiring:
                     f"C-8 regression: hardcoded {forbidden_literal} in {name} "
                     "(matches Surface B anti-pattern)"
                 )
+
+
+class TestRobustnessValidationFlagDefaults:
+    """M-reach3: pipeline responses must carry an explicit robustness-unvalidated flag.
+
+    /causal/pipeline/{sequential,parallel} never run refutation (DoWhy executor
+    hardcodes refutation_results={}), so the response models MUST expose a
+    fail-safe boolean that defaults to False, plus a warning string, so a
+    consumer cannot mistake an unrefuted ATE for a validated one.
+    """
+
+    def test_sequential_response_has_robustness_flag_defaulting_false(self):
+        resp = SequentialPipelineResponse(
+            pipeline_id="p1",
+            status="completed",
+            stages_completed=1,
+            stages_total=1,
+            total_latency_ms=10,
+            created_at="2026-06-05T00:00:00Z",
+        )
+        # Field exists and is fail-safe by default.
+        assert resp.robustness_validation_performed is False
+        # Warning field exists (None by default; populated by the builder).
+        assert resp.robustness_warning is None
+
+    def test_parallel_response_has_robustness_flag_defaulting_false(self):
+        resp = ParallelPipelineResponse(
+            pipeline_id="p2",
+            status="completed",
+            consensus_method="variance_weighted",
+            total_latency_ms=10,
+            created_at="2026-06-05T00:00:00Z",
+        )
+        assert resp.robustness_validation_performed is False
+        assert resp.robustness_warning is None
+
+    def test_robustness_flag_is_serialized_in_model_dump(self):
+        # The flag must survive model_dump() since the route caches responses
+        # via .model_dump() (causal.py:711/718) and returns the dict shape.
+        resp = ParallelPipelineResponse(
+            pipeline_id="p3",
+            status="completed",
+            consensus_method="variance_weighted",
+            total_latency_ms=10,
+            created_at="2026-06-05T00:00:00Z",
+        )
+        dumped = resp.model_dump()
+        assert dumped["robustness_validation_performed"] is False
+        assert "robustness_warning" in dumped
