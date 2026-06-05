@@ -372,6 +372,46 @@ class TestPCAdjacencyConversion:
         # Should return empty adjacency matrix as fallback
         assert adj.shape == (3, 3)
 
+    def test_parse_error_raises_not_silently_empty(self, pc):
+        """A genuine parse error inside the loop must raise, not return zeros.
+
+        Regression for M-fo4: a malformed `.graph` (object that raises on
+        indexing) was silently swallowed and returned an all-zeros matrix,
+        making a parse failure indistinguishable from an edge-free graph.
+        """
+        mock_graph = MagicMock()
+        # .graph exists (passes hasattr guard) but raises on element access.
+        bad_matrix = MagicMock()
+        bad_matrix.__getitem__.side_effect = ValueError("corrupt graph matrix")
+        mock_graph.graph = bad_matrix
+
+        with pytest.raises(ValueError, match="corrupt graph matrix"):
+            pc._graph_to_adjacency(mock_graph, 3)
+
+
+class TestPCDiscoveryParseFailure:
+    """M-fo4: parse failure during discover() must yield converged=False."""
+
+    @pytest.fixture
+    def pc(self):
+        return PCAlgorithm()
+
+    def test_parse_failure_marks_result_failed(self, pc):
+        """If adjacency parsing raises, discover() returns converged=False + error."""
+        config = DiscoveryConfig()
+        df = pd.DataFrame({"A": [1.0, 2.0, 3.0], "B": [4.0, 5.0, 6.0]})
+
+        with patch.object(
+            pc,
+            "_graph_to_adjacency",
+            side_effect=ValueError("corrupt graph matrix"),
+        ):
+            result = pc.discover(df, config)
+
+        assert result.converged is False
+        assert "error" in result.metadata
+        assert result.edge_list == []
+
 
 # =============================================================================
 # PC Integration Tests
