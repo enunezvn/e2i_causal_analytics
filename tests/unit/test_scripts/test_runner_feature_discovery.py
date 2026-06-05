@@ -37,3 +37,24 @@ class TestDiscoverModelFeatureCols_RC2:
         excl = _runner_exclude_set({"scope_spec": {"excluded_features": ["custom_pii"]}})
         for name in ("patient_journey_id", "journey_status", "treatment_initiated", "custom_pii"):
             assert name in excl, f"{name} must be in the runner exclude set"
+
+
+import inspect
+
+from scripts import run_tier0_test
+
+
+class TestRunnerTrainsOnRetainedSet_RC2:
+    def test_narrow_subset_selection_is_gone(self):
+        src = inspect.getsource(run_tier0_test)
+        assert "feature_cols = [f for f in remediated if f in eligible_df.columns]" not in src, (
+            "RC2: Site-1 still selects X from the curated remediated sub-list"
+        )
+        assert "feature_cols = [f for f in _rem_features if f in eligible_df.columns]" not in src, (
+            "RC2: Step-5a still selects X from the curated _rem_features sub-list"
+        )
+
+    def test_discovery_helper_drives_the_matrix(self):
+        src = inspect.getsource(run_tier0_test)
+        # The two override sites must route through the helper (definition = 3rd occurrence).
+        assert src.count("_discover_model_feature_cols(") >= 3

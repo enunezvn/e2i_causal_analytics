@@ -5903,74 +5903,18 @@ async def run_pipeline(
             step_start = time.time()
             eligible_df = state.get("eligible_df", patient_df)
 
-            # Dynamic feature discovery: use remediated features from data_preparer
-            # if available, otherwise discover numeric features from the data
-            remediated = state.get("leakage_remediated_features")
-            if remediated:
-                feature_cols = [f for f in remediated if f in eligible_df.columns]
-            else:
-                # Discover features, excluding IDs, dates, targets, metadata
-                _exclude = {
-                    "patient_journey_id",
-                    "patient_id",
-                    "patient_hash",
-                    "brand",
-                    "journey_start_date",
-                    "journey_end_date",
-                    "created_at",
-                    "updated_at",
-                    "source_timestamp",
-                    "ingestion_timestamp",
-                    "data_split",
-                    "split_config_id",
-                    "data_source",
-                    "data_sources_matched",
-                    "source_match_confidence",
-                    "source_combination_method",
-                    "source_stacking_flag",
-                    "data_lag_hours",
-                    # data_quality_score encodes data-source archetype (A/B/C);
-                    # after cohort filtering it nearly separates treated from untreated
-                    "data_quality_score",
-                    # primary_diagnosis_code removed — it's a legitimate low-cardinality
-                    # feature; leakage detector will vet it
-                    "primary_diagnosis_desc",
-                    "secondary_diagnosis_codes",
-                    "state",
-                    "zip_code",
-                    "comorbidities",
-                    "risk_score",
-                    # Derived from target — potential leakers
-                    "journey_stage",
-                    "journey_status",
-                    CONFIG.target_outcome,
-                    "discontinuation_flag",
-                    "treatment_initiated",
-                }
-                # Merge scope_definer's canonical excluded_features (PII, temporal
-                # leakage, pipeline construction metadata like index_date /
-                # lookback_start_date / prediction_end_date) so Step 5's feature
-                # discovery honors the same policy as data_preparer.
-                _exclude |= set(state.get("scope_spec", {}).get("excluded_features", []) or [])
-                # Phase 1: Numeric features
-                numeric_cols = [
-                    c
-                    for c in eligible_df.columns
-                    if c not in _exclude
-                    and eligible_df[c].dtype.kind in "iufb"
-                    and eligible_df[c].nunique() > 1
-                    and eligible_df[c].notna().mean() > 0.5
-                ]
-                # Phase 2: Low-cardinality categoricals (e.g. demo_product, demo_lis_dual)
-                categorical_cols = [
-                    c
-                    for c in eligible_df.columns
-                    if c not in _exclude
-                    and eligible_df[c].dtype == object
-                    and 2 <= eligible_df[c].nunique() <= 50
-                    and eligible_df[c].notna().mean() > 0.5
-                ]
-                feature_cols = numeric_cols + categorical_cols
+            # RC2: always build the training matrix from the RETAINED set
+            # (well-formed columns minus genuine leaks); never short-circuit to
+            # the curated leakage_remediated_features survivor list. The leakage
+            # layer may only SUBTRACT leaks; it must not define the matrix.
+            _exclude = _runner_exclude_set(state)
+            # Every feature any leakage layer flagged as a genuine leak.
+            _genuine_leaks = set(state.get("leakage_dropped_features") or []) | set(
+                state.get("leaked_features") or []
+            )
+            feature_cols = _discover_model_feature_cols(
+                eligible_df, _exclude | _genuine_leaks
+            )
             if not feature_cols:
                 # Absolute fallback to historical defaults
                 feature_cols = ["days_on_therapy", "hcp_visits", "prior_treatments"]
@@ -6177,8 +6121,16 @@ async def run_pipeline(
                     )
 
                     if _rem_viable and _rem_features:
-                        # Update feature set and rebuild X
-                        feature_cols = [f for f in _rem_features if f in eligible_df.columns]
+                        # RC2: rebuild X from the RETAINED set (discovered columns
+                        # minus the genuine leaks remediation dropped), not the
+                        # curated _rem_features survivor sub-list. The post-override
+                        # re-check below (the safety net) re-fires if a leak slips in.
+                        _step5a_leaks = set(_rem_dropped) | set(
+                            state.get("leakage_dropped_features") or []
+                        ) | set(state.get("leaked_features") or [])
+                        feature_cols = _discover_model_feature_cols(
+                            eligible_df, _exclude | _step5a_leaks
+                        )
                         X = eligible_df[feature_cols].copy()
                         y = eligible_df[CONFIG.target_outcome].copy()
 
