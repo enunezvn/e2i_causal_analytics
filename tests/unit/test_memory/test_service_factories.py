@@ -8,9 +8,10 @@ Tests focus on:
 - Service abstraction interfaces
 """
 
+import asyncio
 import os
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -182,13 +183,22 @@ class TestFactoriesWithMocks:
                 os.environ["SUPABASE_ANON_KEY"] = saved_key
 
     def test_supabase_client_raises_without_key(self):
-        """get_supabase_client should raise if SUPABASE_ANON_KEY is not set."""
+        """get_supabase_client should raise if NO Supabase key is set.
+
+        After M9 (#703) the factory prefers a service-role key and falls back to
+        anon, so a missing-key assertion must clear ALL three key vars (not just
+        anon) — otherwise a service key present in the env would make the call
+        succeed instead of raising.
+        """
         # Save current values
         saved_url = os.environ.get("SUPABASE_URL")
-        saved_key = os.environ.pop("SUPABASE_ANON_KEY", None)
+        saved = {
+            k: os.environ.pop(k, None)
+            for k in ("SUPABASE_ANON_KEY", "SUPABASE_SERVICE_KEY", "SUPABASE_SERVICE_ROLE_KEY")
+        }
         reset_all_clients()
 
-        # Set URL but not key
+        # Set URL but no key of any kind
         os.environ["SUPABASE_URL"] = "https://example.supabase.co"
 
         try:
@@ -201,8 +211,101 @@ class TestFactoriesWithMocks:
                 os.environ["SUPABASE_URL"] = saved_url
             elif "SUPABASE_URL" in os.environ:
                 del os.environ["SUPABASE_URL"]
-            if saved_key:
-                os.environ["SUPABASE_ANON_KEY"] = saved_key
+            for k, v in saved.items():
+                if v is not None:
+                    os.environ[k] = v
+
+
+# ============================================================================
+# M9 (#703): backend Supabase clients authenticate as SERVICE-ROLE, not anon
+# ============================================================================
+
+
+class TestSupabaseClientUsesServiceRole:
+    """get_supabase_client / get_async_supabase_client must PREFER the
+    service-role key over the anon key.
+
+    The backend is a trusted server-side caller. Migration 058 REVOKEs the
+    anon/authenticated table+view grants, so an anon-key client would lose
+    access; the backend must authenticate as service-role (bypasses RLS, retains
+    full grants). Falls back to the anon key only when no service key is set
+    (keeps dev/test green). Mirrors the existing get_async_supabase_service_client
+    resolution: SERVICE_ROLE_KEY > SERVICE_KEY > ANON_KEY.
+    """
+
+    def setup_method(self):
+        reset_all_clients()
+
+    def teardown_method(self):
+        reset_all_clients()
+
+    def test_sync_prefers_service_key_over_anon(self, monkeypatch):
+        """get_supabase_client uses SUPABASE_SERVICE_KEY when present."""
+        monkeypatch.setenv("SUPABASE_URL", "https://svc.example.supabase.co")
+        monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
+        monkeypatch.setenv("SUPABASE_SERVICE_KEY", "svc-key-sentinel")
+        monkeypatch.setenv("SUPABASE_ANON_KEY", "anon-key-sentinel")
+        reset_all_clients()
+        with patch("supabase.create_client") as mock_create:
+            mock_create.return_value = object()
+            get_supabase_client()
+        assert mock_create.call_args.args[1] == "svc-key-sentinel", (
+            "get_supabase_client must authenticate with the service-role key, not anon"
+        )
+
+    def test_sync_prefers_service_role_key_var(self, monkeypatch):
+        """SUPABASE_SERVICE_ROLE_KEY also satisfies the service-role preference."""
+        monkeypatch.setenv("SUPABASE_URL", "https://svc.example.supabase.co")
+        monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "svc-role-sentinel")
+        monkeypatch.delenv("SUPABASE_SERVICE_KEY", raising=False)
+        monkeypatch.setenv("SUPABASE_ANON_KEY", "anon-key-sentinel")
+        reset_all_clients()
+        with patch("supabase.create_client") as mock_create:
+            mock_create.return_value = object()
+            get_supabase_client()
+        assert mock_create.call_args.args[1] == "svc-role-sentinel"
+
+    def test_sync_falls_back_to_anon_without_service_key(self, monkeypatch):
+        """Without any service key, get_supabase_client falls back to anon."""
+        monkeypatch.setenv("SUPABASE_URL", "https://anon.example.supabase.co")
+        monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
+        monkeypatch.delenv("SUPABASE_SERVICE_KEY", raising=False)
+        monkeypatch.setenv("SUPABASE_ANON_KEY", "anon-only-sentinel")
+        reset_all_clients()
+        with patch("supabase.create_client") as mock_create:
+            mock_create.return_value = object()
+            get_supabase_client()
+        assert mock_create.call_args.args[1] == "anon-only-sentinel"
+
+    def test_async_prefers_service_key_over_anon(self, monkeypatch):
+        """get_async_supabase_client uses the service-role key when present."""
+        from src.memory.services.factories import get_async_supabase_client
+
+        monkeypatch.setenv("SUPABASE_URL", "https://svc.example.supabase.co")
+        monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
+        monkeypatch.setenv("SUPABASE_SERVICE_KEY", "svc-key-sentinel")
+        monkeypatch.setenv("SUPABASE_ANON_KEY", "anon-key-sentinel")
+        reset_all_clients()
+        with patch("supabase.acreate_client", new_callable=AsyncMock) as mock_acreate:
+            mock_acreate.return_value = object()
+            asyncio.run(get_async_supabase_client())
+        assert mock_acreate.call_args.args[1] == "svc-key-sentinel", (
+            "get_async_supabase_client must authenticate with the service-role key, not anon"
+        )
+
+    def test_async_falls_back_to_anon_without_service_key(self, monkeypatch):
+        """Without any service key, get_async_supabase_client falls back to anon."""
+        from src.memory.services.factories import get_async_supabase_client
+
+        monkeypatch.setenv("SUPABASE_URL", "https://anon.example.supabase.co")
+        monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
+        monkeypatch.delenv("SUPABASE_SERVICE_KEY", raising=False)
+        monkeypatch.setenv("SUPABASE_ANON_KEY", "anon-only-sentinel")
+        reset_all_clients()
+        with patch("supabase.acreate_client", new_callable=AsyncMock) as mock_acreate:
+            mock_acreate.return_value = object()
+            asyncio.run(get_async_supabase_client())
+        assert mock_acreate.call_args.args[1] == "anon-only-sentinel"
 
 
 # ============================================================================
