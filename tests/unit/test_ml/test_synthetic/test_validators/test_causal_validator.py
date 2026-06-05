@@ -219,6 +219,70 @@ class TestCausalValidator:
         assert "estimated_ate" in summary
         assert "confounder_balance" in summary
 
+    def test_estimate_ate_simple_returns_real_ate_not_correlation(self, validator):
+        """M-est1: the statsmodels-unavailable numpy fallback must return a real
+        treatment-effect coefficient (least squares), NOT a Pearson correlation.
+
+        Data: continuous treatment with TRUE_ATE = 0.40, continuous outcome, no
+        confounders. A least-squares slope recovers ~0.40; a Pearson correlation
+        of this data is ~0.92 (scale-dependent), which is wrong.
+        """
+        np.random.seed(42)
+        n = 1000
+        treatment = np.random.uniform(0, 10, n)
+        outcome = 0.40 * treatment + np.random.normal(0, 0.5, n)
+        df = pd.DataFrame(
+            {
+                "engagement_score": treatment,
+                "treatment_initiated": outcome,
+            }
+        )
+
+        ate = validator._estimate_ate_simple(df, "engagement_score", "treatment_initiated", [])
+
+        # Recovers the true slope (least squares), not the ~0.92 correlation.
+        assert abs(ate - 0.40) < 0.05
+
+    def test_estimate_ate_simple_adjusts_for_confounders(self, validator):
+        """M-est1: with confounders supplied, the numpy fallback must include them
+        in the design matrix so the treatment coefficient is de-confounded.
+
+        TRUE causal coefficient is 0.25; the unadjusted slope is biased upward.
+        """
+        np.random.seed(1)
+        n = 4000
+        disease_severity = np.clip(np.random.normal(5, 2, n), 0, 10)
+        academic_hcp = np.random.binomial(1, 0.3, n)
+        treatment = 3.0 + 0.3 * disease_severity + 2.0 * academic_hcp + np.random.normal(0, 1, n)
+        outcome = (
+            -2.0
+            + 0.25 * treatment
+            + 0.4 * disease_severity
+            + 0.6 * academic_hcp
+            + np.random.normal(0, 1, n)
+        )
+        df = pd.DataFrame(
+            {
+                "engagement_score": treatment,
+                "treatment_initiated": outcome,
+                "disease_severity": disease_severity,
+                "academic_hcp": academic_hcp,
+            }
+        )
+
+        adjusted = validator._estimate_ate_simple(
+            df,
+            "engagement_score",
+            "treatment_initiated",
+            ["disease_severity", "academic_hcp"],
+        )
+        unadjusted = validator._estimate_ate_simple(
+            df, "engagement_score", "treatment_initiated", []
+        )
+
+        assert abs(adjusted - 0.25) < 0.05
+        assert abs(adjusted - 0.25) < abs(unadjusted - 0.25)
+
 
 class TestCausalValidationResult:
     """Test suite for CausalValidationResult."""
