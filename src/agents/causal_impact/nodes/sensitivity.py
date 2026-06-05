@@ -4,7 +4,7 @@ Computes E-values to quantify robustness to unmeasured confounding.
 """
 
 import time
-from typing import Dict
+from typing import Dict, Optional
 
 import numpy as np
 
@@ -43,9 +43,15 @@ class SensitivityNode:
             ate_ci_lower = estimation_result["ate_ci_lower"]
             estimation_result["ate_ci_upper"]
 
+            # H3: the E-value RR approximation needs a STANDARDIZED effect, so
+            # resolve the outcome SD (σ_Y) from the estimation data and divide the
+            # raw ATE by it. NOTE: estimation_result["ate_std"] is the ATE's
+            # standard error, NOT σ_Y, so it must NOT be used for standardization.
+            outcome_std = self._resolve_outcome_std(state)
+
             # Calculate E-values
-            e_value_point = self._calculate_e_value(ate)
-            e_value_ci = self._calculate_e_value(ate_ci_lower)
+            e_value_point = self._calculate_e_value(ate, outcome_std)
+            e_value_ci = self._calculate_e_value(ate_ci_lower, outcome_std)
 
             # Interpret E-value
             interpretation = self._interpret_e_value(e_value_point)
@@ -88,7 +94,26 @@ class SensitivityNode:
                 "error_message": f"Sensitivity analysis failed: {e}",
             }
 
-    def _calculate_e_value(self, effect: float) -> float:
+    def _resolve_outcome_std(self, state: CausalImpactState) -> Optional[float]:
+        """Resolve the outcome SD (σ_Y) for E-value standardization (H3).
+
+        Reads the estimation-data passthrough; returns None when no data /
+        outcome column is available (then the E-value is computed on the raw
+        effect — scale-dependent, but better than crashing).
+        """
+        data = state.get("estimation_data")
+        outcome_var = state.get("outcome_var")
+        if data is None or not outcome_var:
+            return None
+        try:
+            if hasattr(data, "columns") and outcome_var in data.columns:
+                sd = float(np.std(np.asarray(data[outcome_var], dtype=float)))
+                return sd if np.isfinite(sd) and sd > 0 else None
+        except Exception:  # noqa: BLE001 - non-numeric / missing → no standardization
+            return None
+        return None
+
+    def _calculate_e_value(self, effect: float, outcome_std: Optional[float] = None) -> float:
         """Calculate E-value for a given effect estimate.
 
         E-value is the minimum strength of association (on the risk ratio scale)
@@ -98,17 +123,24 @@ class SensitivityNode:
         Formula (VanderWeele & Ding, 2017):
         E-value = RR + sqrt(RR * (RR - 1))
 
-        Where RR is the risk ratio (approximated from effect size).
+        Where RR is the risk ratio (approximated from the STANDARDIZED effect).
 
         Args:
-            effect: Effect estimate (ATE)
+            effect: Effect estimate (ATE), in native outcome units
+            outcome_std: Outcome SD (σ_Y) used to standardize the effect (H3); the
+                approximation requires a standardized mean difference, so a raw
+                ATE in native units would otherwise make the E-value scale-dependent.
 
         Returns:
             E-value (>= 1)
         """
-        # Convert effect to approximate risk ratio
-        # Assuming standardized effect: RR ≈ exp(effect)
-        rr = np.exp(abs(effect))
+        # H3: standardize the effect by the outcome SD before the RR step.
+        d = abs(effect)
+        if outcome_std is not None and np.isfinite(outcome_std) and outcome_std > 0:
+            d = d / outcome_std
+
+        # Convert the standardized effect to an approximate risk ratio.
+        rr = np.exp(d)
 
         # Calculate E-value
         if rr <= 1:
