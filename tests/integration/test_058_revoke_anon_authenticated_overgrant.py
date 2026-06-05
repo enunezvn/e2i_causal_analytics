@@ -88,12 +88,21 @@ def test_fixes_default_privileges_for_both_owner_roles() -> None:
     )
 
 
-def test_transactional_and_idempotent() -> None:
-    """Wrapped in BEGIN/COMMIT and re-runnable (DROP IF EXISTS; REVOKE is a no-op
-    when already revoked)."""
+def test_no_script_level_txn_control_and_idempotent() -> None:
+    """No bare BEGIN;/COMMIT;/ROLLBACK; — run_migrations.sh wraps each migration in
+    ``psql --single-transaction`` (the runner owns the outer txn; enforced by
+    test_migrations_no_inner_txn.py). PL/pgSQL DO-block ``BEGIN``/``END $$;`` are
+    fine (they don't end a script-level statement with a bare keyword+semicolon).
+    Idempotent via DROP IF EXISTS + (inherently re-runnable) REVOKE.
+    """
     content = _content()
-    assert "BEGIN;" in content and "COMMIT;" in content, (
-        "Migration must be wrapped in an explicit BEGIN; … COMMIT; block."
+    # Only consider lines that END a statement (`;`); the DO blocks' `BEGIN`
+    # opener has no trailing `;`, and `END $$;` is not a bare `END;`.
+    stmt_lines = {ln.strip().lower() for ln in content.splitlines() if ln.strip().endswith(";")}
+    offenders = stmt_lines & {"begin;", "commit;", "rollback;", "end;", "abort;"}
+    assert not offenders, (
+        f"Migration must NOT contain script-level transaction control {offenders} — "
+        "run_migrations.sh owns the outer txn via psql --single-transaction."
     )
     assert "DROP FUNCTION IF EXISTS" in content, (
         "Use DROP FUNCTION IF EXISTS for idempotent re-apply."

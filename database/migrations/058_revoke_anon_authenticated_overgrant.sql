@@ -46,9 +46,14 @@
 --
 -- IDEMPOTENT: DROP ... IF EXISTS; REVOKE is inherently re-runnable; ALTER DEFAULT
 --   PRIVILEGES REVOKE is re-runnable. Safe to re-apply.
+--
+-- NO SCRIPT-LEVEL BEGIN/COMMIT: scripts/run_migrations.sh wraps every migration in
+--   `psql --single-transaction`, so the runner owns the outer transaction (a bare
+--   BEGIN/COMMIT here would fragment it — see test_migrations_no_inner_txn.py and
+--   the canonical shape in 039_drop_triggers_join_from_feedback_loop.sql). For a
+--   MANUAL apply, run atomically with: psql --single-transaction -f <this file>
+--   (the DO blocks below are PL/pgSQL function bodies, not script-level txn control).
 -- ============================================================================
-
-BEGIN;
 
 -- 1. Remove the arbitrary-SQL bypass primitive (vestigial + dangerous).
 DROP FUNCTION IF EXISTS public.execute_custom_sql(text);
@@ -96,5 +101,3 @@ EXCEPTION WHEN insufficient_privilege OR undefined_object THEN
     -- undefined_object: supabase_admin role absent (e.g. a vanilla Postgres) — n/a.
     RAISE NOTICE 'migration 058: SKIPPED supabase_admin default-privilege REVOKE (not a member of, or absent, supabase_admin). The postgres default REVOKE covers migration-created tables; re-apply as supabase_admin to also neutralise the supabase_admin default.';
 END $$;
-
-COMMIT;
