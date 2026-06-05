@@ -81,9 +81,7 @@ def test_guard_excludes_functions_dropped_by_a_later_migration(tmp_path: Path) -
     )
     guard = _load_guard()
     findings = guard.find_phantom_column_references(db)
-    assert not findings, (
-        f"guard flagged a function retired by a later migration: {findings}"
-    )
+    assert not findings, f"guard flagged a function retired by a later migration: {findings}"
 
 
 def test_real_schema_is_blocking_clean() -> None:
