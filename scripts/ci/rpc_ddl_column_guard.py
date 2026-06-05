@@ -170,6 +170,29 @@ def _alias_table_map(body: str) -> Dict[str, str]:
     return amap
 
 
+def _dropped_function_names(texts) -> Set[str]:
+    """Function names retired by a later migration — excluded from findings.
+
+    A function dropped by `DROP FUNCTION ...` (or by the pg_proc `proname IN (...)`
+    DO-block pattern this repo uses for signature-robust drops) is no longer part
+    of the effective schema, so its (now-historical) definition file must not
+    flag. This is what lets the guard go blocking even though immutable migration
+    history (e.g. the `016` file) still contains the retired CREATE FUNCTION.
+    """
+    names: Set[str] = set()
+    for text in texts:
+        for m in re.finditer(
+            r"DROP\s+FUNCTION\s+(?:IF\s+EXISTS\s+)?([A-Za-z_][\w.\"]*)",
+            text,
+            flags=re.IGNORECASE,
+        ):
+            names.add(_norm_table(m.group(1)))
+        for m in re.finditer(r"proname\s+IN\s*\(([^)]*)\)", text, flags=re.IGNORECASE):
+            for q in re.findall(r"'([^']+)'", m.group(1)):
+                names.add(q.strip().lower())
+    return names
+
+
 def find_phantom_column_references(db_dir: Path) -> List[dict]:
     """Return a list of phantom references: {file, function, alias, column, table}."""
     sql_files = sorted(db_dir.rglob("*.sql"))
@@ -184,9 +207,12 @@ def find_phantom_column_references(db_dir: Path) -> List[dict]:
         for tbl, cols in parse_table_columns(text).items():
             table_columns.setdefault(tbl, set()).update(cols)
 
+    dropped = _dropped_function_names(raw.values())
     findings: List[dict] = []
     for f, text in raw.items():
         for fn_name, body in _function_bodies(text):
+            if fn_name in dropped:
+                continue  # retired by a later migration — not in the effective schema
             amap = _alias_table_map(body)
             if not amap:
                 continue

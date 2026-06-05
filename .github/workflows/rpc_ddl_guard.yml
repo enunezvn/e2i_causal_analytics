@@ -12,9 +12,9 @@ name: RPC vs DDL Column Guard
 #     `<file>: <function>() references <alias>.<col> -> table '<t>' has no column`.
 #   * exit 2 — discovery error (no .sql found, parse failure). Build fails fast.
 #
-# Staged rollout: this guard starts in --report-only (non-blocking) mode while
-# the known `016` baseline is being retired (PR for audit F1). Once F1 drops the
-# `016` RPCs the `--report-only` flag is removed and the guard becomes blocking.
+# Blocking: migration 031 retires the only known baseline (the `016` RPCs), and
+# the guard excludes functions dropped by a later migration, so the real schema
+# is clean. A new RPC that references a phantom column now FAILS the build.
 #
 # Validator is stdlib-only (no DB, no third-party deps); the faithful
 # environment for a "does this column exist?" question is the schema source,
@@ -40,5 +40,5 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Run RPC↔DDL column guard (report-only during F1 retirement)
-        run: python scripts/ci/rpc_ddl_column_guard.py --report-only
+      - name: Run RPC↔DDL column guard (blocking)
+        run: python scripts/ci/rpc_ddl_column_guard.py
