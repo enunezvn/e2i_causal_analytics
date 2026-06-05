@@ -456,7 +456,7 @@ class GraphBuilderNode:
         # (2) d-separation in the proper backdoor graph (remove T's out-edges).
         backdoor_graph = dag.copy()
         backdoor_graph.remove_edges_from(list(dag.out_edges(treatment)))
-        return nx.is_d_separator(backdoor_graph, {treatment}, {outcome}, set(adjustment_set))
+        return bool(nx.is_d_separator(backdoor_graph, {treatment}, {outcome}, set(adjustment_set)))
 
     def _to_dot_format(self, dag: nx.DiGraph) -> str:
         """Convert DAG to DOT format for visualization.
