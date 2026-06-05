@@ -906,6 +906,24 @@ class TestGateDecision:
 
         assert decision == GateDecision.BLOCK
 
+    def test_critical_warning_does_not_block_proceed(self, runner):
+        """Contract: only a critical test FAILED blocks. A critical test in WARNING
+        with high confidence still yields PROCEED (documents the corrected
+        GateDecision.PROCEED comment).
+        """
+        tests = [
+            RefutationResult(
+                test_name=RefutationTestType.PLACEBO_TREATMENT,  # critical, WARNING
+                status=RefutationStatus.WARNING,
+                original_effect=0.15,
+                refuted_effect=0.08,
+            ),
+        ]
+
+        decision = runner._determine_gate_decision(tests, confidence_score=0.85)
+
+        assert decision == GateDecision.PROCEED
+
 
 # ============================================================================
 # FULL SUITE TESTS

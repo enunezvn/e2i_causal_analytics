@@ -119,7 +119,9 @@ class GateDecision(str, Enum):
     Aligned with database ENUM: gate_decision
     """
 
-    PROCEED = "proceed"  # Confidence >= 0.7, all critical tests passed
+    # PROCEED requires confidence >= 0.70 and NO critical test FAILED; a critical
+    # test in WARNING still permits PROCEED (see _determine_gate_decision).
+    PROCEED = "proceed"  # Confidence >= 0.70 and no critical test FAILED
     REVIEW = "review"  # Confidence 0.5-0.7, requires expert review
     BLOCK = "block"  # Confidence < 0.5 or critical test failed
 
