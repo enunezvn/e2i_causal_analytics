@@ -176,6 +176,15 @@ class InterpretationNode:
         tests_passed = refutation_results.get("tests_passed", 0)
         total_tests = refutation_results.get("total_tests", 0)
         overall_robust = refutation_results.get("overall_robust", False)
+        # H2: a REVIEW-band gate is borderline (needs_review), NOT robust. The
+        # legacy ``overall_robust`` is True for both PROCEED and REVIEW ("not
+        # blocked"), so a REVIEW result would otherwise get "likely genuine /
+        # proceed" narrative language. Downgrade it here so REVIEW takes the
+        # caution branch and is never described as robust to the user.
+        if refutation_results.get("needs_review") or refutation_results.get("gate_decision") == (
+            "review"
+        ):
+            overall_robust = False
 
         e_value = sensitivity_analysis.get("e_value", 1.0)
         robust_to_confounding = sensitivity_analysis.get("robust_to_confounding", False)

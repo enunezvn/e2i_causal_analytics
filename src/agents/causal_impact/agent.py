@@ -356,7 +356,9 @@ class CausalImpactAgent(SkillsMixin):
         # Refutation outcome (H1/H2): consult the actual gate, not just ATE
         # presence. A refutation that ERRORED or produced no results must be
         # treated as a fail-closed validation gap, never as silently-robust.
-        gate_decision = state.get("gate_decision") or refutation_results.get("gate_decision")
+        # Prefer the refutation node's structured output over any pre-existing
+        # state value (the node result is the fresher, authoritative source).
+        gate_decision = refutation_results.get("gate_decision") or state.get("gate_decision")
         refutation_error = state.get("refutation_error")
         # "Ran" = produced results AND did not error.
         refutation_ran = bool(refutation_results) and not refutation_error

@@ -133,6 +133,32 @@ class TestBuildOutputFailsClosed:
         assert out["refutation_passed"] is True
         assert out.get("needs_review") in (False, None)
 
+    def test_block_band_is_failed_and_low_confidence(self):
+        """BLOCK contract (codex follow-up): a blocked estimate is status=failed,
+        not passed, not needs_review, and its confidence is the real (low) suite
+        score — by gate definition < 0.50, so well below the 0.70 threshold. The
+        refutation DID run, so this is the informative-low case, distinct from the
+        unrun hard penalty."""
+        agent = CausalImpactAgent()
+        suite = RefutationSuite(
+            passed=False,
+            confidence_score=0.30,  # BLOCK band (< 0.50)
+            tests=[],
+            gate_decision=GateDecision.BLOCK,
+        )
+        state = _base_state(
+            refutation_results=suite.to_legacy_format(),
+            gate_decision="block",
+        )
+        out = agent._build_output(state, time.time())
+        assert out["status"] == "failed"
+        assert out["refutation_passed"] is False
+        assert out.get("needs_review") is False
+        assert out["confidence"] < 0.5, (
+            f"blocked estimate must be low-confidence, got {out['confidence']}"
+        )
+        assert out["requires_further_analysis"] is True
+
 
 # =============================================================================
 # H2 — runner surfaces a distinct needs_review signal
@@ -214,6 +240,65 @@ class _MockHooks:
     async def store_causal_path(self, *a, **k):
         self.semantic_called = True
         return True
+
+
+class TestInterpretationDowngradesReview:
+    """H2 — a REVIEW result must NOT be described as robust in the user narrative."""
+
+    @pytest.mark.asyncio
+    async def test_review_narrative_is_cautionary_not_robust(self):
+        from src.agents.causal_impact.nodes.interpretation import InterpretationNode
+
+        node = InterpretationNode()
+        refutation_results = _review_suite().to_legacy_format()
+        refutation_results["tests_passed"] = 3
+        refutation_results["total_tests"] = 4
+
+        state = {
+            "query": "impact of t on y",
+            "query_id": "t-review",
+            "treatment_var": "t",
+            "outcome_var": "y",
+            "confounders": ["region"],
+            "data_source": "synthetic",
+            "causal_graph": {
+                "nodes": ["t", "y", "region"],
+                "edges": [("region", "t"), ("t", "y")],
+                "treatment_nodes": ["t"],
+                "outcome_nodes": ["y"],
+                "adjustment_sets": [["region"]],
+                "dag_dot": "digraph { }",
+                "confidence": 0.85,
+            },
+            "estimation_result": {
+                "method": "CausalForestDML",
+                "ate": 0.5,
+                "ate_ci_lower": 0.4,
+                "ate_ci_upper": 0.6,
+                "standard_error": 0.05,
+                "effect_size": "medium",
+                "statistical_significance": True,
+                "p_value": 0.01,
+            },
+            "refutation_results": refutation_results,
+            "sensitivity_analysis": {
+                "e_value": 2.5,
+                "robust_to_confounding": True,
+                "interpretation": "moderate",
+            },
+            "interpretation_depth": "standard",
+            "user_context": {"expertise": "analyst"},
+            "status": "pending",
+            "errors": [],
+            "warnings": [],
+        }
+        result = await node.execute(state)
+        narrative = result["interpretation"]["narrative"].lower()
+        # REVIEW (needs_review) must take the caution branch, not the robust one.
+        assert "genuine and not spurious" not in narrative, (
+            "REVIEW must not be described as robust/genuine in the narrative"
+        )
+        assert "caution" in narrative
 
 
 class TestMemoryDoesNotAmplifyReview:
