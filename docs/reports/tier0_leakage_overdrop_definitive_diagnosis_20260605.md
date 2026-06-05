@@ -20,6 +20,23 @@ experiment; the proposed fix was validated with data.
 
 ---
 
+> **✅ REMEDIATION SHIPPED & VERIFIED (2026-06-05).** All four root causes are closed by the
+> sharded plan in `.claude/plans/tier0-leakage-remediation/`:
+> **RC1 → R1** (rare-event guard on `check_zero_variance_within_class`, PR #729);
+> **RC3a → R2** (declared-safe immunity in `_apply_leakage_remediation`'s structural re-check, PR #731);
+> **RC2 → R3** (the offline runner trains on the retained feature set, not the curated survivor
+> list, PR #736); **Fix 4 defense-in-depth → R4** (demote `zero_variance` HIGH→MODERATE on
+> rare-event cohorts, PR #733). **RC3b** is subsumed by R1 (its guard protects the no-manifest
+> path). (Test-reconcile PR #735 isolated R2's immunity tests from R1's guard after a cross-shard
+> interaction.) An end-to-end recovery proof on this exact synthetic cohort —
+> `tests/integration/test_agents/test_data_preparer/test_tier0_rare_event_recovery.py` (this
+> remediation) — is **green**: only the genuine post-index leak is flagged, all 12 cardinality-2
+> sparse flags survive, and neutralizing **both** R1 and R4 reproduces the original over-drop (all
+> 12 wrongly flagged) — confirming the two layers are independent. **Scope unchanged (see §7):**
+> this hardens an offline / dark-path harness (`worker_heavy` ships `replicas: 0`); it stops
+> sparse pre-index predictors being deleted as "leakage" and fixes the leakage audit trail — it
+> does **not** make the 37-event Optum cohort modelable (EPV ≈ 0.13 is independent of this bug).
+
 ## TL;DR — Verdict
 
 **The user is right: the leakage logic is genuinely too aggressive — it deletes legitimate
