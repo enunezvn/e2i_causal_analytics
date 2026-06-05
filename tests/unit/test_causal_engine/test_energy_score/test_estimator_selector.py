@@ -1001,3 +1001,69 @@ class TestEstimatorSelectorIntegration:
         assert "selected_estimator" in d
         assert "selection_strategy" in d
         assert "energy_scores" in d
+
+
+class TestSelectionResultRequiresReview:
+    """M-est3: a best energy score above ``max_acceptable_energy_score`` must
+    flag the SelectionResult as requiring review instead of only logging a
+    warning while the unreliable ATE flows downstream as a clean result.
+    """
+
+    def _selector(self, max_acceptable: float) -> EstimatorSelector:
+        # Single-OLS chain; we call select()'s internals via crafted results,
+        # so nothing slow is fit (matches TestFastEstimatorTiebreak pattern).
+        config = EstimatorSelectorConfig(
+            estimators=[EstimatorConfig(EstimatorType.OLS, priority=1)],
+            max_acceptable_energy_score=max_acceptable,
+        )
+        return EstimatorSelector(config)
+
+    def test_requires_review_default_false(self):
+        selected = EstimatorResult(estimator_type=EstimatorType.OLS, success=True, ate=2.0)
+        result = SelectionResult(
+            selected=selected,
+            selection_strategy=SelectionStrategy.BEST_ENERGY_SCORE,
+        )
+        assert result.requires_review is False
+        assert result.exceeded_max_energy_score is False
+
+    def test_to_dict_includes_review_flags(self):
+        selected = EstimatorResult(estimator_type=EstimatorType.OLS, success=True, ate=2.0)
+        result = SelectionResult(
+            selected=selected,
+            selection_strategy=SelectionStrategy.BEST_ENERGY_SCORE,
+            all_results=[selected],
+            requires_review=True,
+            exceeded_max_energy_score=True,
+        )
+        d = result.to_dict()
+        assert d["requires_review"] is True
+        assert d["exceeded_max_energy_score"] is True
+
+    def test_select_flags_review_when_best_exceeds_max(self):
+        # max_acceptable low so the single result (energy 0.5) breaches it.
+        selector = self._selector(max_acceptable=0.3)
+        results = [_result(EstimatorType.OLS, 0.5)]
+        sel = selector._select_best_energy(results)
+        breached = sel.energy_score > selector.config.max_acceptable_energy_score
+        assert breached is True  # precondition for the flag
+        # Now assert the full SelectionResult produced carries it.
+        sr = selector._build_selection_result(
+            selection=sel,
+            results=results,
+            total_time_ms=0.0,
+        )
+        assert sr.requires_review is True
+        assert sr.exceeded_max_energy_score is True
+
+    def test_select_no_review_when_best_within_max(self):
+        selector = self._selector(max_acceptable=0.8)
+        results = [_result(EstimatorType.OLS, 0.5)]
+        sel = selector._select_best_energy(results)
+        sr = selector._build_selection_result(
+            selection=sel,
+            results=results,
+            total_time_ms=0.0,
+        )
+        assert sr.requires_review is False
+        assert sr.exceeded_max_energy_score is False
