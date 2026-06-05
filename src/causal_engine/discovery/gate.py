@@ -38,19 +38,25 @@ class GateConfig:
         accept_threshold: Minimum overall confidence for ACCEPT
         review_threshold: Minimum overall confidence for REVIEW (below = REJECT)
         augment_edge_threshold: Minimum edge confidence for AUGMENT
-        min_algorithm_agreement: Minimum fraction of algorithms that must agree
         max_rejected_edges_fraction: Max fraction of edges to reject before REJECT
         min_edges: Minimum edges required (below = REJECT)
-        require_dag: Whether to require acyclic graph
+
+    NOTE (H12): the former ``require_dag`` and ``min_algorithm_agreement`` fields
+    were DELETED. They were documented + defaulted but ``evaluate()`` NEVER read
+    them, so they were false assurance: acyclicity is already guaranteed UPSTREAM
+    by ``runner._build_ensemble`` → ``_remove_cycles`` (the gate never sees a
+    cyclic ``ensemble_dag``), and agreement already enters as a soft 0.4 weight in
+    the confidence score (ACCEPT is unreachable below ~0.5 agreement). An operator
+    who set ``require_dag=True`` / raised ``min_algorithm_agreement`` got NO extra
+    enforcement. The real acyclicity guarantee is pinned by a ``_remove_cycles``
+    invariant test instead of an inert config flag.
     """
 
     accept_threshold: float = 0.8
     review_threshold: float = 0.5
     augment_edge_threshold: float = 0.9
-    min_algorithm_agreement: float = 0.5
     max_rejected_edges_fraction: float = 0.3
     min_edges: int = 1
-    require_dag: bool = True
 
 
 @dataclass
@@ -94,8 +100,12 @@ class DiscoveryGate:
     The gate uses multiple criteria to determine confidence:
     1. Algorithm agreement: How many algorithms found the same edges
     2. Edge confidence: Average confidence across edges
-    3. Graph structure: Whether result is a valid DAG
-    4. Coverage: Whether important variables are connected
+    3. Coverage: Whether important variables are connected
+
+    NOTE: the gate does NOT itself check acyclicity — that is guaranteed
+    upstream by ``runner._build_ensemble`` → ``_remove_cycles`` before the gate
+    ever sees the ``ensemble_dag`` (H12). The earlier "valid DAG" criterion +
+    ``require_dag`` config were false assurance and were removed.
 
     Example:
         >>> gate = DiscoveryGate()

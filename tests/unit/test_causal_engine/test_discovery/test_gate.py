@@ -33,10 +33,12 @@ class TestGateConfig:
         assert config.accept_threshold == 0.8
         assert config.review_threshold == 0.5
         assert config.augment_edge_threshold == 0.9
-        assert config.min_algorithm_agreement == 0.5
         assert config.max_rejected_edges_fraction == 0.3
         assert config.min_edges == 1
-        assert config.require_dag is True
+        # H12: the inert require_dag / min_algorithm_agreement knobs were DELETED
+        # (never read by evaluate(); false assurance). They must NOT come back.
+        assert not hasattr(config, "require_dag")
+        assert not hasattr(config, "min_algorithm_agreement")
 
     def test_custom_config(self):
         """Test custom configuration."""
