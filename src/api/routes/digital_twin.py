@@ -28,7 +28,7 @@ Version: 4.2.0
 import logging
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -36,6 +36,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from src.api.dependencies.auth import require_operator
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
+
+if TYPE_CHECKING:
+    from src.digital_twin.twin_repository import TwinRepository
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +58,24 @@ router = APIRouter(
         500: {"model": ErrorResponse, "description": "Internal server error"},
     },
 )
+
+
+async def _get_twin_repo() -> "TwinRepository":
+    """Build a TwinRepository backed by a real async Supabase client (fail-closed).
+
+    Before #705 every handler built ``TwinRepository()`` with no client, so all
+    sub-repos short-circuited on ``if not self.client`` and twin reads/writes
+    were silent no-ops (``twin_simulations`` / ``twin_fidelity_tracking`` stayed
+    0-rows on prod). This mirrors the proven monitoring.py pattern
+    (``get_async_supabase_client()`` -> repo). ``get_async_supabase_client``
+    raises ``ServiceConnectionError`` when the Supabase env is missing — we let
+    it surface (fail-closed) rather than silently degrading to a None client.
+    """
+    from src.digital_twin.twin_repository import TwinRepository
+    from src.memory.services.factories import get_async_supabase_client
+
+    client = await get_async_supabase_client()
+    return TwinRepository(supabase_client=client)
 
 
 # =============================================================================
@@ -491,9 +512,8 @@ async def digital_twin_health() -> DigitalTwinHealthResponse:
     Returns:
         Service health status including model availability and simulation stats.
     """
-    from src.digital_twin.twin_repository import TwinRepository
 
-    repo = TwinRepository()
+    repo = await _get_twin_repo()
 
     try:
         models = await repo.list_active_models()
@@ -582,7 +602,6 @@ async def run_simulation(
     from src.digital_twin.models.twin_models import Brand, TwinType
     from src.digital_twin.simulation_engine import SimulationEngine
     from src.digital_twin.twin_generator import TwinGenerator
-    from src.digital_twin.twin_repository import TwinRepository
 
     logger.info(f"Simulation requested for {request.intervention.intervention_type}")
 
@@ -690,7 +709,7 @@ async def run_simulation(
                 result = await run_in_bounded_executor(_do_sim)
 
         # Save simulation result
-        repo = TwinRepository()
+        repo = await _get_twin_repo()
         await repo.save_simulation(result, request.brand.value)
 
         return SimulationResponse(
@@ -765,10 +784,9 @@ async def list_simulations(
         Paginated list of simulations
     """
     from src.digital_twin.models.simulation_models import SimulationStatus
-    from src.digital_twin.twin_repository import TwinRepository
 
     try:
-        repo = TwinRepository()
+        repo = await _get_twin_repo()
 
         # Convert status to SimulationStatus enum if provided
         status_enum = SimulationStatus(status.value) if status else None
@@ -839,10 +857,9 @@ async def get_simulation_history(
     Returns:
         Simulation history rows with total count and pagination echo.
     """
-    from src.digital_twin.twin_repository import TwinRepository
 
     try:
-        repo = TwinRepository()
+        repo = await _get_twin_repo()
         # Fetch enough rows to cover the requested window (repo returns newest
         # first), then apply the offset/limit slice.
         rows = await repo.simulations.list_simulations(limit=offset + limit)
@@ -1007,10 +1024,9 @@ async def get_simulation(
     Returns:
         Detailed simulation result including heterogeneous effects
     """
-    from src.digital_twin.twin_repository import TwinRepository
 
     try:
-        repo = TwinRepository()
+        repo = await _get_twin_repo()
         result = await repo.get_simulation(UUID(simulation_id))
 
         if not result:
@@ -1095,12 +1111,11 @@ async def validate_simulation(
     """
     from src.digital_twin.fidelity_tracker import FidelityTracker
     from src.digital_twin.models.simulation_models import SimulationResult
-    from src.digital_twin.twin_repository import TwinRepository
 
     logger.info(f"Validating simulation {request.simulation_id}")
 
     try:
-        repo = TwinRepository()
+        repo = await _get_twin_repo()
         tracker = FidelityTracker(repo)
 
         simulation_uuid = UUID(request.simulation_id)
@@ -1113,7 +1128,7 @@ async def validate_simulation(
             )
 
         # Check if fidelity record already exists for this simulation
-        existing_record = tracker.get_simulation_record(simulation_uuid)
+        existing_record = await tracker.get_simulation_record(simulation_uuid)
 
         if not existing_record:
             # Create a minimal SimulationResult to record prediction
@@ -1143,7 +1158,7 @@ async def validate_simulation(
             )
 
             # Record the prediction
-            existing_record = tracker.record_prediction(sim_result)
+            existing_record = await tracker.record_prediction(sim_result)
 
         # Build CI tuple if both bounds provided
         actual_ci = None
@@ -1151,7 +1166,7 @@ async def validate_simulation(
             actual_ci = (request.actual_ci_lower, request.actual_ci_upper)
 
         # Validate with actual results
-        record = tracker.validate(
+        record = await tracker.validate(
             simulation_id=simulation_uuid,
             actual_ate=request.actual_ate,
             actual_ci=actual_ci,
@@ -1217,10 +1232,9 @@ async def list_models(
         List of active models
     """
     from src.digital_twin.models.twin_models import TwinType
-    from src.digital_twin.twin_repository import TwinRepository
 
     try:
-        repo = TwinRepository()
+        repo = await _get_twin_repo()
 
         # Convert twin_type to TwinType enum if provided
         twin_type_enum = TwinType(twin_type.value) if twin_type else None
@@ -1274,10 +1288,9 @@ async def get_model(
     Returns:
         Model details including performance metrics
     """
-    from src.digital_twin.twin_repository import TwinRepository
 
     try:
-        repo = TwinRepository()
+        repo = await _get_twin_repo()
         model = await repo.get_model(UUID(model_id))
 
         if not model:
@@ -1329,10 +1342,9 @@ async def get_model_fidelity(
     Returns:
         Fidelity history with grade distribution
     """
-    from src.digital_twin.twin_repository import TwinRepository
 
     try:
-        repo = TwinRepository()
+        repo = await _get_twin_repo()
 
         # Get fidelity records for model from repository
         records = await repo.get_model_fidelity_records(  # type: ignore[attr-defined]
@@ -1418,10 +1430,9 @@ async def get_fidelity_report(
         Fidelity report with trend analysis
     """
     from src.digital_twin.fidelity_tracker import FidelityTracker
-    from src.digital_twin.twin_repository import TwinRepository
 
     try:
-        repo = TwinRepository()
+        repo = await _get_twin_repo()
         tracker = FidelityTracker(repo)
 
         # get_model_fidelity_report returns a dict, not an object

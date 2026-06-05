@@ -17,8 +17,6 @@ import warnings
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
-import pytest
-
 from src.digital_twin.fidelity_tracker import FidelityTracker
 from src.digital_twin.models.simulation_models import (
     FidelityRecord,

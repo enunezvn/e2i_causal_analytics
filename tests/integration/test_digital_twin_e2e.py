@@ -128,6 +128,11 @@ def mock_repository():
     repo.save_simulation = AsyncMock(return_value=uuid4())
     repo.get_simulation = AsyncMock(return_value=None)
     repo.get_model_fidelity_records = AsyncMock(return_value=[])
+    # Fidelity persistence methods are async coroutines (#705 H7); the tracker
+    # awaits them, so they must be AsyncMocks.
+    repo.save_fidelity_record = AsyncMock(return_value=uuid4())
+    repo.update_fidelity_validation = AsyncMock(return_value={"updated": True})
+    repo.get_fidelity_by_simulation = AsyncMock(return_value=None)
     return repo
 
 
@@ -267,7 +272,7 @@ class TestFullWorkflowRefine:
 class TestFidelityValidationWorkflow:
     """Tests for fidelity tracking and validation workflow."""
 
-    def test_record_prediction_then_validate(
+    async def test_record_prediction_then_validate(
         self, fidelity_tracker, generator, training_data, email_campaign_config
     ):
         """Test recording prediction then validating against actual results."""
@@ -279,7 +284,7 @@ class TestFidelityValidationWorkflow:
         result = engine.simulate(email_campaign_config)
 
         # Step 1: Record prediction
-        record = fidelity_tracker.record_prediction(result)
+        record = await fidelity_tracker.record_prediction(result)
 
         assert record.simulation_id == result.simulation_id
         assert record.simulated_ate == result.simulated_ate
@@ -290,7 +295,7 @@ class TestFidelityValidationWorkflow:
         actual_ate = result.simulated_ate * 0.95  # 5% error
         actual_ci = (result.simulated_ci_lower * 0.9, result.simulated_ci_upper * 1.1)
 
-        validated_record = fidelity_tracker.validate(
+        validated_record = await fidelity_tracker.validate(
             simulation_id=result.simulation_id,
             actual_ate=actual_ate,
             actual_ci=actual_ci,
@@ -305,7 +310,7 @@ class TestFidelityValidationWorkflow:
             FidelityGrade.GOOD,
         ]
 
-    def test_poor_fidelity_grade(self, fidelity_tracker):
+    async def test_poor_fidelity_grade(self, fidelity_tracker):
         """Test that large prediction error results in POOR grade."""
         # Create a fake simulation result
         from src.digital_twin.models.simulation_models import (
@@ -336,10 +341,10 @@ class TestFidelityValidationWorkflow:
             created_at=datetime.now(timezone.utc),
         )
 
-        fidelity_tracker.record_prediction(result)
+        await fidelity_tracker.record_prediction(result)
 
         # Validate with very different actual (50% error)
-        validated = fidelity_tracker.validate(
+        validated = await fidelity_tracker.validate(
             simulation_id=result.simulation_id,
             actual_ate=0.05,  # Only 5% actual (50% error from 10%)
             actual_ci=(0.03, 0.07),
@@ -493,14 +498,14 @@ class TestCompleteE2EWorkflow:
         assert result.status == SimulationStatus.COMPLETED
 
         # 4. Record prediction
-        fidelity_tracker.record_prediction(result)
+        await fidelity_tracker.record_prediction(result)
 
         # 5. "Run" the actual experiment (simulated)
         # Assume actual results are close to prediction
         actual_ate = result.simulated_ate * 0.92  # 8% error
 
         # 6. Validate
-        validated = fidelity_tracker.validate(
+        validated = await fidelity_tracker.validate(
             simulation_id=result.simulation_id,
             actual_ate=actual_ate,
             actual_ci=(
@@ -534,10 +539,10 @@ class TestCompleteE2EWorkflow:
         engine = SimulationEngine(population)
         result = engine.simulate(email_campaign_config)
 
-        fidelity_tracker.record_prediction(result)
+        await fidelity_tracker.record_prediction(result)
 
         # 5. Validate with poor actual results (large error)
-        validated = fidelity_tracker.validate(
+        validated = await fidelity_tracker.validate(
             simulation_id=result.simulation_id,
             actual_ate=result.simulated_ate * 0.3,  # 70% error!
             actual_ci=(0.01, 0.03),

@@ -92,8 +92,20 @@ def mock_simulation_engine():
 
 @pytest.fixture
 def mock_twin_repository():
-    """Mock TwinRepository."""
-    with patch("src.digital_twin.twin_repository.TwinRepository") as mock_repo:
+    """Mock TwinRepository.
+
+    Also patches ``get_async_supabase_client`` so the route's ``_get_twin_repo``
+    helper (#705 H6) does not reach for a real Supabase client during unit tests.
+    The patched ``TwinRepository(supabase_client=...)`` returns this AsyncMock
+    instance regardless of the (mocked) client argument.
+    """
+    with (
+        patch("src.digital_twin.twin_repository.TwinRepository") as mock_repo,
+        patch(
+            "src.memory.services.factories.get_async_supabase_client",
+            new=AsyncMock(return_value=MagicMock()),
+        ),
+    ):
         instance = AsyncMock()
         mock_repo.return_value = instance
 
@@ -215,9 +227,14 @@ def mock_twin_repository():
 
 @pytest.fixture
 def mock_fidelity_tracker():
-    """Mock FidelityTracker."""
+    """Mock FidelityTracker.
+
+    The tracker's record_prediction / validate / get_simulation_record are async
+    coroutines (#705 H7), so the instance must be an AsyncMock for ``await`` to
+    work in the route.
+    """
     with patch("src.digital_twin.fidelity_tracker.FidelityTracker") as mock_tracker:
-        instance = MagicMock()
+        instance = AsyncMock()
         mock_tracker.return_value = instance
 
         # Mock fidelity record
@@ -242,11 +259,16 @@ def mock_fidelity_tracker():
         mock_record.validated_at = datetime.now(timezone.utc)
         mock_record.validated_by = "test_user"
 
+        # These three tracker methods are async coroutines (#705 H7): on an
+        # AsyncMock instance they auto-return awaitables, which is what the route
+        # awaits.
         instance.get_simulation_record.return_value = None  # No existing record
         instance.record_prediction.return_value = mock_record
         instance.validate.return_value = mock_record
 
-        # Mock fidelity report
+        # ``get_model_fidelity_report`` is still SYNC; force it to a plain
+        # MagicMock so it returns the dict directly (not a coroutine) on the
+        # AsyncMock instance.
         mock_report = {
             "validation_count": 10,
             "fidelity_score": 0.88,
@@ -255,7 +277,7 @@ def mock_fidelity_tracker():
             "grade_distribution": {"excellent": 8, "good": 2},
             "computed_at": datetime.now(timezone.utc),
         }
-        instance.get_model_fidelity_report.return_value = mock_report
+        instance.get_model_fidelity_report = MagicMock(return_value=mock_report)
 
         yield instance
 
@@ -1296,9 +1318,7 @@ async def test_validate_reaches_db_with_injected_client():
 
 
 @pytest.mark.asyncio
-async def test_simulate_save_path_uses_injected_client(
-    mock_twin_generator, mock_simulation_engine
-):
+async def test_simulate_save_path_uses_injected_client(mock_twin_generator, mock_simulation_engine):
     """H6: /simulate save path persists to twin_simulations via injected client."""
     from src.api.routes.digital_twin import (
         BrandEnum,
@@ -1309,6 +1329,15 @@ async def test_simulate_save_path_uses_injected_client(
     )
 
     fake_client, chain = _fake_supabase_client()
+
+    # The REAL SimulationRepository.save_simulation serializes the result; give
+    # the mocked engine result JSON-able population_filters / heterogeneity so
+    # the save reaches the injected client instead of raising on None.to_dict().
+    result = mock_simulation_engine.simulate.return_value
+    result.population_filters = MagicMock()
+    result.population_filters.to_dict.return_value = {}
+    result.effect_heterogeneity.model_dump.return_value = {}
+    result.memory_usage_mb = 0.0
 
     with patch(
         "src.memory.services.factories.get_async_supabase_client",
@@ -1340,5 +1369,6 @@ def test_no_bare_twin_repository_in_route_source():
     import src.api.routes.digital_twin as route_mod
 
     source = Path(route_mod.__file__).read_text()
-    # Bare zero-arg construction (client-less) must be gone everywhere.
-    assert re.search(r"TwinRepository\(\s*\)", source) is None
+    # A client-less ``repo = TwinRepository()`` assignment must be gone from every
+    # handler (the docstring may still *mention* ``TwinRepository()`` as history).
+    assert re.search(r"=\s*TwinRepository\(\s*\)", source) is None

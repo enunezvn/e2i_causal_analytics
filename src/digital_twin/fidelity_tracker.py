@@ -16,7 +16,7 @@ Key Functions:
 
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
 import numpy as np
@@ -105,7 +105,7 @@ class FidelityTracker:
             f"(auto_retraining={'enabled' if auto_trigger_retraining else 'disabled'})"
         )
 
-    def record_prediction(
+    async def record_prediction(
         self,
         simulation_result: SimulationResult,
     ) -> FidelityRecord:
@@ -132,12 +132,15 @@ class FidelityTracker:
             f"ATE={simulation_result.simulated_ate:.4f}"
         )
 
+        # ``save_fidelity_record`` is an async repository coroutine; it MUST be
+        # awaited or the write is silently dropped (#705 H7). Persists to
+        # ``twin_fidelity_tracking`` when a real Supabase-backed client is wired.
         if self.repository:
-            self.repository.save_fidelity_record(record)
+            await self.repository.save_fidelity_record(record)
 
         return record
 
-    def validate(
+    async def validate(
         self,
         simulation_id: UUID,
         actual_ate: float,
@@ -168,7 +171,7 @@ class FidelityTracker:
             ValueError: If simulation_id not found
         """
         # Find the record
-        record = self._find_record_by_simulation(simulation_id)
+        record = await self._find_record_by_simulation(simulation_id)
         if record is None:
             raise ValueError(f"No fidelity record found for simulation {simulation_id}")
 
@@ -192,8 +195,21 @@ class FidelityTracker:
             f"error={record.prediction_error:.2%}, grade={record.fidelity_grade.value}"
         )
 
+        # Persist the validation. The REAL repository method is
+        # ``update_fidelity_validation`` (async, individual fields) — NOT
+        # ``update_fidelity_record`` (which never existed; #705 H7). Must be
+        # awaited or the update is silently dropped.
         if self.repository:
-            self.repository.update_fidelity_record(record)
+            await self.repository.update_fidelity_validation(
+                record.tracking_id,
+                actual_ate=record.actual_ate,
+                actual_ci_lower=record.actual_ci_lower,
+                actual_ci_upper=record.actual_ci_upper,
+                actual_sample_size=record.actual_sample_size,
+                actual_experiment_id=record.actual_experiment_id,
+                validation_notes=record.validation_notes,
+                validated_by=record.validated_by,
+            )
 
         # Invalidate model cache
         self._invalidate_model_cache(simulation_id)
@@ -254,9 +270,9 @@ class FidelityTracker:
         """Get fidelity record by tracking ID."""
         return self.records.get(tracking_id)
 
-    def get_simulation_record(self, simulation_id: UUID) -> Optional[FidelityRecord]:
+    async def get_simulation_record(self, simulation_id: UUID) -> Optional[FidelityRecord]:
         """Get fidelity record by simulation ID."""
-        return self._find_record_by_simulation(simulation_id)
+        return await self._find_record_by_simulation(simulation_id)
 
     def get_model_fidelity_report(
         self,
@@ -365,17 +381,18 @@ class FidelityTracker:
         else:
             return FidelityGrade.POOR
 
-    def _find_record_by_simulation(self, simulation_id: UUID) -> Optional[FidelityRecord]:
+    async def _find_record_by_simulation(self, simulation_id: UUID) -> Optional[FidelityRecord]:
         """Find fidelity record by simulation ID."""
         for record in self.records.values():
             if record.simulation_id == simulation_id:
                 return record
 
-        # Try repository if available
+        # On in-memory cache-miss, read through to the repository. The composite
+        # ``get_fidelity_by_simulation`` is an async coroutine that MUST be
+        # awaited (#705 H7/H7b) — a sync ``cast`` returned the un-awaited
+        # coroutine object before this fix.
         if self.repository:
-            return cast(
-                Optional[FidelityRecord], self.repository.get_fidelity_by_simulation(simulation_id)
-            )
+            return await self.repository.get_fidelity_by_simulation(simulation_id)
 
         return None
 

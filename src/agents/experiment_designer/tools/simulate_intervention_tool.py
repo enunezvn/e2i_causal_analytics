@@ -12,6 +12,7 @@ If the simulated effect is below threshold, the tool recommends
 skipping the experiment, saving resources on tests unlikely to succeed.
 """
 
+import asyncio
 import logging
 from typing import Annotated, Any, Dict, Optional
 
@@ -266,9 +267,13 @@ def simulate_intervention(
             calculate_heterogeneity=True,
         )
 
-        # Track for fidelity validation
+        # Track for fidelity validation. ``record_prediction`` is async (#705
+        # H7); this is a SYNC LangChain ``@tool`` invoked only via sync
+        # ``.invoke()`` (never ``.ainvoke()``), so there is no running event loop
+        # here and ``asyncio.run`` is the correct sync->async bridge. The tracker
+        # is repo-less, so this only does in-memory tracking (no DB write).
         tracker = FidelityTracker()
-        tracker.record_prediction(result)
+        asyncio.run(tracker.record_prediction(result))
 
         # Format output
         return _format_output(result)

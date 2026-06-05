@@ -11,6 +11,7 @@ Usage:
     the actual results and update the twin model's fidelity score.
 """
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Annotated, Any, Dict, List, Optional, Tuple, cast
@@ -173,18 +174,24 @@ def validate_twin_fidelity(
             except ValueError:
                 logger.warning(f"Invalid experiment_id format: {actual_experiment_id}")
 
-        # Validate
+        # Validate. ``tracker.validate`` is async (#705 H7); this is a SYNC
+        # LangChain ``@tool`` invoked only via sync ``.invoke()`` (never
+        # ``.ainvoke()``), so there is no running event loop and ``asyncio.run``
+        # is the correct sync->async bridge. The tracker is repo-less, so this is
+        # in-memory only (no DB write).
         try:
-            record = tracker.validate(
-                simulation_id=sim_uuid,
-                actual_ate=actual_ate,
-                actual_ci=cast(Tuple[float, float], (actual_ci_lower, actual_ci_upper))
-                if actual_ci_lower and actual_ci_upper
-                else None,
-                actual_sample_size=actual_sample_size,
-                actual_experiment_id=exp_uuid,
-                notes=validation_notes,
-                confounding_factors=confounding_factors or [],
+            record = asyncio.run(
+                tracker.validate(
+                    simulation_id=sim_uuid,
+                    actual_ate=actual_ate,
+                    actual_ci=cast(Tuple[float, float], (actual_ci_lower, actual_ci_upper))
+                    if actual_ci_lower and actual_ci_upper
+                    else None,
+                    actual_sample_size=actual_sample_size,
+                    actual_experiment_id=exp_uuid,
+                    notes=validation_notes,
+                    confounding_factors=confounding_factors or [],
+                )
             )
         except ValueError as e:
             # Simulation not found - create new record with provided info

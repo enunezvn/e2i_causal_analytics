@@ -21,6 +21,19 @@ from src.api.main import app
 client = TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def _patch_async_supabase_client():
+    """Stop the route's ``_get_twin_repo`` helper (#705 H6) from reaching for a
+    real Supabase client during these HTTP-level tests. Each test still patches
+    ``TwinRepository`` so the (mocked) client argument is irrelevant.
+    """
+    with patch(
+        "src.memory.services.factories.get_async_supabase_client",
+        new=AsyncMock(return_value=MagicMock()),
+    ):
+        yield
+
+
 # =============================================================================
 # FIXTURES
 # =============================================================================
@@ -375,9 +388,12 @@ class TestValidateSimulation:
         mock_repo = MagicMock()
         mock_repo.get_simulation = AsyncMock(return_value=mock_simulation_data)
 
+        # get_simulation_record / validate are async coroutines (#705 H7); the
+        # route awaits them, so they must be AsyncMocks.
         mock_tracker = MagicMock()
-        mock_tracker.get_simulation_record = MagicMock(return_value=mock_fidelity_record)
-        mock_tracker.validate = MagicMock(return_value=mock_fidelity_record)
+        mock_tracker.get_simulation_record = AsyncMock(return_value=mock_fidelity_record)
+        mock_tracker.record_prediction = AsyncMock(return_value=mock_fidelity_record)
+        mock_tracker.validate = AsyncMock(return_value=mock_fidelity_record)
 
         with (
             patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo),

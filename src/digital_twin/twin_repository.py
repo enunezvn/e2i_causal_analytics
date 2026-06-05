@@ -903,6 +903,12 @@ class TwinRepository:
             tracking_id, actual_ate, **kwargs
         )
 
+    async def get_fidelity_by_simulation(self, simulation_id: UUID) -> Optional[FidelityRecord]:
+        """Get fidelity tracking record by simulation ID."""
+        return await self.fidelity.get_fidelity_by_simulation(  # type: ignore[no-any-return]
+            simulation_id
+        )
+
 
 # --------------------------------------------------------------------------- #
 # Twin retraining job persistence (#549)
