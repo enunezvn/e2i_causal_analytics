@@ -141,9 +141,12 @@ class TestDirectLiNGAMDiscovery:
             mock_model = MagicMock()
             mock_model.adjacency_matrix_ = np.array(
                 [
-                    [0.0, 0.8, 0.0],
-                    [0.0, 0.0, 0.8],
+                    # Correct lingam B for X→Y→Z (x_i = Σ_j B[i,j] x_j):
+                    # B[1,0]=B[2,1]=0.8. The wrapper transposes before building
+                    # the edge list (H7), recovering X→Y→Z.
                     [0.0, 0.0, 0.0],
+                    [0.8, 0.0, 0.0],
+                    [0.0, 0.8, 0.0],
                 ]
             )
             mock_model.causal_order_ = [0, 1, 2]
@@ -165,9 +168,12 @@ class TestDirectLiNGAMDiscovery:
             mock_model = MagicMock()
             mock_model.adjacency_matrix_ = np.array(
                 [
-                    [0.0, 0.8, 0.0],
-                    [0.0, 0.0, 0.8],
+                    # Correct lingam B for X→Y→Z (x_i = Σ_j B[i,j] x_j):
+                    # B[1,0]=B[2,1]=0.8. The wrapper transposes before building
+                    # the edge list (H7), recovering X→Y→Z.
                     [0.0, 0.0, 0.0],
+                    [0.8, 0.0, 0.0],
+                    [0.0, 0.8, 0.0],
                 ]
             )
             mock_model.causal_order_ = [0, 1, 2]
@@ -188,9 +194,12 @@ class TestDirectLiNGAMDiscovery:
             mock_model = MagicMock()
             adj_weights = np.array(
                 [
-                    [0.0, 0.8, 0.0],
-                    [0.0, 0.0, 0.8],
+                    # Correct lingam B for X→Y→Z (x_i = Σ_j B[i,j] x_j):
+                    # B[1,0]=B[2,1]=0.8. The wrapper transposes before building
+                    # the edge list (H7), recovering X→Y→Z.
                     [0.0, 0.0, 0.0],
+                    [0.8, 0.0, 0.0],
+                    [0.0, 0.8, 0.0],
                 ]
             )
             mock_model.adjacency_matrix_ = adj_weights
@@ -345,9 +354,12 @@ class TestICALiNGAMDiscovery:
             mock_model = MagicMock()
             mock_model.adjacency_matrix_ = np.array(
                 [
-                    [0.0, 0.8, 0.0],
-                    [0.0, 0.0, 0.8],
+                    # Correct lingam B for X→Y→Z (x_i = Σ_j B[i,j] x_j):
+                    # B[1,0]=B[2,1]=0.8. The wrapper transposes before building
+                    # the edge list (H7), recovering X→Y→Z.
                     [0.0, 0.0, 0.0],
+                    [0.8, 0.0, 0.0],
+                    [0.0, 0.8, 0.0],
                 ]
             )
             mock_model.causal_order_ = [0, 1, 2]
@@ -369,9 +381,12 @@ class TestICALiNGAMDiscovery:
             mock_model = MagicMock()
             mock_model.adjacency_matrix_ = np.array(
                 [
-                    [0.0, 0.8, 0.0],
-                    [0.0, 0.0, 0.8],
+                    # Correct lingam B for X→Y→Z (x_i = Σ_j B[i,j] x_j):
+                    # B[1,0]=B[2,1]=0.8. The wrapper transposes before building
+                    # the edge list (H7), recovering X→Y→Z.
                     [0.0, 0.0, 0.0],
+                    [0.8, 0.0, 0.0],
+                    [0.0, 0.8, 0.0],
                 ]
             )
             mock_model.causal_order_ = [0, 1, 2]
@@ -390,9 +405,12 @@ class TestICALiNGAMDiscovery:
             mock_model = MagicMock()
             adj_weights = np.array(
                 [
-                    [0.0, 0.8, 0.0],
-                    [0.0, 0.0, 0.8],
+                    # Correct lingam B for X→Y→Z (x_i = Σ_j B[i,j] x_j):
+                    # B[1,0]=B[2,1]=0.8. The wrapper transposes before building
+                    # the edge list (H7), recovering X→Y→Z.
                     [0.0, 0.0, 0.0],
+                    [0.8, 0.0, 0.0],
+                    [0.0, 0.8, 0.0],
                 ]
             )
             mock_model.adjacency_matrix_ = adj_weights
