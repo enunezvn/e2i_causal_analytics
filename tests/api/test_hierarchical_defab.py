@@ -182,6 +182,7 @@ class TestHierarchicalRealDataFlowsThrough:
                 uplift_range=(0.0, 1.0),
                 cate_mean=0.5,
                 cate_std=0.1,
+                cate_se=None,
                 cate_ci_lower=0.3,
                 cate_ci_upper=0.7,
                 success=True,
