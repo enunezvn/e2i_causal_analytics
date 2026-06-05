@@ -303,6 +303,8 @@ class DataSourceValidator:
             return self._detect_experiment_designer_source(
                 agent_output, execution_logs, agent_instance, evidence
             )
+        elif agent_name == "causal_impact":
+            return self._detect_causal_impact_source(agent_output, evidence)
         else:
             # Default: check for tier0 passthrough indicators
             return self._detect_tier0_passthrough(agent_output, evidence)
@@ -443,6 +445,39 @@ class DataSourceValidator:
 
         evidence.append("Could not determine data source")
         return DataSourceType.UNKNOWN, evidence
+
+    def _detect_causal_impact_source(
+        self,
+        agent_output: dict[str, Any],
+        evidence: list[str],
+    ) -> tuple[DataSourceType, list[str]]:
+        """Detect data source for causal_impact agent.
+
+        H1/H2: a causal analysis that ran end-to-end used tier0 data REGARDLESS
+        of its robustness verdict. After the fail-open remediation a refutation
+        that BLOCKS a weak claim yields ``status="failed"`` — so the default
+        ``_detect_tier0_passthrough`` (which infers tier0 only from
+        ``status in {completed, success}``) would mis-label an honest fail-closed
+        block as ``UNKNOWN``. Detect the real analysis directly: a numeric ATE
+        plus an executed refutation suite proves the agent processed the tier0
+        frame, whether the gate PROCEEDed, REVIEWed, or BLOCKed.
+        """
+        if agent_output.get("tier0_experiment_id"):
+            evidence.append("tier0_experiment_id present in output")
+            return DataSourceType.TIER0_PASSTHROUGH, evidence
+
+        ate = agent_output.get("ate_estimate")
+        refutation_total = agent_output.get("refutation_tests_total", 0) or 0
+        if isinstance(ate, (int, float)) and not isinstance(ate, bool) and refutation_total > 0:
+            evidence.append(
+                "Numeric ATE + executed refutation suite "
+                f"({refutation_total} tests) → tier0 passthrough (verdict-independent)"
+            )
+            return DataSourceType.TIER0_PASSTHROUGH, evidence
+
+        # Fall back to the default status-based heuristic (covers completed/
+        # success outputs that lack an explicit refutation count).
+        return self._detect_tier0_passthrough(agent_output, evidence)
 
     def _detect_drift_monitor_source(
         self,

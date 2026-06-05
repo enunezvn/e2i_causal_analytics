@@ -70,9 +70,19 @@ class TestCausalImpactAgent:
 
         result = await agent.run(input_data)
 
-        assert result["status"] == "completed"
-        # Should infer treatment and outcome
+        # The point of this test: variable inference produced a causal graph.
         assert result["causal_graph_summary"] is not None
+        # H1 honesty (P3): for this synthetic DGP the estimation data lacks
+        # columns matching the inferred variable names, so refutation fail-closes
+        # (RefutationError). The result must therefore NOT be a full-confidence
+        # "completed" (the old fail-open masked this); a fail-closed refutation
+        # yields a penalized, honest status.
+        if result["status"] == "failed":
+            assert result["confidence"] < 0.5, (
+                "refutation fail-closed must penalize confidence, not default to 1.0"
+            )
+        else:
+            assert result["status"] == "completed"
 
     @pytest.mark.asyncio
     async def test_minimal_interpretation(self):

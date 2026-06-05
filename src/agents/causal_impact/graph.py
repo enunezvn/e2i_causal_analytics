@@ -358,7 +358,14 @@ def should_continue_after_refutation(
 ) -> Literal["sensitivity", "error_handler"]:
     """Conditional routing after refutation node.
 
-    Contract: gate_decision determines flow.
+    Contract: gate_decision determines flow, fail-CLOSED (H1).
+
+    A refutation that ERRORED or FAILED sets ``refutation_error`` /
+    ``status="failed"`` but NO ``refutation_results`` — previously the gate then
+    defaulted to ``"proceed"`` and carried a never-validated estimate forward to
+    sensitivity → interpretation → a "completed" result. Route those to the
+    error handler instead. Only PROCEED/REVIEW continue to sensitivity; BLOCK
+    and any error/failure stop at the error handler.
 
     Args:
         state: Current workflow state
@@ -366,7 +373,12 @@ def should_continue_after_refutation(
     Returns:
         Next node name
     """
-    gate = state.get("refutation_results", {}).get("gate_decision", "proceed")
+    # Fail-closed: an errored/failed refutation must not proceed as if validated.
+    if state.get("refutation_error") or state.get("status") == "failed":
+        return "error_handler"
+    gate = state.get("gate_decision") or state.get("refutation_results", {}).get(
+        "gate_decision", "proceed"
+    )
     if gate == "block":
         return "error_handler"
     return "sensitivity"

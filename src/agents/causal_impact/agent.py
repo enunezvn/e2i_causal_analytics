@@ -20,6 +20,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# H1: when refutation did NOT run successfully (errored, or produced no
+# confidence_adjustment), confidence must be hard-penalized rather than silently
+# defaulting to 1.0 (no penalty). A never-validated estimate cannot be trusted.
+_REFUTATION_UNVALIDATED_PENALTY = 0.3
+
 
 # ============================================================================
 # FALLBACK CHAIN (Contract: AgentConfig.fallback_models)
@@ -348,8 +353,25 @@ class CausalImpactAgent(SkillsMixin):
         interpretation_latency_ms = state.get("interpretation_latency_ms", 0)
         total_latency_ms = (time.time() - start_time) * 1000
 
+        # Refutation outcome (H1/H2): consult the actual gate, not just ATE
+        # presence. A refutation that ERRORED or produced no results must be
+        # treated as a fail-closed validation gap, never as silently-robust.
+        # Prefer the refutation node's structured output over any pre-existing
+        # state value (the node result is the fresher, authoritative source).
+        gate_decision = refutation_results.get("gate_decision") or state.get("gate_decision")
+        refutation_error = state.get("refutation_error")
+        # "Ran" = produced results AND did not error.
+        refutation_ran = bool(refutation_results) and not refutation_error
+        gate_blocked = gate_decision == "block"
+        needs_review = gate_decision == "review"
+
         # Determine overall confidence
-        refutation_confidence = refutation_results.get("confidence_adjustment", 1.0)
+        if not refutation_ran or "confidence_adjustment" not in refutation_results:
+            # H1: never default to 1.0 (no penalty) when validation did not run or
+            # produced no adjustment — hard-penalize the unvalidated estimate.
+            refutation_confidence = _REFUTATION_UNVALIDATED_PENALTY
+        else:
+            refutation_confidence = refutation_results["confidence_adjustment"]
         sensitivity_robust = sensitivity_analysis.get("robust_to_confounding", False)
         statistical_significance = estimation_result.get("statistical_significance", False)
 
@@ -362,17 +384,24 @@ class CausalImpactAgent(SkillsMixin):
 
         overall_confidence = base_confidence * refutation_confidence
 
-        # Determine refutation status
-        refutation_passed = refutation_results.get("overall_robust", False)
+        # H2: only a PROCEED gate is "passed/robust". A REVIEW band is borderline
+        # (needs_review) and an errored/blocked refutation is not passed at all.
+        refutation_passed = refutation_ran and gate_decision == "proceed"
 
         # Build output with contract field names
         output: CausalImpactOutput = {
             "query_id": state.get("query_id", "unknown"),
-            # Honest status (#606): report "failed" when estimation produced no
-            # ATE (e.g. an EstimationError was caught upstream) instead of masking
-            # it as "completed" with ate_estimate=None. Previously this was
-            # hardcoded "completed", so a failed analysis looked successful.
-            "status": ("completed" if estimation_result.get("ate") is not None else "failed"),
+            # Honest status (#606 + H1): report "failed" when estimation produced
+            # no ATE OR when refutation failed/errored OR the gate BLOCKED. A
+            # never-validated or blocked estimate must not be surfaced as
+            # "completed" with full confidence (the F-014 fail-closed seam).
+            "status": (
+                "completed"
+                if (
+                    estimation_result.get("ate") is not None and refutation_ran and not gate_blocked
+                )
+                else "failed"
+            ),
             # Core results
             "causal_narrative": interpretation.get("narrative", "Analysis completed successfully."),
             "ate_estimate": estimation_result.get("ate"),  # type: ignore[typeddict-item]
@@ -402,7 +431,11 @@ class CausalImpactAgent(SkillsMixin):
                 "recommendations", []
             ),  # Contract field (was recommendations)
             "requires_further_analysis": overall_confidence < 0.7,  # Contract REQUIRED
-            "refutation_passed": refutation_passed,  # Contract REQUIRED
+            "refutation_passed": refutation_passed,  # Contract REQUIRED (PROCEED only)
+            # H2: a REVIEW-band estimate is borderline-robust, surfaced distinctly
+            # so it is not consumed/persisted as validated.
+            "needs_review": needs_review,
+            "gate_decision": gate_decision,
             "executive_summary": self._generate_executive_summary(
                 interpretation,
                 estimation_result,

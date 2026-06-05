@@ -401,6 +401,7 @@ class RefutationNode:
         config: Optional[Dict[str, Dict[str, Any]]] = None,
         thresholds: Optional[Dict[str, Dict[str, float]]] = None,
         validation_repo: Optional[CausalValidationRepository] = None,
+        expert_review_gate: Optional[Any] = None,
     ):
         """Initialize refutation node.
 
@@ -408,10 +409,65 @@ class RefutationNode:
             config: Custom test configuration (merged with defaults)
             thresholds: Custom pass/fail thresholds
             validation_repo: Repository for database persistence (optional)
+            expert_review_gate: ExpertReviewGate consulted on a REVIEW-band gate
+                (H2). When None, a no-repository gate is constructed lazily and
+                bypasses gracefully (development mode); a real repository-backed
+                gate creates/looks up the DAG approval in production.
         """
         self.runner = RefutationRunner(config=config, thresholds=thresholds)
         self.validation_repo = validation_repo
+        self.expert_review_gate = expert_review_gate
         logger.info(f"RefutationNode initialized (DoWhy available: {DOWHY_AVAILABLE})")
+
+    async def _consult_review_gate(
+        self, state: CausalImpactState, suite: "RefutationSuite"
+    ) -> Dict[str, Any]:
+        """On a REVIEW-band gate, consult the ExpertReviewGate (H2).
+
+        Wires the built-but-previously-unwired ``ExpertReviewGate`` at the REVIEW
+        seam. Always flags ``needs_review`` and emits a user-facing caveat; the
+        gate consultation is best-effort (a missing repository bypasses to
+        PROCEED with a logged warning, a gate error degrades to needs_review).
+        """
+        from src.causal_engine.expert_review_gate import ExpertReviewGate
+
+        gate = self.expert_review_gate or ExpertReviewGate()
+        treatment = state.get("treatment_var", "unknown_treatment")
+        outcome = state.get("outcome_var", "unknown_outcome")
+        brand = state.get("brand")
+        dag_hash = str(state.get("dag_hash") or "")
+        requester_id = state.get("query_id") or "causal_impact_agent"
+
+        expert_review_decision: Optional[str] = None
+        try:
+            review_result = await gate.check_approval(
+                dag_hash=dag_hash,
+                brand=brand,
+                treatment=treatment,
+                outcome=outcome,
+                requester_id=requester_id,
+                # check_approval expects a STRING description (Optional[str]),
+                # not a dict — summarise the refutation verdict for the audit row.
+                analysis_context=(
+                    f"confidence={suite.confidence_score:.2f}, gate={suite.gate_decision.value}"
+                ),
+            )
+            expert_review_decision = review_result.decision.value
+        except Exception as gate_err:  # noqa: BLE001 - gate must never break the node
+            logger.warning(
+                f"ExpertReviewGate consult failed (degrading to needs_review): {gate_err}"
+            )
+
+        caveat = (
+            f"Refutation gate is REVIEW (borderline robust, "
+            f"confidence={suite.confidence_score:.2f}). This estimate needs expert "
+            f"review before it is used as a validated result."
+        )
+        return {
+            "needs_review": True,
+            "expert_review_decision": expert_review_decision,
+            "review_caveat": caveat,
+        }
 
     async def execute(self, state: CausalImpactState) -> Dict:
         """Run refutation tests.
@@ -621,6 +677,7 @@ class RefutationNode:
             latency_ms = (time.time() - start_time) * 1000
 
             # Determine next phase based on gate decision
+            review_fields: Dict[str, Any] = {}
             if suite.gate_decision == GateDecision.BLOCK:
                 logger.warning(
                     f"Refutation BLOCKED estimate: confidence={suite.confidence_score:.2f}, "
@@ -637,6 +694,9 @@ class RefutationNode:
                 next_phase = "analyzing_sensitivity"
                 status = state.get("status", "in_progress")
                 error_message = None
+                # H2: consult the ExpertReviewGate and flag needs_review + caveat
+                # so a REVIEW band is NOT surfaced/persisted as robust/validated.
+                review_fields = await self._consult_review_gate(state, suite)
             else:
                 logger.info(
                     f"Refutation PASSED: confidence={suite.confidence_score:.2f}, "
@@ -655,10 +715,14 @@ class RefutationNode:
                 "refutation_suite": suite.to_dict(),
                 "gate_decision": suite.gate_decision.value,
                 "refutation_confidence": suite.confidence_score,
+                # H2: distinct REVIEW signal (default False for PROCEED/BLOCK)
+                "needs_review": suite.needs_review,
                 # Persistence tracking
                 "validation_ids": validation_ids,
                 # Phase 4: Feedback Learner tracking
                 "validation_outcome_id": validation_outcome_id,
+                # REVIEW-band caveat / expert-review decision (empty otherwise)
+                **review_fields,
             }
 
             if status == "failed":

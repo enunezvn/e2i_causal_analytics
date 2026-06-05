@@ -427,11 +427,18 @@ class CausalImpactMemoryHooks:
             ate = result.get("ate_estimate", 0)
             confidence = result.get("confidence", 0)
             refutation = result.get("refutation_passed", False)
+            # H2: carry the gate band so RAG read-back can distinguish a
+            # PROCEED-validated estimate from a borderline REVIEW one.
+            gate_decision = result.get("gate_decision") or state.get("gate_decision")
+            needs_review = bool(result.get("needs_review"))
+            # A REVIEW-grade estimate is lower-value/lower-trust memory than a
+            # PROCEED-validated one — do not store it at the same importance.
+            importance_score = 0.5 if (needs_review or gate_decision == "review") else 0.85
 
             description = (
                 f"Causal analysis: {treatment_var} -> {outcome_var}, "
                 f"ATE={ate:.3f}, confidence={confidence:.2f}, "
-                f"refutation_passed={refutation}"
+                f"refutation_passed={refutation}, gate_decision={gate_decision}"
             )
 
             # Create episodic memory input
@@ -446,6 +453,8 @@ class CausalImpactMemoryHooks:
                     "ate_estimate": ate,
                     "confidence_interval": result.get("confidence_interval"),
                     "refutation_passed": refutation,
+                    "gate_decision": gate_decision,
+                    "needs_review": needs_review,
                     "effect_size": result.get("effect_size"),
                     "model_used": result.get("model_used"),
                     "executive_summary": result.get("executive_summary", "")[:500],
@@ -453,7 +462,7 @@ class CausalImpactMemoryHooks:
                 entities=None,
                 outcome_type="causal_analysis_delivered",
                 agent_name="causal_impact",
-                importance_score=0.85,  # Causal analyses are high value
+                importance_score=importance_score,  # PROCEED=0.85, REVIEW=0.5 (H2)
                 e2i_refs=E2IEntityReferences(
                     brand=brand,
                     region=region,
@@ -681,12 +690,18 @@ async def contribute_to_memory(
     if memory_id:
         counts["episodic_stored"] = 1
 
-    # 3. Store causal path in semantic memory (only if refutation passed)
+    # 3. Store causal path in semantic memory — ONLY for a PROCEED-validated
+    # estimate (H2). A REVIEW-band result is borderline-robust and must NOT be
+    # written to the knowledge graph as a validated causal path (it would
+    # resurface via RAG as if fully validated). Gate explicitly on the PROCEED
+    # band, not merely on refutation_passed, as defense-in-depth.
     treatment_var = state.get("treatment_var")
     outcome_var = state.get("outcome_var")
     confounders = state.get("confounders", [])
+    gate_decision = result.get("gate_decision") or state.get("gate_decision")
+    is_proceed_validated = bool(result.get("refutation_passed")) and gate_decision != "review"
 
-    if treatment_var and outcome_var and result.get("refutation_passed"):
+    if treatment_var and outcome_var and is_proceed_validated:
         stored = await memory_hooks.store_causal_path(
             treatment_var=treatment_var,
             outcome_var=outcome_var,
