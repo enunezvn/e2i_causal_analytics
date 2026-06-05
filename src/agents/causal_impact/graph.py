@@ -334,10 +334,13 @@ async def traced_apply_adjustment_policy(state: CausalImpactState) -> Dict[str, 
 
 def should_continue_after_estimation(
     state: CausalImpactState,
-) -> Literal["refutation", "interpretation", "error_handler"]:
+) -> Literal["refutation", "error_handler"]:
     """Conditional routing after estimation node.
 
-    Contract: Partial success path - if ate_estimate exists, skip to interpretation on error.
+    Contract: fail-closed. A partial success (estimation_error set but an ATE was
+    still produced) must STILL be validated by refutation — it must NOT skip to
+    interpretation, which would surface an unvalidated estimate as if validated.
+    Only a total estimation failure (no ATE) routes to the error handler.
 
     Args:
         state: Current workflow state
@@ -346,9 +349,11 @@ def should_continue_after_estimation(
         Next node name
     """
     if state.get("estimation_error"):
-        # Partial success: if we have an ATE estimate, go to interpretation
+        # Partial success: an ATE exists but estimation flagged a problem. Do NOT
+        # skip to interpretation — route through refutation so the gate validates
+        # (or blocks) the estimate. Only a total failure (no ATE) errors out.
         if state.get("estimation_result", {}).get("ate") is not None:
-            return "interpretation"
+            return "refutation"
         return "error_handler"
     return "refutation"
 
@@ -416,7 +421,7 @@ def create_causal_impact_graph(enable_checkpointing: bool = False):
     0. audit_init: Initialize audit chain workflow (genesis block)
     1. graph_builder: Construct causal DAG (Standard, <10s)
     2. estimation: Estimate causal effect (Standard, <30s)
-       → conditional: refutation | interpretation (partial success) | error_handler
+       → conditional: refutation | error_handler (no ATE)
     3. refutation: Robustness tests (Standard, <15s)
        → conditional: sensitivity | error_handler (if blocked)
     4. sensitivity: E-value analysis (Standard, <5s)
@@ -464,7 +469,6 @@ def create_causal_impact_graph(enable_checkpointing: bool = False):
         should_continue_after_estimation,
         {
             "refutation": "refutation",
-            "interpretation": "interpretation",
             "error_handler": "error_handler",
         },
     )
