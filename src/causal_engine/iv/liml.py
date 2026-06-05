@@ -118,7 +118,12 @@ class LIMLEstimator(BaseIVEstimator):
             # ============ Compute LIML k-class parameter ============
             kappa = self._compute_liml_kappa(Y_tilde, D_tilde, Z_tilde, n, k)
 
-            # Apply Fuller modification if specified
+            # Apply Fuller modification if specified. With κ now correctly ≥ 1
+            # (C2 fix), Fuller subtracts a small c/(n−k−p−1) from a valid k-class
+            # κ — its intended finite-sample bias correction (which may move κ
+            # slightly below 1 by design). Previously it compounded an already
+            # inverted κ < 1. Do NOT clamp κ to ≥ 1 here: Fuller is allowed to
+            # dip below 1.
             if self.config.fuller_k is not None:
                 kappa = kappa - self.config.fuller_k / (n - k - p - 1)
 
@@ -251,16 +256,20 @@ class LIMLEstimator(BaseIVEstimator):
         """
         Compute LIML kappa parameter.
 
-        LIML finds the smallest root λ of:
-            det(W'M_Z W - λ W'M_0 W) = 0
+        LIML κ is the smallest root of:
+            det(W'M_0 W - κ W'M_Z W) = 0
 
         where:
             W = [Y, D]
             M_Z = I - Z(Z'Z)^{-1}Z' (residual maker for instruments)
             M_0 = I - 1*1'/n (demeaning matrix, for no exogenous covariates)
 
-        κ is this smallest eigenvalue, and should be close to 1 when
-        instruments are strong (making LIML ≈ 2SLS).
+        Equivalently κ is the smallest eigenvalue of (W'M_Z W)^{-1}(W'M_0 W),
+        which is ≥ 1 (= 1 exactly-identified, > 1 over-identified) and → 1 when
+        instruments are strong (making LIML ≈ 2SLS). NOTE the pencil ordering:
+        ``scipy.linalg.eigvalsh(a, b)`` solves ``a v = κ b v``, so the call is
+        ``eigvalsh(W'M_0 W, W'M_Z W)`` — swapping the arguments yields the
+        reciprocal-pencil eigenvalues ≤ 1, which is NOT the k-class κ (C2).
 
         Reference:
             Anderson & Rubin (1949), Stock & Yogo (2005)
@@ -285,21 +294,30 @@ class LIMLEstimator(BaseIVEstimator):
         WtMzW = W.T @ M_Z @ W
         WtM0W = W.T @ M_0 @ W
 
-        # Solve generalized eigenvalue problem
-        # W'M_Z*W * v = κ * W'M_0*W * v
-        # The smallest eigenvalue is the LIML kappa
+        # Solve the generalized eigenvalue problem for the LIML k-class κ.
+        #
+        # C2 fix: ``scipy.linalg.eigvalsh(a, b)`` solves ``a v = κ b v`` (i.e.
+        # the eigenvalues of ``b^{-1} a``). The LIML κ is the smallest root of
+        #   det(W'M_0 W − κ · W'M_Z W) = 0
+        # = the smallest eigenvalue of ``(W'M_Z W)^{-1} (W'M_0 W)``, which is
+        # ≥ 1 (= 1 exactly-identified, > 1 over-identified). So the pencil is
+        # ``eigvalsh(WtM0W, WtMzW)``. The previous code passed the arguments in
+        # the WRONG order (``eigvalsh(WtMzW, WtM0W)``), returning eigenvalues
+        # ≤ 1 (a canonical-correlation quantity → 0 with more instruments),
+        # biasing every LIML/Fuller estimate.
         try:
-            eigenvalues = linalg.eigvalsh(WtMzW, WtM0W)
+            eigenvalues = linalg.eigvalsh(WtM0W, WtMzW)
             # Filter out numerical noise (eigenvalues should be >= 0)
             eigenvalues = eigenvalues[eigenvalues > -1e-10]
             kappa = float(np.min(eigenvalues)) if len(eigenvalues) > 0 else 1.0
             # Ensure kappa >= 0 (numerical stability)
             kappa = max(0.0, kappa)
         except Exception:
-            # Fallback: direct eigenvalue computation
+            # Fallback: direct eigenvalue computation of the SAME quantity —
+            # the smallest eigenvalue of (W'M_Z W)^{-1} (W'M_0 W).
             try:
-                WtM0W_inv = np.linalg.inv(WtM0W)
-                A = WtM0W_inv @ WtMzW
+                WtMzW_inv = np.linalg.inv(WtMzW)
+                A = WtMzW_inv @ WtM0W
                 eigenvalues = np.linalg.eigvalsh(A)
                 eigenvalues = eigenvalues[eigenvalues > -1e-10]
                 kappa = float(np.min(eigenvalues)) if len(eigenvalues) > 0 else 1.0

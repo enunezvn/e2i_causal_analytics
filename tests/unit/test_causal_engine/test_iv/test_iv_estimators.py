@@ -241,20 +241,44 @@ class TestLIMLEstimator:
         # LIML should be within ~0.2 of true effect (allowing for sampling variation)
         assert abs(result.coefficient - synthetic_data["beta_true"]) < 0.20
 
-    def test_liml_kappa_close_to_one_strong_instruments(self, estimator, synthetic_data):
-        """Test LIML kappa is in reasonable range with strong instruments."""
+    def test_liml_kappa_just_identified_strong_is_one(self, estimator, synthetic_data):
+        """Just-identified strong instruments → LIML κ ≈ 1.0 (LIML ≈ 2SLS).
+
+        C2 regression: the generalized-eigenvalue arguments were swapped
+        (``eigvalsh(WtMzW, WtM0W)``), so ``min`` returned a canonical-correlation
+        quantity ≈0.70 instead of the k-class κ. The LIML κ is the smallest root
+        of ``det(W'M0 W − κ W'MZ W)=0`` = ``min eigvalsh(WtM0W, WtMzW)``, which is
+        ≥ 1 (=1 exactly-identified). The old loose ``0 < κ < 2`` assertion on this
+        just-identified, near-exogenous DGP could not catch the inversion.
+        """
         result = estimator.fit(
             outcome=synthetic_data["outcome"],
             treatment=synthetic_data["treatment"],
             instruments=synthetic_data["instruments"],
         )
-
-        # With strong instruments, LIML produces kappa values that make
-        # the estimator behave similarly to 2SLS. The exact kappa value
-        # depends on the eigenvalue formulation used.
         kappa = result.raw_estimate["kappa"]
-        # Kappa should be positive and less than 2 for reasonable behavior
-        assert 0 < kappa < 2.0
+        assert kappa == pytest.approx(1.0, abs=0.02), (
+            f"just-identified κ must be ≈1.0 (LIML≈2SLS), got {kappa}"
+        )
+
+    def test_liml_kappa_over_identified_endogenous_at_least_one(self, estimator):
+        """Over-identified (k≥3), genuine endogeneity → LIML κ strictly > 1.
+
+        C2: with over-identifying instruments the smallest root of the LIML
+        pencil exceeds 1. RED with the swapped arguments: ≈0.39.
+        """
+        np.random.seed(7)
+        n = 4000
+        # 3 instruments (over-identified for a single endogenous treatment)
+        Z = np.random.normal(0, 1, (n, 3))
+        U = np.random.normal(0, 1, n)  # unobserved confounder → endogeneity
+        D = Z @ np.array([0.6, 0.5, 0.4]) + 0.7 * U + np.random.normal(0, 0.5, n)
+        Y = 0.5 * D + 0.8 * U + np.random.normal(0, 0.5, n)
+
+        result = estimator.fit(outcome=Y, treatment=D, instruments=Z)
+        kappa = result.raw_estimate["kappa"]
+        assert kappa >= 1.0 - 1e-6, f"over-identified κ must be ≥ 1, got {kappa}"
+        assert kappa > 1.0, f"over-identified κ should be strictly > 1, got {kappa}"
 
     def test_fuller_modification(self):
         """Test Fuller modification reduces bias."""
