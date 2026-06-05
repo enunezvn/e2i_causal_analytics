@@ -264,6 +264,15 @@ The Tier-0 "Clean Features / Dropped" console report reflects the LLM/rule
 **`recommended_feature_set`** from `leakage_remediation` — it is **NOT** the
 actual `train_df` columns the model is trained on. Treat it as cosmetic.
 
+> **Runner-path correction (RC2, 2026-06-05).** This invariant was historically
+> *violated* by `scripts/run_tier0_test.py`, which trained the model on exactly
+> `leakage_remediated_features` (the cosmetic count) rather than the retained
+> `train_df` columns — turning the over-flag of sparse pre-index predictors into
+> an over-*drop* of the actual training matrix. As of the RC2 fix the runner
+> discovers its feature matrix via `_discover_model_feature_cols` (all
+> well-formed columns minus the genuine leaks), so the "Clean Features" count is
+> cosmetic again and this invariant holds on the runner path.
+
 To verify the REAL retained-feature count, use one of:
 
 - the **data-sufficiency floor** (`sufficiency_check.py`): events-per-variable
