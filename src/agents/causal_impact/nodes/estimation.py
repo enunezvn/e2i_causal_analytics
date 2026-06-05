@@ -241,7 +241,21 @@ class EstimationNode:
             )
 
         energy_score = selected.energy_score
-        quality_tier = self._get_quality_tier(energy_score)
+        # M-est3: the selector flags requires_review when the best estimator's
+        # energy score breaches max_acceptable_energy_score. A breach means the
+        # ATE is NOT a clean valid result: force the 'unreliable' tier and mark
+        # the result for review rather than reporting it as reliable.
+        requires_review = bool(getattr(selection_result, "requires_review", False))
+        if requires_review:
+            quality_tier = "unreliable"
+            logger.warning(
+                "Energy-score review gate: selected estimator %s has energy_score=%.4f "
+                "exceeding max_acceptable; marking result requires_review (unreliable).",
+                selected.estimator_type.value,
+                energy_score,
+            )
+        else:
+            quality_tier = self._get_quality_tier(energy_score)
 
         # Map estimator type to method name
         estimator_to_method = {
@@ -445,6 +459,9 @@ class EstimationNode:
             "energy_score_gap": float(selection_result.energy_score_gap),
             "n_estimators_evaluated": len(selection_result.all_results),
             "n_estimators_succeeded": sum(1 for r in selection_result.all_results if r.success),
+            # M-est3: surface the review gate so downstream nodes don't treat a
+            # breached (unreliable) ATE as clean valid evidence.
+            "requires_review": requires_review,
         }
 
         # Include all estimator results for logging
@@ -471,6 +488,7 @@ class EstimationNode:
             "n_evaluated": len(selection_result.all_results),
             "n_succeeded": sum(1 for r in selection_result.all_results if r.success),
             "energy_scores": {k: float(v) for k, v in selection_result.energy_scores.items()},
+            "requires_review": requires_review,
         }
 
         return result, selection_dict, latency_ms
