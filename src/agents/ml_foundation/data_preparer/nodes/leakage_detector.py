@@ -758,6 +758,24 @@ def check_zero_variance_within_class(
             if len(class_0) < 5 or len(class_1) < 5:
                 continue
 
+            # Rare-event guard — mirror of check_perfect_class_separation (RC1).
+            # A binary/near-binary feature that is constant within the tiny
+            # positive class is small-sample degeneracy, NOT leakage: with a
+            # rare positive class, a sparse pre-index flag whose few 1s all land
+            # in the negative class is all-0 in the positive class -> std==0 ->
+            # false HIGH/CRITICAL. Skip when (a) <=2 unique values AND (b) the
+            # positive class is small (n < 30 or positive rate < 5%). The
+            # genuine post-index leak is still caught by logical_dependency and
+            # single_feature_auc, so this does not weaken leak detection.
+            n_unique = feat_valid.nunique()
+            pos_rate = len(class_1) / max(len(feat_valid), 1)
+            if n_unique <= 2 and (len(class_1) < 30 or pos_rate < 0.05):
+                logger.debug(
+                    f"Skipping zero_variance_within_class for binary feature '{feature}' — "
+                    f"rare-event cohort (n_pos={len(class_1)}, pos_rate={pos_rate:.2%})"
+                )
+                continue
+
             std_0 = float(class_0.std())
             std_1 = float(class_1.std())
             mean_0 = float(class_0.mean())
@@ -773,6 +791,9 @@ def check_zero_variance_within_class(
                 findings.append(
                     LeakageFinding(
                         check_name="zero_variance_within_class",
+                        # Not demoted (cf. Fix 4): constant in BOTH classes with
+                        # different values is deterministic separation regardless
+                        # of cohort balance.
                         severity=LeakageSeverity.CRITICAL,
                         feature=feature,
                         description=(
@@ -793,7 +814,15 @@ def check_zero_variance_within_class(
                 findings.append(
                     LeakageFinding(
                         check_name="zero_variance_within_class",
-                        severity=LeakageSeverity.HIGH,
+                        # Fix 4 (defense in depth): on a rare-event cohort the
+                        # within-class-variance premise is statistically
+                        # unreliable, so route to review (MODERATE) rather than
+                        # auto-drop (HIGH). R1's guard skips cardinality<=2 (or
+                        # n_pos<30) rare events; this demotes cardinality>2 rare
+                        # events that pass R1 but still have pos_rate < 0.05.
+                        severity=(
+                            LeakageSeverity.MODERATE if pos_rate < 0.05 else LeakageSeverity.HIGH
+                        ),
                         feature=feature,
                         description=(
                             f"Feature '{feature}' has zero variance in one class "

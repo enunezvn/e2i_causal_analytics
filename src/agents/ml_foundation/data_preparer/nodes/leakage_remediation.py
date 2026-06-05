@@ -947,12 +947,33 @@ def _apply_leakage_remediation(
     features_to_drop = analysis.get("features_to_drop", [])
     recommended = analysis.get("recommended_feature_set", [])
 
+    # RC3a: declared-safe (manifest pre-index) features are governed by the
+    # contract, not the per-feature structural statistics. The caller
+    # (review_and_remediate_leakage) already strips them from the LLM drop list
+    # AND re-adds them to recommended_feature_set; without this, the structural
+    # re-check below silently re-drops them. Resolve immunity from the same
+    # scope_spec this function already reads (no signature change). No-op when
+    # no manifest source resolved. Scope: per-feature re-check only — backward
+    # elimination is intentionally NOT exempted (multi-feature CV-AUC guard).
+    manifest_source = scope_spec.get("feature_manifest_source")
+    immune_recheck: set[str] = set()
+    if manifest_source:
+        from .adaptive_validity_check import _declared_safe_immune_features
+
+        immune_recheck = _declared_safe_immune_features(set(recommended), manifest_source)
+
     # Validate recommended features exist in the data and are ML-compatible
     # Reject columns with unhashable types (lists, dicts) or pure strings
     available_cols = set(train_df.columns)
     valid_recommended = []
     for f in recommended:
         if f not in available_cols or f == target_variable:
+            if f in immune_recheck and f != target_variable:
+                logger.warning(
+                    "Declared-safe feature %r is missing from train_df — cannot "
+                    "honor its manifest immunity (possible upstream data issue)",
+                    f,
+                )
             continue
         col = train_df[f]
         # Accept numeric/boolean columns
@@ -983,6 +1004,10 @@ def _apply_leakage_remediation(
     rejected_features: List[str] = []
 
     for feat in valid_recommended:
+        if feat in immune_recheck:
+            # Contract-certified pre-index feature: keep without re-checking.
+            verified_features.append(feat)
+            continue
         if feat not in train_df.columns or target_variable not in train_df.columns:
             rejected_features.append(feat)
             continue
