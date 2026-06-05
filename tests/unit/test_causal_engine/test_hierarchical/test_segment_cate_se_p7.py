@@ -37,6 +37,15 @@ class TestSEFromCI:
         assert se_n == pytest.approx(0.2, abs=1e-6)
         assert se_4n == pytest.approx(0.1, abs=1e-6)  # 4× n → 2× smaller SE
 
+    def test_degenerate_se_is_none_not_zero(self):
+        # A zero-width CI / constant-prediction segment must NOT yield SE=0
+        # (which would become an infinite 1/SE² weight) — return None instead.
+        calc = SegmentCATECalculator(SegmentCATEConfig(ci_confidence_level=0.95))
+        assert calc._se_from_ci(2.0, 2.0, cate_std=0.0, n_samples=50) is None
+        assert calc._se_from_ci(None, None, cate_std=0.0, n_samples=50) is None
+        # A real CI still returns a positive SE.
+        assert calc._se_from_ci(1.8, 2.2, cate_std=0.0, n_samples=50) > 0
+
 
 class TestAggregateUsesSE:
     def test_aggregate_ci_uses_se_not_std(self):

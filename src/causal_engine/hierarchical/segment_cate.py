@@ -582,7 +582,7 @@ class SegmentCATECalculator:
         ci_upper: Optional[float],
         cate_std: float,
         n_samples: int,
-    ) -> float:
+    ) -> Optional[float]:
         """True standard error of the segment ATE (H6).
 
         Every estimator's ``ci_lower``/``ci_upper`` is a CI of the segment MEAN
@@ -600,11 +600,18 @@ class SegmentCATECalculator:
         if ci_lower is not None and ci_upper is not None and z > 0:
             half_width = (float(ci_upper) - float(ci_lower)) / 2.0
             se = half_width / z
-            if np.isfinite(se) and se >= 0:
+            # Require strictly positive: a zero-width (degenerate) CI must NOT
+            # yield SE=0, which would become an infinite 1/SE² inverse-variance
+            # weight downstream.
+            if np.isfinite(se) and se > 0:
                 return float(se)
-        # Fallback: SE of the mean = std / √n (shrinks with n).
+        # Fallback: SE of the mean = std / √n (shrinks with n). Return None (no
+        # usable SE) for a degenerate constant-prediction segment (cate_std=0,
+        # e.g. OLS) rather than 0 — the bridge then falls back without producing
+        # a zero SE.
         n = max(int(n_samples), 1)
-        return float(cate_std / np.sqrt(n)) if n > 0 else float(cate_std)
+        fallback = float(cate_std) / np.sqrt(n)
+        return fallback if np.isfinite(fallback) and fallback > 0 else None
 
     def _compute_ci(
         self,
