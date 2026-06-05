@@ -251,7 +251,23 @@ class EconMLToCausalMLValidator(StageValidator):
 
 
 class PipelineValidator:
-    """Orchestrates validation across pipeline stages."""
+    """Orchestrates validation across pipeline stages.
+
+    STATUS (P11 investigation): this inter-stage validator is **built and tested
+    but NOT wired into any production pipeline path** — a consumer grep found
+    zero callers outside this module and its tests. It is therefore *latent
+    false assurance*: the refutation-failure / negative-CATE / identification
+    gates it implements do not currently block or flag anything in the
+    sequential/parallel orchestrators.
+
+    This is surfaced as an explicit OWNER DECISION rather than blindly wired:
+    inserting it as a blocking inter-stage gate changes pipeline control flow
+    (regression surface across the whole pipeline test suite), so the
+    wire-vs-delete choice is intentionally left to the maintainer. Either wire it
+    into ``SequentialPipeline``/``ParallelPipeline`` so a failing inter-stage
+    gate actually blocks/flags, or delete it once superseded — do not leave it
+    as documented-but-inert defense-in-depth (per H12's lesson).
+    """
 
     def __init__(self):
         self._validators: Dict[tuple[CausalLibrary, CausalLibrary], StageValidator] = {}

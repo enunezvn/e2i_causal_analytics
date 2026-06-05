@@ -370,8 +370,15 @@ class DiscoveryCache:
         """Serialize DiscoveryResult to JSON."""
         return json.dumps(result.to_dict())
 
-    def _deserialize_result(self, result_json: str) -> "DiscoveryResult":
-        """Deserialize JSON to DiscoveryResult."""
+    def _deserialize_result(self, result_json: str) -> Optional["DiscoveryResult"]:
+        """Deserialize JSON to DiscoveryResult.
+
+        Returns None (a cache MISS) on any corrupt/unparseable entry rather than
+        raising — ``get()``'s contract is "return the cached result or None", so
+        a corrupt entry (truncated write, schema drift, bad enum) must NOT
+        propagate an exception up through ``get()`` (MED). The caller treats None
+        as a miss and recomputes.
+        """
         from .base import (
             DiscoveredEdge,
             DiscoveryAlgorithmType,
@@ -381,49 +388,55 @@ class DiscoveryCache:
             GateDecision,
         )
 
-        data = json.loads(result_json)
+        try:
+            data = json.loads(result_json)
 
-        # Reconstruct config
-        config_data = data.get("config", {})
-        config = DiscoveryConfig(
-            algorithms=[DiscoveryAlgorithmType(alg) for alg in config_data.get("algorithms", [])],
-            alpha=config_data.get("alpha", 0.05),
-            max_cond_vars=config_data.get("max_cond_vars"),
-            ensemble_threshold=config_data.get("ensemble_threshold", 0.5),
-            max_iter=config_data.get("max_iter", 10000),
-            random_state=config_data.get("random_state", 42),
-            score_func=config_data.get("score_func", "local_score_BIC"),
-            assume_linear=config_data.get("assume_linear", True),
-            assume_gaussian=config_data.get("assume_gaussian", False),
-        )
-
-        # Reconstruct edges
-        edges = []
-        for edge_data in data.get("edges", []):
-            edges.append(
-                DiscoveredEdge(
-                    source=edge_data["source"],
-                    target=edge_data["target"],
-                    edge_type=EdgeType(edge_data.get("edge_type", "directed")),
-                    confidence=edge_data.get("confidence", 1.0),
-                    algorithm_votes=edge_data.get("algorithm_votes", 1),
-                    algorithms=edge_data.get("algorithms", []),
-                )
+            # Reconstruct config
+            config_data = data.get("config", {})
+            config = DiscoveryConfig(
+                algorithms=[
+                    DiscoveryAlgorithmType(alg) for alg in config_data.get("algorithms", [])
+                ],
+                alpha=config_data.get("alpha", 0.05),
+                max_cond_vars=config_data.get("max_cond_vars"),
+                ensemble_threshold=config_data.get("ensemble_threshold", 0.5),
+                max_iter=config_data.get("max_iter", 10000),
+                random_state=config_data.get("random_state", 42),
+                score_func=config_data.get("score_func", "local_score_BIC"),
+                assume_linear=config_data.get("assume_linear", True),
+                assume_gaussian=config_data.get("assume_gaussian", False),
             )
 
-        # Reconstruct gate decision
-        gate_decision = None
-        if data.get("gate_decision"):
-            gate_decision = GateDecision(data["gate_decision"])
+            # Reconstruct edges
+            edges = []
+            for edge_data in data.get("edges", []):
+                edges.append(
+                    DiscoveredEdge(
+                        source=edge_data["source"],
+                        target=edge_data["target"],
+                        edge_type=EdgeType(edge_data.get("edge_type", "directed")),
+                        confidence=edge_data.get("confidence", 1.0),
+                        algorithm_votes=edge_data.get("algorithm_votes", 1),
+                        algorithms=edge_data.get("algorithms", []),
+                    )
+                )
 
-        return DiscoveryResult(
-            success=data.get("success", True),
-            config=config,
-            edges=edges,
-            gate_decision=gate_decision,
-            gate_confidence=data.get("gate_confidence", 0.0),
-            metadata=data.get("metadata", {}),
-        )
+            # Reconstruct gate decision
+            gate_decision = None
+            if data.get("gate_decision"):
+                gate_decision = GateDecision(data["gate_decision"])
+
+            return DiscoveryResult(
+                success=data.get("success", True),
+                config=config,
+                edges=edges,
+                gate_decision=gate_decision,
+                gate_confidence=data.get("gate_confidence", 0.0),
+                metadata=data.get("metadata", {}),
+            )
+        except Exception as exc:  # noqa: BLE001 - corrupt cache entry → treat as a miss
+            logger.warning(f"Discarding corrupt discovery-cache entry (treating as miss): {exc}")
+            return None
 
 
 # Singleton cache instance

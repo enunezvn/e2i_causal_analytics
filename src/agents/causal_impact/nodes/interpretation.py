@@ -8,7 +8,7 @@ Additionally handles:
 
 import logging
 import time
-from typing import Dict
+from typing import Any, Dict
 
 from src.agents.causal_impact.state import (
     CausalImpactState,
@@ -85,13 +85,21 @@ class InterpretationNode:
             # Collect and route DSPy training signal (non-blocking)
             await self._collect_dspy_signal(state, interpretation, latency_ms)
 
-            return {
+            # MED (fail-open): a sensitivity-node FAILURE (which set
+            # state["sensitivity_error"] and status="failed" with a defaulted
+            # E-value) must NOT be masked as "completed" here. Surface it: keep
+            # the failed status and flag the result as needing review.
+            sensitivity_failed = bool(state.get("sensitivity_error"))
+            result: Dict[str, Any] = {
                 **state,
                 "interpretation": interpretation,
                 "interpretation_latency_ms": latency_ms,
-                "current_phase": "completed",
-                "status": "completed",  # Contract: final status after interpreting phase
+                "current_phase": "failed" if sensitivity_failed else "completed",
+                "status": "failed" if sensitivity_failed else "completed",
             }
+            if sensitivity_failed:
+                result["needs_review"] = True
+            return result
 
         except Exception as e:
             latency_ms = (time.time() - start_time) * 1000
