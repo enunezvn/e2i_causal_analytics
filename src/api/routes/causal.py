@@ -968,7 +968,7 @@ def _sequential_output_to_response(
         # H8: a REAL library-agreement metric (mean pairwise concordance), NOT
         # consensus_confidence (the mean of per-library confidences, which the API
         # previously mislabeled as agreement).
-        library_agreement_score=(state or {}).get("library_agreement_score"),
+        library_agreement_score=(state.get("library_agreement_score") if state else None),
         effect_estimate_variance=None,
         total_latency_ms=int(output.get("total_latency_ms") or 0),
         created_at=datetime.now(timezone.utc),
@@ -1033,7 +1033,7 @@ def _parallel_output_to_response(
         consensus_ci_lower=None,
         consensus_ci_upper=None,
         # H8: real mean-pairwise-concordance agreement, not consensus_confidence.
-        library_agreement_score=(state or {}).get("library_agreement_score"),
+        library_agreement_score=(state.get("library_agreement_score") if state else None),
         consensus_method=request.consensus_method,
         total_latency_ms=int(output.get("total_latency_ms") or 0),
         created_at=datetime.now(timezone.utc),

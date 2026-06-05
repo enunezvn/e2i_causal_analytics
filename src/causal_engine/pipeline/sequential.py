@@ -193,9 +193,11 @@ def _se_for_library(state: PipelineState, lib: str) -> Optional[float]:
     if lib == "causalml":
         us = state.get("uplift_summary")
         if isinstance(us, dict):
-            se = _ci_to_se(us.get("ate_ci_lower"), us.get("ate_ci_upper"))
-            if se is not None:
-                return se
+            # Distinct name: the dowhy branch binds ``se: float``; reusing it here
+            # for the Optional return of _ci_to_se would conflict (mypy).
+            se_uplift = _ci_to_se(us.get("ate_ci_lower"), us.get("ate_ci_upper"))
+            if se_uplift is not None:
+                return se_uplift
         p = _payload("causalml_result")
         return _ci_to_se(p.get("ate_ci_lower"), p.get("ate_ci_upper")) if p else None
     return None
@@ -234,7 +236,9 @@ def _apply_consensus(state: PipelineState, effects: List[Tuple[str, float, float
     # constant-prediction estimator) also fails the gate, avoiding an infinite
     # 1/SE² weight.
     ses = {lib: _se_for_library(state, lib) for lib, _, _ in effects}
-    use_inverse_variance = all((ses[lib] is not None and ses[lib] > 0) for lib, _, _ in effects)
+    # Walrus binds a local mypy can narrow — a bare ``ses[lib] > 0`` after
+    # ``ses[lib] is not None`` is not narrowed (subscript, not a name).
+    use_inverse_variance = all((se := ses[lib]) is not None and se > 0 for lib, _, _ in effects)
     if use_inverse_variance:
         weights = [1.0 / (ses[lib] ** 2) for lib, _, _ in effects]  # type: ignore[operator]
         weight_sum = sum(weights)

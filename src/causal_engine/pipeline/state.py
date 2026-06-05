@@ -145,6 +145,11 @@ class PipelineState(TypedDict):
     consensus_effect: Optional[float]  # Weighted consensus effect
     consensus_confidence: Optional[float]  # Agreement-based confidence
     library_agreement: Optional[Dict[str, float]]  # Pairwise agreement
+    # H8/H9: how the consensus effect was combined ("inverse_variance" when all
+    # libraries report a positive SE, else "confidence") + the real mean pairwise
+    # agreement score (None when no pairwise agreement could be computed).
+    consensus_weighting: NotRequired[str]
+    library_agreement_score: NotRequired[Optional[float]]
 
     # === C-6 EXTRACTED CHANNELS (added phase C-6 of GH #354) ===
     # All three are NotRequired[Optional[...]] so callers that
