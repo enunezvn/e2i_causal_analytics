@@ -4453,11 +4453,7 @@ def _resolve_declared_safe_full_immunity(
     ``manifest_source`` is the EFFECTIVE source already resolved onto ``scope_spec``
     by ``_apply_synthetic_manifest_source`` (i.e. exactly what the node reads).
     """
-    return (
-        not data_dir
-        and regime in _LEGACY_REGIMES
-        and manifest_source == "synthetic"
-    )
+    return not data_dir and regime in _LEGACY_REGIMES and manifest_source == "synthetic"
 
 
 def _resolve_synthetic_manifest_source(
@@ -4842,6 +4838,79 @@ def _resolve_feature_manifest_source(
     return resolved
 
 
+def _runner_exclude_set(state: "dict") -> "set[str]":
+    """The runner's hard denylist of non-feature / target-proxy columns, merged
+    with the scope_definer's canonical excluded_features. Single source of truth
+    for Step-5 feature discovery (RC2)."""
+    exclude = {
+        "patient_journey_id",
+        "patient_id",
+        "patient_hash",
+        "brand",
+        "journey_start_date",
+        "journey_end_date",
+        "created_at",
+        "updated_at",
+        "source_timestamp",
+        "ingestion_timestamp",
+        "data_split",
+        "split_config_id",
+        "data_source",
+        "data_sources_matched",
+        "source_match_confidence",
+        "source_combination_method",
+        "source_stacking_flag",
+        "data_lag_hours",
+        # data_quality_score encodes data-source archetype (A/B/C);
+        # after cohort filtering it nearly separates treated from untreated
+        "data_quality_score",
+        # primary_diagnosis_code removed — it's a legitimate low-cardinality
+        # feature; leakage detector will vet it
+        "primary_diagnosis_desc",
+        "secondary_diagnosis_codes",
+        "state",
+        "zip_code",
+        "comorbidities",
+        "risk_score",
+        # Derived from target — potential leakers
+        "journey_stage",
+        "journey_status",
+        CONFIG.target_outcome,
+        "discontinuation_flag",
+        "treatment_initiated",
+    }
+    # Merge scope_definer's canonical excluded_features (PII, temporal leakage,
+    # pipeline construction metadata) so Step-5 discovery honors the same policy
+    # as data_preparer.
+    exclude |= set((state.get("scope_spec") or {}).get("excluded_features", []) or [])
+    return exclude
+
+
+def _discover_model_feature_cols(eligible_df: "pd.DataFrame", exclude: "set[str]") -> "list[str]":
+    """Stage-1 leakage-INDEPENDENT discovery: keep well-formed predictors and
+    drop constants / too-sparse columns. The leakage layer may only SUBTRACT
+    genuine leaks (via ``exclude``); it must never shrink the matrix to a curated
+    sub-list. Sparse cardinality-2 pre-index flags (100%-non-null) are retained —
+    they pass nunique>1 and notna>0.5."""
+    numeric_cols = [
+        c
+        for c in eligible_df.columns
+        if c not in exclude
+        and eligible_df[c].dtype.kind in "iufb"
+        and eligible_df[c].nunique() > 1
+        and eligible_df[c].notna().mean() > 0.5
+    ]
+    categorical_cols = [
+        c
+        for c in eligible_df.columns
+        if c not in exclude
+        and eligible_df[c].dtype == object
+        and 2 <= eligible_df[c].nunique() <= 50
+        and eligible_df[c].notna().mean() > 0.5
+    ]
+    return numeric_cols + categorical_cols
+
+
 def _route_leakage_outputs(
     state: dict,
     *,
@@ -5191,9 +5260,7 @@ async def run_pipeline(
             # #604: make Step 2 self-sufficient for partial (--step 2) runs — the
             # Step-1 block that injects the manifest source is skipped when Step 2
             # runs alone. Idempotent in the full-pipeline path (Step 1 already set it).
-            _apply_synthetic_manifest_source(
-                scope_spec, regime, data_dir, feature_manifest_source
-            )
+            _apply_synthetic_manifest_source(scope_spec, regime, data_dir, feature_manifest_source)
             result = await step_2_data_preparer(
                 experiment_id,
                 scope_spec,
