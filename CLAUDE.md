@@ -179,6 +179,10 @@ This prevents 403 errors from the Novartis corporate proxy intercepting GitHub t
 - **Linting**: `ruff check src/`
 - **Tests**: `pytest tests/`
 
+### ⚠️ Do NOT run full `mypy src/` on the prod droplet (memory) — CI is the arbiter (2026-06-05)
+
+The prod droplet (`enunez@138.197.4.36`) is also the dev box and runs under memory pressure. A full `mypy --config-file pyproject.toml src/` spikes **~1.6 GiB** and has a known local env pathology (times out on `memory.py`). On the droplet, **rely on CI's `Type Check (MyPy)` gate as authoritative** — do not run the whole-tree mypy there. If you need a local check, scope it to the changed files only (e.g. `mypy <changed_file.py>`), which is a fraction of the memory. The mypy gate is a CEILING check; read the `mypy-report` artifact for the actual errors. (Same spirit for whole-tree `pytest` — prefer targeted runs on the box; CI runs the full suite.) Fail-safe mirror in memory: [[droplet-mypy-ci-arbiter-policy-20260605]].
+
 ## Known Issues
 
 - Large codebase (~5GB with dependencies) - see `OOM_FIX_README.md` for memory optimization
