@@ -138,14 +138,34 @@ class TestHierarchicalAnalysis:
             f"Default path must fail-closed with 503, got {response.status_code}"
         )
 
-    def test_run_hierarchical_analysis_async(self, client, hierarchical_request):
-        """Test asynchronous hierarchical analysis."""
+    def test_run_hierarchical_analysis_async_fails_closed_without_data(
+        self, client, hierarchical_request
+    ):
+        """Async non-demo submission with no inline data MUST fail-closed (503).
+
+        C1: the async path preflights the same fail-closed contract as the sync
+        path BEFORE accepting the submission, so a no-data request fails fast
+        with 503 rather than being accepted as pending then cached as a generic
+        FAILED record by the background task.
+        """
         response = client.post(
             "/causal/hierarchical/analyze?async_mode=true",
             json=hierarchical_request,
         )
 
-        # API returns 200 with status=pending for async mode
+        assert response.status_code == 503, (
+            f"Async non-demo path must fail-closed with 503, got {response.status_code}"
+        )
+
+    def test_run_hierarchical_analysis_async_demo_returns_pending(
+        self, client, hierarchical_request
+    ):
+        """Async demo_mode=true is accepted (200 pending) — no data required."""
+        response = client.post(
+            "/causal/hierarchical/analyze?async_mode=true&demo_mode=true",
+            json=hierarchical_request,
+        )
+
         assert response.status_code == 200
         data = response.json()
         assert "analysis_id" in data

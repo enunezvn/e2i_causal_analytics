@@ -85,6 +85,46 @@ class TestHierarchicalDefaultPath503:
         )
 
 
+class TestHierarchicalAsyncFailsClosed:
+    def test_async_non_demo_no_data_returns_503(self, hierarchical_request):
+        """async_mode=true + no inline data + non-demo → 503 up-front (C1).
+
+        The submission must be rejected BEFORE it is accepted as pending, so the
+        503 fail-close signal is not lost to a generic background FAILED record.
+        """
+        from fastapi.testclient import TestClient
+
+        from src.api.main import app
+
+        client = TestClient(app)
+        response = client.post(
+            "/api/causal/hierarchical/analyze?async_mode=true",
+            json=hierarchical_request,
+        )
+        assert response.status_code == 503, (
+            f"Async non-demo path must fail-closed with 503, got {response.status_code}"
+        )
+
+
+class TestHierarchicalMissingColumns:
+    def test_missing_required_columns_returns_400(self, hierarchical_request):
+        """Inline records missing treatment/outcome/modifier columns → 400."""
+        from fastapi.testclient import TestClient
+
+        from src.api.main import app
+
+        # Records present but lacking the required 'trx'/'age' columns.
+        req = dict(hierarchical_request)
+        req["filters"] = {"estimation_data_records": [{"promotion": i % 2} for i in range(8)]}
+
+        client = TestClient(app)
+        response = client.post("/api/causal/hierarchical/analyze", json=req)
+        assert response.status_code == 400, (
+            f"Missing required columns must return 400, got {response.status_code}: "
+            f"{response.text[:300]}"
+        )
+
+
 class TestHierarchicalDemoMode:
     def test_demo_mode_returns_pinned_zeros_labeled(self, hierarchical_request):
         """demo_mode=true → 200, is_demo=true, pinned-zero segments, demo warning."""

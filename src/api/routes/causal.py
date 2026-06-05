@@ -165,6 +165,12 @@ async def run_hierarchical_analysis(
     )
 
     if async_mode:
+        # Preflight the fail-closed contract BEFORE accepting the submission, so
+        # an async non-demo request with no real data fails fast with 503/400
+        # (C1) instead of being accepted as pending and then cached as a generic
+        # FAILED record by the background task. demo_mode skips the preflight.
+        if not demo_mode:
+            _resolve_hierarchical_dataframe(request)
         # Create pending response and run in background
         pending_response = HierarchicalAnalysisResponse(
             analysis_id=analysis_id,
@@ -369,27 +375,10 @@ async def _execute_hierarchical_analysis(
         }
 
         # Resolve a REAL estimation DataFrame from request filters. No real data
-        # backend → honest 503 (C1: never fabricate synthetic input via RNG).
-        # This mirrors the sequential/parallel sibling endpoints in this file.
-        df = _resolve_pipeline_dataframe(request.filters)
-        if df is None:
-            raise HTTPException(status_code=503, detail=_NO_REAL_DATA_BACKEND_DETAIL)
-
-        required_cols = [
-            request.treatment_var,
-            request.outcome_var,
-            *request.effect_modifiers,
-        ]
-        missing = [c for c in required_cols if c not in df.columns]
-        if missing:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "estimation_data_records is missing required column(s): "
-                    f"{missing}. Supply treatment / outcome / effect-modifier "
-                    "columns as record keys."
-                ),
-            )
+        # backend → honest 503 (C1: never fabricate synthetic input via RNG);
+        # missing required columns → 400. Mirrors the sequential/parallel
+        # sibling endpoints in this file.
+        df = _resolve_hierarchical_dataframe(request)
 
         # Prepare data from the REAL frame (columns are read as data, not names).
         if request.effect_modifiers:
@@ -831,6 +820,38 @@ def _resolve_pipeline_dataframe(
         return None
     if df.empty:
         return None
+    return df
+
+
+def _resolve_hierarchical_dataframe(
+    request: HierarchicalAnalysisRequest,
+) -> "pd.DataFrame":  # type: ignore[name-defined] # noqa: F821
+    """Resolve a real estimation DataFrame for hierarchical analysis, or raise.
+
+    Fail-closed (C1): raises ``HTTPException(503)`` when no inline data is
+    present and ``HTTPException(400)`` when the required treatment / outcome /
+    effect-modifier columns are missing. NEVER fabricates synthetic input.
+    Shared by the sync execute path and the async-submission preflight so both
+    enforce the identical contract.
+    """
+    df = _resolve_pipeline_dataframe(request.filters)
+    if df is None:
+        raise HTTPException(status_code=503, detail=_NO_REAL_DATA_BACKEND_DETAIL)
+    required_cols = [
+        request.treatment_var,
+        request.outcome_var,
+        *request.effect_modifiers,
+    ]
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "estimation_data_records is missing required column(s): "
+                f"{missing}. Supply treatment / outcome / effect-modifier "
+                "columns as record keys."
+            ),
+        )
     return df
 
 
