@@ -582,6 +582,15 @@ class RefutationRunner:
             tests.append(test_result)
 
         if self.config["sensitivity_e_value"]["enabled"]:
+            # H3: the E-value needs a STANDARDIZED effect, so compute the outcome
+            # SD from the passthrough data and hand it to the sensitivity test.
+            outcome_std: Optional[float] = None
+            if data is not None and outcome is not None:
+                try:
+                    if outcome in getattr(data, "columns", []):
+                        outcome_std = float(np.std(data[outcome].to_numpy(dtype=float)))
+                except Exception:  # noqa: BLE001 - missing/non-numeric outcome → no standardization
+                    outcome_std = None
             test_result = self._run_test_with_tracing(
                 test_name="sensitivity_e_value",
                 test_func=self._run_sensitivity_test,
@@ -590,6 +599,7 @@ class RefutationRunner:
                 estimate_id=estimate_id,
                 original_effect=original_effect,
                 original_ci=original_ci,
+                outcome_std=outcome_std,
             )
             tests.append(test_result)
 
@@ -1179,11 +1189,19 @@ class RefutationRunner:
         self,
         original_effect: float,
         original_ci: Tuple[float, float],
+        outcome_std: Optional[float] = None,
     ) -> RefutationResult:
         """Run E-value sensitivity analysis.
 
         Calculates the E-value to assess robustness to unmeasured confounding.
         Based on VanderWeele & Ding (2017).
+
+        H3 fix: the Chinn(2000)/VanderWeele-Ding ``RR ≈ exp(0.91·d)`` approximation
+        requires a STANDARDIZED mean difference d. The effect/CI arrive in native
+        outcome units, so they MUST be divided by the outcome SD first — otherwise
+        the E-value is scale-dependent (near 1 on a 0–1 outcome, exploding on a
+        dollar/count outcome) and ``sensitivity_e_value`` is a critical gate, so a
+        meaningless number can hard-BLOCK or wave through depending only on units.
         """
         import time
 
@@ -1193,16 +1211,24 @@ class RefutationRunner:
 
         # Calculate E-value using VanderWeele formula
         # E-value = RR + sqrt(RR * (RR - 1)) where RR is the relative risk
-        # For continuous outcomes, we approximate using standardized effect
         abs_effect = abs(original_effect)
+        ci_bound = min(abs(original_ci[0]), abs(original_ci[1]))
 
-        # Approximate risk ratio from standardized effect
-        # Using formula: RR ≈ exp(0.91 * effect) for standardized effects
+        # H3: standardize the effect + CI bound by the outcome SD before the
+        # exp(0.91·d) step (d must be a standardized mean difference). Guard a
+        # non-positive / missing SD (constant outcome or no data passthrough) —
+        # in that degenerate case we cannot standardize and flag it in details.
+        standardized = False
+        if outcome_std is not None and np.isfinite(outcome_std) and outcome_std > 0:
+            abs_effect = abs_effect / outcome_std
+            ci_bound = ci_bound / outcome_std
+            standardized = True
+
+        # Approximate risk ratio from the (now standardized) effect.
         rr = np.exp(0.91 * abs_effect)
         e_value = rr + np.sqrt(rr * (rr - 1)) if rr > 1 else 1.0
 
         # E-value for CI bound (more conservative)
-        ci_bound = min(abs(original_ci[0]), abs(original_ci[1]))
         rr_ci = np.exp(0.91 * ci_bound)
         e_value_ci = rr_ci + np.sqrt(rr_ci * (rr_ci - 1)) if rr_ci > 1 else 1.0
 
@@ -1240,6 +1266,11 @@ class RefutationRunner:
                 "e_value_ci": e_value_ci,
                 "threshold": threshold,
                 "confounder_strength": strength,
+                # H3: surface whether the effect was standardized + the SD used,
+                # so a scale-dependent (unstandardized) E-value is not mistaken
+                # for a comparable one.
+                "standardized": standardized,
+                "outcome_std": outcome_std,
             },
             execution_time_ms=execution_time,
         )
