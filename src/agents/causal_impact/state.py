@@ -233,6 +233,7 @@ class CausalImpactState(TypedDict):
     discovery_result: NotRequired[Dict[str, Any]]  # Full DiscoveryResult from runner
     discovery_gate_evaluation: NotRequired[Dict[str, Any]]  # Full GateEvaluation from gate
     discovery_latency_ms: NotRequired[float]  # Discovery computation time
+    discovery_skip_reason: NotRequired[str]  # M-gb1: surfaced reason auto-discovery was skipped
 
     # Estimation outputs
     estimation_result: NotRequired[EstimationResult]

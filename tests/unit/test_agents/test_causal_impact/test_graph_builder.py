@@ -311,6 +311,72 @@ class TestGraphBuilderNode:
         ]
         assert evaluation["decision"] == "accept"
 
+    @pytest.mark.asyncio
+    async def test_discovery_skip_surfaced_when_no_estimation_data(self):
+        """M-gb1: when auto_discover=True but no estimation_data is in the cache,
+        the skip must be surfaced (not silently swallowed): the result records a
+        distinct 'discovery_skip_reason' and appends a string to 'warnings'.
+        Behavior otherwise unchanged: pipeline still produces a manual DAG.
+        """
+        node = GraphBuilderNode()
+
+        state: CausalImpactState = {
+            "query": "test",
+            "query_id": "test-gb1-skip",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "auto_discover": True,
+            # No data_cache / no estimation_data -> discovery must skip + surface.
+            "status": "pending",
+            "warnings": [],
+        }
+
+        result = await node.execute(state)
+
+        # Pipeline still succeeds with a manual DAG (graceful degradation).
+        assert "causal_graph" in result
+        assert result["causal_graph"]["discovery_algorithms_used"] == []
+        # Skip is surfaced distinctly, not swallowed.
+        assert result.get("discovery_skip_reason")
+        assert "estimation_data" in result["discovery_skip_reason"]
+        assert any("discovery" in w.lower() for w in result.get("warnings", [])), result.get(
+            "warnings"
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_discovery_skip_reason_when_discovery_succeeds(self):
+        """discovery_skip_reason must NOT be set when discovery runs cleanly."""
+        from unittest.mock import AsyncMock, patch
+
+        from src.causal_engine.discovery import (
+            DiscoveryConfig,
+            DiscoveryResult,
+            GateDecision,
+        )
+        from src.causal_engine.discovery.gate import GateEvaluation
+
+        node = GraphBuilderNode()
+        state: CausalImpactState = {
+            "query": "test",
+            "query_id": "test-gb1-ok",
+            "treatment_var": "treatment",
+            "outcome_var": "outcome",
+            "auto_discover": True,
+            "status": "pending",
+        }
+        mock_result = DiscoveryResult(success=True, config=DiscoveryConfig())
+        mock_eval = GateEvaluation(
+            decision=GateDecision.REVIEW,
+            confidence=0.6,
+            reasons=["ok"],
+            high_confidence_edges=[],
+        )
+        with patch.object(node, "_run_discovery", new_callable=AsyncMock) as m:
+            m.return_value = (mock_result, mock_eval.to_dict())
+            result = await node.execute(state)
+
+        assert not result.get("discovery_skip_reason")
+
 
 class TestVariableInference:
     """Test variable inference logic."""

@@ -126,6 +126,7 @@ class GraphBuilderNode:
             discovery_result: Optional[DiscoveryResult] = None
             gate_evaluation: Optional[Dict[str, Any]] = None
             discovery_latency_ms: float = 0.0
+            discovery_skip_reason: Optional[str] = None
 
             if auto_discover:
                 logger.info("Auto-discovery enabled, attempting structure learning")
@@ -137,7 +138,14 @@ class GraphBuilderNode:
                     )
                     discovery_latency_ms = (time.time() - discovery_start) * 1000
                 except Exception as e:
-                    logger.warning(f"Discovery failed: {e}, falling back to manual DAG")
+                    # M-gb1: surface the skip as a distinct, non-swallowed signal
+                    # instead of only logging. The pipeline still degrades
+                    # gracefully to a manual DAG, but the skip is now observable
+                    # in state (discovery_skip_reason + warnings accumulator).
+                    discovery_skip_reason = (
+                        f"auto-discovery skipped, falling back to manual DAG: {e}"
+                    )
+                    logger.warning(discovery_skip_reason)
                     discovery_latency_ms = (time.time() - discovery_start) * 1000
 
             # Build DAG based on discovery results
@@ -210,6 +218,11 @@ class GraphBuilderNode:
                     result["discovery_result"] = discovery_result.to_dict()
                 if gate_evaluation:
                     result["discovery_gate_evaluation"] = gate_evaluation
+                if discovery_skip_reason is not None:
+                    result["discovery_skip_reason"] = discovery_skip_reason
+                    # warnings is an operator.add accumulator (state.py);
+                    # return ONLY the new entry so LangGraph appends it.
+                    result["warnings"] = [discovery_skip_reason]
 
             return result
 
