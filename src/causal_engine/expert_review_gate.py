@@ -175,7 +175,9 @@ class ExpertReviewGate:
             )
 
         # No active approval - check for pending review
-        pending_reviews = await self.repository.get_reviews_for_dag(dag_hash, include_expired=False)
+        pending_reviews = await self.repository.get_reviews_for_dag(
+            dag_hash, include_expired=False, brand=brand
+        )
         pending = [r for r in pending_reviews if r.get("approval_status") == "pending"]
 
         if pending:

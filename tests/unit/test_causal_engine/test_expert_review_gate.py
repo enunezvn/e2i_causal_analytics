@@ -149,6 +149,20 @@ class TestExpertReviewGate:
 
         mock_repo.get_dag_approval.assert_called_with("abc123", "TestBrand")
 
+    @pytest.mark.asyncio
+    async def test_pending_lookup_passes_brand(self, gate, mock_repo):
+        """check_approval must forward the brand to get_reviews_for_dag so a
+        pending review from a different brand cannot gate this analysis."""
+        mock_repo.get_dag_approval = AsyncMock(return_value=None)
+        mock_repo.get_reviews_for_dag = AsyncMock(return_value=[])
+        mock_repo.create_review = AsyncMock(return_value="rev-new")
+
+        await gate.check_approval("abc123", brand="BrandX", requester_id="user-1")
+
+        # brand must be forwarded to the pending-review lookup.
+        _, kwargs = mock_repo.get_reviews_for_dag.call_args
+        assert kwargs.get("brand") == "BrandX"
+
 
 class TestExpertReviewGateCanProceed:
     """Test can_proceed convenience method."""
