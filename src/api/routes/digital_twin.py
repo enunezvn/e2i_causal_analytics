@@ -25,10 +25,11 @@ Author: E2I Causal Analytics Team
 Version: 4.2.0
 """
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -36,6 +37,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from src.api.dependencies.auth import require_operator
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
+
+if TYPE_CHECKING:
+    from src.digital_twin.twin_repository import TwinRepository
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +59,92 @@ router = APIRouter(
         500: {"model": ErrorResponse, "description": "Internal server error"},
     },
 )
+
+
+async def _get_twin_repo() -> "TwinRepository":
+    """Build a TwinRepository backed by a real async Supabase client (fail-closed).
+
+    Before #705 every handler built ``TwinRepository()`` with no client, so all
+    sub-repos short-circuited on ``if not self.client`` and twin reads/writes
+    were silent no-ops (``twin_simulations`` / ``twin_fidelity_tracking`` stayed
+    0-rows on prod). This mirrors the proven monitoring.py pattern
+    (``get_async_supabase_client()`` -> repo). ``get_async_supabase_client``
+    raises ``ServiceConnectionError`` when the Supabase env is missing — we let
+    it surface (fail-closed) rather than silently degrading to a None client.
+    """
+    from src.digital_twin.twin_repository import TwinRepository
+    from src.memory.services.factories import get_async_supabase_client
+
+    client = await get_async_supabase_client()
+    return TwinRepository(supabase_client=client)
+
+
+async def _resolve_active_model_row(
+    repo: Any,
+    *,
+    twin_type: Any,
+    brand: Any,
+    model_id: Optional[str],
+) -> Dict[str, Any]:
+    """Resolve the trained model row to simulate with, or fail closed with 503.
+
+    A fresh untrained ``TwinGenerator`` raises ``RuntimeError`` in ``generate()``
+    (surfacing as an opaque 500), and a ``UUID(int=0)`` sentinel would violate
+    the ``twin_simulations.model_id`` FK. Instead we require a REAL persisted
+    model: an explicit ``model_id`` when given, else the highest-fidelity active
+    model for the brand/twin_type. ``None`` → honest 503 + ``Retry-After`` (#705 H4).
+    """
+    if model_id:
+        row = await repo.get_model(UUID(model_id))
+    else:
+        actives = await repo.list_active_models(twin_type=twin_type, brand=brand.value)
+        row = actives[0] if actives else None
+
+    if not row:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"No trained digital-twin model is available for {brand.value}/"
+                f"{twin_type.value}. Train a model before running a simulation."
+            ),
+            headers={"Retry-After": "30"},
+        )
+    return cast(Dict[str, Any], row)
+
+
+async def _load_trained_generator(
+    *,
+    twin_type: Any,
+    brand: Any,
+    model_row: Dict[str, Any],
+) -> Any:
+    """Hydrate a ``TwinGenerator`` from a persisted model row, or fail closed (503).
+
+    The MLflow round-trip (``hydrate_generator``) is synchronous I/O, so it runs
+    off the event loop. A load failure is a fail-closed 503 — never a fabricated
+    or unscaled-prediction result.
+    """
+    from src.digital_twin import twin_persistence
+    from src.digital_twin.twin_generator import TwinGenerator
+
+    generator = TwinGenerator(twin_type=twin_type, brand=brand)
+    loaded = await asyncio.to_thread(
+        twin_persistence.hydrate_generator,
+        generator,
+        model_row.get("mlflow_model_uri"),
+        model_row.get("mlflow_run_id"),
+    )
+    if not loaded:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Trained model {model_row.get('model_id')} for {brand.value}/"
+                f"{twin_type.value} could not be loaded from the model registry. "
+                "Retry shortly."
+            ),
+            headers={"Retry-After": "30"},
+        )
+    return generator
 
 
 # =============================================================================
@@ -491,9 +581,8 @@ async def digital_twin_health() -> DigitalTwinHealthResponse:
     Returns:
         Service health status including model availability and simulation stats.
     """
-    from src.digital_twin.twin_repository import TwinRepository
 
-    repo = TwinRepository()
+    repo = await _get_twin_repo()
 
     try:
         models = await repo.list_active_models()
@@ -581,8 +670,6 @@ async def run_simulation(
     )
     from src.digital_twin.models.twin_models import Brand, TwinType
     from src.digital_twin.simulation_engine import SimulationEngine
-    from src.digital_twin.twin_generator import TwinGenerator
-    from src.digital_twin.twin_repository import TwinRepository
 
     logger.info(f"Simulation requested for {request.intervention.intervention_type}")
 
@@ -619,11 +706,15 @@ async def run_simulation(
         twin_type = TwinType(request.twin_type.value)
         brand = Brand(request.brand.value)
 
-        # Initialize generator
-        generator = TwinGenerator(twin_type=twin_type, brand=brand)
-
-        # Get model ID (from generator or request)
-        model_id = UUID(request.model_id) if request.model_id else generator.model_id or UUID(int=0)
+        # Resolve a REAL trained model BEFORE generating: an explicit model_id, or
+        # the highest-fidelity active model for this brand/twin_type. No model →
+        # honest 503 (not a fresh untrained generator → opaque 500, and not a
+        # UUID(int=0) sentinel → twin_simulations.model_id FK violation) (#705 H4).
+        repo = await _get_twin_repo()
+        model_row = await _resolve_active_model_row(
+            repo, twin_type=twin_type, brand=brand, model_id=request.model_id
+        )
+        model_id = UUID(str(model_row["model_id"]))
 
         if heavy_offload_enabled():
             # P2 offload path (DARK by default): enqueue the heavy compute on
@@ -652,6 +743,10 @@ async def run_simulation(
                 ),
                 "calculate_heterogeneity": request.calculate_heterogeneity,
                 "model_id_value": str(model_id),
+                # The worker rebuilds a fresh generator, so it must hydrate the
+                # SAME persisted model before generating (#705 H4).
+                "model_uri": model_row.get("mlflow_model_uri"),
+                "model_run_id": model_row.get("mlflow_run_id"),
             }
             async_result = celery_app.send_task(
                 "src.tasks.simulate_population", args=[payload], queue="twins"
@@ -674,6 +769,10 @@ async def run_simulation(
             # If the per-worker slot budget is exhausted, heavy_compute_slot()
             # raises HeavyComputeSaturated on enter (mapped to a 503 + Retry-After
             # by the app exception handler) — nothing is queued.
+            generator = await _load_trained_generator(
+                twin_type=twin_type, brand=brand, model_row=model_row
+            )
+
             def _do_sim():
                 population = generator.generate(n=request.twin_count)
                 engine = SimulationEngine(
@@ -689,8 +788,7 @@ async def run_simulation(
             async with heavy_compute_slot():
                 result = await run_in_bounded_executor(_do_sim)
 
-        # Save simulation result
-        repo = TwinRepository()
+        # Save simulation result (reuse the repo resolved above).
         await repo.save_simulation(result, request.brand.value)
 
         return SimulationResponse(
@@ -765,10 +863,9 @@ async def list_simulations(
         Paginated list of simulations
     """
     from src.digital_twin.models.simulation_models import SimulationStatus
-    from src.digital_twin.twin_repository import TwinRepository
 
     try:
-        repo = TwinRepository()
+        repo = await _get_twin_repo()
 
         # Convert status to SimulationStatus enum if provided
         status_enum = SimulationStatus(status.value) if status else None
@@ -839,10 +936,9 @@ async def get_simulation_history(
     Returns:
         Simulation history rows with total count and pagination echo.
     """
-    from src.digital_twin.twin_repository import TwinRepository
 
     try:
-        repo = TwinRepository()
+        repo = await _get_twin_repo()
         # Fetch enough rows to cover the requested window (repo returns newest
         # first), then apply the offset/limit slice.
         rows = await repo.simulations.list_simulations(limit=offset + limit)
@@ -896,10 +992,14 @@ async def compare_scenarios(
     Returns:
         Base + alternative results with a comparison summary.
     """
+    from src.api.dependencies.compute import (
+        HeavyComputeSaturated,
+        heavy_compute_slot,
+        run_in_bounded_executor,
+    )
     from src.digital_twin.models.simulation_models import InterventionConfig
     from src.digital_twin.models.twin_models import Brand, TwinType
     from src.digital_twin.simulation_engine import SimulationEngine
-    from src.digital_twin.twin_generator import TwinGenerator
 
     logger.info(
         "Scenario comparison requested: base=%s alternatives=%d",
@@ -907,7 +1007,26 @@ async def compare_scenarios(
         len(request.alternative_scenarios),
     )
 
-    def _run_scenario(scenario: ScenarioSimulateRequest) -> SimulationResponse:
+    async def _load_for(scenario: ScenarioSimulateRequest) -> Any:
+        # Each scenario simulates against its own brand/twin_type trained model; a
+        # scenario with no loadable model fails the whole comparison closed (503),
+        # rather than generating from an untrained generator (#705 H4).
+        twin_type = TwinType(scenario.twin_type.value)
+        brand = Brand(scenario.brand)
+        model_row = await _resolve_active_model_row(
+            repo,
+            twin_type=twin_type,
+            brand=brand,
+            model_id=getattr(scenario, "model_id", None),
+        )
+        generator = await _load_trained_generator(
+            twin_type=twin_type, brand=brand, model_row=model_row
+        )
+        return generator, model_row
+
+    def _run_scenario(
+        scenario: ScenarioSimulateRequest, generator: Any, model_row: Dict[str, Any]
+    ) -> SimulationResponse:
         intervention = InterventionConfig(
             intervention_type=scenario.intervention_type,
             target_regions=scenario.target_regions,
@@ -920,10 +1039,8 @@ async def compare_scenarios(
                 **scenario.parameters,
             },
         )
-        twin_type = TwinType(scenario.twin_type.value)
-        brand = Brand(scenario.brand)
-        generator = TwinGenerator(twin_type=twin_type, brand=brand)
-        model_id = generator.model_id or UUID(int=0)
+        # Use the resolved DB model_id — never a UUID(int=0) sentinel (#705 H4).
+        model_id = UUID(str(model_row["model_id"]))
         population = generator.generate(n=scenario.twin_count)
         engine = SimulationEngine(
             population=population,
@@ -961,8 +1078,22 @@ async def compare_scenarios(
         )
 
     try:
-        base_result = _run_scenario(request.base_scenario)
-        alternative_results = [_run_scenario(s) for s in request.alternative_scenarios]
+        repo = await _get_twin_repo()
+        base_gen, base_row = await _load_for(request.base_scenario)
+        alt_loaded = [await _load_for(s) for s in request.alternative_scenarios]
+
+        # Twin generation is the heavy, blocking, ~1.3 GiB work. Run every scenario
+        # off the event loop under ONE per-worker heavy-compute slot (mirrors the
+        # /simulate inline path) so a multi-scenario compare can't stall the worker
+        # or bypass the OOM budget the slot enforces.
+        async with heavy_compute_slot():
+            base_result = await run_in_bounded_executor(
+                _run_scenario, request.base_scenario, base_gen, base_row
+            )
+            alternative_results = [
+                await run_in_bounded_executor(_run_scenario, s, gen, row)
+                for s, (gen, row) in zip(request.alternative_scenarios, alt_loaded, strict=True)
+            ]
 
         all_results = [base_result, *alternative_results]
         ates = [r.simulated_ate for r in all_results]
@@ -982,6 +1113,12 @@ async def compare_scenarios(
             comparison=comparison,
         )
 
+    except HTTPException:
+        # Honest 503 (no/unloadable model) must propagate, not collapse to 500.
+        raise
+    except HeavyComputeSaturated:
+        # Reject fast under load (mapped to 503 + Retry-After by the app handler).
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -1007,10 +1144,9 @@ async def get_simulation(
     Returns:
         Detailed simulation result including heterogeneous effects
     """
-    from src.digital_twin.twin_repository import TwinRepository
 
     try:
-        repo = TwinRepository()
+        repo = await _get_twin_repo()
         result = await repo.get_simulation(UUID(simulation_id))
 
         if not result:
@@ -1095,12 +1231,11 @@ async def validate_simulation(
     """
     from src.digital_twin.fidelity_tracker import FidelityTracker
     from src.digital_twin.models.simulation_models import SimulationResult
-    from src.digital_twin.twin_repository import TwinRepository
 
     logger.info(f"Validating simulation {request.simulation_id}")
 
     try:
-        repo = TwinRepository()
+        repo = await _get_twin_repo()
         tracker = FidelityTracker(repo)
 
         simulation_uuid = UUID(request.simulation_id)
@@ -1113,7 +1248,7 @@ async def validate_simulation(
             )
 
         # Check if fidelity record already exists for this simulation
-        existing_record = tracker.get_simulation_record(simulation_uuid)
+        existing_record = await tracker.get_simulation_record(simulation_uuid)
 
         if not existing_record:
             # Create a minimal SimulationResult to record prediction
@@ -1143,7 +1278,7 @@ async def validate_simulation(
             )
 
             # Record the prediction
-            existing_record = tracker.record_prediction(sim_result)
+            existing_record = await tracker.record_prediction(sim_result)
 
         # Build CI tuple if both bounds provided
         actual_ci = None
@@ -1151,7 +1286,7 @@ async def validate_simulation(
             actual_ci = (request.actual_ci_lower, request.actual_ci_upper)
 
         # Validate with actual results
-        record = tracker.validate(
+        record = await tracker.validate(
             simulation_id=simulation_uuid,
             actual_ate=request.actual_ate,
             actual_ci=actual_ci,
@@ -1217,10 +1352,9 @@ async def list_models(
         List of active models
     """
     from src.digital_twin.models.twin_models import TwinType
-    from src.digital_twin.twin_repository import TwinRepository
 
     try:
-        repo = TwinRepository()
+        repo = await _get_twin_repo()
 
         # Convert twin_type to TwinType enum if provided
         twin_type_enum = TwinType(twin_type.value) if twin_type else None
@@ -1230,21 +1364,31 @@ async def list_models(
             brand=brand.value if brand else None,
         )
 
-        items = [
-            TwinModelSummary(
-                model_id=str(m.get("model_id")),
-                model_name=m.get("model_name", ""),
-                twin_type=m.get("twin_type", ""),
-                brand=m.get("brand", ""),
-                algorithm=m.get("algorithm", ""),
-                r2_score=m.get("r2_score"),
-                rmse=m.get("rmse"),
-                training_samples=m.get("training_samples", 0),
-                is_active=m.get("is_active", True),
-                created_at=m.get("created_at", datetime.now(timezone.utc)),
+        # save_model stores metrics nested under performance_metrics (JSONB) and
+        # tuning under training_config (JSONB) — NOT as flat columns. Read from
+        # the nested dicts (with a flat fallback for the v_active_twin_models view
+        # / legacy rows) so real trained models are not shown metric-less (#705 H4).
+        items = []
+        for m in models:
+            pm = m.get("performance_metrics") or {}
+            tc = m.get("training_config") or {}
+            items.append(
+                TwinModelSummary(
+                    model_id=str(m.get("model_id")),
+                    model_name=m.get("model_name", ""),
+                    twin_type=m.get("twin_type", ""),
+                    brand=m.get("brand", ""),
+                    algorithm=tc.get("algorithm", m.get("algorithm", "")),
+                    r2_score=pm.get("r2_score", m.get("r2_score")),
+                    rmse=pm.get("rmse", m.get("rmse")),
+                    training_samples=tc.get(
+                        "training_samples",
+                        pm.get("training_samples", m.get("training_samples", 0)),
+                    ),
+                    is_active=m.get("is_active", True),
+                    created_at=m.get("created_at", datetime.now(timezone.utc)),
+                )
             )
-            for m in models
-        ]
 
         return ModelListResponse(
             total_count=len(items),
@@ -1274,35 +1418,43 @@ async def get_model(
     Returns:
         Model details including performance metrics
     """
-    from src.digital_twin.twin_repository import TwinRepository
 
     try:
-        repo = TwinRepository()
+        repo = await _get_twin_repo()
         model = await repo.get_model(UUID(model_id))
 
         if not model:
             raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
 
+        # Read from the nested JSONB columns save_model actually writes
+        # (performance_metrics / training_config / target_columns), with a flat
+        # fallback for view/legacy rows (#705 H4).
+        pm = model.get("performance_metrics") or {}
+        tc = model.get("training_config") or {}
+        target_cols = model.get("target_columns") or []
         return TwinModelDetailResponse(
             model_id=str(model.get("model_id")),
             model_name=model.get("model_name", ""),
             model_description=model.get("model_description"),
             twin_type=model.get("twin_type", ""),
             brand=model.get("brand", ""),
-            algorithm=model.get("algorithm", ""),
+            algorithm=tc.get("algorithm", model.get("algorithm", "")),
             feature_columns=model.get("feature_columns", []),
-            target_column=model.get("target_column", ""),
-            r2_score=model.get("r2_score"),
-            rmse=model.get("rmse"),
-            cv_mean=model.get("cv_mean"),
-            cv_std=model.get("cv_std"),
-            feature_importances=model.get("feature_importances", {}),
-            top_features=model.get("top_features", []),
-            training_samples=model.get("training_samples", 0),
-            training_duration_seconds=model.get("training_duration_seconds", 0.0),
+            target_column=(target_cols[0] if target_cols else model.get("target_column", "")),
+            r2_score=pm.get("r2_score", model.get("r2_score")),
+            rmse=pm.get("rmse", model.get("rmse")),
+            cv_mean=pm.get("cv_mean", model.get("cv_mean")),
+            cv_std=pm.get("cv_std", model.get("cv_std")),
+            feature_importances=pm.get("feature_importances", model.get("feature_importances", {})),
+            top_features=pm.get("top_features", model.get("top_features", [])),
+            training_samples=tc.get(
+                "training_samples",
+                pm.get("training_samples", model.get("training_samples", 0)),
+            ),
+            training_duration_seconds=pm.get("training_duration_seconds", 0.0),
             is_active=model.get("is_active", True),
             created_at=model.get("created_at", datetime.now(timezone.utc)),
-            config=model.get("config", {}),
+            config=tc or model.get("config", {}),
         )
 
     except HTTPException:
@@ -1329,10 +1481,9 @@ async def get_model_fidelity(
     Returns:
         Fidelity history with grade distribution
     """
-    from src.digital_twin.twin_repository import TwinRepository
 
     try:
-        repo = TwinRepository()
+        repo = await _get_twin_repo()
 
         # Get fidelity records for model from repository
         records = await repo.get_model_fidelity_records(  # type: ignore[attr-defined]
@@ -1418,10 +1569,9 @@ async def get_fidelity_report(
         Fidelity report with trend analysis
     """
     from src.digital_twin.fidelity_tracker import FidelityTracker
-    from src.digital_twin.twin_repository import TwinRepository
 
     try:
-        repo = TwinRepository()
+        repo = await _get_twin_repo()
         tracker = FidelityTracker(repo)
 
         # get_model_fidelity_report returns a dict, not an object

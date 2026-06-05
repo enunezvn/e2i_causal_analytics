@@ -112,6 +112,18 @@ def _twin_request():
     )
 
 
+def _active_model_row():
+    """A persisted active-model row /simulate resolves before generating (#705 H4)."""
+    return {
+        "model_id": str(uuid4()),
+        "twin_type": "hcp",
+        "brand": "Remibrutinib",
+        "is_active": True,
+        "mlflow_model_uri": "models:/m-test",
+        "mlflow_run_id": "run-test",
+    }
+
+
 @pytest.mark.asyncio
 async def test_simulate_inline_path_does_not_enqueue_when_flag_off(monkeypatch):
     """Dark default: /simulate runs inline and NEVER calls apply_async."""
@@ -125,6 +137,14 @@ async def test_simulate_inline_path_does_not_enqueue_when_flag_off(monkeypatch):
         patch("src.digital_twin.simulation_engine.SimulationEngine") as mock_engine,
         patch("src.digital_twin.twin_repository.TwinRepository") as mock_repo,
         patch("src.workers.celery_app.celery_app.send_task") as mock_apply,
+        patch("src.digital_twin.twin_persistence.hydrate_generator", return_value=True),
+        # /simulate resolves the repo via _get_twin_repo -> get_async_supabase_client
+        # FIRST (#705 H6); without this the real client raises ServiceConnectionError
+        # in keyless CI -> caught -> 500. Mirrors test_digital_twin.mock_twin_repository.
+        patch(
+            "src.memory.services.factories.get_async_supabase_client",
+            new=AsyncMock(return_value=MagicMock()),
+        ),
     ):
         gen_instance = MagicMock()
         gen_instance.model_id = uuid4()
@@ -136,6 +156,7 @@ async def test_simulate_inline_path_does_not_enqueue_when_flag_off(monkeypatch):
         mock_engine.return_value = engine_instance
 
         repo_instance = AsyncMock()
+        repo_instance.list_active_models.return_value = [_active_model_row()]
         mock_repo.return_value = repo_instance
 
         result = await run_simulation(_twin_request(), {"role": "operator"})
@@ -171,6 +192,10 @@ async def test_simulate_offload_path_enqueues_and_builds_same_response(
             "src.workers.celery_app.celery_app.send_task",
             return_value=fake_async,
         ) as mock_apply,
+        patch(
+            "src.memory.services.factories.get_async_supabase_client",
+            new=AsyncMock(return_value=MagicMock()),
+        ),
     ):
         gen_instance = MagicMock()
         gen_instance.model_id = uuid4()
@@ -178,6 +203,7 @@ async def test_simulate_offload_path_enqueues_and_builds_same_response(
         engine_instance = MagicMock()
         mock_engine.return_value = engine_instance
         repo_instance = AsyncMock()
+        repo_instance.list_active_models.return_value = [_active_model_row()]
         mock_repo.return_value = repo_instance
 
         result = await run_simulation(_twin_request(), {"role": "operator"})
@@ -213,16 +239,23 @@ async def test_simulate_offload_timeout_returns_408(monkeypatch, _no_eager_celer
     with (
         patch("src.digital_twin.twin_generator.TwinGenerator") as mock_gen,
         patch("src.digital_twin.simulation_engine.SimulationEngine"),
-        patch("src.digital_twin.twin_repository.TwinRepository"),
+        patch("src.digital_twin.twin_repository.TwinRepository") as mock_repo,
         patch(
             "src.workers.celery_app.celery_app.send_task",
             return_value=fake_async,
+        ),
+        patch(
+            "src.memory.services.factories.get_async_supabase_client",
+            new=AsyncMock(return_value=MagicMock()),
         ),
         patch.object(dt_mod, "_OFFLOAD_TIMEOUT_SECONDS", 0.05),
     ):
         gen_instance = MagicMock()
         gen_instance.model_id = uuid4()
         mock_gen.return_value = gen_instance
+        repo_instance = AsyncMock()
+        repo_instance.list_active_models.return_value = [_active_model_row()]
+        mock_repo.return_value = repo_instance
 
         with pytest.raises(HTTPException) as exc:
             await run_simulation(_twin_request(), {"role": "operator"})

@@ -21,6 +21,19 @@ from src.api.main import app
 client = TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def _patch_async_supabase_client():
+    """Stop the route's ``_get_twin_repo`` helper (#705 H6) from reaching for a
+    real Supabase client during these HTTP-level tests. Each test still patches
+    ``TwinRepository`` so the (mocked) client argument is irrelevant.
+    """
+    with patch(
+        "src.memory.services.factories.get_async_supabase_client",
+        new=AsyncMock(return_value=MagicMock()),
+    ):
+        yield
+
+
 # =============================================================================
 # FIXTURES
 # =============================================================================
@@ -188,11 +201,25 @@ class TestRunSimulation:
 
         mock_repo = MagicMock()
         mock_repo.save_simulation = AsyncMock()
+        # #705 H4: /simulate resolves + loads an active model before generating.
+        mock_repo.list_active_models = AsyncMock(
+            return_value=[
+                {
+                    "model_id": "660e8400-e29b-41d4-a716-446655440000",
+                    "twin_type": "hcp",
+                    "brand": "Remibrutinib",
+                    "is_active": True,
+                    "mlflow_model_uri": "models:/m-x",
+                    "mlflow_run_id": "run-x",
+                }
+            ]
+        )
 
         with (
             patch("src.digital_twin.twin_generator.TwinGenerator", return_value=mock_generator),
             patch("src.digital_twin.simulation_engine.SimulationEngine", return_value=mock_engine),
             patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo),
+            patch("src.digital_twin.twin_persistence.hydrate_generator", return_value=True),
         ):
             response = client.post("/api/digital-twin/simulate", json=simulate_request)
 
@@ -222,11 +249,25 @@ class TestRunSimulation:
 
         mock_repo = MagicMock()
         mock_repo.save_simulation = AsyncMock()
+        # #705 H4: /simulate resolves + loads an active model before generating.
+        mock_repo.list_active_models = AsyncMock(
+            return_value=[
+                {
+                    "model_id": "660e8400-e29b-41d4-a716-446655440000",
+                    "twin_type": "hcp",
+                    "brand": "Remibrutinib",
+                    "is_active": True,
+                    "mlflow_model_uri": "models:/m-x",
+                    "mlflow_run_id": "run-x",
+                }
+            ]
+        )
 
         with (
             patch("src.digital_twin.twin_generator.TwinGenerator", return_value=mock_generator),
             patch("src.digital_twin.simulation_engine.SimulationEngine", return_value=mock_engine),
             patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo),
+            patch("src.digital_twin.twin_persistence.hydrate_generator", return_value=True),
         ):
             response = client.post("/api/digital-twin/simulate", json=simulate_request)
 
@@ -247,7 +288,7 @@ class TestListSimulations:
     def test_list_simulations_success(self, mock_simulation_data):
         """Should list simulations with pagination."""
         mock_repo = MagicMock()
-        mock_repo.list_simulations = AsyncMock(return_value=[mock_simulation_data])
+        mock_repo.simulations.list_simulations = AsyncMock(return_value=[mock_simulation_data])
 
         with patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo):
             response = client.get("/api/digital-twin/simulations")
@@ -262,7 +303,7 @@ class TestListSimulations:
     def test_list_simulations_filter_by_brand(self, mock_simulation_data):
         """Should filter simulations by brand."""
         mock_repo = MagicMock()
-        mock_repo.list_simulations = AsyncMock(return_value=[mock_simulation_data])
+        mock_repo.simulations.list_simulations = AsyncMock(return_value=[mock_simulation_data])
 
         with patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo):
             response = client.get(
@@ -275,7 +316,7 @@ class TestListSimulations:
     def test_list_simulations_pagination(self, mock_simulation_data):
         """Should handle pagination parameters."""
         mock_repo = MagicMock()
-        mock_repo.list_simulations = AsyncMock(return_value=[mock_simulation_data])
+        mock_repo.simulations.list_simulations = AsyncMock(return_value=[mock_simulation_data])
 
         with patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo):
             response = client.get(
@@ -375,9 +416,12 @@ class TestValidateSimulation:
         mock_repo = MagicMock()
         mock_repo.get_simulation = AsyncMock(return_value=mock_simulation_data)
 
+        # get_simulation_record / validate are async coroutines (#705 H7); the
+        # route awaits them, so they must be AsyncMocks.
         mock_tracker = MagicMock()
-        mock_tracker.get_simulation_record = MagicMock(return_value=mock_fidelity_record)
-        mock_tracker.validate = MagicMock(return_value=mock_fidelity_record)
+        mock_tracker.get_simulation_record = AsyncMock(return_value=mock_fidelity_record)
+        mock_tracker.record_prediction = AsyncMock(return_value=mock_fidelity_record)
+        mock_tracker.validate = AsyncMock(return_value=mock_fidelity_record)
 
         with (
             patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo),

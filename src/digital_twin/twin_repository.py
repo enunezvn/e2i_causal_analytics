@@ -65,25 +65,33 @@ class TwinModelRepository(BaseRepository):
         metrics: TwinModelMetrics,
         model_artifact: Any = None,
         mlflow_run_id: Optional[str] = None,
+        mlflow_model_uri: Optional[str] = None,
+        data_provenance: Optional[str] = None,
     ) -> UUID:
         """
-        Save a trained twin model.
+        Save a trained twin model's metadata row.
+
+        MLflow artifact persistence is owned by
+        :mod:`src.digital_twin.twin_persistence` (``save_twin_artifacts``), which
+        the caller invokes BEFORE this method and whose real ``run_id`` /
+        ``model_uri`` are passed in here. We store exactly what we are given —
+        never a fabricated reference (#705 H4). The old internal stub returned a
+        plausible-but-fake ``models:/twin_<type>_<brand>/latest`` URI that pointed
+        nowhere; it has been removed.
 
         Args:
             config: Model configuration
             metrics: Training metrics
-            model_artifact: Optional sklearn model object
-            mlflow_run_id: Optional MLflow run ID
+            model_artifact: Retained for backward compatibility; persistence is
+                done by the caller via ``save_twin_artifacts`` (not used here).
+            mlflow_run_id: Real MLflow run ID produced by ``save_twin_artifacts``.
+            mlflow_model_uri: Real MLflow model URI produced by
+                ``save_twin_artifacts`` (loadable via ``mlflow.sklearn.load_model``).
 
         Returns:
             UUID of saved model
         """
         model_id = metrics.model_id
-
-        # Save to MLflow if available
-        mlflow_uri = None
-        if self.mlflow_client and model_artifact:
-            mlflow_uri = self._save_to_mlflow(model_artifact, config, metrics, mlflow_run_id)
 
         # Prepare database record
         row = {
@@ -93,7 +101,7 @@ class TwinModelRepository(BaseRepository):
             "twin_type": config.twin_type.value,
             "model_version": "1.0",
             "mlflow_run_id": mlflow_run_id,
-            "mlflow_model_uri": mlflow_uri,
+            "mlflow_model_uri": mlflow_model_uri,
             "training_config": {
                 "algorithm": config.algorithm,
                 "n_estimators": config.n_estimators,
@@ -101,6 +109,9 @@ class TwinModelRepository(BaseRepository):
                 "training_samples": config.training_samples,
                 "validation_split": config.validation_split,
                 "cv_folds": config.cv_folds,
+                # Structured provenance so a synthetic-trained model is never
+                # mistaken for an RWD-trained one (#705 H4 anti-mock).
+                "data_provenance": data_provenance,
             },
             "feature_columns": config.feature_columns,
             "target_columns": [config.target_column],
@@ -296,18 +307,6 @@ class TwinModelRepository(BaseRepository):
         except Exception as e:
             logger.error(f"Failed to update fidelity for model {model_id}: {e}")
             return False
-
-    def _save_to_mlflow(
-        self,
-        model_artifact: Any,
-        config: TwinModelConfig,
-        metrics: TwinModelMetrics,
-        run_id: Optional[str],
-    ) -> str:
-        """Save model to MLflow and return URI."""
-        # MLflow integration would go here
-        # mlflow.sklearn.log_model(model_artifact, "twin_model")
-        return f"models:/twin_{config.twin_type.value}_{config.brand.value}/latest"
 
     def _cache_model_info(
         self,
@@ -854,10 +853,17 @@ class TwinRepository:
         metrics: TwinModelMetrics,
         model_artifact: Any = None,
         mlflow_run_id: Optional[str] = None,
+        mlflow_model_uri: Optional[str] = None,
+        data_provenance: Optional[str] = None,
     ) -> UUID:
         """Save a trained twin model."""
         return await self.models.save_model(  # type: ignore[no-any-return]
-            config, metrics, model_artifact, mlflow_run_id
+            config,
+            metrics,
+            model_artifact,
+            mlflow_run_id,
+            mlflow_model_uri,
+            data_provenance,
         )
 
     async def get_model(self, model_id: UUID) -> Optional[Dict[str, Any]]:
@@ -901,6 +907,12 @@ class TwinRepository:
         """Update fidelity record with validation results."""
         return await self.fidelity.update_fidelity_validation(  # type: ignore[no-any-return]
             tracking_id, actual_ate, **kwargs
+        )
+
+    async def get_fidelity_by_simulation(self, simulation_id: UUID) -> Optional[FidelityRecord]:
+        """Get fidelity tracking record by simulation ID."""
+        return await self.fidelity.get_fidelity_by_simulation(  # type: ignore[no-any-return]
+            simulation_id
         )
 
 

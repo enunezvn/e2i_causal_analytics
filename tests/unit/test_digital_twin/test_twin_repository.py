@@ -133,6 +133,46 @@ class TestTwinModelRepository:
         mock_supabase.execute.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_save_model_persists_real_mlflow_refs_no_fabrication(
+        self, mock_supabase, twin_model_config, twin_model_metrics
+    ):
+        """save_model must store the REAL mlflow refs the caller passes, never a
+        fabricated ``models:/twin_<type>_<brand>/latest`` URI (#705 H4 anti-mock)."""
+        repo = TwinModelRepository(mock_supabase)
+        mock_supabase.execute.return_value = MagicMock(
+            data=[{"model_id": str(twin_model_metrics.model_id)}]
+        )
+
+        await repo.save_model(
+            twin_model_config,
+            twin_model_metrics,
+            mlflow_run_id="run-abc123",
+            mlflow_model_uri="models:/m-deadbeef",
+        )
+
+        row = mock_supabase.insert.call_args.args[0]
+        assert row["mlflow_run_id"] == "run-abc123"
+        assert row["mlflow_model_uri"] == "models:/m-deadbeef"
+        # Anti-mock: never the old fabricated stub pattern.
+        assert "/latest" not in (row["mlflow_model_uri"] or "")
+
+    @pytest.mark.asyncio
+    async def test_save_model_no_mlflow_refs_stores_null_not_fabricated(
+        self, mock_supabase, twin_model_config, twin_model_metrics
+    ):
+        """With no refs supplied, the row stores NULL — not a phantom URI."""
+        repo = TwinModelRepository(mock_supabase)
+        mock_supabase.execute.return_value = MagicMock(
+            data=[{"model_id": str(twin_model_metrics.model_id)}]
+        )
+
+        await repo.save_model(twin_model_config, twin_model_metrics)
+
+        row = mock_supabase.insert.call_args.args[0]
+        assert row["mlflow_model_uri"] is None
+        assert row["mlflow_run_id"] is None
+
+    @pytest.mark.asyncio
     async def test_save_model_no_client(self, twin_model_config, twin_model_metrics):
         """Test save model without client."""
         repo = TwinModelRepository(None, None, None)
@@ -465,7 +505,9 @@ class TestTwinRepository:
             mock_save.return_value = twin_model_metrics.model_id
             result = await repo.save_model(twin_model_config, twin_model_metrics)
 
-            mock_save.assert_called_once_with(twin_model_config, twin_model_metrics, None, None)
+            mock_save.assert_called_once_with(
+                twin_model_config, twin_model_metrics, None, None, None, None
+            )
             assert result == twin_model_metrics.model_id
 
     @pytest.mark.asyncio

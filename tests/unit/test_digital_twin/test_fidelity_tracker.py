@@ -5,10 +5,11 @@ Tests fidelity tracking, validation, grading, and degradation detection.
 """
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
+import pytest_asyncio
 
 from src.digital_twin.fidelity_tracker import FidelityTracker
 from src.digital_twin.models.simulation_models import (
@@ -83,9 +84,9 @@ class TestRecordPrediction:
             execution_time_ms=150,
         )
 
-    def test_record_prediction_creates_fidelity_record(self, tracker, simulation_result):
+    async def test_record_prediction_creates_fidelity_record(self, tracker, simulation_result):
         """Test that record_prediction creates a FidelityRecord."""
-        record = tracker.record_prediction(simulation_result)
+        record = await tracker.record_prediction(simulation_result)
 
         assert isinstance(record, FidelityRecord)
         assert record.simulation_id == simulation_result.simulation_id
@@ -93,25 +94,25 @@ class TestRecordPrediction:
         assert record.simulated_ci_lower == simulation_result.simulated_ci_lower
         assert record.simulated_ci_upper == simulation_result.simulated_ci_upper
 
-    def test_record_prediction_stores_record(self, tracker, simulation_result):
+    async def test_record_prediction_stores_record(self, tracker, simulation_result):
         """Test that record is stored in tracker.records."""
-        record = tracker.record_prediction(simulation_result)
+        record = await tracker.record_prediction(simulation_result)
 
         assert record.tracking_id in tracker.records
         assert tracker.records[record.tracking_id] is record
 
-    def test_record_prediction_with_repository(self, simulation_result):
+    async def test_record_prediction_with_repository(self, simulation_result):
         """Test that record is saved to repository when available."""
-        mock_repo = MagicMock()
+        mock_repo = AsyncMock()
         tracker = FidelityTracker(repository=mock_repo)
 
-        record = tracker.record_prediction(simulation_result)
+        record = await tracker.record_prediction(simulation_result)
 
-        mock_repo.save_fidelity_record.assert_called_once_with(record)
+        mock_repo.save_fidelity_record.assert_awaited_once_with(record)
 
-    def test_multiple_records_stored(self, tracker, simulation_result):
+    async def test_multiple_records_stored(self, tracker, simulation_result):
         """Test storing multiple prediction records."""
-        record1 = tracker.record_prediction(simulation_result)
+        record1 = await tracker.record_prediction(simulation_result)
 
         # Create second result
         result2 = SimulationResult(
@@ -131,7 +132,7 @@ class TestRecordPrediction:
             simulation_confidence=0.80,
             execution_time_ms=120,
         )
-        record2 = tracker.record_prediction(result2)
+        record2 = await tracker.record_prediction(result2)
 
         assert len(tracker.records) == 2
         assert record1.tracking_id in tracker.records
@@ -141,8 +142,8 @@ class TestRecordPrediction:
 class TestValidate:
     """Tests for validate method."""
 
-    @pytest.fixture
-    def tracker_with_record(self):
+    @pytest_asyncio.fixture
+    async def tracker_with_record(self):
         """Create tracker with a recorded prediction."""
         tracker = FidelityTracker()
 
@@ -163,15 +164,15 @@ class TestValidate:
             simulation_confidence=0.85,
             execution_time_ms=150,
         )
-        record = tracker.record_prediction(result)
+        record = await tracker.record_prediction(result)
 
         return tracker, result.simulation_id, record
 
-    def test_validate_updates_record_with_actuals(self, tracker_with_record):
+    async def test_validate_updates_record_with_actuals(self, tracker_with_record):
         """Test that validate updates record with actual results."""
         tracker, simulation_id, original_record = tracker_with_record
 
-        validated_record = tracker.validate(
+        validated_record = await tracker.validate(
             simulation_id=simulation_id,
             actual_ate=0.09,
             actual_ci=(0.05, 0.13),
@@ -183,11 +184,11 @@ class TestValidate:
         assert validated_record.actual_ci_upper == 0.13
         assert validated_record.actual_sample_size == 800
 
-    def test_validate_calculates_prediction_error(self, tracker_with_record):
+    async def test_validate_calculates_prediction_error(self, tracker_with_record):
         """Test that validation calculates prediction error."""
         tracker, simulation_id, _ = tracker_with_record
 
-        validated_record = tracker.validate(
+        validated_record = await tracker.validate(
             simulation_id=simulation_id,
             actual_ate=0.09,  # Predicted was 0.10, error = 0.01/0.09 ≈ 11%
         )
@@ -196,23 +197,23 @@ class TestValidate:
         assert validated_record.prediction_error is not None
         assert validated_record.absolute_error is not None
 
-    def test_validate_assigns_fidelity_grade(self, tracker_with_record):
+    async def test_validate_assigns_fidelity_grade(self, tracker_with_record):
         """Test that validation assigns fidelity grade."""
         tracker, simulation_id, _ = tracker_with_record
 
-        validated_record = tracker.validate(
+        validated_record = await tracker.validate(
             simulation_id=simulation_id,
             actual_ate=0.09,  # Close to predicted 0.10, should be EXCELLENT
         )
 
         assert validated_record.fidelity_grade != FidelityGrade.UNVALIDATED
 
-    def test_validate_with_experiment_id(self, tracker_with_record):
+    async def test_validate_with_experiment_id(self, tracker_with_record):
         """Test validation with experiment ID."""
         tracker, simulation_id, _ = tracker_with_record
         experiment_id = uuid4()
 
-        validated_record = tracker.validate(
+        validated_record = await tracker.validate(
             simulation_id=simulation_id,
             actual_ate=0.10,
             actual_experiment_id=experiment_id,
@@ -220,11 +221,11 @@ class TestValidate:
 
         assert validated_record.actual_experiment_id == experiment_id
 
-    def test_validate_with_notes_and_validator(self, tracker_with_record):
+    async def test_validate_with_notes_and_validator(self, tracker_with_record):
         """Test validation with notes and validator."""
         tracker, simulation_id, _ = tracker_with_record
 
-        validated_record = tracker.validate(
+        validated_record = await tracker.validate(
             simulation_id=simulation_id,
             actual_ate=0.10,
             notes="Experiment completed successfully",
@@ -234,12 +235,12 @@ class TestValidate:
         assert validated_record.validation_notes == "Experiment completed successfully"
         assert validated_record.validated_by == "analyst@company.com"
 
-    def test_validate_with_confounding_factors(self, tracker_with_record):
+    async def test_validate_with_confounding_factors(self, tracker_with_record):
         """Test validation with confounding factors."""
         tracker, simulation_id, _ = tracker_with_record
         factors = ["seasonality", "competitor_launch"]
 
-        validated_record = tracker.validate(
+        validated_record = await tracker.validate(
             simulation_id=simulation_id,
             actual_ate=0.10,
             confounding_factors=factors,
@@ -247,28 +248,37 @@ class TestValidate:
 
         assert validated_record.confounding_factors == factors
 
-    def test_validate_nonexistent_simulation_raises_error(self):
+    async def test_validate_nonexistent_simulation_raises_error(self):
         """Test that validating non-existent simulation raises ValueError."""
         tracker = FidelityTracker()
 
         with pytest.raises(ValueError, match="No fidelity record found"):
-            tracker.validate(
+            await tracker.validate(
                 simulation_id=uuid4(),
                 actual_ate=0.10,
             )
 
-    def test_validate_with_repository_updates(self, tracker_with_record):
-        """Test that validation updates repository when available."""
+    async def test_validate_with_repository_updates(self, tracker_with_record):
+        """Test that validation persists via the REAL repo method.
+
+        #705 H7: the tracker calls the async ``update_fidelity_validation`` with
+        individual fields — NOT the (never-existing) ``update_fidelity_record``.
+        """
         tracker, simulation_id, _ = tracker_with_record
-        mock_repo = MagicMock()
+        mock_repo = AsyncMock()
         tracker.repository = mock_repo
 
-        validated_record = tracker.validate(
+        validated_record = await tracker.validate(
             simulation_id=simulation_id,
             actual_ate=0.10,
         )
 
-        mock_repo.update_fidelity_record.assert_called_once_with(validated_record)
+        mock_repo.update_fidelity_validation.assert_awaited_once()
+        args, kwargs = mock_repo.update_fidelity_validation.call_args
+        assert args[0] == validated_record.tracking_id
+        assert kwargs["actual_ate"] == validated_record.actual_ate
+        # The wrong (non-existent) method must never be called.
+        assert not mock_repo.update_fidelity_record.called
 
 
 class TestGetGrade:
@@ -314,8 +324,8 @@ class TestGetGrade:
 class TestGetRecord:
     """Tests for get_record and get_simulation_record methods."""
 
-    @pytest.fixture
-    def tracker_with_records(self):
+    @pytest_asyncio.fixture
+    async def tracker_with_records(self):
         """Create tracker with multiple records."""
         tracker = FidelityTracker()
 
@@ -336,11 +346,11 @@ class TestGetRecord:
             simulation_confidence=0.85,
             execution_time_ms=150,
         )
-        record1 = tracker.record_prediction(result1)
+        record1 = await tracker.record_prediction(result1)
 
         return tracker, record1, result1.simulation_id
 
-    def test_get_record_by_tracking_id(self, tracker_with_records):
+    async def test_get_record_by_tracking_id(self, tracker_with_records):
         """Test retrieving record by tracking ID."""
         tracker, record, _ = tracker_with_records
 
@@ -348,7 +358,7 @@ class TestGetRecord:
 
         assert retrieved is record
 
-    def test_get_record_nonexistent(self, tracker_with_records):
+    async def test_get_record_nonexistent(self, tracker_with_records):
         """Test getting non-existent tracking ID returns None."""
         tracker, _, _ = tracker_with_records
 
@@ -356,19 +366,19 @@ class TestGetRecord:
 
         assert retrieved is None
 
-    def test_get_simulation_record(self, tracker_with_records):
+    async def test_get_simulation_record(self, tracker_with_records):
         """Test retrieving record by simulation ID."""
         tracker, record, simulation_id = tracker_with_records
 
-        retrieved = tracker.get_simulation_record(simulation_id)
+        retrieved = await tracker.get_simulation_record(simulation_id)
 
         assert retrieved is record
 
-    def test_get_simulation_record_nonexistent(self, tracker_with_records):
+    async def test_get_simulation_record_nonexistent(self, tracker_with_records):
         """Test getting non-existent simulation ID returns None."""
         tracker, _, _ = tracker_with_records
 
-        retrieved = tracker.get_simulation_record(uuid4())
+        retrieved = await tracker.get_simulation_record(uuid4())
 
         assert retrieved is None
 
@@ -510,8 +520,8 @@ class TestDegradationDetection:
 class TestModelFidelityReport:
     """Tests for get_model_fidelity_report method."""
 
-    @pytest.fixture
-    def tracker_with_validated_records(self):
+    @pytest_asyncio.fixture
+    async def tracker_with_validated_records(self):
         """Create tracker with validated records."""
         tracker = FidelityTracker()
         model_id = uuid4()
@@ -536,7 +546,7 @@ class TestModelFidelityReport:
                 simulation_confidence=0.85,
                 execution_time_ms=150,
             )
-            record = tracker.record_prediction(result)
+            record = await tracker.record_prediction(result)
 
             # Manually validate (normally done through validate method)
             record.actual_ate = 0.10 + (i * 0.01)  # Varying actuals
@@ -555,7 +565,7 @@ class TestModelFidelityReport:
         assert report["validation_count"] == 0
         assert "message" in report
 
-    def test_report_includes_metrics(self, tracker_with_validated_records):
+    async def test_report_includes_metrics(self, tracker_with_validated_records):
         """Test that report includes fidelity metrics."""
         tracker, model_id = tracker_with_validated_records
 
@@ -567,7 +577,7 @@ class TestModelFidelityReport:
         assert "max_error" in report["metrics"]
         assert "ci_coverage_rate" in report["metrics"]
 
-    def test_report_includes_grade_distribution(self, tracker_with_validated_records):
+    async def test_report_includes_grade_distribution(self, tracker_with_validated_records):
         """Test that report includes grade distribution."""
         tracker, model_id = tracker_with_validated_records
 
@@ -576,7 +586,7 @@ class TestModelFidelityReport:
         assert "grade_distribution" in report
         assert isinstance(report["grade_distribution"], dict)
 
-    def test_report_includes_fidelity_score(self, tracker_with_validated_records):
+    async def test_report_includes_fidelity_score(self, tracker_with_validated_records):
         """Test that report includes fidelity score."""
         tracker, model_id = tracker_with_validated_records
 
@@ -585,7 +595,7 @@ class TestModelFidelityReport:
         assert "fidelity_score" in report
         assert 0 <= report["fidelity_score"] <= 1
 
-    def test_report_caching(self, tracker_with_validated_records):
+    async def test_report_caching(self, tracker_with_validated_records):
         """Test that report is cached."""
         tracker, model_id = tracker_with_validated_records
 
@@ -645,7 +655,7 @@ class TestGetStatistics:
         assert stats["validated_predictions"] == 0
         assert stats["validation_rate"] == 0
 
-    def test_statistics_with_records(self):
+    async def test_statistics_with_records(self):
         """Test statistics with mixed records."""
         tracker = FidelityTracker()
 
@@ -668,7 +678,7 @@ class TestGetStatistics:
                 simulation_confidence=0.85,
                 execution_time_ms=150,
             )
-            record = tracker.record_prediction(result)
+            record = await tracker.record_prediction(result)
 
             # Validate only the first one
             if i == 0:
@@ -681,7 +691,7 @@ class TestGetStatistics:
         assert stats["validated_predictions"] == 1
         assert stats["validation_rate"] == pytest.approx(1 / 3)
 
-    def test_statistics_grade_distribution(self):
+    async def test_statistics_grade_distribution(self):
         """Test that statistics include grade distribution."""
         tracker = FidelityTracker()
 
@@ -704,7 +714,7 @@ class TestGetStatistics:
                 simulation_confidence=0.85,
                 execution_time_ms=150,
             )
-            record = tracker.record_prediction(result)
+            record = await tracker.record_prediction(result)
             record.actual_ate = 0.10 * (1 + error)
             record.calculate_fidelity()
 
@@ -758,7 +768,7 @@ class TestRetrainingTriggerIntegration:
         assert tracker._retraining_service is None
         assert tracker._auto_trigger_retraining is False
 
-    def test_poor_fidelity_logged_for_retraining(self):
+    async def test_poor_fidelity_logged_for_retraining(self):
         """Test that poor fidelity grades are logged for potential retraining."""
         tracker = FidelityTracker()
 
@@ -780,10 +790,10 @@ class TestRetrainingTriggerIntegration:
             execution_time_ms=150,
         )
 
-        tracker.record_prediction(result)
+        await tracker.record_prediction(result)
 
         # Validate with very different actual (50% error -> POOR)
-        validated = tracker.validate(
+        validated = await tracker.validate(
             simulation_id=result.simulation_id,
             actual_ate=0.10,  # 50% error from 0.20
             actual_ci=(0.07, 0.13),
@@ -792,7 +802,7 @@ class TestRetrainingTriggerIntegration:
 
         assert validated.fidelity_grade == FidelityGrade.POOR
 
-    def test_validate_with_retraining_service(self, mock_retraining_service):
+    async def test_validate_with_retraining_service(self, mock_retraining_service):
         """Test validation triggers retraining check when enabled."""
         tracker = FidelityTracker(
             retraining_service=mock_retraining_service,
@@ -817,10 +827,10 @@ class TestRetrainingTriggerIntegration:
             execution_time_ms=150,
         )
 
-        tracker.record_prediction(result)
+        await tracker.record_prediction(result)
 
         # Validate with poor result
-        validated = tracker.validate(
+        validated = await tracker.validate(
             simulation_id=result.simulation_id,
             actual_ate=0.05,  # Large error
             actual_ci=(0.02, 0.08),
@@ -833,7 +843,7 @@ class TestRetrainingTriggerIntegration:
             FidelityGrade.FAIR,
         ]
 
-    def test_validate_good_fidelity_no_retraining_trigger(self, mock_retraining_service):
+    async def test_validate_good_fidelity_no_retraining_trigger(self, mock_retraining_service):
         """Test that good fidelity doesn't trigger retraining check."""
         tracker = FidelityTracker(
             retraining_service=mock_retraining_service,
@@ -858,10 +868,10 @@ class TestRetrainingTriggerIntegration:
             execution_time_ms=150,
         )
 
-        tracker.record_prediction(result)
+        await tracker.record_prediction(result)
 
         # Validate with accurate result (small error)
-        validated = tracker.validate(
+        validated = await tracker.validate(
             simulation_id=result.simulation_id,
             actual_ate=0.095,  # 5% error
             actual_ci=(0.065, 0.125),

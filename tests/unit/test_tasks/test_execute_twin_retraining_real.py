@@ -44,6 +44,16 @@ def _hermetic_async_supabase():
         yield
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_mlflow(tmp_path_factory, monkeypatch):
+    """Point MLflow at a throwaway file store so the real-trainer path (#705 H4
+    now logs the artifact via save_twin_artifacts) does not hit mlflow:5000 or
+    pollute the repo with ./mlruns."""
+    store = tmp_path_factory.mktemp("mlruns")
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", f"file://{store}")
+    yield
+
+
 # --------------------------------------------------------------------------- #
 # Bug repro: the task must exist and be importable from the path the service
 # already imports it from.
@@ -177,10 +187,17 @@ async def test_twin_retraining_records_real_metric(tmp_path: Any) -> None:
     mock_gen = MagicMock()
     mock_gen.train = MagicMock(return_value=real_metrics)
     gen_patch = patch("src.tasks.ab_testing_tasks.TwinGenerator", MagicMock(return_value=mock_gen))
+    # The MagicMock generator has no real sklearn artifact to persist; the real
+    # MLflow round-trip is covered by test_twin_persistence.py. Here we only test
+    # the retraining ORCHESTRATION, so stub the persistence with a real ref shape.
+    art_patch = patch(
+        "src.digital_twin.twin_persistence.save_twin_artifacts",
+        return_value=MagicMock(run_id="run-x", model_uri="models:/m-x"),
+    )
 
     cfg = {"data_source": str(csv), "target_column": "prescribing_change"}
 
-    with repo_patch, gen_patch:
+    with repo_patch, gen_patch, art_patch:
         out = await _execute_real_twin_retraining(
             retraining_job_id="twin-1",
             model_id=model_row["model_id"],
@@ -224,10 +241,14 @@ async def test_fail_closed_when_durable_completion_not_recorded(tmp_path: Any) -
     mock_gen = MagicMock()
     mock_gen.train = MagicMock(return_value=real_metrics)
     gen_patch = patch("src.tasks.ab_testing_tasks.TwinGenerator", MagicMock(return_value=mock_gen))
+    art_patch = patch(
+        "src.digital_twin.twin_persistence.save_twin_artifacts",
+        return_value=MagicMock(run_id="run-x", model_uri="models:/m-x"),
+    )
 
     cfg = {"data_source": str(csv), "target_column": "prescribing_change"}
 
-    with repo_patch, gen_patch:
+    with repo_patch, gen_patch, art_patch:
         out = await _execute_real_twin_retraining(
             retraining_job_id="twin-xproc",
             model_id=model_row["model_id"],

@@ -36,6 +36,8 @@ def run_simulation_compute(
     population_filter_dict: Optional[Dict[str, Any]],
     calculate_heterogeneity: bool,
     model_id_value: Optional[str],
+    model_uri: Optional[str] = None,
+    model_run_id: Optional[str] = None,
 ) -> "Any":
     """Run twin generation + simulation, returning the ``SimulationResult``.
 
@@ -51,10 +53,18 @@ def run_simulation_compute(
             ``None`` when no filter was supplied.
         calculate_heterogeneity: Whether to compute heterogeneous effects.
         model_id_value: Optional explicit model UUID string.
+        model_uri: MLflow model URI of the persisted trained model to load
+            before generating (#705 H4).
+        model_run_id: MLflow run id holding the preprocessor bundle for that model.
 
     Returns:
         A ``SimulationResult`` (pydantic model).
+
+    Raises:
+        RuntimeError: if no trained model can be hydrated — the worker fails
+            loudly rather than generate from an untrained model.
     """
+    from src.digital_twin import twin_persistence
     from src.digital_twin.models.simulation_models import (
         InterventionConfig,
         PopulationFilter,
@@ -72,6 +82,14 @@ def run_simulation_compute(
     brand = Brand(brand_value)
 
     generator = TwinGenerator(twin_type=twin_type, brand=brand)
+    # Load the persisted trained model before generating. A fresh untrained
+    # generator would raise RuntimeError in generate(); fail loudly here so the
+    # task surfaces an honest error instead of fabricating output (#705 H4).
+    if not twin_persistence.hydrate_generator(generator, model_uri, model_run_id):
+        raise RuntimeError(
+            f"No loadable trained twin model (uri={model_uri!r}, run_id="
+            f"{model_run_id!r}) for {brand_value}/{twin_type_value} — cannot simulate."
+        )
     model_id = UUID(model_id_value) if model_id_value else (generator.model_id or UUID(int=0))
 
     population = generator.generate(n=twin_count)
@@ -127,6 +145,8 @@ def run_population_simulation(payload: Dict[str, Any]) -> Dict[str, Any]:
         population_filter_dict=payload.get("population_filter_dict"),
         calculate_heterogeneity=bool(payload.get("calculate_heterogeneity", True)),
         model_id_value=payload.get("model_id_value"),
+        model_uri=payload.get("model_uri"),
+        model_run_id=payload.get("model_run_id"),
     )
     return simulation_result_to_dict(result)
 
