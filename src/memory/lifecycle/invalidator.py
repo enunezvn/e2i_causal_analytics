@@ -31,6 +31,15 @@ logger = logging.getLogger(__name__)
 
 
 # Tables that carry invalidated_at columns. The cascade updates these on hit.
+#
+# BY-DESIGN EXCLUSION (audit 2026-06-05, F5 — do NOT "complete" this set):
+# `procedural_memories` and `semantic_memory_cache` are deliberately ABSENT.
+# Procedural memories are generalized, reusable how-to patterns gated behind
+# usage/success thresholds — NOT dataset-bound findings — so an overturned
+# causal result must not invalidate them. The semantic cache is derived from the
+# data layer, not from invalidatable insights. Adding either here would be a
+# rule-match ("cascade should be comprehensive") against the intent of what
+# these stores represent. Confirmed with the subsystem owner.
 INVALIDATABLE_TABLES: Dict[str, str] = {
     "trigger": "triggers",
     "ml_prediction": "ml_predictions",

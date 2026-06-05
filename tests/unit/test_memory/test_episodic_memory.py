@@ -37,7 +37,6 @@ from src.memory.episodic_memory import (
     search_episodic_by_text,
     # Functions
     search_episodic_memory,
-    sync_treatment_relationships_to_cache,
 )
 
 # ============================================================================
@@ -809,27 +808,6 @@ class TestUtilityFunctions:
             )
 
             assert cutoff_large < cutoff_small
-
-    @pytest.mark.asyncio
-    async def test_sync_treatment_relationships_to_cache(self, mock_supabase):
-        """sync_treatment_relationships_to_cache should call RPC and return count."""
-        with patch("src.memory.episodic_memory.get_supabase_client", return_value=mock_supabase):
-            mock_supabase.rpc.return_value.execute.return_value.data = 150
-
-            count = await sync_treatment_relationships_to_cache()
-
-            mock_supabase.rpc.assert_called_with("sync_hcp_patient_relationships_to_cache", {})
-            assert count == 150
-
-    @pytest.mark.asyncio
-    async def test_sync_treatment_relationships_error(self, mock_supabase):
-        """sync_treatment_relationships_to_cache should handle errors."""
-        with patch("src.memory.episodic_memory.get_supabase_client", return_value=mock_supabase):
-            mock_supabase.rpc.return_value.execute.side_effect = Exception("RPC failed")
-
-            count = await sync_treatment_relationships_to_cache()
-
-            assert count == 0
 
 
 # ============================================================================

@@ -11,7 +11,6 @@ Core Repositories:
 - BusinessMetricRepository: KPI snapshots
 - CausalPathRepository: Discovered causal relationships
 - AgentActivityRepository: Agent analysis outputs
-- ConversationRepository: Chat history for RAG
 
 V3 Repositories:
 - UserSessionRepository: MAU/WAU/DAU tracking
@@ -72,7 +71,6 @@ from src.repositories.chatbot_user_profile import (
     ChatbotUserProfileRepository,
     get_chatbot_user_profile_repository,
 )
-from src.repositories.conversation import ConversationRepository
 from src.repositories.data_cache import CacheConfig, DataCache, get_data_cache
 
 # Data Quality (Phase 3)
@@ -178,7 +176,6 @@ __all__ = [
     "BusinessMetricRepository",
     "CausalPathRepository",
     "AgentActivityRepository",
-    "ConversationRepository",
     "AgentRegistryRepository",
     "UserSessionRepository",
     "CausalValidationRepository",

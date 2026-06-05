@@ -40,7 +40,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from src.memory.episodic_memory import E2IEntityType
 from src.memory.services.config import get_config
-from src.memory.services.factories import get_falkordb_client, get_supabase_client
+from src.memory.services.factories import get_falkordb_client
 
 logger = logging.getLogger(__name__)
 
@@ -1574,19 +1574,3 @@ async def sync_to_semantic_graph(triplet: Dict[str, Any]) -> bool:
     semantic.add_e2i_entity(E2IEntityType.PATIENT, triplet["object"])
 
     return True
-
-
-async def sync_data_layer_to_semantic_cache() -> Dict[str, Any]:
-    """
-    Sync E2I data layer relationships to Supabase semantic cache.
-
-    Calls the sync_hcp_patient_relationships_to_cache database function.
-
-    Returns:
-        Result from the sync operation
-    """
-    client = get_supabase_client()
-
-    result = client.rpc("sync_hcp_patient_relationships_to_cache", {}).execute()
-
-    return result.data  # type: ignore[no-any-return]
