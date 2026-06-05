@@ -251,8 +251,17 @@ class CausalValidator:
         treatment: str,
         outcome: str,
     ) -> float:
-        """Simple ATE estimation (biased if confounded)."""
-        # Just compute correlation coefficient as rough estimate
+        """Crude ASSOCIATIONAL proxy — a Pearson CORRELATION, NOT a causal ATE.
+
+        Honest-label note (MED): returns ``corr(treatment, outcome)``, which is a
+        correlation (confounded, scale-dependent), NOT an average treatment
+        effect. It is a statsmodels-unavailable FALLBACK inside the synthetic-data
+        validator cluster, which is test-only / not reachable from any production
+        path (verified: no production consumers). Do not treat the returned value
+        as a causal ATE; if ever wired to a real path it must be replaced with an
+        identification-based estimator.
+        """
+        # Correlation coefficient as a rough associational proxy (NOT an ATE).
         corr = df[[treatment, outcome]].corr().iloc[0, 1]
         return float(corr)
 
