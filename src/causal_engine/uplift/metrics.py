@@ -234,6 +234,37 @@ def calculate_cumulative_gain(
     return x_values, gain_values
 
 
+def _optimal_ranking_scores(
+    treatment: NDArray[np.int_],
+    outcome: NDArray[np.float64],
+) -> NDArray[np.float64]:
+    """Optimal in-hindsight unit ranking for uplift / Qini curves (H5).
+
+    Greedy by per-unit marginal contribution to the cumulative incremental gain:
+    a treated responder adds +outcome, a control responder subtracts
+    outcome·(n_treated/n_control). Sorting by this marginal descending maximizes
+    the area under the curve — i.e. it traces the perfect-targeting curve. Used
+    to compute the perfect-model normalization AREA (not the endpoint height).
+    """
+    treatment = np.asarray(treatment).flatten()
+    outcome = np.asarray(outcome).flatten()
+    n_t = float(np.sum(treatment))
+    n_c = float(len(treatment) - n_t)
+    ratio = (n_t / n_c) if n_c > 0 else 1.0
+    return treatment * outcome - (1.0 - treatment) * outcome * ratio
+
+
+def _perfect_curve_area(
+    curve_fn,
+    treatment: NDArray[np.int_],
+    outcome: NDArray[np.float64],
+) -> float:
+    """Area under ``curve_fn`` for the optimal in-hindsight ranking (H5)."""
+    oracle = _optimal_ranking_scores(treatment, outcome)
+    x, vals = curve_fn(oracle, treatment, outcome)
+    return float(np.trapz(vals, x))
+
+
 def auuc(
     uplift_scores: NDArray[np.float64],
     treatment: NDArray[np.int_],
@@ -260,22 +291,13 @@ def auuc(
     area = np.trapz(uplift_values, x_values)
 
     if normalize:
-        # Normalize by perfect model area
-        # Perfect model would have constant uplift
-        treatment = np.asarray(treatment).flatten()
-        outcome = np.asarray(outcome).flatten()
-
-        n_treated = np.sum(treatment)
-        n_control = len(treatment) - n_treated
-
-        if n_treated > 0 and n_control > 0:
-            overall_uplift = (
-                np.sum(treatment * outcome) / n_treated
-                - np.sum((1 - treatment) * outcome) / n_control
-            )
-            random_area = overall_uplift * 0.5  # Random model area
-            if abs(random_area) > 1e-10:
-                area = area / abs(random_area)  # type: ignore[operator]
+        # H5/MED: normalize against the perfect-targeting AREA — the integral of
+        # the optimally-ranked uplift curve — NOT 0.5·overall_uplift (a scaled
+        # height). A perfectly-targeting model then scores ≈ 1.0; the previous
+        # height denominator produced an uninterpretable, mis-scaled value.
+        perfect_area = _perfect_curve_area(calculate_uplift_curve, treatment, outcome)
+        if abs(perfect_area) > 1e-10:
+            area = area / perfect_area
 
     return float(area)
 
@@ -301,18 +323,23 @@ def qini_coefficient(
     """
     x_values, qini_values = calculate_qini_curve(uplift_scores, treatment, outcome)
 
-    # Area under Qini curve
+    # Area under the model's Qini curve.
     qini_area = np.trapz(qini_values, x_values)
 
-    # Random model area (diagonal)
+    # Random model: the straight diagonal (0,0)->(1, total_effect). Its area is
+    # the triangle 0.5·height, where height = qini_values[-1] is the total
+    # incremental effect at 100% targeting (identical for ANY ranking).
     random_area = qini_values[-1] * 0.5
 
-    # Qini coefficient: (actual - random) / (perfect - random)
-    # Perfect model area is qini_values[-1]
-    perfect_area = qini_values[-1]
+    # H5 fix: the "perfect" reference is the AREA under the Qini curve of the
+    # optimal in-hindsight ranking — NOT the endpoint HEIGHT qini_values[-1].
+    # The previous code divided a true np.trapz AREA by a curve HEIGHT, which is
+    # dimensionally inconsistent and not comparable to any standard Qini value.
+    perfect_area = _perfect_curve_area(calculate_qini_curve, treatment, outcome)
 
-    if abs(perfect_area - random_area) > 1e-10:
-        coefficient = (qini_area - random_area) / (perfect_area - random_area)
+    denominator = perfect_area - random_area
+    if abs(denominator) > 1e-10:
+        coefficient = (qini_area - random_area) / denominator
     else:
         coefficient = 0.0
 
