@@ -336,39 +336,37 @@ class GraphBuilderNode:
         Returns:
             List of adjustment sets (each is a list of variable names)
         """
-        # Find all backdoor paths (paths that go into treatment)
-        backdoor_paths = self._find_backdoor_paths(dag, treatment, outcome)
+        from itertools import combinations
 
-        if not backdoor_paths:
-            return [[]]  # No confounding, empty adjustment set sufficient
+        # Guard: treatment/outcome must be present in the DAG.
+        if treatment not in dag or outcome not in dag:
+            return [[]]
 
-        # Find minimal adjustment sets that block all backdoor paths
-        all_nodes = set(dag.nodes()) - {treatment, outcome}
-        adjustment_sets = []
+        # Backdoor criterion (Pearl 2009, Def. 3.3.1): a set Z is admissible iff
+        # (1) no node in Z is a descendant of the treatment, AND
+        # (2) Z d-separates treatment and outcome in the proper backdoor graph
+        #     obtained by deleting all edges OUT OF the treatment.
+        # This excludes colliders (and their descendants) and prevents M-bias.
+        descendants = nx.descendants(dag, treatment)
+        candidate_nodes = (set(dag.nodes()) - {treatment, outcome}) - descendants
 
-        # Try individual nodes first
-        for node in all_nodes:
-            if self._blocks_all_backdoor_paths(dag, {node}, treatment, outcome):
-                adjustment_sets.append([node])
+        adjustment_sets: List[List[str]] = []
+        max_set_size = min(3, len(candidate_nodes))
 
-        # Try pairs if no individual nodes work
-        if not adjustment_sets:
-            from itertools import combinations
+        # Search by increasing set size; return the smallest valid sets found
+        # (prefer minimal adjustment sets), capped at 3.
+        for size in range(0, max_set_size + 1):
+            for combo in combinations(sorted(candidate_nodes), size):
+                if self._satisfies_backdoor_criterion(dag, set(combo), treatment, outcome):
+                    adjustment_sets.append(list(combo))
+                    if len(adjustment_sets) >= 3:
+                        return adjustment_sets
+            if adjustment_sets:
+                return adjustment_sets
 
-            for node_pair in combinations(all_nodes, 2):
-                if self._blocks_all_backdoor_paths(dag, set(node_pair), treatment, outcome):
-                    adjustment_sets.append(list(node_pair))
-                    if len(adjustment_sets) >= 3:  # Limit to 3 sets
-                        break
-
-        # Fallback: all non-descendants of treatment
-        if not adjustment_sets:
-            descendants = nx.descendants(dag, treatment)
-            fallback_set = list(all_nodes - descendants)
-            if fallback_set:
-                adjustment_sets.append(fallback_set)
-
-        return adjustment_sets[:3]  # Return top 3 adjustment sets
+        # No admissible set found at sizes <= 3: return empty set as a documented
+        # fallback (downstream estimation defaults to no adjustment).
+        return adjustment_sets if adjustment_sets else [[]]
 
     def _find_backdoor_paths(
         self, dag: nx.DiGraph, treatment: str, outcome: str
@@ -395,28 +393,39 @@ class GraphBuilderNode:
 
         return backdoor_paths
 
-    def _blocks_all_backdoor_paths(
+    def _satisfies_backdoor_criterion(
         self, dag: nx.DiGraph, adjustment_set: Set[str], treatment: str, outcome: str
     ) -> bool:
-        """Check if adjustment set blocks all backdoor paths.
+        """Check whether ``adjustment_set`` satisfies the backdoor criterion.
+
+        Pearl backdoor criterion for (treatment, outcome):
+          1. No node in the adjustment set is a descendant of treatment.
+          2. The adjustment set d-separates treatment from outcome in the
+             proper backdoor graph (treatment's OUTGOING edges removed).
+
+        This correctly EXCLUDES colliders (and their descendants); conditioning
+        on a collider would open a non-causal path (M-bias).
 
         Args:
             dag: Causal DAG
-            adjustment_set: Set of nodes to adjust for
+            adjustment_set: Candidate set of nodes to adjust for
             treatment: Treatment node
             outcome: Outcome node
 
         Returns:
-            True if all backdoor paths are blocked
+            True iff the set is a valid backdoor adjustment set.
         """
-        backdoor_paths = self._find_backdoor_paths(dag, treatment, outcome)
+        if treatment in adjustment_set or outcome in adjustment_set:
+            return False
 
-        for path in backdoor_paths:
-            # Check if any node in adjustment set is on this path
-            if not any(node in adjustment_set for node in path[1:-1]):
-                return False  # Path not blocked
+        # (1) No descendant of treatment may be in the adjustment set.
+        if adjustment_set & nx.descendants(dag, treatment):
+            return False
 
-        return True
+        # (2) d-separation in the proper backdoor graph (remove T's out-edges).
+        backdoor_graph = dag.copy()
+        backdoor_graph.remove_edges_from(list(dag.out_edges(treatment)))
+        return nx.is_d_separator(backdoor_graph, {treatment}, {outcome}, set(adjustment_set))
 
     def _to_dot_format(self, dag: nx.DiGraph) -> str:
         """Convert DAG to DOT format for visualization.

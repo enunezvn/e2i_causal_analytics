@@ -353,3 +353,35 @@ class TestAdjustmentSetLogic:
 
         # Should find valid adjustment sets
         assert len(adjustment_sets) > 0
+
+    def test_m_structure_collider_not_in_adjustment_set(self):
+        """M-bias regression (M-gb2): a collider on an M-structure must NEVER be
+        selected into an adjustment set.
+
+        DAG (M-structure, no direct T->O effect path):
+            T <- U1 -> C <- U2 -> O
+        C is a collider (U1 -> C <- U2). There is NO open backdoor path between
+        T and O, so the empty set {} is the valid backdoor adjustment set.
+        Conditioning on the collider C opens the path T<-U1->C<-U2->O (M-bias),
+        so C must be excluded from every returned set.
+        """
+        import networkx as nx
+
+        node = GraphBuilderNode()
+
+        dag = nx.DiGraph()
+        dag.add_edge("U1", "T")
+        dag.add_edge("U1", "C")
+        dag.add_edge("U2", "O")
+        dag.add_edge("U2", "C")
+
+        adjustment_sets = node._find_adjustment_sets(dag, "T", "O")
+
+        # The collider C must not be conditioned on in ANY returned set.
+        assert all("C" not in adj_set for adj_set in adjustment_sets), (
+            f"Collider 'C' must never be in an adjustment set (M-bias), got {adjustment_sets}"
+        )
+        # The empty set is the correct backdoor adjustment set here.
+        assert [] in adjustment_sets, (
+            f"Empty set must be a valid backdoor adjustment set, got {adjustment_sets}"
+        )
