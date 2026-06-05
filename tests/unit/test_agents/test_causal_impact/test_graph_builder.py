@@ -385,3 +385,65 @@ class TestAdjustmentSetLogic:
         assert [] in adjustment_sets, (
             f"Empty set must be a valid backdoor adjustment set, got {adjustment_sets}"
         )
+
+    def test_mixed_mstructure_and_confounder_excludes_collider(self):
+        """With both a genuine confounder W and an M-structure collider C, the
+        finder must adjust for W and never include the collider C.
+
+        DAG:
+            W -> T, W -> O           (W is a confounder -> must be adjusted)
+            U1 -> T, U1 -> C         (M-structure arm)
+            U2 -> O, U2 -> C         (C is a collider)
+            T -> O                   (causal effect)
+        Correct backdoor adjustment set: {W}. Conditioning on C opens the
+        M-path, so C must be excluded; in particular the set chosen by
+        downstream estimation (adjustment_sets[0]) must not contain C.
+        """
+        import networkx as nx
+
+        node = GraphBuilderNode()
+
+        dag = nx.DiGraph()
+        dag.add_edge("W", "T")
+        dag.add_edge("W", "O")
+        dag.add_edge("U1", "T")
+        dag.add_edge("U1", "C")
+        dag.add_edge("U2", "O")
+        dag.add_edge("U2", "C")
+        dag.add_edge("T", "O")
+
+        adjustment_sets = node._find_adjustment_sets(dag, "T", "O")
+
+        assert len(adjustment_sets) >= 1
+        # Collider C is excluded from every returned set.
+        assert all("C" not in adj_set for adj_set in adjustment_sets), (
+            f"Collider 'C' must never be in an adjustment set, got {adjustment_sets}"
+        )
+        # The set actually used downstream (estimation.py picks index 0) must
+        # adjust for the genuine confounder W and not the collider.
+        chosen = adjustment_sets[0]
+        assert "W" in chosen, f"Confounder 'W' must be adjusted for, got chosen set {chosen}"
+        assert "C" not in chosen
+
+    def test_mediator_excluded_from_adjustment_sets(self):
+        """A mediator (descendant of treatment) must never be adjusted for.
+
+        DAG: T -> M -> O, T -> O. Adjusting for the mediator M blocks part of
+        the causal effect (over-control bias). The empty set is the valid
+        backdoor adjustment set.
+        """
+        import networkx as nx
+
+        node = GraphBuilderNode()
+
+        dag = nx.DiGraph()
+        dag.add_edge("T", "M")
+        dag.add_edge("M", "O")
+        dag.add_edge("T", "O")
+
+        adjustment_sets = node._find_adjustment_sets(dag, "T", "O")
+
+        assert all("M" not in adj_set for adj_set in adjustment_sets), (
+            f"Mediator 'M' must never be in an adjustment set, got {adjustment_sets}"
+        )
+        assert [] in adjustment_sets
