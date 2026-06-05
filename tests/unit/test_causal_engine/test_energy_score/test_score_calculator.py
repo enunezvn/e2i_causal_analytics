@@ -693,3 +693,67 @@ class TestEnergyScoreIntegration:
         assert result1.treatment_balance_score == result2.treatment_balance_score
         assert result1.outcome_fit_score == result2.outcome_fit_score
         assert result1.propensity_calibration == result2.propensity_calibration
+
+
+class TestOutcomeFitMonotoneTransform:
+    """M-est2: the outcome-fit component must stay strictly monotone above
+    normalized-RMSE 1.0 instead of collapsing every poor estimator to exactly
+    1.0 (the old `min(normalized_rmse, 1.0)` cap erased all discrimination,
+    leaving 55% of the composite estimator-invariant once nrmse>=1.0).
+
+    The transform is the rational squash `x / (1 + x)`: strictly increasing on
+    [0, inf), 0 at 0, and STRICTLY below 1.0 for every finite input (np.tanh
+    rounds to exactly 1.0 in float64 once the argument exceeds ~19, which would
+    re-introduce the collapse for wildly-off fits).
+    """
+
+    def test_outcome_fit_strictly_increasing_above_one_and_below_one(self):
+        import numpy as np
+        from src.causal_engine.energy_score.score_calculator import (
+            EnergyScoreCalculator,
+            EnergyScoreConfig,
+        )
+
+        calc = EnergyScoreCalculator(EnergyScoreConfig(enable_bootstrap=False))
+        n = 400
+        rng = np.random.default_rng(7)
+        Y = rng.normal(0.0, 1.0, n)
+        Y = Y - Y.mean()
+        T = np.array([1, 0] * (n // 2), dtype=int)
+        ps = np.full(n, 0.5)
+        std_y = float(np.std(Y) + 1e-8)
+        treated = T == 1
+        control = T == 0
+        mu1 = float(np.mean(Y[treated]))
+        mu0 = float(np.mean(Y[control]))
+        pseudo = (T * (Y - mu1)) / ps - ((1 - T) * (Y - mu0)) / (1 - ps) + (mu1 - mu0)
+
+        # tau offset by k*std_y from pseudo so residual RMSE ~= k*std_y.
+        def fit_for(k):
+            tau = pseudo - k * std_y
+            return calc._compute_outcome_fit(Y, T, tau, ps)
+
+        small = fit_for(0.5)  # nrmse ~ 0.5
+        big1 = fit_for(1.5)  # nrmse ~ 1.5 (old cap -> 1.0)
+        big2 = fit_for(3.0)  # nrmse ~ 3.0 (old cap -> 1.0)
+        # Strictly increasing and never collapsed to a shared 1.0.
+        assert small < big1 < big2
+        assert big1 < 1.0 and big2 < 1.0
+        assert big1 != big2  # the defect: old code made these both exactly 1.0
+
+    def test_outcome_fit_stays_in_unit_interval(self):
+        import numpy as np
+        from src.causal_engine.energy_score.score_calculator import (
+            EnergyScoreCalculator,
+            EnergyScoreConfig,
+        )
+
+        calc = EnergyScoreCalculator(EnergyScoreConfig(enable_bootstrap=False))
+        n = 200
+        Y = np.linspace(-5, 5, n)
+        T = np.array([1, 0] * (n // 2), dtype=int)
+        ps = np.full(n, 0.5)
+        # Wildly off tau -> huge nrmse; transform must still be < 1.0 and >= 0.
+        tau = np.full(n, 1e6)
+        val = calc._compute_outcome_fit(Y, T, tau, ps)
+        assert 0.0 <= val < 1.0
