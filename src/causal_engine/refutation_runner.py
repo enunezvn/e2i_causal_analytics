@@ -1373,20 +1373,25 @@ class RefutationRunner:
             RefutationStatus.PASSED: 1.0,
             RefutationStatus.WARNING: 0.6,
             RefutationStatus.FAILED: 0.0,
-            RefutationStatus.SKIPPED: 0.5,  # Neutral
         }
 
         total_weight = 0.0
         weighted_score = 0.0
 
         for test in tests:
+            # SKIPPED tests carry no evidence either way: EXCLUDE them from the
+            # average rather than padding at a neutral 0.5 (which would dilute
+            # genuinely-passed evidence toward the REVIEW band).
+            if test.status == RefutationStatus.SKIPPED:
+                continue
             weight = weights.get(test.test_name, 0.1)
-            score = status_scores.get(test.status, 0.5)
+            score = status_scores.get(test.status, 0.0)
             weighted_score += weight * score
             total_weight += weight
 
         if total_weight == 0:
-            return 0.5
+            # No non-skipped evidence (all tests skipped) -> fail closed, not 0.5.
+            return 0.0
 
         return weighted_score / total_weight
 
