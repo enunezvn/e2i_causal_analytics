@@ -175,6 +175,34 @@ class TestSarganTest:
         # May or may not reject depending on sample (result is np.bool_ or bool)
         assert result.rejects_validity in (True, False, np.True_, np.False_)
 
+    def test_includes_covariates_in_projection(self):
+        """MED — Sargan must project residuals onto the FULL exogenous set [Z, X].
+
+        Standalone ``sargan_test`` ignored included exogenous covariates, so a
+        residual that is orthogonal to the excluded instruments Z but correlated
+        with an included covariate X (a real over-identification violation
+        involving X) was MISSED. With X in the projection the statistic grows and
+        the test rejects.
+        """
+        np.random.seed(5)
+        n = 3000
+        Z = np.random.normal(0, 1, (n, 3))  # excluded instruments
+        X = np.random.normal(0, 1, n)  # included exogenous covariate (indep of Z)
+        # Residuals orthogonal to Z but strongly correlated with X.
+        residuals = 0.6 * X + np.random.normal(0, 0.2, n)
+
+        without_cov = sargan_test(residuals, Z, n_endogenous=1)
+        with_cov = sargan_test(residuals, Z, n_endogenous=1, covariates=X)
+
+        # The covariate-blind projection ignores the residual's correlation with
+        # X, so its statistic is grossly UNDER-SIZED relative to the
+        # covariate-aware one that detects the violation loading on X (here
+        # ~10 vs ~2700). The mis-sizing is the bug.
+        assert with_cov.statistic > 50 * max(without_cov.statistic, 1.0)
+        assert with_cov.rejects_validity, (
+            "covariate-aware Sargan must catch the X-loading violation"
+        )
+
 
 class TestAndersonRubinTest:
     """Tests for Anderson-Rubin test."""

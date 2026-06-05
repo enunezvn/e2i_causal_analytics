@@ -404,3 +404,51 @@ class TestIVEdgeCases:
 
         assert result.success is True
         assert result.n_instruments == k
+
+
+class TestHausmanEndogeneity:
+    """H4 — Hausman endogeneity test must use COEFFICIENT variances.
+
+    The test statistic is (β_IV − β_OLS)² / (Var(β_IV) − Var(β_OLS)) where the
+    variances are of the coefficient estimates (σ̂²·[(W'W)⁻¹]₀₀, O(1/n)). The
+    buggy code used the residual variances σ̂² (O(1), outcome-scale); since
+    σ̂²_IV ≈ σ̂²_OLS the denominator was tiny/sign-unstable and the
+    ``var_diff ≤ 0 → stat=0, p=1.0`` branch silently declared an endogenous
+    treatment EXOGENOUS.
+    """
+
+    def test_rejects_strong_endogeneity(self):
+        est = TwoStageLSEstimator()
+        np.random.seed(3)
+        n = 4000
+        Z = np.random.normal(0, 1, n)
+        U = np.random.normal(0, 1, n)  # unobserved confounder
+        D = 0.8 * Z + 0.9 * U + np.random.normal(0, 0.3, n)  # endogenous
+        Y = 0.5 * D + 1.0 * U + np.random.normal(0, 0.5, n)
+        res = est._hausman_test(Y, D, Z, None, n, 1, 0)
+        stat, pvalue = res[0], res[1]
+        assert stat > 3.84, f"strong endogeneity must yield a large Hausman stat, got {stat}"
+        assert pvalue < 0.01, f"strong endogeneity must reject exogeneity, got p={pvalue}"
+
+    def test_does_not_reject_exogenous(self):
+        est = TwoStageLSEstimator()
+        np.random.seed(11)
+        n = 4000
+        Z = np.random.normal(0, 1, n)
+        D = 0.8 * Z + np.random.normal(0, 0.5, n)  # no shared confounder
+        Y = 0.5 * D + np.random.normal(0, 0.5, n)
+        res = est._hausman_test(Y, D, Z, None, n, 1, 0)
+        pvalue = res[1]
+        assert pvalue > 0.05, f"exogenous DGP must fail to reject, got p={pvalue}"
+
+    def test_surfaces_validity_flag(self):
+        est = TwoStageLSEstimator()
+        np.random.seed(3)
+        n = 2000
+        Z = np.random.normal(0, 1, n)
+        U = np.random.normal(0, 1, n)
+        D = 0.8 * Z + 0.7 * U + np.random.normal(0, 0.4, n)
+        Y = 0.5 * D + 0.8 * U + np.random.normal(0, 0.5, n)
+        res = est._hausman_test(Y, D, Z, None, n, 1, 0)
+        assert len(res) == 3, "Hausman must surface a validity flag (stat, pvalue, valid)"
+        assert res[2] is True, "a well-conditioned Hausman test is valid"
