@@ -340,7 +340,8 @@ class SplitValidator:
                         )
 
         except Exception as e:
-            result.warnings.append(f"LeakageDetector check failed: {str(e)}")
+            result.errors.append(f"LeakageDetector check failed: {str(e)}")
+            result.is_valid = False
 
     def validate_multiple_datasets(
         self,
