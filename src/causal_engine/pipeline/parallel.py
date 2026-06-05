@@ -16,6 +16,7 @@ from .orchestrator import (
 )
 from .router import LibraryRouter
 from .sequential import (
+    _apply_agreement_score,
     _apply_consensus,
     _apply_pairwise_agreement,
     _collect_ate_estimates,
@@ -318,6 +319,7 @@ class ParallelPipeline(PipelineOrchestrator):
         if effects:
             _apply_consensus(state, effects)
             _apply_pairwise_agreement(state, effects)
+            _apply_agreement_score(state)
 
         # Generate summary
         state["executive_summary"] = self._generate_parallel_summary(state)

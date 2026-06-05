@@ -152,10 +152,64 @@ def _collect_ate_estimates(state: PipelineState) -> List[Tuple[str, float, float
     return effects
 
 
+_Z_95 = 1.959963984540054  # z for a 95% normal CI (half-width / z = SE)
+
+
+def _se_for_library(state: PipelineState, lib: str) -> Optional[float]:
+    """Resolve a per-library standard error of the ATE for inverse-variance
+    weighting (H9). DoWhy emits ``standard_error`` directly; EconML / CausalML
+    expose a 95% CI, so SE = (ci_upper − ci_lower) / (2·z). Returns None when no
+    valid positive SE is available."""
+
+    def _ci_to_se(lo: object, hi: object) -> Optional[float]:
+        try:
+            lo_f, hi_f = float(lo), float(hi)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return None
+        if math.isfinite(lo_f) and math.isfinite(hi_f) and hi_f > lo_f:
+            return (hi_f - lo_f) / (2.0 * _Z_95)
+        return None
+
+    def _payload(key: str) -> Optional[Dict[str, object]]:
+        r = state.get(key)
+        if isinstance(r, dict):
+            p = r.get("result")
+            return p if isinstance(p, dict) else None
+        return None
+
+    if lib == "dowhy":
+        p = _payload("dowhy_result")
+        if p is not None:
+            try:
+                se = float(p.get("standard_error"))  # type: ignore[arg-type]
+                if math.isfinite(se) and se > 0:
+                    return se
+            except (TypeError, ValueError):
+                pass
+        return None
+    if lib == "econml":
+        p = _payload("econml_result")
+        return _ci_to_se(p.get("ate_ci_lower"), p.get("ate_ci_upper")) if p else None
+    if lib == "causalml":
+        us = state.get("uplift_summary")
+        if isinstance(us, dict):
+            se = _ci_to_se(us.get("ate_ci_lower"), us.get("ate_ci_upper"))
+            if se is not None:
+                return se
+        p = _payload("causalml_result")
+        return _ci_to_se(p.get("ate_ci_lower"), p.get("ate_ci_upper")) if p else None
+    return None
+
+
 def _apply_consensus(state: PipelineState, effects: List[Tuple[str, float, float]]) -> None:
     """Compute consensus_effect + consensus_confidence and write into state.
 
-    - ``consensus_effect`` = confidence-weighted average of ATE estimates.
+    - ``consensus_effect`` = INVERSE-VARIANCE-weighted average of ATE estimates
+      (weight ∝ 1/SE²) when every contributing library exposes a valid SE, so a
+      library's influence reflects its PRECISION (H9) — NOT the incommensurable
+      per-library confidence scale (DoWhy hardcodes confidence=1.0 and would
+      otherwise structurally dominate). Falls back to confidence-weighting when
+      any SE is unavailable.
     - ``consensus_confidence`` = arithmetic mean of contributing confidences,
       OPTIONALLY MODULATED by NetworkX structural quality:
 
@@ -172,7 +226,20 @@ def _apply_consensus(state: PipelineState, effects: List[Tuple[str, float, float
     if total_weight <= 0:
         return
 
-    consensus_effect = sum(effect * conf for _, effect, conf in effects) / total_weight
+    # H9: inverse-variance weighting when every library has a valid positive SE.
+    ses = {lib: _se_for_library(state, lib) for lib, _, _ in effects}
+    use_inverse_variance = all((ses[lib] is not None and ses[lib] > 0) for lib, _, _ in effects)
+    if use_inverse_variance:
+        weights = [1.0 / (ses[lib] ** 2) for lib, _, _ in effects]  # type: ignore[operator]
+        weight_sum = sum(weights)
+        consensus_effect = (
+            sum(eff * w for (_, eff, _), w in zip(effects, weights, strict=False)) / weight_sum
+        )
+        state["consensus_weighting"] = "inverse_variance"
+    else:
+        consensus_effect = sum(effect * conf for _, effect, conf in effects) / total_weight
+        state["consensus_weighting"] = "confidence"
+
     base_confidence = total_weight / len(effects)
 
     # Apply NetworkX structural-quality modulation (C-6).
@@ -210,6 +277,25 @@ def _apply_pairwise_agreement(
             agreement[pair] = max(0.0, min(1.0, 1.0 - diff))
 
     state["library_agreement"] = agreement
+
+
+def _apply_agreement_score(state: PipelineState) -> None:
+    """Surface a REAL library-agreement metric for ``library_agreement_score`` (H8).
+
+    This is the mean of the pairwise concordances in ``state['library_agreement']``
+    — a genuine measure of whether the libraries AGREE on the effect. It is a
+    SEPARATE quantity from ``consensus_confidence`` (the mean of per-library
+    confidences), which the API previously mislabeled as the agreement score:
+    two libraries reporting +0.5 and −0.5 cancel to ~0 effect yet keep a high
+    consensus_confidence, so surfacing that as "library agreement" was misleading.
+    """
+    agreement = state.get("library_agreement")
+    if isinstance(agreement, dict) and agreement:
+        vals = [float(v) for v in agreement.values() if isinstance(v, (int, float))]
+        if vals:
+            state["library_agreement_score"] = float(sum(vals) / len(vals))
+            return
+    state["library_agreement_score"] = None
 
 
 class SequentialPipeline(PipelineOrchestrator):
@@ -377,6 +463,7 @@ class SequentialPipeline(PipelineOrchestrator):
         if effects:
             _apply_consensus(state, effects)
             _apply_pairwise_agreement(state, effects)
+            _apply_agreement_score(state)
 
         # Generate executive summary
         state["executive_summary"] = self._generate_summary(state)

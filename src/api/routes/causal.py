@@ -965,7 +965,10 @@ def _sequential_output_to_response(
         consensus_effect=output.get("consensus_effect"),
         consensus_ci_lower=None,  # Not produced by the engine output today
         consensus_ci_upper=None,
-        library_agreement_score=output.get("consensus_confidence"),
+        # H8: a REAL library-agreement metric (mean pairwise concordance), NOT
+        # consensus_confidence (the mean of per-library confidences, which the API
+        # previously mislabeled as agreement).
+        library_agreement_score=(state or {}).get("library_agreement_score"),
         effect_estimate_variance=None,
         total_latency_ms=int(output.get("total_latency_ms") or 0),
         created_at=datetime.now(timezone.utc),
@@ -1029,7 +1032,8 @@ def _parallel_output_to_response(
         consensus_effect=output.get("consensus_effect"),
         consensus_ci_lower=None,
         consensus_ci_upper=None,
-        library_agreement_score=output.get("consensus_confidence"),
+        # H8: real mean-pairwise-concordance agreement, not consensus_confidence.
+        library_agreement_score=(state or {}).get("library_agreement_score"),
         consensus_method=request.consensus_method,
         total_latency_ms=int(output.get("total_latency_ms") or 0),
         created_at=datetime.now(timezone.utc),

@@ -306,10 +306,24 @@ class DoWhyExecutor(LibraryExecutor):
         # === Step 10: graph source bookkeeping ===
         graph_source = "networkx" if state.get("causal_graph") else "inferred"
 
+        # H9: best-effort standard error of the ATE so the consensus aggregator
+        # can weight DoWhy by PRECISION (inverse-variance) instead of its
+        # hardcoded confidence=1.0, which otherwise structurally dominates the
+        # blended consensus. None when DoWhy's estimator does not expose one.
+        dowhy_se: Optional[float] = None
+        try:
+            se_raw = estimate.get_standard_error()
+            se_val = float(np.ravel(se_raw)[0]) if se_raw is not None else None
+            if se_val is not None and np.isfinite(se_val) and se_val > 0:
+                dowhy_se = se_val
+        except Exception:  # noqa: BLE001 - SE is method-dependent; absence is fine
+            dowhy_se = None
+
         # === Step 11: build success result ===
         latency_ms = int((time.time() - start_time) * 1000)
         result_payload: Dict[str, Any] = {
             "causal_effect": causal_effect,
+            "standard_error": dowhy_se,
             "identified_estimand": estimand_label,
             "identified_estimand_repr": repr(identified_estimand),
             "dowhy_method": dowhy_method,
