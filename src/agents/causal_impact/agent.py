@@ -365,6 +365,15 @@ class CausalImpactAgent(SkillsMixin):
         gate_blocked = gate_decision == "block"
         needs_review = gate_decision == "review"
 
+        # M-fo3 (MED, fail-closed): the sensitivity node fail-closes by setting
+        # state['sensitivity_error'] (sensitivity.py) and the interpretation node
+        # re-asserts status='failed'/needs_review=True (interpretation.py). The prod
+        # output must mirror that signal — a defaulted/failed E-value is a validation
+        # gap, never a silently-completed full-confidence result.
+        sensitivity_failed = bool(state.get("sensitivity_error"))
+        if sensitivity_failed:
+            needs_review = True
+
         # Determine overall confidence
         if not refutation_ran or "confidence_adjustment" not in refutation_results:
             # H1: never default to 1.0 (no penalty) when validation did not run or
@@ -383,6 +392,10 @@ class CausalImpactAgent(SkillsMixin):
             base_confidence = 0.5
 
         overall_confidence = base_confidence * refutation_confidence
+        # M-fo3: a failed sensitivity analysis is an unvalidated-robustness gap —
+        # hard-cap confidence at the same penalty used for unrun refutation (H1).
+        if sensitivity_failed:
+            overall_confidence = min(overall_confidence, _REFUTATION_UNVALIDATED_PENALTY)
 
         # H2: only a PROCEED gate is "passed/robust". A REVIEW band is borderline
         # (needs_review) and an errored/blocked refutation is not passed at all.
@@ -395,10 +408,14 @@ class CausalImpactAgent(SkillsMixin):
             # no ATE OR when refutation failed/errored OR the gate BLOCKED. A
             # never-validated or blocked estimate must not be surfaced as
             # "completed" with full confidence (the F-014 fail-closed seam).
+            # M-fo3: also fail-closed when the sensitivity node failed.
             "status": (
                 "completed"
                 if (
-                    estimation_result.get("ate") is not None and refutation_ran and not gate_blocked
+                    estimation_result.get("ate") is not None
+                    and refutation_ran
+                    and not gate_blocked
+                    and not sensitivity_failed
                 )
                 else "failed"
             ),
@@ -423,9 +440,10 @@ class CausalImpactAgent(SkillsMixin):
             "model_used": estimation_result.get("method", "unknown"),  # Contract REQUIRED
             "key_insights": interpretation.get("key_findings", []),  # Contract REQUIRED
             "assumption_warnings": self._extract_assumption_warnings(
-                interpretation,
-                estimation_result,
+                interpretation,  # type: ignore[arg-type]  # TypedDict -> Dict (read-only .get)
+                estimation_result,  # type: ignore[arg-type]  # TypedDict -> Dict (read-only .get)
                 refutation_results,  # type: ignore[arg-type]
+                sensitivity_failed=sensitivity_failed,
             ),  # Contract REQUIRED
             "actionable_recommendations": interpretation.get(
                 "recommendations", []
@@ -437,8 +455,8 @@ class CausalImpactAgent(SkillsMixin):
             "needs_review": needs_review,
             "gate_decision": gate_decision,
             "executive_summary": self._generate_executive_summary(
-                interpretation,
-                estimation_result,
+                interpretation,  # type: ignore[arg-type]  # TypedDict -> Dict (read-only .get)
+                estimation_result,  # type: ignore[arg-type]  # TypedDict -> Dict (read-only .get)
                 overall_confidence,  # type: ignore[arg-type]
             ),  # Contract REQUIRED
             # Rich metadata
@@ -533,7 +551,11 @@ class CausalImpactAgent(SkillsMixin):
         return summary
 
     def _extract_assumption_warnings(
-        self, interpretation: Dict, estimation_result: Dict, refutation_results: Dict
+        self,
+        interpretation: Dict,
+        estimation_result: Dict,
+        refutation_results: Dict,
+        sensitivity_failed: bool = False,
     ) -> List[str]:
         """Extract assumption warnings from analysis results.
 
@@ -569,6 +591,14 @@ class CausalImpactAgent(SkillsMixin):
         for assumption in assumptions:
             if "unverified" in assumption.lower() or "assumed" in assumption.lower():
                 warnings.append(f"Unverified assumption: {assumption}")
+
+        # M-fo3: a failed sensitivity node means the E-value is defaulted/absent —
+        # surface that explicitly so the output never implies validated robustness.
+        if sensitivity_failed:
+            warnings.append(
+                "Sensitivity analysis (E-value) failed to run — robustness to "
+                "unmeasured confounding is UNVERIFIED; do not rely on any reported E-value."
+            )
 
         # If no warnings, indicate clean status
         if not warnings:

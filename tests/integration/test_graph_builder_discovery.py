@@ -118,7 +118,7 @@ class TestGraphBuilderNodeDiscoveryIntegration:
             "confounders": ["geographic_region"],
             "auto_discover": True,
             "session_id": str(uuid4()),
-            "data_cache": {"data": synthetic_data},
+            "data_cache": {"estimation_data": synthetic_data},
             "discovery_algorithms": ["ges", "pc"],
             "discovery_ensemble_threshold": 0.5,
         }
@@ -322,7 +322,7 @@ class TestGraphBuilderDiscoveryErrorHandling:
             "treatment_var": "treatment",
             "outcome_var": "outcome",
             "auto_discover": True,
-            "data_cache": {"data": pd.DataFrame({"a": [1, 2], "b": [3, 4]})},
+            "data_cache": {"estimation_data": pd.DataFrame({"a": [1, 2], "b": [3, 4]})},
         }
 
         with patch.object(node, "_run_discovery", new_callable=AsyncMock) as mock_discovery:
@@ -344,7 +344,7 @@ class TestGraphBuilderDiscoveryErrorHandling:
             "treatment_var": "treatment",
             "outcome_var": "outcome",
             "auto_discover": True,
-            "data_cache": {"data": pd.DataFrame()},  # Empty DataFrame
+            "data_cache": {"estimation_data": pd.DataFrame()},  # Empty DataFrame
         }
 
         # Should not crash

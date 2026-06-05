@@ -21,6 +21,11 @@ import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
 
+# Honesty marker for uplift summary statistics. The ate/att/atc carried on an
+# UpliftResult are mean MODEL-PREDICTED uplift over subpopulations, NOT
+# identification-validated causal estimands (see BaseUpliftModel._calculate_ate).
+PROVENANCE_MODEL_PREDICTED_UPLIFT = "model_predicted_uplift_not_identification_validated"
+
 
 class UpliftModelType(str, Enum):
     """Supported uplift model types."""
@@ -94,10 +99,11 @@ class UpliftResult:
         model_type: Type of uplift model used
         success: Whether estimation succeeded
         uplift_scores: Individual treatment effect predictions (ITE/CATE)
-        ate: Average Treatment Effect
-        att: Average Treatment Effect on Treated
-        atc: Average Treatment Effect on Control
-        ate_std: Standard deviation of ATE
+        ate: mean model-predicted uplift (NOT an identification-validated ATE/ATT/ATC)
+        att: mean model-predicted uplift over treated units (NOT an identification-validated ATE/ATT/ATC)
+        atc: mean model-predicted uplift over control units (NOT an identification-validated ATE/ATT/ATC)
+        ate_std: dispersion (np.std) of per-unit predicted uplift, NOT a standard error
+        data_provenance: honesty marker; defaults to PROVENANCE_MODEL_PREDICTED_UPLIFT
         ate_ci_lower: Lower bound of ATE confidence interval
         ate_ci_upper: Upper bound of ATE confidence interval
         treatment_groups: Names of treatment groups
@@ -121,6 +127,7 @@ class UpliftResult:
     error_message: Optional[str] = None
     estimation_time_ms: Optional[float] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    data_provenance: str = PROVENANCE_MODEL_PREDICTED_UPLIFT
 
     def __post_init__(self):
         """Validate result consistency."""
@@ -148,6 +155,7 @@ class UpliftResult:
             "error_message": self.error_message,
             "estimation_time_ms": self.estimation_time_ms,
             "metadata": self.metadata,
+            "data_provenance": self.data_provenance,
         }
 
 
@@ -338,6 +346,7 @@ class BaseUpliftModel(ABC):
                 treatment_groups=self._treatment_groups,
                 feature_importances=feature_importances,
                 estimation_time_ms=elapsed_ms,
+                data_provenance=PROVENANCE_MODEL_PREDICTED_UPLIFT,
                 metadata={
                     "n_samples_train": len(X) if hasattr(X, "__len__") else 0,
                     "n_samples_test": len(X_pred_arr),

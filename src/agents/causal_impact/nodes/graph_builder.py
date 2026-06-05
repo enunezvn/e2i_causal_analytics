@@ -126,6 +126,7 @@ class GraphBuilderNode:
             discovery_result: Optional[DiscoveryResult] = None
             gate_evaluation: Optional[Dict[str, Any]] = None
             discovery_latency_ms: float = 0.0
+            discovery_skip_reason: Optional[str] = None
 
             if auto_discover:
                 logger.info("Auto-discovery enabled, attempting structure learning")
@@ -137,7 +138,14 @@ class GraphBuilderNode:
                     )
                     discovery_latency_ms = (time.time() - discovery_start) * 1000
                 except Exception as e:
-                    logger.warning(f"Discovery failed: {e}, falling back to manual DAG")
+                    # M-gb1: surface the skip as a distinct, non-swallowed signal
+                    # instead of only logging. The pipeline still degrades
+                    # gracefully to a manual DAG, but the skip is now observable
+                    # in state (discovery_skip_reason + warnings accumulator).
+                    discovery_skip_reason = (
+                        f"auto-discovery skipped, falling back to manual DAG: {e}"
+                    )
+                    logger.warning(discovery_skip_reason)
                     discovery_latency_ms = (time.time() - discovery_start) * 1000
 
             # Build DAG based on discovery results
@@ -210,6 +218,11 @@ class GraphBuilderNode:
                     result["discovery_result"] = discovery_result.to_dict()
                 if gate_evaluation:
                     result["discovery_gate_evaluation"] = gate_evaluation
+                if discovery_skip_reason is not None:
+                    result["discovery_skip_reason"] = discovery_skip_reason
+                    # warnings is an operator.add accumulator (state.py);
+                    # return ONLY the new entry so LangGraph appends it.
+                    result["warnings"] = [discovery_skip_reason]
 
             return result
 
@@ -336,39 +349,55 @@ class GraphBuilderNode:
         Returns:
             List of adjustment sets (each is a list of variable names)
         """
-        # Find all backdoor paths (paths that go into treatment)
-        backdoor_paths = self._find_backdoor_paths(dag, treatment, outcome)
+        from itertools import combinations
 
-        if not backdoor_paths:
-            return [[]]  # No confounding, empty adjustment set sufficient
+        # Guard: treatment/outcome must be present and distinct. A degenerate
+        # treatment == outcome query has no meaningful backdoor adjustment and
+        # would make nx.is_d_separator raise (non-disjoint x/y node sets), so
+        # return the trivial empty set rather than hard-failing the node.
+        if treatment not in dag or outcome not in dag or treatment == outcome:
+            return [[]]
 
-        # Find minimal adjustment sets that block all backdoor paths
-        all_nodes = set(dag.nodes()) - {treatment, outcome}
-        adjustment_sets = []
+        # Backdoor criterion (Pearl 2009, Def. 3.3.1): a set Z is admissible iff
+        # (1) no node in Z is a descendant of the treatment, AND
+        # (2) Z d-separates treatment and outcome in the proper backdoor graph
+        #     obtained by deleting all edges OUT OF the treatment.
+        # This excludes colliders (and their descendants) and prevents M-bias.
+        descendants = nx.descendants(dag, treatment)
+        candidate_nodes = (set(dag.nodes()) - {treatment, outcome}) - descendants
 
-        # Try individual nodes first
-        for node in all_nodes:
-            if self._blocks_all_backdoor_paths(dag, {node}, treatment, outcome):
-                adjustment_sets.append([node])
+        adjustment_sets: List[List[str]] = []
+        max_set_size = min(3, len(candidate_nodes))
 
-        # Try pairs if no individual nodes work
-        if not adjustment_sets:
-            from itertools import combinations
+        # Search by increasing set size; return the smallest valid sets found
+        # (prefer minimal adjustment sets), capped at 3.
+        for size in range(0, max_set_size + 1):
+            for combo in combinations(sorted(candidate_nodes), size):
+                if self._satisfies_backdoor_criterion(dag, set(combo), treatment, outcome):
+                    adjustment_sets.append(list(combo))
+                    if len(adjustment_sets) >= 3:
+                        return adjustment_sets
+            if adjustment_sets:
+                return adjustment_sets
 
-            for node_pair in combinations(all_nodes, 2):
-                if self._blocks_all_backdoor_paths(dag, set(node_pair), treatment, outcome):
-                    adjustment_sets.append(list(node_pair))
-                    if len(adjustment_sets) >= 3:  # Limit to 3 sets
-                        break
+        if adjustment_sets:
+            return adjustment_sets
 
-        # Fallback: all non-descendants of treatment
-        if not adjustment_sets:
-            descendants = nx.descendants(dag, treatment)
-            fallback_set = list(all_nodes - descendants)
-            if fallback_set:
-                adjustment_sets.append(fallback_set)
+        # No MINIMAL admissible set of size <= 3 d-separated treatment and
+        # outcome. Before defaulting to no adjustment (which would silently leave
+        # the estimate CONFOUNDED — the exact harm the backdoor criterion exists
+        # to prevent), try the FULL candidate set: with > 3 independent
+        # confounders the only admissible set is all of them, and any proper
+        # subset leaves a confounded path open. If the full set is admissible,
+        # return it (non-minimal but valid) rather than [[]].
+        if candidate_nodes and self._satisfies_backdoor_criterion(
+            dag, candidate_nodes, treatment, outcome
+        ):
+            return [sorted(candidate_nodes)]
 
-        return adjustment_sets[:3]  # Return top 3 adjustment sets
+        # Genuinely no admissible set (e.g. an unblockable backdoor path):
+        # documented fallback to no adjustment.
+        return [[]]
 
     def _find_backdoor_paths(
         self, dag: nx.DiGraph, treatment: str, outcome: str
@@ -395,28 +424,39 @@ class GraphBuilderNode:
 
         return backdoor_paths
 
-    def _blocks_all_backdoor_paths(
+    def _satisfies_backdoor_criterion(
         self, dag: nx.DiGraph, adjustment_set: Set[str], treatment: str, outcome: str
     ) -> bool:
-        """Check if adjustment set blocks all backdoor paths.
+        """Check whether ``adjustment_set`` satisfies the backdoor criterion.
+
+        Pearl backdoor criterion for (treatment, outcome):
+          1. No node in the adjustment set is a descendant of treatment.
+          2. The adjustment set d-separates treatment from outcome in the
+             proper backdoor graph (treatment's OUTGOING edges removed).
+
+        This correctly EXCLUDES colliders (and their descendants); conditioning
+        on a collider would open a non-causal path (M-bias).
 
         Args:
             dag: Causal DAG
-            adjustment_set: Set of nodes to adjust for
+            adjustment_set: Candidate set of nodes to adjust for
             treatment: Treatment node
             outcome: Outcome node
 
         Returns:
-            True if all backdoor paths are blocked
+            True iff the set is a valid backdoor adjustment set.
         """
-        backdoor_paths = self._find_backdoor_paths(dag, treatment, outcome)
+        if treatment in adjustment_set or outcome in adjustment_set:
+            return False
 
-        for path in backdoor_paths:
-            # Check if any node in adjustment set is on this path
-            if not any(node in adjustment_set for node in path[1:-1]):
-                return False  # Path not blocked
+        # (1) No descendant of treatment may be in the adjustment set.
+        if adjustment_set & nx.descendants(dag, treatment):
+            return False
 
-        return True
+        # (2) d-separation in the proper backdoor graph (remove T's out-edges).
+        backdoor_graph = dag.copy()
+        backdoor_graph.remove_edges_from(list(dag.out_edges(treatment)))
+        return bool(nx.is_d_separator(backdoor_graph, {treatment}, {outcome}, set(adjustment_set)))
 
     def _to_dot_format(self, dag: nx.DiGraph) -> str:
         """Convert DAG to DOT format for visualization.
@@ -458,15 +498,20 @@ class GraphBuilderNode:
         Returns:
             Tuple of (DiscoveryResult, gate evaluation dict)
         """
-        # Get data from state
+        # Get data from state. Canonical key is "estimation_data" — the only key
+        # ever written to data_cache (agent.py writes
+        # {"estimation_data": input_data["data"]}; estimation.py reads it).
+        # The previous read of "data" was always None for real callers (M-gb1),
+        # silently disabling auto-discovery.
         data_cache = state.get("data_cache", {})
-        data = data_cache.get("data")
+        data = data_cache.get("estimation_data")
 
         if data is None:
-            # Try to create synthetic data from variable info
-            # In production, this would come from the data source
-            logger.warning("No data in cache, using minimal discovery")
-            raise ValueError("No data available for discovery")
+            # No real data passthrough in the cache -> discovery cannot run.
+            # Raise a distinct, descriptive error; the caller (execute) records
+            # this as a surfaced skip signal rather than swallowing it silently.
+            logger.warning("No estimation_data in data_cache; skipping discovery")
+            raise ValueError("No estimation_data in data_cache for discovery")
 
         # Ensure data is a DataFrame
         if not isinstance(data, pd.DataFrame):
