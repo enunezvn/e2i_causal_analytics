@@ -1,5 +1,7 @@
 """Unit tests for leakage_detector node."""
 
+import asyncio
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -278,3 +280,44 @@ class TestZeroVarianceRareEventGuard_RC1:
         df = pd.DataFrame({"has_dx": flag, "target": y})
         findings = check_zero_variance_within_class(df, "target", ["has_dx"])
         assert findings == [], f"guard's len(class_1)<30 arm did not fire: {findings}"
+
+
+class TestDetectLeakageRareEventRegression_RC1:
+    """End-to-end: on a rare-event no-manifest cohort, detect_leakage must NOT
+    flag a legitimate cardinality-2 sparse predictor, while STILL catching an
+    injected post-index leak (caught redundantly by logical_dependency /
+    single_feature_auc). This is the regression #648 lacked."""
+
+    @staticmethod
+    def _cohort(n: int = 1000, n_pos: int = 30, seed: int = 0):
+        rng = np.random.default_rng(seed)
+        y = np.zeros(n, dtype=int)
+        y[rng.choice(n, size=n_pos, replace=False)] = 1
+        neg_idx = np.where(y == 0)[0]
+        has_asthma = np.zeros(n, dtype=float)
+        has_asthma[rng.choice(neg_idx, size=40, replace=False)] = 1.0  # legit sparse flag
+        leak = y.astype(float)  # genuine post-index leak == target
+        return pd.DataFrame({"has_asthma": has_asthma, "leak": leak, "target": y})
+
+    def test_detect_leakage_drops_only_the_genuine_leak(self):
+        df = self._cohort()
+        state = {
+            "experiment_id": "exp_rc1_regression",
+            "train_df": df,
+            "scope_spec": {
+                "required_features": ["has_asthma", "leak"],
+                "prediction_target": "target",
+                "feature_manifest_source": None,  # no manifest -> only the RC1 guard protects the flag
+            },
+            "skip_leakage_check": False,
+        }
+        result = asyncio.run(detect_leakage(state))
+        leaked = set(result.get("leaked_features", []))
+        assert "leak" in leaked, (
+            "regression: detect_leakage must still catch the genuine post-index "
+            f"leak via logical_dependency/single_feature_auc; got {leaked}"
+        )
+        assert "has_asthma" not in leaked, (
+            "RC1 regression: detect_leakage false-flagged a legitimate cardinality-2 "
+            f"sparse predictor on a rare-event cohort; got {leaked}"
+        )
