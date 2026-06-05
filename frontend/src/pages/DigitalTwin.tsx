@@ -410,16 +410,21 @@ export default function DigitalTwin() {
   });
 
   // Detail for a clicked history item (enabled only when one is selected).
-  const { data: selectedDetail, isLoading: isDetailLoading } = useSimulation(
-    selectedId ?? '',
-    { enabled: !!selectedId }
-  );
+  const {
+    data: selectedDetail,
+    isLoading: isDetailLoading,
+    isError: isDetailError,
+  } = useSimulation(selectedId ?? '', { enabled: !!selectedId });
 
   // What the Results tab shows: the inspected history detail takes priority,
   // otherwise the latest run result. Never a fabricated default.
   const displayed: AnySimulation | null = selectedId
     ? (selectedDetail ?? null)
     : (runResult ?? null);
+
+  // Mutually-exclusive results-panel sub-states.
+  const detailLoading = !!selectedId && isDetailLoading;
+  const detailError = !!selectedId && isDetailError && !isDetailLoading;
 
   const health = healthData ?? {
     status: 'unknown',
@@ -537,11 +542,11 @@ export default function DigitalTwin() {
             </button>
           </div>
 
-          {/* Results Tab */}
+          {/* Results Tab — mutually-exclusive states, no stale/fabricated data */}
           {activeTab === 'results' && (
             <>
-              {/* Loading: a history detail is being fetched, or a run is in flight */}
-              {((selectedId && isDetailLoading) || (isRunning && !displayed)) && (
+              {/* Loading: a run is in flight, or a selected history detail is fetching */}
+              {(isRunning || detailLoading) && (
                 <div className="text-center py-12">
                   <RefreshCw className="h-10 w-10 text-[var(--color-text-tertiary)] mx-auto mb-4 animate-spin" />
                   <p className="text-[var(--color-text-secondary)]">
@@ -550,8 +555,18 @@ export default function DigitalTwin() {
                 </div>
               )}
 
+              {/* Error: a selected history detail failed to load */}
+              {!isRunning && detailError && (
+                <div className="text-center py-12">
+                  <XCircle className="h-12 w-12 text-red-500/70 mx-auto mb-4" />
+                  <p className="text-[var(--color-text-secondary)]">
+                    This simulation could not be loaded. Please try again.
+                  </p>
+                </div>
+              )}
+
               {/* Error: the run failed and there is nothing to show */}
-              {!isRunning && isRunError && !displayed && (
+              {!isRunning && !detailError && isRunError && !displayed && (
                 <div className="text-center py-12">
                   <XCircle className="h-12 w-12 text-red-500/70 mx-auto mb-4" />
                   <p className="text-[var(--color-text-secondary)]">
@@ -561,12 +576,12 @@ export default function DigitalTwin() {
               )}
 
               {/* Result */}
-              {displayed && !(selectedId && isDetailLoading) && (
+              {!isRunning && !detailLoading && !detailError && displayed && (
                 <SimulationResultPanel simulation={displayed} />
               )}
 
               {/* Honest empty state */}
-              {!displayed && !isRunning && !isRunError && !(selectedId && isDetailLoading) && (
+              {!isRunning && !detailLoading && !detailError && !displayed && !isRunError && (
                 <div className="text-center py-12">
                   <FlaskConical className="h-12 w-12 text-[var(--color-text-tertiary)] mx-auto mb-4" />
                   <p className="text-[var(--color-text-secondary)]">Run a simulation to see results</p>

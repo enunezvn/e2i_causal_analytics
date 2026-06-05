@@ -387,4 +387,49 @@ describe('DigitalTwin', () => {
       expect.anything()
     );
   });
+
+  it('shows a running indicator during a re-run even when a previous result is displayed', () => {
+    (useRunSimulation as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: mockMutate,
+      isPending: true,
+      data: mockRunResult, // a previous run result is still in state
+      isError: false,
+    });
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+
+    // A run is in flight → show a running indicator, not the stale result silently.
+    expect(screen.getByText(/Running simulation/i)).toBeInTheDocument();
+    // The stale rationale must not be presented as the current result.
+    expect(
+      screen.queryByText(/Effect is positive and the 95% CI excludes zero/i)
+    ).not.toBeInTheDocument();
+  });
+
+  it('shows an error state when a selected history detail fails to load', async () => {
+    (useSimulation as ReturnType<typeof vi.fn>).mockImplementation((id: string) => ({
+      data: undefined,
+      isLoading: false,
+      isError: !!id,
+      error: { message: 'Simulation not found' },
+    }));
+    const user = userEvent.setup();
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+
+    await act(async () => {
+      await user.click(screen.getByRole('button', { name: /History/i }));
+    });
+    const matches = await screen.findAllByText(/Hcp Engagement/i);
+    const row = matches.find((el) => el.tagName === 'P') ?? matches[matches.length - 1];
+    await act(async () => {
+      await user.click(row);
+    });
+
+    // An honest error state — NOT the generic "run a simulation" empty prompt.
+    await waitFor(() => {
+      expect(screen.getByText(/could not be loaded/i)).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByText(/Run a simulation to see results/i)
+    ).not.toBeInTheDocument();
+  });
 });
