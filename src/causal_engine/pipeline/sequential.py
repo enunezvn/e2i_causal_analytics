@@ -226,7 +226,13 @@ def _apply_consensus(state: PipelineState, effects: List[Tuple[str, float, float
     if total_weight <= 0:
         return
 
-    # H9: inverse-variance weighting when every library has a valid positive SE.
+    # H9: inverse-variance weighting only when EVERY library has a valid positive
+    # SE. This is intentionally all-or-nothing, NOT per-library: mixing 1/SE²
+    # weights (for libraries with an SE) and confidence weights (for those
+    # without) on the same average would re-introduce exactly the
+    # incommensurable-scale problem this fix removes. A zero SE (e.g. a
+    # constant-prediction estimator) also fails the gate, avoiding an infinite
+    # 1/SE² weight.
     ses = {lib: _se_for_library(state, lib) for lib, _, _ in effects}
     use_inverse_variance = all((ses[lib] is not None and ses[lib] > 0) for lib, _, _ in effects)
     if use_inverse_variance:

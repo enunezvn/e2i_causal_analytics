@@ -310,14 +310,24 @@ class DoWhyExecutor(LibraryExecutor):
         # can weight DoWhy by PRECISION (inverse-variance) instead of its
         # hardcoded confidence=1.0, which otherwise structurally dominates the
         # blended consensus. None when DoWhy's estimator does not expose one.
+        #
+        # CRITICAL guard: DoWhy implements a native (cheap) standard error ONLY
+        # for the linear-regression estimator; for every other method
+        # ``get_standard_error()`` falls back to ``_estimate_std_error_with_bootstrap``,
+        # which RUNS a ~100-iteration refit on the full dataset (it does NOT
+        # raise, so a try/except would not catch the cost). Gate the call to the
+        # linear-regression method so we never trigger that bootstrap on the
+        # production path; other methods simply contribute no SE (→ confidence
+        # weighting), no latency hit.
         dowhy_se: Optional[float] = None
-        try:
-            se_raw = estimate.get_standard_error()
-            se_val = float(np.ravel(se_raw)[0]) if se_raw is not None else None
-            if se_val is not None and np.isfinite(se_val) and se_val > 0:
-                dowhy_se = se_val
-        except Exception:  # noqa: BLE001 - SE is method-dependent; absence is fine
-            dowhy_se = None
+        if "linear_regression" in (dowhy_method or "").lower():
+            try:
+                se_raw = estimate.get_standard_error()
+                se_val = float(np.ravel(se_raw)[0]) if se_raw is not None else None
+                if se_val is not None and np.isfinite(se_val) and se_val > 0:
+                    dowhy_se = se_val
+            except Exception:  # noqa: BLE001 - SE is method-dependent; absence is fine
+                dowhy_se = None
 
         # === Step 11: build success result ===
         latency_ms = int((time.time() - start_time) * 1000)

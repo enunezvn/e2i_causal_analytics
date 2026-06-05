@@ -61,6 +61,22 @@ class TestInverseVarianceWeighting:
             f"got {state['consensus_effect']}"
         )
 
+    def test_dowhy_se_is_gated_to_linear_regression(self):
+        """CRITICAL guard: DoWhy's get_standard_error must be gated to the
+        linear-regression method so it never triggers the ~100-iteration
+        bootstrap fallback on the production path."""
+        import inspect
+
+        from src.causal_engine.pipeline.executors import dowhy as dowhy_mod
+
+        src = inspect.getsource(dowhy_mod)
+        idx = src.index("estimate.get_standard_error()")
+        preceding = src[max(0, idx - 400) : idx]
+        assert "linear_regression" in preceding, (
+            "get_standard_error() must be guarded by a linear_regression check to "
+            "avoid DoWhy's bootstrap fallback (perf regression)"
+        )
+
     def test_falls_back_to_confidence_when_se_unavailable(self):
         # No SE/CI for any library → confidence-weighting fallback.
         state: dict = {}
