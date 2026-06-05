@@ -394,9 +394,12 @@ class TwoStageLSEstimator(BaseIVEstimator):
 
             # Hausman test for endogeneity
             if self.config.run_hausman_test:
-                hausman_stat, hausman_pvalue = self._hausman_test(Y, D, Z, X, n, k, p)
+                hausman_stat, hausman_pvalue, hausman_valid = self._hausman_test(
+                    Y, D, Z, X, n, k, p
+                )
                 diagnostics.hausman_stat = hausman_stat
                 diagnostics.hausman_pvalue = hausman_pvalue
+                diagnostics.hausman_valid = hausman_valid
 
         return diagnostics
 
@@ -526,6 +529,12 @@ class TwoStageLSEstimator(BaseIVEstimator):
 
         H0: Treatment is exogenous (OLS is consistent)
         H1: Treatment is endogenous (IV needed)
+
+        Returns:
+            (hausman_stat, hausman_pvalue, hausman_valid). ``hausman_valid`` is
+            False when the coefficient-variance difference is degenerate
+            (Var(β_IV) ≤ Var(β_OLS)); in that case the test is inconclusive and
+            must NOT be read as exogeneity.
         """
         # OLS estimate
         if X is not None:
@@ -561,15 +570,45 @@ class TwoStageLSEstimator(BaseIVEstimator):
         resid_iv = Y - W2_actual @ np.linalg.lstsq(W2, Y, rcond=None)[0]
         var_iv = np.sum(resid_iv**2) / (n - W2.shape[1])
 
-        # Hausman statistic
+        # Hausman statistic (H4 fix).
+        #
+        # H = (β_IV − β_OLS)² / (Var(β_IV) − Var(β_OLS)) where the variances are
+        # of the COEFFICIENT estimates: Var(β_j) = σ̂²·[(W'W)⁻¹]_jj  (O(1/n)).
+        # The previous code used the RESIDUAL variances σ̂²_IV − σ̂²_OLS (O(1),
+        # outcome-scale). Because σ̂²_IV ≈ σ̂²_OLS that difference is a tiny,
+        # sign-unstable noise quantity, so the ``var_diff ≤ 0 → stat=0, p=1.0``
+        # branch silently declared an endogenous treatment EXOGENOUS.
         diff = beta_iv - beta_ols
-        var_diff = var_iv - var_ols  # Approximate
+
+        # Coefficient variance of the treatment coefficient (column 0) for each
+        # fit. OLS uses W_ols; 2SLS uses the projected regressors W2 (D_hat in
+        # column 0), the standard 2SLS coefficient covariance σ̂²·(Ŵ'Ŵ)⁻¹.
+        def _coef_var(design: NDArray[np.float64], sigma2: float) -> float:
+            gram = design.T @ design
+            try:
+                gram_inv = np.linalg.inv(gram)
+            except np.linalg.LinAlgError:
+                gram_inv = np.linalg.pinv(gram)
+            return float(sigma2 * gram_inv[0, 0])
+
+        var_beta_ols = _coef_var(W_ols, var_ols)
+        var_beta_iv = _coef_var(W2, var_iv)
+        var_diff = var_beta_iv - var_beta_ols
 
         if var_diff > 0:
             hausman_stat = diff**2 / var_diff
             hausman_pvalue = 1 - stats.chi2.cdf(hausman_stat, 1)
+            hausman_valid = True
         else:
+            # Degenerate: Var(β_IV) ≤ Var(β_OLS) is a numerical pathology (e.g.
+            # a near-singular design), NOT evidence of exogeneity. Log it and
+            # flag the result invalid instead of silently reporting "exogenous".
+            logger.warning(
+                "Hausman test inconclusive: Var(beta_IV) - Var(beta_OLS) <= 0 "
+                f"({var_diff:.3e}); reporting hausman_valid=False (not exogenous)."
+            )
             hausman_stat = 0.0
             hausman_pvalue = 1.0
+            hausman_valid = False
 
-        return float(hausman_stat), float(hausman_pvalue)
+        return float(hausman_stat), float(hausman_pvalue), hausman_valid

@@ -73,6 +73,9 @@ class IVDiagnostics:
     # Endogeneity test (Hausman)
     hausman_stat: Optional[float] = None
     hausman_pvalue: Optional[float] = None
+    # False when the Hausman variance difference was degenerate (Var(β_IV) ≤
+    # Var(β_OLS)) — the test is INCONCLUSIVE, NOT evidence of exogeneity (H4).
+    hausman_valid: Optional[bool] = None
 
     # Partial R-squared of instruments
     partial_r_squared: float = 0.0
@@ -97,6 +100,10 @@ class IVDiagnostics:
 
     def is_endogenous(self, alpha: float = 0.05) -> bool:
         """Check if treatment is likely endogenous (Hausman test)."""
+        # H4: a degenerate (invalid) Hausman result must NOT be read as
+        # "exogenous" (p≈1.0) — treat it as inconclusive → assume endogenous.
+        if self.hausman_valid is False:
+            return True
         if self.hausman_pvalue is not None:
             return self.hausman_pvalue < alpha
         return True  # Assume endogenous if not tested
@@ -114,6 +121,7 @@ class IVDiagnostics:
             "sargan_pvalue": self.sargan_pvalue,
             "hausman_stat": self.hausman_stat,
             "hausman_pvalue": self.hausman_pvalue,
+            "hausman_valid": self.hausman_valid,
             "is_weak_instrument": self.is_weak_instrument(),
             "passes_overid_test": self.passes_overid_test(),
         }

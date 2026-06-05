@@ -266,18 +266,26 @@ def sargan_test(
     residuals: NDArray[np.float64],
     instruments: NDArray[np.float64],
     n_endogenous: int = 1,
+    covariates: Optional[NDArray[np.float64]] = None,
 ) -> OveridentificationTest:
     """
     Sargan test for overidentifying restrictions.
 
     Under the null hypothesis that instruments are valid,
     the test statistic follows chi-squared(k - g) where
-    k = number of instruments, g = number of endogenous variables.
+    k = number of (excluded) instruments, g = number of endogenous variables.
+
+    The structural residuals must be orthogonal to the FULL set of exogenous
+    variables — the excluded instruments AND any included exogenous covariates.
+    Projecting onto the instruments alone (the previous behavior) mis-sizes the
+    statistic and MISSES over-identification violations that load on an included
+    covariate; pass ``covariates`` so they enter the projection.
 
     Args:
         residuals: Structural equation residuals (n,)
-        instruments: Instruments (n, k)
+        instruments: Excluded instruments (n, k)
         n_endogenous: Number of endogenous variables
+        covariates: Included exogenous covariates (n, p), optional
 
     Returns:
         OveridentificationTest with Sargan statistic
@@ -287,7 +295,8 @@ def sargan_test(
     Z = instruments.reshape(-1, 1) if instruments.ndim == 1 else instruments
     k = Z.shape[1]
 
-    # Degrees of freedom (overidentification)
+    # Degrees of freedom (overidentification) — counts the EXCLUDED instruments
+    # only; included exogenous covariates do not add overidentifying restrictions.
     df = k - n_endogenous
 
     if df <= 0:
@@ -300,15 +309,21 @@ def sargan_test(
             message="Model is exactly identified - Sargan test not applicable",
         )
 
-    # Sargan statistic: n * R² from regressing residuals on instruments
-    try:
-        ZtZ_inv = np.linalg.inv(Z.T @ Z)
-    except np.linalg.LinAlgError:
-        ZtZ_inv = np.linalg.pinv(Z.T @ Z)
+    # Project residuals onto the FULL exogenous span [Z, covariates], not Z alone.
+    if covariates is not None:
+        X = covariates.reshape(-1, 1) if covariates.ndim == 1 else covariates
+        W = np.column_stack([Z, X])
+    else:
+        W = Z
 
-    # Project residuals onto instrument space
-    P_Z = Z @ ZtZ_inv @ Z.T
-    e_hat = P_Z @ e
+    # Sargan statistic: n * R² from regressing residuals on the exogenous set
+    try:
+        WtW_inv = np.linalg.inv(W.T @ W)
+    except np.linalg.LinAlgError:
+        WtW_inv = np.linalg.pinv(W.T @ W)
+
+    P_W = W @ WtW_inv @ W.T
+    e_hat = P_W @ e
 
     ss_reg = np.sum(e_hat**2)
     ss_tot = np.sum(e**2)
@@ -546,9 +561,10 @@ def run_all_diagnostics(
     except Exception as e:
         logger.warning(f"Cragg-Donald test failed: {e}")
 
-    # Overidentification test
+    # Overidentification test — include exogenous covariates in the projection
+    # so residuals are checked for orthogonality to the FULL exogenous set.
     try:
-        report.sargan = sargan_test(residuals, instruments)
+        report.sargan = sargan_test(residuals, instruments, covariates=covariates)
     except Exception as e:
         logger.warning(f"Sargan test failed: {e}")
 
