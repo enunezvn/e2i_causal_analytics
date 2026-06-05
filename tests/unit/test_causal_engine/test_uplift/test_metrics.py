@@ -160,6 +160,31 @@ class TestQiniCurve:
         assert x_values[0] == 0.0
         assert qini_values[0] == 0.0
 
+    def test_qini_curve_no_dead_cumsum_statements(self):
+        """Source guard: calculate_qini_curve must not contain the two dead,
+        result-discarded cumsum statements (np.cumsum(treatment_sorted) and
+        np.cumsum(1 - treatment_sorted)). Their results were never bound."""
+        import inspect
+
+        from src.causal_engine.uplift import metrics as metrics_mod
+
+        source = inspect.getsource(metrics_mod.calculate_qini_curve)
+        # The live computations bind to *_cum names; the dead lines were bare
+        # expression statements. Assert no bare cumsum expression remains.
+        assert "np.cumsum(treatment_sorted)\n" not in source
+        assert "np.cumsum(1 - treatment_sorted)\n" not in source
+
+    def test_qini_curve_value_unchanged_after_dead_code_removal(self, simple_uplift_data):
+        """Removing the dead lines must not change qini output (regression)."""
+        import numpy as np
+
+        uplift_scores, treatment, outcome = simple_uplift_data
+        x_values, qini_values = calculate_qini_curve(uplift_scores, treatment, outcome)
+        # Curve still starts at origin and has n+1 points (live path intact).
+        assert x_values[0] == 0.0
+        assert qini_values[0] == 0.0
+        assert len(qini_values) == len(np.asarray(uplift_scores).flatten()) + 1
+
 
 # =============================================================================
 # CUMULATIVE GAIN TESTS

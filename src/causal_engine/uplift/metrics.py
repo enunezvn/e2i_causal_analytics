@@ -145,9 +145,7 @@ def calculate_qini_curve(
     treatment_sorted = treatment[sorted_idx]
     outcome_sorted = outcome[sorted_idx]
 
-    # Calculate cumulative counts
-    np.cumsum(treatment_sorted)
-    np.cumsum(1 - treatment_sorted)
+    # Calculate cumulative outcome counts for treated / control
     outcome_treated_cum = np.cumsum(treatment_sorted * outcome_sorted)
     outcome_control_cum = np.cumsum((1 - treatment_sorted) * outcome_sorted)
 
