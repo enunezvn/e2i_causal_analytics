@@ -553,6 +553,16 @@ class DiscoveryRunner:
         if n_algorithms == 0:
             return [], nx.DiGraph()
 
+        # MED: the agreement threshold + edge confidence must be relative to the
+        # algorithms that actually CONVERGED, not the total (which includes
+        # failed / non-converged ones). Dividing by the total deflated every
+        # edge's confidence whenever an algorithm failed (e.g. 2 of 2 converged
+        # algorithms agreeing reported as 0.5 on a 4-algorithm run where 2
+        # crashed).
+        n_converged = sum(1 for r in results if r.converged)
+        if n_converged == 0:
+            return [], nx.DiGraph()
+
         # Count votes for each edge
         edge_votes: Dict[Tuple[str, str], List[str]] = {}
 
@@ -567,13 +577,13 @@ class DiscoveryRunner:
                 edge_votes[edge_key].append(result.algorithm.value)
 
         # Filter edges by threshold and create DiscoveredEdge objects
-        min_votes = max(1, int(n_algorithms * threshold))
+        min_votes = max(1, int(n_converged * threshold))
         edges = []
 
         for (source, target), algorithms in edge_votes.items():
             n_votes = len(algorithms)
             if n_votes >= min_votes:
-                confidence = n_votes / n_algorithms
+                confidence = n_votes / n_converged
                 edges.append(
                     DiscoveredEdge(
                         source=source,
