@@ -608,19 +608,23 @@ def _validate_causal_impact(output: dict[str, Any]) -> tuple[bool, str]:
         return (False, "Agent returned status='error' (execution failure)")
 
     if status == "failed":
-        # Accept ONLY an honest fail-closed block: refutation ran AND the gate
-        # explicitly BLOCKED. Anything else is a real failure (missing ATE,
-        # refutation error). This preserves H1 coverage: a refutation that
-        # ERRORED (did not run) still fails the smoke gate.
+        # Accept an honest fail-closed verdict. Two honest shapes (both require the
+        # refutation suite to have actually run, refutation_tests_total > 0):
+        #   1) refutation BLOCKED the claim (gate_decision == 'block'); or
+        #   2) the SENSITIVITY node failed (M-fo3) — surfaced as needs_review=True
+        #      with the refutation having run/passed. Anything else (no ATE,
+        #      refutation errored/never ran, status='error') is a real failure.
         gate_decision = str(_safe_get(output, "gate_decision", "") or "").lower()
         refutation_total = _safe_get(output, "refutation_tests_total", 0) or 0
-        if gate_decision != "block" or not (
-            isinstance(refutation_total, (int, float)) and refutation_total > 0
-        ):
+        ran = isinstance(refutation_total, (int, float)) and refutation_total > 0
+        honest_block = gate_decision == "block" and ran
+        honest_sensitivity_failure = bool(_safe_get(output, "needs_review", False)) and ran
+        if not (honest_block or honest_sensitivity_failure):
             return (
                 False,
-                "status='failed' is not an honest fail-closed block "
-                f"(gate_decision={gate_decision!r}, refutation_tests_total={refutation_total}); "
+                "status='failed' is not an honest fail-closed verdict "
+                f"(gate_decision={gate_decision!r}, needs_review={_safe_get(output, 'needs_review', False)!r}, "
+                f"refutation_tests_total={refutation_total}); "
                 "refutation did not run or estimation failed",
             )
 
