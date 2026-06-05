@@ -283,6 +283,36 @@ class TestCausalValidator:
         assert abs(adjusted - 0.25) < 0.05
         assert abs(adjusted - 0.25) < abs(unadjusted - 0.25)
 
+    def test_dowhy_unavailable_is_unvalidated_not_perfect_pass(self, validator, simple_linear_data):
+        """When DoWhy is unavailable, refutations cannot run. The result must be
+        treated as UNVALIDATED (fail-closed) — refutation_pass_rate must NOT be
+        set to a perfect 1.0, and meets_criteria() must be False even when the ATE
+        is within tolerance.
+        """
+        validator._dowhy_available = False
+        ground_truth = GroundTruthEffect(
+            brand=Brand.REMIBRUTINIB,
+            dgp_type=DGPType.SIMPLE_LINEAR,
+            true_ate=0.40,
+            tolerance=0.10,
+            confounders=[],
+            treatment_variable="engagement_score",
+            outcome_variable="treatment_initiated",
+        )
+
+        result = validator.validate(
+            df=simple_linear_data,
+            ground_truth=ground_truth,
+            run_refutations=True,
+        )
+
+        # Refutations could not run -> not a perfect pass.
+        assert result.refutation_pass_rate == 0.0
+        # And the result must not be declared valid on the strength of refutations
+        # that never ran (fail-closed), regardless of ATE tolerance.
+        assert result.is_valid is False
+        assert any("DoWhy not available" in w for w in result.warnings)
+
 
 class TestCausalValidationResult:
     """Test suite for CausalValidationResult."""

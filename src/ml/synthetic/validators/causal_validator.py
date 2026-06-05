@@ -175,8 +175,10 @@ class CausalValidator:
             self._run_refutations(df, treatment, outcome, confounders, result)
         elif run_refutations:
             result.warnings.append("Refutation tests skipped: DoWhy not available")
-            # Give benefit of the doubt if DoWhy not available
-            result.refutation_pass_rate = 1.0
+            # Fail closed: refutations could not run, so the estimate is UNVALIDATED.
+            # Do NOT award a perfect pass — leave the rate at 0.0 so meets_criteria()
+            # treats the result as not-yet-validated.
+            result.refutation_pass_rate = 0.0
 
         # Determine overall validity
         result.is_valid = result.meets_criteria()
