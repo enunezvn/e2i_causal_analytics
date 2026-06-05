@@ -37,7 +37,11 @@ from src.causal_engine.discovery.algorithms.lingam_wrapper import (  # noqa: E40
     DirectLiNGAMAlgorithm,
     ICALiNGAMAlgorithm,
 )
-from src.causal_engine.discovery.base import DiscoveryConfig  # noqa: E402
+from src.causal_engine.discovery.base import (  # noqa: E402
+    AlgorithmResult,
+    DiscoveryAlgorithmType,
+    DiscoveryConfig,
+)
 from src.causal_engine.discovery.driver_ranker import DriverRanker  # noqa: E402
 
 
@@ -74,6 +78,33 @@ class TestLiNGAMOrientation:
             result = algo.discover(_xy_data(), config)
         assert ("X", "Y") in result.edge_list, f"expected X→Y, got {result.edge_list}"
         assert ("Y", "X") not in result.edge_list
+
+
+class TestMixingMatrix:
+    def test_mixing_matrix_uses_raw_structural_B(self):
+        """get_mixing_matrix must use the RAW structural B, not the i→j transpose.
+
+        adjacency_weights is stored in the i→j convention (transposed lingam B);
+        the mixing matrix A = (I − B)^{-1} needs the raw structural B. For X→Y
+        (weight 0.5) the raw B has B[1,0]=0.5, so A is lower-triangular
+        [[1,0],[0.5,1]] — the un-transposed form would give the wrong upper
+        [[1,0.5],[0,1]].
+        """
+        algo = ICALiNGAMAlgorithm()
+        result = AlgorithmResult(
+            algorithm=DiscoveryAlgorithmType.ICA_LINGAM,
+            adjacency_matrix=np.array([[0, 1], [0, 0]]),
+            edge_list=[("X", "Y")],
+            runtime_seconds=0.1,
+            metadata={
+                "adjacency_weights": [[0.0, 0.5], [0.0, 0.0]],  # i→j: X→Y, weight 0.5
+                "node_names": ["X", "Y"],
+            },
+        )
+        A = algo.get_mixing_matrix(result)
+        assert A is not None
+        assert A[1, 0] == pytest.approx(0.5)
+        assert A[0, 1] == pytest.approx(0.0)
 
 
 class TestDriverRankPropagation:

@@ -94,13 +94,15 @@ class DirectLiNGAMAlgorithm(BaseDiscoveryAlgorithm):
             model.fit(X)
 
             # Get adjacency matrix (continuous weights).
-            # H7 fix: lingam defines adjacency_matrix_ as B where x_i = Σ_j B[i,j]·x_j,
-            # so a nonzero B[i,j] means edge j → i (row = effect, column = cause).
-            # ``_adjacency_to_edge_list`` interprets A[i,j]≠0 as i → j, so B must be
-            # TRANSPOSED before conversion or every discovered edge is reversed.
+            # lingam defines adjacency_matrix_ as B where x_i = Σ_j B[i,j]·x_j, so a
+            # nonzero B[i,j] means edge j → i (row = effect, column = cause).
+            # ``_adjacency_to_edge_list`` and get_causal_effects use the i → j
+            # convention (A[i,j] ⇒ i → j), so transpose B once here — otherwise
+            # every discovered edge is reversed (H7). get_mixing_matrix, which
+            # needs the raw structural B, transposes this stored value back.
             adj_weights = model.adjacency_matrix_.T
 
-            # Convert to binary adjacency using threshold
+            # Convert to binary adjacency using threshold (i → j convention)
             adj_matrix = self._threshold_adjacency(adj_weights)
 
             # Get causal order
@@ -197,10 +199,12 @@ class DirectLiNGAMAlgorithm(BaseDiscoveryAlgorithm):
         adj_weights = np.array(adj_weights)
         n = len(node_names)
 
+        # metadata stores B already TRANSPOSED to the i → j convention, so a
+        # nonzero adj_weights[i, j] is the edge i → j (source = i, target = j).
         for i in range(n):
             for j in range(n):
                 if abs(adj_weights[i, j]) > self.WEIGHT_THRESHOLD:
-                    effects[(node_names[i], node_names[j])] = adj_weights[i, j]
+                    effects[(node_names[i], node_names[j])] = float(adj_weights[i, j])
 
         return effects
 
@@ -266,13 +270,15 @@ class ICALiNGAMAlgorithm(BaseDiscoveryAlgorithm):
             model.fit(X)
 
             # Get adjacency matrix (continuous weights).
-            # H7 fix: lingam defines adjacency_matrix_ as B where x_i = Σ_j B[i,j]·x_j,
-            # so a nonzero B[i,j] means edge j → i (row = effect, column = cause).
-            # ``_adjacency_to_edge_list`` interprets A[i,j]≠0 as i → j, so B must be
-            # TRANSPOSED before conversion or every discovered edge is reversed.
+            # lingam defines adjacency_matrix_ as B where x_i = Σ_j B[i,j]·x_j, so a
+            # nonzero B[i,j] means edge j → i (row = effect, column = cause).
+            # ``_adjacency_to_edge_list`` and get_causal_effects use the i → j
+            # convention (A[i,j] ⇒ i → j), so transpose B once here — otherwise
+            # every discovered edge is reversed (H7). get_mixing_matrix, which
+            # needs the raw structural B, transposes this stored value back.
             adj_weights = model.adjacency_matrix_.T
 
-            # Convert to binary adjacency using threshold
+            # Convert to binary adjacency using threshold (i → j convention)
             adj_matrix = self._threshold_adjacency(adj_weights)
 
             # Get causal order
@@ -367,10 +373,12 @@ class ICALiNGAMAlgorithm(BaseDiscoveryAlgorithm):
         if adj_weights is None:
             return None
 
-        # In ICA-LiNGAM, the adjacency matrix B is related to mixing by:
-        # X = BX + E => X = (I - B)^{-1} E
-        # So mixing matrix A = (I - B)^{-1}
-        B = np.array(adj_weights)
+        # In ICA-LiNGAM, the structural adjacency matrix B is related to mixing by:
+        # X = BX + E => X = (I - B)^{-1} E, so mixing matrix A = (I - B)^{-1}.
+        # ``adjacency_weights`` in metadata is stored TRANSPOSED to the i → j
+        # convention (H7), so transpose it back to the raw structural B before
+        # forming (I - B)^{-1} — otherwise this computes (I - Bᵀ)^{-1}.
+        B = np.array(adj_weights).T
         try:
             I = np.eye(B.shape[0])
             A = np.linalg.inv(I - B)
@@ -400,9 +408,11 @@ class ICALiNGAMAlgorithm(BaseDiscoveryAlgorithm):
         adj_weights = np.array(adj_weights)
         n = len(node_names)
 
+        # metadata stores B already TRANSPOSED to the i → j convention, so a
+        # nonzero adj_weights[i, j] is the edge i → j (source = i, target = j).
         for i in range(n):
             for j in range(n):
                 if abs(adj_weights[i, j]) > self.WEIGHT_THRESHOLD:
-                    effects[(node_names[i], node_names[j])] = adj_weights[i, j]
+                    effects[(node_names[i], node_names[j])] = float(adj_weights[i, j])
 
         return effects
