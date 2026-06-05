@@ -7,6 +7,7 @@ import pytest
 from src.agents.ml_foundation.data_preparer.nodes.leakage_detector import (
     check_target_leakage,
     check_train_test_contamination,
+    check_zero_variance_within_class,
     detect_leakage,
 )
 
@@ -224,3 +225,56 @@ async def test_leakage_detector_missing_train_df():
     assert "error" in result
     assert result["error_type"] == "leakage_detection_error"
     assert result["leakage_detected"] is True  # Fail safe
+
+
+class TestZeroVarianceRareEventGuard_RC1:
+    """RC1 — check_zero_variance_within_class must NOT flag a cardinality-2 sparse
+    pre-index predictor as leakage on a rare-event cohort. Constant-within-the-
+    tiny-positive-class is small-sample degeneracy, not a leak."""
+
+    @staticmethod
+    def _rare_event_card2_cohort(n: int = 1000, n_pos: int = 30, n_flag: int = 40, seed: int = 0):
+        rng = np.random.default_rng(seed)
+        y = np.zeros(n, dtype=int)
+        y[rng.choice(n, size=n_pos, replace=False)] = 1
+        # All the 1s land in the NEGATIVE class -> std_1 == 0, mean_1 == 0,
+        # std_0 > 0, mean_0 > 0. Pre-guard this triggered the HIGH branch; the
+        # RC1 guard now skips it.
+        flag = np.zeros(n, dtype=float)
+        neg_idx = np.where(y == 0)[0]
+        flag[rng.choice(neg_idx, size=n_flag, replace=False)] = 1.0
+        return pd.DataFrame({"has_asthma": flag, "target": y}), "target", "has_asthma"
+
+    def test_sparse_card2_flag_not_flagged_on_rare_event_cohort(self):
+        df, target, feat = self._rare_event_card2_cohort()
+        findings = check_zero_variance_within_class(df, target, [feat])
+        assert findings == [], (
+            "RC1 regression: zero_variance_within_class false-fired on a legitimate "
+            f"cardinality-2 sparse predictor on a rare-event cohort: {findings}"
+        )
+
+    def test_guard_does_not_suppress_a_dense_separating_leak(self):
+        rng = np.random.default_rng(1)
+        n = 400
+        y = rng.integers(0, 2, n)  # ~50% prevalence, dense
+        feat = np.where(y == 1, 5.0, rng.normal(0.0, 0.0001, n))  # std_1==0, means differ
+        df = pd.DataFrame({"leaky": feat, "target": y})
+        findings = check_zero_variance_within_class(df, "target", ["leaky"])
+        assert any(f.feature == "leaky" for f in findings), (
+            "guard over-reached: a dense balanced within-class-constant separator "
+            "must still be flagged"
+        )
+
+    def test_small_positive_class_above_5pct_still_guarded(self):
+        """Exercises the len(class_1) < 30 arm: n_pos=20 in n=100 -> pos_rate=0.20
+        (>5%, so the pos_rate arm is False) but the absolute positive count is < 30."""
+        rng = np.random.default_rng(2)
+        n, n_pos, n_flag = 100, 20, 8
+        y = np.zeros(n, dtype=int)
+        y[rng.choice(n, size=n_pos, replace=False)] = 1
+        flag = np.zeros(n, dtype=float)
+        neg_idx = np.where(y == 0)[0]
+        flag[rng.choice(neg_idx, size=n_flag, replace=False)] = 1.0  # all 1s in negatives
+        df = pd.DataFrame({"has_dx": flag, "target": y})
+        findings = check_zero_variance_within_class(df, "target", ["has_dx"])
+        assert findings == [], f"guard's len(class_1)<30 arm did not fire: {findings}"
