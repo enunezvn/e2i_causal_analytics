@@ -176,6 +176,16 @@ class TestUpliftResult:
         assert isinstance(result_dict["uplift_scores"], list)
         assert len(result_dict["uplift_scores"]) == 100
 
+    def test_to_dict_carries_provenance_marker(self, successful_result):
+        """M-stat4: to_dict() must expose the honesty provenance marker."""
+        from src.causal_engine.uplift.base import PROVENANCE_MODEL_PREDICTED_UPLIFT
+
+        result_dict = successful_result.to_dict()
+        assert result_dict["data_provenance"] == PROVENANCE_MODEL_PREDICTED_UPLIFT
+        assert result_dict["ate"] == 0.05
+        assert result_dict["att"] == 0.08
+        assert result_dict["atc"] == 0.02
+
     def test_result_with_metadata(self):
         """Test result with custom metadata."""
         result = UpliftResult(
