@@ -81,6 +81,13 @@ logger = logging.getLogger(__name__)
 # (with exc_info) instead; the client receives only this opaque message.
 _GENERIC_500_DETAIL = "Internal server error"
 
+_ROBUSTNESS_UNVALIDATED_WARNING = (
+    "robustness_validation_performed=false: this ATE was estimated but NOT "
+    "refutation-tested (the sequential/parallel pipeline does not run "
+    "refutation/sensitivity checks). Treat the effect as UNVALIDATED for "
+    "robustness; do not present it as a validated causal claim."
+)
+
 router = APIRouter(
     prefix="/causal",
     tags=["Causal Inference"],
@@ -1064,6 +1071,12 @@ def _sequential_output_to_response(
 
     stages_completed = sum(1 for r in stage_results if r.status == AnalysisStatus.COMPLETED)
 
+    # M-fo2: read structural graph-quality from the (optional) mapping, guarding
+    # the non-dict case so mypy narrows the type and a malformed value yields None.
+    graph_quality = output.get("graph_quality")
+    if not isinstance(graph_quality, dict):
+        graph_quality = {}
+
     return SequentialPipelineResponse(
         pipeline_id=pipeline_id,
         status=_derive_response_status(stages_completed, len(request.stages)),
@@ -1080,7 +1093,11 @@ def _sequential_output_to_response(
         effect_estimate_variance=None,
         total_latency_ms=int(output.get("total_latency_ms") or 0),
         created_at=datetime.now(timezone.utc),
-        warnings=list(output.get("warnings") or []),
+        warnings=[*list(output.get("warnings") or []), _ROBUSTNESS_UNVALIDATED_WARNING],
+        robustness_validation_performed=False,
+        robustness_warning=_ROBUSTNESS_UNVALIDATED_WARNING,
+        graph_is_dag=graph_quality.get("is_dag"),
+        structural_quality=graph_quality.get("structural_quality"),
     )
 
 
@@ -1127,6 +1144,12 @@ def _parallel_output_to_response(
             failed.append(lib_value)
             library_results[lib_value] = {"error": "library skipped during execution"}
 
+    # M-fo2: read structural graph-quality from the (optional) mapping, guarding
+    # the non-dict case so mypy narrows the type and a malformed value yields None.
+    graph_quality = output.get("graph_quality")
+    if not isinstance(graph_quality, dict):
+        graph_quality = {}
+
     return ParallelPipelineResponse(
         pipeline_id=pipeline_id,
         status=(
@@ -1145,7 +1168,11 @@ def _parallel_output_to_response(
         consensus_method=request.consensus_method,
         total_latency_ms=int(output.get("total_latency_ms") or 0),
         created_at=datetime.now(timezone.utc),
-        warnings=list(output.get("warnings") or []),
+        warnings=[*list(output.get("warnings") or []), _ROBUSTNESS_UNVALIDATED_WARNING],
+        robustness_validation_performed=False,
+        robustness_warning=_ROBUSTNESS_UNVALIDATED_WARNING,
+        graph_is_dag=graph_quality.get("is_dag"),
+        structural_quality=graph_quality.get("structural_quality"),
     )
 
 
