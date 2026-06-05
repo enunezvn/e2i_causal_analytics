@@ -262,7 +262,7 @@ def _perfect_curve_area(
     """Area under ``curve_fn`` for the optimal in-hindsight ranking (H5)."""
     oracle = _optimal_ranking_scores(treatment, outcome)
     x, vals = curve_fn(oracle, treatment, outcome)
-    return float(np.trapz(vals, x))
+    return float(np.trapezoid(vals, x))
 
 
 def auuc(
@@ -288,7 +288,7 @@ def auuc(
     x_values, uplift_values = calculate_uplift_curve(uplift_scores, treatment, outcome)
 
     # Calculate area using trapezoidal rule
-    area = np.trapz(uplift_values, x_values)
+    area = np.trapezoid(uplift_values, x_values)
 
     if normalize:
         # H5/MED: normalize against the perfect-targeting AREA — the integral of
@@ -324,7 +324,7 @@ def qini_coefficient(
     x_values, qini_values = calculate_qini_curve(uplift_scores, treatment, outcome)
 
     # Area under the model's Qini curve.
-    qini_area = np.trapz(qini_values, x_values)
+    qini_area = np.trapezoid(qini_values, x_values)
 
     # Random model: the straight diagonal (0,0)->(1, total_effect). Its area is
     # the triangle 0.5·height, where height = qini_values[-1] is the total
@@ -333,7 +333,7 @@ def qini_coefficient(
 
     # H5 fix: the "perfect" reference is the AREA under the Qini curve of the
     # optimal in-hindsight ranking — NOT the endpoint HEIGHT qini_values[-1].
-    # The previous code divided a true np.trapz AREA by a curve HEIGHT, which is
+    # The previous code divided a true trapezoidal AREA by a curve HEIGHT, which is
     # dimensionally inconsistent and not comparable to any standard Qini value.
     perfect_area = _perfect_curve_area(calculate_qini_curve, treatment, outcome)
 
@@ -362,7 +362,7 @@ def qini_auc(
         Area under Qini curve
     """
     x_values, qini_values = calculate_qini_curve(uplift_scores, treatment, outcome)
-    return float(np.trapz(qini_values, x_values))
+    return float(np.trapezoid(qini_values, x_values))
 
 
 def cumulative_gain_auc(
@@ -381,7 +381,7 @@ def cumulative_gain_auc(
         Area under cumulative gain curve
     """
     x_values, gain_values = calculate_cumulative_gain(uplift_scores, treatment, outcome)
-    return float(np.trapz(gain_values, x_values))
+    return float(np.trapezoid(gain_values, x_values))
 
 
 def uplift_at_k(
