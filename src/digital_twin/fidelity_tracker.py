@@ -16,7 +16,7 @@ Key Functions:
 
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 from uuid import UUID
 
 import numpy as np
@@ -392,7 +392,8 @@ class FidelityTracker:
         # awaited (#705 H7/H7b) — a sync ``cast`` returned the un-awaited
         # coroutine object before this fix.
         if self.repository:
-            return await self.repository.get_fidelity_by_simulation(simulation_id)
+            record = await self.repository.get_fidelity_by_simulation(simulation_id)
+            return cast(Optional[FidelityRecord], record)
 
         return None
 

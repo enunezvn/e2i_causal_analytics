@@ -154,7 +154,7 @@ async def train_and_persist_twin(
         "model_id": str(model_id),
         "run_id": ref.run_id,
         "model_uri": ref.model_uri,
-        "r2_score": float(metrics.r2_score),
+        "r2_score": float(metrics.r2_score) if metrics.r2_score is not None else 0.0,
         "training_samples": int(getattr(metrics, "training_samples", len(frame))),
         "data_provenance": provenance,
         "twin_type": twin_type.value,

@@ -130,7 +130,7 @@ def train_twin_model(self: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
         payload.get("brand"),
         payload.get("twin_type"),
     )
-    result = run_async(_train_twin_model_async(payload))
+    result: Dict[str, Any] = run_async(_train_twin_model_async(payload))
     logger.info("train_twin_model task done model=%s", result.get("model_id"))
     return result
 

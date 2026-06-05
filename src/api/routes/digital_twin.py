@@ -29,7 +29,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -109,7 +109,7 @@ async def _resolve_active_model_row(
             ),
             headers={"Retry-After": "30"},
         )
-    return row
+    return cast(Dict[str, Any], row)
 
 
 async def _load_trained_generator(
