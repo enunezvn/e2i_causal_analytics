@@ -89,8 +89,8 @@ class TestSensitivityNode:
         assert "robust_to_confounding" in sens
         assert isinstance(sens["robust_to_confounding"], bool)
 
-        # Robust if E-value > 2.0
-        expected_robust = sens["e_value"] > 2.0
+        # M-stat2: robustness is gated on the conservative CI E-value.
+        expected_robust = sens["e_value_ci"] > 2.0
         assert sens["robust_to_confounding"] == expected_robust
 
     @pytest.mark.asyncio
@@ -112,11 +112,11 @@ class TestSensitivityNode:
         assert "unmeasured_confounder_strength" in sens
         assert sens["unmeasured_confounder_strength"] in ["weak", "moderate", "strong"]
 
-        # Classification based on E-value
-        e_value = sens["e_value"]
-        if e_value < 1.5:
+        # M-stat2: classification keys off the conservative CI E-value.
+        e_value_ci = sens["e_value_ci"]
+        if e_value_ci < 1.5:
             assert sens["unmeasured_confounder_strength"] == "weak"
-        elif e_value < 3.0:
+        elif e_value_ci < 3.0:
             assert sens["unmeasured_confounder_strength"] == "moderate"
         else:
             assert sens["unmeasured_confounder_strength"] == "strong"
