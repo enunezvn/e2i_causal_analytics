@@ -30,7 +30,13 @@ logger = logging.getLogger(__name__)
 # Configuration from environment
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "") or os.environ.get("SUPABASE_ANON_KEY", "")
-SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
+# M9 (#703): prefer the service-role key (both naming conventions) so this client
+# — like get_supabase_client in src/memory/services/factories.py — authenticates
+# as service-role and keeps table access after migration 058 REVOKEs the
+# anon/authenticated grants. Anon (SUPABASE_KEY) remains the dev/test fallback.
+SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "") or os.environ.get(
+    "SUPABASE_SERVICE_KEY", ""
+)
 
 # Global client reference
 _supabase_client: Optional[Any] = None

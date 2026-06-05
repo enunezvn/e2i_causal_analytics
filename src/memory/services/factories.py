@@ -17,7 +17,7 @@ Usage:
     # Get clients (cached/pooled)
     redis = get_redis_client()
     supabase = get_supabase_client()
-    async_supabase = await get_async_supabase_client()  # For async contexts (anon key)
+    async_supabase = await get_async_supabase_client()  # For async contexts (service-role; anon fallback in dev/test)
     async_service = await get_async_supabase_service_client()  # For internal ops (service_role key)
     falkordb = get_falkordb_client()
 
@@ -641,12 +641,39 @@ _async_supabase_client = None
 _async_supabase_service_client = None
 
 
+def _resolve_supabase_key() -> str | None:
+    """Resolve the Supabase key for a TRUSTED server-side client (M9 / #703).
+
+    The backend authenticates as service-role, not anon: SERVICE_ROLE_KEY >
+    SERVICE_KEY > ANON_KEY. The anon key is a dev/test fallback only. After
+    migration 058 REVOKEs the anon/authenticated table+view grants, an anon-key
+    client would lose table access, so the service key is required in prod.
+    Mirrors get_async_supabase_service_client's resolution.
+    """
+    return (
+        os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+        or os.environ.get("SUPABASE_SERVICE_KEY")
+        or os.environ.get("SUPABASE_ANON_KEY")
+    )
+
+
+def _supabase_key_type() -> str:
+    """'service_role' if a service key is configured, else 'anon' (for logging)."""
+    if os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_SERVICE_KEY"):
+        return "service_role"
+    return "anon"
+
+
 def get_supabase_client():
     """
     Get Supabase client for episodic/procedural memory.
 
-    Requires SUPABASE_URL and SUPABASE_ANON_KEY environment variables.
-    Returns a cached client for connection reuse.
+    Authenticates as the SERVICE-ROLE (trusted server-side caller): prefers
+    SUPABASE_SERVICE_ROLE_KEY > SUPABASE_SERVICE_KEY and falls back to
+    SUPABASE_ANON_KEY only when no service key is configured (dev/test). The
+    service role bypasses RLS and retains full grants, so the backend keeps
+    working after migration 058 REVOKEs the anon/authenticated table+view grants
+    (M9 / #703). Requires SUPABASE_URL. Returns a cached client for reuse.
 
     Returns:
         supabase.Client: Supabase client
@@ -666,16 +693,18 @@ def get_supabase_client():
         ) from e
 
     url = os.environ.get("SUPABASE_URL")
-    key = os.environ.get("SUPABASE_ANON_KEY")
+    key = _resolve_supabase_key()
 
     if not url:
         raise ServiceConnectionError("Supabase", "SUPABASE_URL environment variable is not set")
     if not key:
         raise ServiceConnectionError(
-            "Supabase", "SUPABASE_ANON_KEY environment variable is not set"
+            "Supabase",
+            "No Supabase key set (need SUPABASE_SERVICE_ROLE_KEY, SUPABASE_SERVICE_KEY "
+            "or SUPABASE_ANON_KEY)",
         )
 
-    logger.info(f"Creating Supabase client for: {url}")
+    logger.info(f"Creating Supabase client for: {url} (using {_supabase_key_type()} key)")
 
     try:
         _supabase_client = create_client(url, key)
@@ -717,8 +746,11 @@ async def get_async_supabase_client():
     like LangGraph nodes and tool handlers. Use this when you need to await
     Supabase operations.
 
-    Requires SUPABASE_URL and SUPABASE_ANON_KEY environment variables.
-    Returns a cached client for connection reuse.
+    Authenticates as the SERVICE-ROLE (trusted server-side caller): prefers
+    SUPABASE_SERVICE_ROLE_KEY > SUPABASE_SERVICE_KEY and falls back to
+    SUPABASE_ANON_KEY only when no service key is configured (dev/test) — see
+    get_supabase_client (M9 / #703). Requires SUPABASE_URL. Returns a cached
+    client for connection reuse.
 
     Returns:
         AsyncClient: Async Supabase client
@@ -743,16 +775,18 @@ async def get_async_supabase_client():
         ) from e
 
     url = os.environ.get("SUPABASE_URL")
-    key = os.environ.get("SUPABASE_ANON_KEY")
+    key = _resolve_supabase_key()
 
     if not url:
         raise ServiceConnectionError("Supabase", "SUPABASE_URL environment variable is not set")
     if not key:
         raise ServiceConnectionError(
-            "Supabase", "SUPABASE_ANON_KEY environment variable is not set"
+            "Supabase",
+            "No Supabase key set (need SUPABASE_SERVICE_ROLE_KEY, SUPABASE_SERVICE_KEY "
+            "or SUPABASE_ANON_KEY)",
         )
 
-    logger.info(f"Creating async Supabase client for: {url}")
+    logger.info(f"Creating async Supabase client for: {url} (using {_supabase_key_type()} key)")
 
     try:
         _async_supabase_client = await acreate_client(
