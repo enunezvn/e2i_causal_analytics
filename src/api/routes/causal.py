@@ -1090,6 +1090,8 @@ def _sequential_output_to_response(
         warnings=[*list(output.get("warnings") or []), _ROBUSTNESS_UNVALIDATED_WARNING],
         robustness_validation_performed=False,
         robustness_warning=_ROBUSTNESS_UNVALIDATED_WARNING,
+        graph_is_dag=(output.get("graph_quality") or {}).get("is_dag"),
+        structural_quality=(output.get("graph_quality") or {}).get("structural_quality"),
     )
 
 
@@ -1157,6 +1159,8 @@ def _parallel_output_to_response(
         warnings=[*list(output.get("warnings") or []), _ROBUSTNESS_UNVALIDATED_WARNING],
         robustness_validation_performed=False,
         robustness_warning=_ROBUSTNESS_UNVALIDATED_WARNING,
+        graph_is_dag=(output.get("graph_quality") or {}).get("is_dag"),
+        structural_quality=(output.get("graph_quality") or {}).get("structural_quality"),
     )
 
 

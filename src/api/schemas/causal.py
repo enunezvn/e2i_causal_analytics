@@ -480,6 +480,16 @@ class SequentialPipelineResponse(BaseModel):
             "validated one."
         ),
     )
+    graph_is_dag: Optional[bool] = Field(
+        default=None,
+        description="Whether the discovered/symbolic causal graph is acyclic (M-fo2). "
+        "None when not computed; False signals a cyclic graph (estimate is structurally suspect).",
+    )
+    structural_quality: Optional[float] = Field(
+        default=None,
+        description="NetworkX structural-quality score in [0,1] (M-fo2): 1.0 DAG+path, "
+        "0.5 DAG missing path, 0.0 cyclic. Drives the consensus-confidence haircut.",
+    )
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -587,6 +597,16 @@ class ParallelPipelineResponse(BaseModel):
             "is False, so consumers cannot mistake an unrefuted ATE for a "
             "validated one."
         ),
+    )
+    graph_is_dag: Optional[bool] = Field(
+        default=None,
+        description="Whether the discovered/symbolic causal graph is acyclic (M-fo2). "
+        "None when not computed; False signals a cyclic graph (estimate is structurally suspect).",
+    )
+    structural_quality: Optional[float] = Field(
+        default=None,
+        description="NetworkX structural-quality score in [0,1] (M-fo2): 1.0 DAG+path, "
+        "0.5 DAG missing path, 0.0 cyclic. Drives the consensus-confidence haircut.",
     )
 
     model_config = ConfigDict(
