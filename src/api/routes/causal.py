@@ -1071,6 +1071,12 @@ def _sequential_output_to_response(
 
     stages_completed = sum(1 for r in stage_results if r.status == AnalysisStatus.COMPLETED)
 
+    # M-fo2: read structural graph-quality from the (optional) mapping, guarding
+    # the non-dict case so mypy narrows the type and a malformed value yields None.
+    graph_quality = output.get("graph_quality")
+    if not isinstance(graph_quality, dict):
+        graph_quality = {}
+
     return SequentialPipelineResponse(
         pipeline_id=pipeline_id,
         status=_derive_response_status(stages_completed, len(request.stages)),
@@ -1090,8 +1096,8 @@ def _sequential_output_to_response(
         warnings=[*list(output.get("warnings") or []), _ROBUSTNESS_UNVALIDATED_WARNING],
         robustness_validation_performed=False,
         robustness_warning=_ROBUSTNESS_UNVALIDATED_WARNING,
-        graph_is_dag=(output.get("graph_quality") or {}).get("is_dag"),
-        structural_quality=(output.get("graph_quality") or {}).get("structural_quality"),
+        graph_is_dag=graph_quality.get("is_dag"),
+        structural_quality=graph_quality.get("structural_quality"),
     )
 
 
@@ -1138,6 +1144,12 @@ def _parallel_output_to_response(
             failed.append(lib_value)
             library_results[lib_value] = {"error": "library skipped during execution"}
 
+    # M-fo2: read structural graph-quality from the (optional) mapping, guarding
+    # the non-dict case so mypy narrows the type and a malformed value yields None.
+    graph_quality = output.get("graph_quality")
+    if not isinstance(graph_quality, dict):
+        graph_quality = {}
+
     return ParallelPipelineResponse(
         pipeline_id=pipeline_id,
         status=(
@@ -1159,8 +1171,8 @@ def _parallel_output_to_response(
         warnings=[*list(output.get("warnings") or []), _ROBUSTNESS_UNVALIDATED_WARNING],
         robustness_validation_performed=False,
         robustness_warning=_ROBUSTNESS_UNVALIDATED_WARNING,
-        graph_is_dag=(output.get("graph_quality") or {}).get("is_dag"),
-        structural_quality=(output.get("graph_quality") or {}).get("structural_quality"),
+        graph_is_dag=graph_quality.get("is_dag"),
+        structural_quality=graph_quality.get("structural_quality"),
     )
 
 
