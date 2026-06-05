@@ -791,6 +791,9 @@ def check_zero_variance_within_class(
                 findings.append(
                     LeakageFinding(
                         check_name="zero_variance_within_class",
+                        # Not demoted (cf. Fix 4): constant in BOTH classes with
+                        # different values is deterministic separation regardless
+                        # of cohort balance.
                         severity=LeakageSeverity.CRITICAL,
                         feature=feature,
                         description=(
@@ -811,7 +814,15 @@ def check_zero_variance_within_class(
                 findings.append(
                     LeakageFinding(
                         check_name="zero_variance_within_class",
-                        severity=LeakageSeverity.HIGH,
+                        # Fix 4 (defense in depth): on a rare-event cohort the
+                        # within-class-variance premise is statistically
+                        # unreliable, so route to review (MODERATE) rather than
+                        # auto-drop (HIGH). R1's guard skips cardinality<=2 (or
+                        # n_pos<30) rare events; this demotes cardinality>2 rare
+                        # events that pass R1 but still have pos_rate < 0.05.
+                        severity=(
+                            LeakageSeverity.MODERATE if pos_rate < 0.05 else LeakageSeverity.HIGH
+                        ),
                         feature=feature,
                         description=(
                             f"Feature '{feature}' has zero variance in one class "
