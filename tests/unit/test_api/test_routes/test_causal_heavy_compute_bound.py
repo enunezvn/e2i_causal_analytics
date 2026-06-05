@@ -209,6 +209,7 @@ async def test_hierarchical_analyze_succeeds_when_slot_free(_heavy_compute_one_s
         uplift_range = (0.0, 1.0)
         cate_mean = 0.5
         cate_std = 0.1
+        cate_se = None
         cate_ci_lower = 0.4
         cate_ci_upper = 0.6
         success = True

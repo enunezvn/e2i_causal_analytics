@@ -34,9 +34,10 @@ from src.causal_engine import (
     RefutationError,
     RefutationRunner,
     RefutationSuite,
+    ValidationOutcome,
     # Phase 4: ValidationOutcome for Feedback Learner integration
     create_validation_outcome,
-    log_validation_outcome,
+    log_validation_outcome_with_status,
 )
 from src.repositories.causal_validation import CausalValidationRepository
 
@@ -469,6 +470,41 @@ class RefutationNode:
             "review_caveat": caveat,
         }
 
+    async def _log_validation_outcome_signal(
+        self, validation_outcome: "ValidationOutcome"
+    ) -> Optional[str]:
+        """Persist the Feedback-Learner ValidationOutcome, fail-closed on non-durable writes (H11).
+
+        Returns the outcome id ONLY when the write was DURABLE. On a DEGRADED
+        (ephemeral in-memory fallback) write we log a WARNING and return None so a
+        non-durable signal is never propagated to agent state as a persisted id,
+        and we do NOT emit a confident success line.
+        """
+        try:
+            result = await log_validation_outcome_with_status(validation_outcome)
+        except Exception as learner_error:  # noqa: BLE001 - persistence must never break the node
+            logger.warning(
+                f"Failed to log validation outcome for Feedback Learner: {learner_error}"
+            )
+            return None
+
+        if result.degraded or not result.persisted:
+            logger.warning(
+                "Validation outcome %s for Feedback Learner was written to a DEGRADED "
+                "(non-durable, backend=%s) store — dropping the Feedback-Learner signal; "
+                "it will be lost on restart.",
+                result.outcome_id,
+                result.backend,
+                extra={"metric": "refutation_validation_outcome_degraded"},
+            )
+            return None
+
+        logger.info(
+            f"Logged validation outcome {result.outcome_id} for Feedback Learner: "
+            f"{validation_outcome.outcome_type.value}"
+        )
+        return result.outcome_id
+
     async def execute(self, state: CausalImpactState) -> Dict:
         """Run refutation tests.
 
@@ -651,28 +687,18 @@ class RefutationNode:
                     logger.warning(f"Failed to persist validation results: {persist_error}")
 
             # Phase 4: Log ValidationOutcome for Feedback Learner integration
-            validation_outcome_id = None
-            try:
-                validation_outcome = create_validation_outcome(
-                    suite=suite,
-                    agent_context={
-                        "agent": "causal_impact",
-                        "node": "refutation",
-                        "query_id": query_id,
-                        "agent_activity_id": state.get("agent_activity_id"),
-                    },
-                    dag_hash=cast(Optional[str], state.get("dag_hash")),
-                    sample_size=cast(Optional[int], estimation_result.get("n_samples")),
-                )
-                validation_outcome_id = await log_validation_outcome(validation_outcome)
-                logger.info(
-                    f"Logged validation outcome {validation_outcome_id} for Feedback Learner: "
-                    f"{validation_outcome.outcome_type.value}"
-                )
-            except Exception as learner_error:
-                logger.warning(
-                    f"Failed to log validation outcome for Feedback Learner: {learner_error}"
-                )
+            validation_outcome = create_validation_outcome(
+                suite=suite,
+                agent_context={
+                    "agent": "causal_impact",
+                    "node": "refutation",
+                    "query_id": query_id,
+                    "agent_activity_id": state.get("agent_activity_id"),
+                },
+                dag_hash=cast(Optional[str], state.get("dag_hash")),
+                sample_size=cast(Optional[int], estimation_result.get("n_samples")),
+            )
+            validation_outcome_id = await self._log_validation_outcome_signal(validation_outcome)
 
             latency_ms = (time.time() - start_time) * 1000
 

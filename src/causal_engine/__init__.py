@@ -85,6 +85,7 @@ from .validation_outcome import (
 from .validation_outcome_store import (
     ExperimentKnowledgeStore,
     InMemoryValidationOutcomeStore,
+    StoreResult,
     ValidationLearning,
     # Store classes
     ValidationOutcomeStoreBase,
@@ -92,6 +93,7 @@ from .validation_outcome_store import (
     # Global accessors
     get_validation_outcome_store,
     log_validation_outcome,
+    log_validation_outcome_with_status,
 )
 
 __all__ = [
@@ -139,6 +141,8 @@ __all__ = [
     "get_validation_outcome_store",
     "get_experiment_knowledge_store",
     "log_validation_outcome",
+    "log_validation_outcome_with_status",
+    "StoreResult",
     # V4.2 Enhancement: Energy Score
     "EnergyScoreCalculator",
     "EnergyScoreConfig",

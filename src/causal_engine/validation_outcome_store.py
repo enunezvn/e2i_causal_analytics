@@ -984,6 +984,11 @@ def get_experiment_knowledge_store() -> ExperimentKnowledgeStore:
 async def log_validation_outcome(outcome: ValidationOutcome) -> str:
     """Convenience function to log a validation outcome.
 
+    Returns the bare outcome id for backward compatibility. A bare id does NOT
+    imply the write was DURABLE — callers that must distinguish a durable write
+    from an ephemeral degraded fallback should use
+    ``log_validation_outcome_with_status`` (H11).
+
     Args:
         outcome: ValidationOutcome to store
 
@@ -992,3 +997,21 @@ async def log_validation_outcome(outcome: ValidationOutcome) -> str:
     """
     store = get_validation_outcome_store()
     return await store.store(outcome)
+
+
+async def log_validation_outcome_with_status(outcome: ValidationOutcome) -> StoreResult:
+    """Log a validation outcome, surfacing whether the write was DURABLE (H11).
+
+    Unlike :func:`log_validation_outcome` (which returns a bare id), this returns
+    the full :class:`StoreResult` so the caller can branch on ``persisted`` /
+    ``degraded`` and avoid mistaking an ephemeral in-memory fallback (Supabase
+    outage / RLS denial / schema drift) for a durable write.
+
+    Args:
+        outcome: ValidationOutcome to store
+
+    Returns:
+        StoreResult with ``outcome_id``, ``persisted``, ``degraded``, ``backend``.
+    """
+    store = get_validation_outcome_store()
+    return await store.store_with_status(outcome)
