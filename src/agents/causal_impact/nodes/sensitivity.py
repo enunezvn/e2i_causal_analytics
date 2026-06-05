@@ -46,6 +46,12 @@ class SensitivityNode:
             # the null (smallest |effect|). The previous code read ate_ci_upper
             # but discarded it and used only ate_ci_lower, which is wrong for
             # negative/asymmetric CIs (mirrors the runner's min(|lo|,|hi|)).
+            # M-stat1 null-crossing guard: when the CI straddles (or touches) 0
+            # the effect is statistically indistinguishable from the null, so the
+            # CONSERVATIVE E-value-for-CI must collapse to the null (1.0). Without
+            # this, min(|lo|,|hi|) reports a spurious > 1 bound (e.g. (-0.3,0.5)
+            # -> 0.3 -> E-value ~ 2.0, falsely robust).
+            ci_straddles_null = ate_ci_lower <= 0.0 <= ate_ci_upper
             ci_bound = min(abs(ate_ci_lower), abs(ate_ci_upper))
 
             # H3: the E-value RR approximation needs a STANDARDIZED effect, so
@@ -62,18 +68,23 @@ class SensitivityNode:
 
             # Calculate E-values
             e_value_point = self._calculate_e_value(ate, outcome_std)
-            e_value_ci = self._calculate_e_value(ci_bound, outcome_std)
+            # M-stat1: a null-crossing CI collapses the conservative bound to 1.0.
+            e_value_ci = 1.0 if ci_straddles_null else self._calculate_e_value(
+                ci_bound, outcome_std
+            )
 
-            # Interpret E-value
+            # Interpret E-value (point estimate drives the human narrative).
             interpretation = self._interpret_e_value(e_value_point)
 
-            # Determine robustness
-            robust = e_value_point > 2.0  # Common threshold
+            # M-stat2: the robust/strength decision uses the CONSERVATIVE CI
+            # E-value, not the point estimate, so a wide / null-crossing CI is
+            # correctly flagged as non-robust.
+            robust = e_value_ci > 2.0  # Common threshold
 
-            # Classify unmeasured confounder strength needed
-            if e_value_point < 1.5:
+            # Classify unmeasured confounder strength needed (off the CI bound).
+            if e_value_ci < 1.5:
                 strength = "weak"
-            elif e_value_point < 3.0:
+            elif e_value_ci < 3.0:
                 strength = "moderate"
             else:
                 strength = "strong"

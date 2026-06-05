@@ -175,6 +175,68 @@ class TestSensitivityNode:
         assert "sensitivity_error" in result
         assert result["status"] == "failed"
 
+    @pytest.mark.asyncio
+    async def test_e_value_ci_collapses_to_one_when_ci_straddles_null(self):
+        """M-stat1: a CI straddling 0 (sign(lo) != sign(hi)) is not robust;
+        the conservative E-value-for-CI must collapse to 1.0 instead of
+        min(|lo|,|hi|) (which would falsely report > 1)."""
+        node = SensitivityNode()
+
+        estimation = {
+            "method": "CausalForestDML",
+            "ate": 0.5,
+            "ate_ci_lower": -0.3,  # CI straddles 0
+            "ate_ci_upper": 0.5,
+            "effect_size": "medium",
+            "statistical_significance": False,
+            "p_value": 0.30,
+            "sample_size": 1000,
+            "covariates_adjusted": ["geographic_region"],
+            "heterogeneity_detected": False,
+        }
+        state: CausalImpactState = {
+            "query": "test query",
+            "query_id": "test-straddle",
+            "estimation_result": estimation,
+            "status": "pending",
+        }
+
+        result = await node.execute(state)
+        sens = result["sensitivity_analysis"]
+
+        # Conservative CI E-value collapses to the null when the CI crosses 0.
+        assert sens["e_value_ci"] == 1.0
+        # Robustness gate uses the conservative CI E-value -> not robust.
+        assert sens["robust_to_confounding"] is False
+
+    @pytest.mark.asyncio
+    async def test_e_value_ci_unchanged_when_ci_does_not_straddle_null(self):
+        """Guard must not affect a one-sided CI: ci_bound = min(|lo|,|hi|)."""
+        node = SensitivityNode()
+        estimation = {
+            "method": "CausalForestDML",
+            "ate": 0.5,
+            "ate_ci_lower": 0.4,  # entirely positive
+            "ate_ci_upper": 0.6,
+            "effect_size": "medium",
+            "statistical_significance": True,
+            "p_value": 0.01,
+            "sample_size": 1000,
+            "covariates_adjusted": ["geographic_region"],
+            "heterogeneity_detected": False,
+        }
+        state: CausalImpactState = {
+            "query": "test query",
+            "query_id": "test-onesided",
+            "estimation_result": estimation,
+            "status": "pending",
+        }
+        result = await node.execute(state)
+        sens = result["sensitivity_analysis"]
+        # ci_bound = 0.4 -> exp(0.4) RR -> e_value_ci ~ 2.348
+        assert sens["e_value_ci"] == pytest.approx(2.348397071029064, rel=1e-6)
+        assert sens["e_value_ci"] > 1.0
+
 
 class TestEValueCalculation:
     """Test E-value calculation formula."""
