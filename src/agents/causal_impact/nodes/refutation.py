@@ -435,7 +435,7 @@ class RefutationNode:
         treatment = state.get("treatment_var", "unknown_treatment")
         outcome = state.get("outcome_var", "unknown_outcome")
         brand = state.get("brand")
-        dag_hash = state.get("dag_hash") or ""
+        dag_hash = str(state.get("dag_hash") or "")
         requester_id = state.get("query_id") or "causal_impact_agent"
 
         expert_review_decision: Optional[str] = None
@@ -446,10 +446,11 @@ class RefutationNode:
                 treatment=treatment,
                 outcome=outcome,
                 requester_id=requester_id,
-                analysis_context={
-                    "confidence_score": suite.confidence_score,
-                    "gate_decision": suite.gate_decision.value,
-                },
+                # check_approval expects a STRING description (Optional[str]),
+                # not a dict — summarise the refutation verdict for the audit row.
+                analysis_context=(
+                    f"confidence={suite.confidence_score:.2f}, gate={suite.gate_decision.value}"
+                ),
             )
             expert_review_decision = review_result.decision.value
         except Exception as gate_err:  # noqa: BLE001 - gate must never break the node

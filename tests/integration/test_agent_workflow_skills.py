@@ -512,7 +512,16 @@ class TestSkillWorkflowRobustness:
             "status": "completed",
             "interpretation": {"narrative": "Test narrative"},
             "estimation_result": {"ate": 0.5, "method": "propensity_score"},
-            "refutation_results": {},
+            # H1/H2: a genuinely COMPLETED workflow has a refutation that RAN and
+            # PROCEEDed. An empty refutation_results now (correctly) fails closed
+            # to status="failed" — so a robustness test about *skill loading* must
+            # supply an honest passing refutation, not rely on the old fail-open
+            # path where any estimate-with-ATE was reported "completed".
+            "refutation_results": {
+                "gate_decision": "proceed",
+                "overall_robust": True,
+                "confidence_adjustment": 1.0,
+            },
             "sensitivity_analysis": {},
             "causal_graph": {},
         }
@@ -522,7 +531,9 @@ class TestSkillWorkflowRobustness:
 
             # Mock load_skill to raise an exception
             with patch.object(agent, "load_skill", side_effect=Exception("Skill loading failed")):
-                # Workflow should still complete
+                # Workflow should still complete (skill-loading failure must not
+                # crash the run) — and with a PROCEED refutation it honestly
+                # reports status="completed".
                 result = await agent.run(
                     {
                         "query": "test query",

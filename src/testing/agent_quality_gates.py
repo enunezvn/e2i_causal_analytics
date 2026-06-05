@@ -582,10 +582,52 @@ def _validate_orchestrator(output: dict[str, Any]) -> tuple[bool, str]:
 
 
 def _validate_causal_impact(output: dict[str, Any]) -> tuple[bool, str]:
-    """Causal impact must produce valid ATE within its own confidence interval."""
-    status = output.get("status", "")
+    """Causal impact must produce a valid ATE-in-CI, and any fail-closed verdict
+    must be an HONEST block — not a masked execution error (H1/H2).
 
-    if status in ("completed", "success"):
+    Post-remediation, a refutation that BLOCKS a weak claim correctly yields
+    ``status="failed"`` (a *completed* analysis with a negative robustness
+    verdict that the orchestrator then excludes). That is the agent working as
+    designed, so the smoke gate accepts it **iff** the analysis is structurally
+    complete: a numeric ATE inside its own CI, the refutation suite actually ran
+    (``refutation_tests_total > 0``), and ``gate_decision == "block"``.
+
+    A ``status="failed"`` WITHOUT those — no ATE, refutation never ran (errored),
+    or ``status="error"`` — is a real execution failure and still fails the gate.
+    (The smoke fixture deliberately under-powers the refuters for CI budget, so
+    the PROCEED/REVIEW/BLOCK band is statistically noisy and non-deterministic;
+    the gate verifies execution + contract + ATE validity, not which band the
+    noisy refuters land in. Full-sim refutation correctness is covered by the
+    unit/slow tests, not this smoke gate.)
+    """
+    status = str(output.get("status", "")).lower()
+
+    # status="error" is always a hard execution failure (also tripped by
+    # fail_on_status); never an honest verdict.
+    if status == "error":
+        return (False, "Agent returned status='error' (execution failure)")
+
+    if status == "failed":
+        # Accept ONLY an honest fail-closed block: refutation ran AND the gate
+        # explicitly BLOCKED. Anything else is a real failure (missing ATE,
+        # refutation error). This preserves H1 coverage: a refutation that
+        # ERRORED (did not run) still fails the smoke gate.
+        gate_decision = str(_safe_get(output, "gate_decision", "") or "").lower()
+        refutation_total = _safe_get(output, "refutation_tests_total", 0) or 0
+        if gate_decision != "block" or not (
+            isinstance(refutation_total, (int, float)) and refutation_total > 0
+        ):
+            return (
+                False,
+                "status='failed' is not an honest fail-closed block "
+                f"(gate_decision={gate_decision!r}, refutation_tests_total={refutation_total}); "
+                "refutation did not run or estimation failed",
+            )
+
+    # Structural ATE-in-CI checks apply to completed/success AND an honest block:
+    # in every accepted case the analysis produced a real, internally-consistent
+    # estimate.
+    if status in ("completed", "success", "failed"):
         ate_estimate = _safe_get(output, "ate_estimate")
 
         # ATE must be numeric
@@ -678,7 +720,12 @@ AGENT_QUALITY_GATES: dict[str, AgentQualityGate] = {
         "data_quality_checks": {
             "status": {"type": "str", "not_null": True, "must_not_be": "error"},
         },
-        "fail_on_status": ["error", "failed"],
+        # H1/H2: "failed" is NOT a blanket smoke failure for causal_impact — a
+        # refutation that BLOCKS a weak claim correctly returns status="failed".
+        # The semantic validator (_validate_causal_impact) distinguishes an
+        # honest fail-closed block (accept) from a real execution error (reject);
+        # "error" remains an unconditional hard failure here.
+        "fail_on_status": ["error"],
         "semantic_validator": _validate_causal_impact,
     },
     "gap_analyzer": {
