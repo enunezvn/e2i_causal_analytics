@@ -443,6 +443,7 @@ class CausalImpactAgent(SkillsMixin):
                 interpretation,
                 estimation_result,
                 refutation_results,  # type: ignore[arg-type]
+                sensitivity_failed=sensitivity_failed,
             ),  # Contract REQUIRED
             "actionable_recommendations": interpretation.get(
                 "recommendations", []
@@ -550,7 +551,11 @@ class CausalImpactAgent(SkillsMixin):
         return summary
 
     def _extract_assumption_warnings(
-        self, interpretation: Dict, estimation_result: Dict, refutation_results: Dict
+        self,
+        interpretation: Dict,
+        estimation_result: Dict,
+        refutation_results: Dict,
+        sensitivity_failed: bool = False,
     ) -> List[str]:
         """Extract assumption warnings from analysis results.
 
@@ -586,6 +591,14 @@ class CausalImpactAgent(SkillsMixin):
         for assumption in assumptions:
             if "unverified" in assumption.lower() or "assumed" in assumption.lower():
                 warnings.append(f"Unverified assumption: {assumption}")
+
+        # M-fo3: a failed sensitivity node means the E-value is defaulted/absent —
+        # surface that explicitly so the output never implies validated robustness.
+        if sensitivity_failed:
+            warnings.append(
+                "Sensitivity analysis (E-value) failed to run — robustness to "
+                "unmeasured confounding is UNVERIFIED; do not rely on any reported E-value."
+            )
 
         # If no warnings, indicate clean status
         if not warnings:

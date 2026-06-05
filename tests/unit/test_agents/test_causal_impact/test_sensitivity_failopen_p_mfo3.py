@@ -73,3 +73,17 @@ class TestBuildOutputSensitivityFailsClosed:
         assert out["status"] == "completed"
         assert out.get("needs_review") in (False, None)
         assert out["confidence"] > 0.3
+
+    def test_sensitivity_failure_is_flagged_in_warnings(self):
+        agent = CausalImpactAgent()
+        state = _base_state(sensitivity_error="E-value computation failed: ate_ci_lower missing")
+        out = agent._build_output(state, time.time())
+        warnings_blob = " ".join(out["assumption_warnings"]).lower()
+        # The output must surface that sensitivity FAILED, not present a clean
+        # 'No critical assumption violations' / defaulted E-value as if it ran.
+        assert "sensitivity" in warnings_blob, (
+            f"sensitivity failure not flagged in assumption_warnings: {out['assumption_warnings']}"
+        )
+        assert "No critical assumption violations detected" not in out["assumption_warnings"], (
+            "a failed sensitivity analysis must not report a clean assumptions slate"
+        )
