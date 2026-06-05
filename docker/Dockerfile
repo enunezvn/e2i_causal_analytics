@@ -97,6 +97,9 @@ RUN pip install --no-cache-dir debugpy==1.8.20
 COPY src/ ./src/
 COPY config/ ./config/
 COPY tests/ ./tests/
+# Ops/maintenance scripts (e.g. scripts/train_twin_model.py, the reachable
+# #705 H4 twin train/persist trigger run via `docker exec … python scripts/…`).
+COPY scripts/ ./scripts/
 
 # Create directories for shared volumes
 RUN mkdir -p /app/data/ml_artifacts \
@@ -151,6 +154,11 @@ ENV PATH="/app/.venv/bin:$PATH" \
 # Copy application code
 COPY src/ ./src/
 COPY config/ ./config/
+# Ops/maintenance scripts run inside the container via `docker exec` (e.g.
+# scripts/train_twin_model.py, the reachable #705 H4 twin train/persist trigger
+# while worker_heavy is dark). The prod rootfs is read-only, so these must be
+# baked into the image — they cannot be `docker cp`'d in at runtime.
+COPY scripts/ ./scripts/
 
 # Create directories for shared volumes
 RUN mkdir -p /app/data/ml_artifacts \
