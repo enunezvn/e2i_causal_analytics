@@ -349,6 +349,7 @@ class ExpertReviewRepository(BaseRepository):
         self,
         dag_hash: str,
         include_expired: bool = False,
+        brand: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Get all reviews for a specific DAG version.
@@ -356,6 +357,7 @@ class ExpertReviewRepository(BaseRepository):
         Args:
             dag_hash: SHA256 hash of the DAG structure
             include_expired: Whether to include expired reviews
+            brand: Optional brand filter; when set, only reviews for this brand are returned
 
         Returns:
             List of review records for the DAG
@@ -373,6 +375,9 @@ class ExpertReviewRepository(BaseRepository):
 
             if not include_expired:
                 query = query.or_(f"valid_until.gte.{date.today().isoformat()},valid_until.is.null")
+
+            if brand:
+                query = query.eq("brand", brand)
 
             result = await query.execute()
             return result.data or []

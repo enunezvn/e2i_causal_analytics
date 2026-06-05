@@ -81,7 +81,7 @@ class ExpertReviewGate:
         self,
         repository: Optional[ExpertReviewRepository] = None,
         renewal_warning_days: int = RENEWAL_WARNING_DAYS,
-        auto_create_review: bool = True,
+        auto_create_review: bool = False,
     ):
         """
         Initialize expert review gate.
@@ -89,7 +89,10 @@ class ExpertReviewGate:
         Args:
             repository: ExpertReviewRepository instance
             renewal_warning_days: Days before expiry to warn about renewal
-            auto_create_review: Whether to auto-create review requests for new DAGs
+            auto_create_review: Whether to auto-create a `pending` review row for a new
+                DAG. Defaults False (fail-closed): DEFERRED until the review-queue consumer
+                + admin UI exist (R6-F2) so no orphan pending rows are created that no human
+                can clear. Pass True explicitly once a human-in-the-loop consumer is wired.
         """
         self.repository = repository
         self.renewal_warning_days = renewal_warning_days
@@ -172,7 +175,9 @@ class ExpertReviewGate:
             )
 
         # No active approval - check for pending review
-        pending_reviews = await self.repository.get_reviews_for_dag(dag_hash, include_expired=False)
+        pending_reviews = await self.repository.get_reviews_for_dag(
+            dag_hash, include_expired=False, brand=brand
+        )
         pending = [r for r in pending_reviews if r.get("approval_status") == "pending"]
 
         if pending:

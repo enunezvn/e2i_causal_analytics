@@ -5,6 +5,9 @@ Validation framework ensuring:
 - Schema compliance with Supabase tables
 - Causal effect recovery within tolerance
 - ML-compliant splits with no data leakage
+
+Test-only-by-design: this cluster has no production consumers (imported only
+by tests).
 """
 
 from .causal_validator import CausalValidationResult, CausalValidator

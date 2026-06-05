@@ -404,6 +404,57 @@ class TestSupabaseValidationOutcomeStore:
             assert len(failures) == 1
 
     @pytest.mark.asyncio
+    async def test_query_failures_category_filter_not_undercut_by_limit(self, sample_outcome):
+        """A failure_category filter must not under-return: the server query must NOT
+        pre-trim to `limit` before the in-Python JSONB category post-filter, otherwise
+        matching rows beyond the limit window are silently dropped.
+
+        Setup: server returns 5 rows; only the LAST one matches the requested category.
+        With the old `.limit(limit)` BEFORE the post-filter, limit=1 would fetch only the
+        first (non-matching) row and return []. Correct behavior returns the 1 match.
+        """
+        store = SupabaseValidationOutcomeStore()
+
+        matching_row = store._outcome_to_row(sample_outcome)  # has SPURIOUS_CORRELATION
+        non_matching = store._outcome_to_row(sample_outcome)
+        non_matching = dict(non_matching)
+        non_matching["failure_patterns"] = []  # no category -> never matches
+
+        server_rows = [non_matching, non_matching, non_matching, non_matching, matching_row]
+
+        captured = {}
+
+        def fake_limit(n):
+            captured["limit_arg"] = n
+            return mock_query
+
+        mock_result = MagicMock()
+        mock_result.data = server_rows
+        mock_query = MagicMock()
+        mock_query.neq.return_value = mock_query
+        mock_query.eq.return_value = mock_query
+        mock_query.gte.return_value = mock_query
+        mock_query.order.return_value = mock_query
+        mock_query.limit.side_effect = fake_limit
+        mock_query.execute.return_value = mock_result
+        mock_client = MagicMock()
+        mock_client.table().select.return_value = mock_query
+
+        with patch.object(store, "_get_client", return_value=mock_client):
+            failures = await store.query_failures(
+                failure_category=FailureCategory.SPURIOUS_CORRELATION, limit=1
+            )
+
+        # The single matching row must be returned even though it was the 5th server row.
+        assert len(failures) == 1
+        assert any(
+            p.category == FailureCategory.SPURIOUS_CORRELATION for p in failures[0].failure_patterns
+        )
+        # And when a category filter is active the server-side limit must NOT equal the
+        # caller's small limit (it must over-fetch, or not be applied at the row level).
+        assert captured.get("limit_arg") != 1
+
+    @pytest.mark.asyncio
     async def test_outcome_to_row_conversion(self, sample_outcome):
         """Test converting ValidationOutcome to database row."""
         store = SupabaseValidationOutcomeStore()

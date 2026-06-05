@@ -365,3 +365,69 @@ class TestParallelPipelineRouting:
         decision = await pipeline.route("How does the treatment effect vary by segment?")
 
         assert decision.primary_library == CausalLibrary.ECONML
+
+
+class TestGatherFailFastLogging:
+    """L-cluster-A (c): fail-fast cancellation must be observable in the log."""
+
+    @pytest.mark.asyncio
+    async def test_gather_fail_fast_logs_failing_library(self, caplog):
+        """_gather_fail_fast must emit a clear warning naming the failing
+        library before it cancels the remaining pending tasks, and must still
+        cancel them and return the partial results (Option A: behavior kept)."""
+        import asyncio
+        import logging
+
+        from src.causal_engine.pipeline import ParallelPipeline
+        from src.causal_engine.pipeline.orchestrator import CausalLibrary
+        from src.causal_engine.pipeline.state import LibraryExecutionResult
+
+        pipeline = ParallelPipeline(fail_fast=True)
+
+        async def _failing():
+            return (
+                CausalLibrary.DOWHY,
+                LibraryExecutionResult(
+                    library="dowhy",
+                    success=False,
+                    latency_ms=1,
+                    result=None,
+                    error="boom",
+                    confidence=0.0,
+                    warnings=[],
+                ),
+            )
+
+        async def _slow():
+            await asyncio.sleep(5)
+            return (
+                CausalLibrary.ECONML,
+                LibraryExecutionResult(
+                    library="econml",
+                    success=True,
+                    latency_ms=1,
+                    result=None,
+                    error=None,
+                    confidence=1.0,
+                    warnings=[],
+                ),
+            )
+
+        fail_task = asyncio.ensure_future(_failing())
+        slow_task = asyncio.ensure_future(_slow())
+
+        with caplog.at_level(logging.WARNING, logger="src.causal_engine.pipeline.parallel"):
+            results = await pipeline._gather_fail_fast([fail_task, slow_task])
+
+        # Partial-result contract preserved: only the failed library returned.
+        assert len(results) == 1
+        # Remaining pending task was cancelled. cancel() is requested inside
+        # _gather_fail_fast but the task only transitions to the cancelled state
+        # once the loop processes it, so let it settle, then confirm.
+        with pytest.raises(asyncio.CancelledError):
+            await slow_task
+        assert slow_task.cancelled()
+        # A warning naming the failing library and fail_fast was logged.
+        messages = " ".join(r.getMessage() for r in caplog.records)
+        assert "fail_fast" in messages
+        assert "dowhy" in messages

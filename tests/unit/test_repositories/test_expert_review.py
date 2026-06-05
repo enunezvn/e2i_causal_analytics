@@ -230,6 +230,46 @@ class TestExpertReviewRepository:
         assert len(result) == 2
 
     @pytest.mark.asyncio
+    async def test_get_reviews_for_dag_filters_by_brand(self, repo, mock_client):
+        """get_reviews_for_dag must apply an .eq('brand', brand) filter when a
+        brand is supplied, so cross-brand reviews are not returned."""
+        reviews_data = [{"review_id": "rev-1", "dag_version_hash": "abc123", "brand": "BrandX"}]
+        mock_execute = AsyncMock(return_value=MagicMock(data=reviews_data))
+        mock_query = MagicMock()
+        mock_query.execute = mock_execute
+        mock_query.or_.return_value = mock_query
+        mock_query.eq.return_value = mock_query
+        # base chain: table().select().eq(dag_hash).order() -> mock_query
+        mock_client.table.return_value.select.return_value.eq.return_value.order.return_value = (
+            mock_query
+        )
+
+        result = await repo.get_reviews_for_dag("abc123", brand="BrandX")
+
+        assert len(result) == 1
+        # The brand filter was applied on the post-order query object.
+        mock_query.eq.assert_any_call("brand", "BrandX")
+
+    @pytest.mark.asyncio
+    async def test_get_reviews_for_dag_no_brand_no_filter(self, repo, mock_client):
+        """When brand is None, no brand .eq filter is applied (back-compat)."""
+        reviews_data = [{"review_id": "rev-1", "dag_version_hash": "abc123"}]
+        mock_execute = AsyncMock(return_value=MagicMock(data=reviews_data))
+        mock_query = MagicMock()
+        mock_query.execute = mock_execute
+        mock_query.or_.return_value = mock_query
+        mock_query.eq.return_value = mock_query
+        mock_client.table.return_value.select.return_value.eq.return_value.order.return_value = (
+            mock_query
+        )
+
+        result = await repo.get_reviews_for_dag("abc123")
+
+        assert len(result) == 1
+        for call in mock_query.eq.call_args_list:
+            assert call.args[:1] != ("brand",)
+
+    @pytest.mark.asyncio
     async def test_renew_review(self, repo, mock_client):
         """Test renewing an existing review."""
         # Mock get_by_id for original review

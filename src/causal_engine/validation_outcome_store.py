@@ -562,20 +562,32 @@ class SupabaseValidationOutcomeStore(ValidationOutcomeStoreBase):
             if since:
                 query = query.gte("timestamp", since)
 
-            # Order by timestamp (most recent first) and limit
-            query = query.order("timestamp", desc=True).limit(limit)
+            # Order by timestamp (most recent first).
+            query = query.order("timestamp", desc=True)
+
+            if failure_category:
+                # The failure_category lives in JSONB and is filtered in Python below.
+                # Applying `.limit(limit)` BEFORE that post-filter can under-return
+                # (matching rows may sit beyond the limit window). Over-fetch a bounded
+                # window, post-filter, THEN slice to `limit`.
+                fetch_limit = max(limit * 10, 100)
+                query = query.limit(fetch_limit)
+            else:
+                query = query.limit(limit)
 
             result = query.execute()
 
             outcomes = [self._row_to_outcome(row) for row in result.data]
 
-            # Post-filter by failure category if specified (needs JSONB containment)
+            # Post-filter by failure category if specified (needs JSONB containment),
+            # then apply the caller's limit AFTER filtering.
             if failure_category:
                 outcomes = [
                     o
                     for o in outcomes
                     if any(p.category == failure_category for p in o.failure_patterns)
                 ]
+                outcomes = outcomes[:limit]
 
             return outcomes
 

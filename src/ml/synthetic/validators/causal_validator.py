@@ -5,12 +5,17 @@ Validates that causal inference pipelines can recover TRUE_ATE:
 - DoWhy refutation tests
 - ATE estimation within tolerance
 - Confounder balance verification
+
+Test-only-by-design: imported only by tests; no production consumers. The
+statsmodels-unavailable numpy fallback is an approximation, not a
+DoWhy-grade estimator.
 """
 
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+import numpy as np
 import pandas as pd
 
 from ..config import DGP_CONFIGS, DGPType
@@ -170,8 +175,10 @@ class CausalValidator:
             self._run_refutations(df, treatment, outcome, confounders, result)
         elif run_refutations:
             result.warnings.append("Refutation tests skipped: DoWhy not available")
-            # Give benefit of the doubt if DoWhy not available
-            result.refutation_pass_rate = 1.0
+            # Fail closed: refutations could not run, so the estimate is UNVALIDATED.
+            # Do NOT award a perfect pass — leave the rate at 0.0 so meets_criteria()
+            # treats the result as not-yet-validated.
+            result.refutation_pass_rate = 0.0
 
         # Determine overall validity
         result.is_valid = result.meets_criteria()
@@ -243,27 +250,38 @@ class CausalValidator:
             return float(model.params[treatment])
         except ImportError:
             # Fallback to numpy if statsmodels not available
-            return self._estimate_ate_simple(df, treatment, outcome)
+            return self._estimate_ate_simple(df, treatment, outcome, confounders)
 
     def _estimate_ate_simple(
         self,
         df: pd.DataFrame,
         treatment: str,
         outcome: str,
+        confounders: Optional[List[str]] = None,
     ) -> float:
-        """Crude ASSOCIATIONAL proxy — a Pearson CORRELATION, NOT a causal ATE.
+        """Estimate ATE via numpy least squares (statsmodels-unavailable fallback).
 
-        Honest-label note (MED): returns ``corr(treatment, outcome)``, which is a
-        correlation (confounded, scale-dependent), NOT an average treatment
-        effect. It is a statsmodels-unavailable FALLBACK inside the synthetic-data
-        validator cluster, which is test-only / not reachable from any production
-        path (verified: no production consumers). Do not treat the returned value
-        as a causal ATE; if ever wired to a real path it must be replaced with an
-        identification-based estimator.
+        Returns the treatment coefficient from an OLS fit of
+        ``outcome ~ const + treatment + confounders``. With no confounders this
+        is the simple least-squares slope; with confounders it is the
+        backdoor-adjusted coefficient. This is a REAL average-treatment-effect
+        estimate (treated-vs-control linear contrast), NOT a correlation.
+
+        Test-only-by-design: this validator cluster has no production consumers
+        (imported only by tests). If ever wired to a real path, replace with a
+        DoWhy/statsmodels identification-based estimator.
         """
-        # Correlation coefficient as a rough associational proxy (NOT an ATE).
-        corr = df[[treatment, outcome]].corr().iloc[0, 1]
-        return float(corr)
+        confounders = confounders or []
+        feature_cols = [treatment] + list(confounders)
+        design = df[feature_cols].to_numpy(dtype=float)
+        n_rows = design.shape[0]
+        # Prepend an intercept column.
+        design = np.column_stack([np.ones(n_rows), design])
+        target = df[outcome].to_numpy(dtype=float)
+
+        beta, *_ = np.linalg.lstsq(design, target, rcond=None)
+        # beta[0] is the intercept; beta[1] is the treatment coefficient (ATE).
+        return float(beta[1])
 
     def _check_confounder_balance(
         self,

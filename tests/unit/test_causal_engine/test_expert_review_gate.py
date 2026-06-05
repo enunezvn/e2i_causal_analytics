@@ -88,8 +88,14 @@ class TestExpertReviewGate:
         assert result.requires_action is True
 
     @pytest.mark.asyncio
-    async def test_check_approval_auto_create_review(self, gate, mock_repo):
-        """Test check_approval auto-creates review for new DAG."""
+    async def test_check_approval_auto_create_review(self, mock_repo):
+        """Test check_approval auto-creates review for new DAG.
+
+        M-reach1: auto_create_review now defaults False (fail-closed); a caller that
+        wants the producer must opt in explicitly, so this test constructs the gate
+        with auto_create_review=True rather than relying on the old default.
+        """
+        gate = ExpertReviewGate(repository=mock_repo, auto_create_review=True)
         mock_repo.get_dag_approval = AsyncMock(return_value=None)
         mock_repo.get_reviews_for_dag = AsyncMock(return_value=[])
         mock_repo.create_review = AsyncMock(return_value="rev-new")
@@ -142,6 +148,20 @@ class TestExpertReviewGate:
         await gate.check_approval("abc123", brand="TestBrand")
 
         mock_repo.get_dag_approval.assert_called_with("abc123", "TestBrand")
+
+    @pytest.mark.asyncio
+    async def test_pending_lookup_passes_brand(self, gate, mock_repo):
+        """check_approval must forward the brand to get_reviews_for_dag so a
+        pending review from a different brand cannot gate this analysis."""
+        mock_repo.get_dag_approval = AsyncMock(return_value=None)
+        mock_repo.get_reviews_for_dag = AsyncMock(return_value=[])
+        mock_repo.create_review = AsyncMock(return_value="rev-new")
+
+        await gate.check_approval("abc123", brand="BrandX", requester_id="user-1")
+
+        # brand must be forwarded to the pending-review lookup.
+        _, kwargs = mock_repo.get_reviews_for_dag.call_args
+        assert kwargs.get("brand") == "BrandX"
 
 
 class TestExpertReviewGateCanProceed:
@@ -435,3 +455,19 @@ class TestCheckDagApprovalFunction:
 
         assert result.decision == ReviewGateDecision.PROCEED
         assert "bypassed" in result.message.lower()
+
+
+def test_auto_create_review_defaults_false_failclosed():
+    """M-reach1 (DEFER hardening): until a review-queue consumer/admin-UI exists, a
+    repo-backed gate must NOT silently create orphan `pending` rows. The default is
+    therefore fail-closed (False); callers that have a human-in-the-loop consumer
+    opt in explicitly with auto_create_review=True."""
+    from src.causal_engine.expert_review_gate import ExpertReviewGate
+
+    gate = ExpertReviewGate()  # no repository, default flags
+    assert gate.auto_create_review is False, (
+        "auto_create_review must default False until the admin-UI consumer (R6-F2) exists; "
+        "True would let a future repo-backed wire create pending rows no human can clear"
+    )
+    # Opt-in still honored:
+    assert ExpertReviewGate(auto_create_review=True).auto_create_review is True

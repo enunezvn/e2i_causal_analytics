@@ -20,7 +20,10 @@ import types
 import pytest
 
 from src.agents.causal_impact.agent import CausalImpactAgent
-from src.agents.causal_impact.graph import should_continue_after_refutation
+from src.agents.causal_impact.graph import (
+    should_continue_after_estimation,
+    should_continue_after_refutation,
+)
 from src.agents.causal_impact.nodes.refutation import RefutationNode
 from src.causal_engine.refutation_runner import GateDecision, RefutationSuite
 
@@ -340,3 +343,27 @@ class TestMemoryDoesNotAmplifyReview:
         )
         assert counts["semantic_stored"] == 1
         assert hooks.semantic_called is True
+
+
+class TestEstimationPartialSuccessStillValidates:
+    """H1 (fail-closed): an estimation partial success (estimation_error set but an
+    ATE was still produced) must NOT skip refutation straight to interpretation —
+    that surfaces an UNVALIDATED estimate as if validated. It must route through
+    refutation so the gate can validate or block it.
+    """
+
+    def test_partial_success_routes_to_refutation_not_interpretation(self):
+        state = {
+            "estimation_error": "selector returned partial CI",
+            "estimation_result": {"ate": 0.42},
+        }
+        assert should_continue_after_estimation(state) == "refutation"
+
+    def test_no_ate_partial_failure_still_routes_to_error_handler(self):
+        # Unchanged contract: an estimation error with NO ate must fail to error_handler.
+        state = {"estimation_error": "estimation crashed", "estimation_result": {}}
+        assert should_continue_after_estimation(state) == "error_handler"
+
+    def test_clean_estimation_routes_to_refutation(self):
+        state = {"estimation_result": {"ate": 0.42}}
+        assert should_continue_after_estimation(state) == "refutation"

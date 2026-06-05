@@ -6,6 +6,8 @@ Validates ML-compliant data splits:
 - Temporal ordering (chronological splits)
 - Correct split ratios
 - No data leakage
+
+Test-only-by-design: imported only by tests; no production consumers.
 """
 
 import logging
@@ -257,7 +259,7 @@ class SplitValidator:
                     result.add_leakage(
                         LeakageInfo(
                             leakage_type="temporal_overlap",
-                            severity="warning",
+                            severity="critical",
                             description=(
                                 f"Temporal overlap between '{split1}' "
                                 f"(max: {split_dates[split1]['max']}) and '{split2}' "
@@ -340,7 +342,8 @@ class SplitValidator:
                         )
 
         except Exception as e:
-            result.warnings.append(f"LeakageDetector check failed: {str(e)}")
+            result.errors.append(f"LeakageDetector check failed: {str(e)}")
+            result.is_valid = False
 
     def validate_multiple_datasets(
         self,

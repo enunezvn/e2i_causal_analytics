@@ -15,6 +15,7 @@ import pandas as pd
 
 from src.causal_engine.discovery.base import DiscoveryConfig
 from src.causal_engine.discovery.hasher import (
+    _hash_values,
     hash_config,
     hash_dataframe,
     hash_discovery_request,
@@ -114,6 +115,58 @@ class TestHashDataframe:
 
         assert isinstance(result, str)
         assert len(result) == 64
+
+    def test_mixed_dtype_float_precision_contract(self):
+        """Mixed categorical+float frame: float differences beyond 8 decimals must
+        NOT change the hash (FU-hasher: object-dtype frames previously bypassed
+        rounding because df.values.dtype == object)."""
+        # 'region' forces df.values to object dtype; 'spend' differs only at the
+        # 9th+ decimal place, which the 8-decimal contract must collapse.
+        df1 = pd.DataFrame({"region": ["A", "B", "C"], "spend": [1.123456789012345, 2.0, 3.0]})
+        df2 = pd.DataFrame({"region": ["A", "B", "C"], "spend": [1.123456789012346, 2.0, 3.0]})
+        assert df1.values.dtype == object  # guards the regression scenario
+        assert hash_dataframe(df1) == hash_dataframe(df2)
+
+    def test_mixed_dtype_hash_is_deterministic_across_objects(self):
+        """Two independently-constructed mixed-dtype frames with identical content
+        must hash identically. The old code hashed object-array POINTERS via
+        .tobytes(), making cross-object (and cross-process) hashes unstable."""
+        df1 = pd.DataFrame({"region": ["A", "B", "C"], "spend": [1.0, 2.0, 3.0]})
+        df2 = pd.DataFrame({"region": ["A", "B", "C"], "spend": [1.0, 2.0, 3.0]})
+        assert df1.values.dtype == object
+        assert hash_dataframe(df1) == hash_dataframe(df2)
+
+    def test_mixed_dtype_meaningful_diff_still_distinct(self):
+        """Differences within the 8-decimal window, or in a categorical value,
+        must still change the hash (no over-collapsing)."""
+        base = pd.DataFrame({"region": ["A", "B"], "spend": [1.10000000, 2.0]})
+        float_diff = pd.DataFrame(
+            {"region": ["A", "B"], "spend": [1.10000002, 2.0]}
+        )  # differs at 8th decimal -> within contract -> must differ
+        cat_diff = pd.DataFrame(
+            {"region": ["A", "X"], "spend": [1.10000000, 2.0]}
+        )  # categorical change -> must differ
+        assert hash_dataframe(base) != hash_dataframe(float_diff)
+        assert hash_dataframe(base) != hash_dataframe(cat_diff)
+
+    def test_nullable_boolean_column_hashes_by_value_not_pointer(self):
+        """FU-hasher: a pandas nullable-boolean column (`dtype='boolean'`) reports
+        is_bool_dtype=True but its to_numpy() is an OBJECT array (pd.NA can't fit
+        a numpy bool buffer). Hashing that with .tobytes() serializes object
+        POINTERS — stable within a process (True/False/NA are singletons) but
+        DIFFERENT across processes, making the discovery cache key process-
+        dependent. It must instead serialize by VALUE, identically to the
+        equivalent object column.
+        """
+        vals = [True, False, pd.NA, True]
+        df_nullable = pd.DataFrame({"flag": pd.array(vals, dtype="boolean")})
+        df_object = pd.DataFrame({"flag": pd.Series(vals, dtype="object")})
+        # Guard the scenario: the nullable column really is object-backed.
+        assert df_nullable["flag"].to_numpy().dtype == object
+        assert _hash_values(df_nullable) == _hash_values(df_object), (
+            "nullable-boolean column must hash by value (process-independent), "
+            "matching the equivalent object column"
+        )
 
 
 # =============================================================================

@@ -250,7 +250,9 @@ class ParallelPipeline(PipelineOrchestrator):
             tasks: Tasks to gather
 
         Returns:
-            List of results (may be partial if fail-fast triggered)
+            List of results (may be partial if fail-fast triggered; the
+            cancellation is logged at WARNING with the failing library).
+            Note: fail_fast defaults False.
         """
         results: List[Tuple[CausalLibrary, LibraryExecutionResult]] = []
 
@@ -265,15 +267,26 @@ class ParallelPipeline(PipelineOrchestrator):
 
                     # Check for failure
                     if isinstance(result, tuple):
-                        _, exec_result = result
+                        failed_library, exec_result = result
                         if not exec_result["success"]:
-                            # Cancel remaining tasks
+                            logger.warning(
+                                "fail_fast: library %s failed (%s); cancelling "
+                                "%d remaining librarie(s). fail_fast defaults "
+                                "False; enable it only to abort on first failure.",
+                                failed_library.value,
+                                exec_result["error"],
+                                len(pending),
+                            )
                             for p in pending:
                                 p.cancel()
                             return results
                 except Exception as e:
-                    logger.error(f"Task failed: {e}")
-                    # Cancel remaining tasks
+                    logger.warning(
+                        "fail_fast: a library task raised (%s); cancelling "
+                        "%d remaining librarie(s). fail_fast defaults False.",
+                        e,
+                        len(pending),
+                    )
                     for p in pending:
                         p.cancel()
                     return results

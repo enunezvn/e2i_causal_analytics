@@ -161,37 +161,35 @@ class GESAlgorithm(BaseDiscoveryAlgorithm):
         """
         adj = np.zeros((n_nodes, n_nodes), dtype=int)
 
-        try:
-            # Get the graph matrix from causal-learn
-            # The graph object has a graph attribute that is the adjacency matrix
-            if hasattr(graph, "graph"):
-                # graph.graph is a numpy array where:
-                # -1 means tail (no arrowhead), 1 means arrowhead
-                # So i -> j means graph[j,i] = 1 and graph[i,j] = -1
-                g = graph.graph
-                for i in range(n_nodes):
-                    for j in range(n_nodes):
-                        if g[j, i] == 1 and g[i, j] == -1:
-                            # Directed edge i -> j
-                            adj[i, j] = 1
-                        elif g[i, j] == -1 and g[j, i] == -1:
-                            # Undirected edge i - j (in CPDAG)
-                            # Represent as both directions for now
-                            adj[i, j] = 1
-                            adj[j, i] = 1
-            elif hasattr(graph, "get_graph_edges"):
-                # Alternative: Use edge list
-                edges = graph.get_graph_edges()
-                for edge in edges:
-                    i = edge.get_node1().get_name()
-                    j = edge.get_node2().get_name()
-                    # Get indices if names are X1, X2, etc.
-                    i_idx = int(i.replace("X", "")) - 1 if i.startswith("X") else int(i)
-                    j_idx = int(j.replace("X", "")) - 1 if j.startswith("X") else int(j)
-                    adj[i_idx, j_idx] = 1
-
-        except Exception:
-            # Fallback: return empty adjacency matrix
-            pass
+        # Get the graph matrix from causal-learn.
+        # NOTE (M-fo4): do NOT swallow parse errors here. A genuine failure must
+        # propagate to discover()'s outer except so the result is converged=False
+        # rather than a silently-empty converged=True DAG. A graph object lacking
+        # both `.graph` and `.get_graph_edges` is a legitimate empty result.
+        if hasattr(graph, "graph"):
+            # graph.graph is a numpy array where:
+            # -1 means tail (no arrowhead), 1 means arrowhead
+            # So i -> j means graph[j,i] = 1 and graph[i,j] = -1
+            g = graph.graph
+            for i in range(n_nodes):
+                for j in range(n_nodes):
+                    if g[j, i] == 1 and g[i, j] == -1:
+                        # Directed edge i -> j
+                        adj[i, j] = 1
+                    elif g[i, j] == -1 and g[j, i] == -1:
+                        # Undirected edge i - j (in CPDAG)
+                        # Represent as both directions for now
+                        adj[i, j] = 1
+                        adj[j, i] = 1
+        elif hasattr(graph, "get_graph_edges"):
+            # Alternative: Use edge list
+            edges = graph.get_graph_edges()
+            for edge in edges:
+                i = edge.get_node1().get_name()
+                j = edge.get_node2().get_name()
+                # Get indices if names are X1, X2, etc.
+                i_idx = int(i.replace("X", "")) - 1 if i.startswith("X") else int(i)
+                j_idx = int(j.replace("X", "")) - 1 if j.startswith("X") else int(j)
+                adj[i_idx, j_idx] = 1
 
         return adj

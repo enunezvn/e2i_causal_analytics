@@ -76,15 +76,33 @@ def _hash_values(df: pd.DataFrame) -> str:
     Returns:
         Hash of the values
     """
-    # Convert to numpy and handle float precision
-    arr = df.values.copy()
-
-    # Round floats to fixed precision
-    if arr.dtype in [np.float64, np.float32]:
-        arr = np.round(arr, decimals=8)
-
-    # Convert to bytes and hash
-    return hashlib.sha256(arr.tobytes()).hexdigest()[:16]
+    # Hash column-by-column so heterogeneous (object/mixed-dtype) frames honor
+    # the 8-decimal float precision contract. df.values on a mixed frame is
+    # object-dtype: np.round is skipped AND .tobytes() serializes object
+    # POINTERS (non-deterministic across processes). Per-column serialization
+    # avoids both failure modes.
+    hasher = hashlib.sha256()
+    for col in df.columns:
+        series = df[col]
+        dtype = series.dtype
+        if pd.api.types.is_float_dtype(dtype):
+            # Round floats to fixed precision (8 decimals) then hash raw bytes.
+            rounded = np.round(series.to_numpy(), decimals=8)
+            hasher.update(rounded.tobytes())
+        elif (
+            pd.api.types.is_bool_dtype(dtype) or pd.api.types.is_integer_dtype(dtype)
+        ) and series.to_numpy().dtype != object:
+            hasher.update(series.to_numpy().tobytes())
+        else:
+            # object / categorical / string / datetime AND pandas *nullable*
+            # boolean (whose to_numpy() is object because pd.NA can't fit a numpy
+            # bool buffer): serialize by VALUE, not by pointer. .tobytes() on an
+            # object array would hash object POINTERS — non-deterministic across
+            # processes — making the discovery cache key process-dependent.
+            hasher.update(b"\x1f".join(repr(v).encode("utf-8") for v in series.tolist()))
+        # Column delimiter so concatenations across columns can't collide.
+        hasher.update(b"::")
+    return hasher.hexdigest()[:16]
 
 
 def hash_config(config: DiscoveryConfig) -> str:

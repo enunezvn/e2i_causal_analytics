@@ -184,21 +184,22 @@ class PCAlgorithm(BaseDiscoveryAlgorithm):
         """
         adj = np.zeros((n_nodes, n_nodes), dtype=int)
 
-        try:
-            # Get the graph matrix from causal-learn
-            if hasattr(graph, "graph"):
-                g = graph.graph
-                for i in range(n_nodes):
-                    for j in range(n_nodes):
-                        # Directed edge i -> j
-                        if g[j, i] == 1 and g[i, j] == -1:
-                            adj[i, j] = 1
-                        # Undirected edge (in CPDAG)
-                        elif g[i, j] == -1 and g[j, i] == -1:
-                            adj[i, j] = 1
-                            adj[j, i] = 1
-
-        except Exception:
-            pass
+        # Get the graph matrix from causal-learn.
+        # NOTE (M-fo4): do NOT wrap this in `try/except: pass`. A genuine parse
+        # failure must propagate to discover()'s outer except so the result is
+        # marked converged=False instead of a silently-empty converged=True DAG.
+        # A graph object without a `.graph` attribute is a legitimate empty
+        # result and returns a zeros matrix via the guard below.
+        if hasattr(graph, "graph"):
+            g = graph.graph
+            for i in range(n_nodes):
+                for j in range(n_nodes):
+                    # Directed edge i -> j
+                    if g[j, i] == 1 and g[i, j] == -1:
+                        adj[i, j] = 1
+                    # Undirected edge (in CPDAG)
+                    elif g[i, j] == -1 and g[j, i] == -1:
+                        adj[i, j] = 1
+                        adj[j, i] = 1
 
         return adj

@@ -334,6 +334,40 @@ class TestGESAdjacencyConversion:
         # Should return empty adjacency matrix as fallback
         assert adj.shape == (3, 3)
 
+    def test_parse_error_raises_not_silently_empty(self, ges):
+        """A genuine parse error inside the loop must raise, not return zeros (M-fo4)."""
+        mock_graph = MagicMock()
+        bad_matrix = MagicMock()
+        bad_matrix.__getitem__.side_effect = ValueError("corrupt graph matrix")
+        mock_graph.graph = bad_matrix
+
+        with pytest.raises(ValueError, match="corrupt graph matrix"):
+            ges._graph_to_adjacency(mock_graph, 3)
+
+
+class TestGESDiscoveryParseFailure:
+    """M-fo4: parse failure during discover() must yield converged=False."""
+
+    @pytest.fixture
+    def ges(self):
+        return GESAlgorithm()
+
+    def test_parse_failure_marks_result_failed(self, ges):
+        """If adjacency parsing raises, discover() returns converged=False + error."""
+        config = DiscoveryConfig()
+        df = pd.DataFrame({"A": [1.0, 2.0, 3.0], "B": [4.0, 5.0, 6.0]})
+
+        with patch.object(
+            ges,
+            "_graph_to_adjacency",
+            side_effect=ValueError("corrupt graph matrix"),
+        ):
+            result = ges.discover(df, config)
+
+        assert result.converged is False
+        assert "error" in result.metadata
+        assert result.edge_list == []
+
 
 # =============================================================================
 # GES Integration Tests

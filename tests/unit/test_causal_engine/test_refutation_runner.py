@@ -827,6 +827,62 @@ class TestConfidenceScore:
 
         assert score == 0.0
 
+    def test_skipped_excluded_from_confidence_average(self, runner):
+        """SKIPPED tests must be EXCLUDED from the weighted average, not padded at 0.5.
+
+        Two critical tests PASSED + one critical test SKIPPED: the score must reflect
+        only the evidence actually gathered (1.0), not be diluted to ~0.83 by a
+        neutral 0.5 pad for the skipped test.
+        """
+        tests = [
+            RefutationResult(
+                test_name=RefutationTestType.PLACEBO_TREATMENT,
+                status=RefutationStatus.PASSED,
+                original_effect=0.15,
+                refuted_effect=0.02,
+            ),
+            RefutationResult(
+                test_name=RefutationTestType.RANDOM_COMMON_CAUSE,
+                status=RefutationStatus.PASSED,
+                original_effect=0.15,
+                refuted_effect=0.14,
+            ),
+            RefutationResult(
+                test_name=RefutationTestType.SENSITIVITY_E_VALUE,
+                status=RefutationStatus.SKIPPED,
+                original_effect=0.15,
+                refuted_effect=0.15,
+            ),
+        ]
+
+        score = runner._calculate_confidence_score(tests)
+
+        # Excluding the SKIPPED test, both remaining tests PASSED -> 1.0.
+        assert score == pytest.approx(1.0)
+
+    def test_all_skipped_fails_closed_to_zero(self, runner):
+        """A suite where every test is SKIPPED carries zero evidence and must
+        fail CLOSED (0.0 -> BLOCK band), not surface a 0.5 REVIEW-band score.
+        """
+        tests = [
+            RefutationResult(
+                test_name=RefutationTestType.PLACEBO_TREATMENT,
+                status=RefutationStatus.SKIPPED,
+                original_effect=0.15,
+                refuted_effect=0.15,
+            ),
+            RefutationResult(
+                test_name=RefutationTestType.SENSITIVITY_E_VALUE,
+                status=RefutationStatus.SKIPPED,
+                original_effect=0.15,
+                refuted_effect=0.15,
+            ),
+        ]
+
+        score = runner._calculate_confidence_score(tests)
+
+        assert score == 0.0
+
 
 # ============================================================================
 # GATE DECISION TESTS
@@ -895,6 +951,24 @@ class TestGateDecision:
         decision = runner._determine_gate_decision(tests, confidence_score=0.40)
 
         assert decision == GateDecision.BLOCK
+
+    def test_critical_warning_does_not_block_proceed(self, runner):
+        """Contract: only a critical test FAILED blocks. A critical test in WARNING
+        with high confidence still yields PROCEED (documents the corrected
+        GateDecision.PROCEED comment).
+        """
+        tests = [
+            RefutationResult(
+                test_name=RefutationTestType.PLACEBO_TREATMENT,  # critical, WARNING
+                status=RefutationStatus.WARNING,
+                original_effect=0.15,
+                refuted_effect=0.08,
+            ),
+        ]
+
+        decision = runner._determine_gate_decision(tests, confidence_score=0.85)
+
+        assert decision == GateDecision.PROCEED
 
 
 # ============================================================================

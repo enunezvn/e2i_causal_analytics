@@ -217,57 +217,57 @@ class FCIAlgorithm(BaseDiscoveryAlgorithm):
         adj = np.zeros((n_nodes, n_nodes), dtype=int)
         edge_types: Dict[Tuple[int, int], EdgeType] = {}
 
-        try:
-            if hasattr(graph, "graph"):
-                g = graph.graph
-                for i in range(n_nodes):
-                    for j in range(i + 1, n_nodes):
-                        mark_ij = g[i, j]  # Mark at j end of edge from i
-                        mark_ji = g[j, i]  # Mark at i end of edge from j
+        # NOTE (M-fo4): do NOT swallow parse errors here. A genuine failure must
+        # propagate to discover()'s outer except so the result is converged=False
+        # rather than a silently-empty converged=True PAG. A graph object lacking
+        # a `.graph` attribute is a legitimate empty result.
+        if hasattr(graph, "graph"):
+            g = graph.graph
+            for i in range(n_nodes):
+                for j in range(i + 1, n_nodes):
+                    mark_ij = g[i, j]  # Mark at j end of edge from i
+                    mark_ji = g[j, i]  # Mark at i end of edge from j
 
-                        if mark_ij == 0 and mark_ji == 0:
-                            # No edge
-                            continue
+                    if mark_ij == 0 and mark_ji == 0:
+                        # No edge
+                        continue
 
-                        # Directed edge i -> j
-                        if mark_ji == self.TAIL and mark_ij == self.ARROW:
+                    # Directed edge i -> j
+                    if mark_ji == self.TAIL and mark_ij == self.ARROW:
+                        adj[i, j] = 1
+                        edge_types[(i, j)] = EdgeType.DIRECTED
+
+                    # Directed edge j -> i
+                    elif mark_ij == self.TAIL and mark_ji == self.ARROW:
+                        adj[j, i] = 1
+                        edge_types[(j, i)] = EdgeType.DIRECTED
+
+                    # Bidirected edge i <-> j (latent confounder)
+                    elif mark_ij == self.ARROW and mark_ji == self.ARROW:
+                        adj[i, j] = 1
+                        adj[j, i] = 1
+                        edge_types[(i, j)] = EdgeType.BIDIRECTED
+
+                    # Undirected edge i - j
+                    elif mark_ij == self.TAIL and mark_ji == self.TAIL:
+                        adj[i, j] = 1
+                        adj[j, i] = 1
+                        edge_types[(i, j)] = EdgeType.UNDIRECTED
+
+                    # Circle marks - treat conservatively
+                    elif self.CIRCLE in (mark_ij, mark_ji):
+                        # Circle to arrow (o->) - treat as possible directed
+                        if mark_ij == self.ARROW and mark_ji == self.CIRCLE:
                             adj[i, j] = 1
-                            edge_types[(i, j)] = EdgeType.DIRECTED
-
-                        # Directed edge j -> i
-                        elif mark_ij == self.TAIL and mark_ji == self.ARROW:
+                            edge_types[(i, j)] = EdgeType.UNDIRECTED  # Uncertain
+                        elif mark_ji == self.ARROW and mark_ij == self.CIRCLE:
                             adj[j, i] = 1
-                            edge_types[(j, i)] = EdgeType.DIRECTED
-
-                        # Bidirected edge i <-> j (latent confounder)
-                        elif mark_ij == self.ARROW and mark_ji == self.ARROW:
-                            adj[i, j] = 1
-                            adj[j, i] = 1
-                            edge_types[(i, j)] = EdgeType.BIDIRECTED
-
-                        # Undirected edge i - j
-                        elif mark_ij == self.TAIL and mark_ji == self.TAIL:
+                            edge_types[(j, i)] = EdgeType.UNDIRECTED  # Uncertain
+                        else:
+                            # Other circle combinations - treat as undirected
                             adj[i, j] = 1
                             adj[j, i] = 1
                             edge_types[(i, j)] = EdgeType.UNDIRECTED
-
-                        # Circle marks - treat conservatively
-                        elif self.CIRCLE in (mark_ij, mark_ji):
-                            # Circle to arrow (o->) - treat as possible directed
-                            if mark_ij == self.ARROW and mark_ji == self.CIRCLE:
-                                adj[i, j] = 1
-                                edge_types[(i, j)] = EdgeType.UNDIRECTED  # Uncertain
-                            elif mark_ji == self.ARROW and mark_ij == self.CIRCLE:
-                                adj[j, i] = 1
-                                edge_types[(j, i)] = EdgeType.UNDIRECTED  # Uncertain
-                            else:
-                                # Other circle combinations - treat as undirected
-                                adj[i, j] = 1
-                                adj[j, i] = 1
-                                edge_types[(i, j)] = EdgeType.UNDIRECTED
-
-        except Exception:
-            pass
 
         return adj, edge_types
 
