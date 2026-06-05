@@ -110,6 +110,9 @@ class SegmentResult:
     uplift_range: Tuple[float, float]
     cate_mean: Optional[float] = None
     cate_std: Optional[float] = None
+    # H6: TRUE standard error of the segment ATE (shrinks with n), distinct from
+    # cate_std (per-unit CATE dispersion). Used as ate_std in nested-CI weights.
+    cate_se: Optional[float] = None
     cate_ci_lower: Optional[float] = None
     cate_ci_upper: Optional[float] = None
     cate_values: Optional[NDArray[np.float64]] = None
@@ -128,6 +131,7 @@ class SegmentResult:
             "uplift_range": self.uplift_range,
             "cate_mean": self.cate_mean,
             "cate_std": self.cate_std,
+            "cate_se": self.cate_se,
             "cate_ci_lower": self.cate_ci_lower,
             "cate_ci_upper": self.cate_ci_upper,
             "estimator_used": self.estimator_used,
@@ -579,6 +583,7 @@ class HierarchicalAnalyzer:
                     uplift_range=uplift_range,
                     cate_mean=cate_result.cate_mean,
                     cate_std=cate_result.cate_std,
+                    cate_se=cate_result.cate_se,
                     cate_ci_lower=cate_result.ci_lower,
                     cate_ci_upper=cate_result.ci_upper,
                     cate_values=cate_result.cate_values,
@@ -630,7 +635,11 @@ class HierarchicalAnalyzer:
                     segment_id=s.segment_id,
                     segment_name=s.segment_name,
                     ate=s.cate_mean or 0.0,
-                    ate_std=s.cate_std or 0.0,
+                    # H6: ate_std is a STANDARD ERROR (used in inverse-variance
+                    # weights + Q/I²/τ²), so bridge it from the true SE (cate_se),
+                    # NOT cate_std (the per-unit CATE dispersion). Fall back to
+                    # cate_std only if cate_se is unavailable.
+                    ate_std=(s.cate_se if s.cate_se is not None else (s.cate_std or 0.0)),
                     ci_lower=s.cate_ci_lower or (s.cate_mean or 0.0),
                     ci_upper=s.cate_ci_upper or (s.cate_mean or 0.0),
                     sample_size=s.n_samples,
