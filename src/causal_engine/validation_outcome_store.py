@@ -34,6 +34,27 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================================
+# STORE RESULT (H11 — durable-vs-degraded signal)
+# ============================================================================
+
+
+@dataclass
+class StoreResult:
+    """Result of a validation-outcome write.
+
+    Distinguishes a DURABLE write from a DEGRADED in-memory fallback (H11) so a
+    caller cannot mistake silent data loss (Supabase outage / RLS denial /
+    schema drift) for success. ``store()`` still returns the bare id for
+    backward compatibility; ``store_with_status()`` returns this richer signal.
+    """
+
+    outcome_id: str
+    persisted: bool  # True iff written to the durable backend
+    degraded: bool  # True iff a durable write was attempted but fell back
+    backend: str  # "supabase" | "memory_fallback" | "memory"
+
+
+# ============================================================================
 # ABSTRACT BASE CLASS
 # ============================================================================
 
@@ -57,6 +78,17 @@ class ValidationOutcomeStoreBase(ABC):
             Outcome ID
         """
         pass
+
+    async def store_with_status(self, outcome: ValidationOutcome) -> StoreResult:
+        """Store and report whether the write was DURABLE (H11).
+
+        Default implementation: treat ``store()`` as a durable write for this
+        backend. The Supabase store overrides this to flag a degraded in-memory
+        fallback so callers can distinguish silent data loss from success.
+        """
+        outcome_id = await self.store(outcome)
+        backend = getattr(self, "_backend_name", "memory")
+        return StoreResult(outcome_id=outcome_id, persisted=True, degraded=False, backend=backend)
 
     @abstractmethod
     async def get(self, outcome_id: str) -> Optional[ValidationOutcome]:
@@ -349,7 +381,12 @@ class SupabaseValidationOutcomeStore(ValidationOutcomeStoreBase):
             "outcome_variable": outcome.outcome_variable,
             "brand": outcome.brand,
             "sample_size": outcome.sample_size,
-            "effect_size": float(outcome.effect_size) if outcome.effect_size else None,
+            # H10: use `is not None`, not truthiness — a legitimate 0.0 ATE (a
+            # placebo refutation is designed to yield ~0; a genuine null finding
+            # is ~0) must persist as 0.0, NOT be silently dropped to NULL.
+            "effect_size": (
+                float(outcome.effect_size) if outcome.effect_size is not None else None
+            ),
             "gate_decision": outcome.gate_decision,
             "confidence_score": outcome.confidence_score,
             "tests_passed": outcome.tests_passed,
@@ -413,11 +450,37 @@ class SupabaseValidationOutcomeStore(ValidationOutcomeStoreBase):
         )
 
     async def store(self, outcome: ValidationOutcome) -> str:
-        """Store a validation outcome."""
+        """Store a validation outcome (backward-compatible: returns the id).
+
+        Callers that need to know whether the write was DURABLE should use
+        ``store_with_status()`` (H11) — a bare id here does NOT imply durability.
+        """
+        return (await self.store_with_status(outcome)).outcome_id
+
+    async def _degraded_fallback(self, outcome: ValidationOutcome, reason: str) -> StoreResult:
+        """Write to the EPHEMERAL in-memory fallback and report it as degraded.
+
+        H11: a durable write was attempted and failed — log at ERROR (with a
+        machine-readable metric tag) so the silent-data-loss is alertable, and
+        return persisted=False so the caller can distinguish it from success.
+        """
+        logger.error(
+            "Validation outcome %s written to EPHEMERAL in-memory fallback "
+            "(NOT durable) — %s. This outcome will be lost on process restart.",
+            outcome.outcome_id,
+            reason,
+            extra={"metric": "validation_outcome_persist_degraded", "reason": reason},
+        )
+        fallback_id = await self._get_fallback().store(outcome)
+        return StoreResult(
+            outcome_id=fallback_id, persisted=False, degraded=True, backend="memory_fallback"
+        )
+
+    async def store_with_status(self, outcome: ValidationOutcome) -> StoreResult:
+        """Store a validation outcome, reporting whether it was DURABLE (H11)."""
         client = self._get_client()
         if not client:
-            logger.warning("Supabase unavailable, using in-memory fallback")
-            return await self._get_fallback().store(outcome)
+            return await self._degraded_fallback(outcome, "Supabase client unavailable")
 
         try:
             row = self._outcome_to_row(outcome)
@@ -427,14 +490,18 @@ class SupabaseValidationOutcomeStore(ValidationOutcomeStoreBase):
                 logger.info(
                     f"Stored validation outcome {outcome.outcome_id}: {outcome.outcome_type.value}"
                 )
-                return outcome.outcome_id
+                return StoreResult(
+                    outcome_id=outcome.outcome_id,
+                    persisted=True,
+                    degraded=False,
+                    backend="supabase",
+                )
             else:
                 raise Exception("Insert returned no data")
 
         except Exception as e:
-            logger.error(f"Failed to store outcome in Supabase: {e}")
-            # Fall back to in-memory
-            return await self._get_fallback().store(outcome)
+            # Fall back to in-memory, but report it as a DEGRADED (non-durable) write.
+            return await self._degraded_fallback(outcome, f"Supabase insert failed: {e}")
 
     async def get(self, outcome_id: str) -> Optional[ValidationOutcome]:
         """Retrieve a validation outcome by ID."""
