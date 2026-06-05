@@ -365,6 +365,15 @@ class CausalImpactAgent(SkillsMixin):
         gate_blocked = gate_decision == "block"
         needs_review = gate_decision == "review"
 
+        # M-fo3 (MED, fail-closed): the sensitivity node fail-closes by setting
+        # state['sensitivity_error'] (sensitivity.py) and the interpretation node
+        # re-asserts status='failed'/needs_review=True (interpretation.py). The prod
+        # output must mirror that signal — a defaulted/failed E-value is a validation
+        # gap, never a silently-completed full-confidence result.
+        sensitivity_failed = bool(state.get("sensitivity_error"))
+        if sensitivity_failed:
+            needs_review = True
+
         # Determine overall confidence
         if not refutation_ran or "confidence_adjustment" not in refutation_results:
             # H1: never default to 1.0 (no penalty) when validation did not run or
@@ -383,6 +392,10 @@ class CausalImpactAgent(SkillsMixin):
             base_confidence = 0.5
 
         overall_confidence = base_confidence * refutation_confidence
+        # M-fo3: a failed sensitivity analysis is an unvalidated-robustness gap —
+        # hard-cap confidence at the same penalty used for unrun refutation (H1).
+        if sensitivity_failed:
+            overall_confidence = min(overall_confidence, _REFUTATION_UNVALIDATED_PENALTY)
 
         # H2: only a PROCEED gate is "passed/robust". A REVIEW band is borderline
         # (needs_review) and an errored/blocked refutation is not passed at all.
@@ -395,10 +408,14 @@ class CausalImpactAgent(SkillsMixin):
             # no ATE OR when refutation failed/errored OR the gate BLOCKED. A
             # never-validated or blocked estimate must not be surfaced as
             # "completed" with full confidence (the F-014 fail-closed seam).
+            # M-fo3: also fail-closed when the sensitivity node failed.
             "status": (
                 "completed"
                 if (
-                    estimation_result.get("ate") is not None and refutation_ran and not gate_blocked
+                    estimation_result.get("ate") is not None
+                    and refutation_ran
+                    and not gate_blocked
+                    and not sensitivity_failed
                 )
                 else "failed"
             ),
