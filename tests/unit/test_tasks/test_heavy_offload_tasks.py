@@ -249,3 +249,24 @@ def test_simulate_population_passes_payload_through_to_compute():
     assert kwargs["population_filter_dict"] == {"deciles": [1, 2, 3]}
     assert kwargs["calculate_heterogeneity"] is False
     assert kwargs["model_id_value"] == str(UUID(int=9))
+
+
+def test_run_simulation_compute_fails_closed_without_loadable_model():
+    """Worker-side fail-closed guard (#705 H4): with no loadable model the shared
+    compute raises RuntimeError and never generates from an untrained generator.
+    This exercises the REAL guard (unmocked) — the offload route tests stub the
+    function it should exercise."""
+    from src.digital_twin.simulation_runner import run_simulation_compute
+
+    with pytest.raises(RuntimeError):
+        run_simulation_compute(
+            twin_type_value="hcp",
+            brand_value="Remibrutinib",
+            twin_count=10,
+            intervention_dict={"intervention_type": "email_campaign"},
+            population_filter_dict=None,
+            calculate_heterogeneity=False,
+            model_id_value=None,
+            model_uri=None,
+            model_run_id=None,
+        )

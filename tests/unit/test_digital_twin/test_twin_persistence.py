@@ -8,8 +8,15 @@ reproducible. This is the anti-mock contract that replaces the fabricated
 without ever logging an artifact).
 
 These tests are hermetic: they point MLflow at a ``file://`` tracking store in
-a tmp dir, so no MLflow server/container is required. The real ``mlflow:5000``
-container is exercised separately as the faithful integration check.
+a tmp dir, so no MLflow server/container is required (CI has no ``mlflow:5000``).
+
+The faithful round-trip against the real proxied-artifacts ``http://mlflow:5000``
+server is NOT a suite test (the server is unreachable from CI / the host venv).
+It is verified manually on the droplet, where the server IS reachable:
+
+    docker exec -i e2i_api python scripts/train_twin_model.py \
+        --twin-type hcp --brand Remibrutinib --synthetic
+    # then POST /digital-twin/simulate and confirm a 200 (not 503).
 """
 
 from __future__ import annotations

@@ -129,6 +129,8 @@ async def train_and_persist_twin(
         feature_columns=list(generator.feature_columns),
         target_column=target_column,
         geographic_scope=geographic_scope,
+        # Persist the REAL row count, not TwinModelConfig's 50000 default (#705 H4).
+        training_samples=int(getattr(metrics, "training_samples", len(frame))),
     )
     model_id = await repo.save_model(
         config=config,
@@ -136,6 +138,7 @@ async def train_and_persist_twin(
         model_artifact=generator.model,
         mlflow_run_id=ref.run_id,
         mlflow_model_uri=ref.model_uri,
+        data_provenance=provenance,
     )
 
     logger.info(

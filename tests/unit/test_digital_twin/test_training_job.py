@@ -60,6 +60,8 @@ async def test_train_and_persist_twin_synthetic_creates_loadable_model(file_trac
     kwargs = repo.save_model.await_args.kwargs
     assert kwargs["mlflow_model_uri"] == result["model_uri"]
     assert kwargs["mlflow_run_id"] == result["run_id"]
+    # Structured provenance is persisted (synthetic != RWD).
+    assert kwargs["data_provenance"] == "synthetic"
 
 
 @pytest.mark.asyncio

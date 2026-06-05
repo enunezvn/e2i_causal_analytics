@@ -117,14 +117,20 @@ def train_twin_model(self: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
         JSON-safe training result (``model_id``, ``model_uri``, ``r2_score``,
         ``data_provenance`` …).
     """
-    import asyncio
+    # Reuse the codebase's thread-local-loop helper (NOT bare asyncio.run): the
+    # async Supabase client is process-cached and bound to the loop it was created
+    # on, so asyncio.run's per-call create-then-close loop would raise "Event loop
+    # is closed" on the 2nd+ task in a long-lived prefork worker. run_async reuses
+    # a live thread-local loop, matching execute_twin_retraining. Function-local
+    # import keeps the heavy ab_testing_tasks module off the API process.
+    from src.tasks.ab_testing_tasks import run_async
 
     logger.info(
         "train_twin_model task start brand=%s twin_type=%s",
         payload.get("brand"),
         payload.get("twin_type"),
     )
-    result = asyncio.run(_train_twin_model_async(payload))
+    result = run_async(_train_twin_model_async(payload))
     logger.info("train_twin_model task done model=%s", result.get("model_id"))
     return result
 

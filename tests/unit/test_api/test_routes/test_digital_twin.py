@@ -168,23 +168,22 @@ def mock_twin_repository():
 
         instance.get_simulation.return_value = mock_result
 
-        # For list_active_models
+        # For list_active_models. This mirrors the REAL row shape save_model
+        # writes (#705 H4): metrics nested under performance_metrics, tuning under
+        # training_config, target_columns plural — NOT flat keys. (A flat fixture
+        # would falsely pass while real prod rows render metric-less.) MLflow refs
+        # are flat (as stored); hydration is patched via mock_twin_hydrate.
         mock_model = {
             "model_id": str(uuid4()),
             "model_name": "HCP Twin Model",
             "twin_type": "hcp",
             "brand": "Remibrutinib",
-            "algorithm": "RandomForest",
-            "r2_score": 0.85,
-            "rmse": 0.12,
-            "training_samples": 5000,
             "is_active": True,
             "created_at": datetime.now(timezone.utc),
-            # Real MLflow refs so the route's load-before-generate step (#705 H4)
-            # has something to resolve; hydration itself is patched in tests via
-            # the mock_twin_hydrate fixture.
             "mlflow_model_uri": "models:/m-test",
             "mlflow_run_id": "run-test",
+            "training_config": {"algorithm": "RandomForest", "training_samples": 5000},
+            "performance_metrics": {"r2_score": 0.85, "rmse": 0.12, "training_samples": 5000},
         }
         instance.list_active_models.return_value = [mock_model]
 
@@ -193,13 +192,17 @@ def mock_twin_repository():
             **mock_model,
             "model_description": "Test model",
             "feature_columns": ["feature1", "feature2"],
-            "target_column": "outcome",
-            "cv_mean": 0.83,
-            "cv_std": 0.02,
-            "feature_importances": {"feature1": 0.6, "feature2": 0.4},
-            "top_features": ["feature1", "feature2"],
-            "training_duration_seconds": 120.5,
-            "config": {},
+            "target_columns": ["outcome"],
+            "performance_metrics": {
+                "r2_score": 0.85,
+                "rmse": 0.12,
+                "cv_mean": 0.83,
+                "cv_std": 0.02,
+                "feature_importances": {"feature1": 0.6, "feature2": 0.4},
+                "top_features": ["feature1", "feature2"],
+                "training_samples": 5000,
+                "training_duration_seconds": 120.5,
+            },
         }
         instance.get_model.return_value = mock_model_detail
 
@@ -467,6 +470,36 @@ async def test_compare_scenarios_error_is_generic(
 
     assert exc_info.value.status_code == 500
     assert "SECRET-COMPARE-LEAK" not in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_compare_scenarios_503_when_no_active_model(
+    mock_twin_generator, mock_simulation_engine, mock_twin_repository
+):
+    """compare must fail closed with 503 (not collapse to 500) when a scenario has
+    no trained model — mirroring /simulate, and never generating from an untrained
+    generator (#705 H4)."""
+    from src.api.routes.digital_twin import (
+        ScenarioComparisonRequest,
+        ScenarioSimulateRequest,
+        compare_scenarios,
+    )
+
+    mock_twin_repository.list_active_models.return_value = []
+
+    request = ScenarioComparisonRequest(
+        base_scenario=ScenarioSimulateRequest(
+            intervention_type="email_campaign", brand="Remibrutinib"
+        ),
+        alternative_scenarios=[],
+    )
+    user = {"user_id": "test_user", "role": "operator"}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await compare_scenarios(request, user)
+
+    assert exc_info.value.status_code == 503
+    mock_twin_generator.generate.assert_not_called()
 
 
 # =============================================================================

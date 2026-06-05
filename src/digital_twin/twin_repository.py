@@ -66,6 +66,7 @@ class TwinModelRepository(BaseRepository):
         model_artifact: Any = None,
         mlflow_run_id: Optional[str] = None,
         mlflow_model_uri: Optional[str] = None,
+        data_provenance: Optional[str] = None,
     ) -> UUID:
         """
         Save a trained twin model's metadata row.
@@ -108,6 +109,9 @@ class TwinModelRepository(BaseRepository):
                 "training_samples": config.training_samples,
                 "validation_split": config.validation_split,
                 "cv_folds": config.cv_folds,
+                # Structured provenance so a synthetic-trained model is never
+                # mistaken for an RWD-trained one (#705 H4 anti-mock).
+                "data_provenance": data_provenance,
             },
             "feature_columns": config.feature_columns,
             "target_columns": [config.target_column],
@@ -850,6 +854,7 @@ class TwinRepository:
         model_artifact: Any = None,
         mlflow_run_id: Optional[str] = None,
         mlflow_model_uri: Optional[str] = None,
+        data_provenance: Optional[str] = None,
     ) -> UUID:
         """Save a trained twin model."""
         return await self.models.save_model(  # type: ignore[no-any-return]
@@ -858,6 +863,7 @@ class TwinRepository:
             model_artifact,
             mlflow_run_id,
             mlflow_model_uri,
+            data_provenance,
         )
 
     async def get_model(self, model_id: UUID) -> Optional[Dict[str, Any]]:

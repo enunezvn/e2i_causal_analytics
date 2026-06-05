@@ -1178,7 +1178,9 @@ async def _execute_real_twin_retraining(
             twin_type=twin_type,
             brand=brand,
             algorithm=algorithm,
-            feature_columns=list(feature_cols or []),
+            # Record the ACTUALLY-fitted features (post-train), so the metadata row
+            # matches the persisted bundle rather than the source row's list (#705 H4).
+            feature_columns=list(getattr(generator, "feature_columns", None) or feature_cols or []),
             target_column=target_column,
             geographic_scope=model_row.get("geographic_scope", "national"),
         )

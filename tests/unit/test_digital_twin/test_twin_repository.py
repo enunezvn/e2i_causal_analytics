@@ -506,7 +506,7 @@ class TestTwinRepository:
             result = await repo.save_model(twin_model_config, twin_model_metrics)
 
             mock_save.assert_called_once_with(
-                twin_model_config, twin_model_metrics, None, None, None
+                twin_model_config, twin_model_metrics, None, None, None, None
             )
             assert result == twin_model_metrics.model_id
 

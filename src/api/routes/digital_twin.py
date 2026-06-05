@@ -992,6 +992,11 @@ async def compare_scenarios(
     Returns:
         Base + alternative results with a comparison summary.
     """
+    from src.api.dependencies.compute import (
+        HeavyComputeSaturated,
+        heavy_compute_slot,
+        run_in_bounded_executor,
+    )
     from src.digital_twin.models.simulation_models import InterventionConfig
     from src.digital_twin.models.twin_models import Brand, TwinType
     from src.digital_twin.simulation_engine import SimulationEngine
@@ -1014,9 +1019,14 @@ async def compare_scenarios(
             brand=brand,
             model_id=getattr(scenario, "model_id", None),
         )
-        return await _load_trained_generator(twin_type=twin_type, brand=brand, model_row=model_row)
+        generator = await _load_trained_generator(
+            twin_type=twin_type, brand=brand, model_row=model_row
+        )
+        return generator, model_row
 
-    def _run_scenario(scenario: ScenarioSimulateRequest, generator: Any) -> SimulationResponse:
+    def _run_scenario(
+        scenario: ScenarioSimulateRequest, generator: Any, model_row: Dict[str, Any]
+    ) -> SimulationResponse:
         intervention = InterventionConfig(
             intervention_type=scenario.intervention_type,
             target_regions=scenario.target_regions,
@@ -1029,8 +1039,8 @@ async def compare_scenarios(
                 **scenario.parameters,
             },
         )
-        # generator was hydrated from a real persisted model, so model_id is real.
-        model_id = generator.model_id or UUID(int=0)
+        # Use the resolved DB model_id — never a UUID(int=0) sentinel (#705 H4).
+        model_id = UUID(str(model_row["model_id"]))
         population = generator.generate(n=scenario.twin_count)
         engine = SimulationEngine(
             population=population,
@@ -1069,14 +1079,21 @@ async def compare_scenarios(
 
     try:
         repo = await _get_twin_repo()
-        base_gen = await _load_for(request.base_scenario)
-        alt_gens = [await _load_for(s) for s in request.alternative_scenarios]
+        base_gen, base_row = await _load_for(request.base_scenario)
+        alt_loaded = [await _load_for(s) for s in request.alternative_scenarios]
 
-        base_result = _run_scenario(request.base_scenario, base_gen)
-        alternative_results = [
-            _run_scenario(s, g)
-            for s, g in zip(request.alternative_scenarios, alt_gens, strict=True)
-        ]
+        # Twin generation is the heavy, blocking, ~1.3 GiB work. Run every scenario
+        # off the event loop under ONE per-worker heavy-compute slot (mirrors the
+        # /simulate inline path) so a multi-scenario compare can't stall the worker
+        # or bypass the OOM budget the slot enforces.
+        async with heavy_compute_slot():
+            base_result = await run_in_bounded_executor(
+                _run_scenario, request.base_scenario, base_gen, base_row
+            )
+            alternative_results = [
+                await run_in_bounded_executor(_run_scenario, s, gen, row)
+                for s, (gen, row) in zip(request.alternative_scenarios, alt_loaded, strict=True)
+            ]
 
         all_results = [base_result, *alternative_results]
         ates = [r.simulated_ate for r in all_results]
@@ -1098,6 +1115,9 @@ async def compare_scenarios(
 
     except HTTPException:
         # Honest 503 (no/unloadable model) must propagate, not collapse to 500.
+        raise
+    except HeavyComputeSaturated:
+        # Reject fast under load (mapped to 503 + Retry-After by the app handler).
         raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -1344,21 +1364,31 @@ async def list_models(
             brand=brand.value if brand else None,
         )
 
-        items = [
-            TwinModelSummary(
-                model_id=str(m.get("model_id")),
-                model_name=m.get("model_name", ""),
-                twin_type=m.get("twin_type", ""),
-                brand=m.get("brand", ""),
-                algorithm=m.get("algorithm", ""),
-                r2_score=m.get("r2_score"),
-                rmse=m.get("rmse"),
-                training_samples=m.get("training_samples", 0),
-                is_active=m.get("is_active", True),
-                created_at=m.get("created_at", datetime.now(timezone.utc)),
+        # save_model stores metrics nested under performance_metrics (JSONB) and
+        # tuning under training_config (JSONB) — NOT as flat columns. Read from
+        # the nested dicts (with a flat fallback for the v_active_twin_models view
+        # / legacy rows) so real trained models are not shown metric-less (#705 H4).
+        items = []
+        for m in models:
+            pm = m.get("performance_metrics") or {}
+            tc = m.get("training_config") or {}
+            items.append(
+                TwinModelSummary(
+                    model_id=str(m.get("model_id")),
+                    model_name=m.get("model_name", ""),
+                    twin_type=m.get("twin_type", ""),
+                    brand=m.get("brand", ""),
+                    algorithm=tc.get("algorithm", m.get("algorithm", "")),
+                    r2_score=pm.get("r2_score", m.get("r2_score")),
+                    rmse=pm.get("rmse", m.get("rmse")),
+                    training_samples=tc.get(
+                        "training_samples",
+                        pm.get("training_samples", m.get("training_samples", 0)),
+                    ),
+                    is_active=m.get("is_active", True),
+                    created_at=m.get("created_at", datetime.now(timezone.utc)),
+                )
             )
-            for m in models
-        ]
 
         return ModelListResponse(
             total_count=len(items),
@@ -1396,26 +1426,35 @@ async def get_model(
         if not model:
             raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
 
+        # Read from the nested JSONB columns save_model actually writes
+        # (performance_metrics / training_config / target_columns), with a flat
+        # fallback for view/legacy rows (#705 H4).
+        pm = model.get("performance_metrics") or {}
+        tc = model.get("training_config") or {}
+        target_cols = model.get("target_columns") or []
         return TwinModelDetailResponse(
             model_id=str(model.get("model_id")),
             model_name=model.get("model_name", ""),
             model_description=model.get("model_description"),
             twin_type=model.get("twin_type", ""),
             brand=model.get("brand", ""),
-            algorithm=model.get("algorithm", ""),
+            algorithm=tc.get("algorithm", model.get("algorithm", "")),
             feature_columns=model.get("feature_columns", []),
-            target_column=model.get("target_column", ""),
-            r2_score=model.get("r2_score"),
-            rmse=model.get("rmse"),
-            cv_mean=model.get("cv_mean"),
-            cv_std=model.get("cv_std"),
-            feature_importances=model.get("feature_importances", {}),
-            top_features=model.get("top_features", []),
-            training_samples=model.get("training_samples", 0),
-            training_duration_seconds=model.get("training_duration_seconds", 0.0),
+            target_column=(target_cols[0] if target_cols else model.get("target_column", "")),
+            r2_score=pm.get("r2_score", model.get("r2_score")),
+            rmse=pm.get("rmse", model.get("rmse")),
+            cv_mean=pm.get("cv_mean", model.get("cv_mean")),
+            cv_std=pm.get("cv_std", model.get("cv_std")),
+            feature_importances=pm.get("feature_importances", model.get("feature_importances", {})),
+            top_features=pm.get("top_features", model.get("top_features", [])),
+            training_samples=tc.get(
+                "training_samples",
+                pm.get("training_samples", model.get("training_samples", 0)),
+            ),
+            training_duration_seconds=pm.get("training_duration_seconds", 0.0),
             is_active=model.get("is_active", True),
             created_at=model.get("created_at", datetime.now(timezone.utc)),
-            config=model.get("config", {}),
+            config=tc or model.get("config", {}),
         )
 
     except HTTPException:

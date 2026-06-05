@@ -153,6 +153,24 @@ def hydrate_generator(
         logger.warning("Failed to load twin model uri=%s run_id=%s: %s", model_uri, run_id, exc)
         return False
 
+    # Identity guard: never hydrate a model trained for a DIFFERENT twin_type/brand
+    # into this generator (reachable via an explicit model_id) — that would silently
+    # generate the wrong population. Fail closed instead (#705 H4). The bundle stores
+    # the enum objects, so compare enum-to-enum.
+    bundle_twin_type = bundle.get("twin_type")
+    bundle_brand = bundle.get("brand")
+    if (bundle_twin_type is not None and bundle_twin_type != generator.twin_type) or (
+        bundle_brand is not None and bundle_brand != generator.brand
+    ):
+        logger.warning(
+            "Twin model identity mismatch (bundle %s/%s vs generator %s/%s) — refusing to hydrate",
+            bundle_twin_type,
+            bundle_brand,
+            generator.twin_type,
+            generator.brand,
+        )
+        return False
+
     generator.model = model
     generator.scaler = bundle.get("scaler")
     generator.label_encoders = bundle.get("label_encoders") or {}
