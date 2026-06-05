@@ -116,38 +116,70 @@ def cross_validation_request():
 class TestHierarchicalAnalysis:
     """Tests for hierarchical analysis endpoints."""
 
-    def test_run_hierarchical_analysis_sync(self, client, hierarchical_request):
-        """Test synchronous hierarchical analysis."""
+    def test_run_hierarchical_analysis_sync_fails_closed_without_data(
+        self, client, hierarchical_request
+    ):
+        """Sync hierarchical analysis with no inline data MUST fail-closed (503).
+
+        C1 de-fabrication: the endpoint previously ran the REAL EconML analyzer
+        over fabricated np.random data and returned 200 COMPLETED — this test
+        used to (inadvertently) assert that fabrication. Post-C1 the default
+        path resolves a real DataFrame from filters.estimation_data_records and
+        raises 503 when none is present (matching the sibling endpoints). The
+        labeled demo path and the real-data path are covered by
+        tests/api/test_hierarchical_defab.py.
+        """
         response = client.post(
             "/causal/hierarchical/analyze",
             json=hierarchical_request,
         )
 
-        assert response.status_code == 200
-        data = response.json()
-        assert "analysis_id" in data
-        assert data["status"] in ["completed", "in_progress", "pending", "failed"]
-        # Response uses HierarchicalAnalysisResponse schema which has estimator_type
-        assert "estimator_type" in data
+        assert response.status_code == 503, (
+            f"Default path must fail-closed with 503, got {response.status_code}"
+        )
 
-    def test_run_hierarchical_analysis_async(self, client, hierarchical_request):
-        """Test asynchronous hierarchical analysis."""
+    def test_run_hierarchical_analysis_async_fails_closed_without_data(
+        self, client, hierarchical_request
+    ):
+        """Async non-demo submission with no inline data MUST fail-closed (503).
+
+        C1: the async path preflights the same fail-closed contract as the sync
+        path BEFORE accepting the submission, so a no-data request fails fast
+        with 503 rather than being accepted as pending then cached as a generic
+        FAILED record by the background task.
+        """
         response = client.post(
             "/causal/hierarchical/analyze?async_mode=true",
             json=hierarchical_request,
         )
 
-        # API returns 200 with status=pending for async mode
+        assert response.status_code == 503, (
+            f"Async non-demo path must fail-closed with 503, got {response.status_code}"
+        )
+
+    def test_run_hierarchical_analysis_async_demo_returns_pending(
+        self, client, hierarchical_request
+    ):
+        """Async demo_mode=true is accepted (200 pending) — no data required."""
+        response = client.post(
+            "/causal/hierarchical/analyze?async_mode=true&demo_mode=true",
+            json=hierarchical_request,
+        )
+
         assert response.status_code == 200
         data = response.json()
         assert "analysis_id" in data
         assert data["status"] == "pending"
 
     def test_get_hierarchical_result_success(self, client, hierarchical_request):
-        """Test retrieving hierarchical analysis result."""
-        # First, create an analysis
+        """Test retrieving hierarchical analysis result.
+
+        Uses demo_mode=true to populate the cache without inline data (post-C1
+        the default path fails-closed with 503 when no real data is supplied).
+        """
+        # First, create an analysis (labeled demo placeholder is sufficient here)
         create_response = client.post(
-            "/causal/hierarchical/analyze",
+            "/causal/hierarchical/analyze?demo_mode=true",
             json=hierarchical_request,
         )
         analysis_id = create_response.json()["analysis_id"]
@@ -185,8 +217,11 @@ class TestHierarchicalAnalysis:
         hierarchical_request["n_segments"] = 5
         hierarchical_request["segmentation_method"] = "kmeans"
 
+        # demo_mode=true exercises that the request params (segmentation method,
+        # n_segments) flow through to the response without inline data (post-C1
+        # the default path fails-closed with 503 when no real data is supplied).
         response = client.post(
-            "/causal/hierarchical/analyze",
+            "/causal/hierarchical/analyze?demo_mode=true",
             json=hierarchical_request,
         )
 
@@ -195,6 +230,7 @@ class TestHierarchicalAnalysis:
         assert data["segmentation_method"] == "kmeans"
         # Response uses n_segments_analyzed, not n_segments
         assert "n_segments_analyzed" in data
+        assert data["n_segments_analyzed"] == 5
 
 
 # =============================================================================
@@ -664,9 +700,14 @@ class TestResponseFormats:
     """Tests for response format consistency."""
 
     def test_hierarchical_response_format(self, client, hierarchical_request):
-        """Test hierarchical analysis response format."""
+        """Test hierarchical analysis response format (demo_mode schema check).
+
+        Post-C1 the default path fails-closed with 503 without inline data; this
+        test only validates the response schema, which the labeled demo path
+        provides without requiring a real data backend.
+        """
         response = client.post(
-            "/causal/hierarchical/analyze",
+            "/causal/hierarchical/analyze?demo_mode=true",
             json=hierarchical_request,
         )
 
@@ -781,8 +822,10 @@ class TestEnumValidation:
 
         for method in valid_methods:
             hierarchical_request["segmentation_method"] = method
+            # demo_mode: this asserts enum acceptance, not real compute (post-C1
+            # the default no-data path fails-closed with 503).
             response = client.post(
-                "/causal/hierarchical/analyze",
+                "/causal/hierarchical/analyze?demo_mode=true",
                 json=hierarchical_request,
             )
             assert response.status_code == 200
@@ -793,8 +836,10 @@ class TestEnumValidation:
 
         for est_type in valid_types:
             hierarchical_request["estimator_type"] = est_type
+            # demo_mode: this asserts enum acceptance, not real compute (post-C1
+            # the default no-data path fails-closed with 503).
             response = client.post(
-                "/causal/hierarchical/analyze",
+                "/causal/hierarchical/analyze?demo_mode=true",
                 json=hierarchical_request,
             )
             assert response.status_code == 200

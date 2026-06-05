@@ -116,6 +116,15 @@ async def run_hierarchical_analysis(
     request: HierarchicalAnalysisRequest,
     background_tasks: BackgroundTasks,
     async_mode: bool = Query(default=False, description="Run asynchronously"),
+    demo_mode: bool = Query(
+        default=False,
+        description=(
+            "If true, return pinned-zero placeholder results labeled with "
+            "is_demo=true (for UI demonstrations only). Default is false: "
+            "the endpoint runs the real analyzer over inline "
+            "estimation_data_records or fails with 503."
+        ),
+    ),
     user: Dict[str, Any] = Depends(require_analyst),
 ) -> HierarchicalAnalysisResponse:
     """
@@ -127,10 +136,16 @@ async def run_hierarchical_analysis(
     - Aggregates segment CATEs with nested confidence intervals
     - Computes heterogeneity statistics (I², τ²)
 
+    Fail-closed contract (C1): the default path resolves a real DataFrame from
+    ``request.filters.estimation_data_records`` and raises 503 when none is
+    present — it NEVER fabricates input data. Pass ``demo_mode=true`` for a
+    clearly-labeled pinned-zero placeholder.
+
     Args:
         request: Hierarchical analysis configuration
         background_tasks: FastAPI background tasks
         async_mode: If True, runs analysis asynchronously
+        demo_mode: If True, return clearly-labeled placeholder values
 
     Returns:
         HierarchicalAnalysisResponse with segment-level CATE results
@@ -150,6 +165,12 @@ async def run_hierarchical_analysis(
     )
 
     if async_mode:
+        # Preflight the fail-closed contract BEFORE accepting the submission, so
+        # an async non-demo request with no real data fails fast with 503/400
+        # (C1) instead of being accepted as pending and then cached as a generic
+        # FAILED record by the background task. demo_mode skips the preflight.
+        if not demo_mode:
+            _resolve_hierarchical_dataframe(request)
         # Create pending response and run in background
         pending_response = HierarchicalAnalysisResponse(
             analysis_id=analysis_id,
@@ -170,16 +191,21 @@ async def run_hierarchical_analysis(
         )
         _analysis_cache[analysis_id] = pending_response
 
-        background_tasks.add_task(_run_hierarchical_analysis_task, analysis_id, request)
+        background_tasks.add_task(_run_hierarchical_analysis_task, analysis_id, request, demo_mode)
 
         return pending_response
 
     # Synchronous execution
     try:
-        result = await _execute_hierarchical_analysis(analysis_id, request)
+        result = await _execute_hierarchical_analysis(analysis_id, request, demo_mode=demo_mode)
         _analysis_cache[analysis_id] = result
         return result
 
+    except HTTPException:
+        # Honest fail-close (503 no-real-data) / client errors (400 bad columns)
+        # must pass through unchanged — HTTPException is an Exception subclass, so
+        # this MUST precede the broad handler or the 503 becomes a 500.
+        raise
     except HeavyComputeSaturated:
         # Reject fast under load — surfaced as 503 + Retry-After by the app
         # exception handler (OOM guard). Must precede the broad handler so it
@@ -220,10 +246,11 @@ async def get_hierarchical_analysis(
 async def _run_hierarchical_analysis_task(
     analysis_id: str,
     request: HierarchicalAnalysisRequest,
+    demo_mode: bool = False,
 ) -> None:
     """Background task for hierarchical analysis."""
     try:
-        result = await _execute_hierarchical_analysis(analysis_id, request)
+        result = await _execute_hierarchical_analysis(analysis_id, request, demo_mode=demo_mode)
         _analysis_cache[analysis_id] = result
     except Exception as e:
         # Log the raw error server-side (with traceback); the cached FAILED
@@ -249,17 +276,75 @@ async def _run_hierarchical_analysis_task(
         )
 
 
+def _build_hierarchical_demo_response(
+    analysis_id: str,
+    request: HierarchicalAnalysisRequest,
+    start_time: float,
+) -> HierarchicalAnalysisResponse:
+    """Build a clearly-labeled pinned-zero placeholder for demo_mode=true.
+
+    Never returns RNG values (C1 de-fabrication): every segment is a hard zero
+    and the envelope carries ``is_demo=true`` plus a do-not-use warning so a
+    consumer cannot mistake the demo for a real analysis.
+    """
+    segment_results = [
+        SegmentCATEResult(
+            segment_id=i,
+            segment_name=f"demo_segment_{i}",
+            n_samples=0,
+            uplift_range=[0.0, 0.0],
+            cate_mean=0.0,
+            cate_std=0.0,
+            cate_ci_lower=0.0,
+            cate_ci_upper=0.0,
+            success=True,
+            error_message=None,
+        )
+        for i in range(request.n_segments)
+    ]
+    latency_ms = int((time.time() - start_time) * 1000)
+    return HierarchicalAnalysisResponse(
+        analysis_id=analysis_id,
+        status=AnalysisStatus.COMPLETED,
+        segment_results=segment_results,
+        nested_ci=None,
+        overall_ate=0.0,
+        overall_ci_lower=0.0,
+        overall_ci_upper=0.0,
+        segment_heterogeneity=0.0,
+        n_segments_analyzed=request.n_segments,
+        segmentation_method=request.segmentation_method.value,
+        estimator_type=request.estimator_type.value,
+        latency_ms=latency_ms,
+        created_at=datetime.now(timezone.utc),
+        warnings=[
+            "demo_mode=true: results are pinned-zero placeholders with "
+            "is_demo=true; do NOT use for decisions.",
+        ],
+        errors=[],
+        is_demo=True,
+    )
+
+
 async def _execute_hierarchical_analysis(
     analysis_id: str,
     request: HierarchicalAnalysisRequest,
+    *,
+    demo_mode: bool = False,
 ) -> HierarchicalAnalysisResponse:
-    """Execute hierarchical analysis using the causal engine."""
+    """Execute hierarchical analysis using the causal engine.
+
+    Fail-closed contract (C1): the non-demo path requires a real estimation
+    DataFrame (resolved from ``request.filters.estimation_data_records``); when
+    none is present it raises 503 — it NEVER fabricates synthetic input via RNG.
+    ``demo_mode=true`` returns a clearly-labeled pinned-zero placeholder.
+    """
     start_time = time.time()
 
-    try:
-        import numpy as np
-        import pandas as pd
+    if demo_mode:
+        return _build_hierarchical_demo_response(analysis_id, request, start_time)
 
+    try:
         from src.causal_engine.hierarchical import (
             AggregationMethod as EngineAggregationMethod,
         )
@@ -289,27 +374,17 @@ async def _execute_hierarchical_analysis(
             AggregationMethod.BOOTSTRAP: EngineAggregationMethod.BOOTSTRAP,
         }
 
-        # Generate mock data for demonstration
-        np.random.seed(42)
-        n = 500
-        df = pd.DataFrame(
-            {
-                request.treatment_var: np.random.binomial(1, 0.5, n),
-                request.outcome_var: np.random.normal(100, 20, n),
-            }
-        )
-        for modifier in request.effect_modifiers:
-            df[modifier] = np.random.randn(n)
+        # Resolve a REAL estimation DataFrame from request filters. No real data
+        # backend → honest 503 (C1: never fabricate synthetic input via RNG);
+        # missing required columns → 400. Mirrors the sequential/parallel
+        # sibling endpoints in this file.
+        df = _resolve_hierarchical_dataframe(request)
 
-        # Add heterogeneous treatment effect
+        # Prepare data from the REAL frame (columns are read as data, not names).
         if request.effect_modifiers:
-            treatment_effect = 5.0 + df[request.effect_modifiers[0]] * 3.0
-            df.loc[df[request.treatment_var] == 1, request.outcome_var] += treatment_effect[
-                df[request.treatment_var] == 1
-            ]
-
-        # Prepare data
-        X = df[request.effect_modifiers] if request.effect_modifiers else df.iloc[:, 2:]
+            X = df[request.effect_modifiers]
+        else:
+            X = df.drop(columns=[request.treatment_var, request.outcome_var])
         treatment = df[request.treatment_var].values
         outcome = df[request.outcome_var].values
 
@@ -420,6 +495,7 @@ async def _execute_hierarchical_analysis(
             created_at=datetime.now(timezone.utc),
             warnings=result.warnings if hasattr(result, "warnings") else [],
             errors=result.errors if result.errors else [],
+            is_demo=False,
         )
 
     except asyncio.TimeoutError:
@@ -744,6 +820,38 @@ def _resolve_pipeline_dataframe(
         return None
     if df.empty:
         return None
+    return df
+
+
+def _resolve_hierarchical_dataframe(
+    request: HierarchicalAnalysisRequest,
+) -> "pd.DataFrame":  # type: ignore[name-defined] # noqa: F821
+    """Resolve a real estimation DataFrame for hierarchical analysis, or raise.
+
+    Fail-closed (C1): raises ``HTTPException(503)`` when no inline data is
+    present and ``HTTPException(400)`` when the required treatment / outcome /
+    effect-modifier columns are missing. NEVER fabricates synthetic input.
+    Shared by the sync execute path and the async-submission preflight so both
+    enforce the identical contract.
+    """
+    df = _resolve_pipeline_dataframe(request.filters)
+    if df is None:
+        raise HTTPException(status_code=503, detail=_NO_REAL_DATA_BACKEND_DETAIL)
+    required_cols = [
+        request.treatment_var,
+        request.outcome_var,
+        *request.effect_modifiers,
+    ]
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "estimation_data_records is missing required column(s): "
+                f"{missing}. Supply treatment / outcome / effect-modifier "
+                "columns as record keys."
+            ),
+        )
     return df
 
 

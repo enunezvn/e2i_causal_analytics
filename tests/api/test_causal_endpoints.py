@@ -27,7 +27,12 @@ client = TestClient(app)
 
 @pytest.fixture
 def hierarchical_analysis_request():
-    """Sample hierarchical analysis request."""
+    """Sample hierarchical analysis request.
+
+    Carries inline ``estimation_data_records`` so the post-C1 fail-closed
+    handler resolves a real DataFrame and reaches the (mocked) analyzer instead
+    of returning 503 for missing data.
+    """
     return {
         "treatment_var": "promotion_received",
         "outcome_var": "trx_count",
@@ -39,6 +44,17 @@ def hierarchical_analysis_request():
         "confidence_level": 0.95,
         "aggregation_method": "variance_weighted",
         "timeout_seconds": 60,
+        "filters": {
+            "estimation_data_records": [
+                {
+                    "promotion_received": i % 2,
+                    "trx_count": 100.0 + i,
+                    "region": i % 3,
+                    "specialty": i % 4,
+                }
+                for i in range(40)
+            ]
+        },
     }
 
 
