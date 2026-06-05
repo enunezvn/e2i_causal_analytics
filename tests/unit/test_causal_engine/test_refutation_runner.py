@@ -704,6 +704,30 @@ class TestSensitivityTest:
         assert result.details["e_value_ci"] == pytest.approx(expected, rel=1e-6)
         assert result.details["e_value_ci"] > 1.0
 
+    def test_run_sensitivity_status_uses_conservative_ci_bound(self, runner):
+        """M-stat2: a strong point effect with a null-crossing CI must FAIL the
+        sensitivity gate, because the conservative e_value_ci collapses to 1.0
+        (< warning threshold 1.5). Previously status keyed off the point
+        e_value (~2.53 >= pass 2.0 -> spurious PASSED)."""
+        result = runner._run_sensitivity_test(
+            original_effect=0.5,  # point e_value ~ 2.53 -> would PASS on point
+            original_ci=(-0.3, 0.5),  # straddles 0 -> e_value_ci == 1.0
+        )
+        # Conservative bound drives the status.
+        assert result.details["e_value_ci"] == 1.0
+        assert result.status == RefutationStatus.FAILED
+        # Point e_value is still surfaced for transparency.
+        assert result.details["e_value"] > runner.thresholds["e_value_min"]["pass"]
+
+    def test_run_sensitivity_status_pass_on_strong_one_sided_ci(self, runner):
+        """A one-sided CI with a strong conservative bound still PASSES."""
+        result = runner._run_sensitivity_test(
+            original_effect=0.50,
+            original_ci=(0.40, 0.60),  # ci_bound=0.4 -> e_value_ci ~ 2.234 >= 2.0
+        )
+        assert result.status == RefutationStatus.PASSED
+        assert result.details["e_value_ci"] >= runner.thresholds["e_value_min"]["pass"]
+
 
 # ============================================================================
 # MOCK IMPLEMENTATIONS TESTS
