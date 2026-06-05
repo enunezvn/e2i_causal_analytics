@@ -89,11 +89,16 @@ def _hash_values(df: pd.DataFrame) -> str:
             # Round floats to fixed precision (8 decimals) then hash raw bytes.
             rounded = np.round(series.to_numpy(), decimals=8)
             hasher.update(rounded.tobytes())
-        elif pd.api.types.is_bool_dtype(dtype) or pd.api.types.is_integer_dtype(dtype):
+        elif (
+            pd.api.types.is_bool_dtype(dtype) or pd.api.types.is_integer_dtype(dtype)
+        ) and series.to_numpy().dtype != object:
             hasher.update(series.to_numpy().tobytes())
         else:
-            # object / categorical / string / datetime: serialize by value, not
-            # by pointer, so the hash is deterministic across processes.
+            # object / categorical / string / datetime AND pandas *nullable*
+            # boolean (whose to_numpy() is object because pd.NA can't fit a numpy
+            # bool buffer): serialize by VALUE, not by pointer. .tobytes() on an
+            # object array would hash object POINTERS — non-deterministic across
+            # processes — making the discovery cache key process-dependent.
             hasher.update(b"\x1f".join(repr(v).encode("utf-8") for v in series.tolist()))
         # Column delimiter so concatenations across columns can't collide.
         hasher.update(b"::")

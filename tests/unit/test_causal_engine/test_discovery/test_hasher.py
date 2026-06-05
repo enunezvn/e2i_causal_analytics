@@ -15,6 +15,7 @@ import pandas as pd
 
 from src.causal_engine.discovery.base import DiscoveryConfig
 from src.causal_engine.discovery.hasher import (
+    _hash_values,
     hash_config,
     hash_dataframe,
     hash_discovery_request,
@@ -147,6 +148,25 @@ class TestHashDataframe:
         )  # categorical change -> must differ
         assert hash_dataframe(base) != hash_dataframe(float_diff)
         assert hash_dataframe(base) != hash_dataframe(cat_diff)
+
+    def test_nullable_boolean_column_hashes_by_value_not_pointer(self):
+        """FU-hasher: a pandas nullable-boolean column (`dtype='boolean'`) reports
+        is_bool_dtype=True but its to_numpy() is an OBJECT array (pd.NA can't fit
+        a numpy bool buffer). Hashing that with .tobytes() serializes object
+        POINTERS — stable within a process (True/False/NA are singletons) but
+        DIFFERENT across processes, making the discovery cache key process-
+        dependent. It must instead serialize by VALUE, identically to the
+        equivalent object column.
+        """
+        vals = [True, False, pd.NA, True]
+        df_nullable = pd.DataFrame({"flag": pd.array(vals, dtype="boolean")})
+        df_object = pd.DataFrame({"flag": pd.Series(vals, dtype="object")})
+        # Guard the scenario: the nullable column really is object-backed.
+        assert df_nullable["flag"].to_numpy().dtype == object
+        assert _hash_values(df_nullable) == _hash_values(df_object), (
+            "nullable-boolean column must hash by value (process-independent), "
+            "matching the equivalent object column"
+        )
 
 
 # =============================================================================
