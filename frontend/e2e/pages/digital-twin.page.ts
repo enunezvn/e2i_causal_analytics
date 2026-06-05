@@ -28,21 +28,21 @@ export class DigitalTwinPage extends BasePage {
     return this.page.locator('.rounded-full').filter({ hasText: /healthy|degraded|error|unknown/i }).first()
   }
 
-  // Stats Cards
-  get simulationsTodayCard(): Locator {
-    return this.page.getByText('Simulations Today').first()
-  }
-
-  get avgExecutionTimeCard(): Locator {
-    return this.page.getByText('Avg. Execution Time').first()
+  // Stats Cards (honest, real-data-derived titles — #705 H1/H2)
+  get simulationsCard(): Locator {
+    return this.page.getByText('Simulations', { exact: true }).first()
   }
 
   get deployRateCard(): Locator {
     return this.page.getByText('Deploy Rate').first()
   }
 
+  get modelsAvailableCard(): Locator {
+    return this.page.getByText('Models Available').first()
+  }
+
   get modelFidelityCard(): Locator {
-    return this.page.getByText('Model Fidelity').first()
+    return this.page.getByText('Last Run Fidelity').first()
   }
 
   // Simulation Form
@@ -164,10 +164,10 @@ export class DigitalTwinPage extends BasePage {
   // Verification methods
   async verifyStatsDisplayed(): Promise<boolean> {
     try {
-      await this.page.getByText('Simulations Today').first().waitFor({ state: 'visible', timeout: 5000 })
+      await this.page.getByText('Simulations', { exact: true }).first().waitFor({ state: 'visible', timeout: 5000 })
       return true
     } catch {
-      const stats = ['Avg. Execution Time', 'Deploy Rate', 'Model Fidelity']
+      const stats = ['Deploy Rate', 'Models Available', 'Last Run Fidelity']
       for (const stat of stats) {
         if (await this.page.getByText(stat).first().isVisible().catch(() => false)) {
           return true
@@ -221,7 +221,15 @@ export class DigitalTwinPage extends BasePage {
 
   async verifyResultsDisplayed(): Promise<boolean> {
     try {
-      await this.page.getByText('Simulation Outcomes').first().waitFor({ state: 'visible', timeout: 5000 })
+      // Honest behavior (#705 H1/H2): with no simulation run, the Results tab
+      // shows an empty prompt; after a real run it shows the Estimated Effect
+      // panel. Either honest state counts — never fabricated sample results.
+      await Promise.race([
+        this.page.getByText(/Run a simulation to see results/i).first()
+          .waitFor({ state: 'visible', timeout: 5000 }),
+        this.page.getByText(/Estimated Effect/i).first()
+          .waitFor({ state: 'visible', timeout: 5000 }),
+      ])
       return true
     } catch {
       return false

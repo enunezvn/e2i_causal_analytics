@@ -3,14 +3,15 @@
  * =================
  *
  * E2I Digital Twin simulation interface for intervention pre-screening.
- * Allows running simulations, comparing scenarios, and viewing results.
+ * Allows running simulations, browsing history, and viewing results.
  *
- * Features:
- * - Simulation configuration panel
- * - Results visualization with confidence intervals
- * - Recommendation display
- * - Fidelity metrics
- * - Simulation history
+ * Honesty contract (#705 H1/H2): this page renders ONLY what the backend
+ * actually returns — the flat `SimulationResponse` / `SimulationDetailResponse`
+ * shape — and shows honest empty / loading / error states. It never fabricates
+ * outcomes (no `SAMPLE_SIMULATION` / `SAMPLE_HISTORY`, no static stat cards).
+ * Sections with no backend data source (TRx/NRx/ROI lift, multi-axis fidelity
+ * breakdown, evidence/risk-factor lists, sensitivity, projections) are NOT
+ * rendered rather than filled with plausible-but-fake values.
  *
  * @module pages/DigitalTwin
  */
@@ -20,7 +21,6 @@ import {
   FlaskConical,
   Play,
   History,
-  TrendingUp,
   AlertTriangle,
   CheckCircle,
   XCircle,
@@ -28,21 +28,21 @@ import {
   BarChart3,
   Settings2,
   Gauge,
+  TrendingUp,
 } from 'lucide-react';
 import {
   useDigitalTwinHealth,
   useSimulationHistory,
   useRunSimulation,
+  useSimulation,
 } from '@/hooks/api/use-digital-twin';
 import { toast } from '@/hooks/use-toast';
 import { useDataFreshness } from '@/hooks/use-data-freshness';
 import { DataFreshnessIndicator } from '@/components/ui/data-freshness-indicator';
 import {
   InterventionType,
-  RecommendationType,
-  ConfidenceLevel,
-  type LegacySimulationResponse,
-  type SimulationConfidenceInterval,
+  type SimulationResponse,
+  type SimulationDetailResponse,
 } from '@/types/digital-twin';
 
 // =============================================================================
@@ -57,71 +57,8 @@ interface StatCardProps {
   trend?: 'up' | 'down' | 'neutral';
 }
 
-// =============================================================================
-// SAMPLE DATA
-// =============================================================================
-
-const SAMPLE_SIMULATION: LegacySimulationResponse = {
-  simulation_id: 'sim-001',
-  created_at: '2026-01-04T10:00:00Z',
-  request: {
-    intervention_type: InterventionType.HCP_ENGAGEMENT,
-    brand: 'Remibrutinib',
-    sample_size: 1000,
-    duration_days: 90,
-    target_regions: ['Northeast', 'Midwest'],
-    budget: 500000,
-  },
-  outcomes: {
-    ate: { lower: 0.12, estimate: 0.18, upper: 0.24 },
-    trx_lift: { lower: 45, estimate: 72, upper: 99 },
-    nrx_lift: { lower: 22, estimate: 35, upper: 48 },
-    market_share_change: { lower: 0.5, estimate: 0.8, upper: 1.1 },
-    roi: { lower: 2.1, estimate: 3.2, upper: 4.3 },
-    nnt: 14,
-  },
-  fidelity: {
-    overall_score: 0.87,
-    data_coverage: 0.92,
-    calibration: 0.85,
-    temporal_alignment: 0.88,
-    feature_completeness: 0.83,
-    confidence_level: ConfidenceLevel.HIGH,
-  },
-  sensitivity: [
-    { parameter: 'sample_size', base_value: 1000, low_value: 500, high_value: 2000, ate_at_low: 0.15, ate_at_high: 0.20, sensitivity_score: 0.65 },
-    { parameter: 'duration_days', base_value: 90, low_value: 60, high_value: 120, ate_at_low: 0.14, ate_at_high: 0.21, sensitivity_score: 0.72 },
-    { parameter: 'budget', base_value: 500000, low_value: 250000, high_value: 750000, ate_at_low: 0.12, ate_at_high: 0.22, sensitivity_score: 0.85 },
-  ],
-  recommendation: {
-    type: RecommendationType.DEPLOY,
-    confidence: ConfidenceLevel.HIGH,
-    rationale: 'Simulation indicates strong positive ATE with acceptable uncertainty bounds. ROI projection exceeds threshold.',
-    evidence: [
-      'ATE 95% CI does not include zero',
-      'ROI lower bound exceeds 2.0x',
-      'Model fidelity score above 0.85',
-    ],
-    risk_factors: [
-      'Budget sensitivity is high - consider staged rollout',
-      'Regional variation in effect size observed',
-    ],
-    expected_value: 1600000,
-  },
-  projections: [
-    { date: '2026-02-01', with_intervention: 150, without_intervention: 140, lower_bound: 145, upper_bound: 155 },
-    { date: '2026-03-01', with_intervention: 165, without_intervention: 142, lower_bound: 158, upper_bound: 172 },
-    { date: '2026-04-01', with_intervention: 182, without_intervention: 145, lower_bound: 172, upper_bound: 192 },
-  ],
-  execution_time_ms: 2350,
-};
-
-const SAMPLE_HISTORY = [
-  { simulation_id: 'sim-001', created_at: '2026-01-04T10:00:00Z', intervention_type: InterventionType.HCP_ENGAGEMENT, brand: 'Remibrutinib', ate_estimate: 0.18, recommendation_type: RecommendationType.DEPLOY },
-  { simulation_id: 'sim-002', created_at: '2026-01-03T14:30:00Z', intervention_type: InterventionType.DIGITAL_MARKETING, brand: 'Fabhalta', ate_estimate: 0.09, recommendation_type: RecommendationType.REFINE },
-  { simulation_id: 'sim-003', created_at: '2026-01-02T09:15:00Z', intervention_type: InterventionType.PATIENT_SUPPORT, brand: 'Kisqali', ate_estimate: 0.05, recommendation_type: RecommendationType.SKIP },
-  { simulation_id: 'sim-004', created_at: '2026-01-01T11:45:00Z', intervention_type: InterventionType.REP_TRAINING, brand: 'Remibrutinib', ate_estimate: 0.22, recommendation_type: RecommendationType.DEPLOY },
-];
+/** Either shape returned by the simulate / simulation-detail endpoints. */
+type AnySimulation = SimulationResponse | SimulationDetailResponse;
 
 // =============================================================================
 // HELPER COMPONENTS
@@ -142,35 +79,30 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-function RecommendationBadge({ type }: { type: RecommendationType }) {
-  const config = {
-    [RecommendationType.DEPLOY]: { icon: CheckCircle, className: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400' },
-    [RecommendationType.SKIP]: { icon: XCircle, className: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400' },
-    [RecommendationType.REFINE]: { icon: Settings2, className: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400' },
-    [RecommendationType.ANALYZE]: { icon: BarChart3, className: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400' },
+/**
+ * Recommendation badge. Accepts the raw backend recommendation string
+ * (`deploy` | `skip` | `refine`) — also tolerates `analyze` for legacy
+ * history rows — and never throws on an unknown value.
+ */
+function RecommendationBadge({ recommendation }: { recommendation: string }) {
+  const config: Record<string, { icon: typeof CheckCircle; className: string }> = {
+    deploy: { icon: CheckCircle, className: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400' },
+    skip: { icon: XCircle, className: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400' },
+    refine: { icon: Settings2, className: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400' },
+    analyze: { icon: BarChart3, className: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400' },
   };
 
-  const { icon: Icon, className } = config[type];
+  const key = String(recommendation).toLowerCase();
+  const { icon: Icon, className } = config[key] ?? {
+    icon: BarChart3,
+    className: 'bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-400',
+  };
 
   return (
     <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium ${className}`}>
       <Icon className="h-4 w-4" />
-      {type.charAt(0).toUpperCase() + type.slice(1)}
+      {key.charAt(0).toUpperCase() + key.slice(1)}
     </span>
-  );
-}
-
-function ConfidenceIntervalDisplay({ ci, label, unit = '' }: { ci: SimulationConfidenceInterval; label: string; unit?: string }) {
-  return (
-    <div className="flex flex-col">
-      <span className="text-sm text-[var(--color-text-secondary)]">{label}</span>
-      <span className="text-xl font-bold text-[var(--color-text-primary)]">
-        {ci.estimate.toFixed(2)}{unit}
-      </span>
-      <span className="text-xs text-[var(--color-text-tertiary)]">
-        95% CI: [{ci.lower.toFixed(2)}, {ci.upper.toFixed(2)}]
-      </span>
-    </div>
   );
 }
 
@@ -210,6 +142,17 @@ function FidelityGauge({ score, label }: { score: number; label: string }) {
       <div className="h-2 bg-[var(--color-border)] rounded-full overflow-hidden">
         <div className={`h-full ${color} transition-all`} style={{ width: `${percentage}%` }} />
       </div>
+    </div>
+  );
+}
+
+/** A single metric tile inside the results panel. */
+function Metric({ label, value, hint }: { label: string; value: string; hint?: string }) {
+  return (
+    <div className="flex flex-col">
+      <span className="text-sm text-[var(--color-text-secondary)]">{label}</span>
+      <span className="text-xl font-bold text-[var(--color-text-primary)]">{value}</span>
+      {hint && <span className="text-xs text-[var(--color-text-tertiary)]">{hint}</span>}
     </div>
   );
 }
@@ -311,29 +254,145 @@ function SimulationForm({
   );
 }
 
+/**
+ * Results panel for a single real simulation (SimulationResponse shape).
+ * Renders only fields the backend returns.
+ */
+function SimulationResultPanel({ simulation }: { simulation: AnySimulation }) {
+  const fmt = (n: number) => n.toFixed(3);
+
+  return (
+    <div className="space-y-6">
+      {/* Recommendation + rationale */}
+      <div className="flex items-start justify-between p-4 bg-[var(--color-background)] rounded-lg border border-[var(--color-border)]">
+        <div>
+          <div className="flex items-center gap-3 mb-2">
+            <RecommendationBadge recommendation={simulation.recommendation} />
+            <span className="text-xs text-[var(--color-text-tertiary)]">
+              Confidence: {(simulation.simulation_confidence * 100).toFixed(0)}%
+            </span>
+          </div>
+          <p className="text-sm text-[var(--color-text-primary)]">
+            {simulation.recommendation_rationale}
+          </p>
+        </div>
+      </div>
+
+      {/* Fidelity warning (only when the backend flags one) */}
+      {simulation.fidelity_warning && (
+        <div className="flex items-start gap-2 p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
+          <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-400 mt-0.5" />
+          <p className="text-xs text-yellow-800 dark:text-yellow-300">
+            {simulation.fidelity_warning_reason || 'Model fidelity is low for this simulation; interpret with caution.'}
+          </p>
+        </div>
+      )}
+
+      {/* Core outcome metrics (exactly what the backend returns) */}
+      <div>
+        <h4 className="text-sm font-medium text-[var(--color-text-secondary)] mb-3">Estimated Effect</h4>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <Metric
+            label="ATE"
+            value={fmt(simulation.simulated_ate)}
+            hint={`95% CI: [${fmt(simulation.simulated_ci_lower)}, ${fmt(simulation.simulated_ci_upper)}]`}
+          />
+          <Metric
+            label="Std. Error"
+            value={fmt(simulation.simulated_std_error)}
+            hint={simulation.is_significant ? 'Significant' : 'Not significant'}
+          />
+          <Metric
+            label="Effect Direction"
+            value={String(simulation.effect_direction)}
+            hint={
+              simulation.effect_size_cohens_d != null
+                ? `Cohen's d: ${simulation.effect_size_cohens_d.toFixed(2)}`
+                : undefined
+            }
+          />
+          <Metric
+            label="Twins Simulated"
+            value={simulation.twin_count.toLocaleString()}
+            hint={
+              simulation.statistical_power != null
+                ? `Power: ${(simulation.statistical_power * 100).toFixed(0)}%`
+                : undefined
+            }
+          />
+        </div>
+      </div>
+
+      {/* Model fidelity (single backend score — no fabricated breakdown) */}
+      {simulation.model_fidelity_score != null && (
+        <div>
+          <h4 className="text-sm font-medium text-[var(--color-text-secondary)] mb-3">Model Fidelity</h4>
+          <div className="max-w-xs">
+            <FidelityGauge score={simulation.model_fidelity_score} label="Overall fidelity score" />
+          </div>
+        </div>
+      )}
+
+      {/* Recommended parameters, when present */}
+      {(simulation.recommended_sample_size != null || simulation.recommended_duration_weeks != null) && (
+        <div>
+          <h4 className="text-sm font-medium text-[var(--color-text-secondary)] mb-3">Recommended Parameters</h4>
+          <div className="grid grid-cols-2 gap-4">
+            {simulation.recommended_sample_size != null && (
+              <Metric label="Sample Size" value={simulation.recommended_sample_size.toLocaleString()} />
+            )}
+            {simulation.recommended_duration_weeks != null && (
+              <Metric label="Duration" value={`${simulation.recommended_duration_weeks} weeks`} />
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Execution metadata */}
+      <div className="pt-4 border-t border-[var(--color-border)] flex items-center justify-between text-xs text-[var(--color-text-tertiary)]">
+        <span>Simulation ID: {simulation.simulation_id}</span>
+        <span>Executed in {simulation.execution_time_ms}ms</span>
+      </div>
+    </div>
+  );
+}
+
 // =============================================================================
 // MAIN PAGE
 // =============================================================================
 
 export default function DigitalTwin() {
-  const [selectedSimulation, setSelectedSimulation] = useState<LegacySimulationResponse | null>(SAMPLE_SIMULATION);
   const [activeTab, setActiveTab] = useState<'results' | 'history'>('results');
+  // The simulation_id of a history item the user clicked to inspect (if any).
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const { data: healthData, isLoading: _healthLoading } = useDigitalTwinHealth();
-  const { data: historyData, refetch: refetchHistory, dataUpdatedAt: historyUpdatedAt, isFetching: isHistoryFetching } = useSimulationHistory({ limit: 10 });
+  const { data: healthData } = useDigitalTwinHealth();
+  const {
+    data: historyData,
+    refetch: refetchHistory,
+    dataUpdatedAt: historyUpdatedAt,
+    isFetching: isHistoryFetching,
+  } = useSimulationHistory({ limit: 10 });
   const historyFreshness = useDataFreshness(historyUpdatedAt);
-  const { mutate: runSim, isPending: isRunning } = useRunSimulation({
+
+  const {
+    mutate: runSim,
+    isPending: isRunning,
+    data: runResult,
+    isError: isRunError,
+    error: runError,
+  } = useRunSimulation({
     onSuccess: () => {
-      // Refetch history to show new simulation, switch to history tab
+      // Show the fresh run result (clear any history selection), refresh list.
+      setSelectedId(null);
+      setActiveTab('results');
       refetchHistory();
-      setActiveTab('history');
       toast({
         title: 'Simulation Complete',
         description: 'Your simulation has been processed successfully.',
       });
     },
     onError: (error) => {
-      // Provide user feedback on simulation failure
       const errorMessage = error.message || 'An unexpected error occurred';
       const isTimeout = errorMessage.toLowerCase().includes('timeout');
       const isNetworkError = error.isNetworkError;
@@ -350,9 +409,38 @@ export default function DigitalTwin() {
     },
   });
 
-  const health = healthData ?? { status: 'unknown', service: 'digital-twin', models_available: 0, simulations_pending: 0, last_simulation_at: undefined };
-  const history = historyData?.simulations || SAMPLE_HISTORY;
-  const simulation = selectedSimulation;
+  // Detail for a clicked history item (enabled only when one is selected).
+  const {
+    data: selectedDetail,
+    isLoading: isDetailLoading,
+    isError: isDetailError,
+  } = useSimulation(selectedId ?? '', { enabled: !!selectedId });
+
+  // What the Results tab shows: the inspected history detail takes priority,
+  // otherwise the latest run result. Never a fabricated default.
+  const displayed: AnySimulation | null = selectedId
+    ? (selectedDetail ?? null)
+    : (runResult ?? null);
+
+  // Mutually-exclusive results-panel sub-states.
+  const detailLoading = !!selectedId && isDetailLoading;
+  const detailError = !!selectedId && isDetailError && !isDetailLoading;
+
+  const health = healthData ?? {
+    status: 'unknown',
+    service: 'digital-twin',
+    models_available: 0,
+    simulations_pending: 0,
+    last_simulation_at: undefined,
+  };
+
+  const historyItems = historyData?.simulations ?? [];
+  const deployCount = historyItems.filter(
+    (s) => String(s.recommendation_type).toLowerCase() === 'deploy'
+  ).length;
+  const deployRate = historyItems.length > 0 ? Math.round((deployCount / historyItems.length) * 100) : null;
+  const fidelityPct =
+    displayed?.model_fidelity_score != null ? Math.round(displayed.model_fidelity_score * 100) : null;
 
   const handleRunSimulation = (formData: { interventionType: InterventionType; brand: string; sampleSize: number; durationDays: number }) => {
     runSim({
@@ -386,31 +474,31 @@ export default function DigitalTwin() {
         </div>
       </div>
 
-      {/* Stats Cards */}
+      {/* Stats Cards — derived from real data; honest "—" when unavailable */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <StatCard
-          title="Simulations Today"
-          value={history.length}
-          subtext="Across all brands"
+          title="Simulations"
+          value={historyItems.length}
+          subtext="In recent history"
           icon={<FlaskConical className="h-4 w-4" />}
         />
         <StatCard
-          title="Avg. Execution Time"
-          value="2.4s"
-          subtext="Last 24 hours"
+          title="Deploy Rate"
+          value={deployRate != null ? `${deployRate}%` : '—'}
+          subtext="Of recent runs"
+          icon={<CheckCircle className="h-4 w-4" />}
+          trend={deployRate != null ? 'up' : undefined}
+        />
+        <StatCard
+          title="Models Available"
+          value={health.models_available}
+          subtext="Trained twin models"
           icon={<Gauge className="h-4 w-4" />}
         />
         <StatCard
-          title="Deploy Rate"
-          value="68%"
-          subtext="Recommendations"
-          icon={<CheckCircle className="h-4 w-4" />}
-          trend="up"
-        />
-        <StatCard
-          title="Model Fidelity"
-          value="87%"
-          subtext="Overall score"
+          title="Last Run Fidelity"
+          value={fidelityPct != null ? `${fidelityPct}%` : '—'}
+          subtext="Model fidelity score"
           icon={<TrendingUp className="h-4 w-4" />}
         />
       </div>
@@ -454,92 +542,52 @@ export default function DigitalTwin() {
             </button>
           </div>
 
-          {/* Results Tab */}
-          {activeTab === 'results' && simulation && (
-            <div className="space-y-6">
-              {/* Recommendation */}
-              <div className="flex items-start justify-between p-4 bg-[var(--color-background)] rounded-lg border border-[var(--color-border)]">
-                <div>
-                  <div className="flex items-center gap-3 mb-2">
-                    <RecommendationBadge type={simulation.recommendation.type} />
-                    <StatusBadge status={simulation.recommendation.confidence} />
-                  </div>
-                  <p className="text-sm text-[var(--color-text-primary)]">{simulation.recommendation.rationale}</p>
-                  {simulation.recommendation.expected_value && (
-                    <p className="text-xs text-[var(--color-text-tertiary)] mt-2">
-                      Expected Value: ${simulation.recommendation.expected_value.toLocaleString()}
-                    </p>
-                  )}
+          {/* Results Tab — mutually-exclusive states, no stale/fabricated data */}
+          {activeTab === 'results' && (
+            <>
+              {/* Loading: a run is in flight, or a selected history detail is fetching */}
+              {(isRunning || detailLoading) && (
+                <div className="text-center py-12">
+                  <RefreshCw className="h-10 w-10 text-[var(--color-text-tertiary)] mx-auto mb-4 animate-spin" />
+                  <p className="text-[var(--color-text-secondary)]">
+                    {isRunning ? 'Running simulation…' : 'Loading simulation…'}
+                  </p>
                 </div>
-              </div>
+              )}
 
-              {/* Outcomes Grid */}
-              <div>
-                <h4 className="text-sm font-medium text-[var(--color-text-secondary)] mb-3">Simulation Outcomes</h4>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <ConfidenceIntervalDisplay ci={simulation.outcomes.ate} label="ATE" />
-                  <ConfidenceIntervalDisplay ci={simulation.outcomes.trx_lift} label="TRx Lift" />
-                  <ConfidenceIntervalDisplay ci={simulation.outcomes.nrx_lift} label="NRx Lift" />
-                  <ConfidenceIntervalDisplay ci={simulation.outcomes.roi} label="ROI" unit="x" />
+              {/* Error: a selected history detail failed to load */}
+              {!isRunning && detailError && (
+                <div className="text-center py-12">
+                  <XCircle className="h-12 w-12 text-red-500/70 mx-auto mb-4" />
+                  <p className="text-[var(--color-text-secondary)]">
+                    This simulation could not be loaded. Please try again.
+                  </p>
                 </div>
-              </div>
+              )}
 
-              {/* Fidelity Metrics */}
-              <div>
-                <h4 className="text-sm font-medium text-[var(--color-text-secondary)] mb-3">Model Fidelity</h4>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <FidelityGauge score={simulation.fidelity.data_coverage} label="Data Coverage" />
-                  <FidelityGauge score={simulation.fidelity.calibration} label="Calibration" />
-                  <FidelityGauge score={simulation.fidelity.temporal_alignment} label="Temporal Alignment" />
-                  <FidelityGauge score={simulation.fidelity.feature_completeness} label="Feature Completeness" />
+              {/* Error: the run failed and there is nothing to show */}
+              {!isRunning && !detailError && isRunError && !displayed && (
+                <div className="text-center py-12">
+                  <XCircle className="h-12 w-12 text-red-500/70 mx-auto mb-4" />
+                  <p className="text-[var(--color-text-secondary)]">
+                    {runError?.message || 'The simulation could not be completed. Please try again.'}
+                  </p>
                 </div>
-              </div>
+              )}
 
-              {/* Evidence & Risks */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <h4 className="text-sm font-medium text-[var(--color-text-secondary)] mb-2 flex items-center gap-2">
-                    <CheckCircle className="h-4 w-4 text-green-500" />
-                    Supporting Evidence
-                  </h4>
-                  <ul className="space-y-1">
-                    {simulation.recommendation.evidence.map((item, idx) => (
-                      <li key={idx} className="text-sm text-[var(--color-text-primary)] flex items-start gap-2">
-                        <span className="text-green-500 mt-1">+</span>
-                        {item}
-                      </li>
-                    ))}
-                  </ul>
+              {/* Result */}
+              {!isRunning && !detailLoading && !detailError && displayed && (
+                <SimulationResultPanel simulation={displayed} />
+              )}
+
+              {/* Honest empty state */}
+              {!isRunning && !detailLoading && !detailError && !displayed && !isRunError && (
+                <div className="text-center py-12">
+                  <FlaskConical className="h-12 w-12 text-[var(--color-text-tertiary)] mx-auto mb-4" />
+                  <p className="text-[var(--color-text-secondary)]">Run a simulation to see results</p>
                 </div>
-                <div>
-                  <h4 className="text-sm font-medium text-[var(--color-text-secondary)] mb-2 flex items-center gap-2">
-                    <AlertTriangle className="h-4 w-4 text-yellow-500" />
-                    Risk Factors
-                  </h4>
-                  <ul className="space-y-1">
-                    {simulation.recommendation.risk_factors?.map((item, idx) => (
-                      <li key={idx} className="text-sm text-[var(--color-text-primary)] flex items-start gap-2">
-                        <span className="text-yellow-500 mt-1">!</span>
-                        {item}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
-
-              {/* Execution Info */}
-              <div className="pt-4 border-t border-[var(--color-border)] flex items-center justify-between text-xs text-[var(--color-text-tertiary)]">
-                <span>Simulation ID: {simulation.simulation_id}</span>
-                <span>Executed in {simulation.execution_time_ms}ms</span>
-              </div>
-            </div>
-          )}
-
-          {activeTab === 'results' && !simulation && (
-            <div className="text-center py-12">
-              <FlaskConical className="h-12 w-12 text-[var(--color-text-tertiary)] mx-auto mb-4" />
-              <p className="text-[var(--color-text-secondary)]">Run a simulation to see results</p>
-            </div>
+              )}
+            </>
           )}
 
           {/* History Tab */}
@@ -554,39 +602,49 @@ export default function DigitalTwin() {
                   isRefreshing={isHistoryFetching}
                 />
               </div>
-              {history.map((sim) => (
-                <div
-                  key={sim.simulation_id}
-                  onClick={() => {
-                    // In real app, would fetch full simulation
-                    setSelectedSimulation(SAMPLE_SIMULATION);
-                    setActiveTab('results');
-                  }}
-                  className="flex items-center justify-between p-4 bg-[var(--color-background)] rounded-lg border border-[var(--color-border)] cursor-pointer hover:border-[var(--color-primary)] transition-colors"
-                >
-                  <div className="flex items-center gap-4">
-                    <div className="p-2 rounded-lg bg-[var(--color-primary)]/10 text-[var(--color-primary)]">
-                      <FlaskConical className="h-4 w-4" />
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium text-[var(--color-text-primary)]">
-                        {sim.intervention_type.replace('_', ' ').replace(/\b\w/g, (l) => l.toUpperCase())}
-                      </p>
-                      <p className="text-xs text-[var(--color-text-tertiary)]">
-                        {sim.brand} - {new Date(sim.created_at).toLocaleString()}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-4">
-                    <div className="text-right">
-                      <p className="text-sm font-medium text-[var(--color-text-primary)]">
-                        ATE: {sim.ate_estimate.toFixed(2)}
-                      </p>
-                    </div>
-                    <RecommendationBadge type={sim.recommendation_type} />
-                  </div>
+
+              {historyItems.length === 0 ? (
+                <div className="text-center py-12">
+                  <History className="h-12 w-12 text-[var(--color-text-tertiary)] mx-auto mb-4" />
+                  <p className="text-[var(--color-text-secondary)]">No simulations yet</p>
+                  <p className="text-xs text-[var(--color-text-tertiary)] mt-1">
+                    Run a simulation to start building history.
+                  </p>
                 </div>
-              ))}
+              ) : (
+                historyItems.map((sim) => (
+                  <div
+                    key={sim.simulation_id}
+                    onClick={() => {
+                      setSelectedId(sim.simulation_id);
+                      setActiveTab('results');
+                    }}
+                    className="flex items-center justify-between p-4 bg-[var(--color-background)] rounded-lg border border-[var(--color-border)] cursor-pointer hover:border-[var(--color-primary)] transition-colors"
+                  >
+                    <div className="flex items-center gap-4">
+                      <div className="p-2 rounded-lg bg-[var(--color-primary)]/10 text-[var(--color-primary)]">
+                        <FlaskConical className="h-4 w-4" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-[var(--color-text-primary)]">
+                          {sim.intervention_type.replace('_', ' ').replace(/\b\w/g, (l) => l.toUpperCase())}
+                        </p>
+                        <p className="text-xs text-[var(--color-text-tertiary)]">
+                          {sim.brand} - {new Date(sim.created_at).toLocaleString()}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-4">
+                      <div className="text-right">
+                        <p className="text-sm font-medium text-[var(--color-text-primary)]">
+                          ATE: {sim.ate_estimate.toFixed(2)}
+                        </p>
+                      </div>
+                      <RecommendationBadge recommendation={sim.recommendation_type} />
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           )}
         </div>

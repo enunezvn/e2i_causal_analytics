@@ -45,11 +45,11 @@ test.describe('Digital Twin Page', () => {
       expect(hasStats).toBeTruthy()
     })
 
-    test('should show Simulations Today stat', async () => {
-      await expect(twinPage.simulationsTodayCard).toBeVisible()
+    test('should show Simulations stat', async () => {
+      await expect(twinPage.simulationsCard).toBeVisible()
     })
 
-    test('should show Model Fidelity stat', async () => {
+    test('should show Last Run Fidelity stat', async () => {
       await expect(twinPage.modelFidelityCard).toBeVisible()
     })
   })
@@ -86,10 +86,12 @@ test.describe('Digital Twin Page', () => {
   })
 
   test.describe('Results Tab', () => {
-    test('should display results when tab clicked', async () => {
+    test('should show an honest results state when tab clicked', async () => {
       await twinPage.clickResultsTab()
-      const hasResults = await twinPage.verifyResultsDisplayed()
-      expect(hasResults).toBeTruthy()
+      // No simulation has run, so the Results tab shows the honest empty prompt
+      // ("Run a simulation to see results") — never fabricated sample results.
+      const hasHonestState = await twinPage.verifyResultsDisplayed()
+      expect(hasHonestState).toBeTruthy()
     })
   })
 
