@@ -467,15 +467,20 @@ class GraphBuilderNode:
         Returns:
             Tuple of (DiscoveryResult, gate evaluation dict)
         """
-        # Get data from state
+        # Get data from state. Canonical key is "estimation_data" — the only key
+        # ever written to data_cache (agent.py writes
+        # {"estimation_data": input_data["data"]}; estimation.py reads it).
+        # The previous read of "data" was always None for real callers (M-gb1),
+        # silently disabling auto-discovery.
         data_cache = state.get("data_cache", {})
-        data = data_cache.get("data")
+        data = data_cache.get("estimation_data")
 
         if data is None:
-            # Try to create synthetic data from variable info
-            # In production, this would come from the data source
-            logger.warning("No data in cache, using minimal discovery")
-            raise ValueError("No data available for discovery")
+            # No real data passthrough in the cache -> discovery cannot run.
+            # Raise a distinct, descriptive error; the caller (execute) records
+            # this as a surfaced skip signal rather than swallowing it silently.
+            logger.warning("No estimation_data in data_cache; skipping discovery")
+            raise ValueError("No estimation_data in data_cache for discovery")
 
         # Ensure data is a DataFrame
         if not isinstance(data, pd.DataFrame):

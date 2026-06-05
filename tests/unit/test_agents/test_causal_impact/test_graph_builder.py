@@ -253,6 +253,64 @@ class TestGraphBuilderNode:
         # OR return error state
         assert "status" in result
 
+    @pytest.mark.asyncio
+    async def test_run_discovery_reads_estimation_data_key(self):
+        """M-gb1: _run_discovery must resolve its DataFrame from the canonical
+        data_cache['estimation_data'] key (the one agent.py writes and
+        estimation.py reads), NOT the dead 'estimation_data'-vs-'data' mismatch.
+
+        Pre-fix: _run_discovery reads data_cache.get('data') -> None even though
+        estimation_data is populated -> raises ValueError -> AssertionError here
+        because discovery_runner.discover_dag is never called.
+        """
+        from unittest.mock import AsyncMock, MagicMock
+
+        import pandas as pd
+
+        node = GraphBuilderNode()
+
+        df = pd.DataFrame(
+            {
+                "hcp_engagement_level": [0.1, 0.2, 0.3, 0.4],
+                "patient_conversion_rate": [1.0, 2.0, 3.0, 4.0],
+            }
+        )
+
+        # Stub the discovery runner + gate so we assert *only* on data wiring,
+        # not on the (slow, nondeterministic) GES/PC algorithms.
+        fake_result = MagicMock()
+        fake_result.n_edges = 1
+        node._discovery_runner = MagicMock()
+        node._discovery_runner.discover_dag = AsyncMock(return_value=fake_result)
+
+        fake_eval = MagicMock()
+        fake_eval.decision.value = "accept"
+        fake_eval.to_dict.return_value = {"decision": "accept", "confidence": 0.9}
+        node._discovery_gate = MagicMock()
+        node._discovery_gate.evaluate = MagicMock(return_value=fake_eval)
+
+        state: CausalImpactState = {
+            "query": "test",
+            "query_id": "test-gb1",
+            "treatment_var": "hcp_engagement_level",
+            "outcome_var": "patient_conversion_rate",
+            "data_cache": {"estimation_data": df},
+            "status": "pending",
+        }
+
+        result, evaluation = await node._run_discovery(
+            state, "hcp_engagement_level", "patient_conversion_rate"
+        )
+
+        # discover_dag must have been called -> proves data was resolved.
+        node._discovery_runner.discover_dag.assert_awaited_once()
+        passed_df = node._discovery_runner.discover_dag.await_args.kwargs["data"]
+        assert list(passed_df.columns) == [
+            "hcp_engagement_level",
+            "patient_conversion_rate",
+        ]
+        assert evaluation["decision"] == "accept"
+
 
 class TestVariableInference:
     """Test variable inference logic."""
