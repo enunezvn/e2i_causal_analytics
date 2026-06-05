@@ -361,7 +361,18 @@ class BaseUpliftModel(ABC):
         treatment: NDArray[np.int_],
         y: NDArray[np.float64],
     ) -> Tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
-        """Calculate ATE, ATT, ATC from uplift scores.
+        """Summarize the MODEL-PREDICTED uplift as ATE / ATT / ATC estimands.
+
+        These are honest *model predictions* averaged over subpopulations, NOT
+        identification-validated estimands (MED, estimand-label):
+          - ATE  = mean predicted uplift over all units              (E[τ̂])
+          - ATT  = mean predicted uplift over the TREATED units      (E[τ̂|T=1])
+          - ATC  = mean predicted uplift over the CONTROL units      (E[τ̂|T=0])
+        ATT and ATC therefore differ only when the treated and control feature
+        distributions differ; under randomized assignment they coincide with the
+        ATE by construction — that coincidence is correct, not a bug. ``ate_std``
+        is the DISPERSION of the per-unit predicted uplift (np.std), NOT a
+        standard error of the ATE.
 
         Args:
             uplift_scores: Predicted uplift scores
@@ -369,7 +380,7 @@ class BaseUpliftModel(ABC):
             y: Observed outcomes
 
         Returns:
-            Tuple of (ATE, ATT, ATC, ATE_std)
+            Tuple of (ATE, ATT, ATC, ATE_dispersion) — all model-predicted means.
         """
         try:
             # Handle multi-dimensional uplift scores (multiple treatments)
