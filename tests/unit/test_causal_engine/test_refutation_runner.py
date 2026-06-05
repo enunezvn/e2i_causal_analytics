@@ -682,6 +682,28 @@ class TestSensitivityTest:
         # Small effects typically have low E-values
         assert result.details["e_value"] > 0
 
+    def test_run_sensitivity_test_null_crossing_ci_collapses_e_value_ci(self, runner):
+        """M-stat1: a CI straddling 0 makes the conservative e_value_ci == 1.0
+        instead of min(|lo|,|hi|) (which falsely reports > 1)."""
+        result = runner._run_sensitivity_test(
+            original_effect=0.5,
+            original_ci=(-0.3, 0.5),  # straddles 0
+        )
+        assert result.details["e_value_ci"] == 1.0
+
+    def test_run_sensitivity_test_one_sided_ci_e_value_ci_unchanged(self, runner):
+        """Guard must not affect a one-sided CI: ci_bound = min(|lo|,|hi|)."""
+        import numpy as np
+
+        result = runner._run_sensitivity_test(
+            original_effect=0.5,
+            original_ci=(0.4, 0.6),  # entirely positive, ci_bound=0.4
+        )
+        rr_ci = np.exp(0.91 * 0.4)
+        expected = rr_ci + np.sqrt(rr_ci * (rr_ci - 1))
+        assert result.details["e_value_ci"] == pytest.approx(expected, rel=1e-6)
+        assert result.details["e_value_ci"] > 1.0
+
 
 # ============================================================================
 # MOCK IMPLEMENTATIONS TESTS
