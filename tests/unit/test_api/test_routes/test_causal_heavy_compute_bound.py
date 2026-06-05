@@ -95,12 +95,20 @@ def _parallel_request() -> ParallelPipelineRequest:
 
 
 def _hierarchical_request() -> HierarchicalAnalysisRequest:
+    # Inline records so the post-C1 fail-closed handler resolves a real frame and
+    # reaches the heavy-compute slot (the behavior these tests bound) rather than
+    # short-circuiting to 503 for missing data.
     return HierarchicalAnalysisRequest(
         data_source="test_data",
         treatment_var="treatment",
         outcome_var="outcome",
         effect_modifiers=["mod_a"],
         timeout_seconds=30,
+        filters={
+            "estimation_data_records": [
+                {"treatment": i % 2, "outcome": float(i), "mod_a": float(i)} for i in range(60)
+            ]
+        },
     )
 
 
@@ -177,6 +185,7 @@ async def test_hierarchical_analyze_rejects_when_saturated(_heavy_compute_one_sl
                 _hierarchical_request(),
                 background_tasks=BackgroundTasks(),
                 async_mode=False,
+                demo_mode=False,
                 user={"user_id": "test", "role": "analyst"},
             )
 
@@ -236,6 +245,7 @@ async def test_hierarchical_analyze_succeeds_when_slot_free(_heavy_compute_one_s
             _hierarchical_request(),
             background_tasks=BackgroundTasks(),
             async_mode=False,
+            demo_mode=False,
             user={"user_id": "test", "role": "analyst"},
         )
 

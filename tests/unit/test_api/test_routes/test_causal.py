@@ -116,19 +116,27 @@ def cross_validation_request():
 class TestHierarchicalAnalysis:
     """Tests for hierarchical analysis endpoints."""
 
-    def test_run_hierarchical_analysis_sync(self, client, hierarchical_request):
-        """Test synchronous hierarchical analysis."""
+    def test_run_hierarchical_analysis_sync_fails_closed_without_data(
+        self, client, hierarchical_request
+    ):
+        """Sync hierarchical analysis with no inline data MUST fail-closed (503).
+
+        C1 de-fabrication: the endpoint previously ran the REAL EconML analyzer
+        over fabricated np.random data and returned 200 COMPLETED — this test
+        used to (inadvertently) assert that fabrication. Post-C1 the default
+        path resolves a real DataFrame from filters.estimation_data_records and
+        raises 503 when none is present (matching the sibling endpoints). The
+        labeled demo path and the real-data path are covered by
+        tests/api/test_hierarchical_defab.py.
+        """
         response = client.post(
             "/causal/hierarchical/analyze",
             json=hierarchical_request,
         )
 
-        assert response.status_code == 200
-        data = response.json()
-        assert "analysis_id" in data
-        assert data["status"] in ["completed", "in_progress", "pending", "failed"]
-        # Response uses HierarchicalAnalysisResponse schema which has estimator_type
-        assert "estimator_type" in data
+        assert response.status_code == 503, (
+            f"Default path must fail-closed with 503, got {response.status_code}"
+        )
 
     def test_run_hierarchical_analysis_async(self, client, hierarchical_request):
         """Test asynchronous hierarchical analysis."""
@@ -144,10 +152,14 @@ class TestHierarchicalAnalysis:
         assert data["status"] == "pending"
 
     def test_get_hierarchical_result_success(self, client, hierarchical_request):
-        """Test retrieving hierarchical analysis result."""
-        # First, create an analysis
+        """Test retrieving hierarchical analysis result.
+
+        Uses demo_mode=true to populate the cache without inline data (post-C1
+        the default path fails-closed with 503 when no real data is supplied).
+        """
+        # First, create an analysis (labeled demo placeholder is sufficient here)
         create_response = client.post(
-            "/causal/hierarchical/analyze",
+            "/causal/hierarchical/analyze?demo_mode=true",
             json=hierarchical_request,
         )
         analysis_id = create_response.json()["analysis_id"]
@@ -185,8 +197,11 @@ class TestHierarchicalAnalysis:
         hierarchical_request["n_segments"] = 5
         hierarchical_request["segmentation_method"] = "kmeans"
 
+        # demo_mode=true exercises that the request params (segmentation method,
+        # n_segments) flow through to the response without inline data (post-C1
+        # the default path fails-closed with 503 when no real data is supplied).
         response = client.post(
-            "/causal/hierarchical/analyze",
+            "/causal/hierarchical/analyze?demo_mode=true",
             json=hierarchical_request,
         )
 
@@ -195,6 +210,7 @@ class TestHierarchicalAnalysis:
         assert data["segmentation_method"] == "kmeans"
         # Response uses n_segments_analyzed, not n_segments
         assert "n_segments_analyzed" in data
+        assert data["n_segments_analyzed"] == 5
 
 
 # =============================================================================

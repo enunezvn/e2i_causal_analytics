@@ -230,6 +230,13 @@ class HierarchicalAnalysisResponse(BaseModel):
     created_at: datetime = Field(..., description="Analysis timestamp")
     warnings: List[str] = Field(default_factory=list, description="Warnings")
     errors: List[str] = Field(default_factory=list, description="Errors")
+    is_demo: Optional[bool] = Field(
+        default=None,
+        description=(
+            "True when this response is a demo_mode=true pinned-zero placeholder "
+            "(NOT a real analysis). False/None for real computed results."
+        ),
+    )
 
     model_config = ConfigDict(
         json_schema_extra={
