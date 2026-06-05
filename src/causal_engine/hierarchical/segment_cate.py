@@ -101,6 +101,10 @@ class SegmentCATEResult:
     success: bool
     cate_mean: Optional[float] = None
     cate_std: Optional[float] = None
+    # H6: TRUE standard error of the segment ATE (the mean of cate_values),
+    # which SHRINKS with n — distinct from cate_std, the per-unit CATE dispersion
+    # that does NOT shrink with n and must NOT be used as a standard error.
+    cate_se: Optional[float] = None
     ci_lower: Optional[float] = None
     ci_upper: Optional[float] = None
     cate_values: Optional[NDArray[np.float64]] = None
@@ -120,6 +124,7 @@ class SegmentCATEResult:
             "success": self.success,
             "cate_mean": self.cate_mean,
             "cate_std": self.cate_std,
+            "cate_se": self.cate_se,
             "ci_lower": self.ci_lower,
             "ci_upper": self.ci_upper,
             "n_samples": self.n_samples,
@@ -231,12 +236,18 @@ class SegmentCATECalculator:
 
             elapsed = (time.perf_counter() - start_time) * 1000
 
+            # H6: derive the TRUE SE of the segment ATE from the segment-MEAN CI
+            # (which shrinks with n) instead of using cate_std (the per-unit CATE
+            # dispersion, which does NOT shrink with n).
+            cate_se = self._se_from_ci(ci_lower, ci_upper, cate_std, n_samples)
+
             return SegmentCATEResult(
                 segment_id=segment_id,
                 segment_name=segment_name,
                 success=True,
                 cate_mean=cate_mean,
                 cate_std=cate_std,
+                cate_se=cate_se,
                 ci_lower=ci_lower,
                 ci_upper=ci_upper,
                 cate_values=cate_values,
@@ -564,6 +575,43 @@ class SegmentCATECalculator:
         ci_lower, ci_upper = self._compute_ci_bootstrap(X, treatment, outcome, cate_mean)
 
         return cate_values, cate_mean, cate_std, ci_lower, ci_upper, "ols"
+
+    def _se_from_ci(
+        self,
+        ci_lower: Optional[float],
+        ci_upper: Optional[float],
+        cate_std: float,
+        n_samples: int,
+    ) -> Optional[float]:
+        """True standard error of the segment ATE (H6).
+
+        Every estimator's ``ci_lower``/``ci_upper`` is a CI of the segment MEAN
+        effect (EconML ``conf_int_mean`` for inference-capable estimators,
+        bootstrap for the meta-learners, or a normal ``mean ± z·std/√n``
+        fallback). All of these SHRINK with n, so the SE = half-width / z is a
+        valid standard error — unlike ``np.std(cate_values)`` (the per-unit CATE
+        dispersion), which does NOT shrink with n and made the nested CIs ~√n too
+        wide and the heterogeneity stats wrong.
+        """
+        from scipy.stats import norm
+
+        alpha = 1.0 - self.config.ci_confidence_level
+        z = float(norm.ppf(1.0 - alpha / 2.0))
+        if ci_lower is not None and ci_upper is not None and z > 0:
+            half_width = (float(ci_upper) - float(ci_lower)) / 2.0
+            se = half_width / z
+            # Require strictly positive: a zero-width (degenerate) CI must NOT
+            # yield SE=0, which would become an infinite 1/SE² inverse-variance
+            # weight downstream.
+            if np.isfinite(se) and se > 0:
+                return float(se)
+        # Fallback: SE of the mean = std / √n (shrinks with n). Return None (no
+        # usable SE) for a degenerate constant-prediction segment (cate_std=0,
+        # e.g. OLS) rather than 0 — the bridge then falls back without producing
+        # a zero SE.
+        n = max(int(n_samples), 1)
+        fallback = float(cate_std) / np.sqrt(n)
+        return fallback if np.isfinite(fallback) and fallback > 0 else None
 
     def _compute_ci(
         self,
